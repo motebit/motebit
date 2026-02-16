@@ -71,7 +71,6 @@ export function smoothDelta(
 
 const BODY_R = 0.14;
 const EYE_R = 0.035;
-const N_DRIPS = 16;
 
 // === Creature Part Builders ===
 
@@ -88,6 +87,9 @@ function createBody(): { mesh: THREE.Mesh; material: THREE.MeshPhysicalMaterial 
     clearcoat: 0.4,
     clearcoatRoughness: 0.02,
     envMapIntensity: 0.6,
+    iridescence: 0.4,
+    iridescenceIOR: 1.3,
+    iridescenceThicknessRange: [100, 400],
     side: THREE.FrontSide,
     attenuationColor: new THREE.Color(0.9, 0.92, 1.0),
     attenuationDistance: 0.8,
@@ -141,59 +143,100 @@ function createSmile(): THREE.Mesh {
 interface SkirtResult {
   group: THREE.Group;
   material: THREE.MeshPhysicalMaterial;
-  drips: THREE.Mesh[];
-  dripBasePositions: THREE.Vector3[];
+  skirtMesh: THREE.Mesh;
 }
 
 function createSkirt(): SkirtResult {
   const group = new THREE.Group();
-  const drips: THREE.Mesh[] = [];
-  const dripBasePositions: THREE.Vector3[] = [];
 
-  // Ring positioned inside the body sphere so it's hidden — drips emerge from body
-  const ringY = -BODY_R * 0.7;
-  const ringR = Math.sqrt(BODY_R * BODY_R - ringY * ringY) * 0.95;
+  // === Meniscus profile curve ===
+  // Revolved around Y axis to create a surface-of-revolution skirt.
+  // Starts inside body sphere (hidden overlap), tapers to delicate pinch points.
+  const profilePoints: THREE.Vector2[] = [];
+  const N_PROFILE = 24;
+  const N_SEGMENTS = 48;
+  const N_PINCHES = 7; // Rayleigh–Plateau instability — 7 potential drip sites
 
-  // Glass material — matches body for seamless melting look
-  const mat = new THREE.MeshPhysicalMaterial({
-    color: new THREE.Color(1.0, 1.0, 1.0),
-    transmission: 0.95,
-    ior: 1.15,
-    thickness: 0.1,
-    roughness: 0.0,
-    clearcoat: 0.4,
-    clearcoatRoughness: 0.02,
-    envMapIntensity: 0.6,
-    side: THREE.FrontSide,
-    attenuationColor: new THREE.Color(0.9, 0.92, 1.0),
-    attenuationDistance: 0.8,
-  });
+  const attachY = -BODY_R * 0.55;
+  const tipY = -BODY_R * 1.15;
+  const attachR = Math.sqrt(BODY_R * BODY_R - attachY * attachY);
+  const tipR = 0.035; // wide enough for visible Rayleigh scalloping
 
-  // No visible membrane — drips hang directly from inside the body sphere
-  // Drips — glass teardrops melting from the body
-  for (let i = 0; i < N_DRIPS; i++) {
-    const angle = (i / N_DRIPS) * Math.PI * 2;
+  for (let i = 0; i <= N_PROFILE; i++) {
+    const t = i / N_PROFILE;
+    const y = attachY + (tipY - attachY) * t;
 
-    const sizeVar = 0.85 + 0.3 * Math.abs(Math.sin(i * 2.17));
-    const lengthVar = 1.0 + 0.5 * Math.abs(Math.cos(i * 1.73));
-    const dripR = 0.016 * sizeVar;
+    // Quadratic taper — holds width at top, accelerates toward bottom
+    const taper = 1 - t * t;
+    const r = tipR + (attachR - tipR) * taper;
 
-    const dripGeo = new THREE.SphereGeometry(dripR, 12, 10);
-    dripGeo.scale(1.1, 1.6 * lengthVar, 1.1); // wider so they overlap neighbors
+    // Meniscus bulge — surface tension pushes outward before gravity wins
+    const bulge = Math.sin(t * Math.PI) * 0.006 * (1 - t * 0.5);
 
-    const drip = new THREE.Mesh(dripGeo, mat);
-    const x = Math.cos(angle) * ringR;
-    const z = Math.sin(angle) * ringR;
-    const y = ringY - 0.008 * lengthVar;
-
-    const basePos = new THREE.Vector3(x, y, z);
-    drip.position.copy(basePos);
-    dripBasePositions.push(basePos.clone());
-    drips.push(drip);
-    group.add(drip);
+    profilePoints.push(new THREE.Vector2(r + bulge, y));
   }
 
-  return { group, material: mat, drips, dripBasePositions };
+  const latheGeo = new THREE.LatheGeometry(profilePoints, N_SEGMENTS);
+
+  // === Rayleigh–Plateau instability modulation ===
+  // Surface tension creates periodic bulges where material gathers,
+  // separated by thin necking points where the film stretches to break.
+  const positions = latheGeo.getAttribute("position") as THREE.BufferAttribute;
+
+  for (let v = 0; v < positions.count; v++) {
+    const x = positions.getX(v);
+    const y = positions.getY(v);
+    const z = positions.getZ(v);
+
+    const profileT = Math.max(0, Math.min(1, (y - attachY) / (tipY - attachY)));
+
+    if (profileT > 0.3) {
+      const angle = Math.atan2(z, x);
+      const pinchStrength = 0.5 + 0.5 * Math.cos(angle * N_PINCHES);
+      const depthFactor = Math.pow((profileT - 0.3) / 0.7, 1.5);
+
+      const r = Math.sqrt(x * x + z * z);
+      if (r > 0.001) {
+        // Necks thin to 30% radius, bulges expand to 120% — visible scalloping
+        const modulation = 1 - depthFactor * pinchStrength * 0.7
+                             + depthFactor * (1 - pinchStrength) * 0.2;
+        const newR = r * modulation;
+        positions.setX(v, (x / r) * newR);
+        positions.setZ(v, (z / r) * newR);
+      }
+
+      // Bulges sag lower (more mass), necks hold higher
+      const yDrop = depthFactor * (1 - pinchStrength) * 0.012;
+      positions.setY(v, y - yDrop);
+    }
+  }
+
+  positions.needsUpdate = true;
+  latheGeo.computeVertexNormals();
+
+  // Glass material — thinner than body, more dissolved at the edges
+  const mat = new THREE.MeshPhysicalMaterial({
+    color: new THREE.Color(1.0, 1.0, 1.0),
+    transmission: 0.97,
+    ior: 1.12,
+    thickness: 0.06,
+    roughness: 0.0,
+    clearcoat: 0.3,
+    clearcoatRoughness: 0.02,
+    envMapIntensity: 0.5,
+    iridescence: 0.3,
+    iridescenceIOR: 1.3,
+    iridescenceThicknessRange: [100, 400],
+    side: THREE.FrontSide,
+    attenuationColor: new THREE.Color(0.9, 0.92, 1.0),
+    attenuationDistance: 0.5,
+  });
+
+  const skirtMesh = new THREE.Mesh(latheGeo, mat);
+  skirtMesh.renderOrder = 2;
+  group.add(skirtMesh);
+
+  return { group, material: mat, skirtMesh };
 }
 
 function createEnvironmentMap(renderer: THREE.WebGLRenderer): THREE.Texture {
@@ -231,8 +274,8 @@ function createEnvironmentMap(renderer: THREE.WebGLRenderer): THREE.Texture {
   });
   envScene.add(new THREE.Mesh(skyGeo, skyMat));
 
-  // Bright sun — upper right
-  const panelGeo = new THREE.PlaneGeometry(1.5, 1.5);
+  // Bright sun — upper right (circle avoids square reflection artifacts on polished surfaces)
+  const panelGeo = new THREE.CircleGeometry(0.85, 32);
   const sunMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(2.5, 2.2, 1.8), side: THREE.DoubleSide });
   const sunPanel = new THREE.Mesh(panelGeo, sunMat);
   sunPanel.position.set(3, 3, 2);
@@ -241,7 +284,7 @@ function createEnvironmentMap(renderer: THREE.WebGLRenderer): THREE.Texture {
 
   // Cool fill — upper left
   const fillMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.4, 0.5, 0.9), side: THREE.DoubleSide });
-  const fillPanel = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), fillMat);
+  const fillPanel = new THREE.Mesh(new THREE.CircleGeometry(1.1, 32), fillMat);
   fillPanel.position.set(-2.5, 2, -1);
   fillPanel.lookAt(0, 0, 0);
   envScene.add(fillPanel);
@@ -292,8 +335,7 @@ export class ThreeJSAdapter implements RenderAdapter {
   private rightEye: THREE.Group | null = null;
   private smileMesh: THREE.Mesh | null = null;
   private skirtGroup: THREE.Group | null = null;
-  private drips: THREE.Mesh[] = [];
-  private dripBasePositions: THREE.Vector3[] = [];
+  private skirtMesh: THREE.Mesh | null = null;
 
   async init(target: unknown): Promise<void> {
     // Guard: if target is not an HTMLCanvasElement, set initialized and return.
@@ -356,11 +398,10 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.smileMesh.position.set(0, -0.025, 0.09);
     this.creature.add(this.smileMesh);
 
-    // Skirt + drips — the melting bottom edge
+    // Skirt — meniscus with Rayleigh instability pinch points
     const skirt = createSkirt();
     this.skirtGroup = skirt.group;
-    this.drips = skirt.drips;
-    this.dripBasePositions = skirt.dripBasePositions;
+    this.skirtMesh = skirt.skirtMesh;
     this.creature.add(this.skirtGroup);
 
     // === Lighting — natural ===
@@ -435,16 +476,10 @@ export class ThreeJSAdapter implements RenderAdapter {
         this.smileMesh.scale.y = cues.smile_curvature;
       }
 
-      // === Drip sway ===
-      for (let i = 0; i < this.drips.length; i++) {
-        const drip = this.drips[i]!;
-        const basePos = this.dripBasePositions[i]!;
-        const phase = (i * Math.PI * 2) / this.drips.length;
-        const swayAmount = 0.006 * (1 + cues.skirt_deformation * 2.5);
-        const sway = Math.sin(t * 1.0 + phase) * swayAmount;
-        drip.position.x = basePos.x + sway;
-        drip.rotation.z = sway * 3;
-        drip.scale.y = 1 + cues.hover_distance * 0.1;
+      // === Skirt meniscus — stretches as body compresses ===
+      if (this.skirtMesh) {
+        const skirtStretch = 1 + Math.sin(t * 2.0 + 0.5) * 0.03;
+        this.skirtMesh.scale.set(breathe, skirtStretch, breathe);
       }
 
       // === Rotation disabled for now ===
@@ -487,8 +522,7 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.rightEye = null;
     this.smileMesh = null;
     this.skirtGroup = null;
-    this.drips = [];
-    this.dripBasePositions = [];
+    this.skirtMesh = null;
 
     if (this.scene?.environment) {
       this.scene.environment.dispose();
