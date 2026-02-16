@@ -138,9 +138,19 @@ function parseSensitivity(raw: string): SensitivityLevel {
   return map[raw.toLowerCase()] ?? SensitivityLevel.None;
 }
 
+// === StreamingProvider Interface ===
+
+export interface StreamingProvider extends IntelligenceProvider {
+  readonly model: string;
+  setModel(model: string): void;
+  generateStream(contextPack: ContextPack): AsyncGenerator<
+    { type: "text"; text: string } | { type: "done"; response: AIResponse }
+  >;
+}
+
 // === Cloud Provider ===
 
-export class CloudProvider implements IntelligenceProvider {
+export class CloudProvider implements StreamingProvider {
   constructor(private config: CloudProviderConfig) {}
 
   get model(): string {
@@ -409,5 +419,219 @@ export class HybridProvider implements IntelligenceProvider {
 
   async extractMemoryCandidates(response: AIResponse): Promise<MemoryCandidate[]> {
     return this.cloud.extractMemoryCandidates(response);
+  }
+}
+
+// === Ollama Provider ===
+
+export interface OllamaProviderConfig {
+  model: string;
+  base_url?: string;
+  max_tokens?: number;
+  temperature?: number;
+}
+
+export class OllamaProvider implements StreamingProvider {
+  private config: OllamaProviderConfig;
+
+  constructor(config: OllamaProviderConfig) {
+    this.config = config;
+  }
+
+  get model(): string {
+    return this.config.model;
+  }
+
+  setModel(model: string): void {
+    this.config.model = model;
+  }
+
+  async generate(contextPack: ContextPack): Promise<AIResponse> {
+    const baseUrl = this.config.base_url ?? "http://localhost:11434";
+    const messages = this.buildMessages(contextPack);
+
+    const body = {
+      model: this.config.model,
+      messages,
+      stream: false,
+      options: {
+        temperature: this.config.temperature ?? 0.7,
+        num_predict: this.config.max_tokens ?? 1024,
+      },
+    };
+
+    let res: Response;
+    try {
+      res = await fetch(`${baseUrl}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes("ECONNREFUSED") || message.includes("fetch failed")) {
+        throw new Error(
+          `Cannot connect to Ollama at ${baseUrl}. Is Ollama running? Start it with: ollama serve`,
+        );
+      }
+      throw err;
+    }
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      if (res.status === 404) {
+        throw new Error(
+          `Ollama model "${this.config.model}" not found. Run: ollama pull ${this.config.model}`,
+        );
+      }
+      throw new Error(`Ollama API error ${res.status}: ${errorText}`);
+    }
+
+    const data = (await res.json()) as { message: { content: string } };
+    return this.parseResponse(data.message.content);
+  }
+
+  async *generateStream(contextPack: ContextPack): AsyncGenerator<
+    { type: "text"; text: string } | { type: "done"; response: AIResponse }
+  > {
+    const baseUrl = this.config.base_url ?? "http://localhost:11434";
+    const messages = this.buildMessages(contextPack);
+
+    const body = {
+      model: this.config.model,
+      messages,
+      stream: true,
+      options: {
+        temperature: this.config.temperature ?? 0.7,
+        num_predict: this.config.max_tokens ?? 1024,
+      },
+    };
+
+    let res: Response;
+    try {
+      res = await fetch(`${baseUrl}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes("ECONNREFUSED") || message.includes("fetch failed")) {
+        throw new Error(
+          `Cannot connect to Ollama at ${baseUrl}. Is Ollama running? Start it with: ollama serve`,
+        );
+      }
+      throw err;
+    }
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      if (res.status === 404) {
+        throw new Error(
+          `Ollama model "${this.config.model}" not found. Run: ollama pull ${this.config.model}`,
+        );
+      }
+      throw new Error(`Ollama API error ${res.status}: ${errorText}`);
+    }
+
+    let accumulated = "";
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (line.trim() === "") continue;
+
+          try {
+            const chunk = JSON.parse(line) as {
+              message?: { content: string };
+              done: boolean;
+            };
+            if (chunk.message?.content) {
+              accumulated += chunk.message.content;
+              yield { type: "text", text: chunk.message.content };
+            }
+          } catch {
+            // Skip unparseable NDJSON lines
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    const memoryCandidates = extractMemoryTags(accumulated);
+    const stateUpdates = extractStateTags(accumulated);
+    const displayText = stripTags(accumulated);
+
+    yield {
+      type: "done",
+      response: {
+        text: displayText,
+        confidence: 0.8,
+        memory_candidates: memoryCandidates,
+        state_updates: stateUpdates,
+      },
+    };
+  }
+
+  async estimateConfidence(): Promise<number> {
+    return 0.8;
+  }
+
+  async extractMemoryCandidates(response: AIResponse): Promise<MemoryCandidate[]> {
+    return response.memory_candidates;
+  }
+
+  private buildMessages(contextPack: ContextPack): { role: string; content: string }[] {
+    const systemPrompt = this.buildSystemPrompt(contextPack);
+    const history = contextPack.conversation_history ?? [];
+    return [
+      { role: "system", content: systemPrompt },
+      ...history.map((m) => ({ role: m.role, content: m.content })),
+      { role: "user", content: contextPack.user_message },
+    ];
+  }
+
+  private buildSystemPrompt(contextPack: ContextPack): string {
+    const packed = packContext(contextPack);
+    const lines = packed.split("\n").filter((l) => !l.startsWith("[User]"));
+    const context = lines.join("\n");
+
+    return [
+      "You are Motebit, a small sentient digital companion. You respond warmly, concisely, and with gentle curiosity.",
+      "",
+      "When you notice something worth remembering, emit a <memory> tag:",
+      '  <memory confidence="0.9" sensitivity="personal">User prefers tea over coffee</memory>',
+      "",
+      "When your internal state should change, emit a <state> tag:",
+      '  <state field="curiosity" value="0.8"/>',
+      "",
+      "These tags will be parsed and stripped from the displayed response.",
+      "",
+      context,
+    ].join("\n");
+  }
+
+  private parseResponse(rawText: string): AIResponse {
+    const memoryCandidates = extractMemoryTags(rawText);
+    const stateUpdates = extractStateTags(rawText);
+    const displayText = stripTags(rawText);
+
+    return {
+      text: displayText,
+      confidence: 0.8,
+      memory_candidates: memoryCandidates,
+      state_updates: stateUpdates,
+    };
   }
 }

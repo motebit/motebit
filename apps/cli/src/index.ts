@@ -5,8 +5,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { parseArgs } from "node:util";
-import { CloudProvider, runTurn, runTurnStreaming } from "@motebit/ai-core";
-import type { MotebitLoopDependencies } from "@motebit/ai-core";
+import { CloudProvider, OllamaProvider, runTurn, runTurnStreaming } from "@motebit/ai-core";
+import type { MotebitLoopDependencies, StreamingProvider } from "@motebit/ai-core";
 import { EventStore } from "@motebit/event-log";
 import { MemoryGraph } from "@motebit/memory-graph";
 import { StateVectorEngine } from "@motebit/state-vector";
@@ -22,6 +22,7 @@ const VERSION = "0.1.0";
 // --- Arg Parsing ---
 
 export interface CliConfig {
+  provider: "anthropic" | "ollama";
   model: string;
   dbPath: string | undefined;
   noStream: boolean;
@@ -30,20 +31,32 @@ export interface CliConfig {
 }
 
 export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig {
+  // Strip leading "--" that pnpm injects when using `pnpm start -- --flag`
+  const cleanArgs = args[0] === "--" ? args.slice(1) : args;
   const { values } = parseArgs({
-    args,
+    args: cleanArgs,
     options: {
-      model: { type: "string", default: "claude-sonnet-4-5-20250514" },
+      provider: { type: "string", default: "anthropic" },
+      model: { type: "string" },
       "db-path": { type: "string" },
       "no-stream": { type: "boolean", default: false },
       version: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
     strict: true,
+    allowPositionals: true,
   });
 
+  const provider = values.provider as string;
+  if (provider !== "anthropic" && provider !== "ollama") {
+    throw new Error(`Unknown provider "${provider}". Use "anthropic" or "ollama".`);
+  }
+
+  const defaultModel = provider === "ollama" ? "llama3.2" : "claude-sonnet-4-5-20250514";
+
   return {
-    model: values.model as string,
+    provider,
+    model: (values.model as string | undefined) ?? defaultModel,
     dbPath: values["db-path"] as string | undefined,
     noStream: values["no-stream"] as boolean,
     version: values.version as boolean,
@@ -58,11 +71,18 @@ export function printHelp(): void {
 Usage: motebit [options]
 
 Options:
-  --model <model>    AI model to use (default: claude-sonnet-4-5-20250514)
+  --provider <name>  AI provider: "anthropic" or "ollama" (default: anthropic)
+  --model <model>    AI model to use (default depends on provider)
   --db-path <path>   Database file path (default: ~/.motebit/motebit.db)
   --no-stream        Disable streaming (use blocking mode)
   -v, --version      Print version and exit
   -h, --help         Print this help and exit
+
+Providers:
+  anthropic          Uses Anthropic API (requires ANTHROPIC_API_KEY)
+                     Default model: claude-sonnet-4-5-20250514
+  ollama             Uses local Ollama server (no API key needed)
+                     Default model: llama3.2
 
 Slash commands (in REPL):
   /help              Show available commands
@@ -147,10 +167,29 @@ interface CliDeps {
   moteDb: MotebitDatabase;
   stateEngine: StateVectorEngine;
   memoryGraph: MemoryGraph;
-  cloudProvider: CloudProvider;
+  provider: StreamingProvider;
 }
 
-function createDependencies(apiKey: string, config: CliConfig): CliDeps {
+function createProvider(config: CliConfig): StreamingProvider {
+  if (config.provider === "ollama") {
+    return new OllamaProvider({
+      model: config.model,
+      max_tokens: 1024,
+      temperature: 0.7,
+    });
+  }
+
+  const apiKey = getApiKey();
+  return new CloudProvider({
+    provider: "anthropic",
+    api_key: apiKey,
+    model: config.model,
+    max_tokens: 1024,
+    temperature: 0.7,
+  });
+}
+
+function createDependencies(config: CliConfig): CliDeps {
   const dbPath = getDbPath(config.dbPath);
   const moteDb = createMotebitDatabase(dbPath);
 
@@ -164,15 +203,10 @@ function createDependencies(apiKey: string, config: CliConfig): CliDeps {
   }
 
   const behaviorEngine = new BehaviorEngine();
-  const cloudProvider = new CloudProvider({
-    provider: "anthropic",
-    api_key: apiKey,
-    model: config.model,
-    max_tokens: 1024,
-    temperature: 0.7,
-  });
+  const provider = createProvider(config);
 
   console.log(`Data: ${dbPath}`);
+  console.log(`Provider: ${config.provider} (${provider.model})`);
 
   return {
     loopDeps: {
@@ -181,12 +215,12 @@ function createDependencies(apiKey: string, config: CliConfig): CliDeps {
       memoryGraph,
       stateEngine,
       behaviorEngine,
-      cloudProvider,
+      provider,
     },
     moteDb,
     stateEngine,
     memoryGraph,
-    cloudProvider,
+    provider,
   };
 }
 
@@ -264,10 +298,10 @@ Available commands:
 
     case "model": {
       if (!args) {
-        console.log(`Current model: ${deps.cloudProvider.model}`);
+        console.log(`Current model: ${deps.provider.model}`);
         break;
       }
-      deps.cloudProvider.setModel(args);
+      deps.provider.setModel(args);
       console.log(`Model switched to: ${args}`);
       break;
     }
@@ -300,8 +334,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const apiKey = getApiKey();
-  const deps = createDependencies(apiKey, config);
+  const deps = createDependencies(config);
   const history: { role: "user" | "assistant"; content: string }[] = [];
 
   const shutdown = (): void => {

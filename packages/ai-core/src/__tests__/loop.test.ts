@@ -65,7 +65,7 @@ function makeDeps(): MotebitLoopDependencies {
     memoryGraph,
     stateEngine,
     behaviorEngine,
-    cloudProvider,
+    provider: cloudProvider,
   };
 }
 

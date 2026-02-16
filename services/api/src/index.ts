@@ -78,7 +78,7 @@ export function createMotebitServer(config: MotebitServerConfig): MotebitServer 
     memoryGraph,
     stateEngine,
     behaviorEngine,
-    cloudProvider,
+    provider: cloudProvider,
   };
 
   const app = new Hono();

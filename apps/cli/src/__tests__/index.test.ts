@@ -11,11 +11,34 @@ import {
 describe("parseCliArgs", () => {
   it("returns defaults when no args provided", () => {
     const config = parseCliArgs([]);
+    expect(config.provider).toBe("anthropic");
     expect(config.model).toBe("claude-sonnet-4-5-20250514");
     expect(config.dbPath).toBeUndefined();
     expect(config.noStream).toBe(false);
     expect(config.version).toBe(false);
     expect(config.help).toBe(false);
+  });
+
+  it("parses --provider anthropic with default model", () => {
+    const config = parseCliArgs(["--provider", "anthropic"]);
+    expect(config.provider).toBe("anthropic");
+    expect(config.model).toBe("claude-sonnet-4-5-20250514");
+  });
+
+  it("parses --provider ollama with default model", () => {
+    const config = parseCliArgs(["--provider", "ollama"]);
+    expect(config.provider).toBe("ollama");
+    expect(config.model).toBe("llama3.2");
+  });
+
+  it("--model overrides provider default", () => {
+    const config = parseCliArgs(["--provider", "ollama", "--model", "mistral"]);
+    expect(config.provider).toBe("ollama");
+    expect(config.model).toBe("mistral");
+  });
+
+  it("throws on unknown provider", () => {
+    expect(() => parseCliArgs(["--provider", "openai"])).toThrow('Unknown provider "openai"');
   });
 
   it("parses --model flag", () => {

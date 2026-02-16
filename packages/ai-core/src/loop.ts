@@ -5,7 +5,7 @@ import type { MemoryGraph } from "@motebit/memory-graph";
 import { embedText } from "@motebit/memory-graph";
 import type { StateVectorEngine } from "@motebit/state-vector";
 import type { BehaviorEngine } from "@motebit/behavior-engine";
-import type { CloudProvider } from "./index.js";
+import type { StreamingProvider } from "./index.js";
 
 // === Types ===
 
@@ -15,7 +15,7 @@ export interface MotebitLoopDependencies {
   memoryGraph: MemoryGraph;
   stateEngine: StateVectorEngine;
   behaviorEngine: BehaviorEngine;
-  cloudProvider: CloudProvider;
+  provider: StreamingProvider;
 }
 
 export interface TurnResult {
@@ -42,7 +42,7 @@ export async function runTurn(
     memoryGraph,
     stateEngine,
     behaviorEngine,
-    cloudProvider,
+    provider,
   } = deps;
 
   // 1. Query recent events
@@ -57,9 +57,9 @@ export async function runTurn(
     limit: 5,
   });
 
-  // 3. Pack context and call CloudProvider
+  // 3. Pack context and call provider
   const currentState = stateEngine.getState();
-  const aiResponse = await cloudProvider.generate({
+  const aiResponse = await provider.generate({
     recent_events: recentEvents,
     relevant_memories: relevantMemories,
     current_state: currentState,
@@ -121,7 +121,7 @@ export async function* runTurnStreaming(
     memoryGraph,
     stateEngine,
     behaviorEngine,
-    cloudProvider,
+    provider,
   } = deps;
 
   // 1. Query recent events
@@ -136,7 +136,7 @@ export async function* runTurnStreaming(
     limit: 5,
   });
 
-  // 3. Pack context and stream from CloudProvider
+  // 3. Pack context and stream from provider
   const currentState = stateEngine.getState();
   const contextPack = {
     recent_events: recentEvents,
@@ -147,7 +147,7 @@ export async function* runTurnStreaming(
   };
 
   let aiResponse;
-  for await (const chunk of cloudProvider.generateStream(contextPack)) {
+  for await (const chunk of provider.generateStream(contextPack)) {
     if (chunk.type === "text") {
       yield { type: "text", text: chunk.text };
     } else {
