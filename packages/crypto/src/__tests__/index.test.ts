@@ -54,7 +54,7 @@ describe("generateNonce", () => {
 describe("encrypt and decrypt", () => {
   it("roundtrips plaintext correctly", async () => {
     const key = generateKey();
-    const plaintext = new TextEncoder().encode("Hello, Mote!");
+    const plaintext = new TextEncoder().encode("Hello, Motebit!");
     const encrypted = await encrypt(plaintext, key);
 
     expect(encrypted.ciphertext).toBeInstanceOf(Uint8Array);
@@ -64,7 +64,7 @@ describe("encrypt and decrypt", () => {
     expect(encrypted.tag.length).toBe(16);
 
     const decrypted = await decrypt(encrypted, key);
-    expect(new TextDecoder().decode(decrypted)).toBe("Hello, Mote!");
+    expect(new TextDecoder().decode(decrypted)).toBe("Hello, Motebit!");
   });
 
   it("fails to decrypt with wrong key", async () => {

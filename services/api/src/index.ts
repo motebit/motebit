@@ -236,7 +236,7 @@ function parseSensitivity(value?: string): SensitivityLevel {
 // === Default app for standalone use ===
 
 const { app } = createMotebitServer({
-  motebitId: process.env.MOTEBIT_ID ?? "default-mote",
+  motebitId: process.env.MOTEBIT_ID ?? "default-motebit",
   apiKey: process.env.ANTHROPIC_API_KEY ?? "",
   dbPath: process.env.MOTEBIT_DB_PATH,
 });

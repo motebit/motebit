@@ -263,7 +263,7 @@ describe("SqliteMemoryStorage", () => {
     expect(loaded!.tombstoned).toBe(true);
   });
 
-  it("getAllNodes returns all nodes for a mote", async () => {
+  it("getAllNodes returns all nodes for a motebit", async () => {
     await mdb.memoryStorage.saveNode(makeNode({ motebit_id: "motebit-1" }));
     await mdb.memoryStorage.saveNode(makeNode({ motebit_id: "motebit-1" }));
     await mdb.memoryStorage.saveNode(makeNode({ motebit_id: "motebit-2" }));
@@ -271,7 +271,7 @@ describe("SqliteMemoryStorage", () => {
     expect(results).toHaveLength(2);
   });
 
-  it("getAllEdges returns edges for mote's nodes only", async () => {
+  it("getAllEdges returns edges for motebit's nodes only", async () => {
     const nodeA = makeNode({ motebit_id: "motebit-1" });
     const nodeB = makeNode({ motebit_id: "motebit-1" });
     const nodeC = makeNode({ motebit_id: "motebit-2" });

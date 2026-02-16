@@ -438,7 +438,7 @@ describe("MemoryGraph", () => {
   });
 
   describe("exportAll", () => {
-    it("returns all nodes and edges for the mote", async () => {
+    it("returns all nodes and edges for the motebit", async () => {
       const nodeA = await graph.formMemory(
         {
           content: "A",

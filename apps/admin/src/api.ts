@@ -7,7 +7,7 @@ export const config = {
     return import.meta.env.VITE_API_URL || "http://localhost:8787";
   },
   get motebitId(): string {
-    return import.meta.env.VITE_MOTEBIT_ID || "default-mote";
+    return import.meta.env.VITE_MOTEBIT_ID || "default-motebit";
   },
 };
 

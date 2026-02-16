@@ -95,7 +95,7 @@ describe("InMemoryEventStore", () => {
     expect(results).toHaveLength(2);
   });
 
-  it("getLatestClock returns 0 for unknown mote", async () => {
+  it("getLatestClock returns 0 for unknown motebit", async () => {
     const clock = await store.getLatestClock("nonexistent");
     expect(clock).toBe(0);
   });
@@ -172,7 +172,7 @@ describe("EventStore", () => {
     expect(order).toEqual([1, 2, 3]);
   });
 
-  it("replay only processes events for the specified mote", async () => {
+  it("replay only processes events for the specified motebit", async () => {
     await eventStore.append(
       makeEvent({ motebit_id: "m1", version_clock: 1 }),
     );

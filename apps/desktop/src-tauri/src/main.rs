@@ -26,7 +26,7 @@ fn db_execute(state: State<AppState>, sql: String) -> Result<usize, String> {
 }
 
 fn main() {
-    let db = Connection::open("mote.db").expect("Failed to open database");
+    let db = Connection::open("motebit.db").expect("Failed to open database");
 
     // Enable WAL mode for better concurrent access
     db.execute_batch("PRAGMA journal_mode=WAL;")
