@@ -71,7 +71,7 @@ export function smoothDelta(
 
 const BODY_R = 0.14;
 const EYE_R = 0.035;
-const N_DRIPS = 12;
+const N_DRIPS = 16;
 
 // === Creature Part Builders ===
 
@@ -113,15 +113,15 @@ function createEye(): THREE.Group {
   const catchMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
 
   // Large catchlight — upper right
-  const bigCatchGeo = new THREE.SphereGeometry(EYE_R * 0.22, 12, 12);
+  const bigCatchGeo = new THREE.SphereGeometry(EYE_R * 0.22, 16, 16);
   const bigCatch = new THREE.Mesh(bigCatchGeo, catchMat);
-  bigCatch.position.set(EYE_R * 0.28, EYE_R * 0.35, EYE_R * 0.7);
+  bigCatch.position.set(EYE_R * 0.25, EYE_R * 0.3, EYE_R * 0.82);
   group.add(bigCatch);
 
   // Small catchlight — lower left
-  const smallCatchGeo = new THREE.SphereGeometry(EYE_R * 0.11, 8, 8);
+  const smallCatchGeo = new THREE.SphereGeometry(EYE_R * 0.12, 16, 16);
   const smallCatch = new THREE.Mesh(smallCatchGeo, catchMat);
-  smallCatch.position.set(-EYE_R * 0.22, -EYE_R * 0.15, EYE_R * 0.75);
+  smallCatch.position.set(-EYE_R * 0.2, -EYE_R * 0.15, EYE_R * 0.85);
   group.add(smallCatch);
 
   return group;
@@ -129,16 +129,12 @@ function createEye(): THREE.Group {
 
 function createSmile(): THREE.Mesh {
   const curve = new THREE.QuadraticBezierCurve3(
-    new THREE.Vector3(-0.028, 0, 0),
-    new THREE.Vector3(0, -0.01, 0.002),
-    new THREE.Vector3(0.028, 0, 0),
+    new THREE.Vector3(-0.03, 0, 0),
+    new THREE.Vector3(0, -0.012, 0.002),
+    new THREE.Vector3(0.03, 0, 0),
   );
-  // Whisper-thin tube — just a surface mark
-  const geo = new THREE.TubeGeometry(curve, 16, 0.0015, 4, false);
-  const mat = new THREE.MeshStandardMaterial({
-    color: 0x1a1a1a,
-    roughness: 0.3,
-  });
+  const geo = new THREE.TubeGeometry(curve, 20, 0.002, 6, false);
+  const mat = new THREE.MeshBasicMaterial({ color: 0x111111 });
   return new THREE.Mesh(geo, mat);
 }
 
@@ -180,16 +176,15 @@ function createSkirt(): SkirtResult {
 
     const sizeVar = 0.85 + 0.3 * Math.abs(Math.sin(i * 2.17));
     const lengthVar = 1.0 + 0.5 * Math.abs(Math.cos(i * 1.73));
-    const dripR = 0.014 * sizeVar;
+    const dripR = 0.016 * sizeVar;
 
     const dripGeo = new THREE.SphereGeometry(dripR, 12, 10);
-    dripGeo.scale(0.85, 1.5 * lengthVar, 0.85);
+    dripGeo.scale(1.1, 1.6 * lengthVar, 1.1); // wider so they overlap neighbors
 
     const drip = new THREE.Mesh(dripGeo, mat);
     const x = Math.cos(angle) * ringR;
     const z = Math.sin(angle) * ringR;
-    // Start inside the body sphere so drips emerge from it
-    const y = ringY - 0.01 * lengthVar;
+    const y = ringY - 0.008 * lengthVar;
 
     const basePos = new THREE.Vector3(x, y, z);
     drip.position.copy(basePos);
@@ -334,8 +329,8 @@ export class ThreeJSAdapter implements RenderAdapter {
       0.01,
       10,
     );
-    this.camera.position.set(0, 0.02, 0.55);
-    this.camera.lookAt(0, -0.02, 0);
+    this.camera.position.set(0, 0.02, 0.85);
+    this.camera.lookAt(0, -0.015, 0);
 
     // === Build Creature ===
     this.creature = new THREE.Group();
