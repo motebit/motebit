@@ -126,11 +126,63 @@ export function extractStateTags(
   return updates as Partial<MotebitState>;
 }
 
+export function extractActions(text: string): string[] {
+  const regex = /\*([^*]+)\*/g;
+  const actions: string[] = [];
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    actions.push(match[1]!.trim());
+  }
+  return actions;
+}
+
+// Action keywords → MotebitState field deltas
+const ACTION_RULES: { pattern: RegExp; updates: Partial<MotebitState> }[] = [
+  // Movement / proximity (allow words between verb and direction)
+  { pattern: /\b(?:drift|move|lean|float|scoot|inch|nudge)s?\b.*\b(?:closer|toward|nearer|in)\b/i, updates: { social_distance: -0.15 } },
+  { pattern: /\b(?:drift|move|pull|float|back|retreat|withdraw)s?\b.*\b(?:away|back)\b/i, updates: { social_distance: 0.15 } },
+  // Glow / light
+  { pattern: /\b(?:glow|brighten|shimmer|sparkle|pulse)s?\b/i, updates: { processing: 0.2, affect_valence: 0.1 } },
+  { pattern: /\b(?:dim|fade)s?\b/i, updates: { processing: -0.15 } },
+  // Eyes
+  { pattern: /\b(?:eyes?\s+widen|wide[\s-]eyed|look(?:s|ing)?\s+closely|peer)s?\b/i, updates: { attention: 0.2, curiosity: 0.15 } },
+  { pattern: /\b(?:squint|narrow)s?\b/i, updates: { attention: -0.1 } },
+  { pattern: /\b(?:blink)s?\b/i, updates: { attention: 0.05 } },
+  // Expression
+  { pattern: /\b(?:smile|grin|beam)s?\b/i, updates: { affect_valence: 0.2 } },
+  { pattern: /\b(?:frown|wince|grimace)s?\b/i, updates: { affect_valence: -0.2 } },
+  // Energy / motion
+  { pattern: /\b(?:bounce|bob|wiggle|sway|jiggle)s?\b/i, updates: { affect_arousal: 0.1, curiosity: 0.05 } },
+  { pattern: /\b(?:still|calm|settle)s?\b/i, updates: { affect_arousal: -0.1 } },
+  // Cognitive
+  { pattern: /\b(?:think|ponder|consider|contemplate)s?\b/i, updates: { processing: 0.2, attention: 0.1 } },
+  { pattern: /\b(?:nod)s?\b/i, updates: { confidence: 0.1, affect_valence: 0.05 } },
+  { pattern: /\b(?:tilt)s?\b/i, updates: { curiosity: 0.15 } },
+];
+
+export function actionsToStateUpdates(
+  actions: string[],
+): Partial<MotebitState> {
+  const deltas: Record<string, number> = {};
+  for (const action of actions) {
+    for (const rule of ACTION_RULES) {
+      if (rule.pattern.test(action)) {
+        for (const [field, delta] of Object.entries(rule.updates)) {
+          deltas[field] = (deltas[field] ?? 0) + (delta as number);
+        }
+      }
+    }
+  }
+  return deltas as Partial<MotebitState>;
+}
+
 export function stripTags(text: string): string {
   return text
     .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
     .replace(/<state\s+[^>]*\/>/g, "")
+    .replace(/\*[^*]+\*/g, "")
     .replace(/\n{3,}/g, "\n\n")
+    .replace(/\s{2,}/g, " ")
     .trim();
 }
 

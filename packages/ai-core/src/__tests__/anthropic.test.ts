@@ -3,6 +3,8 @@ import {
   CloudProvider,
   extractMemoryTags,
   extractStateTags,
+  extractActions,
+  actionsToStateUpdates,
   stripTags,
 } from "../index";
 import type { CloudProviderConfig } from "../index";
@@ -137,12 +139,17 @@ describe("stripTags", () => {
   it("removes memory tags from text", () => {
     const text =
       'Hello! <memory confidence="0.9" sensitivity="personal">User likes jazz</memory> How are you?';
-    expect(stripTags(text)).toBe("Hello!  How are you?");
+    expect(stripTags(text)).toBe("Hello! How are you?");
   });
 
   it("removes state tags from text", () => {
     const text = 'Hello! <state field="curiosity" value="0.8"/> How are you?';
-    expect(stripTags(text)).toBe("Hello!  How are you?");
+    expect(stripTags(text)).toBe("Hello! How are you?");
+  });
+
+  it("removes action text from asterisks", () => {
+    const text = "Hello! *drifts slightly closer* How are you?";
+    expect(stripTags(text)).toBe("Hello! How are you?");
   });
 
   it("removes both memory and state tags", () => {
@@ -153,11 +160,78 @@ describe("stripTags", () => {
     expect(result).not.toContain("<state");
   });
 
+  it("removes all tag types together", () => {
+    const text =
+      'Hi *smiles* <state field="curiosity" value="0.8"/> How are you? <memory confidence="0.9" sensitivity="none">fact</memory>';
+    const result = stripTags(text);
+    expect(result).not.toContain("*");
+    expect(result).not.toContain("<state");
+    expect(result).not.toContain("<memory");
+    expect(result).toBe("Hi How are you?");
+  });
+
   it("collapses excessive newlines", () => {
     const text =
       'Hello\n\n\n\n<memory confidence="0.9" sensitivity="none">fact</memory>\n\n\nWorld';
     const result = stripTags(text);
     expect(result).not.toContain("\n\n\n");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractActions
+// ---------------------------------------------------------------------------
+
+describe("extractActions", () => {
+  it("extracts single action", () => {
+    const actions = extractActions("Hello! *drifts closer* How are you?");
+    expect(actions).toEqual(["drifts closer"]);
+  });
+
+  it("extracts multiple actions", () => {
+    const actions = extractActions("*smiles* Hello! *glows softly*");
+    expect(actions).toEqual(["smiles", "glows softly"]);
+  });
+
+  it("returns empty array when no actions", () => {
+    expect(extractActions("no actions here")).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// actionsToStateUpdates
+// ---------------------------------------------------------------------------
+
+describe("actionsToStateUpdates", () => {
+  it("maps drift closer to reduced social_distance", () => {
+    const updates = actionsToStateUpdates(["drifts slightly closer"]);
+    expect(updates.social_distance).toBeLessThan(0);
+  });
+
+  it("maps smile to positive affect_valence", () => {
+    const updates = actionsToStateUpdates(["smiles warmly"]);
+    expect(updates.affect_valence).toBeGreaterThan(0);
+  });
+
+  it("maps glowing to increased processing", () => {
+    const updates = actionsToStateUpdates(["glows softly"]);
+    expect(updates.processing).toBeGreaterThan(0);
+  });
+
+  it("maps eyes widen to increased attention and curiosity", () => {
+    const updates = actionsToStateUpdates(["eyes widen"]);
+    expect(updates.attention).toBeGreaterThan(0);
+    expect(updates.curiosity).toBeGreaterThan(0);
+  });
+
+  it("maps bounce to increased arousal", () => {
+    const updates = actionsToStateUpdates(["bounces excitedly"]);
+    expect(updates.affect_arousal).toBeGreaterThan(0);
+  });
+
+  it("returns empty object for unrecognized actions", () => {
+    const updates = actionsToStateUpdates(["does something unknown"]);
+    expect(Object.keys(updates)).toHaveLength(0);
   });
 });
 

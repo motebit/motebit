@@ -1,4 +1,5 @@
 import { DesktopApp, isSlashCommand, parseSlashCommand, type DesktopAIConfig, type InvokeFn } from "./index";
+import { stripTags } from "@motebit/ai-core";
 
 const canvas = document.getElementById("motebit-canvas") as HTMLCanvasElement;
 if (!canvas) {
@@ -73,10 +74,12 @@ async function handleSend(): Promise<void> {
   bubble.textContent = "";
   chatLog.appendChild(bubble);
 
+  let accumulated = "";
   try {
     for await (const chunk of app.sendMessageStreaming(text)) {
       if (chunk.type === "text") {
-        bubble.textContent += chunk.text;
+        accumulated += chunk.text;
+        bubble.textContent = stripTags(accumulated);
         chatLog.scrollTop = chatLog.scrollHeight;
       }
     }

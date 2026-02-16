@@ -27,6 +27,9 @@ import {
   resolveConfig,
   runTurn,
   runTurnStreaming,
+  extractStateTags,
+  extractActions,
+  actionsToStateUpdates,
   type MotebitPersonalityConfig,
   type MotebitLoopDependencies,
   type TurnResult,
@@ -258,11 +261,42 @@ export class DesktopApp {
 
     try {
       let result: TurnResult | null = null;
+      let accumulated = "";
+      const appliedActions = new Set<string>();
 
       for await (const chunk of runTurnStreaming(this.loopDeps, text, {
         conversationHistory: this.conversationHistory,
         previousCues: this.latestCues,
       })) {
+        // Apply state tags and action cues mid-stream so the creature reacts in real-time
+        if (chunk.type === "text") {
+          accumulated += chunk.text;
+
+          // State tags are idempotent (absolute values) — safe to re-extract
+          const stateUpdates = extractStateTags(accumulated);
+          if (Object.keys(stateUpdates).length > 0) {
+            this.stateEngine.pushUpdate(stateUpdates);
+          }
+
+          // Action cues need deduplication — apply each action once
+          const actions = extractActions(accumulated);
+          const newActions = actions.filter((a) => !appliedActions.has(a));
+          if (newActions.length > 0) {
+            for (const a of newActions) appliedActions.add(a);
+            const actionDeltas = actionsToStateUpdates(newActions);
+            if (Object.keys(actionDeltas).length > 0) {
+              // Convert deltas to absolute values — state engine clamps in tick()
+              const current = this.stateEngine.getState();
+              const absolute: Record<string, number> = {};
+              for (const [field, delta] of Object.entries(actionDeltas)) {
+                const base = (current as unknown as Record<string, unknown>)[field];
+                absolute[field] = (typeof base === "number" ? base : 0) + (delta as number);
+              }
+              this.stateEngine.pushUpdate(absolute as Partial<MotebitState>);
+            }
+          }
+        }
+
         yield chunk;
         if (chunk.type === "result") result = chunk.result;
       }
