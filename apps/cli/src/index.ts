@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { parseArgs } from "node:util";
-import { CloudProvider, OllamaProvider, runTurn, runTurnStreaming, loadConfig } from "@motebit/ai-core";
+import { CloudProvider, OllamaProvider, runTurn, runTurnStreaming, loadConfig, formatBodyAwareness } from "@motebit/ai-core";
 import type { MotebitLoopDependencies, StreamingProvider, MotebitPersonalityConfig } from "@motebit/ai-core";
 import type { BehaviorCues } from "@motebit/sdk";
 import { EventStore } from "@motebit/event-log";
@@ -167,6 +167,7 @@ interface CliDeps {
   loopDeps: MotebitLoopDependencies;
   moteDb: MotebitDatabase;
   stateEngine: StateVectorEngine;
+  behaviorEngine: BehaviorEngine;
   memoryGraph: MemoryGraph;
   provider: StreamingProvider;
 }
@@ -224,6 +225,7 @@ function createDependencies(config: CliConfig, personalityConfig?: MotebitPerson
     },
     moteDb,
     stateEngine,
+    behaviorEngine,
     memoryGraph,
     provider,
   };
@@ -355,7 +357,7 @@ async function main(): Promise<void> {
 
   const deps = createDependencies(config, personalityConfig);
   const history: { role: "user" | "assistant"; content: string }[] = [];
-  let lastCues: BehaviorCues | undefined;
+  let lastCues: BehaviorCues = deps.behaviorEngine.compute(deps.stateEngine.getState());
 
   const shutdown = (): void => {
     deps.moteDb.stateSnapshot.saveState(MOTEBIT_ID, deps.stateEngine.serialize());
@@ -431,6 +433,10 @@ async function main(): Promise<void> {
         console.log(
           `  [state: attention=${s.attention.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} curiosity=${s.curiosity.toFixed(2)}]`,
         );
+        const bodyLine = formatBodyAwareness(result.cues);
+        if (bodyLine) {
+          console.log(`  ${bodyLine}`);
+        }
         console.log();
       } else {
         // Streaming mode
@@ -466,6 +472,10 @@ async function main(): Promise<void> {
             console.log(
               `  [state: attention=${s.attention.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} curiosity=${s.curiosity.toFixed(2)}]`,
             );
+            const bodyLine = formatBodyAwareness(result.cues);
+            if (bodyLine) {
+              console.log(`  ${bodyLine}`);
+            }
             console.log();
           }
         }
