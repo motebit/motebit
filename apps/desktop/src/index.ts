@@ -14,6 +14,7 @@
  * - keyring_set(key, value)
  * - keyring_delete(key)
  * - read_config() -> JSON string
+ * - write_config(json) -> void
  */
 
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";
@@ -41,6 +42,7 @@ export interface TauriCommands {
   keyring_set(key: string, value: string): Promise<void>;
   keyring_delete(key: string): Promise<void>;
   read_config(): Promise<string>;
+  write_config(json: string): Promise<void>;
 }
 
 // === Desktop AI Config ===
@@ -122,6 +124,15 @@ export class DesktopApp {
     return this._isProcessing;
   }
 
+  get currentModel(): string | null {
+    return this.loopDeps?.provider.model ?? null;
+  }
+
+  setModel(model: string): void {
+    if (!this.loopDeps) throw new Error("AI not initialized — call initAI() first");
+    this.loopDeps.provider.setModel(model);
+  }
+
   initAI(config: DesktopAIConfig): boolean {
     const resolved = config.personalityConfig
       ? resolveConfig(config.personalityConfig)
@@ -177,6 +188,10 @@ export class DesktopApp {
     return true;
   }
 
+  resetConversation(): void {
+    this.conversationHistory = [];
+  }
+
   async sendMessage(text: string): Promise<TurnResult> {
     if (!this.loopDeps) {
       throw new Error("AI not initialized — call initAI() first");
@@ -212,4 +227,16 @@ export class DesktopApp {
       this._isProcessing = false;
     }
   }
+}
+
+// === Slash Command Utilities ===
+
+export function isSlashCommand(input: string): boolean {
+  return input.startsWith("/");
+}
+
+export function parseSlashCommand(input: string): { command: string; args: string } {
+  const spaceIdx = input.indexOf(" ");
+  if (spaceIdx === -1) return { command: input.slice(1), args: "" };
+  return { command: input.slice(1, spaceIdx), args: input.slice(spaceIdx + 1).trim() };
 }

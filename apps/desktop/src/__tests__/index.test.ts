@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { DesktopApp } from "../index";
+import { DesktopApp, isSlashCommand, parseSlashCommand } from "../index";
 
 // ---------------------------------------------------------------------------
 // DesktopApp
@@ -145,5 +145,102 @@ describe("DesktopApp.initAI", () => {
     });
     expect(result).toBe(true);
     expect(app.isAIReady).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Slash command utilities
+// ---------------------------------------------------------------------------
+
+describe("isSlashCommand", () => {
+  it("returns true for strings starting with /", () => {
+    expect(isSlashCommand("/model")).toBe(true);
+    expect(isSlashCommand("/help")).toBe(true);
+    expect(isSlashCommand("/model mistral")).toBe(true);
+  });
+
+  it("returns false for regular text", () => {
+    expect(isSlashCommand("hello")).toBe(false);
+    expect(isSlashCommand("")).toBe(false);
+    expect(isSlashCommand(" /model")).toBe(false);
+  });
+});
+
+describe("parseSlashCommand", () => {
+  it("parses command without args", () => {
+    expect(parseSlashCommand("/model")).toEqual({ command: "model", args: "" });
+    expect(parseSlashCommand("/help")).toEqual({ command: "help", args: "" });
+  });
+
+  it("parses command with args", () => {
+    expect(parseSlashCommand("/model mistral")).toEqual({ command: "model", args: "mistral" });
+    expect(parseSlashCommand("/model  spaced  arg ")).toEqual({ command: "model", args: "spaced  arg" });
+  });
+
+  it("handles single slash", () => {
+    expect(parseSlashCommand("/")).toEqual({ command: "", args: "" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DesktopApp.currentModel / setModel
+// ---------------------------------------------------------------------------
+
+describe("DesktopApp.currentModel", () => {
+  let app: DesktopApp;
+
+  afterEach(() => {
+    if (app) app.stop();
+  });
+
+  it("returns null before initAI", () => {
+    app = new DesktopApp();
+    expect(app.currentModel).toBeNull();
+  });
+
+  it("returns the model after ollama initAI", () => {
+    app = new DesktopApp();
+    app.initAI({ provider: "ollama", isTauri: false });
+    expect(app.currentModel).toBe("llama3.2");
+  });
+
+  it("returns custom model when specified", () => {
+    app = new DesktopApp();
+    app.initAI({ provider: "ollama", model: "mistral", isTauri: false });
+    expect(app.currentModel).toBe("mistral");
+  });
+
+  it("returns the model after anthropic initAI", () => {
+    app = new DesktopApp();
+    app.initAI({ provider: "anthropic", apiKey: "sk-test", isTauri: false });
+    expect(app.currentModel).toBe("claude-sonnet-4-20250514");
+  });
+});
+
+describe("DesktopApp.setModel", () => {
+  let app: DesktopApp;
+
+  afterEach(() => {
+    if (app) app.stop();
+  });
+
+  it("throws before initAI", () => {
+    app = new DesktopApp();
+    expect(() => app.setModel("mistral")).toThrow("AI not initialized");
+  });
+
+  it("switches model in-place for ollama", () => {
+    app = new DesktopApp();
+    app.initAI({ provider: "ollama", isTauri: false });
+    expect(app.currentModel).toBe("llama3.2");
+    app.setModel("mistral");
+    expect(app.currentModel).toBe("mistral");
+  });
+
+  it("switches model in-place for anthropic", () => {
+    app = new DesktopApp();
+    app.initAI({ provider: "anthropic", apiKey: "sk-test", isTauri: false });
+    app.setModel("claude-haiku-4-5-20251001");
+    expect(app.currentModel).toBe("claude-haiku-4-5-20251001");
   });
 });

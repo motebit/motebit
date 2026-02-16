@@ -38,6 +38,55 @@ fn read_config() -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+fn write_config(json: String) -> Result<(), String> {
+    // Validate JSON
+    serde_json::from_str::<serde_json::Value>(&json)
+        .map_err(|e| format!("Invalid JSON: {}", e))?;
+
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map_err(|_| "Cannot determine home directory".to_string())?;
+    let dir = std::path::Path::new(&home).join(".motebit");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    let path = dir.join("config.json");
+    std::fs::write(&path, &json)
+        .map_err(|e| format!("Failed to write config: {}", e))?;
+    Ok(())
+}
+
+const KEYRING_SERVICE: &str = "com.motebit.desktop";
+
+#[tauri::command]
+fn keyring_get(key: String) -> Result<Option<String>, String> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, &key)
+        .map_err(|e| e.to_string())?;
+    match entry.get_password() {
+        Ok(val) => Ok(Some(val)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+fn keyring_set(key: String, value: String) -> Result<(), String> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, &key)
+        .map_err(|e| e.to_string())?;
+    entry.set_password(&value).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn keyring_delete(key: String) -> Result<(), String> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, &key)
+        .map_err(|e| e.to_string())?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()), // idempotent
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 fn main() {
     let db = Connection::open("motebit.db").expect("Failed to open database");
 
@@ -49,7 +98,15 @@ fn main() {
         .manage(AppState {
             db: Mutex::new(db),
         })
-        .invoke_handler(tauri::generate_handler![db_query, db_execute, read_config])
+        .invoke_handler(tauri::generate_handler![
+            db_query,
+            db_execute,
+            read_config,
+            write_config,
+            keyring_get,
+            keyring_set,
+            keyring_delete,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

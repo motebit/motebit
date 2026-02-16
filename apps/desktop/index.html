@@ -64,6 +64,7 @@
       color: rgba(255, 255, 255, 0.5);
       font-size: 12px;
       border-radius: 8px;
+      white-space: pre-line;
     }
     #chat-input-row {
       pointer-events: auto;
@@ -83,10 +84,163 @@
     }
     #chat-input::placeholder { color: rgba(255, 255, 255, 0.35); }
     #chat-input:focus { border-color: rgba(99, 102, 241, 0.5); }
+
+    /* Gear icon */
+    #settings-btn {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      z-index: 20;
+      width: 36px;
+      height: 36px;
+      border: none;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.08);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 18px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.2s, color 0.2s;
+    }
+    #settings-btn:hover {
+      background: rgba(255, 255, 255, 0.15);
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    /* Settings panel */
+    #settings-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      background: rgba(0, 0, 0, 0.4);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s;
+    }
+    #settings-backdrop.open { opacity: 1; pointer-events: auto; }
+
+    #settings-panel {
+      position: fixed;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 31;
+      width: 280px;
+      background: rgba(30, 30, 46, 0.95);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-left: 1px solid rgba(255, 255, 255, 0.08);
+      transform: translateX(100%);
+      transition: transform 0.25s ease;
+      padding: 24px 20px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: rgba(255, 255, 255, 0.85);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      overflow-y: auto;
+    }
+    #settings-panel.open { transform: translateX(0); }
+
+    #settings-panel h2 {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 0;
+    }
+    #settings-panel label {
+      display: block;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.5);
+      margin-bottom: 4px;
+    }
+    #settings-panel select,
+    #settings-panel input[type="text"],
+    #settings-panel input[type="password"] {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.06);
+      color: #fff;
+      font-size: 13px;
+      outline: none;
+      font-family: inherit;
+    }
+    #settings-panel select:focus,
+    #settings-panel input:focus {
+      border-color: rgba(99, 102, 241, 0.5);
+    }
+    .settings-field { display: flex; flex-direction: column; }
+    .settings-key-row { display: flex; gap: 6px; }
+    .settings-key-row input { flex: 1; }
+    .settings-key-row button {
+      padding: 6px 8px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.06);
+      color: rgba(255, 255, 255, 0.6);
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .settings-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .settings-actions button {
+      flex: 1;
+      padding: 8px 0;
+      border: none;
+      border-radius: 10px;
+      font-size: 13px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .settings-actions .save-btn {
+      background: rgba(99, 102, 241, 0.85);
+      color: #fff;
+    }
+    .settings-actions .save-btn:hover { background: rgba(99, 102, 241, 1); }
+    .settings-actions .cancel-btn {
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(255, 255, 255, 0.7);
+    }
+    .settings-actions .cancel-btn:hover { background: rgba(255, 255, 255, 0.15); }
   </style>
 </head>
 <body>
   <canvas id="motebit-canvas"></canvas>
+  <button id="settings-btn" title="Settings">&#9881;</button>
+  <div id="settings-backdrop"></div>
+  <div id="settings-panel">
+    <h2>Settings</h2>
+    <div class="settings-field">
+      <label for="settings-provider">Provider</label>
+      <select id="settings-provider">
+        <option value="ollama">Ollama</option>
+        <option value="anthropic">Anthropic</option>
+      </select>
+    </div>
+    <div class="settings-field">
+      <label for="settings-model">Model</label>
+      <input id="settings-model" type="text" placeholder="e.g. llama3.2, claude-sonnet-4-20250514" />
+    </div>
+    <div class="settings-field">
+      <label for="settings-apikey">API Key</label>
+      <div class="settings-key-row">
+        <input id="settings-apikey" type="password" placeholder="sk-ant-..." />
+        <button id="settings-apikey-toggle" type="button">Show</button>
+      </div>
+    </div>
+    <div class="settings-actions">
+      <button class="cancel-btn" id="settings-cancel">Cancel</button>
+      <button class="save-btn" id="settings-save">Save</button>
+    </div>
+  </div>
   <div id="chat-container">
     <div id="chat-log"></div>
     <div id="chat-input-row">
