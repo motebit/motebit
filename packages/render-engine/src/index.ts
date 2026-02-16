@@ -74,7 +74,7 @@ const EYE_R = 0.035;
 
 // === Creature Part Builders ===
 
-function createBody(): { mesh: THREE.Mesh; material: THREE.MeshPhysicalMaterial } {
+function createBody(): { mesh: THREE.Mesh; material: THREE.MeshPhysicalMaterial; basePositions: Float32Array } {
   const geo = new THREE.SphereGeometry(BODY_R, 64, 48);
   geo.scale(1.0, 0.97, 1.0); // barely perceptible squish — nearly perfect sphere
 
@@ -97,7 +97,13 @@ function createBody(): { mesh: THREE.Mesh; material: THREE.MeshPhysicalMaterial 
 
   const mesh = new THREE.Mesh(geo, mat);
   mesh.renderOrder = 2;
-  return { mesh, material: mat };
+
+  // Snapshot base positions for per-frame gravity sag animation
+  const basePositions = new Float32Array(
+    (geo.getAttribute("position") as THREE.BufferAttribute).array,
+  );
+
+  return { mesh, material: mat, basePositions };
 }
 
 function createEye(): THREE.Group {
@@ -138,105 +144,6 @@ function createSmile(): THREE.Mesh {
   const geo = new THREE.TubeGeometry(curve, 20, 0.002, 6, false);
   const mat = new THREE.MeshBasicMaterial({ color: 0x111111 });
   return new THREE.Mesh(geo, mat);
-}
-
-interface SkirtResult {
-  group: THREE.Group;
-  material: THREE.MeshPhysicalMaterial;
-  skirtMesh: THREE.Mesh;
-}
-
-function createSkirt(): SkirtResult {
-  const group = new THREE.Group();
-
-  // === Meniscus profile curve ===
-  // Revolved around Y axis to create a surface-of-revolution skirt.
-  // Starts inside body sphere (hidden overlap), tapers to delicate pinch points.
-  const profilePoints: THREE.Vector2[] = [];
-  const N_PROFILE = 24;
-  const N_SEGMENTS = 48;
-  const N_PINCHES = 7; // Rayleigh–Plateau instability — 7 potential drip sites
-
-  const attachY = -BODY_R * 0.55;
-  const tipY = -BODY_R * 1.15;
-  const attachR = Math.sqrt(BODY_R * BODY_R - attachY * attachY);
-  const tipR = 0.035; // wide enough for visible Rayleigh scalloping
-
-  for (let i = 0; i <= N_PROFILE; i++) {
-    const t = i / N_PROFILE;
-    const y = attachY + (tipY - attachY) * t;
-
-    // Quadratic taper — holds width at top, accelerates toward bottom
-    const taper = 1 - t * t;
-    const r = tipR + (attachR - tipR) * taper;
-
-    // Meniscus bulge — surface tension pushes outward before gravity wins
-    const bulge = Math.sin(t * Math.PI) * 0.006 * (1 - t * 0.5);
-
-    profilePoints.push(new THREE.Vector2(r + bulge, y));
-  }
-
-  const latheGeo = new THREE.LatheGeometry(profilePoints, N_SEGMENTS);
-
-  // === Rayleigh–Plateau instability modulation ===
-  // Surface tension creates periodic bulges where material gathers,
-  // separated by thin necking points where the film stretches to break.
-  const positions = latheGeo.getAttribute("position") as THREE.BufferAttribute;
-
-  for (let v = 0; v < positions.count; v++) {
-    const x = positions.getX(v);
-    const y = positions.getY(v);
-    const z = positions.getZ(v);
-
-    const profileT = Math.max(0, Math.min(1, (y - attachY) / (tipY - attachY)));
-
-    if (profileT > 0.3) {
-      const angle = Math.atan2(z, x);
-      const pinchStrength = 0.5 + 0.5 * Math.cos(angle * N_PINCHES);
-      const depthFactor = Math.pow((profileT - 0.3) / 0.7, 1.5);
-
-      const r = Math.sqrt(x * x + z * z);
-      if (r > 0.001) {
-        // Necks thin to 30% radius, bulges expand to 120% — visible scalloping
-        const modulation = 1 - depthFactor * pinchStrength * 0.7
-                             + depthFactor * (1 - pinchStrength) * 0.2;
-        const newR = r * modulation;
-        positions.setX(v, (x / r) * newR);
-        positions.setZ(v, (z / r) * newR);
-      }
-
-      // Bulges sag lower (more mass), necks hold higher
-      const yDrop = depthFactor * (1 - pinchStrength) * 0.012;
-      positions.setY(v, y - yDrop);
-    }
-  }
-
-  positions.needsUpdate = true;
-  latheGeo.computeVertexNormals();
-
-  // Glass material — thinner than body, more dissolved at the edges
-  const mat = new THREE.MeshPhysicalMaterial({
-    color: new THREE.Color(1.0, 1.0, 1.0),
-    transmission: 0.97,
-    ior: 1.12,
-    thickness: 0.06,
-    roughness: 0.0,
-    clearcoat: 0.3,
-    clearcoatRoughness: 0.02,
-    envMapIntensity: 0.5,
-    iridescence: 0.3,
-    iridescenceIOR: 1.3,
-    iridescenceThicknessRange: [100, 400],
-    side: THREE.FrontSide,
-    attenuationColor: new THREE.Color(0.9, 0.92, 1.0),
-    attenuationDistance: 0.5,
-  });
-
-  const skirtMesh = new THREE.Mesh(latheGeo, mat);
-  skirtMesh.renderOrder = 2;
-  group.add(skirtMesh);
-
-  return { group, material: mat, skirtMesh };
 }
 
 function createEnvironmentMap(renderer: THREE.WebGLRenderer): THREE.Texture {
@@ -334,8 +241,7 @@ export class ThreeJSAdapter implements RenderAdapter {
   private leftEye: THREE.Group | null = null;
   private rightEye: THREE.Group | null = null;
   private smileMesh: THREE.Mesh | null = null;
-  private skirtGroup: THREE.Group | null = null;
-  private skirtMesh: THREE.Mesh | null = null;
+  private bodyBasePositions: Float32Array | null = null;
 
   async init(target: unknown): Promise<void> {
     // Guard: if target is not an HTMLCanvasElement, set initialized and return.
@@ -382,6 +288,7 @@ export class ThreeJSAdapter implements RenderAdapter {
     const body = createBody();
     this.bodyMesh = body.mesh;
     this.bodyMaterial = body.material;
+    this.bodyBasePositions = body.basePositions;
     this.creature.add(this.bodyMesh);
 
     // Eyes — inside the glass body
@@ -397,12 +304,6 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.smileMesh = createSmile();
     this.smileMesh.position.set(0, -0.025, 0.09);
     this.creature.add(this.smileMesh);
-
-    // Skirt — meniscus with Rayleigh instability pinch points
-    const skirt = createSkirt();
-    this.skirtGroup = skirt.group;
-    this.skirtMesh = skirt.skirtMesh;
-    this.creature.add(this.skirtGroup);
 
     // === Lighting — natural ===
     const ambient = new THREE.AmbientLight(0x8090b0, 0.6);
@@ -476,10 +377,42 @@ export class ThreeJSAdapter implements RenderAdapter {
         this.smileMesh.scale.y = cues.smile_curvature;
       }
 
-      // === Skirt meniscus — stretches as body compresses ===
-      if (this.skirtMesh) {
-        const skirtStretch = 1 + Math.sin(t * 2.0 + 0.5) * 0.03;
-        this.skirtMesh.scale.set(breathe, skirtStretch, breathe);
+      // === Body sag — gravity vs surface tension ===
+      // The sphere itself deforms: bottom hemisphere stretches down (teardrop),
+      // then surface tension pulls it back. One geometry, one truth.
+      if (this.bodyBasePositions) {
+        const positions = this.bodyMesh.geometry.getAttribute("position") as THREE.BufferAttribute;
+        const base = this.bodyBasePositions;
+        const halfR = BODY_R * 0.97; // Y-squished radius
+
+        const sagSpeed = 0.8 + cues.skirt_deformation * 1.5;
+        const sagMax = 0.018 + cues.skirt_deformation * 0.02;
+        const sagPhase = Math.sin(t * sagSpeed);
+
+        for (let i = 0; i < positions.count; i++) {
+          const bx = base[i * 3]!;
+          const by = base[i * 3 + 1]!;
+          const bz = base[i * 3 + 2]!;
+
+          // Latitude: +1 at top, -1 at bottom
+          const normalizedY = by / halfR;
+
+          // Only deform bottom hemisphere, quadratic acceleration toward pole
+          const sagFactor = Math.pow(Math.max(0, -normalizedY), 2);
+
+          // Y: bottom sags down (teardrop), or rises past neutral (pumpkin)
+          const ySag = -sagPhase * sagFactor * sagMax;
+
+          // Radial: bottom narrows during sag (teardrop), widens during recovery
+          const radialScale = 1 - sagPhase * sagFactor * 0.05;
+
+          positions.setX(i, bx * radialScale);
+          positions.setY(i, by + ySag);
+          positions.setZ(i, bz * radialScale);
+        }
+
+        positions.needsUpdate = true;
+        this.bodyMesh.geometry.computeVertexNormals();
       }
 
       // === Rotation disabled for now ===
@@ -521,8 +454,7 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.leftEye = null;
     this.rightEye = null;
     this.smileMesh = null;
-    this.skirtGroup = null;
-    this.skirtMesh = null;
+    this.bodyBasePositions = null;
 
     if (this.scene?.environment) {
       this.scene.environment.dispose();
