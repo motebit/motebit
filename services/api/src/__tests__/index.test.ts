@@ -210,8 +210,8 @@ describe("Motebit API", () => {
     expect(body.response).not.toContain("<state");
 
     expect(body.memories_formed).toHaveLength(1);
-    expect(body.memories_formed[0].content).toBe("User enjoys hiking on weekends");
-    expect(body.memories_formed[0].confidence).toBe(0.9);
+    expect(body.memories_formed[0]!.content).toBe("User enjoys hiking on weekends");
+    expect(body.memories_formed[0]!.confidence).toBe(0.9);
 
     expect(body.state).toBeDefined();
     expect(body.cues).toBeDefined();
@@ -278,7 +278,7 @@ describe("Motebit API", () => {
       memories: { content: string }[];
     };
     expect(body2.memories).toHaveLength(1);
-    expect(body2.memories[0].content).toBe("User loves jazz music");
+    expect(body2.memories[0]!.content).toBe("User loves jazz music");
   });
 
   it("POST /api/v1/message/:motebitId handles no-memory response", async () => {
@@ -442,7 +442,7 @@ describe("Motebit API", () => {
     });
     const getBody = (await getRes.json()) as { memories: { content: string }[] };
     expect(getBody.memories).toHaveLength(1);
-    expect(getBody.memories[0].content).toBe("User likes coffee");
+    expect(getBody.memories[0]!.content).toBe("User likes coffee");
   });
 
   it("POST /api/v1/memory/:motebitId respects sensitivity parameter", async () => {
