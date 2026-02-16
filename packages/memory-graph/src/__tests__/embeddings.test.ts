@@ -1,4 +1,4 @@
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, afterAll, afterEach, vi } from "vitest";
 import { embedText, embedTextHash, EMBEDDING_DIMENSIONS, resetPipeline } from "../embeddings";
 import { cosineSimilarity } from "../index";
 
@@ -37,6 +37,47 @@ describe("embedText (semantic)", () => {
     expect(vec.every((v) => v === 0)).toBe(true);
   });
 }, 120_000);
+
+describe("embedText (hash fallback when pipeline fails)", () => {
+  afterEach(() => {
+    resetPipeline();
+    vi.restoreAllMocks();
+  });
+
+  it("falls back to hash-based embedding padded to 384 dims", async () => {
+    // Force pipeline to fail by mocking the dynamic import
+    vi.mock("@xenova/transformers", () => {
+      throw new Error("Simulated download failure");
+    });
+    resetPipeline(); // clear cached pipeline so it retries
+
+    const vec = await embedText("hello world");
+    expect(vec).toHaveLength(EMBEDDING_DIMENSIONS);
+  });
+
+  it("fallback produces an L2-normalized vector", async () => {
+    vi.mock("@xenova/transformers", () => {
+      throw new Error("Simulated download failure");
+    });
+    resetPipeline();
+
+    const vec = await embedText("the quick brown fox");
+    const norm = Math.sqrt(vec.reduce((sum, v) => sum + v * v, 0));
+    expect(norm).toBeCloseTo(1.0, 5);
+  });
+
+  it("fallback is deterministic", async () => {
+    vi.mock("@xenova/transformers", () => {
+      throw new Error("Simulated download failure");
+    });
+    resetPipeline();
+
+    const a = await embedText("test input");
+    const b = await embedText("test input");
+    expect(a).toEqual(b);
+  });
+
+});
 
 describe("embedTextHash (fallback)", () => {
   it("returns a vector of 128 dimensions", () => {

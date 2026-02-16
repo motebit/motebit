@@ -9,15 +9,22 @@ export const EMBEDDING_DIMENSIONS = 384;
 type Pipeline = (text: string, options: { pooling: string; normalize: boolean }) => Promise<{ data: Float32Array }>;
 
 let pipelineInstance: Pipeline | null = null;
+let pipelineFailed = false;
 
 async function getPipeline(): Promise<Pipeline> {
   if (pipelineInstance !== null) return pipelineInstance;
-  const { pipeline } = await import("@xenova/transformers");
-  pipelineInstance = (await pipeline(
-    "feature-extraction",
-    "Xenova/all-MiniLM-L6-v2",
-  )) as unknown as Pipeline;
-  return pipelineInstance;
+  if (pipelineFailed) throw new Error("Pipeline previously failed to load");
+  try {
+    const { pipeline } = await import("@xenova/transformers");
+    pipelineInstance = (await pipeline(
+      "feature-extraction",
+      "Xenova/all-MiniLM-L6-v2",
+    )) as unknown as Pipeline;
+    return pipelineInstance;
+  } catch (e) {
+    pipelineFailed = true;
+    throw e;
+  }
 }
 
 /**
@@ -25,20 +32,34 @@ async function getPipeline(): Promise<Pipeline> {
  */
 export function resetPipeline(): void {
   pipelineInstance = null;
+  pipelineFailed = false;
 }
 
 /**
  * Produce a 384-dimension L2-normalized embedding using all-MiniLM-L6-v2.
  * Lazy-loads the ONNX model on first call.
+ * Falls back to hash-based embedding if the model can't be loaded
+ * (e.g., in a Tauri WebView where HF CDN may be unreachable).
  */
 export async function embedText(text: string): Promise<number[]> {
   if (text === "") {
     return new Array<number>(EMBEDDING_DIMENSIONS).fill(0);
   }
 
-  const extractor = await getPipeline();
-  const output = await extractor(text, { pooling: "mean", normalize: true });
-  return Array.from(output.data);
+  try {
+    const extractor = await getPipeline();
+    const output = await extractor(text, { pooling: "mean", normalize: true });
+    return Array.from(output.data);
+  } catch {
+    // Hash-based fallback padded to EMBEDDING_DIMENSIONS for consistent vector sizes.
+    // The hash embedding is already L2-normalized; zero-padding preserves the norm.
+    const hash = embedTextHash(text);
+    const padded = new Array<number>(EMBEDDING_DIMENSIONS).fill(0);
+    for (let i = 0; i < hash.length; i++) {
+      padded[i] = hash[i]!;
+    }
+    return padded;
+  }
 }
 
 // === Hash-based fallback (deterministic, no external deps) ===
