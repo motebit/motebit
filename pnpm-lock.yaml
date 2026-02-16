@@ -61,6 +61,37 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.11)(lightningcss@1.27.0)(terser@5.46.0)
 
+  apps/cli:
+    dependencies:
+      '@mote/ai-core':
+        specifier: workspace:*
+        version: link:../../packages/ai-core
+      '@mote/behavior-engine':
+        specifier: workspace:*
+        version: link:../../packages/behavior-engine
+      '@mote/event-log':
+        specifier: workspace:*
+        version: link:../../packages/event-log
+      '@mote/memory-graph':
+        specifier: workspace:*
+        version: link:../../packages/memory-graph
+      '@mote/state-vector':
+        specifier: workspace:*
+        version: link:../../packages/state-vector
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
+      tsx:
+        specifier: ^4.19.0
+        version: 4.21.0
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.11)(lightningcss@1.27.0)(terser@5.46.0)
+
   apps/desktop:
     dependencies:
       '@mote/behavior-engine':
@@ -344,9 +375,24 @@ importers:
 
   services/api:
     dependencies:
+      '@mote/ai-core':
+        specifier: workspace:*
+        version: link:../../packages/ai-core
+      '@mote/behavior-engine':
+        specifier: workspace:*
+        version: link:../../packages/behavior-engine
+      '@mote/event-log':
+        specifier: workspace:*
+        version: link:../../packages/event-log
+      '@mote/memory-graph':
+        specifier: workspace:*
+        version: link:../../packages/memory-graph
       '@mote/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
+      '@mote/state-vector':
+        specifier: workspace:*
+        version: link:../../packages/state-vector
       hono:
         specifier: ^4.6.0
         version: 4.11.9

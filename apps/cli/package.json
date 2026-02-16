@@ -1,28 +1,28 @@
 {
-  "name": "@mote/desktop",
+  "name": "@mote/cli",
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "./dist/index.js",
   "scripts": {
-    "dev": "vite",
+    "start": "tsx src/index.ts",
     "build": "tsc -b",
-    "preview": "vite preview",
-    "tauri": "tauri",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@mote/sdk": "workspace:*",
+    "@mote/ai-core": "workspace:*",
+    "@mote/event-log": "workspace:*",
+    "@mote/memory-graph": "workspace:*",
     "@mote/state-vector": "workspace:*",
-    "@mote/behavior-engine": "workspace:*",
-    "@mote/render-engine": "workspace:*"
+    "@mote/behavior-engine": "workspace:*"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.0.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
     "typescript": "^5.6.0",
-    "vite": "^6.0.0",
     "vitest": "^2.1.0"
   }
 }
