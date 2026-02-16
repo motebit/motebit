@@ -66,7 +66,7 @@ app.post("/api/v1/inference", async (c) => {
   return c.json(response);
 });
 
-app.get("/api/v1/inference/:requestId", async (c) => {
+app.get("/api/v1/inference/:requestId", (c) => {
   const requestId = c.req.param("requestId");
   const request = requestQueue.find((r) => r.id === requestId);
   if (request === undefined) {

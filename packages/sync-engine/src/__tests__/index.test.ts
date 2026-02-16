@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { SyncEngine } from "../index";
 import type { SyncStatus } from "../index";
 import { InMemoryEventStore } from "@motebit/event-log";
+import type { EventStoreAdapter } from "@motebit/event-log";
 import { EventType } from "@motebit/sdk";
 import type { EventLogEntry } from "@motebit/sdk";
 
@@ -157,11 +158,11 @@ describe("SyncEngine", () => {
   });
 
   it("sync sets error status when remote throws", async () => {
-    const failingStore: any = {
-      append: vi.fn().mockRejectedValue(new Error("network error")),
-      query: vi.fn().mockRejectedValue(new Error("network error")),
-      getLatestClock: vi.fn().mockRejectedValue(new Error("network error")),
-      tombstone: vi.fn(),
+    const failingStore: EventStoreAdapter = {
+      append: vi.fn<EventStoreAdapter["append"]>().mockRejectedValue(new Error("network error")),
+      query: vi.fn<EventStoreAdapter["query"]>().mockRejectedValue(new Error("network error")),
+      getLatestClock: vi.fn<EventStoreAdapter["getLatestClock"]>().mockRejectedValue(new Error("network error")),
+      tombstone: vi.fn<EventStoreAdapter["tombstone"]>(),
     };
     engine.connectRemote(failingStore);
 

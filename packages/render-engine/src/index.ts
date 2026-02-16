@@ -236,10 +236,10 @@ export class ThreeJSAdapter implements RenderAdapter {
   private rightEye: THREE.Group | null = null;
   private smileMesh: THREE.Mesh | null = null;
 
-  async init(target: unknown): Promise<void> {
+  init(target: unknown): Promise<void> {
     if (typeof HTMLCanvasElement === "undefined" || !(target instanceof HTMLCanvasElement)) {
       this.initialized = true;
-      return;
+      return Promise.resolve();
     }
 
     const canvas = target;
@@ -296,6 +296,7 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.scene.add(rim);
 
     this.initialized = true;
+    return Promise.resolve();
   }
 
   render(frame: RenderFrame): void {
@@ -382,8 +383,9 @@ export class ThreeJSAdapter implements RenderAdapter {
     if (this.creature) {
       this.creature.traverse((obj) => {
         if (obj instanceof THREE.Mesh) {
-          obj.geometry.dispose();
-          if (obj.material instanceof THREE.Material) obj.material.dispose();
+          const mesh = obj as THREE.Mesh<THREE.BufferGeometry, THREE.Material | THREE.Material[]>;
+          mesh.geometry.dispose();
+          if (mesh.material instanceof THREE.Material) mesh.material.dispose();
         }
       });
     }
@@ -398,8 +400,9 @@ export class ThreeJSAdapter implements RenderAdapter {
     if (this.scene) {
       this.scene.traverse((obj) => {
         if (obj instanceof THREE.Mesh) {
-          obj.geometry.dispose();
-          if (obj.material instanceof THREE.Material) obj.material.dispose();
+          const mesh = obj as THREE.Mesh<THREE.BufferGeometry, THREE.Material | THREE.Material[]>;
+          mesh.geometry.dispose();
+          if (mesh.material instanceof THREE.Material) mesh.material.dispose();
         }
       });
     }
@@ -414,7 +417,7 @@ export class ThreeJSAdapter implements RenderAdapter {
 
 export class SpatialAdapter implements RenderAdapter {
   private spec: RenderSpec = CANONICAL_SPEC;
-  async init(_target: unknown): Promise<void> {}
+  init(_target: unknown): Promise<void> { return Promise.resolve(); }
   render(_frame: RenderFrame): void {}
   getSpec(): RenderSpec { return this.spec; }
   resize(_width: number, _height: number): void {}

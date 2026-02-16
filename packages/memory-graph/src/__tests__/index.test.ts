@@ -6,7 +6,7 @@ import {
   MemoryGraph,
 } from "../index";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
-import { SensitivityLevel, RelationType } from "@motebit/sdk";
+import { SensitivityLevel, RelationType, EventType } from "@motebit/sdk";
 import type { MemoryCandidate } from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
@@ -343,7 +343,7 @@ describe("MemoryGraph", () => {
 
       const events = await eventStore.query({
         motebit_id: motebitId,
-        event_types: ["memory_deleted" as any],
+        event_types: [EventType.MemoryDeleted],
       });
       expect(events).toHaveLength(1);
     });

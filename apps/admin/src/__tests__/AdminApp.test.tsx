@@ -57,7 +57,7 @@ const mockEvents = {
 };
 
 function setupFetchMock() {
-  globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+  globalThis.fetch = vi.fn().mockImplementation((url: string): Promise<Partial<Response>> => {
     if (url.includes("/api/v1/state/")) {
       return Promise.resolve({
         ok: true, status: 200, statusText: "OK",

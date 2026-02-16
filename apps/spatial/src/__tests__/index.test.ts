@@ -130,12 +130,12 @@ describe("computeWorldPosition", () => {
     const large = computeWorldPosition(anchor, makeRelative({ orbit_radius: 10.0, orbit_angle: angle }));
 
     // X component: cos(PI/4) * radius
-    expect(small[0]!).toBeCloseTo(Math.cos(angle) * 0.1, 10);
-    expect(large[0]!).toBeCloseTo(Math.cos(angle) * 10.0, 10);
+    expect(small[0]).toBeCloseTo(Math.cos(angle) * 0.1, 10);
+    expect(large[0]).toBeCloseTo(Math.cos(angle) * 10.0, 10);
 
     // Large radius should produce larger displacement
-    expect(Math.abs(large[0]!)).toBeGreaterThan(Math.abs(small[0]!));
-    expect(Math.abs(large[2]!)).toBeGreaterThan(Math.abs(small[2]!));
+    expect(Math.abs(large[0])).toBeGreaterThan(Math.abs(small[0]));
+    expect(Math.abs(large[2])).toBeGreaterThan(Math.abs(small[2]));
   });
 
   it("zero orbit radius produces no orbit displacement", () => {
@@ -157,7 +157,7 @@ describe("computeWorldPosition", () => {
     const angles = [0, Math.PI / 4, Math.PI / 2, Math.PI, 2 * Math.PI];
 
     for (const angle of angles) {
-      const [_x, y, _z] = computeWorldPosition(
+      const [, y] = computeWorldPosition(
         anchor,
         makeRelative({ orbit_radius: 5.0, orbit_angle: angle }),
       );

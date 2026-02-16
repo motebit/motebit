@@ -53,7 +53,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     allowPositionals: true,
   });
 
-  const provider = values.provider as string;
+  const provider = values.provider;
   if (provider !== "anthropic" && provider !== "ollama") {
     throw new Error(`Unknown provider "${provider}". Use "anthropic" or "ollama".`);
   }
@@ -62,13 +62,13 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
 
   return {
     provider,
-    model: (values.model as string | undefined) ?? defaultModel,
-    dbPath: values["db-path"] as string | undefined,
-    noStream: values["no-stream"] as boolean,
-    syncUrl: values["sync-url"] as string | undefined,
-    syncToken: values["sync-token"] as string | undefined,
-    version: values.version as boolean,
-    help: values.help as boolean,
+    model: values.model ?? defaultModel,
+    dbPath: values["db-path"],
+    noStream: values["no-stream"],
+    syncUrl: values["sync-url"],
+    syncToken: values["sync-token"],
+    version: values.version,
+    help: values.help,
   };
 }
 
@@ -396,8 +396,8 @@ async function main(): Promise<void> {
   // Apply config defaults when CLI flags weren't explicit
   if (personalityConfig.default_provider && !process.argv.includes("--provider")) {
     const validProviders = ["anthropic", "ollama"] as const;
-    if (validProviders.includes(personalityConfig.default_provider as typeof validProviders[number])) {
-      config.provider = personalityConfig.default_provider as "anthropic" | "ollama";
+    if (validProviders.includes(personalityConfig.default_provider)) {
+      config.provider = personalityConfig.default_provider;
     }
   }
   if (personalityConfig.default_model && !process.argv.includes("--model")) {
@@ -512,7 +512,6 @@ async function main(): Promise<void> {
       } else {
         // Streaming mode
         process.stdout.write("\nmote> ");
-        let responseText = "";
 
         for await (const chunk of runTurnStreaming(deps.loopDeps, trimmed, {
           conversationHistory: history.length > 0 ? history : undefined,
@@ -520,7 +519,6 @@ async function main(): Promise<void> {
         })) {
           if (chunk.type === "text") {
             process.stdout.write(chunk.text);
-            responseText += chunk.text;
           } else {
             const result = chunk.result;
             lastCues = result.cues;

@@ -66,15 +66,16 @@ export class InMemoryMemoryStorage implements MemoryStorageAdapter {
   private nodes = new Map<string, MemoryNode>();
   private edges = new Map<string, MemoryEdge>();
 
-  async saveNode(node: MemoryNode): Promise<void> {
+  saveNode(node: MemoryNode): Promise<void> {
     this.nodes.set(node.node_id, { ...node });
+    return Promise.resolve();
   }
 
-  async getNode(nodeId: string): Promise<MemoryNode | null> {
-    return this.nodes.get(nodeId) ?? null;
+  getNode(nodeId: string): Promise<MemoryNode | null> {
+    return Promise.resolve(this.nodes.get(nodeId) ?? null);
   }
 
-  async queryNodes(query: MemoryQuery): Promise<MemoryNode[]> {
+  queryNodes(query: MemoryQuery): Promise<MemoryNode[]> {
     let results = Array.from(this.nodes.values()).filter(
       (n) => n.motebit_id === query.motebit_id,
     );
@@ -105,38 +106,46 @@ export class InMemoryMemoryStorage implements MemoryStorageAdapter {
       results = results.slice(0, query.limit);
     }
 
-    return results;
+    return Promise.resolve(results);
   }
 
-  async saveEdge(edge: MemoryEdge): Promise<void> {
+  saveEdge(edge: MemoryEdge): Promise<void> {
     this.edges.set(edge.edge_id, { ...edge });
+    return Promise.resolve();
   }
 
-  async getEdges(nodeId: string): Promise<MemoryEdge[]> {
-    return Array.from(this.edges.values()).filter(
-      (e) => e.source_id === nodeId || e.target_id === nodeId,
+  getEdges(nodeId: string): Promise<MemoryEdge[]> {
+    return Promise.resolve(
+      Array.from(this.edges.values()).filter(
+        (e) => e.source_id === nodeId || e.target_id === nodeId,
+      ),
     );
   }
 
-  async tombstoneNode(nodeId: string): Promise<void> {
+  tombstoneNode(nodeId: string): Promise<void> {
     const node = this.nodes.get(nodeId);
     if (node !== undefined) {
       node.tombstoned = true;
     }
+    return Promise.resolve();
   }
 
-  async getAllNodes(motebitId: string): Promise<MemoryNode[]> {
-    return Array.from(this.nodes.values()).filter((n) => n.motebit_id === motebitId);
+  getAllNodes(motebitId: string): Promise<MemoryNode[]> {
+    return Promise.resolve(
+      Array.from(this.nodes.values()).filter((n) => n.motebit_id === motebitId),
+    );
   }
 
-  async getAllEdges(motebitId: string): Promise<MemoryEdge[]> {
+  getAllEdges(motebitId: string): Promise<MemoryEdge[]> {
     const moteNodes = new Set(
       Array.from(this.nodes.values())
         .filter((n) => n.motebit_id === motebitId)
         .map((n) => n.node_id),
     );
-    return Array.from(this.edges.values()).filter(
-      (e) => moteNodes.has(e.source_id) || moteNodes.has(e.target_id),
+    return Promise.resolve(
+      Array.from(this.edges.values()).filter(
+        (e) => moteNodes.has(e.source_id) || moteNodes.has(e.target_id),
+      ),
     );
   }
 }

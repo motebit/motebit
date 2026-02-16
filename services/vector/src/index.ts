@@ -80,7 +80,7 @@ app.post("/api/v1/vectors/search", async (c) => {
   return c.json({ results });
 });
 
-app.delete("/api/v1/vectors/:id", async (c) => {
+app.delete("/api/v1/vectors/:id", (c) => {
   const id = c.req.param("id");
   const deleted = vectorIndex.delete(id);
   return c.json({ id, deleted });

@@ -166,8 +166,9 @@ describe("EventStore", () => {
     );
 
     const order: number[] = [];
-    await eventStore.replay("m1", async (entry) => {
+    await eventStore.replay("m1", (entry) => {
       order.push(entry.version_clock);
+      return Promise.resolve();
     });
     expect(order).toEqual([1, 2, 3]);
   });
@@ -181,8 +182,9 @@ describe("EventStore", () => {
     );
 
     const seen: string[] = [];
-    await eventStore.replay("m1", async (entry) => {
+    await eventStore.replay("m1", (entry) => {
       seen.push(entry.motebit_id);
+      return Promise.resolve();
     });
     expect(seen).toEqual(["m1"]);
   });

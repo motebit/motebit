@@ -3,9 +3,8 @@ import type {
   AuditRecord,
   ExportManifest,
   MotebitIdentity,
-  SensitivityLevel,
 } from "@motebit/sdk";
-import { EventType } from "@motebit/sdk";
+import { EventType, SensitivityLevel } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MemoryGraph, MemoryStorageAdapter } from "@motebit/memory-graph";
 import type { DeletionCertificate } from "@motebit/crypto";
@@ -21,11 +20,12 @@ export interface AuditLogAdapter {
 export class InMemoryAuditLog implements AuditLogAdapter {
   private records: AuditRecord[] = [];
 
-  async record(entry: AuditRecord): Promise<void> {
+  record(entry: AuditRecord): Promise<void> {
     this.records.push({ ...entry });
+    return Promise.resolve();
   }
 
-  async query(
+  query(
     motebitId: string,
     options: { limit?: number; after?: number } = {},
   ): Promise<AuditRecord[]> {
@@ -36,7 +36,7 @@ export class InMemoryAuditLog implements AuditLogAdapter {
     if (options.limit !== undefined) {
       results = results.slice(-options.limit);
     }
-    return results;
+    return Promise.resolve(results);
   }
 }
 
@@ -134,15 +134,15 @@ export class SensitivityManager {
    */
   getRetentionRules(level: SensitivityLevel): { max_retention_days: number; display_allowed: boolean } {
     switch (level) {
-      case "none":
+      case SensitivityLevel.None:
         return { max_retention_days: Infinity, display_allowed: true };
-      case "personal":
+      case SensitivityLevel.Personal:
         return { max_retention_days: 365, display_allowed: true };
-      case "medical":
+      case SensitivityLevel.Medical:
         return { max_retention_days: 90, display_allowed: false };
-      case "financial":
+      case SensitivityLevel.Financial:
         return { max_retention_days: 90, display_allowed: false };
-      case "secret":
+      case SensitivityLevel.Secret:
         return { max_retention_days: 30, display_allowed: false };
       default:
         return { max_retention_days: 0, display_allowed: false };

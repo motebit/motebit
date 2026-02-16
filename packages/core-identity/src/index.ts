@@ -41,21 +41,22 @@ export interface IdentityStorage {
 export class InMemoryIdentityStorage implements IdentityStorage {
   private identities = new Map<string, MotebitIdentity>();
 
-  async save(identity: MotebitIdentity): Promise<void> {
+  save(identity: MotebitIdentity): Promise<void> {
     this.identities.set(identity.motebit_id, { ...identity });
+    return Promise.resolve();
   }
 
-  async load(motebitId: string): Promise<MotebitIdentity | null> {
-    return this.identities.get(motebitId) ?? null;
+  load(motebitId: string): Promise<MotebitIdentity | null> {
+    return Promise.resolve(this.identities.get(motebitId) ?? null);
   }
 
-  async loadByOwner(ownerId: string): Promise<MotebitIdentity | null> {
+  loadByOwner(ownerId: string): Promise<MotebitIdentity | null> {
     for (const identity of this.identities.values()) {
       if (identity.owner_id === ownerId) {
-        return identity;
+        return Promise.resolve(identity);
       }
     }
-    return null;
+    return Promise.resolve(null);
   }
 }
 

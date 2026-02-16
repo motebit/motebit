@@ -250,7 +250,7 @@ export function createMotebitServer(config: MotebitServerConfig): MotebitServer 
 
   // === State Routes ===
 
-  app.get("/api/v1/state/:motebitId", async (c) => {
+  app.get("/api/v1/state/:motebitId", (c) => {
     const state = stateEngine.getState();
     return c.json({ motebit_id: motebitId, state });
   });

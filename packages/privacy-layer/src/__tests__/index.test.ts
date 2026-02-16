@@ -3,9 +3,9 @@ import {
   InMemoryAuditLog,
   PrivacyLayer,
 } from "../index";
-import { InMemoryMemoryStorage, MemoryGraph } from "@motebit/memory-graph";
+import { InMemoryMemoryStorage, MemoryGraph, type MemoryStorageAdapter } from "@motebit/memory-graph";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
-import { SensitivityLevel } from "@motebit/sdk";
+import { SensitivityLevel, EventType } from "@motebit/sdk";
 import type { MemoryNode, AuditRecord, MotebitIdentity } from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
@@ -247,7 +247,7 @@ describe("PrivacyLayer", () => {
 
       const events = await eventStore.query({ motebit_id: MOTEBIT_ID });
       expect(
-        events.some((e) => e.event_type === "export_requested"),
+        events.some((e) => e.event_type === EventType.ExportRequested),
       ).toBe(true);
     });
   });
@@ -255,7 +255,7 @@ describe("PrivacyLayer", () => {
   describe("fail-closed behavior", () => {
     it("wraps errors in fail-closed message for listMemories", async () => {
       // Create a storage that throws
-      const failingStorage: any = {
+      const failingStorage: MemoryStorageAdapter = {
         queryNodes: vi.fn().mockRejectedValue(new Error("DB error")),
         getNode: vi.fn(),
         saveNode: vi.fn(),
@@ -280,7 +280,7 @@ describe("PrivacyLayer", () => {
     });
 
     it("wraps errors in fail-closed message for inspectMemory", async () => {
-      const failingStorage: any = {
+      const failingStorage: MemoryStorageAdapter = {
         queryNodes: vi.fn(),
         getNode: vi.fn().mockRejectedValue(new Error("DB error")),
         saveNode: vi.fn(),

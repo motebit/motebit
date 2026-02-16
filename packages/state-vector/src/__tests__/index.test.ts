@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { StateVectorEngine } from "../index";
-import { TrustMode, BatteryMode } from "@motebit/sdk";
+import { TrustMode, BatteryMode, MotebitState } from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
 // StateVectorEngine
@@ -119,7 +119,7 @@ describe("StateVectorEngine", () => {
     const serialized = engine.serialize();
     expect(typeof serialized).toBe("string");
 
-    const parsed = JSON.parse(serialized);
+    const parsed: MotebitState = JSON.parse(serialized) as MotebitState;
     expect(typeof parsed.attention).toBe("number");
 
     // Deserialize into a new engine

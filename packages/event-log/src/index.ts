@@ -23,12 +23,13 @@ export interface EventStoreAdapter {
 export class InMemoryEventStore implements EventStoreAdapter {
   private events: EventLogEntry[] = [];
 
-  async append(entry: EventLogEntry): Promise<void> {
+  append(entry: EventLogEntry): Promise<void> {
     // Event log is append-only — no updates, no deletes
     this.events.push({ ...entry });
+    return Promise.resolve();
   }
 
-  async query(filter: EventFilter): Promise<EventLogEntry[]> {
+  query(filter: EventFilter): Promise<EventLogEntry[]> {
     let results = [...this.events];
 
     if (filter.motebit_id !== undefined) {
@@ -50,16 +51,16 @@ export class InMemoryEventStore implements EventStoreAdapter {
       results = results.slice(0, filter.limit);
     }
 
-    return results;
+    return Promise.resolve(results);
   }
 
-  async getLatestClock(motebitId: string): Promise<number> {
+  getLatestClock(motebitId: string): Promise<number> {
     const moteEvents = this.events.filter((e) => e.motebit_id === motebitId);
-    if (moteEvents.length === 0) return 0;
-    return Math.max(...moteEvents.map((e) => e.version_clock));
+    if (moteEvents.length === 0) return Promise.resolve(0);
+    return Promise.resolve(Math.max(...moteEvents.map((e) => e.version_clock)));
   }
 
-  async tombstone(eventId: string, motebitId: string): Promise<void> {
+  tombstone(eventId: string, motebitId: string): Promise<void> {
     const event = this.events.find(
       (e) => e.event_id === eventId && e.motebit_id === motebitId,
     );
@@ -67,6 +68,7 @@ export class InMemoryEventStore implements EventStoreAdapter {
       // Tombstone is a marker, not a delete — the event stays in the log
       event.tombstoned = true;
     }
+    return Promise.resolve();
   }
 }
 

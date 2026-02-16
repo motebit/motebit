@@ -69,8 +69,8 @@ export function AdminApp(): React.ReactElement {
 
   useEffect(() => {
     const controller = new AbortController();
-    refresh(controller.signal);
-    const interval = setInterval(() => refresh(controller.signal), 2000);
+    void refresh(controller.signal);
+    const interval = setInterval(() => { void refresh(controller.signal); }, 2000);
     return () => {
       controller.abort();
       clearInterval(interval);
@@ -102,7 +102,7 @@ export function AdminApp(): React.ReactElement {
       content = React.createElement(StateVectorPanel, { state, history: historyRef.current });
       break;
     case "memory":
-      content = React.createElement(MemoryGraphPanel, { memories, edges, onDelete: handleDeleteMemory });
+      content = React.createElement(MemoryGraphPanel, { memories, edges, onDelete: (nodeId: string) => { void handleDeleteMemory(nodeId); } });
       break;
     case "behavior":
       content = React.createElement(BehaviorPanel, { cues });

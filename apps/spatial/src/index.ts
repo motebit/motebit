@@ -53,13 +53,14 @@ export class WebXRAdapter implements RenderAdapter {
     return this.session != null;
   }
 
-  async init(target: unknown): Promise<void> {
+  init(target: unknown): Promise<void> {
     // In production:
     // 1. Request WebXR session (immersive-ar)
     // 2. Set up reference space (local-floor)
     // 3. Initialize Three.js WebXR renderer
     // 4. Set up hit testing for spatial anchors
     this.session = target;
+    return Promise.resolve();
   }
 
   render(_frame: RenderFrame): void {

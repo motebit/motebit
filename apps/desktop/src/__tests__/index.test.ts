@@ -308,7 +308,7 @@ describe("DesktopApp.initAI storage selection", () => {
   it("uses Tauri storage when isTauri is true and invoke is provided", () => {
     app = new DesktopApp();
     // Provide a no-op invoke — we only check that initAI succeeds
-    const mockInvoke: InvokeFn = async () => { return [] as never; };
+    const mockInvoke: InvokeFn = () => Promise.resolve([] as never);
     const result = app.initAI({
       provider: "ollama",
       isTauri: true,

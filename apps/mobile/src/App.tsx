@@ -16,7 +16,7 @@ const DEFAULT_STATE: MotebitState = {
 };
 
 export function App(): React.ReactElement {
-  const [state, setState] = useState<MotebitState>(DEFAULT_STATE);
+  const [state, _setState] = useState<MotebitState>(DEFAULT_STATE);
   const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {

@@ -1,4 +1,5 @@
 import type { ContextPack, MotebitState, BehaviorCues } from "@motebit/sdk";
+import { BatteryMode } from "@motebit/sdk";
 import type { MotebitPersonalityConfig } from "./config.js";
 import { DEFAULT_CONFIG } from "./config.js";
 import { packContext } from "./index.js";
@@ -43,7 +44,7 @@ export function derivePersonalityNote(state: MotebitState): string {
     notes.push("You feel familiar and open with this person.");
   }
 
-  if (notes.length < 2 && state.battery_mode === "critical") {
+  if (notes.length < 2 && state.battery_mode === BatteryMode.Critical) {
     notes.push("You are conserving words.");
   }
 

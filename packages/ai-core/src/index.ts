@@ -343,14 +343,14 @@ export class CloudProvider implements StreamingProvider {
     };
   }
 
-  async estimateConfidence(): Promise<number> {
-    return 0.8;
+  estimateConfidence(): Promise<number> {
+    return Promise.resolve(0.8);
   }
 
-  async extractMemoryCandidates(
+  extractMemoryCandidates(
     response: AIResponse,
   ): Promise<MemoryCandidate[]> {
-    return response.memory_candidates;
+    return Promise.resolve(response.memory_candidates);
   }
 
   private buildMessages(contextPack: ContextPack): { role: string; content: string }[] {
@@ -403,24 +403,24 @@ export class LocalProvider implements IntelligenceProvider {
     this.modelPath = config.model_path;
   }
 
-  async generate(contextPack: ContextPack): Promise<AIResponse> {
+  generate(contextPack: ContextPack): Promise<AIResponse> {
     void packContext(contextPack);
 
     // In production: call local ONNX Runtime or llama.cpp
-    return {
+    return Promise.resolve({
       text: `[LocalProvider:${this.modelPath}] Response to: ${contextPack.user_message}`,
       confidence: 0.6,
       memory_candidates: [],
       state_updates: {},
-    };
+    });
   }
 
-  async estimateConfidence(): Promise<number> {
-    return 0.6;
+  estimateConfidence(): Promise<number> {
+    return Promise.resolve(0.6);
   }
 
-  async extractMemoryCandidates(response: AIResponse): Promise<MemoryCandidate[]> {
-    return response.memory_candidates;
+  extractMemoryCandidates(response: AIResponse): Promise<MemoryCandidate[]> {
+    return Promise.resolve(response.memory_candidates);
   }
 }
 
@@ -459,7 +459,7 @@ export class HybridProvider implements IntelligenceProvider {
     }
   }
 
-  async extractMemoryCandidates(response: AIResponse): Promise<MemoryCandidate[]> {
+  extractMemoryCandidates(response: AIResponse): Promise<MemoryCandidate[]> {
     return this.cloud.extractMemoryCandidates(response);
   }
 }
@@ -627,12 +627,12 @@ export class OllamaProvider implements StreamingProvider {
     };
   }
 
-  async estimateConfidence(): Promise<number> {
-    return 0.8;
+  estimateConfidence(): Promise<number> {
+    return Promise.resolve(0.8);
   }
 
-  async extractMemoryCandidates(response: AIResponse): Promise<MemoryCandidate[]> {
-    return response.memory_candidates;
+  extractMemoryCandidates(response: AIResponse): Promise<MemoryCandidate[]> {
+    return Promise.resolve(response.memory_candidates);
   }
 
   private buildMessages(contextPack: ContextPack): { role: string; content: string }[] {

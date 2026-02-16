@@ -41,7 +41,7 @@ app.put("/api/v1/objects/:key", async (c) => {
 });
 
 // Download object
-app.get("/api/v1/objects/:key", async (c) => {
+app.get("/api/v1/objects/:key", (c) => {
   const key = c.req.param("key");
   const obj = objectStore.get(key);
   if (obj === undefined) {
@@ -51,7 +51,7 @@ app.get("/api/v1/objects/:key", async (c) => {
 });
 
 // Delete object
-app.delete("/api/v1/objects/:key", async (c) => {
+app.delete("/api/v1/objects/:key", (c) => {
   const key = c.req.param("key");
   const deleted = objectStore.delete(key);
   return c.json({ key, deleted });

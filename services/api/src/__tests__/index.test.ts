@@ -118,7 +118,7 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(400);
-    const body = await res.json();
+    const body = (await res.json()) as { error: string };
     expect(body.error).toContain("message");
   });
 
@@ -130,7 +130,7 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(400);
-    const body = await res.json();
+    const body = (await res.json()) as { error: string };
     expect(body.error).toContain("message");
   });
 
@@ -142,7 +142,7 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(400);
-    const body = await res.json();
+    const body = (await res.json()) as { error: string };
     expect(body.error).toContain("owner_id");
   });
 
@@ -154,7 +154,7 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(400);
-    const body = await res.json();
+    const body = (await res.json()) as { error: string };
     expect(body.error).toContain("content");
   });
 
@@ -166,7 +166,7 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(400);
-    const body = await res.json();
+    const body = (await res.json()) as { error: string };
     expect(body.error).toContain("events");
   });
 
@@ -174,7 +174,7 @@ describe("Motebit API", () => {
     const res = await server.app.request("/health", { method: "GET" });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as { status: string; timestamp: number };
     expect(body.status).toBe("ok");
     expect(body.timestamp).toBeTypeOf("number");
   });
@@ -197,7 +197,13 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as {
+      motebit_id: string;
+      response: string;
+      memories_formed: { content: string; confidence: number }[];
+      state: Record<string, unknown>;
+      cues: { hover_distance: number };
+    };
 
     expect(body.response).toContain("That's really interesting!");
     expect(body.response).not.toContain("<memory");
@@ -220,7 +226,10 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as {
+      motebit_id: string;
+      state: { confidence: number; attention: number; trust_mode: string; battery_mode: string };
+    };
 
     expect(body.motebit_id).toBe(MOTEBIT_ID);
     expect(body.state).toBeDefined();
@@ -238,7 +247,11 @@ describe("Motebit API", () => {
     });
 
     expect(res1.status).toBe(200);
-    const body1 = await res1.json();
+    const body1 = (await res1.json()) as {
+      motebit_id: string;
+      memories: { content: string }[];
+      edges: unknown[];
+    };
     expect(body1.motebit_id).toBe(MOTEBIT_ID);
     expect(body1.memories).toHaveLength(0);
     expect(body1.edges).toHaveLength(0);
@@ -261,7 +274,9 @@ describe("Motebit API", () => {
     });
 
     expect(res2.status).toBe(200);
-    const body2 = await res2.json();
+    const body2 = (await res2.json()) as {
+      memories: { content: string }[];
+    };
     expect(body2.memories).toHaveLength(1);
     expect(body2.memories[0].content).toBe("User loves jazz music");
   });
@@ -276,7 +291,7 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as { response: string; memories_formed: unknown[] };
     expect(body.response).toBe("Just a plain response, no memories here.");
     expect(body.memories_formed).toHaveLength(0);
   });
@@ -308,7 +323,13 @@ describe("Motebit API", () => {
     // Parse the done event data
     const doneMatch = text.match(/event: done\ndata: (.+)/);
     expect(doneMatch).not.toBeNull();
-    const doneData = JSON.parse(doneMatch![1]!);
+    const doneData = JSON.parse(doneMatch![1]!) as {
+      motebit_id: string;
+      response: string;
+      state: Record<string, unknown>;
+      cues: Record<string, unknown>;
+      memories_formed: unknown[];
+    };
     expect(doneData.motebit_id).toBe(MOTEBIT_ID);
     expect(doneData.response).toBeDefined();
     expect(doneData.state).toBeDefined();
@@ -324,7 +345,7 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(400);
-    const body = await res.json();
+    const body = (await res.json()) as { error: string };
     expect(body.error).toContain("message");
   });
 
@@ -348,7 +369,12 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(201);
-    const body = await res.json();
+    const body = (await res.json()) as {
+      motebit_id: string;
+      owner_id: string;
+      created_at: number;
+      version_clock: number;
+    };
     expect(body.motebit_id).toBeTypeOf("string");
     expect(body.owner_id).toBe("owner-1");
     expect(body.created_at).toBeTypeOf("number");
@@ -362,7 +388,7 @@ describe("Motebit API", () => {
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ owner_id: "owner-2" }),
     });
-    const created = await createRes.json();
+    const created = (await createRes.json()) as { motebit_id: string; owner_id: string };
 
     // Load
     const res = await server.app.request(`/api/v1/identity/${created.motebit_id}`, {
@@ -371,7 +397,7 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as { motebit_id: string; owner_id: string };
     expect(body.motebit_id).toBe(created.motebit_id);
     expect(body.owner_id).toBe("owner-2");
   });
@@ -383,7 +409,7 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(404);
-    const body = await res.json();
+    const body = (await res.json()) as { error: string };
     expect(body.error).toBe("identity not found");
   });
 
@@ -397,7 +423,12 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(201);
-    const body = await res.json();
+    const body = (await res.json()) as {
+      content: string;
+      node_id: string;
+      embedding: number[];
+      sensitivity: string;
+    };
     expect(body.content).toBe("User likes coffee");
     expect(body.node_id).toBeTypeOf("string");
     expect(body.embedding).toBeInstanceOf(Array);
@@ -409,7 +440,7 @@ describe("Motebit API", () => {
       method: "GET",
       headers: AUTH_HEADER,
     });
-    const getBody = await getRes.json();
+    const getBody = (await getRes.json()) as { memories: { content: string }[] };
     expect(getBody.memories).toHaveLength(1);
     expect(getBody.memories[0].content).toBe("User likes coffee");
   });
@@ -422,7 +453,7 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(201);
-    const body = await res.json();
+    const body = (await res.json()) as { sensitivity: string };
     expect(body.sensitivity).toBe(SensitivityLevel.Medical);
   });
 
@@ -438,7 +469,7 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as { accepted: number };
     expect(body.accepted).toBe(2);
   });
 
@@ -457,7 +488,7 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as { events: EventLogEntry[] };
     expect(body.events.length).toBeGreaterThanOrEqual(2);
   });
 
@@ -480,7 +511,7 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as { events: EventLogEntry[] };
     // Should only get events with version_clock > 1
     for (const ev of body.events) {
       expect(ev.version_clock).toBeGreaterThan(1);
@@ -506,7 +537,7 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as { motebit_id: string; latest_clock: number };
     expect(body.motebit_id).toBe(MOTEBIT_ID);
     expect(body.latest_clock).toBe(3);
   });
@@ -518,7 +549,7 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as { motebit_id: string; latest_clock: number };
     expect(body.motebit_id).toBe(MOTEBIT_ID);
     expect(body.latest_clock).toBe(0);
   });
@@ -532,7 +563,7 @@ describe("Motebit API", () => {
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ owner_id: "owner-export" }),
     });
-    const identity = await createRes.json();
+    const identity = (await createRes.json()) as { motebit_id: string };
 
     // Form a memory via message endpoint (uses the server's motebitId)
     mockFetchSuccess(
@@ -551,7 +582,14 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as {
+      motebit_id: string;
+      exported_at: number;
+      identity: { motebit_id: string };
+      memories: unknown[];
+      events: unknown[];
+      audit_log: unknown[];
+    };
     expect(body.motebit_id).toBe(MOTEBIT_ID); // manifest uses server's motebitId
     expect(body.exported_at).toBeTypeOf("number");
     expect(body.identity).toBeDefined();
@@ -568,7 +606,7 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(404);
-    const body = await res.json();
+    const body = (await res.json()) as { error: string };
     expect(body.error).toBe("identity not found");
   });
 
@@ -581,7 +619,7 @@ describe("Motebit API", () => {
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ owner_id: "owner-delete" }),
     });
-    const identity = await createRes.json();
+    const identity = (await createRes.json()) as { motebit_id: string };
 
     // Form a memory via message endpoint
     mockFetchSuccess(
@@ -601,7 +639,7 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as { motebit_id: string; deletion_certificates: unknown[] };
     expect(body.motebit_id).toBe(identity.motebit_id);
     expect(body.deletion_certificates).toBeInstanceOf(Array);
   });
@@ -613,7 +651,7 @@ describe("Motebit API", () => {
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ owner_id: "owner-empty-delete" }),
     });
-    const identity = await createRes.json();
+    const identity = (await createRes.json()) as { motebit_id: string };
 
     const res = await server.app.request(`/api/v1/delete/${identity.motebit_id}`, {
       method: "POST",
@@ -622,7 +660,7 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as { deletion_certificates: unknown[] };
     expect(body.deletion_certificates).toEqual([]);
   });
 
@@ -634,7 +672,7 @@ describe("Motebit API", () => {
     });
 
     expect(res.status).toBe(404);
-    const body = await res.json();
+    const body = (await res.json()) as { error: string };
     expect(body.error).toBe("identity not found");
   });
 });

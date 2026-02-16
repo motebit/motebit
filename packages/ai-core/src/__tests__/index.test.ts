@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { packContext, CloudProvider, HybridProvider } from "../index";
 import type { CloudProviderConfig, HybridProviderConfig } from "../index";
 import { TrustMode, BatteryMode, SensitivityLevel, EventType } from "@motebit/sdk";
-import type { ContextPack, MotebitState, EventLogEntry, MemoryNode } from "@motebit/sdk";
+import type { AIResponse, ContextPack, MemoryCandidate, MotebitState, EventLogEntry, MemoryNode } from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -181,7 +181,7 @@ describe("CloudProvider", () => {
     mockFetchSuccess("Hello! I'm Motebit.");
 
     const provider = new CloudProvider(config);
-    const response = await provider.generate(makeContextPack());
+    const response: AIResponse = await provider.generate(makeContextPack());
 
     expect(response.text).toBe("Hello! I'm Motebit.");
     expect(response.confidence).toBe(0.8);
@@ -215,13 +215,13 @@ describe("CloudProvider", () => {
 
   it("estimateConfidence() returns 0.8", async () => {
     const provider = new CloudProvider(config);
-    const confidence = await provider.estimateConfidence();
+    const confidence: number = await provider.estimateConfidence();
     expect(confidence).toBe(0.8);
   });
 
   it("extractMemoryCandidates() returns response candidates", async () => {
     const provider = new CloudProvider(config);
-    const candidates = await provider.extractMemoryCandidates({
+    const candidates: MemoryCandidate[] = await provider.extractMemoryCandidates({
       text: "test",
       confidence: 0.8,
       memory_candidates: [
@@ -265,7 +265,7 @@ describe("HybridProvider", () => {
       fallback_to_local: false,
     };
     const provider = new HybridProvider(config);
-    const response = await provider.generate(makeContextPack());
+    const response: AIResponse = await provider.generate(makeContextPack());
     expect(response.text).toBe("Cloud response");
   });
 
@@ -284,7 +284,7 @@ describe("HybridProvider", () => {
       fallback_to_local: true,
     };
     const provider = new HybridProvider(config);
-    const response = await provider.generate(makeContextPack());
+    const response: AIResponse = await provider.generate(makeContextPack());
     expect(response.text).toContain("LocalProvider");
   });
 
@@ -334,7 +334,7 @@ describe("HybridProvider", () => {
       fallback_to_local: false,
     };
     const provider = new HybridProvider(config);
-    const confidence = await provider.estimateConfidence();
+    const confidence: number = await provider.estimateConfidence();
     expect(confidence).toBe(0.8);
   });
 });

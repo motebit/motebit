@@ -1,4 +1,4 @@
-import type { MotebitState, BehaviorCues } from "@motebit/sdk";
+import { type MotebitState, type BehaviorCues, BatteryMode } from "@motebit/sdk";
 import { clamp, enforceCueDelta, enforceDriftVariation } from "@motebit/policy-invariants";
 
 // === Spatial Constants ===
@@ -24,7 +24,7 @@ export function computeRawCues(state: MotebitState): BehaviorCues {
   const hover_distance = attentionDistance + idleBlend * (SPATIAL.RETREAT_DISTANCE - SPATIAL.SHOULDER_DISTANCE);
 
   // Drift amplitude: slight increase with curiosity, decrease in low power
-  const batteryFactor = state.battery_mode === "critical" ? 0.3 : state.battery_mode === "low_power" ? 0.6 : 1.0;
+  const batteryFactor = state.battery_mode === BatteryMode.Critical ? 0.3 : state.battery_mode === BatteryMode.LowPower ? 0.6 : 1.0;
   const drift_amplitude = SPATIAL.BASE_DRIFT * (1 + state.curiosity * 0.5) * batteryFactor;
 
   // Glow: processing and confidence
