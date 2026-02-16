@@ -68,11 +68,23 @@ async function handleSend(): Promise<void> {
 
   addMessage("user", text);
 
+  const bubble = document.createElement("div");
+  bubble.className = "chat-bubble assistant";
+  bubble.textContent = "";
+  chatLog.appendChild(bubble);
+
   try {
-    const result = await app.sendMessage(text);
-    addMessage("assistant", result.response);
+    for await (const chunk of app.sendMessageStreaming(text)) {
+      if (chunk.type === "text") {
+        bubble.textContent += chunk.text;
+        chatLog.scrollTop = chatLog.scrollHeight;
+      }
+    }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
+    if (!bubble.textContent) {
+      bubble.remove();
+    }
     addMessage("system", `Error: ${msg}`);
   }
 }

@@ -26,6 +26,7 @@ import {
   OllamaProvider,
   resolveConfig,
   runTurn,
+  runTurnStreaming,
   type MotebitPersonalityConfig,
   type MotebitLoopDependencies,
   type TurnResult,
@@ -223,6 +224,45 @@ export class DesktopApp {
       return result;
     } finally {
       // Reset processing — glow fades
+      this.stateEngine.pushUpdate({ processing: 0.1, attention: 0.3 });
+      this._isProcessing = false;
+    }
+  }
+
+  async *sendMessageStreaming(
+    text: string,
+  ): AsyncGenerator<{ type: "text"; text: string } | { type: "result"; result: TurnResult }> {
+    if (!this.loopDeps) {
+      throw new Error("AI not initialized — call initAI() first");
+    }
+    if (this._isProcessing) {
+      throw new Error("Already processing a message");
+    }
+
+    this._isProcessing = true;
+    this.stateEngine.pushUpdate({ processing: 0.9, attention: 0.8 });
+
+    try {
+      let result: TurnResult | null = null;
+
+      for await (const chunk of runTurnStreaming(this.loopDeps, text, {
+        conversationHistory: this.conversationHistory,
+        previousCues: this.latestCues,
+      })) {
+        yield chunk;
+        if (chunk.type === "result") result = chunk.result;
+      }
+
+      if (result) {
+        this.conversationHistory.push(
+          { role: "user", content: text },
+          { role: "assistant", content: result.response },
+        );
+        if (this.conversationHistory.length > 40) {
+          this.conversationHistory = this.conversationHistory.slice(-40);
+        }
+      }
+    } finally {
       this.stateEngine.pushUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
     }

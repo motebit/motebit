@@ -244,3 +244,45 @@ describe("DesktopApp.setModel", () => {
     expect(app.currentModel).toBe("claude-haiku-4-5-20251001");
   });
 });
+
+// ---------------------------------------------------------------------------
+// DesktopApp.sendMessageStreaming — guards and contract
+// ---------------------------------------------------------------------------
+
+describe("DesktopApp.sendMessageStreaming", () => {
+  let app: DesktopApp;
+
+  afterEach(() => {
+    if (app) app.stop();
+  });
+
+  it("throws before initAI", async () => {
+    app = new DesktopApp();
+    const gen = app.sendMessageStreaming("hello");
+    await expect(gen.next()).rejects.toThrow("AI not initialized");
+  });
+
+  it("throws when already processing", async () => {
+    app = new DesktopApp();
+    app.initAI({ provider: "ollama", isTauri: false });
+
+    // Start a blocking sendMessage that we never await to completion
+    // to set _isProcessing = true. We use sendMessage since it also sets the flag.
+    const pending = app.sendMessage("first").catch(() => {});
+
+    const gen = app.sendMessageStreaming("second");
+    await expect(gen.next()).rejects.toThrow("Already processing");
+
+    // Clean up — let the pending call reject (no real provider)
+    await pending;
+  });
+
+  it("returns an async generator", () => {
+    app = new DesktopApp();
+    app.initAI({ provider: "ollama", isTauri: false });
+    const gen = app.sendMessageStreaming("hello");
+    expect(typeof gen[Symbol.asyncIterator]).toBe("function");
+    // Return without consuming to avoid hitting the real provider
+    void gen.return(undefined);
+  });
+});
