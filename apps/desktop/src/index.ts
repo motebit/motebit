@@ -13,12 +13,24 @@
  * - keyring_get(key) -> value
  * - keyring_set(key, value)
  * - keyring_delete(key)
+ * - read_config() -> JSON string
  */
 
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";
 import { StateVectorEngine } from "@motebit/state-vector";
 import { BehaviorEngine } from "@motebit/behavior-engine";
 import { ThreeJSAdapter } from "@motebit/render-engine";
+import {
+  CloudProvider,
+  OllamaProvider,
+  resolveConfig,
+  runTurn,
+  type MotebitPersonalityConfig,
+  type MotebitLoopDependencies,
+  type TurnResult,
+} from "@motebit/ai-core";
+import { EventStore, InMemoryEventStore } from "@motebit/event-log";
+import { MemoryGraph, InMemoryMemoryStorage } from "@motebit/memory-graph";
 
 // === Tauri Command Interface ===
 
@@ -28,6 +40,17 @@ export interface TauriCommands {
   keyring_get(key: string): Promise<string | null>;
   keyring_set(key: string, value: string): Promise<void>;
   keyring_delete(key: string): Promise<void>;
+  read_config(): Promise<string>;
+}
+
+// === Desktop AI Config ===
+
+export interface DesktopAIConfig {
+  provider: "anthropic" | "ollama";
+  model?: string;
+  apiKey?: string;
+  personalityConfig?: MotebitPersonalityConfig;
+  isTauri: boolean;
 }
 
 // === Desktop App Bootstrap ===
@@ -44,6 +67,11 @@ export class DesktopApp {
     eye_dilation: 0.3,
     smile_curvature: 0,
   };
+
+  // AI loop
+  private loopDeps: MotebitLoopDependencies | null = null;
+  private conversationHistory: { role: "user" | "assistant"; content: string }[] = [];
+  private _isProcessing = false;
 
   constructor() {
     this.stateEngine = new StateVectorEngine({ tick_rate_hz: 2 });
@@ -82,5 +110,106 @@ export class DesktopApp {
       delta_time: deltaTime,
       time,
     });
+  }
+
+  // === AI Integration ===
+
+  get isAIReady(): boolean {
+    return this.loopDeps !== null;
+  }
+
+  get isProcessing(): boolean {
+    return this._isProcessing;
+  }
+
+  initAI(config: DesktopAIConfig): boolean {
+    const resolved = config.personalityConfig
+      ? resolveConfig(config.personalityConfig)
+      : undefined;
+    const temperature = resolved?.temperature;
+
+    const motebitId = "desktop-" + crypto.randomUUID().slice(0, 8);
+    const eventStore = new EventStore(new InMemoryEventStore());
+    const memoryGraph = new MemoryGraph(
+      new InMemoryMemoryStorage(),
+      eventStore,
+      motebitId,
+    );
+
+    let provider;
+
+    if (config.provider === "ollama") {
+      const model = config.model || "llama3.2";
+      const base_url = config.isTauri
+        ? "http://localhost:11434"
+        : "/api/ollama";
+      provider = new OllamaProvider({
+        model,
+        base_url,
+        max_tokens: 1024,
+        temperature,
+      });
+    } else {
+      if (!config.apiKey) return false;
+      const model = config.model || "claude-sonnet-4-20250514";
+      const base_url = config.isTauri
+        ? "https://api.anthropic.com"
+        : "/api/anthropic";
+      provider = new CloudProvider({
+        provider: "anthropic",
+        api_key: config.apiKey,
+        model,
+        base_url,
+        max_tokens: 1024,
+        temperature,
+      });
+    }
+
+    this.loopDeps = {
+      motebitId,
+      eventStore,
+      memoryGraph,
+      stateEngine: this.stateEngine,
+      behaviorEngine: this.behaviorEngine,
+      provider,
+    };
+
+    return true;
+  }
+
+  async sendMessage(text: string): Promise<TurnResult> {
+    if (!this.loopDeps) {
+      throw new Error("AI not initialized — call initAI() first");
+    }
+    if (this._isProcessing) {
+      throw new Error("Already processing a message");
+    }
+
+    this._isProcessing = true;
+
+    // Creature glows while thinking
+    this.stateEngine.pushUpdate({ processing: 0.9, attention: 0.8 });
+
+    try {
+      const result = await runTurn(this.loopDeps, text, {
+        conversationHistory: this.conversationHistory,
+        previousCues: this.latestCues,
+      });
+
+      // Maintain conversation history (cap at 40 entries = 20 turns)
+      this.conversationHistory.push(
+        { role: "user", content: text },
+        { role: "assistant", content: result.response },
+      );
+      if (this.conversationHistory.length > 40) {
+        this.conversationHistory = this.conversationHistory.slice(-40);
+      }
+
+      return result;
+    } finally {
+      // Reset processing — glow fades
+      this.stateEngine.pushUpdate({ processing: 0.1, attention: 0.3 });
+      this._isProcessing = false;
+    }
   }
 }

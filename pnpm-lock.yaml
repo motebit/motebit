@@ -121,9 +121,18 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@motebit/ai-core':
+        specifier: workspace:*
+        version: link:../../packages/ai-core
       '@motebit/behavior-engine':
         specifier: workspace:*
         version: link:../../packages/behavior-engine
+      '@motebit/event-log':
+        specifier: workspace:*
+        version: link:../../packages/event-log
+      '@motebit/memory-graph':
+        specifier: workspace:*
+        version: link:../../packages/memory-graph
       '@motebit/render-engine':
         specifier: workspace:*
         version: link:../../packages/render-engine
@@ -133,6 +142,9 @@ importers:
       '@motebit/state-vector':
         specifier: workspace:*
         version: link:../../packages/state-vector
+      '@tauri-apps/api':
+        specifier: ^2.0.0
+        version: 2.10.1
       three:
         specifier: ^0.170.0
         version: 0.170.0
@@ -2328,6 +2340,9 @@ packages:
 
   '@sinonjs/fake-timers@10.3.0':
     resolution: {integrity: sha512-V4BG07kuYSUkTCSBHG8G8TNhM+F19jXFWnQtzj+we8DrkpSBCee9Z3Ms8yiGer/dlmhe35/Xdgyo3/0rQKg7YA==}
+
+  '@tauri-apps/api@2.10.1':
+    resolution: {integrity: sha512-hKL/jWf293UDSUN09rR69hrToyIXBb8CjGaWC7gfinvnQrBVvnLr08FeFi38gxtugAVyVcTa5/FD/Xnkb1siBw==}
 
   '@tauri-apps/cli-darwin-arm64@2.10.0':
     resolution: {integrity: sha512-avqHD4HRjrMamE/7R/kzJPcAJnZs0IIS+1nkDP5b+TNBn3py7N2aIo9LIpy+VQq0AkN8G5dDpZtOOBkmWt/zjA==}
@@ -7965,6 +7980,8 @@ snapshots:
   '@sinonjs/fake-timers@10.3.0':
     dependencies:
       '@sinonjs/commons': 3.0.1
+
+  '@tauri-apps/api@2.10.1': {}
 
   '@tauri-apps/cli-darwin-arm64@2.10.0':
     optional: true

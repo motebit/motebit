@@ -16,10 +16,14 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
+    "@motebit/ai-core": "workspace:*",
+    "@motebit/event-log": "workspace:*",
+    "@motebit/memory-graph": "workspace:*",
     "@motebit/sdk": "workspace:*",
     "@motebit/state-vector": "workspace:*",
     "@motebit/behavior-engine": "workspace:*",
     "@motebit/render-engine": "workspace:*",
+    "@tauri-apps/api": "^2.0.0",
     "three": "^0.170.0"
   },
   "devDependencies": {

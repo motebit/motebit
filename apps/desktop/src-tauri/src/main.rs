@@ -25,6 +25,19 @@ fn db_execute(state: State<AppState>, sql: String) -> Result<usize, String> {
     db.execute(&sql, []).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn read_config() -> Result<String, String> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map_err(|_| "Cannot determine home directory".to_string())?;
+    let path = std::path::Path::new(&home).join(".motebit").join("config.json");
+    match std::fs::read_to_string(&path) {
+        Ok(contents) => Ok(contents),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok("{}".to_string()),
+        Err(e) => Err(format!("Failed to read config: {}", e)),
+    }
+}
+
 fn main() {
     let db = Connection::open("motebit.db").expect("Failed to open database");
 
@@ -36,7 +49,7 @@ fn main() {
         .manage(AppState {
             db: Mutex::new(db),
         })
-        .invoke_handler(tauri::generate_handler![db_query, db_execute])
+        .invoke_handler(tauri::generate_handler![db_query, db_execute, read_config])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

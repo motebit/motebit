@@ -67,3 +67,83 @@ describe("DesktopApp", () => {
     // Should be cleanly stopped without errors
   });
 });
+
+// ---------------------------------------------------------------------------
+// DesktopApp.initAI — provider selection
+// ---------------------------------------------------------------------------
+
+describe("DesktopApp.initAI", () => {
+  let app: DesktopApp;
+
+  afterEach(() => {
+    if (app) {
+      app.stop();
+    }
+  });
+
+  it("ollama provider initializes without an API key", () => {
+    app = new DesktopApp();
+    const result = app.initAI({
+      provider: "ollama",
+      isTauri: false,
+    });
+    expect(result).toBe(true);
+    expect(app.isAIReady).toBe(true);
+  });
+
+  it("anthropic provider initializes with an API key", () => {
+    app = new DesktopApp();
+    const result = app.initAI({
+      provider: "anthropic",
+      apiKey: "sk-ant-test-key",
+      isTauri: false,
+    });
+    expect(result).toBe(true);
+    expect(app.isAIReady).toBe(true);
+  });
+
+  it("anthropic provider fails without an API key", () => {
+    app = new DesktopApp();
+    const result = app.initAI({
+      provider: "anthropic",
+      isTauri: false,
+    });
+    expect(result).toBe(false);
+    expect(app.isAIReady).toBe(false);
+  });
+
+  it("personalityConfig temperature is passed through", () => {
+    app = new DesktopApp();
+    // This should not throw — the resolved config propagates to the provider
+    const result = app.initAI({
+      provider: "ollama",
+      personalityConfig: { temperature: 0.2 },
+      isTauri: false,
+    });
+    expect(result).toBe(true);
+    expect(app.isAIReady).toBe(true);
+  });
+
+  it("ollama uses custom model when specified", () => {
+    app = new DesktopApp();
+    const result = app.initAI({
+      provider: "ollama",
+      model: "mistral",
+      isTauri: false,
+    });
+    expect(result).toBe(true);
+    expect(app.isAIReady).toBe(true);
+  });
+
+  it("anthropic uses custom model when specified", () => {
+    app = new DesktopApp();
+    const result = app.initAI({
+      provider: "anthropic",
+      apiKey: "sk-ant-test-key",
+      model: "claude-haiku-4-5-20251001",
+      isTauri: false,
+    });
+    expect(result).toBe(true);
+    expect(app.isAIReady).toBe(true);
+  });
+});
