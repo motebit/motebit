@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { View, Text, StyleSheet } from "react-native";
-import type { MoteState } from "@mote/sdk";
-import { TrustMode, BatteryMode } from "@mote/sdk";
+import type { MotebitState } from "@motebit/sdk";
+import { TrustMode, BatteryMode } from "@motebit/sdk";
 
-const DEFAULT_STATE: MoteState = {
+const DEFAULT_STATE: MotebitState = {
   attention: 0,
   processing: 0,
   confidence: 0.5,
@@ -16,7 +16,7 @@ const DEFAULT_STATE: MoteState = {
 };
 
 export function App(): React.ReactElement {
-  const [state, setState] = useState<MoteState>(DEFAULT_STATE);
+  const [state, setState] = useState<MotebitState>(DEFAULT_STATE);
   const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
@@ -33,14 +33,14 @@ export function App(): React.ReactElement {
   if (!initialized) {
     return (
       <View style={styles.container}>
-        <Text style={styles.text}>Initializing Mote...</Text>
+        <Text style={styles.text}>Initializing Motebit...</Text>
       </View>
     );
   }
 
   return (
     <View style={styles.container}>
-      <Text style={styles.text}>Mote</Text>
+      <Text style={styles.text}>Motebit</Text>
       <Text style={styles.subtext}>
         attention: {state.attention.toFixed(2)} | confidence: {state.confidence.toFixed(2)}
       </Text>

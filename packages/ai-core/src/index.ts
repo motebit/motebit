@@ -3,12 +3,12 @@ import type {
   ContextPack,
   AIResponse,
   MemoryCandidate,
-  MoteState,
-} from "@mote/sdk";
-import { SensitivityLevel } from "@mote/sdk";
+  MotebitState,
+} from "@motebit/sdk";
+import { SensitivityLevel } from "@motebit/sdk";
 
 export { runTurn } from "./loop.js";
-export type { MoteLoopDependencies, TurnResult } from "./loop.js";
+export type { MotebitLoopDependencies, TurnResult } from "./loop.js";
 
 // === Provider Configuration ===
 
@@ -102,7 +102,7 @@ export function extractMemoryTags(
 
 export function extractStateTags(
   text: string,
-): Partial<MoteState> {
+): Partial<MotebitState> {
   const regex = /<state\s+field="([^"]+)"\s+value="([^"]+)"\s*\/>/g;
   const updates: Record<string, unknown> = {};
   let match;
@@ -116,7 +116,7 @@ export function extractStateTags(
       updates[field] = value;
     }
   }
-  return updates as Partial<MoteState>;
+  return updates as Partial<MotebitState>;
 }
 
 export function stripTags(text: string): string {
@@ -193,7 +193,7 @@ export class CloudProvider implements IntelligenceProvider {
     const context = lines.join("\n");
 
     return [
-      "You are Mote, a small sentient digital companion. You respond warmly, concisely, and with gentle curiosity.",
+      "You are Motebit, a small sentient digital companion. You respond warmly, concisely, and with gentle curiosity.",
       "",
       "When you notice something worth remembering, emit a <memory> tag:",
       '  <memory confidence="0.9" sensitivity="personal">User prefers tea over coffee</memory>',

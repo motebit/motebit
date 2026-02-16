@@ -3,31 +3,31 @@ import { cors } from "hono/cors";
 import {
   CloudProvider,
   runTurn,
-} from "@mote/ai-core";
-import type { CloudProviderConfig, MoteLoopDependencies } from "@mote/ai-core";
-import { EventStore } from "@mote/event-log";
-import { MemoryGraph, embedText } from "@mote/memory-graph";
-import { StateVectorEngine } from "@mote/state-vector";
-import { BehaviorEngine } from "@mote/behavior-engine";
-import { createMoteDatabase } from "@mote/persistence";
-import type { MoteDatabase } from "@mote/persistence";
-import { IdentityManager } from "@mote/core-identity";
-import { PrivacyLayer } from "@mote/privacy-layer";
-import { SyncEngine } from "@mote/sync-engine";
-import { SensitivityLevel } from "@mote/sdk";
-import type { EventLogEntry } from "@mote/sdk";
+} from "@motebit/ai-core";
+import type { CloudProviderConfig, MotebitLoopDependencies } from "@motebit/ai-core";
+import { EventStore } from "@motebit/event-log";
+import { MemoryGraph, embedText } from "@motebit/memory-graph";
+import { StateVectorEngine } from "@motebit/state-vector";
+import { BehaviorEngine } from "@motebit/behavior-engine";
+import { createMotebitDatabase } from "@motebit/persistence";
+import type { MotebitDatabase } from "@motebit/persistence";
+import { IdentityManager } from "@motebit/core-identity";
+import { PrivacyLayer } from "@motebit/privacy-layer";
+import { SyncEngine } from "@motebit/sync-engine";
+import { SensitivityLevel } from "@motebit/sdk";
+import type { EventLogEntry } from "@motebit/sdk";
 
 // === Config & Types ===
 
-export interface MoteServerConfig {
-  moteId: string;
+export interface MotebitServerConfig {
+  motebitId: string;
   apiKey: string;
   dbPath?: string; // default ":memory:" for tests
 }
 
-export interface MoteServer {
+export interface MotebitServer {
   app: Hono;
-  deps: MoteLoopDependencies;
+  deps: MotebitLoopDependencies;
   close(): void;
 }
 
@@ -36,8 +36,8 @@ export interface MoteServer {
 /**
  * Create a fully-wired Hono app backed by SQLite persistence.
  */
-export function createMoteServer(config: MoteServerConfig): MoteServer {
-  const { moteId, apiKey, dbPath = ":memory:" } = config;
+export function createMotebitServer(config: MotebitServerConfig): MotebitServer {
+  const { motebitId, apiKey, dbPath = ":memory:" } = config;
 
   const cloudConfig: CloudProviderConfig = {
     provider: "anthropic",
@@ -46,28 +46,28 @@ export function createMoteServer(config: MoteServerConfig): MoteServer {
   };
 
   // Persistence
-  const moteDb: MoteDatabase = createMoteDatabase(dbPath);
+  const moteDb: MotebitDatabase = createMotebitDatabase(dbPath);
 
   // Core services
   const eventStore = new EventStore(moteDb.eventStore);
-  const memoryGraph = new MemoryGraph(moteDb.memoryStorage, eventStore, moteId);
+  const memoryGraph = new MemoryGraph(moteDb.memoryStorage, eventStore, motebitId);
   const identityManager = new IdentityManager(moteDb.identityStorage, eventStore);
   const privacyLayer = new PrivacyLayer(
     moteDb.memoryStorage,
     memoryGraph,
     eventStore,
     moteDb.auditLog,
-    moteId,
+    motebitId,
   );
-  const syncEngine = new SyncEngine(moteDb.eventStore, moteId);
+  const syncEngine = new SyncEngine(moteDb.eventStore, motebitId);
 
   // AI/behavior
   const stateEngine = new StateVectorEngine();
   const behaviorEngine = new BehaviorEngine();
   const cloudProvider = new CloudProvider(cloudConfig);
 
-  const deps: MoteLoopDependencies = {
-    moteId,
+  const deps: MotebitLoopDependencies = {
+    motebitId,
     eventStore,
     memoryGraph,
     stateEngine,
@@ -85,11 +85,11 @@ export function createMoteServer(config: MoteServerConfig): MoteServer {
 
   // === Message Route (wired to orchestrator) ===
 
-  app.post("/api/v1/message/:moteId", async (c) => {
+  app.post("/api/v1/message/:motebitId", async (c) => {
     const body = await c.req.json<{ message: string }>();
     const result = await runTurn(deps, body.message);
     return c.json({
-      mote_id: moteId,
+      motebit_id: motebitId,
       response: result.response,
       memories_formed: result.memoriesFormed,
       state: result.stateAfter,
@@ -105,8 +105,8 @@ export function createMoteServer(config: MoteServerConfig): MoteServer {
     return c.json(identity, 201);
   });
 
-  app.get("/api/v1/identity/:moteId", async (c) => {
-    const id = c.req.param("moteId");
+  app.get("/api/v1/identity/:motebitId", async (c) => {
+    const id = c.req.param("motebitId");
     const identity = await identityManager.load(id);
     if (!identity) {
       return c.json({ error: "identity not found" }, 404);
@@ -116,16 +116,16 @@ export function createMoteServer(config: MoteServerConfig): MoteServer {
 
   // === Memory Routes ===
 
-  app.get("/api/v1/memory/:moteId", async (c) => {
+  app.get("/api/v1/memory/:motebitId", async (c) => {
     const exported = await memoryGraph.exportAll();
     return c.json({
-      mote_id: moteId,
+      motebit_id: motebitId,
       memories: exported.nodes,
       edges: exported.edges,
     });
   });
 
-  app.post("/api/v1/memory/:moteId", async (c) => {
+  app.post("/api/v1/memory/:motebitId", async (c) => {
     const body = await c.req.json<{ content: string; sensitivity?: string }>();
     const sensitivity = parseSensitivity(body.sensitivity);
     const embedding = await embedText(body.content);
@@ -136,42 +136,42 @@ export function createMoteServer(config: MoteServerConfig): MoteServer {
     return c.json(node, 201);
   });
 
-  app.delete("/api/v1/memory/:moteId/:nodeId", async (c) => {
+  app.delete("/api/v1/memory/:motebitId/:nodeId", async (c) => {
     const nodeId = c.req.param("nodeId");
     await memoryGraph.deleteMemory(nodeId);
-    return c.json({ mote_id: moteId, node_id: nodeId, deleted: true });
+    return c.json({ motebit_id: motebitId, node_id: nodeId, deleted: true });
   });
 
   // === State Routes ===
 
-  app.get("/api/v1/state/:moteId", async (c) => {
+  app.get("/api/v1/state/:motebitId", async (c) => {
     const state = stateEngine.getState();
-    return c.json({ mote_id: moteId, state });
+    return c.json({ motebit_id: motebitId, state });
   });
 
   // === Sync Routes ===
 
-  app.post("/api/v1/sync/:moteId/push", async (c) => {
+  app.post("/api/v1/sync/:motebitId/push", async (c) => {
     const body = await c.req.json<{ events: EventLogEntry[] }>();
     for (const event of body.events) {
       await eventStore.append(event);
     }
-    return c.json({ mote_id: moteId, accepted: body.events.length });
+    return c.json({ motebit_id: motebitId, accepted: body.events.length });
   });
 
-  app.get("/api/v1/sync/:moteId/pull", async (c) => {
+  app.get("/api/v1/sync/:motebitId/pull", async (c) => {
     const afterClock = Number(c.req.query("after_clock") ?? "0");
     const events = await eventStore.query({
-      mote_id: moteId,
+      motebit_id: motebitId,
       after_version_clock: afterClock,
     });
-    return c.json({ mote_id: moteId, events, after_clock: afterClock });
+    return c.json({ motebit_id: motebitId, events, after_clock: afterClock });
   });
 
   // === Export Route ===
 
-  app.get("/api/v1/export/:moteId", async (c) => {
-    const id = c.req.param("moteId");
+  app.get("/api/v1/export/:motebitId", async (c) => {
+    const id = c.req.param("motebitId");
     const identity = await identityManager.load(id);
     if (!identity) {
       return c.json({ error: "identity not found" }, 404);
@@ -182,8 +182,8 @@ export function createMoteServer(config: MoteServerConfig): MoteServer {
 
   // === Delete Route ===
 
-  app.post("/api/v1/delete/:moteId", async (c) => {
-    const id = c.req.param("moteId");
+  app.post("/api/v1/delete/:motebitId", async (c) => {
+    const id = c.req.param("motebitId");
     const body = await c.req.json<{ deleted_by: string }>();
 
     const identity = await identityManager.load(id);
@@ -203,7 +203,7 @@ export function createMoteServer(config: MoteServerConfig): MoteServer {
     const clock = await eventStore.getLatestClock(id);
     await eventStore.append({
       event_id: crypto.randomUUID(),
-      mote_id: id,
+      motebit_id: id,
       timestamp: Date.now(),
       event_type: "delete_requested" as EventLogEntry["event_type"],
       payload: { deleted_by: body.deleted_by, memories_deleted: deletionCertificates.length },
@@ -211,7 +211,7 @@ export function createMoteServer(config: MoteServerConfig): MoteServer {
       tombstoned: false,
     });
 
-    return c.json({ mote_id: id, deletion_certificates: deletionCertificates });
+    return c.json({ motebit_id: id, deletion_certificates: deletionCertificates });
   });
 
   function close(): void {
@@ -235,10 +235,10 @@ function parseSensitivity(value?: string): SensitivityLevel {
 
 // === Default app for standalone use ===
 
-const { app } = createMoteServer({
-  moteId: process.env.MOTE_ID ?? "default-mote",
+const { app } = createMotebitServer({
+  motebitId: process.env.MOTEBIT_ID ?? "default-mote",
   apiKey: process.env.ANTHROPIC_API_KEY ?? "",
-  dbPath: process.env.MOTE_DB_PATH,
+  dbPath: process.env.MOTEBIT_DB_PATH,
 });
 
 export default app;

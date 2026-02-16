@@ -1,13 +1,13 @@
 /**
- * @mote/spatial — AR/Spatial computing stub
+ * @motebit/spatial — AR/Spatial computing stub
  *
  * This package defines the spatial anchoring API and body-relative
  * positioning system. Actual AR runtime (Unity/Unreal/WebXR)
- * must conform to the canonical render spec from @mote/render-engine.
+ * must conform to the canonical render spec from @motebit/render-engine.
  */
 
-import type { RenderSpec } from "@mote/sdk";
-import { CANONICAL_SPEC, type RenderAdapter, type RenderFrame } from "@mote/render-engine";
+import type { RenderSpec } from "@motebit/sdk";
+import { CANONICAL_SPEC, type RenderAdapter, type RenderFrame } from "@motebit/render-engine";
 
 // === Spatial Anchor ===
 
@@ -63,7 +63,7 @@ export class WebXRAdapter implements RenderAdapter {
   }
 
   render(_frame: RenderFrame): void {
-    // In production: render mote at body-relative position in AR space
+    // In production: render motebit at body-relative position in AR space
   }
 
   getSpec(): RenderSpec {

@@ -31,20 +31,20 @@ afterEach(() => {
 
 describe("fetchState", () => {
   it("calls correct URL and returns typed response", async () => {
-    const data = { mote_id: "m1", state: { attention: 0.5 } };
+    const data = { motebit_id: "m1", state: { attention: 0.5 } };
     mockFetch(data);
 
     const result = await fetchState();
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      `${config.apiUrl}/api/v1/state/${config.moteId}`,
+      `${config.apiUrl}/api/v1/state/${config.motebitId}`,
       { signal: undefined },
     );
     expect(result).toEqual(data);
   });
 
   it("passes AbortSignal", async () => {
-    mockFetch({ mote_id: "m1", state: {} });
+    mockFetch({ motebit_id: "m1", state: {} });
     const controller = new AbortController();
 
     await fetchState(controller.signal);
@@ -58,13 +58,13 @@ describe("fetchState", () => {
 
 describe("fetchMemory", () => {
   it("calls correct URL and returns typed response", async () => {
-    const data = { mote_id: "m1", memories: [], edges: [] };
+    const data = { motebit_id: "m1", memories: [], edges: [] };
     mockFetch(data);
 
     const result = await fetchMemory();
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      `${config.apiUrl}/api/v1/memory/${config.moteId}`,
+      `${config.apiUrl}/api/v1/memory/${config.motebitId}`,
       { signal: undefined },
     );
     expect(result).toEqual(data);
@@ -73,13 +73,13 @@ describe("fetchMemory", () => {
 
 describe("fetchEvents", () => {
   it("calls correct URL with after_clock param", async () => {
-    const data = { mote_id: "m1", events: [], after_clock: 5 };
+    const data = { motebit_id: "m1", events: [], after_clock: 5 };
     mockFetch(data);
 
     const result = await fetchEvents(5);
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      `${config.apiUrl}/api/v1/sync/${config.moteId}/pull?after_clock=5`,
+      `${config.apiUrl}/api/v1/sync/${config.motebitId}/pull?after_clock=5`,
       { signal: undefined },
     );
     expect(result).toEqual(data);
@@ -88,13 +88,13 @@ describe("fetchEvents", () => {
 
 describe("deleteMemoryNode", () => {
   it("calls DELETE with correct URL", async () => {
-    const data = { mote_id: "m1", node_id: "n1", deleted: true };
+    const data = { motebit_id: "m1", node_id: "n1", deleted: true };
     mockFetch(data);
 
     const result = await deleteMemoryNode("n1");
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      `${config.apiUrl}/api/v1/memory/${config.moteId}/n1`,
+      `${config.apiUrl}/api/v1/memory/${config.motebitId}/n1`,
       { method: "DELETE", signal: undefined },
     );
     expect(result).toEqual(data);

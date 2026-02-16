@@ -1,25 +1,25 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
-  createMoteDatabase,
-  type MoteDatabase,
+  createMotebitDatabase,
+  type MotebitDatabase,
 } from "../index.js";
 import {
   EventType,
   SensitivityLevel,
   RelationType,
-} from "@mote/sdk";
+} from "@motebit/sdk";
 import type {
   EventLogEntry,
   MemoryNode,
   MemoryEdge,
-  MoteIdentity,
+  MotebitIdentity,
   AuditRecord,
-} from "@mote/sdk";
+} from "@motebit/sdk";
 
-let mdb: MoteDatabase;
+let mdb: MotebitDatabase;
 
 beforeEach(() => {
-  mdb = createMoteDatabase(":memory:");
+  mdb = createMotebitDatabase(":memory:");
 });
 
 // === Schema ===
@@ -40,9 +40,9 @@ describe("schema", () => {
     expect(names).toContain("state_snapshots");
   });
 
-  it("is idempotent (calling createMoteDatabase twice on same db is safe)", () => {
+  it("is idempotent (calling createMotebitDatabase twice on same db is safe)", () => {
     // Just ensure no error on second init
-    expect(() => createMoteDatabase(":memory:")).not.toThrow();
+    expect(() => createMotebitDatabase(":memory:")).not.toThrow();
   });
 });
 
@@ -51,7 +51,7 @@ describe("schema", () => {
 describe("SqliteEventStore", () => {
   const makeEvent = (overrides: Partial<EventLogEntry> = {}): EventLogEntry => ({
     event_id: crypto.randomUUID(),
-    mote_id: "mote-1",
+    motebit_id: "motebit-1",
     timestamp: Date.now(),
     event_type: EventType.MemoryFormed,
     payload: { test: true },
@@ -63,25 +63,25 @@ describe("SqliteEventStore", () => {
   it("appends and queries events", async () => {
     const event = makeEvent();
     await mdb.eventStore.append(event);
-    const results = await mdb.eventStore.query({ mote_id: "mote-1" });
+    const results = await mdb.eventStore.query({ motebit_id: "motebit-1" });
     expect(results).toHaveLength(1);
     expect(results[0]!.event_id).toBe(event.event_id);
     expect(results[0]!.payload).toEqual({ test: true });
   });
 
-  it("filters by mote_id", async () => {
-    await mdb.eventStore.append(makeEvent({ mote_id: "mote-1", version_clock: 1 }));
-    await mdb.eventStore.append(makeEvent({ mote_id: "mote-2", version_clock: 1 }));
-    const results = await mdb.eventStore.query({ mote_id: "mote-2" });
+  it("filters by motebit_id", async () => {
+    await mdb.eventStore.append(makeEvent({ motebit_id: "motebit-1", version_clock: 1 }));
+    await mdb.eventStore.append(makeEvent({ motebit_id: "motebit-2", version_clock: 1 }));
+    const results = await mdb.eventStore.query({ motebit_id: "motebit-2" });
     expect(results).toHaveLength(1);
-    expect(results[0]!.mote_id).toBe("mote-2");
+    expect(results[0]!.motebit_id).toBe("motebit-2");
   });
 
   it("filters by event_types", async () => {
     await mdb.eventStore.append(makeEvent({ event_type: EventType.MemoryFormed, version_clock: 1 }));
     await mdb.eventStore.append(makeEvent({ event_type: EventType.StateUpdated, version_clock: 2 }));
     const results = await mdb.eventStore.query({
-      mote_id: "mote-1",
+      motebit_id: "motebit-1",
       event_types: [EventType.StateUpdated],
     });
     expect(results).toHaveLength(1);
@@ -93,7 +93,7 @@ describe("SqliteEventStore", () => {
     await mdb.eventStore.append(makeEvent({ timestamp: 200, version_clock: 2 }));
     await mdb.eventStore.append(makeEvent({ timestamp: 300, version_clock: 3 }));
     const results = await mdb.eventStore.query({
-      mote_id: "mote-1",
+      motebit_id: "motebit-1",
       after_timestamp: 100,
       before_timestamp: 300,
     });
@@ -106,7 +106,7 @@ describe("SqliteEventStore", () => {
     await mdb.eventStore.append(makeEvent({ version_clock: 2 }));
     await mdb.eventStore.append(makeEvent({ version_clock: 3 }));
     const results = await mdb.eventStore.query({
-      mote_id: "mote-1",
+      motebit_id: "motebit-1",
       after_version_clock: 1,
     });
     expect(results).toHaveLength(2);
@@ -116,7 +116,7 @@ describe("SqliteEventStore", () => {
     await mdb.eventStore.append(makeEvent({ version_clock: 1 }));
     await mdb.eventStore.append(makeEvent({ version_clock: 2 }));
     await mdb.eventStore.append(makeEvent({ version_clock: 3 }));
-    const results = await mdb.eventStore.query({ mote_id: "mote-1", limit: 2 });
+    const results = await mdb.eventStore.query({ motebit_id: "motebit-1", limit: 2 });
     expect(results).toHaveLength(2);
   });
 
@@ -129,7 +129,7 @@ describe("SqliteEventStore", () => {
     await mdb.eventStore.append(makeEvent({ version_clock: 5 }));
     await mdb.eventStore.append(makeEvent({ version_clock: 3 }));
     await mdb.eventStore.append(makeEvent({ version_clock: 10 }));
-    const clock = await mdb.eventStore.getLatestClock("mote-1");
+    const clock = await mdb.eventStore.getLatestClock("motebit-1");
     expect(clock).toBe(10);
   });
 
@@ -137,9 +137,9 @@ describe("SqliteEventStore", () => {
     const event = makeEvent({ version_clock: 1 });
     await mdb.eventStore.append(event);
 
-    await mdb.eventStore.tombstone(event.event_id, "mote-1");
+    await mdb.eventStore.tombstone(event.event_id, "motebit-1");
 
-    const results = await mdb.eventStore.query({ mote_id: "mote-1" });
+    const results = await mdb.eventStore.query({ motebit_id: "motebit-1" });
     expect(results[0]!.tombstoned).toBe(true);
   });
 });
@@ -149,7 +149,7 @@ describe("SqliteEventStore", () => {
 describe("SqliteMemoryStorage", () => {
   const makeNode = (overrides: Partial<MemoryNode> = {}): MemoryNode => ({
     node_id: crypto.randomUUID(),
-    mote_id: "mote-1",
+    motebit_id: "motebit-1",
     content: "test memory",
     embedding: [0.1, 0.2, 0.3],
     confidence: 0.9,
@@ -187,18 +187,18 @@ describe("SqliteMemoryStorage", () => {
     expect(result).toBeNull();
   });
 
-  it("queryNodes filters by mote_id", async () => {
-    await mdb.memoryStorage.saveNode(makeNode({ mote_id: "mote-1" }));
-    await mdb.memoryStorage.saveNode(makeNode({ mote_id: "mote-2" }));
-    const results = await mdb.memoryStorage.queryNodes({ mote_id: "mote-1" });
+  it("queryNodes filters by motebit_id", async () => {
+    await mdb.memoryStorage.saveNode(makeNode({ motebit_id: "motebit-1" }));
+    await mdb.memoryStorage.saveNode(makeNode({ motebit_id: "motebit-2" }));
+    const results = await mdb.memoryStorage.queryNodes({ motebit_id: "motebit-1" });
     expect(results).toHaveLength(1);
-    expect(results[0]!.mote_id).toBe("mote-1");
+    expect(results[0]!.motebit_id).toBe("motebit-1");
   });
 
   it("queryNodes excludes tombstoned by default", async () => {
     await mdb.memoryStorage.saveNode(makeNode({ tombstoned: true }));
     await mdb.memoryStorage.saveNode(makeNode({ tombstoned: false }));
-    const results = await mdb.memoryStorage.queryNodes({ mote_id: "mote-1" });
+    const results = await mdb.memoryStorage.queryNodes({ motebit_id: "motebit-1" });
     expect(results).toHaveLength(1);
   });
 
@@ -206,7 +206,7 @@ describe("SqliteMemoryStorage", () => {
     await mdb.memoryStorage.saveNode(makeNode({ tombstoned: true }));
     await mdb.memoryStorage.saveNode(makeNode({ tombstoned: false }));
     const results = await mdb.memoryStorage.queryNodes({
-      mote_id: "mote-1",
+      motebit_id: "motebit-1",
       include_tombstoned: true,
     });
     expect(results).toHaveLength(2);
@@ -217,7 +217,7 @@ describe("SqliteMemoryStorage", () => {
     await mdb.memoryStorage.saveNode(makeNode({ sensitivity: SensitivityLevel.Medical }));
     await mdb.memoryStorage.saveNode(makeNode({ sensitivity: SensitivityLevel.Financial }));
     const results = await mdb.memoryStorage.queryNodes({
-      mote_id: "mote-1",
+      motebit_id: "motebit-1",
       sensitivity_filter: [SensitivityLevel.None, SensitivityLevel.Financial],
     });
     expect(results).toHaveLength(2);
@@ -228,7 +228,7 @@ describe("SqliteMemoryStorage", () => {
       await mdb.memoryStorage.saveNode(makeNode());
     }
     const results = await mdb.memoryStorage.queryNodes({
-      mote_id: "mote-1",
+      motebit_id: "motebit-1",
       limit: 3,
     });
     expect(results).toHaveLength(3);
@@ -264,17 +264,17 @@ describe("SqliteMemoryStorage", () => {
   });
 
   it("getAllNodes returns all nodes for a mote", async () => {
-    await mdb.memoryStorage.saveNode(makeNode({ mote_id: "mote-1" }));
-    await mdb.memoryStorage.saveNode(makeNode({ mote_id: "mote-1" }));
-    await mdb.memoryStorage.saveNode(makeNode({ mote_id: "mote-2" }));
-    const results = await mdb.memoryStorage.getAllNodes("mote-1");
+    await mdb.memoryStorage.saveNode(makeNode({ motebit_id: "motebit-1" }));
+    await mdb.memoryStorage.saveNode(makeNode({ motebit_id: "motebit-1" }));
+    await mdb.memoryStorage.saveNode(makeNode({ motebit_id: "motebit-2" }));
+    const results = await mdb.memoryStorage.getAllNodes("motebit-1");
     expect(results).toHaveLength(2);
   });
 
   it("getAllEdges returns edges for mote's nodes only", async () => {
-    const nodeA = makeNode({ mote_id: "mote-1" });
-    const nodeB = makeNode({ mote_id: "mote-1" });
-    const nodeC = makeNode({ mote_id: "mote-2" });
+    const nodeA = makeNode({ motebit_id: "motebit-1" });
+    const nodeB = makeNode({ motebit_id: "motebit-1" });
+    const nodeC = makeNode({ motebit_id: "motebit-2" });
     await mdb.memoryStorage.saveNode(nodeA);
     await mdb.memoryStorage.saveNode(nodeB);
     await mdb.memoryStorage.saveNode(nodeC);
@@ -282,10 +282,10 @@ describe("SqliteMemoryStorage", () => {
     await mdb.memoryStorage.saveEdge(makeEdge({ source_id: nodeA.node_id, target_id: nodeB.node_id }));
     await mdb.memoryStorage.saveEdge(makeEdge({ source_id: nodeC.node_id, target_id: nodeC.node_id }));
 
-    const mote1Edges = await mdb.memoryStorage.getAllEdges("mote-1");
+    const mote1Edges = await mdb.memoryStorage.getAllEdges("motebit-1");
     expect(mote1Edges).toHaveLength(1);
 
-    const mote2Edges = await mdb.memoryStorage.getAllEdges("mote-2");
+    const mote2Edges = await mdb.memoryStorage.getAllEdges("motebit-2");
     expect(mote2Edges).toHaveLength(1);
   });
 });
@@ -293,8 +293,8 @@ describe("SqliteMemoryStorage", () => {
 // === IdentityStorage ===
 
 describe("SqliteIdentityStorage", () => {
-  const makeIdentity = (overrides: Partial<MoteIdentity> = {}): MoteIdentity => ({
-    mote_id: crypto.randomUUID(),
+  const makeIdentity = (overrides: Partial<MotebitIdentity> = {}): MotebitIdentity => ({
+    motebit_id: crypto.randomUUID(),
     created_at: Date.now(),
     owner_id: "owner-1",
     version_clock: 0,
@@ -304,7 +304,7 @@ describe("SqliteIdentityStorage", () => {
   it("save/load round-trip", async () => {
     const identity = makeIdentity();
     await mdb.identityStorage.save(identity);
-    const loaded = await mdb.identityStorage.load(identity.mote_id);
+    const loaded = await mdb.identityStorage.load(identity.motebit_id);
     expect(loaded).toEqual(identity);
   });
 
@@ -318,7 +318,7 @@ describe("SqliteIdentityStorage", () => {
     await mdb.identityStorage.save(identity);
     const loaded = await mdb.identityStorage.loadByOwner("owner-42");
     expect(loaded).not.toBeNull();
-    expect(loaded!.mote_id).toBe(identity.mote_id);
+    expect(loaded!.motebit_id).toBe(identity.motebit_id);
   });
 
   it("loadByOwner returns null for missing owner", async () => {
@@ -332,7 +332,7 @@ describe("SqliteIdentityStorage", () => {
 describe("SqliteAuditLog", () => {
   const makeAudit = (overrides: Partial<AuditRecord> = {}): AuditRecord => ({
     audit_id: crypto.randomUUID(),
-    mote_id: "mote-1",
+    motebit_id: "motebit-1",
     timestamp: Date.now(),
     action: "test_action",
     target_type: "memory",
@@ -344,7 +344,7 @@ describe("SqliteAuditLog", () => {
   it("record and query", async () => {
     const entry = makeAudit();
     await mdb.auditLog.record(entry);
-    const results = await mdb.auditLog.query("mote-1");
+    const results = await mdb.auditLog.query("motebit-1");
     expect(results).toHaveLength(1);
     expect(results[0]!.action).toBe("test_action");
     expect(results[0]!.details).toEqual({ foo: "bar" });
@@ -354,7 +354,7 @@ describe("SqliteAuditLog", () => {
     await mdb.auditLog.record(makeAudit({ timestamp: 100 }));
     await mdb.auditLog.record(makeAudit({ timestamp: 200 }));
     await mdb.auditLog.record(makeAudit({ timestamp: 300 }));
-    const results = await mdb.auditLog.query("mote-1", { after: 150 });
+    const results = await mdb.auditLog.query("motebit-1", { after: 150 });
     expect(results).toHaveLength(2);
   });
 
@@ -362,7 +362,7 @@ describe("SqliteAuditLog", () => {
     await mdb.auditLog.record(makeAudit({ timestamp: 100, action: "first" }));
     await mdb.auditLog.record(makeAudit({ timestamp: 200, action: "second" }));
     await mdb.auditLog.record(makeAudit({ timestamp: 300, action: "third" }));
-    const results = await mdb.auditLog.query("mote-1", { limit: 2 });
+    const results = await mdb.auditLog.query("motebit-1", { limit: 2 });
     expect(results).toHaveLength(2);
     expect(results[0]!.action).toBe("second");
     expect(results[1]!.action).toBe("third");
@@ -374,8 +374,8 @@ describe("SqliteAuditLog", () => {
 describe("SqliteStateSnapshot", () => {
   it("saveState/loadState round-trip", () => {
     const json = JSON.stringify({ attention: 0.5, confidence: 0.8 });
-    mdb.stateSnapshot.saveState("mote-1", json);
-    const loaded = mdb.stateSnapshot.loadState("mote-1");
+    mdb.stateSnapshot.saveState("motebit-1", json);
+    const loaded = mdb.stateSnapshot.loadState("motebit-1");
     expect(loaded).toBe(json);
   });
 
@@ -385,9 +385,9 @@ describe("SqliteStateSnapshot", () => {
   });
 
   it("saveState overwrites previous value", () => {
-    mdb.stateSnapshot.saveState("mote-1", "first");
-    mdb.stateSnapshot.saveState("mote-1", "second");
-    const loaded = mdb.stateSnapshot.loadState("mote-1");
+    mdb.stateSnapshot.saveState("motebit-1", "first");
+    mdb.stateSnapshot.saveState("motebit-1", "second");
+    const loaded = mdb.stateSnapshot.loadState("motebit-1");
     expect(loaded).toBe("second");
   });
 });
@@ -398,7 +398,7 @@ describe("cross-adapter persistence", () => {
   it("data persists across separate adapter instances sharing same db", async () => {
     const event = {
       event_id: crypto.randomUUID(),
-      mote_id: "mote-1",
+      motebit_id: "motebit-1",
       timestamp: Date.now(),
       event_type: EventType.MemoryFormed,
       payload: { shared: true },
@@ -410,7 +410,7 @@ describe("cross-adapter persistence", () => {
     // Create new adapter instances from the same db handle
     const { SqliteEventStore } = await import("../index.js");
     const freshEventStore = new SqliteEventStore(mdb.db);
-    const results = await freshEventStore.query({ mote_id: "mote-1" });
+    const results = await freshEventStore.query({ motebit_id: "motebit-1" });
     expect(results).toHaveLength(1);
     expect(results[0]!.payload).toEqual({ shared: true });
   });

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { computeWorldPosition, WebXRAdapter } from "../index";
 import type { SpatialAnchor, BodyRelativePosition } from "../index";
-import { CANONICAL_SPEC } from "@mote/render-engine";
+import { CANONICAL_SPEC } from "@motebit/render-engine";
 
 // ---------------------------------------------------------------------------
 // Helper: create a default body anchor at a known position

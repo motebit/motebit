@@ -1,5 +1,5 @@
 {
-  "name": "@mote/sync-engine",
+  "name": "@motebit/sync-engine",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -13,8 +13,8 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@mote/sdk": "workspace:*",
-    "@mote/event-log": "workspace:*"
+    "@motebit/sdk": "workspace:*",
+    "@motebit/event-log": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

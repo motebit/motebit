@@ -2,17 +2,17 @@ import * as readline from "node:readline";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { CloudProvider, runTurn } from "@mote/ai-core";
-import type { MoteLoopDependencies } from "@mote/ai-core";
-import { EventStore } from "@mote/event-log";
-import { MemoryGraph } from "@mote/memory-graph";
-import { StateVectorEngine } from "@mote/state-vector";
-import { BehaviorEngine } from "@mote/behavior-engine";
-import { createMoteDatabase, type MoteDatabase } from "@mote/persistence";
+import { CloudProvider, runTurn } from "@motebit/ai-core";
+import type { MotebitLoopDependencies } from "@motebit/ai-core";
+import { EventStore } from "@motebit/event-log";
+import { MemoryGraph } from "@motebit/memory-graph";
+import { StateVectorEngine } from "@motebit/state-vector";
+import { BehaviorEngine } from "@motebit/behavior-engine";
+import { createMotebitDatabase, type MotebitDatabase } from "@motebit/persistence";
 
 // --- Configuration ---
 
-const MOTE_ID = "mote-cli";
+const MOTEBIT_ID = "motebit-cli";
 
 function getApiKey(): string {
   const key = process.env["ANTHROPIC_API_KEY"];
@@ -27,31 +27,31 @@ function getApiKey(): string {
 }
 
 function getDbPath(): string {
-  const envPath = process.env["MOTE_DB_PATH"];
+  const envPath = process.env["MOTEBIT_DB_PATH"];
   if (envPath) return envPath;
-  const dir = path.join(os.homedir(), ".mote");
+  const dir = path.join(os.homedir(), ".motebit");
   fs.mkdirSync(dir, { recursive: true });
-  return path.join(dir, "mote.db");
+  return path.join(dir, "motebit.db");
 }
 
 // --- Bootstrap dependencies ---
 
 interface CliDeps {
-  loopDeps: MoteLoopDependencies;
-  moteDb: MoteDatabase;
+  loopDeps: MotebitLoopDependencies;
+  moteDb: MotebitDatabase;
   stateEngine: StateVectorEngine;
 }
 
 function createDependencies(apiKey: string): CliDeps {
   const dbPath = getDbPath();
-  const moteDb = createMoteDatabase(dbPath);
+  const moteDb = createMotebitDatabase(dbPath);
 
   const eventStore = new EventStore(moteDb.eventStore);
-  const memoryGraph = new MemoryGraph(moteDb.memoryStorage, eventStore, MOTE_ID);
+  const memoryGraph = new MemoryGraph(moteDb.memoryStorage, eventStore, MOTEBIT_ID);
   const stateEngine = new StateVectorEngine();
 
   // Restore state from snapshot if available
-  const savedState = moteDb.stateSnapshot.loadState(MOTE_ID);
+  const savedState = moteDb.stateSnapshot.loadState(MOTEBIT_ID);
   if (savedState) {
     stateEngine.deserialize(savedState);
   }
@@ -69,7 +69,7 @@ function createDependencies(apiKey: string): CliDeps {
 
   return {
     loopDeps: {
-      moteId: MOTE_ID,
+      motebitId: MOTEBIT_ID,
       eventStore,
       memoryGraph,
       stateEngine,
@@ -88,7 +88,7 @@ async function main(): Promise<void> {
   const { loopDeps, moteDb, stateEngine } = createDependencies(apiKey);
 
   const shutdown = (): void => {
-    moteDb.stateSnapshot.saveState(MOTE_ID, stateEngine.serialize());
+    moteDb.stateSnapshot.saveState(MOTEBIT_ID, stateEngine.serialize());
     moteDb.close();
   };
 
@@ -103,7 +103,7 @@ async function main(): Promise<void> {
     output: process.stdout,
   });
 
-  console.log("Mote CLI — type a message, or 'quit' to exit\n");
+  console.log("Motebit CLI — type a message, or 'quit' to exit\n");
 
   const prompt = (): void => {
     rl.question("you> ", (line) => {

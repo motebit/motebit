@@ -1,16 +1,16 @@
-import type { BehaviorCues, MoteState, MemoryNode } from "@mote/sdk";
-import { EventType } from "@mote/sdk";
-import type { EventStore } from "@mote/event-log";
-import type { MemoryGraph } from "@mote/memory-graph";
-import { embedText } from "@mote/memory-graph";
-import type { StateVectorEngine } from "@mote/state-vector";
-import type { BehaviorEngine } from "@mote/behavior-engine";
+import type { BehaviorCues, MotebitState, MemoryNode } from "@motebit/sdk";
+import { EventType } from "@motebit/sdk";
+import type { EventStore } from "@motebit/event-log";
+import type { MemoryGraph } from "@motebit/memory-graph";
+import { embedText } from "@motebit/memory-graph";
+import type { StateVectorEngine } from "@motebit/state-vector";
+import type { BehaviorEngine } from "@motebit/behavior-engine";
 import type { CloudProvider } from "./index.js";
 
 // === Types ===
 
-export interface MoteLoopDependencies {
-  moteId: string;
+export interface MotebitLoopDependencies {
+  motebitId: string;
   eventStore: EventStore;
   memoryGraph: MemoryGraph;
   stateEngine: StateVectorEngine;
@@ -21,18 +21,18 @@ export interface MoteLoopDependencies {
 export interface TurnResult {
   response: string;
   memoriesFormed: MemoryNode[];
-  stateAfter: MoteState;
+  stateAfter: MotebitState;
   cues: BehaviorCues;
 }
 
 // === Orchestrator ===
 
 export async function runTurn(
-  deps: MoteLoopDependencies,
+  deps: MotebitLoopDependencies,
   userMessage: string,
 ): Promise<TurnResult> {
   const {
-    moteId,
+    motebitId,
     eventStore,
     memoryGraph,
     stateEngine,
@@ -42,7 +42,7 @@ export async function runTurn(
 
   // 1. Query recent events
   const recentEvents = await eventStore.query({
-    mote_id: moteId,
+    motebit_id: motebitId,
     limit: 10,
   });
 
@@ -75,10 +75,10 @@ export async function runTurn(
   }
 
   // 6. Log interaction event
-  const clock = await eventStore.getLatestClock(moteId);
+  const clock = await eventStore.getLatestClock(motebitId);
   await eventStore.append({
     event_id: crypto.randomUUID(),
-    mote_id: moteId,
+    motebit_id: motebitId,
     timestamp: Date.now(),
     event_type: EventType.StateUpdated,
     payload: {

@@ -1,5 +1,5 @@
 /**
- * @mote/crypto — Key handling, encryption, delete semantics.
+ * @motebit/crypto — Key handling, encryption, delete semantics.
  *
  * Uses @noble/hashes and @noble/ciphers for zero-dependency,
  * audited cryptographic operations.

@@ -1,6 +1,6 @@
-import type { MoteState } from "@mote/sdk";
-import { TrustMode, BatteryMode } from "@mote/sdk";
-import { clampState } from "@mote/policy-invariants";
+import type { MotebitState } from "@motebit/sdk";
+import { TrustMode, BatteryMode } from "@motebit/sdk";
+import { clampState } from "@motebit/policy-invariants";
 
 // === Types ===
 
@@ -12,10 +12,10 @@ export interface StateVectorConfig {
 }
 
 export interface StateSubscriber {
-  (state: MoteState): void;
+  (state: MotebitState): void;
 }
 
-export interface InterpolatedState extends MoteState {
+export interface InterpolatedState extends MotebitState {
   interpolation_t: number; // [0, 1] between prev and next tick
 }
 
@@ -30,7 +30,7 @@ const DEFAULT_CONFIG: StateVectorConfig = {
 
 // === Default State ===
 
-function defaultState(): MoteState {
+function defaultState(): MotebitState {
   return {
     attention: 0,
     processing: 0,
@@ -56,9 +56,9 @@ interface HysteresisEntry {
 
 export class StateVectorEngine {
   private config: StateVectorConfig;
-  private currentState: MoteState;
-  private previousState: MoteState;
-  private rawInputState: MoteState;
+  private currentState: MotebitState;
+  private previousState: MotebitState;
+  private rawInputState: MotebitState;
   private subscribers: Set<StateSubscriber> = new Set();
   private tickInterval: ReturnType<typeof setInterval> | null = null;
   private lastTickTime: number = 0;
@@ -94,7 +94,7 @@ export class StateVectorEngine {
   /**
    * Push raw state updates from external sources (AI, sensors, etc).
    */
-  pushUpdate(partial: Partial<MoteState>): void {
+  pushUpdate(partial: Partial<MotebitState>): void {
     this.rawInputState = { ...this.rawInputState, ...partial };
   }
 
@@ -111,7 +111,7 @@ export class StateVectorEngine {
   /**
    * Get the current computed state.
    */
-  getState(): MoteState {
+  getState(): MotebitState {
     return { ...this.currentState };
   }
 
@@ -236,7 +236,7 @@ export class StateVectorEngine {
    * Restore state from serialized form.
    */
   deserialize(data: string): void {
-    const parsed = JSON.parse(data) as MoteState;
+    const parsed = JSON.parse(data) as MotebitState;
     this.currentState = clampState(parsed);
     this.previousState = { ...this.currentState };
     this.rawInputState = { ...this.currentState };

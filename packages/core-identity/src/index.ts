@@ -1,6 +1,6 @@
-import type { MoteIdentity, EventLogEntry } from "@mote/sdk";
-import { EventType } from "@mote/sdk";
-import type { EventStore } from "@mote/event-log";
+import type { MotebitIdentity, EventLogEntry } from "@motebit/sdk";
+import { EventType } from "@motebit/sdk";
+import type { EventStore } from "@motebit/event-log";
 
 // === UUID v7 Generation ===
 
@@ -31,25 +31,25 @@ function generateUUIDv7(): string {
 // === Identity Storage Interface ===
 
 export interface IdentityStorage {
-  save(identity: MoteIdentity): Promise<void>;
-  load(moteId: string): Promise<MoteIdentity | null>;
-  loadByOwner(ownerId: string): Promise<MoteIdentity | null>;
+  save(identity: MotebitIdentity): Promise<void>;
+  load(motebitId: string): Promise<MotebitIdentity | null>;
+  loadByOwner(ownerId: string): Promise<MotebitIdentity | null>;
 }
 
 // === In-Memory Storage (for testing) ===
 
 export class InMemoryIdentityStorage implements IdentityStorage {
-  private identities = new Map<string, MoteIdentity>();
+  private identities = new Map<string, MotebitIdentity>();
 
-  async save(identity: MoteIdentity): Promise<void> {
-    this.identities.set(identity.mote_id, { ...identity });
+  async save(identity: MotebitIdentity): Promise<void> {
+    this.identities.set(identity.motebit_id, { ...identity });
   }
 
-  async load(moteId: string): Promise<MoteIdentity | null> {
-    return this.identities.get(moteId) ?? null;
+  async load(motebitId: string): Promise<MotebitIdentity | null> {
+    return this.identities.get(motebitId) ?? null;
   }
 
-  async loadByOwner(ownerId: string): Promise<MoteIdentity | null> {
+  async loadByOwner(ownerId: string): Promise<MotebitIdentity | null> {
     for (const identity of this.identities.values()) {
       if (identity.owner_id === ownerId) {
         return identity;
@@ -68,11 +68,11 @@ export class IdentityManager {
   ) {}
 
   /**
-   * Create a new Mote identity. The mote_id is immutable once created.
+   * Create a new Motebit identity. The motebit_id is immutable once created.
    */
-  async create(ownerId: string): Promise<MoteIdentity> {
-    const identity: MoteIdentity = {
-      mote_id: generateUUIDv7(),
+  async create(ownerId: string): Promise<MotebitIdentity> {
+    const identity: MotebitIdentity = {
+      motebit_id: generateUUIDv7(),
       created_at: Date.now(),
       owner_id: ownerId,
       version_clock: 0,
@@ -80,10 +80,10 @@ export class IdentityManager {
 
     await this.storage.save(identity);
 
-    const clock = await this.eventStore.getLatestClock(identity.mote_id);
+    const clock = await this.eventStore.getLatestClock(identity.motebit_id);
     const event: EventLogEntry = {
       event_id: generateUUIDv7(),
-      mote_id: identity.mote_id,
+      motebit_id: identity.motebit_id,
       timestamp: identity.created_at,
       event_type: EventType.IdentityCreated,
       payload: {
@@ -100,24 +100,24 @@ export class IdentityManager {
   /**
    * Load an existing identity. Returns null if not found.
    */
-  async load(moteId: string): Promise<MoteIdentity | null> {
-    return this.storage.load(moteId);
+  async load(motebitId: string): Promise<MotebitIdentity | null> {
+    return this.storage.load(motebitId);
   }
 
   /**
    * Load identity by owner. Returns null if not found.
    */
-  async loadByOwner(ownerId: string): Promise<MoteIdentity | null> {
+  async loadByOwner(ownerId: string): Promise<MotebitIdentity | null> {
     return this.storage.loadByOwner(ownerId);
   }
 
   /**
    * Increment the version clock and persist.
    */
-  async incrementClock(moteId: string): Promise<number> {
-    const identity = await this.storage.load(moteId);
+  async incrementClock(motebitId: string): Promise<number> {
+    const identity = await this.storage.load(motebitId);
     if (identity === null) {
-      throw new Error(`Identity not found: ${moteId}`);
+      throw new Error(`Identity not found: ${motebitId}`);
     }
     identity.version_clock += 1;
     await this.storage.save(identity);
@@ -127,7 +127,7 @@ export class IdentityManager {
   /**
    * Export identity as a plain JSON-serializable object.
    */
-  async export(moteId: string): Promise<MoteIdentity | null> {
-    return this.storage.load(moteId);
+  async export(motebitId: string): Promise<MotebitIdentity | null> {
+    return this.storage.load(motebitId);
   }
 }

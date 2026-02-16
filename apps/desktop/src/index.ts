@@ -1,5 +1,5 @@
 /**
- * @mote/desktop — Tauri app (Rust + webview)
+ * @motebit/desktop — Tauri app (Rust + webview)
  *
  * Architecture:
  * - Three.js in webview for rendering
@@ -15,10 +15,10 @@
  * - keyring_delete(key)
  */
 
-import type { MoteState, BehaviorCues } from "@mote/sdk";
-import { StateVectorEngine } from "@mote/state-vector";
-import { BehaviorEngine } from "@mote/behavior-engine";
-import { ThreeJSAdapter } from "@mote/render-engine";
+import type { MotebitState, BehaviorCues } from "@motebit/sdk";
+import { StateVectorEngine } from "@motebit/state-vector";
+import { BehaviorEngine } from "@motebit/behavior-engine";
+import { ThreeJSAdapter } from "@motebit/render-engine";
 
 // === Tauri Command Interface ===
 
@@ -48,7 +48,7 @@ export class DesktopApp {
     await this.renderer.init(canvas);
 
     // Subscribe to state changes → compute cues → render
-    this.stateEngine.subscribe((state: MoteState) => {
+    this.stateEngine.subscribe((state: MotebitState) => {
       const cues: BehaviorCues = this.behaviorEngine.compute(state);
       this.renderer.render({
         cues,

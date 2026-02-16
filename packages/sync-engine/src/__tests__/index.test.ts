@@ -1,20 +1,20 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { SyncEngine } from "../index";
 import type { SyncStatus } from "../index";
-import { InMemoryEventStore } from "@mote/event-log";
-import { EventType } from "@mote/sdk";
-import type { EventLogEntry } from "@mote/sdk";
+import { InMemoryEventStore } from "@motebit/event-log";
+import { EventType } from "@motebit/sdk";
+import type { EventLogEntry } from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-const MOTE_ID = "mote-1";
+const MOTEBIT_ID = "motebit-1";
 
 function makeEvent(overrides: Partial<EventLogEntry> = {}): EventLogEntry {
   return {
     event_id: crypto.randomUUID(),
-    mote_id: MOTE_ID,
+    motebit_id: MOTEBIT_ID,
     timestamp: Date.now(),
     event_type: EventType.StateUpdated,
     payload: {},
@@ -34,7 +34,7 @@ describe("SyncEngine", () => {
 
   beforeEach(() => {
     localStore = new InMemoryEventStore();
-    engine = new SyncEngine(localStore, MOTE_ID);
+    engine = new SyncEngine(localStore, MOTEBIT_ID);
   });
 
   it("starts in idle status", () => {
@@ -61,7 +61,7 @@ describe("SyncEngine", () => {
     expect(result.pushed).toBe(1);
 
     // Verify event was pushed to remote
-    const remoteEvents = await remoteStore.query({ mote_id: MOTE_ID });
+    const remoteEvents = await remoteStore.query({ motebit_id: MOTEBIT_ID });
     expect(remoteEvents).toHaveLength(1);
     expect(remoteEvents[0]!.event_id).toBe(event.event_id);
   });
@@ -78,7 +78,7 @@ describe("SyncEngine", () => {
     expect(result.pulled).toBe(1);
 
     // Verify event was pulled to local
-    const localEvents = await localStore.query({ mote_id: MOTE_ID });
+    const localEvents = await localStore.query({ motebit_id: MOTEBIT_ID });
     expect(localEvents).toHaveLength(1);
   });
 
@@ -140,7 +140,7 @@ describe("SyncEngine", () => {
 
   it("getCursor returns the current cursor state", () => {
     const cursor = engine.getCursor();
-    expect(cursor.mote_id).toBe(MOTE_ID);
+    expect(cursor.motebit_id).toBe(MOTEBIT_ID);
     expect(cursor.last_event_id).toBe("");
     expect(cursor.last_version_clock).toBe(0);
   });

@@ -1,5 +1,5 @@
 /**
- * @mote/admin — React + Vite admin dashboard
+ * @motebit/admin — React + Vite admin dashboard
  *
  * Features:
  * - Memory graph visualizer

@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { packContext, CloudProvider, HybridProvider } from "../index";
 import type { CloudProviderConfig, HybridProviderConfig } from "../index";
-import { TrustMode, BatteryMode, SensitivityLevel, EventType } from "@mote/sdk";
-import type { ContextPack, MoteState, EventLogEntry, MemoryNode } from "@mote/sdk";
+import { TrustMode, BatteryMode, SensitivityLevel, EventType } from "@motebit/sdk";
+import type { ContextPack, MotebitState, EventLogEntry, MemoryNode } from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeDefaultState(overrides: Partial<MoteState> = {}): MoteState {
+function makeDefaultState(overrides: Partial<MotebitState> = {}): MotebitState {
   return {
     attention: 0.5,
     processing: 0.3,
@@ -28,7 +28,7 @@ function makeContextPack(overrides: Partial<ContextPack> = {}): ContextPack {
     recent_events: [],
     relevant_memories: [],
     current_state: makeDefaultState(),
-    user_message: "Hello, Mote!",
+    user_message: "Hello, Motebit!",
     ...overrides,
   };
 }
@@ -36,7 +36,7 @@ function makeContextPack(overrides: Partial<ContextPack> = {}): ContextPack {
 function makeEvent(overrides: Partial<EventLogEntry> = {}): EventLogEntry {
   return {
     event_id: "e1",
-    mote_id: "m1",
+    motebit_id: "m1",
     timestamp: 1000,
     event_type: EventType.StateUpdated,
     payload: { key: "value" },
@@ -49,7 +49,7 @@ function makeEvent(overrides: Partial<EventLogEntry> = {}): EventLogEntry {
 function makeMemory(overrides: Partial<MemoryNode> = {}): MemoryNode {
   return {
     node_id: "n1",
-    mote_id: "m1",
+    motebit_id: "m1",
     content: "User likes jazz",
     embedding: [0.1, 0.2],
     confidence: 0.85,
@@ -178,12 +178,12 @@ describe("CloudProvider", () => {
   });
 
   it("generate() calls Anthropic API and returns parsed response", async () => {
-    mockFetchSuccess("Hello! I'm Mote.");
+    mockFetchSuccess("Hello! I'm Motebit.");
 
     const provider = new CloudProvider(config);
     const response = await provider.generate(makeContextPack());
 
-    expect(response.text).toBe("Hello! I'm Mote.");
+    expect(response.text).toBe("Hello! I'm Motebit.");
     expect(response.confidence).toBe(0.8);
     expect(response.memory_candidates).toEqual([]);
     expect(response.state_updates).toEqual({});

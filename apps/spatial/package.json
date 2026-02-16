@@ -1,5 +1,5 @@
 {
-  "name": "@mote/spatial",
+  "name": "@motebit/spatial",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -13,8 +13,8 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@mote/sdk": "workspace:*",
-    "@mote/render-engine": "workspace:*"
+    "@motebit/sdk": "workspace:*",
+    "@motebit/render-engine": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

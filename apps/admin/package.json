@@ -1,5 +1,5 @@
 {
-  "name": "@mote/admin",
+  "name": "@motebit/admin",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -13,8 +13,8 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@mote/behavior-engine": "workspace:*",
-    "@mote/sdk": "workspace:*",
+    "@motebit/behavior-engine": "workspace:*",
+    "@motebit/sdk": "workspace:*",
     "react": "^18.3.0",
     "react-dom": "^18.3.0"
   },

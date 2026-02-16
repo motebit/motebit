@@ -1,5 +1,5 @@
 {
-  "name": "@mote/policy-invariants",
+  "name": "@motebit/policy-invariants",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -13,7 +13,7 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@mote/sdk": "workspace:*"
+    "@motebit/sdk": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

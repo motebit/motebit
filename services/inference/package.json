@@ -1,5 +1,5 @@
 {
-  "name": "@mote/inference",
+  "name": "@motebit/inference",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -15,7 +15,7 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@mote/sdk": "workspace:*",
+    "@motebit/sdk": "workspace:*",
     "hono": "^4.6.0"
   },
   "devDependencies": {

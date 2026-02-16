@@ -1,5 +1,5 @@
 /**
- * @mote/mobile — Expo + React Native app
+ * @motebit/mobile — Expo + React Native app
  *
  * Architecture:
  * - expo-gl for Three.js rendering

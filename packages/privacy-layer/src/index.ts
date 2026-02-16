@@ -2,20 +2,20 @@ import type {
   MemoryNode,
   AuditRecord,
   ExportManifest,
-  MoteIdentity,
+  MotebitIdentity,
   SensitivityLevel,
-} from "@mote/sdk";
-import { EventType } from "@mote/sdk";
-import type { EventStore } from "@mote/event-log";
-import type { MemoryGraph, MemoryStorageAdapter } from "@mote/memory-graph";
-import type { DeletionCertificate } from "@mote/crypto";
-import { createDeletionCertificate } from "@mote/crypto";
+} from "@motebit/sdk";
+import { EventType } from "@motebit/sdk";
+import type { EventStore } from "@motebit/event-log";
+import type { MemoryGraph, MemoryStorageAdapter } from "@motebit/memory-graph";
+import type { DeletionCertificate } from "@motebit/crypto";
+import { createDeletionCertificate } from "@motebit/crypto";
 
 // === Audit Log ===
 
 export interface AuditLogAdapter {
   record(entry: AuditRecord): Promise<void>;
-  query(moteId: string, options?: { limit?: number; after?: number }): Promise<AuditRecord[]>;
+  query(motebitId: string, options?: { limit?: number; after?: number }): Promise<AuditRecord[]>;
 }
 
 export class InMemoryAuditLog implements AuditLogAdapter {
@@ -26,10 +26,10 @@ export class InMemoryAuditLog implements AuditLogAdapter {
   }
 
   async query(
-    moteId: string,
+    motebitId: string,
     options: { limit?: number; after?: number } = {},
   ): Promise<AuditRecord[]> {
-    let results = this.records.filter((r) => r.mote_id === moteId);
+    let results = this.records.filter((r) => r.motebit_id === motebitId);
     if (options.after !== undefined) {
       results = results.filter((r) => r.timestamp > options.after!);
     }
@@ -46,7 +46,7 @@ export class MemoryInspector {
   constructor(
     private storage: MemoryStorageAdapter,
     private auditLog: AuditLogAdapter,
-    private moteId: string,
+    private motebitId: string,
   ) {}
 
   /**
@@ -60,7 +60,7 @@ export class MemoryInspector {
     await this.audit("list_memories", "memory", "*", { options });
 
     return this.storage.queryNodes({
-      mote_id: this.moteId,
+      motebit_id: this.motebitId,
       include_tombstoned: options.include_tombstoned,
       sensitivity_filter: options.sensitivity,
       limit: options.limit,
@@ -83,7 +83,7 @@ export class MemoryInspector {
   ): Promise<void> {
     await this.auditLog.record({
       audit_id: crypto.randomUUID(),
-      mote_id: this.moteId,
+      motebit_id: this.motebitId,
       timestamp: Date.now(),
       action,
       target_type: targetType,
@@ -99,7 +99,7 @@ export class SensitivityManager {
   constructor(
     private storage: MemoryStorageAdapter,
     private auditLog: AuditLogAdapter,
-    private moteId: string,
+    private motebitId: string,
   ) {}
 
   /**
@@ -120,7 +120,7 @@ export class SensitivityManager {
 
     await this.auditLog.record({
       audit_id: crypto.randomUUID(),
-      mote_id: this.moteId,
+      motebit_id: this.motebitId,
       timestamp: Date.now(),
       action: "set_sensitivity",
       target_type: "memory",
@@ -157,7 +157,7 @@ export class DeleteManager {
     private memoryGraph: MemoryGraph,
     _eventStore: EventStore,
     private auditLog: AuditLogAdapter,
-    private moteId: string,
+    private motebitId: string,
   ) {}
 
   /**
@@ -176,7 +176,7 @@ export class DeleteManager {
     // Audit
     await this.auditLog.record({
       audit_id: crypto.randomUUID(),
-      mote_id: this.moteId,
+      motebit_id: this.motebitId,
       timestamp: Date.now(),
       action: "delete_memory",
       target_type: "memory",
@@ -198,29 +198,29 @@ export class ExportManager {
     private memoryGraph: MemoryGraph,
     private eventStore: EventStore,
     private auditLog: AuditLogAdapter,
-    private moteId: string,
+    private motebitId: string,
   ) {}
 
   /**
    * Export all user data as a JSON manifest.
    */
-  async exportAll(identity: MoteIdentity): Promise<ExportManifest> {
+  async exportAll(identity: MotebitIdentity): Promise<ExportManifest> {
     // Audit the export request
     await this.auditLog.record({
       audit_id: crypto.randomUUID(),
-      mote_id: this.moteId,
+      motebit_id: this.motebitId,
       timestamp: Date.now(),
       action: "export_all",
-      target_type: "mote",
-      target_id: this.moteId,
+      target_type: "motebit",
+      target_id: this.motebitId,
       details: {},
     });
 
     // Log the export event
-    const clock = await this.eventStore.getLatestClock(this.moteId);
+    const clock = await this.eventStore.getLatestClock(this.motebitId);
     await this.eventStore.append({
       event_id: crypto.randomUUID(),
-      mote_id: this.moteId,
+      motebit_id: this.motebitId,
       timestamp: Date.now(),
       event_type: EventType.ExportRequested,
       payload: {},
@@ -229,11 +229,11 @@ export class ExportManager {
     });
 
     const { nodes, edges } = await this.memoryGraph.exportAll();
-    const events = await this.eventStore.query({ mote_id: this.moteId });
-    const auditRecords = await this.auditLog.query(this.moteId);
+    const events = await this.eventStore.query({ motebit_id: this.motebitId });
+    const auditRecords = await this.auditLog.query(this.motebitId);
 
     return {
-      mote_id: this.moteId,
+      motebit_id: this.motebitId,
       exported_at: Date.now(),
       identity,
       memories: nodes,
@@ -257,12 +257,12 @@ export class PrivacyLayer {
     memoryGraph: MemoryGraph,
     eventStore: EventStore,
     auditLog: AuditLogAdapter,
-    moteId: string,
+    motebitId: string,
   ) {
-    this.inspector = new MemoryInspector(storage, auditLog, moteId);
-    this.sensitivityManager = new SensitivityManager(storage, auditLog, moteId);
-    this.deleteManager = new DeleteManager(memoryGraph, eventStore, auditLog, moteId);
-    this.exportManager = new ExportManager(memoryGraph, eventStore, auditLog, moteId);
+    this.inspector = new MemoryInspector(storage, auditLog, motebitId);
+    this.sensitivityManager = new SensitivityManager(storage, auditLog, motebitId);
+    this.deleteManager = new DeleteManager(memoryGraph, eventStore, auditLog, motebitId);
+    this.exportManager = new ExportManager(memoryGraph, eventStore, auditLog, motebitId);
   }
 
   /**
@@ -302,7 +302,7 @@ export class PrivacyLayer {
     }
   }
 
-  async exportAll(identity: MoteIdentity): Promise<ExportManifest> {
+  async exportAll(identity: MotebitIdentity): Promise<ExportManifest> {
     try {
       return await this.exportManager.exportAll(identity);
     } catch (error) {

@@ -1,5 +1,5 @@
-import type { MoteState, BehaviorCues } from "@mote/sdk";
-import { SPECIES_CONSTRAINTS } from "@mote/sdk";
+import type { MotebitState, BehaviorCues } from "@motebit/sdk";
+import { SPECIES_CONSTRAINTS } from "@motebit/sdk";
 
 // Re-export constraints for convenience
 export { SPECIES_CONSTRAINTS };
@@ -12,10 +12,10 @@ export function clamp(value: number, min: number, max: number): number {
 }
 
 /**
- * Clamp all MoteState fields to their valid ranges.
+ * Clamp all MotebitState fields to their valid ranges.
  * affect_arousal is hard-clamped to [0, MAX_AROUSAL].
  */
-export function clampState(state: MoteState): MoteState {
+export function clampState(state: MotebitState): MotebitState {
   return {
     ...state,
     attention: clamp(state.attention, 0, 1),
@@ -72,10 +72,10 @@ export function enforceDriftVariation(
 }
 
 /**
- * Validate that a MoteState is within all species constraints.
+ * Validate that a MotebitState is within all species constraints.
  * Returns an array of violation descriptions (empty = valid).
  */
-export function validateState(state: MoteState): string[] {
+export function validateState(state: MotebitState): string[] {
   const violations: string[] = [];
   if (state.affect_arousal > SPECIES_CONSTRAINTS.MAX_AROUSAL) {
     violations.push(

@@ -1,5 +1,5 @@
 {
-  "name": "@mote/cli",
+  "name": "@motebit/cli",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -13,12 +13,12 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@mote/ai-core": "workspace:*",
-    "@mote/event-log": "workspace:*",
-    "@mote/memory-graph": "workspace:*",
-    "@mote/state-vector": "workspace:*",
-    "@mote/behavior-engine": "workspace:*",
-    "@mote/persistence": "workspace:*"
+    "@motebit/ai-core": "workspace:*",
+    "@motebit/event-log": "workspace:*",
+    "@motebit/memory-graph": "workspace:*",
+    "@motebit/state-vector": "workspace:*",
+    "@motebit/behavior-engine": "workspace:*",
+    "@motebit/persistence": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

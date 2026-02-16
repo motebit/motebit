@@ -1,5 +1,5 @@
 {
-  "name": "@mote/ai-core",
+  "name": "@motebit/ai-core",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -13,11 +13,11 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@mote/sdk": "workspace:*",
-    "@mote/event-log": "workspace:*",
-    "@mote/memory-graph": "workspace:*",
-    "@mote/state-vector": "workspace:*",
-    "@mote/behavior-engine": "workspace:*"
+    "@motebit/sdk": "workspace:*",
+    "@motebit/event-log": "workspace:*",
+    "@motebit/memory-graph": "workspace:*",
+    "@motebit/state-vector": "workspace:*",
+    "@motebit/behavior-engine": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

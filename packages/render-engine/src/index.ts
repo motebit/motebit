@@ -1,4 +1,4 @@
-import type { BehaviorCues, RenderSpec, GeometrySpec, MaterialSpec, LightingSpec } from "@mote/sdk";
+import type { BehaviorCues, RenderSpec, GeometrySpec, MaterialSpec, LightingSpec } from "@motebit/sdk";
 
 // === Canonical Render Spec ===
 // This is the source of truth. All adapters must conform.

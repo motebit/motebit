@@ -6,7 +6,7 @@ const app = new Hono();
 
 interface VectorEntry {
   id: string;
-  mote_id: string;
+  motebit_id: string;
   embedding: number[];
   metadata: Record<string, unknown>;
 }
@@ -26,11 +26,11 @@ class VectorIndex {
     this.entries.set(entry.id, entry);
   }
 
-  search(queryEmbedding: number[], moteId: string, limit: number = 10): SimilarityResult[] {
+  search(queryEmbedding: number[], motebitId: string, limit: number = 10): SimilarityResult[] {
     const results: SimilarityResult[] = [];
 
     for (const entry of this.entries.values()) {
-      if (entry.mote_id !== moteId) continue;
+      if (entry.motebit_id !== motebitId) continue;
 
       const score = this.cosineSimilarity(queryEmbedding, entry.embedding);
       results.push({ id: entry.id, score, metadata: entry.metadata });
@@ -64,10 +64,10 @@ const vectorIndex = new VectorIndex();
 app.get("/health", (c) => c.json({ status: "ok" }));
 
 app.post("/api/v1/vectors", async (c) => {
-  const body = await c.req.json<{ id: string; mote_id: string; embedding: number[]; metadata?: Record<string, unknown> }>();
+  const body = await c.req.json<{ id: string; motebit_id: string; embedding: number[]; metadata?: Record<string, unknown> }>();
   vectorIndex.add({
     id: body.id,
-    mote_id: body.mote_id,
+    motebit_id: body.motebit_id,
     embedding: body.embedding,
     metadata: body.metadata ?? {},
   });
@@ -75,8 +75,8 @@ app.post("/api/v1/vectors", async (c) => {
 });
 
 app.post("/api/v1/vectors/search", async (c) => {
-  const body = await c.req.json<{ mote_id: string; embedding: number[]; limit?: number }>();
-  const results = vectorIndex.search(body.embedding, body.mote_id, body.limit);
+  const body = await c.req.json<{ motebit_id: string; embedding: number[]; limit?: number }>();
+  const results = vectorIndex.search(body.embedding, body.motebit_id, body.limit);
   return c.json({ results });
 });
 

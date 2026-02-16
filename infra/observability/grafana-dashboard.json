@@ -1,22 +1,22 @@
 {
   "dashboard": {
-    "title": "Mote System Overview",
-    "tags": ["mote"],
+    "title": "Motebit System Overview",
+    "tags": ["motebit"],
     "panels": [
       {
         "title": "State Vector Distribution",
         "type": "histogram",
         "targets": [
           {
-            "expr": "mote_state_vector_attention",
+            "expr": "motebit_state_vector_attention",
             "legendFormat": "attention"
           },
           {
-            "expr": "mote_state_vector_confidence",
+            "expr": "motebit_state_vector_confidence",
             "legendFormat": "confidence"
           },
           {
-            "expr": "mote_state_vector_affect_arousal",
+            "expr": "motebit_state_vector_affect_arousal",
             "legendFormat": "affect_arousal"
           }
         ]
@@ -26,7 +26,7 @@
         "type": "timeseries",
         "targets": [
           {
-            "expr": "rate(mote_errors_total[5m])",
+            "expr": "rate(motebit_errors_total[5m])",
             "legendFormat": "{{ service }}"
           }
         ]
@@ -36,7 +36,7 @@
         "type": "timeseries",
         "targets": [
           {
-            "expr": "histogram_quantile(0.95, mote_api_request_duration_seconds_bucket)",
+            "expr": "histogram_quantile(0.95, motebit_api_request_duration_seconds_bucket)",
             "legendFormat": "p95"
           }
         ]
@@ -46,15 +46,15 @@
         "type": "stat",
         "targets": [
           {
-            "expr": "mote_sync_events_pushed_total",
+            "expr": "motebit_sync_events_pushed_total",
             "legendFormat": "pushed"
           },
           {
-            "expr": "mote_sync_events_pulled_total",
+            "expr": "motebit_sync_events_pulled_total",
             "legendFormat": "pulled"
           },
           {
-            "expr": "mote_sync_conflicts_total",
+            "expr": "motebit_sync_conflicts_total",
             "legendFormat": "conflicts"
           }
         ]
@@ -64,11 +64,11 @@
         "type": "gauge",
         "targets": [
           {
-            "expr": "mote_memory_nodes_total",
+            "expr": "motebit_memory_nodes_total",
             "legendFormat": "nodes"
           },
           {
-            "expr": "mote_memory_edges_total",
+            "expr": "motebit_memory_edges_total",
             "legendFormat": "edges"
           }
         ]

@@ -9,7 +9,7 @@ terraform {
   }
 
   backend "s3" {
-    bucket = "mote-terraform-state"
+    bucket = "motebit-terraform-state"
     key    = "state/terraform.tfstate"
     region = "us-east-1"
   }
@@ -41,7 +41,7 @@ resource "aws_vpc" "main" {
   enable_dns_support   = true
 
   tags = {
-    Name        = "mote-${var.environment}"
+    Name        = "motebit-${var.environment}"
     Environment = var.environment
   }
 }
@@ -52,7 +52,7 @@ resource "aws_subnet" "private_a" {
   availability_zone = "${var.aws_region}a"
 
   tags = {
-    Name = "mote-private-a"
+    Name = "motebit-private-a"
   }
 }
 
@@ -62,19 +62,19 @@ resource "aws_subnet" "private_b" {
   availability_zone = "${var.aws_region}b"
 
   tags = {
-    Name = "mote-private-b"
+    Name = "motebit-private-b"
   }
 }
 
 # === RDS (Postgres + pgvector) ===
 
 resource "aws_db_subnet_group" "main" {
-  name       = "mote-db-${var.environment}"
+  name       = "motebit-db-${var.environment}"
   subnet_ids = [aws_subnet.private_a.id, aws_subnet.private_b.id]
 }
 
 resource "aws_db_instance" "postgres" {
-  identifier     = "mote-${var.environment}"
+  identifier     = "motebit-${var.environment}"
   engine         = "postgres"
   engine_version = "16.4"
   instance_class = var.db_instance_class
@@ -83,8 +83,8 @@ resource "aws_db_instance" "postgres" {
   max_allocated_storage = 200
   storage_encrypted     = true
 
-  db_name  = "mote"
-  username = "mote_admin"
+  db_name  = "motebit"
+  username = "motebit_admin"
   password = var.db_password
 
   db_subnet_group_name   = aws_db_subnet_group.main.name
@@ -104,7 +104,7 @@ variable "db_password" {
 }
 
 resource "aws_security_group" "db" {
-  name   = "mote-db-${var.environment}"
+  name   = "motebit-db-${var.environment}"
   vpc_id = aws_vpc.main.id
 
   ingress {
@@ -116,7 +116,7 @@ resource "aws_security_group" "db" {
 }
 
 resource "aws_security_group" "services" {
-  name   = "mote-services-${var.environment}"
+  name   = "motebit-services-${var.environment}"
   vpc_id = aws_vpc.main.id
 
   egress {
@@ -130,7 +130,7 @@ resource "aws_security_group" "services" {
 # === S3 (Object Storage) ===
 
 resource "aws_s3_bucket" "storage" {
-  bucket = "mote-storage-${var.environment}"
+  bucket = "motebit-storage-${var.environment}"
 
   tags = {
     Environment = var.environment

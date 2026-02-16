@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { InMemoryEventStore, EventStore } from "../index";
-import { EventType } from "@mote/sdk";
-import type { EventLogEntry } from "@mote/sdk";
+import { EventType } from "@motebit/sdk";
+import type { EventLogEntry } from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -10,7 +10,7 @@ import type { EventLogEntry } from "@mote/sdk";
 function makeEvent(overrides: Partial<EventLogEntry> = {}): EventLogEntry {
   return {
     event_id: crypto.randomUUID(),
-    mote_id: "mote-1",
+    motebit_id: "motebit-1",
     timestamp: Date.now(),
     event_type: EventType.StateUpdated,
     payload: {},
@@ -39,12 +39,12 @@ describe("InMemoryEventStore", () => {
     expect(results[0]!.event_id).toBe(event.event_id);
   });
 
-  it("filters by mote_id", async () => {
-    await store.append(makeEvent({ mote_id: "mote-1" }));
-    await store.append(makeEvent({ mote_id: "mote-2" }));
-    const results = await store.query({ mote_id: "mote-1" });
+  it("filters by motebit_id", async () => {
+    await store.append(makeEvent({ motebit_id: "motebit-1" }));
+    await store.append(makeEvent({ motebit_id: "motebit-2" }));
+    const results = await store.query({ motebit_id: "motebit-1" });
     expect(results).toHaveLength(1);
-    expect(results[0]!.mote_id).toBe("mote-1");
+    expect(results[0]!.motebit_id).toBe("motebit-1");
   });
 
   it("filters by event_types", async () => {
@@ -101,15 +101,15 @@ describe("InMemoryEventStore", () => {
   });
 
   it("getLatestClock returns the highest version_clock", async () => {
-    await store.append(makeEvent({ mote_id: "m1", version_clock: 3 }));
-    await store.append(makeEvent({ mote_id: "m1", version_clock: 7 }));
-    await store.append(makeEvent({ mote_id: "m1", version_clock: 5 }));
+    await store.append(makeEvent({ motebit_id: "m1", version_clock: 3 }));
+    await store.append(makeEvent({ motebit_id: "m1", version_clock: 7 }));
+    await store.append(makeEvent({ motebit_id: "m1", version_clock: 5 }));
     const clock = await store.getLatestClock("m1");
     expect(clock).toBe(7);
   });
 
   it("tombstone marks the event", async () => {
-    const event = makeEvent({ event_id: "e1", mote_id: "m1" });
+    const event = makeEvent({ event_id: "e1", motebit_id: "m1" });
     await store.append(event);
     await store.tombstone("e1", "m1");
     const results = await store.query({});
@@ -140,10 +140,10 @@ describe("EventStore", () => {
     );
   });
 
-  it("rejects empty mote_id", async () => {
-    const event = makeEvent({ mote_id: "" });
+  it("rejects empty motebit_id", async () => {
+    const event = makeEvent({ motebit_id: "" });
     await expect(eventStore.append(event)).rejects.toThrow(
-      "mote_id must not be empty",
+      "motebit_id must not be empty",
     );
   });
 
@@ -156,13 +156,13 @@ describe("EventStore", () => {
 
   it("replay processes events in version_clock order", async () => {
     await eventStore.append(
-      makeEvent({ mote_id: "m1", version_clock: 3 }),
+      makeEvent({ motebit_id: "m1", version_clock: 3 }),
     );
     await eventStore.append(
-      makeEvent({ mote_id: "m1", version_clock: 1 }),
+      makeEvent({ motebit_id: "m1", version_clock: 1 }),
     );
     await eventStore.append(
-      makeEvent({ mote_id: "m1", version_clock: 2 }),
+      makeEvent({ motebit_id: "m1", version_clock: 2 }),
     );
 
     const order: number[] = [];
@@ -174,15 +174,15 @@ describe("EventStore", () => {
 
   it("replay only processes events for the specified mote", async () => {
     await eventStore.append(
-      makeEvent({ mote_id: "m1", version_clock: 1 }),
+      makeEvent({ motebit_id: "m1", version_clock: 1 }),
     );
     await eventStore.append(
-      makeEvent({ mote_id: "m2", version_clock: 2 }),
+      makeEvent({ motebit_id: "m2", version_clock: 2 }),
     );
 
     const seen: string[] = [];
     await eventStore.replay("m1", async (entry) => {
-      seen.push(entry.mote_id);
+      seen.push(entry.motebit_id);
     });
     expect(seen).toEqual(["m1"]);
   });

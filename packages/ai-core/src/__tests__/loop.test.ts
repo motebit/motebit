@@ -1,25 +1,25 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-vi.mock("@mote/memory-graph", async () => {
-  const actual = await vi.importActual<typeof import("@mote/memory-graph")>("@mote/memory-graph");
+vi.mock("@motebit/memory-graph", async () => {
+  const actual = await vi.importActual<typeof import("@motebit/memory-graph")>("@motebit/memory-graph");
   return { ...actual, embedText: (text: string) => Promise.resolve(actual.embedTextHash(text)) };
 });
 
 import { runTurn } from "../loop";
-import type { MoteLoopDependencies } from "../loop";
+import type { MotebitLoopDependencies } from "../loop";
 import { CloudProvider } from "../index";
 import type { CloudProviderConfig } from "../index";
-import { EventStore, InMemoryEventStore } from "@mote/event-log";
-import { MemoryGraph, InMemoryMemoryStorage } from "@mote/memory-graph";
-import { StateVectorEngine } from "@mote/state-vector";
-import { BehaviorEngine } from "@mote/behavior-engine";
-import { SensitivityLevel } from "@mote/sdk";
+import { EventStore, InMemoryEventStore } from "@motebit/event-log";
+import { MemoryGraph, InMemoryMemoryStorage } from "@motebit/memory-graph";
+import { StateVectorEngine } from "@motebit/state-vector";
+import { BehaviorEngine } from "@motebit/behavior-engine";
+import { SensitivityLevel } from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-const MOTE_ID = "mote-loop-test";
+const MOTEBIT_ID = "motebit-loop-test";
 
 function mockAnthropicResponse(text: string) {
   return {
@@ -45,7 +45,7 @@ function mockFetchError(status: number, body: string): void {
   mockFn.mockResolvedValueOnce(new Response(body, { status }));
 }
 
-function makeDeps(): MoteLoopDependencies {
+function makeDeps(): MotebitLoopDependencies {
   const cloudConfig: CloudProviderConfig = {
     provider: "anthropic",
     api_key: "test-key",
@@ -54,13 +54,13 @@ function makeDeps(): MoteLoopDependencies {
 
   const eventStore = new EventStore(new InMemoryEventStore());
   const storage = new InMemoryMemoryStorage();
-  const memoryGraph = new MemoryGraph(storage, eventStore, MOTE_ID);
+  const memoryGraph = new MemoryGraph(storage, eventStore, MOTEBIT_ID);
   const stateEngine = new StateVectorEngine();
   const behaviorEngine = new BehaviorEngine();
   const cloudProvider = new CloudProvider(cloudConfig);
 
   return {
-    moteId: MOTE_ID,
+    motebitId: MOTEBIT_ID,
     eventStore,
     memoryGraph,
     stateEngine,
@@ -173,7 +173,7 @@ describe("runTurn", () => {
     await runTurn(deps, "Message 2");
 
     // Check events have incrementing clocks
-    const events = await deps.eventStore.query({ mote_id: MOTE_ID });
+    const events = await deps.eventStore.query({ motebit_id: MOTEBIT_ID });
     const clocks = events.map((e) => e.version_clock);
 
     // Each event should have a unique clock

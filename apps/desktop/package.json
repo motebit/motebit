@@ -1,5 +1,5 @@
 {
-  "name": "@mote/desktop",
+  "name": "@motebit/desktop",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -14,10 +14,10 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@mote/sdk": "workspace:*",
-    "@mote/state-vector": "workspace:*",
-    "@mote/behavior-engine": "workspace:*",
-    "@mote/render-engine": "workspace:*"
+    "@motebit/sdk": "workspace:*",
+    "@motebit/state-vector": "workspace:*",
+    "@motebit/behavior-engine": "workspace:*",
+    "@motebit/render-engine": "workspace:*"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",

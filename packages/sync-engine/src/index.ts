@@ -1,5 +1,5 @@
-import type { EventLogEntry, SyncCursor, ConflictEdge } from "@mote/sdk";
-import type { EventStoreAdapter } from "@mote/event-log";
+import type { EventLogEntry, SyncCursor, ConflictEdge } from "@motebit/sdk";
+import type { EventStoreAdapter } from "@motebit/event-log";
 
 // === Sync Configuration ===
 
@@ -49,13 +49,13 @@ export class SyncEngine {
 
   constructor(
     localStore: EventStoreAdapter,
-    moteId: string,
+    motebitId: string,
     config: Partial<SyncConfig> = {},
   ) {
     this.config = { ...DEFAULT_SYNC_CONFIG, ...config };
     this.localStore = localStore;
     this.cursor = {
-      mote_id: moteId,
+      motebit_id: motebitId,
       last_event_id: "",
       last_version_clock: 0,
     };
@@ -111,7 +111,7 @@ export class SyncEngine {
       this.conflicts.push(...conflicts);
 
       // Update cursor
-      const localClock = await this.localStore.getLatestClock(this.cursor.mote_id);
+      const localClock = await this.localStore.getLatestClock(this.cursor.motebit_id);
       this.cursor.last_version_clock = localClock;
 
       this.setStatus("idle");
@@ -164,7 +164,7 @@ export class SyncEngine {
     if (this.remoteStore === null) return { count: 0, events: [] };
 
     const localEvents = await this.localStore.query({
-      mote_id: this.cursor.mote_id,
+      motebit_id: this.cursor.motebit_id,
       after_version_clock: this.cursor.last_version_clock,
       limit: this.config.batch_size,
     });
@@ -180,13 +180,13 @@ export class SyncEngine {
     if (this.remoteStore === null) return { count: 0, events: [] };
 
     const remoteEvents = await this.remoteStore.query({
-      mote_id: this.cursor.mote_id,
+      motebit_id: this.cursor.motebit_id,
       after_version_clock: this.cursor.last_version_clock,
       limit: this.config.batch_size,
     });
 
     // Only append events we don't already have
-    const localClock = await this.localStore.getLatestClock(this.cursor.mote_id);
+    const localClock = await this.localStore.getLatestClock(this.cursor.motebit_id);
     const newEvents = remoteEvents.filter((e) => e.version_clock > localClock);
 
     for (const event of newEvents) {

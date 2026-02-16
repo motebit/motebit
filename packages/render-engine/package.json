@@ -1,5 +1,5 @@
 {
-  "name": "@mote/render-engine",
+  "name": "@motebit/render-engine",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -13,8 +13,8 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@mote/sdk": "workspace:*",
-    "@mote/policy-invariants": "workspace:*"
+    "@motebit/sdk": "workspace:*",
+    "@motebit/policy-invariants": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

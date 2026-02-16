@@ -1,5 +1,5 @@
 {
-  "name": "@mote/crypto",
+  "name": "@motebit/crypto",
   "version": "0.1.0",
   "private": true,
   "type": "module",

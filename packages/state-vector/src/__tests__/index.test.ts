@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { StateVectorEngine } from "../index";
-import { TrustMode, BatteryMode } from "@mote/sdk";
+import { TrustMode, BatteryMode } from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
 // StateVectorEngine

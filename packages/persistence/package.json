@@ -1,5 +1,5 @@
 {
-  "name": "@mote/persistence",
+  "name": "@motebit/persistence",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -12,11 +12,11 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@mote/sdk": "workspace:*",
-    "@mote/event-log": "workspace:*",
-    "@mote/memory-graph": "workspace:*",
-    "@mote/core-identity": "workspace:*",
-    "@mote/privacy-layer": "workspace:*",
+    "@motebit/sdk": "workspace:*",
+    "@motebit/event-log": "workspace:*",
+    "@motebit/memory-graph": "workspace:*",
+    "@motebit/core-identity": "workspace:*",
+    "@motebit/privacy-layer": "workspace:*",
     "better-sqlite3": "^11.0.0"
   },
   "devDependencies": {

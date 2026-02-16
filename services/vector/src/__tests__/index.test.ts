@@ -28,7 +28,7 @@ describe("Vector Service", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: "add-test-1",
-          mote_id: "mote-a",
+          motebit_id: "motebit-a",
           embedding: [1, 0, 0],
           metadata: { label: "test" },
         }),
@@ -46,7 +46,7 @@ describe("Vector Service", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: "add-test-2",
-          mote_id: "mote-a",
+          motebit_id: "motebit-a",
           embedding: [0, 1, 0],
         }),
       });
@@ -61,10 +61,10 @@ describe("Vector Service", () => {
     beforeEach(async () => {
       // Seed vectors for search tests
       const vectors = [
-        { id: "search-1", mote_id: "mote-search", embedding: [1, 0, 0], metadata: { label: "x-axis" } },
-        { id: "search-2", mote_id: "mote-search", embedding: [0, 1, 0], metadata: { label: "y-axis" } },
-        { id: "search-3", mote_id: "mote-search", embedding: [0.9, 0.1, 0], metadata: { label: "near-x" } },
-        { id: "search-4", mote_id: "mote-other", embedding: [1, 0, 0], metadata: { label: "other-mote" } },
+        { id: "search-1", motebit_id: "motebit-search", embedding: [1, 0, 0], metadata: { label: "x-axis" } },
+        { id: "search-2", motebit_id: "motebit-search", embedding: [0, 1, 0], metadata: { label: "y-axis" } },
+        { id: "search-3", motebit_id: "motebit-search", embedding: [0.9, 0.1, 0], metadata: { label: "near-x" } },
+        { id: "search-4", motebit_id: "motebit-other", embedding: [1, 0, 0], metadata: { label: "other-motebit" } },
       ];
 
       for (const v of vectors) {
@@ -81,7 +81,7 @@ describe("Vector Service", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          mote_id: "mote-search",
+          motebit_id: "motebit-search",
           embedding: [1, 0, 0],
         }),
       });
@@ -104,18 +104,18 @@ describe("Vector Service", () => {
       }
     });
 
-    it("filters results by mote_id", async () => {
+    it("filters results by motebit_id", async () => {
       const res = await app.request("/api/v1/vectors/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          mote_id: "mote-search",
+          motebit_id: "motebit-search",
           embedding: [1, 0, 0],
         }),
       });
 
       const body = (await res.json()) as SearchResponse;
-      // Should NOT include "search-4" which belongs to "mote-other"
+      // Should NOT include "search-4" which belongs to "motebit-other"
       const ids = body.results.map((r) => r.id);
       expect(ids).not.toContain("search-4");
     });
@@ -125,7 +125,7 @@ describe("Vector Service", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          mote_id: "mote-search",
+          motebit_id: "motebit-search",
           embedding: [1, 0, 0],
           limit: 1,
         }),
@@ -135,12 +135,12 @@ describe("Vector Service", () => {
       expect(body.results.length).toBe(1);
     });
 
-    it("returns empty results for unknown mote_id", async () => {
+    it("returns empty results for unknown motebit_id", async () => {
       const res = await app.request("/api/v1/vectors/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          mote_id: "nonexistent-mote",
+          motebit_id: "nonexistent-motebit",
           embedding: [1, 0, 0],
         }),
       });
@@ -157,7 +157,7 @@ describe("Vector Service", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: "del-1",
-          mote_id: "mote-del",
+          motebit_id: "motebit-del",
           embedding: [1, 0, 0],
           metadata: {},
         }),
@@ -194,7 +194,7 @@ describe("Vector Service", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          mote_id: "mote-del",
+          motebit_id: "motebit-del",
           embedding: [1, 0, 0],
         }),
       });
@@ -225,7 +225,7 @@ describe("Vector Service", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: "cos-identical",
-          mote_id: "mote-cos",
+          motebit_id: "motebit-cos",
           embedding: [0.5, 0.5, 0.5],
         }),
       });
@@ -234,7 +234,7 @@ describe("Vector Service", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          mote_id: "mote-cos",
+          motebit_id: "motebit-cos",
           embedding: [0.5, 0.5, 0.5],
         }),
       });
@@ -251,7 +251,7 @@ describe("Vector Service", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: "cos-ortho",
-          mote_id: "mote-ortho",
+          motebit_id: "motebit-ortho",
           embedding: [1, 0, 0],
         }),
       });
@@ -260,7 +260,7 @@ describe("Vector Service", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          mote_id: "mote-ortho",
+          motebit_id: "motebit-ortho",
           embedding: [0, 1, 0],
         }),
       });
@@ -277,7 +277,7 @@ describe("Vector Service", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: "cos-opposite",
-          mote_id: "mote-opposite",
+          motebit_id: "motebit-opposite",
           embedding: [1, 0, 0],
         }),
       });
@@ -286,7 +286,7 @@ describe("Vector Service", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          mote_id: "mote-opposite",
+          motebit_id: "motebit-opposite",
           embedding: [-1, 0, 0],
         }),
       });

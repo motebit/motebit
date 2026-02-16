@@ -1,24 +1,24 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-vi.mock("@mote/memory-graph", async () => {
-  const actual = await vi.importActual<typeof import("@mote/memory-graph")>("@mote/memory-graph");
+vi.mock("@motebit/memory-graph", async () => {
+  const actual = await vi.importActual<typeof import("@motebit/memory-graph")>("@motebit/memory-graph");
   return { ...actual, embedText: (text: string) => Promise.resolve(actual.embedTextHash(text)) };
 });
 
-import { createMoteServer } from "../index.js";
-import type { MoteServer } from "../index.js";
-import { TrustMode, BatteryMode, EventType, SensitivityLevel } from "@mote/sdk";
-import type { EventLogEntry } from "@mote/sdk";
+import { createMotebitServer } from "../index.js";
+import type { MotebitServer } from "../index.js";
+import { TrustMode, BatteryMode, EventType, SensitivityLevel } from "@motebit/sdk";
+import type { EventLogEntry } from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-const MOTE_ID = "mote-api-test";
+const MOTEBIT_ID = "motebit-api-test";
 const API_KEY = "test-api-key";
 
-function createTestServer(): MoteServer {
-  return createMoteServer({ moteId: MOTE_ID, apiKey: API_KEY });
+function createTestServer(): MotebitServer {
+  return createMotebitServer({ motebitId: MOTEBIT_ID, apiKey: API_KEY });
 }
 
 function mockAnthropicResponse(text: string) {
@@ -40,10 +40,10 @@ function mockFetchSuccess(text: string): void {
   );
 }
 
-function makeEvent(moteId: string, clock: number): EventLogEntry {
+function makeEvent(motebitId: string, clock: number): EventLogEntry {
   return {
     event_id: crypto.randomUUID(),
-    mote_id: moteId,
+    motebit_id: motebitId,
     timestamp: Date.now(),
     event_type: EventType.StateUpdated,
     payload: { clock },
@@ -56,9 +56,9 @@ function makeEvent(moteId: string, clock: number): EventLogEntry {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("Mote API", () => {
+describe("Motebit API", () => {
   const originalFetch = globalThis.fetch;
-  let server: MoteServer;
+  let server: MotebitServer;
 
   beforeEach(() => {
     globalThis.fetch = vi.fn();
@@ -72,7 +72,7 @@ describe("Mote API", () => {
 
   // === Existing tests (updated to use config object) ===
 
-  it("POST /api/v1/message/:moteId returns response with memory and state", async () => {
+  it("POST /api/v1/message/:motebitId returns response with memory and state", async () => {
     const responseText = [
       "That's really interesting!",
       '<memory confidence="0.9" sensitivity="personal">User enjoys hiking on weekends</memory>',
@@ -81,7 +81,7 @@ describe("Mote API", () => {
 
     mockFetchSuccess(responseText);
 
-    const res = await server.app.request(`/api/v1/message/${MOTE_ID}`, {
+    const res = await server.app.request(`/api/v1/message/${MOTEBIT_ID}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: "I love hiking on weekends!" }),
@@ -101,18 +101,18 @@ describe("Mote API", () => {
     expect(body.state).toBeDefined();
     expect(body.cues).toBeDefined();
     expect(body.cues.hover_distance).toBeGreaterThan(0);
-    expect(body.mote_id).toBe(MOTE_ID);
+    expect(body.motebit_id).toBe(MOTEBIT_ID);
   });
 
-  it("GET /api/v1/state/:moteId returns current state", async () => {
-    const res = await server.app.request(`/api/v1/state/${MOTE_ID}`, {
+  it("GET /api/v1/state/:motebitId returns current state", async () => {
+    const res = await server.app.request(`/api/v1/state/${MOTEBIT_ID}`, {
       method: "GET",
     });
 
     expect(res.status).toBe(200);
     const body = await res.json();
 
-    expect(body.mote_id).toBe(MOTE_ID);
+    expect(body.motebit_id).toBe(MOTEBIT_ID);
     expect(body.state).toBeDefined();
     expect(body.state.confidence).toBe(0.5);
     expect(body.state.attention).toBe(0);
@@ -120,15 +120,15 @@ describe("Mote API", () => {
     expect(body.state.battery_mode).toBe(BatteryMode.Normal);
   });
 
-  it("GET /api/v1/memory/:moteId returns stored memories", async () => {
+  it("GET /api/v1/memory/:motebitId returns stored memories", async () => {
     // Initially empty
-    const res1 = await server.app.request(`/api/v1/memory/${MOTE_ID}`, {
+    const res1 = await server.app.request(`/api/v1/memory/${MOTEBIT_ID}`, {
       method: "GET",
     });
 
     expect(res1.status).toBe(200);
     const body1 = await res1.json();
-    expect(body1.mote_id).toBe(MOTE_ID);
+    expect(body1.motebit_id).toBe(MOTEBIT_ID);
     expect(body1.memories).toHaveLength(0);
     expect(body1.edges).toHaveLength(0);
 
@@ -137,14 +137,14 @@ describe("Mote API", () => {
       'Cool! <memory confidence="0.85" sensitivity="none">User loves jazz music</memory>',
     );
 
-    await server.app.request(`/api/v1/message/${MOTE_ID}`, {
+    await server.app.request(`/api/v1/message/${MOTEBIT_ID}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: "I love jazz music" }),
     });
 
     // Now memories should be populated
-    const res2 = await server.app.request(`/api/v1/memory/${MOTE_ID}`, {
+    const res2 = await server.app.request(`/api/v1/memory/${MOTEBIT_ID}`, {
       method: "GET",
     });
 
@@ -163,10 +163,10 @@ describe("Mote API", () => {
     expect(body.timestamp).toBeTypeOf("number");
   });
 
-  it("POST /api/v1/message/:moteId handles no-memory response", async () => {
+  it("POST /api/v1/message/:motebitId handles no-memory response", async () => {
     mockFetchSuccess("Just a plain response, no memories here.");
 
-    const res = await server.app.request(`/api/v1/message/${MOTE_ID}`, {
+    const res = await server.app.request(`/api/v1/message/${MOTEBIT_ID}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: "What's up?" }),
@@ -189,13 +189,13 @@ describe("Mote API", () => {
 
     expect(res.status).toBe(201);
     const body = await res.json();
-    expect(body.mote_id).toBeTypeOf("string");
+    expect(body.motebit_id).toBeTypeOf("string");
     expect(body.owner_id).toBe("owner-1");
     expect(body.created_at).toBeTypeOf("number");
     expect(body.version_clock).toBe(0);
   });
 
-  it("GET /api/v1/identity/:moteId loads existing identity", async () => {
+  it("GET /api/v1/identity/:motebitId loads existing identity", async () => {
     // Create first
     const createRes = await server.app.request("/api/v1/identity", {
       method: "POST",
@@ -205,17 +205,17 @@ describe("Mote API", () => {
     const created = await createRes.json();
 
     // Load
-    const res = await server.app.request(`/api/v1/identity/${created.mote_id}`, {
+    const res = await server.app.request(`/api/v1/identity/${created.motebit_id}`, {
       method: "GET",
     });
 
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.mote_id).toBe(created.mote_id);
+    expect(body.motebit_id).toBe(created.motebit_id);
     expect(body.owner_id).toBe("owner-2");
   });
 
-  it("GET /api/v1/identity/:moteId returns 404 for nonexistent", async () => {
+  it("GET /api/v1/identity/:motebitId returns 404 for nonexistent", async () => {
     const res = await server.app.request("/api/v1/identity/nonexistent-id", {
       method: "GET",
     });
@@ -227,8 +227,8 @@ describe("Mote API", () => {
 
   // === New tests: Memory POST ===
 
-  it("POST /api/v1/memory/:moteId creates memory with embedding", async () => {
-    const res = await server.app.request(`/api/v1/memory/${MOTE_ID}`, {
+  it("POST /api/v1/memory/:motebitId creates memory with embedding", async () => {
+    const res = await server.app.request(`/api/v1/memory/${MOTEBIT_ID}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content: "User likes coffee" }),
@@ -243,7 +243,7 @@ describe("Mote API", () => {
     expect(body.sensitivity).toBe(SensitivityLevel.None);
 
     // Verify persisted via GET
-    const getRes = await server.app.request(`/api/v1/memory/${MOTE_ID}`, {
+    const getRes = await server.app.request(`/api/v1/memory/${MOTEBIT_ID}`, {
       method: "GET",
     });
     const getBody = await getRes.json();
@@ -251,8 +251,8 @@ describe("Mote API", () => {
     expect(getBody.memories[0].content).toBe("User likes coffee");
   });
 
-  it("POST /api/v1/memory/:moteId respects sensitivity parameter", async () => {
-    const res = await server.app.request(`/api/v1/memory/${MOTE_ID}`, {
+  it("POST /api/v1/memory/:motebitId respects sensitivity parameter", async () => {
+    const res = await server.app.request(`/api/v1/memory/${MOTEBIT_ID}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content: "User has allergy", sensitivity: "medical" }),
@@ -265,10 +265,10 @@ describe("Mote API", () => {
 
   // === New tests: Sync ===
 
-  it("POST /api/v1/sync/:moteId/push accepts events", async () => {
-    const events = [makeEvent(MOTE_ID, 1), makeEvent(MOTE_ID, 2)];
+  it("POST /api/v1/sync/:motebitId/push accepts events", async () => {
+    const events = [makeEvent(MOTEBIT_ID, 1), makeEvent(MOTEBIT_ID, 2)];
 
-    const res = await server.app.request(`/api/v1/sync/${MOTE_ID}/push`, {
+    const res = await server.app.request(`/api/v1/sync/${MOTEBIT_ID}/push`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ events }),
@@ -279,16 +279,16 @@ describe("Mote API", () => {
     expect(body.accepted).toBe(2);
   });
 
-  it("GET /api/v1/sync/:moteId/pull returns pushed events", async () => {
-    const events = [makeEvent(MOTE_ID, 1), makeEvent(MOTE_ID, 2)];
+  it("GET /api/v1/sync/:motebitId/pull returns pushed events", async () => {
+    const events = [makeEvent(MOTEBIT_ID, 1), makeEvent(MOTEBIT_ID, 2)];
 
-    await server.app.request(`/api/v1/sync/${MOTE_ID}/push`, {
+    await server.app.request(`/api/v1/sync/${MOTEBIT_ID}/push`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ events }),
     });
 
-    const res = await server.app.request(`/api/v1/sync/${MOTE_ID}/pull?after_clock=0`, {
+    const res = await server.app.request(`/api/v1/sync/${MOTEBIT_ID}/pull?after_clock=0`, {
       method: "GET",
     });
 
@@ -297,20 +297,20 @@ describe("Mote API", () => {
     expect(body.events.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("GET /api/v1/sync/:moteId/pull filters by after_clock", async () => {
+  it("GET /api/v1/sync/:motebitId/pull filters by after_clock", async () => {
     const events = [
-      makeEvent(MOTE_ID, 1),
-      makeEvent(MOTE_ID, 2),
-      makeEvent(MOTE_ID, 3),
+      makeEvent(MOTEBIT_ID, 1),
+      makeEvent(MOTEBIT_ID, 2),
+      makeEvent(MOTEBIT_ID, 3),
     ];
 
-    await server.app.request(`/api/v1/sync/${MOTE_ID}/push`, {
+    await server.app.request(`/api/v1/sync/${MOTEBIT_ID}/push`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ events }),
     });
 
-    const res = await server.app.request(`/api/v1/sync/${MOTE_ID}/pull?after_clock=1`, {
+    const res = await server.app.request(`/api/v1/sync/${MOTEBIT_ID}/pull?after_clock=1`, {
       method: "GET",
     });
 
@@ -325,7 +325,7 @@ describe("Mote API", () => {
 
   // === New tests: Export ===
 
-  it("GET /api/v1/export/:moteId returns full manifest", async () => {
+  it("GET /api/v1/export/:motebitId returns full manifest", async () => {
     // Create identity
     const createRes = await server.app.request("/api/v1/identity", {
       method: "POST",
@@ -334,34 +334,34 @@ describe("Mote API", () => {
     });
     const identity = await createRes.json();
 
-    // Form a memory via message endpoint (uses the server's moteId)
+    // Form a memory via message endpoint (uses the server's motebitId)
     mockFetchSuccess(
       'Sure! <memory confidence="0.8" sensitivity="none">User likes exports</memory>',
     );
-    await server.app.request(`/api/v1/message/${MOTE_ID}`, {
+    await server.app.request(`/api/v1/message/${MOTEBIT_ID}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: "Test export" }),
     });
 
     // Export
-    const res = await server.app.request(`/api/v1/export/${identity.mote_id}`, {
+    const res = await server.app.request(`/api/v1/export/${identity.motebit_id}`, {
       method: "GET",
     });
 
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.mote_id).toBe(MOTE_ID); // manifest uses server's moteId
+    expect(body.motebit_id).toBe(MOTEBIT_ID); // manifest uses server's motebitId
     expect(body.exported_at).toBeTypeOf("number");
     expect(body.identity).toBeDefined();
-    expect(body.identity.mote_id).toBe(identity.mote_id);
+    expect(body.identity.motebit_id).toBe(identity.motebit_id);
     expect(body.memories).toBeInstanceOf(Array);
     expect(body.events).toBeInstanceOf(Array);
     expect(body.audit_log).toBeInstanceOf(Array);
   });
 
-  it("GET /api/v1/export/:moteId returns 404 with no identity", async () => {
-    const res = await server.app.request("/api/v1/export/no-such-mote", {
+  it("GET /api/v1/export/:motebitId returns 404 with no identity", async () => {
+    const res = await server.app.request("/api/v1/export/no-such-motebit", {
       method: "GET",
     });
 
@@ -372,7 +372,7 @@ describe("Mote API", () => {
 
   // === New tests: Delete ===
 
-  it("POST /api/v1/delete/:moteId deletes memories and returns certificates", async () => {
+  it("POST /api/v1/delete/:motebitId deletes memories and returns certificates", async () => {
     // Create identity
     const createRes = await server.app.request("/api/v1/identity", {
       method: "POST",
@@ -385,14 +385,14 @@ describe("Mote API", () => {
     mockFetchSuccess(
       'OK! <memory confidence="0.7" sensitivity="none">Deletable memory</memory>',
     );
-    await server.app.request(`/api/v1/message/${MOTE_ID}`, {
+    await server.app.request(`/api/v1/message/${MOTEBIT_ID}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: "Remember this for deletion" }),
     });
 
     // Delete
-    const res = await server.app.request(`/api/v1/delete/${identity.mote_id}`, {
+    const res = await server.app.request(`/api/v1/delete/${identity.motebit_id}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ deleted_by: "owner-delete" }),
@@ -400,11 +400,11 @@ describe("Mote API", () => {
 
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.mote_id).toBe(identity.mote_id);
+    expect(body.motebit_id).toBe(identity.motebit_id);
     expect(body.deletion_certificates).toBeInstanceOf(Array);
   });
 
-  it("POST /api/v1/delete/:moteId with no memories returns empty certificates", async () => {
+  it("POST /api/v1/delete/:motebitId with no memories returns empty certificates", async () => {
     // Create identity with no memories
     const createRes = await server.app.request("/api/v1/identity", {
       method: "POST",
@@ -413,7 +413,7 @@ describe("Mote API", () => {
     });
     const identity = await createRes.json();
 
-    const res = await server.app.request(`/api/v1/delete/${identity.mote_id}`, {
+    const res = await server.app.request(`/api/v1/delete/${identity.motebit_id}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ deleted_by: "owner-empty-delete" }),
@@ -424,8 +424,8 @@ describe("Mote API", () => {
     expect(body.deletion_certificates).toEqual([]);
   });
 
-  it("POST /api/v1/delete/:moteId returns 404 with no identity", async () => {
-    const res = await server.app.request("/api/v1/delete/no-such-mote", {
+  it("POST /api/v1/delete/:motebitId returns 404 with no identity", async () => {
+    const res = await server.app.request("/api/v1/delete/no-such-motebit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ deleted_by: "someone" }),

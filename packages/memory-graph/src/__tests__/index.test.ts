@@ -5,9 +5,9 @@ import {
   InMemoryMemoryStorage,
   MemoryGraph,
 } from "../index";
-import { EventStore, InMemoryEventStore } from "@mote/event-log";
-import { SensitivityLevel, RelationType } from "@mote/sdk";
-import type { MemoryCandidate } from "@mote/sdk";
+import { EventStore, InMemoryEventStore } from "@motebit/event-log";
+import { SensitivityLevel, RelationType } from "@motebit/sdk";
+import type { MemoryCandidate } from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
 // computeDecayedConfidence()
@@ -88,7 +88,7 @@ describe("InMemoryMemoryStorage", () => {
   it("saveNode and getNode roundtrip", async () => {
     const node = {
       node_id: "n1",
-      mote_id: "m1",
+      motebit_id: "m1",
       content: "test memory",
       embedding: [0.1, 0.2, 0.3],
       confidence: 0.9,
@@ -108,10 +108,10 @@ describe("InMemoryMemoryStorage", () => {
     expect(await storage.getNode("nonexistent")).toBeNull();
   });
 
-  it("queryNodes filters by mote_id", async () => {
+  it("queryNodes filters by motebit_id", async () => {
     await storage.saveNode({
       node_id: "n1",
-      mote_id: "m1",
+      motebit_id: "m1",
       content: "a",
       embedding: [],
       confidence: 1,
@@ -123,7 +123,7 @@ describe("InMemoryMemoryStorage", () => {
     });
     await storage.saveNode({
       node_id: "n2",
-      mote_id: "m2",
+      motebit_id: "m2",
       content: "b",
       embedding: [],
       confidence: 1,
@@ -133,7 +133,7 @@ describe("InMemoryMemoryStorage", () => {
       half_life: 999999999,
       tombstoned: false,
     });
-    const results = await storage.queryNodes({ mote_id: "m1" });
+    const results = await storage.queryNodes({ motebit_id: "m1" });
     expect(results).toHaveLength(1);
     expect(results[0]!.node_id).toBe("n1");
   });
@@ -141,7 +141,7 @@ describe("InMemoryMemoryStorage", () => {
   it("queryNodes excludes tombstoned by default", async () => {
     await storage.saveNode({
       node_id: "n1",
-      mote_id: "m1",
+      motebit_id: "m1",
       content: "a",
       embedding: [],
       confidence: 1,
@@ -151,14 +151,14 @@ describe("InMemoryMemoryStorage", () => {
       half_life: 999999999,
       tombstoned: true,
     });
-    const results = await storage.queryNodes({ mote_id: "m1" });
+    const results = await storage.queryNodes({ motebit_id: "m1" });
     expect(results).toHaveLength(0);
   });
 
   it("queryNodes includes tombstoned when requested", async () => {
     await storage.saveNode({
       node_id: "n1",
-      mote_id: "m1",
+      motebit_id: "m1",
       content: "a",
       embedding: [],
       confidence: 1,
@@ -169,7 +169,7 @@ describe("InMemoryMemoryStorage", () => {
       tombstoned: true,
     });
     const results = await storage.queryNodes({
-      mote_id: "m1",
+      motebit_id: "m1",
       include_tombstoned: true,
     });
     expect(results).toHaveLength(1);
@@ -194,7 +194,7 @@ describe("InMemoryMemoryStorage", () => {
   it("tombstoneNode marks node as tombstoned", async () => {
     await storage.saveNode({
       node_id: "n1",
-      mote_id: "m1",
+      motebit_id: "m1",
       content: "a",
       embedding: [],
       confidence: 1,
@@ -218,12 +218,12 @@ describe("MemoryGraph", () => {
   let storage: InMemoryMemoryStorage;
   let eventStore: EventStore;
   let graph: MemoryGraph;
-  const moteId = "mote-1";
+  const motebitId = "motebit-1";
 
   beforeEach(() => {
     storage = new InMemoryMemoryStorage();
     eventStore = new EventStore(new InMemoryEventStore());
-    graph = new MemoryGraph(storage, eventStore, moteId);
+    graph = new MemoryGraph(storage, eventStore, motebitId);
   });
 
   describe("formMemory", () => {
@@ -237,7 +237,7 @@ describe("MemoryGraph", () => {
       const node = await graph.formMemory(candidate, embedding);
 
       expect(node.node_id).toBeTruthy();
-      expect(node.mote_id).toBe(moteId);
+      expect(node.motebit_id).toBe(motebitId);
       expect(node.content).toBe("The user likes jazz");
       expect(node.confidence).toBe(0.85);
       expect(node.sensitivity).toBe(SensitivityLevel.Personal);
@@ -253,7 +253,7 @@ describe("MemoryGraph", () => {
         sensitivity: SensitivityLevel.None,
       };
       await graph.formMemory(candidate, [1, 0]);
-      const events = await eventStore.query({ mote_id: moteId });
+      const events = await eventStore.query({ motebit_id: motebitId });
       expect(events).toHaveLength(1);
       expect(events[0]!.event_type).toBe("memory_formed");
     });
@@ -342,7 +342,7 @@ describe("MemoryGraph", () => {
       await graph.deleteMemory(node.node_id);
 
       const events = await eventStore.query({
-        mote_id: moteId,
+        motebit_id: motebitId,
         event_types: ["memory_deleted" as any],
       });
       expect(events).toHaveLength(1);
@@ -430,7 +430,7 @@ describe("MemoryGraph", () => {
       await graph.deleteMemory(node1.node_id);
       await graph.getMemory(node2.node_id);
 
-      const events = await eventStore.query({ mote_id: moteId });
+      const events = await eventStore.query({ motebit_id: motebitId });
       const clocks = events.map((e) => e.version_clock);
       // Each event should have a unique, incrementing clock
       expect(clocks).toEqual([1, 2, 3, 4]);

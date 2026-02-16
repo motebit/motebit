@@ -19,12 +19,12 @@ processors:
         match_type: regexp
         metric_names:
           - ".*user_id.*"
-          - ".*mote_id.*"
+          - ".*motebit_id.*"
 
 exporters:
   prometheus:
     endpoint: 0.0.0.0:8889
-    namespace: mote
+    namespace: motebit
 
   otlp/grafana:
     endpoint: "${GRAFANA_OTLP_ENDPOINT}"

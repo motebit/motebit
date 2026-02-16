@@ -8,14 +8,14 @@ import {
   assertSpeciesIntegrity,
   SPECIES_CONSTRAINTS,
 } from "../index";
-import { TrustMode, BatteryMode } from "@mote/sdk";
-import type { MoteState, BehaviorCues } from "@mote/sdk";
+import { TrustMode, BatteryMode } from "@motebit/sdk";
+import type { MotebitState, BehaviorCues } from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeDefaultState(overrides: Partial<MoteState> = {}): MoteState {
+function makeDefaultState(overrides: Partial<MotebitState> = {}): MotebitState {
   return {
     attention: 0.5,
     processing: 0.5,

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import type { MoteState, MemoryNode, MemoryEdge, EventLogEntry, BehaviorCues } from "@mote/sdk";
-import { TrustMode, BatteryMode } from "@mote/sdk";
-import { computeRawCues } from "@mote/behavior-engine";
+import type { MotebitState, MemoryNode, MemoryEdge, EventLogEntry, BehaviorCues } from "@motebit/sdk";
+import { TrustMode, BatteryMode } from "@motebit/sdk";
+import { computeRawCues } from "@motebit/behavior-engine";
 import { fetchState, fetchMemory, fetchEvents, deleteMemoryNode } from "./api";
 
 // === Panel Components ===
@@ -15,7 +15,7 @@ function ConnectionStatus({ connected }: { connected: boolean }): React.ReactEle
   );
 }
 
-function StateVectorPanel({ state }: { state: MoteState }): React.ReactElement {
+function StateVectorPanel({ state }: { state: MotebitState }): React.ReactElement {
   const fields = [
     { name: "attention", value: state.attention },
     { name: "processing", value: state.processing },
@@ -112,7 +112,7 @@ function EventsPanel({ events }: { events: EventLogEntry[] }): React.ReactElemen
 
 // === Main Admin App ===
 
-const DEFAULT_STATE: MoteState = {
+const DEFAULT_STATE: MotebitState = {
   attention: 0,
   processing: 0,
   confidence: 0.5,
@@ -125,7 +125,7 @@ const DEFAULT_STATE: MoteState = {
 };
 
 export function AdminApp(): React.ReactElement {
-  const [state, setState] = useState<MoteState>(DEFAULT_STATE);
+  const [state, setState] = useState<MotebitState>(DEFAULT_STATE);
   const [memories, setMemories] = useState<MemoryNode[]>([]);
   const [edges, setEdges] = useState<MemoryEdge[]>([]);
   const [events, setEvents] = useState<EventLogEntry[]>([]);
@@ -217,7 +217,7 @@ export function AdminApp(): React.ReactElement {
   }
 
   const header = React.createElement("div", { className: "admin-header" },
-    React.createElement("h1", null, "Mote Admin"),
+    React.createElement("h1", null, "Motebit Admin"),
     React.createElement(ConnectionStatus, { connected }),
   );
 

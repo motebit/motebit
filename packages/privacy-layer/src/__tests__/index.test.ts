@@ -3,21 +3,21 @@ import {
   InMemoryAuditLog,
   PrivacyLayer,
 } from "../index";
-import { InMemoryMemoryStorage, MemoryGraph } from "@mote/memory-graph";
-import { EventStore, InMemoryEventStore } from "@mote/event-log";
-import { SensitivityLevel } from "@mote/sdk";
-import type { MemoryNode, AuditRecord, MoteIdentity } from "@mote/sdk";
+import { InMemoryMemoryStorage, MemoryGraph } from "@motebit/memory-graph";
+import { EventStore, InMemoryEventStore } from "@motebit/event-log";
+import { SensitivityLevel } from "@motebit/sdk";
+import type { MemoryNode, AuditRecord, MotebitIdentity } from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-const MOTE_ID = "mote-1";
+const MOTEBIT_ID = "motebit-1";
 
 function makeNode(overrides: Partial<MemoryNode> = {}): MemoryNode {
   return {
     node_id: crypto.randomUUID(),
-    mote_id: MOTE_ID,
+    motebit_id: MOTEBIT_ID,
     content: "test memory",
     embedding: [0.1, 0.2],
     confidence: 0.9,
@@ -30,9 +30,9 @@ function makeNode(overrides: Partial<MemoryNode> = {}): MemoryNode {
   };
 }
 
-function makeIdentity(): MoteIdentity {
+function makeIdentity(): MotebitIdentity {
   return {
-    mote_id: MOTE_ID,
+    motebit_id: MOTEBIT_ID,
     created_at: Date.now(),
     owner_id: "owner-1",
     version_clock: 5,
@@ -53,7 +53,7 @@ describe("InMemoryAuditLog", () => {
   it("records and queries audit entries", async () => {
     const entry: AuditRecord = {
       audit_id: "a1",
-      mote_id: MOTE_ID,
+      motebit_id: MOTEBIT_ID,
       timestamp: 1000,
       action: "test_action",
       target_type: "memory",
@@ -61,15 +61,15 @@ describe("InMemoryAuditLog", () => {
       details: { key: "val" },
     };
     await auditLog.record(entry);
-    const results = await auditLog.query(MOTE_ID);
+    const results = await auditLog.query(MOTEBIT_ID);
     expect(results).toHaveLength(1);
     expect(results[0]!.action).toBe("test_action");
   });
 
-  it("filters by mote_id", async () => {
+  it("filters by motebit_id", async () => {
     await auditLog.record({
       audit_id: "a1",
-      mote_id: "m1",
+      motebit_id: "m1",
       timestamp: 1000,
       action: "act",
       target_type: "t",
@@ -78,7 +78,7 @@ describe("InMemoryAuditLog", () => {
     });
     await auditLog.record({
       audit_id: "a2",
-      mote_id: "m2",
+      motebit_id: "m2",
       timestamp: 1000,
       action: "act",
       target_type: "t",
@@ -92,7 +92,7 @@ describe("InMemoryAuditLog", () => {
   it("filters by after timestamp", async () => {
     await auditLog.record({
       audit_id: "a1",
-      mote_id: MOTE_ID,
+      motebit_id: MOTEBIT_ID,
       timestamp: 100,
       action: "early",
       target_type: "t",
@@ -101,14 +101,14 @@ describe("InMemoryAuditLog", () => {
     });
     await auditLog.record({
       audit_id: "a2",
-      mote_id: MOTE_ID,
+      motebit_id: MOTEBIT_ID,
       timestamp: 200,
       action: "late",
       target_type: "t",
       target_id: "x",
       details: {},
     });
-    const results = await auditLog.query(MOTE_ID, { after: 150 });
+    const results = await auditLog.query(MOTEBIT_ID, { after: 150 });
     expect(results).toHaveLength(1);
     expect(results[0]!.action).toBe("late");
   });
@@ -117,7 +117,7 @@ describe("InMemoryAuditLog", () => {
     for (let i = 0; i < 5; i++) {
       await auditLog.record({
         audit_id: `a${i}`,
-        mote_id: MOTE_ID,
+        motebit_id: MOTEBIT_ID,
         timestamp: i * 100,
         action: `action-${i}`,
         target_type: "t",
@@ -125,7 +125,7 @@ describe("InMemoryAuditLog", () => {
         details: {},
       });
     }
-    const results = await auditLog.query(MOTE_ID, { limit: 2 });
+    const results = await auditLog.query(MOTEBIT_ID, { limit: 2 });
     expect(results).toHaveLength(2);
     // Should be the last 2 entries
     expect(results[0]!.action).toBe("action-3");
@@ -148,13 +148,13 @@ describe("PrivacyLayer", () => {
     storage = new InMemoryMemoryStorage();
     eventStore = new EventStore(new InMemoryEventStore());
     auditLog = new InMemoryAuditLog();
-    memoryGraph = new MemoryGraph(storage, eventStore, MOTE_ID);
+    memoryGraph = new MemoryGraph(storage, eventStore, MOTEBIT_ID);
     privacyLayer = new PrivacyLayer(
       storage,
       memoryGraph,
       eventStore,
       auditLog,
-      MOTE_ID,
+      MOTEBIT_ID,
     );
   });
 
@@ -168,7 +168,7 @@ describe("PrivacyLayer", () => {
       expect(memories[0]!.content).toBe("test memory");
 
       // Verify audit trail
-      const auditRecords = await auditLog.query(MOTE_ID);
+      const auditRecords = await auditLog.query(MOTEBIT_ID);
       expect(auditRecords.length).toBeGreaterThanOrEqual(1);
       expect(
         auditRecords.some((r) => r.action === "list_memories"),
@@ -234,8 +234,8 @@ describe("PrivacyLayer", () => {
 
       const manifest = await privacyLayer.exportAll(makeIdentity());
 
-      expect(manifest.mote_id).toBe(MOTE_ID);
-      expect(manifest.identity.mote_id).toBe(MOTE_ID);
+      expect(manifest.motebit_id).toBe(MOTEBIT_ID);
+      expect(manifest.identity.motebit_id).toBe(MOTEBIT_ID);
       expect(manifest.memories.length).toBeGreaterThanOrEqual(1);
       expect(manifest.events.length).toBeGreaterThanOrEqual(1);
       expect(manifest.audit_log.length).toBeGreaterThanOrEqual(1);
@@ -245,7 +245,7 @@ describe("PrivacyLayer", () => {
     it("logs an ExportRequested event", async () => {
       await privacyLayer.exportAll(makeIdentity());
 
-      const events = await eventStore.query({ mote_id: MOTE_ID });
+      const events = await eventStore.query({ motebit_id: MOTEBIT_ID });
       expect(
         events.some((e) => e.event_type === "export_requested"),
       ).toBe(true);
@@ -271,7 +271,7 @@ describe("PrivacyLayer", () => {
         memoryGraph,
         eventStore,
         auditLog,
-        MOTE_ID,
+        MOTEBIT_ID,
       );
 
       await expect(failLayer.listMemories()).rejects.toThrow(
@@ -296,7 +296,7 @@ describe("PrivacyLayer", () => {
         memoryGraph,
         eventStore,
         auditLog,
-        MOTE_ID,
+        MOTEBIT_ID,
       );
 
       await expect(failLayer.inspectMemory("n1")).rejects.toThrow(

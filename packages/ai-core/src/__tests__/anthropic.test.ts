@@ -6,14 +6,14 @@ import {
   stripTags,
 } from "../index";
 import type { CloudProviderConfig } from "../index";
-import { TrustMode, BatteryMode, SensitivityLevel } from "@mote/sdk";
-import type { ContextPack, MoteState } from "@mote/sdk";
+import { TrustMode, BatteryMode, SensitivityLevel } from "@motebit/sdk";
+import type { ContextPack, MotebitState } from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeDefaultState(overrides: Partial<MoteState> = {}): MoteState {
+function makeDefaultState(overrides: Partial<MotebitState> = {}): MotebitState {
   return {
     attention: 0.5,
     processing: 0.3,
@@ -33,7 +33,7 @@ function makeContextPack(overrides: Partial<ContextPack> = {}): ContextPack {
     recent_events: [],
     relevant_memories: [],
     current_state: makeDefaultState(),
-    user_message: "Hello, Mote!",
+    user_message: "Hello, Motebit!",
     ...overrides,
   };
 }
@@ -197,7 +197,7 @@ describe("CloudProvider Anthropic integration", () => {
     expect(body.max_tokens).toBe(2048);
     expect(body.temperature).toBe(0.5);
     expect(body.messages).toEqual([{ role: "user", content: "Test" }]);
-    expect(body.system).toContain("Mote");
+    expect(body.system).toContain("Motebit");
   });
 
   it("parses memory tags from response", async () => {

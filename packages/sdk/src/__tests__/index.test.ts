@@ -8,8 +8,8 @@ import {
   RelationType,
 } from "../index";
 import type {
-  MoteIdentity,
-  MoteState,
+  MotebitIdentity,
+  MotebitState,
   BehaviorCues,
   MemoryNode,
   EventLogEntry,
@@ -106,19 +106,19 @@ describe("RelationType enum", () => {
 // ---------------------------------------------------------------------------
 
 describe("Type construction", () => {
-  it("constructs a valid MoteIdentity", () => {
-    const identity: MoteIdentity = {
-      mote_id: "test-id",
+  it("constructs a valid MotebitIdentity", () => {
+    const identity: MotebitIdentity = {
+      motebit_id: "test-id",
       created_at: Date.now(),
       owner_id: "owner-1",
       version_clock: 0,
     };
-    expect(identity.mote_id).toBe("test-id");
+    expect(identity.motebit_id).toBe("test-id");
     expect(identity.version_clock).toBe(0);
   });
 
-  it("constructs a valid MoteState", () => {
-    const state: MoteState = {
+  it("constructs a valid MotebitState", () => {
+    const state: MotebitState = {
       attention: 0.5,
       processing: 0.3,
       confidence: 0.7,
@@ -148,7 +148,7 @@ describe("Type construction", () => {
   it("constructs a valid MemoryNode", () => {
     const node: MemoryNode = {
       node_id: "n1",
-      mote_id: "m1",
+      motebit_id: "m1",
       content: "hello",
       embedding: [0.1, 0.2],
       confidence: 0.9,
@@ -164,7 +164,7 @@ describe("Type construction", () => {
   it("constructs a valid EventLogEntry", () => {
     const entry: EventLogEntry = {
       event_id: "e1",
-      mote_id: "m1",
+      motebit_id: "m1",
       timestamp: Date.now(),
       event_type: EventType.StateUpdated,
       payload: { key: "value" },
@@ -176,7 +176,7 @@ describe("Type construction", () => {
 
   it("constructs a valid SyncCursor", () => {
     const cursor: SyncCursor = {
-      mote_id: "m1",
+      motebit_id: "m1",
       last_event_id: "e1",
       last_version_clock: 5,
     };
@@ -186,7 +186,7 @@ describe("Type construction", () => {
   it("constructs a valid ConflictEdge", () => {
     const localEvent: EventLogEntry = {
       event_id: "e1",
-      mote_id: "m1",
+      motebit_id: "m1",
       timestamp: 100,
       event_type: EventType.StateUpdated,
       payload: {},
@@ -195,7 +195,7 @@ describe("Type construction", () => {
     };
     const remoteEvent: EventLogEntry = {
       event_id: "e2",
-      mote_id: "m1",
+      motebit_id: "m1",
       timestamp: 101,
       event_type: EventType.StateUpdated,
       payload: {},
@@ -212,10 +212,10 @@ describe("Type construction", () => {
 
   it("constructs a valid ExportManifest", () => {
     const manifest: ExportManifest = {
-      mote_id: "m1",
+      motebit_id: "m1",
       exported_at: Date.now(),
       identity: {
-        mote_id: "m1",
+        motebit_id: "m1",
         created_at: Date.now(),
         owner_id: "owner",
         version_clock: 0,

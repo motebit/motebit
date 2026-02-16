@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { computeRawCues, BehaviorEngine } from "../index";
-import { TrustMode, BatteryMode, SPECIES_CONSTRAINTS } from "@mote/sdk";
-import type { MoteState } from "@mote/sdk";
+import { TrustMode, BatteryMode, SPECIES_CONSTRAINTS } from "@motebit/sdk";
+import type { MotebitState } from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeDefaultState(overrides: Partial<MoteState> = {}): MoteState {
+function makeDefaultState(overrides: Partial<MotebitState> = {}): MotebitState {
   return {
     attention: 0,
     processing: 0,

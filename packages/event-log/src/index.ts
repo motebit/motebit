@@ -1,9 +1,9 @@
-import type { EventLogEntry, EventType } from "@mote/sdk";
+import type { EventLogEntry, EventType } from "@motebit/sdk";
 
 // === Interfaces ===
 
 export interface EventFilter {
-  mote_id?: string;
+  motebit_id?: string;
   event_types?: EventType[];
   after_timestamp?: number;
   before_timestamp?: number;
@@ -14,8 +14,8 @@ export interface EventFilter {
 export interface EventStoreAdapter {
   append(entry: EventLogEntry): Promise<void>;
   query(filter: EventFilter): Promise<EventLogEntry[]>;
-  getLatestClock(moteId: string): Promise<number>;
-  tombstone(eventId: string, moteId: string): Promise<void>;
+  getLatestClock(motebitId: string): Promise<number>;
+  tombstone(eventId: string, motebitId: string): Promise<void>;
 }
 
 // === In-Memory Adapter (for testing and lightweight use) ===
@@ -31,8 +31,8 @@ export class InMemoryEventStore implements EventStoreAdapter {
   async query(filter: EventFilter): Promise<EventLogEntry[]> {
     let results = [...this.events];
 
-    if (filter.mote_id !== undefined) {
-      results = results.filter((e) => e.mote_id === filter.mote_id);
+    if (filter.motebit_id !== undefined) {
+      results = results.filter((e) => e.motebit_id === filter.motebit_id);
     }
     if (filter.event_types !== undefined) {
       results = results.filter((e) => filter.event_types!.includes(e.event_type));
@@ -53,15 +53,15 @@ export class InMemoryEventStore implements EventStoreAdapter {
     return results;
   }
 
-  async getLatestClock(moteId: string): Promise<number> {
-    const moteEvents = this.events.filter((e) => e.mote_id === moteId);
+  async getLatestClock(motebitId: string): Promise<number> {
+    const moteEvents = this.events.filter((e) => e.motebit_id === motebitId);
     if (moteEvents.length === 0) return 0;
     return Math.max(...moteEvents.map((e) => e.version_clock));
   }
 
-  async tombstone(eventId: string, moteId: string): Promise<void> {
+  async tombstone(eventId: string, motebitId: string): Promise<void> {
     const event = this.events.find(
-      (e) => e.event_id === eventId && e.mote_id === moteId,
+      (e) => e.event_id === eventId && e.motebit_id === motebitId,
     );
     if (event !== undefined) {
       // Tombstone is a marker, not a delete — the event stays in the log
@@ -79,8 +79,8 @@ export class EventStore {
     if (entry.event_id === "") {
       throw new Error("event_id must not be empty");
     }
-    if (entry.mote_id === "") {
-      throw new Error("mote_id must not be empty");
+    if (entry.motebit_id === "") {
+      throw new Error("motebit_id must not be empty");
     }
     return this.adapter.append(entry);
   }
@@ -89,22 +89,22 @@ export class EventStore {
     return this.adapter.query(filter);
   }
 
-  async getLatestClock(moteId: string): Promise<number> {
-    return this.adapter.getLatestClock(moteId);
+  async getLatestClock(motebitId: string): Promise<number> {
+    return this.adapter.getLatestClock(motebitId);
   }
 
-  async tombstone(eventId: string, moteId: string): Promise<void> {
-    return this.adapter.tombstone(eventId, moteId);
+  async tombstone(eventId: string, motebitId: string): Promise<void> {
+    return this.adapter.tombstone(eventId, motebitId);
   }
 
   /**
    * Replay events in order — useful for rebuilding derived state.
    */
   async replay(
-    moteId: string,
+    motebitId: string,
     handler: (entry: EventLogEntry) => Promise<void>,
   ): Promise<void> {
-    const events = await this.adapter.query({ mote_id: moteId });
+    const events = await this.adapter.query({ motebit_id: motebitId });
     const sorted = events.sort((a, b) => a.version_clock - b.version_clock);
     for (const event of sorted) {
       await handler(event);

@@ -4,16 +4,16 @@ import type {
   MemoryCandidate,
   SensitivityLevel,
   RelationType,
-} from "@mote/sdk";
-import { EventType } from "@mote/sdk";
-import type { EventStore } from "@mote/event-log";
+} from "@motebit/sdk";
+import { EventType } from "@motebit/sdk";
+import type { EventStore } from "@motebit/event-log";
 
 export { embedText, embedTextHash, EMBEDDING_DIMENSIONS, resetPipeline } from "./embeddings.js";
 
 // === Interfaces ===
 
 export interface MemoryQuery {
-  mote_id: string;
+  motebit_id: string;
   query_embedding?: number[];
   min_confidence?: number;
   sensitivity_filter?: SensitivityLevel[];
@@ -28,8 +28,8 @@ export interface MemoryStorageAdapter {
   saveEdge(edge: MemoryEdge): Promise<void>;
   getEdges(nodeId: string): Promise<MemoryEdge[]>;
   tombstoneNode(nodeId: string): Promise<void>;
-  getAllNodes(moteId: string): Promise<MemoryNode[]>;
-  getAllEdges(moteId: string): Promise<MemoryEdge[]>;
+  getAllNodes(motebitId: string): Promise<MemoryNode[]>;
+  getAllEdges(motebitId: string): Promise<MemoryEdge[]>;
 }
 
 // === Half-Life Decay ===
@@ -76,7 +76,7 @@ export class InMemoryMemoryStorage implements MemoryStorageAdapter {
 
   async queryNodes(query: MemoryQuery): Promise<MemoryNode[]> {
     let results = Array.from(this.nodes.values()).filter(
-      (n) => n.mote_id === query.mote_id,
+      (n) => n.motebit_id === query.motebit_id,
     );
 
     if (query.include_tombstoned !== true) {
@@ -125,14 +125,14 @@ export class InMemoryMemoryStorage implements MemoryStorageAdapter {
     }
   }
 
-  async getAllNodes(moteId: string): Promise<MemoryNode[]> {
-    return Array.from(this.nodes.values()).filter((n) => n.mote_id === moteId);
+  async getAllNodes(motebitId: string): Promise<MemoryNode[]> {
+    return Array.from(this.nodes.values()).filter((n) => n.motebit_id === motebitId);
   }
 
-  async getAllEdges(moteId: string): Promise<MemoryEdge[]> {
+  async getAllEdges(motebitId: string): Promise<MemoryEdge[]> {
     const moteNodes = new Set(
       Array.from(this.nodes.values())
-        .filter((n) => n.mote_id === moteId)
+        .filter((n) => n.motebit_id === motebitId)
         .map((n) => n.node_id),
     );
     return Array.from(this.edges.values()).filter(
@@ -147,7 +147,7 @@ export class MemoryGraph {
   constructor(
     private storage: MemoryStorageAdapter,
     private eventStore: EventStore,
-    private moteId: string,
+    private motebitId: string,
   ) {}
 
   /**
@@ -163,7 +163,7 @@ export class MemoryGraph {
 
     const node: MemoryNode = {
       node_id: nodeId,
-      mote_id: this.moteId,
+      motebit_id: this.motebitId,
       content: candidate.content,
       embedding,
       confidence: candidate.confidence,
@@ -176,10 +176,10 @@ export class MemoryGraph {
 
     await this.storage.saveNode(node);
 
-    const clock = await this.eventStore.getLatestClock(this.moteId);
+    const clock = await this.eventStore.getLatestClock(this.motebitId);
     await this.eventStore.append({
       event_id: crypto.randomUUID(),
-      mote_id: this.moteId,
+      motebit_id: this.motebitId,
       timestamp: now,
       event_type: EventType.MemoryFormed,
       payload: { node_id: nodeId, content: candidate.content },
@@ -230,7 +230,7 @@ export class MemoryGraph {
 
     // Pass 1: weighted filter
     const candidates = await this.storage.queryNodes({
-      mote_id: this.moteId,
+      motebit_id: this.motebitId,
       min_confidence: minConfidence,
       sensitivity_filter: sensitivityFilter,
       limit: limit * 5, // over-fetch for reranking
@@ -260,10 +260,10 @@ export class MemoryGraph {
   async deleteMemory(nodeId: string): Promise<void> {
     await this.storage.tombstoneNode(nodeId);
 
-    const clock = await this.eventStore.getLatestClock(this.moteId);
+    const clock = await this.eventStore.getLatestClock(this.motebitId);
     await this.eventStore.append({
       event_id: crypto.randomUUID(),
-      mote_id: this.moteId,
+      motebit_id: this.motebitId,
       timestamp: Date.now(),
       event_type: EventType.MemoryDeleted,
       payload: { node_id: nodeId },
@@ -281,10 +281,10 @@ export class MemoryGraph {
       node.last_accessed = Date.now();
       await this.storage.saveNode(node);
 
-      const clock = await this.eventStore.getLatestClock(this.moteId);
+      const clock = await this.eventStore.getLatestClock(this.motebitId);
       await this.eventStore.append({
         event_id: crypto.randomUUID(),
-        mote_id: this.moteId,
+        motebit_id: this.motebitId,
         timestamp: Date.now(),
         event_type: EventType.MemoryAccessed,
         payload: { node_id: nodeId },
@@ -302,8 +302,8 @@ export class MemoryGraph {
     nodes: MemoryNode[];
     edges: MemoryEdge[];
   }> {
-    const nodes = await this.storage.getAllNodes(this.moteId);
-    const edges = await this.storage.getAllEdges(this.moteId);
+    const nodes = await this.storage.getAllNodes(this.motebitId);
+    const edges = await this.storage.getAllEdges(this.motebitId);
     return { nodes, edges };
   }
 }

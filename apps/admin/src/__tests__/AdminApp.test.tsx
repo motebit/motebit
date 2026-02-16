@@ -2,12 +2,12 @@ import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { AdminApp } from "../AdminApp";
-import { TrustMode, BatteryMode } from "@mote/sdk";
+import { TrustMode, BatteryMode } from "@motebit/sdk";
 
 const originalFetch = globalThis.fetch;
 
 const mockState = {
-  mote_id: "default-mote",
+  motebit_id: "default-motebit",
   state: {
     attention: 0.7,
     processing: 0.3,
@@ -22,11 +22,11 @@ const mockState = {
 };
 
 const mockMemory = {
-  mote_id: "default-mote",
+  motebit_id: "default-motebit",
   memories: [
     {
       node_id: "n1",
-      mote_id: "default-mote",
+      motebit_id: "default-motebit",
       content: "Test memory content",
       embedding: [0.1, 0.2],
       confidence: 0.9,
@@ -41,11 +41,11 @@ const mockMemory = {
 };
 
 const mockEvents = {
-  mote_id: "default-mote",
+  motebit_id: "default-motebit",
   events: [
     {
       event_id: "e1",
-      mote_id: "default-mote",
+      motebit_id: "default-motebit",
       timestamp: Date.now(),
       event_type: "state_updated",
       payload: {},
@@ -101,7 +101,7 @@ describe("AdminApp", () => {
   it("renders without crashing", () => {
     setupFailingFetch();
     render(React.createElement(AdminApp));
-    expect(screen.getByText("Mote Admin")).toBeTruthy();
+    expect(screen.getByText("Motebit Admin")).toBeTruthy();
   });
 
   it("shows all 4 navigation buttons", () => {

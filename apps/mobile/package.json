@@ -1,5 +1,5 @@
 {
-  "name": "@mote/mobile",
+  "name": "@motebit/mobile",
   "version": "0.1.0",
   "private": true,
   "main": "expo-router/entry",
@@ -14,9 +14,9 @@
     "clean": "rm -rf dist .turbo .expo"
   },
   "dependencies": {
-    "@mote/sdk": "workspace:*",
-    "@mote/state-vector": "workspace:*",
-    "@mote/behavior-engine": "workspace:*",
+    "@motebit/sdk": "workspace:*",
+    "@motebit/state-vector": "workspace:*",
+    "@motebit/behavior-engine": "workspace:*",
     "expo": "~52.0.0",
     "expo-router": "~4.0.0",
     "expo-gl": "~15.0.0",

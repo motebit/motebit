@@ -32,10 +32,10 @@ importers:
 
   apps/admin:
     dependencies:
-      '@mote/behavior-engine':
+      '@motebit/behavior-engine':
         specifier: workspace:*
         version: link:../../packages/behavior-engine
-      '@mote/sdk':
+      '@motebit/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
       react:
@@ -72,22 +72,22 @@ importers:
 
   apps/cli:
     dependencies:
-      '@mote/ai-core':
+      '@motebit/ai-core':
         specifier: workspace:*
         version: link:../../packages/ai-core
-      '@mote/behavior-engine':
+      '@motebit/behavior-engine':
         specifier: workspace:*
         version: link:../../packages/behavior-engine
-      '@mote/event-log':
+      '@motebit/event-log':
         specifier: workspace:*
         version: link:../../packages/event-log
-      '@mote/memory-graph':
+      '@motebit/memory-graph':
         specifier: workspace:*
         version: link:../../packages/memory-graph
-      '@mote/persistence':
+      '@motebit/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence
-      '@mote/state-vector':
+      '@motebit/state-vector':
         specifier: workspace:*
         version: link:../../packages/state-vector
     devDependencies:
@@ -106,16 +106,16 @@ importers:
 
   apps/desktop:
     dependencies:
-      '@mote/behavior-engine':
+      '@motebit/behavior-engine':
         specifier: workspace:*
         version: link:../../packages/behavior-engine
-      '@mote/render-engine':
+      '@motebit/render-engine':
         specifier: workspace:*
         version: link:../../packages/render-engine
-      '@mote/sdk':
+      '@motebit/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@mote/state-vector':
+      '@motebit/state-vector':
         specifier: workspace:*
         version: link:../../packages/state-vector
     devDependencies:
@@ -134,13 +134,13 @@ importers:
 
   apps/mobile:
     dependencies:
-      '@mote/behavior-engine':
+      '@motebit/behavior-engine':
         specifier: workspace:*
         version: link:../../packages/behavior-engine
-      '@mote/sdk':
+      '@motebit/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@mote/state-vector':
+      '@motebit/state-vector':
         specifier: workspace:*
         version: link:../../packages/state-vector
       expo:
@@ -177,10 +177,10 @@ importers:
 
   apps/spatial:
     dependencies:
-      '@mote/render-engine':
+      '@motebit/render-engine':
         specifier: workspace:*
         version: link:../../packages/render-engine
-      '@mote/sdk':
+      '@motebit/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
     devDependencies:
@@ -193,19 +193,19 @@ importers:
 
   packages/ai-core:
     dependencies:
-      '@mote/behavior-engine':
+      '@motebit/behavior-engine':
         specifier: workspace:*
         version: link:../behavior-engine
-      '@mote/event-log':
+      '@motebit/event-log':
         specifier: workspace:*
         version: link:../event-log
-      '@mote/memory-graph':
+      '@motebit/memory-graph':
         specifier: workspace:*
         version: link:../memory-graph
-      '@mote/sdk':
+      '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk
-      '@mote/state-vector':
+      '@motebit/state-vector':
         specifier: workspace:*
         version: link:../state-vector
     devDependencies:
@@ -218,10 +218,10 @@ importers:
 
   packages/behavior-engine:
     dependencies:
-      '@mote/policy-invariants':
+      '@motebit/policy-invariants':
         specifier: workspace:*
         version: link:../policy-invariants
-      '@mote/sdk':
+      '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
@@ -234,10 +234,10 @@ importers:
 
   packages/core-identity:
     dependencies:
-      '@mote/event-log':
+      '@motebit/event-log':
         specifier: workspace:*
         version: link:../event-log
-      '@mote/sdk':
+      '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
@@ -266,7 +266,7 @@ importers:
 
   packages/event-log:
     dependencies:
-      '@mote/sdk':
+      '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
@@ -279,10 +279,10 @@ importers:
 
   packages/memory-graph:
     dependencies:
-      '@mote/event-log':
+      '@motebit/event-log':
         specifier: workspace:*
         version: link:../event-log
-      '@mote/sdk':
+      '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk
       '@xenova/transformers':
@@ -298,19 +298,19 @@ importers:
 
   packages/persistence:
     dependencies:
-      '@mote/core-identity':
+      '@motebit/core-identity':
         specifier: workspace:*
         version: link:../core-identity
-      '@mote/event-log':
+      '@motebit/event-log':
         specifier: workspace:*
         version: link:../event-log
-      '@mote/memory-graph':
+      '@motebit/memory-graph':
         specifier: workspace:*
         version: link:../memory-graph
-      '@mote/privacy-layer':
+      '@motebit/privacy-layer':
         specifier: workspace:*
         version: link:../privacy-layer
-      '@mote/sdk':
+      '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk
       better-sqlite3:
@@ -329,7 +329,7 @@ importers:
 
   packages/policy-invariants:
     dependencies:
-      '@mote/sdk':
+      '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
@@ -342,16 +342,16 @@ importers:
 
   packages/privacy-layer:
     dependencies:
-      '@mote/crypto':
+      '@motebit/crypto':
         specifier: workspace:*
         version: link:../crypto
-      '@mote/event-log':
+      '@motebit/event-log':
         specifier: workspace:*
         version: link:../event-log
-      '@mote/memory-graph':
+      '@motebit/memory-graph':
         specifier: workspace:*
         version: link:../memory-graph
-      '@mote/sdk':
+      '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
@@ -364,10 +364,10 @@ importers:
 
   packages/render-engine:
     dependencies:
-      '@mote/policy-invariants':
+      '@motebit/policy-invariants':
         specifier: workspace:*
         version: link:../policy-invariants
-      '@mote/sdk':
+      '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
@@ -389,10 +389,10 @@ importers:
 
   packages/state-vector:
     dependencies:
-      '@mote/policy-invariants':
+      '@motebit/policy-invariants':
         specifier: workspace:*
         version: link:../policy-invariants
-      '@mote/sdk':
+      '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
@@ -405,10 +405,10 @@ importers:
 
   packages/sync-engine:
     dependencies:
-      '@mote/event-log':
+      '@motebit/event-log':
         specifier: workspace:*
         version: link:../event-log
-      '@mote/sdk':
+      '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
@@ -421,37 +421,37 @@ importers:
 
   services/api:
     dependencies:
-      '@mote/ai-core':
+      '@motebit/ai-core':
         specifier: workspace:*
         version: link:../../packages/ai-core
-      '@mote/behavior-engine':
+      '@motebit/behavior-engine':
         specifier: workspace:*
         version: link:../../packages/behavior-engine
-      '@mote/core-identity':
+      '@motebit/core-identity':
         specifier: workspace:*
         version: link:../../packages/core-identity
-      '@mote/crypto':
+      '@motebit/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto
-      '@mote/event-log':
+      '@motebit/event-log':
         specifier: workspace:*
         version: link:../../packages/event-log
-      '@mote/memory-graph':
+      '@motebit/memory-graph':
         specifier: workspace:*
         version: link:../../packages/memory-graph
-      '@mote/persistence':
+      '@motebit/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence
-      '@mote/privacy-layer':
+      '@motebit/privacy-layer':
         specifier: workspace:*
         version: link:../../packages/privacy-layer
-      '@mote/sdk':
+      '@motebit/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@mote/state-vector':
+      '@motebit/state-vector':
         specifier: workspace:*
         version: link:../../packages/state-vector
-      '@mote/sync-engine':
+      '@motebit/sync-engine':
         specifier: workspace:*
         version: link:../../packages/sync-engine
       hono:
@@ -473,7 +473,7 @@ importers:
 
   services/inference:
     dependencies:
-      '@mote/sdk':
+      '@motebit/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
       hono:
@@ -495,7 +495,7 @@ importers:
 
   services/storage:
     dependencies:
-      '@mote/sdk':
+      '@motebit/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
       hono:
@@ -517,7 +517,7 @@ importers:
 
   services/telemetry:
     dependencies:
-      '@mote/sdk':
+      '@motebit/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
       hono:
@@ -539,7 +539,7 @@ importers:
 
   services/vector:
     dependencies:
-      '@mote/sdk':
+      '@motebit/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
       hono:

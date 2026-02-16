@@ -1,5 +1,5 @@
 {
-  "name": "@mote/api",
+  "name": "@motebit/api",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -15,17 +15,17 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@mote/sdk": "workspace:*",
-    "@mote/ai-core": "workspace:*",
-    "@mote/event-log": "workspace:*",
-    "@mote/memory-graph": "workspace:*",
-    "@mote/state-vector": "workspace:*",
-    "@mote/behavior-engine": "workspace:*",
-    "@mote/persistence": "workspace:*",
-    "@mote/core-identity": "workspace:*",
-    "@mote/privacy-layer": "workspace:*",
-    "@mote/crypto": "workspace:*",
-    "@mote/sync-engine": "workspace:*",
+    "@motebit/sdk": "workspace:*",
+    "@motebit/ai-core": "workspace:*",
+    "@motebit/event-log": "workspace:*",
+    "@motebit/memory-graph": "workspace:*",
+    "@motebit/state-vector": "workspace:*",
+    "@motebit/behavior-engine": "workspace:*",
+    "@motebit/persistence": "workspace:*",
+    "@motebit/core-identity": "workspace:*",
+    "@motebit/privacy-layer": "workspace:*",
+    "@motebit/crypto": "workspace:*",
+    "@motebit/sync-engine": "workspace:*",
     "hono": "^4.6.0"
   },
   "devDependencies": {

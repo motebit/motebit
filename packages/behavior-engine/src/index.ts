@@ -1,5 +1,5 @@
-import type { MoteState, BehaviorCues } from "@mote/sdk";
-import { clamp, enforceCueDelta, enforceDriftVariation } from "@mote/policy-invariants";
+import type { MotebitState, BehaviorCues } from "@motebit/sdk";
+import { clamp, enforceCueDelta, enforceDriftVariation } from "@motebit/policy-invariants";
 
 // === Spatial Constants ===
 
@@ -17,7 +17,7 @@ const SPATIAL = {
  * Compute raw behavior cues from state. Pure function — no side effects.
  * This produces unclamped cues; delta enforcement happens separately.
  */
-export function computeRawCues(state: MoteState): BehaviorCues {
+export function computeRawCues(state: MotebitState): BehaviorCues {
   // Hover distance: high attention → closer, idle → retreat
   const attentionDistance = SPATIAL.FACE_DISTANCE + (1 - state.attention) * (SPATIAL.SHOULDER_DISTANCE - SPATIAL.FACE_DISTANCE);
   const idleBlend = 1 - Math.max(state.attention, state.processing, state.curiosity);
@@ -70,7 +70,7 @@ export class BehaviorEngine {
    * Compute cues from state with all hard clamps enforced.
    * This is the main API — call once per tick.
    */
-  compute(state: MoteState): BehaviorCues {
+  compute(state: MotebitState): BehaviorCues {
     // 1. Compute raw cues
     const raw = computeRawCues(state);
 

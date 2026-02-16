@@ -45,8 +45,8 @@ export enum RelationType {
 
 // === Core Identity ===
 
-export interface MoteIdentity {
-  readonly mote_id: string;
+export interface MotebitIdentity {
+  readonly motebit_id: string;
   readonly created_at: number;
   readonly owner_id: string;
   version_clock: number;
@@ -54,7 +54,7 @@ export interface MoteIdentity {
 
 // === State Vector ===
 
-export interface MoteState {
+export interface MotebitState {
   attention: number;
   processing: number;
   confidence: number;
@@ -92,7 +92,7 @@ export type SpeciesConstraints = typeof SPECIES_CONSTRAINTS;
 
 export interface MemoryNode {
   node_id: string;
-  mote_id: string;
+  motebit_id: string;
   content: string;
   embedding: number[];
   confidence: number;
@@ -122,7 +122,7 @@ export interface MemoryCandidate {
 
 export interface EventLogEntry {
   event_id: string;
-  mote_id: string;
+  motebit_id: string;
   timestamp: number;
   event_type: EventType;
   payload: Record<string, unknown>;
@@ -135,7 +135,7 @@ export interface EventLogEntry {
 export interface ContextPack {
   recent_events: EventLogEntry[];
   relevant_memories: MemoryNode[];
-  current_state: MoteState;
+  current_state: MotebitState;
   user_message: string;
 }
 
@@ -143,7 +143,7 @@ export interface AIResponse {
   text: string;
   confidence: number;
   memory_candidates: MemoryCandidate[];
-  state_updates: Partial<MoteState>;
+  state_updates: Partial<MotebitState>;
 }
 
 export interface IntelligenceProvider {
@@ -156,7 +156,7 @@ export interface IntelligenceProvider {
 
 export interface AuditRecord {
   audit_id: string;
-  mote_id: string;
+  motebit_id: string;
   timestamp: number;
   action: string;
   target_type: string;
@@ -165,9 +165,9 @@ export interface AuditRecord {
 }
 
 export interface ExportManifest {
-  mote_id: string;
+  motebit_id: string;
   exported_at: number;
-  identity: MoteIdentity;
+  identity: MotebitIdentity;
   memories: MemoryNode[];
   edges: MemoryEdge[];
   events: EventLogEntry[];
@@ -177,7 +177,7 @@ export interface ExportManifest {
 // === Sync ===
 
 export interface SyncCursor {
-  mote_id: string;
+  motebit_id: string;
   last_event_id: string;
   last_version_clock: number;
 }

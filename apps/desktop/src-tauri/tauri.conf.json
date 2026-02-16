@@ -1,15 +1,15 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
-  "productName": "Mote",
+  "productName": "Motebit",
   "version": "0.1.0",
-  "identifier": "com.mote.desktop",
+  "identifier": "com.motebit.desktop",
   "build": {
     "frontendDist": "../dist"
   },
   "app": {
     "windows": [
       {
-        "title": "Mote",
+        "title": "Motebit",
         "width": 400,
         "height": 600,
         "resizable": true,
@@ -18,7 +18,7 @@
       }
     ],
     "trayIcon": {
-      "tooltip": "Mote"
+      "tooltip": "Motebit"
     }
   }
 }

@@ -5,26 +5,26 @@ import type {
   EventType,
   MemoryNode,
   MemoryEdge,
-  MoteIdentity,
+  MotebitIdentity,
   AuditRecord,
   SensitivityLevel,
   RelationType,
-} from "@mote/sdk";
-import type { EventStoreAdapter, EventFilter } from "@mote/event-log";
+} from "@motebit/sdk";
+import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import type {
   MemoryStorageAdapter,
   MemoryQuery,
-} from "@mote/memory-graph";
-import { computeDecayedConfidence } from "@mote/memory-graph";
-import type { IdentityStorage } from "@mote/core-identity";
-import type { AuditLogAdapter } from "@mote/privacy-layer";
+} from "@motebit/memory-graph";
+import { computeDecayedConfidence } from "@motebit/memory-graph";
+import type { IdentityStorage } from "@motebit/core-identity";
+import type { AuditLogAdapter } from "@motebit/privacy-layer";
 
 // === Schema ===
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS events (
   event_id TEXT PRIMARY KEY,
-  mote_id TEXT NOT NULL,
+  motebit_id TEXT NOT NULL,
   event_type TEXT NOT NULL,
   payload TEXT NOT NULL,
   version_clock INTEGER NOT NULL,
@@ -32,11 +32,11 @@ CREATE TABLE IF NOT EXISTS events (
   tombstoned INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE INDEX IF NOT EXISTS idx_events_mote_clock ON events (mote_id, version_clock);
+CREATE INDEX IF NOT EXISTS idx_events_mote_clock ON events (motebit_id, version_clock);
 
 CREATE TABLE IF NOT EXISTS memory_nodes (
   node_id TEXT PRIMARY KEY,
-  mote_id TEXT NOT NULL,
+  motebit_id TEXT NOT NULL,
   content TEXT NOT NULL,
   embedding TEXT NOT NULL,
   confidence REAL NOT NULL,
@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
   tombstoned INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote ON memory_nodes (mote_id);
+CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote ON memory_nodes (motebit_id);
 
 CREATE TABLE IF NOT EXISTS memory_edges (
   edge_id TEXT PRIMARY KEY,
@@ -62,7 +62,7 @@ CREATE INDEX IF NOT EXISTS idx_memory_edges_source ON memory_edges (source_id);
 CREATE INDEX IF NOT EXISTS idx_memory_edges_target ON memory_edges (target_id);
 
 CREATE TABLE IF NOT EXISTS identities (
-  mote_id TEXT PRIMARY KEY,
+  motebit_id TEXT PRIMARY KEY,
   created_at INTEGER NOT NULL,
   owner_id TEXT NOT NULL,
   version_clock INTEGER NOT NULL
@@ -72,7 +72,7 @@ CREATE INDEX IF NOT EXISTS idx_identities_owner ON identities (owner_id);
 
 CREATE TABLE IF NOT EXISTS audit_log (
   audit_id TEXT PRIMARY KEY,
-  mote_id TEXT NOT NULL,
+  motebit_id TEXT NOT NULL,
   timestamp INTEGER NOT NULL,
   action TEXT NOT NULL,
   target_type TEXT NOT NULL,
@@ -80,10 +80,10 @@ CREATE TABLE IF NOT EXISTS audit_log (
   details TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_audit_log_mote_ts ON audit_log (mote_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_audit_log_mote_ts ON audit_log (motebit_id, timestamp);
 
 CREATE TABLE IF NOT EXISTS state_snapshots (
-  mote_id TEXT PRIMARY KEY,
+  motebit_id TEXT PRIMARY KEY,
   state_json TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -102,21 +102,21 @@ export class SqliteEventStore implements EventStoreAdapter {
 
   constructor(private db: Database.Database) {
     this.stmtAppend = db.prepare(
-      `INSERT INTO events (event_id, mote_id, event_type, payload, version_clock, timestamp, tombstoned)
+      `INSERT INTO events (event_id, motebit_id, event_type, payload, version_clock, timestamp, tombstoned)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtGetLatestClock = db.prepare(
-      `SELECT MAX(version_clock) as max_clock FROM events WHERE mote_id = ?`,
+      `SELECT MAX(version_clock) as max_clock FROM events WHERE motebit_id = ?`,
     );
     this.stmtTombstone = db.prepare(
-      `UPDATE events SET tombstoned = 1 WHERE event_id = ? AND mote_id = ?`,
+      `UPDATE events SET tombstoned = 1 WHERE event_id = ? AND motebit_id = ?`,
     );
   }
 
   async append(entry: EventLogEntry): Promise<void> {
     this.stmtAppend.run(
       entry.event_id,
-      entry.mote_id,
+      entry.motebit_id,
       entry.event_type,
       JSON.stringify(entry.payload),
       entry.version_clock,
@@ -129,9 +129,9 @@ export class SqliteEventStore implements EventStoreAdapter {
     const conditions: string[] = [];
     const params: unknown[] = [];
 
-    if (filter.mote_id !== undefined) {
-      conditions.push("mote_id = ?");
-      params.push(filter.mote_id);
+    if (filter.motebit_id !== undefined) {
+      conditions.push("motebit_id = ?");
+      params.push(filter.motebit_id);
     }
     if (filter.event_types !== undefined && filter.event_types.length > 0) {
       const placeholders = filter.event_types.map(() => "?").join(", ");
@@ -165,19 +165,19 @@ export class SqliteEventStore implements EventStoreAdapter {
     return rows.map(rowToEvent);
   }
 
-  async getLatestClock(moteId: string): Promise<number> {
-    const row = this.stmtGetLatestClock.get(moteId) as { max_clock: number | null };
+  async getLatestClock(motebitId: string): Promise<number> {
+    const row = this.stmtGetLatestClock.get(motebitId) as { max_clock: number | null };
     return row.max_clock ?? 0;
   }
 
-  async tombstone(eventId: string, moteId: string): Promise<void> {
-    this.stmtTombstone.run(eventId, moteId);
+  async tombstone(eventId: string, motebitId: string): Promise<void> {
+    this.stmtTombstone.run(eventId, motebitId);
   }
 }
 
 interface EventRow {
   event_id: string;
-  mote_id: string;
+  motebit_id: string;
   event_type: string;
   payload: string;
   version_clock: number;
@@ -188,7 +188,7 @@ interface EventRow {
 function rowToEvent(row: EventRow): EventLogEntry {
   return {
     event_id: row.event_id,
-    mote_id: row.mote_id,
+    motebit_id: row.motebit_id,
     event_type: row.event_type as EventType,
     payload: JSON.parse(row.payload) as Record<string, unknown>,
     version_clock: row.version_clock,
@@ -210,7 +210,7 @@ export class SqliteMemoryStorage implements MemoryStorageAdapter {
   constructor(private db: Database.Database) {
     this.stmtSaveNode = db.prepare(
       `INSERT OR REPLACE INTO memory_nodes
-       (node_id, mote_id, content, embedding, confidence, sensitivity, created_at, last_accessed, half_life, tombstoned)
+       (node_id, motebit_id, content, embedding, confidence, sensitivity, created_at, last_accessed, half_life, tombstoned)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtGetNode = db.prepare(
@@ -228,14 +228,14 @@ export class SqliteMemoryStorage implements MemoryStorageAdapter {
       `UPDATE memory_nodes SET tombstoned = 1 WHERE node_id = ?`,
     );
     this.stmtGetAllNodes = db.prepare(
-      `SELECT * FROM memory_nodes WHERE mote_id = ?`,
+      `SELECT * FROM memory_nodes WHERE motebit_id = ?`,
     );
   }
 
   async saveNode(node: MemoryNode): Promise<void> {
     this.stmtSaveNode.run(
       node.node_id,
-      node.mote_id,
+      node.motebit_id,
       node.content,
       JSON.stringify(node.embedding),
       node.confidence,
@@ -254,9 +254,9 @@ export class SqliteMemoryStorage implements MemoryStorageAdapter {
   }
 
   async queryNodes(query: MemoryQuery): Promise<MemoryNode[]> {
-    // Fetch all nodes for mote, then apply app-level filtering
+    // Fetch all nodes for motebit, then apply app-level filtering
     // (matches InMemoryMemoryStorage behavior for decay + sensitivity)
-    const rows = this.stmtGetAllNodes.all(query.mote_id) as NodeRow[];
+    const rows = this.stmtGetAllNodes.all(query.motebit_id) as NodeRow[];
     let results = rows.map(rowToNode);
 
     if (query.include_tombstoned !== true) {
@@ -310,26 +310,26 @@ export class SqliteMemoryStorage implements MemoryStorageAdapter {
     this.stmtTombstoneNode.run(nodeId);
   }
 
-  async getAllNodes(moteId: string): Promise<MemoryNode[]> {
-    const rows = this.stmtGetAllNodes.all(moteId) as NodeRow[];
+  async getAllNodes(motebitId: string): Promise<MemoryNode[]> {
+    const rows = this.stmtGetAllNodes.all(motebitId) as NodeRow[];
     return rows.map(rowToNode);
   }
 
-  async getAllEdges(moteId: string): Promise<MemoryEdge[]> {
+  async getAllEdges(motebitId: string): Promise<MemoryEdge[]> {
     const rows = this.db
       .prepare(
         `SELECT DISTINCT e.* FROM memory_edges e
          INNER JOIN memory_nodes n ON (e.source_id = n.node_id OR e.target_id = n.node_id)
-         WHERE n.mote_id = ?`,
+         WHERE n.motebit_id = ?`,
       )
-      .all(moteId) as EdgeRow[];
+      .all(motebitId) as EdgeRow[];
     return rows.map(rowToEdge);
   }
 }
 
 interface NodeRow {
   node_id: string;
-  mote_id: string;
+  motebit_id: string;
   content: string;
   embedding: string;
   confidence: number;
@@ -343,7 +343,7 @@ interface NodeRow {
 function rowToNode(row: NodeRow): MemoryNode {
   return {
     node_id: row.node_id,
-    mote_id: row.mote_id,
+    motebit_id: row.motebit_id,
     content: row.content,
     embedding: JSON.parse(row.embedding) as number[],
     confidence: row.confidence,
@@ -384,33 +384,33 @@ export class SqliteIdentityStorage implements IdentityStorage {
 
   constructor(db: Database.Database) {
     this.stmtSave = db.prepare(
-      `INSERT OR REPLACE INTO identities (mote_id, created_at, owner_id, version_clock)
+      `INSERT OR REPLACE INTO identities (motebit_id, created_at, owner_id, version_clock)
        VALUES (?, ?, ?, ?)`,
     );
     this.stmtLoad = db.prepare(
-      `SELECT * FROM identities WHERE mote_id = ?`,
+      `SELECT * FROM identities WHERE motebit_id = ?`,
     );
     this.stmtLoadByOwner = db.prepare(
       `SELECT * FROM identities WHERE owner_id = ? LIMIT 1`,
     );
   }
 
-  async save(identity: MoteIdentity): Promise<void> {
+  async save(identity: MotebitIdentity): Promise<void> {
     this.stmtSave.run(
-      identity.mote_id,
+      identity.motebit_id,
       identity.created_at,
       identity.owner_id,
       identity.version_clock,
     );
   }
 
-  async load(moteId: string): Promise<MoteIdentity | null> {
-    const row = this.stmtLoad.get(moteId) as IdentityRow | undefined;
+  async load(motebitId: string): Promise<MotebitIdentity | null> {
+    const row = this.stmtLoad.get(motebitId) as IdentityRow | undefined;
     if (row === undefined) return null;
     return rowToIdentity(row);
   }
 
-  async loadByOwner(ownerId: string): Promise<MoteIdentity | null> {
+  async loadByOwner(ownerId: string): Promise<MotebitIdentity | null> {
     const row = this.stmtLoadByOwner.get(ownerId) as IdentityRow | undefined;
     if (row === undefined) return null;
     return rowToIdentity(row);
@@ -418,15 +418,15 @@ export class SqliteIdentityStorage implements IdentityStorage {
 }
 
 interface IdentityRow {
-  mote_id: string;
+  motebit_id: string;
   created_at: number;
   owner_id: string;
   version_clock: number;
 }
 
-function rowToIdentity(row: IdentityRow): MoteIdentity {
+function rowToIdentity(row: IdentityRow): MotebitIdentity {
   return {
-    mote_id: row.mote_id,
+    motebit_id: row.motebit_id,
     created_at: row.created_at,
     owner_id: row.owner_id,
     version_clock: row.version_clock,
@@ -440,7 +440,7 @@ export class SqliteAuditLog implements AuditLogAdapter {
 
   constructor(private db: Database.Database) {
     this.stmtRecord = db.prepare(
-      `INSERT INTO audit_log (audit_id, mote_id, timestamp, action, target_type, target_id, details)
+      `INSERT INTO audit_log (audit_id, motebit_id, timestamp, action, target_type, target_id, details)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
   }
@@ -448,7 +448,7 @@ export class SqliteAuditLog implements AuditLogAdapter {
   async record(entry: AuditRecord): Promise<void> {
     this.stmtRecord.run(
       entry.audit_id,
-      entry.mote_id,
+      entry.motebit_id,
       entry.timestamp,
       entry.action,
       entry.target_type,
@@ -458,11 +458,11 @@ export class SqliteAuditLog implements AuditLogAdapter {
   }
 
   async query(
-    moteId: string,
+    motebitId: string,
     options: { limit?: number; after?: number } = {},
   ): Promise<AuditRecord[]> {
-    const conditions: string[] = ["mote_id = ?"];
-    const params: unknown[] = [moteId];
+    const conditions: string[] = ["motebit_id = ?"];
+    const params: unknown[] = [motebitId];
 
     if (options.after !== undefined) {
       conditions.push("timestamp > ?");
@@ -485,7 +485,7 @@ export class SqliteAuditLog implements AuditLogAdapter {
 
 interface AuditRow {
   audit_id: string;
-  mote_id: string;
+  motebit_id: string;
   timestamp: number;
   action: string;
   target_type: string;
@@ -496,7 +496,7 @@ interface AuditRow {
 function rowToAudit(row: AuditRow): AuditRecord {
   return {
     audit_id: row.audit_id,
-    mote_id: row.mote_id,
+    motebit_id: row.motebit_id,
     timestamp: row.timestamp,
     action: row.action,
     target_type: row.target_type,
@@ -513,20 +513,20 @@ export class SqliteStateSnapshot {
 
   constructor(db: Database.Database) {
     this.stmtSave = db.prepare(
-      `INSERT OR REPLACE INTO state_snapshots (mote_id, state_json, updated_at)
+      `INSERT OR REPLACE INTO state_snapshots (motebit_id, state_json, updated_at)
        VALUES (?, ?, ?)`,
     );
     this.stmtLoad = db.prepare(
-      `SELECT state_json FROM state_snapshots WHERE mote_id = ?`,
+      `SELECT state_json FROM state_snapshots WHERE motebit_id = ?`,
     );
   }
 
-  saveState(moteId: string, stateJson: string): void {
-    this.stmtSave.run(moteId, stateJson, Date.now());
+  saveState(motebitId: string, stateJson: string): void {
+    this.stmtSave.run(motebitId, stateJson, Date.now());
   }
 
-  loadState(moteId: string): string | null {
-    const row = this.stmtLoad.get(moteId) as { state_json: string } | undefined;
+  loadState(motebitId: string): string | null {
+    const row = this.stmtLoad.get(motebitId) as { state_json: string } | undefined;
     if (row === undefined) return null;
     return row.state_json;
   }
@@ -534,7 +534,7 @@ export class SqliteStateSnapshot {
 
 // === Factory ===
 
-export interface MoteDatabase {
+export interface MotebitDatabase {
   db: Database.Database;
   eventStore: SqliteEventStore;
   memoryStorage: SqliteMemoryStorage;
@@ -544,7 +544,7 @@ export interface MoteDatabase {
   close(): void;
 }
 
-export function createMoteDatabase(dbPath: string): MoteDatabase {
+export function createMotebitDatabase(dbPath: string): MotebitDatabase {
   const db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
