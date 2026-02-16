@@ -10,6 +10,7 @@ import { buildSystemPrompt as buildPrompt } from "./prompt.js";
 
 export { runTurn, runTurnStreaming } from "./loop.js";
 export type { MotebitLoopDependencies, TurnResult, TurnOptions } from "./loop.js";
+export { inferStateFromText } from "./infer-state.js";
 export { buildSystemPrompt, derivePersonalityNote, formatBodyAwareness } from "./prompt.js";
 export { loadConfig, resolveConfig, DEFAULT_CONFIG } from "./config.js";
 export type { MotebitPersonalityConfig } from "./config.js";

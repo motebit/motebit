@@ -180,6 +180,51 @@ describe("runTurn", () => {
     expect(contextPack.behavior_cues).toEqual(cues);
   });
 
+  it("infers state from text when no state tags are present", async () => {
+    // Response with positive words, a question, and length > 200 chars — but no <state> tags
+    const responseText =
+      "I'm so happy you asked about that! It's a wonderful topic and I'd love to explore it with you. " +
+      "What aspects are you most interested in? There are definitely many fascinating angles we could investigate together.";
+
+    mockFetchSuccess(responseText);
+
+    const deps = makeDeps();
+    const pushSpy = vi.spyOn(deps.stateEngine, "pushUpdate");
+
+    await runTurn(deps, "Tell me about something cool");
+
+    expect(pushSpy).toHaveBeenCalledTimes(1);
+    const pushed = pushSpy.mock.calls[0]![0] as Record<string, unknown>;
+
+    // Should have inferred nudges (not explicit state tags)
+    expect(pushed.affect_valence).toBeGreaterThan(0); // positive words
+    expect(pushed.curiosity).toBeGreaterThan(0); // question mark
+    expect(pushed.confidence).toBeGreaterThan(0.5); // "definitely"
+  });
+
+  it("explicit state tags take priority over inference", async () => {
+    // Response with BOTH positive words and explicit state tags
+    const responseText = [
+      "I'm so happy about this!",
+      '<state field="curiosity" value="0.9"/>',
+    ].join(" ");
+
+    mockFetchSuccess(responseText);
+
+    const deps = makeDeps();
+    const pushSpy = vi.spyOn(deps.stateEngine, "pushUpdate");
+
+    await runTurn(deps, "Test explicit vs inferred");
+
+    expect(pushSpy).toHaveBeenCalledTimes(1);
+    const pushed = pushSpy.mock.calls[0]![0] as Record<string, unknown>;
+
+    // Should use explicit tag value, NOT inference
+    expect(pushed).toEqual({ curiosity: 0.9 });
+    // Inference would have also set affect_valence — verify it's absent
+    expect(pushed.affect_valence).toBeUndefined();
+  });
+
   it("version clocks increment across turns", async () => {
     const deps = makeDeps();
 

@@ -6,6 +6,7 @@ import { embedText } from "@motebit/memory-graph";
 import type { StateVectorEngine } from "@motebit/state-vector";
 import type { BehaviorEngine } from "@motebit/behavior-engine";
 import type { StreamingProvider } from "./index.js";
+import { inferStateFromText } from "./infer-state.js";
 
 // === Types ===
 
@@ -77,9 +78,14 @@ export async function runTurn(
     memoriesFormed.push(node);
   }
 
-  // 5. Push state updates
+  // 5. Push state updates (explicit tags win; fall back to text inference)
   if (Object.keys(aiResponse.state_updates).length > 0) {
     stateEngine.pushUpdate(aiResponse.state_updates);
+  } else {
+    const inferred = inferStateFromText(aiResponse.text, stateEngine.getState());
+    if (Object.keys(inferred).length > 0) {
+      stateEngine.pushUpdate(inferred);
+    }
   }
 
   // 6. Log interaction event
@@ -170,9 +176,14 @@ export async function* runTurnStreaming(
     memoriesFormed.push(node);
   }
 
-  // 5. Push state updates
+  // 5. Push state updates (explicit tags win; fall back to text inference)
   if (Object.keys(aiResponse.state_updates).length > 0) {
     stateEngine.pushUpdate(aiResponse.state_updates);
+  } else {
+    const inferred = inferStateFromText(aiResponse.text, stateEngine.getState());
+    if (Object.keys(inferred).length > 0) {
+      stateEngine.pushUpdate(inferred);
+    }
   }
 
   // 6. Log interaction event
