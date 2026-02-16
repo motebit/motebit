@@ -8,6 +8,8 @@
     "build": "tsc -b",
     "preview": "vite preview",
     "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",

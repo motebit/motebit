@@ -102,7 +102,7 @@ export class SqliteEventStore implements EventStoreAdapter {
 
   constructor(private db: Database.Database) {
     this.stmtAppend = db.prepare(
-      `INSERT INTO events (event_id, motebit_id, event_type, payload, version_clock, timestamp, tombstoned)
+      `INSERT OR IGNORE INTO events (event_id, motebit_id, event_type, payload, version_clock, timestamp, tombstoned)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtGetLatestClock = db.prepare(

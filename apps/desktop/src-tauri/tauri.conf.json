@@ -4,7 +4,10 @@
   "version": "0.1.0",
   "identifier": "com.motebit.desktop",
   "build": {
-    "frontendDist": "../dist"
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build"
   },
   "app": {
     "windows": [
@@ -16,9 +19,6 @@
         "transparent": true,
         "decorations": true
       }
-    ],
-    "trayIcon": {
-      "tooltip": "Motebit"
-    }
+    ]
   }
 }
