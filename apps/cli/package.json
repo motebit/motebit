@@ -17,7 +17,8 @@
     "@mote/event-log": "workspace:*",
     "@mote/memory-graph": "workspace:*",
     "@mote/state-vector": "workspace:*",
-    "@mote/behavior-engine": "workspace:*"
+    "@mote/behavior-engine": "workspace:*",
+    "@mote/persistence": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -1,0 +1,417 @@
+import { describe, it, expect, beforeEach } from "vitest";
+import {
+  createMoteDatabase,
+  type MoteDatabase,
+} from "../index.js";
+import {
+  EventType,
+  SensitivityLevel,
+  RelationType,
+} from "@mote/sdk";
+import type {
+  EventLogEntry,
+  MemoryNode,
+  MemoryEdge,
+  MoteIdentity,
+  AuditRecord,
+} from "@mote/sdk";
+
+let mdb: MoteDatabase;
+
+beforeEach(() => {
+  mdb = createMoteDatabase(":memory:");
+});
+
+// === Schema ===
+
+describe("schema", () => {
+  it("creates all tables", () => {
+    const tables = mdb.db
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`,
+      )
+      .all() as { name: string }[];
+    const names = tables.map((t) => t.name);
+    expect(names).toContain("events");
+    expect(names).toContain("memory_nodes");
+    expect(names).toContain("memory_edges");
+    expect(names).toContain("identities");
+    expect(names).toContain("audit_log");
+    expect(names).toContain("state_snapshots");
+  });
+
+  it("is idempotent (calling createMoteDatabase twice on same db is safe)", () => {
+    // Just ensure no error on second init
+    expect(() => createMoteDatabase(":memory:")).not.toThrow();
+  });
+});
+
+// === EventStore ===
+
+describe("SqliteEventStore", () => {
+  const makeEvent = (overrides: Partial<EventLogEntry> = {}): EventLogEntry => ({
+    event_id: crypto.randomUUID(),
+    mote_id: "mote-1",
+    timestamp: Date.now(),
+    event_type: EventType.MemoryFormed,
+    payload: { test: true },
+    version_clock: 1,
+    tombstoned: false,
+    ...overrides,
+  });
+
+  it("appends and queries events", async () => {
+    const event = makeEvent();
+    await mdb.eventStore.append(event);
+    const results = await mdb.eventStore.query({ mote_id: "mote-1" });
+    expect(results).toHaveLength(1);
+    expect(results[0]!.event_id).toBe(event.event_id);
+    expect(results[0]!.payload).toEqual({ test: true });
+  });
+
+  it("filters by mote_id", async () => {
+    await mdb.eventStore.append(makeEvent({ mote_id: "mote-1", version_clock: 1 }));
+    await mdb.eventStore.append(makeEvent({ mote_id: "mote-2", version_clock: 1 }));
+    const results = await mdb.eventStore.query({ mote_id: "mote-2" });
+    expect(results).toHaveLength(1);
+    expect(results[0]!.mote_id).toBe("mote-2");
+  });
+
+  it("filters by event_types", async () => {
+    await mdb.eventStore.append(makeEvent({ event_type: EventType.MemoryFormed, version_clock: 1 }));
+    await mdb.eventStore.append(makeEvent({ event_type: EventType.StateUpdated, version_clock: 2 }));
+    const results = await mdb.eventStore.query({
+      mote_id: "mote-1",
+      event_types: [EventType.StateUpdated],
+    });
+    expect(results).toHaveLength(1);
+    expect(results[0]!.event_type).toBe(EventType.StateUpdated);
+  });
+
+  it("filters by timestamps", async () => {
+    await mdb.eventStore.append(makeEvent({ timestamp: 100, version_clock: 1 }));
+    await mdb.eventStore.append(makeEvent({ timestamp: 200, version_clock: 2 }));
+    await mdb.eventStore.append(makeEvent({ timestamp: 300, version_clock: 3 }));
+    const results = await mdb.eventStore.query({
+      mote_id: "mote-1",
+      after_timestamp: 100,
+      before_timestamp: 300,
+    });
+    expect(results).toHaveLength(1);
+    expect(results[0]!.timestamp).toBe(200);
+  });
+
+  it("filters by version_clock", async () => {
+    await mdb.eventStore.append(makeEvent({ version_clock: 1 }));
+    await mdb.eventStore.append(makeEvent({ version_clock: 2 }));
+    await mdb.eventStore.append(makeEvent({ version_clock: 3 }));
+    const results = await mdb.eventStore.query({
+      mote_id: "mote-1",
+      after_version_clock: 1,
+    });
+    expect(results).toHaveLength(2);
+  });
+
+  it("applies limit", async () => {
+    await mdb.eventStore.append(makeEvent({ version_clock: 1 }));
+    await mdb.eventStore.append(makeEvent({ version_clock: 2 }));
+    await mdb.eventStore.append(makeEvent({ version_clock: 3 }));
+    const results = await mdb.eventStore.query({ mote_id: "mote-1", limit: 2 });
+    expect(results).toHaveLength(2);
+  });
+
+  it("getLatestClock returns 0 for empty store", async () => {
+    const clock = await mdb.eventStore.getLatestClock("nonexistent");
+    expect(clock).toBe(0);
+  });
+
+  it("getLatestClock returns highest clock", async () => {
+    await mdb.eventStore.append(makeEvent({ version_clock: 5 }));
+    await mdb.eventStore.append(makeEvent({ version_clock: 3 }));
+    await mdb.eventStore.append(makeEvent({ version_clock: 10 }));
+    const clock = await mdb.eventStore.getLatestClock("mote-1");
+    expect(clock).toBe(10);
+  });
+
+  it("tombstones an event", async () => {
+    const event = makeEvent({ version_clock: 1 });
+    await mdb.eventStore.append(event);
+
+    await mdb.eventStore.tombstone(event.event_id, "mote-1");
+
+    const results = await mdb.eventStore.query({ mote_id: "mote-1" });
+    expect(results[0]!.tombstoned).toBe(true);
+  });
+});
+
+// === MemoryStorage ===
+
+describe("SqliteMemoryStorage", () => {
+  const makeNode = (overrides: Partial<MemoryNode> = {}): MemoryNode => ({
+    node_id: crypto.randomUUID(),
+    mote_id: "mote-1",
+    content: "test memory",
+    embedding: [0.1, 0.2, 0.3],
+    confidence: 0.9,
+    sensitivity: SensitivityLevel.None,
+    created_at: Date.now(),
+    last_accessed: Date.now(),
+    half_life: 7 * 24 * 60 * 60 * 1000,
+    tombstoned: false,
+    ...overrides,
+  });
+
+  const makeEdge = (overrides: Partial<MemoryEdge> = {}): MemoryEdge => ({
+    edge_id: crypto.randomUUID(),
+    source_id: "src",
+    target_id: "tgt",
+    relation_type: RelationType.Related,
+    weight: 1.0,
+    confidence: 1.0,
+    ...overrides,
+  });
+
+  it("saveNode/getNode round-trip with embedding", async () => {
+    const node = makeNode({ embedding: [1.5, -0.3, 0.0, 42.1] });
+    await mdb.memoryStorage.saveNode(node);
+    const loaded = await mdb.memoryStorage.getNode(node.node_id);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.content).toBe(node.content);
+    expect(loaded!.embedding).toEqual([1.5, -0.3, 0.0, 42.1]);
+    expect(loaded!.sensitivity).toBe(SensitivityLevel.None);
+    expect(loaded!.tombstoned).toBe(false);
+  });
+
+  it("getNode returns null for missing", async () => {
+    const result = await mdb.memoryStorage.getNode("nope");
+    expect(result).toBeNull();
+  });
+
+  it("queryNodes filters by mote_id", async () => {
+    await mdb.memoryStorage.saveNode(makeNode({ mote_id: "mote-1" }));
+    await mdb.memoryStorage.saveNode(makeNode({ mote_id: "mote-2" }));
+    const results = await mdb.memoryStorage.queryNodes({ mote_id: "mote-1" });
+    expect(results).toHaveLength(1);
+    expect(results[0]!.mote_id).toBe("mote-1");
+  });
+
+  it("queryNodes excludes tombstoned by default", async () => {
+    await mdb.memoryStorage.saveNode(makeNode({ tombstoned: true }));
+    await mdb.memoryStorage.saveNode(makeNode({ tombstoned: false }));
+    const results = await mdb.memoryStorage.queryNodes({ mote_id: "mote-1" });
+    expect(results).toHaveLength(1);
+  });
+
+  it("queryNodes includes tombstoned when requested", async () => {
+    await mdb.memoryStorage.saveNode(makeNode({ tombstoned: true }));
+    await mdb.memoryStorage.saveNode(makeNode({ tombstoned: false }));
+    const results = await mdb.memoryStorage.queryNodes({
+      mote_id: "mote-1",
+      include_tombstoned: true,
+    });
+    expect(results).toHaveLength(2);
+  });
+
+  it("queryNodes filters by sensitivity", async () => {
+    await mdb.memoryStorage.saveNode(makeNode({ sensitivity: SensitivityLevel.None }));
+    await mdb.memoryStorage.saveNode(makeNode({ sensitivity: SensitivityLevel.Medical }));
+    await mdb.memoryStorage.saveNode(makeNode({ sensitivity: SensitivityLevel.Financial }));
+    const results = await mdb.memoryStorage.queryNodes({
+      mote_id: "mote-1",
+      sensitivity_filter: [SensitivityLevel.None, SensitivityLevel.Financial],
+    });
+    expect(results).toHaveLength(2);
+  });
+
+  it("queryNodes applies limit", async () => {
+    for (let i = 0; i < 5; i++) {
+      await mdb.memoryStorage.saveNode(makeNode());
+    }
+    const results = await mdb.memoryStorage.queryNodes({
+      mote_id: "mote-1",
+      limit: 3,
+    });
+    expect(results).toHaveLength(3);
+  });
+
+  it("saveEdge/getEdges round-trip", async () => {
+    const nodeA = makeNode();
+    const nodeB = makeNode();
+    await mdb.memoryStorage.saveNode(nodeA);
+    await mdb.memoryStorage.saveNode(nodeB);
+
+    const edge = makeEdge({
+      source_id: nodeA.node_id,
+      target_id: nodeB.node_id,
+      relation_type: RelationType.CausedBy,
+    });
+    await mdb.memoryStorage.saveEdge(edge);
+
+    const fromSource = await mdb.memoryStorage.getEdges(nodeA.node_id);
+    expect(fromSource).toHaveLength(1);
+    expect(fromSource[0]!.relation_type).toBe(RelationType.CausedBy);
+
+    const fromTarget = await mdb.memoryStorage.getEdges(nodeB.node_id);
+    expect(fromTarget).toHaveLength(1);
+  });
+
+  it("tombstoneNode marks node as tombstoned", async () => {
+    const node = makeNode();
+    await mdb.memoryStorage.saveNode(node);
+    await mdb.memoryStorage.tombstoneNode(node.node_id);
+    const loaded = await mdb.memoryStorage.getNode(node.node_id);
+    expect(loaded!.tombstoned).toBe(true);
+  });
+
+  it("getAllNodes returns all nodes for a mote", async () => {
+    await mdb.memoryStorage.saveNode(makeNode({ mote_id: "mote-1" }));
+    await mdb.memoryStorage.saveNode(makeNode({ mote_id: "mote-1" }));
+    await mdb.memoryStorage.saveNode(makeNode({ mote_id: "mote-2" }));
+    const results = await mdb.memoryStorage.getAllNodes("mote-1");
+    expect(results).toHaveLength(2);
+  });
+
+  it("getAllEdges returns edges for mote's nodes only", async () => {
+    const nodeA = makeNode({ mote_id: "mote-1" });
+    const nodeB = makeNode({ mote_id: "mote-1" });
+    const nodeC = makeNode({ mote_id: "mote-2" });
+    await mdb.memoryStorage.saveNode(nodeA);
+    await mdb.memoryStorage.saveNode(nodeB);
+    await mdb.memoryStorage.saveNode(nodeC);
+
+    await mdb.memoryStorage.saveEdge(makeEdge({ source_id: nodeA.node_id, target_id: nodeB.node_id }));
+    await mdb.memoryStorage.saveEdge(makeEdge({ source_id: nodeC.node_id, target_id: nodeC.node_id }));
+
+    const mote1Edges = await mdb.memoryStorage.getAllEdges("mote-1");
+    expect(mote1Edges).toHaveLength(1);
+
+    const mote2Edges = await mdb.memoryStorage.getAllEdges("mote-2");
+    expect(mote2Edges).toHaveLength(1);
+  });
+});
+
+// === IdentityStorage ===
+
+describe("SqliteIdentityStorage", () => {
+  const makeIdentity = (overrides: Partial<MoteIdentity> = {}): MoteIdentity => ({
+    mote_id: crypto.randomUUID(),
+    created_at: Date.now(),
+    owner_id: "owner-1",
+    version_clock: 0,
+    ...overrides,
+  });
+
+  it("save/load round-trip", async () => {
+    const identity = makeIdentity();
+    await mdb.identityStorage.save(identity);
+    const loaded = await mdb.identityStorage.load(identity.mote_id);
+    expect(loaded).toEqual(identity);
+  });
+
+  it("load returns null for missing", async () => {
+    const result = await mdb.identityStorage.load("nope");
+    expect(result).toBeNull();
+  });
+
+  it("loadByOwner finds by owner_id", async () => {
+    const identity = makeIdentity({ owner_id: "owner-42" });
+    await mdb.identityStorage.save(identity);
+    const loaded = await mdb.identityStorage.loadByOwner("owner-42");
+    expect(loaded).not.toBeNull();
+    expect(loaded!.mote_id).toBe(identity.mote_id);
+  });
+
+  it("loadByOwner returns null for missing owner", async () => {
+    const result = await mdb.identityStorage.loadByOwner("nope");
+    expect(result).toBeNull();
+  });
+});
+
+// === AuditLog ===
+
+describe("SqliteAuditLog", () => {
+  const makeAudit = (overrides: Partial<AuditRecord> = {}): AuditRecord => ({
+    audit_id: crypto.randomUUID(),
+    mote_id: "mote-1",
+    timestamp: Date.now(),
+    action: "test_action",
+    target_type: "memory",
+    target_id: "target-1",
+    details: { foo: "bar" },
+    ...overrides,
+  });
+
+  it("record and query", async () => {
+    const entry = makeAudit();
+    await mdb.auditLog.record(entry);
+    const results = await mdb.auditLog.query("mote-1");
+    expect(results).toHaveLength(1);
+    expect(results[0]!.action).toBe("test_action");
+    expect(results[0]!.details).toEqual({ foo: "bar" });
+  });
+
+  it("query filters by after timestamp", async () => {
+    await mdb.auditLog.record(makeAudit({ timestamp: 100 }));
+    await mdb.auditLog.record(makeAudit({ timestamp: 200 }));
+    await mdb.auditLog.record(makeAudit({ timestamp: 300 }));
+    const results = await mdb.auditLog.query("mote-1", { after: 150 });
+    expect(results).toHaveLength(2);
+  });
+
+  it("query applies limit (from end)", async () => {
+    await mdb.auditLog.record(makeAudit({ timestamp: 100, action: "first" }));
+    await mdb.auditLog.record(makeAudit({ timestamp: 200, action: "second" }));
+    await mdb.auditLog.record(makeAudit({ timestamp: 300, action: "third" }));
+    const results = await mdb.auditLog.query("mote-1", { limit: 2 });
+    expect(results).toHaveLength(2);
+    expect(results[0]!.action).toBe("second");
+    expect(results[1]!.action).toBe("third");
+  });
+});
+
+// === StateSnapshot ===
+
+describe("SqliteStateSnapshot", () => {
+  it("saveState/loadState round-trip", () => {
+    const json = JSON.stringify({ attention: 0.5, confidence: 0.8 });
+    mdb.stateSnapshot.saveState("mote-1", json);
+    const loaded = mdb.stateSnapshot.loadState("mote-1");
+    expect(loaded).toBe(json);
+  });
+
+  it("loadState returns null for missing", () => {
+    const result = mdb.stateSnapshot.loadState("nope");
+    expect(result).toBeNull();
+  });
+
+  it("saveState overwrites previous value", () => {
+    mdb.stateSnapshot.saveState("mote-1", "first");
+    mdb.stateSnapshot.saveState("mote-1", "second");
+    const loaded = mdb.stateSnapshot.loadState("mote-1");
+    expect(loaded).toBe("second");
+  });
+});
+
+// === Cross-Adapter ===
+
+describe("cross-adapter persistence", () => {
+  it("data persists across separate adapter instances sharing same db", async () => {
+    const event = {
+      event_id: crypto.randomUUID(),
+      mote_id: "mote-1",
+      timestamp: Date.now(),
+      event_type: EventType.MemoryFormed,
+      payload: { shared: true },
+      version_clock: 1,
+      tombstoned: false,
+    };
+    await mdb.eventStore.append(event);
+
+    // Create new adapter instances from the same db handle
+    const { SqliteEventStore } = await import("../index.js");
+    const freshEventStore = new SqliteEventStore(mdb.db);
+    const results = await freshEventStore.query({ mote_id: "mote-1" });
+    expect(results).toHaveLength(1);
+    expect(results[0]!.payload).toEqual({ shared: true });
+  });
+});

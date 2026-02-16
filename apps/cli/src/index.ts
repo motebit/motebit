@@ -1,10 +1,14 @@
 import * as readline from "node:readline";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
 import { CloudProvider, runTurn } from "@mote/ai-core";
 import type { MoteLoopDependencies } from "@mote/ai-core";
-import { EventStore, InMemoryEventStore } from "@mote/event-log";
-import { MemoryGraph, InMemoryMemoryStorage } from "@mote/memory-graph";
+import { EventStore } from "@mote/event-log";
+import { MemoryGraph } from "@mote/memory-graph";
 import { StateVectorEngine } from "@mote/state-vector";
 import { BehaviorEngine } from "@mote/behavior-engine";
+import { createMoteDatabase, type MoteDatabase } from "@mote/persistence";
 
 // --- Configuration ---
 
@@ -22,13 +26,36 @@ function getApiKey(): string {
   return key;
 }
 
+function getDbPath(): string {
+  const envPath = process.env["MOTE_DB_PATH"];
+  if (envPath) return envPath;
+  const dir = path.join(os.homedir(), ".mote");
+  fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, "mote.db");
+}
+
 // --- Bootstrap dependencies ---
 
-function createDependencies(apiKey: string): MoteLoopDependencies {
-  const eventStore = new EventStore(new InMemoryEventStore());
-  const memoryStorage = new InMemoryMemoryStorage();
-  const memoryGraph = new MemoryGraph(memoryStorage, eventStore, MOTE_ID);
+interface CliDeps {
+  loopDeps: MoteLoopDependencies;
+  moteDb: MoteDatabase;
+  stateEngine: StateVectorEngine;
+}
+
+function createDependencies(apiKey: string): CliDeps {
+  const dbPath = getDbPath();
+  const moteDb = createMoteDatabase(dbPath);
+
+  const eventStore = new EventStore(moteDb.eventStore);
+  const memoryGraph = new MemoryGraph(moteDb.memoryStorage, eventStore, MOTE_ID);
   const stateEngine = new StateVectorEngine();
+
+  // Restore state from snapshot if available
+  const savedState = moteDb.stateSnapshot.loadState(MOTE_ID);
+  if (savedState) {
+    stateEngine.deserialize(savedState);
+  }
+
   const behaviorEngine = new BehaviorEngine();
   const cloudProvider = new CloudProvider({
     provider: "anthropic",
@@ -38,13 +65,19 @@ function createDependencies(apiKey: string): MoteLoopDependencies {
     temperature: 0.7,
   });
 
+  console.log(`Data: ${dbPath}`);
+
   return {
-    moteId: MOTE_ID,
-    eventStore,
-    memoryGraph,
+    loopDeps: {
+      moteId: MOTE_ID,
+      eventStore,
+      memoryGraph,
+      stateEngine,
+      behaviorEngine,
+      cloudProvider,
+    },
+    moteDb,
     stateEngine,
-    behaviorEngine,
-    cloudProvider,
   };
 }
 
@@ -52,7 +85,18 @@ function createDependencies(apiKey: string): MoteLoopDependencies {
 
 async function main(): Promise<void> {
   const apiKey = getApiKey();
-  const deps = createDependencies(apiKey);
+  const { loopDeps, moteDb, stateEngine } = createDependencies(apiKey);
+
+  const shutdown = (): void => {
+    moteDb.stateSnapshot.saveState(MOTE_ID, stateEngine.serialize());
+    moteDb.close();
+  };
+
+  process.on("SIGINT", () => {
+    console.log("\nGoodbye!");
+    shutdown();
+    process.exit(0);
+  });
 
   const rl = readline.createInterface({
     input: process.stdin,
@@ -72,6 +116,7 @@ async function main(): Promise<void> {
 
     if (trimmed === "quit" || trimmed === "exit") {
       console.log("Goodbye!");
+      shutdown();
       rl.close();
       return;
     }
@@ -82,7 +127,7 @@ async function main(): Promise<void> {
     }
 
     try {
-      const result = await runTurn(deps, trimmed);
+      const result = await runTurn(loopDeps, trimmed);
 
       console.log(`\nmote> ${result.response}\n`);
 
