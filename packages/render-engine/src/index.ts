@@ -80,23 +80,22 @@ function createBody(): { mesh: THREE.Mesh; material: THREE.MeshPhysicalMaterial 
   geo.scale(1.0, 0.97, 1.0); // barely perceptible squish — nearly perfect sphere
 
   const mat = new THREE.MeshPhysicalMaterial({
-    color: new THREE.Color(0.92, 0.94, 0.99),
-    transmission: 0.96,
-    ior: 1.45,
-    thickness: 0.4,
-    roughness: 0.02,
-    clearcoat: 1.0,
-    clearcoatRoughness: 0.01,
-    envMapIntensity: 1.5,
-    emissive: new THREE.Color(0.6, 0.7, 0.9),
-    emissiveIntensity: 0.03,
-    transparent: true,
+    color: new THREE.Color(1.0, 1.0, 1.0),
+    transmission: 0.98,
+    ior: 1.15,
+    thickness: 0.12,
+    roughness: 0.0,
+    clearcoat: 0.4,
+    clearcoatRoughness: 0.02,
+    envMapIntensity: 0.6,
     side: THREE.FrontSide,
-    attenuationColor: new THREE.Color(0.85, 0.88, 1.0),
-    attenuationDistance: 0.5,
+    attenuationColor: new THREE.Color(0.9, 0.92, 1.0),
+    attenuationDistance: 0.8,
   });
 
-  return { mesh: new THREE.Mesh(geo, mat), material: mat };
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.renderOrder = 2;
+  return { mesh, material: mat };
 }
 
 function createEye(): THREE.Group {
@@ -155,49 +154,42 @@ function createSkirt(): SkirtResult {
   const drips: THREE.Mesh[] = [];
   const dripBasePositions: THREE.Vector3[] = [];
 
-  // Where the drip ring sits on the sphere
-  // ~55 degrees below equator: y ≈ -0.085, ring radius ≈ 0.107
-  const ringY = -BODY_R * 0.97 * 0.6; // about -0.082
-  const ringR = Math.sqrt(BODY_R * BODY_R - (ringY / 0.97) * (ringY / 0.97)) * 0.95;
+  // Ring positioned inside the body sphere so it's hidden — drips emerge from body
+  const ringY = -BODY_R * 0.7;
+  const ringR = Math.sqrt(BODY_R * BODY_R - ringY * ringY) * 0.95;
 
-  // Glass material for skirt/drips — slightly denser than body
+  // Glass material — matches body for seamless melting look
   const mat = new THREE.MeshPhysicalMaterial({
-    color: new THREE.Color(0.9, 0.93, 0.98),
-    transmission: 0.88,
-    ior: 1.4,
-    thickness: 0.12,
-    roughness: 0.04,
-    clearcoat: 1.0,
+    color: new THREE.Color(1.0, 1.0, 1.0),
+    transmission: 0.95,
+    ior: 1.15,
+    thickness: 0.1,
+    roughness: 0.0,
+    clearcoat: 0.4,
     clearcoatRoughness: 0.02,
-    transparent: true,
-    attenuationColor: new THREE.Color(0.85, 0.88, 1.0),
-    attenuationDistance: 0.25,
+    envMapIntensity: 0.6,
+    side: THREE.FrontSide,
+    attenuationColor: new THREE.Color(0.9, 0.92, 1.0),
+    attenuationDistance: 0.8,
   });
 
-  // Membrane ring — thin torus connecting the drips
-  const membraneGeo = new THREE.TorusGeometry(ringR, 0.006, 8, N_DRIPS * 4);
-  const membrane = new THREE.Mesh(membraneGeo, mat);
-  membrane.position.y = ringY;
-  membrane.rotation.x = Math.PI / 2; // lay flat
-  membrane.scale.y = 0.4; // flatten into a thin band
-  group.add(membrane);
-
-  // Individual drip blobs — 12 rounded drops hanging from the membrane
+  // No visible membrane — drips hang directly from inside the body sphere
+  // Drips — glass teardrops melting from the body
   for (let i = 0; i < N_DRIPS; i++) {
     const angle = (i / N_DRIPS) * Math.PI * 2;
 
-    // Deterministic organic variation (no Math.random)
-    const sizeVar = 0.88 + 0.24 * Math.abs(Math.sin(i * 2.17));
-    const lengthVar = 1.0 + 0.35 * Math.abs(Math.cos(i * 1.73));
-    const dripR = 0.011 * sizeVar;
+    const sizeVar = 0.85 + 0.3 * Math.abs(Math.sin(i * 2.17));
+    const lengthVar = 1.0 + 0.5 * Math.abs(Math.cos(i * 1.73));
+    const dripR = 0.014 * sizeVar;
 
     const dripGeo = new THREE.SphereGeometry(dripR, 12, 10);
-    dripGeo.scale(1.0, 1.35 * lengthVar, 1.0); // elongated teardrop
+    dripGeo.scale(0.85, 1.5 * lengthVar, 0.85);
 
     const drip = new THREE.Mesh(dripGeo, mat);
     const x = Math.cos(angle) * ringR;
     const z = Math.sin(angle) * ringR;
-    const y = ringY - 0.018 * lengthVar;
+    // Start inside the body sphere so drips emerge from it
+    const y = ringY - 0.01 * lengthVar;
 
     const basePos = new THREE.Vector3(x, y, z);
     drip.position.copy(basePos);
@@ -209,72 +201,71 @@ function createSkirt(): SkirtResult {
   return { group, material: mat, drips, dripBasePositions };
 }
 
-function createGround(): THREE.Mesh {
-  const geo = new THREE.PlaneGeometry(2, 2);
-  const mat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(0.9, 0.89, 0.92),
-    roughness: 0.15,
-    metalness: 0.05,
-  });
-  const plane = new THREE.Mesh(geo, mat);
-  plane.rotation.x = -Math.PI / 2;
-  plane.position.y = -0.25;
-  return plane;
-}
-
 function createEnvironmentMap(renderer: THREE.WebGLRenderer): THREE.Texture {
   const pmrem = new THREE.PMREMGenerator(renderer);
   const envScene = new THREE.Scene();
 
-  // Bright studio enclosure — like product photography lightbox
-  const bgGeo = new THREE.SphereGeometry(5, 32, 32);
-  const bgMat = new THREE.MeshBasicMaterial({
-    color: new THREE.Color(0.96, 0.94, 0.97), // very bright lavender-white
+  // Sky dome — gradient from deep blue top to warm horizon
+  const skyGeo = new THREE.SphereGeometry(5, 64, 32);
+  const skyMat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
+    uniforms: {},
+    vertexShader: `
+      varying vec3 vWorldPos;
+      void main() {
+        vWorldPos = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vWorldPos;
+      void main() {
+        float y = normalize(vWorldPos).y;
+        vec3 zenith = vec3(0.15, 0.25, 0.55);
+        vec3 horizon = vec3(0.7, 0.5, 0.4);
+        vec3 ground = vec3(0.12, 0.12, 0.18);
+        vec3 color;
+        if (y > 0.0) {
+          color = mix(horizon, zenith, pow(y, 0.6));
+        } else {
+          color = mix(horizon * 0.5, ground, pow(-y, 0.4));
+        }
+        gl_FragColor = vec4(color, 1.0);
+      }
+    `,
   });
-  envScene.add(new THREE.Mesh(bgGeo, bgMat));
+  envScene.add(new THREE.Mesh(skyGeo, skyMat));
 
-  // Bright panels for strong glass reflections
-  const panelGeo = new THREE.PlaneGeometry(3, 3);
+  // Bright sun — upper right
+  const panelGeo = new THREE.PlaneGeometry(1.5, 1.5);
+  const sunMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(2.5, 2.2, 1.8), side: THREE.DoubleSide });
+  const sunPanel = new THREE.Mesh(panelGeo, sunMat);
+  sunPanel.position.set(3, 3, 2);
+  sunPanel.lookAt(0, 0, 0);
+  envScene.add(sunPanel);
 
-  // Key panel — upper right (dominant highlight)
-  const keyMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
-  const keyPanel = new THREE.Mesh(panelGeo, keyMat);
-  keyPanel.position.set(2, 2.5, 1.5);
-  keyPanel.lookAt(0, 0, 0);
-  envScene.add(keyPanel);
-
-  // Fill panel — upper left (warm)
-  const fillMat = new THREE.MeshBasicMaterial({ color: 0xfff0e8, side: THREE.DoubleSide });
-  const fillPanel = new THREE.Mesh(panelGeo, fillMat);
-  fillPanel.position.set(-2, 2, -1);
+  // Cool fill — upper left
+  const fillMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.4, 0.5, 0.9), side: THREE.DoubleSide });
+  const fillPanel = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), fillMat);
+  fillPanel.position.set(-2.5, 2, -1);
   fillPanel.lookAt(0, 0, 0);
   envScene.add(fillPanel);
 
-  // Bottom panel — soft reflection from below
-  const bottomMat = new THREE.MeshBasicMaterial({ color: 0xeee8f2, side: THREE.DoubleSide });
-  const bottomPanel = new THREE.Mesh(panelGeo, bottomMat);
-  bottomPanel.position.set(0, -2, 0);
-  bottomPanel.rotation.x = Math.PI / 2;
-  envScene.add(bottomPanel);
-
-  // Back panel — rim light
-  const rimMat = new THREE.MeshBasicMaterial({ color: 0xf8f4ff, side: THREE.DoubleSide });
-  const rimPanel = new THREE.Mesh(panelGeo, rimMat);
-  rimPanel.position.set(0, 1, -3);
-  rimPanel.lookAt(0, 0, 0);
-  envScene.add(rimPanel);
+  // Ground bounce
+  const groundMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.3, 0.25, 0.2), side: THREE.DoubleSide });
+  const groundPanel = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), groundMat);
+  groundPanel.position.set(0, -3, 0);
+  groundPanel.rotation.x = Math.PI / 2;
+  envScene.add(groundPanel);
 
   const envMap = pmrem.fromScene(envScene, 0, 0.1, 100).texture;
 
-  // Cleanup
-  bgGeo.dispose();
-  bgMat.dispose();
+  skyGeo.dispose();
+  skyMat.dispose();
   panelGeo.dispose();
-  keyMat.dispose();
+  sunMat.dispose();
   fillMat.dispose();
-  bottomMat.dispose();
-  rimMat.dispose();
+  groundMat.dispose();
   pmrem.dispose();
 
   return envMap;
@@ -325,18 +316,16 @@ export class ThreeJSAdapter implements RenderAdapter {
       antialias: true,
       alpha: true,
     });
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.1;
+    this.renderer.toneMapping = THREE.LinearToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
 
-    // Scene — soft near-white background
+    // Scene — environment as both reflections and transmission background
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0xf5f0f8);
-
-    // Environment map — bright studio for glass reflections
     const envMap = createEnvironmentMap(this.renderer);
     this.scene.environment = envMap;
+    this.scene.background = envMap;
 
     // Camera — framing the creature with room for hover + ground
     this.camera = new THREE.PerspectiveCamera(
@@ -358,18 +347,18 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.bodyMaterial = body.material;
     this.creature.add(this.bodyMesh);
 
-    // Eyes — big, dark, expressive
+    // Eyes — inside the glass body
     this.leftEye = createEye();
-    this.leftEye.position.set(-0.05, 0.015, 0.115);
+    this.leftEye.position.set(-0.055, 0.015, 0.08);
     this.creature.add(this.leftEye);
 
     this.rightEye = createEye();
-    this.rightEye.position.set(0.05, 0.015, 0.115);
+    this.rightEye.position.set(0.055, 0.015, 0.08);
     this.creature.add(this.rightEye);
 
-    // Smile — whisper-thin arc
+    // Smile — inside the glass
     this.smileMesh = createSmile();
-    this.smileMesh.position.set(0, -0.03, 0.128);
+    this.smileMesh.position.set(0, -0.025, 0.09);
     this.creature.add(this.smileMesh);
 
     // Skirt + drips — the melting bottom edge
@@ -379,33 +368,21 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.dripBasePositions = skirt.dripBasePositions;
     this.creature.add(this.skirtGroup);
 
-    // === Ground plane — reflective surface below ===
-    const ground = createGround();
-    this.scene.add(ground);
-
-    // === Lighting — bright, soft, studio-like ===
-    const ambient = new THREE.AmbientLight(0xffffff, 0.8);
+    // === Lighting — natural ===
+    const ambient = new THREE.AmbientLight(0x8090b0, 0.6);
     this.scene.add(ambient);
 
-    // Warm key light from upper-right
-    const key = new THREE.DirectionalLight(0xfff8f0, 1.5);
-    key.position.set(1.5, 2.5, 2);
+    const key = new THREE.DirectionalLight(0xffeedd, 2.0);
+    key.position.set(2, 3, 2);
     this.scene.add(key);
 
-    // Cool fill from left
-    const fill = new THREE.DirectionalLight(0xe8eeff, 0.5);
-    fill.position.set(-2, 1, -1);
+    const fill = new THREE.DirectionalLight(0xaabbee, 0.6);
+    fill.position.set(-2, 1.5, -1);
     this.scene.add(fill);
 
-    // Subtle rim/back light
-    const rim = new THREE.DirectionalLight(0xf4f0ff, 0.4);
-    rim.position.set(0, 1, -2);
+    const rim = new THREE.DirectionalLight(0xddeeff, 0.5);
+    rim.position.set(0, 0.5, -2.5);
     this.scene.add(rim);
-
-    // Bottom point light for ground glow
-    const bottom = new THREE.PointLight(0xf0e8ff, 0.3, 2);
-    bottom.position.set(0, -0.4, 0.2);
-    this.scene.add(bottom);
 
     this.initialized = true;
   }
@@ -452,7 +429,7 @@ export class ThreeJSAdapter implements RenderAdapter {
         this.rightEye.scale.setScalar(eyeScale);
 
         // Subtle eye drift — slightly alive
-        const eyeZ = 0.115 + Math.sin(t * 0.25) * 0.0015;
+        const eyeZ = 0.08 + Math.sin(t * 0.25) * 0.001;
         this.leftEye.position.z = eyeZ;
         this.rightEye.position.z = eyeZ;
       }
@@ -475,8 +452,8 @@ export class ThreeJSAdapter implements RenderAdapter {
         drip.scale.y = 1 + cues.hover_distance * 0.1;
       }
 
-      // === Very slow creature rotation ===
-      this.creature.rotation.y += 0.05 * dt;
+      // === Rotation disabled for now ===
+      // this.creature.rotation.y += 0.05 * dt;
 
       // Render
       this.renderer.render(this.scene, this.camera);
