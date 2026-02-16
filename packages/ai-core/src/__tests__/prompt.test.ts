@@ -39,7 +39,6 @@ function makeDefaultCues(overrides: Partial<BehaviorCues> = {}): BehaviorCues {
     glow_intensity: 0.3,
     eye_dilation: 0.3,
     smile_curvature: 0.0,
-    skirt_deformation: 0.0,
     ...overrides,
   };
 }

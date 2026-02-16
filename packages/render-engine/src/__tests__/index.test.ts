@@ -16,25 +16,23 @@ import {
 describe("CANONICAL_SPEC", () => {
   it("has correct geometry values", () => {
     expect(CANONICAL_GEOMETRY.form).toBe("droplet");
-    expect(CANONICAL_GEOMETRY.lobe_count).toBe(5);
-    expect(CANONICAL_GEOMETRY.skirt_segments).toBe(32);
-    expect(CANONICAL_GEOMETRY.base_radius).toBe(0.08);
+    expect(CANONICAL_GEOMETRY.base_radius).toBe(0.14);
     expect(CANONICAL_GEOMETRY.height).toBe(0.12);
   });
 
-  it("has correct material values", () => {
-    expect(CANONICAL_MATERIAL.ior).toBe(1.35);
+  it("has correct material values (MOTEBIT.md §V)", () => {
+    expect(CANONICAL_MATERIAL.ior).toBe(1.15);
     expect(CANONICAL_MATERIAL.subsurface).toBe(0.05);
-    expect(CANONICAL_MATERIAL.roughness).toBe(0.15);
-    expect(CANONICAL_MATERIAL.clearcoat).toBe(0.8);
+    expect(CANONICAL_MATERIAL.roughness).toBe(0.0);
+    expect(CANONICAL_MATERIAL.clearcoat).toBe(0.4);
     expect(CANONICAL_MATERIAL.surface_noise_amplitude).toBe(0.002);
-    expect(CANONICAL_MATERIAL.base_color).toEqual([0.92, 0.95, 0.98]);
-    expect(CANONICAL_MATERIAL.emissive_intensity).toBe(0.1);
+    expect(CANONICAL_MATERIAL.base_color).toEqual([1.0, 1.0, 1.0]);
+    expect(CANONICAL_MATERIAL.emissive_intensity).toBe(0.02);
   });
 
   it("has correct lighting values", () => {
     expect(CANONICAL_LIGHTING.environment).toBe("hdri");
-    expect(CANONICAL_LIGHTING.exposure).toBe(1.0);
+    expect(CANONICAL_LIGHTING.exposure).toBe(1.2);
     expect(CANONICAL_LIGHTING.ambient_intensity).toBe(0.4);
   });
 
@@ -106,7 +104,7 @@ describe("ThreeJSAdapter", () => {
         glow_intensity: 0.3,
         eye_dilation: 0.3,
         smile_curvature: 0,
-        skirt_deformation: 0,
+
       },
       delta_time: 0.016,
       time: 1.0,
@@ -122,7 +120,7 @@ describe("ThreeJSAdapter", () => {
         glow_intensity: 0.3,
         eye_dilation: 0.3,
         smile_curvature: 0,
-        skirt_deformation: 0,
+
       },
       delta_time: 0.016,
       time: 1.0,
@@ -133,7 +131,7 @@ describe("ThreeJSAdapter", () => {
     const spec = adapter.getSpec();
     expect(spec).toBe(CANONICAL_SPEC);
     expect(spec.geometry.form).toBe("droplet");
-    expect(spec.material.ior).toBe(1.35);
+    expect(spec.material.ior).toBe(1.15);
   });
 
   it("dispose cleans up", async () => {
@@ -147,7 +145,7 @@ describe("ThreeJSAdapter", () => {
         glow_intensity: 0.3,
         eye_dilation: 0.3,
         smile_curvature: 0,
-        skirt_deformation: 0,
+
       },
       delta_time: 0.016,
       time: 1.0,
@@ -168,8 +166,8 @@ describe("SpatialAdapter", () => {
     const adapter = new SpatialAdapter();
     const spec = adapter.getSpec();
     expect(spec.geometry.form).toBe("droplet");
-    expect(spec.geometry.lobe_count).toBe(5);
-    expect(spec.material.ior).toBe(1.35);
+    expect(spec.geometry.base_radius).toBe(0.14);
+    expect(spec.material.ior).toBe(1.15);
     expect(spec.lighting.environment).toBe("hdri");
   });
 
@@ -183,7 +181,7 @@ describe("SpatialAdapter", () => {
         glow_intensity: 0.3,
         eye_dilation: 0.3,
         smile_curvature: 0,
-        skirt_deformation: 0,
+
       },
       delta_time: 0.016,
       time: 1.0,

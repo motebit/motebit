@@ -220,7 +220,6 @@ describe("WebXRAdapter", () => {
           glow_intensity: 0.3,
           eye_dilation: 0.3,
           smile_curvature: 0,
-          skirt_deformation: 0,
         },
         delta_time: 0.016,
         time: 1.0,

@@ -55,7 +55,6 @@ export function enforceCueDelta(prev: BehaviorCues, next: BehaviorCues): Behavio
       next.smile_curvature,
       SPECIES_CONSTRAINTS.SMILE_DELTA_MAX,
     ),
-    skirt_deformation: next.skirt_deformation,
   };
 }
 

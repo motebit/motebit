@@ -37,7 +37,6 @@ function makeDefaultCues(overrides: Partial<BehaviorCues> = {}): BehaviorCues {
     glow_intensity: 0.3,
     eye_dilation: 0.3,
     smile_curvature: 0,
-    skirt_deformation: 0,
     ...overrides,
   };
 }
@@ -167,19 +166,17 @@ describe("enforceCueDelta", () => {
     expect(result.glow_intensity).toBeCloseTo(0.35, 10);
   });
 
-  it("passes through hover_distance, drift_amplitude, eye_dilation, skirt_deformation unchanged", () => {
+  it("passes through hover_distance, drift_amplitude, eye_dilation unchanged", () => {
     const prev = makeDefaultCues();
     const next = makeDefaultCues({
       hover_distance: 0.9,
       drift_amplitude: 0.1,
       eye_dilation: 0.8,
-      skirt_deformation: 0.15,
     });
     const result = enforceCueDelta(prev, next);
     expect(result.hover_distance).toBe(0.9);
     expect(result.drift_amplitude).toBe(0.1);
     expect(result.eye_dilation).toBe(0.8);
-    expect(result.skirt_deformation).toBe(0.15);
   });
 });
 

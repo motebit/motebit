@@ -36,16 +36,12 @@ export function computeRawCues(state: MotebitState): BehaviorCues {
   // Smile: positive valence only, very subtle
   const smile_curvature = clamp(state.affect_valence * 0.15, -0.1, 0.15);
 
-  // Skirt deformation: arousal (already clamped to 0.35 max in state)
-  const skirt_deformation = state.affect_arousal * 0.5;
-
   return {
     hover_distance,
     drift_amplitude,
     glow_intensity: clamp(glow_intensity, 0, 1),
     eye_dilation,
     smile_curvature,
-    skirt_deformation: clamp(skirt_deformation, 0, 0.2),
   };
 }
 
@@ -62,7 +58,7 @@ export class BehaviorEngine {
       glow_intensity: SPATIAL.BASE_GLOW,
       eye_dilation: 0.3,
       smile_curvature: 0,
-      skirt_deformation: 0,
+
     };
   }
 
@@ -106,7 +102,7 @@ export class BehaviorEngine {
       glow_intensity: SPATIAL.BASE_GLOW,
       eye_dilation: 0.3,
       smile_curvature: 0,
-      skirt_deformation: 0,
+
     };
   }
 }

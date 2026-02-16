@@ -32,7 +32,6 @@ export function BehaviorPanel({ cues }: BehaviorPanelProps): React.ReactElement 
     { name: "glow_intensity", value: cues.glow_intensity },
     { name: "eye_dilation", value: cues.eye_dilation },
     { name: "smile_curvature", value: cues.smile_curvature },
-    { name: "skirt_deformation", value: cues.skirt_deformation },
   ];
 
   const readout = fields.map((f) =>

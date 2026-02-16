@@ -74,7 +74,6 @@ export interface BehaviorCues {
   glow_intensity: number;
   eye_dilation: number;
   smile_curvature: number;
-  skirt_deformation: number;
 }
 
 // === Species Constraints (type re-export only — enforcement in policy-invariants) ===
@@ -200,8 +199,6 @@ export interface RenderSpec {
 
 export interface GeometrySpec {
   form: "droplet";
-  lobe_count: number;
-  skirt_segments: number;
   base_radius: number;
   height: number;
 }

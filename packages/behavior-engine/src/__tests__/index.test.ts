@@ -34,7 +34,7 @@ describe("computeRawCues", () => {
     expect(typeof cues.glow_intensity).toBe("number");
     expect(typeof cues.eye_dilation).toBe("number");
     expect(typeof cues.smile_curvature).toBe("number");
-    expect(typeof cues.skirt_deformation).toBe("number");
+
   });
 
   it("higher attention leads to closer hover distance", () => {
@@ -86,8 +86,8 @@ describe("BehaviorEngine", () => {
     const cues = engine.compute(state);
     expect(cues.glow_intensity).toBeGreaterThanOrEqual(0);
     expect(cues.glow_intensity).toBeLessThanOrEqual(1);
-    expect(cues.skirt_deformation).toBeGreaterThanOrEqual(0);
-    expect(cues.skirt_deformation).toBeLessThanOrEqual(0.2);
+    expect(cues.glow_intensity).toBeGreaterThanOrEqual(0);
+    expect(cues.glow_intensity).toBeLessThanOrEqual(1);
   });
 
   it("compute() enforces smile delta max", () => {
@@ -149,7 +149,7 @@ describe("BehaviorEngine", () => {
     expect(prev.glow_intensity).toBe(0.3); // BASE_GLOW
     expect(prev.eye_dilation).toBe(0.3);
     expect(prev.smile_curvature).toBe(0);
-    expect(prev.skirt_deformation).toBe(0);
+    expect(prev.smile_curvature).toBe(0);
   });
 
   it("getPreviousCues() returns a copy", () => {

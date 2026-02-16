@@ -140,7 +140,6 @@ describe("Type construction", () => {
       glow_intensity: 0.3,
       eye_dilation: 0.3,
       smile_curvature: 0,
-      skirt_deformation: 0,
     };
     expect(cues.hover_distance).toBe(0.4);
   });
