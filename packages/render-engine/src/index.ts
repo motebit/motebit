@@ -101,7 +101,7 @@ function createBody(): { mesh: THREE.Mesh; material: THREE.MeshPhysicalMaterial 
     iridescenceThicknessRange: [100, 400],
     side: THREE.FrontSide,
     attenuationColor: new THREE.Color(tint[0], tint[1], tint[2]),
-    attenuationDistance: 0.8,
+    attenuationDistance: BODY_R,
   });
 
   const mesh = new THREE.Mesh(geo, mat);
