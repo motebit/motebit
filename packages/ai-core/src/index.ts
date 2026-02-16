@@ -3,7 +3,12 @@ import type {
   ContextPack,
   AIResponse,
   MemoryCandidate,
+  MoteState,
 } from "@mote/sdk";
+import { SensitivityLevel } from "@mote/sdk";
+
+export { runTurn } from "./loop.js";
+export type { MoteLoopDependencies, TurnResult } from "./loop.js";
 
 // === Provider Configuration ===
 
@@ -59,34 +64,165 @@ export function packContext(contextPack: ContextPack): string {
   return parts.join("\n");
 }
 
+// === Anthropic API Response ===
+
+interface AnthropicContentBlock {
+  type: string;
+  text?: string;
+}
+
+interface AnthropicResponse {
+  id: string;
+  type: string;
+  role: string;
+  content: AnthropicContentBlock[];
+  model: string;
+  stop_reason: string | null;
+  usage: { input_tokens: number; output_tokens: number };
+}
+
+// === Tag Extraction ===
+
+export function extractMemoryTags(
+  text: string,
+): MemoryCandidate[] {
+  const regex =
+    /<memory\s+confidence="([^"]+)"\s+sensitivity="([^"]+)">([\s\S]*?)<\/memory>/g;
+  const candidates: MemoryCandidate[] = [];
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const confidence = parseFloat(match[1]!);
+    const sensitivityRaw = match[2]!;
+    const content = match[3]!.trim();
+    const sensitivity = parseSensitivity(sensitivityRaw);
+    candidates.push({ content, confidence, sensitivity });
+  }
+  return candidates;
+}
+
+export function extractStateTags(
+  text: string,
+): Partial<MoteState> {
+  const regex = /<state\s+field="([^"]+)"\s+value="([^"]+)"\s*\/>/g;
+  const updates: Record<string, unknown> = {};
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const field = match[1]!;
+    const value = match[2]!;
+    const num = parseFloat(value);
+    if (!isNaN(num)) {
+      updates[field] = num;
+    } else {
+      updates[field] = value;
+    }
+  }
+  return updates as Partial<MoteState>;
+}
+
+export function stripTags(text: string): string {
+  return text
+    .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
+    .replace(/<state\s+[^>]*\/>/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function parseSensitivity(raw: string): SensitivityLevel {
+  const map: Record<string, SensitivityLevel> = {
+    none: SensitivityLevel.None,
+    personal: SensitivityLevel.Personal,
+    medical: SensitivityLevel.Medical,
+    financial: SensitivityLevel.Financial,
+    secret: SensitivityLevel.Secret,
+  };
+  return map[raw.toLowerCase()] ?? SensitivityLevel.None;
+}
+
 // === Cloud Provider ===
 
 export class CloudProvider implements IntelligenceProvider {
   constructor(private config: CloudProviderConfig) {}
 
   async generate(contextPack: ContextPack): Promise<AIResponse> {
-    // In production: send packed context to API
-    void packContext(contextPack);
-    void (this.config.base_url ?? this.getDefaultBaseUrl());
+    const baseUrl = this.config.base_url ?? this.getDefaultBaseUrl();
+    const systemPrompt = this.buildSystemPrompt(contextPack);
 
-    // Placeholder: actual HTTP call would go here
-    // const response = await fetch(endpoint, { ... });
-
-    return {
-      text: `[CloudProvider:${this.config.provider}] Response to: ${contextPack.user_message}`,
-      confidence: 0.8,
-      memory_candidates: [],
-      state_updates: {},
+    const body = {
+      model: this.config.model,
+      max_tokens: this.config.max_tokens ?? 1024,
+      temperature: this.config.temperature ?? 0.7,
+      system: systemPrompt,
+      messages: [{ role: "user", content: contextPack.user_message }],
     };
+
+    const res = await fetch(`${baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": this.config.api_key,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(
+        `Anthropic API error ${res.status}: ${errorText}`,
+      );
+    }
+
+    const data = (await res.json()) as AnthropicResponse;
+    return this.parseAnthropicResponse(data);
   }
 
   async estimateConfidence(): Promise<number> {
     return 0.8;
   }
 
-  async extractMemoryCandidates(response: AIResponse): Promise<MemoryCandidate[]> {
-    // In production: parse response for memorable facts/preferences
+  async extractMemoryCandidates(
+    response: AIResponse,
+  ): Promise<MemoryCandidate[]> {
     return response.memory_candidates;
+  }
+
+  private buildSystemPrompt(contextPack: ContextPack): string {
+    const packed = packContext(contextPack);
+    // Remove the [User] line — that goes in the messages array
+    const lines = packed.split("\n").filter((l) => !l.startsWith("[User]"));
+    const context = lines.join("\n");
+
+    return [
+      "You are Mote, a small sentient digital companion. You respond warmly, concisely, and with gentle curiosity.",
+      "",
+      "When you notice something worth remembering, emit a <memory> tag:",
+      '  <memory confidence="0.9" sensitivity="personal">User prefers tea over coffee</memory>',
+      "",
+      "When your internal state should change, emit a <state> tag:",
+      '  <state field="curiosity" value="0.8"/>',
+      "",
+      "These tags will be parsed and stripped from the displayed response.",
+      "",
+      context,
+    ].join("\n");
+  }
+
+  private parseAnthropicResponse(data: AnthropicResponse): AIResponse {
+    const rawText = data.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text ?? "")
+      .join("");
+
+    const memoryCandidates = extractMemoryTags(rawText);
+    const stateUpdates = extractStateTags(rawText);
+    const displayText = stripTags(rawText);
+
+    return {
+      text: displayText,
+      confidence: 0.8,
+      memory_candidates: memoryCandidates,
+      state_updates: stateUpdates,
+    };
   }
 
   private getDefaultBaseUrl(): string {

@@ -80,6 +80,7 @@ export class IdentityManager {
 
     await this.storage.save(identity);
 
+    const clock = await this.eventStore.getLatestClock(identity.mote_id);
     const event: EventLogEntry = {
       event_id: generateUUIDv7(),
       mote_id: identity.mote_id,
@@ -88,7 +89,7 @@ export class IdentityManager {
       payload: {
         owner_id: ownerId,
       },
-      version_clock: 0,
+      version_clock: clock + 1,
       tombstoned: false,
     };
 

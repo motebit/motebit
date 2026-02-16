@@ -8,6 +8,8 @@ import type {
 import { EventType } from "@mote/sdk";
 import type { EventStore } from "@mote/event-log";
 
+export { embedText } from "./embeddings.js";
+
 // === Interfaces ===
 
 export interface MemoryQuery {
@@ -174,13 +176,14 @@ export class MemoryGraph {
 
     await this.storage.saveNode(node);
 
+    const clock = await this.eventStore.getLatestClock(this.moteId);
     await this.eventStore.append({
       event_id: crypto.randomUUID(),
       mote_id: this.moteId,
       timestamp: now,
       event_type: EventType.MemoryFormed,
       payload: { node_id: nodeId, content: candidate.content },
-      version_clock: 0,
+      version_clock: clock + 1,
       tombstoned: false,
     });
 
@@ -257,13 +260,14 @@ export class MemoryGraph {
   async deleteMemory(nodeId: string): Promise<void> {
     await this.storage.tombstoneNode(nodeId);
 
+    const clock = await this.eventStore.getLatestClock(this.moteId);
     await this.eventStore.append({
       event_id: crypto.randomUUID(),
       mote_id: this.moteId,
       timestamp: Date.now(),
       event_type: EventType.MemoryDeleted,
       payload: { node_id: nodeId },
-      version_clock: 0,
+      version_clock: clock + 1,
       tombstoned: false,
     });
   }
@@ -277,13 +281,14 @@ export class MemoryGraph {
       node.last_accessed = Date.now();
       await this.storage.saveNode(node);
 
+      const clock = await this.eventStore.getLatestClock(this.moteId);
       await this.eventStore.append({
         event_id: crypto.randomUUID(),
         mote_id: this.moteId,
         timestamp: Date.now(),
         event_type: EventType.MemoryAccessed,
         payload: { node_id: nodeId },
-        version_clock: 0,
+        version_clock: clock + 1,
         tombstoned: false,
       });
     }

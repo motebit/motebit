@@ -412,6 +412,31 @@ describe("MemoryGraph", () => {
     });
   });
 
+  describe("version_clock incrementing", () => {
+    it("increments version_clock across multiple operations", async () => {
+      const c1: MemoryCandidate = {
+        content: "first",
+        confidence: 0.9,
+        sensitivity: SensitivityLevel.None,
+      };
+      const c2: MemoryCandidate = {
+        content: "second",
+        confidence: 0.9,
+        sensitivity: SensitivityLevel.None,
+      };
+
+      const node1 = await graph.formMemory(c1, [1, 0]);
+      const node2 = await graph.formMemory(c2, [0, 1]);
+      await graph.deleteMemory(node1.node_id);
+      await graph.getMemory(node2.node_id);
+
+      const events = await eventStore.query({ mote_id: moteId });
+      const clocks = events.map((e) => e.version_clock);
+      // Each event should have a unique, incrementing clock
+      expect(clocks).toEqual([1, 2, 3, 4]);
+    });
+  });
+
   describe("exportAll", () => {
     it("returns all nodes and edges for the mote", async () => {
       const nodeA = await graph.formMemory(

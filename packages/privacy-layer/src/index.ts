@@ -217,13 +217,14 @@ export class ExportManager {
     });
 
     // Log the export event
+    const clock = await this.eventStore.getLatestClock(this.moteId);
     await this.eventStore.append({
       event_id: crypto.randomUUID(),
       mote_id: this.moteId,
       timestamp: Date.now(),
       event_type: EventType.ExportRequested,
       payload: {},
-      version_clock: 0,
+      version_clock: clock + 1,
       tombstoned: false,
     });
 

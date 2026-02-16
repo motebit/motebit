@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { packContext, CloudProvider, HybridProvider } from "../index";
 import type { CloudProviderConfig, HybridProviderConfig } from "../index";
 import { TrustMode, BatteryMode, SensitivityLevel, EventType } from "@mote/sdk";
@@ -62,6 +62,39 @@ function makeMemory(overrides: Partial<MemoryNode> = {}): MemoryNode {
   };
 }
 
+function mockAnthropicResponse(text: string) {
+  return {
+    id: "msg_test",
+    type: "message",
+    role: "assistant",
+    content: [{ type: "text", text }],
+    model: "claude-sonnet-4-5-20250514",
+    stop_reason: "end_turn",
+    usage: { input_tokens: 100, output_tokens: 50 },
+  };
+}
+
+function mockFetchSuccess(text: string): void {
+  const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+  mockFn.mockResolvedValueOnce(
+    new Response(JSON.stringify(mockAnthropicResponse(text)), { status: 200 }),
+  );
+}
+
+function mockFetchError(status: number, body: string): void {
+  const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+  mockFn.mockResolvedValueOnce(new Response(body, { status }));
+}
+
+function mockFetchReject(error: Error): void {
+  const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+  mockFn.mockRejectedValueOnce(error);
+}
+
+function getFetchMock(): ReturnType<typeof vi.fn> {
+  return globalThis.fetch as ReturnType<typeof vi.fn>;
+}
+
 // ---------------------------------------------------------------------------
 // packContext()
 // ---------------------------------------------------------------------------
@@ -116,7 +149,6 @@ describe("packContext", () => {
       makeEvent({ event_id: `e${i}` }),
     );
     const result = packContext(makeContextPack({ recent_events: events }));
-    // Should only include the last 10
     const eventLines = result
       .split("\n")
       .filter((line) => line.startsWith("  ") && line.includes("state_updated"));
@@ -130,20 +162,55 @@ describe("packContext", () => {
 
 describe("CloudProvider", () => {
   const config: CloudProviderConfig = {
-    provider: "openai",
+    provider: "anthropic",
     api_key: "test-key",
-    model: "gpt-4",
+    model: "claude-sonnet-4-5-20250514",
   };
 
-  it("generate() returns a response with expected structure", async () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("generate() calls Anthropic API and returns parsed response", async () => {
+    mockFetchSuccess("Hello! I'm Mote.");
+
     const provider = new CloudProvider(config);
     const response = await provider.generate(makeContextPack());
 
-    expect(response.text).toContain("CloudProvider:openai");
-    expect(response.text).toContain("Hello, Mote!");
+    expect(response.text).toBe("Hello! I'm Mote.");
     expect(response.confidence).toBe(0.8);
     expect(response.memory_candidates).toEqual([]);
     expect(response.state_updates).toEqual({});
+  });
+
+  it("sends correct headers", async () => {
+    mockFetchSuccess("Hi");
+
+    const provider = new CloudProvider(config);
+    await provider.generate(makeContextPack());
+
+    const mock = getFetchMock();
+    expect(mock).toHaveBeenCalledOnce();
+    const [url, opts] = mock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.anthropic.com/v1/messages");
+    const headers = opts.headers as Record<string, string>;
+    expect(headers["x-api-key"]).toBe("test-key");
+    expect(headers["anthropic-version"]).toBe("2023-06-01");
+  });
+
+  it("throws on API error", async () => {
+    mockFetchError(401, "Unauthorized");
+
+    const provider = new CloudProvider(config);
+    await expect(provider.generate(makeContextPack())).rejects.toThrow(
+      "Anthropic API error 401",
+    );
   });
 
   it("estimateConfidence() returns 0.8", async () => {
@@ -176,26 +243,40 @@ describe("CloudProvider", () => {
 // ---------------------------------------------------------------------------
 
 describe("HybridProvider", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
   it("uses cloud provider by default", async () => {
+    mockFetchSuccess("Cloud response");
+
     const config: HybridProviderConfig = {
       cloud: {
         provider: "anthropic",
         api_key: "test-key",
-        model: "claude-3",
+        model: "claude-sonnet-4-5-20250514",
       },
       fallback_to_local: false,
     };
     const provider = new HybridProvider(config);
     const response = await provider.generate(makeContextPack());
-    expect(response.text).toContain("CloudProvider:anthropic");
+    expect(response.text).toBe("Cloud response");
   });
 
   it("falls back to local on cloud failure when configured", async () => {
+    mockFetchReject(new Error("Network error"));
+
     const config: HybridProviderConfig = {
       cloud: {
-        provider: "openai",
+        provider: "anthropic",
         api_key: "test-key",
-        model: "gpt-4",
+        model: "claude-sonnet-4-5-20250514",
       },
       local: {
         model_path: "/path/to/model",
@@ -203,33 +284,22 @@ describe("HybridProvider", () => {
       fallback_to_local: true,
     };
     const provider = new HybridProvider(config);
-
-    // We need to mock the internal cloud provider's generate method
-    // Access through the private field
-    const internalCloud = (provider as any).cloud;
-    vi.spyOn(internalCloud, "generate").mockRejectedValueOnce(
-      new Error("Cloud unavailable"),
-    );
-
     const response = await provider.generate(makeContextPack());
     expect(response.text).toContain("LocalProvider");
   });
 
   it("throws when cloud fails and no local fallback", async () => {
+    mockFetchReject(new Error("Network error"));
+
     const config: HybridProviderConfig = {
       cloud: {
-        provider: "openai",
+        provider: "anthropic",
         api_key: "test-key",
-        model: "gpt-4",
+        model: "claude-sonnet-4-5-20250514",
       },
       fallback_to_local: false,
     };
     const provider = new HybridProvider(config);
-
-    const internalCloud = (provider as any).cloud;
-    vi.spyOn(internalCloud, "generate").mockRejectedValueOnce(
-      new Error("Cloud unavailable"),
-    );
 
     await expect(provider.generate(makeContextPack())).rejects.toThrow(
       "Cloud provider failed and no local fallback available",
@@ -237,21 +307,17 @@ describe("HybridProvider", () => {
   });
 
   it("throws when cloud fails and fallback_to_local is true but no local config", async () => {
+    mockFetchReject(new Error("Network error"));
+
     const config: HybridProviderConfig = {
       cloud: {
-        provider: "openai",
+        provider: "anthropic",
         api_key: "test-key",
-        model: "gpt-4",
+        model: "claude-sonnet-4-5-20250514",
       },
       fallback_to_local: true,
-      // local is undefined
     };
     const provider = new HybridProvider(config);
-
-    const internalCloud = (provider as any).cloud;
-    vi.spyOn(internalCloud, "generate").mockRejectedValueOnce(
-      new Error("Cloud unavailable"),
-    );
 
     await expect(provider.generate(makeContextPack())).rejects.toThrow(
       "Cloud provider failed and no local fallback available",
@@ -261,9 +327,9 @@ describe("HybridProvider", () => {
   it("estimateConfidence() delegates to cloud", async () => {
     const config: HybridProviderConfig = {
       cloud: {
-        provider: "openai",
+        provider: "anthropic",
         api_key: "key",
-        model: "gpt-4",
+        model: "claude-sonnet-4-5-20250514",
       },
       fallback_to_local: false,
     };
