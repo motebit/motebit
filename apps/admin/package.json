@@ -15,11 +15,14 @@
   "dependencies": {
     "@motebit/behavior-engine": "workspace:*",
     "@motebit/sdk": "workspace:*",
+    "d3-force": "^3.0.0",
     "react": "^18.3.0",
-    "react-dom": "^18.3.0"
+    "react-dom": "^18.3.0",
+    "recharts": "^2.15.0"
   },
   "devDependencies": {
     "@testing-library/react": "^16.0.0",
+    "@types/d3-force": "^3.0.0",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.0",

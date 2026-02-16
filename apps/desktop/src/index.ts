@@ -37,6 +37,14 @@ export class DesktopApp {
   private behaviorEngine: BehaviorEngine;
   private renderer: ThreeJSAdapter;
   private running = false;
+  private latestCues: BehaviorCues = {
+    hover_distance: 0.4,
+    drift_amplitude: 0.02,
+    glow_intensity: 0.3,
+    eye_dilation: 0.3,
+    smile_curvature: 0,
+    skirt_deformation: 0,
+  };
 
   constructor() {
     this.stateEngine = new StateVectorEngine({ tick_rate_hz: 2 });
@@ -47,14 +55,9 @@ export class DesktopApp {
   async init(canvas: unknown): Promise<void> {
     await this.renderer.init(canvas);
 
-    // Subscribe to state changes → compute cues → render
+    // Subscribe to state changes → compute cues (at 2Hz tick rate)
     this.stateEngine.subscribe((state: MotebitState) => {
-      const cues: BehaviorCues = this.behaviorEngine.compute(state);
-      this.renderer.render({
-        cues,
-        delta_time: 1 / 60,
-        time: Date.now() / 1000,
-      });
+      this.latestCues = this.behaviorEngine.compute(state);
     });
   }
 
@@ -68,5 +71,17 @@ export class DesktopApp {
     this.stateEngine.stop();
     this.renderer.dispose();
     this.running = false;
+  }
+
+  resize(width: number, height: number): void {
+    this.renderer.resize(width, height);
+  }
+
+  renderFrame(deltaTime: number, time: number): void {
+    this.renderer.render({
+      cues: this.latestCues,
+      delta_time: deltaTime,
+      time,
+    });
   }
 }

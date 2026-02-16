@@ -1,6 +1,9 @@
 import type { EventLogEntry, SyncCursor, ConflictEdge } from "@motebit/sdk";
 import type { EventStoreAdapter } from "@motebit/event-log";
 
+export { HttpEventStoreAdapter } from "./http-adapter.js";
+export type { HttpAdapterConfig } from "./http-adapter.js";
+
 // === Sync Configuration ===
 
 export interface SyncConfig {

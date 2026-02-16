@@ -216,3 +216,83 @@ body {
   color: var(--text-dim);
   flex-shrink: 0;
 }
+
+/* === State Chart === */
+
+.state-chart-container {
+  height: 200px;
+  margin-bottom: 16px;
+  padding: 8px 0;
+}
+
+/* === Memory Graph === */
+
+.memory-graph-svg {
+  display: block;
+  width: 100%;
+  max-width: 600px;
+  height: 400px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+
+.memory-graph-svg circle {
+  cursor: pointer;
+  transition: stroke 0.15s ease;
+}
+
+.memory-graph-svg circle:hover {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.memory-graph-svg text {
+  font-size: 10px;
+  fill: var(--text-dim);
+  pointer-events: none;
+}
+
+.memory-graph-svg line {
+  stroke: var(--border);
+  stroke-opacity: 0.6;
+}
+
+/* === Mote Preview === */
+
+.mote-preview-container {
+  position: relative;
+  height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.mote-body {
+  transition: all 0.5s ease;
+}
+
+/* === Recharts dark theme overrides === */
+
+.recharts-cartesian-grid line {
+  stroke: var(--border);
+  stroke-opacity: 0.4;
+}
+
+.recharts-text {
+  fill: var(--text-dim);
+}
+
+.recharts-legend-item-text {
+  color: var(--text) !important;
+}
+
+.recharts-tooltip-cursor {
+  stroke: var(--border);
+}

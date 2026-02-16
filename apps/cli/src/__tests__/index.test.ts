@@ -76,6 +76,18 @@ describe("parseCliArgs", () => {
     expect(config.help).toBe(true);
   });
 
+  it("parses --sync-url and --sync-token", () => {
+    const config = parseCliArgs(["--sync-url", "http://localhost:3000", "--sync-token", "tok"]);
+    expect(config.syncUrl).toBe("http://localhost:3000");
+    expect(config.syncToken).toBe("tok");
+  });
+
+  it("defaults syncUrl and syncToken to undefined", () => {
+    const config = parseCliArgs([]);
+    expect(config.syncUrl).toBeUndefined();
+    expect(config.syncToken).toBeUndefined();
+  });
+
   it("parses multiple flags together", () => {
     const config = parseCliArgs(["--model", "gpt-4", "--no-stream", "--db-path", "/tmp/db"]);
     expect(config.model).toBe("gpt-4");

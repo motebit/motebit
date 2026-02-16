@@ -3,10 +3,12 @@ import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import { bearerAuth } from "hono/bearer-auth";
 import { HTTPException } from "hono/http-exception";
+import { streamSSE } from "hono/streaming";
 import { rateLimiter } from "hono-rate-limiter";
 import {
   CloudProvider,
   runTurn,
+  runTurnStreaming,
 } from "@motebit/ai-core";
 import type { CloudProviderConfig, MotebitLoopDependencies } from "@motebit/ai-core";
 import { EventStore } from "@motebit/event-log";
@@ -17,7 +19,6 @@ import { createMotebitDatabase } from "@motebit/persistence";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { IdentityManager } from "@motebit/core-identity";
 import { PrivacyLayer } from "@motebit/privacy-layer";
-import { SyncEngine } from "@motebit/sync-engine";
 import { SensitivityLevel } from "@motebit/sdk";
 import type { EventLogEntry } from "@motebit/sdk";
 
@@ -65,8 +66,6 @@ export function createMotebitServer(config: MotebitServerConfig): MotebitServer 
     moteDb.auditLog,
     motebitId,
   );
-  const syncEngine = new SyncEngine(moteDb.eventStore, motebitId);
-
   // AI/behavior
   const stateEngine = new StateVectorEngine();
   const behaviorEngine = new BehaviorEngine();
@@ -151,6 +150,44 @@ export function createMotebitServer(config: MotebitServerConfig): MotebitServer 
       console.error("AI provider error:", err);
       throw new HTTPException(502, { message: "AI provider error" });
     }
+  });
+
+  // === Streaming Message Route ===
+
+  app.post("/api/v1/message/:motebitId/stream", async (c) => {
+    const body = await c.req.json<{ message: string }>();
+    if (!body.message || typeof body.message !== "string" || body.message.trim() === "") {
+      throw new HTTPException(400, { message: "Missing or empty 'message' field" });
+    }
+
+    return streamSSE(
+      c,
+      async (stream) => {
+        for await (const chunk of runTurnStreaming(deps, body.message)) {
+          if (chunk.type === "text") {
+            await stream.writeSSE({ event: "text", data: chunk.text });
+          } else {
+            await stream.writeSSE({
+              event: "done",
+              data: JSON.stringify({
+                motebit_id: motebitId,
+                response: chunk.result.response,
+                memories_formed: chunk.result.memoriesFormed,
+                state: chunk.result.stateAfter,
+                cues: chunk.result.cues,
+              }),
+            });
+          }
+        }
+      },
+      async (err, stream) => {
+        console.error("Streaming error:", err);
+        await stream.writeSSE({
+          event: "error",
+          data: err.message,
+        });
+      },
+    );
   });
 
   // === Identity Routes ===
@@ -240,6 +277,11 @@ export function createMotebitServer(config: MotebitServerConfig): MotebitServer 
     return c.json({ motebit_id: motebitId, events, after_clock: afterClock });
   });
 
+  app.get("/api/v1/sync/:motebitId/clock", async (c) => {
+    const clock = await eventStore.getLatestClock(motebitId);
+    return c.json({ motebit_id: motebitId, latest_clock: clock });
+  });
+
   // === Export Route ===
 
   app.get("/api/v1/export/:motebitId", async (c) => {
@@ -290,7 +332,6 @@ export function createMotebitServer(config: MotebitServerConfig): MotebitServer 
   });
 
   function close(): void {
-    syncEngine.stop();
     moteDb.close();
   }
 

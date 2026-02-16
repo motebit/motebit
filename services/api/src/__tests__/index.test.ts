@@ -42,6 +42,25 @@ function mockFetchSuccess(text: string): void {
   );
 }
 
+function mockFetchStreamSuccess(text: string): void {
+  // Build Anthropic SSE stream with content_block_start, content_block_delta(s), message_stop events
+  const chunks = text.split(/(?<=\s)/); // split on word boundaries
+  let ssePayload = "";
+  ssePayload += `event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n`;
+  for (const chunk of chunks) {
+    ssePayload += `event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":${JSON.stringify(chunk)}}}\n\n`;
+  }
+  ssePayload += `event: message_stop\ndata: {"type":"message_stop"}\n\n`;
+
+  const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+  mockFn.mockResolvedValueOnce(
+    new Response(ssePayload, {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+    }),
+  );
+}
+
 function makeEvent(motebitId: string, clock: number): EventLogEntry {
   return {
     event_id: crypto.randomUUID(),
@@ -262,6 +281,63 @@ describe("Motebit API", () => {
     expect(body.memories_formed).toHaveLength(0);
   });
 
+  // === Streaming Message Tests ===
+
+  it("POST /api/v1/message/:motebitId/stream returns SSE text and done events", async () => {
+    const responseText = [
+      "That's really interesting!",
+      '<memory confidence="0.9" sensitivity="personal">User enjoys hiking on weekends</memory>',
+      '<state field="curiosity" value="0.8"/>',
+    ].join(" ");
+
+    mockFetchStreamSuccess(responseText);
+
+    const res = await server.app.request(`/api/v1/message/${MOTEBIT_ID}/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ message: "I love hiking on weekends!" }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+
+    const text = await res.text();
+    expect(text).toContain("event: text");
+    expect(text).toContain("event: done");
+
+    // Parse the done event data
+    const doneMatch = text.match(/event: done\ndata: (.+)/);
+    expect(doneMatch).not.toBeNull();
+    const doneData = JSON.parse(doneMatch![1]!);
+    expect(doneData.motebit_id).toBe(MOTEBIT_ID);
+    expect(doneData.response).toBeDefined();
+    expect(doneData.state).toBeDefined();
+    expect(doneData.cues).toBeDefined();
+    expect(doneData.memories_formed).toBeInstanceOf(Array);
+  });
+
+  it("POST /api/v1/message/:motebitId/stream returns 400 when message is missing", async () => {
+    const res = await server.app.request(`/api/v1/message/${MOTEBIT_ID}/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain("message");
+  });
+
+  it("POST /api/v1/message/:motebitId/stream returns 401 without auth", async () => {
+    const res = await server.app.request(`/api/v1/message/${MOTEBIT_ID}/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "hello" }),
+    });
+
+    expect(res.status).toBe(401);
+  });
+
   // === Identity Tests ===
 
   it("POST /api/v1/identity creates identity", async () => {
@@ -410,6 +486,41 @@ describe("Motebit API", () => {
       expect(ev.version_clock).toBeGreaterThan(1);
     }
     expect(body.events.length).toBeGreaterThanOrEqual(2);
+  });
+
+  // === Clock Tests ===
+
+  it("GET /api/v1/sync/:motebitId/clock returns latest clock", async () => {
+    // Push some events to establish a clock
+    const events = [makeEvent(MOTEBIT_ID, 1), makeEvent(MOTEBIT_ID, 2), makeEvent(MOTEBIT_ID, 3)];
+
+    await server.app.request(`/api/v1/sync/${MOTEBIT_ID}/push`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ events }),
+    });
+
+    const res = await server.app.request(`/api/v1/sync/${MOTEBIT_ID}/clock`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.motebit_id).toBe(MOTEBIT_ID);
+    expect(body.latest_clock).toBe(3);
+  });
+
+  it("GET /api/v1/sync/:motebitId/clock returns 0 when no events exist", async () => {
+    const res = await server.app.request(`/api/v1/sync/${MOTEBIT_ID}/clock`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.motebit_id).toBe(MOTEBIT_ID);
+    expect(body.latest_clock).toBe(0);
   });
 
   // === Export Tests ===

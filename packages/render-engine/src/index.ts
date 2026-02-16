@@ -1,3 +1,4 @@
+import * as THREE from "three";
 import type { BehaviorCues, RenderSpec, GeometrySpec, MaterialSpec, LightingSpec } from "@motebit/sdk";
 
 // === Canonical Render Spec ===
@@ -66,8 +67,61 @@ export function smoothDelta(
   return current + (target - current) * t;
 }
 
-// === Three.js Adapter Stub ===
-// Full implementation requires three.js dependency — this provides the structure.
+// === Three.js Geometry & Material Helpers ===
+
+function createDropletGeometry(spec: GeometrySpec): THREE.LatheGeometry {
+  const points: THREE.Vector2[] = [];
+  const segments = 32;
+
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments; // 0 = bottom, 1 = top
+    const y = t * spec.height;
+
+    // Droplet profile: wide at bottom, tapering to a point at top
+    // Use a sin-based envelope that peaks near the bottom third
+    let r: number;
+    if (t < 0.3) {
+      // Expanding from base
+      r = spec.base_radius * Math.sin((t / 0.3) * (Math.PI / 2));
+    } else if (t < 0.95) {
+      // Tapering section
+      const taper = (t - 0.3) / (0.95 - 0.3);
+      r = spec.base_radius * (1 - taper * taper);
+    } else {
+      // Sharp tip
+      const tip = (t - 0.95) / 0.05;
+      r = spec.base_radius * 0.05 * (1 - tip);
+    }
+
+    // Apply sinusoidal lobe deformation
+    const lobeAngle = t * Math.PI * 2;
+    const lobeDeform = 1 + 0.05 * Math.sin(lobeAngle * spec.lobe_count);
+    r *= lobeDeform;
+
+    // Clamp to avoid zero radius at endpoints (except very tip)
+    r = Math.max(r, 0.0001);
+
+    points.push(new THREE.Vector2(r, y));
+  }
+
+  return new THREE.LatheGeometry(points, spec.skirt_segments);
+}
+
+function createDropletMaterial(spec: MaterialSpec): THREE.MeshPhysicalMaterial {
+  const [r, g, b] = spec.base_color;
+  return new THREE.MeshPhysicalMaterial({
+    color: new THREE.Color(r, g, b),
+    roughness: spec.roughness,
+    clearcoat: spec.clearcoat,
+    ior: spec.ior,
+    emissive: new THREE.Color(r, g, b),
+    emissiveIntensity: spec.emissive_intensity,
+    transmission: spec.subsurface * 0.5, // Slight transmission for subsurface approximation
+    transparent: true,
+  });
+}
+
+// === Three.js Adapter ===
 
 export class ThreeJSAdapter implements RenderAdapter {
   private spec: RenderSpec = CANONICAL_SPEC;
@@ -81,9 +135,67 @@ export class ThreeJSAdapter implements RenderAdapter {
     skirt_deformation: 0,
   };
 
-  async init(_target: unknown): Promise<void> {
-    // In production: create Scene, Camera, Renderer, Geometry, Material
-    // _target would be an HTMLCanvasElement or similar
+  private renderer: THREE.WebGLRenderer | null = null;
+  private scene: THREE.Scene | null = null;
+  private camera: THREE.PerspectiveCamera | null = null;
+  private mesh: THREE.Mesh | null = null;
+  private material: THREE.MeshPhysicalMaterial | null = null;
+  private baseY: number = 0;
+
+  async init(target: unknown): Promise<void> {
+    // Guard: if target is not an HTMLCanvasElement, set initialized and return
+    // This preserves test compatibility when passing null.
+    // Check for typeof HTMLCanvasElement to avoid ReferenceError in Node/test environments.
+    if (typeof HTMLCanvasElement === "undefined" || !(target instanceof HTMLCanvasElement)) {
+      this.initialized = true;
+      return;
+    }
+
+    const canvas = target;
+
+    // Create WebGL renderer
+    this.renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      alpha: true,
+    });
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = this.spec.lighting.exposure;
+    this.renderer.setPixelRatio(window.devicePixelRatio);
+    this.renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
+
+    // Create scene with dark background
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(0x0a0a0f);
+
+    // Create camera positioned to frame the droplet
+    this.camera = new THREE.PerspectiveCamera(
+      50,
+      canvas.clientWidth / canvas.clientHeight,
+      0.01,
+      10,
+    );
+    this.camera.position.set(0, this.spec.geometry.height / 2, 0.5);
+    this.camera.lookAt(0, this.spec.geometry.height / 2, 0);
+
+    // Create droplet mesh
+    const geometry = createDropletGeometry(this.spec.geometry);
+    this.material = createDropletMaterial(this.spec.material);
+    this.mesh = new THREE.Mesh(geometry, this.material);
+    this.baseY = 0;
+    this.scene.add(this.mesh);
+
+    // Add lighting
+    const ambientLight = new THREE.AmbientLight(
+      0xffffff,
+      this.spec.lighting.ambient_intensity,
+    );
+    this.scene.add(ambientLight);
+
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    directionalLight.position.set(1, 2, 3);
+    this.scene.add(directionalLight);
+
     this.initialized = true;
   }
 
@@ -101,26 +213,70 @@ export class ThreeJSAdapter implements RenderAdapter {
       skirt_deformation: smoothDelta(this.currentCues.skirt_deformation, frame.cues.skirt_deformation, dt),
     };
 
-    // In production: update mesh position, material uniforms, etc.
-    // - Position: offset by hover_distance along user-relative axis
-    // - Drift: sinusoidal offset with drift_amplitude
-    // - Glow: emissive intensity = glow_intensity * CANONICAL_MATERIAL.emissive_intensity
-    // - Eye: pupil scale = eye_dilation
-    // - Smile: curve deformation on face mesh
-    // - Skirt: vertex displacement on skirt segments
+    // Apply cues to Three.js objects
+    if (this.mesh && this.material && this.renderer && this.scene && this.camera) {
+      // hover_distance -> mesh vertical position
+      this.mesh.position.y = this.baseY + this.currentCues.hover_distance * 0.1;
+
+      // drift_amplitude -> sinusoidal horizontal drift
+      const driftX = Math.sin(frame.time * 1.2) * this.currentCues.drift_amplitude;
+      const driftZ = Math.cos(frame.time * 0.8) * this.currentCues.drift_amplitude * 0.5;
+      this.mesh.position.x = driftX;
+      this.mesh.position.z = driftZ;
+
+      // glow_intensity -> emissive intensity
+      this.material.emissiveIntensity = this.currentCues.glow_intensity * this.spec.material.emissive_intensity;
+
+      // smile_curvature -> slight color warm/cool shift
+      const [baseR, baseG, baseB] = this.spec.material.base_color;
+      const warmth = this.currentCues.smile_curvature * 0.05;
+      this.material.color.setRGB(
+        baseR + warmth,
+        baseG + warmth * 0.5,
+        baseB - warmth * 0.3,
+      );
+
+      // skirt_deformation -> mesh scale Y
+      this.mesh.scale.y = 1 + this.currentCues.skirt_deformation * 0.2;
+
+      // Gentle continuous rotation
+      this.mesh.rotation.y += 0.3 * dt;
+
+      // Render the frame
+      this.renderer.render(this.scene, this.camera);
+    }
   }
 
   getSpec(): RenderSpec {
     return this.spec;
   }
 
-  resize(_width: number, _height: number): void {
-    // In production: update camera aspect, renderer size
+  resize(width: number, height: number): void {
+    if (this.camera) {
+      this.camera.aspect = width / height;
+      this.camera.updateProjectionMatrix();
+    }
+    if (this.renderer) {
+      this.renderer.setSize(width, height, false);
+    }
   }
 
   dispose(): void {
+    if (this.mesh) {
+      this.mesh.geometry.dispose();
+      this.mesh = null;
+    }
+    if (this.material) {
+      this.material.dispose();
+      this.material = null;
+    }
+    if (this.renderer) {
+      this.renderer.dispose();
+      this.renderer = null;
+    }
+    this.scene = null;
+    this.camera = null;
     this.initialized = false;
-    // In production: dispose geometries, materials, textures, renderer
   }
 }
 

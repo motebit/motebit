@@ -13,6 +13,7 @@ import { MemoryGraph } from "@motebit/memory-graph";
 import { StateVectorEngine } from "@motebit/state-vector";
 import { BehaviorEngine } from "@motebit/behavior-engine";
 import { createMotebitDatabase, type MotebitDatabase } from "@motebit/persistence";
+import { SyncEngine, HttpEventStoreAdapter } from "@motebit/sync-engine";
 
 // --- Constants ---
 
@@ -27,6 +28,8 @@ export interface CliConfig {
   model: string;
   dbPath: string | undefined;
   noStream: boolean;
+  syncUrl: string | undefined;
+  syncToken: string | undefined;
   version: boolean;
   help: boolean;
 }
@@ -41,6 +44,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       model: { type: "string" },
       "db-path": { type: "string" },
       "no-stream": { type: "boolean", default: false },
+      "sync-url": { type: "string" },
+      "sync-token": { type: "string" },
       version: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -60,6 +65,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     model: (values.model as string | undefined) ?? defaultModel,
     dbPath: values["db-path"] as string | undefined,
     noStream: values["no-stream"] as boolean,
+    syncUrl: values["sync-url"] as string | undefined,
+    syncToken: values["sync-token"] as string | undefined,
     version: values.version as boolean,
     help: values.help as boolean,
   };
@@ -76,6 +83,8 @@ Options:
   --model <model>    AI model to use (default depends on provider)
   --db-path <path>   Database file path (default: ~/.motebit/motebit.db)
   --no-stream        Disable streaming (use blocking mode)
+  --sync-url <url>   Remote sync server URL (or set MOTEBIT_SYNC_URL)
+  --sync-token <tok> Auth token for sync server (or set MOTEBIT_SYNC_TOKEN)
   -v, --version      Print version and exit
   -h, --help         Print this help and exit
 
@@ -93,6 +102,7 @@ Slash commands (in REPL):
   /export            Export all memories and state as JSON
   /clear             Clear conversation history
   /model <name>      Switch AI model mid-session
+  /sync              Sync with remote server
   quit, exit         Exit the REPL
 `.trim());
 }
@@ -170,6 +180,7 @@ interface CliDeps {
   behaviorEngine: BehaviorEngine;
   memoryGraph: MemoryGraph;
   provider: StreamingProvider;
+  syncEngine: SyncEngine | null;
 }
 
 function createProvider(config: CliConfig, personalityConfig?: MotebitPersonalityConfig): StreamingProvider {
@@ -214,6 +225,23 @@ function createDependencies(config: CliConfig, personalityConfig?: MotebitPerson
   console.log(`Data: ${dbPath}`);
   console.log(`Provider: ${config.provider} (${provider.model})`);
 
+  let syncEngine: SyncEngine | null = null;
+  const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
+  const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
+
+  if (syncUrl) {
+    syncEngine = new SyncEngine(moteDb.eventStore, MOTEBIT_ID);
+    const remoteStore = new HttpEventStoreAdapter({
+      baseUrl: syncUrl,
+      motebitId: MOTEBIT_ID,
+      authToken: syncToken,
+    });
+    syncEngine.connectRemote(remoteStore);
+    console.log(`Sync: ${syncUrl}`);
+  } else {
+    console.log("Sync: disabled (set MOTEBIT_SYNC_URL to enable)");
+  }
+
   return {
     loopDeps: {
       motebitId: MOTEBIT_ID,
@@ -228,6 +256,7 @@ function createDependencies(config: CliConfig, personalityConfig?: MotebitPerson
     behaviorEngine,
     memoryGraph,
     provider,
+    syncEngine,
   };
 }
 
@@ -250,6 +279,7 @@ Available commands:
   /export            Export all memories and state as JSON
   /clear             Clear conversation history
   /model <name>      Switch AI model
+  /sync              Sync with remote server
   quit, exit         Exit
 `.trim());
       break;
@@ -313,6 +343,25 @@ Available commands:
       break;
     }
 
+    case "sync": {
+      if (!deps.syncEngine) {
+        console.log("Sync is disabled. Set MOTEBIT_SYNC_URL to enable.");
+        break;
+      }
+      try {
+        console.log("Syncing...");
+        const result = await deps.syncEngine.sync();
+        console.log(`Pushed: ${result.pushed}, Pulled: ${result.pulled}`);
+        if (result.conflicts.length > 0) {
+          console.log(`Conflicts: ${result.conflicts.length}`);
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`Sync failed: ${message}`);
+      }
+      break;
+    }
+
     default:
       console.log(`Unknown command: /${cmd}. Type /help for available commands.`);
   }
@@ -356,18 +405,40 @@ async function main(): Promise<void> {
   }
 
   const deps = createDependencies(config, personalityConfig);
+
+  if (deps.syncEngine) {
+    try {
+      console.log("Syncing...");
+      const result = await deps.syncEngine.sync();
+      console.log(`Synced: pulled ${result.pulled} events, pushed ${result.pushed} events`);
+      if (result.conflicts.length > 0) {
+        console.log(`  [${result.conflicts.length} conflicts detected]`);
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`Sync failed (continuing offline): ${message}`);
+    }
+  }
+
   const history: { role: "user" | "assistant"; content: string }[] = [];
   let lastCues: BehaviorCues = deps.behaviorEngine.compute(deps.stateEngine.getState());
 
-  const shutdown = (): void => {
+  const shutdown = async (): Promise<void> => {
     deps.moteDb.stateSnapshot.saveState(MOTEBIT_ID, deps.stateEngine.serialize());
+    if (deps.syncEngine) {
+      try {
+        const result = await deps.syncEngine.sync();
+        console.log(`Synced on exit: pushed ${result.pushed}, pulled ${result.pulled}`);
+      } catch {
+        console.warn("Sync on exit failed (changes saved locally)");
+      }
+    }
     deps.moteDb.close();
   };
 
   process.on("SIGINT", () => {
     console.log("\nGoodbye!");
-    shutdown();
-    process.exit(0);
+    void shutdown().then(() => process.exit(0));
   });
 
   const rl = readline.createInterface({
@@ -388,7 +459,7 @@ async function main(): Promise<void> {
 
     if (trimmed === "quit" || trimmed === "exit") {
       console.log("Goodbye!");
-      shutdown();
+      await shutdown();
       rl.close();
       return;
     }
