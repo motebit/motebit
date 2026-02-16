@@ -1,0 +1,5 @@
+target/
+gen/
+*.db
+*.db-shm
+*.db-wal
