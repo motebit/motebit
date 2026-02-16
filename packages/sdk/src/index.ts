@@ -138,6 +138,7 @@ export interface ContextPack {
   current_state: MotebitState;
   user_message: string;
   conversation_history?: { role: "user" | "assistant"; content: string }[];
+  behavior_cues?: BehaviorCues;
 }
 
 export interface AIResponse {

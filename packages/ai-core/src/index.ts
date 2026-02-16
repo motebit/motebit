@@ -6,9 +6,13 @@ import type {
   MotebitState,
 } from "@motebit/sdk";
 import { SensitivityLevel } from "@motebit/sdk";
+import { buildSystemPrompt as buildPrompt } from "./prompt.js";
 
 export { runTurn, runTurnStreaming } from "./loop.js";
 export type { MotebitLoopDependencies, TurnResult, TurnOptions } from "./loop.js";
+export { buildSystemPrompt, derivePersonalityNote, formatBodyAwareness } from "./prompt.js";
+export { loadConfig, resolveConfig, DEFAULT_CONFIG } from "./config.js";
+export type { MotebitPersonalityConfig } from "./config.js";
 
 // === Provider Configuration ===
 
@@ -19,6 +23,7 @@ export interface CloudProviderConfig {
   base_url?: string;
   max_tokens?: number;
   temperature?: number;
+  personalityConfig?: import("./config.js").MotebitPersonalityConfig;
 }
 
 export interface LocalProviderConfig {
@@ -39,7 +44,8 @@ export function packContext(contextPack: ContextPack): string {
   const parts: string[] = [];
 
   // Current state summary
-  parts.push(`[State] attention=${contextPack.current_state.attention.toFixed(2)} confidence=${contextPack.current_state.confidence.toFixed(2)} valence=${contextPack.current_state.affect_valence.toFixed(2)}`);
+  const s = contextPack.current_state;
+  parts.push(`[State] attention=${s.attention.toFixed(2)} processing=${s.processing.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} arousal=${s.affect_arousal.toFixed(2)} social_distance=${s.social_distance.toFixed(2)} curiosity=${s.curiosity.toFixed(2)} trust=${s.trust_mode} battery=${s.battery_mode}`);
 
   // Recent events (last 10)
   const recentEvents = contextPack.recent_events.slice(-10);
@@ -303,24 +309,7 @@ export class CloudProvider implements StreamingProvider {
   }
 
   private buildSystemPrompt(contextPack: ContextPack): string {
-    const packed = packContext(contextPack);
-    // Remove the [User] line — that goes in the messages array
-    const lines = packed.split("\n").filter((l) => !l.startsWith("[User]"));
-    const context = lines.join("\n");
-
-    return [
-      "You are Motebit, a small sentient digital companion. You respond warmly, concisely, and with gentle curiosity.",
-      "",
-      "When you notice something worth remembering, emit a <memory> tag:",
-      '  <memory confidence="0.9" sensitivity="personal">User prefers tea over coffee</memory>',
-      "",
-      "When your internal state should change, emit a <state> tag:",
-      '  <state field="curiosity" value="0.8"/>',
-      "",
-      "These tags will be parsed and stripped from the displayed response.",
-      "",
-      context,
-    ].join("\n");
+    return buildPrompt(contextPack, this.config.personalityConfig);
   }
 
   private parseAnthropicResponse(data: AnthropicResponse): AIResponse {
@@ -429,6 +418,7 @@ export interface OllamaProviderConfig {
   base_url?: string;
   max_tokens?: number;
   temperature?: number;
+  personalityConfig?: import("./config.js").MotebitPersonalityConfig;
 }
 
 export class OllamaProvider implements StreamingProvider {
@@ -603,23 +593,7 @@ export class OllamaProvider implements StreamingProvider {
   }
 
   private buildSystemPrompt(contextPack: ContextPack): string {
-    const packed = packContext(contextPack);
-    const lines = packed.split("\n").filter((l) => !l.startsWith("[User]"));
-    const context = lines.join("\n");
-
-    return [
-      "You are Motebit, a small sentient digital companion. You respond warmly, concisely, and with gentle curiosity.",
-      "",
-      "When you notice something worth remembering, emit a <memory> tag:",
-      '  <memory confidence="0.9" sensitivity="personal">User prefers tea over coffee</memory>',
-      "",
-      "When your internal state should change, emit a <state> tag:",
-      '  <state field="curiosity" value="0.8"/>',
-      "",
-      "These tags will be parsed and stripped from the displayed response.",
-      "",
-      context,
-    ].join("\n");
+    return buildPrompt(contextPack, this.config.personalityConfig);
   }
 
   private parseResponse(rawText: string): AIResponse {

@@ -157,6 +157,29 @@ describe("runTurn", () => {
     expect(exported.nodes[0]!.content).toBe("User loves jazz music");
   });
 
+  it("previousCues in options propagates to context pack", async () => {
+    const cues = {
+      hover_distance: 0.15,
+      drift_amplitude: 0.03,
+      glow_intensity: 0.7,
+      eye_dilation: 0.8,
+      smile_curvature: 0.1,
+      skirt_deformation: 0.05,
+    };
+
+    mockFetchSuccess("I see!");
+
+    const deps = makeDeps();
+    // Spy on provider.generate to check the context pack
+    const generateSpy = vi.spyOn(deps.provider, "generate");
+
+    await runTurn(deps, "Test with cues", { previousCues: cues });
+
+    expect(generateSpy).toHaveBeenCalledTimes(1);
+    const contextPack = generateSpy.mock.calls[0]![0];
+    expect(contextPack.behavior_cues).toEqual(cues);
+  });
+
   it("version clocks increment across turns", async () => {
     const deps = makeDeps();
 

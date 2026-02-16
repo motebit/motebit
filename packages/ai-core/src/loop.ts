@@ -27,6 +27,7 @@ export interface TurnResult {
 
 export interface TurnOptions {
   conversationHistory?: { role: "user" | "assistant"; content: string }[];
+  previousCues?: BehaviorCues;
 }
 
 // === Orchestrator ===
@@ -65,6 +66,7 @@ export async function runTurn(
     current_state: currentState,
     user_message: userMessage,
     conversation_history: options?.conversationHistory,
+    behavior_cues: options?.previousCues,
   });
 
   // 4. Form memories from candidates
@@ -144,6 +146,7 @@ export async function* runTurnStreaming(
     current_state: currentState,
     user_message: userMessage,
     conversation_history: options?.conversationHistory,
+    behavior_cues: options?.previousCues,
   };
 
   let aiResponse;

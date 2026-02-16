@@ -5,8 +5,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { parseArgs } from "node:util";
-import { CloudProvider, OllamaProvider, runTurn, runTurnStreaming } from "@motebit/ai-core";
-import type { MotebitLoopDependencies, StreamingProvider } from "@motebit/ai-core";
+import { CloudProvider, OllamaProvider, runTurn, runTurnStreaming, loadConfig } from "@motebit/ai-core";
+import type { MotebitLoopDependencies, StreamingProvider, MotebitPersonalityConfig } from "@motebit/ai-core";
+import type { BehaviorCues } from "@motebit/sdk";
 import { EventStore } from "@motebit/event-log";
 import { MemoryGraph } from "@motebit/memory-graph";
 import { StateVectorEngine } from "@motebit/state-vector";
@@ -170,12 +171,15 @@ interface CliDeps {
   provider: StreamingProvider;
 }
 
-function createProvider(config: CliConfig): StreamingProvider {
+function createProvider(config: CliConfig, personalityConfig?: MotebitPersonalityConfig): StreamingProvider {
+  const temperature = personalityConfig?.temperature ?? 0.7;
+
   if (config.provider === "ollama") {
     return new OllamaProvider({
       model: config.model,
       max_tokens: 1024,
-      temperature: 0.7,
+      temperature,
+      personalityConfig,
     });
   }
 
@@ -185,11 +189,12 @@ function createProvider(config: CliConfig): StreamingProvider {
     api_key: apiKey,
     model: config.model,
     max_tokens: 1024,
-    temperature: 0.7,
+    temperature,
+    personalityConfig,
   });
 }
 
-function createDependencies(config: CliConfig): CliDeps {
+function createDependencies(config: CliConfig, personalityConfig?: MotebitPersonalityConfig): CliDeps {
   const dbPath = getDbPath(config.dbPath);
   const moteDb = createMotebitDatabase(dbPath);
 
@@ -203,7 +208,7 @@ function createDependencies(config: CliConfig): CliDeps {
   }
 
   const behaviorEngine = new BehaviorEngine();
-  const provider = createProvider(config);
+  const provider = createProvider(config, personalityConfig);
 
   console.log(`Data: ${dbPath}`);
   console.log(`Provider: ${config.provider} (${provider.model})`);
@@ -334,8 +339,23 @@ async function main(): Promise<void> {
     return;
   }
 
-  const deps = createDependencies(config);
+  // Load personality config from ~/.motebit/config.json
+  const personalityConfig = loadConfig();
+
+  // Apply config defaults when CLI flags weren't explicit
+  if (personalityConfig.default_provider && !process.argv.includes("--provider")) {
+    const validProviders = ["anthropic", "ollama"] as const;
+    if (validProviders.includes(personalityConfig.default_provider as typeof validProviders[number])) {
+      config.provider = personalityConfig.default_provider as "anthropic" | "ollama";
+    }
+  }
+  if (personalityConfig.default_model && !process.argv.includes("--model")) {
+    config.model = personalityConfig.default_model;
+  }
+
+  const deps = createDependencies(config, personalityConfig);
   const history: { role: "user" | "assistant"; content: string }[] = [];
+  let lastCues: BehaviorCues | undefined;
 
   const shutdown = (): void => {
     deps.moteDb.stateSnapshot.saveState(MOTEBIT_ID, deps.stateEngine.serialize());
@@ -389,9 +409,11 @@ async function main(): Promise<void> {
         // Blocking mode
         const result = await runTurn(deps.loopDeps, trimmed, {
           conversationHistory: history.length > 0 ? history : undefined,
+          previousCues: lastCues,
         });
 
         console.log(`\nmote> ${result.response}\n`);
+        lastCues = result.cues;
 
         history.push({ role: "user", content: trimmed });
         history.push({ role: "assistant", content: result.response });
@@ -417,12 +439,14 @@ async function main(): Promise<void> {
 
         for await (const chunk of runTurnStreaming(deps.loopDeps, trimmed, {
           conversationHistory: history.length > 0 ? history : undefined,
+          previousCues: lastCues,
         })) {
           if (chunk.type === "text") {
             process.stdout.write(chunk.text);
             responseText += chunk.text;
           } else {
             const result = chunk.result;
+            lastCues = result.cues;
             console.log("\n");
 
             // Use streamed text for history (stripped of tags)

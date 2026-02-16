@@ -200,6 +200,20 @@ describe("CloudProvider Anthropic integration", () => {
     expect(body.system).toContain("Motebit");
   });
 
+  it("system prompt contains state field documentation", async () => {
+    mockFetchSuccess("Hi");
+
+    const provider = new CloudProvider(config);
+    await provider.generate(makeContextPack());
+
+    const mock = getFetchMock();
+    const [, opts] = mock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(opts.body as string);
+    expect(body.system).toContain("[State Fields]");
+    expect(body.system).toContain("affect_valence");
+    expect(body.system).toContain("trust_mode");
+  });
+
   it("parses memory tags from response", async () => {
     const responseText =
       'That\'s interesting! <memory confidence="0.85" sensitivity="personal">User enjoys hiking on weekends</memory> Tell me more!';

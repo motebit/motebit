@@ -20,6 +20,7 @@
     "@motebit/ai-core": "workspace:*",
     "@motebit/event-log": "workspace:*",
     "@motebit/memory-graph": "workspace:*",
+    "@motebit/sdk": "workspace:*",
     "@motebit/state-vector": "workspace:*",
     "@motebit/behavior-engine": "workspace:*",
     "@motebit/persistence": "workspace:*"

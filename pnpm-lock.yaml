@@ -87,6 +87,9 @@ importers:
       '@motebit/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence
+      '@motebit/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
       '@motebit/state-vector':
         specifier: workspace:*
         version: link:../../packages/state-vector

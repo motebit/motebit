@@ -141,6 +141,20 @@ describe("OllamaProvider", () => {
     });
   });
 
+  it("system prompt contains state field documentation", async () => {
+    mockFetchSuccess("Hi");
+
+    const provider = new OllamaProvider(config);
+    await provider.generate(makeContextPack());
+
+    const mock = getFetchMock();
+    const [, opts] = mock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(opts.body as string);
+    expect(body.messages[0].content).toContain("[State Fields]");
+    expect(body.messages[0].content).toContain("affect_valence");
+    expect(body.messages[0].content).toContain("trust_mode");
+  });
+
   it("parses plain response", async () => {
     mockFetchSuccess("Hello! How are you?");
 
