@@ -16,7 +16,8 @@ export const CANONICAL_MATERIAL: MaterialSpec = {
   clearcoat: 0.4,
   surface_noise_amplitude: 0.002,
   base_color: [1.0, 1.0, 1.0],
-  emissive_intensity: 0.02,
+  emissive_intensity: 0.0,                // Zero at rest — glows only during processing
+  tint: [0.9, 0.92, 1.0],                // Default: faint cool blue — borosilicate
 };
 
 export const CANONICAL_LIGHTING: LightingSpec = {
@@ -83,6 +84,7 @@ function createBody(): { mesh: THREE.Mesh; material: THREE.MeshPhysicalMaterial 
   // Rendering IOR 1.15: Three.js transmission approximates a solid glass lens;
   // at physical IOR 1.45 it over-magnifies interior geometry. 1.15 preserves the
   // visual read of "looking through glass" without grotesque distortion.
+  const tint = CANONICAL_MATERIAL.tint;
   const mat = new THREE.MeshPhysicalMaterial({
     color: new THREE.Color(1.0, 1.0, 1.0),
     transmission: 0.98,
@@ -93,12 +95,12 @@ function createBody(): { mesh: THREE.Mesh; material: THREE.MeshPhysicalMaterial 
     clearcoatRoughness: 0.02,
     envMapIntensity: 0.6,
     emissive: new THREE.Color(0.6, 0.7, 0.9), // §6.4 — processing heat visible through glass
-    emissiveIntensity: 0.02,
+    emissiveIntensity: 0.0,                    // Zero at rest — only glows during processing
     iridescence: 0.3,                         // Thin-film interference, not color — physics
     iridescenceIOR: 1.3,
     iridescenceThicknessRange: [100, 400],
     side: THREE.FrontSide,
-    attenuationColor: new THREE.Color(0.9, 0.92, 1.0),
+    attenuationColor: new THREE.Color(tint[0], tint[1], tint[2]),
     attenuationDistance: 0.8,
   });
 
@@ -341,8 +343,8 @@ export class ThreeJSAdapter implements RenderAdapter {
       1.0 + breathe + sag * 0.15,       // Z: widens as Y compresses
     );
 
-    // Emissive glow
-    this.bodyMaterial.emissiveIntensity = 0.02 + cues.glow_intensity * 0.12;
+    // Interior luminosity — zero at rest, visible only during processing (§6.4)
+    this.bodyMaterial.emissiveIntensity = Math.max(0, (cues.glow_intensity - 0.3) * 0.2);
 
     // Eye dilation
     if (this.leftEye && this.rightEye) {

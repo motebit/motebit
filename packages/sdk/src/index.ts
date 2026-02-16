@@ -211,6 +211,7 @@ export interface MaterialSpec {
   surface_noise_amplitude: number;
   base_color: [number, number, number];
   emissive_intensity: number;
+  tint: [number, number, number];         // Attenuation color — glass absorption spectrum
 }
 
 export interface LightingSpec {
