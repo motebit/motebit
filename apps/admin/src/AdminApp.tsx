@@ -1,8 +1,19 @@
-import React, { useState } from "react";
-import type { MoteState, MemoryNode, AuditRecord } from "@mote/sdk";
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import type { MoteState, MemoryNode, MemoryEdge, EventLogEntry, BehaviorCues } from "@mote/sdk";
 import { TrustMode, BatteryMode } from "@mote/sdk";
+import { computeRawCues } from "@mote/behavior-engine";
+import { fetchState, fetchMemory, fetchEvents, deleteMemoryNode } from "./api";
 
 // === Panel Components ===
+
+function ConnectionStatus({ connected }: { connected: boolean }): React.ReactElement {
+  return React.createElement("div", { className: "connection-status" },
+    React.createElement("div", {
+      className: `status-dot ${connected ? "connected" : "disconnected"}`,
+    }),
+    React.createElement("span", null, connected ? "Connected" : "Disconnected"),
+  );
+}
 
 function StateVectorPanel({ state }: { state: MoteState }): React.ReactElement {
   const fields = [
@@ -35,28 +46,65 @@ function StateVectorPanel({ state }: { state: MoteState }): React.ReactElement {
   );
 }
 
-function MemoryGraphPanel({ memories }: { memories: MemoryNode[] }): React.ReactElement {
+function MemoryGraphPanel({ memories, edges, onDelete }: {
+  memories: MemoryNode[];
+  edges: MemoryEdge[];
+  onDelete: (nodeId: string) => void;
+}): React.ReactElement {
   return React.createElement("div", { className: "panel" },
     React.createElement("h2", null, "Memory Graph"),
-    React.createElement("div", { className: "count" }, `${memories.length} nodes`),
+    React.createElement("div", { className: "count" },
+      `${memories.length} nodes, ${edges.length} edges`,
+    ),
     ...memories.slice(0, 20).map((m) =>
       React.createElement("div", { key: m.node_id, className: "memory-node" },
         React.createElement("span", { className: "content" }, m.content.slice(0, 60)),
         React.createElement("span", { className: "confidence" }, `conf: ${m.confidence.toFixed(2)}`),
         React.createElement("span", { className: "sensitivity" }, m.sensitivity),
+        React.createElement("button", {
+          className: "delete-btn",
+          onClick: () => onDelete(m.node_id),
+          "aria-label": `Delete memory ${m.node_id}`,
+        }, "\u00d7"),
       ),
     ),
   );
 }
 
-function AuditLogPanel({ records }: { records: AuditRecord[] }): React.ReactElement {
+function BehaviorPanel({ cues }: { cues: BehaviorCues }): React.ReactElement {
+  const fields = [
+    { name: "hover_distance", value: cues.hover_distance },
+    { name: "drift_amplitude", value: cues.drift_amplitude },
+    { name: "glow_intensity", value: cues.glow_intensity },
+    { name: "eye_dilation", value: cues.eye_dilation },
+    { name: "smile_curvature", value: cues.smile_curvature },
+    { name: "skirt_deformation", value: cues.skirt_deformation },
+  ];
+
   return React.createElement("div", { className: "panel" },
-    React.createElement("h2", null, "Audit Log"),
-    ...records.slice(-20).reverse().map((r) =>
-      React.createElement("div", { key: r.audit_id, className: "audit-entry" },
-        React.createElement("span", { className: "timestamp" }, new Date(r.timestamp).toISOString()),
-        React.createElement("span", { className: "action" }, r.action),
-        React.createElement("span", { className: "target" }, `${r.target_type}:${r.target_id}`),
+    React.createElement("h2", null, "Behavior Cues"),
+    ...fields.map((f) =>
+      React.createElement("div", { key: f.name, className: "field" },
+        React.createElement("span", { className: "label" }, f.name),
+        React.createElement("span", { className: "value" }, f.value.toFixed(4)),
+        React.createElement("div", { className: "bar", style: { width: `${Math.abs(f.value) * 100}%` } }),
+      ),
+    ),
+  );
+}
+
+function EventsPanel({ events }: { events: EventLogEntry[] }): React.ReactElement {
+  const recent = events.slice(-30).reverse();
+  return React.createElement("div", { className: "panel" },
+    React.createElement("h2", null, "Event Log"),
+    React.createElement("div", { className: "count" }, `${events.length} events total`),
+    ...recent.map((e) =>
+      React.createElement("div", { key: e.event_id, className: "event-entry" },
+        React.createElement("span", { className: "timestamp" },
+          new Date(e.timestamp).toISOString(),
+        ),
+        React.createElement("span", { className: "event-type" }, e.event_type),
+        React.createElement("span", { className: "clock" }, `v${e.version_clock}`),
       ),
     ),
   );
@@ -77,13 +125,69 @@ const DEFAULT_STATE: MoteState = {
 };
 
 export function AdminApp(): React.ReactElement {
-  const [state] = useState<MoteState>(DEFAULT_STATE);
-  const [memories] = useState<MemoryNode[]>([]);
-  const [auditLog] = useState<AuditRecord[]>([]);
+  const [state, setState] = useState<MoteState>(DEFAULT_STATE);
+  const [memories, setMemories] = useState<MemoryNode[]>([]);
+  const [edges, setEdges] = useState<MemoryEdge[]>([]);
+  const [events, setEvents] = useState<EventLogEntry[]>([]);
+  const [connected, setConnected] = useState(false);
   const [activePanel, setActivePanel] = useState<string>("state");
+  const maxClockRef = useRef(0);
+
+  const cues = computeRawCues(state);
+
+  const refresh = useCallback(async (signal: AbortSignal) => {
+    try {
+      const [stateRes, memoryRes, eventsRes] = await Promise.all([
+        fetchState(signal),
+        fetchMemory(signal),
+        fetchEvents(maxClockRef.current, signal),
+      ]);
+
+      setState(stateRes.state);
+      setMemories(memoryRes.memories);
+      setEdges(memoryRes.edges);
+
+      if (eventsRes.events.length > 0) {
+        setEvents((prev) => {
+          const existingIds = new Set(prev.map((e) => e.event_id));
+          const newEvents = eventsRes.events.filter((e) => !existingIds.has(e.event_id));
+          return [...prev, ...newEvents];
+        });
+        const maxClock = Math.max(...eventsRes.events.map((e) => e.version_clock));
+        if (maxClock > maxClockRef.current) {
+          maxClockRef.current = maxClock;
+        }
+      }
+
+      setConnected(true);
+    } catch (err) {
+      if (!(err instanceof DOMException && err.name === "AbortError")) {
+        setConnected(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    refresh(controller.signal);
+    const interval = setInterval(() => refresh(controller.signal), 2000);
+    return () => {
+      controller.abort();
+      clearInterval(interval);
+    };
+  }, [refresh]);
+
+  const handleDeleteMemory = useCallback(async (nodeId: string) => {
+    try {
+      await deleteMemoryNode(nodeId);
+      setMemories((prev) => prev.filter((m) => m.node_id !== nodeId));
+    } catch {
+      // Deletion failed — state remains unchanged
+    }
+  }, []);
 
   const nav = React.createElement("nav", { className: "admin-nav" },
-    ["state", "memory", "behavior", "audit"].map((panel) =>
+    ["state", "memory", "behavior", "events"].map((panel) =>
       React.createElement("button", {
         key: panel,
         className: panel === activePanel ? "active" : "",
@@ -98,17 +202,24 @@ export function AdminApp(): React.ReactElement {
       content = React.createElement(StateVectorPanel, { state });
       break;
     case "memory":
-      content = React.createElement(MemoryGraphPanel, { memories });
+      content = React.createElement(MemoryGraphPanel, { memories, edges, onDelete: handleDeleteMemory });
       break;
-    case "audit":
-      content = React.createElement(AuditLogPanel, { records: auditLog });
+    case "behavior":
+      content = React.createElement(BehaviorPanel, { cues });
+      break;
+    case "events":
+      content = React.createElement(EventsPanel, { events });
       break;
     default:
       content = React.createElement("div", { className: "panel" },
-        React.createElement("h2", null, "Behavior Debug"),
-        React.createElement("p", null, "Behavior overlay coming soon"),
+        React.createElement("p", null, "Unknown panel"),
       );
   }
 
-  return React.createElement("div", { className: "admin-app" }, nav, content);
+  const header = React.createElement("div", { className: "admin-header" },
+    React.createElement("h1", null, "Mote Admin"),
+    React.createElement(ConnectionStatus, { connected }),
+  );
+
+  return React.createElement("div", { className: "admin-app" }, header, nav, content);
 }
