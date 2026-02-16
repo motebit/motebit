@@ -3,7 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "description": "CLI for Motebit — a sentient digital companion",
   "main": "./dist/index.js",
+  "bin": {
+    "motebit": "./dist/index.js"
+  },
   "scripts": {
     "start": "tsx src/index.ts",
     "build": "tsc -b",

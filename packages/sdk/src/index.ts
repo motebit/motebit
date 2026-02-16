@@ -137,6 +137,7 @@ export interface ContextPack {
   relevant_memories: MemoryNode[];
   current_state: MotebitState;
   user_message: string;
+  conversation_history?: { role: "user" | "assistant"; content: string }[];
 }
 
 export interface AIResponse {

@@ -7,8 +7,8 @@ import type {
 } from "@motebit/sdk";
 import { SensitivityLevel } from "@motebit/sdk";
 
-export { runTurn } from "./loop.js";
-export type { MotebitLoopDependencies, TurnResult } from "./loop.js";
+export { runTurn, runTurnStreaming } from "./loop.js";
+export type { MotebitLoopDependencies, TurnResult, TurnOptions } from "./loop.js";
 
 // === Provider Configuration ===
 
@@ -143,16 +143,25 @@ function parseSensitivity(raw: string): SensitivityLevel {
 export class CloudProvider implements IntelligenceProvider {
   constructor(private config: CloudProviderConfig) {}
 
+  get model(): string {
+    return this.config.model;
+  }
+
+  setModel(model: string): void {
+    this.config.model = model;
+  }
+
   async generate(contextPack: ContextPack): Promise<AIResponse> {
     const baseUrl = this.config.base_url ?? this.getDefaultBaseUrl();
     const systemPrompt = this.buildSystemPrompt(contextPack);
+    const messages = this.buildMessages(contextPack);
 
     const body = {
       model: this.config.model,
       max_tokens: this.config.max_tokens ?? 1024,
       temperature: this.config.temperature ?? 0.7,
       system: systemPrompt,
-      messages: [{ role: "user", content: contextPack.user_message }],
+      messages,
     };
 
     const res = await fetch(`${baseUrl}/v1/messages`, {
@@ -176,6 +185,95 @@ export class CloudProvider implements IntelligenceProvider {
     return this.parseAnthropicResponse(data);
   }
 
+  async *generateStream(contextPack: ContextPack): AsyncGenerator<
+    { type: "text"; text: string } | { type: "done"; response: AIResponse }
+  > {
+    const baseUrl = this.config.base_url ?? this.getDefaultBaseUrl();
+    const systemPrompt = this.buildSystemPrompt(contextPack);
+    const messages = this.buildMessages(contextPack);
+
+    const body = {
+      model: this.config.model,
+      max_tokens: this.config.max_tokens ?? 1024,
+      temperature: this.config.temperature ?? 0.7,
+      system: systemPrompt,
+      messages,
+      stream: true,
+    };
+
+    const res = await fetch(`${baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": this.config.api_key,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(
+        `Anthropic API error ${res.status}: ${errorText}`,
+      );
+    }
+
+    let accumulated = "";
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const jsonStr = line.slice(6);
+          if (jsonStr === "[DONE]") continue;
+
+          try {
+            const event = JSON.parse(jsonStr) as {
+              type: string;
+              delta?: { type: string; text?: string };
+            };
+            if (
+              event.type === "content_block_delta" &&
+              event.delta?.type === "text_delta" &&
+              event.delta.text
+            ) {
+              accumulated += event.delta.text;
+              yield { type: "text", text: event.delta.text };
+            }
+          } catch {
+            // Skip unparseable SSE lines
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    const memoryCandidates = extractMemoryTags(accumulated);
+    const stateUpdates = extractStateTags(accumulated);
+    const displayText = stripTags(accumulated);
+
+    yield {
+      type: "done",
+      response: {
+        text: displayText,
+        confidence: 0.8,
+        memory_candidates: memoryCandidates,
+        state_updates: stateUpdates,
+      },
+    };
+  }
+
   async estimateConfidence(): Promise<number> {
     return 0.8;
   }
@@ -184,6 +282,14 @@ export class CloudProvider implements IntelligenceProvider {
     response: AIResponse,
   ): Promise<MemoryCandidate[]> {
     return response.memory_candidates;
+  }
+
+  private buildMessages(contextPack: ContextPack): { role: string; content: string }[] {
+    const history = contextPack.conversation_history ?? [];
+    return [
+      ...history.map((m) => ({ role: m.role, content: m.content })),
+      { role: "user", content: contextPack.user_message },
+    ];
   }
 
   private buildSystemPrompt(contextPack: ContextPack): string {
