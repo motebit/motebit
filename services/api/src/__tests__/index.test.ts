@@ -16,9 +16,11 @@ import type { EventLogEntry } from "@motebit/sdk";
 
 const MOTEBIT_ID = "motebit-api-test";
 const API_KEY = "test-api-key";
+const API_TOKEN = "test-token";
+const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
 
 function createTestServer(): MotebitServer {
-  return createMotebitServer({ motebitId: MOTEBIT_ID, apiKey: API_KEY });
+  return createMotebitServer({ motebitId: MOTEBIT_ID, apiKey: API_KEY, apiToken: API_TOKEN });
 }
 
 function mockAnthropicResponse(text: string) {
@@ -70,7 +72,95 @@ describe("Motebit API", () => {
     globalThis.fetch = originalFetch;
   });
 
-  // === Existing tests (updated to use config object) ===
+  // === Auth & Validation Negative Tests ===
+
+  it("returns 401 when no bearer token is provided", async () => {
+    const res = await server.app.request(`/api/v1/state/${MOTEBIT_ID}`, {
+      method: "GET",
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 401 when wrong bearer token is provided", async () => {
+    const res = await server.app.request(`/api/v1/state/${MOTEBIT_ID}`, {
+      method: "GET",
+      headers: { Authorization: "Bearer wrong-token" },
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("POST /api/v1/message returns 400 when message field is missing", async () => {
+    const res = await server.app.request(`/api/v1/message/${MOTEBIT_ID}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain("message");
+  });
+
+  it("POST /api/v1/message returns 400 when message field is empty", async () => {
+    const res = await server.app.request(`/api/v1/message/${MOTEBIT_ID}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ message: "  " }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain("message");
+  });
+
+  it("POST /api/v1/identity returns 400 when owner_id is missing", async () => {
+    const res = await server.app.request("/api/v1/identity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain("owner_id");
+  });
+
+  it("POST /api/v1/memory returns 400 when content is missing", async () => {
+    const res = await server.app.request(`/api/v1/memory/${MOTEBIT_ID}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain("content");
+  });
+
+  it("POST /api/v1/sync/push returns 400 when events is missing", async () => {
+    const res = await server.app.request(`/api/v1/sync/${MOTEBIT_ID}/push`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain("events");
+  });
+
+  it("GET /health succeeds without auth token", async () => {
+    const res = await server.app.request("/health", { method: "GET" });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe("ok");
+    expect(body.timestamp).toBeTypeOf("number");
+  });
+
+  // === Existing tests (with auth headers) ===
 
   it("POST /api/v1/message/:motebitId returns response with memory and state", async () => {
     const responseText = [
@@ -83,7 +173,7 @@ describe("Motebit API", () => {
 
     const res = await server.app.request(`/api/v1/message/${MOTEBIT_ID}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ message: "I love hiking on weekends!" }),
     });
 
@@ -107,6 +197,7 @@ describe("Motebit API", () => {
   it("GET /api/v1/state/:motebitId returns current state", async () => {
     const res = await server.app.request(`/api/v1/state/${MOTEBIT_ID}`, {
       method: "GET",
+      headers: AUTH_HEADER,
     });
 
     expect(res.status).toBe(200);
@@ -124,6 +215,7 @@ describe("Motebit API", () => {
     // Initially empty
     const res1 = await server.app.request(`/api/v1/memory/${MOTEBIT_ID}`, {
       method: "GET",
+      headers: AUTH_HEADER,
     });
 
     expect(res1.status).toBe(200);
@@ -139,13 +231,14 @@ describe("Motebit API", () => {
 
     await server.app.request(`/api/v1/message/${MOTEBIT_ID}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ message: "I love jazz music" }),
     });
 
     // Now memories should be populated
     const res2 = await server.app.request(`/api/v1/memory/${MOTEBIT_ID}`, {
       method: "GET",
+      headers: AUTH_HEADER,
     });
 
     expect(res2.status).toBe(200);
@@ -154,21 +247,12 @@ describe("Motebit API", () => {
     expect(body2.memories[0].content).toBe("User loves jazz music");
   });
 
-  it("GET /health returns ok", async () => {
-    const res = await server.app.request("/health", { method: "GET" });
-
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.status).toBe("ok");
-    expect(body.timestamp).toBeTypeOf("number");
-  });
-
   it("POST /api/v1/message/:motebitId handles no-memory response", async () => {
     mockFetchSuccess("Just a plain response, no memories here.");
 
     const res = await server.app.request(`/api/v1/message/${MOTEBIT_ID}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ message: "What's up?" }),
     });
 
@@ -178,12 +262,12 @@ describe("Motebit API", () => {
     expect(body.memories_formed).toHaveLength(0);
   });
 
-  // === New tests: Identity ===
+  // === Identity Tests ===
 
   it("POST /api/v1/identity creates identity", async () => {
     const res = await server.app.request("/api/v1/identity", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ owner_id: "owner-1" }),
     });
 
@@ -199,7 +283,7 @@ describe("Motebit API", () => {
     // Create first
     const createRes = await server.app.request("/api/v1/identity", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ owner_id: "owner-2" }),
     });
     const created = await createRes.json();
@@ -207,6 +291,7 @@ describe("Motebit API", () => {
     // Load
     const res = await server.app.request(`/api/v1/identity/${created.motebit_id}`, {
       method: "GET",
+      headers: AUTH_HEADER,
     });
 
     expect(res.status).toBe(200);
@@ -218,6 +303,7 @@ describe("Motebit API", () => {
   it("GET /api/v1/identity/:motebitId returns 404 for nonexistent", async () => {
     const res = await server.app.request("/api/v1/identity/nonexistent-id", {
       method: "GET",
+      headers: AUTH_HEADER,
     });
 
     expect(res.status).toBe(404);
@@ -225,12 +311,12 @@ describe("Motebit API", () => {
     expect(body.error).toBe("identity not found");
   });
 
-  // === New tests: Memory POST ===
+  // === Memory POST Tests ===
 
   it("POST /api/v1/memory/:motebitId creates memory with embedding", async () => {
     const res = await server.app.request(`/api/v1/memory/${MOTEBIT_ID}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ content: "User likes coffee" }),
     });
 
@@ -245,6 +331,7 @@ describe("Motebit API", () => {
     // Verify persisted via GET
     const getRes = await server.app.request(`/api/v1/memory/${MOTEBIT_ID}`, {
       method: "GET",
+      headers: AUTH_HEADER,
     });
     const getBody = await getRes.json();
     expect(getBody.memories).toHaveLength(1);
@@ -254,7 +341,7 @@ describe("Motebit API", () => {
   it("POST /api/v1/memory/:motebitId respects sensitivity parameter", async () => {
     const res = await server.app.request(`/api/v1/memory/${MOTEBIT_ID}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ content: "User has allergy", sensitivity: "medical" }),
     });
 
@@ -263,14 +350,14 @@ describe("Motebit API", () => {
     expect(body.sensitivity).toBe(SensitivityLevel.Medical);
   });
 
-  // === New tests: Sync ===
+  // === Sync Tests ===
 
   it("POST /api/v1/sync/:motebitId/push accepts events", async () => {
     const events = [makeEvent(MOTEBIT_ID, 1), makeEvent(MOTEBIT_ID, 2)];
 
     const res = await server.app.request(`/api/v1/sync/${MOTEBIT_ID}/push`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ events }),
     });
 
@@ -284,12 +371,13 @@ describe("Motebit API", () => {
 
     await server.app.request(`/api/v1/sync/${MOTEBIT_ID}/push`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ events }),
     });
 
     const res = await server.app.request(`/api/v1/sync/${MOTEBIT_ID}/pull?after_clock=0`, {
       method: "GET",
+      headers: AUTH_HEADER,
     });
 
     expect(res.status).toBe(200);
@@ -306,12 +394,13 @@ describe("Motebit API", () => {
 
     await server.app.request(`/api/v1/sync/${MOTEBIT_ID}/push`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ events }),
     });
 
     const res = await server.app.request(`/api/v1/sync/${MOTEBIT_ID}/pull?after_clock=1`, {
       method: "GET",
+      headers: AUTH_HEADER,
     });
 
     expect(res.status).toBe(200);
@@ -323,13 +412,13 @@ describe("Motebit API", () => {
     expect(body.events.length).toBeGreaterThanOrEqual(2);
   });
 
-  // === New tests: Export ===
+  // === Export Tests ===
 
   it("GET /api/v1/export/:motebitId returns full manifest", async () => {
     // Create identity
     const createRes = await server.app.request("/api/v1/identity", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ owner_id: "owner-export" }),
     });
     const identity = await createRes.json();
@@ -340,13 +429,14 @@ describe("Motebit API", () => {
     );
     await server.app.request(`/api/v1/message/${MOTEBIT_ID}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ message: "Test export" }),
     });
 
     // Export
     const res = await server.app.request(`/api/v1/export/${identity.motebit_id}`, {
       method: "GET",
+      headers: AUTH_HEADER,
     });
 
     expect(res.status).toBe(200);
@@ -363,6 +453,7 @@ describe("Motebit API", () => {
   it("GET /api/v1/export/:motebitId returns 404 with no identity", async () => {
     const res = await server.app.request("/api/v1/export/no-such-motebit", {
       method: "GET",
+      headers: AUTH_HEADER,
     });
 
     expect(res.status).toBe(404);
@@ -370,13 +461,13 @@ describe("Motebit API", () => {
     expect(body.error).toBe("identity not found");
   });
 
-  // === New tests: Delete ===
+  // === Delete Tests ===
 
   it("POST /api/v1/delete/:motebitId deletes memories and returns certificates", async () => {
     // Create identity
     const createRes = await server.app.request("/api/v1/identity", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ owner_id: "owner-delete" }),
     });
     const identity = await createRes.json();
@@ -387,14 +478,14 @@ describe("Motebit API", () => {
     );
     await server.app.request(`/api/v1/message/${MOTEBIT_ID}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ message: "Remember this for deletion" }),
     });
 
     // Delete
     const res = await server.app.request(`/api/v1/delete/${identity.motebit_id}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ deleted_by: "owner-delete" }),
     });
 
@@ -408,14 +499,14 @@ describe("Motebit API", () => {
     // Create identity with no memories
     const createRes = await server.app.request("/api/v1/identity", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ owner_id: "owner-empty-delete" }),
     });
     const identity = await createRes.json();
 
     const res = await server.app.request(`/api/v1/delete/${identity.motebit_id}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ deleted_by: "owner-empty-delete" }),
     });
 
@@ -427,7 +518,7 @@ describe("Motebit API", () => {
   it("POST /api/v1/delete/:motebitId returns 404 with no identity", async () => {
     const res = await server.app.request("/api/v1/delete/no-such-motebit", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ deleted_by: "someone" }),
     });
 

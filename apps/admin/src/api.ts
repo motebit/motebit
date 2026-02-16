@@ -9,6 +9,9 @@ export const config = {
   get motebitId(): string {
     return import.meta.env.VITE_MOTEBIT_ID || "default-motebit";
   },
+  get apiToken(): string {
+    return import.meta.env.VITE_API_TOKEN || "";
+  },
 };
 
 // === Error ===
@@ -28,7 +31,11 @@ export class ApiError extends Error {
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${config.apiUrl}${path}`;
-  const res = await fetch(url, init);
+  const headers = new Headers(init?.headers);
+  if (config.apiToken) {
+    headers.set("Authorization", `Bearer ${config.apiToken}`);
+  }
+  const res = await fetch(url, { ...init, headers });
   if (!res.ok) {
     const body = await res.text();
     throw new ApiError(res.status, res.statusText, body);

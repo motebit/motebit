@@ -1,5 +1,9 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { secureHeaders } from "hono/secure-headers";
+import { bearerAuth } from "hono/bearer-auth";
+import { HTTPException } from "hono/http-exception";
+import { rateLimiter } from "hono-rate-limiter";
 import {
   CloudProvider,
   runTurn,
@@ -23,6 +27,8 @@ export interface MotebitServerConfig {
   motebitId: string;
   apiKey: string;
   dbPath?: string; // default ":memory:" for tests
+  apiToken?: string; // bearer token for auth; undefined = no auth enforced
+  corsOrigin?: string; // CORS origin; defaults to "*"
 }
 
 export interface MotebitServer {
@@ -37,7 +43,7 @@ export interface MotebitServer {
  * Create a fully-wired Hono app backed by SQLite persistence.
  */
 export function createMotebitServer(config: MotebitServerConfig): MotebitServer {
-  const { motebitId, apiKey, dbPath = ":memory:" } = config;
+  const { motebitId, apiKey, dbPath = ":memory:", apiToken, corsOrigin = "*" } = config;
 
   const cloudConfig: CloudProviderConfig = {
     provider: "anthropic",
@@ -77,30 +83,83 @@ export function createMotebitServer(config: MotebitServerConfig): MotebitServer 
 
   const app = new Hono();
 
-  // Middleware
-  app.use("*", cors());
+  // === Middleware Stack ===
 
-  // Health check
+  // 1. Secure headers (all routes)
+  app.use("*", secureHeaders());
+
+  // 2. CORS (configurable origin)
+  app.use("*", cors({ origin: corsOrigin }));
+
+  // 3. Rate limiting — tight limit for expensive AI routes
+  app.use(
+    "/api/v1/message/*",
+    rateLimiter({
+      windowMs: 60 * 1000,
+      limit: 20,
+      keyGenerator: (c) => c.req.header("x-forwarded-for") ?? "anonymous",
+    }),
+  );
+
+  // 3b. Rate limiting — general API routes
+  app.use(
+    "/api/*",
+    rateLimiter({
+      windowMs: 60 * 1000,
+      limit: 200,
+      keyGenerator: (c) => c.req.header("x-forwarded-for") ?? "anonymous",
+    }),
+  );
+
+  // 4. Bearer auth on /api/* (skipped when apiToken is undefined)
+  if (apiToken) {
+    app.use("/api/*", bearerAuth({ token: apiToken }));
+  }
+
+  // === Global Error Handler ===
+
+  app.onError((err, c) => {
+    if (err instanceof HTTPException) {
+      return c.json({ error: err.message, status: err.status }, err.status);
+    }
+    console.error(err);
+    return c.json({ error: "Internal server error", status: 500 }, 500);
+  });
+
+  // Health check (public — before /api/* auth)
   app.get("/health", (c) => c.json({ status: "ok", timestamp: Date.now() }));
 
   // === Message Route (wired to orchestrator) ===
 
   app.post("/api/v1/message/:motebitId", async (c) => {
     const body = await c.req.json<{ message: string }>();
-    const result = await runTurn(deps, body.message);
-    return c.json({
-      motebit_id: motebitId,
-      response: result.response,
-      memories_formed: result.memoriesFormed,
-      state: result.stateAfter,
-      cues: result.cues,
-    });
+    if (!body.message || typeof body.message !== "string" || body.message.trim() === "") {
+      throw new HTTPException(400, { message: "Missing or empty 'message' field" });
+    }
+
+    try {
+      const result = await runTurn(deps, body.message);
+      return c.json({
+        motebit_id: motebitId,
+        response: result.response,
+        memories_formed: result.memoriesFormed,
+        state: result.stateAfter,
+        cues: result.cues,
+      });
+    } catch (err) {
+      if (err instanceof HTTPException) throw err;
+      console.error("AI provider error:", err);
+      throw new HTTPException(502, { message: "AI provider error" });
+    }
   });
 
   // === Identity Routes ===
 
   app.post("/api/v1/identity", async (c) => {
     const body = await c.req.json<{ owner_id: string }>();
+    if (!body.owner_id || typeof body.owner_id !== "string" || body.owner_id.trim() === "") {
+      throw new HTTPException(400, { message: "Missing or empty 'owner_id' field" });
+    }
     const identity = await identityManager.create(body.owner_id);
     return c.json(identity, 201);
   });
@@ -127,13 +186,23 @@ export function createMotebitServer(config: MotebitServerConfig): MotebitServer 
 
   app.post("/api/v1/memory/:motebitId", async (c) => {
     const body = await c.req.json<{ content: string; sensitivity?: string }>();
-    const sensitivity = parseSensitivity(body.sensitivity);
-    const embedding = await embedText(body.content);
-    const node = await memoryGraph.formMemory(
-      { content: body.content, confidence: 1.0, sensitivity },
-      embedding,
-    );
-    return c.json(node, 201);
+    if (!body.content || typeof body.content !== "string" || body.content.trim() === "") {
+      throw new HTTPException(400, { message: "Missing or empty 'content' field" });
+    }
+
+    try {
+      const sensitivity = parseSensitivity(body.sensitivity);
+      const embedding = await embedText(body.content);
+      const node = await memoryGraph.formMemory(
+        { content: body.content, confidence: 1.0, sensitivity },
+        embedding,
+      );
+      return c.json(node, 201);
+    } catch (err) {
+      if (err instanceof HTTPException) throw err;
+      console.error("Embedding error:", err);
+      throw new HTTPException(502, { message: "AI provider error" });
+    }
   });
 
   app.delete("/api/v1/memory/:motebitId/:nodeId", async (c) => {
@@ -153,6 +222,9 @@ export function createMotebitServer(config: MotebitServerConfig): MotebitServer 
 
   app.post("/api/v1/sync/:motebitId/push", async (c) => {
     const body = await c.req.json<{ events: EventLogEntry[] }>();
+    if (!Array.isArray(body.events)) {
+      throw new HTTPException(400, { message: "Missing or invalid 'events' field (must be array)" });
+    }
     for (const event of body.events) {
       await eventStore.append(event);
     }
@@ -185,6 +257,9 @@ export function createMotebitServer(config: MotebitServerConfig): MotebitServer 
   app.post("/api/v1/delete/:motebitId", async (c) => {
     const id = c.req.param("motebitId");
     const body = await c.req.json<{ deleted_by: string }>();
+    if (!body.deleted_by || typeof body.deleted_by !== "string" || body.deleted_by.trim() === "") {
+      throw new HTTPException(400, { message: "Missing or empty 'deleted_by' field" });
+    }
 
     const identity = await identityManager.load(id);
     if (!identity) {
@@ -235,11 +310,29 @@ function parseSensitivity(value?: string): SensitivityLevel {
 
 // === Default app for standalone use ===
 
-const { app } = createMotebitServer({
-  motebitId: process.env.MOTEBIT_ID ?? "default-motebit",
-  apiKey: process.env.ANTHROPIC_API_KEY ?? "",
-  dbPath: process.env.MOTEBIT_DB_PATH,
-});
+function createDefaultApp(): Hono {
+  const anthropicKey = process.env.ANTHROPIC_API_KEY ?? "";
+  if (!anthropicKey) {
+    console.error("FATAL: ANTHROPIC_API_KEY is required");
+    process.exit(1);
+  }
+
+  const token = process.env.MOTEBIT_API_TOKEN;
+  if (!token) {
+    console.warn("WARNING: MOTEBIT_API_TOKEN not set — API auth is disabled");
+  }
+
+  return createMotebitServer({
+    motebitId: process.env.MOTEBIT_ID ?? "default-motebit",
+    apiKey: anthropicKey,
+    dbPath: process.env.MOTEBIT_DB_PATH,
+    apiToken: token,
+    corsOrigin: process.env.MOTEBIT_CORS_ORIGIN,
+  }).app;
+}
+
+// Skip standalone initialization during tests (vitest sets VITEST env var)
+const app = process.env.VITEST ? new Hono() : createDefaultApp();
 
 export default app;
 export { app };

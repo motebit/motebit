@@ -21,6 +21,15 @@ function mockFetch(body: unknown, status = 200) {
   } as Response);
 }
 
+function expectAuthHeader(call: unknown[] | undefined) {
+  expect(call).toBeDefined();
+  const init = call![1] as RequestInit;
+  const headers = new Headers(init.headers);
+  if (config.apiToken) {
+    expect(headers.get("Authorization")).toBe(`Bearer ${config.apiToken}`);
+  }
+}
+
 beforeEach(() => {
   globalThis.fetch = vi.fn();
 });
@@ -36,10 +45,11 @@ describe("fetchState", () => {
 
     const result = await fetchState();
 
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      `${config.apiUrl}/api/v1/state/${config.motebitId}`,
-      { signal: undefined },
-    );
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const call = fetchMock.mock.calls[0]!;
+    expect(call[0]).toBe(`${config.apiUrl}/api/v1/state/${config.motebitId}`);
+    expectAuthHeader(call);
     expect(result).toEqual(data);
   });
 
@@ -49,10 +59,10 @@ describe("fetchState", () => {
 
     await fetchState(controller.signal);
 
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      expect.any(String),
-      { signal: controller.signal },
-    );
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const call = fetchMock.mock.calls[0]!;
+    const init = call[1] as RequestInit;
+    expect(init.signal).toBe(controller.signal);
   });
 });
 
@@ -63,10 +73,10 @@ describe("fetchMemory", () => {
 
     const result = await fetchMemory();
 
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      `${config.apiUrl}/api/v1/memory/${config.motebitId}`,
-      { signal: undefined },
-    );
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const call = fetchMock.mock.calls[0]!;
+    expect(call[0]).toBe(`${config.apiUrl}/api/v1/memory/${config.motebitId}`);
+    expectAuthHeader(call);
     expect(result).toEqual(data);
   });
 });
@@ -78,10 +88,10 @@ describe("fetchEvents", () => {
 
     const result = await fetchEvents(5);
 
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      `${config.apiUrl}/api/v1/sync/${config.motebitId}/pull?after_clock=5`,
-      { signal: undefined },
-    );
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const call = fetchMock.mock.calls[0]!;
+    expect(call[0]).toBe(`${config.apiUrl}/api/v1/sync/${config.motebitId}/pull?after_clock=5`);
+    expectAuthHeader(call);
     expect(result).toEqual(data);
   });
 });
@@ -93,10 +103,12 @@ describe("deleteMemoryNode", () => {
 
     const result = await deleteMemoryNode("n1");
 
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      `${config.apiUrl}/api/v1/memory/${config.motebitId}/n1`,
-      { method: "DELETE", signal: undefined },
-    );
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const call = fetchMock.mock.calls[0]!;
+    expect(call[0]).toBe(`${config.apiUrl}/api/v1/memory/${config.motebitId}/n1`);
+    const init = call[1] as RequestInit;
+    expect(init.method).toBe("DELETE");
+    expectAuthHeader(call);
     expect(result).toEqual(data);
   });
 });
@@ -108,10 +120,10 @@ describe("fetchHealth", () => {
 
     const result = await fetchHealth();
 
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      `${config.apiUrl}/health`,
-      { signal: undefined },
-    );
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const call = fetchMock.mock.calls[0]!;
+    expect(call[0]).toBe(`${config.apiUrl}/health`);
+    expectAuthHeader(call);
     expect(result).toEqual(data);
   });
 });
