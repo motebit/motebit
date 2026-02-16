@@ -33,6 +33,8 @@ import {
 } from "@motebit/ai-core";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 import { MemoryGraph, InMemoryMemoryStorage } from "@motebit/memory-graph";
+import { TauriEventStore, TauriMemoryStorage, type InvokeFn } from "./tauri-storage.js";
+export type { InvokeFn } from "./tauri-storage.js";
 
 // === Tauri Command Interface ===
 
@@ -54,6 +56,7 @@ export interface DesktopAIConfig {
   apiKey?: string;
   personalityConfig?: MotebitPersonalityConfig;
   isTauri: boolean;
+  invoke?: InvokeFn;
 }
 
 // === Desktop App Bootstrap ===
@@ -140,10 +143,21 @@ export class DesktopApp {
       : undefined;
     const temperature = resolved?.temperature;
 
-    const motebitId = "desktop-" + crypto.randomUUID().slice(0, 8);
-    const eventStore = new EventStore(new InMemoryEventStore());
+    const motebitId = "desktop-local";
+
+    let eventStoreAdapter;
+    let memoryStorageAdapter;
+    if (config.isTauri && config.invoke) {
+      eventStoreAdapter = new TauriEventStore(config.invoke);
+      memoryStorageAdapter = new TauriMemoryStorage(config.invoke);
+    } else {
+      eventStoreAdapter = new InMemoryEventStore();
+      memoryStorageAdapter = new InMemoryMemoryStorage();
+    }
+
+    const eventStore = new EventStore(eventStoreAdapter);
     const memoryGraph = new MemoryGraph(
-      new InMemoryMemoryStorage(),
+      memoryStorageAdapter,
       eventStore,
       motebitId,
     );

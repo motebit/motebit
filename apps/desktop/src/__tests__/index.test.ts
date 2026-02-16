@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { DesktopApp, isSlashCommand, parseSlashCommand } from "../index";
+import { DesktopApp, isSlashCommand, parseSlashCommand, type InvokeFn } from "../index";
 
 // ---------------------------------------------------------------------------
 // DesktopApp
@@ -284,5 +284,48 @@ describe("DesktopApp.sendMessageStreaming", () => {
     expect(typeof gen[Symbol.asyncIterator]).toBe("function");
     // Return without consuming to avoid hitting the real provider
     void gen.return(undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DesktopApp.initAI — storage selection
+// ---------------------------------------------------------------------------
+
+describe("DesktopApp.initAI storage selection", () => {
+  let app: DesktopApp;
+
+  afterEach(() => {
+    if (app) app.stop();
+  });
+
+  it("uses in-memory storage when isTauri is false", () => {
+    app = new DesktopApp();
+    const result = app.initAI({ provider: "ollama", isTauri: false });
+    expect(result).toBe(true);
+    expect(app.isAIReady).toBe(true);
+  });
+
+  it("uses Tauri storage when isTauri is true and invoke is provided", () => {
+    app = new DesktopApp();
+    // Provide a no-op invoke — we only check that initAI succeeds
+    const mockInvoke: InvokeFn = async () => { return [] as never; };
+    const result = app.initAI({
+      provider: "ollama",
+      isTauri: true,
+      invoke: mockInvoke,
+    });
+    expect(result).toBe(true);
+    expect(app.isAIReady).toBe(true);
+  });
+
+  it("falls back to in-memory when isTauri is true but invoke is missing", () => {
+    app = new DesktopApp();
+    const result = app.initAI({
+      provider: "ollama",
+      isTauri: true,
+      // invoke intentionally omitted
+    });
+    expect(result).toBe(true);
+    expect(app.isAIReady).toBe(true);
   });
 });

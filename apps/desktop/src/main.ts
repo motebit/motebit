@@ -1,4 +1,4 @@
-import { DesktopApp, isSlashCommand, parseSlashCommand, type DesktopAIConfig } from "./index";
+import { DesktopApp, isSlashCommand, parseSlashCommand, type DesktopAIConfig, type InvokeFn } from "./index";
 
 const canvas = document.getElementById("motebit-canvas") as HTMLCanvasElement;
 if (!canvas) {
@@ -113,7 +113,7 @@ async function loadDesktopConfig(): Promise<DesktopAIConfig> {
       apiKey = (parsed.api_key as string) || undefined;
     }
 
-    return { provider, model, apiKey, isTauri: true };
+    return { provider, model, apiKey, isTauri: true, invoke: invoke as InvokeFn };
   }
 
   // Vite dev mode — read from env vars
@@ -171,7 +171,7 @@ async function saveSettings(): Promise<void> {
   }
 
   // Apply immediately
-  const newConfig: DesktopAIConfig = { provider, model, apiKey: apiKey || currentConfig?.apiKey, isTauri };
+  const newConfig: DesktopAIConfig = { provider, model, apiKey: apiKey || currentConfig?.apiKey, isTauri, invoke: currentConfig?.invoke };
   currentConfig = newConfig;
 
   if (app.initAI(newConfig)) {
