@@ -1,4 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+vi.mock("@mote/memory-graph", async () => {
+  const actual = await vi.importActual<typeof import("@mote/memory-graph")>("@mote/memory-graph");
+  return { ...actual, embedText: (text: string) => Promise.resolve(actual.embedTextHash(text)) };
+});
+
 import { createMoteServer } from "../index.js";
 import type { MoteServer } from "../index.js";
 import { TrustMode, BatteryMode, EventType, SensitivityLevel } from "@mote/sdk";

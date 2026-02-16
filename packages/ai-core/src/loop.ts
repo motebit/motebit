@@ -47,7 +47,7 @@ export async function runTurn(
   });
 
   // 2. Embed user message and retrieve relevant memories
-  const queryEmbedding = embedText(userMessage);
+  const queryEmbedding = await embedText(userMessage);
   const relevantMemories = await memoryGraph.retrieve(queryEmbedding, {
     limit: 5,
   });
@@ -64,7 +64,7 @@ export async function runTurn(
   // 4. Form memories from candidates
   const memoriesFormed: MemoryNode[] = [];
   for (const candidate of aiResponse.memory_candidates) {
-    const embedding = embedText(candidate.content);
+    const embedding = await embedText(candidate.content);
     const node = await memoryGraph.formMemory(candidate, embedding);
     memoriesFormed.push(node);
   }

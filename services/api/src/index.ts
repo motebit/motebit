@@ -128,7 +128,7 @@ export function createMoteServer(config: MoteServerConfig): MoteServer {
   app.post("/api/v1/memory/:moteId", async (c) => {
     const body = await c.req.json<{ content: string; sensitivity?: string }>();
     const sensitivity = parseSensitivity(body.sensitivity);
-    const embedding = embedText(body.content);
+    const embedding = await embedText(body.content);
     const node = await memoryGraph.formMemory(
       { content: body.content, confidence: 1.0, sensitivity },
       embedding,

@@ -8,7 +8,7 @@ import type {
 import { EventType } from "@mote/sdk";
 import type { EventStore } from "@mote/event-log";
 
-export { embedText } from "./embeddings.js";
+export { embedText, embedTextHash, EMBEDDING_DIMENSIONS, resetPipeline } from "./embeddings.js";
 
 // === Interfaces ===
 
