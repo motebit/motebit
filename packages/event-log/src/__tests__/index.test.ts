@@ -1,0 +1,189 @@
+import { describe, it, expect, beforeEach } from "vitest";
+import { InMemoryEventStore, EventStore } from "../index";
+import { EventType } from "@mote/sdk";
+import type { EventLogEntry } from "@mote/sdk";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function makeEvent(overrides: Partial<EventLogEntry> = {}): EventLogEntry {
+  return {
+    event_id: crypto.randomUUID(),
+    mote_id: "mote-1",
+    timestamp: Date.now(),
+    event_type: EventType.StateUpdated,
+    payload: {},
+    version_clock: 1,
+    tombstoned: false,
+    ...overrides,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// InMemoryEventStore
+// ---------------------------------------------------------------------------
+
+describe("InMemoryEventStore", () => {
+  let store: InMemoryEventStore;
+
+  beforeEach(() => {
+    store = new InMemoryEventStore();
+  });
+
+  it("appends and queries events", async () => {
+    const event = makeEvent();
+    await store.append(event);
+    const results = await store.query({});
+    expect(results).toHaveLength(1);
+    expect(results[0]!.event_id).toBe(event.event_id);
+  });
+
+  it("filters by mote_id", async () => {
+    await store.append(makeEvent({ mote_id: "mote-1" }));
+    await store.append(makeEvent({ mote_id: "mote-2" }));
+    const results = await store.query({ mote_id: "mote-1" });
+    expect(results).toHaveLength(1);
+    expect(results[0]!.mote_id).toBe("mote-1");
+  });
+
+  it("filters by event_types", async () => {
+    await store.append(
+      makeEvent({ event_type: EventType.StateUpdated }),
+    );
+    await store.append(
+      makeEvent({ event_type: EventType.MemoryFormed }),
+    );
+    await store.append(
+      makeEvent({ event_type: EventType.IdentityCreated }),
+    );
+    const results = await store.query({
+      event_types: [EventType.StateUpdated, EventType.MemoryFormed],
+    });
+    expect(results).toHaveLength(2);
+  });
+
+  it("filters by after_timestamp", async () => {
+    await store.append(makeEvent({ timestamp: 100 }));
+    await store.append(makeEvent({ timestamp: 200 }));
+    await store.append(makeEvent({ timestamp: 300 }));
+    const results = await store.query({ after_timestamp: 150 });
+    expect(results).toHaveLength(2);
+  });
+
+  it("filters by before_timestamp", async () => {
+    await store.append(makeEvent({ timestamp: 100 }));
+    await store.append(makeEvent({ timestamp: 200 }));
+    await store.append(makeEvent({ timestamp: 300 }));
+    const results = await store.query({ before_timestamp: 250 });
+    expect(results).toHaveLength(2);
+  });
+
+  it("filters by after_version_clock", async () => {
+    await store.append(makeEvent({ version_clock: 1 }));
+    await store.append(makeEvent({ version_clock: 2 }));
+    await store.append(makeEvent({ version_clock: 3 }));
+    const results = await store.query({ after_version_clock: 1 });
+    expect(results).toHaveLength(2);
+  });
+
+  it("respects limit", async () => {
+    await store.append(makeEvent({ version_clock: 1 }));
+    await store.append(makeEvent({ version_clock: 2 }));
+    await store.append(makeEvent({ version_clock: 3 }));
+    const results = await store.query({ limit: 2 });
+    expect(results).toHaveLength(2);
+  });
+
+  it("getLatestClock returns 0 for unknown mote", async () => {
+    const clock = await store.getLatestClock("nonexistent");
+    expect(clock).toBe(0);
+  });
+
+  it("getLatestClock returns the highest version_clock", async () => {
+    await store.append(makeEvent({ mote_id: "m1", version_clock: 3 }));
+    await store.append(makeEvent({ mote_id: "m1", version_clock: 7 }));
+    await store.append(makeEvent({ mote_id: "m1", version_clock: 5 }));
+    const clock = await store.getLatestClock("m1");
+    expect(clock).toBe(7);
+  });
+
+  it("tombstone marks the event", async () => {
+    const event = makeEvent({ event_id: "e1", mote_id: "m1" });
+    await store.append(event);
+    await store.tombstone("e1", "m1");
+    const results = await store.query({});
+    expect(results[0]!.tombstoned).toBe(true);
+  });
+
+  it("tombstone does nothing for non-existent event", async () => {
+    // Should not throw
+    await store.tombstone("nonexistent", "m1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// EventStore (high-level wrapper)
+// ---------------------------------------------------------------------------
+
+describe("EventStore", () => {
+  let eventStore: EventStore;
+
+  beforeEach(() => {
+    eventStore = new EventStore(new InMemoryEventStore());
+  });
+
+  it("rejects empty event_id", async () => {
+    const event = makeEvent({ event_id: "" });
+    await expect(eventStore.append(event)).rejects.toThrow(
+      "event_id must not be empty",
+    );
+  });
+
+  it("rejects empty mote_id", async () => {
+    const event = makeEvent({ mote_id: "" });
+    await expect(eventStore.append(event)).rejects.toThrow(
+      "mote_id must not be empty",
+    );
+  });
+
+  it("appends valid events", async () => {
+    const event = makeEvent();
+    await eventStore.append(event);
+    const results = await eventStore.query({});
+    expect(results).toHaveLength(1);
+  });
+
+  it("replay processes events in version_clock order", async () => {
+    await eventStore.append(
+      makeEvent({ mote_id: "m1", version_clock: 3 }),
+    );
+    await eventStore.append(
+      makeEvent({ mote_id: "m1", version_clock: 1 }),
+    );
+    await eventStore.append(
+      makeEvent({ mote_id: "m1", version_clock: 2 }),
+    );
+
+    const order: number[] = [];
+    await eventStore.replay("m1", async (entry) => {
+      order.push(entry.version_clock);
+    });
+    expect(order).toEqual([1, 2, 3]);
+  });
+
+  it("replay only processes events for the specified mote", async () => {
+    await eventStore.append(
+      makeEvent({ mote_id: "m1", version_clock: 1 }),
+    );
+    await eventStore.append(
+      makeEvent({ mote_id: "m2", version_clock: 2 }),
+    );
+
+    const seen: string[] = [];
+    await eventStore.replay("m1", async (entry) => {
+      seen.push(entry.mote_id);
+    });
+    expect(seen).toEqual(["m1"]);
+  });
+});

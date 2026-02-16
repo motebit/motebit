@@ -1,0 +1,24 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
+  "productName": "Mote",
+  "version": "0.1.0",
+  "identifier": "com.mote.desktop",
+  "build": {
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Mote",
+        "width": 400,
+        "height": 600,
+        "resizable": true,
+        "transparent": true,
+        "decorations": true
+      }
+    ],
+    "trayIcon": {
+      "tooltip": "Mote"
+    }
+  }
+}

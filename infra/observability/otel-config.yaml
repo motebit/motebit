@@ -1,0 +1,43 @@
+# OpenTelemetry Collector Configuration
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+
+  # Filter out any individual user data
+  filter:
+    metrics:
+      exclude:
+        match_type: regexp
+        metric_names:
+          - ".*user_id.*"
+          - ".*mote_id.*"
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    namespace: mote
+
+  otlp/grafana:
+    endpoint: "${GRAFANA_OTLP_ENDPOINT}"
+    headers:
+      Authorization: "Bearer ${GRAFANA_API_KEY}"
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch, filter]
+      exporters: [prometheus]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/grafana]

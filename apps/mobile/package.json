@@ -1,0 +1,33 @@
+{
+  "name": "@mote/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "ios": "expo run:ios",
+    "android": "expo run:android",
+    "build": "echo 'Mobile build via EAS'",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "clean": "rm -rf dist .turbo .expo"
+  },
+  "dependencies": {
+    "@mote/sdk": "workspace:*",
+    "@mote/state-vector": "workspace:*",
+    "@mote/behavior-engine": "workspace:*",
+    "expo": "~52.0.0",
+    "expo-router": "~4.0.0",
+    "expo-gl": "~15.0.0",
+    "expo-sqlite": "~15.0.0",
+    "expo-secure-store": "~14.0.0",
+    "react": "^18.3.0",
+    "react-native": "0.76.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
