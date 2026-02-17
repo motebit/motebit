@@ -231,6 +231,11 @@ export class DesktopApp {
     return this.runtime.setupOperatorPin(pin);
   }
 
+  async resetOperatorPin(): Promise<void> {
+    if (!this.runtime) throw new Error("AI not initialized — call initAI() first");
+    return this.runtime.resetOperatorPin();
+  }
+
   resetConversation(): void {
     this.runtime?.resetConversation();
   }

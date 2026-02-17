@@ -410,6 +410,16 @@ export class MotebitRuntime {
     await this.keyring.set(OPERATOR_PIN_KEY, hashed);
   }
 
+  /**
+   * Reset the operator PIN — clears the keyring hash and disables operator mode.
+   */
+  async resetOperatorPin(): Promise<void> {
+    if (!this.keyring) throw new Error("Keyring not available");
+    await this.keyring.delete(OPERATOR_PIN_KEY);
+    this.policy.setOperatorMode(false);
+    this.wireLoopDeps();
+  }
+
   async sendMessage(text: string): Promise<TurnResult> {
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
     if (this._isProcessing) throw new Error("Already processing a message");

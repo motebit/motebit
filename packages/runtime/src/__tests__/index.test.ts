@@ -4,7 +4,7 @@ import {
   NullRenderer,
   createInMemoryStorage,
 } from "../index";
-import type { PlatformAdapters } from "../index";
+import type { PlatformAdapters, KeyringAdapter } from "../index";
 import type { StreamingProvider } from "@motebit/ai-core";
 import type { AIResponse, ContextPack } from "@motebit/sdk";
 import { TrustMode, BatteryMode } from "@motebit/sdk";
@@ -341,5 +341,218 @@ describe("MotebitRuntime compaction", () => {
     const deleted = await rt.compact();
     expect(deleted).toBe(0);
     expect(await rt.events.countEvents("compact-test")).toBe(20);
+  });
+});
+
+// === Operator Mode PIN Auth ===
+
+function createMockKeyring(): KeyringAdapter & { store: Map<string, string> } {
+  const store = new Map<string, string>();
+  return {
+    store,
+    get: vi.fn(async (key: string) => store.get(key) ?? null),
+    set: vi.fn(async (key: string, value: string) => { store.set(key, value); }),
+    delete: vi.fn(async (key: string) => { store.delete(key); }),
+  };
+}
+
+describe("Operator mode PIN auth", () => {
+  function createRuntimeWithKeyring(keyring?: KeyringAdapter) {
+    return new MotebitRuntime(
+      { motebitId: "pin-test", tickRateHz: 0 },
+      {
+        storage: createInMemoryStorage(),
+        renderer: new NullRenderer(),
+        ai: createMockProvider(),
+        keyring,
+      },
+    );
+  }
+
+  it("no keyring: setOperatorMode(true) succeeds without PIN (dev mode)", async () => {
+    const rt = createRuntimeWithKeyring(undefined);
+    const result = await rt.setOperatorMode(true);
+    expect(result.success).toBe(true);
+    expect(rt.isOperatorMode).toBe(true);
+  });
+
+  it("no keyring: setOperatorMode(false) succeeds", async () => {
+    const rt = createRuntimeWithKeyring(undefined);
+    await rt.setOperatorMode(true);
+    const result = await rt.setOperatorMode(false);
+    expect(result.success).toBe(true);
+    expect(rt.isOperatorMode).toBe(false);
+  });
+
+  it("with keyring, no PIN stored: returns needsSetup", async () => {
+    const keyring = createMockKeyring();
+    const rt = createRuntimeWithKeyring(keyring);
+    const result = await rt.setOperatorMode(true);
+    expect(result.success).toBe(false);
+    expect(result.needsSetup).toBe(true);
+    expect(rt.isOperatorMode).toBe(false);
+  });
+
+  it("setupOperatorPin stores hash and enables auth flow", async () => {
+    const keyring = createMockKeyring();
+    const rt = createRuntimeWithKeyring(keyring);
+
+    await rt.setupOperatorPin("1234");
+    expect(keyring.store.has("operator_pin_hash")).toBe(true);
+    // Stored value is a hex SHA-256 hash, not the raw PIN
+    const stored = keyring.store.get("operator_pin_hash")!;
+    expect(stored).not.toBe("1234");
+    expect(stored).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("correct PIN enables operator mode", async () => {
+    const keyring = createMockKeyring();
+    const rt = createRuntimeWithKeyring(keyring);
+
+    await rt.setupOperatorPin("5678");
+    const result = await rt.setOperatorMode(true, "5678");
+    expect(result.success).toBe(true);
+    expect(rt.isOperatorMode).toBe(true);
+  });
+
+  it("incorrect PIN is rejected", async () => {
+    const keyring = createMockKeyring();
+    const rt = createRuntimeWithKeyring(keyring);
+
+    await rt.setupOperatorPin("1234");
+    const result = await rt.setOperatorMode(true, "9999");
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Incorrect PIN");
+    expect(rt.isOperatorMode).toBe(false);
+  });
+
+  it("missing PIN returns error when hash exists", async () => {
+    const keyring = createMockKeyring();
+    const rt = createRuntimeWithKeyring(keyring);
+
+    await rt.setupOperatorPin("1234");
+    const result = await rt.setOperatorMode(true);
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("PIN required");
+  });
+
+  it("disabling operator mode never requires PIN", async () => {
+    const keyring = createMockKeyring();
+    const rt = createRuntimeWithKeyring(keyring);
+
+    await rt.setupOperatorPin("1234");
+    await rt.setOperatorMode(true, "1234");
+    expect(rt.isOperatorMode).toBe(true);
+
+    // Disable without any PIN
+    const result = await rt.setOperatorMode(false);
+    expect(result.success).toBe(true);
+    expect(rt.isOperatorMode).toBe(false);
+  });
+
+  it("setupOperatorPin rejects non-digit PINs", async () => {
+    const keyring = createMockKeyring();
+    const rt = createRuntimeWithKeyring(keyring);
+    await expect(rt.setupOperatorPin("abcd")).rejects.toThrow("PIN must be 4-6 digits");
+  });
+
+  it("setupOperatorPin rejects too-short PINs", async () => {
+    const keyring = createMockKeyring();
+    const rt = createRuntimeWithKeyring(keyring);
+    await expect(rt.setupOperatorPin("12")).rejects.toThrow("PIN must be 4-6 digits");
+  });
+
+  it("setupOperatorPin rejects too-long PINs", async () => {
+    const keyring = createMockKeyring();
+    const rt = createRuntimeWithKeyring(keyring);
+    await expect(rt.setupOperatorPin("1234567")).rejects.toThrow("PIN must be 4-6 digits");
+  });
+
+  it("setupOperatorPin accepts 4, 5, and 6 digit PINs", async () => {
+    const keyring = createMockKeyring();
+    const rt = createRuntimeWithKeyring(keyring);
+    await expect(rt.setupOperatorPin("1234")).resolves.toBeUndefined();
+    await expect(rt.setupOperatorPin("12345")).resolves.toBeUndefined();
+    await expect(rt.setupOperatorPin("123456")).resolves.toBeUndefined();
+  });
+
+  it("setupOperatorPin throws without keyring", async () => {
+    const rt = createRuntimeWithKeyring(undefined);
+    await expect(rt.setupOperatorPin("1234")).rejects.toThrow("Keyring not available");
+  });
+
+  it("PIN hash is deterministic (same PIN → same hash)", async () => {
+    const keyring = createMockKeyring();
+    const rt = createRuntimeWithKeyring(keyring);
+
+    await rt.setupOperatorPin("4321");
+    const hash1 = keyring.store.get("operator_pin_hash")!;
+
+    await rt.setupOperatorPin("4321");
+    const hash2 = keyring.store.get("operator_pin_hash")!;
+
+    expect(hash1).toBe(hash2);
+  });
+
+  it("different PINs produce different hashes", async () => {
+    const keyring = createMockKeyring();
+    const rt = createRuntimeWithKeyring(keyring);
+
+    await rt.setupOperatorPin("1111");
+    const hash1 = keyring.store.get("operator_pin_hash")!;
+
+    await rt.setupOperatorPin("2222");
+    const hash2 = keyring.store.get("operator_pin_hash")!;
+
+    expect(hash1).not.toBe(hash2);
+  });
+
+  it("resetOperatorPin clears keyring hash and disables operator mode", async () => {
+    const keyring = createMockKeyring();
+    const rt = createRuntimeWithKeyring(keyring);
+
+    await rt.setupOperatorPin("1234");
+    await rt.setOperatorMode(true, "1234");
+    expect(rt.isOperatorMode).toBe(true);
+
+    await rt.resetOperatorPin();
+    expect(rt.isOperatorMode).toBe(false);
+    expect(keyring.store.has("operator_pin_hash")).toBe(false);
+    expect(keyring.delete).toHaveBeenCalledWith("operator_pin_hash");
+  });
+
+  it("resetOperatorPin throws without keyring", async () => {
+    const rt = createRuntimeWithKeyring(undefined);
+    await expect(rt.resetOperatorPin()).rejects.toThrow("Keyring not available");
+  });
+
+  it("after reset, setOperatorMode returns needsSetup", async () => {
+    const keyring = createMockKeyring();
+    const rt = createRuntimeWithKeyring(keyring);
+
+    await rt.setupOperatorPin("1234");
+    await rt.setOperatorMode(true, "1234");
+    await rt.resetOperatorPin();
+
+    const result = await rt.setOperatorMode(true);
+    expect(result.success).toBe(false);
+    expect(result.needsSetup).toBe(true);
+  });
+
+  it("re-enable after disable requires PIN again", async () => {
+    const keyring = createMockKeyring();
+    const rt = createRuntimeWithKeyring(keyring);
+
+    await rt.setupOperatorPin("1234");
+    await rt.setOperatorMode(true, "1234");
+    await rt.setOperatorMode(false);
+
+    // Must supply PIN again to re-enable
+    const noPin = await rt.setOperatorMode(true);
+    expect(noPin.success).toBe(false);
+
+    const withPin = await rt.setOperatorMode(true, "1234");
+    expect(withPin.success).toBe(true);
+    expect(rt.isOperatorMode).toBe(true);
   });
 });

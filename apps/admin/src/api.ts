@@ -1,4 +1,4 @@
-import type { MotebitState, MemoryNode, MemoryEdge, EventLogEntry } from "@motebit/sdk";
+import type { MotebitState, MemoryNode, MemoryEdge, EventLogEntry, ToolAuditEntry } from "@motebit/sdk";
 
 // === Config ===
 
@@ -73,6 +73,11 @@ export interface HealthResponse {
   timestamp: number;
 }
 
+export interface AuditResponse {
+  motebit_id: string;
+  entries: ToolAuditEntry[];
+}
+
 // === Endpoint Functions ===
 
 export function fetchState(signal?: AbortSignal): Promise<StateResponse> {
@@ -95,6 +100,10 @@ export function deleteMemoryNode(nodeId: string, signal?: AbortSignal): Promise<
     `/api/v1/memory/${config.motebitId}/${nodeId}`,
     { method: "DELETE", signal },
   );
+}
+
+export function fetchAudit(signal?: AbortSignal): Promise<AuditResponse> {
+  return apiFetch<AuditResponse>(`/api/v1/audit/${config.motebitId}`, { signal });
 }
 
 export function fetchHealth(signal?: AbortSignal): Promise<HealthResponse> {

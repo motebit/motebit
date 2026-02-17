@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import type { MotebitState, MemoryNode, MemoryEdge, EventLogEntry } from "@motebit/sdk";
+import type { MotebitState, MemoryNode, MemoryEdge, EventLogEntry, ToolAuditEntry } from "@motebit/sdk";
 import { TrustMode, BatteryMode } from "@motebit/sdk";
 import { computeRawCues } from "@motebit/behavior-engine";
-import { fetchState, fetchMemory, fetchEvents, deleteMemoryNode } from "./api";
+import { fetchState, fetchMemory, fetchEvents, fetchAudit, deleteMemoryNode } from "./api";
 import { useStateHistory } from "./hooks/useStateHistory";
 import { ConnectionStatus } from "./components/ConnectionStatus";
 import { StateVectorPanel } from "./components/StateVectorPanel";
 import { MemoryGraphPanel } from "./components/MemoryGraphPanel";
 import { BehaviorPanel } from "./components/BehaviorPanel";
 import { EventsPanel } from "./components/EventsPanel";
+import { AuditPanel } from "./components/AuditPanel";
 
 const DEFAULT_STATE: MotebitState = {
   attention: 0,
@@ -27,6 +28,7 @@ export function AdminApp(): React.ReactElement {
   const [memories, setMemories] = useState<MemoryNode[]>([]);
   const [edges, setEdges] = useState<MemoryEdge[]>([]);
   const [events, setEvents] = useState<EventLogEntry[]>([]);
+  const [audit, setAudit] = useState<ToolAuditEntry[]>([]);
   const [connected, setConnected] = useState(false);
   const [activePanel, setActivePanel] = useState<string>("state");
   const maxClockRef = useRef(0);
@@ -36,16 +38,18 @@ export function AdminApp(): React.ReactElement {
 
   const refresh = useCallback(async (signal: AbortSignal) => {
     try {
-      const [stateRes, memoryRes, eventsRes] = await Promise.all([
+      const [stateRes, memoryRes, eventsRes, auditRes] = await Promise.all([
         fetchState(signal),
         fetchMemory(signal),
         fetchEvents(maxClockRef.current, signal),
+        fetchAudit(signal),
       ]);
 
       setState(stateRes.state);
       pushHistory(stateRes.state);
       setMemories(memoryRes.memories);
       setEdges(memoryRes.edges);
+      setAudit(auditRes.entries);
 
       if (eventsRes.events.length > 0) {
         setEvents((prev) => {
@@ -87,7 +91,7 @@ export function AdminApp(): React.ReactElement {
   }, []);
 
   const nav = React.createElement("nav", { className: "admin-nav" },
-    ["state", "memory", "behavior", "events"].map((panel) =>
+    ["state", "memory", "behavior", "events", "audit"].map((panel) =>
       React.createElement("button", {
         key: panel,
         className: panel === activePanel ? "active" : "",
@@ -109,6 +113,9 @@ export function AdminApp(): React.ReactElement {
       break;
     case "events":
       content = React.createElement(EventsPanel, { events });
+      break;
+    case "audit":
+      content = React.createElement(AuditPanel, { entries: audit });
       break;
     default:
       content = React.createElement("div", { className: "panel" },

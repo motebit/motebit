@@ -445,6 +445,9 @@
         </label>
       </div>
     </div>
+    <div class="settings-field">
+      <button id="settings-reset-pin" style="background:none;border:none;color:rgba(255,255,255,0.35);font-size:12px;cursor:pointer;padding:0;font-family:inherit;text-decoration:underline;">Reset PIN</button>
+    </div>
     <div class="settings-actions">
       <button class="cancel-btn" id="settings-cancel">Cancel</button>
       <button class="save-btn" id="settings-save">Save</button>
@@ -455,6 +458,7 @@
       <div id="pin-title">Enter PIN</div>
       <input id="pin-input" type="password" maxlength="6" placeholder="PIN" inputmode="numeric" pattern="\d*" />
       <input id="pin-confirm-input" type="password" maxlength="6" placeholder="Confirm PIN" inputmode="numeric" pattern="\d*" />
+      <div id="pin-confirm-text" style="display:none;font-size:13px;color:rgba(255,255,255,0.6);text-align:center;"></div>
       <div id="pin-error"></div>
       <div class="pin-actions">
         <button id="pin-cancel">Cancel</button>

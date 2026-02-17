@@ -296,3 +296,24 @@ body {
 .recharts-tooltip-cursor {
   stroke: var(--border);
 }
+
+/* === Audit Decision Badges === */
+
+.audit-decision {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.audit-decision.allowed {
+  color: var(--green);
+}
+
+.audit-decision.denied {
+  color: var(--red);
+}
+
+.audit-decision.approval {
+  color: var(--accent);
+}

@@ -311,24 +311,38 @@ function finishSaveSettings(
 const pinBackdrop = document.getElementById("pin-backdrop") as HTMLDivElement;
 const pinInput = document.getElementById("pin-input") as HTMLInputElement;
 const pinConfirmInput = document.getElementById("pin-confirm-input") as HTMLInputElement;
+const pinConfirmText = document.getElementById("pin-confirm-text") as HTMLDivElement;
 const pinError = document.getElementById("pin-error") as HTMLDivElement;
 const pinTitle = document.getElementById("pin-title") as HTMLDivElement;
-let pinMode: "setup" | "verify" = "verify";
+let pinMode: "setup" | "verify" | "reset" = "verify";
 
-function showPinDialog(mode: "setup" | "verify"): void {
+function showPinDialog(mode: "setup" | "verify" | "reset"): void {
   pinMode = mode;
   pinInput.value = "";
   pinConfirmInput.value = "";
   pinError.textContent = "";
+  pinConfirmText.style.display = "none";
+  pinConfirmText.textContent = "";
   if (mode === "setup") {
     pinTitle.textContent = "Set Operator PIN";
+    pinInput.style.display = "block";
     pinConfirmInput.style.display = "block";
+    (document.getElementById("pin-submit") as HTMLButtonElement).textContent = "OK";
+  } else if (mode === "reset") {
+    pinTitle.textContent = "Reset Operator PIN?";
+    pinInput.style.display = "none";
+    pinConfirmInput.style.display = "none";
+    pinConfirmText.style.display = "block";
+    pinConfirmText.textContent = "This will clear your PIN and disable operator mode.";
+    (document.getElementById("pin-submit") as HTMLButtonElement).textContent = "Reset";
   } else {
     pinTitle.textContent = "Enter Operator PIN";
+    pinInput.style.display = "block";
     pinConfirmInput.style.display = "none";
+    (document.getElementById("pin-submit") as HTMLButtonElement).textContent = "OK";
   }
   pinBackdrop.classList.add("open");
-  pinInput.focus();
+  if (mode !== "reset") pinInput.focus();
 }
 
 function closePinDialog(): void {
@@ -341,8 +355,22 @@ function closePinDialog(): void {
 }
 
 async function handlePinSubmit(): Promise<void> {
-  const pin = pinInput.value.trim();
   pinError.textContent = "";
+
+  if (pinMode === "reset") {
+    try {
+      await app.resetOperatorPin();
+    } catch (err: unknown) {
+      pinError.textContent = err instanceof Error ? err.message : String(err);
+      return;
+    }
+    pinBackdrop.classList.remove("open");
+    settingsOperatorMode.checked = false;
+    addMessage("system", "Operator PIN reset");
+    return;
+  }
+
+  const pin = pinInput.value.trim();
 
   if (!/^\d{4,6}$/.test(pin)) {
     pinError.textContent = "PIN must be 4-6 digits";
@@ -386,6 +414,11 @@ pinInput.addEventListener("keydown", (e) => {
 });
 pinConfirmInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") { void handlePinSubmit(); }
+});
+
+// Reset PIN button
+document.getElementById("settings-reset-pin")!.addEventListener("click", () => {
+  showPinDialog("reset");
 });
 
 // Settings event listeners

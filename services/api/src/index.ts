@@ -30,7 +30,7 @@ import { EventStore } from "@motebit/event-log";
 import { IdentityManager } from "@motebit/core-identity";
 import { createMotebitDatabase } from "@motebit/persistence";
 import type { MotebitDatabase } from "@motebit/persistence";
-import type { EventLogEntry } from "@motebit/sdk";
+import type { EventLogEntry, ToolAuditEntry } from "@motebit/sdk";
 import type { WSContext } from "hono/ws";
 
 // === Config ===
@@ -253,6 +253,23 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
     }
     const device = await identityManager.registerDevice(body.motebit_id, body.device_name);
     return c.json(device, 201);
+  });
+
+  // --- Audit: query tool audit log ---
+  if (apiToken) {
+    app.use("/api/v1/*", bearerAuth({ token: apiToken }));
+  }
+
+  app.get("/api/v1/audit/:motebitId", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const turnId = c.req.query("turn_id");
+    let entries: ToolAuditEntry[] = [];
+    if (moteDb.toolAuditSink) {
+      entries = turnId
+        ? moteDb.toolAuditSink.query(turnId)
+        : moteDb.toolAuditSink.getAll();
+    }
+    return c.json({ motebit_id: motebitId, entries });
   });
 
   // --- Identity: create ---
