@@ -413,6 +413,9 @@ importers:
       '@motebit/memory-graph':
         specifier: workspace:*
         version: link:../memory-graph
+      '@motebit/policy':
+        specifier: workspace:*
+        version: link:../policy
       '@motebit/privacy-layer':
         specifier: workspace:*
         version: link:../privacy-layer

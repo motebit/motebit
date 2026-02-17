@@ -18,6 +18,8 @@ import type {
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 import type { IdentityStorage } from "@motebit/core-identity";
 import type { AuditLogAdapter } from "@motebit/privacy-layer";
+import type { ToolAuditEntry, PolicyDecision } from "@motebit/sdk";
+import type { AuditLogSink } from "@motebit/policy";
 
 // === Schema ===
 
@@ -89,6 +91,18 @@ CREATE TABLE IF NOT EXISTS state_snapshots (
   updated_at INTEGER NOT NULL,
   version_clock INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS tool_audit_log (
+  call_id TEXT PRIMARY KEY,
+  turn_id TEXT NOT NULL,
+  tool TEXT NOT NULL,
+  args TEXT NOT NULL,
+  decision TEXT NOT NULL,
+  result TEXT,
+  timestamp INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_tool_audit_turn ON tool_audit_log (turn_id);
 `;
 
 function initSchema(db: Database.Database): void {
@@ -563,6 +577,71 @@ export class SqliteStateSnapshot {
   }
 }
 
+// === SqliteToolAuditSink ===
+
+interface ToolAuditRow {
+  call_id: string;
+  turn_id: string;
+  tool: string;
+  args: string;
+  decision: string;
+  result: string | null;
+  timestamp: number;
+}
+
+function rowToToolAudit(row: ToolAuditRow): ToolAuditEntry {
+  return {
+    callId: row.call_id,
+    turnId: row.turn_id,
+    tool: row.tool,
+    args: JSON.parse(row.args) as Record<string, unknown>,
+    decision: JSON.parse(row.decision) as PolicyDecision,
+    result: row.result ? (JSON.parse(row.result) as { ok: boolean; durationMs: number }) : undefined,
+    timestamp: row.timestamp,
+  };
+}
+
+export class SqliteToolAuditSink implements AuditLogSink {
+  private stmtAppend: Statement;
+  private stmtQueryTurn: Statement;
+  private stmtGetAll: Statement;
+
+  constructor(db: Database.Database) {
+    this.stmtAppend = db.prepare(
+      `INSERT OR REPLACE INTO tool_audit_log (call_id, turn_id, tool, args, decision, result, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmtQueryTurn = db.prepare(
+      `SELECT * FROM tool_audit_log WHERE turn_id = ? ORDER BY timestamp ASC`,
+    );
+    this.stmtGetAll = db.prepare(
+      `SELECT * FROM tool_audit_log ORDER BY timestamp ASC`,
+    );
+  }
+
+  append(entry: ToolAuditEntry): void {
+    this.stmtAppend.run(
+      entry.callId,
+      entry.turnId,
+      entry.tool,
+      JSON.stringify(entry.args),
+      JSON.stringify(entry.decision),
+      entry.result ? JSON.stringify(entry.result) : null,
+      entry.timestamp,
+    );
+  }
+
+  query(turnId: string): ToolAuditEntry[] {
+    const rows = this.stmtQueryTurn.all(turnId) as ToolAuditRow[];
+    return rows.map(rowToToolAudit);
+  }
+
+  getAll(): ToolAuditEntry[] {
+    const rows = this.stmtGetAll.all() as ToolAuditRow[];
+    return rows.map(rowToToolAudit);
+  }
+}
+
 // === Factory ===
 
 export interface MotebitDatabase {
@@ -572,6 +651,7 @@ export interface MotebitDatabase {
   identityStorage: SqliteIdentityStorage;
   auditLog: SqliteAuditLog;
   stateSnapshot: SqliteStateSnapshot;
+  toolAuditSink: SqliteToolAuditSink;
   close(): void;
 }
 
@@ -607,6 +687,7 @@ export function createMotebitDatabase(dbPath: string): MotebitDatabase {
   const identityStorage = new SqliteIdentityStorage(db);
   const auditLog = new SqliteAuditLog(db);
   const stateSnapshot = new SqliteStateSnapshot(db);
+  const toolAuditSink = new SqliteToolAuditSink(db);
 
   return {
     db,
@@ -615,6 +696,7 @@ export function createMotebitDatabase(dbPath: string): MotebitDatabase {
     identityStorage,
     auditLog,
     stateSnapshot,
+    toolAuditSink,
     close() {
       db.close();
     },

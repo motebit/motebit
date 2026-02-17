@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
   createMotebitDatabase,
+  SqliteToolAuditSink,
   type MotebitDatabase,
 } from "../index.js";
 import {
@@ -14,6 +15,7 @@ import type {
   MemoryEdge,
   MotebitIdentity,
   AuditRecord,
+  ToolAuditEntry,
 } from "@motebit/sdk";
 
 let mdb: MotebitDatabase;
@@ -471,5 +473,91 @@ describe("cross-adapter persistence", () => {
     const results = await freshEventStore.query({ motebit_id: "motebit-1" });
     expect(results).toHaveLength(1);
     expect(results[0]!.payload).toEqual({ shared: true });
+  });
+});
+
+// === SqliteToolAuditSink ===
+
+describe("SqliteToolAuditSink", () => {
+  const makeToolAudit = (overrides: Partial<ToolAuditEntry> = {}): ToolAuditEntry => ({
+    callId: crypto.randomUUID(),
+    turnId: "turn-1",
+    tool: "shell_exec",
+    args: { command: "ls" },
+    decision: { allowed: true, requiresApproval: false },
+    timestamp: Date.now(),
+    ...overrides,
+  });
+
+  it("creates tool_audit_log table", () => {
+    const tables = mdb.db
+      .prepare(`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`)
+      .all() as { name: string }[];
+    expect(tables.map((t) => t.name)).toContain("tool_audit_log");
+  });
+
+  it("append and getAll round-trip", () => {
+    const entry = makeToolAudit();
+    mdb.toolAuditSink.append(entry);
+    const all = mdb.toolAuditSink.getAll();
+    expect(all).toHaveLength(1);
+    expect(all[0]!.callId).toBe(entry.callId);
+    expect(all[0]!.tool).toBe("shell_exec");
+    expect(all[0]!.args).toEqual({ command: "ls" });
+    expect(all[0]!.decision).toEqual({ allowed: true, requiresApproval: false });
+  });
+
+  it("query filters by turnId", () => {
+    mdb.toolAuditSink.append(makeToolAudit({ turnId: "turn-A" }));
+    mdb.toolAuditSink.append(makeToolAudit({ turnId: "turn-B" }));
+    mdb.toolAuditSink.append(makeToolAudit({ turnId: "turn-A" }));
+
+    const turnA = mdb.toolAuditSink.query("turn-A");
+    expect(turnA).toHaveLength(2);
+    expect(turnA.every((e) => e.turnId === "turn-A")).toBe(true);
+
+    const turnB = mdb.toolAuditSink.query("turn-B");
+    expect(turnB).toHaveLength(1);
+  });
+
+  it("stores and retrieves result field", () => {
+    const entry = makeToolAudit({ result: { ok: true, durationMs: 42 } });
+    mdb.toolAuditSink.append(entry);
+    const all = mdb.toolAuditSink.getAll();
+    expect(all[0]!.result).toEqual({ ok: true, durationMs: 42 });
+  });
+
+  it("handles entries without result", () => {
+    const entry = makeToolAudit();
+    delete (entry as unknown as Record<string, unknown>).result;
+    mdb.toolAuditSink.append(entry);
+    const all = mdb.toolAuditSink.getAll();
+    expect(all[0]!.result).toBeUndefined();
+  });
+
+  it("stores denied decisions", () => {
+    const entry = makeToolAudit({
+      decision: { allowed: false, requiresApproval: false, reason: "Tool on deny list" },
+    });
+    mdb.toolAuditSink.append(entry);
+    const all = mdb.toolAuditSink.getAll();
+    expect(all[0]!.decision.allowed).toBe(false);
+    expect(all[0]!.decision.reason).toBe("Tool on deny list");
+  });
+
+  it("getAll returns entries ordered by timestamp", () => {
+    mdb.toolAuditSink.append(makeToolAudit({ timestamp: 300 }));
+    mdb.toolAuditSink.append(makeToolAudit({ timestamp: 100 }));
+    mdb.toolAuditSink.append(makeToolAudit({ timestamp: 200 }));
+    const all = mdb.toolAuditSink.getAll();
+    expect(all.map((e) => e.timestamp)).toEqual([100, 200, 300]);
+  });
+
+  it("persists across new sink instances sharing same db", () => {
+    mdb.toolAuditSink.append(makeToolAudit({ tool: "web_fetch" }));
+    const freshSink = new SqliteToolAuditSink(mdb.db);
+    const all = freshSink.getAll();
+    expect(all).toHaveLength(1);
+    expect(all[0]!.tool).toBe("web_fetch");
   });
 });

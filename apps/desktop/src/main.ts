@@ -257,10 +257,42 @@ async function saveSettings(): Promise<void> {
     }
   }
 
-  // Apply operator mode
-  app.setOperatorMode(settingsOperatorMode.checked);
+  // Apply operator mode (with PIN flow if enabling)
+  const wantsOperator = settingsOperatorMode.checked;
+  if (wantsOperator && !app.isOperatorMode) {
+    // Attempt to enable — may trigger PIN flow
+    const result = await app.setOperatorMode(true);
+    if (!result.success) {
+      if (result.needsSetup) {
+        showPinDialog("setup");
+      } else {
+        showPinDialog("verify");
+      }
+      // Don't close settings yet — PIN dialog handles continuation
+      pendingSettingsSave = { provider, model, apiKey, isTauri };
+      return;
+    }
+  } else if (!wantsOperator && app.isOperatorMode) {
+    await app.setOperatorMode(false);
+  }
 
-  // Apply immediately
+  finishSaveSettings(provider, model, apiKey, isTauri);
+}
+
+interface PendingSave {
+  provider: DesktopAIConfig["provider"];
+  model?: string;
+  apiKey?: string;
+  isTauri: boolean;
+}
+let pendingSettingsSave: PendingSave | null = null;
+
+function finishSaveSettings(
+  provider: DesktopAIConfig["provider"],
+  model?: string,
+  apiKey?: string,
+  isTauri = false,
+): void {
   const newConfig: DesktopAIConfig = { provider, model, apiKey: apiKey || currentConfig?.apiKey, isTauri, invoke: currentConfig?.invoke };
   currentConfig = newConfig;
 
@@ -273,6 +305,88 @@ async function saveSettings(): Promise<void> {
 
   closeSettings();
 }
+
+// === PIN Dialog ===
+
+const pinBackdrop = document.getElementById("pin-backdrop") as HTMLDivElement;
+const pinInput = document.getElementById("pin-input") as HTMLInputElement;
+const pinConfirmInput = document.getElementById("pin-confirm-input") as HTMLInputElement;
+const pinError = document.getElementById("pin-error") as HTMLDivElement;
+const pinTitle = document.getElementById("pin-title") as HTMLDivElement;
+let pinMode: "setup" | "verify" = "verify";
+
+function showPinDialog(mode: "setup" | "verify"): void {
+  pinMode = mode;
+  pinInput.value = "";
+  pinConfirmInput.value = "";
+  pinError.textContent = "";
+  if (mode === "setup") {
+    pinTitle.textContent = "Set Operator PIN";
+    pinConfirmInput.style.display = "block";
+  } else {
+    pinTitle.textContent = "Enter Operator PIN";
+    pinConfirmInput.style.display = "none";
+  }
+  pinBackdrop.classList.add("open");
+  pinInput.focus();
+}
+
+function closePinDialog(): void {
+  pinBackdrop.classList.remove("open");
+  pinInput.value = "";
+  pinConfirmInput.value = "";
+  pinError.textContent = "";
+  // Revert the toggle since we didn't succeed
+  settingsOperatorMode.checked = app.isOperatorMode;
+}
+
+async function handlePinSubmit(): Promise<void> {
+  const pin = pinInput.value.trim();
+  pinError.textContent = "";
+
+  if (!/^\d{4,6}$/.test(pin)) {
+    pinError.textContent = "PIN must be 4-6 digits";
+    return;
+  }
+
+  if (pinMode === "setup") {
+    const confirm = pinConfirmInput.value.trim();
+    if (pin !== confirm) {
+      pinError.textContent = "PINs do not match";
+      return;
+    }
+    try {
+      await app.setupOperatorPin(pin);
+    } catch (err: unknown) {
+      pinError.textContent = err instanceof Error ? err.message : String(err);
+      return;
+    }
+  }
+
+  // Now try to enable operator mode with the PIN
+  const result = await app.setOperatorMode(true, pin);
+  if (!result.success) {
+    pinError.textContent = result.error || "Failed to enable operator mode";
+    return;
+  }
+
+  // Success — close PIN dialog and finish settings save
+  pinBackdrop.classList.remove("open");
+  if (pendingSettingsSave) {
+    const s = pendingSettingsSave;
+    pendingSettingsSave = null;
+    finishSaveSettings(s.provider, s.model, s.apiKey, s.isTauri);
+  }
+}
+
+document.getElementById("pin-cancel")!.addEventListener("click", closePinDialog);
+document.getElementById("pin-submit")!.addEventListener("click", () => { void handlePinSubmit(); });
+pinInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { void handlePinSubmit(); }
+});
+pinConfirmInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { void handlePinSubmit(); }
+});
 
 // Settings event listeners
 settingsBackdrop.addEventListener("click", closeSettings);

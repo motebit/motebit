@@ -48,6 +48,18 @@ CREATE TABLE IF NOT EXISTS memory_edges (
 
 CREATE INDEX IF NOT EXISTS idx_memory_edges_source ON memory_edges (source_id);
 CREATE INDEX IF NOT EXISTS idx_memory_edges_target ON memory_edges (target_id);
+
+CREATE TABLE IF NOT EXISTS tool_audit_log (
+  call_id TEXT PRIMARY KEY,
+  turn_id TEXT NOT NULL,
+  tool TEXT NOT NULL,
+  args TEXT NOT NULL,
+  decision TEXT NOT NULL,
+  result TEXT,
+  timestamp INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_tool_audit_turn ON tool_audit_log (turn_id);
 ";
 
 fn json_to_sql_value(v: &JsonValue) -> SqlValue {

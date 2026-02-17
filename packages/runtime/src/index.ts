@@ -30,7 +30,7 @@ import type {
 // to avoid bundling node:child_process / stdio into browser builds (desktop app).
 type McpClientAdapter = { disconnect(): Promise<void> };
 import { PolicyGate, MemoryGovernor } from "@motebit/policy";
-import type { PolicyConfig, MemoryGovernanceConfig } from "@motebit/policy";
+import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 
 // Re-export key types for consumers
 export type { TurnResult, AgenticChunk } from "@motebit/ai-core";
@@ -43,7 +43,7 @@ export type { AuditLogAdapter } from "@motebit/privacy-layer";
 export type { RenderAdapter, RenderFrame } from "@motebit/render-engine";
 export type { RenderSpec } from "@motebit/sdk";
 export { PolicyGate } from "@motebit/policy";
-export type { PolicyConfig, MemoryGovernanceConfig } from "@motebit/policy";
+export type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 
 // === McpServerConfig (inlined to avoid importing Node-only @motebit/mcp-client) ===
 
@@ -114,6 +114,7 @@ export interface StorageAdapters {
   identityStorage: IdentityStorage;
   auditLog: AuditLogAdapter;
   stateSnapshot?: StateSnapshotAdapter;
+  toolAuditSink?: AuditLogSink;
 }
 
 export interface PlatformAdapters {
@@ -158,6 +159,22 @@ export type StreamChunk =
   | { type: "approval_request"; tool_call_id: string; name: string; args: Record<string, unknown> }
   | { type: "injection_warning"; tool_name: string; patterns: string[] }
   | { type: "result"; result: TurnResult };
+
+// === Operator Mode Result ===
+
+export interface OperatorModeResult {
+  success: boolean;
+  needsSetup?: boolean;
+  error?: string;
+}
+
+const OPERATOR_PIN_KEY = "operator_pin_hash";
+
+async function hashPin(pin: string): Promise<string> {
+  const data = new TextEncoder().encode(pin);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
 
 // === In-Memory Storage Factory ===
 
@@ -204,6 +221,7 @@ export class MotebitRuntime {
   private toolRegistry: SimpleToolRegistry;
   private mcpAdapters: McpClientAdapter[] = [];
   private mcpConfigs: McpServerConfig[];
+  private keyring: KeyringAdapter | null;
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
     this.motebitId = config.motebitId;
@@ -213,6 +231,7 @@ export class MotebitRuntime {
     this.renderer = adapters.renderer;
     this.provider = adapters.ai ?? null;
     this.stateSnapshot = adapters.storage.stateSnapshot;
+    this.keyring = adapters.keyring ?? null;
 
     // Tool registry: merge platform-provided tools if any
     this.toolRegistry = new SimpleToolRegistry();
@@ -253,7 +272,7 @@ export class MotebitRuntime {
     });
 
     // Policy & memory governance
-    this.policy = new PolicyGate(config.policy);
+    this.policy = new PolicyGate(config.policy, adapters.storage.toolAuditSink);
     this.memoryGovernor = new MemoryGovernor(config.memoryGovernance);
 
     // Restore saved state
@@ -339,9 +358,56 @@ export class MotebitRuntime {
     return this.policy.operatorMode;
   }
 
-  setOperatorMode(enabled: boolean): void {
-    this.policy.setOperatorMode(enabled);
+  /**
+   * Enable/disable operator mode with PIN authentication.
+   * Disabling never requires a PIN (safe direction).
+   * If no keyring is available, falls through (dev mode).
+   */
+  async setOperatorMode(enabled: boolean, pin?: string): Promise<OperatorModeResult> {
+    // Disabling is always allowed (safe direction)
+    if (!enabled) {
+      this.policy.setOperatorMode(false);
+      this.wireLoopDeps();
+      return { success: true };
+    }
+
+    // No keyring → fall through (non-Tauri dev mode)
+    if (!this.keyring) {
+      this.policy.setOperatorMode(true);
+      this.wireLoopDeps();
+      return { success: true };
+    }
+
+    // Check if PIN is set up
+    const storedHash = await this.keyring.get(OPERATOR_PIN_KEY);
+    if (!storedHash) {
+      return { success: false, needsSetup: true };
+    }
+
+    // PIN is required
+    if (!pin) {
+      return { success: false, error: "PIN required" };
+    }
+
+    const inputHash = await hashPin(pin);
+    if (inputHash !== storedHash) {
+      return { success: false, error: "Incorrect PIN" };
+    }
+
+    this.policy.setOperatorMode(true);
     this.wireLoopDeps();
+    return { success: true };
+  }
+
+  /**
+   * Set up the operator mode PIN (first-time only, or reset).
+   * PIN must be 4-6 digits.
+   */
+  async setupOperatorPin(pin: string): Promise<void> {
+    if (!this.keyring) throw new Error("Keyring not available");
+    if (!/^\d{4,6}$/.test(pin)) throw new Error("PIN must be 4-6 digits");
+    const hashed = await hashPin(pin);
+    await this.keyring.set(OPERATOR_PIN_KEY, hashed);
   }
 
   async sendMessage(text: string): Promise<TurnResult> {

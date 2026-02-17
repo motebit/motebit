@@ -6,7 +6,7 @@
  */
 
 import { MotebitRuntime } from "@motebit/runtime";
-import type { TurnResult, StorageAdapters, StreamChunk } from "@motebit/runtime";
+import type { TurnResult, StorageAdapters, StreamChunk, KeyringAdapter, OperatorModeResult, AuditLogSink } from "@motebit/runtime";
 import { ThreeJSAdapter } from "@motebit/render-engine";
 import {
   CloudProvider,
@@ -14,6 +14,7 @@ import {
   resolveConfig,
   type MotebitPersonalityConfig,
 } from "@motebit/ai-core";
+import type { ToolAuditEntry } from "@motebit/sdk";
 import { InMemoryEventStore } from "@motebit/event-log";
 import { InMemoryMemoryStorage } from "@motebit/memory-graph";
 import { InMemoryIdentityStorage } from "@motebit/core-identity";
@@ -22,7 +23,7 @@ import { TauriEventStore, TauriMemoryStorage, type InvokeFn } from "./tauri-stor
 export type { InvokeFn } from "./tauri-storage.js";
 
 // Re-export runtime types for main.ts consumption
-export type { TurnResult, StreamChunk };
+export type { TurnResult, StreamChunk, OperatorModeResult };
 
 // === Tauri Command Interface ===
 
@@ -47,6 +48,57 @@ export interface DesktopAIConfig {
   invoke?: InvokeFn;
 }
 
+// === Tauri Keyring Adapter ===
+
+class TauriKeyringAdapter implements KeyringAdapter {
+  constructor(private invoke: InvokeFn) {}
+
+  async get(key: string): Promise<string | null> {
+    return this.invoke<string | null>("keyring_get", { key });
+  }
+
+  async set(key: string, value: string): Promise<void> {
+    await this.invoke<void>("keyring_set", { key, value });
+  }
+
+  async delete(key: string): Promise<void> {
+    await this.invoke<void>("keyring_delete", { key });
+  }
+}
+
+// === Tauri Tool Audit Sink ===
+
+class TauriToolAuditSink implements AuditLogSink {
+  constructor(private invoke: InvokeFn) {}
+
+  append(entry: ToolAuditEntry): void {
+    // Fire-and-forget — audit writes are best-effort
+    void this.invoke("db_execute", {
+      sql: `INSERT OR REPLACE INTO tool_audit_log (call_id, turn_id, tool, args, decision, result, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      params: [
+        entry.callId,
+        entry.turnId,
+        entry.tool,
+        JSON.stringify(entry.args),
+        JSON.stringify(entry.decision),
+        entry.result ? JSON.stringify(entry.result) : null,
+        entry.timestamp,
+      ],
+    });
+  }
+
+  query(_turnId: string): ToolAuditEntry[] {
+    // Sync interface — return empty. The Tauri version is async-backed but
+    // the AuditLogSink interface is sync. Writes persist; reads use db_query.
+    return [];
+  }
+
+  getAll(): ToolAuditEntry[] {
+    return [];
+  }
+}
+
 // === Storage Factory ===
 
 function createTauriStorage(invoke: InvokeFn): StorageAdapters {
@@ -55,6 +107,7 @@ function createTauriStorage(invoke: InvokeFn): StorageAdapters {
     memoryStorage: new TauriMemoryStorage(invoke),
     identityStorage: new InMemoryIdentityStorage(),
     auditLog: new InMemoryAuditLog(),
+    toolAuditSink: new TauriToolAuditSink(invoke),
   };
 }
 
@@ -154,10 +207,11 @@ export class DesktopApp {
     }
 
     const storage = createDesktopStorage(config);
+    const keyring = config.isTauri && config.invoke ? new TauriKeyringAdapter(config.invoke) : undefined;
 
     this.runtime = new MotebitRuntime(
       { motebitId: "desktop-local", tickRateHz: 2 },
-      { storage, renderer: this.renderer, ai: provider },
+      { storage, renderer: this.renderer, ai: provider, keyring },
     );
 
     return true;
@@ -167,8 +221,14 @@ export class DesktopApp {
     return this.runtime?.isOperatorMode ?? false;
   }
 
-  setOperatorMode(enabled: boolean): void {
-    this.runtime?.setOperatorMode(enabled);
+  async setOperatorMode(enabled: boolean, pin?: string): Promise<OperatorModeResult> {
+    if (!this.runtime) return { success: false, error: "AI not initialized" };
+    return this.runtime.setOperatorMode(enabled, pin);
+  }
+
+  async setupOperatorPin(pin: string): Promise<void> {
+    if (!this.runtime) throw new Error("AI not initialized — call initAI() first");
+    return this.runtime.setupOperatorPin(pin);
   }
 
   resetConversation(): void {

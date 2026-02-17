@@ -17,6 +17,7 @@
     "@motebit/memory-graph": "workspace:*",
     "@motebit/core-identity": "workspace:*",
     "@motebit/privacy-layer": "workspace:*",
+    "@motebit/policy": "workspace:*",
     "better-sqlite3": "^11.0.0"
   },
   "devDependencies": {
