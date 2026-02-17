@@ -1,0 +1,157 @@
+---
+title: Daemon Mode & Approvals
+description: Running motebit as a daemon — scheduled goals, approval queue, and governance enforcement.
+---
+
+The daemon is a long-running process that executes scheduled goals on behalf of your motebit. It reads the signed `motebit.md` identity file, derives three-band governance thresholds, and runs a tick-based scheduler that fires goals, gates tool calls through the approval queue, and enforces policy at every step.
+
+## Starting the daemon
+
+```bash
+motebit run
+```
+
+Or with an explicit identity file path:
+
+```bash
+motebit run --identity ./path/to/motebit.md
+```
+
+On startup, the daemon:
+
+1. Reads and verifies the `motebit.md` Ed25519 signature (fails if invalid)
+2. Checks that all three governance thresholds are present — `max_risk_auto`, `require_approval_above`, `deny_above` (fails if any are missing)
+3. Derives a `GovernancePolicyConfig` from the governance block
+4. Starts the `GoalScheduler` with a 60-second tick interval
+5. Prints a summary:
+
+```
+Daemon running. motebit_id: a1b2c3d4... Goals: 3. Policy: max_risk_auto=R1_DRAFT, deny_above=R4_MONEY
+```
+
+Stop the daemon with `SIGINT` (Ctrl-C) or `SIGTERM`. On shutdown, all pending approvals are denied with reason `"daemon_shutdown"`.
+
+## Managing goals
+
+Goals are scheduled prompts that the daemon executes at a fixed interval.
+
+### Add a goal
+
+```bash
+motebit goal add "Summarize unread emails" --every 1h
+```
+
+The `--every` flag is required. Valid intervals use a number followed by a unit: `m` (minutes), `h` (hours), `d` (days). Examples: `5m`, `30m`, `1h`, `6h`, `1d`.
+
+### List goals
+
+```bash
+motebit goal list
+```
+
+```
+  ID        Prompt                                     Interval    Last Run            Enabled
+  a1b2c3d4  Summarize unread emails                    1h          2025-01-15T10:00Z   true
+  e5f6a7b8  Check deployment status                    30m         2025-01-15T10:30Z   true
+```
+
+### Remove, pause, resume
+
+```bash
+motebit goal remove a1b2    # prefix match on goal ID
+motebit goal pause e5f6     # disable without deleting
+motebit goal resume e5f6    # re-enable
+```
+
+All goal commands support prefix matching — you only need enough characters to uniquely identify the goal.
+
+## How approvals work
+
+Governance in `motebit.md` defines three risk thresholds that partition all tool calls into three bands:
+
+| Band | Condition | Behavior |
+|---|---|---|
+| **Auto-allow** | `risk_level <= max_risk_auto` | Tool executes immediately |
+| **Approval required** | `risk_level > require_approval_above` and `risk_level <= deny_above` | Daemon suspends the turn and creates a pending approval |
+| **Hard deny** | `risk_level > deny_above` | Tool is blocked by `PolicyGate.validate()` even if visible to the model |
+
+When a tool lands in the approval band, the daemon:
+
+1. Persists a pending approval to `approval_queue` in SQLite
+2. Suspends the current goal's turn
+3. Stops scheduling any other goals (depth-1 constraint — only one approval can be pending at a time)
+4. Waits for an operator to approve or deny via the CLI
+
+The default governance thresholds (set by `motebit init`) are:
+
+| Field | Default |
+|---|---|
+| `max_risk_auto` | `R1_DRAFT` |
+| `require_approval_above` | `R1_DRAFT` |
+| `deny_above` | `R4_MONEY` |
+
+Risk levels, from lowest to highest: `R0_READ`, `R1_DRAFT`, `R2_WRITE`, `R3_EXECUTE`, `R4_MONEY`.
+
+## Managing approvals
+
+### List all approvals
+
+```bash
+motebit approvals list
+```
+
+Shows all approvals (pending, approved, denied, expired), most recent first.
+
+### Show full detail
+
+```bash
+motebit approvals show a1b2
+```
+
+Displays the tool name, argument preview (first 500 chars of serialized args), risk level, timestamps, and status. Supports prefix matching on the approval ID.
+
+### Approve a pending tool call
+
+```bash
+motebit approvals approve a1b2
+```
+
+Sets the approval status to `approved`. The daemon picks it up on its next tick (within 60 seconds) and resumes the suspended turn.
+
+### Deny a pending tool call
+
+```bash
+motebit approvals deny a1b2 --reason "Too risky for production"
+```
+
+Sets the status to `denied` with an optional reason for governance telemetry. If `--reason` is omitted, the denial is recorded without a reason.
+
+Attempting to approve or deny a non-pending approval fails:
+
+```
+Error: approval a1b2c3d4 is already denied.
+```
+
+## Expiry and restart behavior
+
+**Expiry:** Pending approvals expire after 1 hour (3,600,000 ms). On each tick, the scheduler runs `expireStale()` before processing any goals. Expired approvals remain visible in `approvals list` with status `expired`.
+
+**Shutdown:** When the daemon stops (SIGINT/SIGTERM), all pending approvals in the suspended map are denied with reason `"daemon_shutdown"`.
+
+**Restart:** After a daemon restart, previously expired or denied approvals are visible in the history but are not resumable. Cross-restart resume of suspended turns is a v0.3 feature — in v0.2, the goal simply runs fresh on its next scheduled tick.
+
+## Governance enforcement
+
+The daemon requires all three governance fields in `motebit.md`. If any field is missing, the daemon exits with:
+
+```
+Error: motebit.md governance.max_risk_auto is missing or empty.
+All three governance thresholds are required for daemon mode.
+```
+
+At runtime, governance is enforced at two layers:
+
+- **`PolicyGate.filterTools()`** controls which tools the AI model can see. Tools above the deny threshold may still be visible but are blocked at execution time.
+- **`PolicyGate.validate()`** controls execution. Approval-band tools are gated here — the model can reason about them, but cannot execute without operator approval. Hard-denied tools (above `deny_above`) are blocked unconditionally.
+
+This is fail-closed: if governance cannot be parsed or a risk level is unknown, the daemon refuses to start.

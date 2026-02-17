@@ -3,6 +3,7 @@
   "pages": [
     "desktop",
     "cli",
+    "daemon-approvals",
     "configuration",
     "tools",
     "sync"

@@ -4,8 +4,9 @@ const withMDX = createMDX();
 
 /** @type {import('next').NextConfig} */
 const config = {
-  // Skip build-time type check — React 18/19 types conflict in monorepo.
-  // Type safety is enforced via `pnpm --filter @motebit/docs typecheck` instead.
+  // Next.js forces jsx: "preserve" in tsconfig.json, which triggers React types
+  // conflicts in pnpm monorepos. Type safety is enforced via the standalone
+  // typecheck script (tsconfig.typecheck.json with jsx: "react-jsx") instead.
   typescript: { ignoreBuildErrors: true },
   eslint: { ignoreDuringBuilds: true },
 };
