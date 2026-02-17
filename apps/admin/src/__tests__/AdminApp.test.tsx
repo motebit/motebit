@@ -79,6 +79,13 @@ function setupFetchMock() {
         text: () => Promise.resolve(JSON.stringify(mockEvents)),
       });
     }
+    if (url.includes("/api/v1/audit/")) {
+      return Promise.resolve({
+        ok: true, status: 200, statusText: "OK",
+        json: () => Promise.resolve({ motebit_id: "default-motebit", entries: [] }),
+        text: () => Promise.resolve(JSON.stringify({ motebit_id: "default-motebit", entries: [] })),
+      });
+    }
     return Promise.reject(new Error(`Unexpected URL: ${url}`));
   });
 }
