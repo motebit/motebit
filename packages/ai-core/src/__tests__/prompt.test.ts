@@ -163,8 +163,8 @@ describe("formatBodyAwareness", () => {
 describe("buildSystemPrompt", () => {
   it("includes all core sections", () => {
     const prompt = buildSystemPrompt(makeContextPack());
-    expect(prompt).toContain("Motebit");
-    expect(prompt).toContain("[State Fields]");
+    expect(prompt).toContain("motebit");
+    expect(prompt).toContain("[Your internal state");
     expect(prompt).toContain("<memory");
     expect(prompt).toContain("<state");
     expect(prompt).toContain("[State]");
@@ -172,8 +172,8 @@ describe("buildSystemPrompt", () => {
 
   it("uses custom name from config", () => {
     const prompt = buildSystemPrompt(makeContextPack(), { name: "Pebble" });
-    expect(prompt).toContain("You are Pebble");
-    expect(prompt).not.toContain("You are Motebit");
+    expect(prompt).toContain("Your name is Pebble");
+    expect(prompt).not.toContain("Your name is Motebit");
   });
 
   it("includes personality_notes when configured", () => {

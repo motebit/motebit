@@ -133,7 +133,7 @@ describe("OllamaProvider", () => {
 
     // Messages should include system role
     expect(body.messages[0].role).toBe("system");
-    expect(body.messages[0].content).toContain("Motebit");
+    expect(body.messages[0].content).toContain("motebit");
     // Last message should be the user message
     expect(body.messages[body.messages.length - 1]).toEqual({
       role: "user",
@@ -150,7 +150,7 @@ describe("OllamaProvider", () => {
     const mock = getFetchMock();
     const [, opts] = mock.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(opts.body as string);
-    expect(body.messages[0].content).toContain("[State Fields]");
+    expect(body.messages[0].content).toContain("[Your internal state");
     expect(body.messages[0].content).toContain("affect_valence");
     expect(body.messages[0].content).toContain("trust_mode");
   });

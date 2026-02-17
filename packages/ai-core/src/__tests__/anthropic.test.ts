@@ -271,7 +271,7 @@ describe("CloudProvider Anthropic integration", () => {
     expect(body.max_tokens).toBe(2048);
     expect(body.temperature).toBe(0.5);
     expect(body.messages).toEqual([{ role: "user", content: "Test" }]);
-    expect(body.system).toContain("Motebit");
+    expect(body.system).toContain("motebit");
   });
 
   it("system prompt contains state field documentation", async () => {
@@ -283,7 +283,7 @@ describe("CloudProvider Anthropic integration", () => {
     const mock = getFetchMock();
     const [, opts] = mock.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(opts.body as string);
-    expect(body.system).toContain("[State Fields]");
+    expect(body.system).toContain("[Your internal state");
     expect(body.system).toContain("affect_valence");
     expect(body.system).toContain("trust_mode");
   });
