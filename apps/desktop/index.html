@@ -407,6 +407,57 @@
     }
     #pin-submit:hover { background: rgba(99, 102, 241, 1); }
     #pin-confirm-input { display: none; }
+
+    /* Welcome dialog */
+    #welcome-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      background: rgba(0, 0, 0, 0.5);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #welcome-backdrop.open { opacity: 1; pointer-events: auto; }
+    #welcome-dialog {
+      background: rgba(30, 30, 46, 0.97);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 16px;
+      padding: 28px 24px;
+      width: 320px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: rgba(255, 255, 255, 0.85);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      text-align: center;
+    }
+    #welcome-title {
+      font-size: 17px;
+      font-weight: 600;
+    }
+    #welcome-text {
+      font-size: 13px;
+      line-height: 1.5;
+      color: rgba(255, 255, 255, 0.55);
+    }
+    #welcome-start {
+      padding: 10px 0;
+      border: none;
+      border-radius: 10px;
+      background: rgba(99, 102, 241, 0.85);
+      color: #fff;
+      font-size: 14px;
+      cursor: pointer;
+      font-family: inherit;
+      margin-top: 4px;
+    }
+    #welcome-start:hover { background: rgba(99, 102, 241, 1); }
   </style>
 </head>
 <body>
@@ -464,6 +515,17 @@
         <button id="pin-cancel">Cancel</button>
         <button id="pin-submit">OK</button>
       </div>
+    </div>
+  </div>
+  <div id="welcome-backdrop" class="open">
+    <div id="welcome-dialog">
+      <div id="welcome-title">Welcome to Motebit</div>
+      <div id="welcome-text">
+        Motebit creates a local identity and device key to keep your
+        conversations private. Your private key stays on this device
+        and is stored in the system keyring.
+      </div>
+      <button id="welcome-start">Get started</button>
     </div>
   </div>
   <div id="chat-container">

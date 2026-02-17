@@ -1,4 +1,4 @@
-import { DesktopApp, isSlashCommand, parseSlashCommand, type DesktopAIConfig, type InvokeFn, type BootstrapResult } from "./index";
+import { DesktopApp, isSlashCommand, parseSlashCommand, type DesktopAIConfig, type InvokeFn } from "./index";
 import { stripTags } from "@motebit/ai-core";
 
 const canvas = document.getElementById("motebit-canvas") as HTMLCanvasElement;
@@ -479,26 +479,54 @@ async function bootstrap(): Promise<void> {
   const config = await loadDesktopConfig();
   currentConfig = config;
 
+  const welcomeBackdrop = document.getElementById("welcome-backdrop") as HTMLDivElement;
+
   if (config.isTauri && config.invoke) {
-    try {
-      const result: BootstrapResult = await app.bootstrap(config.invoke);
-      if (result.isFirstLaunch) {
-        addMessage("system", "Your mote has been created");
+    const invoke = config.invoke;
+    const raw = await invoke<string>("read_config");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+
+    if (parsed.motebit_id) {
+      // Returning user — skip welcome, bootstrap directly
+      welcomeBackdrop.classList.remove("open");
+      try {
+        await app.bootstrap(invoke);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        addMessage("system", `Identity bootstrap failed: ${msg}`);
+      }
+    } else {
+      // First launch — wait for consent
+      await new Promise<void>((resolve) => {
+        document.getElementById("welcome-start")!.addEventListener("click", () => {
+          welcomeBackdrop.classList.remove("open");
+          resolve();
+        });
+      });
+
+      try {
+        const result = await app.bootstrap(invoke);
+        if (result.isFirstLaunch) {
+          addMessage("system", "Your mote has been created");
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        addMessage("system", `Identity bootstrap failed: ${msg}`);
       }
 
       // Sync relay registration (if configured)
       if (config.syncUrl && config.syncMasterToken) {
         try {
-          await app.registerWithRelay(config.invoke, config.syncUrl, config.syncMasterToken);
+          await app.registerWithRelay(invoke, config.syncUrl, config.syncMasterToken);
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
           addMessage("system", `Sync relay registration failed: ${msg}`);
         }
       }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      addMessage("system", `Identity bootstrap failed: ${msg}`);
     }
+  } else {
+    // Non-Tauri (dev mode) — no identity bootstrap
+    welcomeBackdrop.classList.remove("open");
   }
 
   // AI init
