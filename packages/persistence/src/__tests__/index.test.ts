@@ -393,6 +393,62 @@ describe("SqliteStateSnapshot", () => {
   });
 });
 
+// === Event Compaction ===
+
+function mkEvent(clock: number, motebitId = "motebit-1"): EventLogEntry {
+  return {
+    event_id: crypto.randomUUID(),
+    motebit_id: motebitId,
+    device_id: "test-device",
+    timestamp: Date.now(),
+    event_type: EventType.StateUpdated,
+    payload: {},
+    version_clock: clock,
+    tombstoned: false,
+  };
+}
+
+describe("SqliteEventStore compaction", () => {
+  it("compact removes events at or below beforeClock", async () => {
+    for (let i = 1; i <= 5; i++) {
+      await mdb.eventStore.append(mkEvent(i));
+    }
+
+    const deleted = await mdb.eventStore.compact("motebit-1", 3);
+    expect(deleted).toBe(3);
+
+    const remaining = await mdb.eventStore.query({ motebit_id: "motebit-1" });
+    expect(remaining).toHaveLength(2);
+    expect(remaining.map((e) => e.version_clock)).toEqual([4, 5]);
+  });
+
+  it("countEvents returns correct count", async () => {
+    await mdb.eventStore.append(mkEvent(1));
+    await mdb.eventStore.append(mkEvent(2));
+    expect(await mdb.eventStore.countEvents("motebit-1")).toBe(2);
+    expect(await mdb.eventStore.countEvents("other")).toBe(0);
+  });
+});
+
+// === State Snapshot with version_clock ===
+
+describe("SqliteStateSnapshot version_clock", () => {
+  it("saves and retrieves version_clock", () => {
+    mdb.stateSnapshot.saveState("motebit-1", "{}", 42);
+    expect(mdb.stateSnapshot.getSnapshotClock("motebit-1")).toBe(42);
+  });
+
+  it("defaults to 0 when no snapshot exists", () => {
+    expect(mdb.stateSnapshot.getSnapshotClock("nonexistent")).toBe(0);
+  });
+
+  it("updates version_clock on re-save", () => {
+    mdb.stateSnapshot.saveState("motebit-1", "{}", 10);
+    mdb.stateSnapshot.saveState("motebit-1", "{}", 20);
+    expect(mdb.stateSnapshot.getSnapshotClock("motebit-1")).toBe(20);
+  });
+});
+
 // === Cross-Adapter ===
 
 describe("cross-adapter persistence", () => {

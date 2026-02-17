@@ -190,3 +190,70 @@ describe("EventStore", () => {
     expect(seen).toEqual(["m1"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Compaction
+// ---------------------------------------------------------------------------
+
+describe("InMemoryEventStore compaction", () => {
+  let store: InMemoryEventStore;
+
+  beforeEach(() => {
+    store = new InMemoryEventStore();
+  });
+
+  it("countEvents returns correct count", async () => {
+    await store.append(makeEvent({ motebit_id: "m1", version_clock: 1 }));
+    await store.append(makeEvent({ motebit_id: "m1", version_clock: 2 }));
+    await store.append(makeEvent({ motebit_id: "m2", version_clock: 1 }));
+
+    expect(await store.countEvents("m1")).toBe(2);
+    expect(await store.countEvents("m2")).toBe(1);
+    expect(await store.countEvents("m3")).toBe(0);
+  });
+
+  it("compact removes events at or below beforeClock", async () => {
+    await store.append(makeEvent({ motebit_id: "m1", version_clock: 1 }));
+    await store.append(makeEvent({ motebit_id: "m1", version_clock: 2 }));
+    await store.append(makeEvent({ motebit_id: "m1", version_clock: 3 }));
+    await store.append(makeEvent({ motebit_id: "m1", version_clock: 4 }));
+
+    const deleted = await store.compact("m1", 2);
+    expect(deleted).toBe(2);
+    expect(await store.countEvents("m1")).toBe(2);
+
+    const remaining = await store.query({ motebit_id: "m1" });
+    expect(remaining.map((e) => e.version_clock)).toEqual([3, 4]);
+  });
+
+  it("compact does not affect other motebits", async () => {
+    await store.append(makeEvent({ motebit_id: "m1", version_clock: 1 }));
+    await store.append(makeEvent({ motebit_id: "m2", version_clock: 1 }));
+
+    await store.compact("m1", 1);
+    expect(await store.countEvents("m1")).toBe(0);
+    expect(await store.countEvents("m2")).toBe(1);
+  });
+
+  it("compact returns 0 when no events match", async () => {
+    await store.append(makeEvent({ motebit_id: "m1", version_clock: 5 }));
+    const deleted = await store.compact("m1", 2);
+    expect(deleted).toBe(0);
+  });
+});
+
+describe("EventStore compaction passthrough", () => {
+  it("compact delegates to adapter", async () => {
+    const adapter = new InMemoryEventStore();
+    const eventStore = new EventStore(adapter);
+
+    await adapter.append(makeEvent({ motebit_id: "m1", version_clock: 1 }));
+    await adapter.append(makeEvent({ motebit_id: "m1", version_clock: 2 }));
+    await adapter.append(makeEvent({ motebit_id: "m1", version_clock: 3 }));
+
+    expect(await eventStore.countEvents("m1")).toBe(3);
+    const deleted = await eventStore.compact("m1", 1);
+    expect(deleted).toBe(1);
+    expect(await eventStore.countEvents("m1")).toBe(2);
+  });
+});

@@ -40,8 +40,10 @@ export type { RenderSpec } from "@motebit/sdk";
 // === Platform Adapter Interfaces ===
 
 export interface StateSnapshotAdapter {
-  saveState(motebitId: string, stateJson: string): void;
+  saveState(motebitId: string, stateJson: string, versionClock?: number): void;
   loadState(motebitId: string): string | null;
+  /** Version clock at last snapshot — used to determine what's safe to compact. */
+  getSnapshotClock?(motebitId: string): number;
 }
 
 export interface KeyringAdapter {
@@ -81,6 +83,8 @@ export interface RuntimeConfig {
   motebitId: string;
   tickRateHz?: number;
   maxConversationHistory?: number;
+  /** Compact events when count exceeds this threshold (0 = disabled, default 1000) */
+  compactionThreshold?: number;
 }
 
 // === Stream Chunk ===
@@ -126,11 +130,14 @@ export class MotebitRuntime {
     smile_curvature: 0,
   };
   private stateSnapshot?: StateSnapshotAdapter;
+  private compactionThreshold: number;
+  private lastKnownClock = 0;
   private running = false;
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
     this.motebitId = config.motebitId;
     this.maxHistory = config.maxConversationHistory ?? 40;
+    this.compactionThreshold = config.compactionThreshold ?? 1000;
     this.renderer = adapters.renderer;
     this.provider = adapters.ai ?? null;
     this.stateSnapshot = adapters.storage.stateSnapshot;
@@ -204,9 +211,12 @@ export class MotebitRuntime {
     if (!this.running) return;
     this.sync.stop();
     this.state.stop();
+    // Snapshot synchronously, compact in background
     if (this.stateSnapshot) {
-      this.stateSnapshot.saveState(this.motebitId, this.state.serialize());
+      const clock = this.lastKnownClock;
+      this.stateSnapshot.saveState(this.motebitId, this.state.serialize(), clock);
     }
+    void this.autoCompact();
     this.renderer.dispose();
     this.running = false;
   }
@@ -366,7 +376,48 @@ export class MotebitRuntime {
     this.sync.start();
   }
 
+  // === Compaction ===
+
+  /**
+   * Manually compact the event log, deleting events older than the last snapshot.
+   * Returns the number of events deleted.
+   */
+  async compact(): Promise<number> {
+    if (this.compactionThreshold === 0) return 0;
+
+    const eventCount = await this.events.countEvents(this.motebitId);
+    if (eventCount < 0 || eventCount < this.compactionThreshold) return 0;
+
+    // Ensure we have a snapshot before compacting
+    const clock = await this.events.getLatestClock(this.motebitId);
+    if (clock === 0) return 0;
+
+    // Save state snapshot at current clock
+    if (this.stateSnapshot) {
+      this.stateSnapshot.saveState(this.motebitId, this.state.serialize(), clock);
+    }
+
+    // Delete events up to (but not including) the latest clock
+    // Keep the most recent event so replay can continue from it
+    return this.events.compact(this.motebitId, clock - 1);
+  }
+
   // === Internal ===
+
+  private async autoCompact(): Promise<void> {
+    if (this.compactionThreshold <= 0) return;
+    try {
+      const count = await this.events.countEvents(this.motebitId);
+      if (count >= this.compactionThreshold) {
+        const clock = await this.events.getLatestClock(this.motebitId);
+        if (clock > 0) {
+          await this.events.compact(this.motebitId, clock - 1);
+        }
+      }
+    } catch {
+      // Compaction is best-effort — don't crash the runtime
+    }
+  }
 
   private pushToHistory(userMessage: string, assistantResponse: string): void {
     this.conversationHistory.push(

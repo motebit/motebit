@@ -32,9 +32,9 @@ function createMockProvider(responseText = "Hello from mock"): StreamingProvider
   };
 }
 
-function createAdapters(provider?: StreamingProvider): PlatformAdapters {
+function createAdapters(provider?: StreamingProvider, storage?: ReturnType<typeof createInMemoryStorage>): PlatformAdapters {
   return {
-    storage: createInMemoryStorage(),
+    storage: storage ?? createInMemoryStorage(),
     renderer: new NullRenderer(),
     ai: provider,
   };
@@ -266,5 +266,80 @@ describe("createInMemoryStorage", () => {
     expect(storage.memoryStorage).toBeDefined();
     expect(storage.identityStorage).toBeDefined();
     expect(storage.auditLog).toBeDefined();
+  });
+});
+
+describe("MotebitRuntime compaction", () => {
+  it("compact() removes old events when threshold is exceeded", async () => {
+    const storage = createInMemoryStorage();
+    const rt = new MotebitRuntime(
+      { motebitId: "compact-test", compactionThreshold: 5 },
+      createAdapters(createMockProvider(), storage),
+    );
+
+    // Insert 10 events (above threshold of 5)
+    for (let i = 1; i <= 10; i++) {
+      await rt.events.append({
+        event_id: `e-${i}`,
+        motebit_id: "compact-test",
+        timestamp: Date.now(),
+        event_type: "state_updated" as any,
+        payload: {},
+        version_clock: i,
+        tombstoned: false,
+      });
+    }
+
+    expect(await rt.events.countEvents("compact-test")).toBe(10);
+
+    const deleted = await rt.compact();
+    expect(deleted).toBeGreaterThan(0);
+    expect(await rt.events.countEvents("compact-test")).toBeLessThan(10);
+  });
+
+  it("compact() does nothing when below threshold", async () => {
+    const storage = createInMemoryStorage();
+    const rt = new MotebitRuntime(
+      { motebitId: "compact-test", compactionThreshold: 100 },
+      createAdapters(createMockProvider(), storage),
+    );
+
+    await rt.events.append({
+      event_id: "e-1",
+      motebit_id: "compact-test",
+      timestamp: Date.now(),
+      event_type: "state_updated" as any,
+      payload: {},
+      version_clock: 1,
+      tombstoned: false,
+    });
+
+    const deleted = await rt.compact();
+    expect(deleted).toBe(0);
+    expect(await rt.events.countEvents("compact-test")).toBe(1);
+  });
+
+  it("compact() does nothing when disabled (threshold = 0)", async () => {
+    const storage = createInMemoryStorage();
+    const rt = new MotebitRuntime(
+      { motebitId: "compact-test", compactionThreshold: 0 },
+      createAdapters(createMockProvider(), storage),
+    );
+
+    for (let i = 1; i <= 20; i++) {
+      await rt.events.append({
+        event_id: `e-${i}`,
+        motebit_id: "compact-test",
+        timestamp: Date.now(),
+        event_type: "state_updated" as any,
+        payload: {},
+        version_clock: i,
+        tombstoned: false,
+      });
+    }
+
+    const deleted = await rt.compact();
+    expect(deleted).toBe(0);
+    expect(await rt.events.countEvents("compact-test")).toBe(20);
   });
 });

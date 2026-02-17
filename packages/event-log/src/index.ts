@@ -16,6 +16,10 @@ export interface EventStoreAdapter {
   query(filter: EventFilter): Promise<EventLogEntry[]>;
   getLatestClock(motebitId: string): Promise<number>;
   tombstone(eventId: string, motebitId: string): Promise<void>;
+  /** Delete events with version_clock <= beforeClock. Returns count deleted. */
+  compact?(motebitId: string, beforeClock: number): Promise<number>;
+  /** Count total events for a motebit. */
+  countEvents?(motebitId: string): Promise<number>;
 }
 
 // === In-Memory Adapter (for testing and lightweight use) ===
@@ -70,6 +74,20 @@ export class InMemoryEventStore implements EventStoreAdapter {
     }
     return Promise.resolve();
   }
+
+  compact(motebitId: string, beforeClock: number): Promise<number> {
+    const before = this.events.length;
+    this.events = this.events.filter(
+      (e) => e.motebit_id !== motebitId || e.version_clock > beforeClock,
+    );
+    return Promise.resolve(before - this.events.length);
+  }
+
+  countEvents(motebitId: string): Promise<number> {
+    return Promise.resolve(
+      this.events.filter((e) => e.motebit_id === motebitId).length,
+    );
+  }
 }
 
 // === Event Store (high-level API) ===
@@ -111,5 +129,22 @@ export class EventStore {
     for (const event of sorted) {
       await handler(event);
     }
+  }
+
+  /**
+   * Delete events with version_clock <= beforeClock.
+   * Safe only after a state snapshot at that clock has been persisted.
+   */
+  async compact(motebitId: string, beforeClock: number): Promise<number> {
+    if (!this.adapter.compact) return 0;
+    return this.adapter.compact(motebitId, beforeClock);
+  }
+
+  /**
+   * Count total events for a motebit.
+   */
+  async countEvents(motebitId: string): Promise<number> {
+    if (!this.adapter.countEvents) return -1;
+    return this.adapter.countEvents(motebitId);
   }
 }

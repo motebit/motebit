@@ -79,7 +79,8 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_mote_ts ON audit_log (motebit_id, times
 CREATE TABLE IF NOT EXISTS state_snapshots (
   motebit_id TEXT PRIMARY KEY,
   state_json TEXT NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  version_clock INTEGER NOT NULL DEFAULT 0
 );
 `;
 
@@ -249,6 +250,26 @@ export class ExpoSqliteEventStore implements EventStoreAdapter {
       [eventId, motebitId],
     );
   }
+
+  async compact(motebitId: string, beforeClock: number): Promise<number> {
+    const before = this.db.getFirstSync(
+      "SELECT COUNT(*) as cnt FROM events WHERE motebit_id = ? AND version_clock <= ?",
+      [motebitId, beforeClock],
+    ) as { cnt: number } | null;
+    this.db.runSync(
+      "DELETE FROM events WHERE motebit_id = ? AND version_clock <= ?",
+      [motebitId, beforeClock],
+    );
+    return before?.cnt ?? 0;
+  }
+
+  async countEvents(motebitId: string): Promise<number> {
+    const row = this.db.getFirstSync(
+      "SELECT COUNT(*) as cnt FROM events WHERE motebit_id = ?",
+      [motebitId],
+    ) as { cnt: number } | null;
+    return row?.cnt ?? 0;
+  }
 }
 
 // === MemoryStorage Adapter ===
@@ -384,10 +405,10 @@ export class ExpoSqliteAuditLog implements AuditLogAdapter {
 export class ExpoSqliteStateSnapshot implements StateSnapshotAdapter {
   constructor(private db: SQLite.SQLiteDatabase) {}
 
-  saveState(motebitId: string, stateJson: string): void {
+  saveState(motebitId: string, stateJson: string, versionClock?: number): void {
     this.db.runSync(
-      `INSERT OR REPLACE INTO state_snapshots (motebit_id, state_json, updated_at) VALUES (?, ?, ?)`,
-      [motebitId, stateJson, Date.now()],
+      `INSERT OR REPLACE INTO state_snapshots (motebit_id, state_json, updated_at, version_clock) VALUES (?, ?, ?, ?)`,
+      [motebitId, stateJson, Date.now(), versionClock ?? 0],
     );
   }
 
@@ -397,6 +418,14 @@ export class ExpoSqliteStateSnapshot implements StateSnapshotAdapter {
       [motebitId],
     ) as { state_json: string } | null;
     return row?.state_json ?? null;
+  }
+
+  getSnapshotClock(motebitId: string): number {
+    const row = this.db.getFirstSync(
+      "SELECT version_clock FROM state_snapshots WHERE motebit_id = ?",
+      [motebitId],
+    ) as { version_clock: number } | null;
+    return row?.version_clock ?? 0;
   }
 }
 
@@ -419,6 +448,15 @@ export function createExpoStorage(dbName = "motebit.db"): StorageAdapters {
       // Column may already exist on new DBs that have it in CREATE TABLE
     }
     db.execSync("PRAGMA user_version = 1");
+  }
+
+  if (userVersion < 2) {
+    try {
+      db.execSync("ALTER TABLE state_snapshots ADD COLUMN version_clock INTEGER NOT NULL DEFAULT 0");
+    } catch (_) {
+      // Column may already exist on new DBs
+    }
+    db.execSync("PRAGMA user_version = 2");
   }
 
   return {

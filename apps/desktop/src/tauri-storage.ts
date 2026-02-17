@@ -121,6 +121,23 @@ export class TauriEventStore implements EventStoreAdapter {
       [eventId, motebitId],
     );
   }
+
+  async compact(motebitId: string, beforeClock: number): Promise<number> {
+    return dbExecute(
+      this.invoke,
+      "DELETE FROM events WHERE motebit_id = ? AND version_clock <= ?",
+      [motebitId, beforeClock],
+    );
+  }
+
+  async countEvents(motebitId: string): Promise<number> {
+    const rows = await dbQuery<{ cnt: number }>(
+      this.invoke,
+      "SELECT COUNT(*) as cnt FROM events WHERE motebit_id = ?",
+      [motebitId],
+    );
+    return rows[0]?.cnt ?? 0;
+  }
 }
 
 // === TauriMemoryStorage ===

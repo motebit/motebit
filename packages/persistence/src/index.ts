@@ -86,7 +86,8 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_mote_ts ON audit_log (motebit_id, times
 CREATE TABLE IF NOT EXISTS state_snapshots (
   motebit_id TEXT PRIMARY KEY,
   state_json TEXT NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  version_clock INTEGER NOT NULL DEFAULT 0
 );
 `;
 
@@ -174,6 +175,20 @@ export class SqliteEventStore implements EventStoreAdapter {
 
   async tombstone(eventId: string, motebitId: string): Promise<void> {
     this.stmtTombstone.run(eventId, motebitId);
+  }
+
+  async compact(motebitId: string, beforeClock: number): Promise<number> {
+    const info = this.db.prepare(
+      "DELETE FROM events WHERE motebit_id = ? AND version_clock <= ?",
+    ).run(motebitId, beforeClock);
+    return info.changes;
+  }
+
+  async countEvents(motebitId: string): Promise<number> {
+    const row = this.db.prepare(
+      "SELECT COUNT(*) as cnt FROM events WHERE motebit_id = ?",
+    ).get(motebitId) as { cnt: number };
+    return row.cnt;
   }
 }
 
@@ -517,25 +532,34 @@ function rowToAudit(row: AuditRow): AuditRecord {
 export class SqliteStateSnapshot {
   private stmtSave: Statement;
   private stmtLoad: Statement;
+  private stmtLoadClock: Statement;
 
   constructor(db: Database.Database) {
     this.stmtSave = db.prepare(
-      `INSERT OR REPLACE INTO state_snapshots (motebit_id, state_json, updated_at)
-       VALUES (?, ?, ?)`,
+      `INSERT OR REPLACE INTO state_snapshots (motebit_id, state_json, updated_at, version_clock)
+       VALUES (?, ?, ?, ?)`,
     );
     this.stmtLoad = db.prepare(
       `SELECT state_json FROM state_snapshots WHERE motebit_id = ?`,
     );
+    this.stmtLoadClock = db.prepare(
+      `SELECT version_clock FROM state_snapshots WHERE motebit_id = ?`,
+    );
   }
 
-  saveState(motebitId: string, stateJson: string): void {
-    this.stmtSave.run(motebitId, stateJson, Date.now());
+  saveState(motebitId: string, stateJson: string, versionClock?: number): void {
+    this.stmtSave.run(motebitId, stateJson, Date.now(), versionClock ?? 0);
   }
 
   loadState(motebitId: string): string | null {
     const row = this.stmtLoad.get(motebitId) as { state_json: string } | undefined;
     if (row === undefined) return null;
     return row.state_json;
+  }
+
+  getSnapshotClock(motebitId: string): number {
+    const row = this.stmtLoadClock.get(motebitId) as { version_clock: number } | undefined;
+    return row?.version_clock ?? 0;
   }
 }
 
@@ -567,6 +591,15 @@ export function createMotebitDatabase(dbPath: string): MotebitDatabase {
       // Column may already exist on new DBs that have it in CREATE TABLE
     }
     db.pragma("user_version = 1");
+  }
+
+  if (userVersion < 2) {
+    try {
+      db.exec("ALTER TABLE state_snapshots ADD COLUMN version_clock INTEGER NOT NULL DEFAULT 0");
+    } catch (_) {
+      // Column may already exist on new DBs
+    }
+    db.pragma("user_version = 2");
   }
 
   const eventStore = new SqliteEventStore(db);
