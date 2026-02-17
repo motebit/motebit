@@ -4,12 +4,13 @@ import type {
   AIResponse,
   MemoryCandidate,
   MotebitState,
+  ToolCall,
 } from "@motebit/sdk";
 import { SensitivityLevel } from "@motebit/sdk";
 import { buildSystemPrompt as buildPrompt } from "./prompt.js";
 
 export { runTurn, runTurnStreaming } from "./loop.js";
-export type { MotebitLoopDependencies, TurnResult, TurnOptions } from "./loop.js";
+export type { MotebitLoopDependencies, TurnResult, TurnOptions, AgenticChunk } from "./loop.js";
 export { inferStateFromText } from "./infer-state.js";
 export { buildSystemPrompt, derivePersonalityNote, formatBodyAwareness } from "./prompt.js";
 export { loadConfig, resolveConfig, DEFAULT_CONFIG } from "./config.js";
@@ -76,6 +77,9 @@ export function packContext(contextPack: ContextPack): string {
 interface AnthropicContentBlock {
   type: string;
   text?: string;
+  id?: string;
+  name?: string;
+  input?: Record<string, unknown>;
 }
 
 interface AnthropicResponse {
@@ -86,6 +90,23 @@ interface AnthropicResponse {
   model: string;
   stop_reason: string | null;
   usage: { input_tokens: number; output_tokens: number };
+}
+
+// SSE event types for Anthropic streaming
+interface AnthropicSSEEvent {
+  type: string;
+  index?: number;
+  content_block?: {
+    type: string;
+    id?: string;
+    name?: string;
+    text?: string;
+  };
+  delta?: {
+    type: string;
+    text?: string;
+    partial_json?: string;
+  };
 }
 
 // === Tag Extraction ===
@@ -158,6 +179,10 @@ const ACTION_RULES: { pattern: RegExp; updates: Partial<MotebitState> }[] = [
   { pattern: /\b(?:think|ponder|consider|contemplate)s?\b/i, updates: { processing: 0.2, attention: 0.1 } },
   { pattern: /\b(?:nod)s?\b/i, updates: { confidence: 0.1, affect_valence: 0.05 } },
   { pattern: /\b(?:tilt)s?\b/i, updates: { curiosity: 0.15 } },
+  // Tool-calling: interacting with the world
+  { pattern: /\b(?:reach|extend)(?:es|ing)?\s*(?:out)?\b/i, updates: { processing: 0.25, attention: 0.2, curiosity: 0.1 } },
+  { pattern: /\b(?:absorb|ingest|intake)s?\b/i, updates: { processing: 0.15, attention: 0.1 } },
+  { pattern: /\b(?:present|reveal|display|show)s?\b/i, updates: { confidence: 0.1, affect_valence: 0.1, social_distance: -0.1 } },
 ];
 
 export function actionsToStateUpdates(
@@ -225,13 +250,21 @@ export class CloudProvider implements StreamingProvider {
     const systemPrompt = this.buildSystemPrompt(contextPack);
     const messages = this.buildMessages(contextPack);
 
-    const body = {
+    const body: Record<string, unknown> = {
       model: this.config.model,
       max_tokens: this.config.max_tokens ?? 1024,
       temperature: this.config.temperature ?? 0.7,
       system: systemPrompt,
       messages,
     };
+
+    if (contextPack.tools && contextPack.tools.length > 0) {
+      body.tools = contextPack.tools.map((t) => ({
+        name: t.name,
+        description: t.description,
+        input_schema: t.inputSchema,
+      }));
+    }
 
     const res = await fetch(`${baseUrl}/v1/messages`, {
       method: "POST",
@@ -261,7 +294,7 @@ export class CloudProvider implements StreamingProvider {
     const systemPrompt = this.buildSystemPrompt(contextPack);
     const messages = this.buildMessages(contextPack);
 
-    const body = {
+    const body: Record<string, unknown> = {
       model: this.config.model,
       max_tokens: this.config.max_tokens ?? 1024,
       temperature: this.config.temperature ?? 0.7,
@@ -269,6 +302,14 @@ export class CloudProvider implements StreamingProvider {
       messages,
       stream: true,
     };
+
+    if (contextPack.tools && contextPack.tools.length > 0) {
+      body.tools = contextPack.tools.map((t) => ({
+        name: t.name,
+        description: t.description,
+        input_schema: t.inputSchema,
+      }));
+    }
 
     const res = await fetch(`${baseUrl}/v1/messages`, {
       method: "POST",
@@ -288,6 +329,11 @@ export class CloudProvider implements StreamingProvider {
     }
 
     let accumulated = "";
+    const currentToolCalls: ToolCall[] = [];
+    let activeToolId: string | undefined;
+    let activeToolName: string | undefined;
+    let activeToolJson = "";
+
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -307,17 +353,38 @@ export class CloudProvider implements StreamingProvider {
           if (jsonStr === "[DONE]") continue;
 
           try {
-            const event = JSON.parse(jsonStr) as {
-              type: string;
-              delta?: { type: string; text?: string };
-            };
-            if (
-              event.type === "content_block_delta" &&
-              event.delta?.type === "text_delta" &&
-              event.delta.text
-            ) {
-              accumulated += event.delta.text;
-              yield { type: "text", text: event.delta.text };
+            const event = JSON.parse(jsonStr) as AnthropicSSEEvent;
+
+            if (event.type === "content_block_start") {
+              if (event.content_block?.type === "tool_use") {
+                activeToolId = event.content_block.id;
+                activeToolName = event.content_block.name;
+                activeToolJson = "";
+              }
+            } else if (event.type === "content_block_delta") {
+              if (event.delta?.type === "text_delta" && event.delta.text) {
+                accumulated += event.delta.text;
+                yield { type: "text", text: event.delta.text };
+              } else if (event.delta?.type === "input_json_delta" && event.delta.partial_json) {
+                activeToolJson += event.delta.partial_json;
+              }
+            } else if (event.type === "content_block_stop") {
+              if (activeToolId && activeToolName) {
+                let args: Record<string, unknown> = {};
+                try {
+                  args = JSON.parse(activeToolJson || "{}") as Record<string, unknown>;
+                } catch {
+                  // Malformed JSON — use empty args
+                }
+                currentToolCalls.push({
+                  id: activeToolId,
+                  name: activeToolName,
+                  args,
+                });
+                activeToolId = undefined;
+                activeToolName = undefined;
+                activeToolJson = "";
+              }
             }
           } catch {
             // Skip unparseable SSE lines
@@ -339,6 +406,7 @@ export class CloudProvider implements StreamingProvider {
         confidence: 0.8,
         memory_candidates: memoryCandidates,
         state_updates: stateUpdates,
+        ...(currentToolCalls.length > 0 ? { tool_calls: currentToolCalls } : {}),
       },
     };
   }
@@ -353,12 +421,43 @@ export class CloudProvider implements StreamingProvider {
     return Promise.resolve(response.memory_candidates);
   }
 
-  private buildMessages(contextPack: ContextPack): { role: string; content: string }[] {
+  private buildMessages(contextPack: ContextPack): Record<string, unknown>[] {
     const history = contextPack.conversation_history ?? [];
-    return [
-      ...history.map((m) => ({ role: m.role, content: m.content })),
-      { role: "user", content: contextPack.user_message },
-    ];
+    const messages: Record<string, unknown>[] = [];
+
+    for (const msg of history) {
+      if (msg.role === "tool") {
+        messages.push({
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: msg.tool_call_id,
+              content: msg.content,
+            },
+          ],
+        });
+      } else if (msg.role === "assistant" && msg.tool_calls && msg.tool_calls.length > 0) {
+        const contentBlocks: Record<string, unknown>[] = [];
+        if (msg.content) {
+          contentBlocks.push({ type: "text", text: msg.content });
+        }
+        for (const tc of msg.tool_calls) {
+          contentBlocks.push({
+            type: "tool_use",
+            id: tc.id,
+            name: tc.name,
+            input: tc.args,
+          });
+        }
+        messages.push({ role: "assistant", content: contentBlocks });
+      } else {
+        messages.push({ role: msg.role, content: msg.content });
+      }
+    }
+
+    messages.push({ role: "user", content: contextPack.user_message });
+    return messages;
   }
 
   private buildSystemPrompt(contextPack: ContextPack): string {
@@ -371,6 +470,14 @@ export class CloudProvider implements StreamingProvider {
       .map((block) => block.text ?? "")
       .join("");
 
+    const toolCalls: ToolCall[] = data.content
+      .filter((block) => block.type === "tool_use")
+      .map((block) => ({
+        id: block.id!,
+        name: block.name!,
+        args: block.input ?? {},
+      }));
+
     const memoryCandidates = extractMemoryTags(rawText);
     const stateUpdates = extractStateTags(rawText);
     const displayText = stripTags(rawText);
@@ -380,6 +487,7 @@ export class CloudProvider implements StreamingProvider {
       confidence: 0.8,
       memory_candidates: memoryCandidates,
       state_updates: stateUpdates,
+      ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
     };
   }
 
@@ -493,7 +601,7 @@ export class OllamaProvider implements StreamingProvider {
     const baseUrl = this.config.base_url ?? "http://localhost:11434";
     const messages = this.buildMessages(contextPack);
 
-    const body = {
+    const body: Record<string, unknown> = {
       model: this.config.model,
       messages,
       stream: false,
@@ -502,6 +610,17 @@ export class OllamaProvider implements StreamingProvider {
         num_predict: this.config.max_tokens ?? 1024,
       },
     };
+
+    if (contextPack.tools && contextPack.tools.length > 0) {
+      body.tools = contextPack.tools.map((t) => ({
+        type: "function",
+        function: {
+          name: t.name,
+          description: t.description,
+          parameters: t.inputSchema,
+        },
+      }));
+    }
 
     let res: Response;
     try {
@@ -530,8 +649,24 @@ export class OllamaProvider implements StreamingProvider {
       throw new Error(`Ollama API error ${res.status}: ${errorText}`);
     }
 
-    const data = (await res.json()) as { message: { content: string } };
-    return this.parseResponse(data.message.content);
+    const data = (await res.json()) as {
+      message: {
+        content: string;
+        tool_calls?: Array<{
+          function: { name: string; arguments: Record<string, unknown> };
+        }>;
+      };
+    };
+
+    const response = this.parseResponse(data.message.content);
+    if (data.message.tool_calls && data.message.tool_calls.length > 0) {
+      response.tool_calls = data.message.tool_calls.map((tc) => ({
+        id: crypto.randomUUID(),
+        name: tc.function.name,
+        args: tc.function.arguments,
+      }));
+    }
+    return response;
   }
 
   async *generateStream(contextPack: ContextPack): AsyncGenerator<
@@ -540,7 +675,7 @@ export class OllamaProvider implements StreamingProvider {
     const baseUrl = this.config.base_url ?? "http://localhost:11434";
     const messages = this.buildMessages(contextPack);
 
-    const body = {
+    const body: Record<string, unknown> = {
       model: this.config.model,
       messages,
       stream: true,
@@ -549,6 +684,17 @@ export class OllamaProvider implements StreamingProvider {
         num_predict: this.config.max_tokens ?? 1024,
       },
     };
+
+    if (contextPack.tools && contextPack.tools.length > 0) {
+      body.tools = contextPack.tools.map((t) => ({
+        type: "function",
+        function: {
+          name: t.name,
+          description: t.description,
+          parameters: t.inputSchema,
+        },
+      }));
+    }
 
     let res: Response;
     try {
@@ -578,6 +724,7 @@ export class OllamaProvider implements StreamingProvider {
     }
 
     let accumulated = "";
+    const collectedToolCalls: ToolCall[] = [];
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -596,12 +743,26 @@ export class OllamaProvider implements StreamingProvider {
 
           try {
             const chunk = JSON.parse(line) as {
-              message?: { content: string };
+              message?: {
+                content: string;
+                tool_calls?: Array<{
+                  function: { name: string; arguments: Record<string, unknown> };
+                }>;
+              };
               done: boolean;
             };
             if (chunk.message?.content) {
               accumulated += chunk.message.content;
               yield { type: "text", text: chunk.message.content };
+            }
+            if (chunk.message?.tool_calls) {
+              for (const tc of chunk.message.tool_calls) {
+                collectedToolCalls.push({
+                  id: crypto.randomUUID(),
+                  name: tc.function.name,
+                  args: tc.function.arguments,
+                });
+              }
             }
           } catch {
             // Skip unparseable NDJSON lines
@@ -623,6 +784,7 @@ export class OllamaProvider implements StreamingProvider {
         confidence: 0.8,
         memory_candidates: memoryCandidates,
         state_updates: stateUpdates,
+        ...(collectedToolCalls.length > 0 ? { tool_calls: collectedToolCalls } : {}),
       },
     };
   }
@@ -635,14 +797,23 @@ export class OllamaProvider implements StreamingProvider {
     return Promise.resolve(response.memory_candidates);
   }
 
-  private buildMessages(contextPack: ContextPack): { role: string; content: string }[] {
+  private buildMessages(contextPack: ContextPack): Record<string, unknown>[] {
     const systemPrompt = this.buildSystemPrompt(contextPack);
     const history = contextPack.conversation_history ?? [];
-    return [
+    const messages: Record<string, unknown>[] = [
       { role: "system", content: systemPrompt },
-      ...history.map((m) => ({ role: m.role, content: m.content })),
-      { role: "user", content: contextPack.user_message },
     ];
+
+    for (const msg of history) {
+      if (msg.role === "tool") {
+        messages.push({ role: "tool", content: msg.content });
+      } else {
+        messages.push({ role: msg.role, content: msg.content });
+      }
+    }
+
+    messages.push({ role: "user", content: contextPack.user_message });
+    return messages;
   }
 
   private buildSystemPrompt(contextPack: ContextPack): string {

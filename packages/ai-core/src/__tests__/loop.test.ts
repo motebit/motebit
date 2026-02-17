@@ -5,15 +5,16 @@ vi.mock("@motebit/memory-graph", async () => {
   return { ...actual, embedText: (text: string) => Promise.resolve(actual.embedTextHash(text)) };
 });
 
-import { runTurn } from "../loop";
-import type { MotebitLoopDependencies } from "../loop";
+import { runTurn, runTurnStreaming } from "../loop";
+import type { MotebitLoopDependencies, AgenticChunk } from "../loop";
 import { CloudProvider } from "../index";
-import type { CloudProviderConfig } from "../index";
+import type { CloudProviderConfig, StreamingProvider } from "../index";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 import { MemoryGraph, InMemoryMemoryStorage } from "@motebit/memory-graph";
 import { StateVectorEngine } from "@motebit/state-vector";
 import { BehaviorEngine } from "@motebit/behavior-engine";
 import { SensitivityLevel } from "@motebit/sdk";
+import type { AIResponse, ContextPack, ToolRegistry, ToolDefinition, ToolResult } from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -251,5 +252,313 @@ describe("runTurn", () => {
     for (let i = 1; i < clocks.length; i++) {
       expect(clocks[i]!).toBeGreaterThan(clocks[i - 1]!);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mock StreamingProvider for tool-calling tests
+// ---------------------------------------------------------------------------
+
+function makeMockProvider(responses: AIResponse[]): StreamingProvider {
+  let callIndex = 0;
+  return {
+    model: "test-model",
+    setModel: vi.fn(),
+    async generate(_contextPack: ContextPack): Promise<AIResponse> {
+      const response = responses[callIndex] ?? responses[responses.length - 1]!;
+      callIndex++;
+      return response;
+    },
+    async *generateStream(_contextPack: ContextPack) {
+      const response = responses[callIndex] ?? responses[responses.length - 1]!;
+      callIndex++;
+      if (response.text) {
+        yield { type: "text" as const, text: response.text };
+      }
+      yield { type: "done" as const, response };
+    },
+    estimateConfidence: () => Promise.resolve(0.8),
+    extractMemoryCandidates: (r: AIResponse) => Promise.resolve(r.memory_candidates),
+  };
+}
+
+function makeMockToolRegistry(tools: Map<string, { def: ToolDefinition; result: ToolResult }>): ToolRegistry {
+  return {
+    list(): ToolDefinition[] {
+      return [...tools.values()].map((t) => t.def);
+    },
+    async execute(name: string, _args: Record<string, unknown>): Promise<ToolResult> {
+      const entry = tools.get(name);
+      if (!entry) return { ok: false, error: `Unknown tool: ${name}` };
+      return entry.result;
+    },
+    register(): void {
+      // No-op for tests
+    },
+  };
+}
+
+function makeDepsWithProvider(provider: StreamingProvider, tools?: ToolRegistry): MotebitLoopDependencies {
+  const eventStore = new EventStore(new InMemoryEventStore());
+  const storage = new InMemoryMemoryStorage();
+  const memoryGraph = new MemoryGraph(storage, eventStore, MOTEBIT_ID);
+  const stateEngine = new StateVectorEngine();
+  const behaviorEngine = new BehaviorEngine();
+
+  return {
+    motebitId: MOTEBIT_ID,
+    eventStore,
+    memoryGraph,
+    stateEngine,
+    behaviorEngine,
+    provider,
+    tools,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Agentic Loop: Tool Calling
+// ---------------------------------------------------------------------------
+
+describe("runTurnStreaming (agentic loop)", () => {
+  it("streams text when no tools are provided", async () => {
+    const provider = makeMockProvider([
+      {
+        text: "Hello there!",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+      },
+    ]);
+    const deps = makeDepsWithProvider(provider);
+
+    const chunks: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, "Hi")) {
+      chunks.push(chunk);
+    }
+
+    const textChunks = chunks.filter((c) => c.type === "text");
+    expect(textChunks).toHaveLength(1);
+    expect((textChunks[0] as { type: "text"; text: string }).text).toBe("Hello there!");
+
+    const resultChunk = chunks.find((c) => c.type === "result") as { type: "result"; result: { response: string } };
+    expect(resultChunk).toBeDefined();
+    expect(resultChunk.result.response).toBe("Hello there!");
+  });
+
+  it("executes tool calls and feeds results back into provider", async () => {
+    const toolRegistry = makeMockToolRegistry(
+      new Map([
+        [
+          "get_weather",
+          {
+            def: {
+              name: "get_weather",
+              description: "Get weather for a location",
+              inputSchema: { type: "object", properties: { location: { type: "string" } } },
+            },
+            result: { ok: true, data: { temp: 72, condition: "sunny" } },
+          },
+        ],
+      ]),
+    );
+
+    const provider = makeMockProvider([
+      // First call: provider requests a tool call
+      {
+        text: "Let me check the weather.",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+        tool_calls: [
+          { id: "tc_1", name: "get_weather", args: { location: "San Francisco" } },
+        ],
+      },
+      // Second call: provider responds with tool result incorporated
+      {
+        text: "It's 72°F and sunny in San Francisco!",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+      },
+    ]);
+
+    const deps = makeDepsWithProvider(provider, toolRegistry);
+
+    const chunks: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, "What's the weather in SF?")) {
+      chunks.push(chunk);
+    }
+
+    // Should have tool_status chunks
+    const toolCallingChunk = chunks.find(
+      (c) => c.type === "tool_status" && (c as { status: string }).status === "calling",
+    ) as { type: "tool_status"; name: string; status: string } | undefined;
+    expect(toolCallingChunk).toBeDefined();
+    expect(toolCallingChunk!.name).toBe("get_weather");
+
+    const toolDoneChunk = chunks.find(
+      (c) => c.type === "tool_status" && (c as { status: string }).status === "done",
+    ) as { type: "tool_status"; name: string; status: string; result?: unknown } | undefined;
+    expect(toolDoneChunk).toBeDefined();
+    expect(toolDoneChunk!.result).toEqual({ temp: 72, condition: "sunny" });
+
+    // Final result should contain the follow-up text
+    const resultChunk = chunks.find((c) => c.type === "result") as { type: "result"; result: { response: string } };
+    expect(resultChunk).toBeDefined();
+    expect(resultChunk.result.response).toContain("72°F");
+  });
+
+  it("yields approval_request for tools requiring approval", async () => {
+    const toolRegistry = makeMockToolRegistry(
+      new Map([
+        [
+          "send_email",
+          {
+            def: {
+              name: "send_email",
+              description: "Send an email",
+              inputSchema: { type: "object", properties: { to: { type: "string" } } },
+              requiresApproval: true,
+            },
+            result: { ok: true },
+          },
+        ],
+      ]),
+    );
+
+    const provider = makeMockProvider([
+      {
+        text: "I'll send that email for you.",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+        tool_calls: [
+          { id: "tc_approval", name: "send_email", args: { to: "test@example.com" } },
+        ],
+      },
+    ]);
+
+    const deps = makeDepsWithProvider(provider, toolRegistry);
+
+    const chunks: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, "Send email to test@example.com")) {
+      chunks.push(chunk);
+    }
+
+    const approvalChunk = chunks.find((c) => c.type === "approval_request") as {
+      type: "approval_request";
+      tool_call_id: string;
+      name: string;
+      args: Record<string, unknown>;
+    } | undefined;
+    expect(approvalChunk).toBeDefined();
+    expect(approvalChunk!.name).toBe("send_email");
+    expect(approvalChunk!.tool_call_id).toBe("tc_approval");
+    expect(approvalChunk!.args).toEqual({ to: "test@example.com" });
+
+    // Should NOT have a tool_status "calling" chunk (tool was not executed)
+    const callingChunks = chunks.filter(
+      (c) => c.type === "tool_status" && (c as { status: string }).status === "calling",
+    );
+    expect(callingChunks).toHaveLength(0);
+  });
+
+  it("respects max 10 iteration limit", async () => {
+    const toolRegistry = makeMockToolRegistry(
+      new Map([
+        [
+          "infinite_tool",
+          {
+            def: {
+              name: "infinite_tool",
+              description: "A tool that keeps getting called",
+              inputSchema: { type: "object" },
+            },
+            result: { ok: true, data: "done" },
+          },
+        ],
+      ]),
+    );
+
+    // Provider always returns a tool call, causing an infinite loop
+    const alwaysToolCall: AIResponse = {
+      text: "Calling tool again...",
+      confidence: 0.8,
+      memory_candidates: [],
+      state_updates: {},
+      tool_calls: [
+        { id: "tc_loop", name: "infinite_tool", args: {} },
+      ],
+    };
+
+    let callCount = 0;
+    const provider: StreamingProvider = {
+      model: "test-model",
+      setModel: vi.fn(),
+      async generate() { return alwaysToolCall; },
+      async *generateStream() {
+        callCount++;
+        yield { type: "text" as const, text: "Calling tool again..." };
+        yield { type: "done" as const, response: alwaysToolCall };
+      },
+      estimateConfidence: () => Promise.resolve(0.8),
+      extractMemoryCandidates: (r: AIResponse) => Promise.resolve(r.memory_candidates),
+    };
+
+    const deps = makeDepsWithProvider(provider, toolRegistry);
+
+    const chunks: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, "Do something")) {
+      chunks.push(chunk);
+    }
+
+    // Should have stopped after 10 iterations
+    expect(callCount).toBe(10);
+
+    // Should still yield a result
+    const resultChunk = chunks.find((c) => c.type === "result");
+    expect(resultChunk).toBeDefined();
+  });
+
+  it("falls back to single-pass when tools registry is provided but response has no tool_calls", async () => {
+    const toolRegistry = makeMockToolRegistry(
+      new Map([
+        [
+          "unused_tool",
+          {
+            def: {
+              name: "unused_tool",
+              description: "A tool that isn't needed",
+              inputSchema: { type: "object" },
+            },
+            result: { ok: true },
+          },
+        ],
+      ]),
+    );
+
+    const provider = makeMockProvider([
+      {
+        text: "I don't need any tools for this.",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+      },
+    ]);
+
+    const deps = makeDepsWithProvider(provider, toolRegistry);
+
+    const chunks: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, "Hello")) {
+      chunks.push(chunk);
+    }
+
+    // No tool_status chunks
+    const toolChunks = chunks.filter((c) => c.type === "tool_status");
+    expect(toolChunks).toHaveLength(0);
+
+    const resultChunk = chunks.find((c) => c.type === "result") as { type: "result"; result: { response: string } };
+    expect(resultChunk.result.response).toBe("I don't need any tools for this.");
   });
 });

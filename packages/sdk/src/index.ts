@@ -32,6 +32,7 @@ export enum EventType {
   DeleteRequested = "delete_requested",
   SyncCompleted = "sync_completed",
   AuditEntry = "audit_entry",
+  ToolUsed = "tool_used",
 }
 
 export enum RelationType {
@@ -131,6 +132,29 @@ export interface EventLogEntry {
   tombstoned: boolean;
 }
 
+// === Tools ===
+
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>; // JSON Schema
+  requiresApproval?: boolean;
+}
+
+export interface ToolResult {
+  ok: boolean;
+  data?: unknown;
+  error?: string;
+}
+
+export type ToolHandler = (args: Record<string, unknown>) => Promise<ToolResult>;
+
+export interface ToolRegistry {
+  list(): ToolDefinition[];
+  execute(name: string, args: Record<string, unknown>): Promise<ToolResult>;
+  register(tool: ToolDefinition, handler: ToolHandler): void;
+}
+
 // === AI Provider ===
 
 export interface ContextPack {
@@ -138,8 +162,20 @@ export interface ContextPack {
   relevant_memories: MemoryNode[];
   current_state: MotebitState;
   user_message: string;
-  conversation_history?: { role: "user" | "assistant"; content: string }[];
+  conversation_history?: ConversationMessage[];
   behavior_cues?: BehaviorCues;
+  tools?: ToolDefinition[];
+}
+
+export type ConversationMessage =
+  | { role: "user"; content: string }
+  | { role: "assistant"; content: string; tool_calls?: ToolCall[] }
+  | { role: "tool"; content: string; tool_call_id: string };
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
 }
 
 export interface AIResponse {
@@ -147,6 +183,7 @@ export interface AIResponse {
   confidence: number;
   memory_candidates: MemoryCandidate[];
   state_updates: Partial<MotebitState>;
+  tool_calls?: ToolCall[];
 }
 
 export interface IntelligenceProvider {

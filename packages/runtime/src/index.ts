@@ -1,4 +1,5 @@
-import type { MotebitState, BehaviorCues } from "@motebit/sdk";
+import type { MotebitState, BehaviorCues, ConversationMessage, ToolRegistry } from "@motebit/sdk";
+import { EventType } from "@motebit/sdk";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 import type { EventStoreAdapter } from "@motebit/event-log";
 import { MemoryGraph, InMemoryMemoryStorage } from "@motebit/memory-graph";
@@ -25,17 +26,22 @@ import type {
   MotebitLoopDependencies,
   TurnResult,
 } from "@motebit/ai-core";
+import { InMemoryToolRegistry } from "@motebit/tools";
+import type { McpServerConfig } from "@motebit/mcp-client";
+import { connectMcpServers, McpClientAdapter } from "@motebit/mcp-client";
 
 // Re-export key types for consumers
-export type { TurnResult } from "@motebit/ai-core";
+export type { TurnResult, AgenticChunk } from "@motebit/ai-core";
 export type { StreamingProvider } from "@motebit/ai-core";
-export type { MotebitState, BehaviorCues } from "@motebit/sdk";
+export type { MotebitState, BehaviorCues, ToolRegistry, ConversationMessage } from "@motebit/sdk";
 export type { EventStoreAdapter } from "@motebit/event-log";
 export type { MemoryStorageAdapter } from "@motebit/memory-graph";
 export type { IdentityStorage } from "@motebit/core-identity";
 export type { AuditLogAdapter } from "@motebit/privacy-layer";
 export type { RenderAdapter, RenderFrame } from "@motebit/render-engine";
 export type { RenderSpec } from "@motebit/sdk";
+export type { McpServerConfig } from "@motebit/mcp-client";
+export { InMemoryToolRegistry } from "@motebit/tools";
 
 // === Platform Adapter Interfaces ===
 
@@ -65,6 +71,7 @@ export interface PlatformAdapters {
   renderer: RenderAdapter;
   ai?: StreamingProvider;
   keyring?: KeyringAdapter;
+  tools?: ToolRegistry;
 }
 
 // === Null Renderer (for CLI / headless) ===
@@ -85,12 +92,16 @@ export interface RuntimeConfig {
   maxConversationHistory?: number;
   /** Compact events when count exceeds this threshold (0 = disabled, default 1000) */
   compactionThreshold?: number;
+  /** MCP servers to connect to on init. Tools are discovered and merged into the registry. */
+  mcpServers?: McpServerConfig[];
 }
 
 // === Stream Chunk ===
 
 export type StreamChunk =
   | { type: "text"; text: string }
+  | { type: "tool_status"; name: string; status: "calling" | "done"; result?: unknown }
+  | { type: "approval_request"; tool_call_id: string; name: string; args: Record<string, unknown> }
   | { type: "result"; result: TurnResult };
 
 // === In-Memory Storage Factory ===
@@ -119,7 +130,7 @@ export class MotebitRuntime {
   private renderer: RenderAdapter;
   private provider: StreamingProvider | null;
   private loopDeps: MotebitLoopDependencies | null = null;
-  private conversationHistory: { role: "user" | "assistant"; content: string }[] = [];
+  private conversationHistory: ConversationMessage[] = [];
   private maxHistory: number;
   private _isProcessing = false;
   private latestCues: BehaviorCues = {
@@ -133,14 +144,24 @@ export class MotebitRuntime {
   private compactionThreshold: number;
   private lastKnownClock = 0;
   private running = false;
+  private toolRegistry: InMemoryToolRegistry;
+  private mcpAdapters: McpClientAdapter[] = [];
+  private mcpConfigs: McpServerConfig[];
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
     this.motebitId = config.motebitId;
     this.maxHistory = config.maxConversationHistory ?? 40;
     this.compactionThreshold = config.compactionThreshold ?? 1000;
+    this.mcpConfigs = config.mcpServers ?? [];
     this.renderer = adapters.renderer;
     this.provider = adapters.ai ?? null;
     this.stateSnapshot = adapters.storage.stateSnapshot;
+
+    // Tool registry: merge platform-provided tools if any
+    this.toolRegistry = new InMemoryToolRegistry();
+    if (adapters.tools) {
+      this.toolRegistry.merge(adapters.tools);
+    }
 
     // Core engines
     this.state = new StateVectorEngine({ tick_rate_hz: config.tickRateHz ?? 2 });
@@ -182,23 +203,19 @@ export class MotebitRuntime {
       }
     }
 
-    // Wire AI loop deps if provider present
-    if (this.provider) {
-      this.loopDeps = {
-        motebitId: this.motebitId,
-        eventStore: this.events,
-        memoryGraph: this.memory,
-        stateEngine: this.state,
-        behaviorEngine: this.behavior,
-        provider: this.provider,
-      };
-    }
+    this.wireLoopDeps();
   }
 
   // === Lifecycle ===
 
   async init(target?: unknown): Promise<void> {
     await this.renderer.init(target);
+
+    // Connect to MCP servers and discover their tools
+    if (this.mcpConfigs.length > 0) {
+      this.mcpAdapters = await connectMcpServers(this.mcpConfigs, this.toolRegistry);
+      this.wireLoopDeps(); // re-wire with updated registry
+    }
   }
 
   start(): void {
@@ -217,6 +234,8 @@ export class MotebitRuntime {
       this.stateSnapshot.saveState(this.motebitId, this.state.serialize(), clock);
     }
     void this.autoCompact();
+    // Disconnect MCP servers in background
+    void Promise.allSettled(this.mcpAdapters.map((a) => a.disconnect()));
     this.renderer.dispose();
     this.running = false;
   }
@@ -246,14 +265,12 @@ export class MotebitRuntime {
 
   setProvider(provider: StreamingProvider): void {
     this.provider = provider;
-    this.loopDeps = {
-      motebitId: this.motebitId,
-      eventStore: this.events,
-      memoryGraph: this.memory,
-      stateEngine: this.state,
-      behaviorEngine: this.behavior,
-      provider,
-    };
+    this.wireLoopDeps();
+  }
+
+  /** Access the tool registry to register additional tools at runtime. */
+  getToolRegistry(): InMemoryToolRegistry {
+    return this.toolRegistry;
   }
 
   async sendMessage(text: string): Promise<TurnResult> {
@@ -317,6 +334,23 @@ export class MotebitRuntime {
           }
         }
 
+        // Creature reacts to tool activity
+        if (chunk.type === "tool_status") {
+          if (chunk.status === "calling") {
+            // Reaching out: processing spikes, glow intensifies
+            this.state.pushUpdate({ processing: 0.95, attention: 0.9, curiosity: 0.7 });
+          } else if (chunk.status === "done") {
+            // Absorbing results: processing eases, confidence shifts
+            this.state.pushUpdate({ processing: 0.6, confidence: 0.7 });
+            void this.logToolUsed(chunk.name, chunk.result);
+          }
+        }
+
+        // Approval request: the creature pauses, surface tension holds
+        if (chunk.type === "approval_request") {
+          this.state.pushUpdate({ processing: 0.5, attention: 0.95, affect_arousal: 0.2 });
+        }
+
         yield chunk;
         if (chunk.type === "result") result = chunk.result;
       }
@@ -334,7 +368,7 @@ export class MotebitRuntime {
     this.conversationHistory = [];
   }
 
-  getConversationHistory(): { role: "user" | "assistant"; content: string }[] {
+  getConversationHistory(): ConversationMessage[] {
     return [...this.conversationHistory];
   }
 
@@ -419,6 +453,20 @@ export class MotebitRuntime {
     }
   }
 
+  private wireLoopDeps(): void {
+    if (this.provider) {
+      this.loopDeps = {
+        motebitId: this.motebitId,
+        eventStore: this.events,
+        memoryGraph: this.memory,
+        stateEngine: this.state,
+        behaviorEngine: this.behavior,
+        provider: this.provider,
+        tools: this.toolRegistry.size > 0 ? this.toolRegistry : undefined,
+      };
+    }
+  }
+
   private pushToHistory(userMessage: string, assistantResponse: string): void {
     this.conversationHistory.push(
       { role: "user", content: userMessage },
@@ -426,6 +474,23 @@ export class MotebitRuntime {
     );
     if (this.conversationHistory.length > this.maxHistory) {
       this.conversationHistory = this.conversationHistory.slice(-this.maxHistory);
+    }
+  }
+
+  private async logToolUsed(toolName: string, result: unknown): Promise<void> {
+    try {
+      const clock = await this.events.getLatestClock(this.motebitId);
+      await this.events.append({
+        event_id: crypto.randomUUID(),
+        motebit_id: this.motebitId,
+        timestamp: Date.now(),
+        event_type: EventType.ToolUsed,
+        payload: { tool: toolName, result_preview: String(result).slice(0, 200) },
+        version_clock: clock + 1,
+        tombstoned: false,
+      });
+    } catch {
+      // Tool event logging is best-effort
     }
   }
 }

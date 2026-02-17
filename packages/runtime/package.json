@@ -23,7 +23,9 @@
     "@motebit/privacy-layer": "workspace:*",
     "@motebit/sync-engine": "workspace:*",
     "@motebit/render-engine": "workspace:*",
-    "@motebit/crypto": "workspace:*"
+    "@motebit/crypto": "workspace:*",
+    "@motebit/tools": "workspace:*",
+    "@motebit/mcp-client": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

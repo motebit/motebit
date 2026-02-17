@@ -1,4 +1,4 @@
-import type { BehaviorCues, MotebitState, MemoryNode } from "@motebit/sdk";
+import type { BehaviorCues, MotebitState, MemoryNode, ToolRegistry, ConversationMessage } from "@motebit/sdk";
 import { EventType } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MemoryGraph } from "@motebit/memory-graph";
@@ -7,6 +7,10 @@ import type { StateVectorEngine } from "@motebit/state-vector";
 import type { BehaviorEngine } from "@motebit/behavior-engine";
 import type { StreamingProvider } from "./index.js";
 import { inferStateFromText } from "./infer-state.js";
+
+// === Constants ===
+
+const MAX_TOOL_ITERATIONS = 10;
 
 // === Types ===
 
@@ -17,6 +21,7 @@ export interface MotebitLoopDependencies {
   stateEngine: StateVectorEngine;
   behaviorEngine: BehaviorEngine;
   provider: StreamingProvider;
+  tools?: ToolRegistry;
 }
 
 export interface TurnResult {
@@ -27,9 +32,15 @@ export interface TurnResult {
 }
 
 export interface TurnOptions {
-  conversationHistory?: { role: "user" | "assistant"; content: string }[];
+  conversationHistory?: ConversationMessage[];
   previousCues?: BehaviorCues;
 }
+
+export type AgenticChunk =
+  | { type: "text"; text: string }
+  | { type: "tool_status"; name: string; status: "calling" | "done"; result?: unknown }
+  | { type: "approval_request"; tool_call_id: string; name: string; args: Record<string, unknown> }
+  | { type: "result"; result: TurnResult };
 
 // === Orchestrator ===
 
@@ -68,6 +79,7 @@ export async function runTurn(
     user_message: userMessage,
     conversation_history: options?.conversationHistory,
     behavior_cues: options?.previousCues,
+    tools: deps.tools ? deps.tools.list() : undefined,
   });
 
   // 4. Form memories from candidates
@@ -120,9 +132,7 @@ export async function* runTurnStreaming(
   deps: MotebitLoopDependencies,
   userMessage: string,
   options?: TurnOptions,
-): AsyncGenerator<
-  { type: "text"; text: string } | { type: "result"; result: TurnResult }
-> {
+): AsyncGenerator<AgenticChunk> {
   const {
     motebitId,
     eventStore,
@@ -144,43 +154,129 @@ export async function* runTurnStreaming(
     limit: 5,
   });
 
-  // 3. Pack context and stream from provider
+  // 3. Pack context and stream from provider (agentic loop)
   const currentState = stateEngine.getState();
-  const contextPack = {
-    recent_events: recentEvents,
-    relevant_memories: relevantMemories,
-    current_state: currentState,
-    user_message: userMessage,
-    conversation_history: options?.conversationHistory,
-    behavior_cues: options?.previousCues,
-  };
+  const toolDefs = deps.tools ? deps.tools.list() : undefined;
 
-  let aiResponse;
-  for await (const chunk of provider.generateStream(contextPack)) {
-    if (chunk.type === "text") {
-      yield { type: "text", text: chunk.text };
-    } else {
-      aiResponse = chunk.response;
+  const conversationHistory: ConversationMessage[] = [
+    ...(options?.conversationHistory ?? []),
+  ];
+
+  let finalText = "";
+  let finalResponse;
+  let iteration = 0;
+
+  while (iteration < MAX_TOOL_ITERATIONS) {
+    iteration++;
+
+    const contextPack = {
+      recent_events: recentEvents,
+      relevant_memories: relevantMemories,
+      current_state: currentState,
+      user_message: iteration === 1 ? userMessage : "",
+      conversation_history: iteration === 1
+        ? conversationHistory.length > 0 ? conversationHistory : undefined
+        : conversationHistory,
+      behavior_cues: options?.previousCues,
+      tools: toolDefs,
+    };
+
+    // On continuation turns, the user_message is empty and the conversation
+    // history carries the context (including tool results). Adjust:
+    if (iteration > 1) {
+      contextPack.user_message = userMessage;
+    }
+
+    let aiResponse;
+    for await (const chunk of provider.generateStream(contextPack)) {
+      if (chunk.type === "text") {
+        yield { type: "text", text: chunk.text };
+      } else {
+        aiResponse = chunk.response;
+      }
+    }
+
+    if (!aiResponse) {
+      throw new Error("Stream ended without a final response");
+    }
+
+    finalText = aiResponse.text;
+    finalResponse = aiResponse;
+
+    // If no tool calls or no tool registry, exit the loop
+    if (!aiResponse.tool_calls || aiResponse.tool_calls.length === 0 || !deps.tools) {
+      break;
+    }
+
+    // Process tool calls
+    const assistantMsg: ConversationMessage = {
+      role: "assistant",
+      content: aiResponse.text,
+      tool_calls: aiResponse.tool_calls,
+    };
+    conversationHistory.push(assistantMsg);
+
+    const toolDefsMap = new Map(
+      (toolDefs ?? []).map((t) => [t.name, t]),
+    );
+
+    for (const toolCall of aiResponse.tool_calls) {
+      const toolDef = toolDefsMap.get(toolCall.name);
+
+      // Check if tool requires approval
+      if (toolDef?.requiresApproval) {
+        yield {
+          type: "approval_request",
+          tool_call_id: toolCall.id,
+          name: toolCall.name,
+          args: toolCall.args,
+        };
+        // Skip execution — push a placeholder tool result so the conversation stays valid
+        conversationHistory.push({
+          role: "tool",
+          tool_call_id: toolCall.id,
+          content: JSON.stringify({ ok: false, error: "Awaiting approval" }),
+        });
+        continue;
+      }
+
+      yield { type: "tool_status", name: toolCall.name, status: "calling" };
+      const result = await deps.tools.execute(toolCall.name, toolCall.args);
+      yield { type: "tool_status", name: toolCall.name, status: "done", result: result.data ?? result.error };
+
+      conversationHistory.push({
+        role: "tool",
+        tool_call_id: toolCall.id,
+        content: JSON.stringify(result),
+      });
+    }
+
+    // If all tool calls required approval, don't loop again
+    const allNeedApproval = aiResponse.tool_calls.every(
+      (tc) => toolDefsMap.get(tc.name)?.requiresApproval,
+    );
+    if (allNeedApproval) {
+      break;
     }
   }
 
-  if (!aiResponse) {
-    throw new Error("Stream ended without a final response");
+  if (!finalResponse) {
+    throw new Error("No response generated");
   }
 
   // 4. Form memories from candidates
   const memoriesFormed: MemoryNode[] = [];
-  for (const candidate of aiResponse.memory_candidates) {
+  for (const candidate of finalResponse.memory_candidates) {
     const embedding = await embedText(candidate.content);
     const node = await memoryGraph.formMemory(candidate, embedding);
     memoriesFormed.push(node);
   }
 
   // 5. Push state updates (explicit tags win; fall back to text inference)
-  if (Object.keys(aiResponse.state_updates).length > 0) {
-    stateEngine.pushUpdate(aiResponse.state_updates);
+  if (Object.keys(finalResponse.state_updates).length > 0) {
+    stateEngine.pushUpdate(finalResponse.state_updates);
   } else {
-    const inferred = inferStateFromText(aiResponse.text, stateEngine.getState());
+    const inferred = inferStateFromText(finalResponse.text, stateEngine.getState());
     if (Object.keys(inferred).length > 0) {
       stateEngine.pushUpdate(inferred);
     }
@@ -195,7 +291,7 @@ export async function* runTurnStreaming(
     event_type: EventType.StateUpdated,
     payload: {
       user_message: userMessage,
-      response: aiResponse.text,
+      response: finalText,
       memories_formed: memoriesFormed.length,
     },
     version_clock: clock + 1,
@@ -209,7 +305,7 @@ export async function* runTurnStreaming(
   yield {
     type: "result",
     result: {
-      response: aiResponse.text,
+      response: finalText,
       memoriesFormed,
       stateAfter,
       cues,
