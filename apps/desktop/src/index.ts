@@ -163,6 +163,14 @@ export class DesktopApp {
     return true;
   }
 
+  get isOperatorMode(): boolean {
+    return this.runtime?.isOperatorMode ?? false;
+  }
+
+  setOperatorMode(enabled: boolean): void {
+    this.runtime?.setOperatorMode(enabled);
+  }
+
   resetConversation(): void {
     this.runtime?.resetConversation();
   }

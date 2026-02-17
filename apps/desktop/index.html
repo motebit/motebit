@@ -210,6 +210,124 @@
       color: rgba(255, 255, 255, 0.7);
     }
     .settings-actions .cancel-btn:hover { background: rgba(255, 255, 255, 0.15); }
+
+    /* Tool status messages */
+    .tool-status {
+      align-self: center;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.35);
+      font-style: italic;
+      padding: 2px 10px;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+    .tool-status.done {
+      animation: none;
+      transition: opacity 0.5s ease;
+    }
+    .tool-status.fade-out { opacity: 0; }
+    @keyframes pulse {
+      0%, 100% { opacity: 0.4; }
+      50% { opacity: 0.8; }
+    }
+
+    /* Approval cards */
+    .approval-card {
+      align-self: flex-start;
+      max-width: 70%;
+      padding: 10px 14px;
+      border-radius: 12px;
+      border: 1px solid rgba(99, 102, 241, 0.4);
+      background: rgba(99, 102, 241, 0.08);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.85);
+    }
+    .approval-card .approval-tool {
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .approval-card .approval-args {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.45);
+      margin-bottom: 8px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 100%;
+    }
+    .approval-card .approval-buttons {
+      display: flex;
+      gap: 6px;
+    }
+    .approval-card .approval-buttons button {
+      padding: 4px 12px;
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .approval-card .btn-allow {
+      background: rgba(99, 102, 241, 0.85);
+      color: #fff;
+    }
+    .approval-card .btn-allow:hover { background: rgba(99, 102, 241, 1); }
+    .approval-card .btn-deny {
+      background: rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.6);
+    }
+    .approval-card .btn-deny:hover { background: rgba(255, 255, 255, 0.18); }
+    .approval-card .approval-buttons button:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
+
+    /* Operator mode toggle */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .toggle-row .toggle-label { font-size: 13px; color: rgba(255, 255, 255, 0.85); }
+    .toggle-row .toggle-desc {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.4);
+      margin-top: 2px;
+    }
+    .toggle-switch {
+      position: relative;
+      width: 36px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-switch .slider {
+      position: absolute;
+      inset: 0;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .toggle-switch .slider::before {
+      content: "";
+      position: absolute;
+      left: 2px;
+      top: 2px;
+      width: 16px;
+      height: 16px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 0.2s;
+    }
+    .toggle-switch input:checked + .slider {
+      background: rgba(99, 102, 241, 0.85);
+    }
+    .toggle-switch input:checked + .slider::before {
+      transform: translateX(16px);
+    }
   </style>
 </head>
 <body>
@@ -234,6 +352,18 @@
       <div class="settings-key-row">
         <input id="settings-apikey" type="password" placeholder="sk-ant-..." />
         <button id="settings-apikey-toggle" type="button">Show</button>
+      </div>
+    </div>
+    <div class="settings-field">
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Operator Mode</div>
+          <div class="toggle-desc">Allow high-risk tools (write, execute, payments)</div>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="settings-operator-mode" />
+          <span class="slider"></span>
+        </label>
       </div>
     </div>
     <div class="settings-actions">

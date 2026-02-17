@@ -14,11 +14,83 @@ let currentConfig: DesktopAIConfig | null = null;
 
 // === Chat Helpers ===
 
+const toolStatusElements = new Map<string, HTMLElement>();
+
 function addMessage(role: "user" | "assistant" | "system", text: string): void {
   const bubble = document.createElement("div");
   bubble.className = `chat-bubble ${role}`;
   bubble.textContent = text;
   chatLog.appendChild(bubble);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+function showToolStatus(name: string): void {
+  const el = document.createElement("div");
+  el.className = "tool-status";
+  el.textContent = `${name}...`;
+  chatLog.appendChild(el);
+  chatLog.scrollTop = chatLog.scrollHeight;
+  toolStatusElements.set(name, el);
+}
+
+function completeToolStatus(name: string): void {
+  const el = toolStatusElements.get(name);
+  if (!el) return;
+  el.textContent = `${name} done`;
+  el.classList.add("done");
+  setTimeout(() => {
+    el.classList.add("fade-out");
+    setTimeout(() => { el.remove(); toolStatusElements.delete(name); }, 500);
+  }, 1000);
+}
+
+function showApprovalCard(name: string, args: Record<string, unknown>): void {
+  const card = document.createElement("div");
+  card.className = "approval-card";
+
+  const toolDiv = document.createElement("div");
+  toolDiv.className = "approval-tool";
+  toolDiv.textContent = name;
+  card.appendChild(toolDiv);
+
+  const argsDiv = document.createElement("div");
+  argsDiv.className = "approval-args";
+  argsDiv.textContent = JSON.stringify(args).slice(0, 120);
+  card.appendChild(argsDiv);
+
+  const btns = document.createElement("div");
+  btns.className = "approval-buttons";
+
+  const allowBtn = document.createElement("button");
+  allowBtn.className = "btn-allow";
+  allowBtn.textContent = "Allow";
+
+  const denyBtn = document.createElement("button");
+  denyBtn.className = "btn-deny";
+  denyBtn.textContent = "Deny";
+
+  const disableButtons = (): void => {
+    allowBtn.disabled = true;
+    denyBtn.disabled = true;
+  };
+
+  allowBtn.addEventListener("click", () => {
+    disableButtons();
+    chatInput.value = `I approved the ${name} tool call. Please proceed.`;
+    void handleSend();
+  });
+
+  denyBtn.addEventListener("click", () => {
+    disableButtons();
+    chatInput.value = `I denied the ${name} tool call.`;
+    void handleSend();
+  });
+
+  btns.appendChild(allowBtn);
+  btns.appendChild(denyBtn);
+  card.appendChild(btns);
+
+  chatLog.appendChild(card);
   chatLog.scrollTop = chatLog.scrollHeight;
 }
 
@@ -81,6 +153,14 @@ async function handleSend(): Promise<void> {
         accumulated += chunk.text;
         bubble.textContent = stripTags(accumulated);
         chatLog.scrollTop = chatLog.scrollHeight;
+      } else if (chunk.type === "tool_status") {
+        if (chunk.status === "calling") {
+          showToolStatus(chunk.name);
+        } else if (chunk.status === "done") {
+          completeToolStatus(chunk.name);
+        }
+      } else if (chunk.type === "approval_request") {
+        showApprovalCard(chunk.name, chunk.args);
       }
     }
   } catch (err: unknown) {
@@ -134,6 +214,7 @@ const settingsProvider = document.getElementById("settings-provider") as HTMLSel
 const settingsModel = document.getElementById("settings-model") as HTMLInputElement;
 const settingsApiKey = document.getElementById("settings-apikey") as HTMLInputElement;
 const settingsApiKeyToggle = document.getElementById("settings-apikey-toggle") as HTMLButtonElement;
+const settingsOperatorMode = document.getElementById("settings-operator-mode") as HTMLInputElement;
 
 function openSettings(): void {
   // Pre-populate from current config (never pre-fill actual API key)
@@ -144,6 +225,7 @@ function openSettings(): void {
   settingsApiKey.value = "";
   settingsApiKey.type = "password";
   settingsApiKeyToggle.textContent = "Show";
+  settingsOperatorMode.checked = app.isOperatorMode;
   settingsBackdrop.classList.add("open");
   settingsPanel.classList.add("open");
 }
@@ -172,6 +254,9 @@ async function saveSettings(): Promise<void> {
       await invoke("keyring_set", { key: "api_key", value: apiKey });
     }
   }
+
+  // Apply operator mode
+  app.setOperatorMode(settingsOperatorMode.checked);
 
   // Apply immediately
   const newConfig: DesktopAIConfig = { provider, model, apiKey: apiKey || currentConfig?.apiKey, isTauri, invoke: currentConfig?.invoke };
