@@ -45,6 +45,7 @@ export interface RenderAdapter {
   render(frame: RenderFrame): void;
   getSpec(): RenderSpec;
   resize(width: number, height: number): void;
+  setBackground(color: number | null): void;
   dispose(): void;
 }
 
@@ -379,6 +380,12 @@ export class ThreeJSAdapter implements RenderAdapter {
     }
   }
 
+  setBackground(color: number | null): void {
+    if (this.scene) {
+      this.scene.background = color === null ? null : new THREE.Color(color);
+    }
+  }
+
   dispose(): void {
     if (this.creature) {
       this.creature.traverse((obj) => {
@@ -421,5 +428,6 @@ export class SpatialAdapter implements RenderAdapter {
   render(_frame: RenderFrame): void {}
   getSpec(): RenderSpec { return this.spec; }
   resize(_width: number, _height: number): void {}
+  setBackground(_color: number | null): void {}
   dispose(): void {}
 }

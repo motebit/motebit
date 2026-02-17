@@ -9,6 +9,7 @@ const config = {
   // typecheck script (tsconfig.typecheck.json with jsx: "react-jsx") instead.
   typescript: { ignoreBuildErrors: true },
   eslint: { ignoreDuringBuilds: true },
+  transpilePackages: ["@motebit/render-engine", "@motebit/sdk", "@motebit/policy-invariants"],
 };
 
 export default withMDX(config);

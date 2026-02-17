@@ -2,6 +2,10 @@
 @import "fumadocs-ui/css/neutral.css";
 @import "fumadocs-ui/css/preset.css";
 
+html {
+  scroll-behavior: smooth;
+}
+
 /*
  * Motebit color system
  *
