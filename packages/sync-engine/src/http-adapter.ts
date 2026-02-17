@@ -24,7 +24,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter {
   }
 
   async append(entry: EventLogEntry): Promise<void> {
-    const url = `${this.baseUrl}/api/v1/sync/${this.motebitId}/push`;
+    const url = `${this.baseUrl}/sync/${this.motebitId}/push`;
     const res = await fetch(url, {
       method: "POST",
       headers: this.headers(),
@@ -37,7 +37,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter {
 
   async query(filter: EventFilter): Promise<EventLogEntry[]> {
     const afterClock = filter.after_version_clock ?? 0;
-    const url = `${this.baseUrl}/api/v1/sync/${this.motebitId}/pull?after_clock=${afterClock}`;
+    const url = `${this.baseUrl}/sync/${this.motebitId}/pull?after_clock=${afterClock}`;
     const res = await fetch(url, {
       method: "GET",
       headers: this.headers(),
@@ -50,7 +50,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter {
   }
 
   async getLatestClock(_motebitId: string): Promise<number> {
-    const url = `${this.baseUrl}/api/v1/sync/${this.motebitId}/clock`;
+    const url = `${this.baseUrl}/sync/${this.motebitId}/clock`;
     const res = await fetch(url, {
       method: "GET",
       headers: this.headers(),

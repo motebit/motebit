@@ -3,6 +3,10 @@ import type { EventStoreAdapter } from "@motebit/event-log";
 
 export { HttpEventStoreAdapter } from "./http-adapter.js";
 export type { HttpAdapterConfig } from "./http-adapter.js";
+export { WebSocketEventStoreAdapter } from "./ws-adapter.js";
+export type { WebSocketAdapterConfig, EventReceivedCallback } from "./ws-adapter.js";
+export { EncryptedEventStoreAdapter } from "./encrypted-adapter.js";
+export type { EncryptedAdapterConfig } from "./encrypted-adapter.js";
 
 // === Sync Configuration ===
 

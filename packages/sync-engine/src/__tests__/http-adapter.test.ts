@@ -15,6 +15,7 @@ function makeEvent(clock: number): EventLogEntry {
   return {
     event_id: `event-${clock}`,
     motebit_id: MOTEBIT_ID,
+    device_id: "test-device",
     timestamp: Date.now(),
     event_type: EventType.StateUpdated,
     payload: { clock },
@@ -55,7 +56,7 @@ describe("HttpEventStoreAdapter", () => {
 
     expect(mockFn).toHaveBeenCalledTimes(1);
     const [url, options] = mockFn.mock.calls[0]!;
-    expect(url).toBe(`${BASE_URL}/api/v1/sync/${MOTEBIT_ID}/push`);
+    expect(url).toBe(`${BASE_URL}/sync/${MOTEBIT_ID}/push`);
     expect(options.method).toBe("POST");
     expect(options.headers["Authorization"]).toBe(`Bearer ${AUTH_TOKEN}`);
     expect(options.headers["Content-Type"]).toBe("application/json");
@@ -82,7 +83,7 @@ describe("HttpEventStoreAdapter", () => {
 
     expect(mockFn).toHaveBeenCalledTimes(1);
     const [url, options] = mockFn.mock.calls[0]!;
-    expect(url).toBe(`${BASE_URL}/api/v1/sync/${MOTEBIT_ID}/pull?after_clock=5`);
+    expect(url).toBe(`${BASE_URL}/sync/${MOTEBIT_ID}/pull?after_clock=5`);
     expect(options.method).toBe("GET");
     expect(options.headers["Authorization"]).toBe(`Bearer ${AUTH_TOKEN}`);
     expect(result).toEqual(events);
@@ -102,7 +103,7 @@ describe("HttpEventStoreAdapter", () => {
     await adapter.query({});
 
     const [url] = mockFn.mock.calls[0]!;
-    expect(url).toBe(`${BASE_URL}/api/v1/sync/${MOTEBIT_ID}/pull?after_clock=0`);
+    expect(url).toBe(`${BASE_URL}/sync/${MOTEBIT_ID}/pull?after_clock=0`);
   });
 
   it("getLatestClock sends GET to clock endpoint", async () => {
@@ -121,7 +122,7 @@ describe("HttpEventStoreAdapter", () => {
 
     expect(mockFn).toHaveBeenCalledTimes(1);
     const [url, options] = mockFn.mock.calls[0]!;
-    expect(url).toBe(`${BASE_URL}/api/v1/sync/${MOTEBIT_ID}/clock`);
+    expect(url).toBe(`${BASE_URL}/sync/${MOTEBIT_ID}/clock`);
     expect(options.method).toBe("GET");
     expect(options.headers["Authorization"]).toBe(`Bearer ${AUTH_TOKEN}`);
     expect(clock).toBe(42);
@@ -213,6 +214,6 @@ describe("HttpEventStoreAdapter", () => {
     await adapter.query({});
 
     const [url] = mockFn.mock.calls[0]!;
-    expect(url).toBe(`http://localhost:3000/api/v1/sync/${MOTEBIT_ID}/pull?after_clock=0`);
+    expect(url).toBe(`http://localhost:3000/sync/${MOTEBIT_ID}/pull?after_clock=0`);
   });
 });

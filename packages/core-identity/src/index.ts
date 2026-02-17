@@ -28,18 +28,35 @@ function generateUUIDv7(): string {
   ].join("-");
 }
 
+// === Device Registration ===
+
+export interface DeviceRegistration {
+  device_id: string;
+  motebit_id: string;
+  device_token: string;
+  registered_at: number;
+  device_name?: string;
+}
+
 // === Identity Storage Interface ===
 
 export interface IdentityStorage {
   save(identity: MotebitIdentity): Promise<void>;
   load(motebitId: string): Promise<MotebitIdentity | null>;
   loadByOwner(ownerId: string): Promise<MotebitIdentity | null>;
+  // Device registration (optional — implementations that don't need device auth can omit)
+  saveDevice?(device: DeviceRegistration): Promise<void>;
+  loadDevice?(deviceId: string): Promise<DeviceRegistration | null>;
+  loadDeviceByToken?(token: string): Promise<DeviceRegistration | null>;
+  listDevices?(motebitId: string): Promise<DeviceRegistration[]>;
 }
 
 // === In-Memory Storage (for testing) ===
 
 export class InMemoryIdentityStorage implements IdentityStorage {
   private identities = new Map<string, MotebitIdentity>();
+  private devices = new Map<string, DeviceRegistration>();
+  private devicesByToken = new Map<string, DeviceRegistration>();
 
   save(identity: MotebitIdentity): Promise<void> {
     this.identities.set(identity.motebit_id, { ...identity });
@@ -58,15 +75,45 @@ export class InMemoryIdentityStorage implements IdentityStorage {
     }
     return Promise.resolve(null);
   }
+
+  async saveDevice(device: DeviceRegistration): Promise<void> {
+    this.devices.set(device.device_id, { ...device });
+    this.devicesByToken.set(device.device_token, { ...device });
+  }
+
+  async loadDevice(deviceId: string): Promise<DeviceRegistration | null> {
+    return this.devices.get(deviceId) ?? null;
+  }
+
+  async loadDeviceByToken(token: string): Promise<DeviceRegistration | null> {
+    return this.devicesByToken.get(token) ?? null;
+  }
+
+  async listDevices(motebitId: string): Promise<DeviceRegistration[]> {
+    return [...this.devices.values()].filter(d => d.motebit_id === motebitId);
+  }
 }
 
 // === Identity Manager ===
 
 export class IdentityManager {
+  private deviceFallback: InMemoryDeviceStore | null = null;
+
   constructor(
     private storage: IdentityStorage,
     private eventStore: EventStore,
   ) {}
+
+  /** Returns the device-capable storage, falling back to an in-memory store. */
+  private get deviceStore(): Required<Pick<IdentityStorage, "saveDevice" | "loadDevice" | "loadDeviceByToken" | "listDevices">> {
+    if (this.storage.saveDevice && this.storage.loadDevice && this.storage.loadDeviceByToken && this.storage.listDevices) {
+      return this.storage as Required<Pick<IdentityStorage, "saveDevice" | "loadDevice" | "loadDeviceByToken" | "listDevices">>;
+    }
+    if (!this.deviceFallback) {
+      this.deviceFallback = new InMemoryDeviceStore();
+    }
+    return this.deviceFallback;
+  }
 
   /**
    * Create a new Motebit identity. The motebit_id is immutable once created.
@@ -130,5 +177,55 @@ export class IdentityManager {
    */
   async export(motebitId: string): Promise<MotebitIdentity | null> {
     return this.storage.load(motebitId);
+  }
+
+  /**
+   * Register a new device for a motebit identity. Returns the device
+   * registration including a unique device_token for authentication.
+   */
+  async registerDevice(motebitId: string, deviceName?: string): Promise<DeviceRegistration> {
+    const device: DeviceRegistration = {
+      device_id: crypto.randomUUID(),
+      motebit_id: motebitId,
+      device_token: crypto.randomUUID(),
+      registered_at: Date.now(),
+      device_name: deviceName,
+    };
+    await this.deviceStore.saveDevice(device);
+    return device;
+  }
+
+  /**
+   * Validate a device token for a specific motebitId. Returns the device
+   * registration if valid, null otherwise.
+   */
+  async validateDeviceToken(token: string, motebitId: string): Promise<DeviceRegistration | null> {
+    const device = await this.deviceStore.loadDeviceByToken(token);
+    if (!device || device.motebit_id !== motebitId) return null;
+    return device;
+  }
+}
+
+// === In-Memory Device Store (fallback when IdentityStorage lacks device methods) ===
+
+class InMemoryDeviceStore {
+  private devices = new Map<string, DeviceRegistration>();
+  private devicesByToken = new Map<string, DeviceRegistration>();
+
+  async saveDevice(device: DeviceRegistration): Promise<void> {
+    this.devices.set(device.device_id, { ...device });
+    this.devicesByToken.set(device.device_token, { ...device });
+  }
+
+  async loadDevice(deviceId: string): Promise<DeviceRegistration | null> {
+    return this.devices.get(deviceId) ?? null;
+  }
+
+  async loadDeviceByToken(token: string): Promise<DeviceRegistration | null> {
+    return this.devicesByToken.get(token) ?? null;
+  }
+
+  async listDevices(motebitId: string): Promise<DeviceRegistration[]> {
+    return [...this.devices.values()].filter(d => d.motebit_id === motebitId);
   }
 }

@@ -1,122 +1,118 @@
+/**
+ * @motebit/api — Sync relay
+ *
+ * Thin event relay for cross-device sync. No AI, no memory, no state.
+ * Devices run MotebitRuntime locally; this server is just an event mailbox.
+ *
+ * Endpoints:
+ *   GET  /health                         — health check (public)
+ *   WS   /sync/:motebitId               — bidirectional event stream (primary)
+ *   POST /sync/:motebitId/push           — HTTP fallback for push
+ *   GET  /sync/:motebitId/pull           — HTTP fallback for pull
+ *   GET  /sync/:motebitId/clock          — latest version clock
+ *   POST /identity                       — create identity for device registration
+ *   GET  /identity/:motebitId            — load identity
+ *
+ * WebSocket protocol:
+ *   Client → Server:  { type: "push", events: EventLogEntry[] }
+ *   Server → Client:  { type: "event", event: EventLogEntry }
+ *   Server → Client:  { type: "ack", accepted: number }
+ */
+
+import { serve } from "@hono/node-server";
+import { createNodeWebSocket } from "@hono/node-ws";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import { bearerAuth } from "hono/bearer-auth";
 import { HTTPException } from "hono/http-exception";
-import { streamSSE } from "hono/streaming";
-import { rateLimiter } from "hono-rate-limiter";
-import {
-  CloudProvider,
-  runTurn,
-  runTurnStreaming,
-} from "@motebit/ai-core";
-import type { CloudProviderConfig, MotebitLoopDependencies } from "@motebit/ai-core";
 import { EventStore } from "@motebit/event-log";
-import { MemoryGraph, embedText } from "@motebit/memory-graph";
-import { StateVectorEngine } from "@motebit/state-vector";
-import { BehaviorEngine } from "@motebit/behavior-engine";
+import { IdentityManager } from "@motebit/core-identity";
 import { createMotebitDatabase } from "@motebit/persistence";
 import type { MotebitDatabase } from "@motebit/persistence";
-import { IdentityManager } from "@motebit/core-identity";
-import { PrivacyLayer } from "@motebit/privacy-layer";
-import { SensitivityLevel } from "@motebit/sdk";
 import type { EventLogEntry } from "@motebit/sdk";
+import type { WSContext } from "hono/ws";
 
-// === Config & Types ===
+// === Config ===
 
-export interface MotebitServerConfig {
-  motebitId: string;
-  apiKey: string;
-  dbPath?: string; // default ":memory:" for tests
-  apiToken?: string; // bearer token for auth; undefined = no auth enforced
-  corsOrigin?: string; // CORS origin; defaults to "*"
+export interface SyncRelayConfig {
+  dbPath?: string;
+  apiToken?: string;       // Legacy single token (still supported as admin/master token)
+  corsOrigin?: string;
+  enableDeviceAuth?: boolean;  // When true, validates per-device tokens
 }
 
-export interface MotebitServer {
+export interface ConnectedDevice {
+  ws: WSContext;
+  deviceId: string;
+}
+
+export interface SyncRelay {
   app: Hono;
-  deps: MotebitLoopDependencies;
   close(): void;
+  /** Connected WebSocket clients per motebitId. Exposed for testing. */
+  connections: Map<string, ConnectedDevice[]>;
 }
 
 // === Factory ===
 
-/**
- * Create a fully-wired Hono app backed by SQLite persistence.
- */
-export function createMotebitServer(config: MotebitServerConfig): MotebitServer {
-  const { motebitId, apiKey, dbPath = ":memory:", apiToken, corsOrigin = "*" } = config;
+export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
+  const { dbPath = ":memory:", apiToken, corsOrigin = "*", enableDeviceAuth = false } = config;
 
-  const cloudConfig: CloudProviderConfig = {
-    provider: "anthropic",
-    api_key: apiKey,
-    model: "claude-sonnet-4-5-20250514",
-  };
-
-  // Persistence
   const moteDb: MotebitDatabase = createMotebitDatabase(dbPath);
-
-  // Core services
   const eventStore = new EventStore(moteDb.eventStore);
-  const memoryGraph = new MemoryGraph(moteDb.memoryStorage, eventStore, motebitId);
   const identityManager = new IdentityManager(moteDb.identityStorage, eventStore);
-  const privacyLayer = new PrivacyLayer(
-    moteDb.memoryStorage,
-    memoryGraph,
-    eventStore,
-    moteDb.auditLog,
-    motebitId,
-  );
-  // AI/behavior
-  const stateEngine = new StateVectorEngine();
-  const behaviorEngine = new BehaviorEngine();
-  const cloudProvider = new CloudProvider(cloudConfig);
 
-  const deps: MotebitLoopDependencies = {
-    motebitId,
-    eventStore,
-    memoryGraph,
-    stateEngine,
-    behaviorEngine,
-    provider: cloudProvider,
-  };
+  // Track connected WebSocket clients per motebitId with device identity
+  const connections = new Map<string, ConnectedDevice[]>();
 
   const app = new Hono();
+  const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 
-  // === Middleware Stack ===
-
-  // 1. Secure headers (all routes)
+  // --- Middleware ---
   app.use("*", secureHeaders());
-
-  // 2. CORS (configurable origin)
   app.use("*", cors({ origin: corsOrigin }));
 
-  // 3. Rate limiting — tight limit for expensive AI routes
-  app.use(
-    "/api/v1/message/*",
-    rateLimiter({
-      windowMs: 60 * 1000,
-      limit: 20,
-      keyGenerator: (c) => c.req.header("x-forwarded-for") ?? "anonymous",
-    }),
-  );
-
-  // 3b. Rate limiting — general API routes
-  app.use(
-    "/api/*",
-    rateLimiter({
-      windowMs: 60 * 1000,
-      limit: 200,
-      keyGenerator: (c) => c.req.header("x-forwarded-for") ?? "anonymous",
-    }),
-  );
-
-  // 4. Bearer auth on /api/* (skipped when apiToken is undefined)
   if (apiToken) {
-    app.use("/api/*", bearerAuth({ token: apiToken }));
+    app.use("/identity/*", bearerAuth({ token: apiToken }));
+    app.use("/identity", bearerAuth({ token: apiToken }));
+    // Device registration is protected by the master token
+    app.use("/device/*", bearerAuth({ token: apiToken }));
   }
 
-  // === Global Error Handler ===
+  if (enableDeviceAuth) {
+    // Device auth middleware for sync routes: validates per-device tokens
+    app.use("/sync/*", async (c, next) => {
+      const authHeader = c.req.header("authorization");
+      if (!authHeader?.startsWith("Bearer ")) {
+        throw new HTTPException(401, { message: "Missing device token" });
+      }
+      const token = authHeader.slice(7);
 
+      // Master token bypass
+      if (apiToken && token === apiToken) {
+        await next();
+        return;
+      }
+
+      // Device token validation — extract motebitId from URL path (/sync/:motebitId/...)
+      const pathParts = new URL(c.req.url, "http://localhost").pathname.split("/");
+      const motebitId = pathParts[2];
+      if (!motebitId) {
+        throw new HTTPException(400, { message: "Missing motebitId" });
+      }
+      const device = await identityManager.validateDeviceToken(token, motebitId);
+      if (!device) {
+        throw new HTTPException(403, { message: "Device not authorized for this motebit" });
+      }
+      await next();
+    });
+  } else if (apiToken) {
+    // Legacy single-token auth for sync routes
+    app.use("/sync/*", bearerAuth({ token: apiToken }));
+  }
+
+  // --- Error handler ---
   app.onError((err, c) => {
     if (err instanceof HTTPException) {
       return c.json({ error: err.message, status: err.status }, err.status);
@@ -125,139 +121,83 @@ export function createMotebitServer(config: MotebitServerConfig): MotebitServer 
     return c.json({ error: "Internal server error", status: 500 }, 500);
   });
 
-  // Health check (public — before /api/* auth)
+  // --- Health (public, no auth) ---
   app.get("/health", (c) => c.json({ status: "ok", timestamp: Date.now() }));
 
-  // === Message Route (wired to orchestrator) ===
+  // --- WebSocket: bidirectional event stream ---
+  app.get(
+    "/ws/sync/:motebitId",
+    upgradeWebSocket((c) => {
+      const motebitId = c.req.param("motebitId");
+      const url = new URL(c.req.url, "http://localhost");
+      const deviceId = url.searchParams.get("device_id") ?? crypto.randomUUID();
+      const token = url.searchParams.get("token");
 
-  app.post("/api/v1/message/:motebitId", async (c) => {
-    const body = await c.req.json<{ message: string }>();
-    if (!body.message || typeof body.message !== "string" || body.message.trim() === "") {
-      throw new HTTPException(400, { message: "Missing or empty 'message' field" });
-    }
-
-    try {
-      const result = await runTurn(deps, body.message);
-      return c.json({
-        motebit_id: motebitId,
-        response: result.response,
-        memories_formed: result.memoriesFormed,
-        state: result.stateAfter,
-        cues: result.cues,
-      });
-    } catch (err) {
-      if (err instanceof HTTPException) throw err;
-      console.error("AI provider error:", err);
-      throw new HTTPException(502, { message: "AI provider error" });
-    }
-  });
-
-  // === Streaming Message Route ===
-
-  app.post("/api/v1/message/:motebitId/stream", async (c) => {
-    const body = await c.req.json<{ message: string }>();
-    if (!body.message || typeof body.message !== "string" || body.message.trim() === "") {
-      throw new HTTPException(400, { message: "Missing or empty 'message' field" });
-    }
-
-    return streamSSE(
-      c,
-      async (stream) => {
-        for await (const chunk of runTurnStreaming(deps, body.message)) {
-          if (chunk.type === "text") {
-            await stream.writeSSE({ event: "text", data: chunk.text });
-          } else {
-            await stream.writeSSE({
-              event: "done",
-              data: JSON.stringify({
-                motebit_id: motebitId,
-                response: chunk.result.response,
-                memories_formed: chunk.result.memoriesFormed,
-                state: chunk.result.stateAfter,
-                cues: chunk.result.cues,
-              }),
-            });
+      return {
+        async onOpen(_event, ws) {
+          // Validate token for WebSocket connections
+          if (enableDeviceAuth && token) {
+            const device = await identityManager.validateDeviceToken(token, motebitId);
+            if (!device) {
+              ws.close(4003, "Unauthorized");
+              return;
+            }
+          } else if (apiToken && token !== apiToken) {
+            ws.close(4001, "Unauthorized");
+            return;
           }
-        }
-      },
-      async (err, stream) => {
-        console.error("Streaming error:", err);
-        await stream.writeSSE({
-          event: "error",
-          data: err.message,
-        });
-      },
-    );
-  });
 
-  // === Identity Routes ===
+          if (!connections.has(motebitId)) {
+            connections.set(motebitId, []);
+          }
+          connections.get(motebitId)!.push({ ws, deviceId });
+        },
 
-  app.post("/api/v1/identity", async (c) => {
-    const body = await c.req.json<{ owner_id: string }>();
-    if (!body.owner_id || typeof body.owner_id !== "string" || body.owner_id.trim() === "") {
-      throw new HTTPException(400, { message: "Missing or empty 'owner_id' field" });
-    }
-    const identity = await identityManager.create(body.owner_id);
-    return c.json(identity, 201);
-  });
+        async onMessage(event, ws) {
+          try {
+            const msg = JSON.parse(String(event.data)) as { type: string; events?: EventLogEntry[] };
 
-  app.get("/api/v1/identity/:motebitId", async (c) => {
-    const id = c.req.param("motebitId");
-    const identity = await identityManager.load(id);
-    if (!identity) {
-      return c.json({ error: "identity not found" }, 404);
-    }
-    return c.json(identity);
-  });
+            if (msg.type === "push" && Array.isArray(msg.events)) {
+              for (const entry of msg.events) {
+                await eventStore.append(entry);
+              }
 
-  // === Memory Routes ===
+              // Acknowledge
+              ws.send(JSON.stringify({ type: "ack", accepted: msg.events.length }));
 
-  app.get("/api/v1/memory/:motebitId", async (c) => {
-    const exported = await memoryGraph.exportAll();
-    return c.json({
-      motebit_id: motebitId,
-      memories: exported.nodes,
-      edges: exported.edges,
-    });
-  });
+              // Fan out to other connected clients for the same motebitId
+              const peers = connections.get(motebitId);
+              if (peers) {
+                for (const entry of msg.events) {
+                  const payload = JSON.stringify({ type: "event", event: entry });
+                  for (const peer of peers) {
+                    if (peer.ws !== ws) {
+                      peer.ws.send(payload);
+                    }
+                  }
+                }
+              }
+            }
+          } catch {
+            // Ignore malformed messages
+          }
+        },
 
-  app.post("/api/v1/memory/:motebitId", async (c) => {
-    const body = await c.req.json<{ content: string; sensitivity?: string }>();
-    if (!body.content || typeof body.content !== "string" || body.content.trim() === "") {
-      throw new HTTPException(400, { message: "Missing or empty 'content' field" });
-    }
+        onClose(_event, ws) {
+          const peers = connections.get(motebitId);
+          if (peers) {
+            const idx = peers.findIndex(p => p.ws === ws);
+            if (idx !== -1) peers.splice(idx, 1);
+            if (peers.length === 0) connections.delete(motebitId);
+          }
+        },
+      };
+    }),
+  );
 
-    try {
-      const sensitivity = parseSensitivity(body.sensitivity);
-      const embedding = await embedText(body.content);
-      const node = await memoryGraph.formMemory(
-        { content: body.content, confidence: 1.0, sensitivity },
-        embedding,
-      );
-      return c.json(node, 201);
-    } catch (err) {
-      if (err instanceof HTTPException) throw err;
-      console.error("Embedding error:", err);
-      throw new HTTPException(502, { message: "AI provider error" });
-    }
-  });
-
-  app.delete("/api/v1/memory/:motebitId/:nodeId", async (c) => {
-    const nodeId = c.req.param("nodeId");
-    await memoryGraph.deleteMemory(nodeId);
-    return c.json({ motebit_id: motebitId, node_id: nodeId, deleted: true });
-  });
-
-  // === State Routes ===
-
-  app.get("/api/v1/state/:motebitId", (c) => {
-    const state = stateEngine.getState();
-    return c.json({ motebit_id: motebitId, state });
-  });
-
-  // === Sync Routes ===
-
-  app.post("/api/v1/sync/:motebitId/push", async (c) => {
+  // --- Sync: push events (HTTP fallback) ---
+  app.post("/sync/:motebitId/push", async (c) => {
+    const motebitId = c.req.param("motebitId");
     const body = await c.req.json<{ events: EventLogEntry[] }>();
     if (!Array.isArray(body.events)) {
       throw new HTTPException(400, { message: "Missing or invalid 'events' field (must be array)" });
@@ -265,10 +205,27 @@ export function createMotebitServer(config: MotebitServerConfig): MotebitServer 
     for (const event of body.events) {
       await eventStore.append(event);
     }
+
+    // Fan out to WebSocket clients, skipping the sender device
+    const senderDeviceId = c.req.header("x-device-id");
+    const peers = connections.get(motebitId);
+    if (peers) {
+      for (const event of body.events) {
+        const payload = JSON.stringify({ type: "event", event });
+        for (const peer of peers) {
+          if (peer.deviceId !== senderDeviceId) {
+            peer.ws.send(payload);
+          }
+        }
+      }
+    }
+
     return c.json({ motebit_id: motebitId, accepted: body.events.length });
   });
 
-  app.get("/api/v1/sync/:motebitId/pull", async (c) => {
+  // --- Sync: pull events (HTTP fallback) ---
+  app.get("/sync/:motebitId/pull", async (c) => {
+    const motebitId = c.req.param("motebitId");
     const afterClock = Number(c.req.query("after_clock") ?? "0");
     const events = await eventStore.query({
       motebit_id: motebitId,
@@ -277,103 +234,83 @@ export function createMotebitServer(config: MotebitServerConfig): MotebitServer 
     return c.json({ motebit_id: motebitId, events, after_clock: afterClock });
   });
 
-  app.get("/api/v1/sync/:motebitId/clock", async (c) => {
+  // --- Sync: latest clock ---
+  app.get("/sync/:motebitId/clock", async (c) => {
+    const motebitId = c.req.param("motebitId");
     const clock = await eventStore.getLatestClock(motebitId);
     return c.json({ motebit_id: motebitId, latest_clock: clock });
   });
 
-  // === Export Route ===
-
-  app.get("/api/v1/export/:motebitId", async (c) => {
-    const id = c.req.param("motebitId");
-    const identity = await identityManager.load(id);
-    if (!identity) {
-      return c.json({ error: "identity not found" }, 404);
+  // --- Device: register ---
+  app.post("/device/register", async (c) => {
+    const body = await c.req.json<{ motebit_id: string; device_name?: string }>();
+    if (!body.motebit_id) {
+      throw new HTTPException(400, { message: "Missing 'motebit_id' field" });
     }
-    const manifest = await privacyLayer.exportAll(identity);
-    return c.json(manifest);
+    const identity = await identityManager.load(body.motebit_id);
+    if (!identity) {
+      throw new HTTPException(404, { message: "Identity not found" });
+    }
+    const device = await identityManager.registerDevice(body.motebit_id, body.device_name);
+    return c.json(device, 201);
   });
 
-  // === Delete Route ===
-
-  app.post("/api/v1/delete/:motebitId", async (c) => {
-    const id = c.req.param("motebitId");
-    const body = await c.req.json<{ deleted_by: string }>();
-    if (!body.deleted_by || typeof body.deleted_by !== "string" || body.deleted_by.trim() === "") {
-      throw new HTTPException(400, { message: "Missing or empty 'deleted_by' field" });
+  // --- Identity: create ---
+  app.post("/identity", async (c) => {
+    const body = await c.req.json<{ owner_id: string }>();
+    if (!body.owner_id || typeof body.owner_id !== "string" || body.owner_id.trim() === "") {
+      throw new HTTPException(400, { message: "Missing or empty 'owner_id' field" });
     }
+    const identity = await identityManager.create(body.owner_id);
+    return c.json(identity, 201);
+  });
 
+  // --- Identity: load ---
+  app.get("/identity/:motebitId", async (c) => {
+    const id = c.req.param("motebitId");
     const identity = await identityManager.load(id);
     if (!identity) {
       return c.json({ error: "identity not found" }, 404);
     }
-
-    // Get all memories, delete each one
-    const memories = await privacyLayer.listMemories();
-    const deletionCertificates = [];
-    for (const mem of memories) {
-      const cert = await privacyLayer.deleteMemory(mem.node_id, body.deleted_by);
-      deletionCertificates.push(cert);
-    }
-
-    // Record a DeleteRequested event
-    const clock = await eventStore.getLatestClock(id);
-    await eventStore.append({
-      event_id: crypto.randomUUID(),
-      motebit_id: id,
-      timestamp: Date.now(),
-      event_type: "delete_requested" as EventLogEntry["event_type"],
-      payload: { deleted_by: body.deleted_by, memories_deleted: deletionCertificates.length },
-      version_clock: clock + 1,
-      tombstoned: false,
-    });
-
-    return c.json({ motebit_id: id, deletion_certificates: deletionCertificates });
+    return c.json(identity);
   });
 
   function close(): void {
+    // Close all WebSocket connections
+    for (const peers of connections.values()) {
+      for (const peer of peers) {
+        peer.ws.close();
+      }
+    }
+    connections.clear();
     moteDb.close();
   }
 
-  return { app, deps, close };
+  // Inject WebSocket support into the underlying Node.js server
+  const originalApp = app as Hono & { injectWebSocket?: typeof injectWebSocket };
+  originalApp.injectWebSocket = injectWebSocket;
+
+  return { app, close, connections };
 }
 
-// === Helpers ===
+// === Standalone boot ===
 
-function parseSensitivity(value?: string): SensitivityLevel {
-  if (!value) return SensitivityLevel.None;
-  const valid = Object.values(SensitivityLevel) as string[];
-  if (valid.includes(value)) {
-    return value as SensitivityLevel;
-  }
-  return SensitivityLevel.None;
+const app = process.env.VITEST ? new Hono() : createSyncRelay({
+  dbPath: process.env.MOTEBIT_DB_PATH,
+  apiToken: process.env.MOTEBIT_API_TOKEN,
+  corsOrigin: process.env.MOTEBIT_CORS_ORIGIN,
+  enableDeviceAuth: process.env.MOTEBIT_ENABLE_DEVICE_AUTH === "true",
+}).app;
+
+if (!process.env.VITEST) {
+  const port = Number(process.env.PORT ?? 3000);
+  const server = serve({ fetch: app.fetch, port }, (info) => {
+    console.log(`Motebit sync relay listening on http://localhost:${info.port}`);
+  });
+  // Inject WebSocket support
+  const injectWs = (app as Hono & { injectWebSocket?: (server: unknown) => void }).injectWebSocket;
+  if (injectWs) injectWs(server);
 }
-
-// === Default app for standalone use ===
-
-function createDefaultApp(): Hono {
-  const anthropicKey = process.env.ANTHROPIC_API_KEY ?? "";
-  if (!anthropicKey) {
-    console.error("FATAL: ANTHROPIC_API_KEY is required");
-    process.exit(1);
-  }
-
-  const token = process.env.MOTEBIT_API_TOKEN;
-  if (!token) {
-    console.warn("WARNING: MOTEBIT_API_TOKEN not set — API auth is disabled");
-  }
-
-  return createMotebitServer({
-    motebitId: process.env.MOTEBIT_ID ?? "default-motebit",
-    apiKey: anthropicKey,
-    dbPath: process.env.MOTEBIT_DB_PATH,
-    apiToken: token,
-    corsOrigin: process.env.MOTEBIT_CORS_ORIGIN,
-  }).app;
-}
-
-// Skip standalone initialization during tests (vitest sets VITEST env var)
-const app = process.env.VITEST ? new Hono() : createDefaultApp();
 
 export default app;
 export { app };

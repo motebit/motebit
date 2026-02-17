@@ -5,20 +5,16 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { parseArgs } from "node:util";
-import { CloudProvider, OllamaProvider, runTurn, runTurnStreaming, loadConfig, formatBodyAwareness } from "@motebit/ai-core";
-import type { MotebitLoopDependencies, StreamingProvider, MotebitPersonalityConfig } from "@motebit/ai-core";
-import type { BehaviorCues } from "@motebit/sdk";
-import { EventStore } from "@motebit/event-log";
-import { MemoryGraph } from "@motebit/memory-graph";
-import { StateVectorEngine } from "@motebit/state-vector";
-import { BehaviorEngine } from "@motebit/behavior-engine";
+import { MotebitRuntime, NullRenderer } from "@motebit/runtime";
+import type { StorageAdapters } from "@motebit/runtime";
+import { CloudProvider, OllamaProvider, loadConfig, formatBodyAwareness } from "@motebit/ai-core";
+import type { StreamingProvider, MotebitPersonalityConfig } from "@motebit/ai-core";
 import { createMotebitDatabase, type MotebitDatabase } from "@motebit/persistence";
-import { SyncEngine, HttpEventStoreAdapter } from "@motebit/sync-engine";
+import { HttpEventStoreAdapter } from "@motebit/sync-engine";
 
 // --- Constants ---
 
 const MOTEBIT_ID = "motebit-cli";
-const MAX_HISTORY_EXCHANGES = 20;
 const VERSION = "0.1.0";
 
 // --- Arg Parsing ---
@@ -35,7 +31,6 @@ export interface CliConfig {
 }
 
 export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig {
-  // Strip leading "--" that pnpm injects when using `pnpm start -- --flag`
   const cleanArgs = args[0] === "--" ? args.slice(1) : args;
   const { values } = parseArgs({
     args: cleanArgs,
@@ -116,7 +111,7 @@ export function printVersion(): void {
 export function trimHistory(
   history: { role: "user" | "assistant"; content: string }[],
 ): { role: "user" | "assistant"; content: string }[] {
-  const maxMessages = MAX_HISTORY_EXCHANGES * 2;
+  const maxMessages = 40;
   if (history.length > maxMessages) {
     return history.slice(history.length - maxMessages);
   }
@@ -171,17 +166,7 @@ function getDbPath(override?: string): string {
   return path.join(dir, "motebit.db");
 }
 
-// --- Bootstrap Dependencies ---
-
-interface CliDeps {
-  loopDeps: MotebitLoopDependencies;
-  moteDb: MotebitDatabase;
-  stateEngine: StateVectorEngine;
-  behaviorEngine: BehaviorEngine;
-  memoryGraph: MemoryGraph;
-  provider: StreamingProvider;
-  syncEngine: SyncEngine | null;
-}
+// --- Provider Factory ---
 
 function createProvider(config: CliConfig, personalityConfig?: MotebitPersonalityConfig): StreamingProvider {
   const temperature = personalityConfig?.temperature ?? 0.7;
@@ -206,58 +191,46 @@ function createProvider(config: CliConfig, personalityConfig?: MotebitPersonalit
   });
 }
 
-function createDependencies(config: CliConfig, personalityConfig?: MotebitPersonalityConfig): CliDeps {
+// --- Bootstrap ---
+
+function createRuntime(config: CliConfig, personalityConfig?: MotebitPersonalityConfig): { runtime: MotebitRuntime; moteDb: MotebitDatabase } {
   const dbPath = getDbPath(config.dbPath);
   const moteDb = createMotebitDatabase(dbPath);
-
-  const eventStore = new EventStore(moteDb.eventStore);
-  const memoryGraph = new MemoryGraph(moteDb.memoryStorage, eventStore, MOTEBIT_ID);
-  const stateEngine = new StateVectorEngine();
-
-  const savedState = moteDb.stateSnapshot.loadState(MOTEBIT_ID);
-  if (savedState) {
-    stateEngine.deserialize(savedState);
-  }
-
-  const behaviorEngine = new BehaviorEngine();
   const provider = createProvider(config, personalityConfig);
 
   console.log(`Data: ${dbPath}`);
   console.log(`Provider: ${config.provider} (${provider.model})`);
 
-  let syncEngine: SyncEngine | null = null;
+  const storage: StorageAdapters = {
+    eventStore: moteDb.eventStore,
+    memoryStorage: moteDb.memoryStorage,
+    identityStorage: moteDb.identityStorage,
+    auditLog: moteDb.auditLog,
+    stateSnapshot: moteDb.stateSnapshot,
+  };
+
+  const runtime = new MotebitRuntime(
+    { motebitId: MOTEBIT_ID },
+    { storage, renderer: new NullRenderer(), ai: provider },
+  );
+
+  // Wire sync if configured
   const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
   const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
 
   if (syncUrl) {
-    syncEngine = new SyncEngine(moteDb.eventStore, MOTEBIT_ID);
     const remoteStore = new HttpEventStoreAdapter({
       baseUrl: syncUrl,
       motebitId: MOTEBIT_ID,
       authToken: syncToken,
     });
-    syncEngine.connectRemote(remoteStore);
+    runtime.connectSync(remoteStore);
     console.log(`Sync: ${syncUrl}`);
   } else {
     console.log("Sync: disabled (set MOTEBIT_SYNC_URL to enable)");
   }
 
-  return {
-    loopDeps: {
-      motebitId: MOTEBIT_ID,
-      eventStore,
-      memoryGraph,
-      stateEngine,
-      behaviorEngine,
-      provider,
-    },
-    moteDb,
-    stateEngine,
-    behaviorEngine,
-    memoryGraph,
-    provider,
-    syncEngine,
-  };
+  return { runtime, moteDb };
 }
 
 // --- Slash Command Handlers ---
@@ -265,8 +238,7 @@ function createDependencies(config: CliConfig, personalityConfig?: MotebitPerson
 async function handleSlashCommand(
   cmd: string,
   args: string,
-  deps: CliDeps,
-  history: { role: "user" | "assistant"; content: string }[],
+  runtime: MotebitRuntime,
 ): Promise<void> {
   switch (cmd) {
     case "help":
@@ -285,7 +257,7 @@ Available commands:
       break;
 
     case "memories": {
-      const data = await deps.memoryGraph.exportAll();
+      const data = await runtime.memory.exportAll();
       if (data.nodes.length === 0) {
         console.log("No memories stored yet.");
       } else {
@@ -300,7 +272,7 @@ Available commands:
     }
 
     case "state": {
-      const state = deps.stateEngine.getState();
+      const state = runtime.getState();
       console.log("\nState vector:\n" + formatState(state as unknown as Record<string, unknown>));
       break;
     }
@@ -311,7 +283,7 @@ Available commands:
         break;
       }
       try {
-        await deps.memoryGraph.deleteMemory(args);
+        await runtime.memory.deleteMemory(args);
         console.log(`Deleted memory: ${args}`);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
@@ -321,36 +293,32 @@ Available commands:
     }
 
     case "export": {
-      const memories = await deps.memoryGraph.exportAll();
-      const state = deps.stateEngine.getState();
+      const memories = await runtime.memory.exportAll();
+      const state = runtime.getState();
       const exportData = { memories, state };
       console.log(JSON.stringify(exportData, null, 2));
       break;
     }
 
     case "clear":
-      history.length = 0;
+      runtime.resetConversation();
       console.log("Conversation history cleared.");
       break;
 
     case "model": {
       if (!args) {
-        console.log(`Current model: ${deps.provider.model}`);
+        console.log(`Current model: ${runtime.currentModel}`);
         break;
       }
-      deps.provider.setModel(args);
+      runtime.setModel(args);
       console.log(`Model switched to: ${args}`);
       break;
     }
 
     case "sync": {
-      if (!deps.syncEngine) {
-        console.log("Sync is disabled. Set MOTEBIT_SYNC_URL to enable.");
-        break;
-      }
       try {
         console.log("Syncing...");
-        const result = await deps.syncEngine.sync();
+        const result = await runtime.sync.sync();
         console.log(`Pushed: ${result.pushed}, Pulled: ${result.pulled}`);
         if (result.conflicts.length > 0) {
           console.log(`Conflicts: ${result.conflicts.length}`);
@@ -380,20 +348,11 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  if (config.help) {
-    printHelp();
-    return;
-  }
+  if (config.help) { printHelp(); return; }
+  if (config.version) { printVersion(); return; }
 
-  if (config.version) {
-    printVersion();
-    return;
-  }
-
-  // Load personality config from ~/.motebit/config.json
   const personalityConfig = loadConfig();
 
-  // Apply config defaults when CLI flags weren't explicit
   if (personalityConfig.default_provider && !process.argv.includes("--provider")) {
     const validProviders = ["anthropic", "ollama"] as const;
     if (validProviders.includes(personalityConfig.default_provider)) {
@@ -404,36 +363,30 @@ async function main(): Promise<void> {
     config.model = personalityConfig.default_model;
   }
 
-  const deps = createDependencies(config, personalityConfig);
+  const { runtime, moteDb } = createRuntime(config, personalityConfig);
 
-  if (deps.syncEngine) {
-    try {
-      console.log("Syncing...");
-      const result = await deps.syncEngine.sync();
-      console.log(`Synced: pulled ${result.pulled} events, pushed ${result.pushed} events`);
-      if (result.conflicts.length > 0) {
-        console.log(`  [${result.conflicts.length} conflicts detected]`);
-      }
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.warn(`Sync failed (continuing offline): ${message}`);
+  // Initial sync
+  try {
+    console.log("Syncing...");
+    const result = await runtime.sync.sync();
+    console.log(`Synced: pulled ${result.pulled} events, pushed ${result.pushed} events`);
+    if (result.conflicts.length > 0) {
+      console.log(`  [${result.conflicts.length} conflicts detected]`);
     }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`Sync failed (continuing offline): ${message}`);
   }
 
-  const history: { role: "user" | "assistant"; content: string }[] = [];
-  let lastCues: BehaviorCues = deps.behaviorEngine.compute(deps.stateEngine.getState());
-
   const shutdown = async (): Promise<void> => {
-    deps.moteDb.stateSnapshot.saveState(MOTEBIT_ID, deps.stateEngine.serialize());
-    if (deps.syncEngine) {
-      try {
-        const result = await deps.syncEngine.sync();
-        console.log(`Synced on exit: pushed ${result.pushed}, pulled ${result.pulled}`);
-      } catch {
-        console.warn("Sync on exit failed (changes saved locally)");
-      }
+    runtime.stop();
+    try {
+      const result = await runtime.sync.sync();
+      console.log(`Synced on exit: pushed ${result.pushed}, pulled ${result.pulled}`);
+    } catch {
+      console.warn("Sync on exit failed (changes saved locally)");
     }
-    deps.moteDb.close();
+    moteDb.close();
   };
 
   process.on("SIGINT", () => {
@@ -441,17 +394,12 @@ async function main(): Promise<void> {
     void shutdown().then(() => process.exit(0));
   });
 
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
   console.log("Motebit CLI — type a message, /help for commands, or quit to exit\n");
 
   const prompt = (): void => {
-    rl.question("you> ", (line) => {
-      void handleLine(line);
-    });
+    rl.question("you> ", (line) => { void handleLine(line); });
   };
 
   const handleLine = async (line: string): Promise<void> => {
@@ -464,14 +412,11 @@ async function main(): Promise<void> {
       return;
     }
 
-    if (trimmed === "") {
-      prompt();
-      return;
-    }
+    if (trimmed === "") { prompt(); return; }
 
     if (isSlashCommand(trimmed)) {
       const { command, args } = parseSlashCommand(trimmed);
-      await handleSlashCommand(command, args, deps, history);
+      await handleSlashCommand(command, args, runtime);
       console.log();
       prompt();
       return;
@@ -479,72 +424,37 @@ async function main(): Promise<void> {
 
     try {
       if (config.noStream) {
-        // Blocking mode
-        const result = await runTurn(deps.loopDeps, trimmed, {
-          conversationHistory: history.length > 0 ? history : undefined,
-          previousCues: lastCues,
-        });
+        const result = await runtime.sendMessage(trimmed);
 
         console.log(`\nmote> ${result.response}\n`);
-        lastCues = result.cues;
-
-        history.push({ role: "user", content: trimmed });
-        history.push({ role: "assistant", content: result.response });
-        const trimmedHistory = trimHistory(history);
-        history.length = 0;
-        history.push(...trimmedHistory);
 
         if (result.memoriesFormed.length > 0) {
-          console.log(
-            `  [memories: ${result.memoriesFormed.map((m) => m.content).join(", ")}]`,
-          );
+          console.log(`  [memories: ${result.memoriesFormed.map((m) => m.content).join(", ")}]`);
         }
 
         const s = result.stateAfter;
-        console.log(
-          `  [state: attention=${s.attention.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} curiosity=${s.curiosity.toFixed(2)}]`,
-        );
+        console.log(`  [state: attention=${s.attention.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} curiosity=${s.curiosity.toFixed(2)}]`);
         const bodyLine = formatBodyAwareness(result.cues);
-        if (bodyLine) {
-          console.log(`  ${bodyLine}`);
-        }
+        if (bodyLine) console.log(`  ${bodyLine}`);
         console.log();
       } else {
-        // Streaming mode
         process.stdout.write("\nmote> ");
 
-        for await (const chunk of runTurnStreaming(deps.loopDeps, trimmed, {
-          conversationHistory: history.length > 0 ? history : undefined,
-          previousCues: lastCues,
-        })) {
+        for await (const chunk of runtime.sendMessageStreaming(trimmed)) {
           if (chunk.type === "text") {
             process.stdout.write(chunk.text);
           } else {
             const result = chunk.result;
-            lastCues = result.cues;
             console.log("\n");
 
-            // Use streamed text for history (stripped of tags)
-            history.push({ role: "user", content: trimmed });
-            history.push({ role: "assistant", content: result.response });
-            const trimmedHistory = trimHistory(history);
-            history.length = 0;
-            history.push(...trimmedHistory);
-
             if (result.memoriesFormed.length > 0) {
-              console.log(
-                `  [memories: ${result.memoriesFormed.map((m) => m.content).join(", ")}]`,
-              );
+              console.log(`  [memories: ${result.memoriesFormed.map((m) => m.content).join(", ")}]`);
             }
 
             const s = result.stateAfter;
-            console.log(
-              `  [state: attention=${s.attention.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} curiosity=${s.curiosity.toFixed(2)}]`,
-            );
+            console.log(`  [state: attention=${s.attention.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} curiosity=${s.curiosity.toFixed(2)}]`);
             const bodyLine = formatBodyAwareness(result.cues);
-            if (bodyLine) {
-              console.log(`  ${bodyLine}`);
-            }
+            if (bodyLine) console.log(`  ${bodyLine}`);
             console.log();
           }
         }
@@ -560,7 +470,6 @@ async function main(): Promise<void> {
   prompt();
 }
 
-// Only run when executed directly, not when imported for testing
 const isMainModule =
   process.argv[1] &&
   (import.meta.url === `file://${process.argv[1]}` ||

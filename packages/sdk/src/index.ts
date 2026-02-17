@@ -122,6 +122,8 @@ export interface MemoryCandidate {
 export interface EventLogEntry {
   event_id: string;
   motebit_id: string;
+  /** Device that originated this event (for multi-device conflict resolution) */
+  device_id?: string;
   timestamp: number;
   event_type: EventType;
   payload: Record<string, unknown>;

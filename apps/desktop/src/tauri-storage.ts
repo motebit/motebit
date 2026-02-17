@@ -20,6 +20,7 @@ async function dbExecute(invoke: InvokeFn, sql: string, params: unknown[] = []):
 interface EventRow {
   event_id: string;
   motebit_id: string;
+  device_id: string | null;
   event_type: string;
   payload: string;
   version_clock: number;
@@ -28,7 +29,7 @@ interface EventRow {
 }
 
 function rowToEvent(row: EventRow): EventLogEntry {
-  return {
+  const entry: EventLogEntry = {
     event_id: row.event_id,
     motebit_id: row.motebit_id,
     event_type: row.event_type as EventType,
@@ -37,6 +38,10 @@ function rowToEvent(row: EventRow): EventLogEntry {
     timestamp: row.timestamp,
     tombstoned: row.tombstoned === 1,
   };
+  if (row.device_id !== null) {
+    entry.device_id = row.device_id;
+  }
+  return entry;
 }
 
 export class TauriEventStore implements EventStoreAdapter {
@@ -45,11 +50,12 @@ export class TauriEventStore implements EventStoreAdapter {
   async append(entry: EventLogEntry): Promise<void> {
     await dbExecute(
       this.invoke,
-      `INSERT OR IGNORE INTO events (event_id, motebit_id, event_type, payload, version_clock, timestamp, tombstoned)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO events (event_id, motebit_id, device_id, event_type, payload, version_clock, timestamp, tombstoned)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         entry.event_id,
         entry.motebit_id,
+        entry.device_id ?? null,
         entry.event_type,
         JSON.stringify(entry.payload),
         entry.version_clock,

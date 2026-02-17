@@ -1,43 +1,28 @@
 /**
  * @motebit/desktop — Tauri app (Rust + webview)
  *
- * Architecture:
- * - Three.js in webview for rendering
- * - SQLite via rusqlite in Rust backend, exposed through Tauri commands
- * - OS keyring for identity persistence (via tauri-plugin-keyring)
- * - System tray presence
- *
- * Tauri commands (Rust side):
- * - db_query(sql, params) -> rows
- * - db_execute(sql, params) -> affected
- * - keyring_get(key) -> value
- * - keyring_set(key, value)
- * - keyring_delete(key)
- * - read_config() -> JSON string
- * - write_config(json) -> void
+ * Thin platform shell around MotebitRuntime.
+ * Provides Tauri-specific storage adapters and AI provider creation.
  */
 
-import type { MotebitState, BehaviorCues } from "@motebit/sdk";
-import { StateVectorEngine } from "@motebit/state-vector";
-import { BehaviorEngine } from "@motebit/behavior-engine";
+import { MotebitRuntime } from "@motebit/runtime";
+import type { TurnResult, StorageAdapters, StreamChunk } from "@motebit/runtime";
 import { ThreeJSAdapter } from "@motebit/render-engine";
 import {
   CloudProvider,
   OllamaProvider,
   resolveConfig,
-  runTurn,
-  runTurnStreaming,
-  extractStateTags,
-  extractActions,
-  actionsToStateUpdates,
   type MotebitPersonalityConfig,
-  type MotebitLoopDependencies,
-  type TurnResult,
 } from "@motebit/ai-core";
-import { EventStore, InMemoryEventStore } from "@motebit/event-log";
-import { MemoryGraph, InMemoryMemoryStorage } from "@motebit/memory-graph";
+import { InMemoryEventStore } from "@motebit/event-log";
+import { InMemoryMemoryStorage } from "@motebit/memory-graph";
+import { InMemoryIdentityStorage } from "@motebit/core-identity";
+import { InMemoryAuditLog } from "@motebit/privacy-layer";
 import { TauriEventStore, TauriMemoryStorage, type InvokeFn } from "./tauri-storage.js";
 export type { InvokeFn } from "./tauri-storage.js";
+
+// Re-export runtime types for main.ts consumption
+export type { TurnResult, StreamChunk };
 
 // === Tauri Command Interface ===
 
@@ -62,51 +47,50 @@ export interface DesktopAIConfig {
   invoke?: InvokeFn;
 }
 
-// === Desktop App Bootstrap ===
+// === Storage Factory ===
+
+function createTauriStorage(invoke: InvokeFn): StorageAdapters {
+  return {
+    eventStore: new TauriEventStore(invoke),
+    memoryStorage: new TauriMemoryStorage(invoke),
+    identityStorage: new InMemoryIdentityStorage(),
+    auditLog: new InMemoryAuditLog(),
+  };
+}
+
+function createDesktopStorage(config: DesktopAIConfig): StorageAdapters {
+  if (config.isTauri && config.invoke) {
+    return createTauriStorage(config.invoke);
+  }
+  return {
+    eventStore: new InMemoryEventStore(),
+    memoryStorage: new InMemoryMemoryStorage(),
+    identityStorage: new InMemoryIdentityStorage(),
+    auditLog: new InMemoryAuditLog(),
+  };
+}
+
+// === Desktop App (platform shell) ===
 
 export class DesktopApp {
-  private stateEngine: StateVectorEngine;
-  private behaviorEngine: BehaviorEngine;
+  private runtime: MotebitRuntime | null = null;
   private renderer: ThreeJSAdapter;
-  private running = false;
-  private latestCues: BehaviorCues = {
-    hover_distance: 0.4,
-    drift_amplitude: 0.02,
-    glow_intensity: 0.3,
-    eye_dilation: 0.3,
-    smile_curvature: 0,
-  };
-
-  // AI loop
-  private loopDeps: MotebitLoopDependencies | null = null;
-  private conversationHistory: { role: "user" | "assistant"; content: string }[] = [];
-  private _isProcessing = false;
 
   constructor() {
-    this.stateEngine = new StateVectorEngine({ tick_rate_hz: 2 });
-    this.behaviorEngine = new BehaviorEngine();
     this.renderer = new ThreeJSAdapter();
   }
 
   async init(canvas: unknown): Promise<void> {
     await this.renderer.init(canvas);
-
-    // Subscribe to state changes → compute cues (at 2Hz tick rate)
-    this.stateEngine.subscribe((state: MotebitState) => {
-      this.latestCues = this.behaviorEngine.compute(state);
-    });
   }
 
   start(): void {
-    if (this.running) return;
-    this.running = true;
-    this.stateEngine.start();
+    this.runtime?.start();
   }
 
   stop(): void {
-    this.stateEngine.stop();
+    this.runtime?.stop();
     this.renderer.dispose();
-    this.running = false;
   }
 
   resize(width: number, height: number): void {
@@ -114,30 +98,34 @@ export class DesktopApp {
   }
 
   renderFrame(deltaTime: number, time: number): void {
-    this.renderer.render({
-      cues: this.latestCues,
-      delta_time: deltaTime,
-      time,
-    });
+    if (this.runtime) {
+      this.runtime.renderFrame(deltaTime, time);
+    } else {
+      this.renderer.render({
+        cues: { hover_distance: 0.4, drift_amplitude: 0.02, glow_intensity: 0.3, eye_dilation: 0.3, smile_curvature: 0 },
+        delta_time: deltaTime,
+        time,
+      });
+    }
   }
 
   // === AI Integration ===
 
   get isAIReady(): boolean {
-    return this.loopDeps !== null;
+    return this.runtime?.isAIReady ?? false;
   }
 
   get isProcessing(): boolean {
-    return this._isProcessing;
+    return this.runtime?.isProcessing ?? false;
   }
 
   get currentModel(): string | null {
-    return this.loopDeps?.provider.model ?? null;
+    return this.runtime?.currentModel ?? null;
   }
 
   setModel(model: string): void {
-    if (!this.loopDeps) throw new Error("AI not initialized — call initAI() first");
-    this.loopDeps.provider.setModel(model);
+    if (!this.runtime) throw new Error("AI not initialized — call initAI() first");
+    this.runtime.setModel(model);
   }
 
   initAI(config: DesktopAIConfig): boolean {
@@ -146,44 +134,15 @@ export class DesktopApp {
       : undefined;
     const temperature = resolved?.temperature;
 
-    const motebitId = "desktop-local";
-
-    let eventStoreAdapter;
-    let memoryStorageAdapter;
-    if (config.isTauri && config.invoke) {
-      eventStoreAdapter = new TauriEventStore(config.invoke);
-      memoryStorageAdapter = new TauriMemoryStorage(config.invoke);
-    } else {
-      eventStoreAdapter = new InMemoryEventStore();
-      memoryStorageAdapter = new InMemoryMemoryStorage();
-    }
-
-    const eventStore = new EventStore(eventStoreAdapter);
-    const memoryGraph = new MemoryGraph(
-      memoryStorageAdapter,
-      eventStore,
-      motebitId,
-    );
-
     let provider;
-
     if (config.provider === "ollama") {
       const model = config.model || "llama3.2";
-      const base_url = config.isTauri
-        ? "http://localhost:11434"
-        : "/api/ollama";
-      provider = new OllamaProvider({
-        model,
-        base_url,
-        max_tokens: 1024,
-        temperature,
-      });
+      const base_url = config.isTauri ? "http://localhost:11434" : "/api/ollama";
+      provider = new OllamaProvider({ model, base_url, max_tokens: 1024, temperature });
     } else {
       if (!config.apiKey) return false;
       const model = config.model || "claude-sonnet-4-20250514";
-      const base_url = config.isTauri
-        ? "https://api.anthropic.com"
-        : "/api/anthropic";
+      const base_url = config.isTauri ? "https://api.anthropic.com" : "/api/anthropic";
       provider = new CloudProvider({
         provider: "anthropic",
         api_key: config.apiKey,
@@ -194,126 +153,28 @@ export class DesktopApp {
       });
     }
 
-    this.loopDeps = {
-      motebitId,
-      eventStore,
-      memoryGraph,
-      stateEngine: this.stateEngine,
-      behaviorEngine: this.behaviorEngine,
-      provider,
-    };
+    const storage = createDesktopStorage(config);
+
+    this.runtime = new MotebitRuntime(
+      { motebitId: "desktop-local", tickRateHz: 2 },
+      { storage, renderer: this.renderer, ai: provider },
+    );
 
     return true;
   }
 
   resetConversation(): void {
-    this.conversationHistory = [];
+    this.runtime?.resetConversation();
   }
 
   async sendMessage(text: string): Promise<TurnResult> {
-    if (!this.loopDeps) {
-      throw new Error("AI not initialized — call initAI() first");
-    }
-    if (this._isProcessing) {
-      throw new Error("Already processing a message");
-    }
-
-    this._isProcessing = true;
-
-    // Creature glows while thinking
-    this.stateEngine.pushUpdate({ processing: 0.9, attention: 0.8 });
-
-    try {
-      const result = await runTurn(this.loopDeps, text, {
-        conversationHistory: this.conversationHistory,
-        previousCues: this.latestCues,
-      });
-
-      // Maintain conversation history (cap at 40 entries = 20 turns)
-      this.conversationHistory.push(
-        { role: "user", content: text },
-        { role: "assistant", content: result.response },
-      );
-      if (this.conversationHistory.length > 40) {
-        this.conversationHistory = this.conversationHistory.slice(-40);
-      }
-
-      return result;
-    } finally {
-      // Reset processing — glow fades
-      this.stateEngine.pushUpdate({ processing: 0.1, attention: 0.3 });
-      this._isProcessing = false;
-    }
+    if (!this.runtime) throw new Error("AI not initialized — call initAI() first");
+    return this.runtime.sendMessage(text);
   }
 
-  async *sendMessageStreaming(
-    text: string,
-  ): AsyncGenerator<{ type: "text"; text: string } | { type: "result"; result: TurnResult }> {
-    if (!this.loopDeps) {
-      throw new Error("AI not initialized — call initAI() first");
-    }
-    if (this._isProcessing) {
-      throw new Error("Already processing a message");
-    }
-
-    this._isProcessing = true;
-    this.stateEngine.pushUpdate({ processing: 0.9, attention: 0.8 });
-
-    try {
-      let result: TurnResult | null = null;
-      let accumulated = "";
-      const appliedActions = new Set<string>();
-
-      for await (const chunk of runTurnStreaming(this.loopDeps, text, {
-        conversationHistory: this.conversationHistory,
-        previousCues: this.latestCues,
-      })) {
-        // Apply state tags and action cues mid-stream so the creature reacts in real-time
-        if (chunk.type === "text") {
-          accumulated += chunk.text;
-
-          // State tags are idempotent (absolute values) — safe to re-extract
-          const stateUpdates = extractStateTags(accumulated);
-          if (Object.keys(stateUpdates).length > 0) {
-            this.stateEngine.pushUpdate(stateUpdates);
-          }
-
-          // Action cues need deduplication — apply each action once
-          const actions = extractActions(accumulated);
-          const newActions = actions.filter((a) => !appliedActions.has(a));
-          if (newActions.length > 0) {
-            for (const a of newActions) appliedActions.add(a);
-            const actionDeltas = actionsToStateUpdates(newActions);
-            if (Object.keys(actionDeltas).length > 0) {
-              // Convert deltas to absolute values — state engine clamps in tick()
-              const current = this.stateEngine.getState();
-              const absolute: Record<string, number> = {};
-              for (const [field, delta] of Object.entries(actionDeltas)) {
-                const base = (current as unknown as Record<string, unknown>)[field];
-                absolute[field] = (typeof base === "number" ? base : 0) + (delta as number);
-              }
-              this.stateEngine.pushUpdate(absolute as Partial<MotebitState>);
-            }
-          }
-        }
-
-        yield chunk;
-        if (chunk.type === "result") result = chunk.result;
-      }
-
-      if (result) {
-        this.conversationHistory.push(
-          { role: "user", content: text },
-          { role: "assistant", content: result.response },
-        );
-        if (this.conversationHistory.length > 40) {
-          this.conversationHistory = this.conversationHistory.slice(-40);
-        }
-      }
-    } finally {
-      this.stateEngine.pushUpdate({ processing: 0.1, attention: 0.3 });
-      this._isProcessing = false;
-    }
+  async *sendMessageStreaming(text: string): AsyncGenerator<StreamChunk> {
+    if (!this.runtime) throw new Error("AI not initialized — call initAI() first");
+    yield* this.runtime.sendMessageStreaming(text);
   }
 }
 

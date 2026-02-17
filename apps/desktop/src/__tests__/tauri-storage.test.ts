@@ -7,6 +7,7 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS events (
   event_id TEXT PRIMARY KEY,
   motebit_id TEXT NOT NULL,
+  device_id TEXT,
   event_type TEXT NOT NULL,
   payload TEXT NOT NULL,
   version_clock INTEGER NOT NULL,

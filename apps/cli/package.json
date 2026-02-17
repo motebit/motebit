@@ -17,6 +17,7 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
+    "@motebit/runtime": "workspace:*",
     "@motebit/ai-core": "workspace:*",
     "@motebit/event-log": "workspace:*",
     "@motebit/memory-graph": "workspace:*",

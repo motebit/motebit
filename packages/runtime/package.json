@@ -1,5 +1,5 @@
 {
-  "name": "@motebit/sync-engine",
+  "name": "@motebit/runtime",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -14,7 +14,15 @@
   },
   "dependencies": {
     "@motebit/sdk": "workspace:*",
+    "@motebit/ai-core": "workspace:*",
     "@motebit/event-log": "workspace:*",
+    "@motebit/memory-graph": "workspace:*",
+    "@motebit/state-vector": "workspace:*",
+    "@motebit/behavior-engine": "workspace:*",
+    "@motebit/core-identity": "workspace:*",
+    "@motebit/privacy-layer": "workspace:*",
+    "@motebit/sync-engine": "workspace:*",
+    "@motebit/render-engine": "workspace:*",
     "@motebit/crypto": "workspace:*"
   },
   "devDependencies": {

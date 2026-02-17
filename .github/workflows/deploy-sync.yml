@@ -1,0 +1,29 @@
+name: Deploy Sync Relay
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/api/**"
+      - "packages/sdk/**"
+      - "packages/event-log/**"
+      - "packages/core-identity/**"
+      - "packages/persistence/**"
+      - "packages/crypto/**"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to Fly.io
+        working-directory: services/api
+        run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

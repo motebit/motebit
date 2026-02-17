@@ -25,6 +25,7 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS events (
   event_id TEXT PRIMARY KEY,
   motebit_id TEXT NOT NULL,
+  device_id TEXT,
   event_type TEXT NOT NULL,
   payload TEXT NOT NULL,
   version_clock INTEGER NOT NULL,
@@ -102,8 +103,8 @@ export class SqliteEventStore implements EventStoreAdapter {
 
   constructor(private db: Database.Database) {
     this.stmtAppend = db.prepare(
-      `INSERT OR IGNORE INTO events (event_id, motebit_id, event_type, payload, version_clock, timestamp, tombstoned)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO events (event_id, motebit_id, device_id, event_type, payload, version_clock, timestamp, tombstoned)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtGetLatestClock = db.prepare(
       `SELECT MAX(version_clock) as max_clock FROM events WHERE motebit_id = ?`,
@@ -117,6 +118,7 @@ export class SqliteEventStore implements EventStoreAdapter {
     this.stmtAppend.run(
       entry.event_id,
       entry.motebit_id,
+      entry.device_id ?? null,
       entry.event_type,
       JSON.stringify(entry.payload),
       entry.version_clock,
@@ -178,6 +180,7 @@ export class SqliteEventStore implements EventStoreAdapter {
 interface EventRow {
   event_id: string;
   motebit_id: string;
+  device_id: string | null;
   event_type: string;
   payload: string;
   version_clock: number;
@@ -186,7 +189,7 @@ interface EventRow {
 }
 
 function rowToEvent(row: EventRow): EventLogEntry {
-  return {
+  const entry: EventLogEntry = {
     event_id: row.event_id,
     motebit_id: row.motebit_id,
     event_type: row.event_type as EventType,
@@ -195,6 +198,10 @@ function rowToEvent(row: EventRow): EventLogEntry {
     timestamp: row.timestamp,
     tombstoned: row.tombstoned === 1,
   };
+  if (row.device_id !== null) {
+    entry.device_id = row.device_id;
+  }
+  return entry;
 }
 
 // === SqliteMemoryStorage ===
@@ -549,7 +556,18 @@ export function createMotebitDatabase(dbPath: string): MotebitDatabase {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
 
+  const userVersion = (db.pragma("user_version") as { user_version: number }[])[0]!.user_version;
+
   initSchema(db);
+
+  if (userVersion < 1) {
+    try {
+      db.exec("ALTER TABLE events ADD COLUMN device_id TEXT");
+    } catch (_) {
+      // Column may already exist on new DBs that have it in CREATE TABLE
+    }
+    db.pragma("user_version = 1");
+  }
 
   const eventStore = new SqliteEventStore(db);
   const memoryStorage = new SqliteMemoryStorage(db);

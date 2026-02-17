@@ -3,6 +3,7 @@ import {
   IdentityManager,
   InMemoryIdentityStorage,
 } from "../index";
+import type { DeviceRegistration } from "../index";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 
 // ---------------------------------------------------------------------------
@@ -62,6 +63,72 @@ describe("InMemoryIdentityStorage", () => {
     identity.version_clock = 999;
     const loaded = await storage.load("m1");
     expect(loaded!.version_clock).toBe(0);
+  });
+
+  // --- Device storage ---
+
+  it("saveDevice and loadDevice round-trip", async () => {
+    const device: DeviceRegistration = {
+      device_id: "d1",
+      motebit_id: "m1",
+      device_token: "tok-1",
+      registered_at: 1000,
+      device_name: "Phone",
+    };
+    await storage.saveDevice(device);
+    const loaded = await storage.loadDevice("d1");
+    expect(loaded).not.toBeNull();
+    expect(loaded!.device_id).toBe("d1");
+    expect(loaded!.device_token).toBe("tok-1");
+    expect(loaded!.device_name).toBe("Phone");
+  });
+
+  it("loadDevice returns null for unknown device_id", async () => {
+    const result = await storage.loadDevice("nonexistent");
+    expect(result).toBeNull();
+  });
+
+  it("loadDeviceByToken finds device by token", async () => {
+    const device: DeviceRegistration = {
+      device_id: "d2",
+      motebit_id: "m1",
+      device_token: "tok-2",
+      registered_at: 2000,
+    };
+    await storage.saveDevice(device);
+    const loaded = await storage.loadDeviceByToken("tok-2");
+    expect(loaded).not.toBeNull();
+    expect(loaded!.device_id).toBe("d2");
+  });
+
+  it("loadDeviceByToken returns null for unknown token", async () => {
+    const result = await storage.loadDeviceByToken("nonexistent");
+    expect(result).toBeNull();
+  });
+
+  it("listDevices returns devices for a given motebitId", async () => {
+    await storage.saveDevice({ device_id: "d1", motebit_id: "m1", device_token: "t1", registered_at: 1 });
+    await storage.saveDevice({ device_id: "d2", motebit_id: "m1", device_token: "t2", registered_at: 2 });
+    await storage.saveDevice({ device_id: "d3", motebit_id: "m2", device_token: "t3", registered_at: 3 });
+
+    const devicesM1 = await storage.listDevices("m1");
+    expect(devicesM1).toHaveLength(2);
+    const devicesM2 = await storage.listDevices("m2");
+    expect(devicesM2).toHaveLength(1);
+  });
+
+  it("saveDevice stores a defensive copy", async () => {
+    const device: DeviceRegistration = {
+      device_id: "d4",
+      motebit_id: "m1",
+      device_token: "tok-4",
+      registered_at: 1000,
+      device_name: "Original",
+    };
+    await storage.saveDevice(device);
+    device.device_name = "Mutated";
+    const loaded = await storage.loadDevice("d4");
+    expect(loaded!.device_name).toBe("Original");
   });
 });
 
@@ -152,5 +219,49 @@ describe("IdentityManager", () => {
   it("export() returns null for unknown motebit_id", async () => {
     const exported = await manager.export("nonexistent");
     expect(exported).toBeNull();
+  });
+
+  // --- Device registration ---
+
+  it("registerDevice() creates a device with unique ids and token", async () => {
+    const identity = await manager.create("owner-1");
+    const device = await manager.registerDevice(identity.motebit_id, "Laptop");
+
+    expect(device.device_id).toBeTypeOf("string");
+    expect(device.device_token).toBeTypeOf("string");
+    expect(device.motebit_id).toBe(identity.motebit_id);
+    expect(device.device_name).toBe("Laptop");
+    expect(device.registered_at).toBeGreaterThan(0);
+  });
+
+  it("registerDevice() creates unique tokens for each device", async () => {
+    const identity = await manager.create("owner-1");
+    const device1 = await manager.registerDevice(identity.motebit_id, "Phone");
+    const device2 = await manager.registerDevice(identity.motebit_id, "Tablet");
+
+    expect(device1.device_token).not.toBe(device2.device_token);
+    expect(device1.device_id).not.toBe(device2.device_id);
+  });
+
+  it("validateDeviceToken() returns the device for a valid token and motebitId", async () => {
+    const identity = await manager.create("owner-1");
+    const device = await manager.registerDevice(identity.motebit_id);
+
+    const result = await manager.validateDeviceToken(device.device_token, identity.motebit_id);
+    expect(result).not.toBeNull();
+    expect(result!.device_id).toBe(device.device_id);
+  });
+
+  it("validateDeviceToken() returns null for wrong motebitId", async () => {
+    const identity = await manager.create("owner-1");
+    const device = await manager.registerDevice(identity.motebit_id);
+
+    const result = await manager.validateDeviceToken(device.device_token, "wrong-motebit-id");
+    expect(result).toBeNull();
+  });
+
+  it("validateDeviceToken() returns null for unknown token", async () => {
+    const result = await manager.validateDeviceToken("unknown-token", "any-id");
+    expect(result).toBeNull();
   });
 });

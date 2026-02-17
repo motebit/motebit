@@ -52,6 +52,7 @@ describe("SqliteEventStore", () => {
   const makeEvent = (overrides: Partial<EventLogEntry> = {}): EventLogEntry => ({
     event_id: crypto.randomUUID(),
     motebit_id: "motebit-1",
+    device_id: "test-device",
     timestamp: Date.now(),
     event_type: EventType.MemoryFormed,
     payload: { test: true },
@@ -399,6 +400,7 @@ describe("cross-adapter persistence", () => {
     const event = {
       event_id: crypto.randomUUID(),
       motebit_id: "motebit-1",
+      device_id: "test-device",
       timestamp: Date.now(),
       event_type: EventType.MemoryFormed,
       payload: { shared: true },

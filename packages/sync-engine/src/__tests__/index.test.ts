@@ -16,6 +16,7 @@ function makeEvent(overrides: Partial<EventLogEntry> = {}): EventLogEntry {
   return {
     event_id: crypto.randomUUID(),
     motebit_id: MOTEBIT_ID,
+    device_id: "test-device",
     timestamp: Date.now(),
     event_type: EventType.StateUpdated,
     payload: {},
