@@ -127,6 +127,24 @@ CREATE TABLE IF NOT EXISTS goals (
 );
 
 CREATE INDEX IF NOT EXISTS idx_goals_motebit ON goals (motebit_id);
+
+CREATE TABLE IF NOT EXISTS approval_queue (
+  approval_id TEXT PRIMARY KEY,
+  motebit_id TEXT NOT NULL,
+  goal_id TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  args_preview TEXT NOT NULL,
+  args_hash TEXT NOT NULL,
+  risk_level INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  resolved_at INTEGER,
+  denied_reason TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_approval_queue_motebit_status
+  ON approval_queue (motebit_id, status);
 `;
 
 function initSchema(db: Database.Database): void {
@@ -816,6 +834,129 @@ export class SqliteGoalStore {
   }
 }
 
+// === Approval Queue ===
+
+export type ApprovalStatus = "pending" | "approved" | "denied" | "expired";
+
+export interface ApprovalItem {
+  approval_id: string;
+  motebit_id: string;
+  goal_id: string;
+  tool_name: string;
+  args_preview: string;
+  args_hash: string;
+  risk_level: number;
+  status: ApprovalStatus;
+  created_at: number;
+  expires_at: number;
+  resolved_at: number | null;
+  denied_reason: string | null;
+}
+
+interface ApprovalRow {
+  approval_id: string;
+  motebit_id: string;
+  goal_id: string;
+  tool_name: string;
+  args_preview: string;
+  args_hash: string;
+  risk_level: number;
+  status: string;
+  created_at: number;
+  expires_at: number;
+  resolved_at: number | null;
+  denied_reason: string | null;
+}
+
+function rowToApproval(row: ApprovalRow): ApprovalItem {
+  return {
+    approval_id: row.approval_id,
+    motebit_id: row.motebit_id,
+    goal_id: row.goal_id,
+    tool_name: row.tool_name,
+    args_preview: row.args_preview,
+    args_hash: row.args_hash,
+    risk_level: row.risk_level,
+    status: row.status as ApprovalStatus,
+    created_at: row.created_at,
+    expires_at: row.expires_at,
+    resolved_at: row.resolved_at,
+    denied_reason: row.denied_reason,
+  };
+}
+
+export class SqliteApprovalStore {
+  private stmtAdd: Statement;
+  private stmtGet: Statement;
+  private stmtListPending: Statement;
+  private stmtListAll: Statement;
+  private stmtResolve: Statement;
+  private stmtExpireStale: Statement;
+
+  constructor(db: Database.Database) {
+    this.stmtAdd = db.prepare(
+      `INSERT OR REPLACE INTO approval_queue
+       (approval_id, motebit_id, goal_id, tool_name, args_preview, args_hash, risk_level, status, created_at, expires_at, resolved_at, denied_reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmtGet = db.prepare(`SELECT * FROM approval_queue WHERE approval_id = ?`);
+    this.stmtListPending = db.prepare(
+      `SELECT * FROM approval_queue WHERE motebit_id = ? AND status = 'pending' ORDER BY created_at ASC`,
+    );
+    this.stmtListAll = db.prepare(
+      `SELECT * FROM approval_queue WHERE motebit_id = ? ORDER BY created_at DESC LIMIT ?`,
+    );
+    this.stmtResolve = db.prepare(
+      `UPDATE approval_queue SET status = ?, resolved_at = ?, denied_reason = ? WHERE approval_id = ?`,
+    );
+    this.stmtExpireStale = db.prepare(
+      `UPDATE approval_queue SET status = 'expired', resolved_at = ? WHERE status = 'pending' AND expires_at <= ?`,
+    );
+  }
+
+  add(item: ApprovalItem): void {
+    this.stmtAdd.run(
+      item.approval_id,
+      item.motebit_id,
+      item.goal_id,
+      item.tool_name,
+      item.args_preview,
+      item.args_hash,
+      item.risk_level,
+      item.status,
+      item.created_at,
+      item.expires_at,
+      item.resolved_at,
+      item.denied_reason,
+    );
+  }
+
+  get(approvalId: string): ApprovalItem | null {
+    const row = this.stmtGet.get(approvalId) as ApprovalRow | undefined;
+    if (row === undefined) return null;
+    return rowToApproval(row);
+  }
+
+  listPending(motebitId: string): ApprovalItem[] {
+    const rows = this.stmtListPending.all(motebitId) as ApprovalRow[];
+    return rows.map(rowToApproval);
+  }
+
+  listAll(motebitId: string, limit = 50): ApprovalItem[] {
+    const rows = this.stmtListAll.all(motebitId, limit) as ApprovalRow[];
+    return rows.map(rowToApproval);
+  }
+
+  resolve(approvalId: string, status: "approved" | "denied", deniedReason?: string): void {
+    this.stmtResolve.run(status, Date.now(), deniedReason ?? null, approvalId);
+  }
+
+  expireStale(now: number): number {
+    const info = this.stmtExpireStale.run(now, now);
+    return info.changes;
+  }
+}
+
 // === Factory ===
 
 export interface MotebitDatabase {
@@ -827,6 +968,7 @@ export interface MotebitDatabase {
   stateSnapshot: SqliteStateSnapshot;
   toolAuditSink: SqliteToolAuditSink;
   goalStore: SqliteGoalStore;
+  approvalStore: SqliteApprovalStore;
   close(): void;
 }
 
@@ -862,6 +1004,11 @@ export function createMotebitDatabase(dbPath: string): MotebitDatabase {
     db.pragma("user_version = 3");
   }
 
+  if (userVersion < 4) {
+    // Approval queue table is in SCHEMA for new DBs; this handles upgrades from v3
+    db.pragma("user_version = 4");
+  }
+
   const eventStore = new SqliteEventStore(db);
   const memoryStorage = new SqliteMemoryStorage(db);
   const identityStorage = new SqliteIdentityStorage(db);
@@ -869,6 +1016,7 @@ export function createMotebitDatabase(dbPath: string): MotebitDatabase {
   const stateSnapshot = new SqliteStateSnapshot(db);
   const toolAuditSink = new SqliteToolAuditSink(db);
   const goalStore = new SqliteGoalStore(db);
+  const approvalStore = new SqliteApprovalStore(db);
 
   return {
     db,
@@ -879,6 +1027,7 @@ export function createMotebitDatabase(dbPath: string): MotebitDatabase {
     stateSnapshot,
     toolAuditSink,
     goalStore,
+    approvalStore,
     close() {
       db.close();
     },

@@ -114,6 +114,7 @@ export interface CliConfig {
   output: string | undefined;
   identity: string | undefined;
   every: string | undefined;
+  reason: string | undefined;
   version: boolean;
   help: boolean;
   positionals: string[];
@@ -135,6 +136,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       output: { type: "string", short: "o" },
       identity: { type: "string" },
       every: { type: "string" },
+      reason: { type: "string" },
       version: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -164,6 +166,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     output: values.output,
     identity: values.identity,
     every: values.every,
+    reason: values.reason,
     version: values.version,
     help: values.help,
     positionals,
@@ -185,6 +188,10 @@ Commands:
   goal remove <goal_id>     Remove a scheduled goal
   goal pause <goal_id>      Pause a scheduled goal
   goal resume <goal_id>     Resume a paused goal
+  approvals list            List approval queue items
+  approvals show <id>       Show approval detail
+  approvals approve <id>    Approve a pending tool call
+  approvals deny <id> [--reason <text>]  Deny a pending tool call
 
 Options:
   --provider <name>       AI provider: "anthropic" or "ollama" (default: anthropic)
@@ -860,6 +867,16 @@ async function handleRun(config: CliConfig): Promise<void> {
   const identity = verifyResult.identity;
   const gov = identity.governance;
 
+  // Fail-closed: require all three governance thresholds before starting daemon mode.
+  // Without explicit thresholds, the daemon cannot make safe auto-allow / deny decisions.
+  const requiredFields = ["max_risk_auto", "require_approval_above", "deny_above"] as const;
+  for (const field of requiredFields) {
+    if (!gov[field]) {
+      console.error(`Error: motebit.md governance.${field} is missing or empty. All three governance thresholds are required for daemon mode.`);
+      process.exit(1);
+    }
+  }
+
   // Derive policy from governance — parseRiskLevel throws on invalid values
   const policyConfig = governanceToPolicyConfig(gov);
   const { maxRiskAuto, denyAbove } = policyConfig;
@@ -933,7 +950,7 @@ async function handleRun(config: CliConfig): Promise<void> {
 
   // Start goal scheduler
   const goals = moteDb.goalStore.list(motebitId);
-  const scheduler = new GoalScheduler(runtime, moteDb.goalStore, motebitId, denyAbove);
+  const scheduler = new GoalScheduler(runtime, moteDb.goalStore, moteDb.approvalStore, motebitId, denyAbove);
   scheduler.start();
 
   console.log(`Daemon running. motebit_id: ${motebitId.slice(0, 8)}... Goals: ${goals.length}. Policy: max_risk_auto=${RiskLevel[maxRiskAuto]}, deny_above=${RiskLevel[denyAbove]}`);
@@ -1125,6 +1142,160 @@ function handleGoalSetEnabled(config: CliConfig, enabled: boolean): void {
   console.log(`Goal ${verb}d: ${match.goal_id.slice(0, 8)}`);
 }
 
+// --- Subcommand: approvals list/show/approve/deny ---
+
+function handleApprovalList(config: CliConfig): void {
+  const fullConfig = loadFullConfig();
+  const motebitId = fullConfig.motebit_id;
+  if (!motebitId) {
+    console.error("Error: no motebit identity found. Run `motebit init` first.");
+    process.exit(1);
+  }
+
+  const dbPath = getDbPath(config.dbPath);
+  const moteDb = createMotebitDatabase(dbPath);
+  const items = moteDb.approvalStore.listAll(motebitId);
+  moteDb.close();
+
+  if (items.length === 0) {
+    console.log("No approvals found.");
+    return;
+  }
+
+  console.log("ID        | Tool              | Status   | Goal     | Created");
+  console.log("--------- | ----------------- | -------- | -------- | --------------------");
+  for (const item of items) {
+    const id = item.approval_id.slice(0, 8);
+    const tool = item.tool_name.slice(0, 17).padEnd(17);
+    const status = item.status.padEnd(8);
+    const goal = item.goal_id.slice(0, 8);
+    const created = new Date(item.created_at).toISOString().slice(0, 19);
+    console.log(`${id}  | ${tool} | ${status} | ${goal} | ${created}`);
+  }
+}
+
+function handleApprovalShow(config: CliConfig): void {
+  const approvalId = config.positionals[2];
+  if (!approvalId) {
+    console.error("Usage: motebit approvals show <approval_id>");
+    process.exit(1);
+  }
+
+  const fullConfig = loadFullConfig();
+  const motebitId = fullConfig.motebit_id;
+  if (!motebitId) {
+    console.error("Error: no motebit identity found. Run `motebit init` first.");
+    process.exit(1);
+  }
+
+  const dbPath = getDbPath(config.dbPath);
+  const moteDb = createMotebitDatabase(dbPath);
+
+  // Support prefix match
+  const all = moteDb.approvalStore.listAll(motebitId);
+  const match = all.find((a) => a.approval_id === approvalId || a.approval_id.startsWith(approvalId));
+  moteDb.close();
+
+  if (!match) {
+    console.error(`Error: no approval found matching "${approvalId}".`);
+    process.exit(1);
+  }
+
+  console.log(`Approval ID:    ${match.approval_id}`);
+  console.log(`Status:         ${match.status}`);
+  console.log(`Tool:           ${match.tool_name}`);
+  console.log(`Risk Level:     ${match.risk_level >= 0 ? RiskLevel[match.risk_level] ?? match.risk_level : "unknown"}`);
+  console.log(`Goal ID:        ${match.goal_id}`);
+  console.log(`Args Preview:   ${match.args_preview.slice(0, 100)}`);
+  console.log(`Args Hash:      ${match.args_hash.slice(0, 16)}...`);
+  console.log(`Created:        ${new Date(match.created_at).toISOString()}`);
+  console.log(`Expires:        ${new Date(match.expires_at).toISOString()}`);
+  if (match.resolved_at) {
+    console.log(`Resolved:       ${new Date(match.resolved_at).toISOString()}`);
+  }
+  if (match.denied_reason) {
+    console.log(`Denied Reason:  ${match.denied_reason}`);
+  }
+}
+
+function handleApprovalApprove(config: CliConfig): void {
+  const approvalId = config.positionals[2];
+  if (!approvalId) {
+    console.error("Usage: motebit approvals approve <approval_id>");
+    process.exit(1);
+  }
+
+  const fullConfig = loadFullConfig();
+  const motebitId = fullConfig.motebit_id;
+  if (!motebitId) {
+    console.error("Error: no motebit identity found. Run `motebit init` first.");
+    process.exit(1);
+  }
+
+  const dbPath = getDbPath(config.dbPath);
+  const moteDb = createMotebitDatabase(dbPath);
+
+  const all = moteDb.approvalStore.listAll(motebitId);
+  const match = all.find((a) => a.approval_id === approvalId || a.approval_id.startsWith(approvalId));
+
+  if (!match) {
+    console.error(`Error: no approval found matching "${approvalId}".`);
+    moteDb.close();
+    process.exit(1);
+  }
+
+  if (match.status !== "pending") {
+    console.error(`Error: approval ${match.approval_id.slice(0, 8)} is already ${match.status}.`);
+    moteDb.close();
+    process.exit(1);
+  }
+
+  moteDb.approvalStore.resolve(match.approval_id, "approved");
+  moteDb.close();
+  console.log(`Approved: ${match.approval_id.slice(0, 8)} (${match.tool_name})`);
+  console.log("The daemon will execute this tool on its next tick.");
+}
+
+function handleApprovalDeny(config: CliConfig): void {
+  const approvalId = config.positionals[2];
+  if (!approvalId) {
+    console.error("Usage: motebit approvals deny <approval_id> [--reason <text>]");
+    process.exit(1);
+  }
+
+  const fullConfig = loadFullConfig();
+  const motebitId = fullConfig.motebit_id;
+  if (!motebitId) {
+    console.error("Error: no motebit identity found. Run `motebit init` first.");
+    process.exit(1);
+  }
+
+  const dbPath = getDbPath(config.dbPath);
+  const moteDb = createMotebitDatabase(dbPath);
+
+  const all = moteDb.approvalStore.listAll(motebitId);
+  const match = all.find((a) => a.approval_id === approvalId || a.approval_id.startsWith(approvalId));
+
+  if (!match) {
+    console.error(`Error: no approval found matching "${approvalId}".`);
+    moteDb.close();
+    process.exit(1);
+  }
+
+  if (match.status !== "pending") {
+    console.error(`Error: approval ${match.approval_id.slice(0, 8)} is already ${match.status}.`);
+    moteDb.close();
+    process.exit(1);
+  }
+
+  moteDb.approvalStore.resolve(match.approval_id, "denied", config.reason);
+  moteDb.close();
+  console.log(`Denied: ${match.approval_id.slice(0, 8)} (${match.tool_name})`);
+  if (config.reason) {
+    console.log(`Reason: ${config.reason}`);
+  }
+}
+
 // --- REPL ---
 
 async function main(): Promise<void> {
@@ -1181,6 +1352,23 @@ async function main(): Promise<void> {
 
   if (subcommand === "run") {
     await handleRun(config);
+    return;
+  }
+
+  if (subcommand === "approvals") {
+    const approvalCmd = config.positionals[1];
+    if (approvalCmd === "list") {
+      handleApprovalList(config);
+    } else if (approvalCmd === "show") {
+      handleApprovalShow(config);
+    } else if (approvalCmd === "approve") {
+      handleApprovalApprove(config);
+    } else if (approvalCmd === "deny") {
+      handleApprovalDeny(config);
+    } else {
+      console.error("Usage: motebit approvals [list|show|approve|deny]");
+      process.exit(1);
+    }
     return;
   }
 

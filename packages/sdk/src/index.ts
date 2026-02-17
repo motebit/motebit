@@ -37,6 +37,10 @@ export enum EventType {
   GoalCreated = "goal_created",
   GoalExecuted = "goal_executed",
   GoalRemoved = "goal_removed",
+  ApprovalRequested = "approval_requested",
+  ApprovalApproved = "approval_approved",
+  ApprovalDenied = "approval_denied",
+  ApprovalExpired = "approval_expired",
 }
 
 export enum RelationType {

@@ -1,4 +1,4 @@
-import type { BehaviorCues, MotebitState, MemoryNode, MemoryCandidate, ToolRegistry, ToolDefinition, ToolResult, PolicyDecision, TurnContext, ConversationMessage } from "@motebit/sdk";
+import type { BehaviorCues, MotebitState, MemoryNode, MemoryCandidate, ToolRegistry, ToolDefinition, ToolResult, ToolRiskProfile, PolicyDecision, TurnContext, ConversationMessage } from "@motebit/sdk";
 import { EventType } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MemoryGraph } from "@motebit/memory-graph";
@@ -36,6 +36,7 @@ function wrapExternalData(data: unknown, toolName: string): string {
 export interface LoopPolicyGate {
   filterTools(tools: ToolDefinition[]): ToolDefinition[];
   validate(tool: ToolDefinition, args: Record<string, unknown>, ctx: TurnContext): PolicyDecision;
+  classify(tool: ToolDefinition): ToolRiskProfile;
   sanitizeResult(result: ToolResult, toolName: string): ToolResult;
   sanitizeAndCheck?(result: ToolResult, toolName: string): {
     result: ToolResult;
@@ -81,7 +82,7 @@ export interface TurnOptions {
 export type AgenticChunk =
   | { type: "text"; text: string }
   | { type: "tool_status"; name: string; status: "calling" | "done"; result?: unknown }
-  | { type: "approval_request"; tool_call_id: string; name: string; args: Record<string, unknown> }
+  | { type: "approval_request"; tool_call_id: string; name: string; args: Record<string, unknown>; risk_level?: number }
   | { type: "injection_warning"; tool_name: string; patterns: string[] }
   | { type: "result"; result: TurnResult };
 
@@ -300,11 +301,13 @@ export async function* runTurnStreaming(
         }
 
         if (decision.requiresApproval) {
+          const profile = deps.policyGate.classify(toolDef);
           yield {
             type: "approval_request",
             tool_call_id: toolCall.id,
             name: toolCall.name,
             args: toolCall.args,
+            risk_level: profile.risk,
           };
           conversationHistory.push({
             role: "tool",

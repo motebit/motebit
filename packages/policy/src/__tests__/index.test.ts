@@ -1087,6 +1087,86 @@ describe("PolicyGate", () => {
     });
   });
 
+  describe("three-band governance", () => {
+    // Setup: requireApprovalAbove=R1_DRAFT, denyAbove=R3_EXECUTE
+    // Bands:  R0-R1 → auto-allow (no approval)
+    //         R2-R3 → allowed but requiresApproval=true
+    //         R4    → hard deny
+    const threeBandConfig = {
+      operatorMode: true,
+      requireApprovalAbove: RiskLevel.R1_DRAFT,
+      denyAbove: RiskLevel.R3_EXECUTE,
+    };
+
+    it("auto-allows tools at or below requireApprovalAbove", () => {
+      const gate = new PolicyGate(threeBandConfig);
+      // web_search → R0_READ, draft_email → R1_DRAFT
+      for (const tool of [makeTool("web_search", "Search"), makeTool("draft_email", "Draft email")]) {
+        const decision = gate.validate(tool, {}, freshCtx());
+        expect(decision.allowed).toBe(true);
+        expect(decision.requiresApproval).toBe(false);
+      }
+    });
+
+    it("requires approval for tools in the approval band", () => {
+      const gate = new PolicyGate(threeBandConfig);
+      // write_file → R2_WRITE, shell_exec → R3_EXECUTE
+      for (const tool of [makeTool("write_file", "Write file"), makeTool("shell_exec", "Execute command")]) {
+        const decision = gate.validate(tool, {}, freshCtx());
+        expect(decision.allowed).toBe(true);
+        expect(decision.requiresApproval).toBe(true);
+      }
+    });
+
+    it("hard-denies tools above denyAbove", () => {
+      const gate = new PolicyGate(threeBandConfig);
+      // stripe_checkout → R4_MONEY
+      const decision = gate.validate(makeTool("stripe_checkout", "Checkout"), {}, freshCtx());
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain("exceeds deny threshold");
+    });
+
+    it("filterTools keeps approval-band tools visible to the model", () => {
+      const gate = new PolicyGate(threeBandConfig);
+      const allTools = [
+        makeTool("web_search", "Search"),           // R0 — auto-allow
+        makeTool("draft_email", "Draft email"),      // R1 — auto-allow
+        makeTool("write_file", "Write file"),        // R2 — approval band
+        makeTool("shell_exec", "Execute command"),   // R3 — approval band
+        makeTool("stripe_checkout", "Checkout"),     // R4 — deny band
+      ];
+
+      const visible = gate.filterTools(allTools);
+      const names = visible.map((t) => t.name);
+
+      // filterTools() is a visibility control — what the model sees.
+      // validate() is the execution gate — what actually runs.
+      // R0-R3 are visible (approval-band tools remain in the context pack)
+      expect(names).toContain("web_search");
+      expect(names).toContain("draft_email");
+      expect(names).toContain("write_file");
+      expect(names).toContain("shell_exec");
+      // R4 is also visible here: filterTools uses getEffectiveMaxRisk()
+      // which returns R4_MONEY in operator mode, so R4 tools pass the
+      // risk check. The three-band hard deny is enforced by validate(),
+      // not filterTools(). The model sees the tool; execution is blocked.
+      expect(names).toContain("stripe_checkout");
+    });
+
+    it("validate blocks R4 even when filterTools shows it", () => {
+      const gate = new PolicyGate(threeBandConfig);
+      const tool = makeTool("stripe_checkout", "Checkout");
+
+      // filterTools with operator mode allows R4 tools to be visible
+      const visible = gate.filterTools([tool]);
+      expect(visible).toHaveLength(1);
+
+      // But validate() hard-denies because risk > denyAbove
+      const decision = gate.validate(tool, {}, freshCtx());
+      expect(decision.allowed).toBe(false);
+    });
+  });
+
   describe("config immutability", () => {
     it("does not mutate external config after construction", () => {
       const config = {
