@@ -1,8 +1,21 @@
 # Motebit
 
-Persistent embodied AI presence layer. A motebit is a droplet of intelligence under surface tension — a glass sphere that breathes, sags under gravity, orbits the user, and transmits its interior state through transparency.
+A motebit is a droplet of intelligence under surface tension.
 
-Read `MOTEBIT.md` for the full design thesis. Every visual and behavioral decision derives from droplet physics. If it can't be traced to surface tension, it doesn't belong.
+Every AI product today owns the intelligence and rents you a session. Motebit inverts that. You own the identity. The intelligence is pluggable. The body is yours.
+
+A motebit is not a chatbot. It is a persistent, cryptographically-anchored, sovereign agent — a vessel that connects to any intelligence provider, any tool ecosystem (MCP), and any device. The intelligence is a commodity. The identity, with its accumulated memory, trust, and governance, is the asset.
+
+**The architecture is the metaphor.** Surface tension is the policy gate, the privacy layer, the governance — the boundary between interior and exterior. The interior accumulates capability over time (memory, trust, context) while the boundary exposes the minimum possible attack surface. Minimum surface, maximum interiority.
+
+**Position in the agentic economy.** MCP defines capability — what tools an agent can reach — but says nothing about who the agent is. There is no trust accumulation, no audit trail, no governance. Motebit is the missing layer: cryptographic identity (Ed25519 keypairs, device registration, signed tokens) that can prove who it is to any service, persistent memory that compounds instead of resetting, and policy governance that controls what crosses the surface.
+
+**The three things no one else is building together:**
+1. **Persistent sovereign identity** — not a session token, a cryptographic entity that exists across time and devices
+2. **Accumulated trust** — memory, state history, audit trails that make the agent more capable the longer it runs
+3. **Governance at the boundary** — sensitivity-aware privacy and policy that controls what crosses the surface
+
+Read `MOTEBIT.md` for the full design thesis on form. Every visual and behavioral decision derives from droplet physics. If it can't be traced to surface tension, it doesn't belong.
 
 ## Architecture
 
