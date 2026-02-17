@@ -1,0 +1,146 @@
+---
+title: Privacy & Policy
+description: Retention rules, deletion certificates, fail-closed design, and the privacy layer.
+---
+
+Privacy is not a feature — it's a constraint. Every component in motebit defaults to the most restrictive option when something goes wrong. This is the fail-closed principle.
+
+## The privacy layer
+
+The `PrivacyLayer` is a facade over four sub-components:
+
+```ts
+import { PrivacyLayer } from "@motebit/privacy-layer";
+
+const privacy = new PrivacyLayer(memoryGraph, auditLog);
+```
+
+| Component | Responsibility |
+|---|---|
+| `MemoryInspector` | Browse and audit memories |
+| `SensitivityManager` | Update sensitivity levels, enforce retention |
+| `DeleteManager` | Soft delete with deletion certificates |
+| `ExportManager` | Full data export with manifest |
+
+## Sensitivity levels
+
+Every memory and data element carries a sensitivity level:
+
+| Level | Retention | Display | Example |
+|---|---|---|---|
+| `None` | Infinite | Allowed | "User likes TypeScript" |
+| `Personal` | 365 days | Allowed | "User's name is Alice" |
+| `Medical` | 90 days | Blocked | Health information |
+| `Financial` | 90 days | Blocked | Payment details |
+| `Secret` | 30 days | Blocked | Passwords, keys |
+
+"Blocked" display means the content is stored but cannot be shown to the user directly — it can only be accessed through governed inspection channels.
+
+## Retention rules
+
+Retention is enforced automatically. When a memory exceeds its retention period:
+
+1. The memory is tombstoned (soft-deleted)
+2. A deletion certificate is created
+3. An audit event is recorded
+
+The `MemoryGovernor` can also reject memories at formation time:
+
+```ts
+const governor = new MemoryGovernor({
+  rejectSensitivity: SensitivityLevel.Secret,
+  // Memories classified as "secret" are never stored
+});
+```
+
+## Deletion certificates
+
+When a memory is deleted, a cryptographic certificate is produced:
+
+```ts
+interface DeletionCertificate {
+  target_id: string;
+  target_type: "memory" | "event";
+  deleted_at: number;
+  deleted_by: string;
+  tombstone_hash: string;  // SHA-256 of the original content
+}
+```
+
+The certificate proves that data existed and was intentionally deleted, without revealing what the data was. The `tombstone_hash` allows verification that a specific piece of data was the subject of the deletion.
+
+```ts
+import { createDeletionCertificate } from "@motebit/crypto";
+
+const cert = await createDeletionCertificate(
+  memoryNodeId,
+  "memory",
+  motebitId
+);
+```
+
+## Data export
+
+Users can export all their data:
+
+```ts
+const manifest = await privacy.exportAll(identity);
+```
+
+The `ExportManifest` includes:
+
+- All memories (with sensitivity labels)
+- All events
+- Identity information
+- Device registrations
+- An audit log of the export itself
+
+This supports data portability and "right to access" requirements.
+
+## Audit trail
+
+Every privacy-sensitive operation is audited:
+
+- Memory access (read)
+- Memory formation (create)
+- Sensitivity changes (update)
+- Deletions (delete + certificate)
+- Exports (full dump)
+- Tool executions (allowed/denied)
+
+The audit log is append-only and uses the same event store infrastructure.
+
+```ts
+interface AuditRecord {
+  action: string;
+  target_id: string;
+  target_type: string;
+  actor_id: string;
+  timestamp: number;
+  details?: Record<string, unknown>;
+}
+```
+
+## Fail-closed examples
+
+| Scenario | Behavior |
+|---|---|
+| Sensitivity classification fails | Memory is rejected (not stored) |
+| Policy gate errors during tool evaluation | Tool call is denied |
+| Keyring is unavailable | Operator mode cannot be enabled |
+| Retention check fails | Memory is treated as expired (tombstoned) |
+| Content sanitizer errors | Tool result is flagged as suspicious |
+| Sync authentication fails | Connection is dropped, retry with backoff |
+
+The principle: when in doubt, restrict. No silent failures, no permissive defaults.
+
+## Injection defense
+
+The `ContentSanitizer` checks all tool results for prompt injection:
+
+1. Tool returns data from an external source
+2. Sanitizer analyzes the content for injection patterns
+3. If suspicious, an `injection_warning` is emitted
+4. The warning reaches the user through the streaming interface
+
+MCP tool results get additional protection via `[EXTERNAL_DATA]` boundary markers that explicitly delineate trusted vs. untrusted content in the LLM context.

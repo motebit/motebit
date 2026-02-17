@@ -1,0 +1,69 @@
+---
+title: Introduction
+description: What is motebit, and why does it exist.
+---
+
+A motebit is a persistent, cryptographically-anchored, sovereign agent. You own the identity. The intelligence is pluggable. The body is yours.
+
+Every AI product today owns the intelligence and rents you a session. Motebit inverts that. Your agent accumulates memory, trust, and governance across time and devices — while the LLM underneath is a replaceable commodity.
+
+## What motebit provides
+
+1. **Persistent sovereign identity** — Ed25519 keypairs, device registration, signed tokens. Not a session cookie. A cryptographic entity that exists across time and devices.
+2. **Accumulated trust** — Semantic memory with half-life decay, event-sourced audit trails, tool usage history. The agent gets more capable the longer it runs.
+3. **Governance at the boundary** — Sensitivity-aware privacy, policy gates, operator mode. You control what crosses the surface.
+
+## Quickstart
+
+Clone the repo and install dependencies:
+
+```bash
+git clone https://github.com/motebit/motebit.git
+cd motebit
+pnpm install
+```
+
+Start the desktop app in dev mode:
+
+```bash
+pnpm --filter @motebit/desktop dev
+```
+
+Or start the CLI for a developer REPL:
+
+```bash
+pnpm --filter @motebit/cli dev
+```
+
+The first launch generates an Ed25519 keypair, stores the private key in your OS keyring, and creates your motebit identity. Everything stays on your device.
+
+## Architecture at a glance
+
+Motebit is a pnpm monorepo with Turborepo orchestration, TypeScript throughout:
+
+```
+apps/
+  desktop/     Tauri app — flagship, full identity + crypto + operator mode
+  cli/         Node.js REPL — developer debugging interface
+  mobile/      React Native + Expo — early MVP
+  docs/        This site
+
+packages/
+  sdk/         Core types (MotebitState, BehaviorCues, MemoryNode, etc.)
+  runtime/     MotebitRuntime orchestrator — wires all engines
+  ai-core/     Pluggable LLM providers + agentic turn loop
+  behavior-engine/  State vector → animation cues (pure computation)
+  state-vector/     EMA smoothing, hysteresis, interpolation
+  memory-graph/     Semantic memory with cosine similarity + decay
+  event-log/        Append-only event sourcing with version clocks
+  core-identity/    UUID v7 identity, Ed25519 key binding
+  crypto/           AES-256-GCM, Ed25519 signing, PBKDF2 derivation
+  policy/           Tool approval, budgets, operator mode, audit
+  privacy-layer/    Retention rules, deletion certificates, fail-closed
+  sync-engine/      Multi-device sync with conflict detection
+  render-engine/    Three.js glass droplet renderer
+  tools/            Built-in tool registry
+  mcp-client/       MCP stdio client for external tools
+```
+
+Read the [Concepts](/docs/concepts/identity) section to understand the core ideas, or jump to [Guides](/docs/guides/desktop) to start building.

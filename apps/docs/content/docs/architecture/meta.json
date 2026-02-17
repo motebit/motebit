@@ -1,0 +1,10 @@
+{
+  "title": "Architecture",
+  "pages": [
+    "overview",
+    "runtime",
+    "state-and-behavior",
+    "event-sourcing",
+    "privacy-and-policy"
+  ]
+}

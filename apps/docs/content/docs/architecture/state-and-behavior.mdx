@@ -1,0 +1,123 @@
+---
+title: State & Behavior
+description: The state vector, EMA smoothing, behavior cues, and the rendering pipeline.
+---
+
+The state-to-rendering pipeline is the path from abstract agent state to physical animation. It's a four-stage pipeline, each stage pure and deterministic.
+
+## Stage 1: State vector
+
+Nine fields describe the motebit's current internal state:
+
+| Field | Type | Range | Description |
+|---|---|---|---|
+| `attention` | float | 0-1 | Focus on the current interaction |
+| `processing` | float | 0-1 | Cognitive load (LLM inference active) |
+| `confidence` | float | 0-1 | Certainty in current response |
+| `affect_valence` | float | 0-1 | Emotional tone (0 = negative, 1 = positive) |
+| `affect_arousal` | float | 0-1 | Emotional intensity |
+| `social_distance` | float | 0-1 | Proximity preference (0 = close, 1 = distant) |
+| `curiosity` | float | 0-1 | Exploratory drive |
+| `trust_mode` | enum | Full/Guarded/Minimal | Trust posture |
+| `battery_mode` | enum | Normal/LowPower/Critical | Power state |
+
+Default state: all floats at 0 except `confidence` (0.5) and `social_distance` (0.5). Trust mode: `Guarded`. Battery mode: `Normal`.
+
+## Stage 2: EMA smoothing
+
+Raw state updates from the AI are noisy. The `StateVectorEngine` smooths them:
+
+```ts
+const engine = new StateVectorEngine({
+  tick_rate_hz: 2,           // 2 ticks per second
+  ema_alpha: 0.3,            // Smoothing factor (lower = smoother)
+  hysteresis_threshold: 0.05, // Dead zone to prevent jitter
+  hysteresis_sustain_ms: 500, // Must sustain above threshold
+});
+```
+
+**EMA (Exponential Moving Average):**
+```
+smoothed = alpha * raw + (1 - alpha) * previous
+```
+
+**Hysteresis:** A change must exceed the threshold AND sustain for 500ms before being applied. This prevents oscillation from noisy LLM outputs.
+
+**Interpolation:** Between ticks (at 60 FPS), `getInterpolatedState(t)` linearly interpolates between the previous and current tick states:
+
+```ts
+// t is 0-1 (fraction of tick interval elapsed)
+interpolated[field] = previous[field] + (current[field] - previous[field]) * t;
+```
+
+## Stage 3: Behavior cues
+
+The `BehaviorEngine` converts the state vector into five animation cues:
+
+| Cue | Range | Driven by |
+|---|---|---|
+| `hover_distance` | 0.15-0.80 | attention, idle state |
+| `drift_amplitude` | 0-0.10 | curiosity, battery mode |
+| `glow_intensity` | 0.3-0.80 | processing, confidence |
+| `eye_dilation` | 0-1 | attention, curiosity |
+| `smile_curvature` | -0.10-0.15 | affect_valence |
+
+The computation is a pure function:
+
+```ts
+import { computeRawCues } from "@motebit/behavior-engine";
+
+const cues = computeRawCues(state);
+// cues.hover_distance = 0.15 + (1 - attention) * 0.25 + idleBlend * 0.4
+// cues.drift_amplitude = 0.02 * (1 + curiosity * 0.5) * batteryFactor
+// cues.glow_intensity = 0.3 + processing * 0.3 + confidence * 0.2
+// cues.eye_dilation = clamp(0.3 + attention * 0.4 + curiosity * 0.3, 0, 1)
+// cues.smile_curvature = clamp(affect_valence * 0.15, -0.1, 0.15)
+```
+
+### Species constraints
+
+Delta clamping prevents sudden changes:
+
+```ts
+const SPECIES_CONSTRAINTS = {
+  MAX_AROUSAL: 0.35,
+  SMILE_DELTA_MAX: 0.04,    // Max smile change per tick
+  GLOW_DELTA_MAX: 0.15,     // Max glow change per tick
+  DRIFT_VARIATION_MAX: 0.10, // Max drift change per tick
+};
+```
+
+These constraints define the motebit's "species" — it can't grin, flash, or jerk. It's a droplet.
+
+## Stage 4: Rendering
+
+The `ThreeJSAdapter` takes behavior cues and produces the visual output:
+
+- **Hover distance** → Y position offset (buoyancy bob via organic noise)
+- **Drift amplitude** → X/Z random walk (Brownian motion via incommensurate sinusoids)
+- **Glow intensity** → Emissive intensity of the glass material
+- **Eye dilation** → Scale of the eye geometry
+- **Smile curvature** → Y-scale of the smile geometry
+
+Frame-independent interpolation (`smoothDelta`) ensures consistent behavior regardless of frame rate:
+
+```ts
+function smoothDelta(current: number, target: number, deltaTime: number, factor = 8): number {
+  return current + (target - current) * (1 - Math.exp(-factor * deltaTime));
+}
+```
+
+## The full pipeline
+
+```
+AI response
+  → extractStateTags() + extractActions() + actionsToStateUpdates()
+  → StateVectorEngine.pushUpdate()
+  → [tick at 2 Hz] EMA smooth + hysteresis + clamp
+  → BehaviorEngine.compute() — pure function, species-constrained
+  → [render at 60 FPS] ThreeJSAdapter — interpolation, organic noise, physics
+  → Glass droplet on screen
+```
+
+Every stage is deterministic. Given the same state, you get the same cues. Given the same cues, you get the same animation. The only randomness is in the organic noise, which is seeded by wall-clock time.

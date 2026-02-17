@@ -1,0 +1,153 @@
+---
+title: Runtime
+description: MotebitRuntime orchestration, the tick loop, and the streaming API.
+---
+
+`MotebitRuntime` is the orchestrator. It wires all engines together — state, behavior, memory, events, identity, policy, privacy, tools, AI, rendering, sync — and exposes a clean API for application surfaces.
+
+## Creating a runtime
+
+```ts
+import { MotebitRuntime } from "@motebit/runtime";
+
+const runtime = new MotebitRuntime(
+  {
+    motebitId: "my-motebit",
+    tickRateHz: 2,
+    maxConversationHistory: 40,
+    compactionThreshold: 1000,
+    mcpServers: [],
+    policy: { operatorMode: false },
+    memoryGovernance: { rejectSensitivity: "secret" },
+  },
+  {
+    storage: {
+      eventStore: new InMemoryEventStore(),
+      memoryStorage: new InMemoryMemoryStorage(),
+      identityStorage: new InMemoryIdentityStorage(),
+      auditLog: new InMemoryAuditLog(),
+    },
+    renderer: new ThreeJSAdapter(),
+    ai: provider,
+    tools: registry,
+  }
+);
+
+await runtime.init(canvasElement);
+runtime.start();
+```
+
+## RuntimeConfig
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `motebitId` | string | required | Identity ID |
+| `tickRateHz` | number | 2 | State vector tick rate |
+| `maxConversationHistory` | number | 40 | Messages to keep in context |
+| `compactionThreshold` | number | 1000 | Events before auto-compaction |
+| `mcpServers` | McpServerConfig[] | [] | MCP server configurations |
+| `policy` | PolicyConfig | defaults | Policy gate configuration |
+| `memoryGovernance` | MemoryGovernanceConfig | defaults | Memory governor rules |
+
+## The tick loop
+
+The state vector engine ticks at 1-2 Hz (configurable). Each tick:
+
+1. Applies pending state updates (from AI responses, tool results, user interactions)
+2. Runs EMA smoothing against the previous state
+3. Applies hysteresis (dead zone + sustain time)
+4. Clamps values to valid ranges
+5. Notifies subscribers
+
+Between ticks, the rendering loop interpolates at 60 FPS using `getInterpolatedState(t)`.
+
+```ts
+// Subscribe to state changes (fires on each tick)
+const unsub = runtime.subscribe((state) => {
+  console.log(`Attention: ${state.attention}`);
+});
+
+// Rendering loop (60 FPS)
+function frame(timestamp: number) {
+  const dt = (timestamp - lastTime) / 1000;
+  runtime.renderFrame(dt, timestamp / 1000);
+  requestAnimationFrame(frame);
+}
+```
+
+## Streaming API
+
+The primary interaction API is streaming:
+
+```ts
+for await (const chunk of runtime.sendMessageStreaming("hello")) {
+  switch (chunk.type) {
+    case "text":
+      // Incremental text from the LLM
+      process.stdout.write(chunk.text);
+      break;
+
+    case "tool_status":
+      // Tool execution progress
+      // chunk.name, chunk.status ("calling" | "done")
+      break;
+
+    case "approval_request":
+      // Tool needs user approval
+      // chunk.name, chunk.args
+      break;
+
+    case "injection_warning":
+      // Suspicious content in tool results
+      // chunk.tool_name
+      break;
+
+    case "result":
+      // Final turn result with metadata
+      break;
+  }
+}
+```
+
+### Approval flow
+
+When a tool requires approval, the streaming pauses. Resume with:
+
+```ts
+for await (const chunk of runtime.resumeAfterApproval(true)) {
+  // Continues the turn...
+}
+```
+
+Pass `true` to allow, `false` to deny. The denied tool returns an error to the LLM, which can then try an alternative approach.
+
+## Non-streaming API
+
+For simpler use cases:
+
+```ts
+const result = await runtime.sendMessage("hello");
+// result.response — full text response
+// result.memories — formed memories
+// result.stateUpdates — state changes
+```
+
+## Provider management
+
+Switch providers or models at runtime:
+
+```ts
+runtime.setProvider(new OllamaProvider({ model: "mistral" }));
+runtime.setModel("llama3.2");
+```
+
+## Event compaction
+
+The event log grows indefinitely. Compact old events:
+
+```ts
+const compactedCount = await runtime.compact();
+// Removes events older than the last snapshot
+```
+
+Auto-compaction triggers when the event count exceeds `compactionThreshold`.

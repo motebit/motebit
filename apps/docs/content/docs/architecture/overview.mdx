@@ -1,0 +1,115 @@
+---
+title: Overview
+description: Monorepo structure, package responsibilities, and the adapter pattern.
+---
+
+Motebit is a pnpm monorepo with Turborepo orchestration, TypeScript throughout. Node >= 20, pnpm 9.15.
+
+## Monorepo map
+
+```
+apps/
+  desktop/     Tauri (Rust + webview) — flagship, full stack
+  cli/         Node.js REPL — developer debugging interface
+  mobile/      React Native + Expo — early MVP (~30%)
+  admin/       React + Vite — real-time monitoring dashboard
+  docs/        Fumadocs — this site
+  spatial/     AR/VR positioning library (stub)
+
+packages/
+  sdk/               Core types — the shared vocabulary
+  runtime/           MotebitRuntime — the orchestrator
+  ai-core/           LLM providers + agentic turn loop
+  behavior-engine/   State → animation cues (pure computation)
+  state-vector/      EMA smoothing, hysteresis, interpolation
+  memory-graph/      Semantic memory with cosine similarity
+  event-log/         Append-only event sourcing
+  core-identity/     UUID v7 identity, Ed25519 key binding
+  crypto/            AES-256-GCM, Ed25519, PBKDF2, deletion certs
+  policy/            Tool approval, budgets, audit, injection defense
+  privacy-layer/     Retention rules, deletion certificates
+  sync-engine/       Multi-device sync with conflict detection
+  render-engine/     Three.js glass droplet renderer
+  persistence/       SQLite schema (WAL mode), all table adapters
+  tools/             Built-in tool registry
+  mcp-client/        MCP stdio client for external tools
+  policy-invariants/ Clamping rules, state bounds validation
+
+services/
+  api/               Sync relay — REST + WebSocket, device auth
+```
+
+## Package dependency flow
+
+```
+sdk (types) ← everything depends on this
+  ↓
+core-identity, crypto, event-log, memory-graph ← foundational
+  ↓
+policy, privacy-layer, tools, mcp-client ← governance + capabilities
+  ↓
+ai-core, behavior-engine, state-vector ← intelligence + animation
+  ↓
+render-engine, sync-engine ← I/O surfaces
+  ↓
+runtime ← orchestrates everything
+  ↓
+desktop, cli, mobile, admin ← application surfaces
+```
+
+## The adapter pattern
+
+All I/O is abstracted behind adapter interfaces. This is the single most important architectural pattern in the codebase:
+
+| Adapter | Purpose | Implementations |
+|---|---|---|
+| `EventStoreAdapter` | Event persistence | In-memory, SQLite, HTTP, WebSocket, Encrypted |
+| `MemoryStorageAdapter` | Memory persistence | In-memory, SQLite |
+| `IdentityStorage` | Identity + device persistence | In-memory, SQLite |
+| `AuditLogAdapter` | Audit trail persistence | In-memory, SQLite |
+| `RenderAdapter` | 3D rendering | Three.js, Spatial (stub), Null |
+| `StateSnapshotAdapter` | State persistence | In-memory, File-based |
+| `KeyringAdapter` | Secret storage | Tauri keyring, expo-secure-store |
+| `StreamingProvider` | LLM inference | Cloud, Ollama, Hybrid, Local (stub) |
+
+Tests use in-memory adapters. Production uses SQLite/Tauri/Expo adapters. The runtime doesn't know or care.
+
+```ts
+// In-memory for tests
+const storage = {
+  eventStore: new InMemoryEventStore(),
+  memoryStorage: new InMemoryMemoryStorage(),
+  identityStorage: new InMemoryIdentityStorage(),
+  auditLog: new InMemoryAuditLog(),
+};
+
+// SQLite for production
+const storage = {
+  eventStore: new SqliteEventStore(db),
+  memoryStorage: new SqliteMemoryStorage(db),
+  identityStorage: new SqliteIdentityStorage(db),
+  auditLog: new SqliteAuditLog(db),
+};
+```
+
+## Build commands
+
+```bash
+pnpm run build          # Build all packages
+pnpm run test           # Test all packages
+pnpm run typecheck      # Type-check all packages
+pnpm run lint           # Lint all packages
+
+# Single package
+pnpm --filter @motebit/runtime build
+pnpm --filter @motebit/runtime test
+```
+
+## Conventions
+
+- All packages export from `src/index.ts`
+- Tests live in `src/__tests__/` using vitest
+- Error handling: `catch (err: unknown) { const msg = err instanceof Error ? err.message : String(err); }`
+- Secrets go in OS keyring, never in config files
+- Database: `~/.motebit/motebit.db` (SQLite, WAL mode)
+- Config: `~/.motebit/config.json` for non-secret settings

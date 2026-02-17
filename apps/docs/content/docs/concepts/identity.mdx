@@ -1,0 +1,96 @@
+---
+title: Identity
+description: Ed25519 keypairs, device registration, and sovereign ownership.
+---
+
+Identity is the foundation. Without it, an agent is a stateless function — no memory persists, no trust accumulates, no governance applies. Motebit gives every agent a cryptographic identity that exists independently of any intelligence provider.
+
+## The identity model
+
+A motebit identity consists of:
+
+- **`motebit_id`** — A UUID v7 (timestamp-based, sortable, unique)
+- **`created_at`** — Creation timestamp
+- **`owner_id`** — Human owner identifier
+- **`version_clock`** — Monotonically increasing counter for event ordering
+
+The identity is created once and persists forever. It doesn't expire, rotate, or depend on a server.
+
+## Ed25519 keypairs
+
+Each device that hosts a motebit generates an Ed25519 keypair:
+
+```ts
+import { generateKeypair, sign, verify } from "@motebit/crypto";
+
+const keypair = await generateKeypair();
+// keypair.publicKey  — 32 bytes, shared with relay
+// keypair.privateKey — 64 bytes, stored in OS keyring, never leaves device
+```
+
+The private key is stored in the OS keyring (Tauri's keyring API on desktop, `expo-secure-store` on mobile). It never touches the filesystem, never leaves the device, and never gets sent over the network.
+
+## Device registration
+
+A single motebit can span multiple devices. Each device registers independently:
+
+```ts
+import { IdentityManager } from "@motebit/core-identity";
+
+const manager = new IdentityManager(storage, eventStore);
+
+// First device — creates the identity
+const identity = await manager.create("owner-alice");
+
+// Register this device
+const device = await manager.registerDevice(
+  identity.motebit_id,
+  "MacBook Pro",       // device name
+  keypair.publicKey    // Ed25519 public key
+);
+
+// device.device_id    — unique device identifier
+// device.device_token — authentication token for this device
+```
+
+Each device gets a `device_token` for local authentication and a `public_key` binding for signed token verification against the sync relay.
+
+## Signed tokens
+
+When communicating with the sync relay, devices prove their identity with signed JWTs:
+
+```ts
+import { createSignedToken, verifySignedToken } from "@motebit/crypto";
+
+// Create a signed token (5-minute expiry)
+const token = await createSignedToken(
+  { mid: motebitId, did: deviceId, iat: now, exp: now + 300 },
+  keypair.privateKey
+);
+
+// Relay verifies the token against the registered public key
+const payload = await verifySignedToken(token, registeredPublicKey);
+// null if signature is invalid or token is expired
+```
+
+Tokens are `base64url(payload).base64url(signature)` — compact, verifiable, and short-lived.
+
+## Bootstrap flow
+
+On first launch:
+
+1. User consents to identity creation (desktop shows welcome overlay)
+2. Ed25519 keypair is generated
+3. Private key is stored in OS keyring
+4. Identity is created with `IdentityManager.create(ownerId)`
+5. Device is registered with `IdentityManager.registerDevice()`
+6. Optional: device registers with sync relay using a signed JWT
+
+On subsequent launches, the identity is loaded from storage and the keypair from the keyring. No network round-trip required.
+
+## What this enables
+
+- **Proof of identity** — Any service can verify that a message came from your motebit by checking the Ed25519 signature against the registered public key
+- **Multi-device** — Your motebit exists on your laptop, phone, and any future device, with the same identity and shared state
+- **Relay independence** — The identity doesn't depend on the relay server. Kill the relay, the motebit continues. Switch relays, the motebit follows.
+- **Audit trail** — Every event is tagged with `motebit_id` and `device_id`, creating a verifiable history

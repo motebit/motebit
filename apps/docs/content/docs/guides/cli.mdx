@@ -1,0 +1,89 @@
+---
+title: CLI
+description: The developer REPL — slash commands, streaming, and debugging.
+---
+
+The CLI is a developer debugging interface. Same runtime as the desktop app, different surface — a Node.js REPL with streaming output, tool approval prompts, and direct access to the motebit's internals.
+
+## Running the CLI
+
+```bash
+pnpm --filter @motebit/cli dev
+```
+
+Or with options:
+
+```bash
+pnpm --filter @motebit/cli dev -- \
+  --provider anthropic \
+  --model claude-sonnet-4-5-20250514 \
+  --operator
+```
+
+### CLI flags
+
+| Flag | Description |
+|---|---|
+| `--provider <name>` | `ollama` or `anthropic` |
+| `--model <name>` | Model identifier |
+| `--db-path <path>` | Custom SQLite database path |
+| `--no-stream` | Disable streaming (wait for full response) |
+| `--sync-url <url>` | Sync relay server URL |
+| `--sync-token <token>` | Sync relay master token |
+| `--operator` | Start with operator mode enabled |
+| `--allowed-paths <paths>` | Comma-separated paths for file tools |
+| `--version` | Print version |
+| `--help` | Print help |
+
+## Slash commands
+
+| Command | Action |
+|---|---|
+| `/help` | Show available commands |
+| `/model <name>` | Switch model |
+| `/memories` | List stored memories |
+| `/state` | Show current state vector |
+| `/forget <nodeId>` | Delete a memory by ID |
+| `/export` | Export all data (memories, events, identity) |
+| `/clear` | Clear conversation history |
+| `/tools` | List registered tools |
+| `/sync` | Trigger manual sync cycle |
+| `/mcp list` | List connected MCP servers |
+| `/mcp trust <name>` | Trust an MCP server (skip approval for its tools) |
+| `/mcp untrust <name>` | Remove trust from an MCP server |
+| `/operator` | Toggle operator mode |
+| `quit` / `exit` | Exit the CLI |
+
+## Tool approval flow
+
+When the agent requests a tool that requires approval, the CLI pauses and prompts:
+
+```
+Tool approval required: shellExec
+  args: {"command": "ls -la"}
+Allow? (Y/n):
+```
+
+Type `Y` to approve, `n` to deny. The agent continues with the result (or denial) and completes the turn.
+
+## Identity bootstrap
+
+The CLI uses the same identity system as the desktop app:
+
+1. First launch generates an Ed25519 keypair
+2. Private key is encrypted with PBKDF2 (AES-256-GCM) and stored in `~/.motebit/config.json`
+3. Identity and device are registered in the local SQLite database
+4. Optional: register with a sync relay using `--sync-url` and `--sync-token`
+
+## Streaming output
+
+By default, the CLI streams responses token-by-token. Tool calls appear inline:
+
+```
+> What files are in my home directory?
+[calling readFile...]
+[readFile done]
+Your home directory contains the following files: ...
+```
+
+Use `--no-stream` to wait for the complete response before printing.

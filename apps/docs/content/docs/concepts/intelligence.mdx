@@ -1,0 +1,131 @@
+---
+title: Intelligence
+description: Pluggable LLM providers, the agentic turn loop, and streaming.
+---
+
+Intelligence is a commodity. Motebit treats LLMs as interchangeable providers — you can switch between Anthropic, Ollama, OpenAI, or any future provider without losing your agent's identity, memory, or governance.
+
+## Providers
+
+Three provider implementations, one interface:
+
+```ts
+interface IntelligenceProvider {
+  generate(contextPack: ContextPack): Promise<AIResponse>;
+  estimateConfidence(response: string): number;
+  extractMemoryCandidates(response: string): MemoryCandidate[];
+}
+```
+
+### CloudProvider
+
+Connects to hosted APIs (Anthropic, OpenAI, custom endpoints):
+
+```ts
+import { CloudProvider } from "@motebit/ai-core";
+
+const provider = new CloudProvider({
+  provider: "anthropic",
+  api_key: "sk-ant-...",
+  model: "claude-sonnet-4-5-20250514",
+  max_tokens: 4096,
+  temperature: 0.7,
+});
+```
+
+### OllamaProvider
+
+Local inference via Ollama:
+
+```ts
+import { OllamaProvider } from "@motebit/ai-core";
+
+const provider = new OllamaProvider({
+  model: "llama3.2",
+  base_url: "http://localhost:11434",
+});
+```
+
+### HybridProvider
+
+Falls back from cloud to local on failure:
+
+```ts
+import { HybridProvider } from "@motebit/ai-core";
+
+const provider = new HybridProvider({
+  cloud: { provider: "anthropic", api_key: "...", model: "..." },
+  local: { model: "llama3.2" },
+  fallback_to_local: true,
+});
+```
+
+## The agentic turn loop
+
+A single user message can trigger multiple LLM calls if tools are involved. The turn loop handles this:
+
+1. Pack context (state vector, recent events, relevant memories, conversation history)
+2. Call the LLM
+3. Parse the response for `<memory>`, `<state>`, and `*action*` tags
+4. If the LLM requests a tool call, evaluate it against the policy gate
+5. If approved, execute the tool and feed the result back (go to step 2)
+6. If approval is required, pause and yield an `approval_request` chunk
+7. Continue until the LLM produces a final text response
+
+```ts
+for await (const chunk of runtime.sendMessageStreaming("search for recent papers on RLHF")) {
+  switch (chunk.type) {
+    case "text":
+      process.stdout.write(chunk.text);
+      break;
+    case "tool_status":
+      console.log(`Tool ${chunk.name}: ${chunk.status}`);
+      break;
+    case "approval_request":
+      // User decides whether to allow tool execution
+      const approved = await askUser(`Allow ${chunk.name}?`);
+      for await (const next of runtime.resumeAfterApproval(approved)) {
+        // Continue processing...
+      }
+      break;
+  }
+}
+```
+
+## Context packing
+
+Before each LLM call, the runtime assembles a `ContextPack`:
+
+```ts
+interface ContextPack {
+  state: MotebitState;
+  recentEvents: EventLogEntry[];
+  relevantMemories: MemoryNode[];
+  userMessage: string;
+  conversationHistory: Array<{ role: string; content: string }>;
+}
+```
+
+The system prompt includes body awareness — a description of the motebit's current physical state derived from the state vector and behavior cues. This lets the LLM know how the creature is "feeling" and respond accordingly.
+
+## Tag parsing
+
+The LLM communicates state changes and memory formation through inline XML tags:
+
+```xml
+<!-- State updates -->
+<state field="attention" value="0.8" />
+<state field="curiosity" value="0.6" />
+
+<!-- Memory formation -->
+<memory confidence="0.85" sensitivity="none">
+  User is interested in reinforcement learning
+</memory>
+
+<!-- Actions (affect behavior cues) -->
+*glow brighter*
+*drift closer*
+*widen eyes*
+```
+
+These are parsed by pure functions (`extractStateTags`, `extractMemoryTags`, `extractActions`) and stripped from the displayed output via `stripTags`.

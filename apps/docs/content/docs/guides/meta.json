@@ -1,0 +1,10 @@
+{
+  "title": "Guides",
+  "pages": [
+    "desktop",
+    "cli",
+    "configuration",
+    "tools",
+    "sync"
+  ]
+}

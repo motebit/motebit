@@ -1,0 +1,12 @@
+{
+  "title": "Docs",
+  "pages": [
+    "introduction",
+    "---Concepts---",
+    "...concepts",
+    "---Guides---",
+    "...guides",
+    "---Architecture---",
+    "...architecture"
+  ]
+}

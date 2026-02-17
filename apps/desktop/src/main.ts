@@ -465,6 +465,11 @@ document.getElementById("settings-reset-pin")!.addEventListener("click", () => {
   showPinDialog("reset");
 });
 
+// Documentation button
+document.getElementById("settings-docs")!.addEventListener("click", () => {
+  window.open("https://docs.motebit.dev", "_blank");
+});
+
 // Settings event listeners
 settingsBackdrop.addEventListener("click", closeSettings);
 document.getElementById("settings-btn")!.addEventListener("click", openSettings);

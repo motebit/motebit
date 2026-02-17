@@ -1,0 +1,116 @@
+---
+title: Tools
+description: Built-in tools, MCP integration, and the trust model.
+---
+
+Tools give the motebit agency — the ability to read files, search the web, execute commands, and interact with external services. Every tool call passes through the [policy gate](/docs/concepts/governance) before execution.
+
+## Built-in tools
+
+Motebit ships with seven built-in tools:
+
+| Tool | Risk | Description |
+|---|---|---|
+| `readFile` | R0 (read) | Read a file from allowed paths |
+| `writeFile` | R2 (write) | Write a file (requires approval) |
+| `shellExec` | R3 (execute) | Execute a shell command (requires approval) |
+| `webSearch` | R0 (read) | Search the web |
+| `readUrl` | R1 (annotate) | Fetch and read a URL |
+| `recallMemories` | R0 (read) | Query the agent's memory graph |
+| `listEvents` | R0 (read) | Browse the agent's event log |
+
+### Tool registration
+
+Tools are registered in an `InMemoryToolRegistry`:
+
+```ts
+import { InMemoryToolRegistry, readFileDefinition, readFileHandler } from "@motebit/tools";
+
+const registry = new InMemoryToolRegistry();
+registry.register(readFileDefinition, readFileHandler);
+```
+
+## MCP integration
+
+[Model Context Protocol](https://modelcontextprotocol.io) (MCP) lets your motebit connect to external tool servers. Configure MCP servers in `~/.motebit/config.json`:
+
+```json
+{
+  "mcp_servers": [
+    {
+      "name": "filesystem",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/user"],
+      "trusted": true
+    },
+    {
+      "name": "github",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_TOKEN": "ghp_..." },
+      "trusted": false
+    }
+  ]
+}
+```
+
+### MCP server config
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Server identifier (used in tool namespacing) |
+| `transport` | `"stdio"` | Transport type (stdio only for now) |
+| `command` | string | Command to launch the server |
+| `args` | string[] | Command arguments |
+| `env` | object | Environment variables for the server process |
+| `trusted` | boolean | If false, all tools require per-call approval |
+
+### Tool namespacing
+
+MCP tools are namespaced to avoid collisions:
+
+```
+filesystem__read_file
+filesystem__write_file
+github__create_issue
+github__list_repos
+```
+
+Format: `{serverName}__{toolName}`.
+
+### External data boundary
+
+MCP tool results are wrapped in boundary markers:
+
+```
+[EXTERNAL_DATA source="mcp:filesystem:read_file"]
+...file contents...
+[/EXTERNAL_DATA]
+```
+
+This marks the trust boundary between internal (trusted) and external (untrusted) data, enabling the content sanitizer to detect prompt injection attempts.
+
+## Trust model
+
+### Trusted vs untrusted servers
+
+- **Trusted** (`"trusted": true`) — Tools execute without per-call approval (still subject to risk level + operator mode)
+- **Untrusted** (`"trusted": false`) — Every tool call requires explicit user approval
+
+Trust is managed per-server. In the CLI:
+
+```
+/mcp list          # Show connected servers and trust status
+/mcp trust github  # Trust the github server
+/mcp untrust github  # Remove trust
+```
+
+### Risk levels still apply
+
+Even trusted MCP tools go through risk classification. A trusted server's `write_file` tool still requires operator mode because it's classified as R2 (write). Trust skips the per-call approval prompt, not the policy gate.
+
+### Content sanitization
+
+All tool results (built-in and MCP) pass through the `ContentSanitizer`, which checks for prompt injection patterns. If suspicious content is detected, the system emits an `injection_warning` event and the user is notified.

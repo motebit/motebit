@@ -1,0 +1,103 @@
+---
+title: Configuration
+description: Config files, environment variables, models, and MCP servers.
+---
+
+Motebit uses a layered configuration system: config file for non-secret settings, OS keyring for secrets, environment variables for development overrides.
+
+## Config file
+
+Location: `~/.motebit/config.json`
+
+```json
+{
+  "motebit_id": "01926a3b-...",
+  "device_id": "d-abcdef12",
+  "default_provider": "anthropic",
+  "default_model": "claude-sonnet-4-5-20250514",
+  "sync_url": "https://relay.example.com",
+  "mcp_servers": [
+    {
+      "name": "filesystem",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/docs"],
+      "trusted": true
+    }
+  ]
+}
+```
+
+### Config fields
+
+| Field | Type | Description |
+|---|---|---|
+| `motebit_id` | string | Your motebit's UUID (auto-generated on first launch) |
+| `device_id` | string | This device's registration ID |
+| `default_provider` | `"ollama"` \| `"anthropic"` | LLM provider |
+| `default_model` | string | Model identifier |
+| `sync_url` | string | Sync relay server URL (optional) |
+| `mcp_servers` | array | MCP server configurations (see [Tools](/docs/guides/tools)) |
+
+## Secrets
+
+Secrets are stored in the OS keyring, never in the config file:
+
+| Key | Description |
+|---|---|
+| `api_key` | LLM provider API key |
+| `sync_master_token` | Sync relay authentication token |
+| `operator_pin_hash` | SHA-256 hash of operator PIN |
+| `private_key` | Ed25519 private key (or PBKDF2-encrypted in CLI) |
+
+On desktop, the Tauri keyring API handles storage. On CLI, the private key is encrypted with PBKDF2 and stored in the config file (the only exception to the "no secrets in config" rule, and it's encrypted).
+
+## Environment variables (dev mode)
+
+For development without Tauri:
+
+```bash
+# apps/desktop/.env
+VITE_AI_PROVIDER=anthropic
+VITE_ANTHROPIC_API_KEY=sk-ant-...
+```
+
+These are only used in Vite dev mode. Production builds read from config + keyring.
+
+## Database
+
+Location: `~/.motebit/motebit.db`
+
+SQLite in WAL mode. Stores events, memories, identities, devices, audit logs, and state snapshots. Each table uses the standard adapter pattern — see [Event Sourcing](/docs/architecture/event-sourcing) for schema details.
+
+## Models
+
+### Ollama
+
+Install [Ollama](https://ollama.ai) and pull a model:
+
+```bash
+ollama pull llama3.2
+ollama pull mistral
+ollama pull codellama
+```
+
+Set `default_provider: "ollama"` and `default_model: "llama3.2"` in config, or use the CLI flag `--provider ollama --model llama3.2`.
+
+Ollama runs on `http://localhost:11434` by default.
+
+### Anthropic
+
+Set your API key via the desktop settings panel (stored in keyring) or environment variable. Set `default_provider: "anthropic"` and `default_model: "claude-sonnet-4-5-20250514"`.
+
+### Custom endpoints
+
+The `CloudProvider` supports custom base URLs for OpenAI-compatible APIs:
+
+```json
+{
+  "default_provider": "anthropic",
+  "default_model": "my-custom-model",
+  "base_url": "https://my-proxy.example.com/v1"
+}
+```
