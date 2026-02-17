@@ -32,6 +32,15 @@ import { createMotebitDatabase } from "@motebit/persistence";
 import type { MotebitDatabase } from "@motebit/persistence";
 import type { EventLogEntry, ToolAuditEntry } from "@motebit/sdk";
 import type { WSContext } from "hono/ws";
+import { verifySignedToken } from "@motebit/crypto";
+
+function hexToBytes(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+  }
+  return bytes;
+}
 
 // === Config ===
 
@@ -39,7 +48,8 @@ export interface SyncRelayConfig {
   dbPath?: string;
   apiToken?: string;       // Legacy single token (still supported as admin/master token)
   corsOrigin?: string;
-  enableDeviceAuth?: boolean;  // When true, validates per-device tokens
+  enableDeviceAuth?: boolean;  // When true, validates per-device tokens (default: true)
+  verifyDeviceSignature?: boolean;  // When true, uses Ed25519 signed token verification (default: true)
 }
 
 export interface ConnectedDevice {
@@ -57,7 +67,7 @@ export interface SyncRelay {
 // === Factory ===
 
 export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
-  const { dbPath = ":memory:", apiToken, corsOrigin = "*", enableDeviceAuth = false } = config;
+  const { dbPath = ":memory:", apiToken, corsOrigin = "*", enableDeviceAuth = true, verifyDeviceSignature = true } = config;
 
   const moteDb: MotebitDatabase = createMotebitDatabase(dbPath);
   const eventStore = new EventStore(moteDb.eventStore);
@@ -81,7 +91,7 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
   }
 
   if (enableDeviceAuth) {
-    // Device auth middleware for sync routes: validates per-device tokens
+    // Device auth middleware for sync routes: validates per-device tokens or signed tokens
     app.use("/sync/*", async (c, next) => {
       const authHeader = c.req.header("authorization");
       if (!authHeader?.startsWith("Bearer ")) {
@@ -95,15 +105,35 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
         return;
       }
 
-      // Device token validation — extract motebitId from URL path (/sync/:motebitId/...)
+      // Extract motebitId from URL path (/sync/:motebitId/...)
       const pathParts = new URL(c.req.url, "http://localhost").pathname.split("/");
       const motebitId = pathParts[2];
       if (!motebitId) {
         throw new HTTPException(400, { message: "Missing motebitId" });
       }
-      const device = await identityManager.validateDeviceToken(token, motebitId);
-      if (!device) {
-        throw new HTTPException(403, { message: "Device not authorized for this motebit" });
+
+      if (verifyDeviceSignature && token.includes(".")) {
+        // Signed token verification — look up all devices for this motebitId and try to verify
+        const devices = await identityManager.listDevices(motebitId);
+        let verified = false;
+        for (const device of devices) {
+          if (!device.public_key) continue;
+          const pubKeyBytes = hexToBytes(device.public_key);
+          const payload = await verifySignedToken(token, pubKeyBytes);
+          if (payload && payload.mid === motebitId) {
+            verified = true;
+            break;
+          }
+        }
+        if (!verified) {
+          throw new HTTPException(403, { message: "Device not authorized for this motebit" });
+        }
+      } else {
+        // Legacy device token validation
+        const device = await identityManager.validateDeviceToken(token, motebitId);
+        if (!device) {
+          throw new HTTPException(403, { message: "Device not authorized for this motebit" });
+        }
       }
       await next();
     });
@@ -137,10 +167,33 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
         async onOpen(_event, ws) {
           // Validate token for WebSocket connections
           if (enableDeviceAuth && token) {
-            const device = await identityManager.validateDeviceToken(token, motebitId);
-            if (!device) {
-              ws.close(4003, "Unauthorized");
-              return;
+            // Master token bypass
+            if (apiToken && token === apiToken) {
+              // OK — master token
+            } else if (verifyDeviceSignature && token.includes(".")) {
+              // Signed token verification
+              const devices = await identityManager.listDevices(motebitId);
+              let verified = false;
+              for (const device of devices) {
+                if (!device.public_key) continue;
+                const pubKeyBytes = hexToBytes(device.public_key);
+                const payload = await verifySignedToken(token, pubKeyBytes);
+                if (payload && payload.mid === motebitId) {
+                  verified = true;
+                  break;
+                }
+              }
+              if (!verified) {
+                ws.close(4003, "Unauthorized");
+                return;
+              }
+            } else {
+              // Legacy device token validation
+              const device = await identityManager.validateDeviceToken(token, motebitId);
+              if (!device) {
+                ws.close(4003, "Unauthorized");
+                return;
+              }
             }
           } else if (apiToken && token !== apiToken) {
             ws.close(4001, "Unauthorized");
@@ -243,15 +296,18 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
 
   // --- Device: register ---
   app.post("/device/register", async (c) => {
-    const body = await c.req.json<{ motebit_id: string; device_name?: string }>();
+    const body = await c.req.json<{ motebit_id: string; device_name?: string; public_key?: string }>();
     if (!body.motebit_id) {
       throw new HTTPException(400, { message: "Missing 'motebit_id' field" });
+    }
+    if (body.public_key !== undefined && (typeof body.public_key !== "string" || !/^[0-9a-f]{64}$/i.test(body.public_key))) {
+      throw new HTTPException(400, { message: "Invalid 'public_key' — must be 64-char hex string (32 bytes Ed25519 public key)" });
     }
     const identity = await identityManager.load(body.motebit_id);
     if (!identity) {
       throw new HTTPException(404, { message: "Identity not found" });
     }
-    const device = await identityManager.registerDevice(body.motebit_id, body.device_name);
+    const device = await identityManager.registerDevice(body.motebit_id, body.device_name, body.public_key);
     return c.json(device, 201);
   });
 
@@ -316,7 +372,7 @@ const app = process.env.VITEST ? new Hono() : createSyncRelay({
   dbPath: process.env.MOTEBIT_DB_PATH,
   apiToken: process.env.MOTEBIT_API_TOKEN,
   corsOrigin: process.env.MOTEBIT_CORS_ORIGIN,
-  enableDeviceAuth: process.env.MOTEBIT_ENABLE_DEVICE_AUTH === "true",
+  enableDeviceAuth: process.env.MOTEBIT_ENABLE_DEVICE_AUTH !== "false",
 }).app;
 
 if (!process.env.VITEST) {

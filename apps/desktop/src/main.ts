@@ -1,4 +1,4 @@
-import { DesktopApp, isSlashCommand, parseSlashCommand, type DesktopAIConfig, type InvokeFn } from "./index";
+import { DesktopApp, isSlashCommand, parseSlashCommand, type DesktopAIConfig, type InvokeFn, type BootstrapResult } from "./index";
 import { stripTags } from "@motebit/ai-core";
 
 const canvas = document.getElementById("motebit-canvas") as HTMLCanvasElement;
@@ -198,7 +198,19 @@ async function loadDesktopConfig(): Promise<DesktopAIConfig> {
       apiKey = (parsed.api_key as string) || undefined;
     }
 
-    return { provider, model, apiKey, isTauri: true, invoke: invoke as InvokeFn };
+    // Sync relay config (optional)
+    const syncUrl = (parsed.sync_url as string) || undefined;
+    let syncMasterToken: string | undefined;
+    if (syncUrl) {
+      try {
+        const keyringVal = await invoke<string | null>("keyring_get", { key: "sync_master_token" });
+        syncMasterToken = keyringVal ?? undefined;
+      } catch {
+        // Keyring unavailable
+      }
+    }
+
+    return { provider, model, apiKey, isTauri: true, invoke: invoke as InvokeFn, syncUrl, syncMasterToken };
   }
 
   // Vite dev mode — read from env vars
@@ -463,9 +475,33 @@ async function bootstrap(): Promise<void> {
   };
   requestAnimationFrame(loop);
 
-  // AI init
+  // Identity bootstrap (Tauri only)
   const config = await loadDesktopConfig();
   currentConfig = config;
+
+  if (config.isTauri && config.invoke) {
+    try {
+      const result: BootstrapResult = await app.bootstrap(config.invoke);
+      if (result.isFirstLaunch) {
+        addMessage("system", "Your mote has been created");
+      }
+
+      // Sync relay registration (if configured)
+      if (config.syncUrl && config.syncMasterToken) {
+        try {
+          await app.registerWithRelay(config.invoke, config.syncUrl, config.syncMasterToken);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          addMessage("system", `Sync relay registration failed: ${msg}`);
+        }
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addMessage("system", `Identity bootstrap failed: ${msg}`);
+    }
+  }
+
+  // AI init
   if (app.initAI(config)) {
     const label = config.provider === "ollama" ? "Ollama" : "Anthropic";
     addMessage("system", `AI connected (${label})`);

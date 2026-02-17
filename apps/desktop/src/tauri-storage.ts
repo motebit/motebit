@@ -1,7 +1,8 @@
-import type { EventLogEntry, EventType, MemoryNode, MemoryEdge, SensitivityLevel, RelationType } from "@motebit/sdk";
+import type { EventLogEntry, EventType, MemoryNode, MemoryEdge, MotebitIdentity, SensitivityLevel, RelationType } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import type { MemoryStorageAdapter, MemoryQuery } from "@motebit/memory-graph";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
+import type { IdentityStorage, DeviceRegistration } from "@motebit/core-identity";
 
 // === IPC Helpers ===
 
@@ -314,4 +315,109 @@ export class TauriMemoryStorage implements MemoryStorageAdapter {
     );
     return rows.map(rowToEdge);
   }
+}
+
+// === TauriIdentityStorage ===
+
+interface IdentityRow {
+  motebit_id: string;
+  created_at: number;
+  owner_id: string;
+  version_clock: number;
+}
+
+interface DeviceRow {
+  device_id: string;
+  motebit_id: string;
+  device_token: string;
+  public_key: string;
+  registered_at: number;
+  device_name: string | null;
+}
+
+export class TauriIdentityStorage implements IdentityStorage {
+  constructor(private invoke: InvokeFn) {}
+
+  async save(identity: MotebitIdentity): Promise<void> {
+    await dbExecute(
+      this.invoke,
+      `INSERT OR REPLACE INTO identities (motebit_id, created_at, owner_id, version_clock)
+       VALUES (?, ?, ?, ?)`,
+      [identity.motebit_id, identity.created_at, identity.owner_id, identity.version_clock],
+    );
+  }
+
+  async load(motebitId: string): Promise<MotebitIdentity | null> {
+    const rows = await dbQuery<IdentityRow>(
+      this.invoke,
+      "SELECT * FROM identities WHERE motebit_id = ?",
+      [motebitId],
+    );
+    if (rows.length === 0) return null;
+    const r = rows[0]!;
+    return { motebit_id: r.motebit_id, created_at: r.created_at, owner_id: r.owner_id, version_clock: r.version_clock };
+  }
+
+  async loadByOwner(ownerId: string): Promise<MotebitIdentity | null> {
+    const rows = await dbQuery<IdentityRow>(
+      this.invoke,
+      "SELECT * FROM identities WHERE owner_id = ? LIMIT 1",
+      [ownerId],
+    );
+    if (rows.length === 0) return null;
+    const r = rows[0]!;
+    return { motebit_id: r.motebit_id, created_at: r.created_at, owner_id: r.owner_id, version_clock: r.version_clock };
+  }
+
+  async saveDevice(device: DeviceRegistration): Promise<void> {
+    await dbExecute(
+      this.invoke,
+      `INSERT OR REPLACE INTO devices (device_id, motebit_id, device_token, public_key, registered_at, device_name)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [device.device_id, device.motebit_id, device.device_token, device.public_key, device.registered_at, device.device_name ?? null],
+    );
+  }
+
+  async loadDevice(deviceId: string): Promise<DeviceRegistration | null> {
+    const rows = await dbQuery<DeviceRow>(
+      this.invoke,
+      "SELECT * FROM devices WHERE device_id = ?",
+      [deviceId],
+    );
+    if (rows.length === 0) return null;
+    return rowToDeviceReg(rows[0]!);
+  }
+
+  async loadDeviceByToken(token: string): Promise<DeviceRegistration | null> {
+    const rows = await dbQuery<DeviceRow>(
+      this.invoke,
+      "SELECT * FROM devices WHERE device_token = ?",
+      [token],
+    );
+    if (rows.length === 0) return null;
+    return rowToDeviceReg(rows[0]!);
+  }
+
+  async listDevices(motebitId: string): Promise<DeviceRegistration[]> {
+    const rows = await dbQuery<DeviceRow>(
+      this.invoke,
+      "SELECT * FROM devices WHERE motebit_id = ?",
+      [motebitId],
+    );
+    return rows.map(rowToDeviceReg);
+  }
+}
+
+function rowToDeviceReg(row: DeviceRow): DeviceRegistration {
+  const device: DeviceRegistration = {
+    device_id: row.device_id,
+    motebit_id: row.motebit_id,
+    device_token: row.device_token,
+    public_key: row.public_key,
+    registered_at: row.registered_at,
+  };
+  if (row.device_name !== null) {
+    device.device_name = row.device_name;
+  }
+  return device;
 }

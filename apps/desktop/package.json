@@ -21,6 +21,7 @@
     "@motebit/event-log": "workspace:*",
     "@motebit/memory-graph": "workspace:*",
     "@motebit/core-identity": "workspace:*",
+    "@motebit/crypto": "workspace:*",
     "@motebit/privacy-layer": "workspace:*",
     "@motebit/sdk": "workspace:*",
     "@motebit/state-vector": "workspace:*",

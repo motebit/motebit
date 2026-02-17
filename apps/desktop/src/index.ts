@@ -17,9 +17,11 @@ import {
 import type { ToolAuditEntry } from "@motebit/sdk";
 import { InMemoryEventStore } from "@motebit/event-log";
 import { InMemoryMemoryStorage } from "@motebit/memory-graph";
-import { InMemoryIdentityStorage } from "@motebit/core-identity";
+import { InMemoryIdentityStorage, IdentityManager } from "@motebit/core-identity";
 import { InMemoryAuditLog } from "@motebit/privacy-layer";
-import { TauriEventStore, TauriMemoryStorage, type InvokeFn } from "./tauri-storage.js";
+import { generateKeypair, createSignedToken } from "@motebit/crypto";
+import { EventStore } from "@motebit/event-log";
+import { TauriEventStore, TauriMemoryStorage, TauriIdentityStorage, type InvokeFn } from "./tauri-storage.js";
 export type { InvokeFn } from "./tauri-storage.js";
 
 // Re-export runtime types for main.ts consumption
@@ -46,6 +48,8 @@ export interface DesktopAIConfig {
   personalityConfig?: MotebitPersonalityConfig;
   isTauri: boolean;
   invoke?: InvokeFn;
+  syncUrl?: string;
+  syncMasterToken?: string;
 }
 
 // === Tauri Keyring Adapter ===
@@ -105,7 +109,7 @@ function createTauriStorage(invoke: InvokeFn): StorageAdapters {
   return {
     eventStore: new TauriEventStore(invoke),
     memoryStorage: new TauriMemoryStorage(invoke),
-    identityStorage: new InMemoryIdentityStorage(),
+    identityStorage: new TauriIdentityStorage(invoke),
     auditLog: new InMemoryAuditLog(),
     toolAuditSink: new TauriToolAuditSink(invoke),
   };
@@ -125,12 +129,149 @@ function createDesktopStorage(config: DesktopAIConfig): StorageAdapters {
 
 // === Desktop App (platform shell) ===
 
+export interface BootstrapResult {
+  isFirstLaunch: boolean;
+  motebitId: string;
+  deviceId: string;
+}
+
 export class DesktopApp {
   private runtime: MotebitRuntime | null = null;
   private renderer: ThreeJSAdapter;
+  motebitId: string = "desktop-local";
+  deviceId: string = "desktop-local";
 
   constructor() {
     this.renderer = new ThreeJSAdapter();
+  }
+
+  /**
+   * Bootstrap identity on first launch or load existing identity.
+   * Must be called before initAI() when running in Tauri.
+   */
+  async bootstrap(invoke: InvokeFn): Promise<BootstrapResult> {
+    const raw = await invoke<string>("read_config");
+    const config = JSON.parse(raw) as Record<string, unknown>;
+
+    if (config.motebit_id && typeof config.motebit_id === "string") {
+      // Existing identity — load from config
+      this.motebitId = config.motebit_id;
+      this.deviceId = (config.device_id as string) || "desktop-local";
+      return { isFirstLaunch: false, motebitId: this.motebitId, deviceId: this.deviceId };
+    }
+
+    // First launch — create identity and device keypair
+    const storage = createTauriStorage(invoke);
+    const eventStore = new EventStore(storage.eventStore);
+    const identityManager = new IdentityManager(storage.identityStorage, eventStore);
+
+    const deviceName = "Desktop";
+    const identity = await identityManager.create(deviceName);
+    const keypair = await generateKeypair();
+
+    // Hex-encode keys
+    const pubKeyHex = Array.from(keypair.publicKey).map(b => b.toString(16).padStart(2, "0")).join("");
+    const privKeyHex = Array.from(keypair.privateKey).map(b => b.toString(16).padStart(2, "0")).join("");
+
+    // Register device with the identity
+    const deviceId = crypto.randomUUID();
+    await identityManager.registerDevice(identity.motebit_id, deviceName, pubKeyHex);
+
+    // Persist private key to keyring
+    await invoke<void>("keyring_set", { key: "device_private_key", value: privKeyHex });
+
+    // Write motebit_id, device_id, and public key to config
+    const updatedConfig = { ...config, motebit_id: identity.motebit_id, device_id: deviceId, device_public_key: pubKeyHex };
+    await invoke<void>("write_config", { json: JSON.stringify(updatedConfig) });
+
+    this.motebitId = identity.motebit_id;
+    this.deviceId = deviceId;
+
+    return { isFirstLaunch: true, motebitId: this.motebitId, deviceId: this.deviceId };
+  }
+
+  /**
+   * Get the device keypair from keyring + config. Returns null if not available.
+   */
+  async getDeviceKeypair(invoke: InvokeFn): Promise<{ publicKey: string; privateKey: string } | null> {
+    const raw = await invoke<string>("read_config");
+    const config = JSON.parse(raw) as Record<string, unknown>;
+    const publicKey = config.device_public_key as string | undefined;
+    if (!publicKey) return null;
+
+    let privateKey: string | null = null;
+    try {
+      privateKey = await invoke<string | null>("keyring_get", { key: "device_private_key" });
+    } catch {
+      return null;
+    }
+    if (!privateKey) return null;
+
+    return { publicKey, privateKey };
+  }
+
+  /**
+   * Register this device with a sync relay. Creates the identity server-side
+   * if needed, then registers the device with its public key.
+   * Returns a signed auth token for sync requests.
+   */
+  async registerWithRelay(
+    invoke: InvokeFn,
+    syncUrl: string,
+    masterToken: string,
+  ): Promise<string | null> {
+    const keypair = await this.getDeviceKeypair(invoke);
+    if (!keypair) return null;
+
+    const headers = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${masterToken}`,
+    };
+
+    // Check if identity exists server-side
+    const identityRes = await fetch(`${syncUrl}/identity/${this.motebitId}`, { headers });
+    if (identityRes.status === 404) {
+      // Create identity on server
+      await fetch(`${syncUrl}/identity`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ owner_id: this.motebitId }),
+      });
+    }
+
+    // Register device with public key
+    await fetch(`${syncUrl}/device/register`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        motebit_id: this.motebitId,
+        device_name: "Desktop",
+        public_key: keypair.publicKey,
+      }),
+    });
+
+    // Generate signed token for ongoing sync
+    return this.createSyncToken(keypair.privateKey);
+  }
+
+  /**
+   * Create a signed token for sync authentication. Tokens expire after 5 minutes.
+   */
+  async createSyncToken(privateKeyHex: string): Promise<string> {
+    const privKeyBytes = new Uint8Array(privateKeyHex.length / 2);
+    for (let i = 0; i < privateKeyHex.length; i += 2) {
+      privKeyBytes[i / 2] = parseInt(privateKeyHex.slice(i, i + 2), 16);
+    }
+
+    return createSignedToken(
+      {
+        mid: this.motebitId,
+        did: this.deviceId,
+        iat: Date.now(),
+        exp: Date.now() + 5 * 60 * 1000,
+      },
+      privKeyBytes,
+    );
   }
 
   async init(canvas: unknown): Promise<void> {
@@ -210,7 +351,7 @@ export class DesktopApp {
     const keyring = config.isTauri && config.invoke ? new TauriKeyringAdapter(config.invoke) : undefined;
 
     this.runtime = new MotebitRuntime(
-      { motebitId: "desktop-local", tickRateHz: 2 },
+      { motebitId: this.motebitId, tickRateHz: 2 },
       { storage, renderer: this.renderer, ai: provider, keyring },
     );
 

@@ -3,6 +3,7 @@ import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 import { EventType } from "@motebit/sdk";
 import type { EventLogEntry } from "@motebit/sdk";
+import { generateKeypair, createSignedToken } from "@motebit/crypto";
 
 // === Helpers ===
 
@@ -10,7 +11,11 @@ const API_TOKEN = "test-token";
 const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
 const MOTEBIT_ID = "test-mote";
 
-function createTestRelay(overrides?: { enableDeviceAuth?: boolean }): SyncRelay {
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+function createTestRelay(overrides?: { enableDeviceAuth?: boolean; verifyDeviceSignature?: boolean }): SyncRelay {
   return createSyncRelay({ apiToken: API_TOKEN, ...overrides });
 }
 
@@ -33,7 +38,7 @@ describe("Sync Relay", () => {
   let relay: SyncRelay;
 
   beforeEach(() => {
-    relay = createTestRelay();
+    relay = createTestRelay({ enableDeviceAuth: false });
   });
 
   afterEach(() => {
@@ -379,5 +384,162 @@ describe("Sync Relay — device auth", () => {
       headers: { Authorization: "Bearer invalid-token" },
     });
     expect(res.status).toBe(403);
+  });
+});
+
+// === Signed Token Auth Tests ===
+
+describe("Sync Relay — signed token auth", () => {
+  let relay: SyncRelay;
+
+  beforeEach(() => {
+    relay = createTestRelay({ enableDeviceAuth: true, verifyDeviceSignature: true });
+  });
+
+  afterEach(() => {
+    relay.close();
+  });
+
+  async function createIdentityAndDevice(pubKeyHex: string): Promise<{ motebitId: string; deviceId: string; deviceToken: string }> {
+    // Create identity
+    const identityRes = await relay.app.request("/identity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ owner_id: `owner-${crypto.randomUUID()}` }),
+    });
+    const identity = (await identityRes.json()) as { motebit_id: string };
+
+    // Register device with public key
+    const deviceRes = await relay.app.request("/device/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ motebit_id: identity.motebit_id, device_name: "Test", public_key: pubKeyHex }),
+    });
+    const device = (await deviceRes.json()) as { device_id: string; device_token: string };
+
+    return { motebitId: identity.motebit_id, deviceId: device.device_id, deviceToken: device.device_token };
+  }
+
+  it("allows sync with a valid signed token", async () => {
+    const keypair = await generateKeypair();
+    const pubKeyHex = bytesToHex(keypair.publicKey);
+    const { motebitId, deviceId } = await createIdentityAndDevice(pubKeyHex);
+
+    const token = await createSignedToken(
+      { mid: motebitId, did: deviceId, iat: Date.now(), exp: Date.now() + 5 * 60 * 1000 },
+      keypair.privateKey,
+    );
+
+    const res = await relay.app.request(`/sync/${motebitId}/clock`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("rejects expired signed token", async () => {
+    const keypair = await generateKeypair();
+    const pubKeyHex = bytesToHex(keypair.publicKey);
+    const { motebitId, deviceId } = await createIdentityAndDevice(pubKeyHex);
+
+    const token = await createSignedToken(
+      { mid: motebitId, did: deviceId, iat: Date.now() - 10 * 60 * 1000, exp: Date.now() - 1 },
+      keypair.privateKey,
+    );
+
+    const res = await relay.app.request(`/sync/${motebitId}/clock`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("rejects token signed with wrong key", async () => {
+    const keypairA = await generateKeypair();
+    const keypairB = await generateKeypair();
+    const pubKeyHex = bytesToHex(keypairA.publicKey);
+    const { motebitId, deviceId } = await createIdentityAndDevice(pubKeyHex);
+
+    // Sign with keypairB's private key, but device has keypairA's public key
+    const token = await createSignedToken(
+      { mid: motebitId, did: deviceId, iat: Date.now(), exp: Date.now() + 5 * 60 * 1000 },
+      keypairB.privateKey,
+    );
+
+    const res = await relay.app.request(`/sync/${motebitId}/clock`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("rejects token with mismatched motebitId", async () => {
+    const keypair = await generateKeypair();
+    const pubKeyHex = bytesToHex(keypair.publicKey);
+    const { motebitId: motebitIdA, deviceId } = await createIdentityAndDevice(pubKeyHex);
+
+    // Create another identity
+    const otherRes = await relay.app.request("/identity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ owner_id: `owner-${crypto.randomUUID()}` }),
+    });
+    const otherIdentity = (await otherRes.json()) as { motebit_id: string };
+
+    // Token claims motebitIdA, but we request against otherIdentity
+    const token = await createSignedToken(
+      { mid: motebitIdA, did: deviceId, iat: Date.now(), exp: Date.now() + 5 * 60 * 1000 },
+      keypair.privateKey,
+    );
+
+    const res = await relay.app.request(`/sync/${otherIdentity.motebit_id}/clock`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("device registration stores public key", async () => {
+    const keypair = await generateKeypair();
+    const pubKeyHex = bytesToHex(keypair.publicKey);
+
+    // Create identity
+    const identityRes = await relay.app.request("/identity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ owner_id: `owner-${crypto.randomUUID()}` }),
+    });
+    const identity = (await identityRes.json()) as { motebit_id: string };
+
+    // Register device with public key
+    const deviceRes = await relay.app.request("/device/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ motebit_id: identity.motebit_id, device_name: "My Device", public_key: pubKeyHex }),
+    });
+
+    expect(deviceRes.status).toBe(201);
+    const device = (await deviceRes.json()) as { device_id: string; public_key: string; device_name: string };
+    expect(device.public_key).toBe(pubKeyHex);
+    expect(device.device_name).toBe("My Device");
+  });
+
+  it("rejects device registration with invalid public key format", async () => {
+    // Create identity
+    const identityRes = await relay.app.request("/identity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ owner_id: `owner-${crypto.randomUUID()}` }),
+    });
+    const identity = (await identityRes.json()) as { motebit_id: string };
+
+    // Try to register with invalid public key
+    const deviceRes = await relay.app.request("/device/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ motebit_id: identity.motebit_id, public_key: "not-hex" }),
+    });
+
+    expect(deviceRes.status).toBe(400);
   });
 });

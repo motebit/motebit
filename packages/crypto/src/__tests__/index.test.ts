@@ -8,6 +8,12 @@ import {
   hash,
   createDeletionCertificate,
   secureErase,
+  generateKeypair,
+  sign,
+  verify,
+  createSignedToken,
+  verifySignedToken,
+  type SignedTokenPayload,
 } from "../index";
 
 // ---------------------------------------------------------------------------
@@ -210,5 +216,117 @@ describe("secureErase", () => {
     crypto.getRandomValues(data);
     secureErase(data);
     expect(data.every((b) => b === 0)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ed25519: generateKeypair()
+// ---------------------------------------------------------------------------
+
+describe("generateKeypair", () => {
+  it("returns 32-byte keys", async () => {
+    const kp = await generateKeypair();
+    expect(kp.publicKey).toBeInstanceOf(Uint8Array);
+    expect(kp.privateKey).toBeInstanceOf(Uint8Array);
+    expect(kp.publicKey.length).toBe(32);
+    expect(kp.privateKey.length).toBe(32);
+  });
+
+  it("generates different keypairs on successive calls", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    expect(a.publicKey).not.toEqual(b.publicKey);
+    expect(a.privateKey).not.toEqual(b.privateKey);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ed25519: sign() / verify()
+// ---------------------------------------------------------------------------
+
+describe("sign and verify", () => {
+  it("round-trips correctly", async () => {
+    const kp = await generateKeypair();
+    const message = new TextEncoder().encode("Hello, Ed25519!");
+    const sig = await sign(message, kp.privateKey);
+    expect(sig).toBeInstanceOf(Uint8Array);
+    expect(sig.length).toBe(64);
+    const valid = await verify(sig, message, kp.publicKey);
+    expect(valid).toBe(true);
+  });
+
+  it("rejects tampered message", async () => {
+    const kp = await generateKeypair();
+    const message = new TextEncoder().encode("Original message");
+    const sig = await sign(message, kp.privateKey);
+    const tampered = new TextEncoder().encode("Tampered message");
+    const valid = await verify(sig, tampered, kp.publicKey);
+    expect(valid).toBe(false);
+  });
+
+  it("rejects signature verified with wrong public key", async () => {
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    const message = new TextEncoder().encode("test");
+    const sig = await sign(message, kpA.privateKey);
+    const valid = await verify(sig, message, kpB.publicKey);
+    expect(valid).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Signed Tokens
+// ---------------------------------------------------------------------------
+
+describe("createSignedToken / verifySignedToken", () => {
+  it("round-trips correctly", async () => {
+    const kp = await generateKeypair();
+    const payload: SignedTokenPayload = {
+      mid: "mote-123",
+      did: "device-456",
+      iat: Date.now(),
+      exp: Date.now() + 5 * 60 * 1000,
+    };
+    const token = await createSignedToken(payload, kp.privateKey);
+    expect(typeof token).toBe("string");
+    expect(token).toContain(".");
+
+    const result = await verifySignedToken(token, kp.publicKey);
+    expect(result).not.toBeNull();
+    expect(result!.mid).toBe("mote-123");
+    expect(result!.did).toBe("device-456");
+  });
+
+  it("rejects expired token", async () => {
+    const kp = await generateKeypair();
+    const payload: SignedTokenPayload = {
+      mid: "mote-123",
+      did: "device-456",
+      iat: Date.now() - 10 * 60 * 1000,
+      exp: Date.now() - 1, // Already expired
+    };
+    const token = await createSignedToken(payload, kp.privateKey);
+    const result = await verifySignedToken(token, kp.publicKey);
+    expect(result).toBeNull();
+  });
+
+  it("rejects invalid signature (wrong key)", async () => {
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    const payload: SignedTokenPayload = {
+      mid: "mote-123",
+      did: "device-456",
+      iat: Date.now(),
+      exp: Date.now() + 5 * 60 * 1000,
+    };
+    const token = await createSignedToken(payload, kpA.privateKey);
+    const result = await verifySignedToken(token, kpB.publicKey);
+    expect(result).toBeNull();
+  });
+
+  it("rejects malformed token (no dot)", async () => {
+    const kp = await generateKeypair();
+    const result = await verifySignedToken("nodothere", kp.publicKey);
+    expect(result).toBeNull();
   });
 });

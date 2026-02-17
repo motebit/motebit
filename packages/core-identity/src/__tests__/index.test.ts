@@ -72,6 +72,7 @@ describe("InMemoryIdentityStorage", () => {
       device_id: "d1",
       motebit_id: "m1",
       device_token: "tok-1",
+      public_key: "aa".repeat(32),
       registered_at: 1000,
       device_name: "Phone",
     };
@@ -93,6 +94,7 @@ describe("InMemoryIdentityStorage", () => {
       device_id: "d2",
       motebit_id: "m1",
       device_token: "tok-2",
+      public_key: "bb".repeat(32),
       registered_at: 2000,
     };
     await storage.saveDevice(device);
@@ -107,9 +109,9 @@ describe("InMemoryIdentityStorage", () => {
   });
 
   it("listDevices returns devices for a given motebitId", async () => {
-    await storage.saveDevice({ device_id: "d1", motebit_id: "m1", device_token: "t1", registered_at: 1 });
-    await storage.saveDevice({ device_id: "d2", motebit_id: "m1", device_token: "t2", registered_at: 2 });
-    await storage.saveDevice({ device_id: "d3", motebit_id: "m2", device_token: "t3", registered_at: 3 });
+    await storage.saveDevice({ device_id: "d1", motebit_id: "m1", device_token: "t1", public_key: "aa".repeat(32), registered_at: 1 });
+    await storage.saveDevice({ device_id: "d2", motebit_id: "m1", device_token: "t2", public_key: "bb".repeat(32), registered_at: 2 });
+    await storage.saveDevice({ device_id: "d3", motebit_id: "m2", device_token: "t3", public_key: "cc".repeat(32), registered_at: 3 });
 
     const devicesM1 = await storage.listDevices("m1");
     expect(devicesM1).toHaveLength(2);
@@ -122,6 +124,7 @@ describe("InMemoryIdentityStorage", () => {
       device_id: "d4",
       motebit_id: "m1",
       device_token: "tok-4",
+      public_key: "dd".repeat(32),
       registered_at: 1000,
       device_name: "Original",
     };

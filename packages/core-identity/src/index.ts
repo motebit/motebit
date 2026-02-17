@@ -34,6 +34,7 @@ export interface DeviceRegistration {
   device_id: string;
   motebit_id: string;
   device_token: string;
+  public_key: string; // hex-encoded Ed25519 public key
   registered_at: number;
   device_name?: string;
 }
@@ -183,11 +184,12 @@ export class IdentityManager {
    * Register a new device for a motebit identity. Returns the device
    * registration including a unique device_token for authentication.
    */
-  async registerDevice(motebitId: string, deviceName?: string): Promise<DeviceRegistration> {
+  async registerDevice(motebitId: string, deviceName?: string, publicKey?: string): Promise<DeviceRegistration> {
     const device: DeviceRegistration = {
       device_id: crypto.randomUUID(),
       motebit_id: motebitId,
       device_token: crypto.randomUUID(),
+      public_key: publicKey ?? "",
       registered_at: Date.now(),
       device_name: deviceName,
     };
@@ -203,6 +205,32 @@ export class IdentityManager {
     const device = await this.deviceStore.loadDeviceByToken(token);
     if (!device || device.motebit_id !== motebitId) return null;
     return device;
+  }
+
+  /**
+   * Load a device by token (alias for token-based lookup). Returns the device
+   * registration if found and matches motebitId, null otherwise.
+   */
+  async loadDeviceByToken(token: string, motebitId: string): Promise<DeviceRegistration | null> {
+    const device = await this.deviceStore.loadDeviceByToken(token);
+    if (!device || device.motebit_id !== motebitId) return null;
+    return device;
+  }
+
+  /**
+   * Load a device by its device_id and motebit_id.
+   */
+  async loadDeviceById(deviceId: string, motebitId: string): Promise<DeviceRegistration | null> {
+    const device = await this.deviceStore.loadDevice(deviceId);
+    if (!device || device.motebit_id !== motebitId) return null;
+    return device;
+  }
+
+  /**
+   * List all devices registered to a motebit identity.
+   */
+  async listDevices(motebitId: string): Promise<DeviceRegistration[]> {
+    return this.deviceStore.listDevices(motebitId);
   }
 }
 

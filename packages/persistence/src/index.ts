@@ -16,7 +16,7 @@ import type {
   MemoryQuery,
 } from "@motebit/memory-graph";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
-import type { IdentityStorage } from "@motebit/core-identity";
+import type { IdentityStorage, DeviceRegistration } from "@motebit/core-identity";
 import type { AuditLogAdapter } from "@motebit/privacy-layer";
 import type { ToolAuditEntry, PolicyDecision } from "@motebit/sdk";
 import type { AuditLogSink } from "@motebit/policy";
@@ -103,6 +103,18 @@ CREATE TABLE IF NOT EXISTS tool_audit_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tool_audit_turn ON tool_audit_log (turn_id);
+
+CREATE TABLE IF NOT EXISTS devices (
+  device_id TEXT PRIMARY KEY,
+  motebit_id TEXT NOT NULL,
+  device_token TEXT NOT NULL UNIQUE,
+  public_key TEXT NOT NULL,
+  registered_at INTEGER NOT NULL,
+  device_name TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_devices_motebit ON devices (motebit_id);
+CREATE INDEX IF NOT EXISTS idx_devices_token ON devices (device_token);
 `;
 
 function initSchema(db: Database.Database): void {
@@ -417,6 +429,10 @@ export class SqliteIdentityStorage implements IdentityStorage {
   private stmtSave: Statement;
   private stmtLoad: Statement;
   private stmtLoadByOwner: Statement;
+  private stmtSaveDevice: Statement;
+  private stmtLoadDevice: Statement;
+  private stmtLoadDeviceByToken: Statement;
+  private stmtListDevices: Statement;
 
   constructor(db: Database.Database) {
     this.stmtSave = db.prepare(
@@ -428,6 +444,19 @@ export class SqliteIdentityStorage implements IdentityStorage {
     );
     this.stmtLoadByOwner = db.prepare(
       `SELECT * FROM identities WHERE owner_id = ? LIMIT 1`,
+    );
+    this.stmtSaveDevice = db.prepare(
+      `INSERT OR REPLACE INTO devices (device_id, motebit_id, device_token, public_key, registered_at, device_name)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmtLoadDevice = db.prepare(
+      `SELECT * FROM devices WHERE device_id = ?`,
+    );
+    this.stmtLoadDeviceByToken = db.prepare(
+      `SELECT * FROM devices WHERE device_token = ?`,
+    );
+    this.stmtListDevices = db.prepare(
+      `SELECT * FROM devices WHERE motebit_id = ?`,
     );
   }
 
@@ -451,6 +480,34 @@ export class SqliteIdentityStorage implements IdentityStorage {
     if (row === undefined) return null;
     return rowToIdentity(row);
   }
+
+  async saveDevice(device: DeviceRegistration): Promise<void> {
+    this.stmtSaveDevice.run(
+      device.device_id,
+      device.motebit_id,
+      device.device_token,
+      device.public_key,
+      device.registered_at,
+      device.device_name ?? null,
+    );
+  }
+
+  async loadDevice(deviceId: string): Promise<DeviceRegistration | null> {
+    const row = this.stmtLoadDevice.get(deviceId) as DeviceRow | undefined;
+    if (row === undefined) return null;
+    return rowToDevice(row);
+  }
+
+  async loadDeviceByToken(token: string): Promise<DeviceRegistration | null> {
+    const row = this.stmtLoadDeviceByToken.get(token) as DeviceRow | undefined;
+    if (row === undefined) return null;
+    return rowToDevice(row);
+  }
+
+  async listDevices(motebitId: string): Promise<DeviceRegistration[]> {
+    const rows = this.stmtListDevices.all(motebitId) as DeviceRow[];
+    return rows.map(rowToDevice);
+  }
 }
 
 interface IdentityRow {
@@ -467,6 +524,29 @@ function rowToIdentity(row: IdentityRow): MotebitIdentity {
     owner_id: row.owner_id,
     version_clock: row.version_clock,
   };
+}
+
+interface DeviceRow {
+  device_id: string;
+  motebit_id: string;
+  device_token: string;
+  public_key: string;
+  registered_at: number;
+  device_name: string | null;
+}
+
+function rowToDevice(row: DeviceRow): DeviceRegistration {
+  const device: DeviceRegistration = {
+    device_id: row.device_id,
+    motebit_id: row.motebit_id,
+    device_token: row.device_token,
+    public_key: row.public_key,
+    registered_at: row.registered_at,
+  };
+  if (row.device_name !== null) {
+    device.device_name = row.device_name;
+  }
+  return device;
 }
 
 // === SqliteAuditLog ===
