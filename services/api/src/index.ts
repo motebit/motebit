@@ -42,6 +42,36 @@ function hexToBytes(hex: string): Uint8Array {
   return bytes;
 }
 
+/** Decode the payload half of a signed token without verifying the signature. */
+function parseTokenPayloadUnsafe(token: string): { mid: string; did: string; iat: number; exp: number } | null {
+  const dotIdx = token.indexOf(".");
+  if (dotIdx === -1) return null;
+  try {
+    const padded = token.slice(0, dotIdx).replace(/-/g, "+").replace(/_/g, "/");
+    const json = atob(padded);
+    return JSON.parse(json) as { mid: string; did: string; iat: number; exp: number };
+  } catch {
+    return null;
+  }
+}
+
+/** Verify a signed token against a specific device's public key. O(1) lookup by did. */
+async function verifySignedTokenForDevice(
+  token: string,
+  motebitId: string,
+  identityManager: IdentityManager,
+): Promise<boolean> {
+  const claims = parseTokenPayloadUnsafe(token);
+  if (!claims || claims.mid !== motebitId || !claims.did) return false;
+
+  const device = await identityManager.loadDeviceById(claims.did, motebitId);
+  if (!device || !device.public_key) return false;
+
+  const pubKeyBytes = hexToBytes(device.public_key);
+  const payload = await verifySignedToken(token, pubKeyBytes);
+  return payload !== null && payload.mid === motebitId;
+}
+
 // === Config ===
 
 export interface SyncRelayConfig {
@@ -113,18 +143,8 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
       }
 
       if (verifyDeviceSignature && token.includes(".")) {
-        // Signed token verification — look up all devices for this motebitId and try to verify
-        const devices = await identityManager.listDevices(motebitId);
-        let verified = false;
-        for (const device of devices) {
-          if (!device.public_key) continue;
-          const pubKeyBytes = hexToBytes(device.public_key);
-          const payload = await verifySignedToken(token, pubKeyBytes);
-          if (payload && payload.mid === motebitId) {
-            verified = true;
-            break;
-          }
-        }
+        // Signed token verification — O(1) lookup by device ID from token payload
+        const verified = await verifySignedTokenForDevice(token, motebitId, identityManager);
         if (!verified) {
           throw new HTTPException(403, { message: "Device not authorized for this motebit" });
         }
@@ -171,18 +191,8 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
             if (apiToken && token === apiToken) {
               // OK — master token
             } else if (verifyDeviceSignature && token.includes(".")) {
-              // Signed token verification
-              const devices = await identityManager.listDevices(motebitId);
-              let verified = false;
-              for (const device of devices) {
-                if (!device.public_key) continue;
-                const pubKeyBytes = hexToBytes(device.public_key);
-                const payload = await verifySignedToken(token, pubKeyBytes);
-                if (payload && payload.mid === motebitId) {
-                  verified = true;
-                  break;
-                }
-              }
+              // Signed token verification — O(1) lookup by device ID from token payload
+              const verified = await verifySignedTokenForDevice(token, motebitId, identityManager);
               if (!verified) {
                 ws.close(4003, "Unauthorized");
                 return;
