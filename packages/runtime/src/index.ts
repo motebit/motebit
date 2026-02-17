@@ -156,6 +156,7 @@ export type StreamChunk =
   | { type: "text"; text: string }
   | { type: "tool_status"; name: string; status: "calling" | "done"; result?: unknown }
   | { type: "approval_request"; tool_call_id: string; name: string; args: Record<string, unknown> }
+  | { type: "injection_warning"; tool_name: string; patterns: string[] }
   | { type: "result"; result: TurnResult };
 
 // === In-Memory Storage Factory ===
@@ -419,6 +420,11 @@ export class MotebitRuntime {
         // Approval request: the creature pauses, surface tension holds
         if (chunk.type === "approval_request") {
           this.state.pushUpdate({ processing: 0.5, attention: 0.95, affect_arousal: 0.2 });
+        }
+
+        // Injection warning: the creature reacts defensively — guarded, alert
+        if (chunk.type === "injection_warning") {
+          this.state.pushUpdate({ confidence: 0.4, affect_valence: -0.2, attention: 0.95 });
         }
 
         yield chunk;

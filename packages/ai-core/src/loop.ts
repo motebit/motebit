@@ -12,6 +12,20 @@ import { inferStateFromText } from "./infer-state.js";
 
 const MAX_TOOL_ITERATIONS = 10;
 
+// === Inline boundary wrapping (no dependency on @motebit/policy) ===
+
+const EXTERNAL_DATA_START = "[EXTERNAL_DATA source=";
+const EXTERNAL_DATA_END = "[/EXTERNAL_DATA]";
+
+function wrapExternalData(data: unknown, toolName: string): string {
+  const text = typeof data === "string" ? data : JSON.stringify(data);
+  const escaped = text
+    .replace(/\[EXTERNAL_DATA\b/g, "[ESCAPED_DATA")
+    .replace(/\[\/EXTERNAL_DATA\]/g, "[/ESCAPED_DATA]");
+  const safeName = toolName.replace(/[\[\]"\\]/g, "_").slice(0, 100);
+  return `${EXTERNAL_DATA_START}"tool:${safeName}"]\n${escaped}\n${EXTERNAL_DATA_END}`;
+}
+
 // === Types ===
 
 /**
@@ -23,6 +37,11 @@ export interface LoopPolicyGate {
   filterTools(tools: ToolDefinition[]): ToolDefinition[];
   validate(tool: ToolDefinition, args: Record<string, unknown>, ctx: TurnContext): PolicyDecision;
   sanitizeResult(result: ToolResult, toolName: string): ToolResult;
+  sanitizeAndCheck?(result: ToolResult, toolName: string): {
+    result: ToolResult;
+    injectionDetected: boolean;
+    injectionPatterns: string[];
+  };
   createTurnContext(): TurnContext;
   recordToolCall(ctx: TurnContext, cost?: number): TurnContext;
 }
@@ -63,6 +82,7 @@ export type AgenticChunk =
   | { type: "text"; text: string }
   | { type: "tool_status"; name: string; status: "calling" | "done"; result?: unknown }
   | { type: "approval_request"; tool_call_id: string; name: string; args: Record<string, unknown> }
+  | { type: "injection_warning"; tool_name: string; patterns: string[] }
   | { type: "result"; result: TurnResult };
 
 // === Orchestrator ===
@@ -299,7 +319,19 @@ export async function* runTurnStreaming(
         yield { type: "tool_status", name: toolCall.name, status: "calling" };
         const result = await deps.tools.execute(toolCall.name, toolCall.args);
         turnCtx = deps.policyGate.recordToolCall(turnCtx);
-        const sanitized = deps.policyGate.sanitizeResult(result, toolCall.name);
+
+        // Use sanitizeAndCheck if available (duck-typed), otherwise fall back
+        let sanitized: ToolResult;
+        if (typeof deps.policyGate.sanitizeAndCheck === "function") {
+          const check = deps.policyGate.sanitizeAndCheck(result, toolCall.name);
+          sanitized = check.result;
+          if (check.injectionDetected) {
+            yield { type: "injection_warning", tool_name: toolCall.name, patterns: check.injectionPatterns };
+          }
+        } else {
+          sanitized = deps.policyGate.sanitizeResult(result, toolCall.name);
+        }
+
         yield { type: "tool_status", name: toolCall.name, status: "done", result: sanitized.data ?? sanitized.error };
 
         conversationHistory.push({
@@ -331,10 +363,14 @@ export async function* runTurnStreaming(
       const result = await deps.tools.execute(toolCall.name, toolCall.args);
       yield { type: "tool_status", name: toolCall.name, status: "done", result: result.data ?? result.error };
 
+      // Fallback path: no PolicyGate — still wrap in boundaries for defense-in-depth
+      const wrappedResult = result.data != null
+        ? { ...result, data: wrapExternalData(result.data, toolCall.name) }
+        : result;
       conversationHistory.push({
         role: "tool",
         tool_call_id: toolCall.id,
-        content: JSON.stringify(result),
+        content: JSON.stringify(wrappedResult),
       });
     }
 

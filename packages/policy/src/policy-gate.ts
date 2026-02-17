@@ -282,17 +282,45 @@ export class PolicyGate {
    * and redacts any detected secrets.
    */
   sanitizeResult(result: ToolResult, toolName: string): ToolResult {
-    if (!result.data) return result;
+    return this.sanitizeAndCheck(result, toolName).result;
+  }
+
+  /**
+   * Sanitize a tool result and report whether injection was detected.
+   * Used by the agentic loop to yield injection_warning chunks.
+   */
+  sanitizeAndCheck(result: ToolResult, toolName: string): {
+    result: ToolResult;
+    injectionDetected: boolean;
+    injectionPatterns: string[];
+  } {
+    if (!result.data) {
+      return { result, injectionDetected: false, injectionPatterns: [] };
+    }
 
     const text = typeof result.data === "string" ? result.data : JSON.stringify(result.data);
 
-    // Redact secrets
+    // Redact secrets (always, even if pre-sanitized)
     const { text: redacted } = this.redaction.redact(text);
 
-    // Wrap in injection-safe boundary
-    const sanitized = this.sanitizer.sanitizeToolResult(redacted, toolName);
+    // If already boundary-wrapped by adapter (e.g. MCP client), skip re-wrapping
+    if (result._sanitized) {
+      // Still scan for injection in the redacted text
+      const scanResult = this.sanitizer.sanitize(redacted, `tool:${toolName}`);
+      return {
+        result: { ...result, data: redacted },
+        injectionDetected: scanResult.injectionDetected,
+        injectionPatterns: scanResult.injectionPatterns,
+      };
+    }
 
-    return { ...result, data: sanitized };
+    // Full sanitization: redact + boundary-wrap
+    const sanitized = this.sanitizer.sanitize(redacted, `tool:${toolName}`);
+    return {
+      result: { ...result, data: sanitized.content },
+      injectionDetected: sanitized.injectionDetected,
+      injectionPatterns: sanitized.injectionPatterns,
+    };
   }
 
   /**

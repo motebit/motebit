@@ -161,6 +161,8 @@ async function handleSend(): Promise<void> {
         }
       } else if (chunk.type === "approval_request") {
         showApprovalCard(chunk.name, chunk.args);
+      } else if (chunk.type === "injection_warning") {
+        addMessage("system", `Warning: suspicious content detected in ${chunk.tool_name} results`);
       }
     }
   } catch (err: unknown) {

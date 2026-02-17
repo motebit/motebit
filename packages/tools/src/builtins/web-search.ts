@@ -12,6 +12,8 @@ export const webSearchDefinition: ToolDefinition = {
   },
 };
 
+const MAX_RESULT_SIZE = 8000;
+
 export function createWebSearchHandler(): ToolHandler {
   return async (args) => {
     const query = args.query as string;
@@ -42,7 +44,7 @@ export function createWebSearchHandler(): ToolHandler {
         return { ok: true, data: `No results found for "${query}". Try a more specific query.` };
       }
 
-      return { ok: true, data: results.join("\n\n") };
+      return { ok: true, data: results.join("\n\n").slice(0, MAX_RESULT_SIZE) };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       return { ok: false, error: `Search error: ${msg}` };

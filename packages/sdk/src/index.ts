@@ -205,6 +205,8 @@ export interface ToolResult {
   ok: boolean;
   data?: unknown;
   error?: string;
+  /** Set by adapters that already applied boundary wrapping (e.g. MCP client). */
+  _sanitized?: boolean;
 }
 
 export type ToolHandler = (args: Record<string, unknown>) => Promise<ToolResult>;

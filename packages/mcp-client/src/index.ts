@@ -12,6 +12,20 @@ export interface McpServerConfig {
   env?: Record<string, string>;
 }
 
+// === Inline boundary wrapping for MCP results ===
+
+const EXTERNAL_DATA_START = "[EXTERNAL_DATA source=";
+const EXTERNAL_DATA_END = "[/EXTERNAL_DATA]";
+
+function wrapMcpResult(data: string, serverName: string, toolName: string): string {
+  const escaped = data
+    .replace(/\[EXTERNAL_DATA\b/g, "[ESCAPED_DATA")
+    .replace(/\[\/EXTERNAL_DATA\]/g, "[/ESCAPED_DATA]");
+  const safeServer = serverName.replace(/[\[\]"\\]/g, "_").slice(0, 50);
+  const safeTool = toolName.replace(/[\[\]"\\]/g, "_").slice(0, 50);
+  return `${EXTERNAL_DATA_START}"mcp:${safeServer}:${safeTool}"]\n${escaped}\n${EXTERNAL_DATA_END}`;
+}
+
 export class McpClientAdapter {
   private client: Client;
   private config: McpServerConfig;
@@ -99,10 +113,14 @@ export class McpClientAdapter {
         .map((c) => c.text ?? "")
         .join("\n");
 
+      const wrapped = textContent
+        ? wrapMcpResult(textContent, this.config.name, mcpToolName)
+        : undefined;
       return {
         ok: !result.isError,
-        data: textContent || result.content,
+        data: wrapped || result.content,
         error: result.isError ? textContent : undefined,
+        _sanitized: true,
       };
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
