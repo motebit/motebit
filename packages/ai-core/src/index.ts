@@ -10,7 +10,7 @@ import { SensitivityLevel } from "@motebit/sdk";
 import { buildSystemPrompt as buildPrompt } from "./prompt.js";
 
 export { runTurn, runTurnStreaming } from "./loop.js";
-export type { MotebitLoopDependencies, TurnResult, TurnOptions, AgenticChunk } from "./loop.js";
+export type { MotebitLoopDependencies, TurnResult, TurnOptions, AgenticChunk, LoopMemoryGovernor } from "./loop.js";
 export { inferStateFromText } from "./infer-state.js";
 export { buildSystemPrompt, derivePersonalityNote, formatBodyAwareness } from "./prompt.js";
 export { loadConfig, resolveConfig, DEFAULT_CONFIG } from "./config.js";

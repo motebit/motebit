@@ -29,6 +29,8 @@ import type {
 import { InMemoryToolRegistry } from "@motebit/tools";
 import type { McpServerConfig } from "@motebit/mcp-client";
 import { connectMcpServers, McpClientAdapter } from "@motebit/mcp-client";
+import { PolicyGate, MemoryGovernor } from "@motebit/policy";
+import type { PolicyConfig, MemoryGovernanceConfig } from "@motebit/policy";
 
 // Re-export key types for consumers
 export type { TurnResult, AgenticChunk } from "@motebit/ai-core";
@@ -42,6 +44,8 @@ export type { RenderAdapter, RenderFrame } from "@motebit/render-engine";
 export type { RenderSpec } from "@motebit/sdk";
 export type { McpServerConfig } from "@motebit/mcp-client";
 export { InMemoryToolRegistry } from "@motebit/tools";
+export { PolicyGate } from "@motebit/policy";
+export type { PolicyConfig, MemoryGovernanceConfig } from "@motebit/policy";
 
 // === Platform Adapter Interfaces ===
 
@@ -94,6 +98,10 @@ export interface RuntimeConfig {
   compactionThreshold?: number;
   /** MCP servers to connect to on init. Tools are discovered and merged into the registry. */
   mcpServers?: McpServerConfig[];
+  /** Policy configuration. Controls operator mode, budgets, allow/deny lists. */
+  policy?: Partial<PolicyConfig>;
+  /** Memory governance config. Controls what gets saved, secret rejection. */
+  memoryGovernance?: Partial<MemoryGovernanceConfig>;
 }
 
 // === Stream Chunk ===
@@ -126,6 +134,8 @@ export class MotebitRuntime {
   readonly identity: IdentityManager;
   readonly privacy: PrivacyLayer;
   readonly sync: SyncEngine;
+  readonly policy: PolicyGate;
+  readonly memoryGovernor: MemoryGovernor;
 
   private renderer: RenderAdapter;
   private provider: StreamingProvider | null;
@@ -194,6 +204,10 @@ export class MotebitRuntime {
     this.state.subscribe((state: MotebitState) => {
       this.latestCues = this.behavior.compute(state);
     });
+
+    // Policy & memory governance
+    this.policy = new PolicyGate(config.policy);
+    this.memoryGovernor = new MemoryGovernor(config.memoryGovernance);
 
     // Restore saved state
     if (this.stateSnapshot) {
@@ -271,6 +285,15 @@ export class MotebitRuntime {
   /** Access the tool registry to register additional tools at runtime. */
   getToolRegistry(): InMemoryToolRegistry {
     return this.toolRegistry;
+  }
+
+  get isOperatorMode(): boolean {
+    return this.policy.operatorMode;
+  }
+
+  setOperatorMode(enabled: boolean): void {
+    this.policy.setOperatorMode(enabled);
+    this.wireLoopDeps();
   }
 
   async sendMessage(text: string): Promise<TurnResult> {
@@ -463,6 +486,8 @@ export class MotebitRuntime {
         behaviorEngine: this.behavior,
         provider: this.provider,
         tools: this.toolRegistry.size > 0 ? this.toolRegistry : undefined,
+        policyGate: this.policy,
+        memoryGovernor: this.memoryGovernor,
       };
     }
   }
@@ -485,7 +510,7 @@ export class MotebitRuntime {
         motebit_id: this.motebitId,
         timestamp: Date.now(),
         event_type: EventType.ToolUsed,
-        payload: { tool: toolName, result_preview: String(result).slice(0, 200) },
+        payload: { tool: toolName, result_summary: String(result).slice(0, 500) },
         version_clock: clock + 1,
         tombstoned: false,
       });

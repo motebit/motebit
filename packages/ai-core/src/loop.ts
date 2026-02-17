@@ -1,4 +1,4 @@
-import type { BehaviorCues, MotebitState, MemoryNode, ToolRegistry, ConversationMessage } from "@motebit/sdk";
+import type { BehaviorCues, MotebitState, MemoryNode, MemoryCandidate, ToolRegistry, ToolDefinition, ToolResult, PolicyDecision, TurnContext, ConversationMessage } from "@motebit/sdk";
 import { EventType } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MemoryGraph } from "@motebit/memory-graph";
@@ -14,6 +14,27 @@ const MAX_TOOL_ITERATIONS = 10;
 
 // === Types ===
 
+/**
+ * Minimal policy interface for the agentic loop.
+ * ai-core does NOT depend on @motebit/policy — PolicyGate satisfies this
+ * through structural typing.
+ */
+export interface LoopPolicyGate {
+  filterTools(tools: ToolDefinition[]): ToolDefinition[];
+  validate(tool: ToolDefinition, args: Record<string, unknown>, ctx: TurnContext): PolicyDecision;
+  sanitizeResult(result: ToolResult, toolName: string): ToolResult;
+  createTurnContext(): TurnContext;
+  recordToolCall(ctx: TurnContext, cost?: number): TurnContext;
+}
+
+/**
+ * Minimal memory governance interface for the agentic loop.
+ * MemoryGovernor from @motebit/policy satisfies this through structural typing.
+ */
+export interface LoopMemoryGovernor {
+  evaluate(candidates: MemoryCandidate[]): { candidate: MemoryCandidate; memoryClass: string; reason: string }[];
+}
+
 export interface MotebitLoopDependencies {
   motebitId: string;
   eventStore: EventStore;
@@ -22,6 +43,8 @@ export interface MotebitLoopDependencies {
   behaviorEngine: BehaviorEngine;
   provider: StreamingProvider;
   tools?: ToolRegistry;
+  policyGate?: LoopPolicyGate;
+  memoryGovernor?: LoopMemoryGovernor;
 }
 
 export interface TurnResult {
@@ -72,6 +95,11 @@ export async function runTurn(
 
   // 3. Pack context and call provider
   const currentState = stateEngine.getState();
+  const rawToolDefs = deps.tools ? deps.tools.list() : undefined;
+  const toolDefs = rawToolDefs && deps.policyGate
+    ? deps.policyGate.filterTools(rawToolDefs)
+    : rawToolDefs;
+
   const aiResponse = await provider.generate({
     recent_events: recentEvents,
     relevant_memories: relevantMemories,
@@ -79,12 +107,19 @@ export async function runTurn(
     user_message: userMessage,
     conversation_history: options?.conversationHistory,
     behavior_cues: options?.previousCues,
-    tools: deps.tools ? deps.tools.list() : undefined,
+    tools: toolDefs,
   });
 
-  // 4. Form memories from candidates
+  // 4. Form memories from candidates (governed if governor present)
   const memoriesFormed: MemoryNode[] = [];
-  for (const candidate of aiResponse.memory_candidates) {
+  const candidates = deps.memoryGovernor
+    ? aiResponse.memory_candidates.filter((c) => {
+        const decisions = deps.memoryGovernor!.evaluate([c]);
+        return decisions[0]?.memoryClass === "persistent";
+      })
+    : aiResponse.memory_candidates;
+
+  for (const candidate of candidates) {
     const embedding = await embedText(candidate.content);
     const node = await memoryGraph.formMemory(candidate, embedding);
     memoriesFormed.push(node);
@@ -156,7 +191,12 @@ export async function* runTurnStreaming(
 
   // 3. Pack context and stream from provider (agentic loop)
   const currentState = stateEngine.getState();
-  const toolDefs = deps.tools ? deps.tools.list() : undefined;
+  const rawToolDefs = deps.tools ? deps.tools.list() : undefined;
+  const toolDefs = rawToolDefs && deps.policyGate
+    ? deps.policyGate.filterTools(rawToolDefs)
+    : rawToolDefs;
+
+  let turnCtx = deps.policyGate?.createTurnContext();
 
   const conversationHistory: ConversationMessage[] = [
     ...(options?.conversationHistory ?? []),
@@ -220,10 +260,57 @@ export async function* runTurnStreaming(
       (toolDefs ?? []).map((t) => [t.name, t]),
     );
 
+    let allBlocked = true;
+
     for (const toolCall of aiResponse.tool_calls) {
       const toolDef = toolDefsMap.get(toolCall.name);
 
-      // Check if tool requires approval
+      // Policy gate enforcement (when present)
+      if (deps.policyGate && toolDef && turnCtx) {
+        const decision = deps.policyGate.validate(toolDef, toolCall.args, turnCtx);
+
+        if (!decision.allowed) {
+          yield { type: "tool_status", name: toolCall.name, status: "done", result: decision.reason };
+          conversationHistory.push({
+            role: "tool",
+            tool_call_id: toolCall.id,
+            content: JSON.stringify({ ok: false, error: decision.reason }),
+          });
+          continue;
+        }
+
+        if (decision.requiresApproval) {
+          yield {
+            type: "approval_request",
+            tool_call_id: toolCall.id,
+            name: toolCall.name,
+            args: toolCall.args,
+          };
+          conversationHistory.push({
+            role: "tool",
+            tool_call_id: toolCall.id,
+            content: JSON.stringify({ ok: false, error: "Awaiting approval" }),
+          });
+          continue;
+        }
+
+        // Allowed — execute and record
+        allBlocked = false;
+        yield { type: "tool_status", name: toolCall.name, status: "calling" };
+        const result = await deps.tools.execute(toolCall.name, toolCall.args);
+        turnCtx = deps.policyGate.recordToolCall(turnCtx);
+        const sanitized = deps.policyGate.sanitizeResult(result, toolCall.name);
+        yield { type: "tool_status", name: toolCall.name, status: "done", result: sanitized.data ?? sanitized.error };
+
+        conversationHistory.push({
+          role: "tool",
+          tool_call_id: toolCall.id,
+          content: JSON.stringify(sanitized),
+        });
+        continue;
+      }
+
+      // Fallback: no policy gate — use legacy requiresApproval check
       if (toolDef?.requiresApproval) {
         yield {
           type: "approval_request",
@@ -231,7 +318,6 @@ export async function* runTurnStreaming(
           name: toolCall.name,
           args: toolCall.args,
         };
-        // Skip execution — push a placeholder tool result so the conversation stays valid
         conversationHistory.push({
           role: "tool",
           tool_call_id: toolCall.id,
@@ -240,6 +326,7 @@ export async function* runTurnStreaming(
         continue;
       }
 
+      allBlocked = false;
       yield { type: "tool_status", name: toolCall.name, status: "calling" };
       const result = await deps.tools.execute(toolCall.name, toolCall.args);
       yield { type: "tool_status", name: toolCall.name, status: "done", result: result.data ?? result.error };
@@ -251,11 +338,8 @@ export async function* runTurnStreaming(
       });
     }
 
-    // If all tool calls required approval, don't loop again
-    const allNeedApproval = aiResponse.tool_calls.every(
-      (tc) => toolDefsMap.get(tc.name)?.requiresApproval,
-    );
-    if (allNeedApproval) {
+    // If all tool calls were blocked (denied or approval-gated), don't loop again
+    if (allBlocked) {
       break;
     }
   }
@@ -264,9 +348,16 @@ export async function* runTurnStreaming(
     throw new Error("No response generated");
   }
 
-  // 4. Form memories from candidates
+  // 4. Form memories from candidates (governed if governor present)
   const memoriesFormed: MemoryNode[] = [];
-  for (const candidate of finalResponse.memory_candidates) {
+  const candidates = deps.memoryGovernor
+    ? finalResponse.memory_candidates.filter((c) => {
+        const decisions = deps.memoryGovernor!.evaluate([c]);
+        return decisions[0]?.memoryClass === "persistent";
+      })
+    : finalResponse.memory_candidates;
+
+  for (const candidate of candidates) {
     const embedding = await embedText(candidate.content);
     const node = await memoryGraph.formMemory(candidate, embedding);
     memoriesFormed.push(node);

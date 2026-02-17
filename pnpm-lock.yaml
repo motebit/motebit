@@ -433,6 +433,19 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1)(lightningcss@1.27.0)(terser@5.46.0)
 
+  packages/policy:
+    dependencies:
+      '@motebit/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+    devDependencies:
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1)(lightningcss@1.27.0)(terser@5.46.0)
+
   packages/policy-invariants:
     dependencies:
       '@motebit/sdk':
@@ -513,6 +526,9 @@ importers:
       '@motebit/memory-graph':
         specifier: workspace:*
         version: link:../memory-graph
+      '@motebit/policy':
+        specifier: workspace:*
+        version: link:../policy
       '@motebit/privacy-layer':
         specifier: workspace:*
         version: link:../privacy-layer

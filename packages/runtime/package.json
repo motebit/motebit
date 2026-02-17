@@ -25,7 +25,8 @@
     "@motebit/render-engine": "workspace:*",
     "@motebit/crypto": "workspace:*",
     "@motebit/tools": "workspace:*",
-    "@motebit/mcp-client": "workspace:*"
+    "@motebit/mcp-client": "workspace:*",
+    "@motebit/policy": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

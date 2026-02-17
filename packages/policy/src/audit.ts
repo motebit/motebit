@@ -1,0 +1,115 @@
+import type { ToolAuditEntry, PolicyDecision } from "@motebit/sdk";
+
+/**
+ * AuditLogger — records every policy decision and tool execution for
+ * debugging, compliance, and replay.
+ *
+ * The invariant: every tool call is logged with full context, whether
+ * it succeeded, failed, was denied, or required approval.
+ */
+
+export interface AuditLogSink {
+  append(entry: ToolAuditEntry): void;
+  query(turnId: string): ToolAuditEntry[];
+  getAll(): ToolAuditEntry[];
+}
+
+const DEFAULT_MAX_ENTRIES = 10_000;
+
+export class InMemoryAuditSink implements AuditLogSink {
+  private entries: ToolAuditEntry[] = [];
+  private maxEntries: number;
+
+  constructor(maxEntries = DEFAULT_MAX_ENTRIES) {
+    this.maxEntries = maxEntries;
+  }
+
+  append(entry: ToolAuditEntry): void {
+    this.entries.push(entry);
+    // FIFO eviction when over capacity
+    if (this.entries.length > this.maxEntries) {
+      this.entries = this.entries.slice(-this.maxEntries);
+    }
+  }
+
+  query(turnId: string): ToolAuditEntry[] {
+    return this.entries.filter((e) => e.turnId === turnId);
+  }
+
+  getAll(): ToolAuditEntry[] {
+    return [...this.entries];
+  }
+
+  get size(): number {
+    return this.entries.length;
+  }
+
+  clear(): void {
+    this.entries = [];
+  }
+}
+
+export class AuditLogger {
+  private sink: AuditLogSink;
+
+  constructor(sink?: AuditLogSink) {
+    this.sink = sink ?? new InMemoryAuditSink();
+  }
+
+  /**
+   * Log a policy decision for a tool call.
+   */
+  logDecision(
+    turnId: string,
+    callId: string,
+    tool: string,
+    args: Record<string, unknown>,
+    decision: PolicyDecision,
+  ): void {
+    this.sink.append({
+      turnId,
+      callId,
+      tool,
+      args,
+      decision,
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * Log the result of a tool execution (called after execution completes).
+   */
+  logResult(
+    turnId: string,
+    callId: string,
+    tool: string,
+    args: Record<string, unknown>,
+    decision: PolicyDecision,
+    ok: boolean,
+    durationMs: number,
+  ): void {
+    this.sink.append({
+      turnId,
+      callId,
+      tool,
+      args,
+      decision,
+      result: { ok, durationMs },
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * Get all audit entries for a specific turn.
+   */
+  queryTurn(turnId: string): ToolAuditEntry[] {
+    return this.sink.query(turnId);
+  }
+
+  /**
+   * Get all audit entries.
+   */
+  getAll(): ToolAuditEntry[] {
+    return this.sink.getAll();
+  }
+}

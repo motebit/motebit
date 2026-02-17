@@ -33,6 +33,7 @@ export enum EventType {
   SyncCompleted = "sync_completed",
   AuditEntry = "audit_entry",
   ToolUsed = "tool_used",
+  PolicyViolation = "policy_violation",
 }
 
 export enum RelationType {
@@ -132,6 +133,59 @@ export interface EventLogEntry {
   tombstoned: boolean;
 }
 
+// === Risk Model ===
+
+export enum RiskLevel {
+  R0_READ = 0,
+  R1_DRAFT = 1,
+  R2_WRITE = 2,
+  R3_EXECUTE = 3,
+  R4_MONEY = 4,
+}
+
+export enum DataClass {
+  PUBLIC = "public",
+  PRIVATE = "private",
+  SECRET = "secret",
+}
+
+export enum SideEffect {
+  NONE = "none",
+  REVERSIBLE = "reversible",
+  IRREVERSIBLE = "irreversible",
+}
+
+export interface ToolRiskProfile {
+  risk: RiskLevel;
+  dataClass: DataClass;
+  sideEffect: SideEffect;
+  requiresApproval: boolean;
+}
+
+export interface PolicyDecision {
+  allowed: boolean;
+  requiresApproval: boolean;
+  reason?: string;
+  budgetRemaining?: { calls: number; timeMs: number };
+}
+
+export interface TurnContext {
+  turnId: string;
+  toolCallCount: number;
+  turnStartMs: number;
+  costAccumulated: number;
+}
+
+export interface ToolAuditEntry {
+  turnId: string;
+  callId: string;
+  tool: string;
+  args: Record<string, unknown>;
+  decision: PolicyDecision;
+  result?: { ok: boolean; durationMs: number };
+  timestamp: number;
+}
+
 // === Tools ===
 
 export interface ToolDefinition {
@@ -139,6 +193,12 @@ export interface ToolDefinition {
   description: string;
   inputSchema: Record<string, unknown>; // JSON Schema
   requiresApproval?: boolean;
+  /** Risk hint for PolicyGate classification. If absent, inferred from name/description. */
+  riskHint?: {
+    risk?: RiskLevel;
+    dataClass?: DataClass;
+    sideEffect?: SideEffect;
+  };
 }
 
 export interface ToolResult {

@@ -443,12 +443,12 @@ async function main(): Promise<void> {
         for await (const chunk of runtime.sendMessageStreaming(trimmed)) {
           if (chunk.type === "text") {
             process.stdout.write(chunk.text);
-          } else {
+          } else if (chunk.type === "result") {
             const result = chunk.result;
             console.log("\n");
 
             if (result.memoriesFormed.length > 0) {
-              console.log(`  [memories: ${result.memoriesFormed.map((m) => m.content).join(", ")}]`);
+              console.log(`  [memories: ${result.memoriesFormed.map((m: { content: string }) => m.content).join(", ")}]`);
             }
 
             const s = result.stateAfter;
