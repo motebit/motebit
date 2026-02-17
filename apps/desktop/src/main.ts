@@ -76,14 +76,12 @@ function showApprovalCard(name: string, args: Record<string, unknown>): void {
 
   allowBtn.addEventListener("click", () => {
     disableButtons();
-    chatInput.value = `I approved the ${name} tool call. Please proceed.`;
-    void handleSend();
+    void consumeApproval(true);
   });
 
   denyBtn.addEventListener("click", () => {
     disableButtons();
-    chatInput.value = `I denied the ${name} tool call.`;
-    void handleSend();
+    void consumeApproval(false);
   });
 
   btns.appendChild(allowBtn);
@@ -92,6 +90,40 @@ function showApprovalCard(name: string, args: Record<string, unknown>): void {
 
   chatLog.appendChild(card);
   chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+async function consumeApproval(approved: boolean): Promise<void> {
+  const bubble = document.createElement("div");
+  bubble.className = "chat-bubble assistant";
+  bubble.textContent = "";
+  chatLog.appendChild(bubble);
+
+  let accumulated = "";
+  try {
+    for await (const chunk of app.resumeAfterApproval(approved)) {
+      if (chunk.type === "text") {
+        accumulated += chunk.text;
+        bubble.textContent = stripTags(accumulated);
+        chatLog.scrollTop = chatLog.scrollHeight;
+      } else if (chunk.type === "tool_status") {
+        if (chunk.status === "calling") {
+          showToolStatus(chunk.name);
+        } else if (chunk.status === "done") {
+          completeToolStatus(chunk.name);
+        }
+      } else if (chunk.type === "approval_request") {
+        showApprovalCard(chunk.name, chunk.args);
+      } else if (chunk.type === "injection_warning") {
+        addMessage("system", `Warning: suspicious content detected in ${chunk.tool_name} results`);
+      }
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!bubble.textContent) {
+      bubble.remove();
+    }
+    addMessage("system", `Error: ${msg}`);
+  }
 }
 
 function handleSlashCommand(command: string, args: string): void {

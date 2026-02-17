@@ -10,6 +10,8 @@ export interface McpServerConfig {
   args?: string[];
   url?: string;
   env?: Record<string, string>;
+  /** When false (default), all tools from this server require user approval. */
+  trusted?: boolean;
 }
 
 // === Inline boundary wrapping for MCP results ===
@@ -81,6 +83,7 @@ export class McpClientAdapter {
         type: "object",
         properties: {},
       }) as Record<string, unknown>,
+      ...(this.config.trusted ? {} : { requiresApproval: true }),
     }));
   }
 

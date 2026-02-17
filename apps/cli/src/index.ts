@@ -32,7 +32,8 @@ import {
   createListEventsHandler,
 } from "@motebit/tools";
 import { connectMcpServers, type McpServerConfig } from "@motebit/mcp-client";
-import { generateKeypair } from "@motebit/crypto";
+import { generateKeypair, deriveKey, encrypt, decrypt, generateNonce } from "@motebit/crypto";
+import type { EncryptedPayload } from "@motebit/crypto";
 import { IdentityManager } from "@motebit/core-identity";
 
 // --- Constants ---
@@ -54,9 +55,18 @@ interface FullConfig {
   motebit_id?: string;
   device_id?: string;
   device_public_key?: string;
+  /** @deprecated Plaintext key — migrated to cli_encrypted_key on next launch. */
   cli_private_key?: string;
+  cli_encrypted_key?: {
+    ciphertext: string; // hex
+    nonce: string;      // hex
+    tag: string;        // hex
+    salt: string;       // hex
+  };
   // MCP servers (user-configured)
   mcp_servers?: McpServerConfig[];
+  // Trusted MCP server names (tools don't require approval)
+  mcp_trusted_servers?: string[];
 }
 
 function loadFullConfig(): FullConfig {
@@ -176,6 +186,9 @@ Slash commands (in REPL):
   /model <name>      Switch AI model mid-session
   /sync              Sync with remote server
   /tools             List registered tools
+  /mcp list          List MCP servers and trust status
+  /mcp trust <name>  Mark MCP server as trusted (tools skip approval)
+  /mcp untrust <name> Mark MCP server as untrusted (tools require approval)
   /operator          Show operator mode status
   quit, exit         Exit the REPL
 `.trim());
@@ -275,9 +288,54 @@ function toHex(bytes: Uint8Array): string {
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+function fromHex(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+  }
+  return bytes;
+}
+
+function promptPassphrase(rl: readline.Interface, prompt: string): Promise<string> {
+  return new Promise((resolve) => {
+    rl.question(prompt, (answer) => resolve(answer));
+  });
+}
+
+async function encryptPrivateKey(
+  privKeyHex: string,
+  passphrase: string,
+): Promise<FullConfig["cli_encrypted_key"]> {
+  const salt = generateNonce(); // 12 bytes
+  const key = await deriveKey(passphrase, salt);
+  const payload: EncryptedPayload = await encrypt(new TextEncoder().encode(privKeyHex), key);
+  return {
+    ciphertext: toHex(payload.ciphertext),
+    nonce: toHex(payload.nonce),
+    tag: toHex(payload.tag),
+    salt: toHex(salt),
+  };
+}
+
+async function decryptPrivateKey(
+  encKey: NonNullable<FullConfig["cli_encrypted_key"]>,
+  passphrase: string,
+): Promise<string> {
+  const salt = fromHex(encKey.salt);
+  const key = await deriveKey(passphrase, salt);
+  const payload: EncryptedPayload = {
+    ciphertext: fromHex(encKey.ciphertext),
+    nonce: fromHex(encKey.nonce),
+    tag: fromHex(encKey.tag),
+  };
+  const decrypted = await decrypt(payload, key);
+  return new TextDecoder().decode(decrypted);
+}
+
 async function bootstrapIdentity(
   moteDb: MotebitDatabase,
   fullConfig: FullConfig,
+  passphrase: string,
 ): Promise<{ motebitId: string; isFirstLaunch: boolean }> {
   const eventStore = new EventStore(moteDb.eventStore);
   const identityManager = new IdentityManager(moteDb.identityStorage, eventStore);
@@ -300,11 +358,12 @@ async function bootstrapIdentity(
 
   const device = await identityManager.registerDevice(identity.motebit_id, "cli", pubKeyHex);
 
-  // Persist to config
+  // Persist to config — encrypt private key
   fullConfig.motebit_id = identity.motebit_id;
   fullConfig.device_id = device.device_id;
   fullConfig.device_public_key = pubKeyHex;
-  fullConfig.cli_private_key = privKeyHex;
+  fullConfig.cli_encrypted_key = await encryptPrivateKey(privKeyHex, passphrase);
+  delete fullConfig.cli_private_key;
   saveFullConfig(fullConfig);
 
   return { motebitId: identity.motebit_id, isFirstLaunch: true };
@@ -483,7 +542,7 @@ async function consumeStream(
     }
   }
 
-  // Handle approval request after stream ends
+  // Handle approval request after stream ends — deterministic resumption
   if (pendingApproval) {
     const argsPreview = JSON.stringify(pendingApproval.args).slice(0, 80);
     const answer = await rlQuestion(
@@ -491,19 +550,9 @@ async function consumeStream(
       `  [approval] ${pendingApproval.name}(${argsPreview})\n  Allow? (y/n) `,
     );
 
-    if (answer.trim().toLowerCase() === "y") {
-      const followUp = runtime.sendMessageStreaming(
-        `I approved the ${pendingApproval.name} tool call. Please proceed.`,
-      );
-      process.stdout.write("\nmote> ");
-      await consumeStream(followUp, runtime, rl);
-    } else {
-      const followUp = runtime.sendMessageStreaming(
-        `I denied the ${pendingApproval.name} tool call.`,
-      );
-      process.stdout.write("\nmote> ");
-      await consumeStream(followUp, runtime, rl);
-    }
+    const approved = answer.trim().toLowerCase() === "y";
+    process.stdout.write("\nmote> ");
+    await consumeStream(runtime.resumeAfterApproval(approved), runtime, rl);
   }
 }
 
@@ -514,6 +563,7 @@ async function handleSlashCommand(
   args: string,
   runtime: MotebitRuntime,
   config: CliConfig,
+  fullConfig?: FullConfig,
 ): Promise<void> {
   switch (cmd) {
     case "help":
@@ -528,6 +578,9 @@ Available commands:
   /model <name>      Switch AI model
   /sync              Sync with remote server
   /tools             List registered tools
+  /mcp list          List MCP servers and trust status
+  /mcp trust <name>  Trust an MCP server
+  /mcp untrust <name> Untrust an MCP server
   /operator          Show operator mode status
   quit, exit         Exit
 `.trim());
@@ -627,6 +680,46 @@ Available commands:
       }
       break;
 
+    case "mcp": {
+      if (!fullConfig) {
+        console.log("MCP config not available.");
+        break;
+      }
+      const [subCmd, ...subArgs] = args.split(/\s+/);
+      const serverName = subArgs.join(" ");
+
+      if (!subCmd || subCmd === "list") {
+        const servers = fullConfig.mcp_servers ?? [];
+        const trusted = fullConfig.mcp_trusted_servers ?? [];
+        if (servers.length === 0) {
+          console.log("No MCP servers configured.");
+        } else {
+          console.log(`\nMCP servers (${servers.length}):\n`);
+          for (const s of servers) {
+            const isTrusted = trusted.includes(s.name);
+            console.log(`  ${s.name.padEnd(24)} ${isTrusted ? "trusted" : "untrusted"}`);
+          }
+        }
+      } else if (subCmd === "trust") {
+        if (!serverName) { console.log("Usage: /mcp trust <server-name>"); break; }
+        const trusted = fullConfig.mcp_trusted_servers ?? [];
+        if (!trusted.includes(serverName)) {
+          fullConfig.mcp_trusted_servers = [...trusted, serverName];
+          saveFullConfig(fullConfig);
+        }
+        console.log(`Marked "${serverName}" as trusted. Restart to apply.`);
+      } else if (subCmd === "untrust") {
+        if (!serverName) { console.log("Usage: /mcp untrust <server-name>"); break; }
+        const trusted = fullConfig.mcp_trusted_servers ?? [];
+        fullConfig.mcp_trusted_servers = trusted.filter((n) => n !== serverName);
+        saveFullConfig(fullConfig);
+        console.log(`Marked "${serverName}" as untrusted. Restart to apply.`);
+      } else {
+        console.log("Usage: /mcp [list|trust <name>|untrust <name>]");
+      }
+      break;
+    }
+
     default:
       console.log(`Unknown command: /${cmd}. Type /help for available commands.`);
   }
@@ -665,23 +758,67 @@ async function main(): Promise<void> {
     config.model = personalityConfig.default_model;
   }
 
+  // Create readline early for passphrase prompts
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+  // Resolve passphrase for key encryption
+  const envPassphrase = process.env["MOTEBIT_PASSPHRASE"];
+  let passphrase: string;
+
+  if (fullConfig.cli_encrypted_key) {
+    // Existing encrypted key — need passphrase to decrypt
+    passphrase = envPassphrase ?? await promptPassphrase(rl, "Passphrase: ");
+    try {
+      await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
+    } catch {
+      console.error("Error: incorrect passphrase.");
+      rl.close();
+      process.exit(1);
+    }
+  } else if (fullConfig.cli_private_key) {
+    // Migration: plaintext key exists — encrypt it
+    console.log("Migrating private key to encrypted storage...");
+    passphrase = envPassphrase ?? await promptPassphrase(rl, "Set a passphrase for key encryption: ");
+    if (!passphrase) {
+      console.error("Error: passphrase cannot be empty.");
+      rl.close();
+      process.exit(1);
+    }
+    fullConfig.cli_encrypted_key = await encryptPrivateKey(fullConfig.cli_private_key, passphrase);
+    delete fullConfig.cli_private_key;
+    saveFullConfig(fullConfig);
+    console.log("Private key encrypted and plaintext removed.");
+  } else {
+    // First launch — prompt for new passphrase
+    passphrase = envPassphrase ?? await promptPassphrase(rl, "Set a passphrase for your mote's key: ");
+    if (!passphrase) {
+      console.error("Error: passphrase cannot be empty.");
+      rl.close();
+      process.exit(1);
+    }
+  }
+
   // Bootstrap identity — need DB first for identity storage
   const dbPath = getDbPath(config.dbPath);
   const tempDb = createMotebitDatabase(dbPath);
-  const { motebitId, isFirstLaunch } = await bootstrapIdentity(tempDb, fullConfig);
+  const { motebitId, isFirstLaunch } = await bootstrapIdentity(tempDb, fullConfig, passphrase);
   tempDb.close();
 
   if (isFirstLaunch) {
     console.log(`\nYour mote has been created: ${motebitId.slice(0, 8)}...`);
-    console.log("Identity and keypair stored in ~/.motebit/config.json\n");
+    console.log("Identity and encrypted keypair stored in ~/.motebit/config.json\n");
   }
 
   // Build tool registry with deferred runtime ref
   const runtimeRef: { current: MotebitRuntime | null } = { current: null };
   const toolRegistry = buildToolRegistry(config, runtimeRef, motebitId);
 
-  // MCP servers from config
-  const mcpServers = fullConfig.mcp_servers ?? [];
+  // MCP servers from config — overlay trust from trusted list
+  const trustedServers = fullConfig.mcp_trusted_servers ?? [];
+  const mcpServers = (fullConfig.mcp_servers ?? []).map((s) => ({
+    ...s,
+    trusted: trustedServers.includes(s.name),
+  }));
 
   // Create runtime with tools, policy, MCP config
   const { runtime, moteDb } = createRuntime(config, motebitId, toolRegistry, mcpServers, personalityConfig);
@@ -735,8 +872,6 @@ async function main(): Promise<void> {
     void shutdown().then(() => process.exit(0));
   });
 
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-
   const toolCount = toolRegistry.size;
   console.log(`Tools: ${toolCount} registered${config.operator ? " (operator mode)" : ""}`);
   console.log("Motebit CLI — type a message, /help for commands, or quit to exit\n");
@@ -759,7 +894,7 @@ async function main(): Promise<void> {
 
     if (isSlashCommand(trimmed)) {
       const { command, args } = parseSlashCommand(trimmed);
-      await handleSlashCommand(command, args, runtime, config);
+      await handleSlashCommand(command, args, runtime, config, fullConfig);
       console.log();
       prompt();
       return;

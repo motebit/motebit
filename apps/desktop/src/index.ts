@@ -390,6 +390,11 @@ export class DesktopApp {
     if (!this.runtime) throw new Error("AI not initialized — call initAI() first");
     yield* this.runtime.sendMessageStreaming(text);
   }
+
+  async *resumeAfterApproval(approved: boolean): AsyncGenerator<StreamChunk> {
+    if (!this.runtime) throw new Error("AI not initialized — call initAI() first");
+    yield* this.runtime.resumeAfterApproval(approved);
+  }
 }
 
 // === Slash Command Utilities ===

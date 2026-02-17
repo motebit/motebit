@@ -1,5 +1,6 @@
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 import * as fs from "node:fs/promises";
+import * as fsSync from "node:fs";
 import * as path from "node:path";
 
 export const writeFileDefinition: ToolDefinition = {
@@ -24,14 +25,37 @@ export function createWriteFileHandler(allowedPaths?: string[]): ToolHandler {
     if (!filePath || content === undefined)
       return { ok: false, error: "Missing required parameters: path, content" };
 
-    const resolved = path.resolve(filePath);
-
+    // Sandbox check: resolve symlinks to prevent escape (handle ENOENT for new files)
     if (allowedPaths && allowedPaths.length > 0) {
-      const allowed = allowedPaths.some((p) => resolved.startsWith(path.resolve(p)));
+      let canonical: string;
+      try {
+        canonical = fsSync.realpathSync(path.resolve(filePath));
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          try {
+            const parentCanonical = fsSync.realpathSync(path.dirname(path.resolve(filePath)));
+            canonical = path.join(parentCanonical, path.basename(filePath));
+          } catch {
+            return { ok: false, error: `Cannot resolve parent directory for "${filePath}"` };
+          }
+        } else {
+          return { ok: false, error: `Cannot resolve path "${filePath}"` };
+        }
+      }
+      const allowed = allowedPaths.some((p) => {
+        try {
+          const resolvedAllow = fsSync.realpathSync(path.resolve(p));
+          if (canonical === resolvedAllow) return true;
+          const prefix = resolvedAllow.endsWith("/") ? resolvedAllow : resolvedAllow + "/";
+          return canonical.startsWith(prefix);
+        } catch { return false; }
+      });
       if (!allowed) {
-        return { ok: false, error: `Access denied: "${resolved}" is outside allowed paths` };
+        return { ok: false, error: `Access denied: "${canonical}" is outside allowed paths` };
       }
     }
+
+    const resolved = path.resolve(filePath);
 
     try {
       await fs.mkdir(path.dirname(resolved), { recursive: true });

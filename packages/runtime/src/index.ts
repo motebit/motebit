@@ -25,6 +25,7 @@ import type {
   StreamingProvider,
   MotebitLoopDependencies,
   TurnResult,
+  AgenticChunk,
 } from "@motebit/ai-core";
 // Node-only packages (@motebit/tools, @motebit/mcp-client) are imported dynamically
 // to avoid bundling node:child_process / stdio into browser builds (desktop app).
@@ -54,6 +55,8 @@ export interface McpServerConfig {
   args?: string[];
   url?: string;
   env?: Record<string, string>;
+  /** When false (default), all tools from this server require user approval. */
+  trusted?: boolean;
 }
 
 // === Browser-safe Tool Registry ===
@@ -222,6 +225,12 @@ export class MotebitRuntime {
   private mcpAdapters: McpClientAdapter[] = [];
   private mcpConfigs: McpServerConfig[];
   private keyring: KeyringAdapter | null;
+  private _pendingApproval: {
+    toolCallId: string;
+    toolName: string;
+    args: Record<string, unknown>;
+    userMessage: string;
+  } | null = null;
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
     this.motebitId = config.motebitId;
@@ -445,74 +454,156 @@ export class MotebitRuntime {
     if (this._isProcessing) throw new Error("Already processing a message");
 
     this._isProcessing = true;
+    this._pendingApproval = null;
     this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
 
     try {
-      let result: TurnResult | null = null;
-      let accumulated = "";
-      const appliedActions = new Set<string>();
-
-      for await (const chunk of runTurnStreaming(this.loopDeps, text, {
+      const stream = runTurnStreaming(this.loopDeps, text, {
         conversationHistory: this.conversationHistory,
         previousCues: this.latestCues,
-      })) {
-        if (chunk.type === "text") {
-          accumulated += chunk.text;
-
-          const stateUpdates = extractStateTags(accumulated);
-          if (Object.keys(stateUpdates).length > 0) {
-            this.state.pushUpdate(stateUpdates);
-          }
-
-          const actions = extractActions(accumulated);
-          const newActions = actions.filter((a) => !appliedActions.has(a));
-          if (newActions.length > 0) {
-            for (const a of newActions) appliedActions.add(a);
-            const actionDeltas = actionsToStateUpdates(newActions);
-            if (Object.keys(actionDeltas).length > 0) {
-              const current = this.state.getState();
-              const absolute: Record<string, number> = {};
-              for (const [field, delta] of Object.entries(actionDeltas)) {
-                const base = (current as unknown as Record<string, unknown>)[field];
-                absolute[field] = (typeof base === "number" ? base : 0) + (delta as number);
-              }
-              this.state.pushUpdate(absolute as Partial<MotebitState>);
-            }
-          }
-        }
-
-        // Creature reacts to tool activity
-        if (chunk.type === "tool_status") {
-          if (chunk.status === "calling") {
-            // Reaching out: processing spikes, glow intensifies
-            this.state.pushUpdate({ processing: 0.95, attention: 0.9, curiosity: 0.7 });
-          } else if (chunk.status === "done") {
-            // Absorbing results: processing eases, confidence shifts
-            this.state.pushUpdate({ processing: 0.6, confidence: 0.7 });
-            void this.logToolUsed(chunk.name, chunk.result);
-          }
-        }
-
-        // Approval request: the creature pauses, surface tension holds
-        if (chunk.type === "approval_request") {
-          this.state.pushUpdate({ processing: 0.5, attention: 0.95, affect_arousal: 0.2 });
-        }
-
-        // Injection warning: the creature reacts defensively — guarded, alert
-        if (chunk.type === "injection_warning") {
-          this.state.pushUpdate({ confidence: 0.4, affect_valence: -0.2, attention: 0.95 });
-        }
-
-        yield chunk;
-        if (chunk.type === "result") result = chunk.result;
-      }
-
-      if (result) {
-        this.pushToHistory(text, result.response);
-      }
+      });
+      yield* this.processStream(stream, text);
     } finally {
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
+    }
+  }
+
+  /**
+   * Resume after a tool approval decision. Executes the tool deterministically
+   * (no LLM re-prompting) and continues the agentic loop with the result.
+   */
+  async *resumeAfterApproval(approved: boolean): AsyncGenerator<StreamChunk> {
+    if (!this._pendingApproval) throw new Error("No pending approval to resume");
+    if (!this.loopDeps) throw new Error("AI not initialized");
+
+    const pending = this._pendingApproval;
+    this._pendingApproval = null;
+    this._isProcessing = true;
+    this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
+
+    try {
+      if (approved) {
+        // Execute the tool directly
+        yield { type: "tool_status" as const, name: pending.toolName, status: "calling" as const };
+        const result = await this.toolRegistry.execute(pending.toolName, pending.args);
+
+        // Sanitize through policy if available
+        let sanitized: ToolResult = result;
+        if (typeof this.policy.sanitizeAndCheck === "function") {
+          const check = this.policy.sanitizeAndCheck(result, pending.toolName);
+          sanitized = check.result;
+          if (check.injectionDetected) {
+            yield { type: "injection_warning" as const, tool_name: pending.toolName, patterns: check.injectionPatterns };
+          }
+        } else if (typeof this.policy.sanitizeResult === "function") {
+          sanitized = this.policy.sanitizeResult(result, pending.toolName);
+        }
+
+        yield { type: "tool_status" as const, name: pending.toolName, status: "done" as const, result: sanitized.data ?? sanitized.error };
+        void this.logToolUsed(pending.toolName, sanitized.data ?? sanitized.error);
+
+        // Push tool call + result into conversation history for continuation
+        this.conversationHistory.push(
+          { role: "assistant" as const, content: `[tool_use: ${pending.toolName}(${JSON.stringify(pending.args)})]` },
+          { role: "user" as const, content: `[tool_result: ${JSON.stringify(sanitized)}]` },
+        );
+      } else {
+        // Push denial into conversation history
+        this.conversationHistory.push(
+          { role: "assistant" as const, content: `[tool_use: ${pending.toolName}(${JSON.stringify(pending.args)})]` },
+          { role: "user" as const, content: `[tool_result: {"ok":false,"error":"User denied this tool call."}]` },
+        );
+      }
+
+      // Run continuation turn with updated history
+      const stream = runTurnStreaming(this.loopDeps, pending.userMessage, {
+        conversationHistory: this.conversationHistory,
+        previousCues: this.latestCues,
+      });
+      yield* this.processStream(stream, pending.userMessage);
+    } finally {
+      this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
+      this._isProcessing = false;
+    }
+  }
+
+  get hasPendingApproval(): boolean {
+    return this._pendingApproval !== null;
+  }
+
+  get pendingApprovalInfo(): { toolName: string; args: Record<string, unknown> } | null {
+    if (!this._pendingApproval) return null;
+    return { toolName: this._pendingApproval.toolName, args: this._pendingApproval.args };
+  }
+
+  /** Shared stream processing — extracts state tags, actions, handles tool/approval/injection chunks. */
+  private async *processStream(
+    stream: AsyncGenerator<AgenticChunk>,
+    userMessage: string,
+  ): AsyncGenerator<StreamChunk> {
+    let result: TurnResult | null = null;
+    let accumulated = "";
+    const appliedActions = new Set<string>();
+
+    for await (const chunk of stream) {
+      if (chunk.type === "text") {
+        accumulated += chunk.text;
+
+        const stateUpdates = extractStateTags(accumulated);
+        if (Object.keys(stateUpdates).length > 0) {
+          this.state.pushUpdate(stateUpdates);
+        }
+
+        const actions = extractActions(accumulated);
+        const newActions = actions.filter((a) => !appliedActions.has(a));
+        if (newActions.length > 0) {
+          for (const a of newActions) appliedActions.add(a);
+          const actionDeltas = actionsToStateUpdates(newActions);
+          if (Object.keys(actionDeltas).length > 0) {
+            const current = this.state.getState();
+            const absolute: Record<string, number> = {};
+            for (const [field, delta] of Object.entries(actionDeltas)) {
+              const base = (current as unknown as Record<string, unknown>)[field];
+              absolute[field] = (typeof base === "number" ? base : 0) + (delta as number);
+            }
+            this.state.pushUpdate(absolute as Partial<MotebitState>);
+          }
+        }
+      }
+
+      // Creature reacts to tool activity
+      if (chunk.type === "tool_status") {
+        if (chunk.status === "calling") {
+          this.state.pushUpdate({ processing: 0.95, attention: 0.9, curiosity: 0.7 });
+        } else if (chunk.status === "done") {
+          this.state.pushUpdate({ processing: 0.6, confidence: 0.7 });
+          void this.logToolUsed(chunk.name, chunk.result);
+        }
+      }
+
+      // Approval request: capture pending state before yielding
+      if (chunk.type === "approval_request") {
+        this._pendingApproval = {
+          toolCallId: chunk.tool_call_id,
+          toolName: chunk.name,
+          args: chunk.args,
+          userMessage,
+        };
+        this.state.pushUpdate({ processing: 0.5, attention: 0.95, affect_arousal: 0.2 });
+      }
+
+      // Injection warning
+      if (chunk.type === "injection_warning") {
+        this.state.pushUpdate({ confidence: 0.4, affect_valence: -0.2, attention: 0.95 });
+      }
+
+      yield chunk;
+      if (chunk.type === "result") result = chunk.result;
+    }
+
+    if (result) {
+      this.pushToHistory(userMessage, result.response);
     }
   }
 
