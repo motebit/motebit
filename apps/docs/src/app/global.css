@@ -15,6 +15,10 @@
  *   iridescence: 0.3 — thin-film spectral shift
  */
 
+.dark .prose {
+  --tw-prose-body: color-mix(in oklab, #e4e4e7 90%, transparent);
+}
+
 .dark,
 .dark #nd-sidebar {
   --color-fd-background: #09090b;
