@@ -4,7 +4,7 @@ import { ClosingCTA } from "../components/closing-cta";
 
 export default function HomePage() {
   return (
-    <div className="bg-[#09090b] text-zinc-100 overflow-hidden">
+    <div className="text-zinc-100 overflow-hidden">
       <HeroSection />
 
       {/* ── The Inversion ── */}

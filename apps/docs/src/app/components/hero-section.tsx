@@ -2,33 +2,17 @@
 
 import Link from "next/link";
 import { motion, useScroll, useTransform } from "framer-motion";
-import { HeroCreature } from "./hero-creature";
 
 const ease = [0.16, 1, 0.3, 1] as const;
 
 export function HeroSection() {
   const { scrollY } = useScroll();
 
-  const creatureY = useTransform(scrollY, [0, 700], [0, -80]);
-  const creatureScale = useTransform(scrollY, [0, 700], [1, 0.82]);
-  const creatureOpacity = useTransform(scrollY, [0, 500], [1, 0]);
   const textOpacity = useTransform(scrollY, [0, 400], [1, 0]);
   const textY = useTransform(scrollY, [0, 400], [0, 80]);
 
   return (
-    <section className="relative min-h-screen flex flex-col items-center justify-center px-6">
-      {/* Creature — entrance + scroll-linked parallax */}
-      <motion.div style={{ y: creatureY, scale: creatureScale, opacity: creatureOpacity }}>
-        <motion.div
-          initial={{ opacity: 0, scale: 0.88 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 1.6, ease }}
-        >
-          <HeroCreature />
-        </motion.div>
-      </motion.div>
-
-      {/* Text — entrance + scroll-linked parallax */}
+    <section className="relative min-h-screen flex flex-col items-center justify-end pb-[10vh] px-6">
       <motion.div style={{ opacity: textOpacity, y: textY }}>
         <motion.div
           initial={{ opacity: 0, y: 24 }}
@@ -36,7 +20,7 @@ export function HeroSection() {
           transition={{ duration: 1.2, ease, delay: 0.4 }}
           className="flex flex-col items-center text-center"
         >
-          <h1 className="mt-6 text-[clamp(2.2rem,6vw,5rem)] font-bold tracking-[-0.045em] leading-[1.0] text-center max-w-3xl text-white">
+          <h1 className="text-[clamp(2.2rem,6vw,5rem)] font-bold tracking-[-0.045em] leading-[1.0] text-center max-w-3xl text-white">
             A droplet of intelligence
             <br />
             under surface tension.
