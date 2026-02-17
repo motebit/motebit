@@ -6,16 +6,82 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { parseArgs } from "node:util";
 import { MotebitRuntime, NullRenderer } from "@motebit/runtime";
-import type { StorageAdapters } from "@motebit/runtime";
-import { CloudProvider, OllamaProvider, loadConfig, formatBodyAwareness } from "@motebit/ai-core";
+import type { StorageAdapters, StreamChunk } from "@motebit/runtime";
+import { CloudProvider, OllamaProvider, formatBodyAwareness } from "@motebit/ai-core";
 import type { StreamingProvider, MotebitPersonalityConfig } from "@motebit/ai-core";
+import { DEFAULT_CONFIG } from "@motebit/ai-core";
 import { createMotebitDatabase, type MotebitDatabase } from "@motebit/persistence";
 import { HttpEventStoreAdapter } from "@motebit/sync-engine";
+import { EventStore } from "@motebit/event-log";
+import { EventType } from "@motebit/sdk";
+import {
+  InMemoryToolRegistry,
+  readFileDefinition,
+  createReadFileHandler,
+  writeFileDefinition,
+  createWriteFileHandler,
+  shellExecDefinition,
+  createShellExecHandler,
+  webSearchDefinition,
+  createWebSearchHandler,
+  readUrlDefinition,
+  createReadUrlHandler,
+  recallMemoriesDefinition,
+  createRecallMemoriesHandler,
+  listEventsDefinition,
+  createListEventsHandler,
+} from "@motebit/tools";
+import { connectMcpServers, type McpServerConfig } from "@motebit/mcp-client";
+import { generateKeypair } from "@motebit/crypto";
+import { IdentityManager } from "@motebit/core-identity";
 
 // --- Constants ---
 
-const MOTEBIT_ID = "motebit-cli";
 const VERSION = "0.1.0";
+const CONFIG_DIR = path.join(os.homedir(), ".motebit");
+const CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
+
+// --- Full Config ---
+
+interface FullConfig {
+  // Personality (existing)
+  name?: string;
+  personality_notes?: string;
+  default_provider?: "anthropic" | "ollama";
+  default_model?: string;
+  temperature?: number;
+  // Identity (written on first launch)
+  motebit_id?: string;
+  device_id?: string;
+  device_public_key?: string;
+  cli_private_key?: string;
+  // MCP servers (user-configured)
+  mcp_servers?: McpServerConfig[];
+}
+
+function loadFullConfig(): FullConfig {
+  try {
+    const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
+    return JSON.parse(raw) as FullConfig;
+  } catch {
+    return {};
+  }
+}
+
+function saveFullConfig(config: FullConfig): void {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
+}
+
+function extractPersonality(full: FullConfig): MotebitPersonalityConfig {
+  return {
+    name: full.name,
+    personality_notes: full.personality_notes,
+    default_provider: full.default_provider,
+    default_model: full.default_model,
+    temperature: full.temperature,
+  };
+}
 
 // --- Arg Parsing ---
 
@@ -26,6 +92,8 @@ export interface CliConfig {
   noStream: boolean;
   syncUrl: string | undefined;
   syncToken: string | undefined;
+  operator: boolean;
+  allowedPaths: string[];
   version: boolean;
   help: boolean;
 }
@@ -41,6 +109,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       "no-stream": { type: "boolean", default: false },
       "sync-url": { type: "string" },
       "sync-token": { type: "string" },
+      operator: { type: "boolean", default: false },
+      "allowed-paths": { type: "string" },
       version: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -54,6 +124,9 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
   }
 
   const defaultModel = provider === "ollama" ? "llama3.2" : "claude-sonnet-4-5-20250514";
+  const allowedPaths = values["allowed-paths"]
+    ? values["allowed-paths"].split(",").map((p) => p.trim())
+    : [process.cwd()];
 
   return {
     provider,
@@ -62,6 +135,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     noStream: values["no-stream"],
     syncUrl: values["sync-url"],
     syncToken: values["sync-token"],
+    operator: values.operator,
+    allowedPaths,
     version: values.version,
     help: values.help,
   };
@@ -74,20 +149,22 @@ export function printHelp(): void {
 Usage: motebit [options]
 
 Options:
-  --provider <name>  AI provider: "anthropic" or "ollama" (default: anthropic)
-  --model <model>    AI model to use (default depends on provider)
-  --db-path <path>   Database file path (default: ~/.motebit/motebit.db)
-  --no-stream        Disable streaming (use blocking mode)
-  --sync-url <url>   Remote sync server URL (or set MOTEBIT_SYNC_URL)
-  --sync-token <tok> Auth token for sync server (or set MOTEBIT_SYNC_TOKEN)
-  -v, --version      Print version and exit
-  -h, --help         Print this help and exit
+  --provider <name>       AI provider: "anthropic" or "ollama" (default: anthropic)
+  --model <model>         AI model to use (default depends on provider)
+  --db-path <path>        Database file path (default: ~/.motebit/motebit.db)
+  --no-stream             Disable streaming (use blocking mode)
+  --sync-url <url>        Remote sync server URL (or set MOTEBIT_SYNC_URL)
+  --sync-token <tok>      Auth token for sync server (or set MOTEBIT_SYNC_TOKEN)
+  --operator              Enable operator mode (write/exec tools)
+  --allowed-paths <paths> Comma-separated allowed file paths (default: cwd)
+  -v, --version           Print version and exit
+  -h, --help              Print this help and exit
 
 Providers:
-  anthropic          Uses Anthropic API (requires ANTHROPIC_API_KEY)
-                     Default model: claude-sonnet-4-5-20250514
-  ollama             Uses local Ollama server (no API key needed)
-                     Default model: llama3.2
+  anthropic               Uses Anthropic API (requires ANTHROPIC_API_KEY)
+                          Default model: claude-sonnet-4-5-20250514
+  ollama                  Uses local Ollama server (no API key needed)
+                          Default model: llama3.2
 
 Slash commands (in REPL):
   /help              Show available commands
@@ -98,6 +175,8 @@ Slash commands (in REPL):
   /clear             Clear conversation history
   /model <name>      Switch AI model mid-session
   /sync              Sync with remote server
+  /tools             List registered tools
+  /operator          Show operator mode status
   quit, exit         Exit the REPL
 `.trim());
 }
@@ -161,9 +240,8 @@ function getDbPath(override?: string): string {
   if (override) return override;
   const envPath = process.env["MOTEBIT_DB_PATH"];
   if (envPath) return envPath;
-  const dir = path.join(os.homedir(), ".motebit");
-  fs.mkdirSync(dir, { recursive: true });
-  return path.join(dir, "motebit.db");
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  return path.join(CONFIG_DIR, "motebit.db");
 }
 
 // --- Provider Factory ---
@@ -191,15 +269,119 @@ function createProvider(config: CliConfig, personalityConfig?: MotebitPersonalit
   });
 }
 
-// --- Bootstrap ---
+// --- Identity Bootstrap ---
 
-function createRuntime(config: CliConfig, personalityConfig?: MotebitPersonalityConfig): { runtime: MotebitRuntime; moteDb: MotebitDatabase } {
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function bootstrapIdentity(
+  moteDb: MotebitDatabase,
+  fullConfig: FullConfig,
+): Promise<{ motebitId: string; isFirstLaunch: boolean }> {
+  const eventStore = new EventStore(moteDb.eventStore);
+  const identityManager = new IdentityManager(moteDb.identityStorage, eventStore);
+
+  if (fullConfig.motebit_id) {
+    // Existing identity — load and verify
+    const existing = await identityManager.load(fullConfig.motebit_id);
+    if (existing) {
+      return { motebitId: fullConfig.motebit_id, isFirstLaunch: false };
+    }
+    // Identity in config but not in DB — re-create in DB
+    await identityManager.create("cli");
+  }
+
+  // First launch — generate identity + keypair
+  const identity = await identityManager.create("cli");
+  const keypair = await generateKeypair();
+  const pubKeyHex = toHex(keypair.publicKey);
+  const privKeyHex = toHex(keypair.privateKey);
+
+  const device = await identityManager.registerDevice(identity.motebit_id, "cli", pubKeyHex);
+
+  // Persist to config
+  fullConfig.motebit_id = identity.motebit_id;
+  fullConfig.device_id = device.device_id;
+  fullConfig.device_public_key = pubKeyHex;
+  fullConfig.cli_private_key = privKeyHex;
+  saveFullConfig(fullConfig);
+
+  return { motebitId: identity.motebit_id, isFirstLaunch: true };
+}
+
+// --- Tool Registry Setup ---
+
+function buildToolRegistry(
+  config: CliConfig,
+  runtimeRef: { current: MotebitRuntime | null },
+  motebitId: string,
+): InMemoryToolRegistry {
+  const registry = new InMemoryToolRegistry();
+
+  // Always available (R0/R1): read-only file access, web search, web read
+  registry.register(readFileDefinition, createReadFileHandler(config.allowedPaths));
+  registry.register(webSearchDefinition, createWebSearchHandler());
+  registry.register(readUrlDefinition, createReadUrlHandler());
+
+  // Deferred handlers for memory/events (need runtime, which needs registry)
+  const memorySearchFn = async (query: string, limit: number) => {
+    if (!runtimeRef.current) return [];
+    const all = await runtimeRef.current.memory.exportAll();
+    const queryLower = query.toLowerCase();
+    const matched = all.nodes
+      .filter((n) => !n.tombstoned && n.content.toLowerCase().includes(queryLower))
+      .sort((a, b) => b.confidence - a.confidence)
+      .slice(0, limit);
+    return matched.map((n) => ({ content: n.content, confidence: n.confidence }));
+  };
+  const eventQueryFn = async (limit: number, eventType?: string) => {
+    if (!runtimeRef.current) return [];
+    const filter: { motebit_id: string; limit: number; event_types?: import("@motebit/sdk").EventType[] } = {
+      motebit_id: motebitId,
+      limit,
+    };
+    if (eventType) {
+      filter.event_types = [eventType as EventType];
+    }
+    const events = await runtimeRef.current.events.query(filter);
+    return events.map((e) => ({
+      event_type: e.event_type,
+      timestamp: e.timestamp,
+      payload: e.payload,
+    }));
+  };
+
+  registry.register(recallMemoriesDefinition, createRecallMemoriesHandler(memorySearchFn));
+  registry.register(listEventsDefinition, createListEventsHandler(eventQueryFn));
+
+  // Operator-only (R2+): write files, execute shell commands
+  if (config.operator) {
+    registry.register(writeFileDefinition, createWriteFileHandler(config.allowedPaths));
+    registry.register(shellExecDefinition, createShellExecHandler());
+  }
+
+  return registry;
+}
+
+// --- Bootstrap Runtime ---
+
+function createRuntime(
+  config: CliConfig,
+  motebitId: string,
+  toolRegistry: InMemoryToolRegistry,
+  mcpServers: McpServerConfig[],
+  personalityConfig?: MotebitPersonalityConfig,
+): { runtime: MotebitRuntime; moteDb: MotebitDatabase } {
   const dbPath = getDbPath(config.dbPath);
   const moteDb = createMotebitDatabase(dbPath);
   const provider = createProvider(config, personalityConfig);
 
   console.log(`Data: ${dbPath}`);
   console.log(`Provider: ${config.provider} (${provider.model})`);
+  if (config.operator) {
+    console.log("Operator mode: enabled");
+  }
 
   const storage: StorageAdapters = {
     eventStore: moteDb.eventStore,
@@ -207,11 +389,24 @@ function createRuntime(config: CliConfig, personalityConfig?: MotebitPersonality
     identityStorage: moteDb.identityStorage,
     auditLog: moteDb.auditLog,
     stateSnapshot: moteDb.stateSnapshot,
+    toolAuditSink: moteDb.toolAuditSink,
   };
 
   const runtime = new MotebitRuntime(
-    { motebitId: MOTEBIT_ID },
-    { storage, renderer: new NullRenderer(), ai: provider },
+    {
+      motebitId,
+      mcpServers,
+      policy: {
+        operatorMode: config.operator,
+        pathAllowList: config.allowedPaths,
+      },
+    },
+    {
+      storage,
+      renderer: new NullRenderer(),
+      ai: provider,
+      tools: toolRegistry,
+    },
   );
 
   // Wire sync if configured
@@ -221,7 +416,7 @@ function createRuntime(config: CliConfig, personalityConfig?: MotebitPersonality
   if (syncUrl) {
     const remoteStore = new HttpEventStoreAdapter({
       baseUrl: syncUrl,
-      motebitId: MOTEBIT_ID,
+      motebitId,
       authToken: syncToken,
     });
     runtime.connectSync(remoteStore);
@@ -233,12 +428,92 @@ function createRuntime(config: CliConfig, personalityConfig?: MotebitPersonality
   return { runtime, moteDb };
 }
 
+// --- Streaming Consumer with Tool Status + Approval ---
+
+function rlQuestion(rl: readline.Interface, prompt: string): Promise<string> {
+  return new Promise((resolve) => {
+    rl.question(prompt, (answer) => resolve(answer));
+  });
+}
+
+async function consumeStream(
+  stream: AsyncGenerator<StreamChunk>,
+  runtime: MotebitRuntime,
+  rl: readline.Interface,
+): Promise<void> {
+  let pendingApproval: { tool_call_id: string; name: string; args: Record<string, unknown> } | null = null;
+
+  for await (const chunk of stream) {
+    switch (chunk.type) {
+      case "text":
+        process.stdout.write(chunk.text);
+        break;
+
+      case "tool_status":
+        if (chunk.status === "calling") {
+          process.stdout.write(`\n  [tool] ${chunk.name}...`);
+        } else {
+          process.stdout.write(" done\n");
+        }
+        break;
+
+      case "approval_request":
+        pendingApproval = { tool_call_id: chunk.tool_call_id, name: chunk.name, args: chunk.args };
+        break;
+
+      case "injection_warning":
+        process.stdout.write(`\n  [warning] suspicious content in ${chunk.tool_name}\n`);
+        break;
+
+      case "result": {
+        const result = chunk.result;
+        console.log("\n");
+
+        if (result.memoriesFormed.length > 0) {
+          console.log(`  [memories: ${result.memoriesFormed.map((m: { content: string }) => m.content).join(", ")}]`);
+        }
+
+        const s = result.stateAfter;
+        console.log(`  [state: attention=${s.attention.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} curiosity=${s.curiosity.toFixed(2)}]`);
+        const bodyLine = formatBodyAwareness(result.cues);
+        if (bodyLine) console.log(`  ${bodyLine}`);
+        console.log();
+        break;
+      }
+    }
+  }
+
+  // Handle approval request after stream ends
+  if (pendingApproval) {
+    const argsPreview = JSON.stringify(pendingApproval.args).slice(0, 80);
+    const answer = await rlQuestion(
+      rl,
+      `  [approval] ${pendingApproval.name}(${argsPreview})\n  Allow? (y/n) `,
+    );
+
+    if (answer.trim().toLowerCase() === "y") {
+      const followUp = runtime.sendMessageStreaming(
+        `I approved the ${pendingApproval.name} tool call. Please proceed.`,
+      );
+      process.stdout.write("\nmote> ");
+      await consumeStream(followUp, runtime, rl);
+    } else {
+      const followUp = runtime.sendMessageStreaming(
+        `I denied the ${pendingApproval.name} tool call.`,
+      );
+      process.stdout.write("\nmote> ");
+      await consumeStream(followUp, runtime, rl);
+    }
+  }
+}
+
 // --- Slash Command Handlers ---
 
 async function handleSlashCommand(
   cmd: string,
   args: string,
   runtime: MotebitRuntime,
+  config: CliConfig,
 ): Promise<void> {
   switch (cmd) {
     case "help":
@@ -252,6 +527,8 @@ Available commands:
   /clear             Clear conversation history
   /model <name>      Switch AI model
   /sync              Sync with remote server
+  /tools             List registered tools
+  /operator          Show operator mode status
   quit, exit         Exit
 `.trim());
       break;
@@ -330,6 +607,26 @@ Available commands:
       break;
     }
 
+    case "tools": {
+      const tools = runtime.getToolRegistry().list();
+      if (tools.length === 0) {
+        console.log("No tools registered.");
+      } else {
+        console.log(`\nRegistered tools (${tools.length}):\n`);
+        for (const tool of tools) {
+          console.log(`  ${tool.name.padEnd(24)} ${tool.description.slice(0, 60)}`);
+        }
+      }
+      break;
+    }
+
+    case "operator":
+      console.log(`Operator mode: ${config.operator ? "enabled" : "disabled"}`);
+      if (!config.operator) {
+        console.log("  Start with --operator to enable write/exec tools");
+      }
+      break;
+
     default:
       console.log(`Unknown command: /${cmd}. Type /help for available commands.`);
   }
@@ -351,19 +648,61 @@ async function main(): Promise<void> {
   if (config.help) { printHelp(); return; }
   if (config.version) { printVersion(); return; }
 
-  const personalityConfig = loadConfig();
+  // Load full config (personality + identity + MCP)
+  const fullConfig = loadFullConfig();
+  const personalityConfig: MotebitPersonalityConfig = {
+    ...DEFAULT_CONFIG,
+    ...extractPersonality(fullConfig),
+  };
 
   if (personalityConfig.default_provider && !process.argv.includes("--provider")) {
     const validProviders = ["anthropic", "ollama"] as const;
-    if (validProviders.includes(personalityConfig.default_provider)) {
-      config.provider = personalityConfig.default_provider;
+    if (validProviders.includes(personalityConfig.default_provider!)) {
+      config.provider = personalityConfig.default_provider!;
     }
   }
   if (personalityConfig.default_model && !process.argv.includes("--model")) {
     config.model = personalityConfig.default_model;
   }
 
-  const { runtime, moteDb } = createRuntime(config, personalityConfig);
+  // Bootstrap identity — need DB first for identity storage
+  const dbPath = getDbPath(config.dbPath);
+  const tempDb = createMotebitDatabase(dbPath);
+  const { motebitId, isFirstLaunch } = await bootstrapIdentity(tempDb, fullConfig);
+  tempDb.close();
+
+  if (isFirstLaunch) {
+    console.log(`\nYour mote has been created: ${motebitId.slice(0, 8)}...`);
+    console.log("Identity and keypair stored in ~/.motebit/config.json\n");
+  }
+
+  // Build tool registry with deferred runtime ref
+  const runtimeRef: { current: MotebitRuntime | null } = { current: null };
+  const toolRegistry = buildToolRegistry(config, runtimeRef, motebitId);
+
+  // MCP servers from config
+  const mcpServers = fullConfig.mcp_servers ?? [];
+
+  // Create runtime with tools, policy, MCP config
+  const { runtime, moteDb } = createRuntime(config, motebitId, toolRegistry, mcpServers, personalityConfig);
+  runtimeRef.current = runtime;
+
+  // Connect MCP servers
+  let mcpAdapters: Awaited<ReturnType<typeof connectMcpServers>> = [];
+  if (mcpServers.length > 0) {
+    try {
+      mcpAdapters = await connectMcpServers(mcpServers, toolRegistry);
+      // Re-wire loop deps since registry grew
+      runtime.getToolRegistry().merge(toolRegistry);
+      console.log(`MCP: connected to ${mcpAdapters.length} server(s)`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`MCP connection failed: ${message}`);
+    }
+  }
+
+  // Init runtime (renderer + MCP handled above)
+  await runtime.init();
 
   // Initial sync
   try {
@@ -380,6 +719,8 @@ async function main(): Promise<void> {
 
   const shutdown = async (): Promise<void> => {
     runtime.stop();
+    // Disconnect MCP servers
+    await Promise.allSettled(mcpAdapters.map((a) => a.disconnect()));
     try {
       const result = await runtime.sync.sync();
       console.log(`Synced on exit: pushed ${result.pushed}, pulled ${result.pulled}`);
@@ -396,6 +737,8 @@ async function main(): Promise<void> {
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
+  const toolCount = toolRegistry.size;
+  console.log(`Tools: ${toolCount} registered${config.operator ? " (operator mode)" : ""}`);
   console.log("Motebit CLI — type a message, /help for commands, or quit to exit\n");
 
   const prompt = (): void => {
@@ -416,7 +759,7 @@ async function main(): Promise<void> {
 
     if (isSlashCommand(trimmed)) {
       const { command, args } = parseSlashCommand(trimmed);
-      await handleSlashCommand(command, args, runtime);
+      await handleSlashCommand(command, args, runtime, config);
       console.log();
       prompt();
       return;
@@ -439,25 +782,7 @@ async function main(): Promise<void> {
         console.log();
       } else {
         process.stdout.write("\nmote> ");
-
-        for await (const chunk of runtime.sendMessageStreaming(trimmed)) {
-          if (chunk.type === "text") {
-            process.stdout.write(chunk.text);
-          } else if (chunk.type === "result") {
-            const result = chunk.result;
-            console.log("\n");
-
-            if (result.memoriesFormed.length > 0) {
-              console.log(`  [memories: ${result.memoriesFormed.map((m: { content: string }) => m.content).join(", ")}]`);
-            }
-
-            const s = result.stateAfter;
-            console.log(`  [state: attention=${s.attention.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} curiosity=${s.curiosity.toFixed(2)}]`);
-            const bodyLine = formatBodyAwareness(result.cues);
-            if (bodyLine) console.log(`  ${bodyLine}`);
-            console.log();
-          }
-        }
+        await consumeStream(runtime.sendMessageStreaming(trimmed), runtime, rl);
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);

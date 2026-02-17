@@ -93,9 +93,18 @@ importers:
       '@motebit/behavior-engine':
         specifier: workspace:*
         version: link:../../packages/behavior-engine
+      '@motebit/core-identity':
+        specifier: workspace:*
+        version: link:../../packages/core-identity
+      '@motebit/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@motebit/event-log':
         specifier: workspace:*
         version: link:../../packages/event-log
+      '@motebit/mcp-client':
+        specifier: workspace:*
+        version: link:../../packages/mcp-client
       '@motebit/memory-graph':
         specifier: workspace:*
         version: link:../../packages/memory-graph
@@ -114,6 +123,9 @@ importers:
       '@motebit/sync-engine':
         specifier: workspace:*
         version: link:../../packages/sync-engine
+      '@motebit/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
     devDependencies:
       '@types/node':
         specifier: ^22.0.0

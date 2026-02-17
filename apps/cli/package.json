@@ -25,7 +25,11 @@
     "@motebit/state-vector": "workspace:*",
     "@motebit/behavior-engine": "workspace:*",
     "@motebit/persistence": "workspace:*",
-    "@motebit/sync-engine": "workspace:*"
+    "@motebit/sync-engine": "workspace:*",
+    "@motebit/tools": "workspace:*",
+    "@motebit/mcp-client": "workspace:*",
+    "@motebit/crypto": "workspace:*",
+    "@motebit/core-identity": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
