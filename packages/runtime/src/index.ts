@@ -26,9 +26,9 @@ import type {
   MotebitLoopDependencies,
   TurnResult,
 } from "@motebit/ai-core";
-import { InMemoryToolRegistry } from "@motebit/tools";
-import type { McpServerConfig } from "@motebit/mcp-client";
-import { connectMcpServers, McpClientAdapter } from "@motebit/mcp-client";
+// Node-only packages (@motebit/tools, @motebit/mcp-client) are imported dynamically
+// to avoid bundling node:child_process / stdio into browser builds (desktop app).
+type McpClientAdapter = { disconnect(): Promise<void> };
 import { PolicyGate, MemoryGovernor } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig } from "@motebit/policy";
 
@@ -42,10 +42,56 @@ export type { IdentityStorage } from "@motebit/core-identity";
 export type { AuditLogAdapter } from "@motebit/privacy-layer";
 export type { RenderAdapter, RenderFrame } from "@motebit/render-engine";
 export type { RenderSpec } from "@motebit/sdk";
-export type { McpServerConfig } from "@motebit/mcp-client";
-export { InMemoryToolRegistry } from "@motebit/tools";
 export { PolicyGate } from "@motebit/policy";
 export type { PolicyConfig, MemoryGovernanceConfig } from "@motebit/policy";
+
+// === McpServerConfig (inlined to avoid importing Node-only @motebit/mcp-client) ===
+
+export interface McpServerConfig {
+  name: string;
+  transport: "stdio" | "http";
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: Record<string, string>;
+}
+
+// === Browser-safe Tool Registry ===
+// Inlined so @motebit/tools (which pulls in node:child_process via builtins) is never eagerly imported.
+
+import type { ToolDefinition, ToolResult, ToolHandler } from "@motebit/sdk";
+
+class SimpleToolRegistry implements ToolRegistry {
+  private tools = new Map<string, { definition: ToolDefinition; handler: ToolHandler }>();
+
+  register(tool: ToolDefinition, handler: ToolHandler): void {
+    if (this.tools.has(tool.name)) throw new Error(`Tool "${tool.name}" already registered`);
+    this.tools.set(tool.name, { definition: tool, handler });
+  }
+
+  list(): ToolDefinition[] { return [...this.tools.values()].map((t) => t.definition); }
+  has(name: string): boolean { return this.tools.has(name); }
+  get(name: string): ToolDefinition | undefined { return this.tools.get(name)?.definition; }
+
+  async execute(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+    const entry = this.tools.get(name);
+    if (!entry) return { ok: false, error: `Unknown tool: ${name}` };
+    try { return await entry.handler(args); }
+    catch (err: unknown) { return { ok: false, error: err instanceof Error ? err.message : String(err) }; }
+  }
+
+  merge(other: ToolRegistry): void {
+    for (const def of other.list()) {
+      if (!this.tools.has(def.name)) {
+        this.tools.set(def.name, { definition: def, handler: (args) => other.execute(def.name, args) });
+      }
+    }
+  }
+
+  get size(): number { return this.tools.size; }
+}
+
+export { SimpleToolRegistry };
 
 // === Platform Adapter Interfaces ===
 
@@ -154,7 +200,7 @@ export class MotebitRuntime {
   private compactionThreshold: number;
   private lastKnownClock = 0;
   private running = false;
-  private toolRegistry: InMemoryToolRegistry;
+  private toolRegistry: SimpleToolRegistry;
   private mcpAdapters: McpClientAdapter[] = [];
   private mcpConfigs: McpServerConfig[];
 
@@ -168,7 +214,7 @@ export class MotebitRuntime {
     this.stateSnapshot = adapters.storage.stateSnapshot;
 
     // Tool registry: merge platform-provided tools if any
-    this.toolRegistry = new InMemoryToolRegistry();
+    this.toolRegistry = new SimpleToolRegistry();
     if (adapters.tools) {
       this.toolRegistry.merge(adapters.tools);
     }
@@ -225,9 +271,10 @@ export class MotebitRuntime {
   async init(target?: unknown): Promise<void> {
     await this.renderer.init(target);
 
-    // Connect to MCP servers and discover their tools
+    // Connect to MCP servers and discover their tools (dynamic import — Node-only)
     if (this.mcpConfigs.length > 0) {
-      this.mcpAdapters = await connectMcpServers(this.mcpConfigs, this.toolRegistry);
+      const { connectMcpServers } = await import("@motebit/mcp-client");
+      this.mcpAdapters = await connectMcpServers(this.mcpConfigs, this.toolRegistry as never);
       this.wireLoopDeps(); // re-wire with updated registry
     }
   }
@@ -283,7 +330,7 @@ export class MotebitRuntime {
   }
 
   /** Access the tool registry to register additional tools at runtime. */
-  getToolRegistry(): InMemoryToolRegistry {
+  getToolRegistry(): SimpleToolRegistry {
     return this.toolRegistry;
   }
 

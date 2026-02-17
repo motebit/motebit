@@ -544,9 +544,6 @@ importers:
       '@motebit/sync-engine':
         specifier: workspace:*
         version: link:../sync-engine
-      '@motebit/tools':
-        specifier: workspace:*
-        version: link:../tools
     devDependencies:
       typescript:
         specifier: ^5.6.0

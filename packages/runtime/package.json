@@ -24,7 +24,6 @@
     "@motebit/sync-engine": "workspace:*",
     "@motebit/render-engine": "workspace:*",
     "@motebit/crypto": "workspace:*",
-    "@motebit/tools": "workspace:*",
     "@motebit/mcp-client": "workspace:*",
     "@motebit/policy": "workspace:*"
   },
