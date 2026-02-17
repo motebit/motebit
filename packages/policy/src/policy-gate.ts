@@ -25,6 +25,14 @@ export interface PolicyConfig {
    *  In ambient mode: R1_DRAFT. In operator mode: R4_MONEY. */
   maxRiskLevel?: RiskLevel;
 
+  /** Three-band governance thresholds (from motebit.md governance section).
+   *  When set, these override the simpler maxRiskLevel / requiresApproval logic:
+   *    - risk <= requireApprovalAbove → auto-allow (no approval needed)
+   *    - risk > denyAbove → hard deny
+   *    - between → allowed but requiresApproval=true */
+  requireApprovalAbove?: RiskLevel;
+  denyAbove?: RiskLevel;
+
   /** Budget constraints per turn. */
   budget?: Partial<BudgetConfig>;
 
@@ -188,15 +196,31 @@ export class PolicyGate {
       return decision;
     }
 
-    // 2. Risk level check
-    if (!isToolAllowed(profile, maxRisk)) {
-      const decision: PolicyDecision = {
-        allowed: false,
-        requiresApproval: false,
-        reason: `Tool "${tool.name}" requires risk level ${RiskLevel[profile.risk]} but max allowed is ${RiskLevel[maxRisk]}. Enable Operator Mode for higher-risk tools.`,
-      };
-      this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision);
-      return decision;
+    // 2. Risk level check — three-band governance when thresholds are set
+    const hasBands = this.config.requireApprovalAbove !== undefined && this.config.denyAbove !== undefined;
+
+    if (hasBands) {
+      // Three-band: auto-allow / require-approval / hard-deny
+      if (profile.risk > this.config.denyAbove!) {
+        const decision: PolicyDecision = {
+          allowed: false,
+          requiresApproval: false,
+          reason: `Tool "${tool.name}" risk ${RiskLevel[profile.risk]} exceeds deny threshold ${RiskLevel[this.config.denyAbove!]}`,
+        };
+        this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision);
+        return decision;
+      }
+    } else {
+      // Legacy two-state: allowed or denied based on maxRiskLevel
+      if (!isToolAllowed(profile, maxRisk)) {
+        const decision: PolicyDecision = {
+          allowed: false,
+          requiresApproval: false,
+          reason: `Tool "${tool.name}" requires risk level ${RiskLevel[profile.risk]} but max allowed is ${RiskLevel[maxRisk]}. Enable Operator Mode for higher-risk tools.`,
+        };
+        this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision);
+        return decision;
+      }
     }
 
     // 3. Budget check
@@ -263,10 +287,19 @@ export class PolicyGate {
       }
     }
 
-    // 6. Approval check (derived from risk, not manual)
+    // 6. Approval check — three-band governance vs legacy
+    let needsApproval: boolean;
+    if (hasBands) {
+      // Approval band: risk > requireApprovalAbove but <= denyAbove
+      needsApproval = profile.risk > this.config.requireApprovalAbove!;
+    } else {
+      // Legacy: derived from tool classification (R2+ requires approval)
+      needsApproval = profile.requiresApproval;
+    }
+
     const decision: PolicyDecision = {
       allowed: true,
-      requiresApproval: profile.requiresApproval,
+      requiresApproval: needsApproval,
       budgetRemaining: { calls: budgetResult.remaining.calls, timeMs: budgetResult.remaining.timeMs },
     };
 

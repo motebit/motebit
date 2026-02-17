@@ -34,6 +34,9 @@ export enum EventType {
   AuditEntry = "audit_entry",
   ToolUsed = "tool_used",
   PolicyViolation = "policy_violation",
+  GoalCreated = "goal_created",
+  GoalExecuted = "goal_executed",
+  GoalRemoved = "goal_removed",
 }
 
 export enum RelationType {

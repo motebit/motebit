@@ -12,6 +12,7 @@ import {
   toBase64Url,
   fromBase64Url,
 } from "@motebit/crypto";
+import { RiskLevel } from "@motebit/sdk";
 import type { MotebitIdentityFile } from "./schema.js";
 
 export type { MotebitIdentityFile } from "./schema.js";
@@ -409,4 +410,39 @@ function hexToBytes(hex: string): Uint8Array {
 
 export function toHex(bytes: Uint8Array): string {
   return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+// --- Risk Level Bridge ---
+
+const RISK_MAP: Record<string, RiskLevel> = {
+  R0_READ: RiskLevel.R0_READ,
+  R1_DRAFT: RiskLevel.R1_DRAFT,
+  R2_WRITE: RiskLevel.R2_WRITE,
+  R3_EXECUTE: RiskLevel.R3_EXECUTE,
+  R4_MONEY: RiskLevel.R4_MONEY,
+};
+
+export function parseRiskLevel(name: string): RiskLevel {
+  const level = RISK_MAP[name];
+  if (level === undefined) {
+    const valid = Object.keys(RISK_MAP).join(", ");
+    throw new Error(`Unknown risk level "${name}". Valid values: ${valid}`);
+  }
+  return level;
+}
+
+export interface GovernancePolicyConfig {
+  operatorMode: boolean;
+  maxRiskAuto: RiskLevel;
+  requireApprovalAbove: RiskLevel;
+  denyAbove: RiskLevel;
+}
+
+export function governanceToPolicyConfig(gov: MotebitIdentityFile["governance"]): GovernancePolicyConfig {
+  return {
+    operatorMode: gov.operator_mode,
+    maxRiskAuto: parseRiskLevel(gov.max_risk_auto),
+    requireApprovalAbove: parseRiskLevel(gov.require_approval_above),
+    denyAbove: parseRiskLevel(gov.deny_above),
+  };
 }

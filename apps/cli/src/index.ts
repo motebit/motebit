@@ -13,7 +13,7 @@ import { DEFAULT_CONFIG } from "@motebit/ai-core";
 import { createMotebitDatabase, type MotebitDatabase } from "@motebit/persistence";
 import { HttpEventStoreAdapter } from "@motebit/sync-engine";
 import { EventStore } from "@motebit/event-log";
-import { EventType } from "@motebit/sdk";
+import { EventType, RiskLevel } from "@motebit/sdk";
 import {
   InMemoryToolRegistry,
   readFileDefinition,
@@ -35,7 +35,13 @@ import { connectMcpServers, type McpServerConfig } from "@motebit/mcp-client";
 import { generateKeypair, deriveKey, encrypt, decrypt, generateNonce } from "@motebit/crypto";
 import type { EncryptedPayload } from "@motebit/crypto";
 import { IdentityManager } from "@motebit/core-identity";
-import { generate as generateIdentityFile, verify as verifyIdentityFile } from "@motebit/identity-file";
+import {
+  generate as generateIdentityFile,
+  verify as verifyIdentityFile,
+  governanceToPolicyConfig,
+} from "@motebit/identity-file";
+import { GoalScheduler } from "./scheduler.js";
+import { parseInterval } from "./intervals.js";
 
 // --- Constants ---
 
@@ -106,6 +112,8 @@ export interface CliConfig {
   operator: boolean;
   allowedPaths: string[];
   output: string | undefined;
+  identity: string | undefined;
+  every: string | undefined;
   version: boolean;
   help: boolean;
   positionals: string[];
@@ -125,6 +133,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       operator: { type: "boolean", default: false },
       "allowed-paths": { type: "string" },
       output: { type: "string", short: "o" },
+      identity: { type: "string" },
+      every: { type: "string" },
       version: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -152,6 +162,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     operator: values.operator,
     allowedPaths,
     output: values.output,
+    identity: values.identity,
+    every: values.every,
     version: values.version,
     help: values.help,
     positionals,
@@ -167,6 +179,12 @@ Usage: motebit [command] [options]
 Commands:
   init [--output <path>]    Generate a motebit.md identity file
   verify <path>             Verify a motebit.md identity file signature
+  run [--identity <path>]   Start daemon mode (execute goals on schedule)
+  goal add "<prompt>" --every <interval>   Add a scheduled goal
+  goal list                 List all scheduled goals
+  goal remove <goal_id>     Remove a scheduled goal
+  goal pause <goal_id>      Pause a scheduled goal
+  goal resume <goal_id>     Resume a paused goal
 
 Options:
   --provider <name>       AI provider: "anthropic" or "ollama" (default: anthropic)
@@ -816,6 +834,297 @@ async function handleInit(config: CliConfig): Promise<void> {
   rl.close();
 }
 
+// --- Subcommand: run (daemon mode) ---
+
+async function handleRun(config: CliConfig): Promise<void> {
+  const identityPath = config.identity
+    ? path.resolve(config.identity)
+    : path.resolve("motebit.md");
+
+  let identityContent: string;
+  try {
+    identityContent = fs.readFileSync(identityPath, "utf-8");
+  } catch {
+    console.error(`Error: cannot read identity file: ${identityPath}`);
+    process.exit(1);
+  }
+
+  // Verify signature
+  const verifyResult = await verifyIdentityFile(identityContent);
+  if (!verifyResult.valid || !verifyResult.identity) {
+    console.error(`Error: invalid identity file signature.`);
+    if (verifyResult.error) console.error(`  ${verifyResult.error}`);
+    process.exit(1);
+  }
+
+  const identity = verifyResult.identity;
+  const gov = identity.governance;
+
+  // Derive policy from governance — parseRiskLevel throws on invalid values
+  const policyConfig = governanceToPolicyConfig(gov);
+  const { maxRiskAuto, denyAbove } = policyConfig;
+
+  // Force operator mode from governance
+  config.operator = policyConfig.operatorMode;
+
+  const fullConfig = loadFullConfig();
+  const personalityConfig: MotebitPersonalityConfig = {
+    ...DEFAULT_CONFIG,
+    ...extractPersonality(fullConfig),
+  };
+
+  if (personalityConfig.default_provider && !process.argv.includes("--provider")) {
+    const validProviders = ["anthropic", "ollama"] as const;
+    if (validProviders.includes(personalityConfig.default_provider!)) {
+      config.provider = personalityConfig.default_provider!;
+    }
+  }
+  if (personalityConfig.default_model && !process.argv.includes("--model")) {
+    config.model = personalityConfig.default_model;
+  }
+
+  const motebitId = identity.motebit_id;
+
+  // Build tool registry
+  const runtimeRef: { current: MotebitRuntime | null } = { current: null };
+  const toolRegistry = buildToolRegistry(config, runtimeRef, motebitId);
+
+  const mcpServers = (fullConfig.mcp_servers ?? []).map((s) => ({
+    ...s,
+    trusted: (fullConfig.mcp_trusted_servers ?? []).includes(s.name),
+  }));
+
+  // Create runtime with governance-derived policy
+  const dbPath = getDbPath(config.dbPath);
+  const moteDb = createMotebitDatabase(dbPath);
+  const provider = createProvider(config, personalityConfig);
+
+  const storage: StorageAdapters = {
+    eventStore: moteDb.eventStore,
+    memoryStorage: moteDb.memoryStorage,
+    identityStorage: moteDb.identityStorage,
+    auditLog: moteDb.auditLog,
+    stateSnapshot: moteDb.stateSnapshot,
+    toolAuditSink: moteDb.toolAuditSink,
+  };
+
+  const runtime = new MotebitRuntime(
+    {
+      motebitId,
+      mcpServers,
+      policy: {
+        operatorMode: config.operator,
+        maxRiskLevel: maxRiskAuto,
+        requireApprovalAbove: policyConfig.requireApprovalAbove,
+        denyAbove: policyConfig.denyAbove,
+        pathAllowList: config.allowedPaths,
+      },
+    },
+    {
+      storage,
+      renderer: new NullRenderer(),
+      ai: provider,
+      tools: toolRegistry,
+    },
+  );
+  runtimeRef.current = runtime;
+
+  await runtime.init();
+
+  // Start goal scheduler
+  const goals = moteDb.goalStore.list(motebitId);
+  const scheduler = new GoalScheduler(runtime, moteDb.goalStore, motebitId, denyAbove);
+  scheduler.start();
+
+  console.log(`Daemon running. motebit_id: ${motebitId.slice(0, 8)}... Goals: ${goals.length}. Policy: max_risk_auto=${RiskLevel[maxRiskAuto]}, deny_above=${RiskLevel[denyAbove]}`);
+
+  // Graceful shutdown on SIGINT/SIGTERM
+  const shutdown = (): void => {
+    console.log("\nShutting down...");
+    scheduler.stop();
+    runtime.stop();
+    moteDb.close();
+    process.exit(0);
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
+
+// --- Subcommand: goal add/list/remove ---
+
+async function handleGoalAdd(config: CliConfig): Promise<void> {
+  // positionals: ["goal", "add", "<prompt>"]
+  const prompt = config.positionals[2];
+  if (!prompt) {
+    console.error('Usage: motebit goal add "<prompt>" --every <interval>');
+    process.exit(1);
+  }
+  if (!config.every) {
+    console.error('Error: --every <interval> is required. E.g. --every 30m');
+    process.exit(1);
+  }
+
+  let intervalMs: number;
+  try {
+    intervalMs = parseInterval(config.every);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`Error: ${msg}`);
+    process.exit(1);
+  }
+
+  const fullConfig = loadFullConfig();
+  const motebitId = fullConfig.motebit_id;
+  if (!motebitId) {
+    console.error("Error: no motebit identity found. Run `motebit init` first.");
+    process.exit(1);
+  }
+
+  const dbPath = getDbPath(config.dbPath);
+  const moteDb = createMotebitDatabase(dbPath);
+
+  const goalId = crypto.randomUUID();
+  moteDb.goalStore.add({
+    goal_id: goalId,
+    motebit_id: motebitId,
+    prompt,
+    interval_ms: intervalMs,
+    last_run_at: null,
+    enabled: true,
+    created_at: Date.now(),
+  });
+
+  // Log event
+  const eventStore = new EventStore(moteDb.eventStore);
+  await eventStore.append({
+    event_id: crypto.randomUUID(),
+    motebit_id: motebitId,
+    timestamp: Date.now(),
+    event_type: EventType.GoalCreated,
+    payload: { goal_id: goalId, prompt, interval_ms: intervalMs },
+    version_clock: await moteDb.eventStore.getLatestClock(motebitId) + 1,
+    tombstoned: false,
+  });
+
+  moteDb.close();
+  console.log(`Goal added: ${goalId.slice(0, 8)} — "${prompt}" every ${config.every}`);
+}
+
+function handleGoalList(config: CliConfig): void {
+  const fullConfig = loadFullConfig();
+  const motebitId = fullConfig.motebit_id;
+  if (!motebitId) {
+    console.error("Error: no motebit identity found. Run `motebit init` first.");
+    process.exit(1);
+  }
+
+  const dbPath = getDbPath(config.dbPath);
+  const moteDb = createMotebitDatabase(dbPath);
+  const goals = moteDb.goalStore.list(motebitId);
+  moteDb.close();
+
+  if (goals.length === 0) {
+    console.log("No goals scheduled.");
+    return;
+  }
+
+  console.log(`\nGoals (${goals.length}):\n`);
+  console.log("  ID        Prompt                                     Interval    Last Run            Enabled");
+  console.log("  " + "-".repeat(100));
+
+  for (const g of goals) {
+    const id = g.goal_id.slice(0, 8);
+    const prompt = g.prompt.length > 40 ? g.prompt.slice(0, 37) + "..." : g.prompt.padEnd(40);
+    const interval = formatMs(g.interval_ms).padEnd(11);
+    const lastRun = g.last_run_at ? new Date(g.last_run_at).toISOString().slice(0, 19) : "never".padEnd(19);
+    const enabled = g.enabled ? "yes" : "no";
+    console.log(`  ${id}  ${prompt} ${interval} ${lastRun} ${enabled}`);
+  }
+  console.log();
+}
+
+function formatMs(ms: number): string {
+  if (ms >= 86_400_000) return `${ms / 86_400_000}d`;
+  if (ms >= 3_600_000) return `${ms / 3_600_000}h`;
+  return `${ms / 60_000}m`;
+}
+
+async function handleGoalRemove(config: CliConfig): Promise<void> {
+  const goalId = config.positionals[2];
+  if (!goalId) {
+    console.error("Usage: motebit goal remove <goal_id>");
+    process.exit(1);
+  }
+
+  const fullConfig = loadFullConfig();
+  const motebitId = fullConfig.motebit_id;
+  if (!motebitId) {
+    console.error("Error: no motebit identity found. Run `motebit init` first.");
+    process.exit(1);
+  }
+
+  const dbPath = getDbPath(config.dbPath);
+  const moteDb = createMotebitDatabase(dbPath);
+
+  // Find goal by prefix match
+  const goals = moteDb.goalStore.list(motebitId);
+  const match = goals.find((g) => g.goal_id === goalId || g.goal_id.startsWith(goalId));
+  if (!match) {
+    console.error(`Error: no goal found matching "${goalId}".`);
+    moteDb.close();
+    process.exit(1);
+  }
+
+  moteDb.goalStore.remove(match.goal_id);
+
+  // Log event
+  const eventStore = new EventStore(moteDb.eventStore);
+  await eventStore.append({
+    event_id: crypto.randomUUID(),
+    motebit_id: motebitId,
+    timestamp: Date.now(),
+    event_type: EventType.GoalRemoved,
+    payload: { goal_id: match.goal_id },
+    version_clock: await moteDb.eventStore.getLatestClock(motebitId) + 1,
+    tombstoned: false,
+  });
+
+  moteDb.close();
+  console.log(`Goal removed: ${match.goal_id.slice(0, 8)}`);
+}
+
+function handleGoalSetEnabled(config: CliConfig, enabled: boolean): void {
+  const goalId = config.positionals[2];
+  const verb = enabled ? "resume" : "pause";
+  if (!goalId) {
+    console.error(`Usage: motebit goal ${verb} <goal_id>`);
+    process.exit(1);
+  }
+
+  const fullConfig = loadFullConfig();
+  const motebitId = fullConfig.motebit_id;
+  if (!motebitId) {
+    console.error("Error: no motebit identity found. Run `motebit init` first.");
+    process.exit(1);
+  }
+
+  const dbPath = getDbPath(config.dbPath);
+  const moteDb = createMotebitDatabase(dbPath);
+
+  const goals = moteDb.goalStore.list(motebitId);
+  const match = goals.find((g) => g.goal_id === goalId || g.goal_id.startsWith(goalId));
+  if (!match) {
+    console.error(`Error: no goal found matching "${goalId}".`);
+    moteDb.close();
+    process.exit(1);
+  }
+
+  moteDb.goalStore.setEnabled(match.goal_id, enabled);
+  moteDb.close();
+  console.log(`Goal ${verb}d: ${match.goal_id.slice(0, 8)}`);
+}
+
 // --- REPL ---
 
 async function main(): Promise<void> {
@@ -867,6 +1176,30 @@ async function main(): Promise<void> {
 
   if (subcommand === "init") {
     await handleInit(config);
+    return;
+  }
+
+  if (subcommand === "run") {
+    await handleRun(config);
+    return;
+  }
+
+  if (subcommand === "goal") {
+    const goalCmd = config.positionals[1];
+    if (goalCmd === "add") {
+      await handleGoalAdd(config);
+    } else if (goalCmd === "list") {
+      handleGoalList(config);
+    } else if (goalCmd === "remove") {
+      await handleGoalRemove(config);
+    } else if (goalCmd === "pause") {
+      handleGoalSetEnabled(config, false);
+    } else if (goalCmd === "resume") {
+      handleGoalSetEnabled(config, true);
+    } else {
+      console.error('Usage: motebit goal [add|list|remove|pause|resume]');
+      process.exit(1);
+    }
     return;
   }
 

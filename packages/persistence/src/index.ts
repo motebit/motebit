@@ -115,6 +115,18 @@ CREATE TABLE IF NOT EXISTS devices (
 
 CREATE INDEX IF NOT EXISTS idx_devices_motebit ON devices (motebit_id);
 CREATE INDEX IF NOT EXISTS idx_devices_token ON devices (device_token);
+
+CREATE TABLE IF NOT EXISTS goals (
+  goal_id TEXT PRIMARY KEY,
+  motebit_id TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  interval_ms INTEGER NOT NULL,
+  last_run_at INTEGER,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_goals_motebit ON goals (motebit_id);
 `;
 
 function initSchema(db: Database.Database): void {
@@ -722,6 +734,88 @@ export class SqliteToolAuditSink implements AuditLogSink {
   }
 }
 
+// === Goal Store ===
+
+export interface Goal {
+  goal_id: string;
+  motebit_id: string;
+  prompt: string;
+  interval_ms: number;
+  last_run_at: number | null;
+  enabled: boolean;
+  created_at: number;
+}
+
+interface GoalRow {
+  goal_id: string;
+  motebit_id: string;
+  prompt: string;
+  interval_ms: number;
+  last_run_at: number | null;
+  enabled: number;
+  created_at: number;
+}
+
+function rowToGoal(row: GoalRow): Goal {
+  return {
+    goal_id: row.goal_id,
+    motebit_id: row.motebit_id,
+    prompt: row.prompt,
+    interval_ms: row.interval_ms,
+    last_run_at: row.last_run_at,
+    enabled: row.enabled === 1,
+    created_at: row.created_at,
+  };
+}
+
+export class SqliteGoalStore {
+  private stmtAdd: Statement;
+  private stmtRemove: Statement;
+  private stmtList: Statement;
+  private stmtUpdateLastRun: Statement;
+  private stmtSetEnabled: Statement;
+
+  constructor(db: Database.Database) {
+    this.stmtAdd = db.prepare(
+      `INSERT OR REPLACE INTO goals (goal_id, motebit_id, prompt, interval_ms, last_run_at, enabled, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmtRemove = db.prepare(`DELETE FROM goals WHERE goal_id = ?`);
+    this.stmtList = db.prepare(`SELECT * FROM goals WHERE motebit_id = ? ORDER BY created_at ASC`);
+    this.stmtUpdateLastRun = db.prepare(`UPDATE goals SET last_run_at = ? WHERE goal_id = ?`);
+    this.stmtSetEnabled = db.prepare(`UPDATE goals SET enabled = ? WHERE goal_id = ?`);
+  }
+
+  add(goal: Goal): void {
+    this.stmtAdd.run(
+      goal.goal_id,
+      goal.motebit_id,
+      goal.prompt,
+      goal.interval_ms,
+      goal.last_run_at,
+      goal.enabled ? 1 : 0,
+      goal.created_at,
+    );
+  }
+
+  remove(goalId: string): void {
+    this.stmtRemove.run(goalId);
+  }
+
+  list(motebitId: string): Goal[] {
+    const rows = this.stmtList.all(motebitId) as GoalRow[];
+    return rows.map(rowToGoal);
+  }
+
+  updateLastRun(goalId: string, timestamp: number): void {
+    this.stmtUpdateLastRun.run(timestamp, goalId);
+  }
+
+  setEnabled(goalId: string, enabled: boolean): void {
+    this.stmtSetEnabled.run(enabled ? 1 : 0, goalId);
+  }
+}
+
 // === Factory ===
 
 export interface MotebitDatabase {
@@ -732,6 +826,7 @@ export interface MotebitDatabase {
   auditLog: SqliteAuditLog;
   stateSnapshot: SqliteStateSnapshot;
   toolAuditSink: SqliteToolAuditSink;
+  goalStore: SqliteGoalStore;
   close(): void;
 }
 
@@ -762,12 +857,18 @@ export function createMotebitDatabase(dbPath: string): MotebitDatabase {
     db.pragma("user_version = 2");
   }
 
+  if (userVersion < 3) {
+    // Goals table is in SCHEMA for new DBs; this handles upgrades from v2
+    db.pragma("user_version = 3");
+  }
+
   const eventStore = new SqliteEventStore(db);
   const memoryStorage = new SqliteMemoryStorage(db);
   const identityStorage = new SqliteIdentityStorage(db);
   const auditLog = new SqliteAuditLog(db);
   const stateSnapshot = new SqliteStateSnapshot(db);
   const toolAuditSink = new SqliteToolAuditSink(db);
+  const goalStore = new SqliteGoalStore(db);
 
   return {
     db,
@@ -777,6 +878,7 @@ export function createMotebitDatabase(dbPath: string): MotebitDatabase {
     auditLog,
     stateSnapshot,
     toolAuditSink,
+    goalStore,
     close() {
       db.close();
     },
