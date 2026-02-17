@@ -29,7 +29,8 @@
     "@motebit/tools": "workspace:*",
     "@motebit/mcp-client": "workspace:*",
     "@motebit/crypto": "workspace:*",
-    "@motebit/core-identity": "workspace:*"
+    "@motebit/core-identity": "workspace:*",
+    "@motebit/identity-file": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

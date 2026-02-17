@@ -35,6 +35,7 @@ import { connectMcpServers, type McpServerConfig } from "@motebit/mcp-client";
 import { generateKeypair, deriveKey, encrypt, decrypt, generateNonce } from "@motebit/crypto";
 import type { EncryptedPayload } from "@motebit/crypto";
 import { IdentityManager } from "@motebit/core-identity";
+import { generate as generateIdentityFile, verify as verifyIdentityFile } from "@motebit/identity-file";
 
 // --- Constants ---
 
@@ -104,13 +105,15 @@ export interface CliConfig {
   syncToken: string | undefined;
   operator: boolean;
   allowedPaths: string[];
+  output: string | undefined;
   version: boolean;
   help: boolean;
+  positionals: string[];
 }
 
 export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig {
   const cleanArgs = args[0] === "--" ? args.slice(1) : args;
-  const { values } = parseArgs({
+  const { values, positionals } = parseArgs({
     args: cleanArgs,
     options: {
       provider: { type: "string", default: "anthropic" },
@@ -121,6 +124,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       "sync-token": { type: "string" },
       operator: { type: "boolean", default: false },
       "allowed-paths": { type: "string" },
+      output: { type: "string", short: "o" },
       version: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -147,8 +151,10 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     syncToken: values["sync-token"],
     operator: values.operator,
     allowedPaths,
+    output: values.output,
     version: values.version,
     help: values.help,
+    positionals,
   };
 }
 
@@ -156,7 +162,11 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
 
 export function printHelp(): void {
   console.log(`
-Usage: motebit [options]
+Usage: motebit [command] [options]
+
+Commands:
+  init [--output <path>]    Generate a motebit.md identity file
+  verify <path>             Verify a motebit.md identity file signature
 
 Options:
   --provider <name>       AI provider: "anthropic" or "ollama" (default: anthropic)
@@ -725,6 +735,87 @@ Available commands:
   }
 }
 
+// --- Subcommand: init ---
+
+async function handleInit(config: CliConfig): Promise<void> {
+  const fullConfig = loadFullConfig();
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+  // Resolve passphrase
+  const envPassphrase = process.env["MOTEBIT_PASSPHRASE"];
+  let passphrase: string;
+
+  if (fullConfig.cli_encrypted_key) {
+    passphrase = envPassphrase ?? await promptPassphrase(rl, "Passphrase: ");
+    try {
+      await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
+    } catch {
+      console.error("Error: incorrect passphrase.");
+      rl.close();
+      process.exit(1);
+    }
+  } else if (fullConfig.cli_private_key) {
+    passphrase = envPassphrase ?? await promptPassphrase(rl, "Set a passphrase for key encryption: ");
+    if (!passphrase) { console.error("Error: passphrase cannot be empty."); rl.close(); process.exit(1); }
+    fullConfig.cli_encrypted_key = await encryptPrivateKey(fullConfig.cli_private_key, passphrase);
+    delete fullConfig.cli_private_key;
+    saveFullConfig(fullConfig);
+  } else {
+    passphrase = envPassphrase ?? await promptPassphrase(rl, "Set a passphrase for your mote's key: ");
+    if (!passphrase) { console.error("Error: passphrase cannot be empty."); rl.close(); process.exit(1); }
+  }
+
+  // Bootstrap identity if needed
+  const dbPath = getDbPath(config.dbPath);
+  const moteDb = createMotebitDatabase(dbPath);
+  const { motebitId } = await bootstrapIdentity(moteDb, fullConfig, passphrase);
+  moteDb.close();
+
+  // Reload config (may have been updated by bootstrap)
+  const updatedConfig = loadFullConfig();
+
+  // Decrypt private key
+  if (!updatedConfig.cli_encrypted_key) {
+    console.error("Error: no encrypted key found in config.");
+    rl.close();
+    process.exit(1);
+  }
+  const privKeyHex = await decryptPrivateKey(updatedConfig.cli_encrypted_key, passphrase);
+  const privateKey = fromHex(privKeyHex);
+  const publicKeyHex = updatedConfig.device_public_key ?? "";
+
+  // Collect device info
+  const devices = [];
+  if (updatedConfig.device_id && updatedConfig.device_public_key) {
+    devices.push({
+      device_id: updatedConfig.device_id,
+      name: "cli",
+      public_key: updatedConfig.device_public_key,
+      registered_at: new Date().toISOString(),
+    });
+  }
+
+  // Generate the identity file
+  const content = await generateIdentityFile(
+    {
+      motebitId,
+      ownerId: motebitId,
+      publicKeyHex,
+      devices,
+    },
+    privateKey,
+  );
+
+  // Determine output path
+  const outputPath = config.output
+    ? path.resolve(config.output)
+    : path.resolve("motebit.md");
+
+  fs.writeFileSync(outputPath, content, "utf-8");
+  console.log(`Your agent identity file has been created: ${outputPath}`);
+  rl.close();
+}
+
 // --- REPL ---
 
 async function main(): Promise<void> {
@@ -740,6 +831,44 @@ async function main(): Promise<void> {
 
   if (config.help) { printHelp(); return; }
   if (config.version) { printVersion(); return; }
+
+  // --- Subcommands: init / verify ---
+
+  const subcommand = config.positionals[0];
+
+  if (subcommand === "verify") {
+    const filePath = config.positionals[1];
+    if (!filePath) {
+      console.error("Usage: motebit verify <path>");
+      process.exit(1);
+    }
+    const resolved = path.resolve(filePath);
+    let content: string;
+    try {
+      content = fs.readFileSync(resolved, "utf-8");
+    } catch {
+      console.error(`Error: cannot read file: ${resolved}`);
+      process.exit(1);
+    }
+    const result = await verifyIdentityFile(content);
+    if (result.valid && result.identity) {
+      const pubKey = result.identity.identity.public_key;
+      const fingerprint = pubKey.slice(0, 16) + "...";
+      console.log(`Identity:    ${result.identity.motebit_id}`);
+      console.log(`Public key:  ${fingerprint}`);
+      console.log(`Signature:   valid`);
+      process.exit(0);
+    } else {
+      console.error(`Signature:   invalid`);
+      if (result.error) console.error(`Error:       ${result.error}`);
+      process.exit(1);
+    }
+  }
+
+  if (subcommand === "init") {
+    await handleInit(config);
+    return;
+  }
 
   // Load full config (personality + identity + MCP)
   const fullConfig = loadFullConfig();

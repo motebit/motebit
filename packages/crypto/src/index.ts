@@ -188,7 +188,7 @@ export async function verify(signature: Uint8Array, message: Uint8Array, publicK
 
 // === Signed Tokens ===
 
-function toBase64Url(data: Uint8Array): string {
+export function toBase64Url(data: Uint8Array): string {
   let binary = "";
   for (let i = 0; i < data.length; i++) {
     binary += String.fromCharCode(data[i]!);
@@ -196,7 +196,7 @@ function toBase64Url(data: Uint8Array): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-function fromBase64Url(str: string): Uint8Array {
+export function fromBase64Url(str: string): Uint8Array {
   const padded = str.replace(/-/g, "+").replace(/_/g, "/");
   const binary = atob(padded);
   const bytes = new Uint8Array(binary.length);

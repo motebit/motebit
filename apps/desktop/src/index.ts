@@ -20,6 +20,7 @@ import { InMemoryMemoryStorage } from "@motebit/memory-graph";
 import { InMemoryIdentityStorage, IdentityManager } from "@motebit/core-identity";
 import { InMemoryAuditLog } from "@motebit/privacy-layer";
 import { generateKeypair, createSignedToken } from "@motebit/crypto";
+import { generate as generateIdentityFile } from "@motebit/identity-file";
 import { EventStore } from "@motebit/event-log";
 import { TauriEventStore, TauriMemoryStorage, TauriIdentityStorage, type InvokeFn } from "./tauri-storage.js";
 export type { InvokeFn } from "./tauri-storage.js";
@@ -183,6 +184,29 @@ export class DesktopApp {
     // Write motebit_id, device_id, and public key to config
     const updatedConfig = { ...config, motebit_id: identity.motebit_id, device_id: deviceId, device_public_key: pubKeyHex };
     await invoke<void>("write_config", { json: JSON.stringify(updatedConfig) });
+
+    // Generate motebit.md identity file alongside config
+    try {
+      const identityFileContent = await generateIdentityFile(
+        {
+          motebitId: identity.motebit_id,
+          ownerId: identity.motebit_id,
+          publicKeyHex: pubKeyHex,
+          devices: [{
+            device_id: deviceId,
+            name: deviceName,
+            public_key: pubKeyHex,
+            registered_at: new Date().toISOString(),
+          }],
+        },
+        keypair.privateKey,
+      );
+      await invoke<void>("write_config", {
+        json: JSON.stringify({ ...updatedConfig, _identity_file: identityFileContent }),
+      });
+    } catch {
+      // Non-fatal — identity file generation is best-effort on desktop
+    }
 
     this.motebitId = identity.motebit_id;
     this.deviceId = deviceId;

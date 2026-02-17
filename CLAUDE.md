@@ -6,7 +6,7 @@ Every AI product today owns the intelligence and rents you a session. Motebit in
 
 A motebit is a persistent, cryptographically-anchored, sovereign agent — a vessel that connects to any intelligence provider, any tool ecosystem (MCP), and any device. The intelligence is a commodity. The identity, with its accumulated memory, trust, and governance, is the asset.
 
-**The body is passive. The interior is active.** `MOTEBIT.md` derives the form from physics: the body has no agency, it breathes because droplets oscillate, it orbits because it is captured by the user's attentional field. But the thesis also establishes that glass transmits — the interior is visible without being added to the surface. The agent lives inside the droplet. Memory, trust, identity, tool use — these are interior structures. The policy gate, the privacy layer, the governance — these are the surface tension. The form doesn't change. The interior accumulates. Maximum interiority, minimum display. The physics of form and the architecture of function are the same principle operating at different scales.
+**The body is passive. The interior is active.** `DROPLET.md` derives the form from physics: the body has no agency, it breathes because droplets oscillate, it orbits because it is captured by the user's attentional field. But the thesis also establishes that glass transmits — the interior is visible without being added to the surface. The agent lives inside the droplet. Memory, trust, identity, tool use — these are interior structures. The policy gate, the privacy layer, the governance — these are the surface tension. The form doesn't change. The interior accumulates. Maximum interiority, minimum display. The physics of form and the architecture of function are the same principle operating at different scales.
 
 **Position in the agentic economy.** MCP defines capability — what tools an agent can reach — but says nothing about who the agent is. There is no trust accumulation, no audit trail, no governance. Motebit is the missing layer: cryptographic identity (Ed25519 keypairs, device registration, signed tokens) that can prove who it is to any service, persistent memory that compounds instead of resetting, and policy governance that controls what crosses the surface.
 
@@ -17,7 +17,7 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent — a ves
 
 **Where the implementation stands.** The desktop app is the flagship (~80%): identity bootstrap, operator mode, tool approval, sync relay, rendering. The CLI is a developer debugging interface. Mobile is an early MVP. The current surfaces are chat-based — the sovereign agent vision is ahead of the UI. The infrastructure (identity, crypto, policy, memory, sync) is built. The agentic surface that exposes it is next.
 
-Read `MOTEBIT.md` for the full design thesis on form. Every visual and behavioral decision derives from droplet physics. If it can't be traced to surface tension, it doesn't belong.
+Read `DROPLET.md` for the full design thesis on form. Every visual and behavioral decision derives from droplet physics. If it can't be traced to surface tension, it doesn't belong.
 
 ## Architecture
 
@@ -48,6 +48,7 @@ packages/
   persistence/     SQLite schema (WAL mode), adapters for events/memories/identities/audit/state/devices
   tools/           InMemoryToolRegistry, builtin tools, MCP tool merge
   mcp-client/      MCP stdio client, tool discovery, external data boundary marking
+  identity-file/   Generate, parse, verify motebit.md — cryptographically signed agent identity files
   policy-invariants/ Clamping rules, state bounds validation
 
 services/
