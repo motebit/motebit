@@ -25,6 +25,7 @@
     "@motebit/sdk": "workspace:*",
     "@motebit/state-vector": "workspace:*",
     "@motebit/behavior-engine": "workspace:*",
+    "@motebit/sync-engine": "workspace:*",
     "@react-native-async-storage/async-storage": "^2.1.0",
     "expo": "~52.0.0",
     "expo-router": "~4.0.0",

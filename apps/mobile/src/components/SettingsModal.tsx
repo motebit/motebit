@@ -44,6 +44,7 @@ interface SettingsModalProps {
   onSave: (settings: MobileSettings, aiConfig?: MobileAIConfig) => void;
   onClose: () => void;
   onRequestPin: (mode: "setup" | "verify" | "reset") => void;
+  onLinkDevice?: () => void;
 }
 
 export function SettingsModal({
@@ -53,6 +54,7 @@ export function SettingsModal({
   onSave,
   onClose,
   onRequestPin,
+  onLinkDevice,
 }: SettingsModalProps): React.ReactElement {
   const [tab, setTab] = useState<Tab>("appearance");
   const [draft, setDraft] = useState<MobileSettings>(settings);
@@ -169,6 +171,7 @@ export function SettingsModal({
               deviceId={identity.deviceId}
               publicKey={identity.publicKey}
               onExport={() => void app.exportAllData().then((d) => Alert.alert("Export", d))}
+              onLinkDevice={onLinkDevice}
             />
           )}
         </ScrollView>
@@ -363,11 +366,13 @@ function IdentityTab({
   deviceId,
   publicKey,
   onExport,
+  onLinkDevice,
 }: {
   motebitId: string;
   deviceId: string;
   publicKey: string;
   onExport: () => void;
+  onLinkDevice?: () => void;
 }) {
   const copyToClipboard = (value: string) => {
     Clipboard.setString(value);
@@ -392,6 +397,12 @@ function IdentityTab({
       </TouchableOpacity>
 
       <Text style={styles.hint}>Tap any field to copy to clipboard.</Text>
+
+      {onLinkDevice && (
+        <TouchableOpacity style={styles.linkDeviceButton} onPress={onLinkDevice} activeOpacity={0.7}>
+          <Text style={styles.linkDeviceText}>Link Another Device</Text>
+        </TouchableOpacity>
+      )}
 
       <TouchableOpacity style={styles.exportButton} onPress={onExport} activeOpacity={0.7}>
         <Text style={styles.exportText}>Export All Data</Text>
@@ -569,11 +580,21 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: 8,
   },
+  linkDeviceButton: {
+    backgroundColor: "#1a2838",
+    borderRadius: 10,
+    paddingVertical: 14,
+    marginTop: 20,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#2a4060",
+  },
+  linkDeviceText: { color: "#4080c0", fontSize: 15, fontWeight: "600" },
   exportButton: {
     backgroundColor: "#1a2030",
     borderRadius: 10,
     paddingVertical: 14,
-    marginTop: 20,
+    marginTop: 12,
     alignItems: "center",
   },
   exportText: { color: "#4080c0", fontSize: 15, fontWeight: "600" },

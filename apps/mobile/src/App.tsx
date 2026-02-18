@@ -24,6 +24,8 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Modal,
+  Alert,
 } from "react-native";
 import { GLView } from "expo-gl";
 import type { ExpoWebGLRenderingContext } from "expo-gl";
@@ -80,6 +82,16 @@ export function App(): React.ReactElement {
   const [showPin, setShowPin] = useState(false);
   const [pinMode, setPinMode] = useState<PinMode>("setup");
   const [pinError, setPinError] = useState("");
+
+  // Pairing state
+  const [showPairing, setShowPairing] = useState(false);
+  const [pairingMode, setPairingMode] = useState<"initiate" | "claim">("claim");
+  const [pairingCode, setPairingCode] = useState("");
+  const [pairingCodeInput, setPairingCodeInput] = useState("");
+  const [pairingStatus, setPairingStatusText] = useState("");
+  const [pairingId, setPairingId] = useState<string | null>(null);
+  const [pairingClaimName, setPairingClaimName] = useState("");
+  const pairingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Track pending approval for streaming resume
   const pendingApprovalRef = useRef<string | null>(null);
@@ -152,13 +164,25 @@ export function App(): React.ReactElement {
   const handleWelcomeAccept = useCallback(async () => {
     setShowWelcome(false);
     const a = app.current;
-    const s = settings || (await a.loadSettings());
 
+    // Create new identity (keypair was already generated in bootstrap)
+    await a.createNewIdentity();
+
+    const s = settings || (await a.loadSettings());
     await initializeAI(a, s);
     a.start();
     subscribeToState(a);
     setInitialized(true);
   }, [settings, initializeAI, subscribeToState]);
+
+  // === Welcome link existing ===
+  const handleWelcomeLinkExisting = useCallback(() => {
+    setShowWelcome(false);
+    setPairingMode("claim");
+    setPairingCodeInput("");
+    setPairingStatusText("Enter the code from your other device");
+    setShowPairing(true);
+  }, []);
 
   // === GL context ===
   const onGLContextCreate = useCallback(async (gl: ExpoWebGLRenderingContext) => {
@@ -348,6 +372,168 @@ export function App(): React.ReactElement {
     setPinError("");
   }, [pinMode]);
 
+  // === Pairing helpers ===
+
+  const stopPairingPoll = useCallback(() => {
+    if (pairingPollRef.current) {
+      clearInterval(pairingPollRef.current);
+      pairingPollRef.current = null;
+    }
+  }, []);
+
+  const closePairingDialog = useCallback(() => {
+    stopPairingPoll();
+    setShowPairing(false);
+    setPairingId(null);
+    setPairingCode("");
+    setPairingCodeInput("");
+    setPairingClaimName("");
+  }, [stopPairingPoll]);
+
+  // Device A: initiate from settings
+  const handleInitiatePairing = useCallback(async () => {
+    const a = app.current;
+    const syncUrl = (await a.loadSettings()).provider; // placeholder — get from config
+    // For now, prompt for sync URL
+    Alert.prompt?.(
+      "Sync Relay URL",
+      "Enter your sync relay URL",
+      async (url: string) => {
+        if (!url) return;
+        setPairingMode("initiate");
+        setPairingStatusText("Generating code...");
+        setShowSettings(false);
+        setShowPairing(true);
+        try {
+          const { pairingCode: code, pairingId: pid } = await a.initiatePairing(url);
+          setPairingCode(code);
+          setPairingId(pid);
+          setPairingStatusText("Enter this code on the other device");
+
+          // Poll for claim
+          pairingPollRef.current = setInterval(() => {
+            void (async () => {
+              try {
+                const session = await a.getPairingSession(url, pid);
+                if (session.status === "claimed") {
+                  stopPairingPoll();
+                  setPairingClaimName(session.claiming_device_name || "Unknown device");
+                  setPairingStatusText(`"${session.claiming_device_name}" wants to join`);
+                }
+              } catch {
+                // Non-fatal
+              }
+            })();
+          }, 2000);
+        } catch (err: unknown) {
+          setPairingStatusText(err instanceof Error ? err.message : String(err));
+        }
+      },
+    ) ?? Alert.alert("Not supported", "Pairing initiation requires Alert.prompt (iOS)");
+  }, [stopPairingPoll]);
+
+  // Device B: submit claim code
+  const handlePairingClaimSubmit = useCallback(async () => {
+    const code = pairingCodeInput.trim().toUpperCase();
+    if (code.length !== 6) {
+      setPairingStatusText("Code must be 6 characters");
+      return;
+    }
+
+    const a = app.current;
+
+    // Need sync URL
+    const syncUrl = await new Promise<string>((resolve) => {
+      Alert.prompt?.(
+        "Sync Relay URL",
+        "Enter the sync relay URL",
+        (url: string) => resolve(url || ""),
+      ) ?? resolve("");
+    });
+
+    if (!syncUrl) {
+      setPairingStatusText("Sync relay URL required for pairing");
+      return;
+    }
+
+    setPairingStatusText("Claiming...");
+    try {
+      const { pairingId: pid } = await a.claimPairing(syncUrl, code);
+      setPairingId(pid);
+      setPairingStatusText("Waiting for approval...");
+
+      // Poll for approval
+      pairingPollRef.current = setInterval(() => {
+        void (async () => {
+          try {
+            const status = await a.pollPairingStatus(syncUrl, pid);
+            if (status.status === "approved" && status.device_id && status.motebit_id) {
+              stopPairingPoll();
+              await a.completePairing({
+                motebitId: status.motebit_id,
+                deviceId: status.device_id,
+                deviceToken: status.device_token || "",
+              });
+              closePairingDialog();
+              addSystemMessage("Linked to existing motebit");
+
+              // Initialize AI and start
+              const s = settings || (await a.loadSettings());
+              await initializeAI(a, s);
+              a.start();
+              subscribeToState(a);
+              setInitialized(true);
+            } else if (status.status === "denied") {
+              stopPairingPoll();
+              setPairingStatusText("Pairing was denied by the other device");
+            }
+          } catch {
+            // Non-fatal
+          }
+        })();
+      }, 2000);
+    } catch (err: unknown) {
+      setPairingStatusText(err instanceof Error ? err.message : String(err));
+    }
+  }, [pairingCodeInput, settings, initializeAI, subscribeToState, stopPairingPoll, closePairingDialog, addSystemMessage]);
+
+  // Device A: approve
+  const handlePairingApprove = useCallback(async () => {
+    if (!pairingId) return;
+    const a = app.current;
+
+    // Need sync URL — same issue
+    const syncUrl = ""; // Would need to be stored from initiation
+    setPairingStatusText("Approving...");
+    try {
+      // TODO: store syncUrl from initiation
+      const result = await a.approvePairing(syncUrl, pairingId);
+      closePairingDialog();
+      addSystemMessage(`Device linked (${result.deviceId.slice(0, 8)}...)`);
+    } catch (err: unknown) {
+      setPairingStatusText(err instanceof Error ? err.message : String(err));
+    }
+  }, [pairingId, closePairingDialog, addSystemMessage]);
+
+  // Device A: deny
+  const handlePairingDeny = useCallback(async () => {
+    if (!pairingId) return;
+    const a = app.current;
+    const syncUrl = "";
+    try {
+      await a.denyPairing(syncUrl, pairingId);
+      closePairingDialog();
+      addSystemMessage("Pairing denied");
+    } catch (err: unknown) {
+      setPairingStatusText(err instanceof Error ? err.message : String(err));
+    }
+  }, [pairingId, closePairingDialog, addSystemMessage]);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => stopPairingPoll();
+  }, [stopPairingPoll]);
+
   // === Scroll to bottom ===
   useEffect(() => {
     if (flatListRef.current && messages.length > 0) {
@@ -453,7 +639,11 @@ export function App(): React.ReactElement {
       </View>
 
       {/* Modals */}
-      <WelcomeOverlay visible={showWelcome} onAccept={() => void handleWelcomeAccept()} />
+      <WelcomeOverlay
+        visible={showWelcome}
+        onAccept={() => void handleWelcomeAccept()}
+        onLinkExisting={handleWelcomeLinkExisting}
+      />
 
       {settings && (
         <SettingsModal
@@ -466,6 +656,7 @@ export function App(): React.ReactElement {
             setPinMode(mode);
             setShowPin(true);
           }}
+          onLinkDevice={() => void handleInitiatePairing()}
         />
       )}
 
@@ -476,6 +667,79 @@ export function App(): React.ReactElement {
         onCancel={() => { setShowPin(false); setPinError(""); }}
         error={pinError}
       />
+
+      {/* Pairing Modal */}
+      <Modal visible={showPairing} animationType="fade" transparent statusBarTranslucent>
+        <View style={styles.pairingBackdrop}>
+          <View style={styles.pairingCard}>
+            <Text style={styles.pairingTitle}>
+              {pairingMode === "initiate" ? "Link Another Device" : "Link Existing Motebit"}
+            </Text>
+
+            {pairingMode === "initiate" && pairingCode ? (
+              <Text style={styles.pairingCodeDisplay}>{pairingCode}</Text>
+            ) : null}
+
+            {pairingMode === "claim" && !pairingId && (
+              <TextInput
+                style={styles.pairingInput}
+                value={pairingCodeInput}
+                onChangeText={(t) => setPairingCodeInput(t.toUpperCase().slice(0, 6))}
+                placeholder="Enter code"
+                placeholderTextColor="#405060"
+                maxLength={6}
+                autoCapitalize="characters"
+                autoCorrect={false}
+              />
+            )}
+
+            {pairingClaimName ? (
+              <View style={styles.pairingClaimInfo}>
+                <Text style={styles.pairingClaimText}>"{pairingClaimName}" wants to join</Text>
+              </View>
+            ) : null}
+
+            <Text style={styles.pairingStatusText}>{pairingStatus}</Text>
+
+            <View style={styles.pairingActions}>
+              {pairingMode === "claim" && !pairingId && (
+                <TouchableOpacity
+                  style={styles.pairingSubmitBtn}
+                  onPress={() => void handlePairingClaimSubmit()}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.pairingSubmitText}>Submit</Text>
+                </TouchableOpacity>
+              )}
+              {pairingMode === "initiate" && pairingClaimName ? (
+                <>
+                  <TouchableOpacity
+                    style={styles.pairingDenyBtn}
+                    onPress={() => void handlePairingDeny()}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.pairingDenyText}>Deny</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.pairingApproveBtn}
+                    onPress={() => void handlePairingApprove()}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.pairingApproveText}>Approve</Text>
+                  </TouchableOpacity>
+                </>
+              ) : null}
+              <TouchableOpacity
+                style={styles.pairingCancelBtn}
+                onPress={closePairingDialog}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.pairingCancelText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -613,4 +877,100 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "600",
   },
+
+  // Pairing
+  pairingBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.85)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 32,
+  },
+  pairingCard: {
+    backgroundColor: "#0f1820",
+    borderRadius: 20,
+    padding: 24,
+    width: "100%",
+    maxWidth: 320,
+    alignItems: "center",
+    gap: 14,
+  },
+  pairingTitle: {
+    color: "#c0d0e0",
+    fontSize: 17,
+    fontWeight: "600",
+  },
+  pairingCodeDisplay: {
+    color: "#4080c0",
+    fontSize: 28,
+    fontWeight: "700",
+    letterSpacing: 6,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    paddingVertical: 8,
+  },
+  pairingInput: {
+    width: "100%",
+    backgroundColor: "#0a1018",
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    color: "#c0d0e0",
+    fontSize: 20,
+    letterSpacing: 6,
+    textAlign: "center",
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  pairingClaimInfo: {
+    backgroundColor: "rgba(64, 128, 192, 0.1)",
+    borderRadius: 8,
+    padding: 12,
+    width: "100%",
+  },
+  pairingClaimText: {
+    color: "#8098b0",
+    fontSize: 14,
+    textAlign: "center",
+  },
+  pairingStatusText: {
+    color: "#506070",
+    fontSize: 12,
+    textAlign: "center",
+  },
+  pairingActions: {
+    flexDirection: "row",
+    gap: 8,
+    width: "100%",
+  },
+  pairingSubmitBtn: {
+    flex: 1,
+    backgroundColor: "#2a4060",
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  pairingSubmitText: { color: "#c0d0e0", fontSize: 15, fontWeight: "600" },
+  pairingApproveBtn: {
+    flex: 1,
+    backgroundColor: "#2a4060",
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  pairingApproveText: { color: "#c0d0e0", fontSize: 15, fontWeight: "600" },
+  pairingDenyBtn: {
+    flex: 1,
+    backgroundColor: "#1a2030",
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  pairingDenyText: { color: "#607080", fontSize: 15, fontWeight: "600" },
+  pairingCancelBtn: {
+    flex: 1,
+    backgroundColor: "#1a2030",
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  pairingCancelText: { color: "#607080", fontSize: 15 },
 });

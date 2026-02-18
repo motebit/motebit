@@ -4,9 +4,10 @@ import { Modal, View, Text, TouchableOpacity, StyleSheet } from "react-native";
 interface WelcomeOverlayProps {
   visible: boolean;
   onAccept: () => void;
+  onLinkExisting?: () => void;
 }
 
-export function WelcomeOverlay({ visible, onAccept }: WelcomeOverlayProps): React.ReactElement {
+export function WelcomeOverlay({ visible, onAccept, onLinkExisting }: WelcomeOverlayProps): React.ReactElement {
   return (
     <Modal visible={visible} animationType="fade" transparent statusBarTranslucent>
       <View style={styles.backdrop}>
@@ -24,6 +25,11 @@ export function WelcomeOverlay({ visible, onAccept }: WelcomeOverlayProps): Reac
           <TouchableOpacity style={styles.button} onPress={onAccept} activeOpacity={0.8}>
             <Text style={styles.buttonText}>Create My Mote</Text>
           </TouchableOpacity>
+          {onLinkExisting && (
+            <TouchableOpacity style={styles.linkButton} onPress={onLinkExisting} activeOpacity={0.7}>
+              <Text style={styles.linkText}>I have an existing motebit</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
     </Modal>
@@ -70,5 +76,14 @@ const styles = StyleSheet.create({
     color: "#c0d0e0",
     fontSize: 16,
     fontWeight: "600",
+  },
+  linkButton: {
+    paddingVertical: 10,
+    alignItems: "center",
+  },
+  linkText: {
+    color: "#506070",
+    fontSize: 13,
+    textDecorationLine: "underline",
   },
 });

@@ -7,6 +7,8 @@ export { WebSocketEventStoreAdapter } from "./ws-adapter.js";
 export type { WebSocketAdapterConfig, EventReceivedCallback } from "./ws-adapter.js";
 export { EncryptedEventStoreAdapter } from "./encrypted-adapter.js";
 export type { EncryptedAdapterConfig } from "./encrypted-adapter.js";
+export { PairingClient } from "./pairing-client.js";
+export type { PairingClientConfig, PairingSession, PairingStatus } from "./pairing-client.js";
 
 // === Sync Configuration ===
 

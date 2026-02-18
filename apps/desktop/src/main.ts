@@ -1,4 +1,4 @@
-import { DesktopApp, COLOR_PRESETS, isSlashCommand, parseSlashCommand, type DesktopAIConfig, type InvokeFn, type McpServerConfig, type PolicyConfig } from "./index";
+import { DesktopApp, COLOR_PRESETS, isSlashCommand, parseSlashCommand, type DesktopAIConfig, type InvokeFn, type McpServerConfig, type PolicyConfig, type PairingSession } from "./index";
 import { stripTags } from "@motebit/ai-core";
 
 const canvas = document.getElementById("motebit-canvas") as HTMLCanvasElement;
@@ -496,6 +496,232 @@ document.getElementById("settings-docs")!.addEventListener("click", () => {
   window.open("https://docs.motebit.dev", "_blank");
 });
 
+// === Pairing Dialog ===
+
+const pairingBackdrop = document.getElementById("pairing-backdrop") as HTMLDivElement;
+const pairingTitle = document.getElementById("pairing-title") as HTMLDivElement;
+const pairingCodeDisplay = document.getElementById("pairing-code-display") as HTMLDivElement;
+const pairingInputRow = document.getElementById("pairing-input-row") as HTMLDivElement;
+const pairingCodeInput = document.getElementById("pairing-code-input") as HTMLInputElement;
+const pairingClaimInfo = document.getElementById("pairing-claim-info") as HTMLDivElement;
+const pairingStatus = document.getElementById("pairing-status") as HTMLDivElement;
+const pairingActions = document.getElementById("pairing-actions") as HTMLDivElement;
+
+let pairingPollTimer: ReturnType<typeof setInterval> | null = null;
+
+function closePairingDialog(): void {
+  pairingBackdrop.classList.remove("open");
+  if (pairingPollTimer) {
+    clearInterval(pairingPollTimer);
+    pairingPollTimer = null;
+  }
+}
+
+function resetPairingDialog(): void {
+  pairingCodeDisplay.style.display = "none";
+  pairingCodeDisplay.textContent = "";
+  pairingInputRow.style.display = "none";
+  pairingCodeInput.value = "";
+  pairingClaimInfo.style.display = "none";
+  pairingClaimInfo.textContent = "";
+  pairingStatus.textContent = "";
+  pairingActions.innerHTML = '<button class="pairing-btn-cancel" id="pairing-cancel">Cancel</button>';
+  document.getElementById("pairing-cancel")!.addEventListener("click", closePairingDialog);
+}
+
+// Device A: "Link Another Device" from settings
+document.getElementById("settings-link-device")!.addEventListener("click", () => {
+  if (!currentConfig?.isTauri || !currentConfig?.invoke) {
+    addMessage("system", "Pairing requires Tauri (not available in dev mode)");
+    return;
+  }
+  const syncUrl = currentConfig.syncUrl;
+  if (!syncUrl) {
+    addMessage("system", "No sync relay configured — set sync_url in config");
+    return;
+  }
+
+  closeSettings();
+  resetPairingDialog();
+  pairingTitle.textContent = "Link Another Device";
+  pairingStatus.textContent = "Generating code...";
+  pairingBackdrop.classList.add("open");
+
+  const invoke = currentConfig.invoke;
+
+  void (async () => {
+    try {
+      const { pairingCode, pairingId } = await app.initiatePairing(invoke, syncUrl);
+
+
+      pairingCodeDisplay.textContent = pairingCode;
+      pairingCodeDisplay.style.display = "block";
+      pairingStatus.textContent = "Enter this code on the other device";
+
+      // Poll for claim every 2s
+      pairingPollTimer = setInterval(() => {
+        void pollForClaim(invoke, syncUrl, pairingId);
+      }, 2000);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      pairingStatus.textContent = `Error: ${msg}`;
+    }
+  })();
+});
+
+async function pollForClaim(invoke: InvokeFn, syncUrl: string, pairingId: string): Promise<void> {
+  try {
+    const session: PairingSession = await app.getPairingSession(invoke, syncUrl, pairingId);
+
+    if (session.status === "claimed") {
+      // Stop polling, show approve/deny
+      if (pairingPollTimer) {
+        clearInterval(pairingPollTimer);
+        pairingPollTimer = null;
+      }
+
+      pairingCodeDisplay.style.display = "none";
+      pairingClaimInfo.style.display = "block";
+      pairingClaimInfo.textContent = `"${session.claiming_device_name}" wants to join`;
+      pairingStatus.textContent = "";
+
+      pairingActions.innerHTML = "";
+      const denyBtn = document.createElement("button");
+      denyBtn.className = "pairing-btn-deny";
+      denyBtn.textContent = "Deny";
+      denyBtn.addEventListener("click", () => {
+        void (async () => {
+          try {
+            await app.denyPairing(invoke, syncUrl, pairingId);
+            closePairingDialog();
+            addMessage("system", "Pairing denied");
+          } catch (err: unknown) {
+            pairingStatus.textContent = err instanceof Error ? err.message : String(err);
+          }
+        })();
+      });
+
+      const approveBtn = document.createElement("button");
+      approveBtn.className = "pairing-btn-approve";
+      approveBtn.textContent = "Approve";
+      approveBtn.addEventListener("click", () => {
+        void (async () => {
+          try {
+            approveBtn.disabled = true;
+            denyBtn.disabled = true;
+            pairingStatus.textContent = "Approving...";
+            const result = await app.approvePairing(invoke, syncUrl, pairingId);
+            closePairingDialog();
+            addMessage("system", `Device linked (${result.deviceId.slice(0, 8)}...)`);
+          } catch (err: unknown) {
+            pairingStatus.textContent = err instanceof Error ? err.message : String(err);
+            approveBtn.disabled = false;
+            denyBtn.disabled = false;
+          }
+        })();
+      });
+
+      pairingActions.appendChild(denyBtn);
+      pairingActions.appendChild(approveBtn);
+    }
+  } catch {
+    // Polling errors are non-fatal
+  }
+}
+
+// Device B: "I have an existing motebit" from welcome
+function startPairingClaim(invoke: InvokeFn, syncUrl: string): void {
+  resetPairingDialog();
+  pairingTitle.textContent = "Link Existing Motebit";
+  pairingInputRow.style.display = "block";
+  pairingStatus.textContent = "Enter the code from your other device";
+
+  const submitBtn = document.createElement("button");
+  submitBtn.className = "pairing-btn-approve";
+  submitBtn.textContent = "Submit";
+
+  pairingActions.innerHTML = "";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.className = "pairing-btn-cancel";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.addEventListener("click", closePairingDialog);
+
+  submitBtn.addEventListener("click", () => {
+    const code = pairingCodeInput.value.trim().toUpperCase();
+    if (code.length !== 6) {
+      pairingStatus.textContent = "Code must be 6 characters";
+      return;
+    }
+    void handlePairingClaim(invoke, syncUrl, code);
+  });
+
+  pairingCodeInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") submitBtn.click();
+  });
+
+  pairingActions.appendChild(cancelBtn);
+  pairingActions.appendChild(submitBtn);
+  pairingBackdrop.classList.add("open");
+  pairingCodeInput.focus();
+}
+
+async function handlePairingClaim(invoke: InvokeFn, syncUrl: string, code: string): Promise<void> {
+  pairingStatus.textContent = "Claiming...";
+  pairingInputRow.style.display = "none";
+
+  try {
+    const { pairingId } = await app.claimPairing(syncUrl, code);
+    pairingStatus.textContent = "Waiting for approval...";
+
+    // Remove submit button, keep only cancel
+    pairingActions.innerHTML = "";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "pairing-btn-cancel";
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.addEventListener("click", closePairingDialog);
+    pairingActions.appendChild(cancelBtn);
+
+    // Poll for approval every 2s
+    pairingPollTimer = setInterval(() => {
+      void (async () => {
+        try {
+          const status = await app.pollPairingStatus(syncUrl, pairingId);
+          if (status.status === "approved" && status.device_id && status.motebit_id) {
+            if (pairingPollTimer) {
+              clearInterval(pairingPollTimer);
+              pairingPollTimer = null;
+            }
+            await app.completePairing(invoke, {
+              motebitId: status.motebit_id,
+              deviceId: status.device_id,
+              deviceToken: status.device_token || "",
+            });
+            closePairingDialog();
+            // Close welcome if still open
+            const welcomeBackdrop = document.getElementById("welcome-backdrop") as HTMLDivElement;
+            welcomeBackdrop.classList.remove("open");
+            addMessage("system", "Linked to existing motebit");
+          } else if (status.status === "denied") {
+            if (pairingPollTimer) {
+              clearInterval(pairingPollTimer);
+              pairingPollTimer = null;
+            }
+            pairingStatus.textContent = "Pairing was denied by the other device";
+          }
+        } catch {
+          // Polling errors are non-fatal
+        }
+      })();
+    }, 2000);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    pairingStatus.textContent = `Error: ${msg}`;
+    pairingInputRow.style.display = "block";
+  }
+}
+
+document.getElementById("pairing-cancel")!.addEventListener("click", closePairingDialog);
+
 // === Settings Open / Close ===
 
 function openSettings(): void {
@@ -832,31 +1058,60 @@ async function bootstrap(): Promise<void> {
         addMessage("system", `Identity bootstrap failed: ${msg}`);
       }
     } else {
-      // First launch — wait for consent
-      await new Promise<void>((resolve) => {
-        document.getElementById("welcome-start")!.addEventListener("click", () => {
-          welcomeBackdrop.classList.remove("open");
-          resolve();
-        });
+      // First launch — wait for consent or link existing
+      const action = await new Promise<"create" | "link">((resolve) => {
+        document.getElementById("welcome-start")!.addEventListener("click", () => resolve("create"));
+        document.getElementById("welcome-link-existing")!.addEventListener("click", () => resolve("link"));
       });
 
-      try {
-        const result = await app.bootstrap(invoke);
-        if (result.isFirstLaunch) {
-          addMessage("system", "Your mote has been created");
+      if (action === "link") {
+        // Need sync URL for pairing
+        const linkSyncUrl = (parsed.sync_url as string) || "";
+        if (!linkSyncUrl) {
+          welcomeBackdrop.classList.remove("open");
+          addMessage("system", "No sync relay configured — set sync_url in config to link devices");
+          // Fall through to create identity
+          try {
+            const result = await app.bootstrap(invoke);
+            if (result.isFirstLaunch) {
+              addMessage("system", "Your mote has been created");
+            }
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            addMessage("system", `Identity bootstrap failed: ${msg}`);
+          }
+        } else {
+          // Bootstrap to generate keypair, then start pairing claim
+          try {
+            await app.bootstrap(invoke);
+          } catch {
+            // Non-fatal — we just need the keypair
+          }
+          startPairingClaim(invoke, linkSyncUrl);
+          // Don't close welcome backdrop yet — pairing dialog sits on top
+          // The completePairing flow will close it
         }
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        addMessage("system", `Identity bootstrap failed: ${msg}`);
-      }
+      } else {
+        welcomeBackdrop.classList.remove("open");
 
-      // Sync relay registration (if configured)
-      if (config.syncUrl && config.syncMasterToken) {
         try {
-          await app.registerWithRelay(invoke, config.syncUrl, config.syncMasterToken);
+          const result = await app.bootstrap(invoke);
+          if (result.isFirstLaunch) {
+            addMessage("system", "Your mote has been created");
+          }
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
-          addMessage("system", `Sync relay registration failed: ${msg}`);
+          addMessage("system", `Identity bootstrap failed: ${msg}`);
+        }
+
+        // Sync relay registration (if configured)
+        if (config.syncUrl && config.syncMasterToken) {
+          try {
+            await app.registerWithRelay(invoke, config.syncUrl, config.syncMasterToken);
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            addMessage("system", `Sync relay registration failed: ${msg}`);
+          }
         }
       }
     }

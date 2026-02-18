@@ -20,8 +20,10 @@ import type {
   MemoryGovernanceConfig,
 } from "@motebit/runtime";
 import { CloudProvider, OllamaProvider } from "@motebit/ai-core";
-import { generateKeypair } from "@motebit/crypto";
+import { generateKeypair, createSignedToken } from "@motebit/crypto";
 import { IdentityManager } from "@motebit/core-identity";
+import { PairingClient } from "@motebit/sync-engine";
+import type { PairingSession, PairingStatus } from "@motebit/sync-engine";
 import { EventStore } from "@motebit/event-log";
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";
 import { createExpoStorage } from "./adapters/expo-sqlite";
@@ -109,6 +111,7 @@ export interface MobileAIConfig {
 
 export interface MobileBootstrapResult {
   isFirstLaunch: boolean;
+  needsPairing: boolean;
   motebitId: string;
   deviceId: string;
 }
@@ -138,21 +141,34 @@ export class MobileApp {
       this.motebitId = existingId;
       this.deviceId = (await this.keyring.get("device_id")) || "mobile-local";
       this.publicKey = (await this.keyring.get("device_public_key")) || "";
-      return { isFirstLaunch: false, motebitId: this.motebitId, deviceId: this.deviceId };
+      return { isFirstLaunch: false, needsPairing: false, motebitId: this.motebitId, deviceId: this.deviceId };
     }
 
-    // First launch — create identity and device keypair
+    // First launch — generate keypair but don't create identity yet.
+    // The user may choose to link an existing motebit instead.
+    const keypair = await generateKeypair();
+    const pubKeyHex = Array.from(keypair.publicKey as Uint8Array).map((b: number) => b.toString(16).padStart(2, "0")).join("");
+    const privKeyHex = Array.from(keypair.privateKey as Uint8Array).map((b: number) => b.toString(16).padStart(2, "0")).join("");
+
+    // Store keypair immediately so it's available for pairing or new identity
+    await this.keyring.set("device_public_key", pubKeyHex);
+    await this.keyring.set("device_private_key", privKeyHex);
+    this.publicKey = pubKeyHex;
+
+    return { isFirstLaunch: true, needsPairing: true, motebitId: "", deviceId: "" };
+  }
+
+  /**
+   * Create a new identity (called when user chooses "Create My Mote").
+   */
+  async createNewIdentity(): Promise<MobileBootstrapResult> {
     const storage = createExpoStorage("motebit.db");
     const eventStore = new EventStore(storage.eventStore);
     const identityManager = new IdentityManager(storage.identityStorage, eventStore);
 
     const deviceName = "Mobile";
     const identity = await identityManager.create(deviceName);
-    const keypair = await generateKeypair();
-
-    // Hex-encode keys
-    const pubKeyHex = Array.from(keypair.publicKey as Uint8Array).map((b: number) => b.toString(16).padStart(2, "0")).join("");
-    const privKeyHex = Array.from(keypair.privateKey as Uint8Array).map((b: number) => b.toString(16).padStart(2, "0")).join("");
+    const pubKeyHex = this.publicKey; // Already generated in bootstrap
 
     const deviceId = crypto.randomUUID();
 
@@ -162,14 +178,11 @@ export class MobileApp {
     // Persist to secure store
     await this.keyring.set("motebit_id", identity.motebit_id);
     await this.keyring.set("device_id", deviceId);
-    await this.keyring.set("device_public_key", pubKeyHex);
-    await this.keyring.set("device_private_key", privKeyHex);
 
     this.motebitId = identity.motebit_id;
     this.deviceId = deviceId;
-    this.publicKey = pubKeyHex;
 
-    return { isFirstLaunch: true, motebitId: this.motebitId, deviceId: this.deviceId };
+    return { isFirstLaunch: true, needsPairing: false, motebitId: this.motebitId, deviceId: this.deviceId };
   }
 
   // === AI ===
@@ -361,5 +374,70 @@ export class MobileApp {
       exported_at: new Date().toISOString(),
     };
     return JSON.stringify(data, null, 2);
+  }
+
+  // === Pairing: Device A (existing device) ===
+
+  private async createSyncToken(): Promise<string> {
+    const privKeyHex = await this.keyring.get("device_private_key");
+    if (!privKeyHex) throw new Error("No device private key available");
+
+    const privKeyBytes = new Uint8Array(privKeyHex.length / 2);
+    for (let i = 0; i < privKeyHex.length; i += 2) {
+      privKeyBytes[i / 2] = parseInt(privKeyHex.slice(i, i + 2), 16);
+    }
+
+    return createSignedToken(
+      { mid: this.motebitId, did: this.deviceId, iat: Date.now(), exp: Date.now() + 5 * 60 * 1000 },
+      privKeyBytes,
+    );
+  }
+
+  async initiatePairing(syncUrl: string): Promise<{ pairingCode: string; pairingId: string }> {
+    const token = await this.createSyncToken();
+    const client = new PairingClient({ relayUrl: syncUrl });
+    const result = await client.initiate(token);
+    return { pairingCode: result.pairingCode, pairingId: result.pairingId };
+  }
+
+  async getPairingSession(syncUrl: string, pairingId: string): Promise<PairingSession> {
+    const token = await this.createSyncToken();
+    const client = new PairingClient({ relayUrl: syncUrl });
+    return client.getSession(pairingId, token);
+  }
+
+  async approvePairing(syncUrl: string, pairingId: string): Promise<{ deviceId: string }> {
+    const token = await this.createSyncToken();
+    const client = new PairingClient({ relayUrl: syncUrl });
+    const result = await client.approve(pairingId, token);
+    return { deviceId: result.deviceId };
+  }
+
+  async denyPairing(syncUrl: string, pairingId: string): Promise<void> {
+    const token = await this.createSyncToken();
+    const client = new PairingClient({ relayUrl: syncUrl });
+    await client.deny(pairingId, token);
+  }
+
+  // === Pairing: Device B (new device) ===
+
+  async claimPairing(syncUrl: string, code: string): Promise<{ pairingId: string; motebitId: string }> {
+    if (!this.publicKey) throw new Error("No public key available — bootstrap first");
+    const client = new PairingClient({ relayUrl: syncUrl });
+    return client.claim(code.toUpperCase(), "Mobile", this.publicKey);
+  }
+
+  async pollPairingStatus(syncUrl: string, pairingId: string): Promise<PairingStatus> {
+    const client = new PairingClient({ relayUrl: syncUrl });
+    return client.pollStatus(pairingId);
+  }
+
+  async completePairing(result: { motebitId: string; deviceId: string; deviceToken: string }): Promise<void> {
+    await this.keyring.set("motebit_id", result.motebitId);
+    await this.keyring.set("device_id", result.deviceId);
+    await this.keyring.set("device_token", result.deviceToken);
+
+    this.motebitId = result.motebitId;
+    this.deviceId = result.deviceId;
   }
 }

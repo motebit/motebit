@@ -184,6 +184,9 @@ importers:
       '@motebit/state-vector':
         specifier: workspace:*
         version: link:../../packages/state-vector
+      '@motebit/sync-engine':
+        specifier: workspace:*
+        version: link:../../packages/sync-engine
       '@tauri-apps/api':
         specifier: ^2.0.0
         version: 2.10.1
@@ -306,6 +309,9 @@ importers:
       '@motebit/state-vector':
         specifier: workspace:*
         version: link:../../packages/state-vector
+      '@motebit/sync-engine':
+        specifier: workspace:*
+        version: link:../../packages/sync-engine
       '@react-native-async-storage/async-storage':
         specifier: ^2.1.0
         version: 2.2.0(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.0(@babel/core@7.29.0))(@types/react@18.3.28)(encoding@0.1.13)(react@18.3.1))
@@ -2060,7 +2066,7 @@ packages:
 
   '@expo/bunyan@4.0.1':
     resolution: {integrity: sha512-+Lla7nYSiHZirgK+U/uYzsLv/X+HaJienbD5AKX1UQZHYfWaP+9uuQluRB4GrEVWF0GZ7vEVp/jzaOT9k/SQlg==}
-    engines: {node: '>=0.10.0'}
+    engines: {'0': node >=0.10.0}
 
   '@expo/cli@0.22.28':
     resolution: {integrity: sha512-lvt72KNitGuixYD2l3SZmRKVu2G4zJpmg5V7WfUBNpmUU5oODBw/6qmiJ6kSLAlfDozscUk+BBGknBBzxUrwrA==}

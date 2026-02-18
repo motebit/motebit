@@ -51,6 +51,7 @@ vi.mock("@motebit/crypto", () => ({
     publicKey: new Uint8Array(32).fill(0xab),
     privateKey: new Uint8Array(64).fill(0xcd),
   })),
+  createSignedToken: vi.fn(() => Promise.resolve("mock-signed-token")),
 }));
 
 // @motebit/core-identity
@@ -69,6 +70,31 @@ vi.mock("@motebit/core-identity", () => ({
 // @motebit/event-log
 vi.mock("@motebit/event-log", () => ({
   EventStore: vi.fn().mockImplementation(() => ({})),
+}));
+
+// @motebit/sync-engine
+vi.mock("@motebit/sync-engine", () => ({
+  PairingClient: vi.fn().mockImplementation(() => ({
+    initiate: vi.fn(),
+    claim: vi.fn(),
+    getSession: vi.fn(),
+    approve: vi.fn(),
+    deny: vi.fn(),
+    pollStatus: vi.fn(),
+  })),
+  SyncEngine: vi.fn().mockImplementation(() => ({
+    connectRemote: vi.fn(),
+    start: vi.fn(),
+    stop: vi.fn(),
+    sync: vi.fn(),
+    onStatusChange: vi.fn(() => vi.fn()),
+    getStatus: vi.fn(() => "idle"),
+    getConflicts: vi.fn(() => []),
+    getCursor: vi.fn(() => ({ motebit_id: "", last_event_id: "", last_version_clock: 0 })),
+  })),
+  HttpEventStoreAdapter: vi.fn().mockImplementation(() => ({})),
+  WebSocketEventStoreAdapter: vi.fn().mockImplementation(() => ({})),
+  EncryptedEventStoreAdapter: vi.fn().mockImplementation(() => ({})),
 }));
 
 import { MobileApp, COLOR_PRESETS, APPROVAL_PRESET_CONFIGS } from "../mobile-app";
@@ -114,13 +140,22 @@ describe("MobileApp.bootstrap", () => {
     app.stop();
   });
 
-  it("creates identity on first launch", async () => {
+  it("generates keypair on first launch and signals needsPairing", async () => {
     const result = await app.bootstrap();
     expect(result.isFirstLaunch).toBe(true);
+    expect(result.needsPairing).toBe(true);
+    expect(result.motebitId).toBe("");
+    expect(app.publicKey).toBeTruthy();
+  });
+
+  it("creates identity via createNewIdentity after bootstrap", async () => {
+    await app.bootstrap();
+    const result = await app.createNewIdentity();
+    expect(result.isFirstLaunch).toBe(true);
+    expect(result.needsPairing).toBe(false);
     expect(result.motebitId).toMatch(/^test-mote-/);
     expect(result.deviceId).toBeTruthy();
     expect(app.motebitId).toBe(result.motebitId);
-    expect(app.publicKey).toBeTruthy();
   });
 
   it("loads existing identity on subsequent launch", async () => {
@@ -131,6 +166,7 @@ describe("MobileApp.bootstrap", () => {
 
     const result = await app.bootstrap();
     expect(result.isFirstLaunch).toBe(false);
+    expect(result.needsPairing).toBe(false);
     expect(result.motebitId).toBe("existing-mote-123");
     expect(app.motebitId).toBe("existing-mote-123");
     expect(app.deviceId).toBe("existing-device-456");

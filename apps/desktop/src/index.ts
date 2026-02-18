@@ -22,11 +22,14 @@ import { InMemoryAuditLog } from "@motebit/privacy-layer";
 import { generateKeypair, createSignedToken } from "@motebit/crypto";
 import { generate as generateIdentityFile } from "@motebit/identity-file";
 import { EventStore } from "@motebit/event-log";
+import { PairingClient } from "@motebit/sync-engine";
+import type { PairingSession, PairingStatus } from "@motebit/sync-engine";
 import { TauriEventStore, TauriMemoryStorage, TauriIdentityStorage, type InvokeFn } from "./tauri-storage.js";
 export type { InvokeFn } from "./tauri-storage.js";
 
 // Re-export runtime types for main.ts consumption
 export type { TurnResult, StreamChunk, OperatorModeResult, InteriorColor, McpServerConfig, PolicyConfig, MemoryGovernanceConfig };
+export type { PairingSession, PairingStatus };
 
 // === Tauri Command Interface ===
 
@@ -328,6 +331,8 @@ export class DesktopApp {
 
   async init(canvas: unknown): Promise<void> {
     await this.renderer.init(canvas);
+    this.renderer.setLightEnvironment();
+    this.renderer.enableOrbitControls();
   }
 
   start(): void {
@@ -461,7 +466,7 @@ export class DesktopApp {
 
   async addMcpServer(config: McpServerConfig): Promise<McpServerStatus> {
     // Dynamic import to avoid bundling Node-only dependencies into the webview
-    // @ts-expect-error — @motebit/mcp-client is a Node-only package, resolved at runtime in Tauri
+    // @ts-ignore — @motebit/mcp-client is a Node-only package, resolved at runtime in Tauri
     const mcpModule = await (import("@motebit/mcp-client") as Promise<{
       McpClientAdapter: new (config: McpServerConfig) => {
         connect(): Promise<void>;
@@ -549,6 +554,99 @@ export class DesktopApp {
       exported_at: new Date().toISOString(),
     };
     return JSON.stringify(data, null, 2);
+  }
+
+  // === Pairing: Device A (existing device) ===
+
+  /**
+   * Initiate a pairing session. Returns a 6-char code to display to the user.
+   */
+  async initiatePairing(invoke: InvokeFn, syncUrl: string): Promise<{ pairingCode: string; pairingId: string }> {
+    const keypair = await this.getDeviceKeypair(invoke);
+    if (!keypair) throw new Error("No device keypair available");
+
+    const token = await this.createSyncToken(keypair.privateKey);
+    const client = new PairingClient({ relayUrl: syncUrl });
+    const result = await client.initiate(token);
+    return { pairingCode: result.pairingCode, pairingId: result.pairingId };
+  }
+
+  /**
+   * Get the current state of a pairing session (Device A polls for claim).
+   */
+  async getPairingSession(invoke: InvokeFn, syncUrl: string, pairingId: string): Promise<PairingSession> {
+    const keypair = await this.getDeviceKeypair(invoke);
+    if (!keypair) throw new Error("No device keypair available");
+
+    const token = await this.createSyncToken(keypair.privateKey);
+    const client = new PairingClient({ relayUrl: syncUrl });
+    return client.getSession(pairingId, token);
+  }
+
+  /**
+   * Approve a claimed pairing session, registering Device B.
+   */
+  async approvePairing(invoke: InvokeFn, syncUrl: string, pairingId: string): Promise<{ deviceId: string }> {
+    const keypair = await this.getDeviceKeypair(invoke);
+    if (!keypair) throw new Error("No device keypair available");
+
+    const token = await this.createSyncToken(keypair.privateKey);
+    const client = new PairingClient({ relayUrl: syncUrl });
+    const result = await client.approve(pairingId, token);
+    return { deviceId: result.deviceId };
+  }
+
+  /**
+   * Deny a claimed pairing session.
+   */
+  async denyPairing(invoke: InvokeFn, syncUrl: string, pairingId: string): Promise<void> {
+    const keypair = await this.getDeviceKeypair(invoke);
+    if (!keypair) throw new Error("No device keypair available");
+
+    const token = await this.createSyncToken(keypair.privateKey);
+    const client = new PairingClient({ relayUrl: syncUrl });
+    await client.deny(pairingId, token);
+  }
+
+  // === Pairing: Device B (new device) ===
+
+  /**
+   * Claim a pairing session using a code from Device A.
+   */
+  async claimPairing(syncUrl: string, code: string): Promise<{ pairingId: string; motebitId: string }> {
+    if (!this.publicKey) throw new Error("No public key available — bootstrap first");
+
+    const client = new PairingClient({ relayUrl: syncUrl });
+    return client.claim(code.toUpperCase(), "Desktop", this.publicKey);
+  }
+
+  /**
+   * Poll for pairing approval status (Device B).
+   */
+  async pollPairingStatus(syncUrl: string, pairingId: string): Promise<PairingStatus> {
+    const client = new PairingClient({ relayUrl: syncUrl });
+    return client.pollStatus(pairingId);
+  }
+
+  /**
+   * Complete pairing by storing the received identity (Device B).
+   */
+  async completePairing(invoke: InvokeFn, result: { motebitId: string; deviceId: string; deviceToken: string }): Promise<void> {
+    const raw = await invoke<string>("read_config");
+    const config = JSON.parse(raw) as Record<string, unknown>;
+
+    const updatedConfig = {
+      ...config,
+      motebit_id: result.motebitId,
+      device_id: result.deviceId,
+    };
+    await invoke<void>("write_config", { json: JSON.stringify(updatedConfig) });
+
+    // Store device token in keyring for sync auth
+    await invoke<void>("keyring_set", { key: "device_token", value: result.deviceToken });
+
+    this.motebitId = result.motebitId;
+    this.deviceId = result.deviceId;
   }
 }
 
