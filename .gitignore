@@ -29,6 +29,7 @@ coverage/
 # Build artifacts
 *.tgz
 *.map
+vite.config.ts.timestamp-*
 
 # Tauri
 apps/desktop/src-tauri/target/

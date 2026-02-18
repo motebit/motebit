@@ -1,0 +1,45 @@
+{
+  "name": "create-motebit",
+  "version": "0.1.0",
+  "description": "Create and verify motebit.md agent identity files — the motebit/identity@1.0 standard",
+  "type": "module",
+  "bin": {
+    "create-motebit": "./dist/index.js"
+  },
+  "license": "MIT",
+  "keywords": [
+    "motebit",
+    "agent",
+    "identity",
+    "ed25519",
+    "create",
+    "init",
+    "verify",
+    "signature",
+    "ai"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/motebit/motebit",
+    "directory": "packages/create-motebit"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@motebit/verify": "workspace:*",
+    "@noble/ed25519": "^3.0.0",
+    "@noble/hashes": "^1.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
