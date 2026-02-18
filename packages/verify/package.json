@@ -5,6 +5,13 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "LICENSE", "README.md"],
   "sideEffects": false,
   "license": "MIT",
   "keywords": [
@@ -24,7 +31,8 @@
     "build": "tsc -b",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+    "clean": "rm -rf dist .turbo *.tsbuildinfo",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@noble/ed25519": "^3.0.0",
