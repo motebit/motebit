@@ -5,11 +5,13 @@
  * orbital dynamics, and voice interface. Wires them together so the creature
  * in AR has intelligence, memory, identity, and voice.
  *
- * Storage is in-memory (browser can't use better-sqlite3). No MCP (stdio is
- * Node-only). Identity keypair stored in localStorage via LocalStorageKeyringAdapter.
+ * Storage is IndexedDB-backed via @motebit/browser-persistence — identity,
+ * memories, events, and audit log persist across page reloads. No MCP (stdio
+ * is Node-only). Identity keypair stored in localStorage via LocalStorageKeyringAdapter.
  */
 
-import { MotebitRuntime, createInMemoryStorage } from "@motebit/runtime";
+import { MotebitRuntime } from "@motebit/runtime";
+import { createBrowserStorage } from "@motebit/browser-persistence";
 import type { StreamChunk, KeyringAdapter } from "@motebit/runtime";
 import { WebXRThreeJSAdapter } from "@motebit/render-engine";
 import {
@@ -113,10 +115,10 @@ export class SpatialApp {
   // === AI Integration ===
 
   /**
-   * Create the AI provider and wire MotebitRuntime.
+   * Create the AI provider and wire MotebitRuntime with persistent browser storage.
    * Returns false if the provider needs an API key that wasn't provided.
    */
-  initAI(config: SpatialAIConfig): boolean {
+  async initAI(config: SpatialAIConfig): Promise<boolean> {
     const resolved = config.personalityConfig
       ? resolveConfig(config.personalityConfig)
       : undefined;
@@ -143,7 +145,7 @@ export class SpatialApp {
       });
     }
 
-    const storage = createInMemoryStorage();
+    const storage = await createBrowserStorage();
 
     this.runtime = new MotebitRuntime(
       { motebitId: this.motebitId, tickRateHz: 2 },

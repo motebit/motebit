@@ -76,7 +76,7 @@ async function init(): Promise<void> {
   updateProviderUI(settings.provider);
 
   // If we have a saved config that can init, skip settings
-  if (tryInitAI(settings)) {
+  if (await tryInitAI(settings)) {
     settingsOverlay.classList.add("hidden");
     initVoiceIfEnabled(settings.voiceEnabled);
     showMainOverlay();
@@ -87,7 +87,7 @@ async function init(): Promise<void> {
   }
 }
 
-function tryInitAI(settings: SpatialSettings): boolean {
+async function tryInitAI(settings: SpatialSettings): Promise<boolean> {
   const config: SpatialAIConfig = {
     provider: settings.provider,
     model: settings.model || undefined,
@@ -133,7 +133,7 @@ function updateProviderUI(provider: string): void {
   }
 }
 
-settingsSave?.addEventListener("click", (e) => {
+settingsSave?.addEventListener("click", async (e) => {
   e.preventDefault();
   const settings: SpatialSettings = {
     provider: providerSelect.value as "anthropic" | "ollama",
@@ -143,7 +143,7 @@ settingsSave?.addEventListener("click", (e) => {
   };
   saveSettings(settings);
 
-  if (!tryInitAI(settings)) {
+  if (!await tryInitAI(settings)) {
     statusEl.textContent = "API key required for Anthropic";
     return;
   }
