@@ -5,8 +5,8 @@
  * Provides Tauri-specific storage adapters and AI provider creation.
  */
 
-import { MotebitRuntime } from "@motebit/runtime";
-import type { TurnResult, StorageAdapters, StreamChunk, KeyringAdapter, OperatorModeResult, AuditLogSink } from "@motebit/runtime";
+import { MotebitRuntime, SimpleToolRegistry } from "@motebit/runtime";
+import type { TurnResult, StorageAdapters, StreamChunk, KeyringAdapter, OperatorModeResult, AuditLogSink, InteriorColor, McpServerConfig, PolicyConfig, MemoryGovernanceConfig } from "@motebit/runtime";
 import { ThreeJSAdapter } from "@motebit/render-engine";
 import {
   CloudProvider,
@@ -26,7 +26,7 @@ import { TauriEventStore, TauriMemoryStorage, TauriIdentityStorage, type InvokeF
 export type { InvokeFn } from "./tauri-storage.js";
 
 // Re-export runtime types for main.ts consumption
-export type { TurnResult, StreamChunk, OperatorModeResult };
+export type { TurnResult, StreamChunk, OperatorModeResult, InteriorColor, McpServerConfig, PolicyConfig, MemoryGovernanceConfig };
 
 // === Tauri Command Interface ===
 
@@ -128,6 +128,29 @@ function createDesktopStorage(config: DesktopAIConfig): StorageAdapters {
   };
 }
 
+// === Color Presets ===
+
+export const COLOR_PRESETS: Record<string, InteriorColor> = {
+  borosilicate: { tint: [0.9, 0.92, 1.0], glow: [0.6, 0.7, 0.9] },
+  amber:        { tint: [1.0, 0.85, 0.6], glow: [0.9, 0.7, 0.3] },
+  rose:         { tint: [1.0, 0.82, 0.88], glow: [0.9, 0.5, 0.6] },
+  violet:       { tint: [0.88, 0.8, 1.0], glow: [0.6, 0.4, 0.9] },
+  cyan:         { tint: [0.8, 0.95, 1.0], glow: [0.3, 0.8, 0.9] },
+  ember:        { tint: [1.0, 0.75, 0.65], glow: [0.9, 0.35, 0.2] },
+  sage:         { tint: [0.82, 0.95, 0.85], glow: [0.4, 0.75, 0.5] },
+  moonlight:    { tint: [0.95, 0.95, 1.0], glow: [0.8, 0.85, 1.0] },
+};
+
+// === MCP Server Status ===
+
+export interface McpServerStatus {
+  name: string;
+  transport: string;
+  trusted: boolean;
+  connected: boolean;
+  toolCount: number;
+}
+
 // === Desktop App (platform shell) ===
 
 export interface BootstrapResult {
@@ -139,8 +162,11 @@ export interface BootstrapResult {
 export class DesktopApp {
   private runtime: MotebitRuntime | null = null;
   private renderer: ThreeJSAdapter;
+  private mcpAdapters = new Map<string, { disconnect(): Promise<void> }>();
+  private mcpConfigs = new Map<string, McpServerConfig>();
   motebitId: string = "desktop-local";
   deviceId: string = "desktop-local";
+  publicKey: string = "";
 
   constructor() {
     this.renderer = new ThreeJSAdapter();
@@ -158,6 +184,7 @@ export class DesktopApp {
       // Existing identity — load from config
       this.motebitId = config.motebit_id;
       this.deviceId = (config.device_id as string) || "desktop-local";
+      this.publicKey = (config.device_public_key as string) || "";
       return { isFirstLaunch: false, motebitId: this.motebitId, deviceId: this.deviceId };
     }
 
@@ -210,6 +237,7 @@ export class DesktopApp {
 
     this.motebitId = identity.motebit_id;
     this.deviceId = deviceId;
+    this.publicKey = pubKeyHex;
 
     return { isFirstLaunch: true, motebitId: this.motebitId, deviceId: this.deviceId };
   }
@@ -418,6 +446,109 @@ export class DesktopApp {
   async *resumeAfterApproval(approved: boolean): AsyncGenerator<StreamChunk> {
     if (!this.runtime) throw new Error("AI not initialized — call initAI() first");
     yield* this.runtime.resumeAfterApproval(approved);
+  }
+
+  // === Appearance ===
+
+  setInteriorColor(presetName: string): void {
+    const preset = COLOR_PRESETS[presetName];
+    if (!preset) return;
+    this.renderer.setInteriorColor(preset);
+  }
+
+  // === MCP Lifecycle ===
+  // @motebit/mcp-client is Node-only (stdio/child_process) — dynamic import only.
+
+  async addMcpServer(config: McpServerConfig): Promise<McpServerStatus> {
+    // Dynamic import to avoid bundling Node-only dependencies into the webview
+    // @ts-expect-error — @motebit/mcp-client is a Node-only package, resolved at runtime in Tauri
+    const mcpModule = await (import("@motebit/mcp-client") as Promise<{
+      McpClientAdapter: new (config: McpServerConfig) => {
+        connect(): Promise<void>;
+        disconnect(): Promise<void>;
+        getTools(): unknown[];
+        registerInto(registry: unknown): void;
+      };
+    }>);
+    const adapter = new mcpModule.McpClientAdapter(config);
+    await adapter.connect();
+
+    // Register tools into a temporary registry, then merge into runtime
+    const tempRegistry = new SimpleToolRegistry();
+    adapter.registerInto(tempRegistry);
+
+    if (this.runtime) {
+      this.runtime.registerExternalTools(`mcp:${config.name}`, tempRegistry);
+    }
+
+    this.mcpAdapters.set(config.name, adapter);
+    this.mcpConfigs.set(config.name, config);
+
+    return {
+      name: config.name,
+      transport: config.transport,
+      trusted: config.trusted ?? false,
+      connected: true,
+      toolCount: adapter.getTools().length,
+    };
+  }
+
+  async removeMcpServer(name: string): Promise<void> {
+    const adapter = this.mcpAdapters.get(name);
+    if (adapter) {
+      await adapter.disconnect();
+      this.mcpAdapters.delete(name);
+    }
+    this.mcpConfigs.delete(name);
+    if (this.runtime) {
+      this.runtime.unregisterExternalTools(`mcp:${name}`);
+    }
+  }
+
+  getMcpStatus(): McpServerStatus[] {
+    const result: McpServerStatus[] = [];
+    for (const [name, config] of this.mcpConfigs) {
+      result.push({
+        name,
+        transport: config.transport,
+        trusted: config.trusted ?? false,
+        connected: this.mcpAdapters.has(name),
+        toolCount: 0, // TODO: track per-server tool count
+      });
+    }
+    return result;
+  }
+
+  // === Policy ===
+
+  updatePolicyConfig(config: Partial<PolicyConfig>): void {
+    if (!this.runtime) return;
+    this.runtime.updatePolicyConfig(config);
+  }
+
+  updateMemoryGovernance(config: Partial<MemoryGovernanceConfig>): void {
+    if (!this.runtime) return;
+    this.runtime.updateMemoryGovernance(config);
+  }
+
+  // === Identity ===
+
+  getIdentityInfo(): { motebitId: string; deviceId: string; publicKey: string } {
+    return {
+      motebitId: this.motebitId,
+      deviceId: this.deviceId,
+      publicKey: this.publicKey,
+    };
+  }
+
+  async exportAllData(): Promise<string> {
+    const data: Record<string, unknown> = {
+      motebit_id: this.motebitId,
+      device_id: this.deviceId,
+      public_key: this.publicKey,
+      exported_at: new Date().toISOString(),
+    };
+    return JSON.stringify(data, null, 2);
   }
 }
 

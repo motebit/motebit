@@ -1,4 +1,4 @@
-import { DesktopApp, isSlashCommand, parseSlashCommand, type DesktopAIConfig, type InvokeFn } from "./index";
+import { DesktopApp, COLOR_PRESETS, isSlashCommand, parseSlashCommand, type DesktopAIConfig, type InvokeFn, type McpServerConfig, type PolicyConfig } from "./index";
 import { stripTags } from "@motebit/ai-core";
 
 const canvas = document.getElementById("motebit-canvas") as HTMLCanvasElement;
@@ -252,34 +252,299 @@ async function loadDesktopConfig(): Promise<DesktopAIConfig> {
   return { provider, apiKey, isTauri: false };
 }
 
-// === Settings Panel ===
+// === Settings Modal ===
 
 const settingsBackdrop = document.getElementById("settings-backdrop") as HTMLDivElement;
-const settingsPanel = document.getElementById("settings-panel") as HTMLDivElement;
+const settingsModal = document.getElementById("settings-modal") as HTMLDivElement;
 const settingsProvider = document.getElementById("settings-provider") as HTMLSelectElement;
 const settingsModel = document.getElementById("settings-model") as HTMLInputElement;
 const settingsApiKey = document.getElementById("settings-apikey") as HTMLInputElement;
 const settingsApiKeyToggle = document.getElementById("settings-apikey-toggle") as HTMLButtonElement;
 const settingsOperatorMode = document.getElementById("settings-operator-mode") as HTMLInputElement;
+const colorPresetGrid = document.getElementById("color-preset-grid") as HTMLDivElement;
+const mcpServerList = document.getElementById("mcp-server-list") as HTMLDivElement;
+const persistenceThreshold = document.getElementById("settings-persistence-threshold") as HTMLInputElement;
+const persistenceThresholdValue = document.getElementById("persistence-threshold-value") as HTMLSpanElement;
+const rejectSecrets = document.getElementById("settings-reject-secrets") as HTMLInputElement;
+const maxCalls = document.getElementById("settings-max-calls") as HTMLInputElement;
+
+// Settings state
+let selectedColorPreset = "borosilicate";
+let previousColorPreset = "borosilicate";
+let selectedApprovalPreset = "balanced";
+let mcpServersConfig: McpServerConfig[] = [];
+let hasApiKeyInKeyring = false;
+
+// === Tab Switching ===
+
+function switchTab(tabName: string): void {
+  document.querySelectorAll(".settings-tab").forEach(tab => {
+    tab.classList.toggle("active", (tab as HTMLElement).dataset.tab === tabName);
+  });
+  document.querySelectorAll(".settings-pane").forEach(pane => {
+    pane.classList.toggle("active", pane.id === `pane-${tabName}`);
+  });
+  if (tabName === "identity") populateIdentityTab();
+}
+
+document.querySelectorAll(".settings-tab").forEach(tab => {
+  tab.addEventListener("click", () => {
+    const name = (tab as HTMLElement).dataset.tab;
+    if (name) switchTab(name);
+  });
+});
+
+// === Color Presets ===
+
+function buildColorSwatches(): void {
+  colorPresetGrid.innerHTML = "";
+  for (const [name, preset] of Object.entries(COLOR_PRESETS)) {
+    const btn = document.createElement("button");
+    btn.className = "color-swatch" + (name === selectedColorPreset ? " selected" : "");
+    btn.dataset.preset = name;
+    const t = preset.tint;
+    const g = preset.glow;
+    btn.style.background = `radial-gradient(circle at 40% 40%, rgba(${Math.round(g[0] * 255)},${Math.round(g[1] * 255)},${Math.round(g[2] * 255)},0.6), rgba(${Math.round(t[0] * 200)},${Math.round(t[1] * 200)},${Math.round(t[2] * 200)},0.8))`;
+    const label = document.createElement("span");
+    label.className = "swatch-name";
+    label.textContent = name.charAt(0).toUpperCase() + name.slice(1);
+    btn.appendChild(label);
+    btn.addEventListener("click", () => selectColorPreset(name));
+    colorPresetGrid.appendChild(btn);
+  }
+}
+
+function selectColorPreset(name: string): void {
+  selectedColorPreset = name;
+  document.querySelectorAll(".color-swatch").forEach(el => {
+    el.classList.toggle("selected", (el as HTMLElement).dataset.preset === name);
+  });
+  app.setInteriorColor(name);
+}
+
+// === MCP Server List ===
+
+function renderMcpServerList(): void {
+  mcpServerList.innerHTML = "";
+  const servers = app.getMcpStatus();
+  if (mcpServersConfig.length === 0) {
+    const empty = document.createElement("div");
+    empty.style.cssText = "font-size:12px;color:rgba(255,255,255,0.3);padding:8px 0;";
+    empty.textContent = "No MCP servers configured";
+    mcpServerList.appendChild(empty);
+    return;
+  }
+  for (const config of mcpServersConfig) {
+    const status = servers.find(s => s.name === config.name);
+    const row = document.createElement("div");
+    row.className = "mcp-server-row";
+
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "mcp-server-name";
+    nameSpan.textContent = config.name;
+    row.appendChild(nameSpan);
+
+    const transportBadge = document.createElement("span");
+    transportBadge.className = "mcp-badge";
+    transportBadge.textContent = config.transport;
+    row.appendChild(transportBadge);
+
+    if (config.trusted) {
+      const trustedBadge = document.createElement("span");
+      trustedBadge.className = "mcp-badge trusted";
+      trustedBadge.textContent = "trusted";
+      row.appendChild(trustedBadge);
+    }
+
+    const statusDot = document.createElement("span");
+    statusDot.className = "mcp-status-dot" + (status?.connected ? " connected" : "");
+    row.appendChild(statusDot);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "mcp-remove-btn";
+    removeBtn.textContent = "\u00d7";
+    removeBtn.addEventListener("click", () => {
+      mcpServersConfig = mcpServersConfig.filter(s => s.name !== config.name);
+      void app.removeMcpServer(config.name);
+      renderMcpServerList();
+    });
+    row.appendChild(removeBtn);
+    mcpServerList.appendChild(row);
+  }
+}
+
+// MCP add form
+const mcpAddToggle = document.getElementById("mcp-add-toggle") as HTMLButtonElement;
+const mcpAddForm = document.getElementById("mcp-add-form") as HTMLDivElement;
+const mcpTransport = document.getElementById("mcp-transport") as HTMLSelectElement;
+const mcpCommandField = document.getElementById("mcp-command-field") as HTMLDivElement;
+const mcpUrlField = document.getElementById("mcp-url-field") as HTMLDivElement;
+
+mcpAddToggle.addEventListener("click", () => {
+  mcpAddForm.style.display = mcpAddForm.style.display === "none" ? "block" : "none";
+});
+
+mcpTransport.addEventListener("change", () => {
+  mcpCommandField.style.display = mcpTransport.value === "stdio" ? "flex" : "none";
+  mcpUrlField.style.display = mcpTransport.value === "http" ? "flex" : "none";
+});
+
+document.getElementById("mcp-add-cancel")!.addEventListener("click", () => {
+  mcpAddForm.style.display = "none";
+});
+
+document.getElementById("mcp-add-confirm")!.addEventListener("click", () => {
+  const name = (document.getElementById("mcp-name") as HTMLInputElement).value.trim();
+  if (!name) return;
+  const transport = mcpTransport.value as "stdio" | "http";
+  const command = (document.getElementById("mcp-command") as HTMLInputElement).value.trim();
+  const url = (document.getElementById("mcp-url") as HTMLInputElement).value.trim();
+  const trusted = (document.getElementById("mcp-trusted") as HTMLInputElement).checked;
+
+  const config: McpServerConfig = { name, transport, trusted };
+  if (transport === "stdio" && command) {
+    const parts = command.split(/\s+/);
+    config.command = parts[0];
+    config.args = parts.slice(1);
+  } else if (transport === "http" && url) {
+    config.url = url;
+  }
+
+  mcpServersConfig.push(config);
+  renderMcpServerList();
+  mcpAddForm.style.display = "none";
+  (document.getElementById("mcp-name") as HTMLInputElement).value = "";
+  (document.getElementById("mcp-command") as HTMLInputElement).value = "";
+  (document.getElementById("mcp-url") as HTMLInputElement).value = "";
+  (document.getElementById("mcp-trusted") as HTMLInputElement).checked = false;
+});
+
+// === Approval Presets ===
+
+const APPROVAL_PRESET_CONFIGS: Record<string, Partial<PolicyConfig>> = {
+  cautious: { maxRiskLevel: 3, requireApprovalAbove: 0, denyAbove: 3 },
+  balanced: { maxRiskLevel: 3, requireApprovalAbove: 1, denyAbove: 3 },
+  autonomous: { maxRiskLevel: 4, requireApprovalAbove: 3, denyAbove: 4 },
+};
+
+function selectApprovalPreset(preset: string): void {
+  selectedApprovalPreset = preset;
+  document.querySelectorAll(".preset-option").forEach(el => {
+    const match = (el as HTMLElement).dataset.preset === preset;
+    el.classList.toggle("selected", match);
+    const radio = el.querySelector("input[type=radio]") as HTMLInputElement;
+    if (radio) radio.checked = match;
+  });
+}
+
+document.querySelectorAll(".preset-option").forEach(el => {
+  el.addEventListener("click", () => {
+    const preset = (el as HTMLElement).dataset.preset;
+    if (preset) selectApprovalPreset(preset);
+  });
+});
+
+// Persistence threshold live display
+persistenceThreshold.addEventListener("input", () => {
+  persistenceThresholdValue.textContent = parseFloat(persistenceThreshold.value).toFixed(2);
+});
+
+// === Identity Tab ===
+
+function populateIdentityTab(): void {
+  const info = app.getIdentityInfo();
+  (document.getElementById("identity-motebit-id") as HTMLElement).textContent = info.motebitId || "-";
+  (document.getElementById("identity-device-id") as HTMLElement).textContent = info.deviceId || "-";
+  (document.getElementById("identity-public-key") as HTMLElement).textContent =
+    info.publicKey ? info.publicKey.slice(0, 16) + "..." : "-";
+  const syncBadge = document.getElementById("identity-sync-status") as HTMLElement;
+  syncBadge.className = "sync-badge disconnected";
+  syncBadge.textContent = "Not connected";
+}
+
+// Copy buttons
+document.querySelectorAll(".copy-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const targetId = (btn as HTMLElement).dataset.copy;
+    if (!targetId) return;
+    const el = document.getElementById(targetId);
+    if (el) {
+      void navigator.clipboard.writeText(el.textContent || "").then(() => {
+        const prev = btn.textContent;
+        btn.textContent = "Copied";
+        setTimeout(() => { btn.textContent = prev; }, 1500);
+      });
+    }
+  });
+});
+
+// Export button
+document.getElementById("settings-export")!.addEventListener("click", () => {
+  void app.exportAllData().then(json => {
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `motebit-export-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+});
+
+// Documentation button
+document.getElementById("settings-docs")!.addEventListener("click", () => {
+  window.open("https://docs.motebit.dev", "_blank");
+});
+
+// === Settings Open / Close ===
 
 function openSettings(): void {
-  // Pre-populate from current config (never pre-fill actual API key)
+  // Intelligence tab: populate from current config
   if (currentConfig) {
     settingsProvider.value = currentConfig.provider;
     settingsModel.value = currentConfig.model || "";
   }
+  // API key: never rehydrate into DOM
   settingsApiKey.value = "";
   settingsApiKey.type = "password";
   settingsApiKeyToggle.textContent = "Show";
+  settingsApiKey.placeholder = hasApiKeyInKeyring ? "API key stored" : "sk-ant-...";
+
+  // Operator mode
   settingsOperatorMode.checked = app.isOperatorMode;
+
+  // Appearance: track previous for cancel
+  previousColorPreset = selectedColorPreset;
+  buildColorSwatches();
+
+  // MCP
+  renderMcpServerList();
+
+  // Governance
+  selectApprovalPreset(selectedApprovalPreset);
+
+  // Start on first tab
+  switchTab("appearance");
+
   settingsBackdrop.classList.add("open");
-  settingsPanel.classList.add("open");
+  settingsModal.classList.add("open");
 }
 
 function closeSettings(): void {
   settingsBackdrop.classList.remove("open");
-  settingsPanel.classList.remove("open");
+  settingsModal.classList.remove("open");
 }
+
+function cancelSettings(): void {
+  // Restore previous color on cancel
+  if (selectedColorPreset !== previousColorPreset) {
+    selectedColorPreset = previousColorPreset;
+    app.setInteriorColor(previousColorPreset);
+  }
+  closeSettings();
+}
+
+// === Save Settings ===
 
 async function saveSettings(): Promise<void> {
   const provider = settingsProvider.value as DesktopAIConfig["provider"];
@@ -290,21 +555,47 @@ async function saveSettings(): Promise<void> {
   if (isTauri) {
     const { invoke } = await import("@tauri-apps/api/core");
 
-    // Write provider + model to config file (not API key)
-    const configData: Record<string, string> = { default_provider: provider };
+    // Build config object with all settings
+    const configData: Record<string, unknown> = {
+      default_provider: provider,
+      interior_color_preset: selectedColorPreset,
+      approval_preset: selectedApprovalPreset,
+      mcp_servers: mcpServersConfig,
+      memory_governance: {
+        persistence_threshold: parseFloat(persistenceThreshold.value),
+        reject_secrets: rejectSecrets.checked,
+      },
+      budget: {
+        maxCallsPerTurn: parseInt(maxCalls.value, 10) || 10,
+      },
+    };
     if (model) configData.default_model = model;
     await invoke("write_config", { json: JSON.stringify(configData) });
 
     // API key goes to keyring exclusively
     if (apiKey) {
       await invoke("keyring_set", { key: "api_key", value: apiKey });
+      hasApiKeyInKeyring = true;
     }
   }
+
+  // Apply governance settings
+  const approvalConfig = APPROVAL_PRESET_CONFIGS[selectedApprovalPreset];
+  if (approvalConfig) {
+    app.updatePolicyConfig({
+      ...approvalConfig,
+      operatorMode: settingsOperatorMode.checked,
+      budget: { maxCallsPerTurn: parseInt(maxCalls.value, 10) || 10 },
+    });
+  }
+  app.updateMemoryGovernance({
+    persistenceThreshold: parseFloat(persistenceThreshold.value),
+    rejectSecrets: rejectSecrets.checked,
+  });
 
   // Apply operator mode (with PIN flow if enabling)
   const wantsOperator = settingsOperatorMode.checked;
   if (wantsOperator && !app.isOperatorMode) {
-    // Attempt to enable — may trigger PIN flow
     const result = await app.setOperatorMode(true);
     if (!result.success) {
       if (result.needsSetup) {
@@ -312,7 +603,6 @@ async function saveSettings(): Promise<void> {
       } else {
         showPinDialog("verify");
       }
-      // Don't close settings yet — PIN dialog handles continuation
       pendingSettingsSave = { provider, model, apiKey, isTauri };
       return;
     }
@@ -337,7 +627,13 @@ function finishSaveSettings(
   apiKey?: string,
   isTauri = false,
 ): void {
-  const newConfig: DesktopAIConfig = { provider, model, apiKey: apiKey || currentConfig?.apiKey, isTauri, invoke: currentConfig?.invoke };
+  const newConfig: DesktopAIConfig = {
+    provider,
+    model,
+    apiKey: apiKey || currentConfig?.apiKey,
+    isTauri,
+    invoke: currentConfig?.invoke,
+  };
   currentConfig = newConfig;
 
   if (app.initAI(newConfig)) {
@@ -394,7 +690,6 @@ function closePinDialog(): void {
   pinInput.value = "";
   pinConfirmInput.value = "";
   pinError.textContent = "";
-  // Revert the toggle since we didn't succeed
   settingsOperatorMode.checked = app.isOperatorMode;
 }
 
@@ -435,14 +730,12 @@ async function handlePinSubmit(): Promise<void> {
     }
   }
 
-  // Now try to enable operator mode with the PIN
   const result = await app.setOperatorMode(true, pin);
   if (!result.success) {
     pinError.textContent = result.error || "Failed to enable operator mode";
     return;
   }
 
-  // Success — close PIN dialog and finish settings save
   pinBackdrop.classList.remove("open");
   if (pendingSettingsSave) {
     const s = pendingSettingsSave;
@@ -465,15 +758,10 @@ document.getElementById("settings-reset-pin")!.addEventListener("click", () => {
   showPinDialog("reset");
 });
 
-// Documentation button
-document.getElementById("settings-docs")!.addEventListener("click", () => {
-  window.open("https://docs.motebit.dev", "_blank");
-});
-
 // Settings event listeners
-settingsBackdrop.addEventListener("click", closeSettings);
+settingsBackdrop.addEventListener("click", cancelSettings);
 document.getElementById("settings-btn")!.addEventListener("click", openSettings);
-document.getElementById("settings-cancel")!.addEventListener("click", closeSettings);
+document.getElementById("settings-cancel")!.addEventListener("click", cancelSettings);
 document.getElementById("settings-save")!.addEventListener("click", () => {
   void saveSettings();
 });
@@ -484,6 +772,17 @@ settingsApiKeyToggle.addEventListener("click", () => {
   } else {
     settingsApiKey.type = "password";
     settingsApiKeyToggle.textContent = "Show";
+  }
+});
+
+// Escape key closes settings
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    if (pinBackdrop.classList.contains("open")) {
+      closePinDialog();
+    } else if (settingsModal.classList.contains("open")) {
+      cancelSettings();
+    }
   }
 });
 
@@ -560,6 +859,42 @@ async function bootstrap(): Promise<void> {
           addMessage("system", `Sync relay registration failed: ${msg}`);
         }
       }
+    }
+
+    // Load persisted settings from config
+    if (typeof parsed.interior_color_preset === "string" && COLOR_PRESETS[parsed.interior_color_preset]) {
+      selectedColorPreset = parsed.interior_color_preset;
+      app.setInteriorColor(selectedColorPreset);
+    }
+    if (typeof parsed.approval_preset === "string") {
+      selectedApprovalPreset = parsed.approval_preset;
+    }
+    if (Array.isArray(parsed.mcp_servers)) {
+      mcpServersConfig = parsed.mcp_servers as McpServerConfig[];
+    }
+    if (parsed.memory_governance && typeof parsed.memory_governance === "object") {
+      const mg = parsed.memory_governance as Record<string, unknown>;
+      if (typeof mg.persistence_threshold === "number") {
+        persistenceThreshold.value = String(mg.persistence_threshold);
+        persistenceThresholdValue.textContent = mg.persistence_threshold.toFixed(2);
+      }
+      if (typeof mg.reject_secrets === "boolean") {
+        rejectSecrets.checked = mg.reject_secrets;
+      }
+    }
+    if (parsed.budget && typeof parsed.budget === "object") {
+      const b = parsed.budget as Record<string, unknown>;
+      if (typeof b.maxCallsPerTurn === "number") {
+        maxCalls.value = String(b.maxCallsPerTurn);
+      }
+    }
+
+    // Check if API key exists in keyring (for placeholder display)
+    try {
+      const keyVal = await invoke<string | null>("keyring_get", { key: "api_key" });
+      hasApiKeyInKeyring = !!keyVal;
+    } catch {
+      // Keyring unavailable
     }
   } else {
     // Non-Tauri (dev mode) — no identity bootstrap

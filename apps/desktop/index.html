@@ -111,7 +111,7 @@
       color: rgba(255, 255, 255, 0.8);
     }
 
-    /* Settings panel */
+    /* Settings modal */
     #settings-backdrop {
       position: fixed;
       inset: 0;
@@ -123,43 +123,109 @@
     }
     #settings-backdrop.open { opacity: 1; pointer-events: auto; }
 
-    #settings-panel {
+    #settings-modal {
       position: fixed;
-      top: 0;
-      right: 0;
-      bottom: 0;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) scale(0.95);
       z-index: 31;
-      width: 280px;
+      min-width: 360px;
+      max-width: 520px;
+      width: 90vw;
+      max-height: 80vh;
       background: rgba(30, 30, 46, 0.95);
       backdrop-filter: blur(20px);
       -webkit-backdrop-filter: blur(20px);
-      border-left: 1px solid rgba(255, 255, 255, 0.08);
-      transform: translateX(100%);
-      transition: transform 0.25s ease;
-      padding: 24px 20px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       color: rgba(255, 255, 255, 0.85);
       display: flex;
       flex-direction: column;
-      gap: 16px;
-      overflow-y: auto;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s, transform 0.25s;
     }
-    #settings-panel.open { transform: translateX(0); }
+    #settings-modal.open {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translate(-50%, -50%) scale(1);
+    }
 
-    #settings-panel h2 {
-      font-size: 16px;
-      font-weight: 600;
-      margin: 0;
+    /* Tab bar */
+    .settings-tab-bar {
+      display: flex;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 0 8px;
+      flex-shrink: 0;
     }
-    #settings-panel label {
+    .settings-tab {
+      flex: 1;
+      padding: 12px 4px 10px;
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: rgba(255, 255, 255, 0.4);
+      font-size: 11px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      font-family: inherit;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .settings-tab:hover { color: rgba(255, 255, 255, 0.7); }
+    .settings-tab.active {
+      color: #6366f1;
+      border-bottom-color: #6366f1;
+    }
+    .settings-tab svg { width: 18px; height: 18px; }
+
+    /* Content area */
+    .settings-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+    }
+
+    /* Panes */
+    .settings-pane { display: none; }
+    .settings-pane.active {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* Cards */
+    .settings-card {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .card-title {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 12px;
+      color: rgba(255, 255, 255, 0.5);
+    }
+
+    /* Form fields */
+    .settings-field { display: flex; flex-direction: column; gap: 4px; }
+    .settings-field + .settings-field { margin-top: 10px; }
+    .settings-field label,
+    #settings-modal label {
       display: block;
       font-size: 12px;
       color: rgba(255, 255, 255, 0.5);
-      margin-bottom: 4px;
     }
-    #settings-panel select,
-    #settings-panel input[type="text"],
-    #settings-panel input[type="password"] {
+    #settings-modal select,
+    #settings-modal input[type="text"],
+    #settings-modal input[type="password"],
+    #settings-modal input[type="number"] {
       width: 100%;
       padding: 8px 10px;
       border: 1px solid rgba(255, 255, 255, 0.1);
@@ -170,11 +236,10 @@
       outline: none;
       font-family: inherit;
     }
-    #settings-panel select:focus,
-    #settings-panel input:focus {
+    #settings-modal select:focus,
+    #settings-modal input:focus {
       border-color: rgba(99, 102, 241, 0.5);
     }
-    .settings-field { display: flex; flex-direction: column; }
     .settings-key-row { display: flex; gap: 6px; }
     .settings-key-row input { flex: 1; }
     .settings-key-row button {
@@ -186,12 +251,185 @@
       font-size: 12px;
       cursor: pointer;
     }
-    .settings-actions {
+
+    /* Color swatches */
+    #color-preset-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+    }
+    .color-swatch {
+      aspect-ratio: 1;
+      border-radius: 12px;
+      border: 2px solid transparent;
+      cursor: pointer;
+      position: relative;
+      transition: border-color 0.15s, transform 0.15s;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      padding-bottom: 6px;
+    }
+    .color-swatch:hover { transform: scale(1.05); }
+    .color-swatch.selected { border-color: #6366f1; }
+    .swatch-name {
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.8);
+      text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+      pointer-events: none;
+    }
+
+    /* Approval presets (radio group) */
+    .preset-group { display: flex; flex-direction: column; gap: 8px; }
+    .preset-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .preset-option:hover { background: rgba(255, 255, 255, 0.03); }
+    .preset-option.selected {
+      border-color: rgba(99, 102, 241, 0.5);
+      background: rgba(99, 102, 241, 0.06);
+    }
+    .preset-option input[type="radio"] { margin-top: 2px; accent-color: #6366f1; }
+    .preset-option .preset-name { font-size: 13px; font-weight: 500; }
+    .preset-option .preset-desc {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.4);
+      margin-top: 2px;
+    }
+
+    /* Range slider */
+    .range-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .range-row input[type="range"] {
+      flex: 1;
+      accent-color: #6366f1;
+    }
+    .range-value {
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.6);
+      min-width: 32px;
+      text-align: right;
+    }
+
+    /* MCP server list */
+    .mcp-server-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .mcp-server-row:last-child { border-bottom: none; }
+    .mcp-server-name { font-size: 13px; flex: 1; }
+    .mcp-badge {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(255, 255, 255, 0.5);
+    }
+    .mcp-badge.trusted { background: rgba(99, 102, 241, 0.15); color: #818cf8; }
+    .mcp-status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.2);
+    }
+    .mcp-status-dot.connected { background: #4ade80; }
+    .mcp-remove-btn {
+      background: none;
+      border: none;
+      color: rgba(255, 255, 255, 0.3);
+      cursor: pointer;
+      font-size: 14px;
+      padding: 2px 4px;
+    }
+    .mcp-remove-btn:hover { color: #f87171; }
+    .mcp-add-btn {
+      width: 100%;
+      padding: 8px 0;
+      margin-top: 8px;
+      border: 1px dashed rgba(255, 255, 255, 0.15);
+      border-radius: 8px;
+      background: none;
+      color: rgba(255, 255, 255, 0.4);
+      font-size: 12px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .mcp-add-btn:hover { border-color: rgba(255, 255, 255, 0.3); color: rgba(255, 255, 255, 0.6); }
+    #mcp-add-form {
+      margin-top: 10px;
+      padding: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.02);
+    }
+    #mcp-add-form .settings-field + .settings-field { margin-top: 8px; }
+
+    /* Identity fields */
+    .identity-field {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 0;
+    }
+    .identity-label {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.4);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      min-width: 60px;
+    }
+    .identity-value {
+      flex: 1;
+      font-size: 13px;
+      font-family: "SF Mono", "Menlo", monospace;
+      color: rgba(255, 255, 255, 0.75);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .copy-btn {
+      background: none;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 6px;
+      color: rgba(255, 255, 255, 0.4);
+      font-size: 11px;
+      padding: 3px 8px;
+      cursor: pointer;
+      font-family: inherit;
+      flex-shrink: 0;
+    }
+    .copy-btn:hover { color: rgba(255, 255, 255, 0.7); border-color: rgba(255, 255, 255, 0.2); }
+    .sync-badge {
+      display: inline-block;
+      font-size: 11px;
+      padding: 3px 10px;
+      border-radius: 6px;
+    }
+    .sync-badge.connected { background: rgba(74, 222, 128, 0.15); color: #4ade80; }
+    .sync-badge.disconnected { background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.4); }
+
+    /* Settings footer */
+    .settings-footer {
       display: flex;
       gap: 8px;
-      margin-top: 8px;
+      padding: 12px 20px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      flex-shrink: 0;
     }
-    .settings-actions button {
+    .settings-footer button {
       flex: 1;
       padding: 8px 0;
       border: none;
@@ -200,16 +438,41 @@
       cursor: pointer;
       font-family: inherit;
     }
-    .settings-actions .save-btn {
+    .settings-footer .save-btn {
       background: rgba(99, 102, 241, 0.85);
       color: #fff;
     }
-    .settings-actions .save-btn:hover { background: rgba(99, 102, 241, 1); }
-    .settings-actions .cancel-btn {
+    .settings-footer .save-btn:hover { background: rgba(99, 102, 241, 1); }
+    .settings-footer .cancel-btn {
       background: rgba(255, 255, 255, 0.08);
       color: rgba(255, 255, 255, 0.7);
     }
-    .settings-actions .cancel-btn:hover { background: rgba(255, 255, 255, 0.15); }
+    .settings-footer .cancel-btn:hover { background: rgba(255, 255, 255, 0.15); }
+
+    /* Inline button style */
+    .settings-link-btn {
+      background: none;
+      border: none;
+      color: rgba(255, 255, 255, 0.35);
+      font-size: 12px;
+      cursor: pointer;
+      padding: 0;
+      font-family: inherit;
+      text-decoration: underline;
+    }
+    .settings-link-btn:hover { color: rgba(255, 255, 255, 0.6); }
+    .settings-outline-btn {
+      width: 100%;
+      padding: 8px 0;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.06);
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 13px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .settings-outline-btn:hover { background: rgba(255, 255, 255, 0.1); }
 
     /* Tool status messages */
     .tool-status {
@@ -464,45 +727,204 @@
   <canvas id="motebit-canvas"></canvas>
   <button id="settings-btn" title="Settings">&#9881;</button>
   <div id="settings-backdrop"></div>
-  <div id="settings-panel">
-    <h2>Settings</h2>
-    <div class="settings-field">
-      <label for="settings-provider">Provider</label>
-      <select id="settings-provider">
-        <option value="ollama">Ollama</option>
-        <option value="anthropic">Anthropic</option>
-      </select>
+  <div id="settings-modal">
+    <div class="settings-tab-bar">
+      <button class="settings-tab active" data-tab="appearance">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+        Appearance
+      </button>
+      <button class="settings-tab" data-tab="intelligence">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44A2.5 2.5 0 0 1 2 17.5v-1a2.5 2.5 0 0 1 1.06-2.04A2.5 2.5 0 0 1 2 12.5v-1A2.5 2.5 0 0 1 4.5 9h.5"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44A2.5 2.5 0 0 0 22 17.5v-1a2.5 2.5 0 0 0-1.06-2.04A2.5 2.5 0 0 0 22 12.5v-1A2.5 2.5 0 0 0 19.5 9h-.5"/></svg>
+        Intelligence
+      </button>
+      <button class="settings-tab" data-tab="governance">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        Governance
+      </button>
+      <button class="settings-tab" data-tab="identity">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        Identity
+      </button>
     </div>
-    <div class="settings-field">
-      <label for="settings-model">Model</label>
-      <input id="settings-model" type="text" placeholder="e.g. llama3.2, claude-sonnet-4-20250514" />
-    </div>
-    <div class="settings-field">
-      <label for="settings-apikey">API Key</label>
-      <div class="settings-key-row">
-        <input id="settings-apikey" type="password" placeholder="sk-ant-..." />
-        <button id="settings-apikey-toggle" type="button">Show</button>
-      </div>
-    </div>
-    <div class="settings-field">
-      <div class="toggle-row">
-        <div>
-          <div class="toggle-label">Operator Mode</div>
-          <div class="toggle-desc">Allow high-risk tools (write, execute, payments)</div>
+    <div class="settings-content">
+      <!-- Appearance pane -->
+      <div class="settings-pane active" id="pane-appearance">
+        <div class="settings-card">
+          <div class="card-title">Interior Color</div>
+          <div id="color-preset-grid"></div>
         </div>
-        <label class="toggle-switch">
-          <input type="checkbox" id="settings-operator-mode" />
-          <span class="slider"></span>
-        </label>
+      </div>
+      <!-- Intelligence pane -->
+      <div class="settings-pane" id="pane-intelligence">
+        <div class="settings-card">
+          <div class="card-title">AI Provider</div>
+          <div class="settings-field">
+            <label for="settings-provider">Provider</label>
+            <select id="settings-provider">
+              <option value="ollama">Ollama</option>
+              <option value="anthropic">Anthropic</option>
+            </select>
+          </div>
+          <div class="settings-field">
+            <label for="settings-model">Model</label>
+            <input id="settings-model" type="text" placeholder="e.g. llama3.2, claude-sonnet-4-20250514" />
+          </div>
+          <div class="settings-field">
+            <label for="settings-apikey">API Key</label>
+            <div class="settings-key-row">
+              <input id="settings-apikey" type="password" placeholder="API key stored" />
+              <button id="settings-apikey-toggle" type="button">Show</button>
+            </div>
+          </div>
+        </div>
+        <div class="settings-card">
+          <div class="card-title">MCP Servers</div>
+          <div id="mcp-server-list"></div>
+          <button class="mcp-add-btn" id="mcp-add-toggle">+ Add Server</button>
+          <div id="mcp-add-form" style="display:none;">
+            <div class="settings-field">
+              <label for="mcp-name">Name</label>
+              <input id="mcp-name" type="text" placeholder="e.g. filesystem" />
+            </div>
+            <div class="settings-field">
+              <label for="mcp-transport">Transport</label>
+              <select id="mcp-transport">
+                <option value="stdio">stdio</option>
+                <option value="http">HTTP</option>
+              </select>
+            </div>
+            <div class="settings-field" id="mcp-command-field">
+              <label for="mcp-command">Command</label>
+              <input id="mcp-command" type="text" placeholder="e.g. npx @modelcontextprotocol/server-filesystem" />
+            </div>
+            <div class="settings-field" id="mcp-url-field" style="display:none;">
+              <label for="mcp-url">URL</label>
+              <input id="mcp-url" type="text" placeholder="http://localhost:3000/mcp" />
+            </div>
+            <div class="settings-field">
+              <div class="toggle-row">
+                <div>
+                  <div class="toggle-label">Trusted</div>
+                  <div class="toggle-desc">Auto-approve all tools from this server</div>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="mcp-trusted" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+            <div style="display:flex;gap:6px;margin-top:10px;">
+              <button class="settings-outline-btn" id="mcp-add-cancel" style="flex:1;">Cancel</button>
+              <button class="settings-outline-btn" id="mcp-add-confirm" style="flex:1;background:rgba(99,102,241,0.15);border-color:rgba(99,102,241,0.3);color:#818cf8;">Add</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- Governance pane -->
+      <div class="settings-pane" id="pane-governance">
+        <div class="settings-card">
+          <div class="card-title">Operator Mode</div>
+          <div class="toggle-row">
+            <div>
+              <div class="toggle-label">Operator Mode</div>
+              <div class="toggle-desc">Allow high-risk tools (write, execute, payments)</div>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="settings-operator-mode" />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div style="margin-top:8px;">
+            <button class="settings-link-btn" id="settings-reset-pin">Reset PIN</button>
+          </div>
+        </div>
+        <div class="settings-card">
+          <div class="card-title">Approval Preset</div>
+          <div class="preset-group" id="approval-preset-group">
+            <label class="preset-option" data-preset="cautious">
+              <input type="radio" name="approval-preset" value="cautious" />
+              <div>
+                <div class="preset-name">Cautious</div>
+                <div class="preset-desc">Auto reads, approve writes/exec, deny payments</div>
+              </div>
+            </label>
+            <label class="preset-option selected" data-preset="balanced">
+              <input type="radio" name="approval-preset" value="balanced" checked />
+              <div>
+                <div class="preset-name">Balanced</div>
+                <div class="preset-desc">Auto reads+drafts, approve writes/exec, deny payments</div>
+              </div>
+            </label>
+            <label class="preset-option" data-preset="autonomous">
+              <input type="radio" name="approval-preset" value="autonomous" />
+              <div>
+                <div class="preset-name">Autonomous</div>
+                <div class="preset-desc">Auto-allow most, approve payments only</div>
+              </div>
+            </label>
+          </div>
+        </div>
+        <div class="settings-card">
+          <div class="card-title">Memory Governance</div>
+          <div class="settings-field">
+            <label>Persistence Threshold</label>
+            <div class="range-row">
+              <input type="range" id="settings-persistence-threshold" min="0" max="1" step="0.05" value="0.5" />
+              <span class="range-value" id="persistence-threshold-value">0.50</span>
+            </div>
+          </div>
+          <div class="settings-field" style="margin-top:10px;">
+            <div class="toggle-row">
+              <div>
+                <div class="toggle-label">Secret Detection</div>
+                <div class="toggle-desc">Reject memories containing secrets</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="settings-reject-secrets" checked />
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="settings-card">
+          <div class="card-title">Budget</div>
+          <div class="settings-field">
+            <label for="settings-max-calls">Max tool calls per turn</label>
+            <input id="settings-max-calls" type="number" min="1" max="50" value="10" />
+          </div>
+        </div>
+      </div>
+      <!-- Identity pane -->
+      <div class="settings-pane" id="pane-identity">
+        <div class="settings-card">
+          <div class="card-title">Motebit Identity</div>
+          <div class="identity-field">
+            <span class="identity-label">ID</span>
+            <span class="identity-value" id="identity-motebit-id">-</span>
+            <button class="copy-btn" data-copy="identity-motebit-id">Copy</button>
+          </div>
+          <div class="identity-field">
+            <span class="identity-label">Device</span>
+            <span class="identity-value" id="identity-device-id">-</span>
+            <button class="copy-btn" data-copy="identity-device-id">Copy</button>
+          </div>
+          <div class="identity-field">
+            <span class="identity-label">Key</span>
+            <span class="identity-value" id="identity-public-key">-</span>
+            <button class="copy-btn" data-copy="identity-public-key">Copy</button>
+          </div>
+          <div class="identity-field">
+            <span class="identity-label">Sync</span>
+            <span class="sync-badge disconnected" id="identity-sync-status">Not connected</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="settings-outline-btn" id="settings-export" style="flex:1;">Export Data</button>
+          <button class="settings-outline-btn" id="settings-docs" style="flex:1;">Documentation</button>
+        </div>
       </div>
     </div>
-    <div class="settings-field">
-      <button id="settings-reset-pin" style="background:none;border:none;color:rgba(255,255,255,0.35);font-size:12px;cursor:pointer;padding:0;font-family:inherit;text-decoration:underline;">Reset PIN</button>
-    </div>
-    <div class="settings-field">
-      <button id="settings-docs" style="width:100%;padding:8px 0;border:1px solid rgba(255,255,255,0.1);border-radius:10px;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.7);font-size:13px;cursor:pointer;font-family:inherit;">Documentation</button>
-    </div>
-    <div class="settings-actions">
+    <div class="settings-footer">
       <button class="cancel-btn" id="settings-cancel">Cancel</button>
       <button class="save-btn" id="settings-save">Save</button>
     </div>

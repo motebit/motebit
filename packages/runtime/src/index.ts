@@ -13,7 +13,7 @@ import type { AuditLogAdapter } from "@motebit/privacy-layer";
 import { SyncEngine } from "@motebit/sync-engine";
 import type { RenderSpec } from "@motebit/sdk";
 import { CANONICAL_SPEC } from "@motebit/render-engine";
-import type { RenderAdapter, RenderFrame } from "@motebit/render-engine";
+import type { RenderAdapter, RenderFrame, InteriorColor } from "@motebit/render-engine";
 import {
   runTurn,
   runTurnStreaming,
@@ -41,7 +41,7 @@ export type { EventStoreAdapter } from "@motebit/event-log";
 export type { MemoryStorageAdapter } from "@motebit/memory-graph";
 export type { IdentityStorage } from "@motebit/core-identity";
 export type { AuditLogAdapter } from "@motebit/privacy-layer";
-export type { RenderAdapter, RenderFrame } from "@motebit/render-engine";
+export type { RenderAdapter, RenderFrame, InteriorColor } from "@motebit/render-engine";
 export type { RenderSpec } from "@motebit/sdk";
 export { PolicyGate } from "@motebit/policy";
 export type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
@@ -91,6 +91,10 @@ class SimpleToolRegistry implements ToolRegistry {
     }
   }
 
+  unregister(name: string): boolean {
+    return this.tools.delete(name);
+  }
+
   get size(): number { return this.tools.size; }
 }
 
@@ -135,6 +139,9 @@ export class NullRenderer implements RenderAdapter {
   render(_frame: RenderFrame): void {}
   getSpec(): RenderSpec { return CANONICAL_SPEC; }
   resize(_w: number, _h: number): void {}
+  setBackground(_color: number | null): void {}
+  setDarkEnvironment(): void {}
+  setInteriorColor(_color: InteriorColor): void {}
   dispose(): void {}
 }
 
@@ -201,8 +208,8 @@ export class MotebitRuntime {
   readonly identity: IdentityManager;
   readonly privacy: PrivacyLayer;
   readonly sync: SyncEngine;
-  readonly policy: PolicyGate;
-  readonly memoryGovernor: MemoryGovernor;
+  policy: PolicyGate;
+  memoryGovernor: MemoryGovernor;
 
   private renderer: RenderAdapter;
   private provider: StreamingProvider | null;
@@ -225,6 +232,8 @@ export class MotebitRuntime {
   private mcpAdapters: McpClientAdapter[] = [];
   private mcpConfigs: McpServerConfig[];
   private keyring: KeyringAdapter | null;
+  private toolAuditSink?: AuditLogSink;
+  private externalToolSources = new Map<string, string[]>();
   private _pendingApproval: {
     toolCallId: string;
     toolName: string;
@@ -281,7 +290,8 @@ export class MotebitRuntime {
     });
 
     // Policy & memory governance
-    this.policy = new PolicyGate(config.policy, adapters.storage.toolAuditSink);
+    this.toolAuditSink = adapters.storage.toolAuditSink;
+    this.policy = new PolicyGate(config.policy, this.toolAuditSink);
     this.memoryGovernor = new MemoryGovernor(config.memoryGovernance);
 
     // Restore saved state
@@ -427,6 +437,54 @@ export class MotebitRuntime {
     await this.keyring.delete(OPERATOR_PIN_KEY);
     this.policy.setOperatorMode(false);
     this.wireLoopDeps();
+  }
+
+  /**
+   * Replace the PolicyGate with a new instance built from the given config.
+   * Immutable swap — no mutation of the existing PolicyGate.
+   */
+  updatePolicyConfig(config: Partial<PolicyConfig>): void {
+    this.policy = new PolicyGate(config, this.toolAuditSink);
+    this.wireLoopDeps();
+  }
+
+  /**
+   * Replace the MemoryGovernor with a new instance built from the given config.
+   * Immutable swap — no mutation of the existing MemoryGovernor.
+   */
+  updateMemoryGovernance(config: Partial<MemoryGovernanceConfig>): void {
+    this.memoryGovernor = new MemoryGovernor(config);
+    this.wireLoopDeps();
+  }
+
+  /**
+   * Register external tools under a source ID (e.g. "mcp:filesystem").
+   * Merges tools from the given registry, tracking names for bulk unregister.
+   */
+  registerExternalTools(sourceId: string, registry: ToolRegistry): void {
+    const names: string[] = [];
+    for (const def of registry.list()) {
+      if (!this.toolRegistry.has(def.name)) {
+        this.toolRegistry.register(def, (args) => registry.execute(def.name, args));
+        names.push(def.name);
+      }
+    }
+    this.externalToolSources.set(sourceId, names);
+    this.wireLoopDeps();
+  }
+
+  /**
+   * Remove all tools registered under a source ID.
+   */
+  unregisterExternalTools(sourceId: string): void {
+    const names = this.externalToolSources.get(sourceId);
+    if (names) {
+      for (const name of names) {
+        this.toolRegistry.unregister(name);
+      }
+      this.externalToolSources.delete(sourceId);
+      this.wireLoopDeps();
+    }
   }
 
   async sendMessage(text: string): Promise<TurnResult> {
