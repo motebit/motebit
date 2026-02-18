@@ -16,7 +16,11 @@
   },
   "dependencies": {
     "@motebit/sdk": "workspace:*",
-    "@motebit/render-engine": "workspace:*"
+    "@motebit/render-engine": "workspace:*",
+    "@motebit/runtime": "workspace:*",
+    "@motebit/ai-core": "workspace:*",
+    "@motebit/crypto": "workspace:*",
+    "@motebit/core-identity": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

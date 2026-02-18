@@ -346,9 +346,21 @@ importers:
 
   apps/spatial:
     dependencies:
+      '@motebit/ai-core':
+        specifier: workspace:*
+        version: link:../../packages/ai-core
+      '@motebit/core-identity':
+        specifier: workspace:*
+        version: link:../../packages/core-identity
+      '@motebit/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@motebit/render-engine':
         specifier: workspace:*
         version: link:../../packages/render-engine
+      '@motebit/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk

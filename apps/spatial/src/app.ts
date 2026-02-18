@@ -1,13 +1,16 @@
 /**
  * Spatial app entry point — the glass creature in physical space.
  *
- * Initializes WebXR, places the creature in AR, and runs the orbital dynamics.
- * The same body, same physics, same breathing — rendered at the user's shoulder.
+ * Initializes the SpatialApp platform shell, wires settings UI, voice,
+ * and WebXR session. The creature has intelligence, memory, identity,
+ * and ambient voice interaction — the same sovereign runtime that
+ * powers the desktop app, with browser-native substitutions.
  */
 
+import { SpatialApp } from "./spatial-app";
+import type { SpatialAIConfig } from "./spatial-app";
 import { WebXRThreeJSAdapter } from "@motebit/render-engine";
-import { OrbitalDynamics, estimateBodyAnchors, getAnchorForReference } from "./index";
-import type { BehaviorCues } from "@motebit/sdk";
+import { VoiceInterface } from "./voice";
 
 // === DOM elements ===
 
@@ -16,52 +19,151 @@ const overlay = document.getElementById("overlay") as HTMLElement;
 const enterButton = document.getElementById("enter-ar") as HTMLButtonElement;
 const statusEl = document.getElementById("status") as HTMLElement;
 
+// Settings elements
+const settingsOverlay = document.getElementById("settings-overlay") as HTMLElement;
+const providerSelect = document.getElementById("provider-select") as HTMLSelectElement;
+const apiKeyInput = document.getElementById("api-key-input") as HTMLInputElement;
+const apiKeyGroup = document.getElementById("api-key-group") as HTMLElement;
+const modelInput = document.getElementById("model-input") as HTMLInputElement;
+const voiceToggle = document.getElementById("voice-toggle") as HTMLInputElement;
+const settingsSave = document.getElementById("settings-save") as HTMLButtonElement;
+const settingsSkip = document.getElementById("settings-skip") as HTMLButtonElement;
+
+// Voice indicator
+const voiceIndicator = document.getElementById("voice-indicator") as HTMLElement;
+
 // === State ===
 
-const adapter = new WebXRThreeJSAdapter();
-const dynamics = new OrbitalDynamics();
-
-// Default cues — idle state. In Phase 5 these come from the state vector / behavior engine.
-const idleCues: BehaviorCues = {
-  hover_distance: 0.4,
-  drift_amplitude: 0.02,
-  glow_intensity: 0.3,
-  eye_dilation: 0.3,
-  smile_curvature: 0.5,
-};
-
+const app = new SpatialApp();
 let lastTime = 0;
-let attentionLevel = 0.2; // slightly attentive by default
+
+// === Settings persistence ===
+
+interface SpatialSettings {
+  provider: "anthropic" | "ollama";
+  apiKey: string;
+  model: string;
+  voiceEnabled: boolean;
+}
+
+function loadSettings(): SpatialSettings {
+  try {
+    const raw = localStorage.getItem("motebit:spatial_settings");
+    if (raw) return JSON.parse(raw) as SpatialSettings;
+  } catch { /* ignore */ }
+  return { provider: "anthropic", apiKey: "", model: "", voiceEnabled: true };
+}
+
+function saveSettings(s: SpatialSettings): void {
+  localStorage.setItem("motebit:spatial_settings", JSON.stringify(s));
+}
 
 // === Initialization ===
 
 async function init(): Promise<void> {
+  // Bootstrap identity (generates keypair on first launch)
+  await app.bootstrap();
+
+  // Initialize WebXR adapter
+  await app.init(canvas);
+
+  // Load saved settings and populate form
+  const settings = loadSettings();
+  providerSelect.value = settings.provider;
+  apiKeyInput.value = settings.apiKey;
+  modelInput.value = settings.model;
+  voiceToggle.checked = settings.voiceEnabled;
+  updateProviderUI(settings.provider);
+
+  // If we have a saved config that can init, skip settings
+  if (tryInitAI(settings)) {
+    settingsOverlay.classList.add("hidden");
+    initVoiceIfEnabled(settings.voiceEnabled);
+    showMainOverlay();
+  } else {
+    // Show settings overlay first
+    settingsOverlay.classList.remove("hidden");
+    overlay.classList.add("hidden");
+  }
+}
+
+function tryInitAI(settings: SpatialSettings): boolean {
+  const config: SpatialAIConfig = {
+    provider: settings.provider,
+    model: settings.model || undefined,
+    apiKey: settings.apiKey || undefined,
+  };
+  return app.initAI(config);
+}
+
+function initVoiceIfEnabled(enabled: boolean): void {
+  if (enabled && VoiceInterface.isSupported()) {
+    const started = app.startVoice();
+    if (started && voiceIndicator) {
+      voiceIndicator.classList.remove("hidden");
+    }
+  }
+}
+
+function showMainOverlay(): void {
+  overlay.classList.remove("hidden");
+
   // Check WebXR support
-  const supported = await WebXRThreeJSAdapter.isSupported();
+  void WebXRThreeJSAdapter.isSupported().then((supported) => {
+    if (!supported) {
+      statusEl.textContent = "WebXR AR not available — flat preview";
+      enterButton.disabled = true;
+      startFlatPreview();
+    } else {
+      statusEl.textContent = app.isAIReady ? "Ready" : "Ready (no AI — configure in settings)";
+      enterButton.addEventListener("click", startAR);
+    }
+  });
+}
 
-  if (!supported) {
-    statusEl.textContent = "WebXR AR not available on this device";
-    enterButton.disabled = true;
+// === Settings UI ===
 
-    // Still init the adapter for a flat preview
-    await adapter.init(canvas);
-    adapter.setCreatureWorldPosition(0, 0, -0.5);
+providerSelect?.addEventListener("change", () => {
+  updateProviderUI(providerSelect.value as "anthropic" | "ollama");
+});
 
-    startFlatPreview();
+function updateProviderUI(provider: string): void {
+  if (apiKeyGroup) {
+    apiKeyGroup.style.display = provider === "anthropic" ? "block" : "none";
+  }
+}
+
+settingsSave?.addEventListener("click", (e) => {
+  e.preventDefault();
+  const settings: SpatialSettings = {
+    provider: providerSelect.value as "anthropic" | "ollama",
+    apiKey: apiKeyInput.value.trim(),
+    model: modelInput.value.trim(),
+    voiceEnabled: voiceToggle.checked,
+  };
+  saveSettings(settings);
+
+  if (!tryInitAI(settings)) {
+    statusEl.textContent = "API key required for Anthropic";
     return;
   }
 
-  statusEl.textContent = "Ready";
+  initVoiceIfEnabled(settings.voiceEnabled);
+  settingsOverlay.classList.add("hidden");
+  showMainOverlay();
+});
 
-  await adapter.init(canvas);
-
-  enterButton.addEventListener("click", startAR);
-}
+settingsSkip?.addEventListener("click", () => {
+  // Skip AI — just run the creature with idle cues
+  settingsOverlay.classList.add("hidden");
+  showMainOverlay();
+});
 
 // === Flat preview (non-XR fallback) ===
-// Shows the creature on a flat canvas when WebXR isn't available.
 
 function startFlatPreview(): void {
+  app.adapter.setCreatureWorldPosition(0, 0, -0.5);
+
   let prevTime = performance.now();
 
   function loop(now: number): void {
@@ -69,16 +171,15 @@ function startFlatPreview(): void {
     prevTime = now;
     const time = now / 1000;
 
-    adapter.render({ cues: idleCues, delta_time: dt, time });
+    app.renderFrame(dt, time);
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
 
-  // Handle resize
   window.addEventListener("resize", () => {
-    adapter.resize(window.innerWidth, window.innerHeight);
+    app.adapter.resize(window.innerWidth, window.innerHeight);
   });
-  adapter.resize(window.innerWidth, window.innerHeight);
+  app.adapter.resize(window.innerWidth, window.innerHeight);
 }
 
 // === AR Session ===
@@ -87,7 +188,7 @@ async function startAR(): Promise<void> {
   statusEl.textContent = "Starting AR session...";
   enterButton.disabled = true;
 
-  const success = await adapter.startSession({
+  const success = await app.adapter.startSession({
     requiredFeatures: ["local-floor"],
     optionalFeatures: ["hand-tracking", "light-estimation"],
   });
@@ -100,10 +201,10 @@ async function startAR(): Promise<void> {
 
   overlay.classList.add("hidden");
 
-  const renderer = adapter.getRenderer()!;
+  const renderer = app.adapter.getRenderer()!;
   lastTime = performance.now();
 
-  // The WebXR animation loop — Three.js calls this each frame during the XR session
+  // WebXR animation loop
   renderer.setAnimationLoop((time: number) => {
     const now = time || performance.now();
     const dt = Math.min((now - lastTime) / 1000, 0.1);
@@ -118,21 +219,11 @@ async function startAR(): Promise<void> {
       camera.position.z,
     ];
 
-    // Estimate body anchors from head
-    const anchors = estimateBodyAnchors(headPos);
-    const shoulderAnchor = getAnchorForReference(anchors, "shoulder_right");
+    // Tick orbital dynamics — positions creature relative to shoulder
+    app.tickOrbital(dt, t, headPos);
 
-    if (shoulderAnchor) {
-      // Run orbital dynamics
-      const creaturePos = dynamics.tick(dt, t, shoulderAnchor, attentionLevel);
-      adapter.setCreatureWorldPosition(creaturePos[0], creaturePos[1], creaturePos[2]);
-
-      // Face the creature toward the user's head
-      adapter.setCreatureLookAt(headPos[0], headPos[1], headPos[2]);
-    }
-
-    // Render the creature with current behavior cues
-    adapter.render({ cues: idleCues, delta_time: dt, time: t });
+    // Render with behavior cues from runtime (or idle cues)
+    app.renderFrame(dt, t);
   });
 
   // Listen for session end
@@ -143,7 +234,7 @@ async function startAR(): Promise<void> {
       overlay.classList.remove("hidden");
       enterButton.disabled = false;
       statusEl.textContent = "Session ended";
-      dynamics.reset();
+      app.dynamics.reset();
     });
   }
 }
@@ -152,15 +243,11 @@ async function startAR(): Promise<void> {
 // Touch/pinch increases attention (closer orbit, brighter glow)
 
 document.addEventListener("pointerdown", () => {
-  attentionLevel = Math.min(1, attentionLevel + 0.3);
+  app.bumpAttention(0.3);
 });
 
 document.addEventListener("pointerup", () => {
-  // Slowly decay attention
-  const decay = setInterval(() => {
-    attentionLevel = Math.max(0.2, attentionLevel - 0.05);
-    if (attentionLevel <= 0.2) clearInterval(decay);
-  }, 100);
+  app.decayAttention();
 });
 
 // === Start ===
