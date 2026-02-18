@@ -359,12 +359,18 @@ export async function verify(content: string): Promise<VerifyResult> {
   } catch {
     return { valid: false, identity: null, error: "Invalid public key hex" };
   }
+  if (pubKey.length !== 32) {
+    return { valid: false, identity: null, error: "Public key must be 32 bytes" };
+  }
 
   let sigBytes: Uint8Array;
   try {
     sigBytes = fromBase64Url(parsed.signature);
   } catch {
     return { valid: false, identity: null, error: "Invalid signature encoding" };
+  }
+  if (sigBytes.length !== 64) {
+    return { valid: false, identity: null, error: "Signature must be 64 bytes" };
   }
 
   const frontmatterBytes = new TextEncoder().encode(parsed.rawFrontmatter);
