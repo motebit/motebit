@@ -15,9 +15,9 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent — a ves
 2. **Accumulated trust** — memory, state history, audit trails that make the agent more capable the longer it runs
 3. **Governance at the boundary** — sensitivity-aware privacy and policy that controls what crosses the surface
 
-**Where the implementation stands.** The desktop app is the flagship (~80%): identity bootstrap, operator mode, tool approval, sync relay, rendering. The CLI is a developer debugging interface. Mobile is an early MVP. The current surfaces are chat-based — the sovereign agent vision is ahead of the UI. The infrastructure (identity, crypto, policy, memory, sync) is built. The agentic surface that exposes it is next.
+**Where the implementation stands.** The desktop app is the flagship (~80%): identity bootstrap, operator mode, tool approval, sync relay, voice input, audio-reactive rendering. The CLI is the full operator console: REPL chat, daemon mode with goal scheduling, tool approval queue, operator mode, and the `motebit init`/`verify` commands. Mobile is an early MVP. The public-facing standard ships as `create-motebit` (npm create motebit) and `@motebit/verify` — lightweight, zero-monorepo-dep packages that let anyone create and verify signed agent identities. The infrastructure (identity, crypto, policy, memory, sync) is built. The agentic surface that exposes it is next.
 
-Read `DROPLET.md` for the full design thesis on form. Every visual and behavioral decision derives from droplet physics. If it can't be traced to surface tension, it doesn't belong.
+Read `DROPLET.md` for the full design thesis on form. Read `THE_SOVEREIGN_INTERIOR.md` for the identity thesis. Read `LIQUESCENTIA.md` for the world. Read `THE_MUSIC_OF_THE_MEDIUM.md` for the acoustic interface. Every visual and behavioral decision derives from droplet physics. If it can't be traced to surface tension, it doesn't belong.
 
 ## Architecture
 
@@ -48,8 +48,13 @@ packages/
   persistence/     SQLite schema (WAL mode), adapters for events/memories/identities/audit/state/devices
   tools/           InMemoryToolRegistry, builtin tools, MCP tool merge
   mcp-client/      MCP stdio client, tool discovery, external data boundary marking
-  identity-file/   Generate, parse, verify motebit.md — cryptographically signed agent identity files
+  identity-file/   Generate, parse, verify motebit.md — cryptographically signed agent identity files (internal)
+  verify/          Standalone public verifier for motebit.md — zero monorepo deps, MIT licensed
+  create-motebit/  Public CLI: `npm create motebit` — generates + verifies signed identity files
   policy-invariants/ Clamping rules, state bounds validation
+
+spec/
+  identity-v1.md   motebit/identity@1.0 specification — file format, signing algorithm, verification
 
 services/
   api/             Sync relay server: REST + WebSocket, device auth (master token + Ed25519 signed tokens), fan-out
@@ -87,9 +92,19 @@ Tauri app. Two key files for the UI layer:
 
 **Rendering:** Three.js glass droplet — MeshPhysicalMaterial (transmission 0.98, IOR 1.15, iridescence 0.3), breathing at ~0.3 Hz, gravity sag, Brownian drift, interior glow on processing.
 
-## CLI App
+## CLI App (Operator Console)
 
-`apps/cli/src/main.ts` — REPL with streaming. Commands: `/model`, `/memories`, `/state`, `/forget`, `/export`, `/sync`, `/clear`, `/help`. Hardcoded identity (`motebit-cli`), no keyring, no operator mode. Direct better-sqlite3 persistence.
+`apps/cli/src/index.ts` — Full operator console (1593 lines). Not published to npm — internal tool.
+
+**Subcommands:** `motebit init`, `motebit verify <path>`, `motebit run --identity <path>` (daemon), `motebit goal add/list/remove/pause/resume`, `motebit approvals list/show/approve/deny`. Default (no subcommand) enters interactive REPL.
+
+**REPL commands:** `/model`, `/memories`, `/state`, `/forget`, `/export`, `/sync`, `/clear`, `/tools`, `/mcp list/trust/untrust`, `/operator`, `/help`.
+
+**Identity:** Ed25519 keypair generated on first launch, private key encrypted with PBKDF2 (passphrase-protected), stored in `~/.motebit/config.json`. Supports operator mode via `--operator` flag.
+
+**Daemon mode:** Reads governance thresholds from `motebit.md`, runs goal scheduler (60s tick), suspends on approval requests, fail-closed on invalid governance.
+
+**Dependencies:** 13 workspace packages (runtime, ai-core, persistence, crypto, etc.). Direct better-sqlite3 persistence.
 
 ## Mobile App
 

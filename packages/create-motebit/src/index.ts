@@ -245,8 +245,14 @@ async function init(outputPath: string): Promise<void> {
   console.log(`  ${green(">")} ${bold(outputPath)} written ${dim("(signed identity file)")}`);
   console.log(`  ${green(">")} ${dim(keyPath)} ${dim("(private key, chmod 600)")}`);
   console.log();
-  console.log(`  ${dim("Add motebit.md to your repository.")}`);
+  console.log(`  ${bold("Next steps:")}`);
+  console.log();
+  console.log(`    1. ${dim("Add to your repo:")}      git add ${outputPath}`);
+  console.log(`    2. ${dim("Verify signature:")}      npx create-motebit verify`);
+  console.log(`    3. ${dim("Add to .gitignore:")}     echo '.motebit-keys/' >> .gitignore`);
+  console.log();
   console.log(`  ${dim("Never commit your private key.")}`);
+  console.log(`  ${dim("Learn more: https://github.com/motebit/motebit/blob/main/spec/identity-v1.md")}`);
   console.log();
 }
 

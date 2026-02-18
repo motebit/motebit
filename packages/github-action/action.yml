@@ -1,0 +1,85 @@
+name: 'Verify motebit.md'
+description: 'Verify the Ed25519 signature of a motebit.md agent identity file'
+author: 'Motebit'
+
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  path:
+    description: 'Path to the motebit.md file'
+    required: false
+    default: 'motebit.md'
+  fail-on-missing:
+    description: 'Fail the action if the identity file is not found'
+    required: false
+    default: 'true'
+  node-version:
+    description: 'Node.js version to use'
+    required: false
+    default: '20'
+
+outputs:
+  valid:
+    description: 'Whether the signature is valid (true/false)'
+    value: ${{ steps.verify.outputs.valid }}
+  motebit-id:
+    description: 'The motebit_id from the identity file'
+    value: ${{ steps.verify.outputs.motebit_id }}
+  public-key:
+    description: 'The public key fingerprint (first 16 hex chars)'
+    value: ${{ steps.verify.outputs.public_key }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Verify motebit.md
+      id: verify
+      shell: bash
+      run: |
+        FILE="${{ inputs.path }}"
+
+        if [ ! -f "$FILE" ]; then
+          echo "::warning::motebit.md not found at $FILE"
+          echo "valid=false" >> "$GITHUB_OUTPUT"
+          echo "motebit_id=" >> "$GITHUB_OUTPUT"
+          echo "public_key=" >> "$GITHUB_OUTPUT"
+
+          if [ "${{ inputs.fail-on-missing }}" = "true" ]; then
+            echo "::error::motebit.md not found at $FILE"
+            exit 1
+          fi
+          exit 0
+        fi
+
+        # Run verification using npx (downloads create-motebit on first use)
+        set +e
+        OUTPUT=$(npx --yes create-motebit@latest verify "$FILE" 2>&1)
+        EXIT_CODE=$?
+        set -e
+
+        echo "$OUTPUT"
+
+        if [ $EXIT_CODE -eq 0 ]; then
+          echo "valid=true" >> "$GITHUB_OUTPUT"
+
+          # Extract motebit_id and public_key from output
+          MOTEBIT_ID=$(echo "$OUTPUT" | grep -oP 'motebit_id\s+\K\S+' || echo "")
+          PUBLIC_KEY=$(echo "$OUTPUT" | grep -oP 'public_key\s+\K\S+' || echo "")
+          echo "motebit_id=$MOTEBIT_ID" >> "$GITHUB_OUTPUT"
+          echo "public_key=$PUBLIC_KEY" >> "$GITHUB_OUTPUT"
+
+          echo "::notice::motebit.md signature verified successfully"
+        else
+          echo "valid=false" >> "$GITHUB_OUTPUT"
+          echo "motebit_id=" >> "$GITHUB_OUTPUT"
+          echo "public_key=" >> "$GITHUB_OUTPUT"
+          echo "::error::motebit.md signature verification failed"
+          exit 1
+        fi
