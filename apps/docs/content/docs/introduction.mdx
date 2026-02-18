@@ -15,7 +15,17 @@ Every AI product today owns the intelligence and rents you a session. Motebit in
 
 ## Quickstart
 
-Clone the repo and install dependencies:
+Create a signed agent identity:
+
+```bash
+npm create motebit
+```
+
+This generates a `motebit.md` — a cryptographically signed identity file — and stores the private key on your machine. See the [Identity Standard](/docs/guides/identity-standard) guide for details.
+
+### Development setup
+
+To build on the full platform, clone the repo:
 
 ```bash
 git clone https://github.com/motebit/motebit.git
@@ -23,13 +33,13 @@ cd motebit
 pnpm install
 ```
 
-Start the desktop app in dev mode:
+Start the desktop app:
 
 ```bash
 pnpm --filter @motebit/desktop dev
 ```
 
-Or start the CLI for a developer REPL:
+Or the CLI:
 
 ```bash
 pnpm --filter @motebit/cli dev

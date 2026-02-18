@@ -1,0 +1,153 @@
+---
+title: Identity Standard
+description: Create and verify motebit.md agent identity files — the motebit/identity@1.0 specification.
+---
+
+A `motebit.md` is a human-readable, cryptographically signed agent identity file. It gives an agent a provable identity — an Ed25519 keypair that persists across sessions, devices, and providers.
+
+The file is YAML frontmatter containing identity, governance, privacy, and memory configuration, signed with an Ed25519 signature embedded as an HTML comment. Anyone can verify it. No central authority required.
+
+## Create an identity
+
+```bash
+npm create motebit
+```
+
+This generates two files:
+
+- **`motebit.md`** — the signed identity file (commit this to your repo)
+- **`~/.motebit/keys/<id>.key`** — the Ed25519 private key (never commit this)
+
+```
+  + Generated agent identity
+
+    motebit_id   486d9bf5-88d3-4f1f-93f8-a934c4ed72c5
+    public_key   f253860af10ad705...
+    algorithm    Ed25519
+    trust_mode   guarded
+
+  > motebit.md written (signed identity file)
+  > ~/.motebit/keys/486d9bf5.key (private key, chmod 600)
+```
+
+## Verify a signature
+
+```bash
+npx create-motebit verify motebit.md
+```
+
+Returns exit code 0 if valid, 1 if tampered or malformed.
+
+## Programmatic verification
+
+Install the standalone verifier:
+
+```bash
+npm install @motebit/verify
+```
+
+```typescript
+import { verify } from "@motebit/verify";
+import fs from "node:fs";
+
+const content = fs.readFileSync("motebit.md", "utf-8");
+const result = await verify(content);
+
+if (result.valid) {
+  console.log("Verified:", result.identity.motebit_id);
+  console.log("Trust mode:", result.identity.governance.trust_mode);
+} else {
+  console.error("Failed:", result.error);
+}
+```
+
+`@motebit/verify` has zero monorepo dependencies — only `@noble/ed25519` for cryptography.
+
+## What's in a motebit.md
+
+```yaml
+---
+spec: "motebit/identity@1.0"
+motebit_id: "486d9bf5-88d3-4f1f-93f8-a934c4ed72c5"
+created_at: "2026-01-15T00:00:00.000Z"
+owner_id: "owner"
+
+identity:
+  algorithm: "Ed25519"
+  public_key: "a1b2c3d4..."
+
+governance:
+  trust_mode: "guarded"
+  max_risk_auto: "R1_DRAFT"
+  require_approval_above: "R1_DRAFT"
+  deny_above: "R4_MONEY"
+  operator_mode: false
+
+privacy:
+  default_sensitivity: "personal"
+  retention_days:
+    none: 365
+    personal: 90
+    medical: 30
+    financial: 30
+    secret: 7
+  fail_closed: true
+
+memory:
+  half_life_days: 7
+  confidence_threshold: 0.3
+  per_turn_limit: 5
+
+devices: []
+---
+<!-- motebit:sig:Ed25519:BASE64URL_SIGNATURE -->
+```
+
+### Key sections
+
+| Section | Purpose |
+|---------|---------|
+| **identity** | Ed25519 public key — proves who signed the file |
+| **governance** | Risk thresholds that gate tool execution (see [Governance](/docs/concepts/governance)) |
+| **privacy** | Sensitivity levels and retention rules (see [Privacy](/docs/architecture/privacy-and-policy)) |
+| **memory** | Decay parameters for semantic memory (see [Memory](/docs/concepts/memory)) |
+| **devices** | Registered device public keys for multi-device identity |
+
+### Signature
+
+The Ed25519 signature covers the exact UTF-8 bytes of the YAML frontmatter (between `---` delimiters, exclusive). Any modification — even a single character — invalidates the signature.
+
+The signature is stored as a base64url-encoded value in an HTML comment after the closing `---`. This keeps the file human-readable while remaining cryptographically verifiable.
+
+## Threat model
+
+| Threat | Mitigation |
+|--------|-----------|
+| Frontmatter tampering | Ed25519 signature — any change invalidates |
+| Private key theft | Stored with chmod 600 or in OS keychain; never in the identity file |
+| Identity impersonation | Public key is self-certifying; verification requires the matching keypair |
+| Key compromise | Generate new keypair + new `motebit_id`; old identity is abandoned |
+| YAML injection | Restricted parser; no anchors/aliases/tags |
+
+A valid signature proves the holder has the private key. It does **not** prove the holder is trustworthy. Trust is accumulated at the application layer through history, governance, and memory — not by the identity file alone.
+
+## CI verification
+
+Use the GitHub Action to verify signatures in pull requests:
+
+```yaml
+# .github/workflows/verify-identity.yml
+name: Verify Agent Identity
+on: [push, pull_request]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: motebit/motebit/packages/github-action@main
+```
+
+## Full specification
+
+The complete `motebit/identity@1.0` specification — including field definitions, signing algorithm pseudocode, verification algorithm, and security considerations — is available in [spec/identity-v1.md](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md).
