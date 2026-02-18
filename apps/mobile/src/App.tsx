@@ -1,9 +1,16 @@
 /**
  * @motebit/mobile — React Native app
  *
- * Thin platform shell around MotebitRuntime.
- * The runtime handles AI, state, memory, rendering.
- * This file is just React Native views wired to runtime methods.
+ * Thin platform shell around MobileApp (which wraps MotebitRuntime).
+ * This file is React Native views + modals wired to MobileApp methods.
+ *
+ * Initialization flow:
+ * 1. loadSettings → load saved settings from AsyncStorage
+ * 2. bootstrap → check/create cryptographic identity
+ * 3. If first launch → WelcomeOverlay → wait for acceptance
+ * 4. initAI → connect AI provider
+ * 5. Apply saved governance settings
+ * 6. start → begin state tick loop
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -20,94 +27,160 @@ import {
 } from "react-native";
 import { GLView } from "expo-gl";
 import type { ExpoWebGLRenderingContext } from "expo-gl";
+import * as SecureStore from "expo-secure-store";
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";
-import { MotebitRuntime, NullRenderer } from "@motebit/runtime";
-import { OllamaProvider } from "@motebit/ai-core";
-import { createExpoStorage } from "./adapters/expo-sqlite";
-import { ExpoGLAdapter } from "./adapters/expo-gl";
-import { SecureStoreAdapter } from "./adapters/secure-store";
+import type { StreamChunk } from "@motebit/runtime";
+import { stripTags } from "@motebit/ai-core";
+import { MobileApp, APPROVAL_PRESET_CONFIGS } from "./mobile-app";
+import type { MobileSettings, MobileAIConfig } from "./mobile-app";
+import { WelcomeOverlay } from "./components/WelcomeOverlay";
+import { ApprovalCard } from "./components/ApprovalCard";
+import { PinDialog } from "./components/PinDialog";
+import type { PinMode } from "./components/PinDialog";
+import { SettingsModal } from "./components/SettingsModal";
 
 // === Types ===
 
 interface ChatMessage {
   id: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system" | "approval";
   content: string;
   timestamp: number;
+  // Approval-specific fields
+  toolName?: string;
+  toolArgs?: Record<string, unknown>;
+  approvalResolved?: boolean;
 }
 
-// === Runtime singleton (created once, persists across re-renders) ===
+// === App singleton ===
 
-let runtimeInstance: MotebitRuntime | null = null;
-
-function getOrCreateRuntime(): MotebitRuntime {
-  if (runtimeInstance) return runtimeInstance;
-
-  const storage = createExpoStorage("motebit.db");
-  const renderer = new ExpoGLAdapter();
-  const provider = new OllamaProvider({ model: "llama3.2", max_tokens: 1024, temperature: 0.7 });
-
-  runtimeInstance = new MotebitRuntime(
-    { motebitId: "mobile-local", tickRateHz: 2 },
-    { storage, renderer, ai: provider, keyring: new SecureStoreAdapter() },
-  );
-
-  return runtimeInstance;
+let appInstance: MobileApp | null = null;
+function getApp(): MobileApp {
+  if (!appInstance) appInstance = new MobileApp();
+  return appInstance;
 }
 
 // === Main App Component ===
 
 export function App(): React.ReactElement {
-  const runtime = useRef<MotebitRuntime>(getOrCreateRuntime());
+  const app = useRef<MobileApp>(getApp());
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [state, setState] = useState<MotebitState | null>(null);
-  const [cues, setCues] = useState<BehaviorCues | null>(null);
+  const [_cues, setCues] = useState<BehaviorCues | null>(null);
   const [initialized, setInitialized] = useState(false);
+  const [settings, setSettings] = useState<MobileSettings | null>(null);
   const animFrameRef = useRef<number>(0);
-  const glRef = useRef<ExpoWebGLRenderingContext | null>(null);
   const flatListRef = useRef<FlatList>(null);
 
-  // Subscribe to state changes
-  useEffect(() => {
-    const rt = runtime.current;
-    rt.start();
-    setInitialized(true);
+  // Modal state
+  const [showWelcome, setShowWelcome] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showPin, setShowPin] = useState(false);
+  const [pinMode, setPinMode] = useState<PinMode>("setup");
+  const [pinError, setPinError] = useState("");
 
-    const unsub = rt.subscribe((s) => {
-      setState(s);
-      setCues(rt.getCues());
-    });
+  // Track pending approval for streaming resume
+  const pendingApprovalRef = useRef<string | null>(null);
+
+  // === Initialization ===
+  useEffect(() => {
+    void (async () => {
+      const a = app.current;
+
+      // 1. Load settings
+      const loaded = await a.loadSettings();
+      setSettings(loaded);
+
+      // 2. Bootstrap identity
+      const { isFirstLaunch } = await a.bootstrap();
+
+      if (isFirstLaunch) {
+        // 3. Show welcome overlay, wait for acceptance
+        setShowWelcome(true);
+        return; // Will continue after acceptance
+      }
+
+      // 4. Init AI with saved settings
+      await initializeAI(a, loaded);
+
+      // 5. Start runtime
+      a.start();
+      subscribeToState(a);
+      setInitialized(true);
+    })();
 
     return () => {
-      unsub();
       cancelAnimationFrame(animFrameRef.current);
     };
   }, []);
 
-  // GL context setup + render loop
+  const initializeAI = useCallback(async (a: MobileApp, s: MobileSettings) => {
+    const apiKey = s.provider === "anthropic"
+      ? (await SecureStore.getItemAsync("motebit_anthropic_api_key")) || undefined
+      : undefined;
+
+    a.initAI({ provider: s.provider, model: s.model, apiKey });
+
+    // Apply governance
+    const preset = APPROVAL_PRESET_CONFIGS[s.approvalPreset];
+    if (preset) {
+      a.updatePolicyConfig({
+        requireApprovalAbove: preset.requireApprovalAbove,
+        denyAbove: preset.denyAbove,
+      });
+    }
+    a.updateMemoryGovernance({
+      persistenceThreshold: s.persistenceThreshold,
+      rejectSecrets: s.rejectSecrets,
+      maxMemoriesPerTurn: s.maxMemoriesPerTurn,
+    });
+
+    // Apply color preset
+    a.setInteriorColor(s.colorPreset);
+  }, []);
+
+  const subscribeToState = useCallback((a: MobileApp) => {
+    a.subscribe((s) => {
+      setState(s);
+      setCues(a.getCues());
+    });
+  }, []);
+
+  // === Welcome acceptance ===
+  const handleWelcomeAccept = useCallback(async () => {
+    setShowWelcome(false);
+    const a = app.current;
+    const s = settings || (await a.loadSettings());
+
+    await initializeAI(a, s);
+    a.start();
+    subscribeToState(a);
+    setInitialized(true);
+  }, [settings, initializeAI, subscribeToState]);
+
+  // === GL context ===
   const onGLContextCreate = useCallback(async (gl: ExpoWebGLRenderingContext) => {
-    glRef.current = gl;
-    const rt = runtime.current;
-    await rt.init(gl);
+    const a = app.current;
+    await a.init(gl);
 
     let lastTime = 0;
     const animate = (time: number): void => {
       const dt = lastTime ? (time - lastTime) / 1000 : 0.016;
       lastTime = time;
-      rt.renderFrame(dt, time / 1000);
+      a.renderFrame(dt, time / 1000);
       animFrameRef.current = requestAnimationFrame(animate);
     };
     animFrameRef.current = requestAnimationFrame(animate);
   }, []);
 
-  // Send message
+  // === Send message ===
   const handleSend = useCallback(async () => {
     const text = inputText.trim();
     if (!text || isProcessing) return;
 
-    const rt = runtime.current;
+    const a = app.current;
     setInputText("");
     setIsProcessing(true);
 
@@ -120,53 +193,170 @@ export function App(): React.ReactElement {
     setMessages((prev) => [...prev, userMsg]);
 
     try {
-      let assistantContent = "";
-      const assistantId = crypto.randomUUID();
-
-      // Add placeholder for streaming
-      setMessages((prev) => [
-        ...prev,
-        { id: assistantId, role: "assistant", content: "...", timestamp: Date.now() },
-      ]);
-
-      for await (const chunk of rt.sendMessageStreaming(text)) {
-        if (chunk.type === "text") {
-          assistantContent += chunk.text;
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId ? { ...m, content: assistantContent } : m,
-            ),
-          );
-        }
-      }
-
-      // Final update
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId
-            ? { ...m, content: assistantContent || "...", timestamp: Date.now() }
-            : m,
-        ),
-      );
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : "Unknown error";
-      setMessages((prev) => [
-        ...prev,
-        { id: crypto.randomUUID(), role: "assistant", content: `[Error: ${errMsg}]`, timestamp: Date.now() },
-      ]);
+      await consumeStream(a.sendMessageStreaming(text));
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      addSystemMessage(`[Error: ${errMsg}]`);
     } finally {
       setIsProcessing(false);
     }
   }, [inputText, isProcessing]);
 
-  // Scroll to bottom when messages change
+  // === Stream consumer ===
+  const consumeStream = useCallback(async (stream: AsyncGenerator<StreamChunk>) => {
+    let assistantContent = "";
+    const assistantId = crypto.randomUUID();
+
+    // Add placeholder
+    setMessages((prev) => [
+      ...prev,
+      { id: assistantId, role: "assistant", content: "...", timestamp: Date.now() },
+    ]);
+
+    for await (const chunk of stream) {
+      switch (chunk.type) {
+        case "text":
+          assistantContent += chunk.text;
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId ? { ...m, content: stripTags(assistantContent) } : m,
+            ),
+          );
+          break;
+
+        case "tool_status":
+          if (chunk.status === "calling") {
+            addSystemMessage(`Calling ${chunk.name}...`);
+          }
+          break;
+
+        case "approval_request": {
+          const approvalId = crypto.randomUUID();
+          pendingApprovalRef.current = approvalId;
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: approvalId,
+              role: "approval",
+              content: "",
+              timestamp: Date.now(),
+              toolName: chunk.name,
+              toolArgs: chunk.args,
+              approvalResolved: false,
+            },
+          ]);
+          // Stream pauses here — will resume via handleApproval
+          return;
+        }
+
+        case "injection_warning":
+          addSystemMessage(`Warning: injection patterns detected in ${chunk.tool_name}`);
+          break;
+
+        case "result":
+          // Final update
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, content: stripTags(assistantContent) || "...", timestamp: Date.now() }
+                : m,
+            ),
+          );
+          break;
+      }
+    }
+
+    // Ensure final content is set
+    if (assistantContent) {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, content: stripTags(assistantContent), timestamp: Date.now() }
+            : m,
+        ),
+      );
+    }
+  }, []);
+
+  // === Approval handler ===
+  const handleApproval = useCallback(async (messageId: string, approved: boolean) => {
+    // Mark card as resolved
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId ? { ...m, approvalResolved: true } : m,
+      ),
+    );
+
+    const a = app.current;
+    setIsProcessing(true);
+    try {
+      await consumeStream(a.resumeAfterApproval(approved));
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      addSystemMessage(`[Error: ${errMsg}]`);
+    } finally {
+      setIsProcessing(false);
+      pendingApprovalRef.current = null;
+    }
+  }, [consumeStream]);
+
+  // === System messages ===
+  const addSystemMessage = useCallback((content: string) => {
+    setMessages((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), role: "system", content, timestamp: Date.now() },
+    ]);
+  }, []);
+
+  // === Settings save ===
+  const handleSettingsSave = useCallback(async (newSettings: MobileSettings, aiConfig?: MobileAIConfig) => {
+    const a = app.current;
+    await a.saveSettings(newSettings);
+    setSettings(newSettings);
+
+    if (aiConfig) {
+      const ok = a.initAI(aiConfig);
+      if (!ok) {
+        addSystemMessage("Failed to initialize AI — check API key");
+      } else {
+        a.start();
+        subscribeToState(a);
+      }
+    }
+
+    setShowSettings(false);
+  }, [subscribeToState, addSystemMessage]);
+
+  // === PIN handler ===
+  const handlePinSubmit = useCallback(async (pin: string) => {
+    const a = app.current;
+    if (pinMode === "setup" || pinMode === "reset") {
+      await a.setupOperatorPin(pin);
+      const result = await a.setOperatorMode(true, pin);
+      if (!result.success) {
+        setPinError(result.error || "Failed");
+        return;
+      }
+    } else {
+      const result = await a.setOperatorMode(!a.isOperatorMode, pin);
+      if (!result.success) {
+        setPinError(result.error || "Incorrect PIN");
+        return;
+      }
+    }
+    setShowPin(false);
+    setPinError("");
+  }, [pinMode]);
+
+  // === Scroll to bottom ===
   useEffect(() => {
     if (flatListRef.current && messages.length > 0) {
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     }
   }, [messages.length]);
 
-  if (!initialized) {
+  // === Loading state ===
+  if (!initialized && !showWelcome) {
     return (
       <View style={styles.container}>
         <ActivityIndicator size="large" color="#607080" />
@@ -191,6 +381,14 @@ export function App(): React.ReactElement {
             </Text>
           </View>
         )}
+        {/* Settings gear */}
+        <TouchableOpacity
+          style={styles.gearButton}
+          onPress={() => setShowSettings(true)}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.gearText}>⚙</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Chat Messages */}
@@ -200,13 +398,33 @@ export function App(): React.ReactElement {
         keyExtractor={(item) => item.id}
         style={styles.chatList}
         contentContainerStyle={styles.chatContent}
-        renderItem={({ item }) => (
-          <View style={[styles.messageBubble, item.role === "user" ? styles.userBubble : styles.assistantBubble]}>
-            <Text style={[styles.messageText, item.role === "user" ? styles.userText : styles.assistantText]}>
-              {item.content}
-            </Text>
-          </View>
-        )}
+        renderItem={({ item }) => {
+          if (item.role === "approval") {
+            return (
+              <ApprovalCard
+                toolName={item.toolName || "unknown"}
+                args={item.toolArgs || {}}
+                onAllow={() => void handleApproval(item.id, true)}
+                onDeny={() => void handleApproval(item.id, false)}
+                disabled={item.approvalResolved}
+              />
+            );
+          }
+          if (item.role === "system") {
+            return (
+              <View style={styles.systemBubble}>
+                <Text style={styles.systemText}>{item.content}</Text>
+              </View>
+            );
+          }
+          return (
+            <View style={[styles.messageBubble, item.role === "user" ? styles.userBubble : styles.assistantBubble]}>
+              <Text style={[styles.messageText, item.role === "user" ? styles.userText : styles.assistantText]}>
+                {item.content}
+              </Text>
+            </View>
+          );
+        }}
       />
 
       {/* Input Bar */}
@@ -233,6 +451,31 @@ export function App(): React.ReactElement {
           )}
         </TouchableOpacity>
       </View>
+
+      {/* Modals */}
+      <WelcomeOverlay visible={showWelcome} onAccept={() => void handleWelcomeAccept()} />
+
+      {settings && (
+        <SettingsModal
+          visible={showSettings}
+          app={app.current}
+          settings={settings}
+          onSave={(s, ai) => void handleSettingsSave(s, ai)}
+          onClose={() => setShowSettings(false)}
+          onRequestPin={(mode) => {
+            setPinMode(mode);
+            setShowPin(true);
+          }}
+        />
+      )}
+
+      <PinDialog
+        visible={showPin}
+        mode={pinMode}
+        onSubmit={handlePinSubmit}
+        onCancel={() => { setShowPin(false); setPinError(""); }}
+        error={pinError}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -270,6 +513,21 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
   },
+  gearButton: {
+    position: "absolute",
+    top: Platform.OS === "ios" ? 50 : 12,
+    right: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(15, 24, 32, 0.7)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  gearText: {
+    fontSize: 18,
+    color: "#607080",
+  },
 
   // Chat
   chatList: {
@@ -294,6 +552,13 @@ const styles = StyleSheet.create({
     alignSelf: "flex-start",
     backgroundColor: "#0f1820",
   },
+  systemBubble: {
+    alignSelf: "center",
+    backgroundColor: "transparent",
+    paddingVertical: 4,
+    paddingHorizontal: 12,
+    marginVertical: 2,
+  },
   messageText: {
     fontSize: 15,
     lineHeight: 21,
@@ -303,6 +568,12 @@ const styles = StyleSheet.create({
   },
   assistantText: {
     color: "#8098b0",
+  },
+  systemText: {
+    color: "#405060",
+    fontSize: 12,
+    fontStyle: "italic",
+    textAlign: "center",
   },
 
   // Input
