@@ -774,6 +774,28 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1)(lightningcss@1.30.2)(terser@5.46.0)
 
+  packages/verify:
+    dependencies:
+      '@noble/ed25519':
+        specifier: ^3.0.0
+        version: 3.0.0
+      '@noble/hashes':
+        specifier: ^1.6.0
+        version: 1.8.0
+    devDependencies:
+      '@motebit/crypto':
+        specifier: workspace:*
+        version: link:../crypto
+      '@motebit/identity-file':
+        specifier: workspace:*
+        version: link:../identity-file
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@22.19.11)(jiti@2.6.1)(jsdom@25.0.1)(lightningcss@1.30.2)(terser@5.46.0)(tsx@4.21.0)
+
   services/api:
     dependencies:
       '@hono/node-server':

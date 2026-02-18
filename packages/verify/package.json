@@ -1,0 +1,39 @@
+{
+  "name": "@motebit/verify",
+  "version": "0.1.0",
+  "description": "Verify motebit.md agent identity files — Ed25519 signature verification for the motebit/identity@1.0 spec",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "license": "MIT",
+  "keywords": [
+    "motebit",
+    "agent",
+    "identity",
+    "ed25519",
+    "verify",
+    "signature"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/motebit/motebit",
+    "directory": "packages/verify"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@noble/ed25519": "^3.0.0",
+    "@noble/hashes": "^1.6.0"
+  },
+  "devDependencies": {
+    "@motebit/crypto": "workspace:*",
+    "@motebit/identity-file": "workspace:*",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  }
+}

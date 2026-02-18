@@ -100,7 +100,7 @@ function organicNoise(t: number, frequencies: number[]): number {
 function createBody(): { mesh: THREE.Mesh; material: THREE.MeshPhysicalMaterial } {
   const geo = new THREE.SphereGeometry(BODY_R, 64, 48);
 
-  // Material derived from MOTEBIT.md §V — glass is surface tension frozen in time
+  // Material derived from DROPLET.md — glass is surface tension frozen in time
   // IOR 1.3: enough refraction to visibly lens the environment (color shift at edges,
   // distorted horizon) without grotesque magnification of interior geometry.
   // Transmission 0.94: still reads as glass, but the 6% opacity gives the body

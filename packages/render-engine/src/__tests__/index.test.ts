@@ -20,7 +20,7 @@ describe("CANONICAL_SPEC", () => {
     expect(CANONICAL_GEOMETRY.height).toBe(0.12);
   });
 
-  it("has correct material values (MOTEBIT.md §V)", () => {
+  it("has correct material values (DROPLET.md)", () => {
     expect(CANONICAL_MATERIAL.ior).toBe(1.15);
     expect(CANONICAL_MATERIAL.subsurface).toBe(0.05);
     expect(CANONICAL_MATERIAL.roughness).toBe(0.0);
