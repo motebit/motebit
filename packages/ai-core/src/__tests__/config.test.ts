@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { loadConfig, resolveConfig, DEFAULT_CONFIG } from "../config";
+import { resolveConfig, DEFAULT_CONFIG } from "../config";
+import { loadConfig } from "../config-loader";
 
 // ---------------------------------------------------------------------------
 // resolveConfig

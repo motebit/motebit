@@ -11,7 +11,7 @@
  */
 
 import type { RenderSpec } from "@motebit/sdk";
-import { CANONICAL_SPEC, type RenderAdapter, type RenderFrame, type InteriorColor } from "@motebit/render-engine";
+import { CANONICAL_SPEC, type RenderAdapter, type RenderFrame, type InteriorColor, type AudioReactivity } from "@motebit/render-engine";
 
 // === Spatial Anchor ===
 
@@ -330,6 +330,7 @@ export class WebXRAdapter implements RenderAdapter {
   setDarkEnvironment(): void {}
   setLightEnvironment(): void {}
   setInteriorColor(_color: InteriorColor): void {}
+  setAudioReactivity(_energy: AudioReactivity | null): void {}
 
   dispose(): void {
     this.session = null;

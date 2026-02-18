@@ -4,7 +4,7 @@ import { ClosingCTA } from "../components/closing-cta";
 
 export default function HomePage() {
   return (
-    <div className="text-zinc-100 overflow-hidden">
+    <div className="text-zinc-900 overflow-hidden">
       <HeroSection />
 
       {/* ── The Inversion ── */}
@@ -16,7 +16,7 @@ export default function HomePage() {
               <br className="hidden md:block" />
               and rents you a session.
             </p>
-            <p className="mt-8 text-3xl md:text-5xl font-bold tracking-[-0.03em] text-[#38bdf8]">
+            <p className="mt-8 text-3xl md:text-5xl font-bold tracking-[-0.03em] text-[#0284c7]">
               Motebit inverts that.
             </p>
           </div>

@@ -47,6 +47,14 @@ export interface InteriorColor {
   glowIntensity?: number;
 }
 
+/** Normalized audio energy from mic or system audio. All values 0–1. */
+export interface AudioReactivity {
+  rms: number;
+  low: number;
+  mid: number;
+  high: number;
+}
+
 export interface RenderAdapter {
   init(target: unknown): Promise<void>;
   render(frame: RenderFrame): void;
@@ -56,6 +64,7 @@ export interface RenderAdapter {
   setDarkEnvironment(): void;
   setLightEnvironment(): void;
   setInteriorColor(color: InteriorColor): void;
+  setAudioReactivity(energy: AudioReactivity | null): void;
   dispose(): void;
 }
 
@@ -297,6 +306,7 @@ export class ThreeJSAdapter implements RenderAdapter {
     eye_dilation: 0.3,
     smile_curvature: 0,
   };
+  private audio: AudioReactivity | null = null;
 
   private renderer: THREE.WebGLRenderer | null = null;
   private scene: THREE.Scene | null = null;
@@ -389,20 +399,29 @@ export class ThreeJSAdapter implements RenderAdapter {
     };
 
     const cues = this.currentCues;
+    const a = this.audio;
+
+    // Audio reactivity — sound pressure modulates the creature's body language.
+    // Additive: layers on top of behavior cues, not replacing them.
+    const audioBreathScale = a ? 1 + a.rms * 2.5 : 1;             // breathe bigger with sound energy
+    const audioGlow = a ? a.low * 0.25 : 0;                       // bass → interior heat
+    const audioDrift = a ? a.mid * 0.015 : 0;                     // melody → swaying
+    const audioShimmer = a ? a.high * 0.35 : 0;                   // transients → glass iridescence
 
     // Buoyancy bob — micro-pressure gradients in the medium (§6.3)
     this.creature.position.y = organicNoise(t, [1.5, 2.37, 0.73]) * 0.01 * cues.hover_distance;
 
     // Brownian drift — the medium is not perfectly still (§6.3)
-    this.creature.position.x = organicNoise(t, [0.7, 1.13, 0.31]) * cues.drift_amplitude;
-    this.creature.position.z = organicNoise(t, [0.5, 0.83, 0.23]) * cues.drift_amplitude * 0.25;
+    const drift = cues.drift_amplitude + audioDrift;
+    this.creature.position.x = organicNoise(t, [0.7, 1.13, 0.31]) * drift;
+    this.creature.position.z = organicNoise(t, [0.5, 0.83, 0.23]) * drift * 0.25;
 
     // Breathing — asymmetric oblate/prolate oscillation via scale
     // Gravity deforms slowly, surface tension snaps back fast
     const breatheRaw = Math.sin(t * 2.0);
-    const breathe = breatheRaw > 0
+    const breathe = (breatheRaw > 0
       ? breatheRaw * 0.015
-      : Math.sign(breatheRaw) * Math.pow(Math.abs(breatheRaw), 0.6) * 0.015;
+      : Math.sign(breatheRaw) * Math.pow(Math.abs(breatheRaw), 0.6) * 0.015) * audioBreathScale;
 
     // Gravity sag — slow cycle, weight pulls down, tension recovers
     const sagRaw = Math.sin(t * 0.32 * Math.PI * 2); // 0.32 Hz
@@ -420,7 +439,10 @@ export class ThreeJSAdapter implements RenderAdapter {
     );
 
     // Interior luminosity — zero at rest, visible only during processing (§6.4)
-    this.bodyMaterial.emissiveIntensity = Math.max(0, (cues.glow_intensity - 0.3) * 0.2);
+    this.bodyMaterial.emissiveIntensity = Math.max(0, (cues.glow_intensity - 0.3) * 0.2 + audioGlow);
+
+    // Iridescence — high-frequency transients shimmer the glass surface
+    this.bodyMaterial.iridescence = 0.4 + audioShimmer;
 
     // Eye dilation
     if (this.leftEye && this.rightEye) {
@@ -486,6 +508,10 @@ export class ThreeJSAdapter implements RenderAdapter {
     }
   }
 
+  setAudioReactivity(energy: AudioReactivity | null): void {
+    this.audio = energy;
+  }
+
   enableOrbitControls(): void {
     if (!this.camera || !this.renderer) return;
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -544,6 +570,7 @@ export class SpatialAdapter implements RenderAdapter {
   setDarkEnvironment(): void {}
   setLightEnvironment(): void {}
   setInteriorColor(_color: InteriorColor): void {}
+  setAudioReactivity(_energy: AudioReactivity | null): void {}
   dispose(): void {}
 }
 
@@ -837,6 +864,10 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
       this.bodyMaterial.emissiveIntensity = color.glowIntensity ?? 0.0;
       this.bodyMaterial.needsUpdate = true;
     }
+  }
+
+  setAudioReactivity(_energy: AudioReactivity | null): void {
+    // TODO: apply audio modulation to WebXR creature
   }
 
   dispose(): void {

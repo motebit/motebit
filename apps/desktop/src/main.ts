@@ -8,6 +8,10 @@ if (!canvas) {
 
 const chatLog = document.getElementById("chat-log") as HTMLDivElement;
 const chatInput = document.getElementById("chat-input") as HTMLInputElement;
+const micBtn = document.getElementById("mic-btn") as HTMLButtonElement;
+const voiceWaveform = document.getElementById("voice-waveform") as HTMLCanvasElement;
+const voiceTranscript = document.getElementById("voice-transcript") as HTMLSpanElement;
+const inputBarWrapper = document.getElementById("input-bar-wrapper") as HTMLDivElement;
 
 const app = new DesktopApp();
 let currentConfig: DesktopAIConfig | null = null;
@@ -320,6 +324,502 @@ function selectColorPreset(name: string): void {
     el.classList.toggle("selected", (el as HTMLElement).dataset.preset === name);
   });
   app.setInteriorColor(name);
+  updateVoiceGlowColor();
+}
+
+// === Voice Input & Ambient Audio ===
+//
+// Two modes sharing one mic pipeline:
+//   voice:   SpeechRecognition active, waveform visible, creature body feels audio
+//   ambient: recognition off, waveform hidden, creature body feels audio
+//
+// The body always responds to pressure waves. The mind (recognition) is the toggle.
+// Noise floor gating absorbs constant ambient. Mid-band spectral flatness shapes
+// the response quality: tonal → shimmer, broadband → dampened.
+//
+// Flow: off → voice (mic click) → off (mic click) or ambient (Enter)
+// Escape from any state → off (full mic release)
+
+type MicState = "off" | "ambient" | "voice";
+let micState: MicState = "off";
+let voiceRecognition: SpeechRecognitionInstance | null = null;
+let audioContext: AudioContext | null = null;
+let analyserNode: AnalyserNode | null = null;
+let micStream: MediaStream | null = null;
+let waveformAnimationId = 0;
+let ambientAnimationId = 0;
+let voiceFinalTranscript = "";
+let voiceInterimTranscript = "";
+const waveformSmoothed = new Float32Array(64);
+
+/** Rolling noise floor — persists across voice↔ambient transitions. */
+let noiseFloor = 0;
+
+/** Cached saturated RGB for waveform canvas strokes. */
+let waveformColor = { r: 153, g: 163, b: 230 };
+
+function updateVoiceGlowColor(): void {
+  const preset = COLOR_PRESETS[selectedColorPreset];
+  if (!preset) return;
+  const glow = preset.glow;
+
+  // CSS variable for border/shadow glow
+  const r = Math.round(glow[0] * 255);
+  const green = Math.round(glow[1] * 255);
+  const b = Math.round(glow[2] * 255);
+  inputBarWrapper.style.setProperty("--voice-glow-color", `rgba(${r},${green},${b},0.55)`);
+
+  // Saturated color for canvas waveform strokes (higher contrast on glass)
+  const maxG = Math.max(glow[0], glow[1], glow[2], 0.01);
+  const satPow = 1.3;
+  waveformColor = {
+    r: Math.min(255, Math.round(((glow[0] / maxG) ** (1 / satPow)) * glow[0] * 300)),
+    g: Math.min(255, Math.round(((glow[1] / maxG) ** (1 / satPow)) * glow[1] * 300)),
+    b: Math.min(255, Math.round(((glow[2] / maxG) ** (1 / satPow)) * glow[2] * 300)),
+  };
+}
+
+/** Acquire mic and create audio analysis pipeline if not already running. */
+async function ensureAudioPipeline(): Promise<boolean> {
+  if (audioContext && analyserNode && micStream) return true;
+
+  let stream: MediaStream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch {
+    addMessage("system", "Microphone access denied");
+    return false;
+  }
+  micStream = stream;
+
+  const ctx = new AudioContext();
+  const source = ctx.createMediaStreamSource(stream);
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 256;
+  analyser.smoothingTimeConstant = 0.4;
+  source.connect(analyser);
+  audioContext = ctx;
+  analyserNode = analyser;
+  return true;
+}
+
+/** Release audio context and mic stream. */
+function releaseAudioResources(): void {
+  if (audioContext) {
+    void audioContext.close();
+    audioContext = null;
+    analyserNode = null;
+  }
+  if (micStream) {
+    micStream.getTracks().forEach(t => t.stop());
+    micStream = null;
+  }
+}
+
+function toggleVoice(): void {
+  if (micState === "voice") {
+    stopVoice(true, false);  // mic toggle = transfer transcript, release mic
+  } else {
+    void startVoice();       // off or ambient → voice
+  }
+}
+
+async function startVoice(): Promise<void> {
+  const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognitionCtor) return;
+
+  // If ambient, stop its loop (we'll take over the audio pipeline)
+  stopAmbientLoop();
+  app.setAudioReactivity(null);
+
+  // Ensure mic + audio analysis pipeline
+  if (!await ensureAudioPipeline()) return;
+
+  // Speech recognition
+  const recognition = new SpeechRecognitionCtor();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = "en-US";
+
+  recognition.onresult = (event: SpeechRecognitionEvent) => {
+    let final = "";
+    let interim = "";
+    for (let i = 0; i < event.results.length; i++) {
+      const result = event.results[i] as SpeechRecognitionResult | undefined;
+      if (!result) continue;
+      const alt = result[0] as SpeechRecognitionAlternative | undefined;
+      const text = alt?.transcript ?? "";
+      if (result.isFinal) {
+        final += text;
+      } else {
+        interim += text;
+      }
+    }
+    voiceFinalTranscript = final;
+    voiceInterimTranscript = interim;
+    const display = (final + interim).trim();
+    voiceTranscript.textContent = display || "Listening...";
+  };
+
+  recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+    if (event.error === "no-speech" || event.error === "aborted" || event.error === "service-not-allowed") return;
+    addMessage("system", `Voice error: ${event.error}`);
+    stopVoice(false, false); // error → full stop
+  };
+
+  recognition.onend = () => {
+    if (micState === "voice") {
+      try { recognition.start(); } catch { /* already started */ }
+    }
+  };
+
+  voiceRecognition = recognition;
+
+  try {
+    recognition.start();
+  } catch {
+    addMessage("system", "Speech recognition failed to start");
+    // Recognition failed but mic works — enter ambient
+    micState = "ambient";
+    micBtn.classList.add("ambient");
+    startAmbientLoop();
+    return;
+  }
+
+  // UI state
+  micState = "voice";
+  voiceFinalTranscript = "";
+  voiceInterimTranscript = "";
+  voiceTranscript.textContent = "Listening...";
+  inputBarWrapper.classList.add("listening");
+  micBtn.classList.add("active");
+  micBtn.classList.remove("ambient");
+  updateVoiceGlowColor();
+
+  sizeWaveformCanvas();
+  startWaveformLoop();
+}
+
+/**
+ * Stop voice recognition.
+ * transfer:  true = put transcript in input field, false = discard
+ * toAmbient: true = keep mic alive, creature feels the room. false = release mic.
+ */
+function stopVoice(transfer: boolean, toAmbient: boolean): void {
+  // Stop recognition
+  if (voiceRecognition) {
+    try { voiceRecognition.stop(); } catch { /* */ }
+    voiceRecognition = null;
+  }
+
+  // Stop waveform
+  if (waveformAnimationId) {
+    cancelAnimationFrame(waveformAnimationId);
+    waveformAnimationId = 0;
+  }
+  const ctx2d = voiceWaveform.getContext("2d");
+  if (ctx2d) ctx2d.clearRect(0, 0, voiceWaveform.width, voiceWaveform.height);
+
+  // Transfer transcript
+  if (transfer) {
+    const text = (voiceFinalTranscript + voiceInterimTranscript).trim();
+    if (text) chatInput.value = text;
+  }
+  voiceFinalTranscript = "";
+  voiceInterimTranscript = "";
+
+  // UI — clear voice state
+  inputBarWrapper.classList.remove("listening");
+  micBtn.classList.remove("active");
+  voiceTranscript.textContent = "";
+  chatInput.focus();
+
+  if (toAmbient) {
+    // Keep mic alive → ambient: creature feels the room
+    micState = "ambient";
+    micBtn.classList.add("ambient");
+    startAmbientLoop();
+  } else {
+    // Full stop: release mic
+    micState = "off";
+    micBtn.classList.remove("ambient");
+    releaseAudioResources();
+    app.setAudioReactivity(null);
+  }
+}
+
+/** Stop ambient sensing and release mic. */
+function stopAmbient(): void {
+  stopAmbientLoop();
+  releaseAudioResources();
+  app.setAudioReactivity(null);
+  micState = "off";
+  micBtn.classList.remove("ambient");
+}
+
+function stopAmbientLoop(): void {
+  if (ambientAnimationId) {
+    cancelAnimationFrame(ambientAnimationId);
+    ambientAnimationId = 0;
+  }
+}
+
+/** Ambient analysis loop — feeds audio energy to the creature's body. No waveform drawing. */
+function startAmbientLoop(): void {
+  if (!analyserNode) return;
+
+  const timeDomain = new Uint8Array(analyserNode.frequencyBinCount);
+  const freqDomain = new Uint8Array(analyserNode.frequencyBinCount);
+  let smoothedRms = 0;
+  let smoothedLow = 0;
+  let smoothedMid = 0;
+  let smoothedHigh = 0;
+  let smoothedFlatness = 0;
+
+  const analyze = (): void => {
+    if (micState !== "ambient" || !analyserNode) return;
+
+    analyserNode.getByteTimeDomainData(timeDomain);
+    analyserNode.getByteFrequencyData(freqDomain);
+
+    // RMS — gentler smoothing (body language, not visualization)
+    let sumSq = 0;
+    for (let j = 0; j < timeDomain.length; j++) {
+      const v = (timeDomain[j]! / 128.0) - 1.0;
+      sumSq += v * v;
+    }
+    const rms = Math.sqrt(sumSq / timeDomain.length);
+    smoothedRms += (rms > smoothedRms ? 0.3 : 0.04) * (rms - smoothedRms);
+
+    // Noise floor: slow rise (absorbs sustained ambient), fast fall (recovers sensitivity)
+    noiseFloor += (rms > noiseFloor ? 0.003 : 0.05) * (rms - noiseFloor);
+
+    // Frequency bands
+    const binCount = freqDomain.length;
+    const lowEnd = Math.max(1, Math.floor(binCount * 0.06));
+    const midEnd = Math.max(2, Math.floor(binCount * 0.25));
+    let lowE = 0, midE = 0, highE = 0;
+    for (let j = 0; j < binCount; j++) {
+      const v = freqDomain[j]! / 255;
+      if (j < lowEnd) lowE += v;
+      else if (j < midEnd) midE += v;
+      else highE += v;
+    }
+    lowE /= lowEnd;
+    midE /= (midEnd - lowEnd);
+    highE /= (binCount - midEnd);
+
+    smoothedLow += (lowE > smoothedLow ? 0.3 : 0.04) * (lowE - smoothedLow);
+    smoothedMid += (midE > smoothedMid ? 0.3 : 0.04) * (midE - smoothedMid);
+    smoothedHigh += (highE > smoothedHigh ? 0.25 : 0.03) * (highE - smoothedHigh);
+
+    // Mid-band spectral flatness (geom/arith mean, 0 = tonal, 1 = noise)
+    let logSum = 0;
+    let linSum = 0;
+    for (let j = lowEnd; j < midEnd; j++) {
+      const v = freqDomain[j]! / 255 + 1e-10;
+      logSum += Math.log(v);
+      linSum += v;
+    }
+    const flatBins = midEnd - lowEnd;
+    const rawFlatness = linSum > 1e-8 ? Math.exp(logSum / flatBins) / (linSum / flatBins) : 0;
+    smoothedFlatness += 0.08 * (rawFlatness - smoothedFlatness);
+
+    // Gate: only energy above the noise floor drives response
+    const gatedRms = Math.max(0, smoothedRms - noiseFloor);
+    const gate = smoothedRms > 0.001 ? gatedRms / smoothedRms : 0;
+
+    // Shape: flatness controls response quality (multiplicative, not branching)
+    const flat2 = smoothedFlatness * smoothedFlatness;
+    const damping = Math.max(0.15, 1 - flat2 * 0.9);     // noise → suppress
+    const shimmer = 1 + (1 - smoothedFlatness) * 0.6;     // tonal → boost iridescence
+
+    app.setAudioReactivity({
+      rms: gatedRms * damping,
+      low: smoothedLow * gate * damping,
+      mid: smoothedMid * gate * damping,
+      high: smoothedHigh * gate * damping * shimmer,
+    });
+
+    ambientAnimationId = requestAnimationFrame(analyze);
+  };
+
+  ambientAnimationId = requestAnimationFrame(analyze);
+}
+
+function sizeWaveformCanvas(): void {
+  const rect = inputBarWrapper.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  voiceWaveform.width = rect.width * dpr;
+  voiceWaveform.height = rect.height * dpr;
+  voiceWaveform.style.width = rect.width + "px";
+  voiceWaveform.style.height = rect.height + "px";
+}
+
+/** Waveform render loop for voice mode — draws multi-wave visualization + feeds creature body. */
+function startWaveformLoop(): void {
+  const ctx2d = voiceWaveform.getContext("2d");
+  if (!ctx2d || !analyserNode) return;
+
+  const timeDomain = new Uint8Array(analyserNode.frequencyBinCount);
+  const freqDomain = new Uint8Array(analyserNode.frequencyBinCount);
+  let smoothedRms = 0;
+  let smoothedLow = 0;
+  let smoothedMid = 0;
+  let smoothedHigh = 0;
+  let smoothedFlatness = 0;
+
+  // Edge attenuation: 1 - x^6, wide flat top with smooth rolloff
+  const att = (x: number): number => {
+    const d = 2 * x - 1;
+    const d2 = d * d;
+    return 1 - d2 * d2 * d2;
+  };
+
+  // Four wave layers — each with unique motion and frequency-band affinity.
+  // In silence they nearly overlap (one line). When speaking they separate
+  // and respond to different aspects of speech (bass/mid/treble).
+  const waves = [
+    { tf: 0.7,  sf: 6.5,  amp: 0.40, alpha: 0.10, lw: 16,  band: 0 }, // slow wide glow — bass
+    { tf: 1.1,  sf: 9.3,  amp: 0.32, alpha: 0.28, lw: 4.5, band: 1 }, // mid halo — formants
+    { tf: 1.5,  sf: 13.1, amp: 0.25, alpha: 0.50, lw: 2.5, band: 1 }, // sharp — formants
+    { tf: 2.1,  sf: 17.4, amp: 0.15, alpha: 0.88, lw: 1.5, band: 2 }, // crisp center — consonants
+  ];
+
+  const N = 64;
+  const waveY = new Float32Array(N);
+
+  const draw = (timestamp: number): void => {
+    if (micState !== "voice" || !analyserNode) return;
+
+    const t = timestamp / 1000;
+    const w = voiceWaveform.width;
+    const h = voiceWaveform.height;
+    const dpr = window.devicePixelRatio || 1;
+
+    ctx2d.clearRect(0, 0, w, h);
+
+    analyserNode.getByteTimeDomainData(timeDomain);
+    analyserNode.getByteFrequencyData(freqDomain);
+
+    // RMS — asymmetric attack/decay
+    let sumSq = 0;
+    for (let j = 0; j < timeDomain.length; j++) {
+      const v = (timeDomain[j]! / 128.0) - 1.0;
+      sumSq += v * v;
+    }
+    const rms = Math.sqrt(sumSq / timeDomain.length);
+    smoothedRms += (rms > smoothedRms ? 0.4 : 0.06) * (rms - smoothedRms);
+
+    // Noise floor: slow rise (absorbs sustained ambient), fast fall (recovers sensitivity)
+    noiseFloor += (rms > noiseFloor ? 0.003 : 0.05) * (rms - noiseFloor);
+
+    // Frequency band energies
+    const binCount = freqDomain.length;
+    const lowEnd = Math.max(1, Math.floor(binCount * 0.06));
+    const midEnd = Math.max(2, Math.floor(binCount * 0.25));
+    let lowE = 0, midE = 0, highE = 0;
+    for (let j = 0; j < binCount; j++) {
+      const v = freqDomain[j]! / 255;
+      if (j < lowEnd) lowE += v;
+      else if (j < midEnd) midE += v;
+      else highE += v;
+    }
+    lowE /= lowEnd;
+    midE /= (midEnd - lowEnd);
+    highE /= (binCount - midEnd);
+
+    smoothedLow += (lowE > smoothedLow ? 0.35 : 0.05) * (lowE - smoothedLow);
+    smoothedMid += (midE > smoothedMid ? 0.35 : 0.05) * (midE - smoothedMid);
+    smoothedHigh += (highE > smoothedHigh ? 0.3 : 0.04) * (highE - smoothedHigh);
+    const bands = [smoothedLow, smoothedMid, smoothedHigh];
+
+    // Mid-band spectral flatness (geom/arith mean, 0 = tonal, 1 = noise)
+    let logSum = 0;
+    let linSum = 0;
+    for (let j = lowEnd; j < midEnd; j++) {
+      const v = freqDomain[j]! / 255 + 1e-10;
+      logSum += Math.log(v);
+      linSum += v;
+    }
+    const flatBins = midEnd - lowEnd;
+    const rawFlatness = linSum > 1e-8 ? Math.exp(logSum / flatBins) / (linSum / flatBins) : 0;
+    smoothedFlatness += 0.08 * (rawFlatness - smoothedFlatness);
+
+    // Gate: only energy above the noise floor drives creature response
+    const gatedRms = Math.max(0, smoothedRms - noiseFloor);
+    const gate = smoothedRms > 0.001 ? gatedRms / smoothedRms : 0;
+
+    // Shape: flatness controls response quality
+    const flat2 = smoothedFlatness * smoothedFlatness;
+    const damping = Math.max(0.15, 1 - flat2 * 0.9);
+    const shimmer = 1 + (1 - smoothedFlatness) * 0.6;
+
+    // The body feels pressure waves — gated and shaped by surface tension
+    app.setAudioReactivity({
+      rms: gatedRms * damping,
+      low: smoothedLow * gate * damping,
+      mid: smoothedMid * gate * damping,
+      high: smoothedHigh * gate * damping * shimmer,
+    });
+
+    const pad = 24 * dpr;
+    const drawW = w - pad * 2;
+    const midY = h / 2;
+
+    const voiceGain = Math.min(smoothedRms * 10, 1.8);
+    const amplitude = h * (0.22 + voiceGain * 0.18);
+    const sampleDecay = 0.08 + voiceGain * 0.15;
+
+    for (let i = 0; i < N; i++) {
+      const bufIdx = Math.floor((i / N) * timeDomain.length);
+      const raw = (timeDomain[bufIdx]! / 128.0) - 1.0;
+      const target = raw * (1 + voiceGain * 5);
+      waveformSmoothed[i] = waveformSmoothed[i]! + (target - waveformSmoothed[i]!) * sampleDecay;
+    }
+
+    const { r: cr, g: cg, b: cb } = waveformColor;
+
+    ctx2d.lineCap = "round";
+    ctx2d.lineJoin = "round";
+    const stepX = drawW / (N - 1);
+
+    const spread = voiceGain * 0.7;
+
+    for (const wave of waves) {
+      const bandVal = bands[wave.band] ?? 0;
+      const bandBoost = 1 + bandVal * 3.5;
+
+      for (let i = 0; i < N; i++) {
+        const pos = i / (N - 1);
+        const a = att(pos);
+
+        const organic =
+          Math.sin(t * wave.tf + pos * wave.sf) * wave.amp +
+          Math.sin(t * wave.tf * 1.73 + pos * wave.sf * 1.61) * wave.amp * 0.5;
+
+        const val = (waveformSmoothed[i]! + organic * (0.5 + spread)) * bandBoost * a;
+        waveY[i] = midY + val * amplitude;
+      }
+
+      ctx2d.beginPath();
+      ctx2d.moveTo(pad, waveY[0]!);
+      for (let i = 1; i < N - 1; i++) {
+        const x = pad + i * stepX;
+        const nx = pad + (i + 1) * stepX;
+        ctx2d.quadraticCurveTo(x, waveY[i]!, (x + nx) / 2, (waveY[i]! + waveY[i + 1]!) / 2);
+      }
+      ctx2d.lineTo(pad + drawW, waveY[N - 1]!);
+
+      ctx2d.strokeStyle = `rgba(${cr},${cg},${cb},${wave.alpha})`;
+      ctx2d.lineWidth = wave.lw * dpr;
+      ctx2d.stroke();
+    }
+
+    waveformAnimationId = requestAnimationFrame(draw);
+  };
+
+  waveformAnimationId = requestAnimationFrame(draw);
 }
 
 // === MCP Server List ===
@@ -1001,10 +1501,14 @@ settingsApiKeyToggle.addEventListener("click", () => {
   }
 });
 
-// Escape key closes settings
+// Escape key: cancel voice/ambient first, then close modals
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
-    if (pinBackdrop.classList.contains("open")) {
+    if (micState === "voice") {
+      stopVoice(false, false);  // cancel voice, release mic
+    } else if (micState === "ambient") {
+      stopAmbient();     // stop ambient sensing
+    } else if (pinBackdrop.classList.contains("open")) {
       closePinDialog();
     } else if (settingsModal.classList.contains("open")) {
       cancelSettings();
@@ -1021,6 +1525,7 @@ async function bootstrap(): Promise<void> {
   // Resize handler
   const onResize = (): void => {
     app.resize(window.innerWidth, window.innerHeight);
+    if (micState === "voice") sizeWaveformCanvas();
   };
   window.addEventListener("resize", onResize);
   onResize();
@@ -1172,9 +1677,20 @@ async function bootstrap(): Promise<void> {
   chatInput.addEventListener("keydown", (e: KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      if (micState === "voice") {
+        stopVoice(true, true);  // transfer transcript, enter ambient
+      }
       void handleSend();
     }
   });
+
+  // Voice input: show mic button if Web Speech API is available
+  const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (SpeechRecognitionCtor) {
+    micBtn.style.display = "flex";
+    micBtn.addEventListener("click", toggleVoice);
+    updateVoiceGlowColor();
+  }
 }
 
 bootstrap().catch((err: unknown) => {

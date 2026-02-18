@@ -20,6 +20,7 @@ export function HeroCreature() {
       const adapter = new ThreeJSAdapter();
       await adapter.init(canvas);
       adapter.setBackground(null);
+      adapter.setLightEnvironment();
 
       const observer = new ResizeObserver((entries) => {
         for (const entry of entries) {
@@ -75,20 +76,6 @@ export function HeroCreature() {
 
   return (
     <div className="relative mx-auto w-[320px] h-[320px] md:w-[480px] md:h-[480px]">
-      {/* Outer diffuse glow — the creature illuminates its surroundings */}
-      <div
-        className="absolute inset-[-80%] rounded-full pointer-events-none"
-        style={{
-          background: "radial-gradient(circle, rgba(56,189,248,0.03) 0%, rgba(56,189,248,0.01) 30%, transparent 60%)",
-        }}
-      />
-      {/* Inner concentrated glow — light source halo */}
-      <div
-        className="absolute inset-[-25%] rounded-full pointer-events-none"
-        style={{
-          background: "radial-gradient(circle, rgba(180,210,240,0.07) 0%, rgba(56,189,248,0.03) 40%, transparent 70%)",
-        }}
-      />
       <canvas
         ref={canvasRef}
         className="relative w-full h-full"

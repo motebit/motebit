@@ -12,7 +12,7 @@
 import { Renderer } from "expo-three";
 import * as THREE from "three";
 import { CANONICAL_SPEC } from "@motebit/render-engine";
-import type { RenderAdapter, RenderFrame, InteriorColor } from "@motebit/render-engine";
+import type { RenderAdapter, RenderFrame, InteriorColor, AudioReactivity } from "@motebit/render-engine";
 import type { RenderSpec, BehaviorCues } from "@motebit/sdk";
 
 const BODY_R = 0.14;
@@ -239,6 +239,10 @@ export class ExpoGLAdapter implements RenderAdapter {
 
   setLightEnvironment(): void {
     // No-op on mobile — single environment
+  }
+
+  setAudioReactivity(_energy: AudioReactivity | null): void {
+    // TODO: apply audio modulation to mobile creature
   }
 
   dispose(): void {

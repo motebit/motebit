@@ -13,7 +13,7 @@ import type { AuditLogAdapter } from "@motebit/privacy-layer";
 import { SyncEngine } from "@motebit/sync-engine";
 import type { RenderSpec } from "@motebit/sdk";
 import { CANONICAL_SPEC } from "@motebit/render-engine";
-import type { RenderAdapter, RenderFrame, InteriorColor } from "@motebit/render-engine";
+import type { RenderAdapter, RenderFrame, InteriorColor, AudioReactivity } from "@motebit/render-engine";
 import {
   runTurn,
   runTurnStreaming,
@@ -41,7 +41,7 @@ export type { EventStoreAdapter } from "@motebit/event-log";
 export type { MemoryStorageAdapter } from "@motebit/memory-graph";
 export type { IdentityStorage } from "@motebit/core-identity";
 export type { AuditLogAdapter } from "@motebit/privacy-layer";
-export type { RenderAdapter, RenderFrame, InteriorColor } from "@motebit/render-engine";
+export type { RenderAdapter, RenderFrame, InteriorColor, AudioReactivity } from "@motebit/render-engine";
 export type { RenderSpec } from "@motebit/sdk";
 export { PolicyGate } from "@motebit/policy";
 export type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
@@ -141,7 +141,9 @@ export class NullRenderer implements RenderAdapter {
   resize(_w: number, _h: number): void {}
   setBackground(_color: number | null): void {}
   setDarkEnvironment(): void {}
+  setLightEnvironment(): void {}
   setInteriorColor(_color: InteriorColor): void {}
+  setAudioReactivity(_energy: AudioReactivity | null): void {}
   dispose(): void {}
 }
 

@@ -20,7 +20,7 @@ export function HeroSection() {
           transition={{ duration: 1.2, ease, delay: 0.4 }}
           className="flex flex-col items-center text-center"
         >
-          <h1 className="text-[clamp(2.2rem,6vw,5rem)] font-bold tracking-[-0.045em] leading-[1.0] text-center max-w-3xl text-white">
+          <h1 className="text-[clamp(2.2rem,6vw,5rem)] font-bold tracking-[-0.045em] leading-[1.0] text-center max-w-3xl text-zinc-900">
             A droplet of intelligence
             <br />
             under surface tension.
@@ -38,13 +38,13 @@ export function HeroSection() {
           >
             <Link
               href="/docs/introduction"
-              className="px-7 py-2.5 rounded-full bg-white text-[#09090b] text-sm font-medium hover:bg-zinc-200 transition-colors"
+              className="px-7 py-2.5 rounded-full bg-zinc-900 text-white text-sm font-medium hover:bg-zinc-800 transition-colors"
             >
               Get Started
             </Link>
             <Link
               href="/docs/introduction"
-              className="px-7 py-2.5 rounded-full border border-zinc-800 text-zinc-400 text-sm hover:border-zinc-600 hover:text-zinc-200 transition-colors"
+              className="px-7 py-2.5 rounded-full border border-zinc-300 text-zinc-500 text-sm hover:border-zinc-400 hover:text-zinc-700 transition-colors"
             >
               Documentation
             </Link>

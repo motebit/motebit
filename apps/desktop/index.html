@@ -71,19 +71,114 @@
     }
     #chat-input {
       width: 100%;
-      padding: 10px 16px;
-      border: 1px solid rgba(0, 0, 0, 0.08);
-      border-radius: 20px;
-      background: rgba(255, 255, 255, 0.7);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      color: #1a1a1a;
+      padding: 12px 40px 12px 18px;
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      border-radius: 22px;
+      background: rgba(255, 255, 255, 0.28);
+      backdrop-filter: blur(24px) saturate(1.3);
+      -webkit-backdrop-filter: blur(24px) saturate(1.3);
+      color: rgba(0, 0, 0, 0.75);
       font-size: 14px;
       outline: none;
       font-family: inherit;
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.55),
+        inset 0 -0.5px 0 rgba(0, 0, 0, 0.04),
+        0 2px 12px rgba(0, 0, 0, 0.06),
+        0 0.5px 0 rgba(255, 255, 255, 0.25);
+      transition: border-color 0.3s ease, box-shadow 0.4s ease, background 0.3s ease, color 0.15s ease;
     }
-    #chat-input::placeholder { color: rgba(0, 0, 0, 0.3); }
-    #chat-input:focus { border-color: rgba(99, 102, 241, 0.5); }
+    #chat-input::placeholder { color: rgba(0, 0, 0, 0.25); }
+    #chat-input:focus {
+      border-color: rgba(255, 255, 255, 0.65);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.6),
+        inset 0 -0.5px 0 rgba(0, 0, 0, 0.04),
+        0 2px 16px rgba(0, 0, 0, 0.08),
+        0 0.5px 0 rgba(255, 255, 255, 0.3);
+    }
+
+    /* Voice input wrapper */
+    #input-bar-wrapper {
+      position: relative;
+      width: 100%;
+    }
+    #voice-waveform {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      border-radius: 22px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      z-index: 1;
+    }
+    #voice-transcript {
+      position: absolute;
+      left: 18px;
+      right: 46px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 14px;
+      color: rgba(0, 0, 0, 0.4);
+      font-family: inherit;
+      pointer-events: none;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: none;
+      z-index: 2;
+    }
+    #mic-btn {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 30px;
+      height: 30px;
+      border: none;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.15);
+      color: rgba(0, 0, 0, 0.3);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      transition: background 0.25s ease, color 0.2s ease, box-shadow 0.3s ease;
+      z-index: 3;
+    }
+    #mic-btn:hover { background: rgba(255, 255, 255, 0.3); color: rgba(0, 0, 0, 0.5); }
+    #mic-btn.active {
+      background: var(--voice-glow-color, rgba(99, 102, 241, 0.25));
+      color: rgba(0, 0, 0, 0.65);
+      box-shadow: 0 0 10px var(--voice-glow-color, rgba(99, 102, 241, 0.25));
+    }
+    #mic-btn.ambient {
+      background: var(--voice-glow-color, rgba(99, 102, 241, 0.12));
+      color: rgba(0, 0, 0, 0.4);
+    }
+    #mic-btn svg { width: 16px; height: 16px; }
+
+    /* Listening state — the glass glows with the creature's color */
+    #input-bar-wrapper.listening #chat-input {
+      border-color: var(--voice-glow-color, rgba(99, 102, 241, 0.45));
+      background: rgba(255, 255, 255, 0.22);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.45),
+        0 0 10px var(--voice-glow-color, rgba(99, 102, 241, 0.2)),
+        0 0 28px var(--voice-glow-color, rgba(99, 102, 241, 0.1)),
+        0 0 56px var(--voice-glow-color, rgba(99, 102, 241, 0.05));
+      caret-color: transparent;
+      color: transparent;
+    }
+    #input-bar-wrapper.listening #chat-input::placeholder { color: transparent; }
+    #input-bar-wrapper.listening #voice-waveform { opacity: 1; }
+    #input-bar-wrapper.listening #voice-transcript {
+      display: block;
+    }
+    #input-bar-wrapper.listening #chat-input { padding-right: 40px; }
 
     /* Gear icon */
     #settings-btn {
@@ -1050,7 +1145,14 @@
   <div id="chat-container">
     <div id="chat-log"></div>
     <div id="chat-input-row">
-      <input id="chat-input" type="text" placeholder="Say something..." autocomplete="off" />
+      <div id="input-bar-wrapper">
+        <canvas id="voice-waveform"></canvas>
+        <input id="chat-input" type="text" placeholder="Say something..." autocomplete="off" />
+        <span id="voice-transcript"></span>
+        <button id="mic-btn" type="button" title="Voice input" style="display:none;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+        </button>
+      </div>
     </div>
   </div>
   <script type="module" src="/src/main.ts"></script>

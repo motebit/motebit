@@ -13,8 +13,9 @@ export { runTurn, runTurnStreaming } from "./loop.js";
 export type { MotebitLoopDependencies, TurnResult, TurnOptions, AgenticChunk, LoopMemoryGovernor } from "./loop.js";
 export { inferStateFromText } from "./infer-state.js";
 export { buildSystemPrompt, derivePersonalityNote, formatBodyAwareness } from "./prompt.js";
-export { loadConfig, resolveConfig, DEFAULT_CONFIG } from "./config.js";
+export { resolveConfig, DEFAULT_CONFIG } from "./config.js";
 export type { MotebitPersonalityConfig } from "./config.js";
+// loadConfig is Node-only (node:fs) — import directly from @motebit/ai-core/dist/config-loader.js
 
 // === Provider Configuration ===
 

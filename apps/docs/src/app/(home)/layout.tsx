@@ -9,7 +9,7 @@ export default function HomeLayout({ children }: { children: any }) {
     <MotionConfig reducedMotion="never">
       <FloatingCreature />
       <Nav />
-      <main className="relative z-10">{children}</main>
+      <main className="relative z-10 bg-white">{children}</main>
       <Footer />
     </MotionConfig>
   );

@@ -28,7 +28,7 @@ export function ClosingCTA() {
       <div className="mt-10">
         <Link
           href="/docs/introduction"
-          className="inline-block px-8 py-3 rounded-full bg-white text-[#09090b] text-sm font-medium hover:bg-zinc-200 transition-colors"
+          className="inline-block px-8 py-3 rounded-full bg-zinc-900 text-white text-sm font-medium hover:bg-zinc-800 transition-colors"
         >
           Read the Documentation
         </Link>

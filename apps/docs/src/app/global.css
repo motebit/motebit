@@ -9,9 +9,10 @@ html {
 /*
  * Motebit color system
  *
- * The droplet is glass in darkness. The only color is refracted light.
- * Background: obsidian. Accent: luminous cyan — chromatic dispersion
- * through borosilicate at the blue-shift edge.
+ * The droplet is glass in light. Glass transmits — it needs a luminous
+ * environment to read as glass. Homepage and desktop use bright backgrounds
+ * so the creature's transmission, iridescence, and refraction are visible.
+ * Docs pages keep their own dark theme via .dark class.
  *
  * Derived from render-engine material spec:
  *   tint: [0.9, 0.92, 1.0]  — cool blue attenuation

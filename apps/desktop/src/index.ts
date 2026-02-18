@@ -461,6 +461,10 @@ export class DesktopApp {
     this.renderer.setInteriorColor(preset);
   }
 
+  setAudioReactivity(energy: { rms: number; low: number; mid: number; high: number } | null): void {
+    this.renderer.setAudioReactivity(energy);
+  }
+
   // === MCP Lifecycle ===
   // @motebit/mcp-client is Node-only (stdio/child_process) — dynamic import only.
 
