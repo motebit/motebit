@@ -1,6 +1,16 @@
 import { defineConfig } from "vite";
 
 export default defineConfig({
+  optimizeDeps: {
+    exclude: ["@motebit/mcp-client"], // Node-only (stdio/child_process), cannot run in webview
+  },
+  build: {
+    target: "esnext",
+    outDir: "dist",
+    rollupOptions: {
+      external: ["@motebit/mcp-client"],
+    },
+  },
   server: {
     port: 5173,
     strictPort: true,
@@ -16,9 +26,5 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/api\/ollama/, ''),
       },
     },
-  },
-  build: {
-    target: "esnext",
-    outDir: "dist",
   },
 });
