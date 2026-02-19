@@ -1,66 +1,30 @@
 ---
 title: Sync
-description: Multi-device sync, the relay server, signed tokens, and conflict detection.
+description: Multi-device sync, the relay server, and conflict detection.
 ---
 
 Sync lets a single motebit span multiple devices — laptop, phone, any future surface — with the same identity, shared memory, and unified event log.
 
 ## How it works
 
-The sync engine pushes and pulls events between the local event store and a remote relay:
+The sync engine keeps your devices in step through a simple push-pull cycle:
 
-1. **Push** — Send local events that the relay hasn't seen (filtered by sync cursor)
+1. **Push** — Send local events that the relay hasn't seen
 2. **Pull** — Receive remote events that this device hasn't seen
 3. **Conflict detection** — Identify events from different devices that modify the same data
 
-```ts
-import { SyncEngine } from "@motebit/sync-engine";
-
-const sync = new SyncEngine(localEventStore, motebitId, {
-  sync_interval_ms: 30000,  // 30 seconds
-  batch_size: 100,
-  max_retries: 3,
-  retry_backoff_ms: 1000,
-});
-
-sync.connectRemote(remoteAdapter);
-sync.start();
-```
+Sync runs automatically on a configurable interval (default 30 seconds) and can also be triggered manually.
 
 ## The relay server
 
-The sync relay (`services/api/`) is a lightweight REST + WebSocket server that:
+The sync relay is a lightweight server that:
 
-- Authenticates devices using master tokens and Ed25519 signed JWTs
+- Authenticates devices using Ed25519 signed tokens (no passwords stored server-side)
 - Stores events for each motebit
 - Fans out events to connected devices in real-time via WebSocket
 - Supports batch push/pull over REST
 
-### Running the relay
-
-```bash
-pnpm --filter @motebit/api dev
-```
-
-### Authentication flow
-
-1. Device creates a signed JWT with its Ed25519 private key:
-   ```ts
-   const token = await createSignedToken(
-     { mid: motebitId, did: deviceId, iat: now, exp: now + 300 },
-     privateKey
-   );
-   ```
-2. Relay verifies the signature against the device's registered public key
-3. Token is valid for 5 minutes — devices re-sign periodically
-
-### Transport adapters
-
-| Adapter | Use case |
-|---|---|
-| `HttpEventStoreAdapter` | REST-based push/pull, works through firewalls |
-| `WebSocketEventStoreAdapter` | Real-time sync, lower latency |
-| `EncryptedEventStoreAdapter` | Wraps any adapter with AES-256-GCM encryption |
+The relay is a transport layer — it passes events between devices. It doesn't interpret, modify, or depend on the event content.
 
 ## Configuration
 
@@ -68,56 +32,30 @@ In `~/.motebit/config.json`:
 
 ```json
 {
-  "sync_url": "https://relay.example.com",
+  "sync_url": "https://relay.example.com"
 }
 ```
 
 The sync master token is stored in the OS keyring (not in the config file).
 
-In the CLI:
-
-```bash
-pnpm --filter @motebit/cli dev -- \
-  --sync-url https://relay.example.com \
-  --sync-token your-master-token
-```
+In the CLI, use `/sync` to trigger a manual sync cycle and see the current status.
 
 ## Conflict detection
 
-When two devices modify state simultaneously, the sync engine detects the conflict:
+When two devices modify state simultaneously, the sync engine detects the conflict. Conflicts are recorded but not auto-resolved — the system uses version clocks to maintain a consistent ordering. Events are sorted by version clock, and the highest clock wins for state reconstruction.
 
-```ts
-interface ConflictEdge {
-  local_event_id: string;
-  remote_event_id: string;
-  conflict_type: string;
-}
-```
-
-Conflicts are recorded but not auto-resolved — the system uses version clocks to maintain a consistent ordering. Events are sorted by version clock, and the highest clock wins for state reconstruction.
-
-## Sync status
-
-Monitor sync state with the observer pattern:
-
-```ts
-sync.onStatusChange((status) => {
-  // status: "idle" | "syncing" | "error" | "offline"
-  console.log(`Sync: ${status}`);
-});
-```
-
-In the CLI, use `/sync` to trigger a manual sync cycle and see the current status.
+This means your devices converge to the same state without requiring manual conflict resolution in normal operation.
 
 ## Encrypted sync
 
-Wrap any transport adapter with encryption so the relay never sees plaintext events:
+Sync supports end-to-end encryption. When enabled, events are encrypted before leaving the device and decrypted on arrival. The relay stores only opaque ciphertext — it never sees plaintext events.
 
-```ts
-import { EncryptedEventStoreAdapter } from "@motebit/sync-engine";
+This means even a compromised relay server can't read your agent's memory, state, or event history. Only devices with the encryption key can access the content.
 
-const encrypted = new EncryptedEventStoreAdapter(httpAdapter, encryptionKey);
-sync.connectRemote(encrypted);
-```
+## Transport options
 
-The relay stores opaque ciphertext. Only devices with the encryption key can read events.
+The sync engine supports multiple transports:
+
+- **HTTP** — REST-based push/pull, works through firewalls and proxies
+- **WebSocket** — Real-time sync with lower latency
+- **Encrypted** — Wraps any transport with AES-256-GCM encryption

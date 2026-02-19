@@ -1,117 +1,56 @@
 ---
 title: Governance
-description: PolicyGate, sensitivity levels, operator mode, and the audit trail.
+description: Surface tension — what crosses the boundary between the agent and the world.
 ---
 
-Governance is the surface tension. It controls what crosses the boundary between the agent's interior (memory, tools, state) and the outside world. Without it, a tool-using agent is a liability.
+Governance is the surface tension. It controls what crosses the boundary between the agent's interior — memory, tools, state — and the outside world. Without it, a tool-using agent is a liability.
 
-## PolicyGate
+## The policy gate
 
-Every tool call passes through the `PolicyGate` before execution:
+Every tool call passes through the policy gate before execution. The gate evaluates each request against allow/deny lists, risk classification, operator mode, rate limits, and per-tool approval requirements.
 
-```ts
-import { PolicyGate } from "@motebit/policy";
-
-const gate = new PolicyGate({
-  operatorMode: false,
-  requireApproval: ["writeFile", "shellExec"],
-  budgets: { maxCallsPerWindow: 20, windowMs: 60000 },
-  allowList: ["readFile", "webSearch", "recallMemories"],
-  denyList: [],
-});
-```
-
-The gate evaluates each tool call against:
-
-1. **Allow/deny lists** — Explicit overrides
-2. **Risk classification** — Tools are classified by risk level (R0-R4)
-3. **Operator mode** — High-risk tools (R2+) require operator mode to be enabled
-4. **Budget enforcement** — Rate limits and time budgets per turn
-5. **Approval requirements** — Specific tools can require explicit user approval
+The result is one of three outcomes: **allowed** (the tool executes), **denied** (the tool is blocked), or **requires approval** (the user decides).
 
 ## Risk levels
 
-Every tool gets a risk classification:
+Tools are classified by the risk they carry:
 
-| Level | Description | Examples |
+| Level | What it means | Examples |
 |---|---|---|
-| `R0_READ` | Read-only, no side effects | `readFile`, `webSearch`, `recallMemories` |
-| `R1_ANNOTATE` | Creates metadata, no external effect | `listEvents`, `readUrl` |
-| `R2_WRITE` | Writes to local storage | `writeFile` |
-| `R3_EXECUTE` | Executes code or commands | `shellExec` |
-| `R4_MONEY` | Financial transactions | Payment tools |
+| Read-only | No side effects | Search the web, read a file, recall memories |
+| Annotate | Creates metadata, no external effect | Browse events, fetch a URL |
+| Write | Modifies local storage | Write a file |
+| Execute | Runs code or commands | Shell execution |
+| Financial | Money is involved | Payment tools |
 
-The `classifyTool` function infers risk from tool names and descriptions. MCP tools from untrusted servers default to requiring approval.
+Read-only tools flow through automatically. Write and execute tools require operator mode. Financial tools are denied by default. The risk level is inferred from the tool's name and description, so even tools from external sources get classified.
 
 ## Operator mode
 
-Operator mode is a PIN-protected escalation that unlocks high-risk tools:
+Operator mode is a PIN-protected escalation that unlocks higher-risk tools. Think of it as `sudo` for your agent.
 
-1. User enables operator mode in settings
-2. System prompts for a 4-6 digit PIN
-3. PIN is hashed with SHA-256 and stored in the OS keyring
-4. While active, R2+ tools can execute (still subject to approval requirements)
-5. Disabling operator mode re-locks high-risk tools immediately
+1. Enable operator mode in settings
+2. Enter a 4-6 digit PIN
+3. While active, write and execute tools can proceed (still subject to per-tool approval rules)
+4. Disable operator mode to re-lock everything immediately
 
-```ts
-// Enable operator mode
-const result = await runtime.setOperatorMode(true, "1234");
-if (!result.success && result.needsSetup) {
-  // First time — need to create PIN
-  await runtime.setupOperatorPin("1234");
-  await runtime.setOperatorMode(true, "1234");
-}
-```
+The PIN is hashed and stored in the OS keyring. It's never stored in plaintext and never sent over the network.
 
 ## Audit trail
 
-Every policy decision is logged:
+Every policy decision is logged — what tool was requested, what arguments were passed, whether it was allowed or denied, and what the result was. The audit log is append-only and immutable. You can review exactly what your agent has done, attempted, and been prevented from doing.
 
-```ts
-interface ToolAuditEntry {
-  turnId: string;
-  callId: string;
-  tool: string;
-  args: Record<string, unknown>;
-  decision: "allowed" | "denied" | "requires_approval";
-  result?: string;
-  timestamp: number;
-}
-```
+## Memory governance
 
-The audit log is append-only and immutable. It records what was attempted, what was allowed, what was denied, and the result of every tool execution.
-
-## MemoryGovernor
-
-The `MemoryGovernor` applies governance to memory formation:
+Governance extends to memory formation. The memory governor checks every memory candidate before it enters the graph:
 
 - Memories above a sensitivity threshold can be rejected entirely
 - Retention rules are enforced per sensitivity level
-- The governor checks every memory candidate before it enters the graph
+- When sensitive memories are deleted, cryptographic deletion certificates are produced
 
-```ts
-const governor = new MemoryGovernor({
-  retentionRules: {
-    [SensitivityLevel.None]: Infinity,
-    [SensitivityLevel.Personal]: 365 * 24 * 60 * 60 * 1000,
-    [SensitivityLevel.Medical]: 90 * 24 * 60 * 60 * 1000,
-    [SensitivityLevel.Financial]: 90 * 24 * 60 * 60 * 1000,
-    [SensitivityLevel.Secret]: 30 * 24 * 60 * 60 * 1000,
-  },
-  rejectSensitivity: SensitivityLevel.Secret,
-});
-```
+## Injection defense
 
-## Content sanitization
-
-The `ContentSanitizer` defends against prompt injection in tool results. When a tool returns data from an external source, the sanitizer checks for LLM prompt injection attempts and flags suspicious content:
-
-```ts
-// In the streaming output
-{ type: "injection_warning", tool_name: "webSearch" }
-```
-
-MCP tool results are wrapped in `[EXTERNAL_DATA]` markers to clearly delineate the trust boundary between internal and external content.
+When a tool returns data from an external source, the system checks for prompt injection attempts — patterns designed to hijack the agent's behavior. Suspicious content is flagged, and external data is clearly delineated from internal content so the agent can reason about trust boundaries.
 
 ## The principle
 

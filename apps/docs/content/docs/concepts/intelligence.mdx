@@ -1,131 +1,36 @@
 ---
 title: Intelligence
-description: Pluggable LLM providers, the agentic turn loop, and streaming.
+description: Pluggable LLM providers — the intelligence is a commodity, the identity is the asset.
 ---
 
-Intelligence is a commodity. Motebit treats LLMs as interchangeable providers — you can switch between Anthropic, Ollama, OpenAI, or any future provider without losing your agent's identity, memory, or governance.
+Intelligence is a commodity. Motebit treats language models as interchangeable providers — you can switch between Anthropic, Ollama, OpenAI, or any future provider without losing your agent's identity, memory, or governance.
 
-## Providers
+## Pluggable providers
 
-Three provider implementations, one interface:
+Motebit supports three modes of intelligence:
 
-```ts
-interface IntelligenceProvider {
-  generate(contextPack: ContextPack): Promise<AIResponse>;
-  estimateConfidence(response: string): number;
-  extractMemoryCandidates(response: string): MemoryCandidate[];
-}
-```
+- **Cloud** — Hosted APIs like Anthropic or OpenAI. High capability, requires an API key and network connection.
+- **Local** — On-device inference via Ollama. Private by default, no data leaves your machine.
+- **Hybrid** — Cloud-first with automatic fallback to local. If the cloud provider is unreachable, the agent switches to local inference seamlessly.
 
-### CloudProvider
+Switch any time. Nothing resets. Your identity persists, your memories stay, your governance rules remain. The intelligence provider is a replaceable component — the agent is not.
 
-Connects to hosted APIs (Anthropic, OpenAI, custom endpoints):
+## How a conversation works
 
-```ts
-import { CloudProvider } from "@motebit/ai-core";
+When you send a message, the agent assembles context from its current state, recent events, relevant memories, and conversation history. This context — along with your message — goes to the language model.
 
-const provider = new CloudProvider({
-  provider: "anthropic",
-  api_key: "sk-ant-...",
-  model: "claude-sonnet-4-5-20250514",
-  max_tokens: 4096,
-  temperature: 0.7,
-});
-```
+The response may include more than just text. The agent can update its internal state, form new memories, and request tool calls — all within a single conversational turn.
 
-### OllamaProvider
+## Streaming
 
-Local inference via Ollama:
+Responses stream in real-time. You see text as it's generated, tool calls as they're requested, and approval prompts as they arise. The agent doesn't disappear for 30 seconds and return with a wall of text — it thinks in front of you.
 
-```ts
-import { OllamaProvider } from "@motebit/ai-core";
+## Tool use
 
-const provider = new OllamaProvider({
-  model: "llama3.2",
-  base_url: "http://localhost:11434",
-});
-```
+When the agent needs to act — read a file, search the web, execute a command — it requests a tool call. Every tool call passes through the [governance layer](/docs/concepts/governance) before execution. If the tool is approved, the result feeds back into the conversation and the agent continues reasoning.
 
-### HybridProvider
+If a tool requires explicit approval, the conversation pauses. You decide. The agent resumes only with your consent.
 
-Falls back from cloud to local on failure:
+## Body awareness
 
-```ts
-import { HybridProvider } from "@motebit/ai-core";
-
-const provider = new HybridProvider({
-  cloud: { provider: "anthropic", api_key: "...", model: "..." },
-  local: { model: "llama3.2" },
-  fallback_to_local: true,
-});
-```
-
-## The agentic turn loop
-
-A single user message can trigger multiple LLM calls if tools are involved. The turn loop handles this:
-
-1. Pack context (state vector, recent events, relevant memories, conversation history)
-2. Call the LLM
-3. Parse the response for `<memory>`, `<state>`, and `*action*` tags
-4. If the LLM requests a tool call, evaluate it against the policy gate
-5. If approved, execute the tool and feed the result back (go to step 2)
-6. If approval is required, pause and yield an `approval_request` chunk
-7. Continue until the LLM produces a final text response
-
-```ts
-for await (const chunk of runtime.sendMessageStreaming("search for recent papers on RLHF")) {
-  switch (chunk.type) {
-    case "text":
-      process.stdout.write(chunk.text);
-      break;
-    case "tool_status":
-      console.log(`Tool ${chunk.name}: ${chunk.status}`);
-      break;
-    case "approval_request":
-      // User decides whether to allow tool execution
-      const approved = await askUser(`Allow ${chunk.name}?`);
-      for await (const next of runtime.resumeAfterApproval(approved)) {
-        // Continue processing...
-      }
-      break;
-  }
-}
-```
-
-## Context packing
-
-Before each LLM call, the runtime assembles a `ContextPack`:
-
-```ts
-interface ContextPack {
-  state: MotebitState;
-  recentEvents: EventLogEntry[];
-  relevantMemories: MemoryNode[];
-  userMessage: string;
-  conversationHistory: Array<{ role: string; content: string }>;
-}
-```
-
-The system prompt includes body awareness — a description of the motebit's current physical state derived from the state vector and behavior cues. This lets the LLM know how the creature is "feeling" and respond accordingly.
-
-## Tag parsing
-
-The LLM communicates state changes and memory formation through inline XML tags:
-
-```xml
-<!-- State updates -->
-<state field="attention" value="0.8" />
-<state field="curiosity" value="0.6" />
-
-<!-- Memory formation -->
-<memory confidence="0.85" sensitivity="none">
-  User is interested in reinforcement learning
-</memory>
-
-<!-- Actions (affect behavior cues) -->
-*glow brighter*
-*drift closer*
-*widen eyes*
-```
-
-These are parsed by pure functions (`extractStateTags`, `extractMemoryTags`, `extractActions`) and stripped from the displayed output via `stripTags`.
+The agent knows how it's "feeling." Its current state — attention level, confidence, curiosity, affect — is included in the context sent to the language model. This means the agent's responses are colored by its internal state, not just the conversation content. A curious agent asks follow-up questions. A confident agent gives direct answers. The intelligence adapts to the body.

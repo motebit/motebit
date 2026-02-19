@@ -1,116 +1,49 @@
 ---
 title: Memory
-description: Semantic graph with cosine similarity retrieval and half-life decay.
+description: Semantic memory that accumulates, decays, and respects sensitivity.
 ---
 
-Memory is what separates a sovereign agent from a stateless chatbot. Motebit's memory system is a semantic graph — nodes are memories, edges are relationships, and retrieval uses embedding similarity with confidence decay over time.
+Memory is what separates a sovereign agent from a stateless chatbot. Every conversation, every interaction, every decision leaves a trace. Motebit's memory system stores these traces as a semantic graph — searchable by meaning, governed by sensitivity, and subject to natural decay over time.
 
-## Memory nodes
+## How memories form
 
-Each memory is a `MemoryNode`:
+Memories emerge from conversation. As the agent responds, it identifies facts, preferences, and context worth remembering. Each memory is stored with a confidence level (how certain the agent is) and a sensitivity classification (how private the information is).
 
-```ts
-interface MemoryNode {
-  node_id: string;
-  content: string;
-  embedding: number[];       // vector for similarity search
-  confidence: number;        // 0-1, decays over time
-  sensitivity: SensitivityLevel;
-  half_life: number;         // milliseconds (default: 7 days)
-  created_at: number;
-  last_accessed: number;
-  tombstoned: boolean;
-}
-```
+The agent doesn't record transcripts. It distills — extracting the meaningful signal from conversation and storing it as a discrete memory node.
 
-Memories are formed from LLM output via XML tags. The AI emits `<memory>` tags in its response, which the runtime parses and stores:
+## Retrieval by meaning
 
-```xml
-<memory confidence="0.9" sensitivity="personal">
-  User prefers dark mode and uses vim keybindings
-</memory>
-```
+When context is needed, the agent searches its memory by semantic similarity — not by keyword, but by meaning. A query about "preferred editor" will surface a memory about "uses vim keybindings" even if the exact words don't match.
 
-## Memory formation
-
-```ts
-const memory = await memoryGraph.formMemory(
-  { content: "user prefers dark mode", confidence: 0.9, sensitivity: SensitivityLevel.Personal },
-  embedding,                 // float[] from embedding model
-  7 * 24 * 60 * 60 * 1000   // 7-day half-life
-);
-```
-
-Formation emits an audit event so every memory has a traceable origin.
-
-## Retrieval
-
-Retrieval is a two-pass process:
-
-1. **Filter** — Exclude tombstoned memories and those below a confidence threshold
-2. **Rerank** — Score by similarity, decayed confidence, and recency
-
-```ts
-const results = await memoryGraph.retrieve(queryEmbedding, {
-  limit: 10,
-  minConfidence: 0.1,
-});
-```
-
-The scoring formula:
-
-```
-score = similarity * 0.5 + decayedConfidence * 0.3 + recencyBoost * 0.2
-```
-
-Where:
-- `similarity` is cosine similarity between the query embedding and the memory embedding
-- `decayedConfidence` applies half-life decay: `initial * 0.5^(elapsed / halfLife)`
-- `recencyBoost` favors recently accessed memories: `1 / (1 + age / 24h)`
+Retrieved memories are ranked by a combination of relevance, confidence, and recency. The most pertinent, trustworthy, and recent memories surface first.
 
 ## Half-life decay
 
-Memories don't persist at full strength forever. Confidence decays with a half-life (default 7 days):
+Memories don't persist at full strength forever. Each memory has a half-life — the time it takes for its confidence to drop by half. The default is 7 days.
 
-```ts
-function computeDecayedConfidence(
-  initial: number,
-  halfLife: number,
-  elapsedMs: number
-): number {
-  return initial * Math.pow(0.5, elapsedMs / halfLife);
-}
-```
+A memory stored at 90% confidence:
+- After 7 days: 45%
+- After 14 days: 22%
+- After 28 days: 5%
 
-A memory stored at confidence 0.9 with a 7-day half-life:
-- After 7 days: 0.45
-- After 14 days: 0.225
-- After 28 days: 0.056
+Trivia fades. Important things stick — because they get reinforced. When a memory is accessed or confirmed, its confidence resets. Memories that matter keep coming back; memories that don't, gracefully disappear.
 
-Memories that fall below the retrieval threshold effectively fade, but they're never deleted — they can be reinforced if accessed again.
+Memories are never deleted by decay. They simply fall below the retrieval threshold, becoming invisible to the agent unless specifically sought. They can always be reinforced if they become relevant again.
 
-## Graph edges
+## Relationships between memories
 
-Memories can be linked with typed relationships:
+Memories aren't isolated facts. They can be linked — this caused that, this contradicts that, this is part of that. These relationships let the agent understand not just individual facts but the structure between them: causal chains, contradictions, hierarchies.
 
-```ts
-await memoryGraph.link(sourceId, targetId, RelationType.CausedBy, 0.8);
-```
+## Sensitivity and retention
 
-Relation types: `Related`, `CausedBy`, `FollowedBy`, `ConflictsWith`, `Reinforces`, `PartOf`.
-
-Edges let the system understand not just individual facts but the structure between them — causal chains, contradictions, hierarchies.
-
-## Sensitivity levels
-
-Every memory carries a sensitivity level that controls retention and display:
+Every memory carries a sensitivity level that controls how long it's retained and whether it can be displayed:
 
 | Level | Retention | Display |
 |---|---|---|
-| `None` | Infinite | Allowed |
-| `Personal` | 365 days | Allowed |
-| `Medical` | 90 days | Blocked |
-| `Financial` | 90 days | Blocked |
-| `Secret` | 30 days | Blocked |
+| None | Indefinite | Allowed |
+| Personal | 1 year | Allowed |
+| Medical | 90 days | Blocked |
+| Financial | 90 days | Blocked |
+| Secret | 30 days | Blocked |
 
-The [privacy layer](/docs/architecture/privacy-and-policy) enforces these rules. Sensitive memories can only be accessed through governed channels, and deletion produces a cryptographic certificate.
+Sensitive memories can only be accessed through governed channels. When a sensitive memory is deleted, a cryptographic deletion certificate is produced — proof that the data was removed, without revealing what was removed.
