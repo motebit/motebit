@@ -110,12 +110,20 @@ export function App(): React.ReactElement {
   const [pairingClaimName, setPairingClaimName] = useState("");
   const pairingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Voice state
-  const [micState, setMicState] = useState<"off" | "recording" | "transcribing">("off");
+  // Voice state — 5-state machine:
+  //   off → ambient (mic listening, creature breathes, VAD armed)
+  //   ambient → voice (VAD triggered or manual tap, STT recording)
+  //   voice → transcribing (recording stopped, Whisper API call)
+  //   transcribing → ambient (result received, auto-send, return to listening)
+  //   speaking → ambient (TTS finished or cancelled)
+  //   Any → off (explicit stop)
+  const [micState, setMicState] = useState<"off" | "ambient" | "voice" | "transcribing" | "speaking">("off");
   const ttsRef = useRef<TTSProvider | null>(null);
   const sttRef = useRef<STTProvider | null>(null);
   const audioMonitorRef = useRef<AudioMonitor | null>(null);
   const ttsPulseRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Track whether voice was auto-triggered by VAD (vs manual tap from ambient)
+  const vadTriggeredRef = useRef(false);
 
   // Sync state
   const [syncStatus, setSyncStatus] = useState<"idle" | "syncing" | "error" | "offline">("offline");
@@ -190,6 +198,8 @@ export function App(): React.ReactElement {
       app.current.stopSync();
       if (audioMonitorRef.current) void audioMonitorRef.current.stop();
       if (ttsPulseRef.current) clearInterval(ttsPulseRef.current);
+      ttsRef.current?.cancel();
+      sttRef.current?.stop();
     };
   }, []);
 
@@ -404,11 +414,18 @@ export function App(): React.ReactElement {
   }, []);
 
   // === Audio monitor helpers ===
-  const startAudioMonitor = useCallback(() => {
+
+  /** Start ambient listening — AudioMonitor with VAD that auto-triggers voice recording. */
+  const startAmbientMonitor = useCallback(() => {
     if (audioMonitorRef.current?.isRunning) return;
     const monitor = new AudioMonitor();
     monitor.onAudio = (energy) => {
       app.current.setAudioReactivity(energy ?? null);
+    };
+    monitor.onSpeechStart = () => {
+      // VAD triggered — transition ambient → voice
+      vadTriggeredRef.current = true;
+      setMicState("voice");
     };
     audioMonitorRef.current = monitor;
     void monitor.start();
@@ -422,43 +439,88 @@ export function App(): React.ReactElement {
     app.current.setAudioReactivity(null);
   }, []);
 
-  // === Mic button handler ===
-  const handleMicPress = useCallback(async () => {
-    if (micState === "off") {
-      // Start recording
-      const stt = sttRef.current;
-      if (!stt) {
-        addSystemMessage("Voice input requires an OpenAI API key (set in Settings > Intelligence)");
-        return;
-      }
-
-      stt.onResult = (transcript: string, isFinal: boolean) => {
-        if (isFinal && transcript.trim()) {
-          setInputText(transcript.trim());
-          // Auto-send after filling input
-          setMicState("off");
-        }
-      };
-      stt.onError = (error: string) => {
-        addSystemMessage(`Mic error: ${error}`);
-        setMicState("off");
-      };
-      stt.onEnd = () => {
-        // Transition handled by onResult or onError
-      };
-
-      stt.start({ language: "en-US" });
-      startAudioMonitor();
-      setMicState("recording");
-    } else if (micState === "recording") {
-      // Stop recording → transcribe
-      setMicState("transcribing");
-      stopAudioMonitor();
-      sttRef.current?.stop();
-      // Result will arrive via onResult callback, which sets inputText and micState
+  /** Start STT recording (stops AudioMonitor first — expo-av single-recording constraint on iOS). */
+  const startVoiceRecording = useCallback(() => {
+    const stt = sttRef.current;
+    if (!stt) {
+      addSystemMessage("Voice input requires an OpenAI API key (set in Settings > Intelligence)");
+      setMicState("ambient");
+      return;
     }
-    // "transcribing" state — button is disabled, showing spinner
-  }, [micState, addSystemMessage, startAudioMonitor, stopAudioMonitor]);
+
+    // Stop ambient monitor before starting STT recording
+    stopAudioMonitor();
+
+    stt.onResult = (transcript: string, isFinal: boolean) => {
+      if (isFinal && transcript.trim()) {
+        setInputText(transcript.trim());
+        // Return to ambient after transcription completes
+        setMicState("ambient");
+      }
+    };
+    stt.onError = (error: string) => {
+      addSystemMessage(`Mic error: ${error}`);
+      setMicState("ambient");
+    };
+    stt.onEnd = () => {
+      // Transition handled by onResult or onError
+    };
+
+    stt.start({ language: "en-US" });
+  }, [addSystemMessage, stopAudioMonitor]);
+
+  // Auto-start STT when VAD triggers voice state
+  const prevMicStateForVADRef = useRef(micState);
+  useEffect(() => {
+    if (prevMicStateForVADRef.current === "ambient" && micState === "voice" && vadTriggeredRef.current) {
+      vadTriggeredRef.current = false;
+      startVoiceRecording();
+    }
+    prevMicStateForVADRef.current = micState;
+  }, [micState, startVoiceRecording]);
+
+  // Auto-restart ambient monitor when returning from transcribing/speaking
+  useEffect(() => {
+    if (micState === "ambient" && !audioMonitorRef.current?.isRunning) {
+      startAmbientMonitor();
+    }
+  }, [micState, startAmbientMonitor]);
+
+  // === Mic button handler — 5-state machine ===
+  const handleMicPress = useCallback(async () => {
+    switch (micState) {
+      case "off": {
+        // off → ambient: start listening with VAD
+        setMicState("ambient");
+        startAmbientMonitor();
+        break;
+      }
+      case "ambient": {
+        // ambient → off: stop listening
+        stopAudioMonitor();
+        setMicState("off");
+        break;
+      }
+      case "voice": {
+        // voice → transcribing: stop recording, send to Whisper
+        setMicState("transcribing");
+        sttRef.current?.stop();
+        break;
+      }
+      case "speaking": {
+        // speaking → ambient: cancel TTS, return to ambient
+        ttsRef.current?.cancel();
+        if (ttsPulseRef.current) {
+          clearInterval(ttsPulseRef.current);
+          ttsPulseRef.current = null;
+        }
+        app.current.setAudioReactivity(null);
+        setMicState("ambient");
+        break;
+      }
+      // transcribing: button disabled, no action
+    }
+  }, [micState, startAmbientMonitor, stopAudioMonitor]);
 
   // === Slash commands ===
   const handleSlashCommand = useCallback((command: string, args: string) => {
@@ -568,8 +630,8 @@ export function App(): React.ReactElement {
   // Auto-send when inputText is filled by voice transcription
   const prevMicStateRef = useRef(micState);
   useEffect(() => {
-    // Detect transition from transcribing→off with text in the input
-    if (prevMicStateRef.current === "transcribing" && micState === "off" && inputText.trim()) {
+    // Detect transition from transcribing→ambient with text in the input (voice result arrived)
+    if (prevMicStateRef.current === "transcribing" && micState === "ambient" && inputText.trim()) {
       void handleSend();
     }
     prevMicStateRef.current = micState;
@@ -650,8 +712,15 @@ export function App(): React.ReactElement {
         ),
       );
 
-      // TTS — speak the response if voice is enabled
-      if (settings?.voiceEnabled && ttsRef.current && finalText) {
+      // TTS — speak the response if voice is active (ambient or any non-off state)
+      const voiceActive = micState !== "off";
+      if (voiceActive && settings?.voiceEnabled && ttsRef.current && finalText) {
+        setMicState("speaking");
+        // Stop ambient monitor during TTS (avoid feedback)
+        if (audioMonitorRef.current?.isRunning) {
+          void audioMonitorRef.current.stop();
+        }
+
         // Start TTS pulse — synthesized wave so creature breathes during speech
         const startTime = Date.now();
         ttsPulseRef.current = setInterval(() => {
@@ -677,10 +746,12 @@ export function App(): React.ReactElement {
             ttsPulseRef.current = null;
           }
           app.current.setAudioReactivity(null);
+          // Return to ambient — creature keeps listening
+          setMicState("ambient");
         }
       }
     }
-  }, [settings?.voiceEnabled]);
+  }, [settings?.voiceEnabled, micState]);
 
   // === Approval handler ===
   const handleApproval = useCallback(async (messageId: string, approved: boolean) => {
@@ -1026,6 +1097,7 @@ export function App(): React.ReactElement {
             <Text style={styles.stateText}>
               attn {state.attention.toFixed(2)} · conf {state.confidence.toFixed(2)} · val {state.affect_valence.toFixed(2)}
               {app.current.governanceStatus.governed ? " · gov" : ""}
+              {micState !== "off" ? ` · ${micState}` : ""}
             </Text>
           </View>
         )}
@@ -1127,14 +1199,16 @@ export function App(): React.ReactElement {
           placeholderTextColor="#405060"
           returnKeyType="send"
           onSubmitEditing={() => void handleSend()}
-          editable={!isProcessing && micState === "off"}
+          editable={!isProcessing && (micState === "off" || micState === "ambient")}
         />
         {/* Mic button — show when input is empty and not processing */}
         {!inputText.trim() && !isProcessing ? (
           <TouchableOpacity
             style={[
               styles.micButton,
-              micState === "recording" && styles.micButtonRecording,
+              micState === "ambient" && styles.micButtonAmbient,
+              micState === "voice" && styles.micButtonRecording,
+              micState === "speaking" && styles.micButtonSpeaking,
               micState === "transcribing" && styles.sendButtonDisabled,
             ]}
             onPress={() => void handleMicPress()}
@@ -1145,7 +1219,11 @@ export function App(): React.ReactElement {
               <ActivityIndicator size="small" color="#c0d0e0" />
             ) : (
               <Text style={styles.micButtonText}>
-                {micState === "recording" ? "\u25A0" : "\u{1F399}"}
+                {micState === "off" ? "\u{1F399}" :
+                 micState === "ambient" ? "\u{1F399}" :
+                 micState === "voice" ? "\u25A0" :
+                 micState === "speaking" ? "\u23F9" :
+                 "\u{1F399}"}
               </Text>
             )}
           </TouchableOpacity>
@@ -1514,8 +1592,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginLeft: 8,
   },
+  micButtonAmbient: {
+    backgroundColor: "#1a3828",
+  },
   micButtonRecording: {
     backgroundColor: "#4a2020",
+  },
+  micButtonSpeaking: {
+    backgroundColor: "#2a2a4a",
   },
   micButtonText: {
     color: "#c0d0e0",

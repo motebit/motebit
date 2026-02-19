@@ -12,6 +12,12 @@
  *   - low  → interior glow (bass)
  *   - mid  → drift/sway (midrange)
  *   - high → iridescence shimmer (transients)
+ *
+ * VAD (Voice Activity Detection):
+ * Energy-based speech detection — when smoothedRms exceeds SPEECH_THRESHOLD
+ * for SPEECH_ONSET_FRAMES consecutive ticks (~300ms), fires onSpeechStart.
+ * After firing, requires energy to drop below threshold for SPEECH_OFFSET_FRAMES
+ * before re-arming (prevents rapid re-triggers).
  */
 
 import { Audio } from "expo-av";
@@ -23,6 +29,11 @@ function dbToLinear(db: number): number {
   const clamped = Math.max(-60, Math.min(0, db));
   return Math.pow(10, clamped / 20);
 }
+
+// VAD constants
+const SPEECH_THRESHOLD = 0.03;       // Gated RMS above this = speech
+const SPEECH_ONSET_FRAMES = 9;       // ~300ms at 30fps before triggering
+const SPEECH_OFFSET_FRAMES = 15;     // ~500ms of silence before re-arming
 
 export class AudioMonitor {
   private recording: Audio.Recording | null = null;
@@ -37,8 +48,16 @@ export class AudioMonitor {
   private prevLinear = 0;
   private noiseFloor = 0;
 
+  // VAD state
+  private speechOnsetCount = 0;
+  private speechOffsetCount = 0;
+  private vadArmed = true;
+
   /** Callback invoked ~30fps with computed audio reactivity. */
   onAudio: ((energy: AudioReactivity) => void) | null = null;
+
+  /** Callback fired once when sustained speech energy is detected (VAD trigger). */
+  onSpeechStart: (() => void) | null = null;
 
   get isRunning(): boolean {
     return this._running;
@@ -62,6 +81,11 @@ export class AudioMonitor {
     );
     this.recording = recording;
     this._running = true;
+
+    // Reset VAD state
+    this.speechOnsetCount = 0;
+    this.speechOffsetCount = 0;
+    this.vadArmed = true;
 
     // Poll metering at ~30fps
     this.timer = setInterval(() => {
@@ -135,6 +159,25 @@ export class AudioMonitor {
       const delta = Math.abs(linear - this.prevLinear);
       this.smoothedHigh += (delta > this.smoothedHigh ? 0.4 : 0.06) * (delta - this.smoothedHigh);
       this.prevLinear = linear;
+
+      // VAD — energy-based speech detection
+      if (this.smoothedRms > SPEECH_THRESHOLD) {
+        this.speechOnsetCount++;
+        this.speechOffsetCount = 0;
+
+        if (this.vadArmed && this.speechOnsetCount >= SPEECH_ONSET_FRAMES) {
+          this.vadArmed = false;
+          this.onSpeechStart?.();
+        }
+      } else {
+        this.speechOnsetCount = 0;
+        this.speechOffsetCount++;
+
+        // Re-arm after sustained silence
+        if (!this.vadArmed && this.speechOffsetCount >= SPEECH_OFFSET_FRAMES) {
+          this.vadArmed = true;
+        }
+      }
 
       this.onAudio?.({
         rms: this.smoothedRms,
