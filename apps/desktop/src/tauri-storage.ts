@@ -699,8 +699,186 @@ export class TauriConversationStore implements ConversationStoreAdapter {
     title: string | null;
     messageCount: number;
   }> {
-    // This is called from UI — we'll return empty and let the caller use async if needed.
-    // For the desktop app, this is best-effort.
-    return [];
+    // Sync interface returns from cache (populated by preload / listConversationsAsync)
+    return this._conversationsListCache;
   }
+
+  /** Async list of conversations — populates the sync cache and returns results. */
+  async listConversationsAsync(motebitId: string, limit = 20): Promise<Array<{
+    conversationId: string;
+    startedAt: number;
+    lastActiveAt: number;
+    title: string | null;
+    summary: string | null;
+    messageCount: number;
+  }>> {
+    const rows = await dbQuery<ConversationRow>(
+      this.invoke,
+      "SELECT * FROM conversations WHERE motebit_id = ? ORDER BY last_active_at DESC LIMIT ?",
+      [motebitId, limit],
+    );
+    const results = rows.map(r => ({
+      conversationId: r.conversation_id,
+      startedAt: r.started_at,
+      lastActiveAt: r.last_active_at,
+      title: r.title,
+      summary: r.summary,
+      messageCount: r.message_count,
+    }));
+    // Update sync cache
+    this._conversationsListCache = results;
+    return results;
+  }
+
+  /** Async load messages for a specific conversation (for switching). */
+  async loadMessagesAsync(conversationId: string): Promise<Array<{
+    messageId: string;
+    conversationId: string;
+    motebitId: string;
+    role: string;
+    content: string;
+    toolCalls: string | null;
+    toolCallId: string | null;
+    createdAt: number;
+    tokenEstimate: number;
+  }>> {
+    const rows = await dbQuery<ConversationMessageRow>(
+      this.invoke,
+      "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY created_at ASC",
+      [conversationId],
+    );
+    const messages = rows.map(r => ({
+      messageId: r.message_id,
+      conversationId: r.conversation_id,
+      motebitId: r.motebit_id,
+      role: r.role,
+      content: r.content,
+      toolCalls: r.tool_calls,
+      toolCallId: r.tool_call_id,
+      createdAt: r.created_at,
+      tokenEstimate: r.token_estimate,
+    }));
+    // Update message cache for sync loadMessages()
+    this._messagesCache.set(conversationId, messages);
+    return messages;
+  }
+
+  /** Update the title of a conversation. */
+  updateTitle(conversationId: string, title: string): void {
+    void dbExecute(
+      this.invoke,
+      "UPDATE conversations SET title = ? WHERE conversation_id = ?",
+      [title, conversationId],
+    );
+  }
+
+  /** Get total message count for the active conversation (from DB, async). */
+  async getMessageCount(conversationId: string): Promise<number> {
+    const rows = await dbQuery<{ message_count: number }>(
+      this.invoke,
+      "SELECT message_count FROM conversations WHERE conversation_id = ?",
+      [conversationId],
+    );
+    return rows[0]?.message_count ?? 0;
+  }
+
+  /** Async methods for conversation sync (getConversationsSince, getMessagesSince, upsertConversation, upsertMessage). */
+  async getConversationsSince(motebitId: string, since: number): Promise<Array<{
+    conversation_id: string;
+    motebit_id: string;
+    started_at: number;
+    last_active_at: number;
+    title: string | null;
+    summary: string | null;
+    message_count: number;
+  }>> {
+    const rows = await dbQuery<ConversationRow>(
+      this.invoke,
+      "SELECT * FROM conversations WHERE motebit_id = ? AND last_active_at > ? ORDER BY last_active_at ASC",
+      [motebitId, since],
+    );
+    return rows.map(r => ({
+      conversation_id: r.conversation_id,
+      motebit_id: r.motebit_id,
+      started_at: r.started_at,
+      last_active_at: r.last_active_at,
+      title: r.title,
+      summary: r.summary,
+      message_count: r.message_count,
+    }));
+  }
+
+  async getMessagesSince(conversationId: string, since: number): Promise<Array<{
+    message_id: string;
+    conversation_id: string;
+    motebit_id: string;
+    role: string;
+    content: string;
+    tool_calls: string | null;
+    tool_call_id: string | null;
+    created_at: number;
+    token_estimate: number;
+  }>> {
+    const rows = await dbQuery<ConversationMessageRow>(
+      this.invoke,
+      "SELECT * FROM conversation_messages WHERE conversation_id = ? AND created_at > ? ORDER BY created_at ASC",
+      [conversationId, since],
+    );
+    return rows.map(r => ({
+      message_id: r.message_id,
+      conversation_id: r.conversation_id,
+      motebit_id: r.motebit_id,
+      role: r.role,
+      content: r.content,
+      tool_calls: r.tool_calls,
+      tool_call_id: r.tool_call_id,
+      created_at: r.created_at,
+      token_estimate: r.token_estimate,
+    }));
+  }
+
+  async upsertConversation(conv: {
+    conversation_id: string;
+    motebit_id: string;
+    started_at: number;
+    last_active_at: number;
+    title: string | null;
+    summary: string | null;
+    message_count: number;
+  }): Promise<void> {
+    await dbExecute(
+      this.invoke,
+      `INSERT OR REPLACE INTO conversations (conversation_id, motebit_id, started_at, last_active_at, title, summary, message_count)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [conv.conversation_id, conv.motebit_id, conv.started_at, conv.last_active_at, conv.title, conv.summary, conv.message_count],
+    );
+  }
+
+  async upsertMessage(msg: {
+    message_id: string;
+    conversation_id: string;
+    motebit_id: string;
+    role: string;
+    content: string;
+    tool_calls: string | null;
+    tool_call_id: string | null;
+    created_at: number;
+    token_estimate: number;
+  }): Promise<void> {
+    await dbExecute(
+      this.invoke,
+      `INSERT OR IGNORE INTO conversation_messages (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [msg.message_id, msg.conversation_id, msg.motebit_id, msg.role, msg.content, msg.tool_calls, msg.tool_call_id, msg.created_at, msg.token_estimate],
+    );
+  }
+
+  // Internal cache for sync listConversations() calls
+  private _conversationsListCache: Array<{
+    conversationId: string;
+    startedAt: number;
+    lastActiveAt: number;
+    title: string | null;
+    messageCount: number;
+  }> = [];
 }

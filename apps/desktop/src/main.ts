@@ -149,11 +149,38 @@ function handleSlashCommand(command: string, args: string): void {
     case "settings":
       openSettings();
       break;
+    case "conversations":
+      openConversationsPanel();
+      break;
+    case "new":
+      app.startNewConversation();
+      chatLog.innerHTML = "";
+      addMessage("system", "New conversation started");
+      break;
+    case "sync":
+      if (currentConfig?.syncUrl) {
+        addMessage("system", "Syncing conversations...");
+        void app.syncConversations(currentConfig.syncUrl, currentConfig.syncMasterToken).then(result => {
+          addMessage("system",
+            `Sync complete: ${result.conversations_pushed} pushed, ${result.conversations_pulled} pulled, ` +
+            `${result.messages_pushed} msgs pushed, ${result.messages_pulled} msgs pulled`
+          );
+        }).catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          addMessage("system", `Sync failed: ${msg}`);
+        });
+      } else {
+        addMessage("system", "No sync relay configured");
+      }
+      break;
     case "help":
       addMessage("system",
         "Available commands:\n" +
         "/model — show current model\n" +
         "/model <name> — switch model\n" +
+        "/conversations — browse past conversations\n" +
+        "/new — start a new conversation\n" +
+        "/sync — sync conversations with relay\n" +
         "/settings — open settings panel\n" +
         "/help — show this message"
       );
@@ -201,6 +228,9 @@ async function handleSend(): Promise<void> {
         addMessage("system", `Warning: suspicious content detected in ${chunk.tool_name} results`);
       }
     }
+
+    // Auto-title in background after streaming completes
+    void app.generateTitleInBackground();
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     if (!bubble.textContent) {
@@ -209,6 +239,99 @@ async function handleSend(): Promise<void> {
     addMessage("system", `Error: ${msg}`);
   }
 }
+
+// === Conversations Panel ===
+
+const conversationsPanel = document.getElementById("conversations-panel") as HTMLDivElement;
+const conversationsBackdrop = document.getElementById("conversations-backdrop") as HTMLDivElement;
+const convList = document.getElementById("conv-list") as HTMLDivElement;
+
+function openConversationsPanel(): void {
+  conversationsPanel.classList.add("open");
+  conversationsBackdrop.classList.add("open");
+  populateConversationsList();
+}
+
+function closeConversationsPanel(): void {
+  conversationsPanel.classList.remove("open");
+  conversationsBackdrop.classList.remove("open");
+}
+
+function formatTimeAgo(timestamp: number): string {
+  const seconds = Math.floor((Date.now() - timestamp) / 1000);
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+function populateConversationsList(): void {
+  convList.innerHTML = "";
+  void app.listConversationsAsync(30).then(conversations => {
+    if (conversations.length === 0) {
+      const empty = document.createElement("div");
+      empty.style.cssText = "font-size:12px;color:rgba(0,0,0,0.3);padding:16px;text-align:center;";
+      empty.textContent = "No conversations yet";
+      convList.appendChild(empty);
+      return;
+    }
+
+    const currentId = app.currentConversationId;
+    for (const conv of conversations) {
+      const item = document.createElement("div");
+      item.className = "conv-item" + (conv.conversationId === currentId ? " active" : "");
+
+      const titleDiv = document.createElement("div");
+      titleDiv.className = "conv-item-title";
+      titleDiv.textContent = conv.title || "Untitled conversation";
+      item.appendChild(titleDiv);
+
+      const metaDiv = document.createElement("div");
+      metaDiv.className = "conv-item-meta";
+      metaDiv.innerHTML = `<span>${formatTimeAgo(conv.lastActiveAt)}</span><span>${conv.messageCount} msgs</span>`;
+      item.appendChild(metaDiv);
+
+      item.addEventListener("click", () => {
+        void loadConversation(conv.conversationId);
+      });
+      convList.appendChild(item);
+    }
+  });
+}
+
+async function loadConversation(conversationId: string): Promise<void> {
+  closeConversationsPanel();
+  chatLog.innerHTML = "";
+  addMessage("system", "Loading conversation...");
+
+  try {
+    const messages = await app.loadConversationById(conversationId);
+    chatLog.innerHTML = "";
+    for (const msg of messages) {
+      if (msg.role === "user" || msg.role === "assistant") {
+        addMessage(msg.role, msg.content);
+      }
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    chatLog.innerHTML = "";
+    addMessage("system", `Failed to load conversation: ${msg}`);
+  }
+}
+
+// Conversations panel event listeners
+document.getElementById("conversations-btn")!.addEventListener("click", openConversationsPanel);
+document.getElementById("conv-close-btn")!.addEventListener("click", closeConversationsPanel);
+conversationsBackdrop.addEventListener("click", closeConversationsPanel);
+document.getElementById("conv-new-btn")!.addEventListener("click", () => {
+  closeConversationsPanel();
+  app.startNewConversation();
+  chatLog.innerHTML = "";
+  addMessage("system", "New conversation started");
+});
 
 // === Config Loading ===
 
@@ -1510,6 +1633,8 @@ document.addEventListener("keydown", (e) => {
       stopAmbient();     // stop ambient sensing
     } else if (pinBackdrop.classList.contains("open")) {
       closePinDialog();
+    } else if (conversationsPanel.classList.contains("open")) {
+      closeConversationsPanel();
     } else if (settingsModal.classList.contains("open")) {
       cancelSettings();
     }
@@ -1680,6 +1805,32 @@ async function bootstrap(): Promise<void> {
           addMessage(msg.role, msg.content);
         }
       }
+    }
+
+    // Start goal scheduler (Tauri only)
+    if (config.isTauri && config.invoke) {
+      const goalStatus = document.getElementById("goal-status") as HTMLDivElement;
+      app.onGoalStatus((executing) => {
+        goalStatus.classList.toggle("active", executing);
+      });
+      app.startGoalScheduler(config.invoke);
+    }
+
+    // Connect MCP servers via Tauri IPC bridge
+    if (config.isTauri && config.invoke) {
+      const invoke = config.invoke;
+      for (const mcpConfig of mcpServersConfig) {
+        void app.connectMcpServerViaTauri(mcpConfig, invoke).catch(() => {
+          // MCP connection failures are non-fatal
+        });
+      }
+    }
+
+    // Sync conversations alongside event sync (if relay configured)
+    if (config.syncUrl) {
+      void app.syncConversations(config.syncUrl, config.syncMasterToken).catch(() => {
+        // Conversation sync failures are non-fatal at startup
+      });
     }
   } else {
     if (config.provider === "anthropic") {

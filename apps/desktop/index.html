@@ -843,6 +843,156 @@
     }
     .pairing-btn-deny:hover, .pairing-btn-cancel:hover { background: rgba(0, 0, 0, 0.1); }
 
+    /* Conversation panel — slide-in from left */
+    #conversations-btn {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      z-index: 20;
+      width: 36px;
+      height: 36px;
+      border: none;
+      border-radius: 50%;
+      background: rgba(0, 0, 0, 0.05);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      color: rgba(0, 0, 0, 0.4);
+      font-size: 18px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.2s, color 0.2s;
+    }
+    #conversations-btn:hover {
+      background: rgba(0, 0, 0, 0.1);
+      color: rgba(0, 0, 0, 0.7);
+    }
+    #conversations-btn svg { width: 18px; height: 18px; }
+
+    #conversations-panel {
+      position: fixed;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: 280px;
+      z-index: 25;
+      background: rgba(255, 255, 255, 0.92);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-right: 1px solid rgba(0, 0, 0, 0.06);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: rgba(0, 0, 0, 0.8);
+      transform: translateX(-100%);
+      transition: transform 0.25s ease;
+      display: flex;
+      flex-direction: column;
+    }
+    #conversations-panel.open {
+      transform: translateX(0);
+    }
+    .conv-panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px;
+      border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+      flex-shrink: 0;
+    }
+    .conv-panel-title {
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .conv-new-btn {
+      padding: 6px 12px;
+      border: 1px solid rgba(0, 0, 0, 0.1);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.7);
+      color: rgba(0, 0, 0, 0.6);
+      font-size: 12px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .conv-new-btn:hover {
+      background: rgba(99, 102, 241, 0.1);
+      border-color: rgba(99, 102, 241, 0.3);
+      color: #6366f1;
+    }
+    .conv-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+    }
+    .conv-item {
+      padding: 10px 12px;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background 0.15s;
+      margin-bottom: 2px;
+    }
+    .conv-item:hover { background: rgba(0, 0, 0, 0.03); }
+    .conv-item.active { background: rgba(99, 102, 241, 0.08); }
+    .conv-item-title {
+      font-size: 13px;
+      font-weight: 500;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .conv-item-meta {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: rgba(0, 0, 0, 0.35);
+      margin-top: 3px;
+    }
+    .conv-panel-close {
+      background: none;
+      border: none;
+      color: rgba(0, 0, 0, 0.4);
+      cursor: pointer;
+      font-size: 18px;
+      padding: 2px 6px;
+    }
+    .conv-panel-close:hover { color: rgba(0, 0, 0, 0.7); }
+    #conversations-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 24;
+      background: rgba(0, 0, 0, 0.05);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s;
+    }
+    #conversations-backdrop.open { opacity: 1; pointer-events: auto; }
+
+    /* Goal status indicator */
+    #goal-status {
+      position: fixed;
+      top: 14px;
+      left: 56px;
+      z-index: 20;
+      display: none;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 12px;
+      background: rgba(99, 102, 241, 0.1);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 11px;
+      color: rgba(99, 102, 241, 0.8);
+      animation: pulse 2s ease-in-out infinite;
+    }
+    #goal-status.active { display: flex; }
+    #goal-status .goal-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #6366f1;
+    }
+
     /* Welcome dialog */
     #welcome-backdrop {
       position: fixed;
@@ -897,6 +1047,21 @@
 </head>
 <body>
   <canvas id="motebit-canvas"></canvas>
+  <button id="conversations-btn" title="Conversations">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+  </button>
+  <div id="goal-status"><span class="goal-dot"></span> Goal running</div>
+  <div id="conversations-backdrop"></div>
+  <div id="conversations-panel">
+    <div class="conv-panel-header">
+      <span class="conv-panel-title">Conversations</span>
+      <div style="display:flex;gap:6px;">
+        <button class="conv-new-btn" id="conv-new-btn">New</button>
+        <button class="conv-panel-close" id="conv-close-btn">&times;</button>
+      </div>
+    </div>
+    <div class="conv-list" id="conv-list"></div>
+  </div>
   <button id="settings-btn" title="Settings">&#9881;</button>
   <div id="settings-backdrop"></div>
   <div id="settings-modal">

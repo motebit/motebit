@@ -18,7 +18,7 @@ vi.mock("expo-sqlite", () => {
       runSync: vi.fn(),
       getAllSync: vi.fn(() => []),
       getFirstSync: vi.fn((_sql: string) => {
-        if (_sql.includes("user_version")) return { user_version: 2 };
+        if (_sql.includes("user_version")) return { user_version: 3 };
         return null;
       }),
     }),
@@ -259,6 +259,7 @@ describe("MobileApp.settings", () => {
     const custom: MobileSettings = {
       provider: "anthropic",
       model: "claude-haiku-4-5-20251001",
+      ollamaEndpoint: "http://192.168.1.100:11434",
       colorPreset: "amber",
       approvalPreset: "cautious",
       persistenceThreshold: 0.8,
@@ -269,6 +270,11 @@ describe("MobileApp.settings", () => {
     await app.saveSettings(custom);
     const loaded = await app.loadSettings();
     expect(loaded).toEqual(custom);
+  });
+
+  it("defaults ollamaEndpoint when not set", async () => {
+    const settings = await app.loadSettings();
+    expect(settings.ollamaEndpoint).toBe("http://localhost:11434");
   });
 
   it("merges partial saved settings with defaults", async () => {
@@ -299,6 +305,57 @@ describe("COLOR_PRESETS", () => {
 describe("APPROVAL_PRESET_CONFIGS", () => {
   it("has cautious, balanced, and autonomous", () => {
     expect(Object.keys(APPROVAL_PRESET_CONFIGS)).toEqual(["cautious", "balanced", "autonomous"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MobileApp.initAI — custom Ollama endpoint
+// ---------------------------------------------------------------------------
+
+describe("MobileApp.initAI with custom endpoint", () => {
+  let app: MobileApp;
+
+  beforeEach(() => {
+    secureStoreData.clear();
+    asyncStoreData.clear();
+    app = new MobileApp();
+  });
+
+  afterEach(() => {
+    app.stop();
+  });
+
+  it("accepts custom ollamaEndpoint", () => {
+    const result = app.initAI({ provider: "ollama", ollamaEndpoint: "http://192.168.1.50:11434" });
+    expect(result).toBe(true);
+    expect(app.isAIReady).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MobileApp.getConversationHistory
+// ---------------------------------------------------------------------------
+
+describe("MobileApp.getConversationHistory", () => {
+  let app: MobileApp;
+
+  beforeEach(() => {
+    secureStoreData.clear();
+    asyncStoreData.clear();
+    app = new MobileApp();
+  });
+
+  afterEach(() => {
+    app.stop();
+  });
+
+  it("returns empty array before initAI", () => {
+    expect(app.getConversationHistory()).toEqual([]);
+  });
+
+  it("returns empty array after initAI with no history", () => {
+    app.initAI({ provider: "ollama" });
+    expect(app.getConversationHistory()).toEqual([]);
   });
 });
 

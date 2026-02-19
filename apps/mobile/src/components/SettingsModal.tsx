@@ -93,13 +93,14 @@ export function SettingsModal({
     // Apply color preset
     app.setInteriorColor(draft.colorPreset);
 
-    // Build AI config if provider or model changed
+    // Build AI config if provider, model, or endpoint changed
     let aiConfig: MobileAIConfig | undefined;
-    if (draft.provider !== settings.provider || draft.model !== settings.model) {
+    if (draft.provider !== settings.provider || draft.model !== settings.model || draft.ollamaEndpoint !== settings.ollamaEndpoint) {
       aiConfig = {
         provider: draft.provider,
         model: draft.model,
         apiKey: draft.provider === "anthropic" ? apiKey : undefined,
+        ollamaEndpoint: draft.provider === "ollama" ? draft.ollamaEndpoint : undefined,
       };
     }
 
@@ -152,9 +153,11 @@ export function SettingsModal({
               provider={draft.provider}
               model={draft.model}
               apiKey={apiKey}
+              ollamaEndpoint={draft.ollamaEndpoint}
               onChangeProvider={(p) => updateDraft({ provider: p, model: p === "ollama" ? "llama3.2" : "claude-sonnet-4-20250514" })}
               onChangeModel={(m) => updateDraft({ model: m })}
               onChangeApiKey={setApiKey}
+              onChangeOllamaEndpoint={(e) => updateDraft({ ollamaEndpoint: e })}
             />
           )}
           {tab === "governance" && (
@@ -214,16 +217,20 @@ function IntelligenceTab({
   provider,
   model,
   apiKey,
+  ollamaEndpoint,
   onChangeProvider,
   onChangeModel,
   onChangeApiKey,
+  onChangeOllamaEndpoint,
 }: {
   provider: "ollama" | "anthropic";
   model: string;
   apiKey: string;
+  ollamaEndpoint: string;
   onChangeProvider: (p: "ollama" | "anthropic") => void;
   onChangeModel: (m: string) => void;
   onChangeApiKey: (k: string) => void;
+  onChangeOllamaEndpoint: (e: string) => void;
 }) {
   return (
     <View>
@@ -253,6 +260,22 @@ function IntelligenceTab({
         placeholder="Model name"
         placeholderTextColor="#405060"
       />
+
+      {provider === "ollama" && (
+        <>
+          <Text style={styles.sectionTitle}>Endpoint URL</Text>
+          <TextInput
+            style={styles.textField}
+            value={ollamaEndpoint}
+            onChangeText={onChangeOllamaEndpoint}
+            placeholder="http://localhost:11434"
+            placeholderTextColor="#405060"
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+          />
+        </>
+      )}
 
       {provider === "anthropic" && (
         <>

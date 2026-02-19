@@ -15,7 +15,7 @@ import type { MemoryStorageAdapter, MemoryQuery } from "@motebit/memory-graph";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 import type { IdentityStorage } from "@motebit/core-identity";
 import type { AuditLogAdapter } from "@motebit/privacy-layer";
-import type { StateSnapshotAdapter, StorageAdapters } from "@motebit/runtime";
+import type { StateSnapshotAdapter, ConversationStoreAdapter, StorageAdapters } from "@motebit/runtime";
 
 // === Schema (identical to packages/persistence) ===
 
@@ -82,6 +82,32 @@ CREATE TABLE IF NOT EXISTS state_snapshots (
   updated_at INTEGER NOT NULL,
   version_clock INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS conversations (
+  conversation_id TEXT PRIMARY KEY,
+  motebit_id TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  last_active_at INTEGER NOT NULL,
+  title TEXT,
+  summary TEXT,
+  message_count INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_conversations_motebit
+  ON conversations (motebit_id, last_active_at DESC);
+
+CREATE TABLE IF NOT EXISTS conversation_messages (
+  message_id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  motebit_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  tool_calls TEXT,
+  tool_call_id TEXT,
+  created_at INTEGER NOT NULL,
+  token_estimate INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_conv_messages
+  ON conversation_messages (conversation_id, created_at ASC);
 `;
 
 // === Row Types ===
@@ -429,6 +455,146 @@ export class ExpoSqliteStateSnapshot implements StateSnapshotAdapter {
   }
 }
 
+// === ConversationStore Adapter ===
+
+/** Active conversation window — 4 hours (matches packages/persistence). */
+const ACTIVE_CONVERSATION_WINDOW_MS = 4 * 60 * 60 * 1000;
+
+interface ConversationRow {
+  conversation_id: string;
+  motebit_id: string;
+  started_at: number;
+  last_active_at: number;
+  title: string | null;
+  summary: string | null;
+  message_count: number;
+}
+
+interface ConversationMessageRow {
+  message_id: string;
+  conversation_id: string;
+  motebit_id: string;
+  role: string;
+  content: string;
+  tool_calls: string | null;
+  tool_call_id: string | null;
+  created_at: number;
+  token_estimate: number;
+}
+
+export class ExpoSqliteConversationStore implements ConversationStoreAdapter {
+  constructor(private db: SQLite.SQLiteDatabase) {}
+
+  createConversation(motebitId: string): string {
+    const conversationId = crypto.randomUUID();
+    const now = Date.now();
+    this.db.runSync(
+      `INSERT INTO conversations (conversation_id, motebit_id, started_at, last_active_at, title, summary, message_count)
+       VALUES (?, ?, ?, ?, ?, ?, 0)`,
+      [conversationId, motebitId, now, now, null, null],
+    );
+    return conversationId;
+  }
+
+  appendMessage(conversationId: string, motebitId: string, msg: {
+    role: string;
+    content: string;
+    toolCalls?: string;
+    toolCallId?: string;
+  }): void {
+    const messageId = crypto.randomUUID();
+    const now = Date.now();
+    const tokenEstimate = Math.ceil(msg.content.length / 4);
+    this.db.runSync(
+      `INSERT INTO conversation_messages (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [messageId, conversationId, motebitId, msg.role, msg.content, msg.toolCalls ?? null, msg.toolCallId ?? null, now, tokenEstimate],
+    );
+    this.db.runSync(
+      "UPDATE conversations SET last_active_at = ?, message_count = message_count + 1 WHERE conversation_id = ?",
+      [now, conversationId],
+    );
+  }
+
+  loadMessages(conversationId: string, limit?: number): Array<{
+    messageId: string;
+    conversationId: string;
+    motebitId: string;
+    role: string;
+    content: string;
+    toolCalls: string | null;
+    toolCallId: string | null;
+    createdAt: number;
+    tokenEstimate: number;
+  }> {
+    let sql = "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY created_at ASC";
+    const params: (string | number)[] = [conversationId];
+    if (limit !== undefined) {
+      sql += " LIMIT ?";
+      params.push(limit);
+    }
+    const rows = this.db.getAllSync(sql, params) as ConversationMessageRow[];
+    return rows.map((r) => ({
+      messageId: r.message_id,
+      conversationId: r.conversation_id,
+      motebitId: r.motebit_id,
+      role: r.role,
+      content: r.content,
+      toolCalls: r.tool_calls,
+      toolCallId: r.tool_call_id,
+      createdAt: r.created_at,
+      tokenEstimate: r.token_estimate,
+    }));
+  }
+
+  getActiveConversation(motebitId: string): {
+    conversationId: string;
+    startedAt: number;
+    lastActiveAt: number;
+    summary: string | null;
+  } | null {
+    const cutoff = Date.now() - ACTIVE_CONVERSATION_WINDOW_MS;
+    const row = this.db.getFirstSync(
+      "SELECT * FROM conversations WHERE motebit_id = ? AND last_active_at > ? ORDER BY last_active_at DESC LIMIT 1",
+      [motebitId, cutoff],
+    ) as ConversationRow | null;
+    if (!row) return null;
+    return {
+      conversationId: row.conversation_id,
+      startedAt: row.started_at,
+      lastActiveAt: row.last_active_at,
+      summary: row.summary,
+    };
+  }
+
+  updateSummary(conversationId: string, summary: string): void {
+    this.db.runSync(
+      "UPDATE conversations SET summary = ? WHERE conversation_id = ?",
+      [summary, conversationId],
+    );
+  }
+
+  listConversations(motebitId: string, limit = 20): Array<{
+    conversationId: string;
+    startedAt: number;
+    lastActiveAt: number;
+    title: string | null;
+    messageCount: number;
+  }> {
+    const rows = this.db.getAllSync(
+      "SELECT * FROM conversations WHERE motebit_id = ? ORDER BY last_active_at DESC LIMIT ?",
+      [motebitId, limit],
+    ) as ConversationRow[];
+    return rows.map((r) => ({
+      conversationId: r.conversation_id,
+      startedAt: r.started_at,
+      lastActiveAt: r.last_active_at,
+      title: r.title,
+      messageCount: r.message_count,
+    }));
+  }
+}
+
 // === Factory ===
 
 export function createExpoStorage(dbName = "motebit.db"): StorageAdapters {
@@ -459,11 +625,47 @@ export function createExpoStorage(dbName = "motebit.db"): StorageAdapters {
     db.execSync("PRAGMA user_version = 2");
   }
 
+  // Migration 3: conversation tables (added in schema above, but need migration for existing DBs)
+  if (userVersion < 3) {
+    try {
+      db.execSync(`
+        CREATE TABLE IF NOT EXISTS conversations (
+          conversation_id TEXT PRIMARY KEY,
+          motebit_id TEXT NOT NULL,
+          started_at INTEGER NOT NULL,
+          last_active_at INTEGER NOT NULL,
+          title TEXT,
+          summary TEXT,
+          message_count INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_conversations_motebit
+          ON conversations (motebit_id, last_active_at DESC);
+        CREATE TABLE IF NOT EXISTS conversation_messages (
+          message_id TEXT PRIMARY KEY,
+          conversation_id TEXT NOT NULL,
+          motebit_id TEXT NOT NULL,
+          role TEXT NOT NULL,
+          content TEXT NOT NULL,
+          tool_calls TEXT,
+          tool_call_id TEXT,
+          created_at INTEGER NOT NULL,
+          token_estimate INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_conv_messages
+          ON conversation_messages (conversation_id, created_at ASC);
+      `);
+    } catch (_) {
+      // Tables may already exist on new DBs that have them in the main SCHEMA
+    }
+    db.execSync("PRAGMA user_version = 3");
+  }
+
   return {
     eventStore: new ExpoSqliteEventStore(db),
     memoryStorage: new ExpoSqliteMemoryStorage(db),
     identityStorage: new ExpoSqliteIdentityStorage(db),
     auditLog: new ExpoSqliteAuditLog(db),
     stateSnapshot: new ExpoSqliteStateSnapshot(db),
+    conversationStore: new ExpoSqliteConversationStore(db),
   };
 }

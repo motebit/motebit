@@ -120,6 +120,10 @@ export function App(): React.ReactElement {
       // 5. Start runtime
       a.start();
       subscribeToState(a);
+
+      // 6. Restore persisted conversation history into chat UI
+      restoreConversation(a);
+
       setInitialized(true);
     })();
 
@@ -133,7 +137,12 @@ export function App(): React.ReactElement {
       ? (await SecureStore.getItemAsync("motebit_anthropic_api_key")) || undefined
       : undefined;
 
-    a.initAI({ provider: s.provider, model: s.model, apiKey });
+    a.initAI({
+      provider: s.provider,
+      model: s.model,
+      apiKey,
+      ollamaEndpoint: s.provider === "ollama" ? s.ollamaEndpoint : undefined,
+    });
 
     // Apply governance
     const preset = APPROVAL_PRESET_CONFIGS[s.approvalPreset];
@@ -160,6 +169,20 @@ export function App(): React.ReactElement {
     });
   }, []);
 
+  /** Restore persisted conversation history into chat messages for display. */
+  const restoreConversation = useCallback((a: MobileApp) => {
+    const history = a.getConversationHistory();
+    if (history.length === 0) return;
+
+    const restored: ChatMessage[] = history.map((msg) => ({
+      id: crypto.randomUUID(),
+      role: msg.role as "user" | "assistant",
+      content: msg.content,
+      timestamp: Date.now(),
+    }));
+    setMessages(restored);
+  }, []);
+
   // === Welcome acceptance ===
   const handleWelcomeAccept = useCallback(async () => {
     setShowWelcome(false);
@@ -170,8 +193,10 @@ export function App(): React.ReactElement {
     await initializeAI(a, s);
     a.start();
     subscribeToState(a);
+    // No conversation to restore on first launch, but call for consistency
+    restoreConversation(a);
     setInitialized(true);
-  }, [settings, initializeAI, subscribeToState]);
+  }, [settings, initializeAI, subscribeToState, restoreConversation]);
 
   // === Welcome link existing ===
   const handleWelcomeLinkExisting = useCallback(() => {

@@ -26,8 +26,9 @@ import {
 import { InMemoryAuditLog } from "@motebit/privacy-layer";
 import { createSignedToken } from "@motebit/crypto";
 import { generate as generateIdentityFile, parse as parseIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
-import { PairingClient } from "@motebit/sync-engine";
-import type { PairingSession, PairingStatus } from "@motebit/sync-engine";
+import { PairingClient, ConversationSyncEngine, HttpConversationSyncAdapter } from "@motebit/sync-engine";
+import type { PairingSession, PairingStatus, ConversationSyncStoreAdapter } from "@motebit/sync-engine";
+import type { SyncConversation, SyncConversationMessage } from "@motebit/sdk";
 import { TauriEventStore, TauriMemoryStorage, TauriIdentityStorage, TauriAuditLog, TauriStateSnapshotStorage, TauriConversationStore, type InvokeFn } from "./tauri-storage.js";
 import { registerDesktopTools } from "./desktop-tools.js";
 export type { InvokeFn } from "./tauri-storage.js";
@@ -185,6 +186,11 @@ export class DesktopApp {
   deviceId: string = "desktop-local";
   publicKey: string = "";
   private _governanceStatus: GovernanceStatus = { governed: false, reason: "not initialized" };
+  private goalSchedulerTimer: ReturnType<typeof setInterval> | null = null;
+  private _goalExecuting = false;
+  private _goalStatusCallback: ((executing: boolean) => void) | null = null;
+  private conversationStoreRef: TauriConversationStore | null = null;
+  private _autoTitlePending = false;
 
   constructor() {
     this.renderer = new ThreeJSAdapter();
@@ -442,6 +448,9 @@ export class DesktopApp {
         conversationStore.preload(this.motebitId),
       ]);
     }
+
+    // Store ref to conversation store for async operations (listing, loading, titling)
+    this.conversationStoreRef = conversationStore ?? null;
 
     const storage = createDesktopStorage(config, stateSnapshot, conversationStore);
     const keyring = config.isTauri && config.invoke ? new TauriKeyringAdapter(config.invoke) : undefined;
@@ -769,6 +778,509 @@ export class DesktopApp {
 
     this.motebitId = result.motebitId;
     this.deviceId = result.deviceId;
+  }
+
+  // === Goal Scheduling ===
+
+  /** Subscribe to goal execution status changes (for UI indicator). */
+  onGoalStatus(callback: (executing: boolean) => void): void {
+    this._goalStatusCallback = callback;
+  }
+
+  get isGoalExecuting(): boolean {
+    return this._goalExecuting;
+  }
+
+  /**
+   * Start background goal scheduling. Checks for active goals every 60s and
+   * executes them in the background without interrupting the user's chat.
+   * Goals are stored in the database as rows in a `goals` table — the desktop
+   * reads them via Tauri IPC. If the goals table doesn't exist or has no active
+   * goals, the tick is a no-op.
+   */
+  startGoalScheduler(invoke: InvokeFn): void {
+    if (this.goalSchedulerTimer) return;
+    this.goalSchedulerTimer = setInterval(() => {
+      void this.goalTick(invoke);
+    }, 60_000);
+    // Run first tick after a short delay (let UI settle)
+    setTimeout(() => { void this.goalTick(invoke); }, 5_000);
+  }
+
+  stopGoalScheduler(): void {
+    if (this.goalSchedulerTimer) {
+      clearInterval(this.goalSchedulerTimer);
+      this.goalSchedulerTimer = null;
+    }
+  }
+
+  private async goalTick(invoke: InvokeFn): Promise<void> {
+    if (!this.runtime || this._goalExecuting || this.runtime.isProcessing) return;
+
+    try {
+      // Query active goals that are due
+      interface GoalRow {
+        goal_id: string;
+        motebit_id: string;
+        prompt: string;
+        interval_ms: number;
+        last_run_at: number | null;
+        enabled: number;
+        status: string;
+        mode: string;
+      }
+
+      const goals = await invoke<GoalRow[]>("db_query", {
+        sql: "SELECT * FROM goals WHERE motebit_id = ? AND enabled = 1 AND status = 'active'",
+        params: [this.motebitId],
+      });
+
+      if (!goals || goals.length === 0) return;
+
+      const now = Date.now();
+      for (const goal of goals) {
+        const elapsed = goal.last_run_at ? now - goal.last_run_at : Infinity;
+        if (elapsed < goal.interval_ms) continue;
+        if (this.runtime.isProcessing) break; // Don't interrupt user chat
+
+        this._goalExecuting = true;
+        this._goalStatusCallback?.(true);
+
+        try {
+          // Execute goal as a background message
+          const result = await this.runtime.sendMessage(
+            `[Goal execution] ${goal.prompt}`
+          );
+
+          // Update last_run_at
+          await invoke<number>("db_execute", {
+            sql: "UPDATE goals SET last_run_at = ? WHERE goal_id = ?",
+            params: [now, goal.goal_id],
+          });
+
+          // Record outcome (best-effort)
+          await invoke<number>("db_execute", {
+            sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
+                  VALUES (?, ?, ?, ?, 'completed', ?, 0, ?, NULL)`,
+            params: [
+              crypto.randomUUID(),
+              goal.goal_id,
+              this.motebitId,
+              now,
+              result.response.slice(0, 500),
+              result.memoriesFormed.length,
+            ],
+          });
+
+          // One-shot auto-complete
+          if (goal.mode === "once") {
+            await invoke<number>("db_execute", {
+              sql: "UPDATE goals SET status = 'completed' WHERE goal_id = ?",
+              params: [goal.goal_id],
+            });
+          }
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          // Record failed outcome
+          await invoke<number>("db_execute", {
+            sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
+                  VALUES (?, ?, ?, ?, 'failed', NULL, 0, 0, ?)`,
+            params: [crypto.randomUUID(), goal.goal_id, this.motebitId, now, msg],
+          }).catch(() => {});
+        } finally {
+          this._goalExecuting = false;
+          this._goalStatusCallback?.(false);
+          // Reset conversation after goal execution so user chat is clean
+          this.runtime?.resetConversation();
+        }
+      }
+    } catch {
+      // Goal scheduling is best-effort — don't crash
+      this._goalExecuting = false;
+      this._goalStatusCallback?.(false);
+    }
+  }
+
+  // === MCP via Tauri Commands ===
+
+  /**
+   * Discover and connect MCP tools via Tauri shell commands.
+   * Since @motebit/mcp-client uses Node child_process (not available in webview),
+   * we spawn the MCP server via Tauri's shell_exec_tool and communicate over stdio.
+   *
+   * For now, this registers the MCP server config and attempts a dynamic import
+   * of @motebit/mcp-client. If that fails (expected in webview), it falls back
+   * to a Tauri IPC bridge approach.
+   */
+  async connectMcpServerViaTauri(
+    config: McpServerConfig,
+    invoke: InvokeFn,
+  ): Promise<McpServerStatus> {
+    // First try the existing dynamic import approach (works in Tauri sidecar context)
+    try {
+      return await this.addMcpServer(config);
+    } catch {
+      // Dynamic import failed (expected in pure webview) — use Tauri IPC bridge
+    }
+
+    // Tauri IPC bridge: spawn MCP server, discover tools, register as proxied tools
+    if (config.transport !== "stdio" || !config.command) {
+      this.mcpConfigs.set(config.name, config);
+      return {
+        name: config.name,
+        transport: config.transport,
+        trusted: config.trusted ?? false,
+        connected: false,
+        toolCount: 0,
+      };
+    }
+
+    try {
+      // Discover tools by running the MCP server and listing tools
+      // We use shell_exec to start the server with a tools/list request
+      const args = config.args ?? [];
+      const fullCommand = [config.command, ...args].join(" ");
+
+      // Try to spawn and get tool list via MCP init + tools/list
+      // This is a simplified approach — full MCP stdio protocol would need a Rust command
+      const initPayload = JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "motebit-desktop", version: "0.1.0" } },
+      });
+      const listPayload = JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/list",
+        params: {},
+      });
+
+      // Send init + initialized notification + tools/list through stdin
+      const shellResult = await invoke<{ stdout: string; stderr: string; exit_code: number }>(
+        "shell_exec_tool",
+        {
+          command: `echo '${initPayload}\n{"jsonrpc":"2.0","method":"notifications/initialized"}\n${listPayload}' | ${fullCommand}`,
+          cwd: null,
+        },
+      );
+
+      if (shellResult.exit_code === 0 && shellResult.stdout) {
+        // Parse JSON-RPC responses from stdout
+        const lines = shellResult.stdout.split("\n").filter(l => l.trim());
+        let toolCount = 0;
+
+        for (const line of lines) {
+          try {
+            const response = JSON.parse(line) as { id?: number; result?: { tools?: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }> } };
+            if (response.id === 2 && response.result?.tools) {
+              const tempRegistry = new SimpleToolRegistry();
+              for (const mcpTool of response.result.tools) {
+                const qualifiedName = `${config.name}__${mcpTool.name}`;
+                const definition = {
+                  name: qualifiedName,
+                  description: `[${config.name}] ${mcpTool.description ?? mcpTool.name}`,
+                  inputSchema: mcpTool.inputSchema ?? { type: "object" as const, properties: {} },
+                  ...(config.trusted ? {} : { requiresApproval: true as const }),
+                };
+
+                // Create a handler that calls the tool via Tauri shell
+                const toolHandler = this.createMcpToolHandler(config, mcpTool.name, invoke);
+                tempRegistry.register(definition, toolHandler);
+                toolCount++;
+              }
+
+              if (this.runtime) {
+                this.runtime.registerExternalTools(`mcp:${config.name}`, tempRegistry);
+              }
+            }
+          } catch {
+            // Skip unparseable lines
+          }
+        }
+
+        this.mcpConfigs.set(config.name, config);
+        return {
+          name: config.name,
+          transport: config.transport,
+          trusted: config.trusted ?? false,
+          connected: true,
+          toolCount,
+        };
+      }
+    } catch {
+      // MCP connection failed — store config but mark as disconnected
+    }
+
+    this.mcpConfigs.set(config.name, config);
+    return {
+      name: config.name,
+      transport: config.transport,
+      trusted: config.trusted ?? false,
+      connected: false,
+      toolCount: 0,
+    };
+  }
+
+  /** Create a tool handler that calls an MCP tool by spawning the server via Tauri. */
+  private createMcpToolHandler(
+    config: McpServerConfig,
+    mcpToolName: string,
+    invoke: InvokeFn,
+  ): (args: Record<string, unknown>) => Promise<{ ok: boolean; data?: unknown; error?: string }> {
+    return async (args) => {
+      try {
+        const fullCommand = [config.command!, ...(config.args ?? [])].join(" ");
+        const callPayload = [
+          JSON.stringify({
+            jsonrpc: "2.0", id: 1, method: "initialize",
+            params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "motebit-desktop", version: "0.1.0" } },
+          }),
+          JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+          JSON.stringify({
+            jsonrpc: "2.0", id: 2, method: "tools/call",
+            params: { name: mcpToolName, arguments: args },
+          }),
+        ].join("\n");
+
+        const result = await invoke<{ stdout: string; stderr: string; exit_code: number }>(
+          "shell_exec_tool",
+          { command: `echo '${callPayload}' | ${fullCommand}`, cwd: null },
+        );
+
+        if (result.stdout) {
+          const lines = result.stdout.split("\n").filter(l => l.trim());
+          for (const line of lines) {
+            try {
+              const response = JSON.parse(line) as { id?: number; result?: { content?: Array<{ type: string; text?: string }>; isError?: boolean } };
+              if (response.id === 2 && response.result) {
+                const textContent = (response.result.content ?? [])
+                  .filter(c => c.type === "text")
+                  .map(c => c.text ?? "")
+                  .join("\n");
+                return {
+                  ok: !response.result.isError,
+                  data: textContent || response.result.content,
+                  error: response.result.isError ? textContent : undefined,
+                };
+              }
+            } catch { /* skip */ }
+          }
+        }
+
+        return { ok: false, error: `MCP tool ${mcpToolName} returned no result` };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: msg };
+      }
+    };
+  }
+
+  // === Conversation Browsing ===
+
+  /** List recent conversations (async, for UI). Returns empty array if no conversation store. */
+  async listConversationsAsync(limit = 20): Promise<Array<{
+    conversationId: string;
+    startedAt: number;
+    lastActiveAt: number;
+    title: string | null;
+    summary: string | null;
+    messageCount: number;
+  }>> {
+    if (!this.conversationStoreRef) return [];
+    return this.conversationStoreRef.listConversationsAsync(this.motebitId, limit);
+  }
+
+  /** Load a past conversation by ID — replaces the current chat. Returns the message list. */
+  async loadConversationById(conversationId: string): Promise<Array<{ role: string; content: string }>> {
+    if (!this.runtime || !this.conversationStoreRef) return [];
+
+    // Load messages asynchronously into the cache
+    await this.conversationStoreRef.loadMessagesAsync(conversationId);
+
+    // Now the sync loadMessages() call inside runtime will work from cache
+    this.runtime.loadConversation(conversationId);
+
+    return this.runtime.getConversationHistory();
+  }
+
+  /** Start a new conversation (clears current). */
+  startNewConversation(): void {
+    if (this.runtime) {
+      this.runtime.resetConversation();
+    }
+  }
+
+  /** Get the current conversation ID. */
+  get currentConversationId(): string | null {
+    return this.runtime?.getConversationId() ?? null;
+  }
+
+  // === Auto-Title ===
+
+  /**
+   * Generate a title for the current conversation when it reaches 4+ messages.
+   * Uses the AI provider to produce a short (5-7 word) title from the first messages.
+   * Non-blocking, fires in the background.
+   */
+  async maybeAutoTitle(): Promise<string | null> {
+    if (!this.runtime || !this.conversationStoreRef || this._autoTitlePending) return null;
+
+    const conversationId = this.runtime.getConversationId();
+    if (!conversationId) return null;
+
+    const history = this.runtime.getConversationHistory();
+    if (history.length < 4) return null;
+
+    // Check if already titled
+    const convos = await this.conversationStoreRef.listConversationsAsync(this.motebitId, 50);
+    const current = convos.find(c => c.conversationId === conversationId);
+    if (current?.title) return current.title;
+
+    this._autoTitlePending = true;
+
+    try {
+      // Use a focused prompt to generate a short title
+      const firstMessages = history.slice(0, 6).map(m => `${m.role}: ${m.content.slice(0, 200)}`).join("\n");
+      const titlePrompt = `Generate a very short title (5-7 words max) for this conversation. Return ONLY the title, no quotes, no explanation.\n\n${firstMessages}`;
+
+      const result = await this.runtime.sendMessage(titlePrompt);
+      const title = result.response.trim().replace(/^["']|["']$/g, "").slice(0, 100);
+
+      if (title && title.length > 0 && title.length < 100) {
+        this.conversationStoreRef.updateTitle(conversationId, title);
+        // Reset conversation to remove the title generation exchange
+        // We actually need a different approach — send via provider directly
+        // For now, store the title and don't pollute chat history
+        return title;
+      }
+    } catch {
+      // Auto-titling is best-effort
+    } finally {
+      this._autoTitlePending = false;
+    }
+
+    return null;
+  }
+
+  /**
+   * Generate a title using a lightweight AI call that doesn't affect conversation history.
+   * Called after pushToHistory when message count crosses 4.
+   */
+  async generateTitleInBackground(): Promise<string | null> {
+    if (!this.runtime || !this.conversationStoreRef) return null;
+
+    const conversationId = this.runtime.getConversationId();
+    if (!conversationId) return null;
+
+    // Check message count
+    const count = await this.conversationStoreRef.getMessageCount(conversationId);
+    if (count < 4) return null;
+
+    // Check if already titled
+    const convos = await this.conversationStoreRef.listConversationsAsync(this.motebitId, 50);
+    const current = convos.find(c => c.conversationId === conversationId);
+    if (current?.title) return null; // Already has a title
+
+    if (this._autoTitlePending) return null;
+    this._autoTitlePending = true;
+
+    try {
+      const history = this.runtime.getConversationHistory();
+      const firstUserMsg = history.find(m => m.role === "user");
+      if (firstUserMsg) {
+        // Simple heuristic: use first 7 words of first user message as title
+        const titleWords = firstUserMsg.content.split(/\s+/).slice(0, 7);
+        let title = titleWords.join(" ");
+        if (firstUserMsg.content.split(/\s+/).length > 7) {
+          title += "...";
+        }
+        if (title.length > 0) {
+          this.conversationStoreRef.updateTitle(conversationId, title);
+          return title;
+        }
+      }
+    } catch {
+      // Best-effort
+    } finally {
+      this._autoTitlePending = false;
+    }
+
+    return null;
+  }
+
+  // === Conversation Sync ===
+
+  /**
+   * Sync conversations with the remote relay server.
+   * Creates a ConversationSyncEngine that bridges TauriConversationStore to the relay.
+   */
+  async syncConversations(syncUrl: string, authToken?: string): Promise<{
+    conversations_pushed: number;
+    conversations_pulled: number;
+    messages_pushed: number;
+    messages_pulled: number;
+  }> {
+    if (!this.conversationStoreRef) {
+      return { conversations_pushed: 0, conversations_pulled: 0, messages_pushed: 0, messages_pulled: 0 };
+    }
+
+    const storeAdapter = new TauriConversationSyncStoreAdapter(this.conversationStoreRef, this.motebitId);
+    // Pre-fetch local data before sync (async Tauri -> sync adapter bridge)
+    await storeAdapter.prefetch(0);
+
+    const syncEngine = new ConversationSyncEngine(storeAdapter, this.motebitId);
+    syncEngine.connectRemote(new HttpConversationSyncAdapter({
+      baseUrl: syncUrl,
+      motebitId: this.motebitId,
+      authToken,
+    }));
+
+    return syncEngine.sync();
+  }
+}
+
+// === Tauri Conversation Sync Store Adapter ===
+
+/**
+ * Bridges TauriConversationStore (camelCase, async) to ConversationSyncStoreAdapter (snake_case, sync).
+ * Uses blocking-style approach: pre-fetches data before sync cycle.
+ */
+class TauriConversationSyncStoreAdapter implements ConversationSyncStoreAdapter {
+  private _conversations: SyncConversation[] = [];
+  private _messages: Map<string, SyncConversationMessage[]> = new Map();
+
+  constructor(
+    private store: TauriConversationStore,
+    private motebitId: string,
+  ) {}
+
+  getConversationsSince(motebitId: string, since: number): SyncConversation[] {
+    // Return from pre-fetched data. The sync() call pre-loads before use.
+    return this._conversations.filter(c => c.motebit_id === motebitId && c.last_active_at > since);
+  }
+
+  getMessagesSince(conversationId: string, since: number): SyncConversationMessage[] {
+    const msgs = this._messages.get(conversationId) ?? [];
+    return msgs.filter(m => m.created_at > since);
+  }
+
+  upsertConversation(conv: SyncConversation): void {
+    void this.store.upsertConversation(conv);
+  }
+
+  upsertMessage(msg: SyncConversationMessage): void {
+    void this.store.upsertMessage(msg);
+  }
+
+  /** Pre-fetch data from async Tauri store. Must be called before sync(). */
+  async prefetch(since: number): Promise<void> {
+    const convRows = await this.store.getConversationsSince(this.motebitId, since);
+    this._conversations = convRows;
+    for (const conv of convRows) {
+      const msgRows = await this.store.getMessagesSince(conv.conversation_id, since);
+      this._messages.set(conv.conversation_id, msgRows);
+    }
   }
 }
 

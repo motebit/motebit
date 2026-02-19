@@ -10,7 +10,13 @@ import { CloudProvider, OllamaProvider, formatBodyAwareness } from "@motebit/ai-
 import type { StreamingProvider, MotebitPersonalityConfig } from "@motebit/ai-core";
 import { DEFAULT_CONFIG } from "@motebit/ai-core";
 import { createMotebitDatabase, type MotebitDatabase } from "@motebit/persistence";
-import { HttpEventStoreAdapter } from "@motebit/sync-engine";
+import {
+  HttpEventStoreAdapter,
+  ConversationSyncEngine,
+  HttpConversationSyncAdapter,
+} from "@motebit/sync-engine";
+import type { ConversationSyncStoreAdapter } from "@motebit/sync-engine";
+import type { SyncConversation, SyncConversationMessage } from "@motebit/sdk";
 import { EventStore } from "@motebit/event-log";
 import { EventType, RiskLevel } from "@motebit/sdk";
 import {
@@ -230,7 +236,7 @@ Slash commands (in REPL):
   /conversations     List recent conversations
   /conversation <id> Load a past conversation
   /model <name>      Switch AI model mid-session
-  /sync              Sync with remote server
+  /sync              Sync events and conversations with remote server
   /tools             List registered tools
   /goals             List all scheduled goals
   /goal add "<prompt>" --every <interval> [--once]
@@ -293,6 +299,67 @@ export function trimHistory(
     return history.slice(history.length - maxMessages);
   }
   return history;
+}
+
+// --- Conversation Sync Store Adapter ---
+
+/**
+ * Bridges SqliteConversationStore (camelCase) to ConversationSyncStoreAdapter (snake_case).
+ */
+class SqliteConversationSyncStoreAdapter implements ConversationSyncStoreAdapter {
+  constructor(private store: MotebitDatabase["conversationStore"]) {}
+
+  getConversationsSince(motebitId: string, since: number): SyncConversation[] {
+    return this.store.getConversationsSince(motebitId, since).map((c) => ({
+      conversation_id: c.conversationId,
+      motebit_id: c.motebitId,
+      started_at: c.startedAt,
+      last_active_at: c.lastActiveAt,
+      title: c.title,
+      summary: c.summary,
+      message_count: c.messageCount,
+    }));
+  }
+
+  getMessagesSince(conversationId: string, since: number): SyncConversationMessage[] {
+    return this.store.getMessagesSince(conversationId, since).map((m) => ({
+      message_id: m.messageId,
+      conversation_id: m.conversationId,
+      motebit_id: m.motebitId,
+      role: m.role,
+      content: m.content,
+      tool_calls: m.toolCalls,
+      tool_call_id: m.toolCallId,
+      created_at: m.createdAt,
+      token_estimate: m.tokenEstimate,
+    }));
+  }
+
+  upsertConversation(conv: SyncConversation): void {
+    this.store.upsertConversation({
+      conversationId: conv.conversation_id,
+      motebitId: conv.motebit_id,
+      startedAt: conv.started_at,
+      lastActiveAt: conv.last_active_at,
+      title: conv.title,
+      summary: conv.summary,
+      messageCount: conv.message_count,
+    });
+  }
+
+  upsertMessage(msg: SyncConversationMessage): void {
+    this.store.upsertMessage({
+      messageId: msg.message_id,
+      conversationId: msg.conversation_id,
+      motebitId: msg.motebit_id,
+      role: msg.role,
+      content: msg.content,
+      toolCalls: msg.tool_calls,
+      toolCallId: msg.tool_call_id,
+      createdAt: msg.created_at,
+      tokenEstimate: msg.token_estimate,
+    });
+  }
 }
 
 // --- Slash Commands ---
@@ -670,7 +737,7 @@ Available commands:
   /conversations     List recent conversations
   /conversation <id> Load a past conversation
   /model <name>      Switch AI model
-  /sync              Sync with remote server
+  /sync              Sync events and conversations with remote server
   /tools             List registered tools
   /goals             List all scheduled goals
   /goal add "<prompt>" --every <interval> [--once]
@@ -749,15 +816,41 @@ Available commands:
 
     case "sync": {
       try {
-        console.log("Syncing...");
+        console.log("Syncing events...");
         const result = await runtime.sync.sync();
-        console.log(`Pushed: ${result.pushed}, Pulled: ${result.pulled}`);
+        console.log(`  Events — pushed: ${result.pushed}, pulled: ${result.pulled}`);
         if (result.conflicts.length > 0) {
-          console.log(`Conflicts: ${result.conflicts.length}`);
+          console.log(`  Conflicts: ${result.conflicts.length}`);
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(`Sync failed: ${message}`);
+        console.error(`Event sync failed: ${message}`);
+      }
+
+      // Conversation sync
+      if (repl) {
+        const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
+        if (syncUrl) {
+          try {
+            console.log("Syncing conversations...");
+            const convStoreAdapter = new SqliteConversationSyncStoreAdapter(repl.moteDb.conversationStore);
+            const convSyncEngine = new ConversationSyncEngine(convStoreAdapter, repl.motebitId);
+            const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
+            convSyncEngine.connectRemote(new HttpConversationSyncAdapter({
+              baseUrl: syncUrl,
+              motebitId: repl.motebitId,
+              authToken: syncToken,
+            }));
+            const convResult = await convSyncEngine.sync();
+            console.log(`  Conversations — pushed: ${convResult.conversations_pushed}, pulled: ${convResult.conversations_pulled}`);
+            console.log(`  Messages — pushed: ${convResult.messages_pushed}, pulled: ${convResult.messages_pulled}`);
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(`Conversation sync failed: ${message}`);
+          }
+        } else {
+          console.log("  Conversation sync: skipped (no sync URL)");
+        }
       }
       break;
     }

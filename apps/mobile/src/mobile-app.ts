@@ -82,6 +82,7 @@ export const APPROVAL_PRESET_CONFIGS: Record<string, ApprovalPresetConfig> = {
 export interface MobileSettings {
   provider: "ollama" | "anthropic";
   model: string;
+  ollamaEndpoint: string;
   colorPreset: string;
   approvalPreset: string;
   persistenceThreshold: number;
@@ -93,6 +94,7 @@ export interface MobileSettings {
 const DEFAULT_SETTINGS: MobileSettings = {
   provider: "ollama",
   model: "llama3.2",
+  ollamaEndpoint: "http://localhost:11434",
   colorPreset: "borosilicate",
   approvalPreset: "balanced",
   persistenceThreshold: 0.5,
@@ -109,6 +111,7 @@ export interface MobileAIConfig {
   provider: "ollama" | "anthropic";
   model?: string;
   apiKey?: string;
+  ollamaEndpoint?: string;
 }
 
 // === Bootstrap Result ===
@@ -192,7 +195,8 @@ export class MobileApp {
     let provider;
     if (config.provider === "ollama") {
       const model = config.model || "llama3.2";
-      provider = new OllamaProvider({ model, base_url: "http://localhost:11434", max_tokens: 1024 });
+      const base_url = config.ollamaEndpoint || "http://localhost:11434";
+      provider = new OllamaProvider({ model, base_url, max_tokens: 1024 });
     } else {
       if (!config.apiKey) return false;
       const model = config.model || "claude-sonnet-4-20250514";
@@ -283,6 +287,11 @@ export class MobileApp {
 
   resetConversation(): void {
     this.runtime?.resetConversation();
+  }
+
+  /** Get conversation history for rendering previous messages on reopen. */
+  getConversationHistory(): Array<{ role: string; content: string }> {
+    return this.runtime?.getConversationHistory() ?? [];
   }
 
   // === Operator Mode ===
