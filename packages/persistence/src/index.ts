@@ -1311,6 +1311,73 @@ export class SqliteConversationStore {
     const rows = this.stmtListConversations.all(motebitId, limit) as ConversationRow[];
     return rows.map(rowToConversation);
   }
+
+  // === Sync-oriented methods ===
+
+  /** Get conversations updated since a given timestamp. */
+  getConversationsSince(motebitId: string, since: number): Conversation[] {
+    const rows = this.db.prepare(
+      `SELECT * FROM conversations WHERE motebit_id = ? AND last_active_at > ? ORDER BY last_active_at ASC`,
+    ).all(motebitId, since) as ConversationRow[];
+    return rows.map(rowToConversation);
+  }
+
+  /** Get messages for a conversation created since a given timestamp. */
+  getMessagesSince(conversationId: string, since: number): ConversationMessage[] {
+    const rows = this.db.prepare(
+      `SELECT * FROM conversation_messages WHERE conversation_id = ? AND created_at > ? ORDER BY created_at ASC`,
+    ).all(conversationId, since) as ConversationMessageRow[];
+    return rows.map(rowToConversationMessage);
+  }
+
+  /** Upsert a conversation from sync (last-writer-wins on metadata). */
+  upsertConversation(conv: Conversation): void {
+    this.db.prepare(
+      `INSERT INTO conversations (conversation_id, motebit_id, started_at, last_active_at, title, summary, message_count)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(conversation_id) DO UPDATE SET
+         last_active_at = MAX(excluded.last_active_at, conversations.last_active_at),
+         title = CASE WHEN excluded.last_active_at >= conversations.last_active_at THEN excluded.title ELSE conversations.title END,
+         summary = CASE WHEN excluded.last_active_at >= conversations.last_active_at THEN excluded.summary ELSE conversations.summary END,
+         message_count = MAX(excluded.message_count, conversations.message_count)`,
+    ).run(
+      conv.conversationId,
+      conv.motebitId,
+      conv.startedAt,
+      conv.lastActiveAt,
+      conv.title,
+      conv.summary,
+      conv.messageCount,
+    );
+  }
+
+  /** Upsert a message from sync (append-only, ignore duplicates). */
+  upsertMessage(msg: ConversationMessage): void {
+    this.db.prepare(
+      `INSERT OR IGNORE INTO conversation_messages
+       (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      msg.messageId,
+      msg.conversationId,
+      msg.motebitId,
+      msg.role,
+      msg.content,
+      msg.toolCalls,
+      msg.toolCallId,
+      msg.createdAt,
+      msg.tokenEstimate,
+    );
+  }
+
+  /** Get a single conversation by ID. */
+  getConversation(conversationId: string): Conversation | null {
+    const row = this.db.prepare(
+      `SELECT * FROM conversations WHERE conversation_id = ?`,
+    ).get(conversationId) as ConversationRow | undefined;
+    if (row === undefined) return null;
+    return rowToConversation(row);
+  }
 }
 
 // === Factory ===

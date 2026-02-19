@@ -5,18 +5,28 @@
  * Devices run MotebitRuntime locally; this server is just an event mailbox.
  *
  * Endpoints:
- *   GET  /health                         — health check (public)
- *   WS   /sync/:motebitId               — bidirectional event stream (primary)
- *   POST /sync/:motebitId/push           — HTTP fallback for push
- *   GET  /sync/:motebitId/pull           — HTTP fallback for pull
- *   GET  /sync/:motebitId/clock          — latest version clock
- *   POST /identity                       — create identity for device registration
- *   GET  /identity/:motebitId            — load identity
+ *   GET  /health                                       — health check (public)
+ *   WS   /ws/sync/:motebitId                           — bidirectional event stream (primary)
+ *   POST /sync/:motebitId/push                         — push events (HTTP fallback)
+ *   GET  /sync/:motebitId/pull                         — pull events (HTTP fallback)
+ *   GET  /sync/:motebitId/clock                        — latest version clock
+ *   POST /sync/:motebitId/conversations                — push conversations
+ *   GET  /sync/:motebitId/conversations?since=<ts>     — pull conversations
+ *   POST /sync/:motebitId/messages                     — push conversation messages
+ *   GET  /sync/:motebitId/messages?conversation_id=&since= — pull conversation messages
+ *   POST /identity                                     — create identity for device registration
+ *   GET  /identity/:motebitId                          — load identity
  *
  * WebSocket protocol:
  *   Client → Server:  { type: "push", events: EventLogEntry[] }
+ *   Client → Server:  { type: "push_conversations", conversations: SyncConversation[] }
+ *   Client → Server:  { type: "push_messages", messages: SyncConversationMessage[] }
  *   Server → Client:  { type: "event", event: EventLogEntry }
+ *   Server → Client:  { type: "conversation", conversation: SyncConversation }
+ *   Server → Client:  { type: "conversation_message", message: SyncConversationMessage }
  *   Server → Client:  { type: "ack", accepted: number }
+ *   Server → Client:  { type: "ack_conversations", accepted: number }
+ *   Server → Client:  { type: "ack_messages", accepted: number }
  */
 
 import { serve } from "@hono/node-server";
@@ -30,7 +40,7 @@ import { EventStore } from "@motebit/event-log";
 import { IdentityManager } from "@motebit/core-identity";
 import { createMotebitDatabase } from "@motebit/persistence";
 import type { MotebitDatabase } from "@motebit/persistence";
-import type { EventLogEntry, ToolAuditEntry } from "@motebit/sdk";
+import type { EventLogEntry, ToolAuditEntry, SyncConversation, SyncConversationMessage } from "@motebit/sdk";
 import type { WSContext } from "hono/ws";
 import { verifySignedToken } from "@motebit/crypto";
 
@@ -131,6 +141,35 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
         expires_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_pairing_code ON pairing_sessions (pairing_code);
+  `);
+
+  // Create conversation sync tables (relay-side storage)
+  moteDb.db.exec(`
+      CREATE TABLE IF NOT EXISTS sync_conversations (
+        conversation_id TEXT PRIMARY KEY,
+        motebit_id TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        last_active_at INTEGER NOT NULL,
+        title TEXT,
+        summary TEXT,
+        message_count INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_sync_conv_motebit
+        ON sync_conversations (motebit_id, last_active_at DESC);
+
+      CREATE TABLE IF NOT EXISTS sync_conversation_messages (
+        message_id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        motebit_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        tool_calls TEXT,
+        tool_call_id TEXT,
+        created_at INTEGER NOT NULL,
+        token_estimate INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_sync_conv_messages
+        ON sync_conversation_messages (conversation_id, created_at ASC);
   `);
 
   // Track connected WebSocket clients per motebitId with device identity
@@ -248,7 +287,12 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
 
         async onMessage(event, ws) {
           try {
-            const msg = JSON.parse(String(event.data)) as { type: string; events?: EventLogEntry[] };
+            const msg = JSON.parse(String(event.data)) as {
+              type: string;
+              events?: EventLogEntry[];
+              conversations?: SyncConversation[];
+              messages?: SyncConversationMessage[];
+            };
 
             if (msg.type === "push" && Array.isArray(msg.events)) {
               for (const entry of msg.events) {
@@ -263,6 +307,46 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
               if (peers) {
                 for (const entry of msg.events) {
                   const payload = JSON.stringify({ type: "event", event: entry });
+                  for (const peer of peers) {
+                    if (peer.ws !== ws) {
+                      peer.ws.send(payload);
+                    }
+                  }
+                }
+              }
+            }
+
+            if (msg.type === "push_conversations" && Array.isArray(msg.conversations)) {
+              for (const conv of msg.conversations) {
+                upsertSyncConversation(conv);
+              }
+              ws.send(JSON.stringify({ type: "ack_conversations", accepted: msg.conversations.length }));
+
+              // Fan out conversation updates to peers
+              const peers = connections.get(motebitId);
+              if (peers) {
+                for (const conv of msg.conversations) {
+                  const payload = JSON.stringify({ type: "conversation", conversation: conv });
+                  for (const peer of peers) {
+                    if (peer.ws !== ws) {
+                      peer.ws.send(payload);
+                    }
+                  }
+                }
+              }
+            }
+
+            if (msg.type === "push_messages" && Array.isArray(msg.messages)) {
+              for (const m of msg.messages) {
+                upsertSyncMessage(m);
+              }
+              ws.send(JSON.stringify({ type: "ack_messages", accepted: msg.messages.length }));
+
+              // Fan out new messages to peers
+              const peers = connections.get(motebitId);
+              if (peers) {
+                for (const m of msg.messages) {
+                  const payload = JSON.stringify({ type: "conversation_message", message: m });
                   for (const peer of peers) {
                     if (peer.ws !== ws) {
                       peer.ws.send(payload);
@@ -579,6 +663,126 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
     }
 
     return c.json(result);
+  });
+
+  // === Conversation Sync Helpers ===
+
+  function upsertSyncConversation(conv: SyncConversation): void {
+    moteDb.db.prepare(
+      `INSERT INTO sync_conversations (conversation_id, motebit_id, started_at, last_active_at, title, summary, message_count)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(conversation_id) DO UPDATE SET
+         last_active_at = MAX(excluded.last_active_at, sync_conversations.last_active_at),
+         title = CASE WHEN excluded.last_active_at >= sync_conversations.last_active_at THEN excluded.title ELSE sync_conversations.title END,
+         summary = CASE WHEN excluded.last_active_at >= sync_conversations.last_active_at THEN excluded.summary ELSE sync_conversations.summary END,
+         message_count = MAX(excluded.message_count, sync_conversations.message_count)`,
+    ).run(
+      conv.conversation_id,
+      conv.motebit_id,
+      conv.started_at,
+      conv.last_active_at,
+      conv.title,
+      conv.summary,
+      conv.message_count,
+    );
+  }
+
+  function upsertSyncMessage(msg: SyncConversationMessage): void {
+    moteDb.db.prepare(
+      `INSERT OR IGNORE INTO sync_conversation_messages
+       (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      msg.message_id,
+      msg.conversation_id,
+      msg.motebit_id,
+      msg.role,
+      msg.content,
+      msg.tool_calls,
+      msg.tool_call_id,
+      msg.created_at,
+      msg.token_estimate,
+    );
+  }
+
+  // --- Conversation Sync: push conversations ---
+  app.post("/sync/:motebitId/conversations", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const body = await c.req.json<{ conversations: SyncConversation[] }>();
+    if (!Array.isArray(body.conversations)) {
+      throw new HTTPException(400, { message: "Missing or invalid 'conversations' field (must be array)" });
+    }
+    for (const conv of body.conversations) {
+      upsertSyncConversation(conv);
+    }
+
+    // Fan out to WebSocket clients, skipping the sender device
+    const senderDeviceId = c.req.header("x-device-id");
+    const peers = connections.get(motebitId);
+    if (peers) {
+      for (const conv of body.conversations) {
+        const payload = JSON.stringify({ type: "conversation", conversation: conv });
+        for (const peer of peers) {
+          if (peer.deviceId !== senderDeviceId) {
+            peer.ws.send(payload);
+          }
+        }
+      }
+    }
+
+    return c.json({ motebit_id: motebitId, accepted: body.conversations.length });
+  });
+
+  // --- Conversation Sync: pull conversations ---
+  app.get("/sync/:motebitId/conversations", (c) => {
+    const motebitId = c.req.param("motebitId");
+    const since = Number(c.req.query("since") ?? "0");
+    const rows = moteDb.db.prepare(
+      `SELECT * FROM sync_conversations WHERE motebit_id = ? AND last_active_at > ? ORDER BY last_active_at ASC`,
+    ).all(motebitId, since) as SyncConversation[];
+    return c.json({ motebit_id: motebitId, conversations: rows, since });
+  });
+
+  // --- Conversation Sync: push messages ---
+  app.post("/sync/:motebitId/messages", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const body = await c.req.json<{ messages: SyncConversationMessage[] }>();
+    if (!Array.isArray(body.messages)) {
+      throw new HTTPException(400, { message: "Missing or invalid 'messages' field (must be array)" });
+    }
+    for (const msg of body.messages) {
+      upsertSyncMessage(msg);
+    }
+
+    // Fan out to WebSocket clients, skipping the sender device
+    const senderDeviceId = c.req.header("x-device-id");
+    const peers = connections.get(motebitId);
+    if (peers) {
+      for (const msg of body.messages) {
+        const payload = JSON.stringify({ type: "conversation_message", message: msg });
+        for (const peer of peers) {
+          if (peer.deviceId !== senderDeviceId) {
+            peer.ws.send(payload);
+          }
+        }
+      }
+    }
+
+    return c.json({ motebit_id: motebitId, accepted: body.messages.length });
+  });
+
+  // --- Conversation Sync: pull messages ---
+  app.get("/sync/:motebitId/messages", (c) => {
+    const motebitId = c.req.param("motebitId");
+    const conversationId = c.req.query("conversation_id");
+    const since = Number(c.req.query("since") ?? "0");
+    if (!conversationId) {
+      throw new HTTPException(400, { message: "Missing 'conversation_id' query parameter" });
+    }
+    const rows = moteDb.db.prepare(
+      `SELECT * FROM sync_conversation_messages WHERE conversation_id = ? AND motebit_id = ? AND created_at > ? ORDER BY created_at ASC`,
+    ).all(conversationId, motebitId, since) as SyncConversationMessage[];
+    return c.json({ motebit_id: motebitId, conversation_id: conversationId, messages: rows, since });
   });
 
   function close(): void {

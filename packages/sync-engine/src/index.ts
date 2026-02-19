@@ -9,6 +9,14 @@ export { EncryptedEventStoreAdapter } from "./encrypted-adapter.js";
 export type { EncryptedAdapterConfig } from "./encrypted-adapter.js";
 export { PairingClient } from "./pairing-client.js";
 export type { PairingClientConfig, PairingSession, PairingStatus } from "./pairing-client.js";
+export { ConversationSyncEngine, HttpConversationSyncAdapter, InMemoryConversationSyncStore } from "./conversation-sync.js";
+export type {
+  ConversationSyncConfig,
+  ConversationSyncStatus,
+  ConversationSyncStoreAdapter,
+  ConversationSyncRemoteAdapter,
+  HttpConversationSyncConfig,
+} from "./conversation-sync.js";
 
 // === Sync Configuration ===
 

@@ -1,8 +1,8 @@
 import type { MotebitState, BehaviorCues, ConversationMessage, ToolRegistry } from "@motebit/sdk";
-import { EventType } from "@motebit/sdk";
+import { EventType, SensitivityLevel } from "@motebit/sdk";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 import type { EventStoreAdapter } from "@motebit/event-log";
-import { MemoryGraph, InMemoryMemoryStorage } from "@motebit/memory-graph";
+import { MemoryGraph, InMemoryMemoryStorage, embedText } from "@motebit/memory-graph";
 import type { MemoryStorageAdapter } from "@motebit/memory-graph";
 import { StateVectorEngine } from "@motebit/state-vector";
 import { BehaviorEngine } from "@motebit/behavior-engine";
@@ -21,6 +21,9 @@ import {
   extractActions,
   actionsToStateUpdates,
   trimConversation,
+  summarizeConversation,
+  shouldSummarize,
+  reflect as aiReflect,
 } from "@motebit/ai-core";
 import type {
   StreamingProvider,
@@ -28,6 +31,7 @@ import type {
   TurnResult,
   AgenticChunk,
   ContextBudget,
+  ReflectionResult,
 } from "@motebit/ai-core";
 // Node-only packages (@motebit/tools, @motebit/mcp-client) are imported dynamically
 // to avoid bundling node:child_process / stdio into browser builds (desktop app).
@@ -36,7 +40,7 @@ import { PolicyGate, MemoryGovernor } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 
 // Re-export key types for consumers
-export type { TurnResult, AgenticChunk } from "@motebit/ai-core";
+export type { TurnResult, AgenticChunk, ReflectionResult } from "@motebit/ai-core";
 export type { StreamingProvider } from "@motebit/ai-core";
 export type { MotebitState, BehaviorCues, ToolRegistry, ConversationMessage } from "@motebit/sdk";
 export type { EventStoreAdapter } from "@motebit/event-log";
@@ -201,6 +205,8 @@ export interface RuntimeConfig {
   policy?: Partial<PolicyConfig>;
   /** Memory governance config. Controls what gets saved, secret rejection. */
   memoryGovernance?: Partial<MemoryGovernanceConfig>;
+  /** Summarize conversation after this many messages (0 = disabled, default 20). */
+  summarizeAfterMessages?: number;
 }
 
 // === Stream Chunk ===
@@ -278,6 +284,7 @@ export class MotebitRuntime {
   private conversationStore: ConversationStoreAdapter | null;
   private conversationId: string | null = null;
   private externalToolSources = new Map<string, string[]>();
+  private summarizeAfterMessages: number;
   private _pendingApproval: {
     toolCallId: string;
     toolName: string;
@@ -290,6 +297,7 @@ export class MotebitRuntime {
     this.maxHistory = config.maxConversationHistory ?? 40;
     this.compactionThreshold = config.compactionThreshold ?? 1000;
     this.mcpConfigs = config.mcpServers ?? [];
+    this.summarizeAfterMessages = config.summarizeAfterMessages ?? 20;
     this.renderer = adapters.renderer;
     this.provider = adapters.ai ?? null;
     this.stateSnapshot = adapters.storage.stateSnapshot;
@@ -730,8 +738,69 @@ export class MotebitRuntime {
   }
 
   resetConversation(): void {
+    // Trigger reflection on previous conversation before clearing (background)
+    if (this.provider && this.conversationHistory.length > 0) {
+      void this.runReflection();
+    }
     this.conversationHistory = [];
     this.conversationId = null;
+  }
+
+  /**
+   * Trigger a reflection on the current conversation.
+   * The agent reviews its performance, learns insights, and stores them as memories.
+   * Returns the reflection result for display (e.g. in the CLI).
+   */
+  async reflect(): Promise<ReflectionResult> {
+    if (!this.provider) throw new Error("No AI provider configured");
+
+    const summary = this.conversationId && this.conversationStore
+      ? this.conversationStore.getActiveConversation(this.motebitId)?.summary ?? null
+      : null;
+
+    const recentMemories = await this.memory.exportAll();
+    const memories = recentMemories.nodes
+      .slice(0, 10)
+      .map((n) => ({ content: n.content }));
+
+    const result = await aiReflect(
+      summary,
+      this.conversationHistory,
+      [], // Goals are managed at the CLI/daemon level, not here
+      memories,
+      this.provider,
+    );
+
+    // Store insights as memories
+    await this.storeReflectionInsights(result);
+
+    return result;
+  }
+
+  private async runReflection(): Promise<void> {
+    try {
+      await this.reflect();
+    } catch {
+      // Reflection is best-effort — don't crash the runtime
+    }
+  }
+
+  private async storeReflectionInsights(result: ReflectionResult): Promise<void> {
+    for (const insight of result.insights) {
+      try {
+        const embedding = await embedText(`[reflection] ${insight}`);
+        await this.memory.formMemory(
+          {
+            content: `[reflection] ${insight}`,
+            confidence: 0.7,
+            sensitivity: SensitivityLevel.None,
+          },
+          embedding,
+        );
+      } catch {
+        // Memory formation is best-effort during reflection
+      }
+    }
   }
 
   getConversationHistory(): ConversationMessage[] {
@@ -907,6 +976,34 @@ export class MotebitRuntime {
         role: "assistant",
         content: assistantResponse,
       });
+    }
+
+    // Trigger background summarization at message-count intervals
+    if (
+      this.provider &&
+      this.conversationStore &&
+      this.conversationId &&
+      shouldSummarize(this.conversationHistory.length, this.summarizeAfterMessages)
+    ) {
+      void this.runSummarization();
+    }
+  }
+
+  private async runSummarization(): Promise<void> {
+    if (!this.provider || !this.conversationStore || !this.conversationId) return;
+    try {
+      const existingSummary = this.conversationStore
+        .getActiveConversation(this.motebitId)?.summary ?? null;
+      const summary = await summarizeConversation(
+        this.conversationHistory,
+        existingSummary,
+        this.provider,
+      );
+      if (summary && this.conversationId) {
+        this.conversationStore.updateSummary(this.conversationId, summary);
+      }
+    } catch {
+      // Summarization is best-effort — don't crash the runtime
     }
   }
 

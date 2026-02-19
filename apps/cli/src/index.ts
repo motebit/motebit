@@ -5,7 +5,7 @@ import * as os from "node:os";
 import { parseArgs } from "node:util";
 import { MotebitRuntime, NullRenderer } from "@motebit/runtime";
 import { embedText } from "@motebit/memory-graph";
-import type { StorageAdapters, StreamChunk } from "@motebit/runtime";
+import type { StorageAdapters, StreamChunk, ReflectionResult } from "@motebit/runtime";
 import { CloudProvider, OllamaProvider, formatBodyAwareness } from "@motebit/ai-core";
 import type { StreamingProvider, MotebitPersonalityConfig } from "@motebit/ai-core";
 import { DEFAULT_CONFIG } from "@motebit/ai-core";
@@ -239,6 +239,7 @@ Slash commands (in REPL):
   /goal resume <id>  Resume a paused goal
   /goal outcomes <id> Show execution history
   /approvals         Show pending approval queue
+  /reflect           Trigger reflection — see what the agent learned
   /mcp list          List MCP servers and trust status
   /mcp trust <name>  Mark MCP server as trusted (tools skip approval)
   /mcp untrust <name> Mark MCP server as untrusted (tools require approval)
@@ -678,6 +679,7 @@ Available commands:
   /goal resume <id>  Resume a paused goal
   /goal outcomes <id> Show execution history
   /approvals         Show pending approval queue
+  /reflect           Trigger reflection — see what the agent learned
   /mcp list          List MCP servers and trust status
   /mcp trust <name>  Trust an MCP server
   /mcp untrust <name> Untrust an MCP server
@@ -955,6 +957,39 @@ Available commands:
         }
       }
       console.log(`\nApprove/deny via: motebit approvals approve/deny <id>`);
+      break;
+    }
+
+    case "reflect": {
+      try {
+        console.log("Reflecting...");
+        const reflection: ReflectionResult = await runtime.reflect();
+
+        if (reflection.insights.length > 0) {
+          console.log("\nInsights:");
+          for (const insight of reflection.insights) {
+            console.log(`  - ${insight}`);
+          }
+        }
+
+        if (reflection.planAdjustments.length > 0) {
+          console.log("\nAdjustments:");
+          for (const adj of reflection.planAdjustments) {
+            console.log(`  - ${adj}`);
+          }
+        }
+
+        if (reflection.selfAssessment) {
+          console.log(`\nSelf-assessment: ${reflection.selfAssessment}`);
+        }
+
+        if (reflection.insights.length > 0) {
+          console.log(`\n  [${reflection.insights.length} insight(s) stored as memories]`);
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`Reflection failed: ${message}`);
+      }
       break;
     }
 

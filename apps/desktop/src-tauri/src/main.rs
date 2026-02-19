@@ -257,6 +257,81 @@ fn keyring_delete(key: String) -> Result<(), String> {
     }
 }
 
+// === Privileged Tool Commands ===
+
+#[tauri::command]
+fn read_file_tool(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => format!("File not found: {}", path),
+        std::io::ErrorKind::PermissionDenied => format!("Permission denied: {}", path),
+        _ => format!("Read error: {}", e),
+    })
+}
+
+#[tauri::command]
+fn write_file_tool(path: String, content: String) -> Result<String, String> {
+    // Create parent directories if needed
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create directories: {}", e))?;
+    }
+    std::fs::write(&path, &content)
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::PermissionDenied => format!("Permission denied: {}", path),
+            _ => format!("Write error: {}", e),
+        })?;
+    Ok(format!("Written {} bytes to {}", content.len(), path))
+}
+
+#[derive(serde::Serialize)]
+struct ShellExecResult {
+    stdout: String,
+    stderr: String,
+    exit_code: i32,
+}
+
+#[tauri::command]
+fn shell_exec_tool(command: String, cwd: Option<String>) -> Result<ShellExecResult, String> {
+    use std::process::Command;
+
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c").arg(&command);
+
+    if let Some(ref dir) = cwd {
+        cmd.current_dir(dir);
+    }
+
+    // Spawn and wait with timeout
+    let child = cmd
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn process: {}", e))?;
+
+    // Wait with a 30s timeout using a separate thread
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let output = child.wait_with_output();
+        let _ = tx.send(output);
+    });
+
+    match rx.recv_timeout(std::time::Duration::from_secs(30)) {
+        Ok(result) => {
+            let _ = handle.join();
+            let output = result.map_err(|e| format!("Process error: {}", e))?;
+            Ok(ShellExecResult {
+                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                exit_code: output.status.code().unwrap_or(-1),
+            })
+        }
+        Err(_) => {
+            // Timeout — thread will clean up when child exits
+            Err("Command timed out after 30 seconds".to_string())
+        }
+    }
+}
+
 fn main() {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
@@ -287,6 +362,9 @@ fn main() {
             keyring_get,
             keyring_set,
             keyring_delete,
+            read_file_tool,
+            write_file_tool,
+            shell_exec_tool,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -301,6 +301,40 @@ export interface ConflictEdge {
   resolution: "local_wins" | "remote_wins" | "merged" | "unresolved";
 }
 
+// === Conversation Sync ===
+
+/** Conversation metadata for sync. Matches persistence Conversation shape using snake_case for wire format. */
+export interface SyncConversation {
+  conversation_id: string;
+  motebit_id: string;
+  started_at: number;
+  last_active_at: number;
+  title: string | null;
+  summary: string | null;
+  message_count: number;
+}
+
+/** Conversation message for sync. Matches persistence ConversationMessage shape using snake_case for wire format. */
+export interface SyncConversationMessage {
+  message_id: string;
+  conversation_id: string;
+  motebit_id: string;
+  role: string;
+  content: string;
+  tool_calls: string | null;
+  tool_call_id: string | null;
+  created_at: number;
+  token_estimate: number;
+}
+
+/** Result of a conversation sync cycle. */
+export interface ConversationSyncResult {
+  conversations_pushed: number;
+  conversations_pulled: number;
+  messages_pushed: number;
+  messages_pulled: number;
+}
+
 // === Render Spec ===
 
 export interface RenderSpec {

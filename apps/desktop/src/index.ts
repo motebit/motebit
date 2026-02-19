@@ -46,6 +46,9 @@ export interface TauriCommands {
   keyring_delete(key: string): Promise<void>;
   read_config(): Promise<string>;
   write_config(json: string): Promise<void>;
+  read_file_tool(path: string): Promise<string>;
+  write_file_tool(path: string, content: string): Promise<string>;
+  shell_exec_tool(command: string, cwd: string | null): Promise<{ stdout: string; stderr: string; exit_code: number }>;
 }
 
 // === Desktop AI Config ===
@@ -481,7 +484,7 @@ export class DesktopApp {
     // - Tauri mode: tools only register if governance thresholds are present
     // - Dev mode (non-Tauri): tools register freely (no identity to govern from)
     if (!config.isTauri || governanceLoaded) {
-      registerDesktopTools(this.runtime.getToolRegistry(), this.runtime);
+      registerDesktopTools(this.runtime.getToolRegistry(), this.runtime, config.invoke);
       this._governanceStatus = config.isTauri
         ? { governed: true }
         : { governed: false, reason: "dev mode" };
