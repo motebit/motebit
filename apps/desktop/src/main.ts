@@ -461,18 +461,17 @@ function selectColorPreset(name: string): void {
   updateVoiceGlowColor();
 }
 
-// === Voice Input & Ambient Audio ===
+// === Presence Toggle & Voice ===
 //
-// Walkie-talkie pattern. The mic button controls the mind, not the body.
-//   voice:        recording + waveform + creature senses (mind + body)
+// The presence button awakens the creature. Voice is emergent from ambient sensing.
+//   off:          mic released, creature floats in its own rhythm (default)
+//   ambient:      creature senses the room, VAD monitors for speech (body alive)
+//   voice:        VAD detected speech → recording + waveform + transcription
 //   transcribing: Whisper processing, creature senses (body)
 //   speaking:     TTS playing, creature pulses (body)
-//   ambient:      creature senses the room, ready for next voice turn (body only)
-//   off:          mic released, creature quiet (Escape only)
 //
-// The body always responds to pressure waves. The mind (recognition) is the toggle.
-// Mic click toggles voice ↔ ambient. Escape is the only path to off.
-// Once the mic is acquired, the creature stays alive until explicit exit.
+// Click toggles: off → ambient → off. Voice auto-enters on speech, auto-exits on silence.
+// Escape from any state → off.
 
 type MicState = "off" | "ambient" | "voice" | "transcribing" | "speaking";
 let micState: MicState = "off";
@@ -506,6 +505,18 @@ let ttsPulseAnimationId = 0;
 
 /** Rolling noise floor — persists across voice↔ambient transitions. */
 let noiseFloor = 0;
+
+/** VAD state — speech onset detection in ambient mode. */
+let speechConfidence = 0;
+let speechOnsetTime = 0;
+const VAD_ONSET_MS = 300;
+const VAD_CONFIDENCE_THRESHOLD = 0.55;
+
+/** Silence detection state — auto end-of-speech in voice mode. */
+let speechActiveInVoice = false;
+let silenceOnsetTime = 0;
+const SILENCE_DURATION_MS = 1500;
+const SPEECH_RMS_THRESHOLD = 0.015;
 
 /** Cached saturated RGB for waveform canvas strokes. */
 let waveformColor = { r: 153, g: 163, b: 230 };
@@ -571,26 +582,45 @@ function releaseAudioResources(): void {
     micStream.getTracks().forEach(t => t.stop());
     micStream = null;
   }
+  speechConfidence = 0;
+  speechOnsetTime = 0;
+  speechActiveInVoice = false;
+  silenceOnsetTime = 0;
 }
 
 function toggleVoice(): void {
-  if (micState === "voice") {
-    stopVoice(true, true);  // mic toggle = transfer transcript, stay ambient
+  if (micState === "off") {
+    void enterAmbient();                // off → ambient (awaken creature)
+  } else if (micState === "ambient") {
+    stopAmbient();                      // ambient → off (release mic)
+  } else if (micState === "voice") {
+    stopVoice(true, true);              // voice → ambient (process transcript)
   } else if (micState === "speaking") {
     cancelTTS();
-    void startVoice();      // interrupt TTS → start recording
+    void startVoice();                  // speaking → voice (interrupt TTS)
   } else if (micState === "transcribing") {
-    // Cancel transcription, body stays alive
+    // Cancel transcription → ambient
     voiceTranscript.textContent = "";
     voiceTranscript.style.display = "";
     inputBarWrapper.classList.remove("listening");
     micBtn.classList.remove("active");
     micBtn.classList.add("ambient");
     micState = "ambient";
+    speechConfidence = 0;
+    speechOnsetTime = 0;
     startAmbientLoop();
-  } else {
-    void startVoice();       // off or ambient → voice
   }
+}
+
+async function enterAmbient(): Promise<void> {
+  if (!await ensureAudioPipeline()) return;
+  micState = "ambient";
+  micBtn.classList.add("ambient");
+  micBtn.classList.remove("active");
+  speechConfidence = 0;
+  speechOnsetTime = 0;
+  updateVoiceGlowColor();
+  startAmbientLoop();
 }
 
 async function startVoice(): Promise<void> {
@@ -600,6 +630,12 @@ async function startVoice(): Promise<void> {
   // If ambient, stop its loop (we'll take over the audio pipeline)
   stopAmbientLoop();
   app.setAudioReactivity(null);
+
+  // Reset VAD/silence state
+  speechConfidence = 0;
+  speechOnsetTime = 0;
+  speechActiveInVoice = false;
+  silenceOnsetTime = 0;
 
   // Ensure mic + audio analysis pipeline
   if (!await ensureAudioPipeline()) return;
@@ -698,6 +734,10 @@ async function startVoice(): Promise<void> {
  * toAmbient: true = keep mic alive, creature feels the room. false = release mic.
  */
 function stopVoice(transfer: boolean, toAmbient: boolean): void {
+  // Reset silence detection state
+  speechActiveInVoice = false;
+  silenceOnsetTime = 0;
+
   // Stop recognition
   if (voiceRecognition) {
     try { voiceRecognition.stop(); } catch { /* */ }
@@ -824,6 +864,8 @@ function stopAmbient(): void {
   app.setAudioReactivity(null);
   micState = "off";
   micBtn.classList.remove("ambient");
+  speechConfidence = 0;
+  speechOnsetTime = 0;
 }
 
 function stopAmbientLoop(): void {
@@ -909,6 +951,32 @@ function startAmbientLoop(): void {
       mid: smoothedMid * gate * damping,
       high: smoothedHigh * gate * damping * shimmer,
     });
+
+    // VAD: detect speech onset → transition to voice mode
+    const isSpeechLike =
+      smoothedFlatness < 0.65 &&   // tonal (speech), not flat (noise)
+      gatedRms > 0.02 &&           // energy above adaptive noise floor
+      smoothedMid > 0.08;          // formant band presence
+
+    if (isSpeechLike) {
+      speechConfidence += 0.08 * (1 - speechConfidence);
+      if (speechConfidence > VAD_CONFIDENCE_THRESHOLD) {
+        if (speechOnsetTime === 0) {
+          speechOnsetTime = performance.now();
+        } else if (performance.now() - speechOnsetTime > VAD_ONSET_MS) {
+          // Sustained speech detected — enter voice mode
+          speechConfidence = 0;
+          speechOnsetTime = 0;
+          void startVoice();
+          return; // exit ambient loop — startVoice takes over
+        }
+      }
+    } else {
+      speechConfidence *= 0.9;
+      if (speechConfidence < 0.2) {
+        speechOnsetTime = 0;
+      }
+    }
 
     ambientAnimationId = requestAnimationFrame(analyze);
   };
@@ -1149,6 +1217,22 @@ function startWaveformLoop(): void {
       mid: smoothedMid * gate * damping,
       high: smoothedHigh * gate * damping * shimmer,
     });
+
+    // Auto end-of-speech: detect sustained silence → stop recording, return to ambient
+    if (gatedRms > 0.03) {
+      speechActiveInVoice = true;
+      silenceOnsetTime = 0;
+    } else if (speechActiveInVoice && gatedRms < SPEECH_RMS_THRESHOLD) {
+      if (silenceOnsetTime === 0) {
+        silenceOnsetTime = performance.now();
+      } else if (performance.now() - silenceOnsetTime > SILENCE_DURATION_MS) {
+        // Sustained silence after speech — auto-stop
+        speechActiveInVoice = false;
+        silenceOnsetTime = 0;
+        stopVoice(true, true); // process transcript, return to ambient
+        return; // exit waveform loop
+      }
+    }
 
     const pad = 24 * dpr;
     const drawW = w - pad * 2;

@@ -120,8 +120,8 @@
       right: 46px;
       top: 50%;
       transform: translateY(-50%);
-      font-size: 14px;
-      color: rgba(0, 0, 0, 0.4);
+      font-size: 13px;
+      color: rgba(0, 0, 0, 0.5);
       font-family: inherit;
       pointer-events: none;
       white-space: nowrap;
@@ -129,6 +129,26 @@
       text-overflow: ellipsis;
       display: none;
       z-index: 2;
+      letter-spacing: 0.02em;
+    }
+    #voice-transcript.has-text {
+      color: rgba(0, 0, 0, 0.65);
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+    #voice-transcript .recording-dot {
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--voice-glow-color, rgba(99, 102, 241, 0.7));
+      margin-right: 6px;
+      vertical-align: middle;
+      animation: recording-dot-pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes recording-dot-pulse {
+      0%, 100% { opacity: 0.4; transform: scale(0.9); }
+      50% { opacity: 1; transform: scale(1.1); }
     }
     #mic-btn {
       position: absolute;
@@ -140,31 +160,40 @@
       border: none;
       border-radius: 50%;
       background: rgba(255, 255, 255, 0.15);
-      color: rgba(0, 0, 0, 0.3);
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
       padding: 0;
-      transition: background 0.25s ease, color 0.2s ease, box-shadow 0.3s ease;
+      transition: background 0.25s ease, box-shadow 0.3s ease;
       z-index: 3;
     }
-    #mic-btn:hover { background: rgba(255, 255, 255, 0.3); color: rgba(0, 0, 0, 0.5); }
-    #mic-btn.active {
-      background: var(--voice-glow-color, rgba(99, 102, 241, 0.25));
-      color: rgba(0, 0, 0, 0.65);
-      box-shadow: 0 0 10px var(--voice-glow-color, rgba(99, 102, 241, 0.25));
-    }
-    #mic-btn.ambient {
-      background: var(--voice-glow-color, rgba(99, 102, 241, 0.12));
-      color: rgba(0, 0, 0, 0.4);
-      animation: ambient-breathe 3s ease-in-out infinite;
-    }
-    @keyframes ambient-breathe {
-      0%, 100% { box-shadow: 0 0 0 transparent; }
-      50% { box-shadow: 0 0 8px var(--voice-glow-color, rgba(99, 102, 241, 0.2)); }
-    }
+    #mic-btn:hover { background: rgba(255, 255, 255, 0.3); }
     #mic-btn svg { width: 16px; height: 16px; }
+    #mic-btn .presence-shape {
+      fill: none;
+      stroke: rgba(0, 0, 0, 0.3);
+      transition: fill 0.3s ease, stroke 0.3s ease;
+    }
+    #mic-btn:hover .presence-shape {
+      stroke: rgba(0, 0, 0, 0.5);
+    }
+    #mic-btn.ambient .presence-shape {
+      fill: var(--voice-glow-color, rgba(99, 102, 241, 0.6));
+      stroke: var(--voice-glow-color, rgba(99, 102, 241, 0.8));
+    }
+    #mic-btn.active .presence-shape {
+      fill: var(--voice-glow-color, rgba(99, 102, 241, 0.9));
+      stroke: var(--voice-glow-color, rgba(99, 102, 241, 1.0));
+    }
+    #mic-btn.active {
+      box-shadow: 0 0 12px var(--voice-glow-color, rgba(99, 102, 241, 0.4));
+      animation: mic-recording-pulse 1.8s ease-in-out infinite;
+    }
+    @keyframes mic-recording-pulse {
+      0%, 100% { box-shadow: 0 0 8px var(--voice-glow-color, rgba(99, 102, 241, 0.3)); }
+      50% { box-shadow: 0 0 18px var(--voice-glow-color, rgba(99, 102, 241, 0.6)); }
+    }
 
     /* Listening state — the glass glows with the creature's color */
     #input-bar-wrapper.listening #chat-input {
@@ -1354,8 +1383,10 @@
         <canvas id="voice-waveform"></canvas>
         <input id="chat-input" type="text" placeholder="Say something..." autocomplete="off" />
         <span id="voice-transcript"></span>
-        <button id="mic-btn" type="button" title="Voice input" style="display:none;">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+        <button id="mic-btn" type="button" title="Presence" style="display:none;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="7" class="presence-shape"/>
+          </svg>
         </button>
       </div>
     </div>
