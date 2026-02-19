@@ -1,5 +1,6 @@
 import { DesktopApp, COLOR_PRESETS, isSlashCommand, parseSlashCommand, type DesktopAIConfig, type InvokeFn, type McpServerConfig, type PolicyConfig, type PairingSession } from "./index";
 import { stripTags } from "@motebit/ai-core";
+import { MicVAD } from "@ricky0123/vad-web";
 
 const canvas = document.getElementById("motebit-canvas") as HTMLCanvasElement;
 if (!canvas) {
@@ -506,9 +507,13 @@ let ttsPulseAnimationId = 0;
 /** Rolling noise floor — persists across voice↔ambient transitions. */
 let noiseFloor = 0;
 
-/** VAD state — speech onset detection in ambient mode. */
-let speechConfidence = 0;
-let speechOnsetTime = 0;
+/** Silero VAD — neural speech detection (~50-100ms onset). */
+let sileroVad: MicVAD | null = null;
+let sileroVadFailed = false;
+
+/** Fallback VAD state — energy heuristic, used only if Silero fails to load. */
+let fallbackSpeechConfidence = 0;
+let fallbackSpeechOnsetTime = 0;
 const VAD_ONSET_MS = 300;
 const VAD_CONFIDENCE_THRESHOLD = 0.55;
 
@@ -582,10 +587,45 @@ function releaseAudioResources(): void {
     micStream.getTracks().forEach(t => t.stop());
     micStream = null;
   }
-  speechConfidence = 0;
-  speechOnsetTime = 0;
+  fallbackSpeechConfidence = 0;
+  fallbackSpeechOnsetTime = 0;
   speechActiveInVoice = false;
   silenceOnsetTime = 0;
+}
+
+/** Initialize Silero VAD (lazy, first ambient entry). Shares our AudioContext + mic stream. */
+async function initSileroVad(): Promise<void> {
+  if (sileroVad || sileroVadFailed) return;
+  if (!audioContext || !micStream) return;
+
+  const ctx = audioContext;
+  const stream = micStream;
+
+  try {
+    sileroVad = await MicVAD.new({
+      audioContext: ctx,
+      getStream: async () => stream,
+      pauseStream: async () => {},          // no-op — we manage stream lifecycle
+      resumeStream: async () => micStream!, // return current stream
+      positiveSpeechThreshold: 0.5,
+      negativeSpeechThreshold: 0.35,
+      minSpeechMs: 100,
+      startOnLoad: false,
+      model: "v5",
+      baseAssetPath: "/",
+      onnxWASMBasePath: "/",
+      onSpeechStart: () => {
+        if (micState === "ambient") {
+          void startVoice();
+        }
+      },
+      onSpeechEnd: () => {},
+      onVADMisfire: () => {},
+    });
+  } catch (err: unknown) {
+    sileroVadFailed = true;
+    console.warn("Silero VAD failed to load, falling back to energy heuristic:", err instanceof Error ? err.message : String(err));
+  }
 }
 
 function toggleVoice(): void {
@@ -606,8 +646,9 @@ function toggleVoice(): void {
     micBtn.classList.remove("active");
     micBtn.classList.add("ambient");
     micState = "ambient";
-    speechConfidence = 0;
-    speechOnsetTime = 0;
+    fallbackSpeechConfidence = 0;
+    fallbackSpeechOnsetTime = 0;
+    if (sileroVad) void sileroVad.start();
     startAmbientLoop();
   }
 }
@@ -617,9 +658,13 @@ async function enterAmbient(): Promise<void> {
   micState = "ambient";
   micBtn.classList.add("ambient");
   micBtn.classList.remove("active");
-  speechConfidence = 0;
-  speechOnsetTime = 0;
+  fallbackSpeechConfidence = 0;
+  fallbackSpeechOnsetTime = 0;
   updateVoiceGlowColor();
+  await initSileroVad();
+  if (sileroVad) {
+    await sileroVad.start();
+  }
   startAmbientLoop();
 }
 
@@ -629,11 +674,12 @@ async function startVoice(): Promise<void> {
 
   // If ambient, stop its loop (we'll take over the audio pipeline)
   stopAmbientLoop();
+  if (sileroVad) void sileroVad.pause();
   app.setAudioReactivity(null);
 
   // Reset VAD/silence state
-  speechConfidence = 0;
-  speechOnsetTime = 0;
+  fallbackSpeechConfidence = 0;
+  fallbackSpeechOnsetTime = 0;
   speechActiveInVoice = false;
   silenceOnsetTime = 0;
 
@@ -665,7 +711,7 @@ async function startVoice(): Promise<void> {
       voiceFinalTranscript = final;
       voiceInterimTranscript = interim;
       const display = (final + interim).trim();
-      voiceTranscript.textContent = display || "Listening...";
+      voiceTranscript.textContent = display;
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
@@ -718,7 +764,7 @@ async function startVoice(): Promise<void> {
   micState = "voice";
   voiceFinalTranscript = "";
   voiceInterimTranscript = "";
-  voiceTranscript.textContent = "Listening...";
+  voiceTranscript.textContent = "";
   inputBarWrapper.classList.add("listening");
   micBtn.classList.add("active");
   micBtn.classList.remove("ambient");
@@ -841,6 +887,7 @@ function finishVoiceTranscript(text: string, toAmbient: boolean): void {
   if (toAmbient) {
     micState = "ambient";
     micBtn.classList.add("ambient");
+    if (sileroVad) void sileroVad.start();
     startAmbientLoop();
   } else {
     micState = "off";
@@ -860,12 +907,16 @@ function finishVoiceTranscript(text: string, toAmbient: boolean): void {
 /** Stop ambient sensing and release mic. */
 function stopAmbient(): void {
   stopAmbientLoop();
+  if (sileroVad) {
+    void sileroVad.destroy();
+    sileroVad = null;
+  }
   releaseAudioResources();
   app.setAudioReactivity(null);
   micState = "off";
   micBtn.classList.remove("ambient");
-  speechConfidence = 0;
-  speechOnsetTime = 0;
+  fallbackSpeechConfidence = 0;
+  fallbackSpeechOnsetTime = 0;
 }
 
 function stopAmbientLoop(): void {
@@ -953,28 +1004,32 @@ function startAmbientLoop(): void {
     });
 
     // VAD: detect speech onset → transition to voice mode
-    const isSpeechLike =
-      smoothedFlatness < 0.65 &&   // tonal (speech), not flat (noise)
-      gatedRms > 0.02 &&           // energy above adaptive noise floor
-      smoothedMid > 0.08;          // formant band presence
+    // When Silero VAD is active, it handles onset via onSpeechStart callback.
+    // Fallback energy heuristic only runs if Silero failed to load.
+    if (sileroVadFailed) {
+      const isSpeechLike =
+        smoothedFlatness < 0.65 &&   // tonal (speech), not flat (noise)
+        gatedRms > 0.02 &&           // energy above adaptive noise floor
+        smoothedMid > 0.08;          // formant band presence
 
-    if (isSpeechLike) {
-      speechConfidence += 0.08 * (1 - speechConfidence);
-      if (speechConfidence > VAD_CONFIDENCE_THRESHOLD) {
-        if (speechOnsetTime === 0) {
-          speechOnsetTime = performance.now();
-        } else if (performance.now() - speechOnsetTime > VAD_ONSET_MS) {
-          // Sustained speech detected — enter voice mode
-          speechConfidence = 0;
-          speechOnsetTime = 0;
-          void startVoice();
-          return; // exit ambient loop — startVoice takes over
+      if (isSpeechLike) {
+        fallbackSpeechConfidence += 0.08 * (1 - fallbackSpeechConfidence);
+        if (fallbackSpeechConfidence > VAD_CONFIDENCE_THRESHOLD) {
+          if (fallbackSpeechOnsetTime === 0) {
+            fallbackSpeechOnsetTime = performance.now();
+          } else if (performance.now() - fallbackSpeechOnsetTime > VAD_ONSET_MS) {
+            // Sustained speech detected — enter voice mode
+            fallbackSpeechConfidence = 0;
+            fallbackSpeechOnsetTime = 0;
+            void startVoice();
+            return; // exit ambient loop — startVoice takes over
+          }
         }
-      }
-    } else {
-      speechConfidence *= 0.9;
-      if (speechConfidence < 0.2) {
-        speechOnsetTime = 0;
+      } else {
+        fallbackSpeechConfidence *= 0.9;
+        if (fallbackSpeechConfidence < 0.2) {
+          fallbackSpeechOnsetTime = 0;
+        }
       }
     }
 
@@ -1032,6 +1087,7 @@ function speakText(text: string): void {
     if (micStream && audioContext && analyserNode) {
       micState = "ambient";
       micBtn.classList.add("ambient");
+      if (sileroVad) void sileroVad.start();
       startAmbientLoop();
     } else {
       micState = "off";
@@ -1045,7 +1101,10 @@ function speakText(text: string): void {
     stopTTSPulse();
     if (micState === "speaking") {
       micState = micStream ? "ambient" : "off";
-      if (micState === "ambient") startAmbientLoop();
+      if (micState === "ambient") {
+        if (sileroVad) void sileroVad.start();
+        startAmbientLoop();
+      }
     }
   };
 
@@ -2008,11 +2067,13 @@ settingsWhisperApiKeyToggle.addEventListener("click", () => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if (micState === "voice") {
+      if (sileroVad) { void sileroVad.destroy(); sileroVad = null; }
       stopVoice(false, false);  // cancel voice, release mic
     } else if (micState === "speaking") {
       cancelTTS();
-      stopAmbient();     // fully stop
+      stopAmbient();     // fully stop (destroys Silero)
     } else if (micState === "transcribing") {
+      if (sileroVad) { void sileroVad.destroy(); sileroVad = null; }
       micState = "off";
       voiceTranscript.textContent = "";
       voiceTranscript.style.display = "";
@@ -2021,7 +2082,7 @@ document.addEventListener("keydown", (e) => {
       releaseAudioResources();
       app.setAudioReactivity(null);
     } else if (micState === "ambient") {
-      stopAmbient();     // stop ambient sensing
+      stopAmbient();     // stop ambient sensing (destroys Silero)
     } else if (pinBackdrop.classList.contains("open")) {
       closePinDialog();
     } else if (conversationsPanel.classList.contains("open")) {
