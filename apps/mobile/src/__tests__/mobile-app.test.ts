@@ -196,36 +196,36 @@ describe("MobileApp.initAI", () => {
     app.stop();
   });
 
-  it("returns true for ollama without API key", () => {
-    const result = app.initAI({ provider: "ollama" });
+  it("returns true for ollama without API key", async () => {
+    const result = await app.initAI({ provider: "ollama" });
     expect(result).toBe(true);
     expect(app.isAIReady).toBe(true);
   });
 
-  it("returns false for anthropic without API key", () => {
-    const result = app.initAI({ provider: "anthropic" });
+  it("returns false for anthropic without API key", async () => {
+    const result = await app.initAI({ provider: "anthropic" });
     expect(result).toBe(false);
     expect(app.isAIReady).toBe(false);
   });
 
-  it("returns true for anthropic with API key", () => {
-    const result = app.initAI({ provider: "anthropic", apiKey: "sk-ant-test" });
+  it("returns true for anthropic with API key", async () => {
+    const result = await app.initAI({ provider: "anthropic", apiKey: "sk-ant-test" });
     expect(result).toBe(true);
     expect(app.isAIReady).toBe(true);
   });
 
-  it("uses custom model", () => {
-    app.initAI({ provider: "ollama", model: "mistral" });
+  it("uses custom model", async () => {
+    await app.initAI({ provider: "ollama", model: "mistral" });
     expect(app.currentModel).toBe("mistral");
   });
 
-  it("defaults to llama3.2 for ollama", () => {
-    app.initAI({ provider: "ollama" });
+  it("defaults to llama3.2 for ollama", async () => {
+    await app.initAI({ provider: "ollama" });
     expect(app.currentModel).toBe("llama3.2");
   });
 
-  it("defaults to claude-sonnet for anthropic", () => {
-    app.initAI({ provider: "anthropic", apiKey: "sk-ant-test" });
+  it("defaults to claude-sonnet for anthropic", async () => {
+    await app.initAI({ provider: "anthropic", apiKey: "sk-ant-test" });
     expect(app.currentModel).toBe("claude-sonnet-4-20250514");
   });
 });
@@ -326,8 +326,8 @@ describe("MobileApp.initAI with custom endpoint", () => {
     app.stop();
   });
 
-  it("accepts custom ollamaEndpoint", () => {
-    const result = app.initAI({ provider: "ollama", ollamaEndpoint: "http://192.168.1.50:11434" });
+  it("accepts custom ollamaEndpoint", async () => {
+    const result = await app.initAI({ provider: "ollama", ollamaEndpoint: "http://192.168.1.50:11434" });
     expect(result).toBe(true);
     expect(app.isAIReady).toBe(true);
   });
@@ -354,8 +354,8 @@ describe("MobileApp.getConversationHistory", () => {
     expect(app.getConversationHistory()).toEqual([]);
   });
 
-  it("returns empty array after initAI with no history", () => {
-    app.initAI({ provider: "ollama" });
+  it("returns empty array after initAI with no history", async () => {
+    await app.initAI({ provider: "ollama" });
     expect(app.getConversationHistory()).toEqual([]);
   });
 });

@@ -28,6 +28,7 @@
     "@motebit/sync-engine": "workspace:*",
     "@motebit/mcp-client": "workspace:*",
     "@motebit/tools": "workspace:*",
+    "@motebit/identity-file": "workspace:*",
     "@motebit/voice": "workspace:*",
     "@react-native-async-storage/async-storage": "^2.1.0",
     "expo": "~52.0.0",

@@ -36,9 +36,16 @@ import {
 import { McpClientAdapter } from "@motebit/mcp-client";
 import type { McpServerConfig } from "@motebit/mcp-client";
 export type { McpServerConfig } from "@motebit/mcp-client";
+export type { MemoryNode } from "@motebit/sdk";
 import { InMemoryToolRegistry } from "@motebit/tools";
 import type { PairingSession, PairingStatus, SyncStatus } from "@motebit/sync-engine";
-import type { MotebitState, BehaviorCues } from "@motebit/sdk";
+import type { MotebitState, BehaviorCues, MemoryNode } from "@motebit/sdk";
+import { computeDecayedConfidence } from "@motebit/memory-graph";
+import {
+  generate as generateIdentityFile,
+  parse as parseIdentityFile,
+  governanceToPolicyConfig,
+} from "@motebit/identity-file";
 import { createExpoStorage, ExpoGoalStore } from "./adapters/expo-sqlite";
 import type { ExpoStorageResult } from "./adapters/expo-sqlite";
 import { ExpoGLAdapter } from "./adapters/expo-gl";
@@ -116,6 +123,7 @@ const DEFAULT_SETTINGS: MobileSettings = {
 };
 
 const SETTINGS_KEY = "@motebit/settings";
+const IDENTITY_FILE_KEY = "@motebit/identity_file";
 
 // === AI Config ===
 
@@ -247,6 +255,36 @@ export class MobileApp {
     this.deviceId = result.deviceId;
     this.publicKey = result.publicKeyHex;
 
+    // Generate motebit.md identity file on first launch (best-effort)
+    if (result.isFirstLaunch) {
+      try {
+        const privKeyHex = await this.keyring.get("device_private_key");
+        if (privKeyHex) {
+          const privKeyBytes = new Uint8Array(privKeyHex.length / 2);
+          for (let i = 0; i < privKeyHex.length; i += 2) {
+            privKeyBytes[i / 2] = parseInt(privKeyHex.slice(i, i + 2), 16);
+          }
+          const identityFileContent = await generateIdentityFile(
+            {
+              motebitId: result.motebitId,
+              ownerId: result.motebitId,
+              publicKeyHex: result.publicKeyHex,
+              devices: [{
+                device_id: result.deviceId,
+                name: "Mobile",
+                public_key: result.publicKeyHex,
+                registered_at: new Date().toISOString(),
+              }],
+            },
+            privKeyBytes,
+          );
+          await AsyncStorage.setItem(IDENTITY_FILE_KEY, identityFileContent);
+        }
+      } catch {
+        // Non-fatal — identity file generation is best-effort
+      }
+    }
+
     return {
       isFirstLaunch: result.isFirstLaunch,
       motebitId: result.motebitId,
@@ -256,7 +294,7 @@ export class MobileApp {
 
   // === AI ===
 
-  initAI(config: MobileAIConfig): boolean {
+  async initAI(config: MobileAIConfig): Promise<boolean> {
     let provider;
     if (config.provider === "ollama") {
       const model = config.model || "llama3.2";
@@ -276,8 +314,28 @@ export class MobileApp {
 
     const storage = this.storage ?? createExpoStorage("motebit.db");
 
+    // Read governance from identity file if available
+    let policyConfig: Partial<PolicyConfig> | undefined;
+    try {
+      const identityFileContent = await AsyncStorage.getItem(IDENTITY_FILE_KEY);
+      if (identityFileContent) {
+        const parsed = parseIdentityFile(identityFileContent);
+        const gov = parsed.frontmatter.governance;
+        if (gov?.max_risk_auto && gov?.require_approval_above && gov?.deny_above) {
+          const govPolicy = governanceToPolicyConfig(gov);
+          policyConfig = {
+            maxRiskLevel: govPolicy.maxRiskAuto,
+            requireApprovalAbove: govPolicy.requireApprovalAbove,
+            denyAbove: govPolicy.denyAbove,
+          };
+        }
+      }
+    } catch {
+      // Non-fatal — governance parsing is best-effort
+    }
+
     this.runtime = new MotebitRuntime(
-      { motebitId: this.motebitId, tickRateHz: 2 },
+      { motebitId: this.motebitId, tickRateHz: 2, policy: policyConfig },
       { storage, renderer: this.renderer, ai: provider, keyring: this.keyring },
     );
 
@@ -534,6 +592,74 @@ export class MobileApp {
     };
   }
 
+  // === Memory Browser ===
+
+  /** List all non-tombstoned memories, sorted by created_at DESC. */
+  async listMemories(): Promise<MemoryNode[]> {
+    if (!this.runtime) return [];
+    try {
+      const { nodes } = await this.runtime.memory.exportAll();
+      return nodes
+        .filter((n: MemoryNode) => !n.tombstoned)
+        .sort((a: MemoryNode, b: MemoryNode) => b.created_at - a.created_at);
+    } catch {
+      return [];
+    }
+  }
+
+  /** Soft-delete a memory with audit trail. */
+  async deleteMemory(nodeId: string): Promise<void> {
+    if (!this.runtime) return;
+    await this.runtime.memory.deleteMemory(nodeId);
+  }
+
+  /** Compute effective confidence after half-life decay. */
+  getDecayedConfidence(node: MemoryNode): number {
+    return computeDecayedConfidence(
+      node.confidence,
+      node.half_life,
+      Date.now() - node.created_at,
+    );
+  }
+
+  // === Conversation Browsing ===
+
+  /** List recent conversations. */
+  listConversations(limit?: number): Array<{
+    conversationId: string;
+    startedAt: number;
+    lastActiveAt: number;
+    title: string | null;
+    messageCount: number;
+  }> {
+    if (!this.runtime) return [];
+    return this.runtime.listConversations(limit ?? 20);
+  }
+
+  /** Load a past conversation by ID — replaces the current chat. Returns the message list. */
+  loadConversationById(conversationId: string): Array<{ role: string; content: string }> {
+    if (!this.runtime) return [];
+    this.runtime.loadConversation(conversationId);
+    return this.runtime.getConversationHistory();
+  }
+
+  /** Start a new conversation (clears current). */
+  startNewConversation(): void {
+    this.runtime?.resetConversation();
+  }
+
+  /** Get the current conversation ID. */
+  get currentConversationId(): string | null {
+    return this.runtime?.getConversationId() ?? null;
+  }
+
+  // === Identity File ===
+
+  /** Get the stored identity file content. */
+  async getIdentityFile(): Promise<string | null> {
+    return AsyncStorage.getItem(IDENTITY_FILE_KEY);
+  }
+
   async exportAllData(): Promise<string> {
     const data: Record<string, unknown> = {
       motebit_id: this.motebitId,
@@ -541,6 +667,17 @@ export class MobileApp {
       public_key: this.publicKey,
       exported_at: new Date().toISOString(),
     };
+
+    // Include identity file if available
+    try {
+      const identityFile = await AsyncStorage.getItem(IDENTITY_FILE_KEY);
+      if (identityFile) {
+        data.identity_file = identityFile;
+      }
+    } catch {
+      // Non-fatal
+    }
+
     return JSON.stringify(data, null, 2);
   }
 

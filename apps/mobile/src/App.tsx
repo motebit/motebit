@@ -43,6 +43,8 @@ import { ApprovalCard } from "./components/ApprovalCard";
 import { PinDialog } from "./components/PinDialog";
 import type { PinMode } from "./components/PinDialog";
 import { SettingsModal } from "./components/SettingsModal";
+import { MemoryPanel } from "./components/MemoryPanel";
+import { ConversationPanel } from "./components/ConversationPanel";
 
 // === Types ===
 
@@ -92,6 +94,10 @@ export function App(): React.ReactElement {
   const [showPin, setShowPin] = useState(false);
   const [pinMode, setPinMode] = useState<PinMode>("setup");
   const [pinError, setPinError] = useState("");
+
+  // Memory & conversation panel state
+  const [showMemoryPanel, setShowMemoryPanel] = useState(false);
+  const [showConversationPanel, setShowConversationPanel] = useState(false);
 
   // Pairing state
   const [showPairing, setShowPairing] = useState(false);
@@ -209,7 +215,7 @@ export function App(): React.ReactElement {
       ? (await SecureStore.getItemAsync("motebit_anthropic_api_key")) || undefined
       : undefined;
 
-    a.initAI({
+    await a.initAI({
       provider: s.provider,
       model: s.model,
       apiKey,
@@ -296,6 +302,26 @@ export function App(): React.ReactElement {
       timestamp: Date.now(),
     }));
     setMessages(restored);
+  }, []);
+
+  // === Conversation handlers ===
+  const handleLoadConversation = useCallback((id: string) => {
+    const a = app.current;
+    const history = a.loadConversationById(id);
+    const restored: ChatMessage[] = history.map((msg) => ({
+      id: crypto.randomUUID(),
+      role: msg.role as "user" | "assistant",
+      content: msg.content,
+      timestamp: Date.now(),
+    }));
+    setMessages(restored);
+    setShowConversationPanel(false);
+  }, []);
+
+  const handleNewConversation = useCallback(() => {
+    app.current.startNewConversation();
+    setMessages([]);
+    setShowConversationPanel(false);
   }, []);
 
   // === Welcome acceptance ===
@@ -579,7 +605,7 @@ export function App(): React.ReactElement {
     setSettings(newSettings);
 
     if (aiConfig) {
-      const ok = a.initAI(aiConfig);
+      const ok = await a.initAI(aiConfig);
       if (!ok) {
         addSystemMessage("Failed to initialize AI — check API key");
       } else {
@@ -877,6 +903,23 @@ export function App(): React.ReactElement {
             </Text>
           </View>
         )}
+        {/* Top-left buttons: conversations + memories */}
+        <View style={styles.topLeftButtons}>
+          <TouchableOpacity
+            style={styles.overlayButton}
+            onPress={() => setShowConversationPanel(true)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.overlayButtonText}>{"\u2630"}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.overlayButton}
+            onPress={() => setShowMemoryPanel(true)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.overlayButtonText}>{"\u25CF"}</Text>
+          </TouchableOpacity>
+        </View>
         {/* Settings gear */}
         <TouchableOpacity
           style={styles.gearButton}
@@ -1046,6 +1089,21 @@ export function App(): React.ReactElement {
         error={pinError}
       />
 
+      <MemoryPanel
+        visible={showMemoryPanel}
+        app={app.current}
+        onClose={() => setShowMemoryPanel(false)}
+      />
+
+      <ConversationPanel
+        visible={showConversationPanel}
+        app={app.current}
+        currentConversationId={app.current.currentConversationId}
+        onLoad={handleLoadConversation}
+        onNew={handleNewConversation}
+        onClose={() => setShowConversationPanel(false)}
+      />
+
       {/* Pairing Modal */}
       <Modal visible={showPairing} animationType="fade" transparent statusBarTranslucent>
         <View style={styles.pairingBackdrop}>
@@ -1154,6 +1212,25 @@ const styles = StyleSheet.create({
     color: "#405060",
     fontSize: 10,
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  topLeftButtons: {
+    position: "absolute",
+    top: Platform.OS === "ios" ? 50 : 12,
+    left: 12,
+    flexDirection: "row",
+    gap: 8,
+  },
+  overlayButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(15, 24, 32, 0.7)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  overlayButtonText: {
+    fontSize: 16,
+    color: "#607080",
   },
   gearButton: {
     position: "absolute",
