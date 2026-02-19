@@ -41,12 +41,24 @@ export class GoalScheduler {
 
   start(tickMs = 60_000): void {
     if (this.timer) return;
+    this.cleanupOrphanedApprovals();
     this.registerGoalTools();
     this.timer = setInterval(() => {
       void this.tick();
     }, tickMs);
     // Run immediately on start
     void this.tick();
+  }
+
+  /** Deny any pending approvals left over from a previous daemon run. */
+  private cleanupOrphanedApprovals(): void {
+    const orphans = this.approvalStore.listPending(this.motebitId);
+    for (const a of orphans) {
+      this.approvalStore.resolve(a.approval_id, "denied", "daemon_restart");
+    }
+    if (orphans.length > 0) {
+      console.log(`[scheduler] cleaned up ${orphans.length} orphaned approval(s) from previous run`);
+    }
   }
 
   stop(): void {

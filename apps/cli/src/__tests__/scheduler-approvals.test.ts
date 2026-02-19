@@ -284,3 +284,93 @@ describe("GoalScheduler — report_progress invariant", () => {
     expect(outcomes[0]!.status).toBe("completed");
   });
 });
+
+describe("GoalScheduler — orphan approval cleanup on start", () => {
+  let moteDb: MotebitDatabase;
+
+  beforeEach(() => {
+    moteDb = createMotebitDatabase(":memory:");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  });
+
+  it("start() denies pending approvals left over from a previous run", () => {
+    const now = Date.now();
+    moteDb.approvalStore.add({
+      approval_id: "orphan-1",
+      motebit_id: "mote-test",
+      goal_id: "goal-001",
+      tool_name: "shell_exec",
+      args_preview: "{}",
+      args_hash: "abc",
+      risk_level: 3,
+      status: "pending",
+      created_at: now - 120_000,
+      expires_at: now + 3_600_000,
+      resolved_at: null,
+      denied_reason: null,
+    });
+    moteDb.approvalStore.add({
+      approval_id: "orphan-2",
+      motebit_id: "mote-test",
+      goal_id: "goal-002",
+      tool_name: "write_file",
+      args_preview: "{}",
+      args_hash: "def",
+      risk_level: 2,
+      status: "pending",
+      created_at: now - 60_000,
+      expires_at: now + 3_600_000,
+      resolved_at: null,
+      denied_reason: null,
+    });
+
+    const { runtime } = createMockRuntime();
+    const scheduler = new GoalScheduler(
+      runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore,
+      "mote-test", RiskLevel.R3_EXECUTE,
+    );
+    // start() triggers cleanup before first tick
+    scheduler.start(999_999); // long interval so tick doesn't re-fire
+    scheduler.stop();
+
+    const a1 = moteDb.approvalStore.get("orphan-1");
+    expect(a1!.status).toBe("denied");
+    expect(a1!.denied_reason).toBe("daemon_restart");
+
+    const a2 = moteDb.approvalStore.get("orphan-2");
+    expect(a2!.status).toBe("denied");
+    expect(a2!.denied_reason).toBe("daemon_restart");
+  });
+
+  it("start() leaves already-resolved approvals untouched", () => {
+    const now = Date.now();
+    moteDb.approvalStore.add({
+      approval_id: "resolved-1",
+      motebit_id: "mote-test",
+      goal_id: "goal-001",
+      tool_name: "shell_exec",
+      args_preview: "{}",
+      args_hash: "abc",
+      risk_level: 3,
+      status: "approved",
+      created_at: now - 120_000,
+      expires_at: now + 3_600_000,
+      resolved_at: now - 60_000,
+      denied_reason: null,
+    });
+
+    const { runtime } = createMockRuntime();
+    const scheduler = new GoalScheduler(
+      runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore,
+      "mote-test", RiskLevel.R3_EXECUTE,
+    );
+    scheduler.start(999_999);
+    scheduler.stop();
+
+    const a = moteDb.approvalStore.get("resolved-1");
+    expect(a!.status).toBe("approved");
+  });
+});

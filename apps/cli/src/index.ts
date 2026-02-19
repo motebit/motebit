@@ -4,6 +4,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { parseArgs } from "node:util";
 import { MotebitRuntime, NullRenderer } from "@motebit/runtime";
+import { embedText } from "@motebit/memory-graph";
 import type { StorageAdapters, StreamChunk } from "@motebit/runtime";
 import { CloudProvider, OllamaProvider, formatBodyAwareness } from "@motebit/ai-core";
 import type { StreamingProvider, MotebitPersonalityConfig } from "@motebit/ai-core";
@@ -471,13 +472,9 @@ function buildToolRegistry(
   // Deferred handlers for memory/events (need runtime, which needs registry)
   const memorySearchFn = async (query: string, limit: number) => {
     if (!runtimeRef.current) return [];
-    const all = await runtimeRef.current.memory.exportAll();
-    const queryLower = query.toLowerCase();
-    const matched = all.nodes
-      .filter((n) => !n.tombstoned && n.content.toLowerCase().includes(queryLower))
-      .sort((a, b) => b.confidence - a.confidence)
-      .slice(0, limit);
-    return matched.map((n) => ({ content: n.content, confidence: n.confidence }));
+    const queryEmbedding = await embedText(query);
+    const nodes = await runtimeRef.current.memory.retrieve(queryEmbedding, { limit });
+    return nodes.map((n) => ({ content: n.content, confidence: n.confidence }));
   };
   const eventQueryFn = async (limit: number, eventType?: string) => {
     if (!runtimeRef.current) return [];
