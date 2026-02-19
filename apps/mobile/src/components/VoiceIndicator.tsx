@@ -3,14 +3,11 @@
  * during voice states (ambient/voice/speaking).
  *
  * Shows a pulsing horizontal bar whose width tracks the current audio
- * energy level, color-coded by mic state:
- *   - ambient: green-tinted (listening)
- *   - voice: red-tinted (recording)
- *   - speaking: blue-tinted (TTS playback)
- *   - transcribing: pulsing neutral (processing)
+ * energy level, color derived from the creature's color preset and
+ * mic state intensity.
  */
 
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useMemo } from "react";
 import { View, Animated, StyleSheet } from "react-native";
 
 type MicState = "off" | "ambient" | "voice" | "transcribing" | "speaking";
@@ -19,17 +16,37 @@ interface VoiceIndicatorProps {
   micState: MicState;
   /** Current audio energy level 0-1 (from AudioMonitor rms or TTS pulse). */
   audioLevel: number;
+  /** Creature glow color [r, g, b] 0-1 from the active color preset. */
+  glowColor?: [number, number, number];
 }
 
-const STATE_COLORS: Record<MicState, string> = {
+/** Convert [r,g,b] 0-1 floats to a hex color string with optional alpha scaling. */
+function rgbToHex(rgb: [number, number, number], alpha: number): string {
+  const r = Math.round(Math.min(255, rgb[0] * 255 * alpha));
+  const g = Math.round(Math.min(255, rgb[1] * 255 * alpha));
+  const b = Math.round(Math.min(255, rgb[2] * 255 * alpha));
+  return `rgb(${r},${g},${b})`;
+}
+
+/** State-specific intensity multipliers — voice/speaking are brighter. */
+const STATE_INTENSITY: Record<MicState, number> = {
+  off: 0,
+  ambient: 0.4,
+  voice: 0.8,
+  transcribing: 0.5,
+  speaking: 0.6,
+};
+
+/** Fallback colors when no glowColor is provided. */
+const FALLBACK_COLORS: Record<MicState, string> = {
   off: "transparent",
   ambient: "#2a5040",
   voice: "#8a3030",
   transcribing: "#405060",
-  speaking: "#3040708a",
+  speaking: "#304070",
 };
 
-export function VoiceIndicator({ micState, audioLevel }: VoiceIndicatorProps): React.ReactElement | null {
+export function VoiceIndicator({ micState, audioLevel, glowColor }: VoiceIndicatorProps): React.ReactElement | null {
   const widthAnim = useRef(new Animated.Value(0)).current;
   const pulseAnim = useRef(new Animated.Value(0.3)).current;
   const pulseRef = useRef<Animated.CompositeAnimation | null>(null);
@@ -61,9 +78,15 @@ export function VoiceIndicator({ micState, audioLevel }: VoiceIndicatorProps): R
     return () => { pulseRef.current?.stop(); };
   }, [micState, pulseAnim]);
 
+  // Derive bar color from creature glow + state intensity
+  const barColor = useMemo(() => {
+    if (!glowColor) return FALLBACK_COLORS[micState];
+    const intensity = STATE_INTENSITY[micState];
+    return rgbToHex(glowColor, intensity);
+  }, [glowColor, micState]);
+
   if (micState === "off") return null;
 
-  const barColor = STATE_COLORS[micState];
   const barWidth = micState === "transcribing"
     ? pulseAnim.interpolate({ inputRange: [0, 1], outputRange: ["30%", "100%"] })
     : widthAnim.interpolate({ inputRange: [0, 1], outputRange: ["5%", "100%"] });

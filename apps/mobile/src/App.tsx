@@ -13,7 +13,7 @@
  * 6. start → begin state tick loop
  */
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -39,7 +39,7 @@ import { ExpoSpeechTTSProvider } from "./adapters/expo-speech-tts";
 import { OpenAITTSProvider } from "./adapters/openai-tts";
 import { ExpoAVSTTProvider } from "./adapters/expo-av-stt";
 import { AudioMonitor } from "./adapters/audio-monitor";
-import { MobileApp, APPROVAL_PRESET_CONFIGS } from "./mobile-app";
+import { MobileApp, APPROVAL_PRESET_CONFIGS, COLOR_PRESETS } from "./mobile-app";
 import type { MobileSettings, MobileAIConfig, GoalCompleteEvent, GoalApprovalEvent } from "./mobile-app";
 import { WelcomeOverlay } from "./components/WelcomeOverlay";
 import { ApprovalCard } from "./components/ApprovalCard";
@@ -49,6 +49,7 @@ import { SettingsModal } from "./components/SettingsModal";
 import { MemoryPanel } from "./components/MemoryPanel";
 import { ConversationPanel } from "./components/ConversationPanel";
 import { VoiceIndicator } from "./components/VoiceIndicator";
+import { GoalsPanel } from "./components/GoalsPanel";
 
 // === Types ===
 
@@ -99,9 +100,10 @@ export function App(): React.ReactElement {
   const [pinMode, setPinMode] = useState<PinMode>("setup");
   const [pinError, setPinError] = useState("");
 
-  // Memory & conversation panel state
+  // Memory, conversation & goals panel state
   const [showMemoryPanel, setShowMemoryPanel] = useState(false);
   const [showConversationPanel, setShowConversationPanel] = useState(false);
+  const [showGoalsPanel, setShowGoalsPanel] = useState(false);
 
   // Pairing state
   const [showPairing, setShowPairing] = useState(false);
@@ -140,6 +142,21 @@ export function App(): React.ReactElement {
 
   // Goal scheduler state
   const [goalRunning, setGoalRunning] = useState(false);
+
+  // Derive voice glow color from creature preset
+  const activeGlow = useMemo((): [number, number, number] | undefined => {
+    const preset = COLOR_PRESETS[settings?.colorPreset ?? "borosilicate"];
+    return preset?.glow as [number, number, number] | undefined;
+  }, [settings?.colorPreset]);
+
+  // Dynamic mic button background from glow color
+  const micButtonActiveStyle = useMemo(() => {
+    if (!activeGlow) return undefined;
+    const r = Math.round(activeGlow[0] * 60);
+    const g = Math.round(activeGlow[1] * 60);
+    const b = Math.round(activeGlow[2] * 60);
+    return { backgroundColor: `rgb(${r},${g},${b})` };
+  }, [activeGlow]);
 
   // Track pending approval for streaming resume
   const pendingApprovalRef = useRef<string | null>(null);
@@ -1195,6 +1212,13 @@ export function App(): React.ReactElement {
           >
             <Text style={styles.overlayButtonText}>{"\u25CF"}</Text>
           </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.overlayButton}
+            onPress={() => setShowGoalsPanel(true)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.overlayButtonText}>{"\u25C9"}</Text>
+          </TouchableOpacity>
         </View>
         {/* Settings gear */}
         <TouchableOpacity
@@ -1268,7 +1292,7 @@ export function App(): React.ReactElement {
       />
 
       {/* Voice amplitude indicator */}
-      <VoiceIndicator micState={micState} audioLevel={audioLevel} />
+      <VoiceIndicator micState={micState} audioLevel={audioLevel} glowColor={activeGlow} />
 
       {/* Input Bar */}
       <View style={styles.inputBar}>
@@ -1287,9 +1311,8 @@ export function App(): React.ReactElement {
           <TouchableOpacity
             style={[
               styles.micButton,
-              micState === "ambient" && styles.micButtonAmbient,
+              micState !== "off" && micButtonActiveStyle,
               micState === "voice" && styles.micButtonRecording,
-              micState === "speaking" && styles.micButtonSpeaking,
               micState === "transcribing" && styles.sendButtonDisabled,
             ]}
             onPress={() => void handleMicPress()}
@@ -1387,6 +1410,12 @@ export function App(): React.ReactElement {
         onLoad={handleLoadConversation}
         onNew={handleNewConversation}
         onClose={() => setShowConversationPanel(false)}
+      />
+
+      <GoalsPanel
+        visible={showGoalsPanel}
+        app={app.current}
+        onClose={() => setShowGoalsPanel(false)}
       />
 
       {/* Pairing Modal */}
@@ -1673,14 +1702,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginLeft: 8,
   },
-  micButtonAmbient: {
-    backgroundColor: "#1a3828",
-  },
   micButtonRecording: {
     backgroundColor: "#4a2020",
-  },
-  micButtonSpeaking: {
-    backgroundColor: "#2a2a4a",
   },
   micButtonText: {
     color: "#c0d0e0",
