@@ -17,7 +17,7 @@ import type { MobileApp, MobileSettings, MobileAIConfig } from "../mobile-app";
 import { COLOR_PRESETS, APPROVAL_PRESET_CONFIGS } from "../mobile-app";
 import type { Goal, GoalMode } from "../adapters/expo-sqlite";
 
-type Tab = "appearance" | "intelligence" | "governance" | "goals" | "sync" | "identity";
+type Tab = "appearance" | "intelligence" | "governance" | "goals" | "sync" | "tools" | "identity";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "appearance", label: "Appearance" },
@@ -25,6 +25,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "governance", label: "Governance" },
   { key: "goals", label: "Goals" },
   { key: "sync", label: "Sync" },
+  { key: "tools", label: "Tools" },
   { key: "identity", label: "Identity" },
 ];
 
@@ -67,6 +68,9 @@ interface SettingsModalProps {
   settings: MobileSettings;
   syncStatus?: "idle" | "syncing" | "error" | "offline";
   lastSyncTime?: number;
+  mcpServers?: Array<{ name: string; url: string; connected: boolean; toolCount: number }>;
+  onAddMcpServer?: (url: string, name: string) => Promise<void>;
+  onRemoveMcpServer?: (name: string) => Promise<void>;
   onSave: (settings: MobileSettings, aiConfig?: MobileAIConfig) => void;
   onClose: () => void;
   onRequestPin: (mode: "setup" | "verify" | "reset") => void;
@@ -81,6 +85,9 @@ export function SettingsModal({
   settings,
   syncStatus,
   lastSyncTime,
+  mcpServers,
+  onAddMcpServer,
+  onRemoveMcpServer,
   onSave,
   onClose,
   onRequestPin,
@@ -223,6 +230,13 @@ export function SettingsModal({
               app={app}
               onSyncNow={onSyncNow}
               onDisconnect={onDisconnectSync}
+            />
+          )}
+          {tab === "tools" && (
+            <ToolsTab
+              servers={mcpServers ?? []}
+              onAdd={onAddMcpServer}
+              onRemove={onRemoveMcpServer}
             />
           )}
           {tab === "identity" && (
@@ -781,6 +795,134 @@ function GoalsTab({ app }: { app: MobileApp }) {
   );
 }
 
+// === Tools Tab ===
+
+function ToolsTab({
+  servers,
+  onAdd,
+  onRemove,
+}: {
+  servers: Array<{ name: string; url: string; connected: boolean; toolCount: number }>;
+  onAdd?: (url: string, name: string) => Promise<void>;
+  onRemove?: (name: string) => Promise<void>;
+}) {
+  const [newName, setNewName] = useState("");
+  const [newUrl, setNewUrl] = useState("");
+  const [adding, setAdding] = useState(false);
+
+  const handleConnect = useCallback(async () => {
+    const name = newName.trim();
+    const url = newUrl.trim();
+    if (!name || !url || !onAdd) return;
+
+    try {
+      new URL(url);
+    } catch {
+      Alert.alert("Invalid URL", "Please enter a valid server URL.");
+      return;
+    }
+
+    setAdding(true);
+    try {
+      await onAdd(url, name);
+      setNewName("");
+      setNewUrl("");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      Alert.alert("Connection Failed", msg);
+    } finally {
+      setAdding(false);
+    }
+  }, [newName, newUrl, onAdd]);
+
+  const handleRemove = useCallback((name: string) => {
+    Alert.alert(
+      "Remove Server",
+      `Disconnect and remove "${name}"?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: () => void onRemove?.(name),
+        },
+      ],
+    );
+  }, [onRemove]);
+
+  return (
+    <View>
+      <Text style={styles.sectionTitle}>MCP Servers</Text>
+      {servers.length === 0 ? (
+        <Text style={styles.toolsEmptyText}>
+          No MCP servers connected. Add an HTTP MCP server to extend your motebit's capabilities.
+        </Text>
+      ) : (
+        servers.map((server) => (
+          <View key={server.name} style={styles.toolsServerRow}>
+            <View style={styles.toolsServerInfo}>
+              <View style={styles.toolsServerHeader}>
+                <View style={[
+                  styles.toolsStatusDot,
+                  { backgroundColor: server.connected ? "#4ade80" : "#c04040" },
+                ]} />
+                <Text style={styles.toolsServerName}>{server.name}</Text>
+                {server.toolCount > 0 && (
+                  <View style={styles.toolsCountBadge}>
+                    <Text style={styles.toolsCountText}>{server.toolCount}</Text>
+                  </View>
+                )}
+              </View>
+              <Text style={styles.toolsServerUrl} numberOfLines={1}>{server.url}</Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => handleRemove(server.name)}
+              activeOpacity={0.7}
+              style={styles.toolsRemoveBtn}
+            >
+              <Text style={styles.toolsRemoveText}>X</Text>
+            </TouchableOpacity>
+          </View>
+        ))
+      )}
+
+      <Text style={styles.sectionTitle}>Add Server</Text>
+      <TextInput
+        style={styles.textField}
+        value={newName}
+        onChangeText={setNewName}
+        placeholder="Server name"
+        placeholderTextColor="#405060"
+        autoCapitalize="none"
+        autoCorrect={false}
+      />
+      <View style={{ height: 8 }} />
+      <TextInput
+        style={styles.textField}
+        value={newUrl}
+        onChangeText={setNewUrl}
+        placeholder="https://example.com/mcp"
+        placeholderTextColor="#405060"
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="url"
+      />
+      <TouchableOpacity
+        style={[styles.toolsConnectBtn, (!newName.trim() || !newUrl.trim() || adding) && styles.toolsConnectBtnDisabled]}
+        onPress={() => void handleConnect()}
+        disabled={!newName.trim() || !newUrl.trim() || adding}
+        activeOpacity={0.7}
+      >
+        <Text style={styles.toolsConnectText}>{adding ? "Connecting..." : "Connect"}</Text>
+      </TouchableOpacity>
+
+      <Text style={styles.toolsNote}>
+        Mobile supports HTTP MCP servers only. Stdio servers require the desktop or CLI app.
+      </Text>
+    </View>
+  );
+}
+
 // === Styles ===
 
 const styles = StyleSheet.create({
@@ -1101,5 +1243,95 @@ const styles = StyleSheet.create({
     color: "#c0d0e0",
     fontSize: 15,
     fontWeight: "600",
+  },
+
+  // Tools
+  toolsEmptyText: {
+    color: "#506070",
+    fontSize: 13,
+    fontStyle: "italic",
+    textAlign: "center",
+    marginVertical: 12,
+  },
+  toolsServerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#0f1820",
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: "#1a2030",
+  },
+  toolsServerInfo: {
+    flex: 1,
+    marginRight: 10,
+  },
+  toolsServerHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 4,
+  },
+  toolsStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  toolsServerName: {
+    color: "#c0d0e0",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  toolsCountBadge: {
+    backgroundColor: "#1a2838",
+    borderRadius: 10,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  toolsCountText: {
+    color: "#607080",
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  toolsServerUrl: {
+    color: "#506070",
+    fontSize: 12,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  toolsRemoveBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#2a1518",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  toolsRemoveText: {
+    color: "#d04050",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  toolsConnectBtn: {
+    backgroundColor: "#2a4060",
+    borderRadius: 10,
+    paddingVertical: 14,
+    marginTop: 12,
+    alignItems: "center",
+  },
+  toolsConnectBtnDisabled: {
+    opacity: 0.4,
+  },
+  toolsConnectText: {
+    color: "#c0d0e0",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  toolsNote: {
+    color: "#405060",
+    fontSize: 11,
+    fontStyle: "italic",
+    textAlign: "center",
+    marginTop: 16,
   },
 });

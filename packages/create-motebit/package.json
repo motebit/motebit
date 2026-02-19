@@ -19,10 +19,17 @@
     "signature",
     "ai"
   ],
+  "homepage": "https://github.com/motebit/motebit/tree/main/packages/create-motebit#readme",
+  "bugs": {
+    "url": "https://github.com/motebit/motebit/issues"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/motebit/motebit",
     "directory": "packages/create-motebit"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -b",

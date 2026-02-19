@@ -16,14 +16,25 @@ describe("McpClientAdapter", () => {
     expect(adapter.getTools()).toEqual([]);
   });
 
-  it("throws for http transport (not yet supported)", async () => {
+  it("throws for http transport without url", async () => {
     const config: McpServerConfig = {
       name: "http-server",
       transport: "http",
-      url: "https://example.com",
     };
     const adapter = new McpClientAdapter(config);
-    await expect(adapter.connect()).rejects.toThrow("HTTP transport");
+    await expect(adapter.connect()).rejects.toThrow("requires a url");
+  });
+
+  it("constructs with http config", () => {
+    const config: McpServerConfig = {
+      name: "http-server",
+      transport: "http",
+      url: "https://example.com/mcp",
+    };
+    const adapter = new McpClientAdapter(config);
+    expect(adapter.serverName).toBe("http-server");
+    expect(adapter.isConnected).toBe(false);
+    expect(adapter.getTools()).toEqual([]);
   });
 
   it("throws for stdio without command", async () => {

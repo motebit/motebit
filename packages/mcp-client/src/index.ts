@@ -1,5 +1,4 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { ToolDefinition, ToolResult } from "@motebit/sdk";
 import { InMemoryToolRegistry } from "@motebit/tools";
 
@@ -51,6 +50,7 @@ export class McpClientAdapter {
           `MCP server "${this.config.name}" requires a command for stdio transport`,
         );
       }
+      const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
       const transport = new StdioClientTransport({
         command: this.config.command,
         args: this.config.args ?? [],
@@ -58,9 +58,14 @@ export class McpClientAdapter {
       });
       await this.client.connect(transport);
     } else {
-      throw new Error(
-        `HTTP transport for MCP is not yet supported. Use stdio transport.`,
-      );
+      if (!this.config.url) {
+        throw new Error(
+          `MCP server "${this.config.name}" requires a url for http transport`,
+        );
+      }
+      const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+      const transport = new StreamableHTTPClientTransport(new URL(this.config.url));
+      await this.client.connect(transport);
     }
 
     this.connected = true;

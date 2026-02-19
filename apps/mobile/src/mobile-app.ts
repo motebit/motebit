@@ -33,6 +33,10 @@ import {
   ConversationSyncEngine,
   HttpConversationSyncAdapter,
 } from "@motebit/sync-engine";
+import { McpClientAdapter } from "@motebit/mcp-client";
+import type { McpServerConfig } from "@motebit/mcp-client";
+export type { McpServerConfig } from "@motebit/mcp-client";
+import { InMemoryToolRegistry } from "@motebit/tools";
 import type { PairingSession, PairingStatus, SyncStatus } from "@motebit/sync-engine";
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";
 import { createExpoStorage, ExpoGoalStore } from "./adapters/expo-sqlite";
@@ -173,6 +177,12 @@ export class MobileApp {
   private _syncStatusCallback: ((status: SyncStatus, lastSync: number) => void) | null = null;
   private _lastSyncTime = 0;
 
+  // MCP state
+  private mcpAdapters: Map<string, McpClientAdapter> = new Map();
+  private _mcpServers: McpServerConfig[] = [];
+  private _toolsChangedCallback: (() => void) | null = null;
+  private static readonly MCP_SERVERS_KEY = "@motebit/mcp_servers";
+
   // Goal scheduler state
   private goalSchedulerTimer: ReturnType<typeof setInterval> | null = null;
   private _goalExecuting = false;
@@ -270,6 +280,9 @@ export class MobileApp {
       { motebitId: this.motebitId, tickRateHz: 2 },
       { storage, renderer: this.renderer, ai: provider, keyring: this.keyring },
     );
+
+    // Reconnect any persisted MCP servers
+    void this.reconnectMcpServers();
 
     return true;
   }
@@ -389,6 +402,95 @@ export class MobileApp {
     const preset = COLOR_PRESETS[presetName];
     if (!preset) return;
     this.renderer.setInteriorColor(preset);
+  }
+
+  // === MCP ===
+
+  async addMcpServer(config: McpServerConfig): Promise<void> {
+    if (config.transport !== "http") {
+      throw new Error("Mobile only supports HTTP MCP servers. Use the desktop or CLI app for stdio servers.");
+    }
+    if (!config.url) {
+      throw new Error("HTTP MCP server requires a url");
+    }
+
+    const adapter = new McpClientAdapter(config);
+    await adapter.connect();
+
+    // Register tools into runtime
+    const tempRegistry = new InMemoryToolRegistry();
+    adapter.registerInto(tempRegistry);
+    if (this.runtime) {
+      this.runtime.registerExternalTools(`mcp:${config.name}`, tempRegistry);
+    }
+
+    this.mcpAdapters.set(config.name, adapter);
+    this._mcpServers = this._mcpServers.filter((s) => s.name !== config.name);
+    this._mcpServers.push(config);
+
+    // Persist
+    await AsyncStorage.setItem(MobileApp.MCP_SERVERS_KEY, JSON.stringify(this._mcpServers));
+    this._toolsChangedCallback?.();
+  }
+
+  async removeMcpServer(name: string): Promise<void> {
+    const adapter = this.mcpAdapters.get(name);
+    if (adapter) {
+      await adapter.disconnect();
+      this.mcpAdapters.delete(name);
+    }
+    if (this.runtime) {
+      this.runtime.unregisterExternalTools(`mcp:${name}`);
+    }
+
+    this._mcpServers = this._mcpServers.filter((s) => s.name !== name);
+    await AsyncStorage.setItem(MobileApp.MCP_SERVERS_KEY, JSON.stringify(this._mcpServers));
+    this._toolsChangedCallback?.();
+  }
+
+  getMcpServers(): Array<{ name: string; url: string; connected: boolean; toolCount: number }> {
+    return this._mcpServers.map((config) => {
+      const adapter = this.mcpAdapters.get(config.name);
+      return {
+        name: config.name,
+        url: config.url || "",
+        connected: adapter?.isConnected ?? false,
+        toolCount: adapter?.getTools().length ?? 0,
+      };
+    });
+  }
+
+  onToolsChanged(callback: () => void): void {
+    this._toolsChangedCallback = callback;
+  }
+
+  private async reconnectMcpServers(): Promise<void> {
+    const raw = await AsyncStorage.getItem(MobileApp.MCP_SERVERS_KEY);
+    if (!raw) return;
+    try {
+      const configs: McpServerConfig[] = JSON.parse(raw);
+      this._mcpServers = configs;
+      for (const config of configs) {
+        try {
+          const adapter = new McpClientAdapter(config);
+          await adapter.connect();
+          const tempRegistry = new InMemoryToolRegistry();
+          adapter.registerInto(tempRegistry);
+          if (this.runtime) {
+            this.runtime.registerExternalTools(`mcp:${config.name}`, tempRegistry);
+          }
+          this.mcpAdapters.set(config.name, adapter);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn(`Failed to reconnect MCP server "${config.name}": ${msg}`);
+        }
+      }
+      if (this.mcpAdapters.size > 0) {
+        this._toolsChangedCallback?.();
+      }
+    } catch {
+      // Non-fatal — corrupted storage
+    }
   }
 
   // === Observability ===

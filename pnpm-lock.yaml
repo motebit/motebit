@@ -322,6 +322,9 @@ importers:
       '@motebit/event-log':
         specifier: workspace:*
         version: link:../../packages/event-log
+      '@motebit/mcp-client':
+        specifier: workspace:*
+        version: link:../../packages/mcp-client
       '@motebit/memory-graph':
         specifier: workspace:*
         version: link:../../packages/memory-graph
@@ -343,6 +346,9 @@ importers:
       '@motebit/sync-engine':
         specifier: workspace:*
         version: link:../../packages/sync-engine
+      '@motebit/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
       '@motebit/voice':
         specifier: workspace:*
         version: link:../../packages/voice

@@ -113,6 +113,9 @@ export function App(): React.ReactElement {
   const [lastSyncTime, setLastSyncTime] = useState(0);
   const pairingSyncUrlRef = useRef("");
 
+  // MCP state
+  const [mcpServers, setMcpServers] = useState<Array<{ name: string; url: string; connected: boolean; toolCount: number }>>([]);
+
   // Goal scheduler state
   const [goalRunning, setGoalRunning] = useState(false);
 
@@ -152,7 +155,11 @@ export function App(): React.ReactElement {
       // 7. Start goal scheduler
       startGoals(a);
 
-      // 8. Auto-start sync if relay URL persisted
+      // 8. Wire MCP tool change callback and load initial state
+      a.onToolsChanged(refreshMcpServers);
+      refreshMcpServers();
+
+      // 9. Auto-start sync if relay URL persisted
       const syncUrl = await a.getSyncUrl();
       if (syncUrl) {
         a.onSyncStatus((status, lastSync) => {
@@ -162,7 +169,7 @@ export function App(): React.ReactElement {
         void a.startSync(syncUrl);
       }
 
-      // 9. Restore persisted conversation history into chat UI
+      // 10. Restore persisted conversation history into chat UI
       restoreConversation(a);
 
       setInitialized(true);
@@ -324,6 +331,31 @@ export function App(): React.ReactElement {
       { id: crypto.randomUUID(), role: "system", content, timestamp: Date.now() },
     ]);
   }, []);
+
+  // === MCP handlers ===
+  const refreshMcpServers = useCallback(() => {
+    setMcpServers(app.current.getMcpServers());
+  }, []);
+
+  const handleAddMcpServer = useCallback(async (url: string, name: string) => {
+    try {
+      await app.current.addMcpServer({ name, transport: "http", url });
+      refreshMcpServers();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addSystemMessage(`MCP error: ${msg}`);
+    }
+  }, [refreshMcpServers, addSystemMessage]);
+
+  const handleRemoveMcpServer = useCallback(async (name: string) => {
+    try {
+      await app.current.removeMcpServer(name);
+      refreshMcpServers();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addSystemMessage(`MCP error: ${msg}`);
+    }
+  }, [refreshMcpServers, addSystemMessage]);
 
   // === GL context ===
   const onGLContextCreate = useCallback(async (gl: ExpoWebGLRenderingContext) => {
@@ -979,6 +1011,9 @@ export function App(): React.ReactElement {
           settings={settings}
           syncStatus={syncStatus}
           lastSyncTime={lastSyncTime}
+          mcpServers={mcpServers}
+          onAddMcpServer={handleAddMcpServer}
+          onRemoveMcpServer={handleRemoveMcpServer}
           onSave={(s, ai) => void handleSettingsSave(s, ai)}
           onClose={() => setShowSettings(false)}
           onRequestPin={(mode) => void handleRequestPin(mode)}
