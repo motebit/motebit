@@ -87,6 +87,28 @@ vi.mock("@motebit/core-identity", () => ({
   })),
 }));
 
+// @motebit/tools/web-safe
+vi.mock("@motebit/tools/web-safe", () => ({
+  webSearchDefinition: { name: "web_search", description: "Search the web", inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } },
+  createWebSearchHandler: vi.fn(() => vi.fn(() => Promise.resolve({ ok: true, data: "mock results" }))),
+  readUrlDefinition: { name: "read_url", description: "Read a URL", inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] } },
+  createReadUrlHandler: vi.fn(() => vi.fn(() => Promise.resolve({ ok: true, data: "mock content" }))),
+  recallMemoriesDefinition: { name: "recall_memories", description: "Recall memories", inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } },
+  createRecallMemoriesHandler: vi.fn((_fn: unknown) => vi.fn(() => Promise.resolve({ ok: true, data: "mock memories" }))),
+  listEventsDefinition: { name: "list_events", description: "List events", inputSchema: { type: "object", properties: {} } },
+  createListEventsHandler: vi.fn((_fn: unknown) => vi.fn(() => Promise.resolve({ ok: true, data: "mock events" }))),
+  DuckDuckGoSearchProvider: vi.fn().mockImplementation(() => ({})),
+}));
+
+// @motebit/memory-graph — mock embedText while preserving MemoryGraph class
+vi.mock("@motebit/memory-graph", async (importOriginal) => {
+  const actual = await importOriginal() as Record<string, unknown>;
+  return {
+    ...actual,
+    embedText: vi.fn(() => Promise.resolve(new Array(384).fill(0))),
+  };
+});
+
 // @motebit/sync-engine
 vi.mock("@motebit/sync-engine", () => ({
   PairingClient: vi.fn().mockImplementation(() => ({
@@ -430,5 +452,38 @@ describe("MobileApp.identity", () => {
     const parsed = JSON.parse(exported);
     expect(parsed.motebit_id).toBe("mobile-local");
     expect(parsed.exported_at).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MobileApp.governanceStatus
+// ---------------------------------------------------------------------------
+
+describe("MobileApp.governanceStatus", () => {
+  it("returns ungoverned before initAI", () => {
+    const app = new MobileApp();
+    expect(app.governanceStatus.governed).toBe(false);
+    expect(app.governanceStatus.reason).toBe("not initialized");
+  });
+
+  it("returns ungoverned when no identity file", async () => {
+    const app = new MobileApp();
+    await app.initAI({ provider: "ollama" });
+    expect(app.governanceStatus.governed).toBe(false);
+    expect(app.governanceStatus.reason).toBe("no identity file");
+    app.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MobileApp.generateTitleInBackground
+// ---------------------------------------------------------------------------
+
+describe("MobileApp.generateTitleInBackground", () => {
+  it("does nothing before initAI", () => {
+    const app = new MobileApp();
+    // Should not throw
+    app.generateTitleInBackground();
+    app.stop();
   });
 });

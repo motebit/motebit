@@ -40,13 +40,26 @@ export type { MemoryNode } from "@motebit/sdk";
 import { InMemoryToolRegistry } from "@motebit/tools";
 import type { PairingSession, PairingStatus, SyncStatus } from "@motebit/sync-engine";
 import type { MotebitState, BehaviorCues, MemoryNode } from "@motebit/sdk";
-import { computeDecayedConfidence } from "@motebit/memory-graph";
+import { computeDecayedConfidence, embedText } from "@motebit/memory-graph";
+import {
+  webSearchDefinition,
+  createWebSearchHandler,
+  readUrlDefinition,
+  createReadUrlHandler,
+  recallMemoriesDefinition,
+  createRecallMemoriesHandler,
+  listEventsDefinition,
+  createListEventsHandler,
+  DuckDuckGoSearchProvider,
+} from "@motebit/tools/web-safe";
+import type { EventFilter } from "@motebit/event-log";
+import type { EventType } from "@motebit/sdk";
 import {
   generate as generateIdentityFile,
   parse as parseIdentityFile,
   governanceToPolicyConfig,
 } from "@motebit/identity-file";
-import { createExpoStorage, ExpoGoalStore } from "./adapters/expo-sqlite";
+import { createExpoStorage, ExpoGoalStore, ExpoSqliteConversationStore } from "./adapters/expo-sqlite";
 import type { ExpoStorageResult } from "./adapters/expo-sqlite";
 import { ExpoGLAdapter } from "./adapters/expo-gl";
 import { SecureStoreAdapter } from "./adapters/secure-store";
@@ -176,6 +189,9 @@ export class MobileApp {
   private storage: ExpoStorageResult | null = null;
   private renderer: ExpoGLAdapter;
   private keyring: SecureStoreAdapter;
+
+  // Governance status
+  private _governanceStatus: { governed: boolean; reason?: string } = { governed: false, reason: "not initialized" };
 
   // Sync state
   private syncEngine: SyncEngine | null = null;
@@ -328,10 +344,16 @@ export class MobileApp {
             requireApprovalAbove: govPolicy.requireApprovalAbove,
             denyAbove: govPolicy.denyAbove,
           };
+          this._governanceStatus = { governed: true };
+        } else {
+          this._governanceStatus = { governed: false, reason: "incomplete governance in identity file" };
         }
+      } else {
+        this._governanceStatus = { governed: false, reason: "no identity file" };
       }
     } catch {
       // Non-fatal — governance parsing is best-effort
+      this._governanceStatus = { governed: false, reason: "identity file parse error" };
     }
 
     this.runtime = new MotebitRuntime(
@@ -339,10 +361,56 @@ export class MobileApp {
       { storage, renderer: this.renderer, ai: provider, keyring: this.keyring },
     );
 
+    // Register builtin tools (web_search, read_url, recall_memories, list_events)
+    this.registerBuiltinTools();
+
     // Reconnect any persisted MCP servers
     void this.reconnectMcpServers();
 
     return true;
+  }
+
+  /** Register builtin tools into the runtime's tool registry. */
+  private registerBuiltinTools(): void {
+    if (!this.runtime) return;
+    const registry = this.runtime.getToolRegistry();
+    const runtime = this.runtime;
+
+    // web_search — DuckDuckGo (no API key needed)
+    registry.register(webSearchDefinition, createWebSearchHandler(new DuckDuckGoSearchProvider()));
+
+    // read_url — fetch + clean HTML
+    registry.register(readUrlDefinition, createReadUrlHandler());
+
+    // recall_memories — semantic search via embeddings
+    registry.register(
+      recallMemoriesDefinition,
+      createRecallMemoriesHandler(async (query, limit) => {
+        const queryEmbedding = await embedText(query);
+        const nodes = await runtime.memory.retrieve(queryEmbedding, { limit });
+        return nodes.map((n) => ({ content: n.content, confidence: n.confidence }));
+      }),
+    );
+
+    // list_events — query event log
+    registry.register(
+      listEventsDefinition,
+      createListEventsHandler(async (limit, eventType) => {
+        const filter: EventFilter = {
+          motebit_id: runtime.motebitId,
+          limit,
+        };
+        if (eventType) {
+          filter.event_types = [eventType as EventType];
+        }
+        const events = await runtime.events.query(filter);
+        return events.map((e) => ({
+          event_type: e.event_type,
+          timestamp: e.timestamp,
+          payload: e.payload,
+        }));
+      }),
+    );
   }
 
   // === GL Init ===
@@ -590,6 +658,51 @@ export class MobileApp {
       deviceId: this.deviceId,
       publicKey: this.publicKey,
     };
+  }
+
+  // === Governance ===
+
+  get governanceStatus(): { governed: boolean; reason?: string } {
+    return this._governanceStatus;
+  }
+
+  // === Auto-Titling ===
+
+  private _autoTitlePending = false;
+
+  /**
+   * Generate a title for the current conversation if it has enough messages
+   * and no title yet. Uses first 7 words of first user message (heuristic).
+   */
+  generateTitleInBackground(): void {
+    if (this._autoTitlePending || !this.runtime || !this.storage) return;
+
+    const conversationId = this.runtime.getConversationId();
+    if (!conversationId) return;
+
+    const convStore = this.storage.conversationStore as ExpoSqliteConversationStore;
+    const count = convStore.getMessageCount(conversationId);
+    if (count < 4) return;
+
+    // Check if title already set
+    const conversations = convStore.listConversations(this.motebitId, 1);
+    const current = conversations.find((c) => c.conversationId === conversationId);
+    if (current?.title) return;
+
+    this._autoTitlePending = true;
+
+    const history = this.runtime.getConversationHistory();
+    const firstUserMsg = history.find((m) => m.role === "user");
+    if (firstUserMsg) {
+      const words = firstUserMsg.content.split(/\s+/).slice(0, 7);
+      let title = words.join(" ");
+      if (firstUserMsg.content.split(/\s+/).length > 7) {
+        title += "...";
+      }
+      convStore.updateTitle(conversationId, title);
+    }
+
+    this._autoTitlePending = false;
   }
 
   // === Memory Browser ===

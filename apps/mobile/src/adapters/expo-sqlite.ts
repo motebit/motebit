@@ -576,6 +576,21 @@ export class ExpoSqliteConversationStore implements ConversationStoreAdapter {
     );
   }
 
+  updateTitle(conversationId: string, title: string): void {
+    this.db.runSync(
+      "UPDATE conversations SET title = ? WHERE conversation_id = ?",
+      [title, conversationId],
+    );
+  }
+
+  getMessageCount(conversationId: string): number {
+    const row = this.db.getFirstSync(
+      "SELECT message_count FROM conversations WHERE conversation_id = ?",
+      [conversationId],
+    ) as { message_count: number } | null;
+    return row?.message_count ?? 0;
+  }
+
   listConversations(motebitId: string, limit = 20): Array<{
     conversationId: string;
     startedAt: number;

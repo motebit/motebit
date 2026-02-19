@@ -434,10 +434,86 @@ export function App(): React.ReactElement {
     // "transcribing" state — button is disabled, showing spinner
   }, [micState, addSystemMessage]);
 
+  // === Slash commands ===
+  const handleSlashCommand = useCallback((command: string, args: string) => {
+    const a = app.current;
+    switch (command) {
+      case "model":
+        if (!args) {
+          addSystemMessage(`Current model: ${a.currentModel ?? "none"}`);
+        } else {
+          try {
+            a.setModel(args);
+            addSystemMessage(`Model switched to: ${args}`);
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            addSystemMessage(`Error: ${msg}`);
+          }
+        }
+        break;
+      case "conversations":
+        setShowConversationPanel(true);
+        break;
+      case "new":
+        a.startNewConversation();
+        setMessages([]);
+        addSystemMessage("New conversation started");
+        break;
+      case "memories":
+        setShowMemoryPanel(true);
+        break;
+      case "sync":
+        void a.syncNow().then((result) => {
+          addSystemMessage(
+            `Sync: ${result.events_pushed} events pushed, ${result.events_pulled} pulled, ` +
+            `${result.conversations_pushed} convs pushed, ${result.conversations_pulled} pulled`,
+          );
+        }).catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          addSystemMessage(`Sync failed: ${msg}`);
+        });
+        break;
+      case "export":
+        void a.exportAllData().then((data) => {
+          addSystemMessage(`Exported data:\n${data}`);
+        });
+        break;
+      case "settings":
+        setShowSettings(true);
+        break;
+      case "help":
+        addSystemMessage(
+          "Available commands:\n" +
+          "/model — show current model\n" +
+          "/model <name> — switch model\n" +
+          "/conversations — browse past conversations\n" +
+          "/new — start a new conversation\n" +
+          "/memories — browse memories\n" +
+          "/sync — sync with relay\n" +
+          "/export — export all data\n" +
+          "/settings — open settings\n" +
+          "/help — show this message",
+        );
+        break;
+      default:
+        addSystemMessage(`Unknown command: /${command}`);
+    }
+  }, [addSystemMessage]);
+
   // === Send message ===
   const handleSend = useCallback(async () => {
     const text = inputText.trim();
     if (!text || isProcessing) return;
+
+    // Slash command detection
+    if (text.startsWith("/")) {
+      setInputText("");
+      const spaceIdx = text.indexOf(" ");
+      const command = spaceIdx === -1 ? text.slice(1) : text.slice(1, spaceIdx);
+      const args = spaceIdx === -1 ? "" : text.slice(spaceIdx + 1).trim();
+      handleSlashCommand(command, args);
+      return;
+    }
 
     const a = app.current;
     setInputText("");
@@ -453,13 +529,15 @@ export function App(): React.ReactElement {
 
     try {
       await consumeStream(a.sendMessageStreaming(text));
+      // Auto-title after streaming completes
+      a.generateTitleInBackground();
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
       addSystemMessage(`[Error: ${errMsg}]`);
     } finally {
       setIsProcessing(false);
     }
-  }, [inputText, isProcessing]);
+  }, [inputText, isProcessing, handleSlashCommand]);
 
   // Auto-send when inputText is filled by voice transcription
   const prevMicStateRef = useRef(micState);
@@ -900,6 +978,7 @@ export function App(): React.ReactElement {
           <View style={styles.stateOverlay}>
             <Text style={styles.stateText}>
               attn {state.attention.toFixed(2)} · conf {state.confidence.toFixed(2)} · val {state.affect_valence.toFixed(2)}
+              {app.current.governanceStatus.governed ? " · gov" : ""}
             </Text>
           </View>
         )}
