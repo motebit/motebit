@@ -71,6 +71,7 @@ export class ExpoGLAdapter implements RenderAdapter {
   private leftEye: THREE.Group | null = null;
   private rightEye: THREE.Group | null = null;
   private smileMesh: THREE.Mesh | null = null;
+  private audio: AudioReactivity | null = null;
   private spec: RenderSpec = CANONICAL_SPEC;
   private width = 1;
   private height = 1;
@@ -153,11 +154,18 @@ export class ExpoGLAdapter implements RenderAdapter {
     const cues: BehaviorCues = frame.cues;
     const t = frame.time;
 
+    // Audio modulation — four dimensions match desktop ThreeJSAdapter
+    const a = this.audio;
+    const audioBreathScale = a ? 1 + a.rms * 2.5 : 1;       // RMS → breathing amplitude
+    const audioGlow = a ? a.low * 0.25 : 0;                  // Bass → interior heat
+    const audioDrift = a ? a.mid * 0.015 : 0;                // Midrange → swaying motion
+    const audioShimmer = a ? a.high * 0.35 : 0;              // Transients → glass shimmer
+
     // Breathing — asymmetric oblate/prolate oscillation
     const breatheRaw = Math.sin(t * 2.0);
-    const breathe = breatheRaw > 0
+    const breathe = (breatheRaw > 0
       ? breatheRaw * 0.015
-      : Math.sign(breatheRaw) * Math.pow(Math.abs(breatheRaw), 0.6) * 0.015;
+      : Math.sign(breatheRaw) * Math.pow(Math.abs(breatheRaw), 0.6) * 0.015) * audioBreathScale;
 
     // Gravity sag — slow cycle
     const sagRaw = Math.sin(t * 0.32 * Math.PI * 2);
@@ -172,13 +180,17 @@ export class ExpoGLAdapter implements RenderAdapter {
       1.0 + breathe + sag * 0.15,
     );
 
-    // Organic drift
+    // Organic drift — midrange audio increases sway
+    const drift = cues.drift_amplitude + audioDrift;
     this.creature.position.y = organicNoise(t, [1.5, 2.37, 0.73]) * 0.01 * cues.hover_distance - sag * 0.01;
-    this.creature.position.x = organicNoise(t, [0.7, 1.13, 0.31]) * cues.drift_amplitude;
-    this.creature.position.z = organicNoise(t, [0.5, 0.83, 0.23]) * cues.drift_amplitude * 0.25;
+    this.creature.position.x = organicNoise(t, [0.7, 1.13, 0.31]) * drift;
+    this.creature.position.z = organicNoise(t, [0.5, 0.83, 0.23]) * drift * 0.25;
 
-    // Interior glow
-    this.bodyMaterial.emissiveIntensity = Math.max(0, (cues.glow_intensity - 0.3) * 0.2);
+    // Interior glow — bass frequencies brighten interior
+    this.bodyMaterial.emissiveIntensity = Math.max(0, (cues.glow_intensity - 0.3) * 0.2 + audioGlow);
+
+    // Glass shimmer — transients increase iridescence
+    this.bodyMaterial.iridescence = 0.4 + audioShimmer;
 
     // Eye dilation
     if (this.leftEye && this.rightEye) {
@@ -241,8 +253,8 @@ export class ExpoGLAdapter implements RenderAdapter {
     // No-op on mobile — single environment
   }
 
-  setAudioReactivity(_energy: AudioReactivity | null): void {
-    // TODO: apply audio modulation to mobile creature
+  setAudioReactivity(energy: AudioReactivity | null): void {
+    this.audio = energy;
   }
 
   dispose(): void {

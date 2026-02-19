@@ -522,6 +522,12 @@ export class MobileApp {
     this.runtime.updateMemoryGovernance(config);
   }
 
+  // === Audio Reactivity ===
+
+  setAudioReactivity(energy: { rms: number; low: number; mid: number; high: number } | null): void {
+    this.renderer.setAudioReactivity(energy);
+  }
+
   // === Appearance ===
 
   setInteriorColor(presetName: string): void {

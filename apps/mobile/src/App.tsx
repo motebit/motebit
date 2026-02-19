@@ -36,6 +36,7 @@ import { stripTags } from "@motebit/ai-core";
 import type { TTSProvider, STTProvider } from "@motebit/voice";
 import { ExpoSpeechTTSProvider } from "./adapters/expo-speech-tts";
 import { ExpoAVSTTProvider } from "./adapters/expo-av-stt";
+import { AudioMonitor } from "./adapters/audio-monitor";
 import { MobileApp, APPROVAL_PRESET_CONFIGS } from "./mobile-app";
 import type { MobileSettings, MobileAIConfig, GoalCompleteEvent, GoalApprovalEvent } from "./mobile-app";
 import { WelcomeOverlay } from "./components/WelcomeOverlay";
@@ -113,6 +114,8 @@ export function App(): React.ReactElement {
   const [micState, setMicState] = useState<"off" | "recording" | "transcribing">("off");
   const ttsRef = useRef<TTSProvider | null>(null);
   const sttRef = useRef<STTProvider | null>(null);
+  const audioMonitorRef = useRef<AudioMonitor | null>(null);
+  const ttsPulseRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Sync state
   const [syncStatus, setSyncStatus] = useState<"idle" | "syncing" | "error" | "offline">("offline");
@@ -185,6 +188,8 @@ export function App(): React.ReactElement {
       cancelAnimationFrame(animFrameRef.current);
       app.current.stopGoalScheduler();
       app.current.stopSync();
+      if (audioMonitorRef.current) void audioMonitorRef.current.stop();
+      if (ttsPulseRef.current) clearInterval(ttsPulseRef.current);
     };
   }, []);
 
@@ -398,6 +403,25 @@ export function App(): React.ReactElement {
     animFrameRef.current = requestAnimationFrame(animate);
   }, []);
 
+  // === Audio monitor helpers ===
+  const startAudioMonitor = useCallback(() => {
+    if (audioMonitorRef.current?.isRunning) return;
+    const monitor = new AudioMonitor();
+    monitor.onAudio = (energy) => {
+      app.current.setAudioReactivity(energy ?? null);
+    };
+    audioMonitorRef.current = monitor;
+    void monitor.start();
+  }, []);
+
+  const stopAudioMonitor = useCallback(() => {
+    if (audioMonitorRef.current) {
+      void audioMonitorRef.current.stop();
+      audioMonitorRef.current = null;
+    }
+    app.current.setAudioReactivity(null);
+  }, []);
+
   // === Mic button handler ===
   const handleMicPress = useCallback(async () => {
     if (micState === "off") {
@@ -424,15 +448,17 @@ export function App(): React.ReactElement {
       };
 
       stt.start({ language: "en-US" });
+      startAudioMonitor();
       setMicState("recording");
     } else if (micState === "recording") {
       // Stop recording → transcribe
       setMicState("transcribing");
+      stopAudioMonitor();
       sttRef.current?.stop();
       // Result will arrive via onResult callback, which sets inputText and micState
     }
     // "transcribing" state — button is disabled, showing spinner
-  }, [micState, addSystemMessage]);
+  }, [micState, addSystemMessage, startAudioMonitor, stopAudioMonitor]);
 
   // === Slash commands ===
   const handleSlashCommand = useCallback((command: string, args: string) => {
@@ -626,10 +652,31 @@ export function App(): React.ReactElement {
 
       // TTS — speak the response if voice is enabled
       if (settings?.voiceEnabled && ttsRef.current && finalText) {
+        // Start TTS pulse — synthesized wave so creature breathes during speech
+        const startTime = Date.now();
+        ttsPulseRef.current = setInterval(() => {
+          const elapsed = (Date.now() - startTime) / 1000;
+          const base = 0.06;
+          const wave = Math.sin(elapsed * 4.5) * 0.04;
+          app.current.setAudioReactivity({
+            rms: base + wave,
+            low: base * 0.8 + wave * 0.5,
+            mid: base * 1.2 + wave,
+            high: base * 0.4 + Math.sin(elapsed * 11.3) * 0.03,
+          });
+        }, 33);
+
         try {
           await ttsRef.current.speak(finalText);
         } catch {
           // Non-fatal — TTS failure should not block the UI
+        } finally {
+          // Stop TTS pulse
+          if (ttsPulseRef.current) {
+            clearInterval(ttsPulseRef.current);
+            ttsPulseRef.current = null;
+          }
+          app.current.setAudioReactivity(null);
         }
       }
     }
