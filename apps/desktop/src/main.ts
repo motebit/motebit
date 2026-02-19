@@ -1,4 +1,4 @@
-import { DesktopApp, COLOR_PRESETS, isSlashCommand, parseSlashCommand, type DesktopAIConfig, type InvokeFn, type McpServerConfig, type PolicyConfig, type PairingSession, type GoalCompleteEvent } from "./index";
+import { DesktopApp, COLOR_PRESETS, isSlashCommand, parseSlashCommand, type DesktopAIConfig, type InvokeFn, type McpServerConfig, type PolicyConfig, type PairingSession, type GoalCompleteEvent, type MemoryNode } from "./index";
 import { stripTags } from "@motebit/ai-core";
 import { MicVAD } from "@ricky0123/vad-web";
 import { WebSpeechTTSProvider, WebSpeechSTTProvider, FallbackTTSProvider } from "@motebit/voice";
@@ -589,6 +589,114 @@ goalsBackdrop.addEventListener("click", closeGoalsPanel);
 document.getElementById("goal-create-btn")!.addEventListener("click", () => {
   void createGoal();
 });
+
+// === Memory Panel ===
+
+const memoryPanel = document.getElementById("memory-panel") as HTMLDivElement;
+const memoryBackdrop = document.getElementById("memory-backdrop") as HTMLDivElement;
+const memoryList = document.getElementById("memory-list") as HTMLDivElement;
+const memoryCount = document.getElementById("memory-count") as HTMLSpanElement;
+const memorySearch = document.getElementById("memory-search") as HTMLInputElement;
+
+let allMemories: MemoryNode[] = [];
+
+function openMemoryPanel(): void {
+  memoryPanel.classList.add("open");
+  memoryBackdrop.classList.add("open");
+  refreshMemoryList();
+}
+
+function closeMemoryPanel(): void {
+  memoryPanel.classList.remove("open");
+  memoryBackdrop.classList.remove("open");
+}
+
+function refreshMemoryList(): void {
+  memoryList.innerHTML = "";
+  void app.listMemories().then(memories => {
+    allMemories = memories;
+    memoryCount.textContent = String(memories.length);
+    renderMemoryItems(memories, memorySearch.value.trim());
+  });
+}
+
+function renderMemoryItems(memories: MemoryNode[], query: string): void {
+  memoryList.innerHTML = "";
+  const filtered = query
+    ? memories.filter(m => m.content.toLowerCase().includes(query.toLowerCase()))
+    : memories;
+
+  if (filtered.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "mem-empty";
+    empty.textContent = query ? "No matches" : "No memories yet";
+    memoryList.appendChild(empty);
+    return;
+  }
+
+  for (const mem of filtered) {
+    const item = document.createElement("div");
+    item.className = "mem-item";
+
+    const contentDiv = document.createElement("div");
+    contentDiv.className = "mem-item-content";
+    contentDiv.textContent = mem.content;
+    item.appendChild(contentDiv);
+
+    const metaDiv = document.createElement("div");
+    metaDiv.className = "mem-item-meta";
+
+    // Sensitivity badge (skip "none")
+    if (mem.sensitivity && mem.sensitivity !== "none") {
+      const badge = document.createElement("span");
+      badge.className = `mem-sensitivity-badge ${mem.sensitivity}`;
+      badge.textContent = mem.sensitivity;
+      metaDiv.appendChild(badge);
+    }
+
+    // Effective confidence %
+    const conf = document.createElement("span");
+    const decayed = app.getDecayedConfidence(mem);
+    conf.textContent = `${Math.round(decayed * 100)}%`;
+    metaDiv.appendChild(conf);
+
+    // Time ago
+    const time = document.createElement("span");
+    time.textContent = formatTimeAgo(mem.created_at);
+    metaDiv.appendChild(time);
+
+    item.appendChild(metaDiv);
+
+    // Delete button
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "mem-delete-btn";
+    deleteBtn.textContent = "\u00d7";
+    deleteBtn.title = "Delete memory";
+    deleteBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      void app.deleteMemory(mem.node_id).then(() => {
+        refreshMemoryList();
+      });
+    });
+    item.appendChild(deleteBtn);
+
+    memoryList.appendChild(item);
+  }
+}
+
+// Debounced search
+let memorySearchTimeout: ReturnType<typeof setTimeout> | null = null;
+memorySearch.addEventListener("input", () => {
+  if (memorySearchTimeout) clearTimeout(memorySearchTimeout);
+  memorySearchTimeout = setTimeout(() => {
+    renderMemoryItems(allMemories, memorySearch.value.trim());
+  }, 200);
+});
+
+// Memory panel event listeners
+document.getElementById("memory-btn")!.addEventListener("click", openMemoryPanel);
+document.getElementById("memory-close-btn")!.addEventListener("click", closeMemoryPanel);
+memoryBackdrop.addEventListener("click", closeMemoryPanel);
 
 // === Config Loading ===
 
@@ -2284,6 +2392,8 @@ document.addEventListener("keydown", (e) => {
       closePinDialog();
     } else if (goalsPanel.classList.contains("open")) {
       closeGoalsPanel();
+    } else if (memoryPanel.classList.contains("open")) {
+      closeMemoryPanel();
     } else if (conversationsPanel.classList.contains("open")) {
       closeConversationsPanel();
     } else if (settingsModal.classList.contains("open")) {

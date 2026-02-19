@@ -14,9 +14,9 @@ import {
   resolveConfig,
   type MotebitPersonalityConfig,
 } from "@motebit/ai-core";
-import type { ToolAuditEntry } from "@motebit/sdk";
+import type { ToolAuditEntry, MemoryNode } from "@motebit/sdk";
 import { InMemoryEventStore } from "@motebit/event-log";
-import { InMemoryMemoryStorage } from "@motebit/memory-graph";
+import { InMemoryMemoryStorage, computeDecayedConfidence } from "@motebit/memory-graph";
 import {
   InMemoryIdentityStorage,
   bootstrapIdentity as sharedBootstrapIdentity,
@@ -36,6 +36,7 @@ export type { InvokeFn } from "./tauri-storage.js";
 // Re-export runtime types for main.ts consumption
 export type { TurnResult, StreamChunk, OperatorModeResult, InteriorColor, McpServerConfig, PolicyConfig, MemoryGovernanceConfig };
 export type { PairingSession, PairingStatus };
+export type { MemoryNode };
 
 export interface GoalCompleteEvent {
   goalId: string;
@@ -695,6 +696,36 @@ export class DesktopApp {
     }
 
     return JSON.stringify(data, null, 2);
+  }
+
+  // === Memory Browser ===
+
+  /** List all non-tombstoned memories, sorted by created_at DESC. */
+  async listMemories(): Promise<MemoryNode[]> {
+    if (!this.runtime) return [];
+    try {
+      const { nodes } = await this.runtime.memory.exportAll();
+      return nodes
+        .filter(n => !n.tombstoned)
+        .sort((a, b) => b.created_at - a.created_at);
+    } catch {
+      return [];
+    }
+  }
+
+  /** Soft-delete a memory with audit trail. */
+  async deleteMemory(nodeId: string): Promise<void> {
+    if (!this.runtime) return;
+    await this.runtime.memory.deleteMemory(nodeId);
+  }
+
+  /** Compute effective confidence after half-life decay. */
+  getDecayedConfidence(node: MemoryNode): number {
+    return computeDecayedConfidence(
+      node.confidence,
+      node.half_life,
+      Date.now() - node.created_at,
+    );
   }
 
   // === Pairing: Device A (existing device) ===

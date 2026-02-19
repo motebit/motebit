@@ -1000,6 +1000,172 @@
     }
     #conversations-backdrop.open { opacity: 1; pointer-events: auto; }
 
+    /* Memory panel — slide-in from left */
+    #memory-btn {
+      position: fixed;
+      top: 12px;
+      left: 52px;
+      z-index: 20;
+      width: 36px;
+      height: 36px;
+      border: none;
+      border-radius: 50%;
+      background: rgba(0, 0, 0, 0.05);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      color: rgba(0, 0, 0, 0.4);
+      font-size: 18px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.2s, color 0.2s;
+    }
+    #memory-btn:hover {
+      background: rgba(0, 0, 0, 0.1);
+      color: rgba(0, 0, 0, 0.7);
+    }
+    #memory-btn svg { width: 18px; height: 18px; }
+
+    #memory-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 24;
+      background: rgba(0, 0, 0, 0.05);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s;
+    }
+    #memory-backdrop.open { opacity: 1; pointer-events: auto; }
+
+    #memory-panel {
+      position: fixed;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: 300px;
+      z-index: 25;
+      background: rgba(255, 255, 255, 0.92);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-right: 1px solid rgba(0, 0, 0, 0.06);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: rgba(0, 0, 0, 0.8);
+      transform: translateX(-100%);
+      transition: transform 0.25s ease;
+      display: flex;
+      flex-direction: column;
+    }
+    #memory-panel.open {
+      transform: translateX(0);
+    }
+    .mem-panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px;
+      border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+      flex-shrink: 0;
+    }
+    .mem-panel-title {
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .mem-count-badge {
+      font-size: 11px;
+      padding: 1px 7px;
+      border-radius: 10px;
+      background: rgba(0, 0, 0, 0.06);
+      color: rgba(0, 0, 0, 0.4);
+      margin-left: 6px;
+    }
+    .mem-panel-close {
+      background: none;
+      border: none;
+      color: rgba(0, 0, 0, 0.4);
+      cursor: pointer;
+      font-size: 18px;
+      padding: 2px 6px;
+    }
+    .mem-panel-close:hover { color: rgba(0, 0, 0, 0.7); }
+    .mem-search-wrap {
+      padding: 8px 12px;
+      flex-shrink: 0;
+    }
+    #memory-search {
+      width: 100%;
+      padding: 7px 10px;
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.03);
+      color: rgba(0, 0, 0, 0.75);
+      font-size: 12px;
+      outline: none;
+      font-family: inherit;
+    }
+    #memory-search:focus { border-color: rgba(99, 102, 241, 0.4); }
+    #memory-search::placeholder { color: rgba(0, 0, 0, 0.25); }
+    .mem-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 4px 8px;
+    }
+    .mem-item {
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(0, 0, 0, 0.04);
+      margin-bottom: 4px;
+      position: relative;
+    }
+    .mem-item:hover { background: rgba(0, 0, 0, 0.02); }
+    .mem-item-content {
+      font-size: 13px;
+      color: rgba(0, 0, 0, 0.7);
+      line-height: 1.4;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      word-break: break-word;
+    }
+    .mem-item-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 6px;
+      font-size: 11px;
+      color: rgba(0, 0, 0, 0.35);
+    }
+    .mem-sensitivity-badge {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-weight: 500;
+    }
+    .mem-sensitivity-badge.personal { background: rgba(59, 130, 246, 0.12); color: #3b82f6; }
+    .mem-sensitivity-badge.medical { background: rgba(245, 158, 11, 0.12); color: #f59e0b; }
+    .mem-sensitivity-badge.financial { background: rgba(34, 197, 94, 0.12); color: #22c55e; }
+    .mem-sensitivity-badge.secret { background: rgba(239, 68, 68, 0.12); color: #ef4444; }
+    .mem-delete-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: none;
+      border: none;
+      color: rgba(0, 0, 0, 0.15);
+      cursor: pointer;
+      font-size: 14px;
+      padding: 2px 4px;
+      line-height: 1;
+    }
+    .mem-delete-btn:hover { color: #f87171; }
+    .mem-empty {
+      font-size: 12px;
+      color: rgba(0, 0, 0, 0.3);
+      padding: 16px;
+      text-align: center;
+    }
+
     /* Goals panel — slide-in from right */
     #goals-btn {
       position: fixed;
@@ -1242,7 +1408,7 @@
     #goal-status {
       position: fixed;
       top: 14px;
-      left: 56px;
+      left: 96px;
       z-index: 20;
       display: none;
       align-items: center;
@@ -1333,6 +1499,20 @@
       </div>
     </div>
     <div class="conv-list" id="conv-list"></div>
+  </div>
+  <button id="memory-btn" title="Memories">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a6 6 0 0 1 6 6c0 2.5-1.5 4.5-3 6h-6c-1.5-1.5-3-3.5-3-6a6 6 0 0 1 6-6z"/><path d="M9 14h6"/><path d="M10 18h4"/><path d="M10 22h4"/></svg>
+  </button>
+  <div id="memory-backdrop"></div>
+  <div id="memory-panel">
+    <div class="mem-panel-header">
+      <span class="mem-panel-title">Memories <span class="mem-count-badge" id="memory-count">0</span></span>
+      <button class="mem-panel-close" id="memory-close-btn">&times;</button>
+    </div>
+    <div class="mem-search-wrap">
+      <input id="memory-search" type="text" placeholder="Search memories..." autocomplete="off" />
+    </div>
+    <div class="mem-list" id="memory-list"></div>
   </div>
   <button id="goals-btn" title="Goals">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
