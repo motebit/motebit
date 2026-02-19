@@ -68,7 +68,7 @@ describe("create-motebit", () => {
     const pkg = JSON.parse(readFileSync(join(testDir, "package.json"), "utf-8"));
     expect(pkg.dependencies).toHaveProperty("motebit");
     expect(pkg.dependencies.motebit).toBe("0.1.0");
-    expect(pkg.scripts.chat).toBe("motebit");
+    expect(pkg.scripts.start).toBe("motebit");
     expect(pkg.type).toBe("module");
     expect(pkg.private).toBe(true);
 

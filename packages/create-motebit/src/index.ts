@@ -39,8 +39,9 @@ function makePackageJson(name: string): string {
     private: true,
     type: "module",
     scripts: {
-      start: "motebit run --identity motebit.md",
-      chat: "motebit",
+      start: "motebit",
+      export: "motebit export",
+      daemon: "motebit run --identity motebit.md",
       verify: "motebit verify motebit.md",
     },
     dependencies: {
