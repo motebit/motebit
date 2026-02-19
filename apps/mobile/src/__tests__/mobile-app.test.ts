@@ -47,29 +47,44 @@ vi.mock("expo-three", () => ({
 
 // @motebit/crypto
 vi.mock("@motebit/crypto", () => ({
-  generateKeypair: vi.fn(() => Promise.resolve({
-    publicKey: new Uint8Array(32).fill(0xab),
-    privateKey: new Uint8Array(64).fill(0xcd),
-  })),
   createSignedToken: vi.fn(() => Promise.resolve("mock-signed-token")),
 }));
 
 // @motebit/core-identity
 vi.mock("@motebit/core-identity", () => ({
+  bootstrapIdentity: vi.fn(async (opts: {
+    configStore: { read(): Promise<{ motebit_id: string; device_id: string; device_public_key: string } | null>; write(s: { motebit_id: string; device_id: string; device_public_key: string }): Promise<void> };
+    keyStore: { storePrivateKey(hex: string): Promise<void> };
+  }) => {
+    const existing = await opts.configStore.read();
+    if (existing && existing.motebit_id) {
+      return {
+        motebitId: existing.motebit_id,
+        deviceId: existing.device_id,
+        publicKeyHex: existing.device_public_key,
+        isFirstLaunch: false,
+      };
+    }
+    const motebitId = "test-mote-" + crypto.randomUUID().slice(0, 8);
+    const deviceId = "test-device-" + crypto.randomUUID().slice(0, 8);
+    const publicKeyHex = "ab".repeat(32);
+    await opts.keyStore.storePrivateKey("cd".repeat(64));
+    await opts.configStore.write({ motebit_id: motebitId, device_id: deviceId, device_public_key: publicKeyHex });
+    return { motebitId, deviceId, publicKeyHex, isFirstLaunch: true };
+  }),
+  // MotebitRuntime imports IdentityManager internally
   IdentityManager: vi.fn().mockImplementation(() => ({
-    create: vi.fn((_name: string) => Promise.resolve({
-      motebit_id: "test-mote-" + crypto.randomUUID().slice(0, 8),
-      created_at: Date.now(),
-      owner_id: "test-owner",
-      version_clock: 1,
-    })),
+    create: vi.fn(() => Promise.resolve({ motebit_id: "rt-mote", created_at: Date.now(), owner_id: "rt", version_clock: 0 })),
+    load: vi.fn(() => Promise.resolve(null)),
+    loadByOwner: vi.fn(() => Promise.resolve(null)),
     registerDevice: vi.fn(() => Promise.resolve()),
+    incrementClock: vi.fn(() => Promise.resolve(1)),
   })),
-}));
-
-// @motebit/event-log
-vi.mock("@motebit/event-log", () => ({
-  EventStore: vi.fn().mockImplementation(() => ({})),
+  InMemoryIdentityStorage: vi.fn().mockImplementation(() => ({
+    save: vi.fn(() => Promise.resolve()),
+    load: vi.fn(() => Promise.resolve(null)),
+    loadByOwner: vi.fn(() => Promise.resolve(null)),
+  })),
 }));
 
 // @motebit/sync-engine
@@ -140,22 +155,13 @@ describe("MobileApp.bootstrap", () => {
     app.stop();
   });
 
-  it("generates keypair on first launch and signals needsPairing", async () => {
+  it("creates identity on first launch", async () => {
     const result = await app.bootstrap();
     expect(result.isFirstLaunch).toBe(true);
-    expect(result.needsPairing).toBe(true);
-    expect(result.motebitId).toBe("");
-    expect(app.publicKey).toBeTruthy();
-  });
-
-  it("creates identity via createNewIdentity after bootstrap", async () => {
-    await app.bootstrap();
-    const result = await app.createNewIdentity();
-    expect(result.isFirstLaunch).toBe(true);
-    expect(result.needsPairing).toBe(false);
     expect(result.motebitId).toMatch(/^test-mote-/);
     expect(result.deviceId).toBeTruthy();
     expect(app.motebitId).toBe(result.motebitId);
+    expect(app.publicKey).toBeTruthy();
   });
 
   it("loads existing identity on subsequent launch", async () => {
@@ -166,7 +172,6 @@ describe("MobileApp.bootstrap", () => {
 
     const result = await app.bootstrap();
     expect(result.isFirstLaunch).toBe(false);
-    expect(result.needsPairing).toBe(false);
     expect(result.motebitId).toBe("existing-mote-123");
     expect(app.motebitId).toBe("existing-mote-123");
     expect(app.deviceId).toBe("existing-device-456");

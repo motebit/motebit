@@ -7,12 +7,13 @@
  *
  * Storage is IndexedDB-backed via @motebit/browser-persistence — identity,
  * memories, events, and audit log persist across page reloads. No MCP (stdio
- * is Node-only). Identity keypair stored in localStorage via LocalStorageKeyringAdapter.
+ * is Node-only). Identity bootstrap via shared bootstrapIdentity() protocol.
+ * Private key encrypted via EncryptedKeyStore (WebCrypto + IndexedDB).
  */
 
 import { MotebitRuntime } from "@motebit/runtime";
 import { createBrowserStorage } from "@motebit/browser-persistence";
-import type { StreamChunk, KeyringAdapter } from "@motebit/runtime";
+import type { StreamChunk, KeyringAdapter, StorageAdapters } from "@motebit/runtime";
 import { WebXRThreeJSAdapter } from "@motebit/render-engine";
 import {
   CloudProvider,
@@ -20,11 +21,16 @@ import {
   resolveConfig,
   type MotebitPersonalityConfig,
 } from "@motebit/ai-core";
-import { generateKeypair } from "@motebit/crypto";
+import {
+  bootstrapIdentity as sharedBootstrapIdentity,
+  type BootstrapConfigStore,
+  type BootstrapKeyStore,
+} from "@motebit/core-identity";
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";
 import { OrbitalDynamics, estimateBodyAnchors, getAnchorForReference } from "./index";
 import { VoiceInterface } from "./voice";
 import { LocalStorageKeyringAdapter } from "./browser-keyring";
+import { EncryptedKeyStore } from "./encrypted-keystore";
 
 // === Configuration ===
 
@@ -43,6 +49,7 @@ export class SpatialApp {
   readonly voice: VoiceInterface;
 
   private runtime: MotebitRuntime | null = null;
+  private storage: StorageAdapters | null = null;
   private keyring: KeyringAdapter;
   private latestCues: BehaviorCues = {
     hover_distance: 0.4,
@@ -73,43 +80,45 @@ export class SpatialApp {
   }
 
   /**
-   * Bootstrap identity — generate Ed25519 keypair on first launch,
-   * or load existing identity from localStorage.
+   * Bootstrap identity — delegates to shared bootstrapIdentity() protocol.
+   * Creates identity in IndexedDB, registers device, logs event.
+   * Private key stored via EncryptedKeyStore (WebCrypto + IndexedDB).
    */
   async bootstrap(): Promise<{ isFirstLaunch: boolean }> {
-    const existingId = localStorage.getItem("motebit:motebit_id");
+    const configStore: BootstrapConfigStore = {
+      async read() {
+        const mid = localStorage.getItem("motebit:motebit_id");
+        if (!mid) return null;
+        return {
+          motebit_id: mid,
+          device_id: localStorage.getItem("motebit:device_id") || "",
+          device_public_key: localStorage.getItem("motebit:device_public_key") || "",
+        };
+      },
+      async write(state) {
+        localStorage.setItem("motebit:motebit_id", state.motebit_id);
+        localStorage.setItem("motebit:device_id", state.device_id);
+        localStorage.setItem("motebit:device_public_key", state.device_public_key);
+      },
+    };
 
-    if (existingId) {
-      this.motebitId = existingId;
-      this.deviceId = localStorage.getItem("motebit:device_id") || "spatial-local";
-      this.publicKey = localStorage.getItem("motebit:device_public_key") || "";
-      return { isFirstLaunch: false };
-    }
+    const keyStore: BootstrapKeyStore = new EncryptedKeyStore();
+    const storage = await createBrowserStorage();
+    this.storage = storage;
 
-    // First launch — create identity and device keypair
-    const keypair = await generateKeypair();
+    const result = await sharedBootstrapIdentity({
+      surfaceName: "Spatial",
+      identityStorage: storage.identityStorage,
+      eventStoreAdapter: storage.eventStore,
+      configStore,
+      keyStore,
+    });
 
-    const pubKeyHex = Array.from(keypair.publicKey)
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-    const privKeyHex = Array.from(keypair.privateKey)
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
+    this.motebitId = result.motebitId;
+    this.deviceId = result.deviceId;
+    this.publicKey = result.publicKeyHex;
 
-    const motebitId = crypto.randomUUID();
-    const deviceId = crypto.randomUUID();
-
-    // Persist to localStorage
-    localStorage.setItem("motebit:motebit_id", motebitId);
-    localStorage.setItem("motebit:device_id", deviceId);
-    localStorage.setItem("motebit:device_public_key", pubKeyHex);
-    await this.keyring.set("device_private_key", privKeyHex);
-
-    this.motebitId = motebitId;
-    this.deviceId = deviceId;
-    this.publicKey = pubKeyHex;
-
-    return { isFirstLaunch: true };
+    return { isFirstLaunch: result.isFirstLaunch };
   }
 
   // === AI Integration ===
@@ -145,7 +154,7 @@ export class SpatialApp {
       });
     }
 
-    const storage = await createBrowserStorage();
+    const storage = this.storage ?? await createBrowserStorage();
 
     this.runtime = new MotebitRuntime(
       { motebitId: this.motebitId, tickRateHz: 2 },

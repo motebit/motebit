@@ -165,9 +165,7 @@ export function App(): React.ReactElement {
     setShowWelcome(false);
     const a = app.current;
 
-    // Create new identity (keypair was already generated in bootstrap)
-    await a.createNewIdentity();
-
+    // Identity already exists from bootstrap — just init AI and start
     const s = settings || (await a.loadSettings());
     await initializeAI(a, s);
     a.start();

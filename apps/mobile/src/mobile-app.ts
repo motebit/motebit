@@ -18,13 +18,17 @@ import type {
   InteriorColor,
   PolicyConfig,
   MemoryGovernanceConfig,
+  StorageAdapters,
 } from "@motebit/runtime";
 import { CloudProvider, OllamaProvider } from "@motebit/ai-core";
-import { generateKeypair, createSignedToken } from "@motebit/crypto";
-import { IdentityManager } from "@motebit/core-identity";
+import { createSignedToken } from "@motebit/crypto";
+import {
+  bootstrapIdentity as sharedBootstrapIdentity,
+  type BootstrapConfigStore,
+  type BootstrapKeyStore,
+} from "@motebit/core-identity";
 import { PairingClient } from "@motebit/sync-engine";
 import type { PairingSession, PairingStatus } from "@motebit/sync-engine";
-import { EventStore } from "@motebit/event-log";
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";
 import { createExpoStorage } from "./adapters/expo-sqlite";
 import { ExpoGLAdapter } from "./adapters/expo-gl";
@@ -111,7 +115,6 @@ export interface MobileAIConfig {
 
 export interface MobileBootstrapResult {
   isFirstLaunch: boolean;
-  needsPairing: boolean;
   motebitId: string;
   deviceId: string;
 }
@@ -120,6 +123,7 @@ export interface MobileBootstrapResult {
 
 export class MobileApp {
   private runtime: MotebitRuntime | null = null;
+  private storage: StorageAdapters | null = null;
   private renderer: ExpoGLAdapter;
   private keyring: SecureStoreAdapter;
 
@@ -135,54 +139,51 @@ export class MobileApp {
   // === Identity ===
 
   async bootstrap(): Promise<MobileBootstrapResult> {
-    // Check for existing identity in secure store
-    const existingId = await this.keyring.get("motebit_id");
-    if (existingId) {
-      this.motebitId = existingId;
-      this.deviceId = (await this.keyring.get("device_id")) || "mobile-local";
-      this.publicKey = (await this.keyring.get("device_public_key")) || "";
-      return { isFirstLaunch: false, needsPairing: false, motebitId: this.motebitId, deviceId: this.deviceId };
-    }
+    const keyring = this.keyring;
 
-    // First launch — generate keypair but don't create identity yet.
-    // The user may choose to link an existing motebit instead.
-    const keypair = await generateKeypair();
-    const pubKeyHex = Array.from(keypair.publicKey as Uint8Array).map((b: number) => b.toString(16).padStart(2, "0")).join("");
-    const privKeyHex = Array.from(keypair.privateKey as Uint8Array).map((b: number) => b.toString(16).padStart(2, "0")).join("");
+    const configStore: BootstrapConfigStore = {
+      async read() {
+        const mid = await keyring.get("motebit_id");
+        if (!mid) return null;
+        return {
+          motebit_id: mid,
+          device_id: (await keyring.get("device_id")) || "",
+          device_public_key: (await keyring.get("device_public_key")) || "",
+        };
+      },
+      async write(state) {
+        await keyring.set("motebit_id", state.motebit_id);
+        await keyring.set("device_id", state.device_id);
+        await keyring.set("device_public_key", state.device_public_key);
+      },
+    };
 
-    // Store keypair immediately so it's available for pairing or new identity
-    await this.keyring.set("device_public_key", pubKeyHex);
-    await this.keyring.set("device_private_key", privKeyHex);
-    this.publicKey = pubKeyHex;
+    const keyStore: BootstrapKeyStore = {
+      async storePrivateKey(hex: string) {
+        await keyring.set("device_private_key", hex);
+      },
+    };
 
-    return { isFirstLaunch: true, needsPairing: true, motebitId: "", deviceId: "" };
-  }
-
-  /**
-   * Create a new identity (called when user chooses "Create My Mote").
-   */
-  async createNewIdentity(): Promise<MobileBootstrapResult> {
     const storage = createExpoStorage("motebit.db");
-    const eventStore = new EventStore(storage.eventStore);
-    const identityManager = new IdentityManager(storage.identityStorage, eventStore);
+    this.storage = storage;
 
-    const deviceName = "Mobile";
-    const identity = await identityManager.create(deviceName);
-    const pubKeyHex = this.publicKey; // Already generated in bootstrap
+    const result = await sharedBootstrapIdentity({
+      surfaceName: "Mobile",
+      identityStorage: storage.identityStorage,
+      eventStoreAdapter: storage.eventStore,
+      configStore,
+      keyStore,
+    });
 
-    const deviceId = crypto.randomUUID();
+    this.motebitId = result.motebitId;
+    this.deviceId = result.deviceId;
+    this.publicKey = result.publicKeyHex;
 
-    // Register device
-    await identityManager.registerDevice(identity.motebit_id, deviceName, pubKeyHex);
-
-    // Persist to secure store
-    await this.keyring.set("motebit_id", identity.motebit_id);
-    await this.keyring.set("device_id", deviceId);
-
-    this.motebitId = identity.motebit_id;
-    this.deviceId = deviceId;
-
-    return { isFirstLaunch: true, needsPairing: false, motebitId: this.motebitId, deviceId: this.deviceId };
+    return {
+      isFirstLaunch: result.isFirstLaunch,
+      motebitId: result.motebitId,
+      deviceId: result.deviceId,
+    };
   }
 
   // === AI ===
@@ -204,7 +205,7 @@ export class MobileApp {
       });
     }
 
-    const storage = createExpoStorage("motebit.db");
+    const storage = this.storage ?? createExpoStorage("motebit.db");
 
     this.runtime = new MotebitRuntime(
       { motebitId: this.motebitId, tickRateHz: 2 },
