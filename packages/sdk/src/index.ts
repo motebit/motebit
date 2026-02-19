@@ -236,6 +236,8 @@ export interface ContextPack {
   conversation_history?: ConversationMessage[];
   behavior_cues?: BehaviorCues;
   tools?: ToolDefinition[];
+  /** Session resumption info — set when continuing a persisted conversation. */
+  sessionInfo?: { continued: boolean; startedAt: number };
 }
 
 export type ConversationMessage =

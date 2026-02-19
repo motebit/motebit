@@ -5,7 +5,7 @@
  * memory edges, identities, devices, and audit log.
  */
 
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 export function openMotebitDB(dbName = "motebit"): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -51,6 +51,18 @@ export function openMotebitDB(dbName = "motebit"): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains("audit_log")) {
         const audit = db.createObjectStore("audit_log", { keyPath: "audit_id" });
         audit.createIndex("motebit_time", ["motebit_id", "timestamp"]);
+      }
+
+      // Conversations
+      if (!db.objectStoreNames.contains("conversations")) {
+        const convs = db.createObjectStore("conversations", { keyPath: "conversationId" });
+        convs.createIndex("motebit_id", "motebitId");
+      }
+
+      // Conversation messages
+      if (!db.objectStoreNames.contains("conversation_messages")) {
+        const msgs = db.createObjectStore("conversation_messages", { keyPath: "messageId" });
+        msgs.createIndex("conversation_id", "conversationId");
       }
     };
 

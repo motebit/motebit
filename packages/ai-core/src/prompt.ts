@@ -196,6 +196,20 @@ export function buildSystemPrompt(
     sections.push(INJECTION_DEFENSE);
   }
 
+  // Session awareness — continuing a persisted conversation
+  if (contextPack.sessionInfo?.continued) {
+    const elapsed = Date.now() - contextPack.sessionInfo.startedAt;
+    const minutes = Math.floor(elapsed / 60_000);
+    let timeAgo: string;
+    if (minutes < 60) {
+      timeAgo = `${minutes} minute${minutes !== 1 ? "s" : ""} ago`;
+    } else {
+      const hours = Math.floor(minutes / 60);
+      timeAgo = `${hours} hour${hours !== 1 ? "s" : ""} ago`;
+    }
+    sections.push(`[Session] You are continuing a conversation from ${timeAgo}. You have access to earlier context above.`);
+  }
+
   // Body awareness — where the motebit IS right now
   if (contextPack.behavior_cues) {
     const bodyLine = formatBodyAwareness(contextPack.behavior_cues);

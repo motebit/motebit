@@ -4,7 +4,7 @@ import type { MemoryStorageAdapter, MemoryQuery } from "@motebit/memory-graph";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 import type { IdentityStorage, DeviceRegistration } from "@motebit/core-identity";
 import type { AuditLogAdapter } from "@motebit/privacy-layer";
-import type { StateSnapshotAdapter } from "@motebit/runtime";
+import type { StateSnapshotAdapter, ConversationStoreAdapter } from "@motebit/runtime";
 
 // === IPC Helpers ===
 
@@ -536,5 +536,171 @@ export class TauriStateSnapshotStorage implements StateSnapshotAdapter {
       this._cache.set(motebitId, rows[0]!.state_json);
       this._clockCache.set(motebitId, rows[0]!.version_clock);
     }
+  }
+}
+
+// === TauriConversationStore ===
+
+interface ConversationRow {
+  conversation_id: string;
+  motebit_id: string;
+  started_at: number;
+  last_active_at: number;
+  title: string | null;
+  summary: string | null;
+  message_count: number;
+}
+
+interface ConversationMessageRow {
+  message_id: string;
+  conversation_id: string;
+  motebit_id: string;
+  role: string;
+  content: string;
+  tool_calls: string | null;
+  tool_call_id: string | null;
+  created_at: number;
+  token_estimate: number;
+}
+
+/** 4-hour window for session continuity. */
+const ACTIVE_CONVERSATION_WINDOW_MS = 4 * 60 * 60 * 1000;
+
+export class TauriConversationStore implements ConversationStoreAdapter {
+  // ConversationStoreAdapter is sync, but Tauri IPC is async.
+  // We use the same preload/cache strategy as TauriStateSnapshotStorage.
+  private _activeCache = new Map<string, {
+    conversationId: string;
+    startedAt: number;
+    lastActiveAt: number;
+    summary: string | null;
+  } | null>();
+  private _messagesCache = new Map<string, Array<{
+    messageId: string;
+    conversationId: string;
+    motebitId: string;
+    role: string;
+    content: string;
+    toolCalls: string | null;
+    toolCallId: string | null;
+    createdAt: number;
+    tokenEstimate: number;
+  }>>();
+
+  constructor(private invoke: InvokeFn) {}
+
+  /** Pre-load active conversation and its messages before runtime construction. */
+  async preload(motebitId: string): Promise<void> {
+    const cutoff = Date.now() - ACTIVE_CONVERSATION_WINDOW_MS;
+    const convRows = await dbQuery<ConversationRow>(
+      this.invoke,
+      "SELECT * FROM conversations WHERE motebit_id = ? AND last_active_at > ? ORDER BY last_active_at DESC LIMIT 1",
+      [motebitId, cutoff],
+    );
+    if (convRows.length > 0) {
+      const row = convRows[0]!;
+      this._activeCache.set(motebitId, {
+        conversationId: row.conversation_id,
+        startedAt: row.started_at,
+        lastActiveAt: row.last_active_at,
+        summary: row.summary,
+      });
+      const msgRows = await dbQuery<ConversationMessageRow>(
+        this.invoke,
+        "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY created_at ASC",
+        [row.conversation_id],
+      );
+      this._messagesCache.set(row.conversation_id, msgRows.map(r => ({
+        messageId: r.message_id,
+        conversationId: r.conversation_id,
+        motebitId: r.motebit_id,
+        role: r.role,
+        content: r.content,
+        toolCalls: r.tool_calls,
+        toolCallId: r.tool_call_id,
+        createdAt: r.created_at,
+        tokenEstimate: r.token_estimate,
+      })));
+    } else {
+      this._activeCache.set(motebitId, null);
+    }
+  }
+
+  createConversation(motebitId: string): string {
+    const conversationId = crypto.randomUUID();
+    const now = Date.now();
+    void dbExecute(
+      this.invoke,
+      `INSERT INTO conversations (conversation_id, motebit_id, started_at, last_active_at, title, summary, message_count)
+       VALUES (?, ?, ?, ?, ?, ?, 0)`,
+      [conversationId, motebitId, now, now, null, null],
+    );
+    return conversationId;
+  }
+
+  appendMessage(conversationId: string, motebitId: string, msg: {
+    role: string;
+    content: string;
+    toolCalls?: string;
+    toolCallId?: string;
+  }): void {
+    const messageId = crypto.randomUUID();
+    const now = Date.now();
+    const tokenEstimate = Math.ceil(msg.content.length / 4);
+    void dbExecute(
+      this.invoke,
+      `INSERT INTO conversation_messages (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [messageId, conversationId, motebitId, msg.role, msg.content, msg.toolCalls ?? null, msg.toolCallId ?? null, now, tokenEstimate],
+    );
+    void dbExecute(
+      this.invoke,
+      "UPDATE conversations SET last_active_at = ?, message_count = message_count + 1 WHERE conversation_id = ?",
+      [now, conversationId],
+    );
+  }
+
+  loadMessages(conversationId: string, _limit?: number): Array<{
+    messageId: string;
+    conversationId: string;
+    motebitId: string;
+    role: string;
+    content: string;
+    toolCalls: string | null;
+    toolCallId: string | null;
+    createdAt: number;
+    tokenEstimate: number;
+  }> {
+    // Return from preloaded cache (sync interface requirement)
+    return this._messagesCache.get(conversationId) ?? [];
+  }
+
+  getActiveConversation(motebitId: string): {
+    conversationId: string;
+    startedAt: number;
+    lastActiveAt: number;
+    summary: string | null;
+  } | null {
+    return this._activeCache.get(motebitId) ?? null;
+  }
+
+  updateSummary(conversationId: string, summary: string): void {
+    void dbExecute(
+      this.invoke,
+      "UPDATE conversations SET summary = ? WHERE conversation_id = ?",
+      [summary, conversationId],
+    );
+  }
+
+  listConversations(_motebitId: string, _limit = 20): Array<{
+    conversationId: string;
+    startedAt: number;
+    lastActiveAt: number;
+    title: string | null;
+    messageCount: number;
+  }> {
+    // This is called from UI — we'll return empty and let the caller use async if needed.
+    // For the desktop app, this is best-effort.
+    return [];
   }
 }

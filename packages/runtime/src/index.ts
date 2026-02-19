@@ -20,12 +20,14 @@ import {
   extractStateTags,
   extractActions,
   actionsToStateUpdates,
+  trimConversation,
 } from "@motebit/ai-core";
 import type {
   StreamingProvider,
   MotebitLoopDependencies,
   TurnResult,
   AgenticChunk,
+  ContextBudget,
 } from "@motebit/ai-core";
 // Node-only packages (@motebit/tools, @motebit/mcp-client) are imported dynamically
 // to avoid bundling node:child_process / stdio into browser builds (desktop app).
@@ -102,6 +104,43 @@ export { SimpleToolRegistry };
 
 // === Platform Adapter Interfaces ===
 
+// === Conversation Store Adapter ===
+
+export interface ConversationStoreAdapter {
+  createConversation(motebitId: string): string;
+  appendMessage(conversationId: string, motebitId: string, msg: {
+    role: string;
+    content: string;
+    toolCalls?: string;
+    toolCallId?: string;
+  }): void;
+  loadMessages(conversationId: string, limit?: number): Array<{
+    messageId: string;
+    conversationId: string;
+    motebitId: string;
+    role: string;
+    content: string;
+    toolCalls: string | null;
+    toolCallId: string | null;
+    createdAt: number;
+    tokenEstimate: number;
+  }>;
+  getActiveConversation(motebitId: string): {
+    conversationId: string;
+    startedAt: number;
+    lastActiveAt: number;
+    summary: string | null;
+  } | null;
+  updateSummary(conversationId: string, summary: string): void;
+  listConversations(motebitId: string, limit?: number): Array<{
+    conversationId: string;
+    startedAt: number;
+    lastActiveAt: number;
+    title: string | null;
+    messageCount: number;
+  }>;
+}
+
 export interface StateSnapshotAdapter {
   saveState(motebitId: string, stateJson: string, versionClock?: number): void;
   loadState(motebitId: string): string | null;
@@ -122,6 +161,7 @@ export interface StorageAdapters {
   auditLog: AuditLogAdapter;
   stateSnapshot?: StateSnapshotAdapter;
   toolAuditSink?: AuditLogSink;
+  conversationStore?: ConversationStoreAdapter;
 }
 
 export interface PlatformAdapters {
@@ -235,6 +275,8 @@ export class MotebitRuntime {
   private mcpConfigs: McpServerConfig[];
   private keyring: KeyringAdapter | null;
   private toolAuditSink?: AuditLogSink;
+  private conversationStore: ConversationStoreAdapter | null;
+  private conversationId: string | null = null;
   private externalToolSources = new Map<string, string[]>();
   private _pendingApproval: {
     toolCallId: string;
@@ -301,6 +343,24 @@ export class MotebitRuntime {
       const saved = this.stateSnapshot.loadState(this.motebitId);
       if (saved) {
         this.state.deserialize(saved);
+      }
+    }
+
+    // Conversation persistence — resume active conversation if within window
+    this.conversationStore = adapters.storage.conversationStore ?? null;
+    if (this.conversationStore) {
+      const active = this.conversationStore.getActiveConversation(this.motebitId);
+      if (active) {
+        this.conversationId = active.conversationId;
+        const messages = this.conversationStore.loadMessages(active.conversationId);
+        for (const msg of messages) {
+          if (msg.role === "user" || msg.role === "assistant") {
+            this.conversationHistory.push({
+              role: msg.role as "user" | "assistant",
+              content: msg.content,
+            });
+          }
+        }
       }
     }
 
@@ -497,8 +557,9 @@ export class MotebitRuntime {
     this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
 
     try {
+      const trimmed = this.trimHistory();
       const result = await runTurn(this.loopDeps, text, {
-        conversationHistory: this.conversationHistory,
+        conversationHistory: trimmed,
         previousCues: this.latestCues,
       });
       this.pushToHistory(text, result.response);
@@ -518,8 +579,9 @@ export class MotebitRuntime {
     this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
 
     try {
+      const trimmed = this.trimHistory();
       const stream = runTurnStreaming(this.loopDeps, text, {
-        conversationHistory: this.conversationHistory,
+        conversationHistory: trimmed,
         previousCues: this.latestCues,
       });
       yield* this.processStream(stream, text);
@@ -669,10 +731,43 @@ export class MotebitRuntime {
 
   resetConversation(): void {
     this.conversationHistory = [];
+    this.conversationId = null;
   }
 
   getConversationHistory(): ConversationMessage[] {
     return [...this.conversationHistory];
+  }
+
+  getConversationId(): string | null {
+    return this.conversationId;
+  }
+
+  /** Load a specific past conversation by ID, replacing current history. */
+  loadConversation(conversationId: string): void {
+    if (!this.conversationStore) return;
+    const messages = this.conversationStore.loadMessages(conversationId);
+    this.conversationHistory = [];
+    for (const msg of messages) {
+      if (msg.role === "user" || msg.role === "assistant") {
+        this.conversationHistory.push({
+          role: msg.role as "user" | "assistant",
+          content: msg.content,
+        });
+      }
+    }
+    this.conversationId = conversationId;
+  }
+
+  /** List recent conversations (for UI/CLI). */
+  listConversations(limit?: number): Array<{
+    conversationId: string;
+    startedAt: number;
+    lastActiveAt: number;
+    title: string | null;
+    messageCount: number;
+  }> {
+    if (!this.conversationStore) return [];
+    return this.conversationStore.listConversations(this.motebitId, limit);
   }
 
   // === Rendering ===
@@ -772,6 +867,24 @@ export class MotebitRuntime {
     }
   }
 
+  /** Default context window budget — conservative to fit most models. */
+  private static readonly CONVERSATION_BUDGET: ContextBudget = {
+    maxTokens: 8000,
+    reserveForResponse: 1024,
+  };
+
+  /** Trim conversation history to fit within token budget. In-memory history stays complete. */
+  private trimHistory(): ConversationMessage[] {
+    const summary = this.conversationId && this.conversationStore
+      ? this.conversationStore.getActiveConversation(this.motebitId)?.summary ?? null
+      : null;
+    return trimConversation(
+      this.conversationHistory,
+      MotebitRuntime.CONVERSATION_BUDGET,
+      summary,
+    );
+  }
+
   private pushToHistory(userMessage: string, assistantResponse: string): void {
     this.conversationHistory.push(
       { role: "user", content: userMessage },
@@ -779,6 +892,21 @@ export class MotebitRuntime {
     );
     if (this.conversationHistory.length > this.maxHistory) {
       this.conversationHistory = this.conversationHistory.slice(-this.maxHistory);
+    }
+
+    // Persist to conversation store
+    if (this.conversationStore) {
+      if (!this.conversationId) {
+        this.conversationId = this.conversationStore.createConversation(this.motebitId);
+      }
+      this.conversationStore.appendMessage(this.conversationId, this.motebitId, {
+        role: "user",
+        content: userMessage,
+      });
+      this.conversationStore.appendMessage(this.conversationId, this.motebitId, {
+        role: "assistant",
+        content: assistantResponse,
+      });
     }
   }
 

@@ -28,7 +28,7 @@ import { createSignedToken } from "@motebit/crypto";
 import { generate as generateIdentityFile, parse as parseIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
 import { PairingClient } from "@motebit/sync-engine";
 import type { PairingSession, PairingStatus } from "@motebit/sync-engine";
-import { TauriEventStore, TauriMemoryStorage, TauriIdentityStorage, TauriAuditLog, TauriStateSnapshotStorage, type InvokeFn } from "./tauri-storage.js";
+import { TauriEventStore, TauriMemoryStorage, TauriIdentityStorage, TauriAuditLog, TauriStateSnapshotStorage, TauriConversationStore, type InvokeFn } from "./tauri-storage.js";
 import { registerDesktopTools } from "./desktop-tools.js";
 export type { InvokeFn } from "./tauri-storage.js";
 
@@ -114,7 +114,7 @@ class TauriToolAuditSink implements AuditLogSink {
 
 // === Storage Factory ===
 
-function createTauriStorage(invoke: InvokeFn, stateSnapshot?: TauriStateSnapshotStorage): StorageAdapters {
+function createTauriStorage(invoke: InvokeFn, stateSnapshot?: TauriStateSnapshotStorage, conversationStore?: TauriConversationStore): StorageAdapters {
   return {
     eventStore: new TauriEventStore(invoke),
     memoryStorage: new TauriMemoryStorage(invoke),
@@ -122,12 +122,13 @@ function createTauriStorage(invoke: InvokeFn, stateSnapshot?: TauriStateSnapshot
     auditLog: new TauriAuditLog(invoke),
     toolAuditSink: new TauriToolAuditSink(invoke),
     stateSnapshot,
+    conversationStore,
   };
 }
 
-function createDesktopStorage(config: DesktopAIConfig, stateSnapshot?: TauriStateSnapshotStorage): StorageAdapters {
+function createDesktopStorage(config: DesktopAIConfig, stateSnapshot?: TauriStateSnapshotStorage, conversationStore?: TauriConversationStore): StorageAdapters {
   if (config.isTauri && config.invoke) {
-    return createTauriStorage(config.invoke, stateSnapshot);
+    return createTauriStorage(config.invoke, stateSnapshot, conversationStore);
   }
   return {
     eventStore: new InMemoryEventStore(),
@@ -427,14 +428,19 @@ export class DesktopApp {
       });
     }
 
-    // State snapshot persistence — preload before runtime construction
+    // State snapshot + conversation persistence — preload before runtime construction
     let stateSnapshot: TauriStateSnapshotStorage | undefined;
+    let conversationStore: TauriConversationStore | undefined;
     if (config.isTauri && config.invoke) {
       stateSnapshot = new TauriStateSnapshotStorage(config.invoke);
-      await stateSnapshot.preload(this.motebitId);
+      conversationStore = new TauriConversationStore(config.invoke);
+      await Promise.all([
+        stateSnapshot.preload(this.motebitId),
+        conversationStore.preload(this.motebitId),
+      ]);
     }
 
-    const storage = createDesktopStorage(config, stateSnapshot);
+    const storage = createDesktopStorage(config, stateSnapshot, conversationStore);
     const keyring = config.isTauri && config.invoke ? new TauriKeyringAdapter(config.invoke) : undefined;
 
     // Read governance from motebit.md identity file.
@@ -507,6 +513,11 @@ export class DesktopApp {
 
   resetConversation(): void {
     this.runtime?.resetConversation();
+  }
+
+  /** Get conversation history for rendering previous messages on reopen. */
+  getConversationHistory(): Array<{ role: string; content: string }> {
+    return this.runtime?.getConversationHistory() ?? [];
   }
 
   async sendMessage(text: string): Promise<TurnResult> {

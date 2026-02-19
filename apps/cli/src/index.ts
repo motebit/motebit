@@ -227,6 +227,8 @@ Slash commands (in REPL):
   /forget <nodeId>   Delete a memory by ID
   /export            Export all memories and state as JSON
   /clear             Clear conversation history
+  /conversations     List recent conversations
+  /conversation <id> Load a past conversation
   /model <name>      Switch AI model mid-session
   /sync              Sync with remote server
   /tools             List registered tools
@@ -531,6 +533,7 @@ function createRuntime(
     auditLog: moteDb.auditLog,
     stateSnapshot: moteDb.stateSnapshot,
     toolAuditSink: moteDb.toolAuditSink,
+    conversationStore: moteDb.conversationStore,
   };
 
   const runtime = new MotebitRuntime(
@@ -663,6 +666,8 @@ Available commands:
   /forget <nodeId>   Delete a memory by ID
   /export            Export all memories and state as JSON
   /clear             Clear conversation history
+  /conversations     List recent conversations
+  /conversation <id> Load a past conversation
   /model <name>      Switch AI model
   /sync              Sync with remote server
   /tools             List registered tools
@@ -765,6 +770,45 @@ Available commands:
           console.log(`  ${tool.name.padEnd(24)} ${tool.description.slice(0, 60)}`);
         }
       }
+      break;
+    }
+
+    case "conversations": {
+      const convList = runtime.listConversations(20);
+      if (convList.length === 0) {
+        console.log("No conversations found.");
+      } else {
+        console.log(`\nConversations (${convList.length}):\n`);
+        for (const c of convList) {
+          const id = c.conversationId.slice(0, 8);
+          const ago = formatTimeAgo(Date.now() - c.lastActiveAt);
+          const title = c.title ?? "(untitled)";
+          console.log(`  ${id}  ${ago.padEnd(10)} ${String(c.messageCount).padEnd(4)} msgs  ${title}`);
+        }
+        console.log("\nLoad a conversation: /conversation <id>");
+      }
+      break;
+    }
+
+    case "conversation": {
+      if (!args) {
+        const convId = runtime.getConversationId();
+        if (convId) {
+          console.log(`Active conversation: ${convId.slice(0, 8)}...`);
+        } else {
+          console.log("No active conversation. Use /conversations to list past ones.");
+        }
+        break;
+      }
+      const convList = runtime.listConversations(100);
+      const match = convList.find((c) => c.conversationId === args || c.conversationId.startsWith(args));
+      if (!match) {
+        console.log(`No conversation found matching "${args}".`);
+        break;
+      }
+      runtime.loadConversation(match.conversationId);
+      const history = runtime.getConversationHistory();
+      console.log(`Loaded conversation ${match.conversationId.slice(0, 8)} (${history.length} messages)`);
       break;
     }
 
@@ -1195,6 +1239,7 @@ async function handleRun(config: CliConfig): Promise<void> {
     auditLog: moteDb.auditLog,
     stateSnapshot: moteDb.stateSnapshot,
     toolAuditSink: moteDb.toolAuditSink,
+    conversationStore: moteDb.conversationStore,
   };
 
   const runtime = new MotebitRuntime(

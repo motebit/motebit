@@ -97,6 +97,30 @@ CREATE TABLE IF NOT EXISTS state_snapshots (
   updated_at INTEGER NOT NULL,
   version_clock INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS conversations (
+  conversation_id TEXT PRIMARY KEY,
+  motebit_id TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  last_active_at INTEGER NOT NULL,
+  title TEXT,
+  summary TEXT,
+  message_count INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_conversations_motebit ON conversations (motebit_id, last_active_at DESC);
+
+CREATE TABLE IF NOT EXISTS conversation_messages (
+  message_id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  motebit_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  tool_calls TEXT,
+  tool_call_id TEXT,
+  created_at INTEGER NOT NULL,
+  token_estimate INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_conv_messages ON conversation_messages (conversation_id, created_at ASC);
 ";
 
 fn json_to_sql_value(v: &JsonValue) -> SqlValue {

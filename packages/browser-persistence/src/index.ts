@@ -5,6 +5,7 @@ import { IdbMemoryStorage } from "./memory-storage.js";
 import { IdbIdentityStorage } from "./identity-storage.js";
 import { IdbAuditLog } from "./audit-log.js";
 import { LocalStorageStateSnapshot } from "./state-snapshot.js";
+import { IdbConversationStore } from "./conversation-store.js";
 
 export { openMotebitDB, idbRequest, idbTransaction } from "./idb.js";
 export { IdbEventStore } from "./event-store.js";
@@ -12,6 +13,7 @@ export { IdbMemoryStorage } from "./memory-storage.js";
 export { IdbIdentityStorage } from "./identity-storage.js";
 export { IdbAuditLog } from "./audit-log.js";
 export { LocalStorageStateSnapshot } from "./state-snapshot.js";
+export { IdbConversationStore } from "./conversation-store.js";
 export type { StateSnapshotAdapter } from "./state-snapshot.js";
 
 export async function createBrowserStorage(): Promise<StorageAdapters> {
@@ -22,5 +24,6 @@ export async function createBrowserStorage(): Promise<StorageAdapters> {
     identityStorage: new IdbIdentityStorage(db),
     auditLog: new IdbAuditLog(db),
     stateSnapshot: new LocalStorageStateSnapshot(),
+    conversationStore: new IdbConversationStore(db),
   };
 }

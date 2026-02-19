@@ -1671,6 +1671,16 @@ async function bootstrap(): Promise<void> {
     if (!gov.governed && gov.reason !== "dev mode") {
       addMessage("system", `Tools disabled — ${gov.reason}. The agent can chat but cannot act.`);
     }
+
+    // Restore previous conversation messages on reopen
+    const previousMessages = app.getConversationHistory();
+    if (previousMessages.length > 0) {
+      for (const msg of previousMessages) {
+        if (msg.role === "user" || msg.role === "assistant") {
+          addMessage(msg.role, msg.content);
+        }
+      }
+    }
   } else {
     if (config.provider === "anthropic") {
       addMessage("system", "No API key — set VITE_ANTHROPIC_API_KEY in .env or api_key in ~/.motebit/config.json");

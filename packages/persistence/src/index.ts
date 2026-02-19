@@ -159,6 +159,34 @@ CREATE TABLE IF NOT EXISTS approval_queue (
 
 CREATE INDEX IF NOT EXISTS idx_approval_queue_motebit_status
   ON approval_queue (motebit_id, status);
+
+CREATE TABLE IF NOT EXISTS conversations (
+  conversation_id TEXT PRIMARY KEY,
+  motebit_id TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  last_active_at INTEGER NOT NULL,
+  title TEXT,
+  summary TEXT,
+  message_count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversations_motebit
+  ON conversations (motebit_id, last_active_at DESC);
+
+CREATE TABLE IF NOT EXISTS conversation_messages (
+  message_id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  motebit_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  tool_calls TEXT,
+  tool_call_id TEXT,
+  created_at INTEGER NOT NULL,
+  token_estimate INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_conv_messages
+  ON conversation_messages (conversation_id, created_at ASC);
 `;
 
 function initSchema(db: Database.Database): void {
@@ -1117,6 +1145,174 @@ export class SqliteApprovalStore {
   }
 }
 
+// === Conversation Store ===
+
+export interface Conversation {
+  conversationId: string;
+  motebitId: string;
+  startedAt: number;
+  lastActiveAt: number;
+  title: string | null;
+  summary: string | null;
+  messageCount: number;
+}
+
+export interface ConversationMessage {
+  messageId: string;
+  conversationId: string;
+  motebitId: string;
+  role: string;
+  content: string;
+  toolCalls: string | null;
+  toolCallId: string | null;
+  createdAt: number;
+  tokenEstimate: number;
+}
+
+interface ConversationRow {
+  conversation_id: string;
+  motebit_id: string;
+  started_at: number;
+  last_active_at: number;
+  title: string | null;
+  summary: string | null;
+  message_count: number;
+}
+
+function rowToConversation(row: ConversationRow): Conversation {
+  return {
+    conversationId: row.conversation_id,
+    motebitId: row.motebit_id,
+    startedAt: row.started_at,
+    lastActiveAt: row.last_active_at,
+    title: row.title,
+    summary: row.summary,
+    messageCount: row.message_count,
+  };
+}
+
+interface ConversationMessageRow {
+  message_id: string;
+  conversation_id: string;
+  motebit_id: string;
+  role: string;
+  content: string;
+  tool_calls: string | null;
+  tool_call_id: string | null;
+  created_at: number;
+  token_estimate: number;
+}
+
+function rowToConversationMessage(row: ConversationMessageRow): ConversationMessage {
+  return {
+    messageId: row.message_id,
+    conversationId: row.conversation_id,
+    motebitId: row.motebit_id,
+    role: row.role,
+    content: row.content,
+    toolCalls: row.tool_calls,
+    toolCallId: row.tool_call_id,
+    createdAt: row.created_at,
+    tokenEstimate: row.token_estimate,
+  };
+}
+
+/** 4-hour window for session continuity. */
+const ACTIVE_CONVERSATION_WINDOW_MS = 4 * 60 * 60 * 1000;
+
+export class SqliteConversationStore {
+  private stmtCreate: Statement;
+  private stmtAppendMessage: Statement;
+  private stmtUpdateActivity: Statement;
+  private stmtLoadMessages: Statement;
+  private stmtGetActive: Statement;
+  private stmtUpdateSummary: Statement;
+  private stmtListConversations: Statement;
+
+  constructor(private db: Database.Database) {
+    this.stmtCreate = db.prepare(
+      `INSERT INTO conversations (conversation_id, motebit_id, started_at, last_active_at, title, summary, message_count)
+       VALUES (?, ?, ?, ?, ?, ?, 0)`,
+    );
+    this.stmtAppendMessage = db.prepare(
+      `INSERT INTO conversation_messages (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmtUpdateActivity = db.prepare(
+      `UPDATE conversations SET last_active_at = ?, message_count = message_count + 1 WHERE conversation_id = ?`,
+    );
+    this.stmtLoadMessages = db.prepare(
+      `SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY created_at ASC`,
+    );
+    this.stmtGetActive = db.prepare(
+      `SELECT * FROM conversations WHERE motebit_id = ? AND last_active_at > ? ORDER BY last_active_at DESC LIMIT 1`,
+    );
+    this.stmtUpdateSummary = db.prepare(
+      `UPDATE conversations SET summary = ? WHERE conversation_id = ?`,
+    );
+    this.stmtListConversations = db.prepare(
+      `SELECT * FROM conversations WHERE motebit_id = ? ORDER BY last_active_at DESC LIMIT ?`,
+    );
+  }
+
+  createConversation(motebitId: string): string {
+    const conversationId = crypto.randomUUID();
+    const now = Date.now();
+    this.stmtCreate.run(conversationId, motebitId, now, now, null, null);
+    return conversationId;
+  }
+
+  appendMessage(conversationId: string, motebitId: string, msg: {
+    role: string;
+    content: string;
+    toolCalls?: string;
+    toolCallId?: string;
+  }): void {
+    const messageId = crypto.randomUUID();
+    const now = Date.now();
+    const tokenEstimate = Math.ceil(msg.content.length / 4);
+    this.stmtAppendMessage.run(
+      messageId,
+      conversationId,
+      motebitId,
+      msg.role,
+      msg.content,
+      msg.toolCalls ?? null,
+      msg.toolCallId ?? null,
+      now,
+      tokenEstimate,
+    );
+    this.stmtUpdateActivity.run(now, conversationId);
+  }
+
+  loadMessages(conversationId: string, limit?: number): ConversationMessage[] {
+    if (limit !== undefined) {
+      const rows = this.db.prepare(
+        `SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY created_at ASC LIMIT ?`,
+      ).all(conversationId, limit) as ConversationMessageRow[];
+      return rows.map(rowToConversationMessage);
+    }
+    const rows = this.stmtLoadMessages.all(conversationId) as ConversationMessageRow[];
+    return rows.map(rowToConversationMessage);
+  }
+
+  getActiveConversation(motebitId: string): Conversation | null {
+    const cutoff = Date.now() - ACTIVE_CONVERSATION_WINDOW_MS;
+    const row = this.stmtGetActive.get(motebitId, cutoff) as ConversationRow | undefined;
+    if (row === undefined) return null;
+    return rowToConversation(row);
+  }
+
+  updateSummary(conversationId: string, summary: string): void {
+    this.stmtUpdateSummary.run(summary, conversationId);
+  }
+
+  listConversations(motebitId: string, limit = 20): Conversation[] {
+    const rows = this.stmtListConversations.all(motebitId, limit) as ConversationRow[];
+    return rows.map(rowToConversation);
+  }
+}
+
 // === Factory ===
 
 export interface MotebitDatabase {
@@ -1130,6 +1326,7 @@ export interface MotebitDatabase {
   goalStore: SqliteGoalStore;
   goalOutcomeStore: SqliteGoalOutcomeStore;
   approvalStore: SqliteApprovalStore;
+  conversationStore: SqliteConversationStore;
   close(): void;
 }
 
@@ -1184,6 +1381,11 @@ export function createMotebitDatabase(dbPath: string): MotebitDatabase {
     db.pragma("user_version = 5");
   }
 
+  if (userVersion < 6) {
+    // Conversation persistence tables are in SCHEMA for new DBs; this handles upgrades
+    db.pragma("user_version = 6");
+  }
+
   const eventStore = new SqliteEventStore(db);
   const memoryStorage = new SqliteMemoryStorage(db);
   const identityStorage = new SqliteIdentityStorage(db);
@@ -1193,6 +1395,7 @@ export function createMotebitDatabase(dbPath: string): MotebitDatabase {
   const goalStore = new SqliteGoalStore(db);
   const goalOutcomeStore = new SqliteGoalOutcomeStore(db);
   const approvalStore = new SqliteApprovalStore(db);
+  const conversationStore = new SqliteConversationStore(db);
 
   return {
     db,
@@ -1205,6 +1408,7 @@ export function createMotebitDatabase(dbPath: string): MotebitDatabase {
     goalStore,
     goalOutcomeStore,
     approvalStore,
+    conversationStore,
     close() {
       db.close();
     },
