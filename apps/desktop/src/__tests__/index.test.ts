@@ -341,7 +341,7 @@ describe("DesktopApp.initAI tools", () => {
     if (app) app.stop();
   });
 
-  it("registers browser-safe builtin tools", async () => {
+  it("registers browser-safe builtin tools in dev mode", async () => {
     app = new DesktopApp();
     await app.initAI({ provider: "ollama", isTauri: false });
 
@@ -353,6 +353,53 @@ describe("DesktopApp.initAI tools", () => {
     expect(toolNames).toContain("read_url");
     expect(toolNames).toContain("recall_memories");
     expect(toolNames).toContain("list_events");
+  });
+
+  it("does NOT register tools in Tauri mode without governance (fail-closed)", async () => {
+    app = new DesktopApp();
+    // Mock invoke returns empty config — no _identity_file
+    const mockInvoke: InvokeFn = (cmd: string) => {
+      if (cmd === "read_config") return Promise.resolve("{}" as never);
+      return Promise.resolve([] as never);
+    };
+    await app.initAI({ provider: "ollama", isTauri: true, invoke: mockInvoke });
+
+    const toolNames = (app as unknown as { runtime: { getToolRegistry(): { list(): { name: string }[] } } })
+      .runtime.getToolRegistry().list().map((t) => t.name);
+
+    expect(toolNames).not.toContain("web_search");
+    expect(toolNames).not.toContain("recall_memories");
+    expect(toolNames).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DesktopApp.governanceStatus
+// ---------------------------------------------------------------------------
+
+describe("DesktopApp.governanceStatus", () => {
+  let app: DesktopApp;
+
+  afterEach(() => {
+    if (app) app.stop();
+  });
+
+  it("reports dev mode when isTauri is false", async () => {
+    app = new DesktopApp();
+    await app.initAI({ provider: "ollama", isTauri: false });
+    expect(app.governanceStatus.governed).toBe(false);
+    expect((app.governanceStatus as { reason: string }).reason).toBe("dev mode");
+  });
+
+  it("reports missing governance when Tauri mode has no identity file", async () => {
+    app = new DesktopApp();
+    const mockInvoke: InvokeFn = (cmd: string) => {
+      if (cmd === "read_config") return Promise.resolve("{}" as never);
+      return Promise.resolve([] as never);
+    };
+    await app.initAI({ provider: "ollama", isTauri: true, invoke: mockInvoke });
+    expect(app.governanceStatus.governed).toBe(false);
+    expect((app.governanceStatus as { reason: string }).reason).toContain("missing or invalid governance");
   });
 });
 

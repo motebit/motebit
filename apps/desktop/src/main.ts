@@ -1665,6 +1665,12 @@ async function bootstrap(): Promise<void> {
   if (await app.initAI(config)) {
     const label = config.provider === "ollama" ? "Ollama" : "Anthropic";
     addMessage("system", `AI connected (${label})`);
+
+    // Surface governance status
+    const gov = app.governanceStatus;
+    if (!gov.governed && gov.reason !== "dev mode") {
+      addMessage("system", `Tools disabled — ${gov.reason}. The agent can chat but cannot act.`);
+    }
   } else {
     if (config.provider === "anthropic") {
       addMessage("system", "No API key — set VITE_ANTHROPIC_API_KEY in .env or api_key in ~/.motebit/config.json");

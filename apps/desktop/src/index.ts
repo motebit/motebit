@@ -168,6 +168,10 @@ export interface BootstrapResult {
   deviceId: string;
 }
 
+export type GovernanceStatus =
+  | { governed: true }
+  | { governed: false; reason: string };
+
 export class DesktopApp {
   private runtime: MotebitRuntime | null = null;
   private renderer: ThreeJSAdapter;
@@ -176,6 +180,7 @@ export class DesktopApp {
   motebitId: string = "desktop-local";
   deviceId: string = "desktop-local";
   publicKey: string = "";
+  private _governanceStatus: GovernanceStatus = { governed: false, reason: "not initialized" };
 
   constructor() {
     this.renderer = new ThreeJSAdapter();
@@ -432,8 +437,12 @@ export class DesktopApp {
     const storage = createDesktopStorage(config, stateSnapshot);
     const keyring = config.isTauri && config.invoke ? new TauriKeyringAdapter(config.invoke) : undefined;
 
-    // Read governance from motebit.md identity file (if available)
+    // Read governance from motebit.md identity file.
+    // Fail-closed: in Tauri mode, tools are only registered if governance is valid.
+    // In dev mode (non-Tauri), tools register freely — no identity file exists.
     let policyConfig: Partial<PolicyConfig> | undefined;
+    let governanceLoaded = false;
+
     if (config.isTauri && config.invoke) {
       try {
         const raw = await config.invoke<string>("read_config");
@@ -449,10 +458,11 @@ export class DesktopApp {
               requireApprovalAbove: govPolicy.requireApprovalAbove,
               denyAbove: govPolicy.denyAbove,
             };
+            governanceLoaded = true;
           }
         }
       } catch {
-        // Non-fatal — governance reading is best-effort
+        // Parse failure — governance stays unloaded, tools won't register
       }
     }
 
@@ -461,8 +471,17 @@ export class DesktopApp {
       { storage, renderer: this.renderer, ai: provider, keyring },
     );
 
-    // Register browser-safe builtin tools
-    registerDesktopTools(this.runtime.getToolRegistry(), this.runtime);
+    // Fail-closed tool registration:
+    // - Tauri mode: tools only register if governance thresholds are present
+    // - Dev mode (non-Tauri): tools register freely (no identity to govern from)
+    if (!config.isTauri || governanceLoaded) {
+      registerDesktopTools(this.runtime.getToolRegistry(), this.runtime);
+      this._governanceStatus = config.isTauri
+        ? { governed: true }
+        : { governed: false, reason: "dev mode" };
+    } else {
+      this._governanceStatus = { governed: false, reason: "missing or invalid governance in motebit.md" };
+    }
 
     return true;
   }
@@ -590,6 +609,12 @@ export class DesktopApp {
   updateMemoryGovernance(config: Partial<MemoryGovernanceConfig>): void {
     if (!this.runtime) return;
     this.runtime.updateMemoryGovernance(config);
+  }
+
+  // === Governance ===
+
+  get governanceStatus(): GovernanceStatus {
+    return this._governanceStatus;
   }
 
   // === Identity ===
