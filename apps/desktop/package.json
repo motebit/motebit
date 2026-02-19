@@ -31,6 +31,7 @@
     "@motebit/state-vector": "workspace:*",
     "@motebit/sync-engine": "workspace:*",
     "@motebit/tools": "workspace:*",
+    "@motebit/voice": "workspace:^",
     "@ricky0123/vad-web": "^0.0.30",
     "@tauri-apps/api": "^2.0.0",
     "onnxruntime-web": "^1.24.1",

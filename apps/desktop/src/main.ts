@@ -1,6 +1,10 @@
 import { DesktopApp, COLOR_PRESETS, isSlashCommand, parseSlashCommand, type DesktopAIConfig, type InvokeFn, type McpServerConfig, type PolicyConfig, type PairingSession } from "./index";
 import { stripTags } from "@motebit/ai-core";
 import { MicVAD } from "@ricky0123/vad-web";
+import { WebSpeechTTSProvider, WebSpeechSTTProvider } from "@motebit/voice";
+
+const ttsProvider = new WebSpeechTTSProvider(["Samantha", "Karen", "Daniel", "Alex"]);
+const sttProvider = new WebSpeechSTTProvider();
 
 const canvas = document.getElementById("motebit-canvas") as HTMLCanvasElement;
 if (!canvas) {
@@ -476,7 +480,6 @@ function selectColorPreset(name: string): void {
 
 type MicState = "off" | "ambient" | "voice" | "transcribing" | "speaking";
 let micState: MicState = "off";
-let voiceRecognition: SpeechRecognitionInstance | null = null;
 let audioContext: AudioContext | null = null;
 let analyserNode: AnalyserNode | null = null;
 let micStream: MediaStream | null = null;
@@ -499,9 +502,7 @@ let voiceAutoSend = true;
 let voiceResponseEnabled = true;
 
 /** TTS state. */
-let ttsUtterance: SpeechSynthesisUtterance | null = null;
 let ttsSpeaking = false;
-let ttsVoice: SpeechSynthesisVoice | null = null;
 let ttsPulseAnimationId = 0;
 
 /** Rolling noise floor — persists across voice↔ambient transitions. */
@@ -686,37 +687,23 @@ async function startVoice(): Promise<void> {
   // Ensure mic + audio analysis pipeline
   if (!await ensureAudioPipeline()) return;
 
-  // Speech recognition (only if API available and not previously denied)
-  const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (SpeechRecognitionCtor && sttAvailable) {
-    const recognition = new SpeechRecognitionCtor();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = "en-US";
-
-    recognition.onresult = (event: SpeechRecognitionEvent) => {
-      let final = "";
-      let interim = "";
-      for (let i = 0; i < event.results.length; i++) {
-        const result = event.results[i] as SpeechRecognitionResult | undefined;
-        if (!result) continue;
-        const alt = result[0] as SpeechRecognitionAlternative | undefined;
-        const text = alt?.transcript ?? "";
-        if (result.isFinal) {
-          final += text;
-        } else {
-          interim += text;
-        }
+  // Speech recognition via STT provider (only if API available and not previously denied)
+  if (sttAvailable) {
+    sttProvider.onResult = (transcript: string, isFinal: boolean) => {
+      if (isFinal) {
+        voiceFinalTranscript += transcript;
+        voiceInterimTranscript = "";
+      } else {
+        voiceInterimTranscript = transcript;
       }
-      voiceFinalTranscript = final;
-      voiceInterimTranscript = interim;
-      const display = (final + interim).trim();
-      voiceTranscript.textContent = display;
+      voiceTranscript.textContent = (voiceFinalTranscript + voiceInterimTranscript).trim();
     };
 
-    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-      if (event.error === "no-speech" || event.error === "aborted") return;
-      if (event.error === "service-not-allowed" || event.error === "not-allowed") {
+    sttProvider.onError = (error: string) => {
+      if (error === "no-speech" || error === "aborted") return;
+      if (error === "not-allowed" || error === "service-not-allowed"
+          || error === "Microphone permission denied"
+          || error === "SpeechRecognition API not available") {
         sttAvailable = false;
         if (!sttErrorShown) {
           sttErrorShown = true;
@@ -724,24 +711,16 @@ async function startVoice(): Promise<void> {
         }
         return;
       }
-      addMessage("system", `Voice error: ${event.error}`);
+      addMessage("system", `Voice error: ${error}`);
       stopVoice(false, false); // error → full stop
     };
 
-    recognition.onend = () => {
-      if (micState === "voice") {
-        try { recognition.start(); } catch { /* already started */ }
-      }
-    };
-
-    voiceRecognition = recognition;
+    sttProvider.onEnd = () => {}; // Auto-restart handled by provider in continuous mode
 
     try {
-      recognition.start();
+      sttProvider.start({ continuous: true, interimResults: true, language: "en-US" });
     } catch {
       sttAvailable = false;
-      voiceRecognition = null;
-      // Recognition failed but mic works — continue with MediaRecorder only
     }
   }
 
@@ -785,9 +764,8 @@ function stopVoice(transfer: boolean, toAmbient: boolean): void {
   silenceOnsetTime = 0;
 
   // Stop recognition
-  if (voiceRecognition) {
-    try { voiceRecognition.stop(); } catch { /* */ }
-    voiceRecognition = null;
+  if (sttProvider.listening) {
+    sttProvider.stop();
   }
 
   // Stop MediaRecorder
@@ -1041,49 +1019,21 @@ function startAmbientLoop(): void {
 
 // === TTS (Text-to-Speech) ===
 
-/** Pick a natural macOS voice, preferring Samantha or similar. */
-function pickTTSVoice(): void {
-  const voices = speechSynthesis.getVoices();
-  if (voices.length === 0) return;
-  // Prefer high-quality macOS voices
-  const preferred = ["Samantha", "Karen", "Daniel", "Alex"];
-  for (const name of preferred) {
-    const match = voices.find(v => v.name.includes(name) && v.lang.startsWith("en"));
-    if (match) { ttsVoice = match; return; }
-  }
-  // Fall back to any English voice
-  ttsVoice = voices.find(v => v.lang.startsWith("en")) ?? voices[0] ?? null;
-}
-
-// Voices load asynchronously in WebKit
-if (typeof speechSynthesis !== "undefined") {
-  speechSynthesis.addEventListener("voiceschanged", pickTTSVoice);
-  pickTTSVoice();
-}
-
-/** Speak text via Web Speech Synthesis API. Returns when speech ends. */
+/** Speak text via TTS provider. Fire-and-forget with ttsSpeaking guard. */
 function speakText(text: string): void {
   if (!voiceResponseEnabled || !text.trim()) return;
 
-  const utterance = new SpeechSynthesisUtterance(text);
-  if (ttsVoice) utterance.voice = ttsVoice;
-  utterance.rate = 1.0;
-  utterance.pitch = 1.0;
-  utterance.volume = 0.9;
+  ttsProvider.cancel(); // Clear any queued speech
+  ttsSpeaking = true;
+  micState = "speaking";
+  micBtn.classList.remove("active");
+  micBtn.classList.add("ambient");
+  startTTSPulse();
 
-  utterance.onstart = () => {
-    ttsSpeaking = true;
-    micState = "speaking";
-    micBtn.classList.remove("active");
-    micBtn.classList.add("ambient");
-    startTTSPulse();
-  };
-
-  utterance.onend = () => {
+  ttsProvider.speak(text).then(() => {
+    if (!ttsSpeaking) return; // Already cancelled
     ttsSpeaking = false;
-    ttsUtterance = null;
     stopTTSPulse();
-    // After speaking, enter ambient mode — creature feels the room, ready for next voice turn
     if (micStream && audioContext && analyserNode) {
       micState = "ambient";
       micBtn.classList.add("ambient");
@@ -1093,11 +1043,9 @@ function speakText(text: string): void {
       micState = "off";
       micBtn.classList.remove("ambient");
     }
-  };
-
-  utterance.onerror = () => {
+  }).catch(() => {
+    if (!ttsSpeaking) return; // Already cancelled
     ttsSpeaking = false;
-    ttsUtterance = null;
     stopTTSPulse();
     if (micState === "speaking") {
       micState = micStream ? "ambient" : "off";
@@ -1106,19 +1054,14 @@ function speakText(text: string): void {
         startAmbientLoop();
       }
     }
-  };
-
-  ttsUtterance = utterance;
-  speechSynthesis.cancel(); // Clear any queued speech
-  speechSynthesis.speak(utterance);
+  });
 }
 
 /** Cancel ongoing TTS. */
 function cancelTTS(): void {
-  if (ttsSpeaking || ttsUtterance) {
-    speechSynthesis.cancel();
+  if (ttsSpeaking) {
+    ttsProvider.cancel();
     ttsSpeaking = false;
-    ttsUtterance = null;
     stopTTSPulse();
   }
 }
