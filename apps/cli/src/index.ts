@@ -229,6 +229,13 @@ Slash commands (in REPL):
   /model <name>      Switch AI model mid-session
   /sync              Sync with remote server
   /tools             List registered tools
+  /goals             List all scheduled goals
+  /goal add "<prompt>" --every <interval> [--once]
+  /goal remove <id>  Remove a goal
+  /goal pause <id>   Pause a goal
+  /goal resume <id>  Resume a paused goal
+  /goal outcomes <id> Show execution history
+  /approvals         Show pending approval queue
   /mcp list          List MCP servers and trust status
   /mcp trust <name>  Mark MCP server as trusted (tools skip approval)
   /mcp untrust <name> Mark MCP server as untrusted (tools require approval)
@@ -605,12 +612,18 @@ async function consumeStream(
 
 // --- Slash Command Handlers ---
 
-async function handleSlashCommand(
+export interface ReplContext {
+  moteDb: MotebitDatabase;
+  motebitId: string;
+}
+
+export async function handleSlashCommand(
   cmd: string,
   args: string,
   runtime: MotebitRuntime,
   config: CliConfig,
   fullConfig?: FullConfig,
+  repl?: ReplContext,
 ): Promise<void> {
   switch (cmd) {
     case "help":
@@ -625,6 +638,13 @@ Available commands:
   /model <name>      Switch AI model
   /sync              Sync with remote server
   /tools             List registered tools
+  /goals             List all scheduled goals
+  /goal add "<prompt>" --every <interval> [--once]
+  /goal remove <id>  Remove a goal
+  /goal pause <id>   Pause a goal
+  /goal resume <id>  Resume a paused goal
+  /goal outcomes <id> Show execution history
+  /approvals         Show pending approval queue
   /mcp list          List MCP servers and trust status
   /mcp trust <name>  Trust an MCP server
   /mcp untrust <name> Untrust an MCP server
@@ -726,6 +746,145 @@ Available commands:
         console.log("  Start with --operator to enable write/exec tools");
       }
       break;
+
+    case "goals": {
+      if (!repl) { console.log("Goals not available in this context."); break; }
+      const goals = repl.moteDb.goalStore.list(repl.motebitId);
+      if (goals.length === 0) {
+        console.log("No goals scheduled. Use /goal add to create one.");
+        break;
+      }
+      console.log(`\nGoals (${goals.length}):\n`);
+      for (const g of goals) {
+        const id = g.goal_id.slice(0, 8);
+        const interval = formatMs(g.interval_ms);
+        const statusIcon = g.status === "active" ? "+" : g.status === "paused" ? "~" : g.status === "completed" ? "*" : "!";
+        const mode = g.mode === "once" ? " (once)" : "";
+        const outcomes = repl.moteDb.goalOutcomeStore.listForGoal(g.goal_id, 1);
+        const lastOutcome = outcomes.length > 0
+          ? ` — last: ${outcomes[0]!.status}${outcomes[0]!.summary ? ` "${outcomes[0]!.summary.slice(0, 30)}"` : ""}`
+          : "";
+        console.log(`  [${statusIcon}] ${id}  "${g.prompt.slice(0, 45)}" every ${interval}${mode}${lastOutcome}`);
+      }
+      console.log(`\n  + active  ~ paused  * completed  ! failed`);
+      break;
+    }
+
+    case "goal": {
+      if (!repl) { console.log("Goals not available in this context."); break; }
+      const parts = args.match(/^(\S+)\s*([\s\S]*)$/) ?? [];
+      const goalSub = parts[1] ?? "";
+      const goalArgs = (parts[2] ?? "").trim();
+
+      if (goalSub === "add") {
+        // Parse: /goal add "prompt" --every 30m [--once]
+        const promptMatch = goalArgs.match(/^["'](.+?)["']\s*(.*)$/) ?? goalArgs.match(/^(\S+)\s*(.*)$/);
+        if (!promptMatch) {
+          console.log('Usage: /goal add "check emails" --every 30m [--once]');
+          break;
+        }
+        const prompt = promptMatch[1]!;
+        const rest = promptMatch[2] ?? "";
+        const everyMatch = rest.match(/--every\s+(\S+)/);
+        if (!everyMatch) {
+          console.log("Error: --every <interval> is required. E.g. /goal add \"check emails\" --every 30m");
+          break;
+        }
+        let intervalMs: number;
+        try {
+          intervalMs = parseInterval(everyMatch[1]!);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.log(`Error: ${msg}`);
+          break;
+        }
+        const once = rest.includes("--once");
+        const goalId = crypto.randomUUID();
+        repl.moteDb.goalStore.add({
+          goal_id: goalId,
+          motebit_id: repl.motebitId,
+          prompt,
+          interval_ms: intervalMs,
+          last_run_at: null,
+          enabled: true,
+          created_at: Date.now(),
+          mode: once ? "once" : "recurring",
+          status: "active",
+          parent_goal_id: null,
+          max_retries: 3,
+          consecutive_failures: 0,
+        });
+        const modeLabel = once ? " (one-shot)" : "";
+        console.log(`Goal added: ${goalId.slice(0, 8)} — "${prompt}" every ${everyMatch[1]}${modeLabel}`);
+      } else if (goalSub === "remove") {
+        if (!goalArgs) { console.log("Usage: /goal remove <goal_id>"); break; }
+        const goals = repl.moteDb.goalStore.list(repl.motebitId);
+        const match = goals.find((g) => g.goal_id === goalArgs || g.goal_id.startsWith(goalArgs));
+        if (!match) { console.log(`No goal found matching "${goalArgs}".`); break; }
+        repl.moteDb.goalStore.remove(match.goal_id);
+        console.log(`Goal removed: ${match.goal_id.slice(0, 8)}`);
+      } else if (goalSub === "pause") {
+        if (!goalArgs) { console.log("Usage: /goal pause <goal_id>"); break; }
+        const goals = repl.moteDb.goalStore.list(repl.motebitId);
+        const match = goals.find((g) => g.goal_id === goalArgs || g.goal_id.startsWith(goalArgs));
+        if (!match) { console.log(`No goal found matching "${goalArgs}".`); break; }
+        repl.moteDb.goalStore.setEnabled(match.goal_id, false);
+        console.log(`Goal paused: ${match.goal_id.slice(0, 8)}`);
+      } else if (goalSub === "resume") {
+        if (!goalArgs) { console.log("Usage: /goal resume <goal_id>"); break; }
+        const goals = repl.moteDb.goalStore.list(repl.motebitId);
+        const match = goals.find((g) => g.goal_id === goalArgs || g.goal_id.startsWith(goalArgs));
+        if (!match) { console.log(`No goal found matching "${goalArgs}".`); break; }
+        repl.moteDb.goalStore.setEnabled(match.goal_id, true);
+        console.log(`Goal resumed: ${match.goal_id.slice(0, 8)}`);
+      } else if (goalSub === "outcomes") {
+        if (!goalArgs) { console.log("Usage: /goal outcomes <goal_id>"); break; }
+        const goals = repl.moteDb.goalStore.list(repl.motebitId);
+        const match = goals.find((g) => g.goal_id === goalArgs || g.goal_id.startsWith(goalArgs));
+        if (!match) { console.log(`No goal found matching "${goalArgs}".`); break; }
+        const outcomes = repl.moteDb.goalOutcomeStore.listForGoal(match.goal_id, 10);
+        if (outcomes.length === 0) {
+          console.log(`No outcomes for goal ${match.goal_id.slice(0, 8)}.`);
+          break;
+        }
+        console.log(`\nOutcomes for ${match.goal_id.slice(0, 8)} (${outcomes.length}):\n`);
+        for (const o of outcomes) {
+          const ago = formatTimeAgo(Date.now() - o.ran_at);
+          const detail = o.error_message
+            ? `[error: ${o.error_message.slice(0, 40)}]`
+            : (o.summary ? `"${o.summary.slice(0, 50)}"` : "—");
+          console.log(`  ${ago.padEnd(10)} ${o.status.padEnd(11)} tools:${o.tool_calls_made} mem:${o.memories_formed}  ${detail}`);
+        }
+      } else {
+        console.log('Usage: /goal [add|remove|pause|resume|outcomes] — or /goals to list');
+      }
+      break;
+    }
+
+    case "approvals": {
+      if (!repl) { console.log("Approvals not available in this context."); break; }
+      const items = repl.moteDb.approvalStore.listAll(repl.motebitId);
+      const pending = items.filter((a) => a.status === "pending");
+      if (pending.length === 0) {
+        console.log("No pending approvals.");
+        if (items.length > 0) {
+          console.log(`(${items.length} total — use 'motebit approvals list' for full history)`);
+        }
+        break;
+      }
+      console.log(`\nPending approvals (${pending.length}):\n`);
+      for (const a of pending) {
+        const id = a.approval_id.slice(0, 8);
+        const ago = formatTimeAgo(Date.now() - a.created_at);
+        const goalId = a.goal_id.slice(0, 8);
+        console.log(`  ${id}  ${a.tool_name.padEnd(20)} goal:${goalId}  ${ago}`);
+        if (a.args_preview) {
+          console.log(`         args: ${a.args_preview.slice(0, 60)}`);
+        }
+      }
+      console.log(`\nApprove/deny via: motebit approvals approve/deny <id>`);
+      break;
+    }
 
     case "mcp": {
       if (!fullConfig) {
@@ -1220,6 +1379,13 @@ function formatMs(ms: number): string {
   return `${ms / 60_000}m`;
 }
 
+function formatTimeAgo(ms: number): string {
+  if (ms < 60_000) return "just now";
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m ago`;
+  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h ago`;
+  return `${Math.round(ms / 86_400_000)}d ago`;
+}
+
 async function handleGoalRemove(config: CliConfig): Promise<void> {
   const goalId = config.positionals[2];
   if (!goalId) {
@@ -1704,7 +1870,7 @@ async function main(): Promise<void> {
 
     if (isSlashCommand(trimmed)) {
       const { command, args } = parseSlashCommand(trimmed);
-      await handleSlashCommand(command, args, runtime, config, fullConfig);
+      await handleSlashCommand(command, args, runtime, config, fullConfig, { moteDb, motebitId });
       console.log();
       prompt();
       return;
