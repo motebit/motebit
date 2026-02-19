@@ -9,3 +9,7 @@ export { webSearchDefinition, createWebSearchHandler } from "./builtins/web-sear
 export { readUrlDefinition, createReadUrlHandler } from "./builtins/read-url.js";
 export { recallMemoriesDefinition, createRecallMemoriesHandler } from "./builtins/recall-memories.js";
 export { listEventsDefinition, createListEventsHandler } from "./builtins/list-events.js";
+export type { SearchProvider, SearchResult } from "./search-provider.js";
+export { FallbackSearchProvider } from "./search-provider.js";
+export { BraveSearchProvider } from "./providers/brave-search.js";
+export { DuckDuckGoSearchProvider } from "./providers/duckduckgo.js";

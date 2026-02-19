@@ -1,4 +1,5 @@
 import { InMemoryToolRegistry } from "../index.js";
+import type { SearchProvider } from "../search-provider.js";
 
 export { webSearchDefinition, createWebSearchHandler } from "./web-search.js";
 export { readUrlDefinition, createReadUrlHandler } from "./read-url.js";
@@ -19,6 +20,7 @@ import { listEventsDefinition, createListEventsHandler } from "./list-events.js"
 
 export interface BuiltinToolOptions {
   allowedPaths?: string[];
+  searchProvider?: SearchProvider;
   memorySearchFn?: (
     query: string,
     limit: number,
@@ -35,7 +37,7 @@ export function registerBuiltinTools(
   registry: InMemoryToolRegistry,
   options: BuiltinToolOptions = {},
 ): void {
-  registry.register(webSearchDefinition, createWebSearchHandler());
+  registry.register(webSearchDefinition, createWebSearchHandler(options.searchProvider));
   registry.register(readUrlDefinition, createReadUrlHandler());
   registry.register(readFileDefinition, createReadFileHandler(options.allowedPaths));
   registry.register(writeFileDefinition, createWriteFileHandler(options.allowedPaths));

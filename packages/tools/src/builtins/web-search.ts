@@ -1,4 +1,6 @@
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
+import type { SearchProvider } from "../search-provider.js";
+import { DuckDuckGoSearchProvider } from "../providers/duckduckgo.js";
 
 export const webSearchDefinition: ToolDefinition = {
   name: "web_search",
@@ -14,37 +16,32 @@ export const webSearchDefinition: ToolDefinition = {
 
 const MAX_RESULT_SIZE = 8000;
 
-export function createWebSearchHandler(): ToolHandler {
+/**
+ * Creates a web search tool handler.
+ *
+ * If a SearchProvider is supplied, uses it for structured search results.
+ * If not, falls back to the built-in DuckDuckGo provider (backward compatible).
+ */
+export function createWebSearchHandler(provider?: SearchProvider): ToolHandler {
+  const searchProvider = provider ?? new DuckDuckGoSearchProvider();
+
   return async (args) => {
     const query = args.query as string;
     if (!query) return { ok: false, error: "Missing required parameter: query" };
 
-    // Use DuckDuckGo's instant answer API (no API key needed)
     try {
-      const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1`;
-      const res = await fetch(url);
-      if (!res.ok) return { ok: false, error: `Search failed: ${res.status}` };
-      const data = (await res.json()) as {
-        AbstractText?: string;
-        AbstractSource?: string;
-        RelatedTopics?: Array<{ Text?: string }>;
-      };
-
-      const results: string[] = [];
-      if (data.AbstractText) {
-        results.push(data.AbstractText);
-      }
-      if (data.RelatedTopics) {
-        for (const topic of data.RelatedTopics.slice(0, 5)) {
-          if (topic.Text) results.push(topic.Text);
-        }
-      }
+      const results = await searchProvider.search(query, 5);
 
       if (results.length === 0) {
         return { ok: true, data: `No results found for "${query}". Try a more specific query.` };
       }
 
-      return { ok: true, data: results.join("\n\n").slice(0, MAX_RESULT_SIZE) };
+      const formatted = results
+        .map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`)
+        .join("\n\n");
+
+      const output = `Results for "${query}":\n\n${formatted}`;
+      return { ok: true, data: output.slice(0, MAX_RESULT_SIZE) };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       return { ok: false, error: `Search error: ${msg}` };

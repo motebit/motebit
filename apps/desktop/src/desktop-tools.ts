@@ -31,7 +31,11 @@ import {
   createRecallMemoriesHandler,
   listEventsDefinition,
   createListEventsHandler,
+  BraveSearchProvider,
+  DuckDuckGoSearchProvider,
+  FallbackSearchProvider,
 } from "@motebit/tools/web-safe";
+import type { SearchProvider } from "@motebit/tools/web-safe";
 import {
   tauriReadFileDefinition,
   createTauriReadFileHandler,
@@ -48,7 +52,16 @@ export function registerDesktopTools(
   invoke?: InvokeFn,
 ): void {
   // Fetch-based tools — work in any environment
-  registry.register(webSearchDefinition, createWebSearchHandler());
+  // Search provider chain: Brave (if API key configured) → DuckDuckGo fallback
+  const braveKey = import.meta.env.VITE_BRAVE_SEARCH_API_KEY as string | undefined;
+  let searchProvider: SearchProvider | undefined;
+  if (braveKey) {
+    searchProvider = new FallbackSearchProvider([
+      new BraveSearchProvider(braveKey),
+      new DuckDuckGoSearchProvider(),
+    ]);
+  }
+  registry.register(webSearchDefinition, createWebSearchHandler(searchProvider));
   registry.register(readUrlDefinition, createReadUrlHandler());
 
   // Memory recall — bridges to runtime's semantic memory graph

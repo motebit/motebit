@@ -12,6 +12,55 @@ import { inferStateFromText } from "./infer-state.js";
 
 const MAX_TOOL_ITERATIONS = 10;
 
+// === Missed-memory heuristic detection ===
+
+const PREFERENCE_RE = /\b(?:i\s+(?:like|prefer|love|enjoy|hate|dislike|can't stand))\s+(.{3,60})/gi;
+const PERSONAL_FACT_RE = /\b(?:i(?:'m|\s+am)\s+from|i\s+live\s+in|i\s+work\s+at|my\s+name\s+is|i(?:'m|\s+am)\s+a\b)\s+(.{2,60})/gi;
+const GOAL_RE = /\b(?:i\s+want\s+to|i(?:'m|\s+am)\s+planning\s+to|i\s+need\s+to|i(?:'m|\s+am)\s+trying\s+to|my\s+goal\s+is)\s+(.{3,80})/gi;
+const CORRECTION_RE = /\b(?:actually,?\s+i\s+meant|no,?\s+i\s+(?:said|mean)|i\s+meant\s+to\s+say)\s+(.{3,80})/gi;
+
+/**
+ * Lightweight heuristic check for memory-worthy patterns in conversation text
+ * that the model did not tag with <memory>. For audit/logging only — does NOT
+ * create memories (false positive risk is too high for automatic formation).
+ */
+export function detectUntaggedMemoryPatterns(
+  userMessage: string,
+  aiResponse: string,
+  taggedMemories: MemoryCandidate[],
+): string[] {
+  const taggedLower = taggedMemories.map((m) => m.content.toLowerCase());
+
+  function isAlreadyCaptured(matchText: string): boolean {
+    const lower = matchText.toLowerCase().trim();
+    return taggedLower.some((t) => t.includes(lower) || lower.includes(t));
+  }
+
+  const patterns: { label: string; re: RegExp; source: string }[] = [
+    { label: "preference", re: PREFERENCE_RE, source: userMessage },
+    { label: "personal_fact", re: PERSONAL_FACT_RE, source: userMessage },
+    { label: "goal", re: GOAL_RE, source: userMessage },
+    { label: "correction", re: CORRECTION_RE, source: userMessage },
+    // Also scan AI response for preferences/facts it acknowledged but didn't tag
+    { label: "preference_in_response", re: PREFERENCE_RE, source: aiResponse },
+  ];
+
+  const detected: string[] = [];
+
+  for (const { label, re, source } of patterns) {
+    re.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(source)) !== null) {
+      const captured = match[1]?.trim();
+      if (captured && !isAlreadyCaptured(captured)) {
+        detected.push(`${label}: "${match[0].trim()}"`);
+      }
+    }
+  }
+
+  return detected;
+}
+
 // === Inline boundary wrapping (no dependency on @motebit/policy) ===
 
 const EXTERNAL_DATA_START = "[EXTERNAL_DATA source=";
@@ -93,95 +142,30 @@ export async function runTurn(
   userMessage: string,
   options?: TurnOptions,
 ): Promise<TurnResult> {
-  const {
-    motebitId,
-    eventStore,
-    memoryGraph,
-    stateEngine,
-    behaviorEngine,
-    provider,
-  } = deps;
+  let result: TurnResult | undefined;
 
-  // 1. Query recent events
-  const recentEvents = await eventStore.query({
-    motebit_id: motebitId,
-    limit: 10,
-  });
-
-  // 2. Embed user message and retrieve relevant memories
-  const queryEmbedding = await embedText(userMessage);
-  const relevantMemories = await memoryGraph.retrieve(queryEmbedding, {
-    limit: 5,
-  });
-
-  // 3. Pack context and call provider
-  const currentState = stateEngine.getState();
-  const rawToolDefs = deps.tools ? deps.tools.list() : undefined;
-  const toolDefs = rawToolDefs && deps.policyGate
-    ? deps.policyGate.filterTools(rawToolDefs)
-    : rawToolDefs;
-
-  const aiResponse = await provider.generate({
-    recent_events: recentEvents,
-    relevant_memories: relevantMemories,
-    current_state: currentState,
-    user_message: userMessage,
-    conversation_history: options?.conversationHistory,
-    behavior_cues: options?.previousCues,
-    tools: toolDefs,
-  });
-
-  // 4. Form memories from candidates (governed if governor present)
-  const memoriesFormed: MemoryNode[] = [];
-  const candidates = deps.memoryGovernor
-    ? aiResponse.memory_candidates.filter((c) => {
-        const decisions = deps.memoryGovernor!.evaluate([c]);
-        return decisions[0]?.memoryClass === "persistent";
-      })
-    : aiResponse.memory_candidates;
-
-  for (const candidate of candidates) {
-    const embedding = await embedText(candidate.content);
-    const node = await memoryGraph.formMemory(candidate, embedding);
-    memoriesFormed.push(node);
-  }
-
-  // 5. Push state updates (explicit tags win; fall back to text inference)
-  if (Object.keys(aiResponse.state_updates).length > 0) {
-    stateEngine.pushUpdate(aiResponse.state_updates);
-  } else {
-    const inferred = inferStateFromText(aiResponse.text, stateEngine.getState());
-    if (Object.keys(inferred).length > 0) {
-      stateEngine.pushUpdate(inferred);
+  for await (const chunk of runTurnStreaming(deps, userMessage, options)) {
+    switch (chunk.type) {
+      case "result":
+        result = chunk.result;
+        break;
+      case "approval_request":
+        // Non-streaming callers cannot handle interactive approval — auto-deny.
+        // The streaming loop already pushes "Awaiting approval" into conversation
+        // history, so the model will see the denial on the next iteration.
+        break;
+      case "injection_warning":
+        // Logged by the streaming loop; nothing to surface in non-streaming mode.
+        break;
+      // "text" and "tool_status" chunks are intermediate — ignore.
     }
   }
 
-  // 6. Log interaction event
-  const clock = await eventStore.getLatestClock(motebitId);
-  await eventStore.append({
-    event_id: crypto.randomUUID(),
-    motebit_id: motebitId,
-    timestamp: Date.now(),
-    event_type: EventType.StateUpdated,
-    payload: {
-      user_message: userMessage,
-      response: aiResponse.text,
-      memories_formed: memoriesFormed.length,
-    },
-    version_clock: clock + 1,
-    tombstoned: false,
-  });
+  if (!result) {
+    throw new Error("runTurnStreaming ended without producing a result");
+  }
 
-  // 7. Compute behavior cues
-  const stateAfter = stateEngine.getState();
-  const cues = behaviorEngine.compute(stateAfter);
-
-  return {
-    response: aiResponse.text,
-    memoriesFormed,
-    stateAfter,
-    cues,
-  };
+  return result;
 }
 
 export async function* runTurnStreaming(
@@ -400,6 +384,28 @@ export async function* runTurnStreaming(
     const embedding = await embedText(candidate.content);
     const node = await memoryGraph.formMemory(candidate, embedding);
     memoriesFormed.push(node);
+  }
+
+  // 4b. Audit: detect memory-worthy patterns the model missed
+  const untaggedPatterns = detectUntaggedMemoryPatterns(
+    userMessage,
+    finalText,
+    finalResponse.memory_candidates,
+  );
+  if (untaggedPatterns.length > 0) {
+    const auditClock = await eventStore.getLatestClock(motebitId);
+    await eventStore.append({
+      event_id: crypto.randomUUID(),
+      motebit_id: motebitId,
+      timestamp: Date.now(),
+      event_type: EventType.MemoryAudit,
+      payload: {
+        missed_patterns: untaggedPatterns,
+        turn_message: userMessage.slice(0, 200),
+      },
+      version_clock: auditClock + 1,
+      tombstoned: false,
+    });
   }
 
   // 5. Push state updates (explicit tags win; fall back to text inference)

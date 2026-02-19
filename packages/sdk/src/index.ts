@@ -43,6 +43,7 @@ export enum EventType {
   ApprovalExpired = "approval_expired",
   GoalCompleted = "goal_completed",
   GoalProgress = "goal_progress",
+  MemoryAudit = "memory_audit",
 }
 
 export enum RelationType {

@@ -22,22 +22,25 @@ import type { AIResponse, ContextPack, ToolRegistry, ToolDefinition, ToolResult 
 
 const MOTEBIT_ID = "motebit-loop-test";
 
-function mockAnthropicResponse(text: string) {
-  return {
-    id: "msg_test",
-    type: "message",
-    role: "assistant",
-    content: [{ type: "text", text }],
-    model: "claude-sonnet-4-5-20250514",
-    stop_reason: "end_turn",
-    usage: { input_tokens: 100, output_tokens: 50 },
-  };
+/**
+ * Build an SSE-formatted body that CloudProvider.generateStream can parse.
+ * The stream sends the full text in a single content_block_delta, then closes.
+ */
+function mockSSEBody(text: string): string {
+  const lines = [
+    `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text } })}`,
+    "",
+    "data: [DONE]",
+    "",
+  ];
+  return lines.join("\n");
 }
 
 function mockFetchSuccess(text: string): void {
   const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+  const body = mockSSEBody(text);
   mockFn.mockResolvedValueOnce(
-    new Response(JSON.stringify(mockAnthropicResponse(text)), { status: 200 }),
+    new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
   );
 }
 
@@ -170,13 +173,13 @@ describe("runTurn", () => {
     mockFetchSuccess("I see!");
 
     const deps = makeDeps();
-    // Spy on provider.generate to check the context pack
-    const generateSpy = vi.spyOn(deps.provider, "generate");
+    // runTurn delegates to runTurnStreaming which calls generateStream
+    const streamSpy = vi.spyOn(deps.provider, "generateStream");
 
     await runTurn(deps, "Test with cues", { previousCues: cues });
 
-    expect(generateSpy).toHaveBeenCalledTimes(1);
-    const contextPack = generateSpy.mock.calls[0]![0];
+    expect(streamSpy).toHaveBeenCalledTimes(1);
+    const contextPack = streamSpy.mock.calls[0]![0];
     expect(contextPack.behavior_cues).toEqual(cues);
   });
 
@@ -223,6 +226,91 @@ describe("runTurn", () => {
     expect(pushed).toEqual({ curiosity: 0.9 });
     // Inference would have also set affect_valence — verify it's absent
     expect(pushed.affect_valence).toBeUndefined();
+  });
+
+  it("executes tool calls via the streaming agentic loop", async () => {
+    const toolRegistry = makeMockToolRegistry(
+      new Map([
+        [
+          "get_weather",
+          {
+            def: {
+              name: "get_weather",
+              description: "Get weather for a location",
+              inputSchema: { type: "object", properties: { location: { type: "string" } } },
+            },
+            result: { ok: true, data: { temp: 72, condition: "sunny" } },
+          },
+        ],
+      ]),
+    );
+
+    const provider = makeMockProvider([
+      // First call: provider requests a tool call
+      {
+        text: "Let me check the weather.",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+        tool_calls: [
+          { id: "tc_1", name: "get_weather", args: { location: "San Francisco" } },
+        ],
+      },
+      // Second call: provider responds with tool result incorporated
+      {
+        text: "It's 72°F and sunny in San Francisco!",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+      },
+    ]);
+
+    const deps = makeDepsWithProvider(provider, toolRegistry);
+    const result = await runTurn(deps, "What's the weather in SF?");
+
+    // The final response should come from the second provider call
+    expect(result.response).toContain("72°F");
+    expect(result.stateAfter).toBeDefined();
+    expect(result.cues).toBeDefined();
+  });
+
+  it("handles approval_request tools by auto-denying in non-streaming mode", async () => {
+    const toolRegistry = makeMockToolRegistry(
+      new Map([
+        [
+          "send_email",
+          {
+            def: {
+              name: "send_email",
+              description: "Send an email",
+              inputSchema: { type: "object", properties: { to: { type: "string" } } },
+              requiresApproval: true,
+            },
+            result: { ok: true },
+          },
+        ],
+      ]),
+    );
+
+    const provider = makeMockProvider([
+      {
+        text: "I'll send that email for you.",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+        tool_calls: [
+          { id: "tc_approval", name: "send_email", args: { to: "test@example.com" } },
+        ],
+      },
+    ]);
+
+    const deps = makeDepsWithProvider(provider, toolRegistry);
+    const result = await runTurn(deps, "Send email to test@example.com");
+
+    // Should still return a result (the approval-gated tool was not executed,
+    // and the loop breaks because all calls were blocked)
+    expect(result.response).toBe("I'll send that email for you.");
+    expect(result.stateAfter).toBeDefined();
   });
 
   it("version clocks increment across turns", async () => {

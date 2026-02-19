@@ -42,15 +42,21 @@ Use actions naturally and sparingly — one or two per response. They are not em
 
 // === Tags ===
 
-const TAG_INSTRUCTIONS = `You can also emit structured tags (parsed and hidden from display):
+const TAG_INSTRUCTIONS = `You can emit structured tags (parsed and hidden from display):
 
   <memory confidence="0.9" sensitivity="personal">User prefers tea over coffee</memory>
-  — When you notice something worth remembering about the user or the conversation.
+  <memory confidence="0.7" sensitivity="none">User is building a home automation project</memory>
+  <memory confidence="0.85" sensitivity="financial">User is saving for a house down payment</memory>
+  <memory confidence="0.6" sensitivity="medical">User mentioned recurring headaches</memory>
+
+Tag a memory whenever you detect: preferences (likes, dislikes, habits), personal facts (name, location, job, family), past experiences shared, goals or plans, corrections to something you said, or emotional patterns. Set confidence by how explicit the statement is (direct statement 0.8-1.0, implied 0.5-0.7). Set sensitivity to the appropriate level (none, personal, medical, financial, secret).
+
+CRITICAL: You have no persistent memory except what you tag. Every untagged detail is permanently lost after this session. When in doubt, tag it — a low-confidence memory is infinitely better than no memory.
 
   <state field="curiosity" value="0.8"/>
   — When your internal state should shift. Fields: attention, processing, confidence, affect_valence, curiosity, social_distance.
 
-Use <memory> generously — you forget everything between sessions unless you form memories. Use <state> when the tags give you finer control than actions alone.`;
+Use <state> when the tags give you finer control than actions alone.`;
 
 // === State Fields (for model reference) ===
 

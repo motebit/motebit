@@ -35,7 +35,11 @@ import {
   createRecallMemoriesHandler,
   listEventsDefinition,
   createListEventsHandler,
+  BraveSearchProvider,
+  DuckDuckGoSearchProvider,
+  FallbackSearchProvider,
 } from "@motebit/tools";
+import type { SearchProvider } from "@motebit/tools";
 import { connectMcpServers, type McpServerConfig } from "@motebit/mcp-client";
 import { deriveKey, encrypt, decrypt, generateNonce } from "@motebit/crypto";
 import type { EncryptedPayload } from "@motebit/crypto";
@@ -536,7 +540,17 @@ function buildToolRegistry(
 
   // Always available (R0/R1): read-only file access, web search, web read
   registry.register(readFileDefinition, createReadFileHandler(config.allowedPaths));
-  registry.register(webSearchDefinition, createWebSearchHandler());
+
+  // Search provider chain: Brave (if API key configured) → DuckDuckGo fallback
+  const braveKey = process.env["BRAVE_SEARCH_API_KEY"];
+  let searchProvider: SearchProvider | undefined;
+  if (braveKey) {
+    searchProvider = new FallbackSearchProvider([
+      new BraveSearchProvider(braveKey),
+      new DuckDuckGoSearchProvider(),
+    ]);
+  }
+  registry.register(webSearchDefinition, createWebSearchHandler(searchProvider));
   registry.register(readUrlDefinition, createReadUrlHandler());
 
   // Deferred handlers for memory/events (need runtime, which needs registry)

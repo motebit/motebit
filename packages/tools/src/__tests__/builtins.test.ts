@@ -27,9 +27,11 @@ describe("web_search", () => {
       ok: true,
       json: async () => ({
         AbstractText: "TypeScript is a typed superset of JavaScript.",
+        Heading: "TypeScript",
+        AbstractURL: "https://en.wikipedia.org/wiki/TypeScript",
         RelatedTopics: [
-          { Text: "Related topic 1" },
-          { Text: "Related topic 2" },
+          { Text: "Related topic 1", FirstURL: "https://example.com/1" },
+          { Text: "Related topic 2", FirstURL: "https://example.com/2" },
         ],
       }),
     }) as unknown as typeof fetch;
@@ -71,7 +73,8 @@ describe("web_search", () => {
     const handler = createWebSearchHandler();
     const result = await handler({ query: "test" });
     expect(result.ok).toBe(false);
-    expect(result.error).toContain("Search failed: 500");
+    expect(result.error).toContain("Search error");
+    expect(result.error).toContain("500");
   });
 
   it("returns error on network error", async () => {
@@ -81,6 +84,40 @@ describe("web_search", () => {
     const result = await handler({ query: "test" });
     expect(result.ok).toBe(false);
     expect(result.error).toContain("Network error");
+  });
+
+  it("uses a custom SearchProvider when provided", async () => {
+    const mockProvider = {
+      search: vi.fn().mockResolvedValue([
+        { title: "Brave Result", url: "https://brave.com", snippet: "Found via Brave" },
+      ]),
+    };
+
+    const handler = createWebSearchHandler(mockProvider);
+    const result = await handler({ query: "test query" });
+
+    expect(result.ok).toBe(true);
+    expect(result.data).toContain("Brave Result");
+    expect(result.data).toContain("https://brave.com");
+    expect(result.data).toContain("Found via Brave");
+    expect(mockProvider.search).toHaveBeenCalledWith("test query", 5);
+  });
+
+  it("formats results as numbered list", async () => {
+    const mockProvider = {
+      search: vi.fn().mockResolvedValue([
+        { title: "First", url: "https://first.com", snippet: "First result" },
+        { title: "Second", url: "https://second.com", snippet: "Second result" },
+      ]),
+    };
+
+    const handler = createWebSearchHandler(mockProvider);
+    const result = await handler({ query: "multi" });
+
+    expect(result.ok).toBe(true);
+    expect(result.data).toContain('Results for "multi"');
+    expect(result.data).toContain("1. First");
+    expect(result.data).toContain("2. Second");
   });
 });
 
