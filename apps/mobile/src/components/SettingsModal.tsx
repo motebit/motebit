@@ -203,12 +203,18 @@ export function SettingsModal({
               apiKey={apiKey}
               ollamaEndpoint={draft.ollamaEndpoint}
               voiceEnabled={draft.voiceEnabled}
+              voiceResponseEnabled={draft.voiceResponseEnabled}
+              voiceAutoSend={draft.voiceAutoSend}
+              ttsVoice={draft.ttsVoice}
               openaiKey={openaiKey}
               onChangeProvider={(p) => updateDraft({ provider: p, model: p === "ollama" ? "llama3.2" : "claude-sonnet-4-20250514" })}
               onChangeModel={(m) => updateDraft({ model: m })}
               onChangeApiKey={setApiKey}
               onChangeOllamaEndpoint={(e) => updateDraft({ ollamaEndpoint: e })}
               onChangeVoiceEnabled={(v) => updateDraft({ voiceEnabled: v })}
+              onChangeVoiceResponseEnabled={(v) => updateDraft({ voiceResponseEnabled: v })}
+              onChangeVoiceAutoSend={(v) => updateDraft({ voiceAutoSend: v })}
+              onChangeTtsVoice={(v) => updateDraft({ ttsVoice: v })}
               onChangeOpenaiKey={setOpenaiKey}
             />
           )}
@@ -284,18 +290,33 @@ function AppearanceTab({ selected, onSelect }: { selected: string; onSelect: (p:
 
 // === Intelligence Tab ===
 
+const TTS_VOICE_OPTIONS = [
+  { key: "alloy", label: "Alloy" },
+  { key: "echo", label: "Echo" },
+  { key: "fable", label: "Fable" },
+  { key: "onyx", label: "Onyx" },
+  { key: "nova", label: "Nova" },
+  { key: "shimmer", label: "Shimmer" },
+];
+
 function IntelligenceTab({
   provider,
   model,
   apiKey,
   ollamaEndpoint,
   voiceEnabled,
+  voiceResponseEnabled,
+  voiceAutoSend,
+  ttsVoice,
   openaiKey,
   onChangeProvider,
   onChangeModel,
   onChangeApiKey,
   onChangeOllamaEndpoint,
   onChangeVoiceEnabled,
+  onChangeVoiceResponseEnabled,
+  onChangeVoiceAutoSend,
+  onChangeTtsVoice,
   onChangeOpenaiKey,
 }: {
   provider: "ollama" | "anthropic";
@@ -303,12 +324,18 @@ function IntelligenceTab({
   apiKey: string;
   ollamaEndpoint: string;
   voiceEnabled: boolean;
+  voiceResponseEnabled: boolean;
+  voiceAutoSend: boolean;
+  ttsVoice: string;
   openaiKey: string;
   onChangeProvider: (p: "ollama" | "anthropic") => void;
   onChangeModel: (m: string) => void;
   onChangeApiKey: (k: string) => void;
   onChangeOllamaEndpoint: (e: string) => void;
   onChangeVoiceEnabled: (v: boolean) => void;
+  onChangeVoiceResponseEnabled: (v: boolean) => void;
+  onChangeVoiceAutoSend: (v: boolean) => void;
+  onChangeTtsVoice: (v: string) => void;
   onChangeOpenaiKey: (k: string) => void;
 }) {
   return (
@@ -374,7 +401,7 @@ function IntelligenceTab({
 
       <Text style={styles.sectionTitle}>Voice</Text>
       <View style={styles.switchRow}>
-        <Text style={styles.switchLabel}>Voice responses</Text>
+        <Text style={styles.switchLabel}>Voice mode</Text>
         <Switch
           value={voiceEnabled}
           onValueChange={onChangeVoiceEnabled}
@@ -382,9 +409,52 @@ function IntelligenceTab({
           thumbColor={voiceEnabled ? "#c0d0e0" : "#607080"}
         />
       </View>
-      <Text style={styles.voiceHint}>Speak assistant replies aloud using system TTS</Text>
+      <Text style={styles.voiceHint}>Enable mic button for voice input and spoken responses</Text>
 
-      <Text style={styles.sectionTitle}>OpenAI API Key (Whisper STT)</Text>
+      {voiceEnabled && (
+        <>
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>Speak responses</Text>
+            <Switch
+              value={voiceResponseEnabled}
+              onValueChange={onChangeVoiceResponseEnabled}
+              trackColor={{ false: "#1a2030", true: "#2a4060" }}
+              thumbColor={voiceResponseEnabled ? "#c0d0e0" : "#607080"}
+            />
+          </View>
+          <Text style={styles.voiceHint}>Read assistant replies aloud via TTS</Text>
+
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>Auto-send transcript</Text>
+            <Switch
+              value={voiceAutoSend}
+              onValueChange={onChangeVoiceAutoSend}
+              trackColor={{ false: "#1a2030", true: "#2a4060" }}
+              thumbColor={voiceAutoSend ? "#c0d0e0" : "#607080"}
+            />
+          </View>
+          <Text style={styles.voiceHint}>Send voice transcript immediately, or drop into input for review</Text>
+
+          <Text style={styles.sectionTitle}>TTS Voice</Text>
+          <View style={styles.voiceGrid}>
+            {TTS_VOICE_OPTIONS.map((opt) => (
+              <TouchableOpacity
+                key={opt.key}
+                style={[styles.voiceChip, ttsVoice === opt.key && styles.voiceChipActive]}
+                onPress={() => onChangeTtsVoice(opt.key)}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.voiceChipText, ttsVoice === opt.key && styles.voiceChipTextActive]}>
+                  {opt.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <Text style={styles.voiceHint}>OpenAI TTS voice (requires API key below). Falls back to system TTS.</Text>
+        </>
+      )}
+
+      <Text style={styles.sectionTitle}>OpenAI API Key</Text>
       <TextInput
         style={styles.textField}
         value={openaiKey}
@@ -395,7 +465,7 @@ function IntelligenceTab({
         autoCapitalize="none"
         autoCorrect={false}
       />
-      <Text style={styles.voiceHint}>Required for voice input (mic button). Uses Whisper API for transcription.</Text>
+      <Text style={styles.voiceHint}>Used for Whisper STT (voice input) and OpenAI TTS (spoken responses).</Text>
     </View>
   );
 }
@@ -1031,6 +1101,31 @@ const styles = StyleSheet.create({
   radioTextActive: { color: "#c0d0e0" },
   radioDesc: { color: "#506070", fontSize: 12, marginTop: 2 },
   voiceHint: { color: "#405060", fontSize: 11, marginTop: 4, marginBottom: 4 },
+  voiceGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  voiceChip: {
+    backgroundColor: "#0f1820",
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: "#1a2030",
+  },
+  voiceChipActive: {
+    borderColor: "#4080c0",
+    backgroundColor: "#0f1a28",
+  },
+  voiceChipText: {
+    color: "#607080",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  voiceChipTextActive: {
+    color: "#c0d0e0",
+  },
 
   // Fields
   textField: {

@@ -289,6 +289,9 @@ describe("MobileApp.settings", () => {
       maxMemoriesPerTurn: 3,
       budgetMaxCalls: 10,
       voiceEnabled: false,
+      ttsVoice: "nova",
+      voiceAutoSend: false,
+      voiceResponseEnabled: true,
     };
     await app.saveSettings(custom);
     const loaded = await app.loadSettings();

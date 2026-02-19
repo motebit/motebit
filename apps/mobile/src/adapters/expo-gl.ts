@@ -18,6 +18,140 @@ import type { RenderSpec, BehaviorCues } from "@motebit/sdk";
 const BODY_R = 0.14;
 const EYE_R = 0.035;
 
+// === Environment Presets ===
+// Ported from packages/render-engine/src/adapter.ts — same values, same principle:
+// glass needs chromatic variation to refract; uniform environments make glass invisible.
+
+interface EnvironmentPreset {
+  zenith: [number, number, number];
+  horizon: [number, number, number];
+  ground: [number, number, number];
+  sun: [number, number, number];
+  fill: [number, number, number];
+  groundPanel: [number, number, number];
+  warmTint?: [number, number, number];
+  coolTint?: [number, number, number];
+}
+
+const ENV_LIGHT: EnvironmentPreset = {
+  zenith:      [0.22, 0.32, 0.72],   // saturated blue upper sky
+  horizon:     [0.92, 0.62, 0.35],   // warm amber horizon
+  ground:      [0.15, 0.14, 0.18],   // dark cool ground
+  sun:         [6.0,  3.2,  0.8],    // deep amber-gold key
+  fill:        [0.3,  0.5,  2.2],    // blue-violet fill — spectral opposite of sun
+  groundPanel: [0.50, 0.32, 0.18],   // warm ground bounce
+  warmTint:    [1.25, 0.94, 0.68],   // warm side: red boost, blue cut
+  coolTint:    [0.68, 0.88, 1.30],   // cool side: blue boost, red cut
+};
+
+const ENV_DARK: EnvironmentPreset = {
+  zenith:      [0.02, 0.02, 0.04],
+  horizon:     [0.04, 0.03, 0.03],
+  ground:      [0.02, 0.02, 0.02],
+  sun:         [2.0,  1.8,  1.5],
+  fill:        [0.3,  0.4,  0.8],
+  groundPanel: [0.08, 0.06, 0.05],
+};
+
+/**
+ * Build a PMREM environment map from a sky gradient + emissive panels.
+ * The GLSL shader creates a zenith→horizon→ground vertical gradient with
+ * optional warm-cool azimuthal tinting. Sun, fill, and ground panels add
+ * directional chromatic light sources.
+ */
+function createEnvironmentMap(
+  renderer: THREE.WebGLRenderer,
+  preset: EnvironmentPreset,
+): THREE.Texture {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const envScene = new THREE.Scene();
+
+  const skyGeo = new THREE.SphereGeometry(5, 64, 32);
+  const z = preset.zenith, h = preset.horizon, g = preset.ground;
+  const hasSpectral = preset.warmTint && preset.coolTint;
+  const w = preset.warmTint ?? [1, 1, 1], c = preset.coolTint ?? [1, 1, 1];
+
+  const skyMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    uniforms: {},
+    vertexShader: `
+      varying vec3 vWorldPos;
+      void main() {
+        vWorldPos = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vWorldPos;
+      void main() {
+        vec3 dir = normalize(vWorldPos);
+        float y = dir.y;
+        vec3 zenith  = vec3(${z[0]}, ${z[1]}, ${z[2]});
+        vec3 horizon = vec3(${h[0]}, ${h[1]}, ${h[2]});
+        vec3 ground  = vec3(${g[0]}, ${g[1]}, ${g[2]});
+        vec3 color;
+        if (y > 0.0) {
+          color = mix(horizon, zenith, pow(y, 0.6));
+        } else {
+          color = mix(horizon * 0.5, ground, pow(-y, 0.4));
+        }
+        ${hasSpectral ? `
+        float azimuth = atan(dir.z, dir.x) / 3.14159;
+        float warmFactor = azimuth * 0.5 + 0.5;
+        vec3 warm = vec3(${w[0]}, ${w[1]}, ${w[2]});
+        vec3 cool = vec3(${c[0]}, ${c[1]}, ${c[2]});
+        color *= mix(cool, warm, warmFactor);
+        ` : ""}
+        gl_FragColor = vec4(color, 1.0);
+      }
+    `,
+  });
+  envScene.add(new THREE.Mesh(skyGeo, skyMat));
+
+  // Sun panel: amber-gold, positioned top-right-front
+  const sunMat = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(...preset.sun),
+    side: THREE.DoubleSide,
+  });
+  const sunPanel = new THREE.Mesh(new THREE.CircleGeometry(0.85, 32), sunMat);
+  sunPanel.position.set(3, 3, 2);
+  sunPanel.lookAt(0, 0, 0);
+  envScene.add(sunPanel);
+
+  // Fill panel: blue-violet, positioned upper-left-back
+  const fillMat = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(...preset.fill),
+    side: THREE.DoubleSide,
+  });
+  const fillPanel = new THREE.Mesh(new THREE.CircleGeometry(1.1, 32), fillMat);
+  fillPanel.position.set(-2.5, 2, -1);
+  fillPanel.lookAt(0, 0, 0);
+  envScene.add(fillPanel);
+
+  // Ground bounce panel: warm, horizontal, below
+  const groundMat = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(...preset.groundPanel),
+    side: THREE.DoubleSide,
+  });
+  const groundPanel = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), groundMat);
+  groundPanel.position.set(0, -3, 0);
+  groundPanel.rotation.x = Math.PI / 2;
+  envScene.add(groundPanel);
+
+  // Bake to PMREM cube texture
+  const envMap = pmrem.fromScene(envScene, 0, 0.1, 100).texture;
+
+  // Dispose intermediates
+  skyGeo.dispose();
+  skyMat.dispose();
+  sunMat.dispose();
+  fillMat.dispose();
+  groundMat.dispose();
+  pmrem.dispose();
+
+  return envMap;
+}
+
 function organicNoise(t: number, frequencies: number[]): number {
   let sum = 0;
   for (const f of frequencies) sum += Math.sin(t * f);
@@ -81,12 +215,23 @@ export class ExpoGLAdapter implements RenderAdapter {
 
     this.renderer = new Renderer({ gl: glContext }) as unknown as THREE.WebGLRenderer;
     this.renderer.setSize(glContext.drawingBufferWidth, glContext.drawingBufferHeight);
-    this.renderer.setClearColor(0x0a0a0a);
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
 
     this.width = glContext.drawingBufferWidth;
     this.height = glContext.drawingBufferHeight;
 
     this.scene = new THREE.Scene();
+
+    // Spectral environment — chromatic sky gradient that makes glass visible
+    try {
+      const envMap = createEnvironmentMap(this.renderer, ENV_LIGHT);
+      this.scene.environment = envMap;
+      this.scene.background = envMap;
+    } catch {
+      // Fallback: flat dark background if PMREM fails (old ES2 devices)
+      this.scene.background = new THREE.Color(0x0a0a0a);
+    }
 
     this.camera = new THREE.PerspectiveCamera(
       45,
@@ -96,7 +241,7 @@ export class ExpoGLAdapter implements RenderAdapter {
     );
     this.camera.position.set(0, 0, 3);
 
-    // Lighting
+    // Lighting — ambient + directional supplement the environment map
     const ambient = new THREE.AmbientLight(0xffffff, this.spec.lighting.ambient_intensity);
     this.scene.add(ambient);
 
@@ -246,11 +391,27 @@ export class ExpoGLAdapter implements RenderAdapter {
   }
 
   setDarkEnvironment(): void {
-    // No-op on mobile — single environment
+    if (this.scene && this.renderer) {
+      try {
+        const envMap = createEnvironmentMap(this.renderer, ENV_DARK);
+        this.scene.environment = envMap;
+        this.scene.background = envMap;
+      } catch {
+        // Non-fatal
+      }
+    }
   }
 
   setLightEnvironment(): void {
-    // No-op on mobile — single environment
+    if (this.scene && this.renderer) {
+      try {
+        const envMap = createEnvironmentMap(this.renderer, ENV_LIGHT);
+        this.scene.environment = envMap;
+        this.scene.background = envMap;
+      } catch {
+        // Non-fatal
+      }
+    }
   }
 
   setAudioReactivity(energy: AudioReactivity | null): void {

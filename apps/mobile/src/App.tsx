@@ -34,7 +34,9 @@ import type { MotebitState, BehaviorCues } from "@motebit/sdk";
 import type { StreamChunk } from "@motebit/runtime";
 import { stripTags } from "@motebit/ai-core";
 import type { TTSProvider, STTProvider } from "@motebit/voice";
+import { FallbackTTSProvider } from "@motebit/voice";
 import { ExpoSpeechTTSProvider } from "./adapters/expo-speech-tts";
+import { OpenAITTSProvider } from "./adapters/openai-tts";
 import { ExpoAVSTTProvider } from "./adapters/expo-av-stt";
 import { AudioMonitor } from "./adapters/audio-monitor";
 import { MobileApp, APPROVAL_PRESET_CONFIGS } from "./mobile-app";
@@ -46,6 +48,7 @@ import type { PinMode } from "./components/PinDialog";
 import { SettingsModal } from "./components/SettingsModal";
 import { MemoryPanel } from "./components/MemoryPanel";
 import { ConversationPanel } from "./components/ConversationPanel";
+import { VoiceIndicator } from "./components/VoiceIndicator";
 
 // === Types ===
 
@@ -124,6 +127,8 @@ export function App(): React.ReactElement {
   const ttsPulseRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Track whether voice was auto-triggered by VAD (vs manual tap from ambient)
   const vadTriggeredRef = useRef(false);
+  // Audio level for VoiceIndicator visualization
+  const [audioLevel, setAudioLevel] = useState(0);
 
   // Sync state
   const [syncStatus, setSyncStatus] = useState<"idle" | "syncing" | "error" | "offline">("offline");
@@ -203,23 +208,27 @@ export function App(): React.ReactElement {
     };
   }, []);
 
-  // Initialize voice providers (TTS always, STT lazily when API key available)
-  const initVoice = useCallback(async () => {
-    if (!ttsRef.current) {
-      ttsRef.current = new ExpoSpeechTTSProvider();
+  // Initialize voice providers — TTS chain: OpenAI TTS → expo-speech fallback
+  const initVoice = useCallback(async (voiceSettings?: { ttsVoice?: string }) => {
+    const openaiKey = await SecureStore.getItemAsync("motebit_openai_api_key");
+    const voice = voiceSettings?.ttsVoice ?? settings?.ttsVoice ?? "alloy";
+
+    // Build TTS chain: OpenAI (if key available) → system TTS fallback
+    const systemTts = new ExpoSpeechTTSProvider();
+    if (openaiKey) {
+      const openaiTts = new OpenAITTSProvider({ apiKey: openaiKey, voice });
+      ttsRef.current = new FallbackTTSProvider([openaiTts, systemTts]);
+    } else {
+      ttsRef.current = systemTts;
     }
 
     if (!sttRef.current) {
-      // STT needs an OpenAI API key for Whisper — try loading from secure store.
-      // If the user is on Anthropic provider, they may still have an OpenAI key
-      // stored for Whisper. We store it under a separate key.
-      const whisperKey = await SecureStore.getItemAsync("motebit_openai_api_key");
-      if (whisperKey) {
-        const provider = new ExpoAVSTTProvider({ apiKey: whisperKey });
-        sttRef.current = provider;
+      // STT needs an OpenAI API key for Whisper
+      if (openaiKey) {
+        sttRef.current = new ExpoAVSTTProvider({ apiKey: openaiKey });
       }
     }
-  }, []);
+  }, [settings?.ttsVoice]);
 
   const initializeAI = useCallback(async (a: MobileApp, s: MobileSettings) => {
     // Capture operator mode before re-init (initAI creates a new runtime/PolicyGate
@@ -421,6 +430,7 @@ export function App(): React.ReactElement {
     const monitor = new AudioMonitor();
     monitor.onAudio = (energy) => {
       app.current.setAudioReactivity(energy ?? null);
+      setAudioLevel(energy?.rms ?? 0);
     };
     monitor.onSpeechStart = () => {
       // VAD triggered — transition ambient → voice
@@ -437,6 +447,7 @@ export function App(): React.ReactElement {
       audioMonitorRef.current = null;
     }
     app.current.setAudioReactivity(null);
+    setAudioLevel(0);
   }, []);
 
   /** Start STT recording (stops AudioMonitor first — expo-av single-recording constraint on iOS). */
@@ -627,15 +638,18 @@ export function App(): React.ReactElement {
     }
   }, [inputText, isProcessing, handleSlashCommand]);
 
-  // Auto-send when inputText is filled by voice transcription
+  // Auto-send when inputText is filled by voice transcription (if voiceAutoSend enabled)
   const prevMicStateRef = useRef(micState);
   useEffect(() => {
     // Detect transition from transcribing→ambient with text in the input (voice result arrived)
     if (prevMicStateRef.current === "transcribing" && micState === "ambient" && inputText.trim()) {
-      void handleSend();
+      if (settings?.voiceAutoSend !== false) {
+        void handleSend();
+      }
+      // If auto-send disabled, text stays in input for user review
     }
     prevMicStateRef.current = micState;
-  }, [micState, inputText, handleSend]);
+  }, [micState, inputText, handleSend, settings?.voiceAutoSend]);
 
   // === Stream consumer ===
   const consumeStream = useCallback(async (stream: AsyncGenerator<StreamChunk>) => {
@@ -712,9 +726,10 @@ export function App(): React.ReactElement {
         ),
       );
 
-      // TTS — speak the response if voice is active (ambient or any non-off state)
+      // TTS — speak the response if voice is active and response is enabled
       const voiceActive = micState !== "off";
-      if (voiceActive && settings?.voiceEnabled && ttsRef.current && finalText) {
+      const responseEnabled = settings?.voiceResponseEnabled !== false;
+      if (voiceActive && responseEnabled && settings?.voiceEnabled && ttsRef.current && finalText) {
         setMicState("speaking");
         // Stop ambient monitor during TTS (avoid feedback)
         if (audioMonitorRef.current?.isRunning) {
@@ -727,12 +742,14 @@ export function App(): React.ReactElement {
           const elapsed = (Date.now() - startTime) / 1000;
           const base = 0.06;
           const wave = Math.sin(elapsed * 4.5) * 0.04;
+          const rms = base + wave;
           app.current.setAudioReactivity({
-            rms: base + wave,
+            rms,
             low: base * 0.8 + wave * 0.5,
             mid: base * 1.2 + wave,
             high: base * 0.4 + Math.sin(elapsed * 11.3) * 0.03,
           });
+          setAudioLevel(rms);
         }, 33);
 
         try {
@@ -746,6 +763,7 @@ export function App(): React.ReactElement {
             ttsPulseRef.current = null;
           }
           app.current.setAudioReactivity(null);
+          setAudioLevel(0);
           // Return to ambient — creature keeps listening
           setMicState("ambient");
         }
@@ -829,9 +847,9 @@ export function App(): React.ReactElement {
       a.setInteriorColor(newSettings.colorPreset);
     }
 
-    // Re-init STT provider (user may have added/changed OpenAI key)
+    // Re-init voice providers (user may have added/changed OpenAI key or TTS voice)
     sttRef.current = null;
-    await initVoice();
+    await initVoice({ ttsVoice: newSettings.ttsVoice });
 
     setShowSettings(false);
   }, [subscribeToState, addSystemMessage, initVoice]);
@@ -1188,6 +1206,9 @@ export function App(): React.ReactElement {
           );
         }}
       />
+
+      {/* Voice amplitude indicator */}
+      <VoiceIndicator micState={micState} audioLevel={audioLevel} />
 
       {/* Input Bar */}
       <View style={styles.inputBar}>

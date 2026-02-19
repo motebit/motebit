@@ -120,6 +120,9 @@ export interface MobileSettings {
   maxMemoriesPerTurn: number;
   budgetMaxCalls: number;
   voiceEnabled: boolean;
+  ttsVoice: string;
+  voiceAutoSend: boolean;
+  voiceResponseEnabled: boolean;
 }
 
 const DEFAULT_SETTINGS: MobileSettings = {
@@ -133,6 +136,9 @@ const DEFAULT_SETTINGS: MobileSettings = {
   maxMemoriesPerTurn: 5,
   budgetMaxCalls: 20,
   voiceEnabled: false,
+  ttsVoice: "alloy",
+  voiceAutoSend: true,
+  voiceResponseEnabled: true,
 };
 
 const SETTINGS_KEY = "@motebit/settings";
