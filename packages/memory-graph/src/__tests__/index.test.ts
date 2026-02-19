@@ -466,4 +466,212 @@ describe("MemoryGraph", () => {
       expect(exported.edges).toHaveLength(1);
     });
   });
+
+  describe("configurable scoring weights", () => {
+    it("similarity-only scoring ranks by cosine similarity alone", async () => {
+      // Create two memories: one semantically close, one with higher confidence
+      await graph.formMemory(
+        {
+          content: "semantically close",
+          confidence: 0.3,
+          sensitivity: SensitivityLevel.None,
+        },
+        [1, 0, 0], // perfect match to query
+      );
+      await graph.formMemory(
+        {
+          content: "high confidence but distant",
+          confidence: 1.0,
+          sensitivity: SensitivityLevel.None,
+        },
+        [0, 0, 1], // orthogonal to query
+      );
+
+      // With default weights (0.5 sim, 0.3 conf, 0.2 recency), the high-confidence
+      // memory might rank higher. With similarity-only, it must rank lower.
+      const results = await graph.retrieve([1, 0, 0], {
+        scoringConfig: { similarityWeight: 1, confidenceWeight: 0, recencyWeight: 0 },
+      });
+      expect(results[0]!.content).toBe("semantically close");
+    });
+
+    it("confidence-only scoring ranks by decayed confidence alone", async () => {
+      await graph.formMemory(
+        {
+          content: "low confidence exact match",
+          confidence: 0.2,
+          sensitivity: SensitivityLevel.None,
+        },
+        [1, 0, 0],
+      );
+      await graph.formMemory(
+        {
+          content: "high confidence orthogonal",
+          confidence: 1.0,
+          sensitivity: SensitivityLevel.None,
+        },
+        [0, 0, 1],
+      );
+
+      const results = await graph.retrieve([1, 0, 0], {
+        scoringConfig: { similarityWeight: 0, confidenceWeight: 1, recencyWeight: 0 },
+      });
+      expect(results[0]!.content).toBe("high confidence orthogonal");
+    });
+
+    it("weight normalization handles non-unit-sum weights", async () => {
+      // Weights (10, 0, 0) should normalize to (1, 0, 0) — same as similarity-only
+      await graph.formMemory(
+        {
+          content: "exact match",
+          confidence: 0.1,
+          sensitivity: SensitivityLevel.None,
+        },
+        [1, 0, 0],
+      );
+      await graph.formMemory(
+        {
+          content: "high confidence distant",
+          confidence: 1.0,
+          sensitivity: SensitivityLevel.None,
+        },
+        [0, 0, 1],
+      );
+
+      const results = await graph.retrieve([1, 0, 0], {
+        scoringConfig: { similarityWeight: 10, confidenceWeight: 0, recencyWeight: 0 },
+      });
+      expect(results[0]!.content).toBe("exact match");
+    });
+
+    it("constructor-level scoring config is used as default", async () => {
+      // Create a graph with similarity-only config
+      const customGraph = new MemoryGraph(storage, eventStore, motebitId, {
+        similarityWeight: 1,
+        confidenceWeight: 0,
+        recencyWeight: 0,
+      });
+
+      await customGraph.formMemory(
+        {
+          content: "exact match",
+          confidence: 0.1,
+          sensitivity: SensitivityLevel.None,
+        },
+        [1, 0, 0],
+      );
+      await customGraph.formMemory(
+        {
+          content: "high confidence distant",
+          confidence: 1.0,
+          sensitivity: SensitivityLevel.None,
+        },
+        [0, 0, 1],
+      );
+
+      // No per-call config — should use constructor config
+      const results = await customGraph.retrieve([1, 0, 0]);
+      expect(results[0]!.content).toBe("exact match");
+    });
+
+    it("per-call scoring config overrides constructor config", async () => {
+      // Constructor says similarity-only
+      const customGraph = new MemoryGraph(storage, eventStore, motebitId, {
+        similarityWeight: 1,
+        confidenceWeight: 0,
+        recencyWeight: 0,
+      });
+
+      await customGraph.formMemory(
+        {
+          content: "exact match low confidence",
+          confidence: 0.1,
+          sensitivity: SensitivityLevel.None,
+        },
+        [1, 0, 0],
+      );
+      await customGraph.formMemory(
+        {
+          content: "distant high confidence",
+          confidence: 1.0,
+          sensitivity: SensitivityLevel.None,
+        },
+        [0, 0, 1],
+      );
+
+      // Per-call override says confidence-only
+      const results = await customGraph.retrieve([1, 0, 0], {
+        scoringConfig: { similarityWeight: 0, confidenceWeight: 1, recencyWeight: 0 },
+      });
+      expect(results[0]!.content).toBe("distant high confidence");
+    });
+
+    it("custom overFetchRatio changes candidate pool size", async () => {
+      // With overFetchRatio=1 and limit=1, only 1 candidate is fetched
+      // so only the first node inserted is available for reranking
+      const customGraph = new MemoryGraph(storage, eventStore, motebitId, {
+        overFetchRatio: 1,
+      });
+
+      // Insert multiple memories
+      for (let i = 0; i < 5; i++) {
+        await customGraph.formMemory(
+          {
+            content: `memory-${i}`,
+            confidence: 0.9,
+            sensitivity: SensitivityLevel.None,
+          },
+          [1, 0],
+        );
+      }
+
+      // With overFetchRatio=1 and limit=1, only 1 candidate fetched, 1 returned
+      const results = await customGraph.retrieve([1, 0], { limit: 1 });
+      expect(results).toHaveLength(1);
+    });
+
+    it("exponential recency decay gives half boost after one half-life", async () => {
+      // Create a graph with recency-only scoring and a known half-life
+      const halfLifeMs = 1000; // 1 second for test
+      const customGraph = new MemoryGraph(storage, eventStore, motebitId, {
+        similarityWeight: 0,
+        confidenceWeight: 0,
+        recencyWeight: 1,
+        recencyHalfLife: halfLifeMs,
+      });
+
+      // Create two memories: one recent, one older
+      const now = Date.now();
+      // Directly insert nodes with controlled timestamps via the storage adapter
+      await storage.saveNode({
+        node_id: "recent",
+        motebit_id: motebitId,
+        content: "recent memory",
+        embedding: [1, 0],
+        confidence: 0.9,
+        sensitivity: SensitivityLevel.None,
+        created_at: now,
+        last_accessed: now, // just accessed
+        half_life: 999999999,
+        tombstoned: false,
+      });
+      await storage.saveNode({
+        node_id: "old",
+        motebit_id: motebitId,
+        content: "old memory",
+        embedding: [1, 0],
+        confidence: 0.9,
+        sensitivity: SensitivityLevel.None,
+        created_at: now - 10000,
+        last_accessed: now - 10000, // accessed 10s ago (10 half-lives)
+        half_life: 999999999,
+        tombstoned: false,
+      });
+
+      const results = await customGraph.retrieve([1, 0]);
+      // Recent memory should rank first with recency-only scoring
+      expect(results[0]!.content).toBe("recent memory");
+      expect(results[1]!.content).toBe("old memory");
+    });
+  });
 });

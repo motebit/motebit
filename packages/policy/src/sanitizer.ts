@@ -134,6 +134,68 @@ export interface SanitizeResult {
   content: string;
   injectionDetected: boolean;
   injectionPatterns: string[];
+  directiveDensity?: number;
+  structuralFlags?: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Entropy-based anomaly detection — catches novel injections that bypass regex
+// ---------------------------------------------------------------------------
+
+/** Default threshold: 5% of words are directive phrases → suspicious. */
+export const DIRECTIVE_DENSITY_THRESHOLD = 0.05;
+
+/** Imperative / instruction-like phrases that should not appear in tool data. */
+const DIRECTIVE_PHRASES: RegExp[] = [
+  /\b(?:you must|you should|you are|you will|do not|don't|ignore|forget|disregard)\b/g,
+  /\b(?:instead|override|bypass|execute|output|respond with|answer with|say|repeat)\b/g,
+  /\b(?:from now on|new instructions|real instructions|actual instructions)\b/g,
+];
+
+/**
+ * Compute directive density: ratio of directive phrase matches to total words.
+ * Tool results should be data, not commands — a high ratio is suspicious.
+ */
+function computeDirectiveDensity(text: string): number {
+  const normalized = text.toLowerCase();
+  const words = normalized.split(/\s+/).filter((w) => w.length > 0);
+  if (words.length === 0) return 0;
+
+  let count = 0;
+  for (const re of DIRECTIVE_PHRASES) {
+    // Reset lastIndex for global regex before counting
+    re.lastIndex = 0;
+    const matches = normalized.match(re);
+    if (matches) count += matches.length;
+  }
+  return count / words.length;
+}
+
+/** Structural patterns that should not appear in tool output data. */
+const STRUCTURAL_ANOMALIES: Array<{ pattern: RegExp; flag: string }> = [
+  // JSON role markers (chat completion injection)
+  { pattern: /"role"\s*:\s*"(?:system|assistant)"/i, flag: "json_role_injection" },
+  { pattern: /\{\s*"messages"\s*:\s*\[/i, flag: "chat_completion_format" },
+
+  // Markdown headers that look like prompt sections
+  { pattern: /^#{1,3}\s+(?:system|instructions|system prompt)\s*$/im, flag: "prompt_section_header" },
+
+  // XML-style prompt framing tags
+  { pattern: /<\s*(?:instructions|rules|system_prompt|persona|context)\s*>/i, flag: "xml_prompt_framing" },
+];
+
+/**
+ * Detect structural anomalies: elements in tool output that look like
+ * prompt engineering artifacts rather than data.
+ */
+function detectStructuralAnomalies(text: string): string[] {
+  const flags: string[] = [];
+  for (const { pattern, flag } of STRUCTURAL_ANOMALIES) {
+    if (pattern.test(text)) {
+      flags.push(flag);
+    }
+  }
+  return flags;
 }
 
 export class ContentSanitizer {
@@ -148,7 +210,11 @@ export class ContentSanitizer {
 
   /**
    * Wrap external content in data boundaries that the model is instructed to
-   * treat as data, not directives. Also scans for injection attempts.
+   * treat as data, not directives. Also scans for injection attempts using
+   * three complementary layers:
+   *   1. Regex pattern matching (known attack signatures)
+   *   2. Directive density (instruction-like language ratio)
+   *   3. Structural anomaly detection (prompt engineering artifacts in data)
    */
   sanitize(content: string, source: string): SanitizeResult {
     const detected: string[] = [];
@@ -163,6 +229,13 @@ export class ContentSanitizer {
       }
     }
 
+    // --- Entropy layer: directive density ---
+    const density = computeDirectiveDensity(normalized);
+    const densityFlag = density >= DIRECTIVE_DENSITY_THRESHOLD;
+
+    // --- Structural anomaly layer ---
+    const structuralFlags = detectStructuralAnomalies(normalized);
+
     const safeSource = sanitizeSource(source);
     const safeContent = stripBoundaryMarkers(content);
 
@@ -171,10 +244,16 @@ export class ContentSanitizer {
 ${safeContent}
 ${DATA_BOUNDARY_END}`;
 
+    // Any layer can trigger detection independently
+    const injectionDetected =
+      detected.length > 0 || densityFlag || structuralFlags.length > 0;
+
     return {
       content: wrapped,
-      injectionDetected: detected.length > 0,
+      injectionDetected,
       injectionPatterns: detected,
+      directiveDensity: density,
+      structuralFlags,
     };
   }
 

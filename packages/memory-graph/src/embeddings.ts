@@ -83,17 +83,49 @@ function hashToken(token: string): number {
 }
 
 /**
+ * Extract character n-grams (trigrams) from a token.
+ * E.g., "running" → ["run", "unn", "nni", "nin", "ing"]
+ */
+function charTrigrams(token: string): string[] {
+  const grams: string[] = [];
+  if (token.length < 3) {
+    // For short tokens, use the token itself as its own gram
+    grams.push(token);
+  } else {
+    for (let i = 0; i <= token.length - 3; i++) {
+      grams.push(token.slice(i, i + 3));
+    }
+  }
+  return grams;
+}
+
+/**
  * Produce a 128-dimension L2-normalized embedding from text using
- * hashed bag-of-words. Deterministic — same text always yields
- * the same vector. Useful as a fast fallback in tests.
+ * character trigrams and word unigrams. Deterministic — same text
+ * always yields the same vector. The trigram component captures
+ * partial word similarity (e.g., "running" and "runner" share
+ * trigrams "run", "unn"), providing better semantic signal than
+ * pure bag-of-words bucketing.
  */
 export function embedTextHash(text: string): number[] {
   const vec = new Array<number>(HASH_DIMENSIONS).fill(0);
   const tokens = tokenize(text);
 
+  // Word unigrams — same as before
   for (const token of tokens) {
     const bucket = hashToken(token);
     vec[bucket] = (vec[bucket] ?? 0) + 1;
+  }
+
+  // Character trigrams — adds sub-word signal
+  for (const token of tokens) {
+    const grams = charTrigrams(token);
+    for (const gram of grams) {
+      // Use a different hash seed (prefix with "#") to spread trigrams
+      // across different buckets than the word unigrams
+      const bucket = hashToken("#" + gram);
+      vec[bucket] = (vec[bucket] ?? 0) + 0.5; // half-weight relative to full words
+    }
   }
 
   // L2 normalize

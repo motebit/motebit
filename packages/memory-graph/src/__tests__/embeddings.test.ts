@@ -96,4 +96,35 @@ describe("embedTextHash (fallback)", () => {
     const b = embedTextHash("test input");
     expect(a).toEqual(b);
   });
+
+  it("morphologically related words have higher similarity than unrelated words", () => {
+    // "running" and "runner" share trigrams: "run", "unn"
+    const running = embedTextHash("running");
+    const runner = embedTextHash("runner");
+    const quantum = embedTextHash("quantum");
+
+    const simRelated = cosineSimilarity(running, runner);
+    const simUnrelated = cosineSimilarity(running, quantum);
+
+    // Trigram-enhanced hash should produce higher similarity for morphologically related words
+    expect(simRelated).toBeGreaterThan(simUnrelated);
+  });
+
+  it("partial word overlap increases similarity via trigrams", () => {
+    // "unhappy" and "happiness" share trigrams from "happ" / "happi"
+    const a = embedTextHash("unhappy");
+    const b = embedTextHash("happiness");
+    const c = embedTextHash("volcano");
+
+    const simOverlap = cosineSimilarity(a, b);
+    const simNoOverlap = cosineSimilarity(a, c);
+
+    expect(simOverlap).toBeGreaterThan(simNoOverlap);
+  });
+
+  it("identical text produces similarity of 1", () => {
+    const a = embedTextHash("test phrase");
+    const b = embedTextHash("test phrase");
+    expect(cosineSimilarity(a, b)).toBeCloseTo(1.0, 10);
+  });
 });

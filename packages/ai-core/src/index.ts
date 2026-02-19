@@ -21,6 +21,8 @@ export { summarizeConversation, shouldSummarize } from "./summarizer.js";
 export type { SummarizerConfig } from "./summarizer.js";
 export { reflect, parseReflectionResponse } from "./reflection.js";
 export type { ReflectionResult } from "./reflection.js";
+export { TaskRouter, withTaskConfig } from "./task-router.js";
+export type { TaskType, TaskProfile, TaskRouterConfig, ResolvedTaskConfig } from "./task-router.js";
 // loadConfig is Node-only (node:fs) — import directly from @motebit/ai-core/dist/config-loader.js
 
 // === Provider Configuration ===
@@ -233,7 +235,11 @@ function parseSensitivity(raw: string): SensitivityLevel {
 
 export interface StreamingProvider extends IntelligenceProvider {
   readonly model: string;
+  readonly temperature?: number;
+  readonly maxTokens?: number;
   setModel(model: string): void;
+  setTemperature?(temperature: number): void;
+  setMaxTokens?(maxTokens: number): void;
   generateStream(contextPack: ContextPack): AsyncGenerator<
     { type: "text"; text: string } | { type: "done"; response: AIResponse }
   >;
@@ -248,8 +254,24 @@ export class CloudProvider implements StreamingProvider {
     return this.config.model;
   }
 
+  get temperature(): number | undefined {
+    return this.config.temperature;
+  }
+
+  get maxTokens(): number | undefined {
+    return this.config.max_tokens;
+  }
+
   setModel(model: string): void {
     this.config.model = model;
+  }
+
+  setTemperature(temperature: number): void {
+    this.config.temperature = temperature;
+  }
+
+  setMaxTokens(maxTokens: number): void {
+    this.config.max_tokens = maxTokens;
   }
 
   async generate(contextPack: ContextPack): Promise<AIResponse> {
@@ -600,8 +622,24 @@ export class OllamaProvider implements StreamingProvider {
     return this.config.model;
   }
 
+  get temperature(): number | undefined {
+    return this.config.temperature;
+  }
+
+  get maxTokens(): number | undefined {
+    return this.config.max_tokens;
+  }
+
   setModel(model: string): void {
     this.config.model = model;
+  }
+
+  setTemperature(temperature: number): void {
+    this.config.temperature = temperature;
+  }
+
+  setMaxTokens(maxTokens: number): void {
+    this.config.max_tokens = maxTokens;
   }
 
   async generate(contextPack: ContextPack): Promise<AIResponse> {

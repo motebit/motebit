@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { summarizeConversation, shouldSummarize } from "../summarizer.js";
+import { TaskRouter } from "../task-router.js";
 import type { ConversationMessage, AIResponse, IntelligenceProvider, ContextPack } from "@motebit/sdk";
 
 // === Mock Provider ===
@@ -138,5 +139,84 @@ describe("shouldSummarize", () => {
 
   it("returns false when trigger is negative", () => {
     expect(shouldSummarize(20, -1)).toBe(false);
+  });
+});
+
+// === summarizeConversation with TaskRouter ===
+
+describe("summarizeConversation with TaskRouter", () => {
+  function createConfigurableProvider(responseText: string) {
+    let currentModel = "default-model";
+    let currentTemp: number | undefined = 0.7;
+    let currentMaxTokens: number | undefined = 1024;
+
+    return {
+      get model() { return currentModel; },
+      get temperature() { return currentTemp; },
+      get maxTokens() { return currentMaxTokens; },
+      setModel: vi.fn((m: string) => { currentModel = m; }),
+      setTemperature: vi.fn((t: number) => { currentTemp = t; }),
+      setMaxTokens: vi.fn((mt: number) => { currentMaxTokens = mt; }),
+      generate: vi.fn().mockResolvedValue({
+        text: responseText,
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+      } satisfies AIResponse),
+      estimateConfidence: vi.fn().mockResolvedValue(0.8),
+      extractMemoryCandidates: vi.fn().mockResolvedValue([]),
+    };
+  }
+
+  it("switches model config for summarization task and restores after", async () => {
+    const provider = createConfigurableProvider("Routed summary.");
+    const router = new TaskRouter({
+      default: { model: "default-model", temperature: 0.7, maxTokens: 1024 },
+      overrides: {
+        summarization: { model: "summary-model", temperature: 0.3, maxTokens: 512 },
+      },
+    });
+
+    const messages = [msg("user", "Hello"), msg("assistant", "Hi!")];
+    const result = await summarizeConversation(messages, null, provider, router);
+
+    expect(result).toBe("Routed summary.");
+
+    // Verify setModel was called with the summarization model
+    expect(provider.setModel).toHaveBeenCalledWith("summary-model");
+    expect(provider.setTemperature).toHaveBeenCalledWith(0.3);
+    expect(provider.setMaxTokens).toHaveBeenCalledWith(512);
+
+    // Verify config was restored after the call
+    expect(provider.model).toBe("default-model");
+    expect(provider.temperature).toBe(0.7);
+    expect(provider.maxTokens).toBe(1024);
+  });
+
+  it("works without router (backward compatible)", async () => {
+    const provider = createMockProvider("Plain summary.");
+    const messages = [msg("user", "Hello")];
+
+    const result = await summarizeConversation(messages, null, provider);
+
+    expect(result).toBe("Plain summary.");
+    expect(provider.generate).toHaveBeenCalledOnce();
+  });
+
+  it("does not attempt config switching on plain IntelligenceProvider", async () => {
+    const provider = createMockProvider("Plain summary.");
+    const router = new TaskRouter({
+      default: { model: "default-model" },
+      overrides: {
+        summarization: { model: "summary-model" },
+      },
+    });
+
+    const messages = [msg("user", "Hello")];
+    const result = await summarizeConversation(messages, null, provider, router);
+
+    // Should still work — just doesn't switch model
+    expect(result).toBe("Plain summary.");
+    expect(provider.generate).toHaveBeenCalledOnce();
   });
 });

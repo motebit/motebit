@@ -1,5 +1,7 @@
 import type { ConversationMessage, IntelligenceProvider } from "@motebit/sdk";
 import { TrustMode, BatteryMode } from "@motebit/sdk";
+import type { TaskRouter } from "./task-router.js";
+import { withTaskConfig } from "./task-router.js";
 
 // === Reflection Result ===
 
@@ -112,6 +114,10 @@ function parseBulletList(text: string): string[] {
  *
  * This is a meta-cognitive loop — the agent thinking about its own
  * performance and what it has learned.
+ *
+ * When a `TaskRouter` is provided, the provider's model/temperature/maxTokens
+ * are temporarily switched to the "reflection" task config before calling
+ * generate, then restored afterward.
  */
 export async function reflect(
   conversationSummary: string | null,
@@ -119,6 +125,7 @@ export async function reflect(
   activeGoals: Array<{ description: string; status: string }>,
   memories: Array<{ content: string }>,
   provider: IntelligenceProvider,
+  taskRouter?: TaskRouter,
 ): Promise<ReflectionResult> {
   // Build context sections
   const sections: string[] = [REFLECTION_PROMPT];
@@ -155,12 +162,20 @@ export async function reflect(
 
   const userMessage = sections.join("\n\n");
 
-  const response = await provider.generate({
-    recent_events: [],
-    relevant_memories: [],
-    current_state: minimalState(),
-    user_message: userMessage,
-  });
+  const doGenerate = async (p: IntelligenceProvider) => {
+    const response = await p.generate({
+      recent_events: [],
+      relevant_memories: [],
+      current_state: minimalState(),
+      user_message: userMessage,
+    });
+    return parseReflectionResponse(response.text);
+  };
 
-  return parseReflectionResponse(response.text);
+  if (taskRouter) {
+    const taskConfig = taskRouter.resolve("reflection");
+    return withTaskConfig(provider, taskConfig, doGenerate);
+  }
+
+  return doGenerate(provider);
 }

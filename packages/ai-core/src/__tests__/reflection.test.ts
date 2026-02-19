@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { reflect, parseReflectionResponse } from "../reflection.js";
+import { TaskRouter } from "../task-router.js";
 import type { ConversationMessage, AIResponse, IntelligenceProvider, ContextPack } from "@motebit/sdk";
 
 // === Mock Provider ===
@@ -262,5 +263,104 @@ Lengthy interaction.`);
     expect(call.current_state.attention).toBe(0.5);
     expect(call.recent_events).toEqual([]);
     expect(call.relevant_memories).toEqual([]);
+  });
+});
+
+// === reflect with TaskRouter ===
+
+describe("reflect with TaskRouter", () => {
+  function createConfigurableProvider(responseText: string) {
+    let currentModel = "default-model";
+    let currentTemp: number | undefined = 0.7;
+    let currentMaxTokens: number | undefined = 1024;
+
+    return {
+      get model() { return currentModel; },
+      get temperature() { return currentTemp; },
+      get maxTokens() { return currentMaxTokens; },
+      setModel: vi.fn((m: string) => { currentModel = m; }),
+      setTemperature: vi.fn((t: number) => { currentTemp = t; }),
+      setMaxTokens: vi.fn((mt: number) => { currentMaxTokens = mt; }),
+      generate: vi.fn().mockResolvedValue({
+        text: responseText,
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+      } satisfies AIResponse),
+      estimateConfidence: vi.fn().mockResolvedValue(0.8),
+      extractMemoryCandidates: vi.fn().mockResolvedValue([]),
+    };
+  }
+
+  it("switches model config for reflection task and restores after", async () => {
+    const provider = createConfigurableProvider(`INSIGHTS:
+- Routed insight
+
+ADJUSTMENTS:
+- Routed adjustment
+
+ASSESSMENT:
+Routed reflection.`);
+
+    const router = new TaskRouter({
+      default: { model: "default-model", temperature: 0.7, maxTokens: 1024 },
+      overrides: {
+        reflection: { model: "reflection-model", temperature: 0.4, maxTokens: 768 },
+      },
+    });
+
+    const result = await reflect(
+      "User discussed tea",
+      [msg("user", "I like tea")],
+      [],
+      [],
+      provider,
+      router,
+    );
+
+    expect(result.insights).toEqual(["Routed insight"]);
+    expect(result.selfAssessment).toBe("Routed reflection.");
+
+    // Verify setModel was called with the reflection model
+    expect(provider.setModel).toHaveBeenCalledWith("reflection-model");
+    expect(provider.setTemperature).toHaveBeenCalledWith(0.4);
+    expect(provider.setMaxTokens).toHaveBeenCalledWith(768);
+
+    // Verify config was restored after the call
+    expect(provider.model).toBe("default-model");
+    expect(provider.temperature).toBe(0.7);
+    expect(provider.maxTokens).toBe(1024);
+  });
+
+  it("works without router (backward compatible)", async () => {
+    const provider = createMockProvider(`INSIGHTS:
+- Basic insight
+
+ADJUSTMENTS:
+
+ASSESSMENT:
+Basic reflection.`);
+
+    const result = await reflect(null, [], [], [], provider);
+
+    expect(result.insights).toEqual(["Basic insight"]);
+    expect(result.selfAssessment).toBe("Basic reflection.");
+    expect(provider.generate).toHaveBeenCalledOnce();
+  });
+
+  it("does not attempt config switching on plain IntelligenceProvider", async () => {
+    const provider = createMockProvider(`INSIGHTS:\n\nADJUSTMENTS:\n\nASSESSMENT:\nPlain.`);
+    const router = new TaskRouter({
+      default: { model: "default-model" },
+      overrides: {
+        reflection: { model: "reflection-model" },
+      },
+    });
+
+    const result = await reflect(null, [], [], [], provider, router);
+
+    // Should still work — just doesn't switch model
+    expect(result.selfAssessment).toBe("Plain.");
+    expect(provider.generate).toHaveBeenCalledOnce();
   });
 });

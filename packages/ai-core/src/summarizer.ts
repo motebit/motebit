@@ -1,5 +1,7 @@
 import type { ConversationMessage, IntelligenceProvider } from "@motebit/sdk";
 import { TrustMode, BatteryMode } from "@motebit/sdk";
+import type { TaskRouter } from "./task-router.js";
+import { withTaskConfig } from "./task-router.js";
 
 // === Summarizer Configuration ===
 
@@ -50,11 +52,16 @@ function minimalState() {
  *
  * Uses a short, focused AI call (max ~300 tokens worth of response) to
  * produce a concise summary for context window management.
+ *
+ * When a `TaskRouter` is provided, the provider's model/temperature/maxTokens
+ * are temporarily switched to the "summarization" task config before calling
+ * generate, then restored afterward.
  */
 export async function summarizeConversation(
   messages: ConversationMessage[],
   existingSummary: string | null,
   provider: IntelligenceProvider,
+  taskRouter?: TaskRouter,
 ): Promise<string> {
   if (messages.length === 0) return existingSummary ?? "";
 
@@ -74,14 +81,22 @@ export async function summarizeConversation(
     userMessage = `${SUMMARIZE_NEW_PROMPT}\n\n[Conversation]\n${formatted}`;
   }
 
-  const response = await provider.generate({
-    recent_events: [],
-    relevant_memories: [],
-    current_state: minimalState(),
-    user_message: userMessage,
-  });
+  const doGenerate = async (p: IntelligenceProvider) => {
+    const response = await p.generate({
+      recent_events: [],
+      relevant_memories: [],
+      current_state: minimalState(),
+      user_message: userMessage,
+    });
+    return response.text.trim();
+  };
 
-  return response.text.trim();
+  if (taskRouter) {
+    const taskConfig = taskRouter.resolve("summarization");
+    return withTaskConfig(provider, taskConfig, doGenerate);
+  }
+
+  return doGenerate(provider);
 }
 
 /**

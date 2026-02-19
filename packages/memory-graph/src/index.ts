@@ -10,6 +10,43 @@ import type { EventStore } from "@motebit/event-log";
 
 export { embedText, embedTextHash, EMBEDDING_DIMENSIONS, resetPipeline } from "./embeddings.js";
 
+// === Scoring Configuration ===
+
+export interface ScoringConfig {
+  /** Weight for semantic similarity (cosine). Default 0.5 */
+  similarityWeight: number;
+  /** Weight for decayed confidence. Default 0.3 */
+  confidenceWeight: number;
+  /** Weight for recency boost. Default 0.2 */
+  recencyWeight: number;
+  /** Half-life for recency decay in milliseconds. Default 24h (86400000). Time at which recency boost = 0.5 */
+  recencyHalfLife: number;
+  /** Over-fetch ratio for candidate retrieval before reranking. Default 5 */
+  overFetchRatio: number;
+}
+
+const DEFAULT_SCORING_CONFIG: ScoringConfig = {
+  similarityWeight: 0.5,
+  confidenceWeight: 0.3,
+  recencyWeight: 0.2,
+  recencyHalfLife: 24 * 60 * 60 * 1000, // 24 hours
+  overFetchRatio: 5,
+};
+
+/**
+ * Normalize scoring weights so they sum to 1.
+ * Accepts the three weight fields and returns normalized values.
+ */
+function normalizeWeights(similarity: number, confidence: number, recency: number): { similarity: number; confidence: number; recency: number } {
+  const sum = similarity + confidence + recency;
+  if (sum === 0) return { similarity: 1 / 3, confidence: 1 / 3, recency: 1 / 3 };
+  return {
+    similarity: similarity / sum,
+    confidence: confidence / sum,
+    recency: recency / sum,
+  };
+}
+
 // === Interfaces ===
 
 export interface MemoryQuery {
@@ -153,11 +190,16 @@ export class InMemoryMemoryStorage implements MemoryStorageAdapter {
 // === Memory Graph Manager ===
 
 export class MemoryGraph {
+  private scoringConfig: ScoringConfig;
+
   constructor(
     private storage: MemoryStorageAdapter,
     private eventStore: EventStore,
     private motebitId: string,
-  ) {}
+    scoringConfig?: Partial<ScoringConfig>,
+  ) {
+    this.scoringConfig = { ...DEFAULT_SCORING_CONFIG, ...scoringConfig };
+  }
 
   /**
    * Form a new memory from a candidate.
@@ -226,6 +268,9 @@ export class MemoryGraph {
    * Two-pass retrieval:
    * 1. Weighted filter by confidence, recency, sensitivity
    * 2. Semantic rerank by cosine similarity on embeddings
+   *
+   * Scoring weights are normalized to sum to 1 at scoring time,
+   * so callers can pass any ratio (e.g., {similarityWeight: 10, confidenceWeight: 0, recencyWeight: 0}).
    */
   async retrieve(
     queryEmbedding: number[],
@@ -233,16 +278,21 @@ export class MemoryGraph {
       minConfidence?: number;
       sensitivityFilter?: SensitivityLevel[];
       limit?: number;
+      scoringConfig?: Partial<ScoringConfig>;
     } = {},
   ): Promise<MemoryNode[]> {
-    const { minConfidence = 0.1, sensitivityFilter, limit = 10 } = options;
+    const { minConfidence = 0.1, sensitivityFilter, limit = 10, scoringConfig: perCallConfig } = options;
+
+    // Merge per-call overrides with instance config
+    const config = perCallConfig ? { ...this.scoringConfig, ...perCallConfig } : this.scoringConfig;
+    const weights = normalizeWeights(config.similarityWeight, config.confidenceWeight, config.recencyWeight);
 
     // Pass 1: weighted filter
     const candidates = await this.storage.queryNodes({
       motebit_id: this.motebitId,
       min_confidence: minConfidence,
       sensitivity_filter: sensitivityFilter,
-      limit: limit * 5, // over-fetch for reranking
+      limit: limit * config.overFetchRatio,
     });
 
     // Pass 2: semantic rerank
@@ -254,8 +304,10 @@ export class MemoryGraph {
         node.half_life,
         now - node.created_at,
       );
-      const recencyBoost = 1 / (1 + (now - node.last_accessed) / (24 * 60 * 60 * 1000));
-      const score = similarity * 0.5 + decayedConfidence * 0.3 + recencyBoost * 0.2;
+      // Exponential decay: recencyBoost = 0.5^(elapsed / halfLife)
+      const elapsed = now - node.last_accessed;
+      const recencyBoost = Math.pow(0.5, elapsed / config.recencyHalfLife);
+      const score = similarity * weights.similarity + decayedConfidence * weights.confidence + recencyBoost * weights.recency;
       return { node, score };
     });
 
