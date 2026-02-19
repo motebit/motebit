@@ -90,9 +90,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.12.0
         version: 1.26.0(zod@4.3.6)
-      better-sqlite3:
-        specifier: ^11.0.0
-        version: 11.10.0
+      sql.js:
+        specifier: ^1.11.0
+        version: 1.14.0
     optionalDependencies:
       '@xenova/transformers':
         specifier: ^2.17.2
@@ -664,6 +664,10 @@ importers:
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk
+      sql.js:
+        specifier: ^1.11.0
+        version: 1.14.0
+    optionalDependencies:
       better-sqlite3:
         specifier: ^11.0.0
         version: 11.10.0
@@ -2171,7 +2175,7 @@ packages:
 
   '@expo/bunyan@4.0.1':
     resolution: {integrity: sha512-+Lla7nYSiHZirgK+U/uYzsLv/X+HaJienbD5AKX1UQZHYfWaP+9uuQluRB4GrEVWF0GZ7vEVp/jzaOT9k/SQlg==}
-    engines: {node: '>=0.10.0'}
+    engines: {'0': node >=0.10.0}
 
   '@expo/cli@0.22.28':
     resolution: {integrity: sha512-lvt72KNitGuixYD2l3SZmRKVu2G4zJpmg5V7WfUBNpmUU5oODBw/6qmiJ6kSLAlfDozscUk+BBGknBBzxUrwrA==}
@@ -7811,6 +7815,9 @@ packages:
 
   sprintf-js@1.0.3:
     resolution: {integrity: sha512-D9cPgkvLlV3t3IzL0D0YLvGA9Ahk4PcvVwUbN0dSGr1aP0Nrt4AEnTUbuGvquEC0mA64Gqt1fzirlRs5ibXx8g==}
+
+  sql.js@1.14.0:
+    resolution: {integrity: sha512-NXYh+kFqLiYRCNAaHD0PcbjFgXyjuolEKLMk5vRt2DgPENtF1kkNzzMlg42dUk5wIsH8MhUzsRhaUxIisoSlZQ==}
 
   ssri@10.0.6:
     resolution: {integrity: sha512-MGrFH9Z4NP9Iyhqn16sDtBpRRNJ0Y2hNa6D65h736fVSaPCHr4DM4sWUNvVaSuC+0OBGhwsrydQwmgfg5LncqQ==}
@@ -16899,6 +16906,8 @@ snapshots:
   split-on-first@1.1.0: {}
 
   sprintf-js@1.0.3: {}
+
+  sql.js@1.14.0: {}
 
   ssri@10.0.6:
     dependencies:

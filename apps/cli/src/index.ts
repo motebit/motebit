@@ -9,7 +9,7 @@ import type { StorageAdapters, StreamChunk, ReflectionResult } from "@motebit/ru
 import { CloudProvider, OllamaProvider, formatBodyAwareness } from "@motebit/ai-core";
 import type { StreamingProvider, MotebitPersonalityConfig } from "@motebit/ai-core";
 import { DEFAULT_CONFIG } from "@motebit/ai-core";
-import { createMotebitDatabase, type MotebitDatabase } from "@motebit/persistence";
+import { openMotebitDatabase, type MotebitDatabase } from "@motebit/persistence";
 import {
   HttpEventStoreAdapter,
   ConversationSyncEngine,
@@ -591,15 +591,15 @@ function buildToolRegistry(
 
 // --- Bootstrap Runtime ---
 
-function createRuntime(
+async function createRuntime(
   config: CliConfig,
   motebitId: string,
   toolRegistry: InMemoryToolRegistry,
   mcpServers: McpServerConfig[],
   personalityConfig?: MotebitPersonalityConfig,
-): { runtime: MotebitRuntime; moteDb: MotebitDatabase } {
+): Promise<{ runtime: MotebitRuntime; moteDb: MotebitDatabase }> {
   const dbPath = getDbPath(config.dbPath);
-  const moteDb = createMotebitDatabase(dbPath);
+  const moteDb = await openMotebitDatabase(dbPath);
   const provider = createProvider(config, personalityConfig);
 
   console.log(`Data: ${dbPath}`);
@@ -1170,15 +1170,16 @@ async function handleDoctor(): Promise<void> {
     checks.push({ name: "Config dir", ok: false, detail: `Cannot write to ${CONFIG_DIR}` });
   }
 
-  // better-sqlite3 / SQLite
+  // SQLite driver (better-sqlite3 preferred, sql.js fallback)
   try {
     const tmpDbPath = path.join(CONFIG_DIR, ".doctor-test.db");
-    const db = createMotebitDatabase(tmpDbPath);
+    const db = await openMotebitDatabase(tmpDbPath);
+    const driverName = db.db.driverName;
     db.close();
     fs.unlinkSync(tmpDbPath);
     try { fs.unlinkSync(tmpDbPath + "-wal"); } catch { /* ignore */ }
     try { fs.unlinkSync(tmpDbPath + "-shm"); } catch { /* ignore */ }
-    checks.push({ name: "SQLite", ok: true, detail: "better-sqlite3 loaded and functional" });
+    checks.push({ name: "SQLite", ok: true, detail: `${driverName} loaded and functional` });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     checks.push({ name: "SQLite", ok: false, detail: msg });
@@ -1250,7 +1251,7 @@ async function handleExport(config: CliConfig): Promise<void> {
 
   // Bootstrap identity if needed
   const dbPath = getDbPath(config.dbPath);
-  const moteDb = createMotebitDatabase(dbPath);
+  const moteDb = await openMotebitDatabase(dbPath);
   const { motebitId } = await bootstrapIdentity(moteDb, fullConfig, passphrase);
   moteDb.close();
 
@@ -1371,7 +1372,7 @@ async function handleRun(config: CliConfig): Promise<void> {
 
   // Create runtime with governance-derived policy
   const dbPath = getDbPath(config.dbPath);
-  const moteDb = createMotebitDatabase(dbPath);
+  const moteDb = await openMotebitDatabase(dbPath);
   const provider = createProvider(config, personalityConfig);
 
   const storage: StorageAdapters = {
@@ -1458,7 +1459,7 @@ async function handleGoalAdd(config: CliConfig): Promise<void> {
   }
 
   const dbPath = getDbPath(config.dbPath);
-  const moteDb = createMotebitDatabase(dbPath);
+  const moteDb = await openMotebitDatabase(dbPath);
 
   const mode = config.once ? "once" : "recurring";
   const goalId = crypto.randomUUID();
@@ -1494,7 +1495,7 @@ async function handleGoalAdd(config: CliConfig): Promise<void> {
   console.log(`Goal added: ${goalId.slice(0, 8)} — "${prompt}" every ${config.every}${modeLabel}`);
 }
 
-function handleGoalList(config: CliConfig): void {
+async function handleGoalList(config: CliConfig): Promise<void> {
   const fullConfig = loadFullConfig();
   const motebitId = fullConfig.motebit_id;
   if (!motebitId) {
@@ -1503,7 +1504,7 @@ function handleGoalList(config: CliConfig): void {
   }
 
   const dbPath = getDbPath(config.dbPath);
-  const moteDb = createMotebitDatabase(dbPath);
+  const moteDb = await openMotebitDatabase(dbPath);
   const goals = moteDb.goalStore.list(motebitId);
 
   if (goals.length === 0) {
@@ -1537,7 +1538,7 @@ function handleGoalList(config: CliConfig): void {
   console.log();
 }
 
-function handleGoalOutcomes(config: CliConfig): void {
+async function handleGoalOutcomes(config: CliConfig): Promise<void> {
   const goalId = config.positionals[2];
   if (!goalId) {
     console.error("Usage: motebit goal outcomes <goal_id>");
@@ -1552,7 +1553,7 @@ function handleGoalOutcomes(config: CliConfig): void {
   }
 
   const dbPath = getDbPath(config.dbPath);
-  const moteDb = createMotebitDatabase(dbPath);
+  const moteDb = await openMotebitDatabase(dbPath);
 
   // Find goal by prefix match
   const goals = moteDb.goalStore.list(motebitId);
@@ -1616,7 +1617,7 @@ async function handleGoalRemove(config: CliConfig): Promise<void> {
   }
 
   const dbPath = getDbPath(config.dbPath);
-  const moteDb = createMotebitDatabase(dbPath);
+  const moteDb = await openMotebitDatabase(dbPath);
 
   // Find goal by prefix match
   const goals = moteDb.goalStore.list(motebitId);
@@ -1645,7 +1646,7 @@ async function handleGoalRemove(config: CliConfig): Promise<void> {
   console.log(`Goal removed: ${match.goal_id.slice(0, 8)}`);
 }
 
-function handleGoalSetEnabled(config: CliConfig, enabled: boolean): void {
+async function handleGoalSetEnabled(config: CliConfig, enabled: boolean): Promise<void> {
   const goalId = config.positionals[2];
   const verb = enabled ? "resume" : "pause";
   if (!goalId) {
@@ -1661,7 +1662,7 @@ function handleGoalSetEnabled(config: CliConfig, enabled: boolean): void {
   }
 
   const dbPath = getDbPath(config.dbPath);
-  const moteDb = createMotebitDatabase(dbPath);
+  const moteDb = await openMotebitDatabase(dbPath);
 
   const goals = moteDb.goalStore.list(motebitId);
   const match = goals.find((g) => g.goal_id === goalId || g.goal_id.startsWith(goalId));
@@ -1678,7 +1679,7 @@ function handleGoalSetEnabled(config: CliConfig, enabled: boolean): void {
 
 // --- Subcommand: approvals list/show/approve/deny ---
 
-function handleApprovalList(config: CliConfig): void {
+async function handleApprovalList(config: CliConfig): Promise<void> {
   const fullConfig = loadFullConfig();
   const motebitId = fullConfig.motebit_id;
   if (!motebitId) {
@@ -1687,7 +1688,7 @@ function handleApprovalList(config: CliConfig): void {
   }
 
   const dbPath = getDbPath(config.dbPath);
-  const moteDb = createMotebitDatabase(dbPath);
+  const moteDb = await openMotebitDatabase(dbPath);
   const items = moteDb.approvalStore.listAll(motebitId);
   moteDb.close();
 
@@ -1708,7 +1709,7 @@ function handleApprovalList(config: CliConfig): void {
   }
 }
 
-function handleApprovalShow(config: CliConfig): void {
+async function handleApprovalShow(config: CliConfig): Promise<void> {
   const approvalId = config.positionals[2];
   if (!approvalId) {
     console.error("Usage: motebit approvals show <approval_id>");
@@ -1723,7 +1724,7 @@ function handleApprovalShow(config: CliConfig): void {
   }
 
   const dbPath = getDbPath(config.dbPath);
-  const moteDb = createMotebitDatabase(dbPath);
+  const moteDb = await openMotebitDatabase(dbPath);
 
   // Support prefix match
   const all = moteDb.approvalStore.listAll(motebitId);
@@ -1752,7 +1753,7 @@ function handleApprovalShow(config: CliConfig): void {
   }
 }
 
-function handleApprovalApprove(config: CliConfig): void {
+async function handleApprovalApprove(config: CliConfig): Promise<void> {
   const approvalId = config.positionals[2];
   if (!approvalId) {
     console.error("Usage: motebit approvals approve <approval_id>");
@@ -1767,7 +1768,7 @@ function handleApprovalApprove(config: CliConfig): void {
   }
 
   const dbPath = getDbPath(config.dbPath);
-  const moteDb = createMotebitDatabase(dbPath);
+  const moteDb = await openMotebitDatabase(dbPath);
 
   const all = moteDb.approvalStore.listAll(motebitId);
   const match = all.find((a) => a.approval_id === approvalId || a.approval_id.startsWith(approvalId));
@@ -1790,7 +1791,7 @@ function handleApprovalApprove(config: CliConfig): void {
   console.log("The daemon will execute this tool on its next tick.");
 }
 
-function handleApprovalDeny(config: CliConfig): void {
+async function handleApprovalDeny(config: CliConfig): Promise<void> {
   const approvalId = config.positionals[2];
   if (!approvalId) {
     console.error("Usage: motebit approvals deny <approval_id> [--reason <text>]");
@@ -1805,7 +1806,7 @@ function handleApprovalDeny(config: CliConfig): void {
   }
 
   const dbPath = getDbPath(config.dbPath);
-  const moteDb = createMotebitDatabase(dbPath);
+  const moteDb = await openMotebitDatabase(dbPath);
 
   const all = moteDb.approvalStore.listAll(motebitId);
   const match = all.find((a) => a.approval_id === approvalId || a.approval_id.startsWith(approvalId));
@@ -1897,13 +1898,13 @@ async function main(): Promise<void> {
   if (subcommand === "approvals") {
     const approvalCmd = config.positionals[1];
     if (approvalCmd === "list") {
-      handleApprovalList(config);
+      await handleApprovalList(config);
     } else if (approvalCmd === "show") {
-      handleApprovalShow(config);
+      await handleApprovalShow(config);
     } else if (approvalCmd === "approve") {
-      handleApprovalApprove(config);
+      await handleApprovalApprove(config);
     } else if (approvalCmd === "deny") {
-      handleApprovalDeny(config);
+      await handleApprovalDeny(config);
     } else {
       console.error("Usage: motebit approvals [list|show|approve|deny]");
       process.exit(1);
@@ -1916,15 +1917,15 @@ async function main(): Promise<void> {
     if (goalCmd === "add") {
       await handleGoalAdd(config);
     } else if (goalCmd === "list") {
-      handleGoalList(config);
+      await handleGoalList(config);
     } else if (goalCmd === "outcomes") {
-      handleGoalOutcomes(config);
+      await handleGoalOutcomes(config);
     } else if (goalCmd === "remove") {
       await handleGoalRemove(config);
     } else if (goalCmd === "pause") {
-      handleGoalSetEnabled(config, false);
+      await handleGoalSetEnabled(config, false);
     } else if (goalCmd === "resume") {
-      handleGoalSetEnabled(config, true);
+      await handleGoalSetEnabled(config, true);
     } else {
       console.error('Usage: motebit goal [add|list|outcomes|remove|pause|resume]');
       process.exit(1);
@@ -1991,7 +1992,7 @@ async function main(): Promise<void> {
 
   // Bootstrap identity — need DB first for identity storage
   const dbPath = getDbPath(config.dbPath);
-  const tempDb = createMotebitDatabase(dbPath);
+  const tempDb = await openMotebitDatabase(dbPath);
   const { motebitId, isFirstLaunch } = await bootstrapIdentity(tempDb, fullConfig, passphrase);
   tempDb.close();
 
@@ -2012,7 +2013,7 @@ async function main(): Promise<void> {
   }));
 
   // Create runtime with tools, policy, MCP config
-  const { runtime, moteDb } = createRuntime(config, motebitId, toolRegistry, mcpServers, personalityConfig);
+  const { runtime, moteDb } = await createRuntime(config, motebitId, toolRegistry, mcpServers, personalityConfig);
   runtimeRef.current = runtime;
 
   // Connect MCP servers

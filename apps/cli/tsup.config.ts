@@ -9,5 +9,5 @@ export default defineConfig({
   shims: true,
   banner: { js: "#!/usr/bin/env node" },
   noExternal: [/^@motebit\//],
-  external: ["better-sqlite3", "@xenova/transformers", "@modelcontextprotocol/sdk"],
+  external: ["better-sqlite3", "sql.js", "@xenova/transformers", "@modelcontextprotocol/sdk"],
 });

@@ -18,6 +18,9 @@
     "@motebit/core-identity": "workspace:*",
     "@motebit/privacy-layer": "workspace:*",
     "@motebit/policy": "workspace:*",
+    "sql.js": "^1.11.0"
+  },
+  "optionalDependencies": {
     "better-sqlite3": "^11.0.0"
   },
   "devDependencies": {

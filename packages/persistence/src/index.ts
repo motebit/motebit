@@ -1,5 +1,7 @@
-import Database from "better-sqlite3";
-import type { Statement } from "better-sqlite3";
+import { createRequire } from "node:module";
+import type { DatabaseDriver, PreparedStatement } from "./driver.js";
+export type { DatabaseDriver, PreparedStatement, RunResult } from "./driver.js";
+export { SqlJsDriver } from "./sqljs-driver.js";
 import type {
   EventLogEntry,
   EventType,
@@ -189,18 +191,18 @@ CREATE INDEX IF NOT EXISTS idx_conv_messages
   ON conversation_messages (conversation_id, created_at ASC);
 `;
 
-function initSchema(db: Database.Database): void {
+function initSchema(db: DatabaseDriver): void {
   db.exec(SCHEMA);
 }
 
 // === SqliteEventStore ===
 
 export class SqliteEventStore implements EventStoreAdapter {
-  private stmtAppend: Statement;
-  private stmtGetLatestClock: Statement;
-  private stmtTombstone: Statement;
+  private stmtAppend: PreparedStatement;
+  private stmtGetLatestClock: PreparedStatement;
+  private stmtTombstone: PreparedStatement;
 
-  constructor(private db: Database.Database) {
+  constructor(private db: DatabaseDriver) {
     this.stmtAppend = db.prepare(
       `INSERT OR IGNORE INTO events (event_id, motebit_id, device_id, event_type, payload, version_clock, timestamp, tombstoned)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -320,14 +322,14 @@ function rowToEvent(row: EventRow): EventLogEntry {
 // === SqliteMemoryStorage ===
 
 export class SqliteMemoryStorage implements MemoryStorageAdapter {
-  private stmtSaveNode: Statement;
-  private stmtGetNode: Statement;
-  private stmtSaveEdge: Statement;
-  private stmtGetEdges: Statement;
-  private stmtTombstoneNode: Statement;
-  private stmtGetAllNodes: Statement;
+  private stmtSaveNode: PreparedStatement;
+  private stmtGetNode: PreparedStatement;
+  private stmtSaveEdge: PreparedStatement;
+  private stmtGetEdges: PreparedStatement;
+  private stmtTombstoneNode: PreparedStatement;
+  private stmtGetAllNodes: PreparedStatement;
 
-  constructor(private db: Database.Database) {
+  constructor(private db: DatabaseDriver) {
     this.stmtSaveNode = db.prepare(
       `INSERT OR REPLACE INTO memory_nodes
        (node_id, motebit_id, content, embedding, confidence, sensitivity, created_at, last_accessed, half_life, tombstoned)
@@ -498,15 +500,15 @@ function rowToEdge(row: EdgeRow): MemoryEdge {
 // === SqliteIdentityStorage ===
 
 export class SqliteIdentityStorage implements IdentityStorage {
-  private stmtSave: Statement;
-  private stmtLoad: Statement;
-  private stmtLoadByOwner: Statement;
-  private stmtSaveDevice: Statement;
-  private stmtLoadDevice: Statement;
-  private stmtLoadDeviceByToken: Statement;
-  private stmtListDevices: Statement;
+  private stmtSave: PreparedStatement;
+  private stmtLoad: PreparedStatement;
+  private stmtLoadByOwner: PreparedStatement;
+  private stmtSaveDevice: PreparedStatement;
+  private stmtLoadDevice: PreparedStatement;
+  private stmtLoadDeviceByToken: PreparedStatement;
+  private stmtListDevices: PreparedStatement;
 
-  constructor(db: Database.Database) {
+  constructor(db: DatabaseDriver) {
     this.stmtSave = db.prepare(
       `INSERT OR REPLACE INTO identities (motebit_id, created_at, owner_id, version_clock)
        VALUES (?, ?, ?, ?)`,
@@ -624,9 +626,9 @@ function rowToDevice(row: DeviceRow): DeviceRegistration {
 // === SqliteAuditLog ===
 
 export class SqliteAuditLog implements AuditLogAdapter {
-  private stmtRecord: Statement;
+  private stmtRecord: PreparedStatement;
 
-  constructor(private db: Database.Database) {
+  constructor(private db: DatabaseDriver) {
     this.stmtRecord = db.prepare(
       `INSERT INTO audit_log (audit_id, motebit_id, timestamp, action, target_type, target_id, details)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -696,11 +698,11 @@ function rowToAudit(row: AuditRow): AuditRecord {
 // === SqliteStateSnapshot ===
 
 export class SqliteStateSnapshot {
-  private stmtSave: Statement;
-  private stmtLoad: Statement;
-  private stmtLoadClock: Statement;
+  private stmtSave: PreparedStatement;
+  private stmtLoad: PreparedStatement;
+  private stmtLoadClock: PreparedStatement;
 
-  constructor(db: Database.Database) {
+  constructor(db: DatabaseDriver) {
     this.stmtSave = db.prepare(
       `INSERT OR REPLACE INTO state_snapshots (motebit_id, state_json, updated_at, version_clock)
        VALUES (?, ?, ?, ?)`,
@@ -754,11 +756,11 @@ function rowToToolAudit(row: ToolAuditRow): ToolAuditEntry {
 }
 
 export class SqliteToolAuditSink implements AuditLogSink {
-  private stmtAppend: Statement;
-  private stmtQueryTurn: Statement;
-  private stmtGetAll: Statement;
+  private stmtAppend: PreparedStatement;
+  private stmtQueryTurn: PreparedStatement;
+  private stmtGetAll: PreparedStatement;
 
-  constructor(db: Database.Database) {
+  constructor(db: DatabaseDriver) {
     this.stmtAppend = db.prepare(
       `INSERT OR REPLACE INTO tool_audit_log (call_id, turn_id, tool, args, decision, result, timestamp)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -847,18 +849,18 @@ function rowToGoal(row: GoalRow): Goal {
 }
 
 export class SqliteGoalStore {
-  private stmtAdd: Statement;
-  private stmtRemove: Statement;
-  private stmtList: Statement;
-  private stmtGet: Statement;
-  private stmtUpdateLastRun: Statement;
-  private stmtSetEnabled: Statement;
-  private stmtSetStatus: Statement;
-  private stmtIncrementFailures: Statement;
-  private stmtResetFailures: Statement;
-  private stmtListChildren: Statement;
+  private stmtAdd: PreparedStatement;
+  private stmtRemove: PreparedStatement;
+  private stmtList: PreparedStatement;
+  private stmtGet: PreparedStatement;
+  private stmtUpdateLastRun: PreparedStatement;
+  private stmtSetEnabled: PreparedStatement;
+  private stmtSetStatus: PreparedStatement;
+  private stmtIncrementFailures: PreparedStatement;
+  private stmtResetFailures: PreparedStatement;
+  private stmtListChildren: PreparedStatement;
 
-  constructor(db: Database.Database) {
+  constructor(db: DatabaseDriver) {
     this.stmtAdd = db.prepare(
       `INSERT OR REPLACE INTO goals (goal_id, motebit_id, prompt, interval_ms, last_run_at, enabled, created_at, mode, status, parent_goal_id, max_retries, consecutive_failures)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -979,11 +981,11 @@ function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
 }
 
 export class SqliteGoalOutcomeStore {
-  private stmtAdd: Statement;
-  private stmtListForGoal: Statement;
-  private stmtListRecent: Statement;
+  private stmtAdd: PreparedStatement;
+  private stmtListForGoal: PreparedStatement;
+  private stmtListRecent: PreparedStatement;
 
-  constructor(db: Database.Database) {
+  constructor(db: DatabaseDriver) {
     this.stmtAdd = db.prepare(
       `INSERT OR REPLACE INTO goal_outcomes
        (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
@@ -1074,14 +1076,14 @@ function rowToApproval(row: ApprovalRow): ApprovalItem {
 }
 
 export class SqliteApprovalStore {
-  private stmtAdd: Statement;
-  private stmtGet: Statement;
-  private stmtListPending: Statement;
-  private stmtListAll: Statement;
-  private stmtResolve: Statement;
-  private stmtExpireStale: Statement;
+  private stmtAdd: PreparedStatement;
+  private stmtGet: PreparedStatement;
+  private stmtListPending: PreparedStatement;
+  private stmtListAll: PreparedStatement;
+  private stmtResolve: PreparedStatement;
+  private stmtExpireStale: PreparedStatement;
 
-  constructor(db: Database.Database) {
+  constructor(db: DatabaseDriver) {
     this.stmtAdd = db.prepare(
       `INSERT OR REPLACE INTO approval_queue
        (approval_id, motebit_id, goal_id, tool_name, args_preview, args_hash, risk_level, status, created_at, expires_at, resolved_at, denied_reason)
@@ -1221,15 +1223,15 @@ function rowToConversationMessage(row: ConversationMessageRow): ConversationMess
 const ACTIVE_CONVERSATION_WINDOW_MS = 4 * 60 * 60 * 1000;
 
 export class SqliteConversationStore {
-  private stmtCreate: Statement;
-  private stmtAppendMessage: Statement;
-  private stmtUpdateActivity: Statement;
-  private stmtLoadMessages: Statement;
-  private stmtGetActive: Statement;
-  private stmtUpdateSummary: Statement;
-  private stmtListConversations: Statement;
+  private stmtCreate: PreparedStatement;
+  private stmtAppendMessage: PreparedStatement;
+  private stmtUpdateActivity: PreparedStatement;
+  private stmtLoadMessages: PreparedStatement;
+  private stmtGetActive: PreparedStatement;
+  private stmtUpdateSummary: PreparedStatement;
+  private stmtListConversations: PreparedStatement;
 
-  constructor(private db: Database.Database) {
+  constructor(private db: DatabaseDriver) {
     this.stmtCreate = db.prepare(
       `INSERT INTO conversations (conversation_id, motebit_id, started_at, last_active_at, title, summary, message_count)
        VALUES (?, ?, ?, ?, ?, ?, 0)`,
@@ -1383,7 +1385,7 @@ export class SqliteConversationStore {
 // === Factory ===
 
 export interface MotebitDatabase {
-  db: Database.Database;
+  db: DatabaseDriver;
   eventStore: SqliteEventStore;
   memoryStorage: SqliteMemoryStorage;
   identityStorage: SqliteIdentityStorage;
@@ -1397,75 +1399,75 @@ export interface MotebitDatabase {
   close(): void;
 }
 
-export function createMotebitDatabase(dbPath: string): MotebitDatabase {
-  const db = new Database(dbPath);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
+/** Run schema creation and migrations on a DatabaseDriver, return MotebitDatabase. */
+export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): MotebitDatabase {
+  driver.pragma("journal_mode = WAL");
+  driver.pragma("foreign_keys = ON");
 
-  const userVersion = (db.pragma("user_version") as { user_version: number }[])[0]!.user_version;
+  const userVersion = (driver.pragma("user_version") as { user_version: number }[])[0]!.user_version;
 
-  initSchema(db);
+  initSchema(driver);
 
   if (userVersion < 1) {
     try {
-      db.exec("ALTER TABLE events ADD COLUMN device_id TEXT");
+      driver.exec("ALTER TABLE events ADD COLUMN device_id TEXT");
     } catch (_) {
       // Column may already exist on new DBs that have it in CREATE TABLE
     }
-    db.pragma("user_version = 1");
+    driver.pragma("user_version = 1");
   }
 
   if (userVersion < 2) {
     try {
-      db.exec("ALTER TABLE state_snapshots ADD COLUMN version_clock INTEGER NOT NULL DEFAULT 0");
+      driver.exec("ALTER TABLE state_snapshots ADD COLUMN version_clock INTEGER NOT NULL DEFAULT 0");
     } catch (_) {
       // Column may already exist on new DBs
     }
-    db.pragma("user_version = 2");
+    driver.pragma("user_version = 2");
   }
 
   if (userVersion < 3) {
     // Goals table is in SCHEMA for new DBs; this handles upgrades from v2
-    db.pragma("user_version = 3");
+    driver.pragma("user_version = 3");
   }
 
   if (userVersion < 4) {
     // Approval queue table is in SCHEMA for new DBs; this handles upgrades from v3
-    db.pragma("user_version = 4");
+    driver.pragma("user_version = 4");
   }
 
   if (userVersion < 5) {
     // Goal intelligence: new columns on goals, new goal_outcomes table
     // goal_outcomes table is in SCHEMA for new DBs; ALTER handles upgrades
     const addCol = (table: string, col: string, def: string) => {
-      try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`); } catch (_) { /* already exists */ }
+      try { driver.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`); } catch (_) { /* already exists */ }
     };
     addCol("goals", "mode", "TEXT NOT NULL DEFAULT 'recurring'");
     addCol("goals", "status", "TEXT NOT NULL DEFAULT 'active'");
     addCol("goals", "parent_goal_id", "TEXT");
     addCol("goals", "max_retries", "INTEGER NOT NULL DEFAULT 3");
     addCol("goals", "consecutive_failures", "INTEGER NOT NULL DEFAULT 0");
-    db.pragma("user_version = 5");
+    driver.pragma("user_version = 5");
   }
 
   if (userVersion < 6) {
     // Conversation persistence tables are in SCHEMA for new DBs; this handles upgrades
-    db.pragma("user_version = 6");
+    driver.pragma("user_version = 6");
   }
 
-  const eventStore = new SqliteEventStore(db);
-  const memoryStorage = new SqliteMemoryStorage(db);
-  const identityStorage = new SqliteIdentityStorage(db);
-  const auditLog = new SqliteAuditLog(db);
-  const stateSnapshot = new SqliteStateSnapshot(db);
-  const toolAuditSink = new SqliteToolAuditSink(db);
-  const goalStore = new SqliteGoalStore(db);
-  const goalOutcomeStore = new SqliteGoalOutcomeStore(db);
-  const approvalStore = new SqliteApprovalStore(db);
-  const conversationStore = new SqliteConversationStore(db);
+  const eventStore = new SqliteEventStore(driver);
+  const memoryStorage = new SqliteMemoryStorage(driver);
+  const identityStorage = new SqliteIdentityStorage(driver);
+  const auditLog = new SqliteAuditLog(driver);
+  const stateSnapshot = new SqliteStateSnapshot(driver);
+  const toolAuditSink = new SqliteToolAuditSink(driver);
+  const goalStore = new SqliteGoalStore(driver);
+  const goalOutcomeStore = new SqliteGoalOutcomeStore(driver);
+  const approvalStore = new SqliteApprovalStore(driver);
+  const conversationStore = new SqliteConversationStore(driver);
 
   return {
-    db,
+    db: driver,
     eventStore,
     memoryStorage,
     identityStorage,
@@ -1477,7 +1479,64 @@ export function createMotebitDatabase(dbPath: string): MotebitDatabase {
     approvalStore,
     conversationStore,
     close() {
-      db.close();
+      driver.close();
     },
   };
+}
+
+/**
+ * Thin wrapper that adapts better-sqlite3's Database to DatabaseDriver.
+ * Uses createRequire so better-sqlite3 is loaded lazily (not at module load time).
+ */
+class BetterSqliteDriver implements DatabaseDriver {
+  readonly driverName = "better-sqlite3";
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private inner: any;
+
+  constructor(dbPath: string) {
+    const require = createRequire(import.meta.url);
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Database = require("better-sqlite3");
+    this.inner = new Database(dbPath);
+  }
+
+  exec(sql: string): void {
+    this.inner.exec(sql);
+  }
+
+  prepare(sql: string): PreparedStatement {
+    return this.inner.prepare(sql) as unknown as PreparedStatement;
+  }
+
+  pragma(sql: string): unknown {
+    return this.inner.pragma(sql);
+  }
+
+  close(): void {
+    this.inner.close();
+  }
+}
+
+/**
+ * Sync convenience factory — uses better-sqlite3.
+ * Throws if better-sqlite3 is not installed.
+ */
+export function createMotebitDatabase(dbPath: string): MotebitDatabase {
+  const driver = new BetterSqliteDriver(dbPath);
+  return createMotebitDatabaseFromDriver(driver);
+}
+
+/**
+ * Async factory with fallback.
+ * Tries better-sqlite3 first; if unavailable, falls back to sql.js (WASM).
+ */
+export async function openMotebitDatabase(dbPath: string): Promise<MotebitDatabase> {
+  try {
+    return createMotebitDatabase(dbPath);
+  } catch {
+    // better-sqlite3 not available — fall back to sql.js
+    const { SqlJsDriver } = await import("./sqljs-driver.js");
+    const driver = await SqlJsDriver.open(dbPath);
+    return createMotebitDatabaseFromDriver(driver);
+  }
 }
