@@ -121,6 +121,35 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
   token_estimate INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_conv_messages ON conversation_messages (conversation_id, created_at ASC);
+
+CREATE TABLE IF NOT EXISTS goals (
+  goal_id TEXT PRIMARY KEY,
+  motebit_id TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  interval_ms INTEGER NOT NULL,
+  last_run_at INTEGER,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  mode TEXT NOT NULL DEFAULT 'recurring',
+  status TEXT NOT NULL DEFAULT 'active',
+  parent_goal_id TEXT,
+  max_retries INTEGER NOT NULL DEFAULT 3,
+  consecutive_failures INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_goals_motebit ON goals (motebit_id);
+
+CREATE TABLE IF NOT EXISTS goal_outcomes (
+  outcome_id TEXT PRIMARY KEY,
+  goal_id TEXT NOT NULL,
+  motebit_id TEXT NOT NULL,
+  ran_at INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  summary TEXT,
+  tool_calls_made INTEGER NOT NULL DEFAULT 0,
+  memories_formed INTEGER NOT NULL DEFAULT 0,
+  error_message TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_goal_outcomes_goal ON goal_outcomes (goal_id, ran_at DESC);
 ";
 
 fn json_to_sql_value(v: &JsonValue) -> SqlValue {

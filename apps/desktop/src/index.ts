@@ -819,7 +819,6 @@ export class DesktopApp {
     if (!this.runtime || this._goalExecuting || this.runtime.isProcessing) return;
 
     try {
-      // Query active goals that are due
       interface GoalRow {
         goal_id: string;
         motebit_id: string;
@@ -829,6 +828,16 @@ export class DesktopApp {
         enabled: number;
         status: string;
         mode: string;
+        parent_goal_id: string | null;
+        max_retries: number;
+        consecutive_failures: number;
+      }
+
+      interface OutcomeRow {
+        ran_at: number;
+        status: string;
+        summary: string | null;
+        error_message: string | null;
       }
 
       const goals = await invoke<GoalRow[]>("db_query", {
@@ -842,33 +851,54 @@ export class DesktopApp {
       for (const goal of goals) {
         const elapsed = goal.last_run_at ? now - goal.last_run_at : Infinity;
         if (elapsed < goal.interval_ms) continue;
-        if (this.runtime.isProcessing) break; // Don't interrupt user chat
+        if (this.runtime.isProcessing) break;
 
         this._goalExecuting = true;
         this._goalStatusCallback?.(true);
 
         try {
-          // Execute goal as a background message
-          const result = await this.runtime.sendMessage(
-            `[Goal execution] ${goal.prompt}`
-          );
+          // Build enriched context with previous outcomes
+          const outcomes = await invoke<OutcomeRow[]>("db_query", {
+            sql: "SELECT ran_at, status, summary, error_message FROM goal_outcomes WHERE goal_id = ? ORDER BY ran_at DESC LIMIT 3",
+            params: [goal.goal_id],
+          });
 
-          // Update last_run_at
+          let context = `You are executing a scheduled goal.\n\nGoal: ${goal.prompt}`;
+          if (outcomes && outcomes.length > 0) {
+            context += "\n\nPrevious executions (most recent first):";
+            for (const o of outcomes) {
+              const ago = formatTimeAgo(now - o.ran_at);
+              if (o.status === "failed" && o.error_message) {
+                context += `\n- ${ago}: failed — [error: ${o.error_message}]`;
+              } else if (o.summary) {
+                context += `\n- ${ago}: ${o.status} — "${o.summary.slice(0, 100)}"`;
+              } else {
+                context += `\n- ${ago}: ${o.status}`;
+              }
+            }
+          }
+          if (goal.mode === "once") {
+            context += "\n\nThis is a one-time goal. Complete it fully in this execution.";
+          }
+
+          const result = await this.runtime.sendMessage(context);
+
+          // Update last_run_at and reset failures on success
           await invoke<number>("db_execute", {
-            sql: "UPDATE goals SET last_run_at = ? WHERE goal_id = ?",
+            sql: "UPDATE goals SET last_run_at = ?, consecutive_failures = 0 WHERE goal_id = ?",
             params: [now, goal.goal_id],
           });
 
-          // Record outcome (best-effort)
           await invoke<number>("db_execute", {
             sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
-                  VALUES (?, ?, ?, ?, 'completed', ?, 0, ?, NULL)`,
+                  VALUES (?, ?, ?, ?, 'completed', ?, ?, ?, NULL)`,
             params: [
               crypto.randomUUID(),
               goal.goal_id,
               this.motebitId,
               now,
               result.response.slice(0, 500),
+              0,
               result.memoriesFormed.length,
             ],
           });
@@ -882,21 +912,33 @@ export class DesktopApp {
           }
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
+
           // Record failed outcome
           await invoke<number>("db_execute", {
             sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
                   VALUES (?, ?, ?, ?, 'failed', NULL, 0, 0, ?)`,
             params: [crypto.randomUUID(), goal.goal_id, this.motebitId, now, msg],
           }).catch(() => {});
+
+          // Increment failures and auto-pause if threshold reached
+          await invoke<number>("db_execute", {
+            sql: "UPDATE goals SET consecutive_failures = consecutive_failures + 1 WHERE goal_id = ?",
+            params: [goal.goal_id],
+          }).catch(() => {});
+
+          if (goal.consecutive_failures + 1 >= goal.max_retries) {
+            await invoke<number>("db_execute", {
+              sql: "UPDATE goals SET status = 'paused' WHERE goal_id = ?",
+              params: [goal.goal_id],
+            }).catch(() => {});
+          }
         } finally {
           this._goalExecuting = false;
           this._goalStatusCallback?.(false);
-          // Reset conversation after goal execution so user chat is clean
           this.runtime?.resetConversation();
         }
       }
     } catch {
-      // Goal scheduling is best-effort — don't crash
       this._goalExecuting = false;
       this._goalStatusCallback?.(false);
     }
@@ -1283,6 +1325,15 @@ class TauriConversationSyncStoreAdapter implements ConversationSyncStoreAdapter 
       this._messages.set(conv.conversation_id, msgRows);
     }
   }
+}
+
+// === Helpers ===
+
+function formatTimeAgo(ms: number): string {
+  if (ms < 60_000) return "just now";
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m ago`;
+  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h ago`;
+  return `${Math.round(ms / 86_400_000)}d ago`;
 }
 
 // === Slash Command Utilities ===
