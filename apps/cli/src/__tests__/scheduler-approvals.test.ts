@@ -1,15 +1,25 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { GoalScheduler } from "../scheduler.js";
 import { createMotebitDatabase, type MotebitDatabase, type Goal } from "@motebit/persistence";
-import { RiskLevel } from "@motebit/sdk";
+import { EventType, RiskLevel } from "@motebit/sdk";
+import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
+
+interface MockRuntimeResult {
+  runtime: MotebitRuntime;
+  registeredTools: Map<string, ToolHandler>;
+  eventsAppended: Array<{ event_type: string; payload: Record<string, unknown> }>;
+}
 
 function createMockRuntime(opts: {
   yieldApproval?: boolean;
   approvalToolName?: string;
   approvalArgs?: Record<string, unknown>;
-} = {}): MotebitRuntime {
+  onStream?: (registeredTools: Map<string, ToolHandler>) => Promise<void>;
+} = {}): MockRuntimeResult {
   let _hasPending = false;
+  const registeredTools = new Map<string, ToolHandler>();
+  const eventsAppended: Array<{ event_type: string; payload: Record<string, unknown> }> = [];
 
   const runtime = {
     get hasPendingApproval() {
@@ -30,8 +40,11 @@ function createMockRuntime(opts: {
         };
         return;
       }
+      if (opts.onStream) {
+        await opts.onStream(registeredTools);
+      }
       yield { type: "text" as const, text: "done" };
-      yield { type: "result" as const, result: {} as any };
+      yield { type: "result" as const, result: { memoriesFormed: [] } as any };
     },
     async *resumeAfterApproval(approved: boolean): AsyncGenerator<StreamChunk> {
       _hasPending = false;
@@ -39,16 +52,23 @@ function createMockRuntime(opts: {
         yield { type: "tool_status" as const, name: "shell_exec", status: "calling" as const };
         yield { type: "tool_status" as const, name: "shell_exec", status: "done" as const, result: "output" };
       }
-      yield { type: "result" as const, result: {} as any };
+      yield { type: "result" as const, result: { memoriesFormed: [] } as any };
     },
     events: {
       getLatestClock: vi.fn().mockResolvedValue(0),
-      append: vi.fn().mockResolvedValue(undefined),
+      append: vi.fn().mockImplementation(async (entry: any) => {
+        eventsAppended.push({ event_type: entry.event_type, payload: entry.payload });
+      }),
     },
+    getToolRegistry: vi.fn().mockReturnValue({
+      register: vi.fn().mockImplementation((def: ToolDefinition, handler: ToolHandler) => {
+        registeredTools.set(def.name, handler);
+      }),
+    }),
     stop: vi.fn(),
   } as unknown as MotebitRuntime;
 
-  return runtime;
+  return { runtime, registeredTools, eventsAppended };
 }
 
 function makeGoal(overrides: Partial<Goal> = {}): Goal {
@@ -60,6 +80,11 @@ function makeGoal(overrides: Partial<Goal> = {}): Goal {
     last_run_at: null,
     enabled: true,
     created_at: Date.now(),
+    mode: "recurring",
+    status: "active",
+    parent_goal_id: null,
+    max_retries: 3,
+    consecutive_failures: 0,
     ...overrides,
   };
 }
@@ -76,19 +101,17 @@ describe("GoalScheduler — approval lifecycle", () => {
   });
 
   it("persists approval and suspends instead of denying", async () => {
-    const runtime = createMockRuntime({ yieldApproval: true });
+    const { runtime } = createMockRuntime({ yieldApproval: true });
     moteDb.goalStore.add(makeGoal());
 
     const scheduler = new GoalScheduler(
-      runtime, moteDb.goalStore, moteDb.approvalStore,
+      runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore,
       "mote-test", RiskLevel.R3_EXECUTE,
     );
+    scheduler.registerGoalTools();
+    await scheduler.tickOnce();
 
-    scheduler.start(999_999);
-    await new Promise((r) => setTimeout(r, 50));
-    scheduler.stop();
-
-    // Approval should be persisted (stop resolves it as denied, but it was persisted first)
+    // Approval should be persisted
     const all = moteDb.approvalStore.listAll("mote-test");
     expect(all).toHaveLength(1);
     expect(all[0]!.tool_name).toBe("shell_exec");
@@ -100,18 +123,17 @@ describe("GoalScheduler — approval lifecycle", () => {
   });
 
   it("stop() marks pending approvals as denied with daemon_shutdown", async () => {
-    const runtime = createMockRuntime({ yieldApproval: true });
+    const { runtime } = createMockRuntime({ yieldApproval: true });
     moteDb.goalStore.add(makeGoal());
 
     const scheduler = new GoalScheduler(
-      runtime, moteDb.goalStore, moteDb.approvalStore,
+      runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore,
       "mote-test", RiskLevel.R3_EXECUTE,
     );
+    scheduler.registerGoalTools();
+    await scheduler.tickOnce();
 
-    scheduler.start(999_999);
-    await new Promise((r) => setTimeout(r, 50));
-
-    // Before stop: should have a pending approval
+    // Should have a pending approval
     const all = moteDb.approvalStore.listAll("mote-test");
     expect(all).toHaveLength(1);
     const approvalId = all[0]!.approval_id;
@@ -170,17 +192,15 @@ describe("GoalScheduler — approval lifecycle", () => {
   });
 
   it("completes goals without approval when no approval_request", async () => {
-    const runtime = createMockRuntime({ yieldApproval: false });
+    const { runtime } = createMockRuntime({ yieldApproval: false });
     moteDb.goalStore.add(makeGoal());
 
     const scheduler = new GoalScheduler(
-      runtime, moteDb.goalStore, moteDb.approvalStore,
+      runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore,
       "mote-test", RiskLevel.R3_EXECUTE,
     );
-
-    scheduler.start(999_999);
-    await new Promise((r) => setTimeout(r, 50));
-    scheduler.stop();
+    scheduler.registerGoalTools();
+    await scheduler.tickOnce();
 
     // No approvals should be created
     const approvals = moteDb.approvalStore.listAll("mote-test");
@@ -189,5 +209,78 @@ describe("GoalScheduler — approval lifecycle", () => {
     // Goal should have last_run_at updated
     const goals = moteDb.goalStore.list("mote-test");
     expect(goals[0]!.last_run_at).not.toBeNull();
+  });
+});
+
+describe("GoalScheduler — report_progress invariant", () => {
+  let moteDb: MotebitDatabase;
+
+  beforeEach(() => {
+    moteDb = createMotebitDatabase(":memory:");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  });
+
+  it("report_progress rejects when no goal active and does not mutate outcomes", async () => {
+    const { runtime, registeredTools } = createMockRuntime();
+    moteDb.goalStore.add(makeGoal());
+
+    const scheduler = new GoalScheduler(
+      runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore,
+      "mote-test", RiskLevel.R3_EXECUTE,
+    );
+
+    // Register tools, then tick to run the goal and create a baseline outcome
+    scheduler.registerGoalTools();
+    await scheduler.tickOnce();
+
+    const baselineOutcomes = moteDb.goalOutcomeStore.listForGoal("goal-001").length;
+    expect(baselineOutcomes).toBe(1);
+
+    // Call report_progress outside of goal execution — should be guarded
+    const reportProgress = registeredTools.get("report_progress")!;
+    expect(reportProgress).toBeDefined();
+
+    const guardResult = await reportProgress({ note: "test note" });
+    expect(guardResult.ok).toBe(false);
+    expect(guardResult.error).toContain("No active goal context");
+
+    // Outcome count unchanged
+    const afterOutcomes = moteDb.goalOutcomeStore.listForGoal("goal-001").length;
+    expect(afterOutcomes).toBe(baselineOutcomes);
+  });
+
+  it("report_progress emits GoalProgress event during execution, not an outcome row", async () => {
+    // Mock runtime that calls report_progress mid-stream (simulating agent tool call)
+    const { runtime, eventsAppended } = createMockRuntime({
+      onStream: async (tools) => {
+        const handler = tools.get("report_progress");
+        if (handler) {
+          await handler({ note: "Found 3 new emails" });
+        }
+      },
+    });
+
+    moteDb.goalStore.add(makeGoal());
+
+    const scheduler = new GoalScheduler(
+      runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore,
+      "mote-test", RiskLevel.R3_EXECUTE,
+    );
+    scheduler.registerGoalTools();
+    await scheduler.tickOnce();
+
+    // GoalProgress event was emitted to the event log
+    const progressEvents = eventsAppended.filter((e) => e.event_type === EventType.GoalProgress);
+    expect(progressEvents).toHaveLength(1);
+    expect(progressEvents[0]!.payload.note).toBe("Found 3 new emails");
+    expect(progressEvents[0]!.payload.goal_id).toBe("goal-001");
+
+    // goal_outcomes has exactly 1 row — the run completion, not the progress note
+    const outcomes = moteDb.goalOutcomeStore.listForGoal("goal-001");
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]!.status).toBe("completed");
   });
 });

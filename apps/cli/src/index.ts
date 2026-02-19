@@ -116,6 +116,7 @@ export interface CliConfig {
   output: string | undefined;
   identity: string | undefined;
   every: string | undefined;
+  once: boolean;
   reason: string | undefined;
   version: boolean;
   help: boolean;
@@ -138,6 +139,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       output: { type: "string", short: "o" },
       identity: { type: "string" },
       every: { type: "string" },
+      once: { type: "boolean", default: false },
       reason: { type: "string" },
       version: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
@@ -168,6 +170,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     output: values.output,
     identity: values.identity,
     every: values.every,
+    once: values.once,
     reason: values.reason,
     version: values.version,
     help: values.help,
@@ -186,8 +189,9 @@ Commands:
   export [--output <path>]  Export a signed motebit.md (portable identity for daemon mode)
   verify <path>             Verify a motebit.md identity file signature
   run [--identity <path>]   Start daemon mode (uses exported motebit.md)
-  goal add "<prompt>" --every <interval>   Add a scheduled goal
-  goal list                 List all scheduled goals
+  goal add "<prompt>" --every <interval> [--once]  Add a scheduled goal
+  goal list                 List all scheduled goals with status
+  goal outcomes <goal_id>   Show execution history for a goal
   goal remove <goal_id>     Remove a scheduled goal
   goal pause <goal_id>      Pause a scheduled goal
   goal resume <goal_id>     Resume a paused goal
@@ -203,6 +207,7 @@ Options:
   --no-stream             Disable streaming (use blocking mode)
   --sync-url <url>        Remote sync server URL (or set MOTEBIT_SYNC_URL)
   --sync-token <tok>      Auth token for sync server (or set MOTEBIT_SYNC_TOKEN)
+  --once                  Create a one-shot goal (runs once then completes)
   --operator              Enable operator mode (write/exec tools)
   --allowed-paths <paths> Comma-separated allowed file paths (default: cwd)
   -v, --version           Print version and exit
@@ -1030,7 +1035,7 @@ async function handleRun(config: CliConfig): Promise<void> {
 
   // Start goal scheduler
   const goals = moteDb.goalStore.list(motebitId);
-  const scheduler = new GoalScheduler(runtime, moteDb.goalStore, moteDb.approvalStore, motebitId, denyAbove);
+  const scheduler = new GoalScheduler(runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore, motebitId, denyAbove);
   scheduler.start();
 
   console.log(`Daemon running. motebit_id: ${motebitId.slice(0, 8)}... Goals: ${goals.length}. Policy: max_risk_auto=${RiskLevel[maxRiskAuto]}, deny_above=${RiskLevel[denyAbove]}`);
@@ -1081,6 +1086,7 @@ async function handleGoalAdd(config: CliConfig): Promise<void> {
   const dbPath = getDbPath(config.dbPath);
   const moteDb = createMotebitDatabase(dbPath);
 
+  const mode = config.once ? "once" : "recurring";
   const goalId = crypto.randomUUID();
   moteDb.goalStore.add({
     goal_id: goalId,
@@ -1090,6 +1096,11 @@ async function handleGoalAdd(config: CliConfig): Promise<void> {
     last_run_at: null,
     enabled: true,
     created_at: Date.now(),
+    mode,
+    status: "active",
+    parent_goal_id: null,
+    max_retries: 3,
+    consecutive_failures: 0,
   });
 
   // Log event
@@ -1099,13 +1110,14 @@ async function handleGoalAdd(config: CliConfig): Promise<void> {
     motebit_id: motebitId,
     timestamp: Date.now(),
     event_type: EventType.GoalCreated,
-    payload: { goal_id: goalId, prompt, interval_ms: intervalMs },
+    payload: { goal_id: goalId, prompt, interval_ms: intervalMs, mode },
     version_clock: await moteDb.eventStore.getLatestClock(motebitId) + 1,
     tombstoned: false,
   });
 
   moteDb.close();
-  console.log(`Goal added: ${goalId.slice(0, 8)} — "${prompt}" every ${config.every}`);
+  const modeLabel = mode === "once" ? " (one-shot)" : "";
+  console.log(`Goal added: ${goalId.slice(0, 8)} — "${prompt}" every ${config.every}${modeLabel}`);
 }
 
 function handleGoalList(config: CliConfig): void {
@@ -1119,24 +1131,85 @@ function handleGoalList(config: CliConfig): void {
   const dbPath = getDbPath(config.dbPath);
   const moteDb = createMotebitDatabase(dbPath);
   const goals = moteDb.goalStore.list(motebitId);
-  moteDb.close();
 
   if (goals.length === 0) {
+    moteDb.close();
     console.log("No goals scheduled.");
     return;
   }
 
   console.log(`\nGoals (${goals.length}):\n`);
-  console.log("  ID        Prompt                                     Interval    Last Run            Enabled");
-  console.log("  " + "-".repeat(100));
+  console.log("  ID        Prompt                                     Interval    Status      Last Outcome");
+  console.log("  " + "-".repeat(105));
 
   for (const g of goals) {
     const id = g.goal_id.slice(0, 8);
     const prompt = g.prompt.length > 40 ? g.prompt.slice(0, 37) + "..." : g.prompt.padEnd(40);
     const interval = formatMs(g.interval_ms).padEnd(11);
-    const lastRun = g.last_run_at ? new Date(g.last_run_at).toISOString().slice(0, 19) : "never".padEnd(19);
-    const enabled = g.enabled ? "yes" : "no";
-    console.log(`  ${id}  ${prompt} ${interval} ${lastRun} ${enabled}`);
+    const status = g.status.padEnd(11);
+
+    // Get last outcome summary
+    const outcomes = moteDb.goalOutcomeStore.listForGoal(g.goal_id, 1);
+    let lastOutcome = "—";
+    if (outcomes.length > 0) {
+      const o = outcomes[0]!;
+      const summary = o.summary ? o.summary.slice(0, 30) : o.status;
+      lastOutcome = summary;
+    }
+
+    console.log(`  ${id}  ${prompt} ${interval} ${status} ${lastOutcome}`);
+  }
+  moteDb.close();
+  console.log();
+}
+
+function handleGoalOutcomes(config: CliConfig): void {
+  const goalId = config.positionals[2];
+  if (!goalId) {
+    console.error("Usage: motebit goal outcomes <goal_id>");
+    process.exit(1);
+  }
+
+  const fullConfig = loadFullConfig();
+  const motebitId = fullConfig.motebit_id;
+  if (!motebitId) {
+    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
+    process.exit(1);
+  }
+
+  const dbPath = getDbPath(config.dbPath);
+  const moteDb = createMotebitDatabase(dbPath);
+
+  // Find goal by prefix match
+  const goals = moteDb.goalStore.list(motebitId);
+  const match = goals.find((g) => g.goal_id === goalId || g.goal_id.startsWith(goalId));
+  if (!match) {
+    console.error(`Error: no goal found matching "${goalId}".`);
+    moteDb.close();
+    process.exit(1);
+  }
+
+  const outcomes = moteDb.goalOutcomeStore.listForGoal(match.goal_id, 10);
+  moteDb.close();
+
+  if (outcomes.length === 0) {
+    console.log(`No outcomes recorded for goal ${match.goal_id.slice(0, 8)}.`);
+    return;
+  }
+
+  console.log(`\nOutcomes for goal ${match.goal_id.slice(0, 8)} (${outcomes.length}):\n`);
+  console.log("  Ran At               Status      Tools  Memories  Summary / Error");
+  console.log("  " + "-".repeat(90));
+
+  for (const o of outcomes) {
+    const ranAt = new Date(o.ran_at).toISOString().slice(0, 19);
+    const status = o.status.padEnd(11);
+    const tools = String(o.tool_calls_made).padEnd(6);
+    const memories = String(o.memories_formed).padEnd(9);
+    const detail = o.error_message
+      ? `[error: ${o.error_message.slice(0, 40)}]`
+      : (o.summary ? o.summary.slice(0, 50) : "—");
+    console.log(`  ${ranAt}  ${status} ${tools} ${memories} ${detail}`);
   }
   console.log();
 }
@@ -1463,6 +1536,8 @@ async function main(): Promise<void> {
       await handleGoalAdd(config);
     } else if (goalCmd === "list") {
       handleGoalList(config);
+    } else if (goalCmd === "outcomes") {
+      handleGoalOutcomes(config);
     } else if (goalCmd === "remove") {
       await handleGoalRemove(config);
     } else if (goalCmd === "pause") {
@@ -1470,7 +1545,7 @@ async function main(): Promise<void> {
     } else if (goalCmd === "resume") {
       handleGoalSetEnabled(config, true);
     } else {
-      console.error('Usage: motebit goal [add|list|remove|pause|resume]');
+      console.error('Usage: motebit goal [add|list|outcomes|remove|pause|resume]');
       process.exit(1);
     }
     return;

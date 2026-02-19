@@ -128,6 +128,20 @@ CREATE TABLE IF NOT EXISTS goals (
 
 CREATE INDEX IF NOT EXISTS idx_goals_motebit ON goals (motebit_id);
 
+CREATE TABLE IF NOT EXISTS goal_outcomes (
+  outcome_id TEXT PRIMARY KEY,
+  goal_id TEXT NOT NULL,
+  motebit_id TEXT NOT NULL,
+  ran_at INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  summary TEXT,
+  tool_calls_made INTEGER NOT NULL DEFAULT 0,
+  memories_formed INTEGER NOT NULL DEFAULT 0,
+  error_message TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_goal_outcomes_goal ON goal_outcomes (goal_id, ran_at DESC);
+
 CREATE TABLE IF NOT EXISTS approval_queue (
   approval_id TEXT PRIMARY KEY,
   motebit_id TEXT NOT NULL,
@@ -754,6 +768,9 @@ export class SqliteToolAuditSink implements AuditLogSink {
 
 // === Goal Store ===
 
+export type GoalMode = "recurring" | "once";
+export type GoalStatus = "active" | "completed" | "failed" | "paused";
+
 export interface Goal {
   goal_id: string;
   motebit_id: string;
@@ -762,6 +779,11 @@ export interface Goal {
   last_run_at: number | null;
   enabled: boolean;
   created_at: number;
+  mode: GoalMode;
+  status: GoalStatus;
+  parent_goal_id: string | null;
+  max_retries: number;
+  consecutive_failures: number;
 }
 
 interface GoalRow {
@@ -772,6 +794,11 @@ interface GoalRow {
   last_run_at: number | null;
   enabled: number;
   created_at: number;
+  mode: string;
+  status: string;
+  parent_goal_id: string | null;
+  max_retries: number;
+  consecutive_failures: number;
 }
 
 function rowToGoal(row: GoalRow): Goal {
@@ -783,6 +810,11 @@ function rowToGoal(row: GoalRow): Goal {
     last_run_at: row.last_run_at,
     enabled: row.enabled === 1,
     created_at: row.created_at,
+    mode: (row.mode ?? "recurring") as GoalMode,
+    status: (row.status ?? "active") as GoalStatus,
+    parent_goal_id: row.parent_goal_id,
+    max_retries: row.max_retries ?? 3,
+    consecutive_failures: row.consecutive_failures ?? 0,
   };
 }
 
@@ -790,18 +822,34 @@ export class SqliteGoalStore {
   private stmtAdd: Statement;
   private stmtRemove: Statement;
   private stmtList: Statement;
+  private stmtGet: Statement;
   private stmtUpdateLastRun: Statement;
   private stmtSetEnabled: Statement;
+  private stmtSetStatus: Statement;
+  private stmtIncrementFailures: Statement;
+  private stmtResetFailures: Statement;
+  private stmtListChildren: Statement;
 
   constructor(db: Database.Database) {
     this.stmtAdd = db.prepare(
-      `INSERT OR REPLACE INTO goals (goal_id, motebit_id, prompt, interval_ms, last_run_at, enabled, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO goals (goal_id, motebit_id, prompt, interval_ms, last_run_at, enabled, created_at, mode, status, parent_goal_id, max_retries, consecutive_failures)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtRemove = db.prepare(`DELETE FROM goals WHERE goal_id = ?`);
     this.stmtList = db.prepare(`SELECT * FROM goals WHERE motebit_id = ? ORDER BY created_at ASC`);
+    this.stmtGet = db.prepare(`SELECT * FROM goals WHERE goal_id = ?`);
     this.stmtUpdateLastRun = db.prepare(`UPDATE goals SET last_run_at = ? WHERE goal_id = ?`);
-    this.stmtSetEnabled = db.prepare(`UPDATE goals SET enabled = ? WHERE goal_id = ?`);
+    this.stmtSetEnabled = db.prepare(`UPDATE goals SET enabled = ?, status = ? WHERE goal_id = ?`);
+    this.stmtSetStatus = db.prepare(`UPDATE goals SET status = ? WHERE goal_id = ?`);
+    this.stmtIncrementFailures = db.prepare(
+      `UPDATE goals SET consecutive_failures = consecutive_failures + 1 WHERE goal_id = ?`,
+    );
+    this.stmtResetFailures = db.prepare(
+      `UPDATE goals SET consecutive_failures = 0 WHERE goal_id = ?`,
+    );
+    this.stmtListChildren = db.prepare(
+      `SELECT * FROM goals WHERE parent_goal_id = ? ORDER BY created_at ASC`,
+    );
   }
 
   add(goal: Goal): void {
@@ -813,6 +861,11 @@ export class SqliteGoalStore {
       goal.last_run_at,
       goal.enabled ? 1 : 0,
       goal.created_at,
+      goal.mode ?? "recurring",
+      goal.status ?? "active",
+      goal.parent_goal_id ?? null,
+      goal.max_retries ?? 3,
+      goal.consecutive_failures ?? 0,
     );
   }
 
@@ -820,8 +873,19 @@ export class SqliteGoalStore {
     this.stmtRemove.run(goalId);
   }
 
+  get(goalId: string): Goal | null {
+    const row = this.stmtGet.get(goalId) as GoalRow | undefined;
+    if (row === undefined) return null;
+    return rowToGoal(row);
+  }
+
   list(motebitId: string): Goal[] {
     const rows = this.stmtList.all(motebitId) as GoalRow[];
+    return rows.map(rowToGoal);
+  }
+
+  listChildren(parentGoalId: string): Goal[] {
+    const rows = this.stmtListChildren.all(parentGoalId) as GoalRow[];
     return rows.map(rowToGoal);
   }
 
@@ -830,7 +894,103 @@ export class SqliteGoalStore {
   }
 
   setEnabled(goalId: string, enabled: boolean): void {
-    this.stmtSetEnabled.run(enabled ? 1 : 0, goalId);
+    this.stmtSetEnabled.run(enabled ? 1 : 0, enabled ? "active" : "paused", goalId);
+  }
+
+  setStatus(goalId: string, status: GoalStatus): void {
+    this.stmtSetStatus.run(status, goalId);
+  }
+
+  incrementFailures(goalId: string): void {
+    this.stmtIncrementFailures.run(goalId);
+  }
+
+  resetFailures(goalId: string): void {
+    this.stmtResetFailures.run(goalId);
+  }
+}
+
+// === Goal Outcome Store ===
+
+export interface GoalOutcome {
+  outcome_id: string;
+  goal_id: string;
+  motebit_id: string;
+  ran_at: number;
+  status: "completed" | "failed" | "suspended";
+  summary: string | null;
+  tool_calls_made: number;
+  memories_formed: number;
+  error_message: string | null;
+}
+
+interface GoalOutcomeRow {
+  outcome_id: string;
+  goal_id: string;
+  motebit_id: string;
+  ran_at: number;
+  status: string;
+  summary: string | null;
+  tool_calls_made: number;
+  memories_formed: number;
+  error_message: string | null;
+}
+
+function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
+  return {
+    outcome_id: row.outcome_id,
+    goal_id: row.goal_id,
+    motebit_id: row.motebit_id,
+    ran_at: row.ran_at,
+    status: row.status as GoalOutcome["status"],
+    summary: row.summary,
+    tool_calls_made: row.tool_calls_made,
+    memories_formed: row.memories_formed,
+    error_message: row.error_message,
+  };
+}
+
+export class SqliteGoalOutcomeStore {
+  private stmtAdd: Statement;
+  private stmtListForGoal: Statement;
+  private stmtListRecent: Statement;
+
+  constructor(db: Database.Database) {
+    this.stmtAdd = db.prepare(
+      `INSERT OR REPLACE INTO goal_outcomes
+       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmtListForGoal = db.prepare(
+      `SELECT * FROM goal_outcomes WHERE goal_id = ? ORDER BY ran_at DESC LIMIT ?`,
+    );
+    this.stmtListRecent = db.prepare(
+      `SELECT * FROM goal_outcomes WHERE motebit_id = ? ORDER BY ran_at DESC LIMIT ?`,
+    );
+  }
+
+  add(outcome: GoalOutcome): void {
+    this.stmtAdd.run(
+      outcome.outcome_id,
+      outcome.goal_id,
+      outcome.motebit_id,
+      outcome.ran_at,
+      outcome.status,
+      outcome.summary,
+      outcome.tool_calls_made,
+      outcome.memories_formed,
+      outcome.error_message,
+    );
+  }
+
+  listForGoal(goalId: string, limit = 10): GoalOutcome[] {
+    const rows = this.stmtListForGoal.all(goalId, limit) as GoalOutcomeRow[];
+    return rows.map(rowToGoalOutcome);
+  }
+
+  listRecent(motebitId: string, limit = 10): GoalOutcome[] {
+    const rows = this.stmtListRecent.all(motebitId, limit) as GoalOutcomeRow[];
+    return rows.map(rowToGoalOutcome);
   }
 }
 
@@ -968,6 +1128,7 @@ export interface MotebitDatabase {
   stateSnapshot: SqliteStateSnapshot;
   toolAuditSink: SqliteToolAuditSink;
   goalStore: SqliteGoalStore;
+  goalOutcomeStore: SqliteGoalOutcomeStore;
   approvalStore: SqliteApprovalStore;
   close(): void;
 }
@@ -1009,6 +1170,20 @@ export function createMotebitDatabase(dbPath: string): MotebitDatabase {
     db.pragma("user_version = 4");
   }
 
+  if (userVersion < 5) {
+    // Goal intelligence: new columns on goals, new goal_outcomes table
+    // goal_outcomes table is in SCHEMA for new DBs; ALTER handles upgrades
+    const addCol = (table: string, col: string, def: string) => {
+      try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`); } catch (_) { /* already exists */ }
+    };
+    addCol("goals", "mode", "TEXT NOT NULL DEFAULT 'recurring'");
+    addCol("goals", "status", "TEXT NOT NULL DEFAULT 'active'");
+    addCol("goals", "parent_goal_id", "TEXT");
+    addCol("goals", "max_retries", "INTEGER NOT NULL DEFAULT 3");
+    addCol("goals", "consecutive_failures", "INTEGER NOT NULL DEFAULT 0");
+    db.pragma("user_version = 5");
+  }
+
   const eventStore = new SqliteEventStore(db);
   const memoryStorage = new SqliteMemoryStorage(db);
   const identityStorage = new SqliteIdentityStorage(db);
@@ -1016,6 +1191,7 @@ export function createMotebitDatabase(dbPath: string): MotebitDatabase {
   const stateSnapshot = new SqliteStateSnapshot(db);
   const toolAuditSink = new SqliteToolAuditSink(db);
   const goalStore = new SqliteGoalStore(db);
+  const goalOutcomeStore = new SqliteGoalOutcomeStore(db);
   const approvalStore = new SqliteApprovalStore(db);
 
   return {
@@ -1027,6 +1203,7 @@ export function createMotebitDatabase(dbPath: string): MotebitDatabase {
     stateSnapshot,
     toolAuditSink,
     goalStore,
+    goalOutcomeStore,
     approvalStore,
     close() {
       db.close();

@@ -41,6 +41,8 @@ export enum EventType {
   ApprovalApproved = "approval_approved",
   ApprovalDenied = "approval_denied",
   ApprovalExpired = "approval_expired",
+  GoalCompleted = "goal_completed",
+  GoalProgress = "goal_progress",
 }
 
 export enum RelationType {
