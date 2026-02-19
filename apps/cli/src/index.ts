@@ -248,6 +248,37 @@ export function printVersion(): void {
   console.log(VERSION);
 }
 
+function printBanner(opts: {
+  motebitId: string;
+  provider: string;
+  model: string;
+  toolCount: number;
+  goalCount: number;
+  operator: boolean;
+}): void {
+  const W = 46; // inner width
+  const pad = (s: string) => s + " ".repeat(Math.max(0, W - s.length));
+  const id = opts.motebitId.slice(0, 8);
+  const model = opts.model.replace(/^claude-/, "").slice(0, 20);
+  const providerInfo = `${opts.provider} \u00b7 ${model}`;
+  const toolGoal = `${opts.toolCount} tools \u00b7 ${opts.goalCount} goals`;
+  const op = opts.operator ? " \u00b7 operator" : "";
+  const header = `\u2500 motebit v${VERSION} `;
+  const headerPad = "\u2500".repeat(Math.max(0, W - header.length));
+
+  console.log(`  \u256d${header}${headerPad}\u256e`);
+  console.log(`  \u2502${pad("")}\u2502`);
+  console.log(`  \u2502${pad("          .")}\u2502`);
+  console.log(`  \u2502${pad(`        .:::.          ${id}`)}\u2502`);
+  console.log(`  \u2502${pad(`       .:::::.         ${providerInfo}`)}\u2502`);
+  console.log(`  \u2502${pad(`       :::::::         ${toolGoal}${op}`)}\u2502`);
+  console.log(`  \u2502${pad("       ':::::'")}\u2502`);
+  console.log(`  \u2502${pad("         '''")}\u2502`);
+  console.log(`  \u2502${pad("")}\u2502`);
+  console.log(`  \u2502${pad("   /help for commands \u00b7 /goals to manage")}\u2502`);
+  console.log(`  \u2570${"─".repeat(W)}\u256f`);
+}
+
 // --- Conversation History ---
 
 export function trimHistory(
@@ -1849,8 +1880,17 @@ async function main(): Promise<void> {
   });
 
   const toolCount = toolRegistry.size;
-  console.log(`Tools: ${toolCount} registered${config.operator ? " (operator mode)" : ""}`);
-  console.log("Motebit CLI — type a message, /help for commands, or quit to exit\n");
+  const goalCount = moteDb.goalStore.list(motebitId).filter((g) => g.status === "active").length;
+  console.log();
+  printBanner({
+    motebitId,
+    provider: config.provider,
+    model: config.model,
+    toolCount,
+    goalCount,
+    operator: config.operator,
+  });
+  console.log();
 
   const prompt = (): void => {
     rl.question("you> ", (line) => { void handleLine(line); });
