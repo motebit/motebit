@@ -30,9 +30,13 @@ import {
   createListEventsHandler,
 } from "@motebit/tools";
 import { connectMcpServers, type McpServerConfig } from "@motebit/mcp-client";
-import { generateKeypair, deriveKey, encrypt, decrypt, generateNonce } from "@motebit/crypto";
+import { deriveKey, encrypt, decrypt, generateNonce } from "@motebit/crypto";
 import type { EncryptedPayload } from "@motebit/crypto";
-import { IdentityManager } from "@motebit/core-identity";
+import {
+  bootstrapIdentity as sharedBootstrapIdentity,
+  type BootstrapConfigStore,
+  type BootstrapKeyStore,
+} from "@motebit/core-identity";
 import {
   generate as generateIdentityFile,
   verify as verifyIdentityFile,
@@ -371,36 +375,40 @@ async function bootstrapIdentity(
   fullConfig: FullConfig,
   passphrase: string,
 ): Promise<{ motebitId: string; isFirstLaunch: boolean }> {
-  const eventStore = new EventStore(moteDb.eventStore);
-  const identityManager = new IdentityManager(moteDb.identityStorage, eventStore);
+  const configStore: BootstrapConfigStore = {
+    async read() {
+      if (!fullConfig.motebit_id) return null;
+      return {
+        motebit_id: fullConfig.motebit_id,
+        device_id: fullConfig.device_id ?? "",
+        device_public_key: fullConfig.device_public_key ?? "",
+      };
+    },
+    async write(state) {
+      fullConfig.motebit_id = state.motebit_id;
+      fullConfig.device_id = state.device_id;
+      fullConfig.device_public_key = state.device_public_key;
+      saveFullConfig(fullConfig);
+    },
+  };
 
-  if (fullConfig.motebit_id) {
-    // Existing identity — load and verify
-    const existing = await identityManager.load(fullConfig.motebit_id);
-    if (existing) {
-      return { motebitId: fullConfig.motebit_id, isFirstLaunch: false };
-    }
-    // Identity in config but not in DB — re-create in DB
-    await identityManager.create("cli");
-  }
+  const keyStore: BootstrapKeyStore = {
+    async storePrivateKey(privKeyHex) {
+      fullConfig.cli_encrypted_key = await encryptPrivateKey(privKeyHex, passphrase);
+      delete fullConfig.cli_private_key;
+      saveFullConfig(fullConfig);
+    },
+  };
 
-  // First launch — generate identity + keypair
-  const identity = await identityManager.create("cli");
-  const keypair = await generateKeypair();
-  const pubKeyHex = toHex(keypair.publicKey);
-  const privKeyHex = toHex(keypair.privateKey);
+  const result = await sharedBootstrapIdentity({
+    surfaceName: "cli",
+    identityStorage: moteDb.identityStorage,
+    eventStoreAdapter: moteDb.eventStore,
+    configStore,
+    keyStore,
+  });
 
-  const device = await identityManager.registerDevice(identity.motebit_id, "cli", pubKeyHex);
-
-  // Persist to config — encrypt private key
-  fullConfig.motebit_id = identity.motebit_id;
-  fullConfig.device_id = device.device_id;
-  fullConfig.device_public_key = pubKeyHex;
-  fullConfig.cli_encrypted_key = await encryptPrivateKey(privKeyHex, passphrase);
-  delete fullConfig.cli_private_key;
-  saveFullConfig(fullConfig);
-
-  return { motebitId: identity.motebit_id, isFirstLaunch: true };
+  return { motebitId: result.motebitId, isFirstLaunch: result.isFirstLaunch };
 }
 
 // --- Tool Registry Setup ---
