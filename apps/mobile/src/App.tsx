@@ -57,6 +57,13 @@ interface ChatMessage {
   approvalResolved?: boolean;
 }
 
+function formatSyncTime(ts: number): string {
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return "just now";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  return `${Math.floor(diff / 3_600_000)}h ago`;
+}
+
 // === App singleton ===
 
 let appInstance: MobileApp | null = null;
@@ -101,6 +108,11 @@ export function App(): React.ReactElement {
   const ttsRef = useRef<TTSProvider | null>(null);
   const sttRef = useRef<STTProvider | null>(null);
 
+  // Sync state
+  const [syncStatus, setSyncStatus] = useState<"idle" | "syncing" | "error" | "offline">("offline");
+  const [lastSyncTime, setLastSyncTime] = useState(0);
+  const pairingSyncUrlRef = useRef("");
+
   // Goal scheduler state
   const [goalRunning, setGoalRunning] = useState(false);
 
@@ -140,7 +152,17 @@ export function App(): React.ReactElement {
       // 7. Start goal scheduler
       startGoals(a);
 
-      // 8. Restore persisted conversation history into chat UI
+      // 8. Auto-start sync if relay URL persisted
+      const syncUrl = await a.getSyncUrl();
+      if (syncUrl) {
+        a.onSyncStatus((status, lastSync) => {
+          setSyncStatus(status);
+          setLastSyncTime(lastSync);
+        });
+        void a.startSync(syncUrl);
+      }
+
+      // 9. Restore persisted conversation history into chat UI
       restoreConversation(a);
 
       setInitialized(true);
@@ -149,6 +171,7 @@ export function App(): React.ReactElement {
     return () => {
       cancelAnimationFrame(animFrameRef.current);
       app.current.stopGoalScheduler();
+      app.current.stopSync();
     };
   }, []);
 
@@ -580,6 +603,7 @@ export function App(): React.ReactElement {
       "Enter your sync relay URL",
       async (url: string) => {
         if (!url) return;
+        pairingSyncUrlRef.current = url;
         setPairingMode("initiate");
         setPairingStatusText("Generating code...");
         setShowSettings(false);
@@ -636,6 +660,7 @@ export function App(): React.ReactElement {
       return;
     }
 
+    pairingSyncUrlRef.current = syncUrl;
     setPairingStatusText("Claiming...");
     try {
       const { pairingId: pid } = await a.claimPairing(syncUrl, code);
@@ -653,7 +678,7 @@ export function App(): React.ReactElement {
                 motebitId: status.motebit_id,
                 deviceId: status.device_id,
                 deviceToken: status.device_token || "",
-              });
+              }, syncUrl);
               closePairingDialog();
               addSystemMessage("Linked to existing motebit");
 
@@ -662,6 +687,14 @@ export function App(): React.ReactElement {
               await initializeAI(a, s);
               a.start();
               subscribeToState(a);
+
+              // Start sync
+              a.onSyncStatus((st, lastSync) => {
+                setSyncStatus(st);
+                setLastSyncTime(lastSync);
+              });
+              void a.startSync(syncUrl);
+
               setInitialized(true);
             } else if (status.status === "denied") {
               stopPairingPoll();
@@ -682,11 +715,9 @@ export function App(): React.ReactElement {
     if (!pairingId) return;
     const a = app.current;
 
-    // Need sync URL — same issue
-    const syncUrl = ""; // Would need to be stored from initiation
+    const syncUrl = pairingSyncUrlRef.current;
     setPairingStatusText("Approving...");
     try {
-      // TODO: store syncUrl from initiation
       const result = await a.approvePairing(syncUrl, pairingId);
       closePairingDialog();
       addSystemMessage(`Device linked (${result.deviceId.slice(0, 8)}...)`);
@@ -699,7 +730,7 @@ export function App(): React.ReactElement {
   const handlePairingDeny = useCallback(async () => {
     if (!pairingId) return;
     const a = app.current;
-    const syncUrl = "";
+    const syncUrl = pairingSyncUrlRef.current;
     try {
       await a.denyPairing(syncUrl, pairingId);
       closePairingDialog();
@@ -756,6 +787,23 @@ export function App(): React.ReactElement {
           <Text style={styles.gearText}>⚙</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Sync status indicator */}
+      {syncStatus !== "offline" && (
+        <View style={styles.syncIndicator}>
+          <View style={[
+            styles.syncDot,
+            syncStatus === "idle" && styles.syncDotIdle,
+            syncStatus === "syncing" && styles.syncDotSyncing,
+            syncStatus === "error" && styles.syncDotError,
+          ]} />
+          <Text style={styles.syncIndicatorText}>
+            {syncStatus === "syncing" ? "Syncing..." :
+             syncStatus === "error" ? "Sync error" :
+             lastSyncTime > 0 ? `Synced ${formatSyncTime(lastSyncTime)}` : "Connected"}
+          </Text>
+        </View>
+      )}
 
       {/* Goal status indicator */}
       {goalRunning && (
@@ -862,6 +910,8 @@ export function App(): React.ReactElement {
           visible={showSettings}
           app={app.current}
           settings={settings}
+          syncStatus={syncStatus}
+          lastSyncTime={lastSyncTime}
           onSave={(s, ai) => void handleSettingsSave(s, ai)}
           onClose={() => setShowSettings(false)}
           onRequestPin={(mode) => {
@@ -869,6 +919,23 @@ export function App(): React.ReactElement {
             setShowPin(true);
           }}
           onLinkDevice={() => void handleInitiatePairing()}
+          onSyncNow={() => {
+            void app.current.syncNow().then((result) => {
+              addSystemMessage(
+                `Sync: ${result.events_pushed} events pushed, ${result.events_pulled} pulled, ` +
+                `${result.conversations_pushed} convs pushed, ${result.conversations_pulled} pulled`,
+              );
+            }).catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              addSystemMessage(`Sync failed: ${msg}`);
+            });
+          }}
+          onDisconnectSync={() => {
+            void app.current.disconnectSync().then(() => {
+              setSyncStatus("offline");
+              addSystemMessage("Disconnected from sync relay");
+            });
+          }}
         />
       )}
 
@@ -1003,6 +1070,36 @@ const styles = StyleSheet.create({
   gearText: {
     fontSize: 18,
     color: "#607080",
+  },
+
+  // Sync indicator
+  syncIndicator: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 4,
+    gap: 6,
+    backgroundColor: "rgba(15, 24, 32, 0.9)",
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#1a2030",
+  },
+  syncDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  syncDotIdle: {
+    backgroundColor: "#4ade80",
+  },
+  syncDotSyncing: {
+    backgroundColor: "#4080c0",
+  },
+  syncDotError: {
+    backgroundColor: "#c04040",
+  },
+  syncIndicatorText: {
+    color: "#506070",
+    fontSize: 11,
   },
 
   // Goal indicator

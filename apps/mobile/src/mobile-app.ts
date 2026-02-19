@@ -26,8 +26,14 @@ import {
   type BootstrapConfigStore,
   type BootstrapKeyStore,
 } from "@motebit/core-identity";
-import { PairingClient } from "@motebit/sync-engine";
-import type { PairingSession, PairingStatus } from "@motebit/sync-engine";
+import {
+  PairingClient,
+  SyncEngine,
+  HttpEventStoreAdapter,
+  ConversationSyncEngine,
+  HttpConversationSyncAdapter,
+} from "@motebit/sync-engine";
+import type { PairingSession, PairingStatus, SyncStatus } from "@motebit/sync-engine";
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";
 import { createExpoStorage, ExpoGoalStore } from "./adapters/expo-sqlite";
 import type { ExpoStorageResult } from "./adapters/expo-sqlite";
@@ -159,6 +165,14 @@ export class MobileApp {
   private renderer: ExpoGLAdapter;
   private keyring: SecureStoreAdapter;
 
+  // Sync state
+  private syncEngine: SyncEngine | null = null;
+  private conversationSyncEngine: ConversationSyncEngine | null = null;
+  private syncTimer: ReturnType<typeof setInterval> | null = null;
+  private _syncStatus: SyncStatus = "offline";
+  private _syncStatusCallback: ((status: SyncStatus, lastSync: number) => void) | null = null;
+  private _lastSyncTime = 0;
+
   // Goal scheduler state
   private goalSchedulerTimer: ReturnType<typeof setInterval> | null = null;
   private _goalExecuting = false;
@@ -275,6 +289,7 @@ export class MobileApp {
   stop(): void {
     this.runtime?.stop();
     this.renderer.dispose();
+    this.stopSync();
   }
 
   // === Rendering ===
@@ -483,13 +498,182 @@ export class MobileApp {
     return client.pollStatus(pairingId);
   }
 
-  async completePairing(result: { motebitId: string; deviceId: string; deviceToken: string }): Promise<void> {
+  async completePairing(result: { motebitId: string; deviceId: string; deviceToken: string }, syncUrl?: string): Promise<void> {
     await this.keyring.set("motebit_id", result.motebitId);
     await this.keyring.set("device_id", result.deviceId);
     await this.keyring.set("device_token", result.deviceToken);
 
     this.motebitId = result.motebitId;
     this.deviceId = result.deviceId;
+
+    if (syncUrl) {
+      await this.setSyncUrl(syncUrl);
+    }
+  }
+
+  // === Sync ===
+
+  private static readonly SYNC_URL_KEY = "@motebit/sync_url";
+  private static readonly SYNC_INTERVAL_MS = 30_000;
+
+  async getSyncUrl(): Promise<string | null> {
+    return AsyncStorage.getItem(MobileApp.SYNC_URL_KEY);
+  }
+
+  async setSyncUrl(url: string): Promise<void> {
+    await AsyncStorage.setItem(MobileApp.SYNC_URL_KEY, url);
+  }
+
+  async clearSyncUrl(): Promise<void> {
+    await AsyncStorage.removeItem(MobileApp.SYNC_URL_KEY);
+  }
+
+  get syncStatus(): SyncStatus {
+    return this._syncStatus;
+  }
+
+  get lastSyncTime(): number {
+    return this._lastSyncTime;
+  }
+
+  get isSyncConnected(): boolean {
+    return this.syncEngine !== null;
+  }
+
+  onSyncStatus(callback: (status: SyncStatus, lastSync: number) => void): void {
+    this._syncStatusCallback = callback;
+  }
+
+  async startSync(syncUrl?: string): Promise<void> {
+    const url = syncUrl || (await this.getSyncUrl());
+    if (!url || !this.storage) return;
+
+    await this.setSyncUrl(url);
+
+    // Create engines (they don't start their own timers — we manage the interval
+    // ourselves so we can refresh the auth token each cycle)
+    this.syncEngine = new SyncEngine(
+      this.storage.eventStore,
+      this.motebitId,
+      { sync_interval_ms: MobileApp.SYNC_INTERVAL_MS },
+    );
+
+    this.conversationSyncEngine = new ConversationSyncEngine(
+      this.storage.conversationSyncStore,
+      this.motebitId,
+      { sync_interval_ms: MobileApp.SYNC_INTERVAL_MS },
+    );
+
+    this._syncStatus = "idle";
+    this._syncStatusCallback?.("idle", this._lastSyncTime);
+
+    // Run the sync loop via our own timer (to refresh tokens per cycle)
+    this.syncTimer = setInterval(() => {
+      void this.syncCycle(url);
+    }, MobileApp.SYNC_INTERVAL_MS);
+
+    // Immediate first sync after short delay (let initialization settle)
+    setTimeout(() => void this.syncCycle(url), 3000);
+  }
+
+  stopSync(): void {
+    if (this.syncTimer) {
+      clearInterval(this.syncTimer);
+      this.syncTimer = null;
+    }
+    this.syncEngine?.stop();
+    this.conversationSyncEngine?.stop();
+    this.syncEngine = null;
+    this.conversationSyncEngine = null;
+    this._syncStatus = "offline";
+    this._syncStatusCallback?.("offline", this._lastSyncTime);
+  }
+
+  async disconnectSync(): Promise<void> {
+    this.stopSync();
+    await this.clearSyncUrl();
+  }
+
+  async syncNow(): Promise<{
+    events_pushed: number;
+    events_pulled: number;
+    conversations_pushed: number;
+    conversations_pulled: number;
+  }> {
+    const url = await this.getSyncUrl();
+    if (!url || !this.storage) throw new Error("No sync relay configured");
+
+    const token = await this.createSyncToken();
+
+    // Event sync
+    const eventAdapter = new HttpEventStoreAdapter({
+      baseUrl: url,
+      motebitId: this.motebitId,
+      authToken: token,
+    });
+    const tempEventSync = new SyncEngine(this.storage.eventStore, this.motebitId);
+    tempEventSync.connectRemote(eventAdapter);
+    const eventResult = await tempEventSync.sync();
+
+    // Conversation sync
+    const convAdapter = new HttpConversationSyncAdapter({
+      baseUrl: url,
+      motebitId: this.motebitId,
+      authToken: token,
+    });
+    const tempConvSync = new ConversationSyncEngine(
+      this.storage.conversationSyncStore,
+      this.motebitId,
+    );
+    tempConvSync.connectRemote(convAdapter);
+    const convResult = await tempConvSync.sync();
+
+    this._lastSyncTime = Date.now();
+    this._syncStatusCallback?.("idle", this._lastSyncTime);
+
+    return {
+      events_pushed: eventResult.pushed,
+      events_pulled: eventResult.pulled,
+      conversations_pushed: convResult.conversations_pushed,
+      conversations_pulled: convResult.conversations_pulled,
+    };
+  }
+
+  private async syncCycle(syncUrl: string): Promise<void> {
+    if (!this.syncEngine || !this.conversationSyncEngine) return;
+
+    this._syncStatus = "syncing";
+    this._syncStatusCallback?.("syncing", this._lastSyncTime);
+
+    try {
+      const token = await this.createSyncToken();
+
+      this.syncEngine.connectRemote(
+        new HttpEventStoreAdapter({
+          baseUrl: syncUrl,
+          motebitId: this.motebitId,
+          authToken: token,
+        }),
+      );
+
+      this.conversationSyncEngine.connectRemote(
+        new HttpConversationSyncAdapter({
+          baseUrl: syncUrl,
+          motebitId: this.motebitId,
+          authToken: token,
+        }),
+      );
+
+      await this.syncEngine.sync();
+      await this.conversationSyncEngine.sync();
+
+      this._lastSyncTime = Date.now();
+      this._syncStatus = "idle";
+      this._syncStatusCallback?.("idle", this._lastSyncTime);
+    } catch {
+      this._syncStatus = "error";
+      this._syncStatusCallback?.("error", this._lastSyncTime);
+    }
   }
 
   // === Goal Scheduler ===

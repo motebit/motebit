@@ -17,13 +17,14 @@ import type { MobileApp, MobileSettings, MobileAIConfig } from "../mobile-app";
 import { COLOR_PRESETS, APPROVAL_PRESET_CONFIGS } from "../mobile-app";
 import type { Goal, GoalMode } from "../adapters/expo-sqlite";
 
-type Tab = "appearance" | "intelligence" | "governance" | "goals" | "identity";
+type Tab = "appearance" | "intelligence" | "governance" | "goals" | "sync" | "identity";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "appearance", label: "Appearance" },
   { key: "intelligence", label: "Intelligence" },
   { key: "governance", label: "Governance" },
   { key: "goals", label: "Goals" },
+  { key: "sync", label: "Sync" },
   { key: "identity", label: "Identity" },
 ];
 
@@ -64,20 +65,28 @@ interface SettingsModalProps {
   visible: boolean;
   app: MobileApp;
   settings: MobileSettings;
+  syncStatus?: "idle" | "syncing" | "error" | "offline";
+  lastSyncTime?: number;
   onSave: (settings: MobileSettings, aiConfig?: MobileAIConfig) => void;
   onClose: () => void;
   onRequestPin: (mode: "setup" | "verify" | "reset") => void;
   onLinkDevice?: () => void;
+  onSyncNow?: () => void;
+  onDisconnectSync?: () => void;
 }
 
 export function SettingsModal({
   visible,
   app,
   settings,
+  syncStatus,
+  lastSyncTime,
   onSave,
   onClose,
   onRequestPin,
   onLinkDevice,
+  onSyncNow,
+  onDisconnectSync,
 }: SettingsModalProps): React.ReactElement {
   const [tab, setTab] = useState<Tab>("appearance");
   const [draft, setDraft] = useState<MobileSettings>(settings);
@@ -204,6 +213,15 @@ export function SettingsModal({
           )}
           {tab === "goals" && (
             <GoalsTab app={app} />
+          )}
+          {tab === "sync" && (
+            <SyncTab
+              syncStatus={syncStatus ?? "offline"}
+              lastSyncTime={lastSyncTime ?? 0}
+              app={app}
+              onSyncNow={onSyncNow}
+              onDisconnect={onDisconnectSync}
+            />
           )}
           {tab === "identity" && (
             <IdentityTab
@@ -448,6 +466,95 @@ function GovernanceTab({
           placeholderTextColor="#405060"
         />
       </View>
+    </View>
+  );
+}
+
+// === Sync Tab ===
+
+function SyncTab({
+  syncStatus,
+  lastSyncTime,
+  app,
+  onSyncNow,
+  onDisconnect,
+}: {
+  syncStatus: "idle" | "syncing" | "error" | "offline";
+  lastSyncTime: number;
+  app: MobileApp;
+  onSyncNow?: () => void;
+  onDisconnect?: () => void;
+}) {
+  const [syncUrl, setSyncUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    void app.getSyncUrl().then(setSyncUrl);
+  }, [app]);
+
+  const statusLabel = syncStatus === "idle" ? "Connected"
+    : syncStatus === "syncing" ? "Syncing..."
+    : syncStatus === "error" ? "Error"
+    : "Not connected";
+
+  const statusColor = syncStatus === "idle" ? "#4ade80"
+    : syncStatus === "syncing" ? "#4080c0"
+    : syncStatus === "error" ? "#c04040"
+    : "#506070";
+
+  return (
+    <View>
+      <Text style={styles.sectionTitle}>Status</Text>
+      <View style={styles.syncStatusRow}>
+        <View style={[styles.syncStatusDot, { backgroundColor: statusColor }]} />
+        <Text style={[styles.syncStatusLabel, { color: statusColor }]}>{statusLabel}</Text>
+      </View>
+
+      {lastSyncTime > 0 && (
+        <Text style={styles.syncLastTime}>Last synced: {formatTimeAgo(lastSyncTime)}</Text>
+      )}
+
+      {syncUrl && (
+        <>
+          <Text style={styles.sectionTitle}>Relay</Text>
+          <Text style={styles.monoValue} numberOfLines={1}>{syncUrl}</Text>
+        </>
+      )}
+
+      {syncUrl && onSyncNow && (
+        <TouchableOpacity
+          style={[styles.syncActionButton, syncStatus === "syncing" && styles.syncActionDisabled]}
+          onPress={onSyncNow}
+          disabled={syncStatus === "syncing"}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.syncActionText}>Sync Now</Text>
+        </TouchableOpacity>
+      )}
+
+      {syncUrl && onDisconnect && (
+        <TouchableOpacity
+          style={styles.syncDisconnectButton}
+          onPress={() => {
+            Alert.alert(
+              "Disconnect Sync",
+              "Stop syncing and remove relay connection? Your local data will be preserved.",
+              [
+                { text: "Cancel", style: "cancel" },
+                { text: "Disconnect", style: "destructive", onPress: onDisconnect },
+              ],
+            );
+          }}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.syncDisconnectText}>Disconnect from Relay</Text>
+        </TouchableOpacity>
+      )}
+
+      {!syncUrl && (
+        <Text style={styles.syncHint}>
+          Link another device from the Identity tab to set up sync, or pair from your desktop app.
+        </Text>
+      )}
     </View>
   );
 }
@@ -860,6 +967,64 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   exportText: { color: "#4080c0", fontSize: 15, fontWeight: "600" },
+
+  // Sync
+  syncStatusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 8,
+  },
+  syncStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  syncStatusLabel: {
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  syncLastTime: {
+    color: "#506070",
+    fontSize: 12,
+    marginBottom: 8,
+  },
+  syncActionButton: {
+    backgroundColor: "#2a4060",
+    borderRadius: 10,
+    paddingVertical: 14,
+    marginTop: 16,
+    alignItems: "center",
+  },
+  syncActionDisabled: {
+    opacity: 0.5,
+  },
+  syncActionText: {
+    color: "#c0d0e0",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  syncDisconnectButton: {
+    backgroundColor: "#1a2030",
+    borderRadius: 10,
+    paddingVertical: 14,
+    marginTop: 12,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#2a1518",
+  },
+  syncDisconnectText: {
+    color: "#c07040",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  syncHint: {
+    color: "#405060",
+    fontSize: 13,
+    fontStyle: "italic",
+    textAlign: "center",
+    marginTop: 20,
+  },
 
   // Goals
   goalEmptyText: {

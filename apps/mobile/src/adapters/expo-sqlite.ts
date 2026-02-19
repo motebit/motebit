@@ -16,6 +16,8 @@ import { computeDecayedConfidence } from "@motebit/memory-graph";
 import type { IdentityStorage } from "@motebit/core-identity";
 import type { AuditLogAdapter } from "@motebit/privacy-layer";
 import type { StateSnapshotAdapter, ConversationStoreAdapter, StorageAdapters } from "@motebit/runtime";
+import type { SyncConversation, SyncConversationMessage } from "@motebit/sdk";
+import type { ConversationSyncStoreAdapter } from "@motebit/sync-engine";
 
 // === Schema (identical to packages/persistence) ===
 
@@ -795,10 +797,81 @@ export class ExpoGoalStore {
   }
 }
 
+// === ConversationSync Adapter (for SyncEngine) ===
+
+export class ExpoSqliteConversationSyncStore implements ConversationSyncStoreAdapter {
+  constructor(private db: SQLite.SQLiteDatabase) {}
+
+  getConversationsSince(motebitId: string, since: number): SyncConversation[] {
+    const rows = this.db.getAllSync(
+      "SELECT * FROM conversations WHERE motebit_id = ? AND last_active_at > ? ORDER BY last_active_at ASC",
+      [motebitId, since],
+    ) as ConversationRow[];
+    return rows.map((r) => ({
+      conversation_id: r.conversation_id,
+      motebit_id: r.motebit_id,
+      started_at: r.started_at,
+      last_active_at: r.last_active_at,
+      title: r.title,
+      summary: r.summary,
+      message_count: r.message_count,
+    }));
+  }
+
+  getMessagesSince(conversationId: string, since: number): SyncConversationMessage[] {
+    const rows = this.db.getAllSync(
+      "SELECT * FROM conversation_messages WHERE conversation_id = ? AND created_at > ? ORDER BY created_at ASC",
+      [conversationId, since],
+    ) as ConversationMessageRow[];
+    return rows.map((r) => ({
+      message_id: r.message_id,
+      conversation_id: r.conversation_id,
+      motebit_id: r.motebit_id,
+      role: r.role,
+      content: r.content,
+      tool_calls: r.tool_calls,
+      tool_call_id: r.tool_call_id,
+      created_at: r.created_at,
+      token_estimate: r.token_estimate,
+    }));
+  }
+
+  upsertConversation(conv: SyncConversation): void {
+    const existing = this.db.getFirstSync(
+      "SELECT last_active_at FROM conversations WHERE conversation_id = ?",
+      [conv.conversation_id],
+    ) as { last_active_at: number } | null;
+
+    if (!existing) {
+      this.db.runSync(
+        `INSERT INTO conversations (conversation_id, motebit_id, started_at, last_active_at, title, summary, message_count)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [conv.conversation_id, conv.motebit_id, conv.started_at, conv.last_active_at, conv.title, conv.summary, conv.message_count],
+      );
+    } else if (conv.last_active_at >= existing.last_active_at) {
+      this.db.runSync(
+        `UPDATE conversations SET last_active_at = ?, title = ?, summary = ?, message_count = MAX(message_count, ?)
+         WHERE conversation_id = ?`,
+        [conv.last_active_at, conv.title, conv.summary, conv.message_count, conv.conversation_id],
+      );
+    }
+  }
+
+  upsertMessage(msg: SyncConversationMessage): void {
+    this.db.runSync(
+      `INSERT OR IGNORE INTO conversation_messages
+       (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [msg.message_id, msg.conversation_id, msg.motebit_id, msg.role, msg.content, msg.tool_calls, msg.tool_call_id, msg.created_at, msg.token_estimate],
+    );
+  }
+}
+
 // === Factory ===
 
 export interface ExpoStorageResult extends StorageAdapters {
   goalStore: ExpoGoalStore;
+  conversationSyncStore: ExpoSqliteConversationSyncStore;
 }
 
 export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
@@ -912,5 +985,6 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
     stateSnapshot: new ExpoSqliteStateSnapshot(db),
     conversationStore: new ExpoSqliteConversationStore(db),
     goalStore: new ExpoGoalStore(db),
+    conversationSyncStore: new ExpoSqliteConversationSyncStore(db),
   };
 }
