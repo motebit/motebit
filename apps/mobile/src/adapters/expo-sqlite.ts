@@ -595,9 +595,213 @@ export class ExpoSqliteConversationStore implements ConversationStoreAdapter {
   }
 }
 
+// === Goal Types ===
+
+export type GoalMode = "recurring" | "once";
+export type GoalStatus = "active" | "completed" | "failed" | "paused";
+
+export interface Goal {
+  goal_id: string;
+  motebit_id: string;
+  prompt: string;
+  interval_ms: number;
+  last_run_at: number | null;
+  enabled: boolean;
+  created_at: number;
+  mode: GoalMode;
+  status: GoalStatus;
+  parent_goal_id: string | null;
+  max_retries: number;
+  consecutive_failures: number;
+}
+
+export interface GoalOutcome {
+  outcome_id: string;
+  goal_id: string;
+  motebit_id: string;
+  ran_at: number;
+  status: "completed" | "failed" | "suspended";
+  summary: string | null;
+  tool_calls_made: number;
+  memories_formed: number;
+  error_message: string | null;
+}
+
+interface GoalRow {
+  goal_id: string;
+  motebit_id: string;
+  prompt: string;
+  interval_ms: number;
+  last_run_at: number | null;
+  enabled: number;
+  created_at: number;
+  mode: string;
+  status: string;
+  parent_goal_id: string | null;
+  max_retries: number;
+  consecutive_failures: number;
+}
+
+interface GoalOutcomeRow {
+  outcome_id: string;
+  goal_id: string;
+  motebit_id: string;
+  ran_at: number;
+  status: string;
+  summary: string | null;
+  tool_calls_made: number;
+  memories_formed: number;
+  error_message: string | null;
+}
+
+function rowToGoal(row: GoalRow): Goal {
+  return {
+    goal_id: row.goal_id,
+    motebit_id: row.motebit_id,
+    prompt: row.prompt,
+    interval_ms: row.interval_ms,
+    last_run_at: row.last_run_at,
+    enabled: row.enabled === 1,
+    created_at: row.created_at,
+    mode: (row.mode ?? "recurring") as GoalMode,
+    status: (row.status ?? "active") as GoalStatus,
+    parent_goal_id: row.parent_goal_id,
+    max_retries: row.max_retries ?? 3,
+    consecutive_failures: row.consecutive_failures ?? 0,
+  };
+}
+
+function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
+  return {
+    outcome_id: row.outcome_id,
+    goal_id: row.goal_id,
+    motebit_id: row.motebit_id,
+    ran_at: row.ran_at,
+    status: row.status as GoalOutcome["status"],
+    summary: row.summary,
+    tool_calls_made: row.tool_calls_made,
+    memories_formed: row.memories_formed,
+    error_message: row.error_message,
+  };
+}
+
+// === GoalStore ===
+
+export class ExpoGoalStore {
+  constructor(private db: SQLite.SQLiteDatabase) {}
+
+  listActiveGoals(motebitId: string): Goal[] {
+    const rows = this.db.getAllSync(
+      "SELECT * FROM goals WHERE motebit_id = ? AND enabled = 1 AND status = 'active' ORDER BY created_at ASC",
+      [motebitId],
+    ) as GoalRow[];
+    return rows.map(rowToGoal);
+  }
+
+  listGoals(motebitId: string): Goal[] {
+    const rows = this.db.getAllSync(
+      "SELECT * FROM goals WHERE motebit_id = ? ORDER BY created_at ASC",
+      [motebitId],
+    ) as GoalRow[];
+    return rows.map(rowToGoal);
+  }
+
+  getRecentOutcomes(goalId: string, limit: number): GoalOutcome[] {
+    const rows = this.db.getAllSync(
+      "SELECT * FROM goal_outcomes WHERE goal_id = ? ORDER BY ran_at DESC LIMIT ?",
+      [goalId, limit],
+    ) as GoalOutcomeRow[];
+    return rows.map(rowToGoalOutcome);
+  }
+
+  updateLastRun(goalId: string, timestamp: number): void {
+    this.db.runSync(
+      "UPDATE goals SET last_run_at = ? WHERE goal_id = ?",
+      [timestamp, goalId],
+    );
+  }
+
+  insertOutcome(outcome: GoalOutcome): void {
+    this.db.runSync(
+      `INSERT OR REPLACE INTO goal_outcomes
+       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        outcome.outcome_id,
+        outcome.goal_id,
+        outcome.motebit_id,
+        outcome.ran_at,
+        outcome.status,
+        outcome.summary,
+        outcome.tool_calls_made,
+        outcome.memories_formed,
+        outcome.error_message,
+      ],
+    );
+  }
+
+  setStatus(goalId: string, status: GoalStatus): void {
+    this.db.runSync(
+      "UPDATE goals SET status = ? WHERE goal_id = ?",
+      [status, goalId],
+    );
+  }
+
+  incrementFailures(goalId: string): void {
+    this.db.runSync(
+      "UPDATE goals SET consecutive_failures = consecutive_failures + 1 WHERE goal_id = ?",
+      [goalId],
+    );
+    // Auto-pause if max_retries reached
+    const row = this.db.getFirstSync(
+      "SELECT consecutive_failures, max_retries FROM goals WHERE goal_id = ?",
+      [goalId],
+    ) as { consecutive_failures: number; max_retries: number } | null;
+    if (row && row.consecutive_failures >= row.max_retries) {
+      this.db.runSync(
+        "UPDATE goals SET status = 'paused' WHERE goal_id = ?",
+        [goalId],
+      );
+    }
+  }
+
+  resetFailures(goalId: string): void {
+    this.db.runSync(
+      "UPDATE goals SET consecutive_failures = 0 WHERE goal_id = ?",
+      [goalId],
+    );
+  }
+
+  addGoal(motebitId: string, prompt: string, intervalMs: number, mode: GoalMode = "recurring"): string {
+    const goalId = crypto.randomUUID();
+    const now = Date.now();
+    this.db.runSync(
+      `INSERT INTO goals (goal_id, motebit_id, prompt, interval_ms, last_run_at, enabled, created_at, mode, status, parent_goal_id, max_retries, consecutive_failures)
+       VALUES (?, ?, ?, ?, NULL, 1, ?, ?, 'active', NULL, 3, 0)`,
+      [goalId, motebitId, prompt, intervalMs, now, mode],
+    );
+    return goalId;
+  }
+
+  removeGoal(goalId: string): void {
+    this.db.runSync("DELETE FROM goals WHERE goal_id = ?", [goalId]);
+  }
+
+  toggleGoal(goalId: string, enabled: boolean): void {
+    this.db.runSync(
+      "UPDATE goals SET enabled = ?, status = ? WHERE goal_id = ?",
+      [enabled ? 1 : 0, enabled ? "active" : "paused", goalId],
+    );
+  }
+}
+
 // === Factory ===
 
-export function createExpoStorage(dbName = "motebit.db"): StorageAdapters {
+export interface ExpoStorageResult extends StorageAdapters {
+  goalStore: ExpoGoalStore;
+}
+
+export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
   const db = SQLite.openDatabaseSync(dbName);
   db.execSync("PRAGMA journal_mode = WAL");
   db.execSync("PRAGMA foreign_keys = ON");
@@ -660,6 +864,46 @@ export function createExpoStorage(dbName = "motebit.db"): StorageAdapters {
     db.execSync("PRAGMA user_version = 3");
   }
 
+  // Migration 4: goals and goal_outcomes tables
+  if (userVersion < 4) {
+    try {
+      db.execSync(`
+        CREATE TABLE IF NOT EXISTS goals (
+          goal_id TEXT PRIMARY KEY,
+          motebit_id TEXT NOT NULL,
+          prompt TEXT NOT NULL,
+          interval_ms INTEGER NOT NULL,
+          last_run_at INTEGER,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_at INTEGER NOT NULL,
+          mode TEXT NOT NULL DEFAULT 'recurring',
+          status TEXT NOT NULL DEFAULT 'active',
+          parent_goal_id TEXT,
+          max_retries INTEGER NOT NULL DEFAULT 3,
+          consecutive_failures INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_goals_motebit ON goals (motebit_id);
+
+        CREATE TABLE IF NOT EXISTS goal_outcomes (
+          outcome_id TEXT PRIMARY KEY,
+          goal_id TEXT NOT NULL,
+          motebit_id TEXT NOT NULL,
+          ran_at INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          summary TEXT,
+          tool_calls_made INTEGER NOT NULL DEFAULT 0,
+          memories_formed INTEGER NOT NULL DEFAULT 0,
+          error_message TEXT,
+          FOREIGN KEY (goal_id) REFERENCES goals(goal_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_goal_outcomes_goal ON goal_outcomes (goal_id, ran_at DESC);
+      `);
+    } catch (_) {
+      // Tables may already exist on new DBs
+    }
+    db.execSync("PRAGMA user_version = 4");
+  }
+
   return {
     eventStore: new ExpoSqliteEventStore(db),
     memoryStorage: new ExpoSqliteMemoryStorage(db),
@@ -667,5 +911,6 @@ export function createExpoStorage(dbName = "motebit.db"): StorageAdapters {
     auditLog: new ExpoSqliteAuditLog(db),
     stateSnapshot: new ExpoSqliteStateSnapshot(db),
     conversationStore: new ExpoSqliteConversationStore(db),
+    goalStore: new ExpoGoalStore(db),
   };
 }

@@ -33,8 +33,11 @@ import * as SecureStore from "expo-secure-store";
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";
 import type { StreamChunk } from "@motebit/runtime";
 import { stripTags } from "@motebit/ai-core";
+import type { TTSProvider, STTProvider } from "@motebit/voice";
+import { ExpoSpeechTTSProvider } from "./adapters/expo-speech-tts";
+import { ExpoAVSTTProvider } from "./adapters/expo-av-stt";
 import { MobileApp, APPROVAL_PRESET_CONFIGS } from "./mobile-app";
-import type { MobileSettings, MobileAIConfig } from "./mobile-app";
+import type { MobileSettings, MobileAIConfig, GoalCompleteEvent, GoalApprovalEvent } from "./mobile-app";
 import { WelcomeOverlay } from "./components/WelcomeOverlay";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { PinDialog } from "./components/PinDialog";
@@ -93,8 +96,18 @@ export function App(): React.ReactElement {
   const [pairingClaimName, setPairingClaimName] = useState("");
   const pairingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Voice state
+  const [micState, setMicState] = useState<"off" | "recording" | "transcribing">("off");
+  const ttsRef = useRef<TTSProvider | null>(null);
+  const sttRef = useRef<STTProvider | null>(null);
+
+  // Goal scheduler state
+  const [goalRunning, setGoalRunning] = useState(false);
+
   // Track pending approval for streaming resume
   const pendingApprovalRef = useRef<string | null>(null);
+  // Track whether a pending approval is from a goal (vs. chat)
+  const pendingGoalApprovalRef = useRef<boolean>(false);
 
   // === Initialization ===
   useEffect(() => {
@@ -117,11 +130,17 @@ export function App(): React.ReactElement {
       // 4. Init AI with saved settings
       await initializeAI(a, loaded);
 
-      // 5. Start runtime
+      // 5. Init voice providers
+      await initVoice();
+
+      // 6. Start runtime
       a.start();
       subscribeToState(a);
 
-      // 6. Restore persisted conversation history into chat UI
+      // 7. Start goal scheduler
+      startGoals(a);
+
+      // 8. Restore persisted conversation history into chat UI
       restoreConversation(a);
 
       setInitialized(true);
@@ -129,7 +148,26 @@ export function App(): React.ReactElement {
 
     return () => {
       cancelAnimationFrame(animFrameRef.current);
+      app.current.stopGoalScheduler();
     };
+  }, []);
+
+  // Initialize voice providers (TTS always, STT lazily when API key available)
+  const initVoice = useCallback(async () => {
+    if (!ttsRef.current) {
+      ttsRef.current = new ExpoSpeechTTSProvider();
+    }
+
+    if (!sttRef.current) {
+      // STT needs an OpenAI API key for Whisper — try loading from secure store.
+      // If the user is on Anthropic provider, they may still have an OpenAI key
+      // stored for Whisper. We store it under a separate key.
+      const whisperKey = await SecureStore.getItemAsync("motebit_openai_api_key");
+      if (whisperKey) {
+        const provider = new ExpoAVSTTProvider({ apiKey: whisperKey });
+        sttRef.current = provider;
+      }
+    }
   }, []);
 
   const initializeAI = useCallback(async (a: MobileApp, s: MobileSettings) => {
@@ -169,6 +207,47 @@ export function App(): React.ReactElement {
     });
   }, []);
 
+  /** Wire goal scheduler callbacks and start scheduling. */
+  const startGoals = useCallback((a: MobileApp) => {
+    a.onGoalStatus((executing) => {
+      setGoalRunning(executing);
+    });
+
+    a.onGoalComplete((event: GoalCompleteEvent) => {
+      const content = event.status === "completed" && event.summary
+        ? `Goal completed: ${event.summary}`
+        : event.status === "failed" && event.error
+          ? `Goal failed: ${event.error}`
+          : null;
+      if (content) {
+        setMessages((prev) => [
+          ...prev,
+          { id: crypto.randomUUID(), role: "system" as const, content, timestamp: Date.now() },
+        ]);
+      }
+    });
+
+    a.onGoalApproval((event: GoalApprovalEvent) => {
+      const approvalId = crypto.randomUUID();
+      pendingApprovalRef.current = approvalId;
+      pendingGoalApprovalRef.current = true;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: approvalId,
+          role: "approval" as const,
+          content: `Goal: ${event.goalPrompt}`,
+          timestamp: Date.now(),
+          toolName: event.toolName,
+          toolArgs: event.args,
+          approvalResolved: false,
+        },
+      ]);
+    });
+
+    a.startGoalScheduler();
+  }, []);
+
   /** Restore persisted conversation history into chat messages for display. */
   const restoreConversation = useCallback((a: MobileApp) => {
     const history = a.getConversationHistory();
@@ -191,12 +270,14 @@ export function App(): React.ReactElement {
     // Identity already exists from bootstrap — just init AI and start
     const s = settings || (await a.loadSettings());
     await initializeAI(a, s);
+    await initVoice();
     a.start();
     subscribeToState(a);
+    startGoals(a);
     // No conversation to restore on first launch, but call for consistency
     restoreConversation(a);
     setInitialized(true);
-  }, [settings, initializeAI, subscribeToState, restoreConversation]);
+  }, [settings, initializeAI, initVoice, subscribeToState, startGoals, restoreConversation]);
 
   // === Welcome link existing ===
   const handleWelcomeLinkExisting = useCallback(() => {
@@ -205,6 +286,14 @@ export function App(): React.ReactElement {
     setPairingCodeInput("");
     setPairingStatusText("Enter the code from your other device");
     setShowPairing(true);
+  }, []);
+
+  // === System message helper (used by voice + goals) ===
+  const addSystemMessage = useCallback((content: string) => {
+    setMessages((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), role: "system", content, timestamp: Date.now() },
+    ]);
   }, []);
 
   // === GL context ===
@@ -221,6 +310,42 @@ export function App(): React.ReactElement {
     };
     animFrameRef.current = requestAnimationFrame(animate);
   }, []);
+
+  // === Mic button handler ===
+  const handleMicPress = useCallback(async () => {
+    if (micState === "off") {
+      // Start recording
+      const stt = sttRef.current;
+      if (!stt) {
+        addSystemMessage("Voice input requires an OpenAI API key (set in Settings > Intelligence)");
+        return;
+      }
+
+      stt.onResult = (transcript: string, isFinal: boolean) => {
+        if (isFinal && transcript.trim()) {
+          setInputText(transcript.trim());
+          // Auto-send after filling input
+          setMicState("off");
+        }
+      };
+      stt.onError = (error: string) => {
+        addSystemMessage(`Mic error: ${error}`);
+        setMicState("off");
+      };
+      stt.onEnd = () => {
+        // Transition handled by onResult or onError
+      };
+
+      stt.start({ language: "en-US" });
+      setMicState("recording");
+    } else if (micState === "recording") {
+      // Stop recording → transcribe
+      setMicState("transcribing");
+      sttRef.current?.stop();
+      // Result will arrive via onResult callback, which sets inputText and micState
+    }
+    // "transcribing" state — button is disabled, showing spinner
+  }, [micState, addSystemMessage]);
 
   // === Send message ===
   const handleSend = useCallback(async () => {
@@ -248,6 +373,16 @@ export function App(): React.ReactElement {
       setIsProcessing(false);
     }
   }, [inputText, isProcessing]);
+
+  // Auto-send when inputText is filled by voice transcription
+  const prevMicStateRef = useRef(micState);
+  useEffect(() => {
+    // Detect transition from transcribing→off with text in the input
+    if (prevMicStateRef.current === "transcribing" && micState === "off" && inputText.trim()) {
+      void handleSend();
+    }
+    prevMicStateRef.current = micState;
+  }, [micState, inputText, handleSend]);
 
   // === Stream consumer ===
   const consumeStream = useCallback(async (stream: AsyncGenerator<StreamChunk>) => {
@@ -313,17 +448,27 @@ export function App(): React.ReactElement {
       }
     }
 
-    // Ensure final content is set
+    // Ensure final content is set and speak via TTS if voice enabled
     if (assistantContent) {
+      const finalText = stripTags(assistantContent);
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantId
-            ? { ...m, content: stripTags(assistantContent), timestamp: Date.now() }
+            ? { ...m, content: finalText, timestamp: Date.now() }
             : m,
         ),
       );
+
+      // TTS — speak the response if voice is enabled
+      if (settings?.voiceEnabled && ttsRef.current && finalText) {
+        try {
+          await ttsRef.current.speak(finalText);
+        } catch {
+          // Non-fatal — TTS failure should not block the UI
+        }
+      }
     }
-  }, []);
+  }, [settings?.voiceEnabled]);
 
   // === Approval handler ===
   const handleApproval = useCallback(async (messageId: string, approved: boolean) => {
@@ -335,25 +480,33 @@ export function App(): React.ReactElement {
     );
 
     const a = app.current;
-    setIsProcessing(true);
-    try {
-      await consumeStream(a.resumeAfterApproval(approved));
-    } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      addSystemMessage(`[Error: ${errMsg}]`);
-    } finally {
-      setIsProcessing(false);
-      pendingApprovalRef.current = null;
+    const isGoalApproval = pendingGoalApprovalRef.current;
+
+    if (isGoalApproval) {
+      // Goal approval: stream the continuation via resumeGoalAfterApproval
+      pendingGoalApprovalRef.current = false;
+      try {
+        await consumeStream(a.resumeGoalAfterApproval(approved));
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        addSystemMessage(`[Goal error: ${errMsg}]`);
+      } finally {
+        pendingApprovalRef.current = null;
+      }
+    } else {
+      // Regular chat approval
+      setIsProcessing(true);
+      try {
+        await consumeStream(a.resumeAfterApproval(approved));
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        addSystemMessage(`[Error: ${errMsg}]`);
+      } finally {
+        setIsProcessing(false);
+        pendingApprovalRef.current = null;
+      }
     }
   }, [consumeStream]);
-
-  // === System messages ===
-  const addSystemMessage = useCallback((content: string) => {
-    setMessages((prev) => [
-      ...prev,
-      { id: crypto.randomUUID(), role: "system", content, timestamp: Date.now() },
-    ]);
-  }, []);
 
   // === Settings save ===
   const handleSettingsSave = useCallback(async (newSettings: MobileSettings, aiConfig?: MobileAIConfig) => {
@@ -371,8 +524,12 @@ export function App(): React.ReactElement {
       }
     }
 
+    // Re-init STT provider (user may have added/changed OpenAI key)
+    sttRef.current = null;
+    await initVoice();
+
     setShowSettings(false);
-  }, [subscribeToState, addSystemMessage]);
+  }, [subscribeToState, addSystemMessage, initVoice]);
 
   // === PIN handler ===
   const handlePinSubmit = useCallback(async (pin: string) => {
@@ -600,6 +757,14 @@ export function App(): React.ReactElement {
         </TouchableOpacity>
       </View>
 
+      {/* Goal status indicator */}
+      {goalRunning && (
+        <View style={styles.goalIndicator}>
+          <ActivityIndicator size="small" color="#4080c0" />
+          <Text style={styles.goalIndicatorText}>Running goal...</Text>
+        </View>
+      )}
+
       {/* Chat Messages */}
       <FlatList
         ref={flatListRef}
@@ -646,19 +811,43 @@ export function App(): React.ReactElement {
           placeholderTextColor="#405060"
           returnKeyType="send"
           onSubmitEditing={() => void handleSend()}
-          editable={!isProcessing}
+          editable={!isProcessing && micState === "off"}
         />
-        <TouchableOpacity
-          style={[styles.sendButton, isProcessing && styles.sendButtonDisabled]}
-          onPress={() => void handleSend()}
-          disabled={isProcessing}
-        >
-          {isProcessing ? (
-            <ActivityIndicator size="small" color="#0a0a0a" />
-          ) : (
-            <Text style={styles.sendButtonText}>↑</Text>
-          )}
-        </TouchableOpacity>
+        {/* Mic button — show when input is empty and not processing */}
+        {!inputText.trim() && !isProcessing ? (
+          <TouchableOpacity
+            style={[
+              styles.micButton,
+              micState === "recording" && styles.micButtonRecording,
+              micState === "transcribing" && styles.sendButtonDisabled,
+            ]}
+            onPress={() => void handleMicPress()}
+            disabled={micState === "transcribing"}
+            activeOpacity={0.7}
+          >
+            {micState === "transcribing" ? (
+              <ActivityIndicator size="small" color="#c0d0e0" />
+            ) : (
+              <Text style={styles.micButtonText}>
+                {micState === "recording" ? "\u25A0" : "\u{1F399}"}
+              </Text>
+            )}
+          </TouchableOpacity>
+        ) : null}
+        {/* Send button — show when input has text or processing */}
+        {inputText.trim() || isProcessing ? (
+          <TouchableOpacity
+            style={[styles.sendButton, isProcessing && styles.sendButtonDisabled]}
+            onPress={() => void handleSend()}
+            disabled={isProcessing}
+          >
+            {isProcessing ? (
+              <ActivityIndicator size="small" color="#0a0a0a" />
+            ) : (
+              <Text style={styles.sendButtonText}>↑</Text>
+            )}
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       {/* Modals */}
@@ -816,6 +1005,23 @@ const styles = StyleSheet.create({
     color: "#607080",
   },
 
+  // Goal indicator
+  goalIndicator: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 6,
+    gap: 8,
+    backgroundColor: "rgba(15, 24, 32, 0.9)",
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#1a2030",
+  },
+  goalIndicatorText: {
+    color: "#4080c0",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+
   // Chat
   chatList: {
     flex: 1,
@@ -899,6 +1105,22 @@ const styles = StyleSheet.create({
     color: "#c0d0e0",
     fontSize: 18,
     fontWeight: "600",
+  },
+  micButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#1a2838",
+    justifyContent: "center",
+    alignItems: "center",
+    marginLeft: 8,
+  },
+  micButtonRecording: {
+    backgroundColor: "#4a2020",
+  },
+  micButtonText: {
+    color: "#c0d0e0",
+    fontSize: 16,
   },
 
   // Pairing

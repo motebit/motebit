@@ -266,6 +266,7 @@ describe("MobileApp.settings", () => {
       rejectSecrets: false,
       maxMemoriesPerTurn: 3,
       budgetMaxCalls: 10,
+      voiceEnabled: false,
     };
     await app.saveSettings(custom);
     const loaded = await app.loadSettings();

@@ -18,7 +18,6 @@ import type {
   InteriorColor,
   PolicyConfig,
   MemoryGovernanceConfig,
-  StorageAdapters,
 } from "@motebit/runtime";
 import { CloudProvider, OllamaProvider } from "@motebit/ai-core";
 import { createSignedToken } from "@motebit/crypto";
@@ -30,7 +29,8 @@ import {
 import { PairingClient } from "@motebit/sync-engine";
 import type { PairingSession, PairingStatus } from "@motebit/sync-engine";
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";
-import { createExpoStorage } from "./adapters/expo-sqlite";
+import { createExpoStorage, ExpoGoalStore } from "./adapters/expo-sqlite";
+import type { ExpoStorageResult } from "./adapters/expo-sqlite";
 import { ExpoGLAdapter } from "./adapters/expo-gl";
 import { SecureStoreAdapter } from "./adapters/secure-store";
 
@@ -89,6 +89,7 @@ export interface MobileSettings {
   rejectSecrets: boolean;
   maxMemoriesPerTurn: number;
   budgetMaxCalls: number;
+  voiceEnabled: boolean;
 }
 
 const DEFAULT_SETTINGS: MobileSettings = {
@@ -101,6 +102,7 @@ const DEFAULT_SETTINGS: MobileSettings = {
   rejectSecrets: true,
   maxMemoriesPerTurn: 5,
   budgetMaxCalls: 20,
+  voiceEnabled: false,
 };
 
 const SETTINGS_KEY = "@motebit/settings";
@@ -122,13 +124,52 @@ export interface MobileBootstrapResult {
   deviceId: string;
 }
 
+// === Goal Event Types ===
+
+export interface GoalCompleteEvent {
+  goalId: string;
+  prompt: string;
+  status: "completed" | "failed";
+  summary: string | null;
+  error: string | null;
+}
+
+export interface GoalApprovalEvent {
+  goalId: string;
+  goalPrompt: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  riskLevel?: number;
+}
+
+// === Utilities ===
+
+function formatTimeAgo(ms: number): string {
+  if (ms < 60_000) return "just now";
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m ago`;
+  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h ago`;
+  return `${Math.round(ms / 86_400_000)}d ago`;
+}
+
 // === MobileApp ===
 
 export class MobileApp {
   private runtime: MotebitRuntime | null = null;
-  private storage: StorageAdapters | null = null;
+  private storage: ExpoStorageResult | null = null;
   private renderer: ExpoGLAdapter;
   private keyring: SecureStoreAdapter;
+
+  // Goal scheduler state
+  private goalSchedulerTimer: ReturnType<typeof setInterval> | null = null;
+  private _goalExecuting = false;
+  private _goalStatusCallback: ((executing: boolean) => void) | null = null;
+  private _goalCompleteCallback: ((event: GoalCompleteEvent) => void) | null = null;
+  private _goalApprovalCallback: ((event: GoalApprovalEvent) => void) | null = null;
+  private _pendingGoalApproval: {
+    goalId: string;
+    prompt: string;
+    mode: string;
+  } | null = null;
 
   motebitId = "mobile-local";
   deviceId = "mobile-local";
@@ -449,5 +490,271 @@ export class MobileApp {
 
     this.motebitId = result.motebitId;
     this.deviceId = result.deviceId;
+  }
+
+  // === Goal Scheduler ===
+
+  /** Get the goal store for direct UI access (listing, adding, removing goals). */
+  getGoalStore(): ExpoGoalStore | null {
+    return this.storage?.goalStore ?? null;
+  }
+
+  get isGoalExecuting(): boolean {
+    return this._goalExecuting;
+  }
+
+  /** Subscribe to goal execution status changes (for UI indicator). */
+  onGoalStatus(callback: (executing: boolean) => void): void {
+    this._goalStatusCallback = callback;
+  }
+
+  /** Subscribe to goal completion events (success or failure, for chat surfacing). */
+  onGoalComplete(callback: (event: GoalCompleteEvent) => void): void {
+    this._goalCompleteCallback = callback;
+  }
+
+  /** Subscribe to goal approval requests (tool needs user approval during background goal). */
+  onGoalApproval(callback: (event: GoalApprovalEvent) => void): void {
+    this._goalApprovalCallback = callback;
+  }
+
+  /**
+   * Start background goal scheduling. Checks for active goals every 60s and
+   * executes them in the background without interrupting the user's chat.
+   */
+  startGoalScheduler(): void {
+    if (this.goalSchedulerTimer) return;
+    this.goalSchedulerTimer = setInterval(() => {
+      void this.goalTick();
+    }, 60_000);
+    // Run first tick after a short delay (let UI settle)
+    setTimeout(() => { void this.goalTick(); }, 5_000);
+  }
+
+  stopGoalScheduler(): void {
+    if (this.goalSchedulerTimer) {
+      clearInterval(this.goalSchedulerTimer);
+      this.goalSchedulerTimer = null;
+    }
+  }
+
+  /**
+   * Resume a goal after the user approves/denies a tool call.
+   * Streams the continuation back so App.tsx can render it into chat.
+   * After streaming completes, records the goal outcome and cleans up.
+   */
+  async *resumeGoalAfterApproval(approved: boolean): AsyncGenerator<StreamChunk> {
+    if (!this.runtime) throw new Error("AI not initialized");
+    if (!this._pendingGoalApproval) throw new Error("No pending goal approval");
+
+    const goalStore = this.storage?.goalStore;
+    if (!goalStore) throw new Error("Goal store not available");
+
+    const { goalId, prompt, mode } = this._pendingGoalApproval;
+
+    try {
+      let accumulated = "";
+      for await (const chunk of this.runtime.resumeAfterApproval(approved)) {
+        if (chunk.type === "text") {
+          accumulated += chunk.text;
+        }
+        yield chunk;
+      }
+
+      // Record outcome to DB
+      const now = Date.now();
+      goalStore.updateLastRun(goalId, now);
+      goalStore.resetFailures(goalId);
+
+      goalStore.insertOutcome({
+        outcome_id: crypto.randomUUID(),
+        goal_id: goalId,
+        motebit_id: this.motebitId,
+        ran_at: now,
+        status: "completed",
+        summary: accumulated.slice(0, 500),
+        tool_calls_made: 0,
+        memories_formed: 0,
+        error_message: null,
+      });
+
+      // One-shot auto-complete
+      if (mode === "once") {
+        goalStore.setStatus(goalId, "completed");
+      }
+
+      // Notify UI
+      this._goalCompleteCallback?.({
+        goalId,
+        prompt,
+        status: "completed",
+        summary: accumulated.slice(0, 200),
+        error: null,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this._goalCompleteCallback?.({
+        goalId,
+        prompt,
+        status: "failed",
+        summary: null,
+        error: msg,
+      });
+      throw err;
+    } finally {
+      this._goalExecuting = false;
+      this._goalStatusCallback?.(false);
+      this._pendingGoalApproval = null;
+      this.runtime?.resetConversation();
+    }
+  }
+
+  private async goalTick(): Promise<void> {
+    if (!this.runtime || this._goalExecuting || this.runtime.isProcessing) return;
+
+    const goalStore = this.storage?.goalStore;
+    if (!goalStore) return;
+
+    try {
+      const goals = goalStore.listActiveGoals(this.motebitId);
+      if (goals.length === 0) return;
+
+      const now = Date.now();
+      for (const goal of goals) {
+        const elapsed = goal.last_run_at ? now - goal.last_run_at : Infinity;
+        if (elapsed < goal.interval_ms) continue;
+        if (this.runtime.isProcessing) break;
+
+        this._goalExecuting = true;
+        this._goalStatusCallback?.(true);
+
+        try {
+          // Build enriched context with previous outcomes
+          const outcomes = goalStore.getRecentOutcomes(goal.goal_id, 3);
+
+          let context = `You are executing a scheduled goal.\n\nGoal: ${goal.prompt}`;
+          if (outcomes.length > 0) {
+            context += "\n\nPrevious executions (most recent first):";
+            for (const o of outcomes) {
+              const ago = formatTimeAgo(now - o.ran_at);
+              if (o.status === "failed" && o.error_message) {
+                context += `\n- ${ago}: failed — [error: ${o.error_message}]`;
+              } else if (o.summary) {
+                context += `\n- ${ago}: ${o.status} — "${o.summary.slice(0, 100)}"`;
+              } else {
+                context += `\n- ${ago}: ${o.status}`;
+              }
+            }
+          }
+          if (goal.mode === "once") {
+            context += "\n\nThis is a one-time goal. Complete it fully in this execution.";
+          }
+
+          // Stream so approval_request chunks surface
+          let accumulated = "";
+          let approvalRequested = false;
+
+          for await (const chunk of this.runtime.sendMessageStreaming(context)) {
+            if (chunk.type === "text") {
+              accumulated += chunk.text;
+            } else if (chunk.type === "approval_request") {
+              approvalRequested = true;
+              this._pendingGoalApproval = {
+                goalId: goal.goal_id,
+                prompt: goal.prompt,
+                mode: goal.mode,
+              };
+              this._goalApprovalCallback?.({
+                goalId: goal.goal_id,
+                goalPrompt: goal.prompt,
+                toolName: chunk.name,
+                args: chunk.args,
+                riskLevel: chunk.risk_level,
+              });
+            }
+          }
+
+          if (approvalRequested) {
+            // Don't record outcome — waiting for user decision.
+            // _goalExecuting stays true to block further ticks.
+            return;
+          }
+
+          // Normal completion: record outcome, update DB
+          goalStore.updateLastRun(goal.goal_id, now);
+          goalStore.resetFailures(goal.goal_id);
+
+          goalStore.insertOutcome({
+            outcome_id: crypto.randomUUID(),
+            goal_id: goal.goal_id,
+            motebit_id: this.motebitId,
+            ran_at: now,
+            status: "completed",
+            summary: accumulated.slice(0, 500),
+            tool_calls_made: 0,
+            memories_formed: 0,
+            error_message: null,
+          });
+
+          // One-shot auto-complete
+          if (goal.mode === "once") {
+            goalStore.setStatus(goal.goal_id, "completed");
+          }
+
+          // Notify UI
+          this._goalCompleteCallback?.({
+            goalId: goal.goal_id,
+            prompt: goal.prompt,
+            status: "completed",
+            summary: accumulated.slice(0, 200),
+            error: null,
+          });
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+
+          // Record failed outcome
+          try {
+            goalStore.insertOutcome({
+              outcome_id: crypto.randomUUID(),
+              goal_id: goal.goal_id,
+              motebit_id: this.motebitId,
+              ran_at: now,
+              status: "failed",
+              summary: null,
+              tool_calls_made: 0,
+              memories_formed: 0,
+              error_message: msg,
+            });
+          } catch {
+            // Non-fatal
+          }
+
+          // Increment failures and auto-pause if threshold reached
+          try {
+            goalStore.incrementFailures(goal.goal_id);
+          } catch {
+            // Non-fatal
+          }
+
+          // Notify UI
+          this._goalCompleteCallback?.({
+            goalId: goal.goal_id,
+            prompt: goal.prompt,
+            status: "failed",
+            summary: null,
+            error: msg,
+          });
+        } finally {
+          if (!this._pendingGoalApproval) {
+            this._goalExecuting = false;
+            this._goalStatusCallback?.(false);
+            this.runtime?.resetConversation();
+          }
+        }
+      }
+    } catch {
+      this._goalExecuting = false;
+      this._goalStatusCallback?.(false);
+    }
   }
 }

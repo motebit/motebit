@@ -15,15 +15,38 @@ import {
 import * as SecureStore from "expo-secure-store";
 import type { MobileApp, MobileSettings, MobileAIConfig } from "../mobile-app";
 import { COLOR_PRESETS, APPROVAL_PRESET_CONFIGS } from "../mobile-app";
+import type { Goal, GoalMode } from "../adapters/expo-sqlite";
 
-type Tab = "appearance" | "intelligence" | "governance" | "identity";
+type Tab = "appearance" | "intelligence" | "governance" | "goals" | "identity";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "appearance", label: "Appearance" },
   { key: "intelligence", label: "Intelligence" },
   { key: "governance", label: "Governance" },
+  { key: "goals", label: "Goals" },
   { key: "identity", label: "Identity" },
 ];
+
+const INTERVAL_OPTIONS: { label: string; ms: number }[] = [
+  { label: "Hourly", ms: 3_600_000 },
+  { label: "Daily", ms: 86_400_000 },
+  { label: "Weekly", ms: 604_800_000 },
+];
+
+function formatInterval(ms: number): string {
+  if (ms <= 3_600_000) return "Hourly";
+  if (ms <= 86_400_000) return "Daily";
+  if (ms <= 604_800_000) return "Weekly";
+  return `${Math.round(ms / 86_400_000)}d`;
+}
+
+function formatTimeAgo(ts: number): string {
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return "just now";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return `${Math.floor(diff / 86_400_000)}d ago`;
+}
 
 // Hex colors for preview circles
 const PRESET_COLORS: Record<string, string> = {
@@ -59,13 +82,17 @@ export function SettingsModal({
   const [tab, setTab] = useState<Tab>("appearance");
   const [draft, setDraft] = useState<MobileSettings>(settings);
   const [apiKey, setApiKey] = useState("");
+  const [openaiKey, setOpenaiKey] = useState("");
 
   // Sync draft when settings change or modal opens
   useEffect(() => {
     setDraft(settings);
-    // Load stored API key
+    // Load stored API keys
     void SecureStore.getItemAsync("motebit_anthropic_api_key").then((k) => {
       if (k) setApiKey(k);
+    });
+    void SecureStore.getItemAsync("motebit_openai_api_key").then((k) => {
+      if (k) setOpenaiKey(k);
     });
   }, [settings, visible]);
 
@@ -74,9 +101,12 @@ export function SettingsModal({
   }, []);
 
   const handleSave = useCallback(async () => {
-    // Store API key securely (not in AsyncStorage)
+    // Store API keys securely (not in AsyncStorage)
     if (draft.provider === "anthropic" && apiKey) {
       await SecureStore.setItemAsync("motebit_anthropic_api_key", apiKey);
+    }
+    if (openaiKey) {
+      await SecureStore.setItemAsync("motebit_openai_api_key", openaiKey);
     }
 
     // Apply governance settings to runtime
@@ -105,7 +135,7 @@ export function SettingsModal({
     }
 
     onSave(draft, aiConfig);
-  }, [draft, apiKey, app, settings, onSave]);
+  }, [draft, apiKey, openaiKey, app, settings, onSave]);
 
   const identity = app.getIdentityInfo();
 
@@ -154,10 +184,14 @@ export function SettingsModal({
               model={draft.model}
               apiKey={apiKey}
               ollamaEndpoint={draft.ollamaEndpoint}
+              voiceEnabled={draft.voiceEnabled}
+              openaiKey={openaiKey}
               onChangeProvider={(p) => updateDraft({ provider: p, model: p === "ollama" ? "llama3.2" : "claude-sonnet-4-20250514" })}
               onChangeModel={(m) => updateDraft({ model: m })}
               onChangeApiKey={setApiKey}
               onChangeOllamaEndpoint={(e) => updateDraft({ ollamaEndpoint: e })}
+              onChangeVoiceEnabled={(v) => updateDraft({ voiceEnabled: v })}
+              onChangeOpenaiKey={setOpenaiKey}
             />
           )}
           {tab === "governance" && (
@@ -167,6 +201,9 @@ export function SettingsModal({
               onUpdate={updateDraft}
               onRequestPin={onRequestPin}
             />
+          )}
+          {tab === "goals" && (
+            <GoalsTab app={app} />
           )}
           {tab === "identity" && (
             <IdentityTab
@@ -218,19 +255,27 @@ function IntelligenceTab({
   model,
   apiKey,
   ollamaEndpoint,
+  voiceEnabled,
+  openaiKey,
   onChangeProvider,
   onChangeModel,
   onChangeApiKey,
   onChangeOllamaEndpoint,
+  onChangeVoiceEnabled,
+  onChangeOpenaiKey,
 }: {
   provider: "ollama" | "anthropic";
   model: string;
   apiKey: string;
   ollamaEndpoint: string;
+  voiceEnabled: boolean;
+  openaiKey: string;
   onChangeProvider: (p: "ollama" | "anthropic") => void;
   onChangeModel: (m: string) => void;
   onChangeApiKey: (k: string) => void;
   onChangeOllamaEndpoint: (e: string) => void;
+  onChangeVoiceEnabled: (v: boolean) => void;
+  onChangeOpenaiKey: (k: string) => void;
 }) {
   return (
     <View>
@@ -292,6 +337,31 @@ function IntelligenceTab({
           />
         </>
       )}
+
+      <Text style={styles.sectionTitle}>Voice</Text>
+      <View style={styles.switchRow}>
+        <Text style={styles.switchLabel}>Voice responses</Text>
+        <Switch
+          value={voiceEnabled}
+          onValueChange={onChangeVoiceEnabled}
+          trackColor={{ false: "#1a2030", true: "#2a4060" }}
+          thumbColor={voiceEnabled ? "#c0d0e0" : "#607080"}
+        />
+      </View>
+      <Text style={styles.voiceHint}>Speak assistant replies aloud using system TTS</Text>
+
+      <Text style={styles.sectionTitle}>OpenAI API Key (Whisper STT)</Text>
+      <TextInput
+        style={styles.textField}
+        value={openaiKey}
+        onChangeText={onChangeOpenaiKey}
+        placeholder="sk-..."
+        placeholderTextColor="#405060"
+        secureTextEntry
+        autoCapitalize="none"
+        autoCorrect={false}
+      />
+      <Text style={styles.voiceHint}>Required for voice input (mic button). Uses Whisper API for transcription.</Text>
     </View>
   );
 }
@@ -434,6 +504,174 @@ function IdentityTab({
   );
 }
 
+// === Goals Tab ===
+
+function GoalsTab({ app }: { app: MobileApp }) {
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [newPrompt, setNewPrompt] = useState("");
+  const [newIntervalIdx, setNewIntervalIdx] = useState(0);
+  const [newMode, setNewMode] = useState<GoalMode>("recurring");
+
+  const goalStore = app.getGoalStore();
+  const identity = app.getIdentityInfo();
+
+  const refreshGoals = useCallback(() => {
+    if (!goalStore) return;
+    setGoals(goalStore.listGoals(identity.motebitId));
+  }, [goalStore, identity.motebitId]);
+
+  useEffect(() => {
+    refreshGoals();
+  }, [refreshGoals]);
+
+  const handleAdd = useCallback(() => {
+    const prompt = newPrompt.trim();
+    if (!prompt || !goalStore) return;
+    const interval = INTERVAL_OPTIONS[newIntervalIdx];
+    if (!interval) return;
+    goalStore.addGoal(identity.motebitId, prompt, interval.ms, newMode);
+    setNewPrompt("");
+    refreshGoals();
+  }, [newPrompt, newIntervalIdx, newMode, goalStore, identity.motebitId, refreshGoals]);
+
+  const handleToggle = useCallback((goalId: string, enabled: boolean) => {
+    if (!goalStore) return;
+    goalStore.toggleGoal(goalId, enabled);
+    refreshGoals();
+  }, [goalStore, refreshGoals]);
+
+  const handleRemove = useCallback((goalId: string) => {
+    Alert.alert("Remove Goal", "Are you sure you want to delete this goal?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () => {
+          if (!goalStore) return;
+          goalStore.removeGoal(goalId);
+          refreshGoals();
+        },
+      },
+    ]);
+  }, [goalStore, refreshGoals]);
+
+  if (!goalStore) {
+    return (
+      <View>
+        <Text style={styles.sectionTitle}>Goals</Text>
+        <Text style={styles.goalEmptyText}>Goal store not available. Bootstrap identity first.</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View>
+      <Text style={styles.sectionTitle}>Active Goals</Text>
+      {goals.length === 0 ? (
+        <Text style={styles.goalEmptyText}>No goals yet. Add one below.</Text>
+      ) : (
+        goals.map((goal) => (
+          <View key={goal.goal_id} style={styles.goalRow}>
+            <View style={styles.goalInfo}>
+              <Text style={styles.goalPrompt} numberOfLines={2}>{goal.prompt}</Text>
+              <View style={styles.goalMeta}>
+                <Text style={styles.goalMetaText}>{formatInterval(goal.interval_ms)}</Text>
+                <Text style={styles.goalMetaText}>{goal.mode}</Text>
+                <Text style={[
+                  styles.goalMetaText,
+                  goal.status === "paused" && styles.goalMetaWarning,
+                  goal.status === "failed" && styles.goalMetaWarning,
+                ]}>
+                  {goal.status}
+                </Text>
+                {goal.last_run_at ? (
+                  <Text style={styles.goalMetaText}>ran {formatTimeAgo(goal.last_run_at)}</Text>
+                ) : null}
+                {goal.consecutive_failures > 0 ? (
+                  <Text style={styles.goalMetaWarning}>
+                    {goal.consecutive_failures}/{goal.max_retries} failures
+                  </Text>
+                ) : null}
+              </View>
+            </View>
+            <View style={styles.goalActions}>
+              <Switch
+                value={goal.enabled}
+                onValueChange={(v) => handleToggle(goal.goal_id, v)}
+                trackColor={{ false: "#1a2030", true: "#2a4060" }}
+                thumbColor={goal.enabled ? "#c0d0e0" : "#607080"}
+              />
+              <TouchableOpacity
+                onPress={() => handleRemove(goal.goal_id)}
+                activeOpacity={0.7}
+                style={styles.goalDeleteBtn}
+              >
+                <Text style={styles.goalDeleteText}>X</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ))
+      )}
+
+      <Text style={styles.sectionTitle}>Add Goal</Text>
+      <TextInput
+        style={styles.textField}
+        value={newPrompt}
+        onChangeText={setNewPrompt}
+        placeholder="What should the goal do?"
+        placeholderTextColor="#405060"
+        multiline
+        numberOfLines={3}
+      />
+
+      <Text style={[styles.sectionTitle, { marginTop: 14 }]}>Interval</Text>
+      <View style={styles.radioGroup}>
+        {INTERVAL_OPTIONS.map((opt, idx) => (
+          <TouchableOpacity
+            key={opt.label}
+            style={[styles.radioItem, newIntervalIdx === idx && styles.radioActive]}
+            onPress={() => setNewIntervalIdx(idx)}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.radioText, newIntervalIdx === idx && styles.radioTextActive]}>
+              {opt.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <Text style={[styles.sectionTitle, { marginTop: 14 }]}>Mode</Text>
+      <View style={styles.radioGroup}>
+        <TouchableOpacity
+          style={[styles.radioItem, newMode === "recurring" && styles.radioActive]}
+          onPress={() => setNewMode("recurring")}
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.radioText, newMode === "recurring" && styles.radioTextActive]}>Recurring</Text>
+          <Text style={styles.radioDesc}>Runs on every interval</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.radioItem, newMode === "once" && styles.radioActive]}
+          onPress={() => setNewMode("once")}
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.radioText, newMode === "once" && styles.radioTextActive]}>Once</Text>
+          <Text style={styles.radioDesc}>Runs once, then completes</Text>
+        </TouchableOpacity>
+      </View>
+
+      <TouchableOpacity
+        style={[styles.goalAddBtn, !newPrompt.trim() && styles.goalAddBtnDisabled]}
+        onPress={handleAdd}
+        disabled={!newPrompt.trim()}
+        activeOpacity={0.7}
+      >
+        <Text style={styles.goalAddBtnText}>Add Goal</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 // === Styles ===
 
 const styles = StyleSheet.create({
@@ -541,6 +779,7 @@ const styles = StyleSheet.create({
   radioText: { color: "#8098b0", fontSize: 15, fontWeight: "600" },
   radioTextActive: { color: "#c0d0e0" },
   radioDesc: { color: "#506070", fontSize: 12, marginTop: 2 },
+  voiceHint: { color: "#405060", fontSize: 11, marginTop: 4, marginBottom: 4 },
 
   // Fields
   textField: {
@@ -621,4 +860,79 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   exportText: { color: "#4080c0", fontSize: 15, fontWeight: "600" },
+
+  // Goals
+  goalEmptyText: {
+    color: "#506070",
+    fontSize: 13,
+    fontStyle: "italic",
+    textAlign: "center",
+    marginVertical: 12,
+  },
+  goalRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#0f1820",
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: "#1a2030",
+  },
+  goalInfo: {
+    flex: 1,
+    marginRight: 10,
+  },
+  goalPrompt: {
+    color: "#c0d0e0",
+    fontSize: 14,
+    marginBottom: 4,
+  },
+  goalMeta: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  goalMetaText: {
+    color: "#506070",
+    fontSize: 11,
+  },
+  goalMetaWarning: {
+    color: "#c07040",
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  goalActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  goalDeleteBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#2a1518",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  goalDeleteText: {
+    color: "#d04050",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  goalAddBtn: {
+    backgroundColor: "#2a4060",
+    borderRadius: 10,
+    paddingVertical: 14,
+    marginTop: 16,
+    alignItems: "center",
+  },
+  goalAddBtnDisabled: {
+    opacity: 0.4,
+  },
+  goalAddBtnText: {
+    color: "#c0d0e0",
+    fontSize: 15,
+    fontWeight: "600",
+  },
 });

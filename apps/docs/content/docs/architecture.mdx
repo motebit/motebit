@@ -1,0 +1,108 @@
+---
+title: Architecture
+description: Monorepo structure, package layers, and data flow
+---
+
+Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every package exports from `src/index.ts`, tests live in `src/__tests__/` using Vitest, and all I/O crosses an adapter boundary so the interior never binds to a specific platform.
+
+## Monorepo structure
+
+| Directory | Contents |
+|-----------|----------|
+| `apps/desktop` | Tauri (Rust + webview). Flagship client (~80%). Three.js glass creature, identity bootstrap, operator mode, voice input, audio-reactive rendering. |
+| `apps/cli` | Node.js REPL + daemon. Full operator console — chat, goal scheduling, tool approval queue, `motebit export` / `verify`. |
+| `apps/mobile` | React Native + Expo. Early MVP (~30%). expo-gl + Three.js rendering, SQLite adapters, Ollama-only. |
+| `apps/admin` | React + Vite dashboard. Real-time state vector, memory graph, behavior cues, event log, tool audit. |
+| `apps/spatial` | AR/VR positioning library. Body-relative orbital mechanics. Stub runtime. |
+| `apps/docs` | Fumadocs + Next.js. This site. |
+| `packages/` | 18 shared TypeScript packages — the interior of the system. |
+| `services/api` | Sync relay server. REST + WebSocket, device auth, fan-out. |
+| `spec/` | `identity-v1.md` — the motebit.md file format specification. |
+
+## Package layers
+
+Packages are organized into three tiers. Core has zero internal dependencies. Engines depend on core and on each other. Surface packages sit at the outermost boundary — they face the user, the network, or the renderer.
+
+### Core
+
+The foundation. No package in this tier imports another motebit package.
+
+| Package | Role |
+|---------|------|
+| `sdk` | Shared types — `MotebitState`, `BehaviorCues`, `MemoryNode`, `EventLogEntry`, `PolicyDecision`, `RenderSpec`. |
+| `crypto` | Ed25519 signing, AES-256-GCM encryption, PBKDF2 derivation, signed tokens (5 min expiry). |
+| `core-identity` | UUID v7 identity generation, multi-device registration, Ed25519 public key binding. |
+
+### Engines
+
+The interior machinery. Each engine owns one concern and communicates through typed interfaces defined in `sdk`.
+
+| Package | Role |
+|---------|------|
+| `runtime` | Orchestrator. Wires all engines, exposes `sendMessage` / `sendMessageStreaming`. |
+| `ai-core` | Pluggable providers (Cloud, Ollama, Hybrid), agentic turn loop, context packing. |
+| `behavior-engine` | `computeRawCues(state)` returns `BehaviorCues`. EMA smoothing, species constraints, rate limiting. |
+| `state-vector` | Tick-based EMA smoothing, hysteresis, interpolation for 60 FPS rendering. |
+| `memory-graph` | Semantic memory with cosine similarity retrieval, half-life decay (7 days default), graph edges. |
+| `event-log` | Append-only event sourcing with version clocks, compaction, replay. |
+| `policy` | PolicyGate (tool approval, budgets, audit), MemoryGovernor (sensitivity-aware), injection defense. |
+| `privacy-layer` | Retention rules by sensitivity level, deletion certificates, data export manifests. |
+| `persistence` | SQLite schema (WAL mode), adapters for events, memories, identities, audit, state, devices. |
+| `tools` | InMemoryToolRegistry, builtin tools, MCP tool merge. |
+| `mcp-client` | MCP stdio client, tool discovery, external data boundary marking. |
+| `sync-engine` | Multi-device sync — HTTP/WebSocket adapters, conflict detection, retry backoff. |
+
+### Surface
+
+The outermost layer. These packages face the renderer, the public npm registry, or the user's terminal.
+
+| Package | Role |
+|---------|------|
+| `render-engine` | `RenderSpec` (droplet geometry, glass material), `ThreeJSAdapter` (organic noise, breathing, sag). |
+| `identity-file` | Generate, parse, verify `motebit.md` — signed agent identity files (internal). |
+| `verify` | Standalone public verifier for `motebit.md`. Zero monorepo deps, MIT licensed. |
+| `create-motebit` | Public CLI — `npm create motebit`. Generates and verifies signed identity files. |
+| `policy-invariants` | Clamping rules, state bounds validation. |
+| `voice` | Voice input pipeline — VAD, transcription, audio routing. |
+
+## Data flow
+
+A message enters the system and flows through a single pipeline:
+
+1. **User input** arrives via chat, voice, or a scheduled goal.
+2. **Runtime** receives the message and delegates to `ai-core`.
+3. **AI core** runs a streaming turn loop — it yields text chunks, tool calls, and status events as they arrive.
+4. **Tool execution** — if the model requests a tool, the call passes through the **policy gate**. Read-only tools execute automatically. Write/execute/spend tools require approval. Every decision is logged.
+5. **State vector update** — the outcome updates the 9-field state vector via EMA smoothing.
+6. **Behavior engine** — `computeRawCues(state)` produces 5 behavior cues deterministically.
+7. **Render spec** — cues are mapped to droplet geometry, glow, and motion parameters.
+8. **Platform renderer** — Three.js on desktop, expo-gl on mobile, stub on spatial.
+
+The pipeline is streaming end-to-end. Text appears as it arrives. Tool status events surface in real time. The creature's glow and breathing respond to processing state within the same frame loop.
+
+## The adapter pattern
+
+Every I/O boundary is an interface. Storage, rendering, AI providers, sync transport — each has an in-memory implementation for tests and a platform-specific implementation for production (SQLite via better-sqlite3, Tauri invoke, expo-sqlite). The adapter is the surface tension boundary in code: the interior must not bind to a specific provider. If you can swap it without changing the engine, the boundary is correct.
+
+## Event sourcing
+
+The event log is append-only and immutable. Every state change is recorded as an `EventLogEntry` with a version clock. Multi-device ordering uses these clocks for conflict detection — if two devices produce concurrent events, the sync engine detects the fork and resolves it. After a snapshot, older events compact to save space while preserving the audit trail.
+
+## Identity flow
+
+On first launch the system bootstraps a cryptographic identity:
+
+1. **Generate** an Ed25519 keypair.
+2. **Store** the private key in the OS keychain (Tauri keyring on desktop, PBKDF2-encrypted file on CLI, expo-secure-store on mobile). It never leaves the device.
+3. **Register** the device against the identity (UUID v7).
+4. **Authenticate** with the sync relay using signed JWT tokens (5 min expiry, Ed25519 signature).
+
+The identity persists across sessions, devices, and provider changes. Switching from Ollama to Anthropic changes nothing about who the agent is.
+
+## State vector, behavior, rendering
+
+The state vector is 9 fields. Seven are continuous floats between 0 and 1: `attention`, `processing`, `confidence`, `affect_valence`, `affect_arousal`, `social_distance`, and `curiosity`. Two are enums: `trust_mode` and `battery_mode`. The vector updates on every tick via EMA smoothing with hysteresis to prevent jitter.
+
+The behavior engine maps state to 5 output cues: `hover_distance`, `drift_amplitude`, `glow_intensity`, `eye_dilation`, and `smile_curvature`. The mapping is deterministic and stateless — the same state always produces the same cues.
+
+The render engine translates cues into a `RenderSpec`: droplet geometry, glass material properties (transmission, IOR, iridescence), breathing frequency, gravity sag, Brownian drift amplitude, and interior glow intensity. The platform renderer (Three.js or expo-gl) consumes the spec and draws the creature at 60 FPS. The creature's visual state is a pure function of the state vector — no hidden state, no animation timelines, no imperative overrides.
