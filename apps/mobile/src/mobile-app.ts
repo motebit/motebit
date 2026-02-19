@@ -457,6 +457,14 @@ export class MobileApp {
 
   // === Camera orbit controls ===
 
+  handleOrbitTouchStart(): void {
+    this.renderer.handleTouchStart();
+  }
+
+  handleOrbitTouchEnd(): void {
+    this.renderer.handleTouchEnd();
+  }
+
   handleOrbitPan(dx: number, dy: number): void {
     this.renderer.handlePan(dx, dy);
   }
@@ -821,8 +829,8 @@ export class MobileApp {
     if (this.runtime) {
       try {
         const { nodes, edges } = await this.runtime.memory.exportAll();
-        data.memories = nodes.filter((n: MemoryNode) => !n.tombstoned);
-        data.memory_edges = edges;
+        data.memories = nodes;
+        data.edges = edges;
       } catch {
         // Non-fatal
       }
@@ -831,7 +839,7 @@ export class MobileApp {
       try {
         const events = await this.runtime.events.query({
           motebit_id: this.motebitId,
-          limit: 100,
+          limit: 500,
         });
         data.events = events;
       } catch {
@@ -842,7 +850,7 @@ export class MobileApp {
       try {
         const state = this.runtime.getState();
         if (state) {
-          data.state_vector = state;
+          data.state = state;
         }
       } catch {
         // Non-fatal

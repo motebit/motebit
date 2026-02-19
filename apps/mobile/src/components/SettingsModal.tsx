@@ -263,7 +263,8 @@ export function SettingsModal({
                       await FileSystem.writeAsStringAsync(filePath, jsonData);
                       await Sharing.shareAsync(filePath, { mimeType: "application/json" });
                     } else {
-                      Alert.alert("Export", jsonData);
+                      Clipboard.setString(jsonData);
+                      Alert.alert("Exported", "Data copied to clipboard.");
                     }
                   } catch (err: unknown) {
                     const msg = err instanceof Error ? err.message : String(err);

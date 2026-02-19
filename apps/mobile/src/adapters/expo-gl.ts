@@ -203,9 +203,11 @@ const CAM_PAN_SENSITIVITY = 0.005;        // radians per pixel of gesture delta
 const CAM_LERP_FACTOR = 0.08;             // per-frame interpolation speed
 const CAM_PHI_MIN = (10 / 180) * Math.PI; // ~10° — avoid gimbal flip at poles
 const CAM_PHI_MAX = (170 / 180) * Math.PI;
-const CAM_RADIUS_MIN = 1.5;
-const CAM_RADIUS_MAX = 6.0;
+const CAM_RADIUS_MIN = 0.5;
+const CAM_RADIUS_MAX = 4.0;
 const CAM_RESET_DURATION = 0.5;           // seconds for double-tap reset animation
+const CAM_MOMENTUM_FRICTION = 0.92;       // per-frame velocity multiplier (1 = no friction)
+const CAM_MOMENTUM_MIN = 0.0002;          // radians/frame below which momentum stops
 
 export class ExpoGLAdapter implements RenderAdapter {
   private renderer: THREE.WebGLRenderer | null = null;
@@ -237,6 +239,12 @@ export class ExpoGLAdapter implements RenderAdapter {
   private camResetStartPhi = CAM_DEFAULT_PHI;
   private camResetStartRadius = CAM_DEFAULT_RADIUS;
   private camLastRenderTime = 0;
+
+  // --- Momentum state (fling-to-coast) ---
+  private camVelocityTheta = 0;
+  private camVelocityPhi = 0;
+  /** True while user finger is down — suppresses momentum application. */
+  private camTouching = false;
 
   async init(gl: unknown): Promise<void> {
     const glContext = gl as WebGLRenderingContext;
@@ -323,6 +331,21 @@ export class ExpoGLAdapter implements RenderAdapter {
 
   // === Touch gesture handlers (called from App.tsx) ===
 
+  /** Signal that a touch gesture has begun — suppresses momentum. */
+  handleTouchStart(): void {
+    this.camTouching = true;
+    this.camVelocityTheta = 0;
+    this.camVelocityPhi = 0;
+  }
+
+  /** Signal that touch has ended — momentum begins coasting. */
+  handleTouchEnd(): void {
+    this.camTouching = false;
+    if (Math.abs(this.camVelocityTheta) > CAM_MOMENTUM_MIN || Math.abs(this.camVelocityPhi) > CAM_MOMENTUM_MIN) {
+      this.camDirty = true;
+    }
+  }
+
   /**
    * Orbit the camera around the origin based on pan gesture deltas.
    * dx/dy are pixel deltas from a PanResponder or gesture handler.
@@ -330,11 +353,16 @@ export class ExpoGLAdapter implements RenderAdapter {
   handlePan(dx: number, dy: number): void {
     // Cancel any in-progress reset animation — user is taking control
     this.camResetProgress = -1;
-    this.camTargetTheta -= dx * CAM_PAN_SENSITIVITY;
+    const dTheta = -dx * CAM_PAN_SENSITIVITY;
+    const dPhi = -dy * CAM_PAN_SENSITIVITY;
+    this.camTargetTheta += dTheta;
     this.camTargetPhi = Math.max(
       CAM_PHI_MIN,
-      Math.min(CAM_PHI_MAX, this.camTargetPhi - dy * CAM_PAN_SENSITIVITY),
+      Math.min(CAM_PHI_MAX, this.camTargetPhi + dPhi),
     );
+    // Track velocity for momentum (exponential moving average)
+    this.camVelocityTheta = this.camVelocityTheta * 0.5 + dTheta * 0.5;
+    this.camVelocityPhi = this.camVelocityPhi * 0.5 + dPhi * 0.5;
     this.camDirty = true;
   }
 
@@ -449,16 +477,31 @@ export class ExpoGLAdapter implements RenderAdapter {
           this.camDirty = false;
         }
       } else {
+        // Apply momentum when finger is up and velocity is significant
+        if (!this.camTouching && (Math.abs(this.camVelocityTheta) > CAM_MOMENTUM_MIN || Math.abs(this.camVelocityPhi) > CAM_MOMENTUM_MIN)) {
+          this.camTargetTheta += this.camVelocityTheta;
+          this.camTargetPhi = Math.max(
+            CAM_PHI_MIN,
+            Math.min(CAM_PHI_MAX, this.camTargetPhi + this.camVelocityPhi),
+          );
+          this.camVelocityTheta *= CAM_MOMENTUM_FRICTION;
+          this.camVelocityPhi *= CAM_MOMENTUM_FRICTION;
+          // Kill sub-threshold velocity
+          if (Math.abs(this.camVelocityTheta) <= CAM_MOMENTUM_MIN) this.camVelocityTheta = 0;
+          if (Math.abs(this.camVelocityPhi) <= CAM_MOMENTUM_MIN) this.camVelocityPhi = 0;
+        }
+
         // Normal damped interpolation toward target
         this.camCurrentTheta += (this.camTargetTheta - this.camCurrentTheta) * CAM_LERP_FACTOR;
         this.camCurrentPhi += (this.camTargetPhi - this.camCurrentPhi) * CAM_LERP_FACTOR;
         this.camCurrentRadius += (this.camTargetRadius - this.camCurrentRadius) * CAM_LERP_FACTOR;
 
         // Check convergence — stop doing math once close enough
+        const hasVelocity = Math.abs(this.camVelocityTheta) > CAM_MOMENTUM_MIN || Math.abs(this.camVelocityPhi) > CAM_MOMENTUM_MIN;
         const dTheta = Math.abs(this.camTargetTheta - this.camCurrentTheta);
         const dPhi = Math.abs(this.camTargetPhi - this.camCurrentPhi);
         const dRadius = Math.abs(this.camTargetRadius - this.camCurrentRadius);
-        if (dTheta < 0.0001 && dPhi < 0.0001 && dRadius < 0.0001) {
+        if (!hasVelocity && dTheta < 0.0001 && dPhi < 0.0001 && dRadius < 0.0001) {
           this.camCurrentTheta = this.camTargetTheta;
           this.camCurrentPhi = this.camTargetPhi;
           this.camCurrentRadius = this.camTargetRadius;

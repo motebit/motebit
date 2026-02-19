@@ -430,6 +430,7 @@ export function App(): React.ReactElement {
   // === Orbit gesture handlers ===
 
   const handleGLResponderGrant = useCallback((e: { nativeEvent: { touches: Array<{ pageX: number; pageY: number }> } }) => {
+    app.current.handleOrbitTouchStart();
     const { touches } = e.nativeEvent;
     const t0 = touches[0];
     const t1 = touches[1];
@@ -464,6 +465,7 @@ export function App(): React.ReactElement {
   }, []);
 
   const handleGLResponderRelease = useCallback(() => {
+    app.current.handleOrbitTouchEnd();
     const now = Date.now();
     if (lastTouchRef.current && now - lastTapTimeRef.current < 300) {
       app.current.handleOrbitDoubleTap();
