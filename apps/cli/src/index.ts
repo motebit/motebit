@@ -53,6 +53,8 @@ import {
   verify as verifyIdentityFile,
   governanceToPolicyConfig,
 } from "@motebit/identity-file";
+import { McpServerAdapter } from "@motebit/mcp-server";
+import type { MotebitServerDeps, McpServerConfig as McpServerAdapterConfig } from "@motebit/mcp-server";
 import { GoalScheduler } from "./scheduler.js";
 import { parseInterval } from "./intervals.js";
 
@@ -129,6 +131,8 @@ export interface CliConfig {
   every: string | undefined;
   once: boolean;
   reason: string | undefined;
+  serveTransport: string | undefined;
+  servePort: string | undefined;
   version: boolean;
   help: boolean;
   positionals: string[];
@@ -152,6 +156,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       every: { type: "string" },
       once: { type: "boolean", default: false },
       reason: { type: "string" },
+      "serve-transport": { type: "string" },
+      "serve-port": { type: "string" },
       version: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -183,6 +189,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     every: values.every,
     once: values.once,
     reason: values.reason,
+    serveTransport: values["serve-transport"],
+    servePort: values["serve-port"],
     version: values.version,
     help: values.help,
     positionals,
@@ -200,6 +208,9 @@ Commands:
   export [--output <path>]  Export a signed motebit.md (portable identity for daemon mode)
   verify <path>             Verify a motebit.md identity file signature
   run [--identity <path>]   Start daemon mode (uses exported motebit.md)
+  serve [--identity <path>] Start as MCP server (stdio by default)
+    --serve-transport <mode>  Transport: "stdio" (default) or "http"
+    --serve-port <port>       HTTP port (default: 3100)
   goal add "<prompt>" --every <interval> [--once]  Add a scheduled goal
   goal list                 List all scheduled goals with status
   goal outcomes <goal_id>   Show execution history for a goal
@@ -1428,6 +1439,219 @@ async function handleRun(config: CliConfig): Promise<void> {
   process.on("SIGTERM", shutdown);
 }
 
+// --- Subcommand: serve (MCP server mode) ---
+
+async function handleServe(config: CliConfig): Promise<void> {
+  // Determine transport and port
+  const transport = (config.serveTransport ?? "stdio") as "stdio" | "http";
+  if (transport !== "stdio" && transport !== "http") {
+    console.error(`Error: --serve-transport must be "stdio" or "http", got "${transport}"`);
+    process.exit(1);
+  }
+  const port = config.servePort ? parseInt(config.servePort, 10) : 3100;
+
+  // For stdio mode, all diagnostic output must go to stderr (stdout is the MCP JSON-RPC transport)
+  const log = transport === "stdio"
+    ? (...args: unknown[]) => { console.error(...args); }
+    : (...args: unknown[]) => { console.log(...args); };
+
+  // Load identity file if provided, otherwise use ambient config
+  let motebitId: string;
+  let publicKeyHex: string | undefined;
+  let policyOverrides: {
+    operatorMode?: boolean;
+    maxRiskLevel?: RiskLevel;
+    requireApprovalAbove?: RiskLevel;
+    denyAbove?: RiskLevel;
+  } = {};
+
+  if (config.identity) {
+    const identityPath = path.resolve(config.identity);
+    let identityContent: string;
+    try {
+      identityContent = fs.readFileSync(identityPath, "utf-8");
+    } catch {
+      console.error(`Error: cannot read identity file: ${identityPath}`);
+      process.exit(1);
+    }
+
+    const verifyResult = await verifyIdentityFile(identityContent);
+    if (!verifyResult.valid || !verifyResult.identity) {
+      console.error(`Error: invalid identity file signature.`);
+      if (verifyResult.error) console.error(`  ${verifyResult.error}`);
+      process.exit(1);
+    }
+
+    const identity = verifyResult.identity;
+    const gov = identity.governance;
+
+    // Derive policy from governance if thresholds present
+    if (gov.max_risk_auto && gov.require_approval_above && gov.deny_above) {
+      const policyConfig = governanceToPolicyConfig(gov);
+      policyOverrides = {
+        operatorMode: policyConfig.operatorMode,
+        maxRiskLevel: policyConfig.maxRiskAuto,
+        requireApprovalAbove: policyConfig.requireApprovalAbove,
+        denyAbove: policyConfig.denyAbove,
+      };
+      config.operator = policyConfig.operatorMode;
+    }
+
+    motebitId = identity.motebit_id;
+    publicKeyHex = identity.identity.public_key;
+
+    log(`Identity: ${motebitId.slice(0, 8)}... (from ${identityPath})`);
+  } else {
+    // Ambient mode — use config identity
+    const fullConfig = loadFullConfig();
+    if (!fullConfig.motebit_id) {
+      console.error("Error: no motebit identity found. Run `motebit` first to create an identity, or use --identity <path>.");
+      process.exit(1);
+    }
+    motebitId = fullConfig.motebit_id;
+    publicKeyHex = fullConfig.device_public_key;
+    log(`Identity: ${motebitId.slice(0, 8)}... (from config)`);
+  }
+
+  // Load full config for personality/MCP servers
+  const fullConfig = loadFullConfig();
+  const personalityConfig: MotebitPersonalityConfig = {
+    ...DEFAULT_CONFIG,
+    ...extractPersonality(fullConfig),
+  };
+
+  if (personalityConfig.default_provider && !process.argv.includes("--provider")) {
+    const validProviders = ["anthropic", "ollama"] as const;
+    if (validProviders.includes(personalityConfig.default_provider!)) {
+      config.provider = personalityConfig.default_provider!;
+    }
+  }
+  if (personalityConfig.default_model && !process.argv.includes("--model")) {
+    config.model = personalityConfig.default_model;
+  }
+
+  // Build tool registry
+  const runtimeRef: { current: MotebitRuntime | null } = { current: null };
+  const toolRegistry = buildToolRegistry(config, runtimeRef, motebitId);
+
+  const mcpServers = (fullConfig.mcp_servers ?? []).map((s) => ({
+    ...s,
+    trusted: (fullConfig.mcp_trusted_servers ?? []).includes(s.name),
+  }));
+
+  // Create runtime
+  const dbPath = getDbPath(config.dbPath);
+  const moteDb = await openMotebitDatabase(dbPath);
+  const provider = createProvider(config, personalityConfig);
+
+  const storage: StorageAdapters = {
+    eventStore: moteDb.eventStore,
+    memoryStorage: moteDb.memoryStorage,
+    identityStorage: moteDb.identityStorage,
+    auditLog: moteDb.auditLog,
+    stateSnapshot: moteDb.stateSnapshot,
+    toolAuditSink: moteDb.toolAuditSink,
+    conversationStore: moteDb.conversationStore,
+  };
+
+  const runtime = new MotebitRuntime(
+    {
+      motebitId,
+      mcpServers,
+      policy: {
+        operatorMode: config.operator,
+        pathAllowList: config.allowedPaths,
+        ...policyOverrides,
+      },
+    },
+    {
+      storage,
+      renderer: new NullRenderer(),
+      ai: provider,
+      tools: toolRegistry,
+    },
+  );
+  runtimeRef.current = runtime;
+
+  await runtime.init();
+
+  // Wire MotebitServerDeps from the runtime
+  const deps: MotebitServerDeps = {
+    motebitId,
+    publicKeyHex,
+
+    listTools: () => runtime.getToolRegistry().list(),
+    filterTools: (tools) => runtime.policy.filterTools(tools),
+    validateTool: (tool, args) =>
+      runtime.policy.validate(tool, args, runtime.policy.createTurnContext()),
+    executeTool: (name, args) => runtime.getToolRegistry().execute(name, args),
+
+    getState: () => runtime.getState() as unknown as Record<string, unknown>,
+
+    getMemories: async (limit = 50) => {
+      const data = await runtime.memory.exportAll();
+      return data.nodes
+        .filter((n) => !n.tombstoned)
+        .map((n) => ({
+          content: n.content,
+          confidence: n.confidence,
+          sensitivity: n.sensitivity,
+          created_at: n.created_at,
+        }))
+        .slice(0, limit);
+    },
+
+    logToolCall: (name, args, result) => {
+      const entry = {
+        event_id: crypto.randomUUID(),
+        motebit_id: motebitId,
+        timestamp: Date.now(),
+        event_type: EventType.ToolUsed,
+        payload: {
+          tool: name,
+          args_preview: JSON.stringify(args).slice(0, 200),
+          ok: result.ok,
+          source: "mcp_server",
+        },
+        version_clock: 0, // best-effort, non-critical
+        tombstoned: false,
+      };
+      void runtime.events.append(entry).catch(() => {});
+    },
+  };
+
+  // Create and start MCP server
+  const serverConfig: McpServerAdapterConfig = {
+    name: `motebit-${motebitId.slice(0, 8)}`,
+    transport,
+    port,
+  };
+
+  const mcpServer = new McpServerAdapter(serverConfig, deps);
+  await mcpServer.start();
+
+  const toolCount = runtime.getToolRegistry().list().length;
+  if (transport === "stdio") {
+    log(`MCP server running (stdio). ${toolCount} tools exposed.`);
+    log(`Policy: ${config.operator ? "operator" : "ambient"} mode.`);
+  } else {
+    log(`MCP server running on http://localhost:${port} (SSE). ${toolCount} tools exposed.`);
+    log(`Policy: ${config.operator ? "operator" : "ambient"} mode.`);
+  }
+
+  // Graceful shutdown
+  const shutdown = async (): Promise<void> => {
+    log("\nShutting down MCP server...");
+    await mcpServer.stop();
+    runtime.stop();
+    moteDb.close();
+    process.exit(0);
+  };
+
+  process.on("SIGINT", () => void shutdown());
+  process.on("SIGTERM", () => void shutdown());
+}
+
 // --- Subcommand: goal add/list/remove ---
 
 async function handleGoalAdd(config: CliConfig): Promise<void> {
@@ -1892,6 +2116,11 @@ async function main(): Promise<void> {
 
   if (subcommand === "run") {
     await handleRun(config);
+    return;
+  }
+
+  if (subcommand === "serve") {
+    await handleServe(config);
     return;
   }
 

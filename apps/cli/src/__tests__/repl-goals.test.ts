@@ -41,6 +41,8 @@ const stubConfig = {
   every: undefined,
   once: false,
   reason: undefined,
+  serveTransport: undefined,
+  servePort: undefined,
   version: false,
   help: false,
   positionals: [],
