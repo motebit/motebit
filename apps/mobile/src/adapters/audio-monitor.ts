@@ -34,6 +34,7 @@ function dbToLinear(db: number): number {
 const SPEECH_THRESHOLD = 0.03;       // Gated RMS above this = speech
 const SPEECH_ONSET_FRAMES = 9;       // ~300ms at 30fps before triggering
 const SPEECH_OFFSET_FRAMES = 15;     // ~500ms of silence before re-arming
+const SILENCE_STOP_FRAMES = 45;      // ~1500ms at 30fps — auto-stop after speech ends
 
 export class AudioMonitor {
   private recording: Audio.Recording | null = null;
@@ -53,11 +54,18 @@ export class AudioMonitor {
   private speechOffsetCount = 0;
   private vadArmed = true;
 
+  // Silence detection state (post-speech auto-stop)
+  private speechDetected = false;
+  private silenceFrameCount = 0;
+
   /** Callback invoked ~30fps with computed audio reactivity. */
   onAudio: ((energy: AudioReactivity) => void) | null = null;
 
   /** Callback fired once when sustained speech energy is detected (VAD trigger). */
   onSpeechStart: (() => void) | null = null;
+
+  /** Callback fired when sustained silence follows detected speech (~1500ms). */
+  onSilenceDetected: (() => void) | null = null;
 
   get isRunning(): boolean {
     return this._running;
@@ -86,6 +94,10 @@ export class AudioMonitor {
     this.speechOnsetCount = 0;
     this.speechOffsetCount = 0;
     this.vadArmed = true;
+
+    // Reset silence detection state
+    this.speechDetected = false;
+    this.silenceFrameCount = 0;
 
     // Poll metering at ~30fps
     this.timer = setInterval(() => {
@@ -176,6 +188,19 @@ export class AudioMonitor {
         // Re-arm after sustained silence
         if (!this.vadArmed && this.speechOffsetCount >= SPEECH_OFFSET_FRAMES) {
           this.vadArmed = true;
+        }
+      }
+
+      // Silence detection — auto-stop after speech ends
+      if (this.smoothedRms > SPEECH_THRESHOLD) {
+        this.speechDetected = true;
+        this.silenceFrameCount = 0;
+      } else if (this.speechDetected) {
+        this.silenceFrameCount++;
+        if (this.silenceFrameCount >= SILENCE_STOP_FRAMES) {
+          this.onSilenceDetected?.();
+          this.speechDetected = false;
+          this.silenceFrameCount = 0;
         }
       }
 

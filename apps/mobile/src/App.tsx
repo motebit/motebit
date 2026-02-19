@@ -146,6 +146,11 @@ export function App(): React.ReactElement {
   // Track whether a pending approval is from a goal (vs. chat)
   const pendingGoalApprovalRef = useRef<boolean>(false);
 
+  // Orbit control touch tracking
+  const lastTouchRef = useRef<{ x: number; y: number } | null>(null);
+  const lastPinchDistRef = useRef<number>(0);
+  const lastTapTimeRef = useRef<number>(0);
+
   // === Initialization ===
   useEffect(() => {
     void (async () => {
@@ -420,6 +425,52 @@ export function App(): React.ReactElement {
       animFrameRef.current = requestAnimationFrame(animate);
     };
     animFrameRef.current = requestAnimationFrame(animate);
+  }, []);
+
+  // === Orbit gesture handlers ===
+
+  const handleGLResponderGrant = useCallback((e: { nativeEvent: { touches: Array<{ pageX: number; pageY: number }> } }) => {
+    const { touches } = e.nativeEvent;
+    const t0 = touches[0];
+    const t1 = touches[1];
+    if (touches.length === 1 && t0) {
+      lastTouchRef.current = { x: t0.pageX, y: t0.pageY };
+    } else if (touches.length === 2 && t0 && t1) {
+      const dx = t1.pageX - t0.pageX;
+      const dy = t1.pageY - t0.pageY;
+      lastPinchDistRef.current = Math.sqrt(dx * dx + dy * dy);
+      lastTouchRef.current = null;
+    }
+  }, []);
+
+  const handleGLResponderMove = useCallback((e: { nativeEvent: { touches: Array<{ pageX: number; pageY: number }> } }) => {
+    const { touches } = e.nativeEvent;
+    const t0 = touches[0];
+    const t1 = touches[1];
+    if (touches.length === 1 && t0 && lastTouchRef.current) {
+      const dx = t0.pageX - lastTouchRef.current.x;
+      const dy = t0.pageY - lastTouchRef.current.y;
+      app.current.handleOrbitPan(dx, dy);
+      lastTouchRef.current = { x: t0.pageX, y: t0.pageY };
+    } else if (touches.length === 2 && t0 && t1 && lastPinchDistRef.current > 0) {
+      const dx = t1.pageX - t0.pageX;
+      const dy = t1.pageY - t0.pageY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > 0) {
+        app.current.handleOrbitPinch(dist / lastPinchDistRef.current);
+        lastPinchDistRef.current = dist;
+      }
+    }
+  }, []);
+
+  const handleGLResponderRelease = useCallback(() => {
+    const now = Date.now();
+    if (lastTouchRef.current && now - lastTapTimeRef.current < 300) {
+      app.current.handleOrbitDoubleTap();
+    }
+    lastTapTimeRef.current = now;
+    lastTouchRef.current = null;
+    lastPinchDistRef.current = 0;
   }, []);
 
   // === Audio monitor helpers ===
@@ -1107,8 +1158,15 @@ export function App(): React.ReactElement {
       behavior={Platform.OS === "ios" ? "padding" : "height"}
       keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
     >
-      {/* 3D Rendering */}
-      <View style={styles.glContainer}>
+      {/* 3D Rendering — touch responder for orbit controls */}
+      <View
+        style={styles.glContainer}
+        onStartShouldSetResponder={() => true}
+        onMoveShouldSetResponder={() => true}
+        onResponderGrant={handleGLResponderGrant}
+        onResponderMove={handleGLResponderMove}
+        onResponderRelease={handleGLResponderRelease}
+      >
         <GLView style={styles.glView} onContextCreate={onGLContextCreate} />
         {state && (
           <View style={styles.stateOverlay}>

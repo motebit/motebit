@@ -11,8 +11,11 @@ import {
   Platform,
   Alert,
   Clipboard,
+  Linking,
 } from "react-native";
 import * as SecureStore from "expo-secure-store";
+import * as Sharing from "expo-sharing";
+import * as FileSystem from "expo-file-system";
 import type { MobileApp, MobileSettings, MobileAIConfig } from "../mobile-app";
 import { COLOR_PRESETS, APPROVAL_PRESET_CONFIGS } from "../mobile-app";
 import type { Goal, GoalMode } from "../adapters/expo-sqlite";
@@ -250,7 +253,24 @@ export function SettingsModal({
               motebitId={identity.motebitId}
               deviceId={identity.deviceId}
               publicKey={identity.publicKey}
-              onExport={() => void app.exportAllData().then((d) => Alert.alert("Export", d))}
+              onExport={() => {
+                void (async () => {
+                  try {
+                    const jsonData = await app.exportAllData();
+                    const canShare = await Sharing.isAvailableAsync();
+                    if (canShare) {
+                      const filePath = `${FileSystem.cacheDirectory}motebit-export-${Date.now()}.json`;
+                      await FileSystem.writeAsStringAsync(filePath, jsonData);
+                      await Sharing.shareAsync(filePath, { mimeType: "application/json" });
+                    } else {
+                      Alert.alert("Export", jsonData);
+                    }
+                  } catch (err: unknown) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    Alert.alert("Export Failed", msg);
+                  }
+                })();
+              }}
               onLinkDevice={onLinkDevice}
             />
           )}
@@ -660,35 +680,55 @@ function IdentityTab({
   onExport: () => void;
   onLinkDevice?: () => void;
 }) {
-  const copyToClipboard = (value: string) => {
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  const copyToClipboard = (field: string, value: string) => {
     Clipboard.setString(value);
-    Alert.alert("Copied", "Value copied to clipboard");
+    setCopiedField(field);
+    setTimeout(() => {
+      setCopiedField((current) => (current === field ? null : current));
+    }, 1500);
   };
 
   return (
     <View>
       <Text style={styles.sectionTitle}>Motebit ID</Text>
-      <TouchableOpacity onPress={() => copyToClipboard(motebitId)}>
-        <Text style={styles.monoValue} numberOfLines={1}>{motebitId}</Text>
+      <TouchableOpacity onPress={() => copyToClipboard("motebitId", motebitId)} style={styles.identityFieldRow}>
+        <Text style={[styles.monoValue, styles.identityFieldValue]} numberOfLines={1}>{motebitId}</Text>
+        <Text style={[styles.identityCopyLabel, copiedField === "motebitId" && styles.identityCopiedLabel]}>
+          {copiedField === "motebitId" ? "Copied!" : "Copy"}
+        </Text>
       </TouchableOpacity>
 
       <Text style={styles.sectionTitle}>Device ID</Text>
-      <TouchableOpacity onPress={() => copyToClipboard(deviceId)}>
-        <Text style={styles.monoValue} numberOfLines={1}>{deviceId}</Text>
+      <TouchableOpacity onPress={() => copyToClipboard("deviceId", deviceId)} style={styles.identityFieldRow}>
+        <Text style={[styles.monoValue, styles.identityFieldValue]} numberOfLines={1}>{deviceId}</Text>
+        <Text style={[styles.identityCopyLabel, copiedField === "deviceId" && styles.identityCopiedLabel]}>
+          {copiedField === "deviceId" ? "Copied!" : "Copy"}
+        </Text>
       </TouchableOpacity>
 
       <Text style={styles.sectionTitle}>Public Key</Text>
-      <TouchableOpacity onPress={() => copyToClipboard(publicKey)}>
-        <Text style={styles.monoValue} numberOfLines={2}>{publicKey || "(not generated)"}</Text>
+      <TouchableOpacity onPress={() => copyToClipboard("publicKey", publicKey)} style={styles.identityFieldRow}>
+        <Text style={[styles.monoValue, styles.identityFieldValue]} numberOfLines={2}>{publicKey || "(not generated)"}</Text>
+        <Text style={[styles.identityCopyLabel, copiedField === "publicKey" && styles.identityCopiedLabel]}>
+          {copiedField === "publicKey" ? "Copied!" : "Copy"}
+        </Text>
       </TouchableOpacity>
-
-      <Text style={styles.hint}>Tap any field to copy to clipboard.</Text>
 
       {onLinkDevice && (
         <TouchableOpacity style={styles.linkDeviceButton} onPress={onLinkDevice} activeOpacity={0.7}>
           <Text style={styles.linkDeviceText}>Link Another Device</Text>
         </TouchableOpacity>
       )}
+
+      <TouchableOpacity
+        style={styles.docsButton}
+        onPress={() => void Linking.openURL("https://docs.motebit.dev")}
+        activeOpacity={0.7}
+      >
+        <Text style={styles.docsText}>Documentation</Text>
+      </TouchableOpacity>
 
       <TouchableOpacity style={styles.exportButton} onPress={onExport} activeOpacity={0.7}>
         <Text style={styles.exportText}>Export All Data</Text>
@@ -1198,6 +1238,34 @@ const styles = StyleSheet.create({
     borderColor: "#2a4060",
   },
   linkDeviceText: { color: "#4080c0", fontSize: 15, fontWeight: "600" },
+  identityFieldRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  identityFieldValue: {
+    flex: 1,
+  },
+  identityCopyLabel: {
+    color: "#506070",
+    fontSize: 12,
+    fontWeight: "600",
+    minWidth: 46,
+    textAlign: "center",
+  },
+  identityCopiedLabel: {
+    color: "#4ade80",
+  },
+  docsButton: {
+    backgroundColor: "#1a2838",
+    borderRadius: 10,
+    paddingVertical: 14,
+    marginTop: 12,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#2a4060",
+  },
+  docsText: { color: "#607080", fontSize: 15, fontWeight: "600" },
   exportButton: {
     backgroundColor: "#1a2030",
     borderRadius: 10,

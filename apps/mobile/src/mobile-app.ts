@@ -455,6 +455,20 @@ export class MobileApp {
     this.renderer.resize(width, height);
   }
 
+  // === Camera orbit controls ===
+
+  handleOrbitPan(dx: number, dy: number): void {
+    this.renderer.handlePan(dx, dy);
+  }
+
+  handleOrbitPinch(scale: number): void {
+    this.renderer.handlePinch(scale);
+  }
+
+  handleOrbitDoubleTap(): void {
+    this.renderer.handleDoubleTap();
+  }
+
   // === AI Delegation ===
 
   get isAIReady(): boolean {
@@ -801,6 +815,46 @@ export class MobileApp {
       }
     } catch {
       // Non-fatal
+    }
+
+    // Include all non-tombstoned memories
+    if (this.runtime) {
+      try {
+        const { nodes, edges } = await this.runtime.memory.exportAll();
+        data.memories = nodes.filter((n: MemoryNode) => !n.tombstoned);
+        data.memory_edges = edges;
+      } catch {
+        // Non-fatal
+      }
+
+      // Include recent events
+      try {
+        const events = await this.runtime.events.query({
+          motebit_id: this.motebitId,
+          limit: 100,
+        });
+        data.events = events;
+      } catch {
+        // Non-fatal
+      }
+
+      // Include current state vector
+      try {
+        const state = this.runtime.getState();
+        if (state) {
+          data.state_vector = state;
+        }
+      } catch {
+        // Non-fatal
+      }
+
+      // Include conversation count
+      try {
+        const conversations = this.runtime.listConversations();
+        data.conversation_count = conversations.length;
+      } catch {
+        // Non-fatal
+      }
     }
 
     return JSON.stringify(data, null, 2);

@@ -195,6 +195,18 @@ function createSmile(): THREE.Mesh {
   return new THREE.Mesh(geo, mat);
 }
 
+// Camera orbit defaults — theta=0, phi=PI/2, radius=3 gives position (0, 0, 3)
+const CAM_DEFAULT_THETA = 0;
+const CAM_DEFAULT_PHI = Math.PI / 2;
+const CAM_DEFAULT_RADIUS = 3;
+const CAM_PAN_SENSITIVITY = 0.005;        // radians per pixel of gesture delta
+const CAM_LERP_FACTOR = 0.08;             // per-frame interpolation speed
+const CAM_PHI_MIN = (10 / 180) * Math.PI; // ~10° — avoid gimbal flip at poles
+const CAM_PHI_MAX = (170 / 180) * Math.PI;
+const CAM_RADIUS_MIN = 1.5;
+const CAM_RADIUS_MAX = 6.0;
+const CAM_RESET_DURATION = 0.5;           // seconds for double-tap reset animation
+
 export class ExpoGLAdapter implements RenderAdapter {
   private renderer: THREE.WebGLRenderer | null = null;
   private scene: THREE.Scene | null = null;
@@ -209,6 +221,22 @@ export class ExpoGLAdapter implements RenderAdapter {
   private spec: RenderSpec = CANONICAL_SPEC;
   private width = 1;
   private height = 1;
+
+  // --- Camera orbit state (spherical coordinates) ---
+  private camTargetTheta = CAM_DEFAULT_THETA;
+  private camTargetPhi = CAM_DEFAULT_PHI;
+  private camTargetRadius = CAM_DEFAULT_RADIUS;
+  private camCurrentTheta = CAM_DEFAULT_THETA;
+  private camCurrentPhi = CAM_DEFAULT_PHI;
+  private camCurrentRadius = CAM_DEFAULT_RADIUS;
+  /** True once the user has interacted — avoids unnecessary math when idle. */
+  private camDirty = false;
+  /** When > 0 the camera is animating back to default (double-tap reset). */
+  private camResetProgress = -1;
+  private camResetStartTheta = CAM_DEFAULT_THETA;
+  private camResetStartPhi = CAM_DEFAULT_PHI;
+  private camResetStartRadius = CAM_DEFAULT_RADIUS;
+  private camLastRenderTime = 0;
 
   async init(gl: unknown): Promise<void> {
     const glContext = gl as WebGLRenderingContext;
@@ -293,6 +321,48 @@ export class ExpoGLAdapter implements RenderAdapter {
     this.creature.add(this.smileMesh);
   }
 
+  // === Touch gesture handlers (called from App.tsx) ===
+
+  /**
+   * Orbit the camera around the origin based on pan gesture deltas.
+   * dx/dy are pixel deltas from a PanResponder or gesture handler.
+   */
+  handlePan(dx: number, dy: number): void {
+    // Cancel any in-progress reset animation — user is taking control
+    this.camResetProgress = -1;
+    this.camTargetTheta -= dx * CAM_PAN_SENSITIVITY;
+    this.camTargetPhi = Math.max(
+      CAM_PHI_MIN,
+      Math.min(CAM_PHI_MAX, this.camTargetPhi - dy * CAM_PAN_SENSITIVITY),
+    );
+    this.camDirty = true;
+  }
+
+  /**
+   * Zoom by adjusting camera distance from origin.
+   * scale > 1 = zoom in (closer), scale < 1 = zoom out (farther).
+   */
+  handlePinch(scale: number): void {
+    this.camResetProgress = -1;
+    // Divide by scale so pinch-out (scale > 1) moves closer
+    this.camTargetRadius = Math.max(
+      CAM_RADIUS_MIN,
+      Math.min(CAM_RADIUS_MAX, this.camTargetRadius / scale),
+    );
+    this.camDirty = true;
+  }
+
+  /**
+   * Reset camera to default position with a smooth animation over ~0.5 s.
+   */
+  handleDoubleTap(): void {
+    this.camResetProgress = 0;
+    this.camResetStartTheta = this.camCurrentTheta;
+    this.camResetStartPhi = this.camCurrentPhi;
+    this.camResetStartRadius = this.camCurrentRadius;
+    this.camDirty = true;
+  }
+
   render(frame: RenderFrame): void {
     if (!this.renderer || !this.scene || !this.camera || !this.creature || !this.bodyMesh || !this.bodyMaterial) return;
 
@@ -350,6 +420,62 @@ export class ExpoGLAdapter implements RenderAdapter {
     // Smile
     if (this.smileMesh) {
       this.smileMesh.scale.y = cues.smile_curvature;
+    }
+
+    // --- Camera orbit interpolation ---
+    if (this.camDirty) {
+      const now = t; // frame.time is already available as `t`
+
+      // Handle double-tap reset animation
+      if (this.camResetProgress >= 0) {
+        const dt = this.camLastRenderTime > 0 ? Math.min(now - this.camLastRenderTime, 0.1) : 1 / 60;
+        this.camResetProgress = Math.min(1, this.camResetProgress + dt / CAM_RESET_DURATION);
+        // Smooth-step easing for natural feel
+        const p = this.camResetProgress;
+        const ease = p * p * (3 - 2 * p);
+        this.camCurrentTheta = this.camResetStartTheta + (CAM_DEFAULT_THETA - this.camResetStartTheta) * ease;
+        this.camCurrentPhi = this.camResetStartPhi + (CAM_DEFAULT_PHI - this.camResetStartPhi) * ease;
+        this.camCurrentRadius = this.camResetStartRadius + (CAM_DEFAULT_RADIUS - this.camResetStartRadius) * ease;
+
+        if (this.camResetProgress >= 1) {
+          // Animation complete — snap to defaults
+          this.camTargetTheta = CAM_DEFAULT_THETA;
+          this.camTargetPhi = CAM_DEFAULT_PHI;
+          this.camTargetRadius = CAM_DEFAULT_RADIUS;
+          this.camCurrentTheta = CAM_DEFAULT_THETA;
+          this.camCurrentPhi = CAM_DEFAULT_PHI;
+          this.camCurrentRadius = CAM_DEFAULT_RADIUS;
+          this.camResetProgress = -1;
+          this.camDirty = false;
+        }
+      } else {
+        // Normal damped interpolation toward target
+        this.camCurrentTheta += (this.camTargetTheta - this.camCurrentTheta) * CAM_LERP_FACTOR;
+        this.camCurrentPhi += (this.camTargetPhi - this.camCurrentPhi) * CAM_LERP_FACTOR;
+        this.camCurrentRadius += (this.camTargetRadius - this.camCurrentRadius) * CAM_LERP_FACTOR;
+
+        // Check convergence — stop doing math once close enough
+        const dTheta = Math.abs(this.camTargetTheta - this.camCurrentTheta);
+        const dPhi = Math.abs(this.camTargetPhi - this.camCurrentPhi);
+        const dRadius = Math.abs(this.camTargetRadius - this.camCurrentRadius);
+        if (dTheta < 0.0001 && dPhi < 0.0001 && dRadius < 0.0001) {
+          this.camCurrentTheta = this.camTargetTheta;
+          this.camCurrentPhi = this.camTargetPhi;
+          this.camCurrentRadius = this.camTargetRadius;
+          this.camDirty = false;
+        }
+      }
+
+      // Spherical → Cartesian conversion
+      const sinPhi = Math.sin(this.camCurrentPhi);
+      this.camera.position.set(
+        this.camCurrentRadius * sinPhi * Math.sin(this.camCurrentTheta),
+        this.camCurrentRadius * Math.cos(this.camCurrentPhi),
+        this.camCurrentRadius * sinPhi * Math.cos(this.camCurrentTheta),
+      );
+      this.camera.lookAt(0, 0, 0);
+
+      this.camLastRenderTime = now;
     }
 
     this.renderer.render(this.scene, this.camera);
