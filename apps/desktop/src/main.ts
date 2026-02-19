@@ -531,6 +531,8 @@ function updateVoiceGlowColor(): void {
   };
 }
 
+let micErrorShown = false;
+
 /** Acquire mic and create audio analysis pipeline if not already running. */
 async function ensureAudioPipeline(): Promise<boolean> {
   if (audioContext && analyserNode && micStream) return true;
@@ -539,7 +541,10 @@ async function ensureAudioPipeline(): Promise<boolean> {
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch {
-    addMessage("system", "Microphone access denied");
+    if (!micErrorShown) {
+      micErrorShown = true;
+      addMessage("system", "Microphone access denied — open System Settings > Privacy & Security > Microphone, then grant access to Motebit.");
+    }
     return false;
   }
   micStream = stream;
