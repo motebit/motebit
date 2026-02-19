@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 import * as readline from "node:readline";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -180,9 +178,10 @@ export function printHelp(): void {
 Usage: motebit [command] [options]
 
 Commands:
-  init [--output <path>]    Generate a motebit.md identity file
+  doctor                    Check system readiness (Node, SQLite, config)
+  export [--output <path>]  Export a signed motebit.md (portable identity for daemon mode)
   verify <path>             Verify a motebit.md identity file signature
-  run [--identity <path>]   Start daemon mode (execute goals on schedule)
+  run [--identity <path>]   Start daemon mode (uses exported motebit.md)
   goal add "<prompt>" --every <interval>   Add a scheduled goal
   goal list                 List all scheduled goals
   goal remove <goal_id>     Remove a scheduled goal
@@ -760,9 +759,82 @@ Available commands:
   }
 }
 
-// --- Subcommand: init ---
+// --- Subcommand: doctor ---
 
-async function handleInit(config: CliConfig): Promise<void> {
+async function handleDoctor(): Promise<void> {
+  const checks: { name: string; ok: boolean; detail: string }[] = [];
+
+  // Node version
+  const nodeVer = process.versions.node;
+  const major = parseInt(nodeVer.split(".")[0]!, 10);
+  checks.push({
+    name: "Node.js",
+    ok: major >= 20,
+    detail: major >= 20 ? `v${nodeVer}` : `v${nodeVer} (requires >=20)`,
+  });
+
+  // Config directory writable
+  try {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    const testFile = path.join(CONFIG_DIR, ".doctor-test");
+    fs.writeFileSync(testFile, "ok", "utf-8");
+    fs.unlinkSync(testFile);
+    checks.push({ name: "Config dir", ok: true, detail: CONFIG_DIR });
+  } catch {
+    checks.push({ name: "Config dir", ok: false, detail: `Cannot write to ${CONFIG_DIR}` });
+  }
+
+  // better-sqlite3 / SQLite
+  try {
+    const tmpDbPath = path.join(CONFIG_DIR, ".doctor-test.db");
+    const db = createMotebitDatabase(tmpDbPath);
+    db.close();
+    fs.unlinkSync(tmpDbPath);
+    try { fs.unlinkSync(tmpDbPath + "-wal"); } catch { /* ignore */ }
+    try { fs.unlinkSync(tmpDbPath + "-shm"); } catch { /* ignore */ }
+    checks.push({ name: "SQLite", ok: true, detail: "better-sqlite3 loaded and functional" });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    checks.push({ name: "SQLite", ok: false, detail: msg });
+  }
+
+  // @xenova/transformers (optional)
+  try {
+    await import("@xenova/transformers");
+    checks.push({ name: "Embeddings", ok: true, detail: "@xenova/transformers available (local embeddings)" });
+  } catch {
+    checks.push({ name: "Embeddings", ok: true, detail: "not installed (optional — hash-based fallback active)" });
+  }
+
+  // Existing identity
+  const fullCfg = loadFullConfig();
+  if (fullCfg.motebit_id) {
+    checks.push({ name: "Identity", ok: true, detail: `${fullCfg.motebit_id.slice(0, 8)}...` });
+  } else {
+    checks.push({ name: "Identity", ok: true, detail: "not created yet (run motebit to create)" });
+  }
+
+  // Print results
+  console.log("\nmotebit doctor\n");
+  let allOk = true;
+  for (const check of checks) {
+    const icon = check.ok ? "ok" : "FAIL";
+    console.log(`  ${icon.padEnd(6)} ${check.name.padEnd(14)} ${check.detail}`);
+    if (!check.ok) allOk = false;
+  }
+  console.log();
+
+  if (!allOk) {
+    console.log("Some checks failed. See https://motebit.dev/docs for troubleshooting.\n");
+    process.exit(1);
+  } else {
+    console.log("All checks passed.\n");
+  }
+}
+
+// --- Subcommand: export ---
+
+async function handleExport(config: CliConfig): Promise<void> {
   const fullConfig = loadFullConfig();
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
@@ -994,7 +1066,7 @@ async function handleGoalAdd(config: CliConfig): Promise<void> {
   const fullConfig = loadFullConfig();
   const motebitId = fullConfig.motebit_id;
   if (!motebitId) {
-    console.error("Error: no motebit identity found. Run `motebit init` first.");
+    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
     process.exit(1);
   }
 
@@ -1032,7 +1104,7 @@ function handleGoalList(config: CliConfig): void {
   const fullConfig = loadFullConfig();
   const motebitId = fullConfig.motebit_id;
   if (!motebitId) {
-    console.error("Error: no motebit identity found. Run `motebit init` first.");
+    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
     process.exit(1);
   }
 
@@ -1077,7 +1149,7 @@ async function handleGoalRemove(config: CliConfig): Promise<void> {
   const fullConfig = loadFullConfig();
   const motebitId = fullConfig.motebit_id;
   if (!motebitId) {
-    console.error("Error: no motebit identity found. Run `motebit init` first.");
+    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
     process.exit(1);
   }
 
@@ -1122,7 +1194,7 @@ function handleGoalSetEnabled(config: CliConfig, enabled: boolean): void {
   const fullConfig = loadFullConfig();
   const motebitId = fullConfig.motebit_id;
   if (!motebitId) {
-    console.error("Error: no motebit identity found. Run `motebit init` first.");
+    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
     process.exit(1);
   }
 
@@ -1148,7 +1220,7 @@ function handleApprovalList(config: CliConfig): void {
   const fullConfig = loadFullConfig();
   const motebitId = fullConfig.motebit_id;
   if (!motebitId) {
-    console.error("Error: no motebit identity found. Run `motebit init` first.");
+    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
     process.exit(1);
   }
 
@@ -1184,7 +1256,7 @@ function handleApprovalShow(config: CliConfig): void {
   const fullConfig = loadFullConfig();
   const motebitId = fullConfig.motebit_id;
   if (!motebitId) {
-    console.error("Error: no motebit identity found. Run `motebit init` first.");
+    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
     process.exit(1);
   }
 
@@ -1228,7 +1300,7 @@ function handleApprovalApprove(config: CliConfig): void {
   const fullConfig = loadFullConfig();
   const motebitId = fullConfig.motebit_id;
   if (!motebitId) {
-    console.error("Error: no motebit identity found. Run `motebit init` first.");
+    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
     process.exit(1);
   }
 
@@ -1266,7 +1338,7 @@ function handleApprovalDeny(config: CliConfig): void {
   const fullConfig = loadFullConfig();
   const motebitId = fullConfig.motebit_id;
   if (!motebitId) {
-    console.error("Error: no motebit identity found. Run `motebit init` first.");
+    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
     process.exit(1);
   }
 
@@ -1312,7 +1384,7 @@ async function main(): Promise<void> {
   if (config.help) { printHelp(); return; }
   if (config.version) { printVersion(); return; }
 
-  // --- Subcommands: init / verify ---
+  // --- Subcommands: export / verify ---
 
   const subcommand = config.positionals[0];
 
@@ -1345,8 +1417,13 @@ async function main(): Promise<void> {
     }
   }
 
-  if (subcommand === "init") {
-    await handleInit(config);
+  if (subcommand === "doctor") {
+    await handleDoctor();
+    return;
+  }
+
+  if (subcommand === "export") {
+    await handleExport(config);
     return;
   }
 
@@ -1580,14 +1657,7 @@ async function main(): Promise<void> {
   prompt();
 }
 
-const isMainModule =
-  process.argv[1] &&
-  (import.meta.url === `file://${process.argv[1]}` ||
-    import.meta.url === `file://${process.argv[1].replace(/\.js$/, ".ts")}`);
-
-if (isMainModule) {
-  main().catch((err: unknown) => {
-    console.error("Fatal error:", err);
-    process.exit(1);
-  });
-}
+main().catch((err: unknown) => {
+  console.error("Fatal error:", err);
+  process.exit(1);
+});

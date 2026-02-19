@@ -1,13 +1,13 @@
 {
   "name": "create-motebit",
   "version": "0.1.0",
-  "description": "Create and verify motebit.md agent identity files — the motebit/identity@1.0 standard",
+  "description": "Scaffold a motebit agent project — npm create motebit",
   "type": "module",
   "bin": {
     "create-motebit": "./dist/index.js"
   },
   "files": ["dist", "LICENSE", "README.md"],
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "keywords": [
     "motebit",
     "agent",
@@ -32,9 +32,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@motebit/verify": "workspace:*",
-    "@noble/ed25519": "^3.0.0",
-    "@noble/hashes": "^1.6.0"
+    "@motebit/verify": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -15,7 +15,7 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent — a ves
 2. **Accumulated trust** — memory, state history, audit trails that make the agent more capable the longer it runs
 3. **Governance at the boundary** — sensitivity-aware privacy and policy that controls what crosses the surface
 
-**Where the implementation stands.** The desktop app is the flagship (~80%): identity bootstrap, operator mode, tool approval, sync relay, voice input, audio-reactive rendering. The CLI is the full operator console: REPL chat, daemon mode with goal scheduling, tool approval queue, operator mode, and the `motebit init`/`verify` commands. Mobile is an early MVP. The public-facing standard ships as `create-motebit` (npm create motebit) and `@motebit/verify` — lightweight, zero-monorepo-dep packages that let anyone create and verify signed agent identities. The infrastructure (identity, crypto, policy, memory, sync) is built. The agentic surface that exposes it is next.
+**Where the implementation stands.** The desktop app is the flagship (~80%): identity bootstrap, operator mode, tool approval, sync relay, voice input, audio-reactive rendering. The CLI is the full operator console: REPL chat, daemon mode with goal scheduling, tool approval queue, operator mode, and the `motebit export`/`verify` commands. Mobile is an early MVP. The public-facing standard ships as `create-motebit` (npm create motebit) and `@motebit/verify` — lightweight, zero-monorepo-dep packages that let anyone create and verify signed agent identities. The infrastructure (identity, crypto, policy, memory, sync) is built. The agentic surface that exposes it is next.
 
 Read `DROPLET.md` for the full design thesis on form. Read `THE_SOVEREIGN_INTERIOR.md` for the identity thesis. Read `LIQUESCENTIA.md` for the world. Read `THE_MUSIC_OF_THE_MEDIUM.md` for the acoustic interface. Every visual and behavioral decision derives from droplet physics. If it can't be traced to surface tension, it doesn't belong.
 
@@ -94,9 +94,9 @@ Tauri app. Two key files for the UI layer:
 
 ## CLI App (Operator Console)
 
-`apps/cli/src/index.ts` — Full operator console (1593 lines). Not published to npm — internal tool.
+`apps/cli/src/index.ts` — Full operator console. Published to npm as `motebit`. Bundled with tsup — all workspace packages inlined, native deps external.
 
-**Subcommands:** `motebit init`, `motebit verify <path>`, `motebit run --identity <path>` (daemon), `motebit goal add/list/remove/pause/resume`, `motebit approvals list/show/approve/deny`. Default (no subcommand) enters interactive REPL.
+**Subcommands:** `motebit export`, `motebit verify <path>`, `motebit run --identity <path>` (daemon), `motebit goal add/list/remove/pause/resume`, `motebit approvals list/show/approve/deny`. Default (no subcommand) enters interactive REPL.
 
 **REPL commands:** `/model`, `/memories`, `/state`, `/forget`, `/export`, `/sync`, `/clear`, `/tools`, `/mcp list/trust/untrust`, `/operator`, `/help`.
 

@@ -1,7 +1,8 @@
 {
-  "name": "motebit",
+  "name": "motebit-monorepo",
   "version": "0.1.0",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE",
   "description": "Persistent embodied AI presence layer",
   "scripts": {
     "build": "turbo run build",

@@ -42,14 +42,27 @@ Your PIN hash is stored in the OS keychain. Every tool call is logged to an audi
 
 ## Command line
 
-For developers, the CLI provides the same agent with a terminal interface:
+Install the CLI globally — the same agent, no glass droplet, full operator console:
+
+```bash
+npm install -g motebit
+```
+
+```bash
+motebit                          # Interactive REPL — chat with your agent
+motebit export                   # Export a signed identity file
+motebit verify motebit.md        # Verify an identity file signature
+motebit run --identity motebit.md  # Daemon mode — scheduled goals + approval queue
+```
+
+The REPL supports streaming, tool use with per-call approval, MCP server connections, operator mode, and slash commands (`/memories`, `/state`, `/tools`, `/model`, `/sync`).
+
+For standalone identity file creation without the full agent, you can also use:
 
 ```bash
 npm create motebit          # Create a signed identity file
 npx create-motebit verify   # Verify the signature
 ```
-
-The CLI also has an interactive REPL, daemon mode with scheduled goals, and a full tool approval queue. See the [CLI guide](/docs/guides/cli) for details.
 
 ## What happens over time
 

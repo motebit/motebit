@@ -1,16 +1,29 @@
 # create-motebit
 
-Create and verify `motebit.md` agent identity files — the [motebit/identity@1.0](../../spec/identity-v1.md) standard.
+Scaffold a motebit agent project.
 
 ## Quick Start
 
 ```bash
-npm create motebit
+npm create motebit my-agent
+cd my-agent
+npm install
+cp .env.example .env     # add your Anthropic API key
+npx motebit              # identity created on first run
 ```
 
-This generates:
-- `motebit.md` — a signed agent identity file (commit this)
-- `~/.motebit/keys/<id>.key` — your Ed25519 private key (never commit this)
+5 commands from zero to a running agent.
+
+## What it creates
+
+```
+my-agent/
+  package.json       motebit agent project (depends on motebit CLI)
+  .env.example       API key configuration
+  .gitignore         secrets and build artifacts
+```
+
+Identity is bootstrapped automatically on first `npx motebit`. Run `npx motebit export` to export a signed `motebit.md` for daemon mode.
 
 ## Verify
 
@@ -33,14 +46,13 @@ The identity file is YAML frontmatter signed with Ed25519. Any tool can verify i
 ## Options
 
 ```
-npm create motebit                Create a signed motebit.md
+npm create motebit [dir]          Scaffold a new agent project
 npx create-motebit verify [path]  Verify a motebit.md signature
 
--o, --output <path>   Output path (default: motebit.md)
 -v, --version         Print version
 -h, --help            Print help
 ```
 
 ## License
 
-MIT
+Motebit Community License — see [LICENSE](./LICENSE). Not open source.

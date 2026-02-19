@@ -1,140 +1,22 @@
 #!/usr/bin/env node
 
 /**
- * create-motebit — Create and verify motebit.md agent identity files.
+ * create-motebit — Scaffold a motebit agent project.
  *
  * Usage:
- *   npm create motebit            # Generate a new motebit.md
- *   npx create-motebit            # Same
- *   npx create-motebit verify     # Verify an existing motebit.md
- *   npx create-motebit verify path/to/motebit.md
+ *   npm create motebit [dir]         # Scaffold a new project
+ *   npx create-motebit verify [path] # Verify an existing motebit.md
  */
 
-import * as ed from "@noble/ed25519";
-import { sha512 } from "@noble/hashes/sha512";
 import { verify } from "@motebit/verify";
-import { readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
-import { randomUUID } from "node:crypto";
-
-// @noble/ed25519 v3 requires explicit SHA-512 binding
-if (!ed.hashes.sha512) {
-  ed.hashes.sha512 = (msg: Uint8Array) => sha512(msg);
-}
-
-// ---------------------------------------------------------------------------
-// Encoding helpers
-// ---------------------------------------------------------------------------
-
-function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function toBase64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]!);
-  }
-  return Buffer.from(binary, "binary")
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-}
-
-// ---------------------------------------------------------------------------
-// YAML serializer — handles only the motebit identity schema
-// ---------------------------------------------------------------------------
-
-interface IdentityData {
-  spec: string;
-  motebit_id: string;
-  created_at: string;
-  owner_id: string;
-  identity: { algorithm: string; public_key: string };
-  governance: {
-    trust_mode: string;
-    max_risk_auto: string;
-    require_approval_above: string;
-    deny_above: string;
-    operator_mode: boolean;
-  };
-  privacy: {
-    default_sensitivity: string;
-    retention_days: Record<string, number>;
-    fail_closed: boolean;
-  };
-  memory: {
-    half_life_days: number;
-    confidence_threshold: number;
-    per_turn_limit: number;
-  };
-  devices: Array<{
-    device_id: string;
-    name: string;
-    public_key: string;
-    registered_at: string;
-  }>;
-}
-
-function serializeYaml(data: IdentityData): string {
-  const lines: string[] = [];
-
-  lines.push(`spec: "${data.spec}"`);
-  lines.push(`motebit_id: "${data.motebit_id}"`);
-  lines.push(`created_at: "${data.created_at}"`);
-  lines.push(`owner_id: "${data.owner_id}"`);
-
-  lines.push("identity:");
-  lines.push(`  algorithm: "${data.identity.algorithm}"`);
-  lines.push(`  public_key: "${data.identity.public_key}"`);
-
-  lines.push("governance:");
-  lines.push(`  trust_mode: "${data.governance.trust_mode}"`);
-  lines.push(`  max_risk_auto: "${data.governance.max_risk_auto}"`);
-  lines.push(`  require_approval_above: "${data.governance.require_approval_above}"`);
-  lines.push(`  deny_above: "${data.governance.deny_above}"`);
-  lines.push(`  operator_mode: ${data.governance.operator_mode}`);
-
-  lines.push("privacy:");
-  lines.push(`  default_sensitivity: "${data.privacy.default_sensitivity}"`);
-  lines.push("  retention_days:");
-  for (const [k, v] of Object.entries(data.privacy.retention_days)) {
-    lines.push(`    ${k}: ${v}`);
-  }
-  lines.push(`  fail_closed: ${data.privacy.fail_closed}`);
-
-  lines.push("memory:");
-  lines.push(`  half_life_days: ${data.memory.half_life_days}`);
-  lines.push(`  confidence_threshold: ${data.memory.confidence_threshold}`);
-  lines.push(`  per_turn_limit: ${data.memory.per_turn_limit}`);
-
-  if (data.devices.length === 0) {
-    lines.push("devices: []");
-  } else {
-    lines.push("devices:");
-    for (const d of data.devices) {
-      lines.push(`  - device_id: "${d.device_id}"`);
-      lines.push(`    name: "${d.name}"`);
-      lines.push(`    public_key: "${d.public_key}"`);
-      lines.push(`    registered_at: "${d.registered_at}"`);
-    }
-  }
-
-  return lines.join("\n");
-}
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { join, basename, resolve } from "node:path";
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 const VERSION = "0.1.0";
-const SIG_PREFIX = "<!-- motebit:sig:Ed25519:";
-const SIG_SUFFIX = " -->";
-const KEYS_DIR = join(homedir(), ".motebit", "keys");
 
 // ---------------------------------------------------------------------------
 // Colors (ANSI — disabled if NO_COLOR is set)
@@ -148,111 +30,88 @@ const bold = (s: string) => (noColor ? s : `\x1b[1m${s}\x1b[22m`);
 const cyan = (s: string) => (noColor ? s : `\x1b[36m${s}\x1b[39m`);
 
 // ---------------------------------------------------------------------------
-// init command
+// Scaffolded file contents
 // ---------------------------------------------------------------------------
 
-async function init(outputPath: string): Promise<void> {
+function makePackageJson(name: string): string {
+  const pkg = {
+    name,
+    private: true,
+    type: "module",
+    scripts: {
+      start: "motebit run --identity motebit.md",
+      chat: "motebit",
+      verify: "motebit verify motebit.md",
+    },
+    dependencies: {
+      motebit: "0.1.0",
+    },
+  };
+  return JSON.stringify(pkg, null, 2) + "\n";
+}
+
+const ENV_EXAMPLE = `# AI provider — set at least one
+ANTHROPIC_API_KEY=your-key-here
+
+# Local models (optional, instead of Anthropic)
+# OLLAMA_HOST=http://localhost:11434
+
+# Key passphrase (prompted interactively if not set)
+# MOTEBIT_PASSPHRASE=
+`;
+
+const GITIGNORE = `node_modules/
+.env
+*.key
+`;
+
+// ---------------------------------------------------------------------------
+// scaffold command
+// ---------------------------------------------------------------------------
+
+function scaffold(targetDir: string): void {
   console.log();
   console.log(`  ${bold("create-motebit")} ${dim(`v${VERSION}`)}`);
   console.log();
 
-  // Check if motebit.md already exists
-  if (existsSync(outputPath)) {
-    console.log(`  ${red("!")} ${outputPath} already exists.`);
-    console.log(`    Use ${cyan("create-motebit verify")} to check it.`);
+  const absDir = resolve(targetDir);
+  const dirName = basename(absDir);
+
+  // Check for existing package.json
+  const pkgPath = join(absDir, "package.json");
+  if (existsSync(pkgPath)) {
+    console.log(`  ${red("!")} ${pkgPath} already exists.`);
+    console.log(`    Refusing to scaffold over an existing project.`);
     console.log();
     process.exit(1);
   }
 
-  // Generate Ed25519 keypair
-  const privateKey = ed.utils.randomSecretKey();
-  const publicKey = await ed.getPublicKeyAsync(privateKey);
-  const publicKeyHex = toHex(publicKey);
-  const privateKeyHex = toHex(privateKey);
+  // Create directory if needed
+  mkdirSync(absDir, { recursive: true });
 
-  // Generate identity
-  const motebitId = randomUUID();
-  const now = new Date().toISOString();
-
-  const data: IdentityData = {
-    spec: "motebit/identity@1.0",
-    motebit_id: motebitId,
-    created_at: now,
-    owner_id: "owner",
-    identity: {
-      algorithm: "Ed25519",
-      public_key: publicKeyHex,
-    },
-    governance: {
-      trust_mode: "guarded",
-      max_risk_auto: "R1_DRAFT",
-      require_approval_above: "R1_DRAFT",
-      deny_above: "R4_MONEY",
-      operator_mode: false,
-    },
-    privacy: {
-      default_sensitivity: "personal",
-      retention_days: { none: 365, personal: 90, medical: 30, financial: 30, secret: 7 },
-      fail_closed: true,
-    },
-    memory: {
-      half_life_days: 7,
-      confidence_threshold: 0.3,
-      per_turn_limit: 5,
-    },
-    devices: [],
-  };
-
-  // Serialize + sign
-  const yaml = serializeYaml(data);
-  const frontmatterBytes = new TextEncoder().encode(yaml);
-  const signature = await ed.signAsync(frontmatterBytes, privateKey);
-  const sigB64 = toBase64Url(signature);
-  const content = `---\n${yaml}\n---\n${SIG_PREFIX}${sigB64}${SIG_SUFFIX}\n`;
-
-  // Write identity file
-  writeFileSync(outputPath, content, "utf-8");
-
-  // Store private key
-  mkdirSync(KEYS_DIR, { recursive: true, mode: 0o700 });
-  const keyPath = join(KEYS_DIR, `${motebitId}.key`);
-  const keyContent = [
-    "# motebit private key — DO NOT COMMIT",
-    `# motebit_id: ${motebitId}`,
-    "# algorithm: Ed25519",
-    `# created: ${now}`,
-    privateKeyHex,
-    "",
-  ].join("\n");
-  writeFileSync(keyPath, keyContent, { encoding: "utf-8", mode: 0o600 });
-
-  // Restrict permissions (redundant on POSIX, needed for some edge cases)
-  try {
-    chmodSync(keyPath, 0o600);
-    chmodSync(KEYS_DIR, 0o700);
-  } catch {
-    // Windows — permissions set by writeFileSync mode where supported
-  }
+  // Write scaffolded files
+  writeFileSync(pkgPath, makePackageJson(dirName), "utf-8");
+  writeFileSync(join(absDir, ".env.example"), ENV_EXAMPLE, "utf-8");
+  writeFileSync(join(absDir, ".gitignore"), GITIGNORE, "utf-8");
 
   // Output
-  console.log(`  ${green("+")} Generated agent identity`);
+  const relDir = targetDir === "." ? "." : `./${dirName}`;
+  console.log(`  ${green("+")} Scaffolded in ${bold(relDir)}`);
   console.log();
-  console.log(`    motebit_id   ${cyan(motebitId)}`);
-  console.log(`    public_key   ${dim(publicKeyHex.slice(0, 16))}...`);
-  console.log(`    algorithm    Ed25519`);
-  console.log(`    trust_mode   guarded`);
-  console.log();
-  console.log(`  ${green(">")} ${bold(outputPath)} written ${dim("(signed identity file)")}`);
-  console.log(`  ${green(">")} ${dim(keyPath)} ${dim("(private key, chmod 600)")}`);
+  console.log(`    package.json       motebit agent project`);
+  console.log(`    .env.example       API key configuration`);
+  console.log(`    .gitignore         secrets and build artifacts`);
   console.log();
   console.log(`  ${bold("Next steps:")}`);
   console.log();
-  console.log(`    1. ${dim("Add to your repo:")}      git add ${outputPath}`);
-  console.log(`    2. ${dim("Verify signature:")}      npx create-motebit verify`);
-  console.log(`    3. ${dim("Add to .gitignore:")}     echo '.motebit-keys/' >> .gitignore`);
+  if (targetDir !== ".") {
+    console.log(`    cd ${dirName}`);
+  }
+  console.log(`    npm install`);
+  console.log(`    cp .env.example .env       ${dim("# add your Anthropic API key")}`);
+  console.log(`    npx motebit                ${dim("# identity created on first run")}`);
   console.log();
-  console.log(`  ${dim("Never commit your private key.")}`);
-  console.log(`  ${dim("Learn more: https://github.com/motebit/motebit/blob/main/spec/identity-v1.md")}`);
+  console.log(`  ${dim("Run")} ${cyan("npx motebit export")} ${dim("to export a signed motebit.md for daemon mode.")}`);
   console.log();
 }
 
@@ -308,24 +167,23 @@ async function verifyCmd(filePath: string): Promise<void> {
 
 function printHelp(): void {
   console.log(`
-  ${bold("create-motebit")} ${dim(`v${VERSION}`)} — Agent identity for the motebit/identity@1.0 standard
+  ${bold("create-motebit")} ${dim(`v${VERSION}`)} — Scaffold a motebit agent project
 
   ${bold("Usage:")}
 
-    npm create motebit                Create a signed motebit.md identity file
+    npm create motebit [dir]          Scaffold a new agent project
     npx create-motebit verify [path]  Verify a motebit.md signature
 
   ${bold("Options:")}
 
-    -o, --output <path>   Output path for identity file ${dim("(default: motebit.md)")}
     -v, --version         Print version
     -h, --help            Print this help
 
-  ${bold("What happens on init:")}
+  ${bold("What happens on scaffold:")}
 
-    1. Generates an Ed25519 keypair
-    2. Writes a signed motebit.md to your project
-    3. Stores the private key in ~/.motebit/keys/ (chmod 600)
+    1. Creates project directory with package.json, .env.example, .gitignore
+    2. On first ${cyan("npx motebit")}, identity is bootstrapped automatically
+    3. Run ${cyan("npx motebit export")} to export a signed motebit.md for daemon mode
 
   ${dim("https://github.com/motebit/motebit")}
 `);
@@ -358,18 +216,9 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Default: init
-  // Parse --output / -o
-  let outputPath = "motebit.md";
-  const outputIdx = args.indexOf("--output");
-  const outputShortIdx = args.indexOf("-o");
-  const idx = outputIdx !== -1 ? outputIdx : outputShortIdx;
-  if (idx !== -1 && args[idx + 1]) {
-    outputPath = args[idx + 1]!;
-  }
-
-  // Skip "init" if explicitly passed
-  await init(outputPath);
+  // Default: scaffold
+  const targetDir = command ?? ".";
+  scaffold(targetDir);
 }
 
 main().catch((err: unknown) => {
