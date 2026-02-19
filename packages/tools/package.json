@@ -5,6 +5,16 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./web-safe": {
+      "types": "./dist/web-safe.d.ts",
+      "default": "./dist/web-safe.js"
+    }
+  },
   "scripts": {
     "build": "tsc -b",
     "test": "vitest run"

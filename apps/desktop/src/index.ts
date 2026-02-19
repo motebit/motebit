@@ -25,10 +25,11 @@ import {
 } from "@motebit/core-identity";
 import { InMemoryAuditLog } from "@motebit/privacy-layer";
 import { createSignedToken } from "@motebit/crypto";
-import { generate as generateIdentityFile } from "@motebit/identity-file";
+import { generate as generateIdentityFile, parse as parseIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
 import { PairingClient } from "@motebit/sync-engine";
 import type { PairingSession, PairingStatus } from "@motebit/sync-engine";
-import { TauriEventStore, TauriMemoryStorage, TauriIdentityStorage, type InvokeFn } from "./tauri-storage.js";
+import { TauriEventStore, TauriMemoryStorage, TauriIdentityStorage, TauriAuditLog, TauriStateSnapshotStorage, type InvokeFn } from "./tauri-storage.js";
+import { registerDesktopTools } from "./desktop-tools.js";
 export type { InvokeFn } from "./tauri-storage.js";
 
 // Re-export runtime types for main.ts consumption
@@ -113,19 +114,20 @@ class TauriToolAuditSink implements AuditLogSink {
 
 // === Storage Factory ===
 
-function createTauriStorage(invoke: InvokeFn): StorageAdapters {
+function createTauriStorage(invoke: InvokeFn, stateSnapshot?: TauriStateSnapshotStorage): StorageAdapters {
   return {
     eventStore: new TauriEventStore(invoke),
     memoryStorage: new TauriMemoryStorage(invoke),
     identityStorage: new TauriIdentityStorage(invoke),
-    auditLog: new InMemoryAuditLog(),
+    auditLog: new TauriAuditLog(invoke),
     toolAuditSink: new TauriToolAuditSink(invoke),
+    stateSnapshot,
   };
 }
 
-function createDesktopStorage(config: DesktopAIConfig): StorageAdapters {
+function createDesktopStorage(config: DesktopAIConfig, stateSnapshot?: TauriStateSnapshotStorage): StorageAdapters {
   if (config.isTauri && config.invoke) {
-    return createTauriStorage(config.invoke);
+    return createTauriStorage(config.invoke, stateSnapshot);
   }
   return {
     eventStore: new InMemoryEventStore(),
@@ -390,7 +392,12 @@ export class DesktopApp {
     this.runtime.setModel(model);
   }
 
-  initAI(config: DesktopAIConfig): boolean {
+  /**
+   * Initialize AI, tools, governance, and state persistence.
+   * Must be called after bootstrap() for Tauri builds (needs motebitId).
+   * Returns false only if Anthropic provider is selected but no API key is provided.
+   */
+  async initAI(config: DesktopAIConfig): Promise<boolean> {
     const resolved = config.personalityConfig
       ? resolveConfig(config.personalityConfig)
       : undefined;
@@ -415,13 +422,47 @@ export class DesktopApp {
       });
     }
 
-    const storage = createDesktopStorage(config);
+    // State snapshot persistence — preload before runtime construction
+    let stateSnapshot: TauriStateSnapshotStorage | undefined;
+    if (config.isTauri && config.invoke) {
+      stateSnapshot = new TauriStateSnapshotStorage(config.invoke);
+      await stateSnapshot.preload(this.motebitId);
+    }
+
+    const storage = createDesktopStorage(config, stateSnapshot);
     const keyring = config.isTauri && config.invoke ? new TauriKeyringAdapter(config.invoke) : undefined;
 
+    // Read governance from motebit.md identity file (if available)
+    let policyConfig: Partial<PolicyConfig> | undefined;
+    if (config.isTauri && config.invoke) {
+      try {
+        const raw = await config.invoke<string>("read_config");
+        const configData = JSON.parse(raw) as Record<string, unknown>;
+        const identityFileContent = configData._identity_file as string | undefined;
+        if (identityFileContent) {
+          const parsed = parseIdentityFile(identityFileContent);
+          const gov = parsed.frontmatter.governance;
+          if (gov?.max_risk_auto && gov?.require_approval_above && gov?.deny_above) {
+            const govPolicy = governanceToPolicyConfig(gov);
+            policyConfig = {
+              maxRiskLevel: govPolicy.maxRiskAuto,
+              requireApprovalAbove: govPolicy.requireApprovalAbove,
+              denyAbove: govPolicy.denyAbove,
+            };
+          }
+        }
+      } catch {
+        // Non-fatal — governance reading is best-effort
+      }
+    }
+
     this.runtime = new MotebitRuntime(
-      { motebitId: this.motebitId, tickRateHz: 2 },
+      { motebitId: this.motebitId, tickRateHz: 2, policy: policyConfig },
       { storage, renderer: this.renderer, ai: provider, keyring },
     );
+
+    // Register browser-safe builtin tools
+    registerDesktopTools(this.runtime.getToolRegistry(), this.runtime);
 
     return true;
   }
@@ -568,6 +609,33 @@ export class DesktopApp {
       public_key: this.publicKey,
       exported_at: new Date().toISOString(),
     };
+
+    if (this.runtime) {
+      // Export memories (nodes + edges)
+      try {
+        const { nodes, edges } = await this.runtime.memory.exportAll();
+        data.memories = nodes;
+        data.edges = edges;
+      } catch {
+        data.memories = [];
+        data.edges = [];
+      }
+
+      // Export state vector
+      data.state = this.runtime.getState();
+
+      // Export recent events
+      try {
+        const events = await this.runtime.events.query({
+          motebit_id: this.motebitId,
+          limit: 500,
+        });
+        data.events = events;
+      } catch {
+        data.events = [];
+      }
+    }
+
     return JSON.stringify(data, null, 2);
   }
 

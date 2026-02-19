@@ -60,6 +60,43 @@ CREATE TABLE IF NOT EXISTS tool_audit_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tool_audit_turn ON tool_audit_log (turn_id);
+
+CREATE TABLE IF NOT EXISTS identities (
+  motebit_id TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL,
+  owner_id TEXT NOT NULL,
+  version_clock INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS devices (
+  device_id TEXT PRIMARY KEY,
+  motebit_id TEXT NOT NULL,
+  device_token TEXT NOT NULL,
+  public_key TEXT NOT NULL,
+  registered_at INTEGER NOT NULL,
+  device_name TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_devices_mote ON devices (motebit_id);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  audit_id TEXT PRIMARY KEY,
+  motebit_id TEXT NOT NULL,
+  timestamp INTEGER NOT NULL,
+  action TEXT NOT NULL,
+  target_type TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  details TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_log_mote ON audit_log (motebit_id);
+
+CREATE TABLE IF NOT EXISTS state_snapshots (
+  motebit_id TEXT PRIMARY KEY,
+  state_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  version_clock INTEGER NOT NULL DEFAULT 0
+);
 ";
 
 fn json_to_sql_value(v: &JsonValue) -> SqlValue {

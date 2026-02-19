@@ -1,8 +1,10 @@
-import type { EventLogEntry, EventType, MemoryNode, MemoryEdge, MotebitIdentity, SensitivityLevel, RelationType } from "@motebit/sdk";
+import type { EventLogEntry, EventType, MemoryNode, MemoryEdge, MotebitIdentity, AuditRecord, SensitivityLevel, RelationType } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import type { MemoryStorageAdapter, MemoryQuery } from "@motebit/memory-graph";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 import type { IdentityStorage, DeviceRegistration } from "@motebit/core-identity";
+import type { AuditLogAdapter } from "@motebit/privacy-layer";
+import type { StateSnapshotAdapter } from "@motebit/runtime";
 
 // === IPC Helpers ===
 
@@ -420,4 +422,119 @@ function rowToDeviceReg(row: DeviceRow): DeviceRegistration {
     device.device_name = row.device_name;
   }
   return device;
+}
+
+// === TauriAuditLog ===
+
+interface AuditRow {
+  audit_id: string;
+  motebit_id: string;
+  timestamp: number;
+  action: string;
+  target_type: string;
+  target_id: string;
+  details: string;
+}
+
+function rowToAudit(row: AuditRow): AuditRecord {
+  return {
+    audit_id: row.audit_id,
+    motebit_id: row.motebit_id,
+    timestamp: row.timestamp,
+    action: row.action,
+    target_type: row.target_type,
+    target_id: row.target_id,
+    details: JSON.parse(row.details) as Record<string, unknown>,
+  };
+}
+
+export class TauriAuditLog implements AuditLogAdapter {
+  constructor(private invoke: InvokeFn) {}
+
+  async record(entry: AuditRecord): Promise<void> {
+    await dbExecute(
+      this.invoke,
+      `INSERT OR REPLACE INTO audit_log (audit_id, motebit_id, timestamp, action, target_type, target_id, details)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        entry.audit_id,
+        entry.motebit_id,
+        entry.timestamp,
+        entry.action,
+        entry.target_type,
+        entry.target_id,
+        JSON.stringify(entry.details),
+      ],
+    );
+  }
+
+  async query(
+    motebitId: string,
+    options: { limit?: number; after?: number } = {},
+  ): Promise<AuditRecord[]> {
+    const conditions: string[] = ["motebit_id = ?"];
+    const params: unknown[] = [motebitId];
+
+    if (options.after !== undefined) {
+      conditions.push("timestamp > ?");
+      params.push(options.after);
+    }
+
+    const sql = `SELECT * FROM audit_log WHERE ${conditions.join(" AND ")} ORDER BY timestamp ASC`;
+    const rows = await dbQuery<AuditRow>(this.invoke, sql, params);
+    let results = rows.map(rowToAudit);
+
+    if (options.limit !== undefined) {
+      results = results.slice(-options.limit);
+    }
+
+    return results;
+  }
+}
+
+// === TauriStateSnapshotStorage ===
+
+export class TauriStateSnapshotStorage implements StateSnapshotAdapter {
+  constructor(private invoke: InvokeFn) {}
+
+  saveState(motebitId: string, stateJson: string, versionClock?: number): void {
+    // Fire-and-forget — state snapshot writes are best-effort (matches sync interface)
+    void dbExecute(
+      this.invoke,
+      `INSERT OR REPLACE INTO state_snapshots (motebit_id, state_json, updated_at, version_clock)
+       VALUES (?, ?, ?, ?)`,
+      [motebitId, stateJson, Date.now(), versionClock ?? 0],
+    );
+  }
+
+  loadState(motebitId: string): string | null {
+    // StateSnapshotAdapter is sync — we can't await here.
+    // The runtime calls loadState() during constructor, before any async work.
+    // We use a sync-ish approach: pre-load in an init step (see TauriStateSnapshotStorage.preload).
+    return this._cache.get(motebitId) ?? null;
+  }
+
+  getSnapshotClock(motebitId: string): number {
+    return this._clockCache.get(motebitId) ?? 0;
+  }
+
+  // Internal cache populated by preload()
+  private _cache = new Map<string, string>();
+  private _clockCache = new Map<string, number>();
+
+  /**
+   * Pre-load state from SQLite before constructing MotebitRuntime.
+   * Must be called and awaited before the runtime reads loadState().
+   */
+  async preload(motebitId: string): Promise<void> {
+    const rows = await dbQuery<{ state_json: string; version_clock: number }>(
+      this.invoke,
+      "SELECT state_json, version_clock FROM state_snapshots WHERE motebit_id = ?",
+      [motebitId],
+    );
+    if (rows.length > 0) {
+      this._cache.set(motebitId, rows[0]!.state_json);
+      this._clockCache.set(motebitId, rows[0]!.version_clock);
+    }
+  }
 }

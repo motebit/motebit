@@ -203,6 +203,9 @@ importers:
       '@motebit/sync-engine':
         specifier: workspace:*
         version: link:../../packages/sync-engine
+      '@motebit/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
       '@tauri-apps/api':
         specifier: ^2.0.0
         version: 2.10.1

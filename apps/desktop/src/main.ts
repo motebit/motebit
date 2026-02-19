@@ -1336,7 +1336,7 @@ async function saveSettings(): Promise<void> {
     await app.setOperatorMode(false);
   }
 
-  finishSaveSettings(provider, model, apiKey, isTauri);
+  await finishSaveSettings(provider, model, apiKey, isTauri);
 }
 
 interface PendingSave {
@@ -1347,12 +1347,12 @@ interface PendingSave {
 }
 let pendingSettingsSave: PendingSave | null = null;
 
-function finishSaveSettings(
+async function finishSaveSettings(
   provider: DesktopAIConfig["provider"],
   model?: string,
   apiKey?: string,
   isTauri = false,
-): void {
+): Promise<void> {
   const newConfig: DesktopAIConfig = {
     provider,
     model,
@@ -1362,7 +1362,7 @@ function finishSaveSettings(
   };
   currentConfig = newConfig;
 
-  if (app.initAI(newConfig)) {
+  if (await app.initAI(newConfig)) {
     const label = provider === "ollama" ? "Ollama" : "Anthropic";
     addMessage("system", `Settings saved — AI reconnected (${label})`);
   } else {
@@ -1466,7 +1466,7 @@ async function handlePinSubmit(): Promise<void> {
   if (pendingSettingsSave) {
     const s = pendingSettingsSave;
     pendingSettingsSave = null;
-    finishSaveSettings(s.provider, s.model, s.apiKey, s.isTauri);
+    await finishSaveSettings(s.provider, s.model, s.apiKey, s.isTauri);
   }
 }
 
@@ -1662,7 +1662,7 @@ async function bootstrap(): Promise<void> {
   }
 
   // AI init
-  if (app.initAI(config)) {
+  if (await app.initAI(config)) {
     const label = config.provider === "ollama" ? "Ollama" : "Anthropic";
     addMessage("system", `AI connected (${label})`);
   } else {

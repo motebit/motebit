@@ -30,6 +30,7 @@
     "@motebit/sdk": "workspace:*",
     "@motebit/state-vector": "workspace:*",
     "@motebit/sync-engine": "workspace:*",
+    "@motebit/tools": "workspace:*",
     "@tauri-apps/api": "^2.0.0",
     "three": "^0.170.0"
   },
