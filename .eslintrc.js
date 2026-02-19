@@ -43,5 +43,31 @@ module.exports = {
       }],
     }],
   },
+  overrides: [
+    {
+      // Ban direct generateKeypair usage in app surfaces.
+      // Identity bootstrap (keypair generation + device registration) must go
+      // through bootstrapIdentity() from @motebit/core-identity.
+      // See packages/core-identity/README.md for rationale.
+      files: ["apps/*/src/**/*.ts", "services/*/src/**/*.ts"],
+      rules: {
+        "no-restricted-imports": ["error", {
+          patterns: [
+            {
+              group: ["@motebit/*/dist/*", "@motebit/*/src/*"],
+              message: "Import from the package entry point (e.g., @motebit/sdk), not internal paths.",
+            },
+          ],
+          paths: [
+            {
+              name: "@motebit/crypto",
+              importNames: ["generateKeypair"],
+              message: "Use bootstrapIdentity() from @motebit/core-identity instead of generating keypairs per-surface. See packages/core-identity/README.md.",
+            },
+          ],
+        }],
+      },
+    },
+  ],
   ignorePatterns: ["dist/", "node_modules/", "*.js", "*.mjs"],
 };

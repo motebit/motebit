@@ -12,8 +12,8 @@ import { PrivacyLayer, InMemoryAuditLog } from "@motebit/privacy-layer";
 import type { AuditLogAdapter } from "@motebit/privacy-layer";
 import { SyncEngine } from "@motebit/sync-engine";
 import type { RenderSpec } from "@motebit/sdk";
-import { CANONICAL_SPEC } from "@motebit/render-engine";
-import type { RenderAdapter, RenderFrame, InteriorColor, AudioReactivity } from "@motebit/render-engine";
+import { CANONICAL_SPEC } from "@motebit/render-engine/spec";
+import type { RenderAdapter, RenderFrame, InteriorColor, AudioReactivity } from "@motebit/render-engine/spec";
 import {
   runTurn,
   runTurnStreaming,
@@ -41,7 +41,7 @@ export type { EventStoreAdapter } from "@motebit/event-log";
 export type { MemoryStorageAdapter } from "@motebit/memory-graph";
 export type { IdentityStorage } from "@motebit/core-identity";
 export type { AuditLogAdapter } from "@motebit/privacy-layer";
-export type { RenderAdapter, RenderFrame, InteriorColor, AudioReactivity } from "@motebit/render-engine";
+export type { RenderAdapter, RenderFrame, InteriorColor, AudioReactivity } from "@motebit/render-engine/spec";
 export type { RenderSpec } from "@motebit/sdk";
 export { PolicyGate } from "@motebit/policy";
 export type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";

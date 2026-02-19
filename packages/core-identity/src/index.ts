@@ -1,6 +1,8 @@
 import type { MotebitIdentity, EventLogEntry } from "@motebit/sdk";
 import { EventType } from "@motebit/sdk";
-import type { EventStore } from "@motebit/event-log";
+import type { EventStoreAdapter } from "@motebit/event-log";
+import { EventStore } from "@motebit/event-log";
+import { generateKeypair } from "@motebit/crypto";
 
 // === UUID v7 Generation ===
 
@@ -232,6 +234,91 @@ export class IdentityManager {
   async listDevices(motebitId: string): Promise<DeviceRegistration[]> {
     return this.deviceStore.listDevices(motebitId);
   }
+}
+
+// === Bootstrap: shared identity bootstrap protocol ===
+
+export interface BootstrapConfigStore {
+  read(): Promise<{ motebit_id: string; device_id: string; device_public_key: string } | null>;
+  write(state: { motebit_id: string; device_id: string; device_public_key: string }): Promise<void>;
+}
+
+export interface BootstrapKeyStore {
+  storePrivateKey(privKeyHex: string): Promise<void>;
+}
+
+export interface BootstrapResult {
+  motebitId: string;
+  deviceId: string;
+  publicKeyHex: string;
+  isFirstLaunch: boolean;
+}
+
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Shared identity bootstrap protocol used by all surfaces (CLI, Desktop).
+ *
+ * 1. Check config for existing identity
+ * 2. If found, verify it exists in DB — return existing
+ * 3. If config has ID but DB doesn't, re-create in DB (robustness)
+ * 4. On first launch: create identity, generate Ed25519 keypair, register device
+ * 5. Persist private key via keyStore, write config via configStore
+ */
+export async function bootstrapIdentity(opts: {
+  surfaceName: string;
+  identityStorage: IdentityStorage;
+  eventStoreAdapter: EventStoreAdapter;
+  configStore: BootstrapConfigStore;
+  keyStore: BootstrapKeyStore;
+}): Promise<BootstrapResult> {
+  const { surfaceName, identityStorage, eventStoreAdapter, configStore, keyStore } = opts;
+  const eventStore = new EventStore(eventStoreAdapter);
+  const identityManager = new IdentityManager(identityStorage, eventStore);
+
+  const existing = await configStore.read();
+
+  if (existing && existing.motebit_id) {
+    // Config has an identity — verify it exists in the DB
+    const loaded = await identityManager.load(existing.motebit_id);
+    if (loaded) {
+      return {
+        motebitId: existing.motebit_id,
+        deviceId: existing.device_id,
+        publicKeyHex: existing.device_public_key,
+        isFirstLaunch: false,
+      };
+    }
+    // Config has ID but DB doesn't — re-create in DB
+    await identityManager.create(surfaceName);
+  }
+
+  // First launch — generate identity + keypair
+  const identity = await identityManager.create(surfaceName);
+  const keypair = await generateKeypair();
+  const pubKeyHex = toHex(keypair.publicKey);
+  const privKeyHex = toHex(keypair.privateKey);
+
+  const device = await identityManager.registerDevice(identity.motebit_id, surfaceName, pubKeyHex);
+
+  // Persist private key (surface-specific: OS keyring, encrypted config, etc.)
+  await keyStore.storePrivateKey(privKeyHex);
+
+  // Write identity metadata to config (surface-specific: file, Tauri IPC, etc.)
+  await configStore.write({
+    motebit_id: identity.motebit_id,
+    device_id: device.device_id,
+    device_public_key: pubKeyHex,
+  });
+
+  return {
+    motebitId: identity.motebit_id,
+    deviceId: device.device_id,
+    publicKeyHex: pubKeyHex,
+    isFirstLaunch: true,
+  };
 }
 
 // === In-Memory Device Store (fallback when IdentityStorage lacks device methods) ===

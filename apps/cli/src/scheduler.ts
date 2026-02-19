@@ -312,6 +312,8 @@ export class GoalScheduler {
           this.currentGoalId = null;
         }
       }
+    } catch (err: unknown) {
+      console.error("[scheduler] tick failed", err);
     } finally {
       this.ticking = false;
     }

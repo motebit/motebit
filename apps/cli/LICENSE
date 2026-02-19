@@ -1,0 +1,43 @@
+Motebit Community License
+
+Copyright (c) 2026 Motebit
+
+## Definitions
+
+"Software" means the source code, object code, documentation, and associated
+files distributed under this license.
+
+"Redistribute" means to distribute, publish, make available for download, or
+otherwise transfer copies of the Software or any modified version of it to
+third parties, whether in source or compiled form.
+
+"Hosted Service" means offering the functionality of the Software to third
+parties over a network, including but not limited to software-as-a-service
+(SaaS), API access, or any managed service that provides the capabilities of
+the Software without requiring users to install it.
+
+## Grant
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of the Software, to use, copy, and modify the Software for personal,
+educational, and internal business purposes, subject to the following
+conditions:
+
+1. The above copyright notice, definitions, and this permission notice shall
+   be included in all copies or substantial portions of the Software.
+
+2. You may NOT Redistribute the Software or offer it as a Hosted Service
+   without prior written permission from Motebit.
+
+3. Contributions to the Software are welcome and are licensed back under the
+   same terms.
+
+## Disclaimer
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

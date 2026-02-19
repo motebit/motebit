@@ -17,11 +17,15 @@ import {
 import type { ToolAuditEntry } from "@motebit/sdk";
 import { InMemoryEventStore } from "@motebit/event-log";
 import { InMemoryMemoryStorage } from "@motebit/memory-graph";
-import { InMemoryIdentityStorage, IdentityManager } from "@motebit/core-identity";
+import {
+  InMemoryIdentityStorage,
+  bootstrapIdentity as sharedBootstrapIdentity,
+  type BootstrapConfigStore,
+  type BootstrapKeyStore,
+} from "@motebit/core-identity";
 import { InMemoryAuditLog } from "@motebit/privacy-layer";
-import { generateKeypair, createSignedToken } from "@motebit/crypto";
+import { createSignedToken } from "@motebit/crypto";
 import { generate as generateIdentityFile } from "@motebit/identity-file";
-import { EventStore } from "@motebit/event-log";
 import { PairingClient } from "@motebit/sync-engine";
 import type { PairingSession, PairingStatus } from "@motebit/sync-engine";
 import { TauriEventStore, TauriMemoryStorage, TauriIdentityStorage, type InvokeFn } from "./tauri-storage.js";
@@ -180,69 +184,76 @@ export class DesktopApp {
    * Must be called before initAI() when running in Tauri.
    */
   async bootstrap(invoke: InvokeFn): Promise<BootstrapResult> {
-    const raw = await invoke<string>("read_config");
-    const config = JSON.parse(raw) as Record<string, unknown>;
+    const configStore: BootstrapConfigStore = {
+      async read() {
+        const raw = await invoke<string>("read_config");
+        const config = JSON.parse(raw) as Record<string, unknown>;
+        if (!config.motebit_id || typeof config.motebit_id !== "string") return null;
+        return {
+          motebit_id: config.motebit_id,
+          device_id: (config.device_id as string) ?? "",
+          device_public_key: (config.device_public_key as string) ?? "",
+        };
+      },
+      async write(state) {
+        const raw = await invoke<string>("read_config");
+        const config = { ...JSON.parse(raw) as Record<string, unknown>, ...state };
+        await invoke<void>("write_config", { json: JSON.stringify(config) });
+      },
+    };
 
-    if (config.motebit_id && typeof config.motebit_id === "string") {
-      // Existing identity — load from config
-      this.motebitId = config.motebit_id;
-      this.deviceId = (config.device_id as string) || "desktop-local";
-      this.publicKey = (config.device_public_key as string) || "";
-      return { isFirstLaunch: false, motebitId: this.motebitId, deviceId: this.deviceId };
-    }
+    const keyStore: BootstrapKeyStore = {
+      async storePrivateKey(privKeyHex) {
+        await invoke<void>("keyring_set", { key: "device_private_key", value: privKeyHex });
+      },
+    };
 
-    // First launch — create identity and device keypair
     const storage = createTauriStorage(invoke);
-    const eventStore = new EventStore(storage.eventStore);
-    const identityManager = new IdentityManager(storage.identityStorage, eventStore);
+    const result = await sharedBootstrapIdentity({
+      surfaceName: "Desktop",
+      identityStorage: storage.identityStorage,
+      eventStoreAdapter: storage.eventStore,
+      configStore,
+      keyStore,
+    });
 
-    const deviceName = "Desktop";
-    const identity = await identityManager.create(deviceName);
-    const keypair = await generateKeypair();
+    this.motebitId = result.motebitId;
+    this.deviceId = result.deviceId;
+    this.publicKey = result.publicKeyHex;
 
-    // Hex-encode keys
-    const pubKeyHex = Array.from(keypair.publicKey).map(b => b.toString(16).padStart(2, "0")).join("");
-    const privKeyHex = Array.from(keypair.privateKey).map(b => b.toString(16).padStart(2, "0")).join("");
-
-    // Register device with the identity
-    const deviceId = crypto.randomUUID();
-    await identityManager.registerDevice(identity.motebit_id, deviceName, pubKeyHex);
-
-    // Persist private key to keyring
-    await invoke<void>("keyring_set", { key: "device_private_key", value: privKeyHex });
-
-    // Write motebit_id, device_id, and public key to config
-    const updatedConfig = { ...config, motebit_id: identity.motebit_id, device_id: deviceId, device_public_key: pubKeyHex };
-    await invoke<void>("write_config", { json: JSON.stringify(updatedConfig) });
-
-    // Generate motebit.md identity file alongside config
-    try {
-      const identityFileContent = await generateIdentityFile(
-        {
-          motebitId: identity.motebit_id,
-          ownerId: identity.motebit_id,
-          publicKeyHex: pubKeyHex,
-          devices: [{
-            device_id: deviceId,
-            name: deviceName,
-            public_key: pubKeyHex,
-            registered_at: new Date().toISOString(),
-          }],
-        },
-        keypair.privateKey,
-      );
-      await invoke<void>("write_config", {
-        json: JSON.stringify({ ...updatedConfig, _identity_file: identityFileContent }),
-      });
-    } catch {
-      // Non-fatal — identity file generation is best-effort on desktop
+    // Generate motebit.md identity file on first launch (best-effort, desktop-specific)
+    if (result.isFirstLaunch) {
+      try {
+        const keypair = await this.getDeviceKeypair(invoke);
+        if (keypair) {
+          const privKeyBytes = new Uint8Array(keypair.privateKey.length / 2);
+          for (let i = 0; i < keypair.privateKey.length; i += 2) {
+            privKeyBytes[i / 2] = parseInt(keypair.privateKey.slice(i, i + 2), 16);
+          }
+          const identityFileContent = await generateIdentityFile(
+            {
+              motebitId: result.motebitId,
+              ownerId: result.motebitId,
+              publicKeyHex: result.publicKeyHex,
+              devices: [{
+                device_id: result.deviceId,
+                name: "Desktop",
+                public_key: result.publicKeyHex,
+                registered_at: new Date().toISOString(),
+              }],
+            },
+            privKeyBytes,
+          );
+          const raw = await invoke<string>("read_config");
+          const config = { ...JSON.parse(raw) as Record<string, unknown>, _identity_file: identityFileContent };
+          await invoke<void>("write_config", { json: JSON.stringify(config) });
+        }
+      } catch {
+        // Non-fatal — identity file generation is best-effort on desktop
+      }
     }
 
-    this.motebitId = identity.motebit_id;
-    this.deviceId = deviceId;
-    this.publicKey = pubKeyHex;
-
-    return { isFirstLaunch: true, motebitId: this.motebitId, deviceId: this.deviceId };
+    return { isFirstLaunch: result.isFirstLaunch, motebitId: result.motebitId, deviceId: result.deviceId };
   }
 
   /**

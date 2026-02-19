@@ -480,6 +480,9 @@ importers:
 
   packages/core-identity:
     dependencies:
+      '@motebit/crypto':
+        specifier: workspace:*
+        version: link:../crypto
       '@motebit/event-log':
         specifier: workspace:*
         version: link:../event-log

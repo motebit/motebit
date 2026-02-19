@@ -1,22 +1,51 @@
 {
-  "name": "@motebit/cli",
+  "name": "motebit",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
-  "description": "CLI for Motebit — a sentient digital companion",
+  "description": "Sovereign AI agent — persistent identity, accumulated trust, governance at the boundary",
   "main": "./dist/index.js",
   "bin": {
     "motebit": "./dist/index.js"
   },
+  "files": ["dist/index.js", "dist/index.js.map", "LICENSE", "README.md"],
+  "license": "SEE LICENSE IN LICENSE",
+  "keywords": [
+    "motebit",
+    "agent",
+    "ai",
+    "identity",
+    "ed25519",
+    "cli",
+    "repl",
+    "daemon",
+    "mcp",
+    "sovereign"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/motebit/motebit",
+    "directory": "apps/cli"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "tsx src/index.ts",
-    "build": "tsc -b",
+    "build": "tsup",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
-    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+    "clean": "rm -rf dist .turbo *.tsbuildinfo",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "@modelcontextprotocol/sdk": "^1.12.0"
+  },
+  "optionalDependencies": {
+    "@xenova/transformers": "^2.17.2"
+  },
+  "devDependencies": {
     "@motebit/runtime": "workspace:*",
     "@motebit/ai-core": "workspace:*",
     "@motebit/event-log": "workspace:*",
@@ -30,10 +59,10 @@
     "@motebit/mcp-client": "workspace:*",
     "@motebit/crypto": "workspace:*",
     "@motebit/core-identity": "workspace:*",
-    "@motebit/identity-file": "workspace:*"
-  },
-  "devDependencies": {
+    "@motebit/identity-file": "workspace:*",
+    "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^22.0.0",
+    "tsup": "^8.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"

@@ -59,4 +59,6 @@ See the [motebit/identity@1.0 specification](../../spec/identity-v1.md) for deta
 
 ## License
 
-MIT
+MIT — see [LICENSE](./LICENSE).
+
+"Motebit" is a trademark. The MIT License grants rights to this software, not to any Motebit trademarks, logos, or branding. You may not use Motebit branding in a way that suggests endorsement or affiliation without written permission.
