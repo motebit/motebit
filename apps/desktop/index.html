@@ -1156,6 +1156,41 @@
             </div>
           </div>
         </div>
+        <div class="settings-card">
+          <div class="card-title">Voice</div>
+          <div class="settings-field">
+            <label for="settings-whisper-apikey">OpenAI API Key (Whisper)</label>
+            <div class="settings-key-row">
+              <input id="settings-whisper-apikey" type="password" placeholder="sk-..." />
+              <button id="settings-whisper-apikey-toggle" type="button">Show</button>
+            </div>
+            <div style="font-size:11px;color:rgba(0,0,0,0.35);margin-top:4px;">Used for Whisper transcription when Web Speech API is unavailable</div>
+          </div>
+          <div class="settings-field" style="margin-top:10px;">
+            <div class="toggle-row">
+              <div>
+                <div class="toggle-label">Auto-send</div>
+                <div class="toggle-desc">Send transcript automatically when recording stops</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="settings-voice-autosend" checked />
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
+          <div class="settings-field" style="margin-top:10px;">
+            <div class="toggle-row">
+              <div>
+                <div class="toggle-label">Voice Response</div>
+                <div class="toggle-desc">Speak agent responses aloud via TTS</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="settings-voice-response" checked />
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
+        </div>
       </div>
       <!-- Governance pane -->
       <div class="settings-pane" id="pane-governance">

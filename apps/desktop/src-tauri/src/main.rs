@@ -332,6 +332,105 @@ fn shell_exec_tool(command: String, cwd: Option<String>) -> Result<ShellExecResu
     }
 }
 
+#[tauri::command]
+fn transcribe_audio(audio_base64: String, api_key: Option<String>) -> Result<String, String> {
+    use base64::Engine;
+    use std::process::Command;
+
+    // Decode base64 → temp file
+    let audio_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&audio_base64)
+        .map_err(|e| format!("Failed to decode audio: {}", e))?;
+
+    let temp_path = format!("/tmp/motebit_voice_{}.webm", std::process::id());
+    std::fs::write(&temp_path, &audio_bytes)
+        .map_err(|e| format!("Failed to write temp file: {}", e))?;
+
+    let cleanup = |extra: &str| {
+        let _ = std::fs::remove_file(&temp_path);
+        if !extra.is_empty() {
+            let _ = std::fs::remove_file(extra);
+        }
+    };
+
+    // Try local whisper binary (Python openai-whisper)
+    if let Ok(which_out) = Command::new("which").arg("whisper").output() {
+        if which_out.status.success() {
+            if let Ok(output) = Command::new("whisper")
+                .args([
+                    &temp_path,
+                    "--output_format",
+                    "txt",
+                    "--language",
+                    "en",
+                    "--output_dir",
+                    "/tmp",
+                ])
+                .output()
+            {
+                if output.status.success() {
+                    // whisper outputs <basename>.txt in the output dir
+                    let txt_path = format!(
+                        "/tmp/motebit_voice_{}.txt",
+                        std::process::id()
+                    );
+                    if let Ok(text) = std::fs::read_to_string(&txt_path) {
+                        let trimmed = text.trim().to_string();
+                        cleanup(&txt_path);
+                        if !trimmed.is_empty() {
+                            return Ok(trimmed);
+                        }
+                    } else {
+                        cleanup("");
+                    }
+                }
+            }
+        }
+    }
+
+    // Fall back to OpenAI Whisper API
+    if let Some(ref key) = api_key {
+        let output = Command::new("curl")
+            .args([
+                "-s",
+                "-X",
+                "POST",
+                "https://api.openai.com/v1/audio/transcriptions",
+                "-H",
+                &format!("Authorization: Bearer {}", key),
+                "-F",
+                &format!("file=@{}", temp_path),
+                "-F",
+                "model=whisper-1",
+                "-F",
+                "response_format=text",
+            ])
+            .output()
+            .map_err(|e| {
+                cleanup("");
+                format!("Failed to call Whisper API: {}", e)
+            })?;
+
+        cleanup("");
+
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !text.is_empty() {
+                return Ok(text);
+            }
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !stderr.is_empty() {
+            return Err(format!("Whisper API error: {}", stderr));
+        }
+        return Err("Whisper API returned empty response".to_string());
+    }
+
+    cleanup("");
+    Err("No transcription available. Grant macOS Speech Recognition permission (System Settings > Privacy & Security > Speech Recognition), install whisper locally (pip install openai-whisper), or add an OpenAI API key in Voice settings.".to_string())
+}
+
 fn main() {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
@@ -365,6 +464,7 @@ fn main() {
             read_file_tool,
             write_file_tool,
             shell_exec_tool,
+            transcribe_audio,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

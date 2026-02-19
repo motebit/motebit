@@ -50,6 +50,7 @@ export interface TauriCommands {
   read_file_tool(path: string): Promise<string>;
   write_file_tool(path: string, content: string): Promise<string>;
   shell_exec_tool(command: string, cwd: string | null): Promise<{ stdout: string; stderr: string; exit_code: number }>;
+  transcribe_audio(audio_base64: string, api_key: string | null): Promise<string>;
 }
 
 // === Desktop AI Config ===

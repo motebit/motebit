@@ -231,6 +231,11 @@ async function handleSend(): Promise<void> {
 
     // Auto-title in background after streaming completes
     void app.generateTitleInBackground();
+
+    // TTS: speak the response if voice mode is active
+    if (accumulated && (micState === "ambient" || micState === "off")) {
+      speakAssistantResponse(accumulated);
+    }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     if (!bubble.textContent) {
@@ -395,6 +400,12 @@ const persistenceThresholdValue = document.getElementById("persistence-threshold
 const rejectSecrets = document.getElementById("settings-reject-secrets") as HTMLInputElement;
 const maxCalls = document.getElementById("settings-max-calls") as HTMLInputElement;
 
+const settingsWhisperApiKey = document.getElementById("settings-whisper-apikey") as HTMLInputElement;
+const settingsWhisperApiKeyToggle = document.getElementById("settings-whisper-apikey-toggle") as HTMLButtonElement;
+const settingsVoiceAutoSend = document.getElementById("settings-voice-autosend") as HTMLInputElement;
+const settingsVoiceResponse = document.getElementById("settings-voice-response") as HTMLInputElement;
+let hasWhisperKeyInKeyring = false;
+
 // Settings state
 let selectedColorPreset = "borosilicate";
 let previousColorPreset = "borosilicate";
@@ -463,7 +474,7 @@ function selectColorPreset(name: string): void {
 // Flow: off → voice (mic click) → off (mic click) or ambient (Enter)
 // Escape from any state → off (full mic release)
 
-type MicState = "off" | "ambient" | "voice";
+type MicState = "off" | "ambient" | "voice" | "transcribing" | "speaking";
 let micState: MicState = "off";
 let voiceRecognition: SpeechRecognitionInstance | null = null;
 let audioContext: AudioContext | null = null;
@@ -474,6 +485,23 @@ let ambientAnimationId = 0;
 let voiceFinalTranscript = "";
 let voiceInterimTranscript = "";
 const waveformSmoothed = new Float32Array(64);
+
+/** Whether Web Speech API STT is usable (set false on permission/service errors). */
+let sttAvailable = true;
+
+/** MediaRecorder for Whisper fallback — captures audio alongside AnalyserNode pipeline. */
+let mediaRecorder: MediaRecorder | null = null;
+let mediaRecorderChunks: Blob[] = [];
+
+/** Voice settings. */
+let voiceAutoSend = true;
+let voiceResponseEnabled = true;
+
+/** TTS state. */
+let ttsUtterance: SpeechSynthesisUtterance | null = null;
+let ttsSpeaking = false;
+let ttsVoice: SpeechSynthesisVoice | null = null;
+let ttsPulseAnimationId = 0;
 
 /** Rolling noise floor — persists across voice↔ambient transitions. */
 let noiseFloor = 0;
@@ -541,15 +569,27 @@ function releaseAudioResources(): void {
 
 function toggleVoice(): void {
   if (micState === "voice") {
-    stopVoice(true, false);  // mic toggle = transfer transcript, release mic
+    stopVoice(true, true);  // mic toggle = transfer transcript, stay ambient
+  } else if (micState === "speaking") {
+    cancelTTS();
+    void startVoice();      // interrupt TTS → start recording
+  } else if (micState === "transcribing") {
+    // Cancel transcription attempt, go to off
+    micState = "off";
+    voiceTranscript.textContent = "";
+    voiceTranscript.style.display = "";
+    inputBarWrapper.classList.remove("listening");
+    micBtn.classList.remove("active", "ambient");
+    releaseAudioResources();
+    app.setAudioReactivity(null);
   } else {
     void startVoice();       // off or ambient → voice
   }
 }
 
 async function startVoice(): Promise<void> {
-  const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognitionCtor) return;
+  // Cancel any ongoing TTS
+  cancelTTS();
 
   // If ambient, stop its loop (we'll take over the audio pipeline)
   stopAmbientLoop();
@@ -558,55 +598,75 @@ async function startVoice(): Promise<void> {
   // Ensure mic + audio analysis pipeline
   if (!await ensureAudioPipeline()) return;
 
-  // Speech recognition
-  const recognition = new SpeechRecognitionCtor();
-  recognition.continuous = true;
-  recognition.interimResults = true;
-  recognition.lang = "en-US";
+  // Speech recognition (only if API available and not previously denied)
+  const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (SpeechRecognitionCtor && sttAvailable) {
+    const recognition = new SpeechRecognitionCtor();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
 
-  recognition.onresult = (event: SpeechRecognitionEvent) => {
-    let final = "";
-    let interim = "";
-    for (let i = 0; i < event.results.length; i++) {
-      const result = event.results[i] as SpeechRecognitionResult | undefined;
-      if (!result) continue;
-      const alt = result[0] as SpeechRecognitionAlternative | undefined;
-      const text = alt?.transcript ?? "";
-      if (result.isFinal) {
-        final += text;
-      } else {
-        interim += text;
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      let final = "";
+      let interim = "";
+      for (let i = 0; i < event.results.length; i++) {
+        const result = event.results[i] as SpeechRecognitionResult | undefined;
+        if (!result) continue;
+        const alt = result[0] as SpeechRecognitionAlternative | undefined;
+        const text = alt?.transcript ?? "";
+        if (result.isFinal) {
+          final += text;
+        } else {
+          interim += text;
+        }
       }
+      voiceFinalTranscript = final;
+      voiceInterimTranscript = interim;
+      const display = (final + interim).trim();
+      voiceTranscript.textContent = display || "Listening...";
+    };
+
+    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      if (event.error === "no-speech" || event.error === "aborted") return;
+      if (event.error === "service-not-allowed" || event.error === "not-allowed") {
+        sttAvailable = false;
+        addMessage("system", "Speech recognition needs permission — open System Settings > Privacy & Security > Speech Recognition, then grant access to Motebit. Using Whisper fallback.");
+        return;
+      }
+      addMessage("system", `Voice error: ${event.error}`);
+      stopVoice(false, false); // error → full stop
+    };
+
+    recognition.onend = () => {
+      if (micState === "voice") {
+        try { recognition.start(); } catch { /* already started */ }
+      }
+    };
+
+    voiceRecognition = recognition;
+
+    try {
+      recognition.start();
+    } catch {
+      sttAvailable = false;
+      voiceRecognition = null;
+      // Recognition failed but mic works — continue with MediaRecorder only
     }
-    voiceFinalTranscript = final;
-    voiceInterimTranscript = interim;
-    const display = (final + interim).trim();
-    voiceTranscript.textContent = display || "Listening...";
-  };
+  }
 
-  recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-    if (event.error === "no-speech" || event.error === "aborted" || event.error === "service-not-allowed") return;
-    addMessage("system", `Voice error: ${event.error}`);
-    stopVoice(false, false); // error → full stop
-  };
-
-  recognition.onend = () => {
-    if (micState === "voice") {
-      try { recognition.start(); } catch { /* already started */ }
+  // Start MediaRecorder for Whisper fallback (always, alongside Web Speech)
+  mediaRecorderChunks = [];
+  if (micStream) {
+    try {
+      const mr = new MediaRecorder(micStream, { mimeType: "audio/webm;codecs=opus" });
+      mr.ondataavailable = (e) => {
+        if (e.data.size > 0) mediaRecorderChunks.push(e.data);
+      };
+      mr.start(250); // collect chunks every 250ms
+      mediaRecorder = mr;
+    } catch {
+      // MediaRecorder not available — Web Speech only
     }
-  };
-
-  voiceRecognition = recognition;
-
-  try {
-    recognition.start();
-  } catch {
-    addMessage("system", "Speech recognition failed to start");
-    // Recognition failed but mic works — enter ambient
-    micState = "ambient";
-    micBtn.classList.add("ambient");
-    startAmbientLoop();
-    return;
   }
 
   // UI state
@@ -635,6 +695,13 @@ function stopVoice(transfer: boolean, toAmbient: boolean): void {
     voiceRecognition = null;
   }
 
+  // Stop MediaRecorder
+  const recorderWasActive = mediaRecorder?.state === "recording";
+  if (mediaRecorder) {
+    try { mediaRecorder.stop(); } catch { /* */ }
+    mediaRecorder = null;
+  }
+
   // Stop waveform
   if (waveformAnimationId) {
     cancelAnimationFrame(waveformAnimationId);
@@ -643,31 +710,101 @@ function stopVoice(transfer: boolean, toAmbient: boolean): void {
   const ctx2d = voiceWaveform.getContext("2d");
   if (ctx2d) ctx2d.clearRect(0, 0, voiceWaveform.width, voiceWaveform.height);
 
-  // Transfer transcript
-  if (transfer) {
-    const text = (voiceFinalTranscript + voiceInterimTranscript).trim();
-    if (text) chatInput.value = text;
-  }
+  // Determine transcript source
+  const webSpeechText = (voiceFinalTranscript + voiceInterimTranscript).trim();
   voiceFinalTranscript = "";
   voiceInterimTranscript = "";
 
+  if (transfer && webSpeechText && sttAvailable) {
+    // Web Speech API produced a transcript — use it directly
+    finishVoiceTranscript(webSpeechText, toAmbient);
+  } else if (transfer && recorderWasActive && mediaRecorderChunks.length > 0) {
+    // No Web Speech transcript — fall back to Whisper via MediaRecorder audio
+    micState = "transcribing";
+    inputBarWrapper.classList.remove("listening");
+    micBtn.classList.remove("active");
+    micBtn.classList.add("ambient");
+    voiceTranscript.textContent = "Transcribing...";
+    voiceTranscript.style.display = "block";
+
+    void transcribeWithWhisper(toAmbient);
+  } else {
+    // No transfer or no audio — just clean up
+    finishVoiceTranscript("", toAmbient);
+  }
+}
+
+/** Transcribe recorded audio chunks via Whisper (Tauri command). */
+async function transcribeWithWhisper(toAmbient: boolean): Promise<void> {
+  try {
+    const blob = new Blob(mediaRecorderChunks, { type: "audio/webm;codecs=opus" });
+    mediaRecorderChunks = [];
+
+    // Convert to base64
+    const arrayBuf = await blob.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuf);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]!);
+    }
+    const audioBase64 = btoa(binary);
+
+    if (!currentConfig?.isTauri || !currentConfig?.invoke) {
+      addMessage("system", "Whisper transcription requires the desktop app (Tauri)");
+      finishVoiceTranscript("", toAmbient);
+      return;
+    }
+
+    // Get Whisper API key from keyring (if set)
+    let whisperApiKey: string | undefined;
+    try {
+      const keyVal = await currentConfig.invoke<string | null>("keyring_get", { key: "whisper_api_key" });
+      whisperApiKey = keyVal ?? undefined;
+    } catch {
+      // No key available
+    }
+
+    const transcript = await currentConfig.invoke<string>("transcribe_audio", {
+      audioBase64,
+      apiKey: whisperApiKey ?? null,
+    });
+
+    finishVoiceTranscript(transcript.trim(), toAmbient);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    addMessage("system", msg);
+    finishVoiceTranscript("", toAmbient);
+  }
+}
+
+/** Complete voice input: put transcript in input, optionally auto-send, transition state. */
+function finishVoiceTranscript(text: string, toAmbient: boolean): void {
   // UI — clear voice state
   inputBarWrapper.classList.remove("listening");
   micBtn.classList.remove("active");
   voiceTranscript.textContent = "";
-  chatInput.focus();
+  voiceTranscript.style.display = "";
+
+  if (text) {
+    chatInput.value = text;
+  }
 
   if (toAmbient) {
-    // Keep mic alive → ambient: creature feels the room
     micState = "ambient";
     micBtn.classList.add("ambient");
     startAmbientLoop();
   } else {
-    // Full stop: release mic
     micState = "off";
     micBtn.classList.remove("ambient");
     releaseAudioResources();
     app.setAudioReactivity(null);
+  }
+
+  chatInput.focus();
+
+  // Auto-send if enabled and there's text
+  if (voiceAutoSend && text) {
+    void handleSend();
   }
 }
 
@@ -768,6 +905,124 @@ function startAmbientLoop(): void {
   };
 
   ambientAnimationId = requestAnimationFrame(analyze);
+}
+
+// === TTS (Text-to-Speech) ===
+
+/** Pick a natural macOS voice, preferring Samantha or similar. */
+function pickTTSVoice(): void {
+  const voices = speechSynthesis.getVoices();
+  if (voices.length === 0) return;
+  // Prefer high-quality macOS voices
+  const preferred = ["Samantha", "Karen", "Daniel", "Alex"];
+  for (const name of preferred) {
+    const match = voices.find(v => v.name.includes(name) && v.lang.startsWith("en"));
+    if (match) { ttsVoice = match; return; }
+  }
+  // Fall back to any English voice
+  ttsVoice = voices.find(v => v.lang.startsWith("en")) ?? voices[0] ?? null;
+}
+
+// Voices load asynchronously in WebKit
+if (typeof speechSynthesis !== "undefined") {
+  speechSynthesis.addEventListener("voiceschanged", pickTTSVoice);
+  pickTTSVoice();
+}
+
+/** Speak text via Web Speech Synthesis API. Returns when speech ends. */
+function speakText(text: string): void {
+  if (!voiceResponseEnabled || !text.trim()) return;
+
+  const utterance = new SpeechSynthesisUtterance(text);
+  if (ttsVoice) utterance.voice = ttsVoice;
+  utterance.rate = 1.0;
+  utterance.pitch = 1.0;
+  utterance.volume = 0.9;
+
+  utterance.onstart = () => {
+    ttsSpeaking = true;
+    micState = "speaking";
+    micBtn.classList.remove("active");
+    micBtn.classList.add("ambient");
+    startTTSPulse();
+  };
+
+  utterance.onend = () => {
+    ttsSpeaking = false;
+    ttsUtterance = null;
+    stopTTSPulse();
+    // After speaking, enter ambient mode — creature feels the room, ready for next voice turn
+    if (micStream && audioContext && analyserNode) {
+      micState = "ambient";
+      micBtn.classList.add("ambient");
+      startAmbientLoop();
+    } else {
+      micState = "off";
+      micBtn.classList.remove("ambient");
+    }
+  };
+
+  utterance.onerror = () => {
+    ttsSpeaking = false;
+    ttsUtterance = null;
+    stopTTSPulse();
+    if (micState === "speaking") {
+      micState = micStream ? "ambient" : "off";
+      if (micState === "ambient") startAmbientLoop();
+    }
+  };
+
+  ttsUtterance = utterance;
+  speechSynthesis.cancel(); // Clear any queued speech
+  speechSynthesis.speak(utterance);
+}
+
+/** Cancel ongoing TTS. */
+function cancelTTS(): void {
+  if (ttsSpeaking || ttsUtterance) {
+    speechSynthesis.cancel();
+    ttsSpeaking = false;
+    ttsUtterance = null;
+    stopTTSPulse();
+  }
+}
+
+/** Simulated creature audio reactivity during TTS — pulse at speech rhythm. */
+function startTTSPulse(): void {
+  stopTTSPulse();
+  let phase = 0;
+  const pulse = (): void => {
+    if (!ttsSpeaking) return;
+    phase += 0.05;
+    // Gentle pulsing — simulates the creature's voice
+    const base = 0.15;
+    const wave = Math.sin(phase * 3.7) * 0.08 + Math.sin(phase * 7.1) * 0.04;
+    app.setAudioReactivity({
+      rms: base + wave,
+      low: base * 0.8 + wave * 0.5,
+      mid: base * 1.2 + wave,
+      high: base * 0.4 + Math.sin(phase * 11.3) * 0.03,
+    });
+    ttsPulseAnimationId = requestAnimationFrame(pulse);
+  };
+  ttsPulseAnimationId = requestAnimationFrame(pulse);
+}
+
+function stopTTSPulse(): void {
+  if (ttsPulseAnimationId) {
+    cancelAnimationFrame(ttsPulseAnimationId);
+    ttsPulseAnimationId = 0;
+  }
+  if (!ttsSpeaking) {
+    app.setAudioReactivity(null);
+  }
+}
+
+/** Speak an assistant response if voice response is enabled. Strips tags. */
+function speakAssistantResponse(text: string): void {
+  if (!voiceResponseEnabled) return;
+  const clean = stripTags(text).trim();
+  if (clean) speakText(clean);
 }
 
 function sizeWaveformCanvas(): void {
@@ -1362,6 +1617,14 @@ function openSettings(): void {
   // Operator mode
   settingsOperatorMode.checked = app.isOperatorMode;
 
+  // Voice settings
+  settingsWhisperApiKey.value = "";
+  settingsWhisperApiKey.type = "password";
+  settingsWhisperApiKeyToggle.textContent = "Show";
+  settingsWhisperApiKey.placeholder = hasWhisperKeyInKeyring ? "API key stored" : "sk-...";
+  settingsVoiceAutoSend.checked = voiceAutoSend;
+  settingsVoiceResponse.checked = voiceResponseEnabled;
+
   // Appearance: track previous for cancel
   previousColorPreset = selectedColorPreset;
   buildColorSwatches();
@@ -1399,7 +1662,12 @@ async function saveSettings(): Promise<void> {
   const provider = settingsProvider.value as DesktopAIConfig["provider"];
   const model = settingsModel.value.trim() || undefined;
   const apiKey = settingsApiKey.value.trim() || undefined;
+  const whisperApiKey = settingsWhisperApiKey.value.trim() || undefined;
   const isTauri = typeof window !== "undefined" && !!window.__TAURI__;
+
+  // Apply voice settings immediately
+  voiceAutoSend = settingsVoiceAutoSend.checked;
+  voiceResponseEnabled = settingsVoiceResponse.checked;
 
   if (isTauri) {
     const { invoke } = await import("@tauri-apps/api/core");
@@ -1417,6 +1685,10 @@ async function saveSettings(): Promise<void> {
       budget: {
         maxCallsPerTurn: parseInt(maxCalls.value, 10) || 10,
       },
+      voice: {
+        auto_send: voiceAutoSend,
+        voice_response: voiceResponseEnabled,
+      },
     };
     if (model) configData.default_model = model;
     await invoke("write_config", { json: JSON.stringify(configData) });
@@ -1425,6 +1697,12 @@ async function saveSettings(): Promise<void> {
     if (apiKey) {
       await invoke("keyring_set", { key: "api_key", value: apiKey });
       hasApiKeyInKeyring = true;
+    }
+
+    // Whisper API key to keyring
+    if (whisperApiKey) {
+      await invoke("keyring_set", { key: "whisper_api_key", value: whisperApiKey });
+      hasWhisperKeyInKeyring = true;
     }
   }
 
@@ -1623,12 +1901,32 @@ settingsApiKeyToggle.addEventListener("click", () => {
     settingsApiKeyToggle.textContent = "Show";
   }
 });
+settingsWhisperApiKeyToggle.addEventListener("click", () => {
+  if (settingsWhisperApiKey.type === "password") {
+    settingsWhisperApiKey.type = "text";
+    settingsWhisperApiKeyToggle.textContent = "Hide";
+  } else {
+    settingsWhisperApiKey.type = "password";
+    settingsWhisperApiKeyToggle.textContent = "Show";
+  }
+});
 
-// Escape key: cancel voice/ambient first, then close modals
+// Escape key: cancel voice/ambient/speaking first, then close modals
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if (micState === "voice") {
       stopVoice(false, false);  // cancel voice, release mic
+    } else if (micState === "speaking") {
+      cancelTTS();
+      stopAmbient();     // fully stop
+    } else if (micState === "transcribing") {
+      micState = "off";
+      voiceTranscript.textContent = "";
+      voiceTranscript.style.display = "";
+      inputBarWrapper.classList.remove("listening");
+      micBtn.classList.remove("active", "ambient");
+      releaseAudioResources();
+      app.setAudioReactivity(null);
     } else if (micState === "ambient") {
       stopAmbient();     // stop ambient sensing
     } else if (pinBackdrop.classList.contains("open")) {
@@ -1774,10 +2072,23 @@ async function bootstrap(): Promise<void> {
       }
     }
 
-    // Check if API key exists in keyring (for placeholder display)
+    // Voice settings
+    if (parsed.voice && typeof parsed.voice === "object") {
+      const v = parsed.voice as Record<string, unknown>;
+      if (typeof v.auto_send === "boolean") voiceAutoSend = v.auto_send;
+      if (typeof v.voice_response === "boolean") voiceResponseEnabled = v.voice_response;
+    }
+
+    // Check if API keys exist in keyring (for placeholder display)
     try {
       const keyVal = await invoke<string | null>("keyring_get", { key: "api_key" });
       hasApiKeyInKeyring = !!keyVal;
+    } catch {
+      // Keyring unavailable
+    }
+    try {
+      const whisperVal = await invoke<string | null>("keyring_get", { key: "whisper_api_key" });
+      hasWhisperKeyInKeyring = !!whisperVal;
     } catch {
       // Keyring unavailable
     }
@@ -1845,19 +2156,17 @@ async function bootstrap(): Promise<void> {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (micState === "voice") {
-        stopVoice(true, true);  // transfer transcript, enter ambient
+        stopVoice(true, true);  // transfer transcript, enter ambient (auto-send handled by stopVoice)
+        return; // stopVoice → finishVoiceTranscript handles send
       }
       void handleSend();
     }
   });
 
-  // Voice input: show mic button if Web Speech API is available
-  const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (SpeechRecognitionCtor) {
-    micBtn.style.display = "flex";
-    micBtn.addEventListener("click", toggleVoice);
-    updateVoiceGlowColor();
-  }
+  // Voice input: always show mic button (Web Speech + Whisper fallback)
+  micBtn.style.display = "flex";
+  micBtn.addEventListener("click", toggleVoice);
+  updateVoiceGlowColor();
 }
 
 bootstrap().catch((err: unknown) => {
