@@ -11,6 +11,7 @@ serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 keyring = "3"
 base64 = "0.22"
+reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -1,10 +1,26 @@
 import { DesktopApp, COLOR_PRESETS, isSlashCommand, parseSlashCommand, type DesktopAIConfig, type InvokeFn, type McpServerConfig, type PolicyConfig, type PairingSession } from "./index";
 import { stripTags } from "@motebit/ai-core";
 import { MicVAD } from "@ricky0123/vad-web";
-import { WebSpeechTTSProvider, WebSpeechSTTProvider } from "@motebit/voice";
+import { WebSpeechTTSProvider, WebSpeechSTTProvider, FallbackTTSProvider } from "@motebit/voice";
+import type { TTSProvider } from "@motebit/voice";
+import { TauriTTSProvider } from "./tauri-tts";
 
-const ttsProvider = new WebSpeechTTSProvider(["Samantha", "Karen", "Daniel", "Alex"]);
+const webSpeechTts = new WebSpeechTTSProvider(["Samantha", "Karen", "Daniel", "Alex"]);
+let ttsProvider: TTSProvider = webSpeechTts;
 const sttProvider = new WebSpeechSTTProvider();
+
+/** TTS voice setting (OpenAI voice name). */
+let ttsVoice = "alloy";
+
+/** Rebuild TTS provider chain based on current Tauri availability and settings. */
+function rebuildTtsProvider(invoke?: InvokeFn): void {
+  if (invoke) {
+    const tauriTts = new TauriTTSProvider(invoke, { voice: ttsVoice });
+    ttsProvider = new FallbackTTSProvider([tauriTts, webSpeechTts]);
+  } else {
+    ttsProvider = webSpeechTts;
+  }
+}
 
 const canvas = document.getElementById("motebit-canvas") as HTMLCanvasElement;
 if (!canvas) {
@@ -343,6 +359,171 @@ document.getElementById("conv-new-btn")!.addEventListener("click", () => {
   addMessage("system", "New conversation started");
 });
 
+// === Goals Panel ===
+
+const goalsPanel = document.getElementById("goals-panel") as HTMLDivElement;
+const goalsBackdrop = document.getElementById("goals-backdrop") as HTMLDivElement;
+const goalList = document.getElementById("goal-list") as HTMLDivElement;
+
+function openGoalsPanel(): void {
+  goalsPanel.classList.add("open");
+  goalsBackdrop.classList.add("open");
+  refreshGoalList();
+}
+
+function closeGoalsPanel(): void {
+  goalsPanel.classList.remove("open");
+  goalsBackdrop.classList.remove("open");
+}
+
+function formatInterval(ms: number): string {
+  if (ms >= 86400000) return `${Math.round(ms / 86400000)}d`;
+  if (ms >= 3600000) return `${Math.round(ms / 3600000)}h`;
+  if (ms >= 60000) return `${Math.round(ms / 60000)}m`;
+  return `${Math.round(ms / 1000)}s`;
+}
+
+function refreshGoalList(): void {
+  if (!currentConfig?.isTauri || !currentConfig?.invoke) return;
+  const motebitId = app.motebitId;
+  if (!motebitId) return;
+  const invoke = currentConfig.invoke;
+
+  goalList.innerHTML = "";
+  void invoke<Array<Record<string, unknown>>>("goals_list", { motebitId }).then(goals => {
+    if (goals.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "goal-empty";
+      empty.textContent = "No goals yet";
+      goalList.appendChild(empty);
+      return;
+    }
+
+    for (const goal of goals) {
+      const item = document.createElement("div");
+      item.className = "goal-item";
+
+      const promptDiv = document.createElement("div");
+      promptDiv.className = "goal-item-prompt";
+      const promptText = String(goal.prompt || "");
+      promptDiv.textContent = promptText.length > 60 ? promptText.slice(0, 60) + "..." : promptText;
+      promptDiv.title = promptText;
+      item.appendChild(promptDiv);
+
+      const metaDiv = document.createElement("div");
+      metaDiv.className = "goal-item-meta";
+
+      const statusDot = document.createElement("span");
+      const status = String(goal.status || "active");
+      statusDot.className = `goal-status-dot ${status}`;
+      metaDiv.appendChild(statusDot);
+
+      const statusText = document.createElement("span");
+      statusText.textContent = status;
+      metaDiv.appendChild(statusText);
+
+      const intervalSpan = document.createElement("span");
+      intervalSpan.textContent = formatInterval(Number(goal.interval_ms) || 0);
+      metaDiv.appendChild(intervalSpan);
+
+      const modeSpan = document.createElement("span");
+      modeSpan.textContent = String(goal.mode || "recurring");
+      metaDiv.appendChild(modeSpan);
+
+      item.appendChild(metaDiv);
+
+      const actions = document.createElement("div");
+      actions.className = "goal-item-actions";
+
+      const goalId = String(goal.goal_id);
+
+      if (status === "active" || status === "paused") {
+        const toggleBtn = document.createElement("button");
+        toggleBtn.textContent = status === "active" ? "Pause" : "Resume";
+        toggleBtn.addEventListener("click", () => {
+          void toggleGoal(goalId);
+        });
+        actions.appendChild(toggleBtn);
+      }
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.className = "goal-delete-btn";
+      deleteBtn.textContent = "Delete";
+      deleteBtn.addEventListener("click", () => {
+        void deleteGoal(goalId);
+      });
+      actions.appendChild(deleteBtn);
+
+      item.appendChild(actions);
+      goalList.appendChild(item);
+    }
+  }).catch(() => {
+    goalList.innerHTML = '<div class="goal-empty">Failed to load goals</div>';
+  });
+}
+
+async function createGoal(): Promise<void> {
+  if (!currentConfig?.isTauri || !currentConfig?.invoke) return;
+  const motebitId = app.motebitId;
+  if (!motebitId) return;
+
+  const promptEl = document.getElementById("goal-prompt") as HTMLTextAreaElement;
+  const intervalEl = document.getElementById("goal-interval") as HTMLSelectElement;
+  const modeEl = document.getElementById("goal-mode") as HTMLSelectElement;
+
+  const prompt = promptEl.value.trim();
+  if (!prompt) return;
+
+  const intervalMs = parseInt(intervalEl.value, 10);
+  const mode = modeEl.value;
+  const goalId = crypto.randomUUID();
+
+  try {
+    await currentConfig.invoke("goals_create", {
+      motebitId,
+      goalId,
+      prompt,
+      intervalMs,
+      mode,
+    });
+    promptEl.value = "";
+    refreshGoalList();
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    addMessage("system", `Failed to create goal: ${msg}`);
+  }
+}
+
+async function toggleGoal(goalId: string): Promise<void> {
+  if (!currentConfig?.isTauri || !currentConfig?.invoke) return;
+  try {
+    await currentConfig.invoke("goals_toggle", { goalId });
+    refreshGoalList();
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    addMessage("system", `Failed to toggle goal: ${msg}`);
+  }
+}
+
+async function deleteGoal(goalId: string): Promise<void> {
+  if (!currentConfig?.isTauri || !currentConfig?.invoke) return;
+  try {
+    await currentConfig.invoke("goals_delete", { goalId });
+    refreshGoalList();
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    addMessage("system", `Failed to delete goal: ${msg}`);
+  }
+}
+
+// Goals panel event listeners
+document.getElementById("goals-btn")!.addEventListener("click", openGoalsPanel);
+document.getElementById("goals-close-btn")!.addEventListener("click", closeGoalsPanel);
+goalsBackdrop.addEventListener("click", closeGoalsPanel);
+document.getElementById("goal-create-btn")!.addEventListener("click", () => {
+  void createGoal();
+});
+
 // === Config Loading ===
 
 async function loadDesktopConfig(): Promise<DesktopAIConfig> {
@@ -409,6 +590,7 @@ const settingsWhisperApiKey = document.getElementById("settings-whisper-apikey")
 const settingsWhisperApiKeyToggle = document.getElementById("settings-whisper-apikey-toggle") as HTMLButtonElement;
 const settingsVoiceAutoSend = document.getElementById("settings-voice-autosend") as HTMLInputElement;
 const settingsVoiceResponse = document.getElementById("settings-voice-response") as HTMLInputElement;
+const settingsTtsVoice = document.getElementById("settings-tts-voice") as HTMLSelectElement;
 let hasWhisperKeyInKeyring = false;
 
 // Settings state
@@ -1719,6 +1901,7 @@ function openSettings(): void {
   settingsWhisperApiKey.placeholder = hasWhisperKeyInKeyring ? "API key stored" : "sk-...";
   settingsVoiceAutoSend.checked = voiceAutoSend;
   settingsVoiceResponse.checked = voiceResponseEnabled;
+  settingsTtsVoice.value = ttsVoice;
 
   // Appearance: track previous for cancel
   previousColorPreset = selectedColorPreset;
@@ -1763,6 +1946,7 @@ async function saveSettings(): Promise<void> {
   // Apply voice settings immediately
   voiceAutoSend = settingsVoiceAutoSend.checked;
   voiceResponseEnabled = settingsVoiceResponse.checked;
+  ttsVoice = settingsTtsVoice.value;
 
   if (isTauri) {
     const { invoke } = await import("@tauri-apps/api/core");
@@ -1783,6 +1967,7 @@ async function saveSettings(): Promise<void> {
       voice: {
         auto_send: voiceAutoSend,
         voice_response: voiceResponseEnabled,
+        tts_voice: ttsVoice,
       },
     };
     if (model) configData.default_model = model;
@@ -1799,6 +1984,9 @@ async function saveSettings(): Promise<void> {
       await invoke("keyring_set", { key: "whisper_api_key", value: whisperApiKey });
       hasWhisperKeyInKeyring = true;
     }
+
+    // Rebuild TTS chain with updated voice setting
+    rebuildTtsProvider(invoke as InvokeFn);
   }
 
   // Apply governance settings
@@ -2028,6 +2216,8 @@ document.addEventListener("keydown", (e) => {
       stopAmbient();     // stop ambient sensing (destroys Silero)
     } else if (pinBackdrop.classList.contains("open")) {
       closePinDialog();
+    } else if (goalsPanel.classList.contains("open")) {
+      closeGoalsPanel();
     } else if (conversationsPanel.classList.contains("open")) {
       closeConversationsPanel();
     } else if (settingsModal.classList.contains("open")) {
@@ -2174,7 +2364,11 @@ async function bootstrap(): Promise<void> {
       const v = parsed.voice as Record<string, unknown>;
       if (typeof v.auto_send === "boolean") voiceAutoSend = v.auto_send;
       if (typeof v.voice_response === "boolean") voiceResponseEnabled = v.voice_response;
+      if (typeof v.tts_voice === "string") ttsVoice = v.tts_voice;
     }
+
+    // Build TTS fallback chain: OpenAI TTS (via Tauri IPC) → Web Speech
+    rebuildTtsProvider(invoke as InvokeFn);
 
     // Check if API keys exist in keyring (for placeholder display)
     try {

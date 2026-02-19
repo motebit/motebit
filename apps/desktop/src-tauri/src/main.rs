@@ -460,6 +460,176 @@ fn transcribe_audio(audio_base64: String, api_key: Option<String>) -> Result<Str
     Err("No transcription available. Grant macOS Speech Recognition permission (System Settings > Privacy & Security > Speech Recognition), install whisper locally (pip install openai-whisper), or add an OpenAI API key in Voice settings.".to_string())
 }
 
+// === Goal Commands (narrow IPC — no raw SQL from the webview) ===
+
+#[tauri::command]
+fn goals_list(state: State<AppState>, motebit_id: String) -> Result<Vec<JsonValue>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let mut stmt = db
+        .prepare(
+            "SELECT goal_id, prompt, interval_ms, mode, status, consecutive_failures, created_at \
+             FROM goals WHERE motebit_id = ? ORDER BY created_at DESC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map([&motebit_id], |row| {
+            let mut obj = serde_json::Map::new();
+            obj.insert("goal_id".into(), JsonValue::String(row.get::<_, String>(0)?));
+            obj.insert("prompt".into(), JsonValue::String(row.get::<_, String>(1)?));
+            obj.insert("interval_ms".into(), JsonValue::Number(row.get::<_, i64>(2)?.into()));
+            obj.insert("mode".into(), JsonValue::String(row.get::<_, String>(3)?));
+            obj.insert("status".into(), JsonValue::String(row.get::<_, String>(4)?));
+            obj.insert(
+                "consecutive_failures".into(),
+                JsonValue::Number(row.get::<_, i64>(5)?.into()),
+            );
+            obj.insert("created_at".into(), JsonValue::Number(row.get::<_, i64>(6)?.into()));
+            Ok(JsonValue::Object(obj))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(results)
+}
+
+#[tauri::command]
+fn goals_create(
+    state: State<AppState>,
+    motebit_id: String,
+    goal_id: String,
+    prompt: String,
+    interval_ms: i64,
+    mode: String,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis() as i64;
+    db.execute(
+        "INSERT INTO goals (goal_id, motebit_id, prompt, interval_ms, mode, status, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6)",
+        rusqlite::params![goal_id, motebit_id, prompt, interval_ms, mode, now],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn goals_toggle(state: State<AppState>, goal_id: String) -> Result<String, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let current: String = db
+        .query_row("SELECT status FROM goals WHERE goal_id = ?1", [&goal_id], |row| {
+            row.get(0)
+        })
+        .map_err(|e| e.to_string())?;
+    let new_status = if current == "active" { "paused" } else { "active" };
+    db.execute(
+        "UPDATE goals SET status = ?1 WHERE goal_id = ?2",
+        rusqlite::params![new_status, goal_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(new_status.to_string())
+}
+
+#[tauri::command]
+fn goals_delete(state: State<AppState>, goal_id: String) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.execute("DELETE FROM goal_outcomes WHERE goal_id = ?1", [&goal_id])
+        .map_err(|e| e.to_string())?;
+    db.execute("DELETE FROM goals WHERE goal_id = ?1", [&goal_id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// === TTS Command (OpenAI API key stays in keyring, never in webview) ===
+
+#[tauri::command]
+async fn tts_openai_speech(
+    text: String,
+    voice: Option<String>,
+    model: Option<String>,
+) -> Result<String, String> {
+    use base64::Engine;
+
+    // Read API key from keyring
+    let entry = keyring::Entry::new(KEYRING_SERVICE, "whisper_api_key")
+        .map_err(|e| e.to_string())?;
+    let api_key = match entry.get_password() {
+        Ok(val) => val,
+        Err(keyring::Error::NoEntry) => {
+            return Err("No OpenAI API key configured".to_string());
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+
+    let voice_name = voice.unwrap_or_else(|| "alloy".to_string());
+    let model_name = model.unwrap_or_else(|| "tts-1".to_string());
+
+    // Split long text at sentence boundaries (4096 char limit per request)
+    let chunks = split_tts_text(&text, 4096);
+    let mut all_bytes: Vec<u8> = Vec::new();
+
+    let client = reqwest::Client::new();
+    for chunk in &chunks {
+        let body = serde_json::json!({
+            "model": model_name,
+            "input": chunk,
+            "voice": voice_name,
+            "response_format": "mp3"
+        });
+
+        let resp = client
+            .post("https://api.openai.com/v1/audio/speech")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("TTS request failed: {}", e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body_text = resp.text().await.unwrap_or_default();
+            return Err(format!("OpenAI TTS error ({}): {}", status, body_text));
+        }
+
+        let bytes = resp.bytes().await.map_err(|e| format!("Failed to read TTS response: {}", e))?;
+        all_bytes.extend_from_slice(&bytes);
+    }
+
+    Ok(base64::engine::general_purpose::STANDARD.encode(&all_bytes))
+}
+
+/// Split text at sentence boundaries for TTS chunking.
+fn split_tts_text(text: &str, max_len: usize) -> Vec<String> {
+    if text.len() <= max_len {
+        return vec![text.to_string()];
+    }
+    let mut chunks = Vec::new();
+    let mut remaining = text;
+    while !remaining.is_empty() {
+        if remaining.len() <= max_len {
+            chunks.push(remaining.to_string());
+            break;
+        }
+        // Find last sentence boundary within max_len
+        let search = &remaining[..max_len];
+        let split_at = search
+            .rfind(". ")
+            .or_else(|| search.rfind("! "))
+            .or_else(|| search.rfind("? "))
+            .map(|i| i + 2)
+            .unwrap_or(max_len);
+        chunks.push(remaining[..split_at].to_string());
+        remaining = &remaining[split_at..];
+    }
+    chunks
+}
+
 fn main() {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
@@ -494,6 +664,11 @@ fn main() {
             write_file_tool,
             shell_exec_tool,
             transcribe_audio,
+            goals_list,
+            goals_create,
+            goals_toggle,
+            goals_delete,
+            tts_openai_speech,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
