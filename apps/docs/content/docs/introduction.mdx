@@ -3,77 +3,33 @@ title: Introduction
 description: What is motebit, and why does it exist.
 ---
 
-A motebit is a persistent, cryptographically-anchored, sovereign agent. You own the identity. The intelligence is pluggable. The body is yours.
+A motebit is a small glass sphere, alive, suspended in air. It breathes because droplets oscillate. It glows when it thinks. It remembers what you've told it, forgets gracefully over time, and asks before it acts. It lives on your device — not in someone else's cloud.
 
-Every AI product today owns the intelligence and rents you a session. Motebit inverts that. Your agent accumulates memory, trust, and governance across time and devices — while the LLM underneath is a replaceable commodity.
+Every AI today owns the intelligence and rents you a session. When the session ends, the memory resets, the context vanishes, the relationship starts over. Motebit inverts that. The intelligence is a commodity — you can swap the LLM underneath at any time. What you own is the agent itself: its identity, its accumulated memory, its trust, its governance.
 
-## What motebit provides
+## What makes it yours
 
-1. **Persistent sovereign identity** — Ed25519 keypairs, device registration, signed tokens. Not a session cookie. A cryptographic entity that exists across time and devices.
-2. **Accumulated trust** — Semantic memory with half-life decay, event-sourced audit trails, tool usage history. The agent gets more capable the longer it runs.
-3. **Governance at the boundary** — Sensitivity-aware privacy, policy gates, operator mode. You control what crosses the surface.
+**It knows who it is.** Your motebit has a cryptographic identity — an Ed25519 keypair that proves it's yours across devices, sessions, and providers. Not a session cookie. A persistent entity.
 
-## Quickstart
+**It remembers.** Conversations become semantic memories that compound over time. Important things stick. Trivial things decay. The agent gets more useful the longer it runs — and that accumulated knowledge belongs to you.
 
-Create a signed agent identity:
+**It asks before it acts.** A governance layer controls what your agent can do. Read-only tasks happen automatically. Anything that writes, executes, or spends money requires your approval. You set the thresholds.
 
-```bash
-npm create motebit
-```
+**It connects to everything.** Through MCP (Model Context Protocol), your motebit can reach any tool ecosystem — file systems, APIs, databases, services — while its policy layer gates what crosses the boundary.
 
-This generates a `motebit.md` — a cryptographically signed identity file — and stores the private key on your machine. See the [Identity Standard](/docs/guides/identity-standard) guide for details.
+## Where it lives
 
-### Development setup
+Today, your motebit lives on your desktop — a glass droplet hovering over your screen, responding to your voice, glowing when it processes, breathing at 0.3 Hz. It also runs as a command-line agent for developers.
 
-To build on the full platform, clone the repo:
+Tomorrow, it lives on your phone. Eventually, it floats in your field of view.
 
-```bash
-git clone https://github.com/motebit/motebit.git
-cd motebit
-pnpm install
-```
+The body changes. The identity persists.
 
-Start the desktop app:
+## Next steps
 
-```bash
-pnpm --filter @motebit/desktop dev
-```
-
-Or the CLI:
-
-```bash
-pnpm --filter @motebit/cli dev
-```
-
-The first launch generates an Ed25519 keypair, stores the private key in your OS keyring, and creates your motebit identity. Everything stays on your device.
-
-## Architecture at a glance
-
-Motebit is a pnpm monorepo with Turborepo orchestration, TypeScript throughout:
-
-```
-apps/
-  desktop/     Tauri app — flagship, full identity + crypto + operator mode
-  cli/         Node.js REPL — developer debugging interface
-  mobile/      React Native + Expo — early MVP
-  docs/        This site
-
-packages/
-  sdk/         Core types (MotebitState, BehaviorCues, MemoryNode, etc.)
-  runtime/     MotebitRuntime orchestrator — wires all engines
-  ai-core/     Pluggable LLM providers + agentic turn loop
-  behavior-engine/  State vector → animation cues (pure computation)
-  state-vector/     EMA smoothing, hysteresis, interpolation
-  memory-graph/     Semantic memory with cosine similarity + decay
-  event-log/        Append-only event sourcing with version clocks
-  core-identity/    UUID v7 identity, Ed25519 key binding
-  crypto/           AES-256-GCM, Ed25519 signing, PBKDF2 derivation
-  policy/           Tool approval, budgets, operator mode, audit
-  privacy-layer/    Retention rules, deletion certificates, fail-closed
-  sync-engine/      Multi-device sync with conflict detection
-  render-engine/    Three.js glass droplet renderer
-  tools/            Built-in tool registry
-  mcp-client/       MCP stdio client for external tools
-```
-
-Read the [Concepts](/docs/concepts/identity) section to understand the core ideas, or jump to [Guides](/docs/guides/desktop) to start building.
+<Cards>
+  <Card title="Get Your Agent" href="/docs/get-your-agent" description="Download the desktop app or create an identity from the command line." />
+  <Card title="The Droplet" href="/docs/concepts/the-droplet" description="Why the form is a glass sphere — the physics derivation." />
+  <Card title="Identity" href="/docs/concepts/identity" description="How cryptographic identity works under the hood." />
+  <Card title="Identity Standard" href="/docs/guides/identity-standard" description="The motebit.md specification for developers." />
+</Cards>

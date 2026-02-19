@@ -1,0 +1,62 @@
+---
+title: Get Your Agent
+description: Download the desktop app, create an identity, and meet your motebit.
+---
+
+## Desktop app
+
+The desktop app is the primary way to interact with your motebit. A glass droplet floats on your screen — it breathes, glows when thinking, responds to your voice, and remembers your conversations.
+
+### First launch
+
+1. **Identity** — The app generates an Ed25519 keypair and stores the private key in your OS keychain. This is your agent's identity. It never leaves your device.
+2. **Device** — Your machine is registered as a trusted device. Later you can add your phone, another computer, or any other device.
+3. **Chat** — The interface appears. Type or speak to your motebit.
+
+Everything is local. Your memories, your identity, your conversation history — all stored on your machine in an encrypted SQLite database.
+
+### Choose your intelligence
+
+Your motebit doesn't care which LLM powers it. Open settings and pick a provider:
+
+| Provider | What you need |
+|----------|--------------|
+| **Ollama** | Install [Ollama](https://ollama.ai), pull a model (`ollama pull llama3.2`). Free, local, private. |
+| **Anthropic** | Enter your API key. Stored in OS keychain, never on disk. |
+
+You can switch providers at any time. Your identity, memory, and governance stay the same — only the intelligence changes.
+
+### Voice
+
+Click the microphone or press and hold to speak. The input bar transforms — it glows with the creature's color and pulses with your voice. When you stop, the transcription fills the text field. The creature responds to ambient sound even when you're not speaking — it breathes with the room.
+
+### Operator mode
+
+By default, your motebit can only read. To let it write files, run commands, or interact with external services, enable operator mode in settings:
+
+1. Set a 4-6 digit PIN (first time only)
+2. Enter your PIN to enable operator mode
+3. High-risk tools now require per-call approval — the agent shows you what it wants to do and waits for you to allow or deny
+
+Your PIN hash is stored in the OS keychain. Every tool call is logged to an audit trail.
+
+## Command line
+
+For developers, the CLI provides the same agent with a terminal interface:
+
+```bash
+npm create motebit          # Create a signed identity file
+npx create-motebit verify   # Verify the signature
+```
+
+The CLI also has an interactive REPL, daemon mode with scheduled goals, and a full tool approval queue. See the [CLI guide](/docs/guides/cli) for details.
+
+## What happens over time
+
+Your motebit accumulates:
+
+- **Memories** — Conversations become semantic nodes with confidence scores. Important things strengthen. Trivia decays with a 7-day half-life. You can inspect, export, or delete any memory.
+- **Trust** — The more you interact, the more context the agent has. It learns your preferences, your tools, your patterns. This compounds.
+- **Audit trail** — Every action, every tool call, every approval decision is logged immutably. You can replay the full history of your agent's behavior.
+
+None of this resets when you switch LLMs. None of it lives on someone else's server. The intelligence is a commodity. The accumulated interior is yours.
