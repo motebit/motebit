@@ -1,4 +1,4 @@
-import { DesktopApp, COLOR_PRESETS, isSlashCommand, parseSlashCommand, type DesktopAIConfig, type InvokeFn, type McpServerConfig, type PolicyConfig, type PairingSession, type GoalCompleteEvent, type MemoryNode } from "./index";
+import { DesktopApp, COLOR_PRESETS, isSlashCommand, parseSlashCommand, type DesktopAIConfig, type InvokeFn, type McpServerConfig, type PolicyConfig, type PairingSession, type GoalCompleteEvent, type GoalApprovalEvent, type MemoryNode } from "./index";
 import { stripTags } from "@motebit/ai-core";
 import { MicVAD } from "@ricky0123/vad-web";
 import { WebSpeechTTSProvider, WebSpeechSTTProvider, FallbackTTSProvider } from "@motebit/voice";
@@ -148,6 +148,89 @@ async function consumeApproval(approved: boolean): Promise<void> {
       bubble.remove();
     }
     addMessage("system", `Error: ${msg}`);
+  }
+}
+
+function showGoalApprovalCard(event: GoalApprovalEvent): void {
+  const card = document.createElement("div");
+  card.className = "approval-card";
+
+  const toolDiv = document.createElement("div");
+  toolDiv.className = "approval-tool";
+  toolDiv.textContent = event.toolName;
+  card.appendChild(toolDiv);
+
+  const argsDiv = document.createElement("div");
+  argsDiv.className = "approval-args";
+  argsDiv.textContent = JSON.stringify(event.args).slice(0, 120);
+  card.appendChild(argsDiv);
+
+  const btns = document.createElement("div");
+  btns.className = "approval-buttons";
+
+  const allowBtn = document.createElement("button");
+  allowBtn.className = "btn-allow";
+  allowBtn.textContent = "Allow";
+
+  const denyBtn = document.createElement("button");
+  denyBtn.className = "btn-deny";
+  denyBtn.textContent = "Deny";
+
+  const disableButtons = (): void => {
+    allowBtn.disabled = true;
+    denyBtn.disabled = true;
+  };
+
+  allowBtn.addEventListener("click", () => {
+    disableButtons();
+    void consumeGoalApproval(true);
+  });
+
+  denyBtn.addEventListener("click", () => {
+    disableButtons();
+    void consumeGoalApproval(false);
+  });
+
+  btns.appendChild(allowBtn);
+  btns.appendChild(denyBtn);
+  card.appendChild(btns);
+
+  chatLog.appendChild(card);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+async function consumeGoalApproval(approved: boolean): Promise<void> {
+  const bubble = document.createElement("div");
+  bubble.className = "chat-bubble assistant";
+  bubble.textContent = "";
+  chatLog.appendChild(bubble);
+
+  let accumulated = "";
+  try {
+    for await (const chunk of app.resumeGoalAfterApproval(approved)) {
+      if (chunk.type === "text") {
+        accumulated += chunk.text;
+        bubble.textContent = stripTags(accumulated);
+        chatLog.scrollTop = chatLog.scrollHeight;
+      } else if (chunk.type === "tool_status") {
+        if (chunk.status === "calling") {
+          showToolStatus(chunk.name);
+        } else if (chunk.status === "done") {
+          completeToolStatus(chunk.name);
+        }
+      } else if (chunk.type === "approval_request") {
+        // Nested approval in continuation — reuse existing card
+        showApprovalCard(chunk.name, chunk.args);
+      } else if (chunk.type === "injection_warning") {
+        addMessage("system", `Warning: suspicious content detected in ${chunk.tool_name} results`);
+      }
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!bubble.textContent) {
+      bubble.remove();
+    }
+    addMessage("system", `Approval expired: ${msg}`);
   }
 }
 
@@ -2600,6 +2683,13 @@ async function bootstrap(): Promise<void> {
           const err = event.error ? `: ${event.error.slice(0, 80)}` : "";
           addMessage("system", `Goal failed "${promptSnippet}"${err}`);
         }
+      });
+      app.onGoalApproval((event: GoalApprovalEvent) => {
+        const promptSnippet = event.goalPrompt.length > 50
+          ? event.goalPrompt.slice(0, 50) + "..."
+          : event.goalPrompt;
+        addMessage("system", `Goal "${promptSnippet}" needs approval:`);
+        showGoalApprovalCard(event);
       });
       app.startGoalScheduler(config.invoke);
     }

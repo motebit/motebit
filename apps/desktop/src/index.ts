@@ -46,6 +46,14 @@ export interface GoalCompleteEvent {
   error: string | null;
 }
 
+export interface GoalApprovalEvent {
+  goalId: string;
+  goalPrompt: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  riskLevel?: number;
+}
+
 // === Tauri Command Interface ===
 
 export interface TauriCommands {
@@ -200,6 +208,13 @@ export class DesktopApp {
   private _goalExecuting = false;
   private _goalStatusCallback: ((executing: boolean) => void) | null = null;
   private _goalCompleteCallback: ((event: GoalCompleteEvent) => void) | null = null;
+  private _goalApprovalCallback: ((event: GoalApprovalEvent) => void) | null = null;
+  private _pendingGoalApproval: {
+    goalId: string;
+    prompt: string;
+    invoke: InvokeFn;
+    mode: string;
+  } | null = null;
   private conversationStoreRef: TauriConversationStore | null = null;
   private _autoTitlePending = false;
 
@@ -833,6 +848,78 @@ export class DesktopApp {
     this._goalCompleteCallback = callback;
   }
 
+  /** Subscribe to goal approval requests (tool needs user approval during background goal). */
+  onGoalApproval(callback: (event: GoalApprovalEvent) => void): void {
+    this._goalApprovalCallback = callback;
+  }
+
+  /**
+   * Resume a goal after the user approves/denies a tool call.
+   * Streams the continuation back so main.ts can render it into chat.
+   * After streaming completes, records the goal outcome and cleans up.
+   */
+  async *resumeGoalAfterApproval(approved: boolean): AsyncGenerator<StreamChunk> {
+    if (!this.runtime) throw new Error("AI not initialized");
+    if (!this._pendingGoalApproval) throw new Error("No pending goal approval");
+
+    const { goalId, prompt, invoke, mode } = this._pendingGoalApproval;
+
+    try {
+      let accumulated = "";
+      for await (const chunk of this.runtime.resumeAfterApproval(approved)) {
+        if (chunk.type === "text") {
+          accumulated += chunk.text;
+        }
+        yield chunk;
+      }
+
+      // Record outcome to DB
+      const now = Date.now();
+      await invoke<number>("db_execute", {
+        sql: "UPDATE goals SET last_run_at = ?, consecutive_failures = 0 WHERE goal_id = ?",
+        params: [now, goalId],
+      });
+
+      await invoke<number>("db_execute", {
+        sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
+              VALUES (?, ?, ?, ?, 'completed', ?, 0, 0, NULL)`,
+        params: [crypto.randomUUID(), goalId, this.motebitId, now, accumulated.slice(0, 500)],
+      });
+
+      // One-shot auto-complete
+      if (mode === "once") {
+        await invoke<number>("db_execute", {
+          sql: "UPDATE goals SET status = 'completed' WHERE goal_id = ?",
+          params: [goalId],
+        });
+      }
+
+      // Notify UI
+      this._goalCompleteCallback?.({
+        goalId,
+        prompt,
+        status: "completed",
+        summary: accumulated.slice(0, 200),
+        error: null,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this._goalCompleteCallback?.({
+        goalId,
+        prompt,
+        status: "failed",
+        summary: null,
+        error: msg,
+      });
+      throw err;
+    } finally {
+      this._goalExecuting = false;
+      this._goalStatusCallback?.(false);
+      this._pendingGoalApproval = null;
+      this.runtime?.resetConversation();
+    }
+  }
+
   get isGoalExecuting(): boolean {
     return this._goalExecuting;
   }
@@ -926,9 +1013,38 @@ export class DesktopApp {
             context += "\n\nThis is a one-time goal. Complete it fully in this execution.";
           }
 
-          const result = await this.runtime.sendMessage(context);
+          // Stream instead of sendMessage so approval_request chunks surface
+          let accumulated = "";
+          let approvalRequested = false;
 
-          // Update last_run_at and reset failures on success
+          for await (const chunk of this.runtime.sendMessageStreaming(context)) {
+            if (chunk.type === "text") {
+              accumulated += chunk.text;
+            } else if (chunk.type === "approval_request") {
+              approvalRequested = true;
+              this._pendingGoalApproval = {
+                goalId: goal.goal_id,
+                prompt: goal.prompt,
+                invoke,
+                mode: goal.mode,
+              };
+              this._goalApprovalCallback?.({
+                goalId: goal.goal_id,
+                goalPrompt: goal.prompt,
+                toolName: chunk.name,
+                args: chunk.args,
+                riskLevel: chunk.risk_level,
+              });
+            }
+          }
+
+          if (approvalRequested) {
+            // Don't record outcome — waiting for user decision.
+            // _goalExecuting stays true to block further ticks.
+            return;
+          }
+
+          // Normal completion: record outcome, update DB
           await invoke<number>("db_execute", {
             sql: "UPDATE goals SET last_run_at = ?, consecutive_failures = 0 WHERE goal_id = ?",
             params: [now, goal.goal_id],
@@ -936,15 +1052,13 @@ export class DesktopApp {
 
           await invoke<number>("db_execute", {
             sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
-                  VALUES (?, ?, ?, ?, 'completed', ?, ?, ?, NULL)`,
+                  VALUES (?, ?, ?, ?, 'completed', ?, 0, 0, NULL)`,
             params: [
               crypto.randomUUID(),
               goal.goal_id,
               this.motebitId,
               now,
-              result.response.slice(0, 500),
-              0,
-              result.memoriesFormed.length,
+              accumulated.slice(0, 500),
             ],
           });
 
@@ -961,7 +1075,7 @@ export class DesktopApp {
             goalId: goal.goal_id,
             prompt: goal.prompt,
             status: "completed",
-            summary: result.response.slice(0, 200),
+            summary: accumulated.slice(0, 200),
             error: null,
           });
         } catch (err: unknown) {
@@ -996,9 +1110,11 @@ export class DesktopApp {
             error: msg,
           });
         } finally {
-          this._goalExecuting = false;
-          this._goalStatusCallback?.(false);
-          this.runtime?.resetConversation();
+          if (!this._pendingGoalApproval) {
+            this._goalExecuting = false;
+            this._goalStatusCallback?.(false);
+            this.runtime?.resetConversation();
+          }
         }
       }
     } catch {
