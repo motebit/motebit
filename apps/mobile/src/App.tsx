@@ -393,7 +393,7 @@ export function App(): React.ReactElement {
   // Device A: initiate from settings
   const handleInitiatePairing = useCallback(async () => {
     const a = app.current;
-    const syncUrl = (await a.loadSettings()).provider; // placeholder — get from config
+    // TODO: pre-fill with (await a.loadSettings()).provider once settings UI exists
     // For now, prompt for sync URL
     Alert.prompt?.(
       "Sync Relay URL",

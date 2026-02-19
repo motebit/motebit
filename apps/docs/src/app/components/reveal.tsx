@@ -38,7 +38,8 @@ export function Reveal({
       style={{ opacity, y }}
       className={className}
     >
-      {children}
+      {/* eslint-disable-next-line @typescript-eslint/no-explicit-any -- framer-motion types incompatible with React 19 ReactNode */}
+      {children as any}
     </motion.div>
   );
 }

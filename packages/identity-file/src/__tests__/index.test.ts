@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { generateKeypair } from "@motebit/crypto";
+import { verify as standaloneVerify } from "@motebit/verify";
 import { generate, parse, verify, update, toHex } from "../index";
 
 // ---------------------------------------------------------------------------
@@ -259,5 +260,87 @@ describe("update", () => {
     // Both verify independently
     expect((await verify(original)).valid).toBe(true);
     expect((await verify(updated)).valid).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cross-compatibility: identity-file generate → @motebit/verify verify
+// ---------------------------------------------------------------------------
+// This locks the contract between the two packages. identity-file generates
+// and serializes; @motebit/verify (the standalone, zero-monorepo-dep package)
+// must accept the output. Import standaloneVerify directly from @motebit/verify
+// so this test breaks visibly if the packages drift.
+
+describe("cross-compatibility with @motebit/verify", () => {
+  it("standalone verify accepts generate() output", async () => {
+    const kp = await makeKeypairHex();
+
+    const content = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        createdAt: DEFAULTS.createdAt,
+        publicKeyHex: kp.publicKeyHex,
+        devices: [
+          {
+            device_id: "dev-cross",
+            name: "Cross-compat Device",
+            public_key: kp.publicKeyHex,
+            registered_at: DEFAULTS.createdAt,
+          },
+        ],
+      },
+      kp.privateKey,
+    );
+
+    const result = await standaloneVerify(content);
+    expect(result.valid).toBe(true);
+    expect(result.identity).not.toBeNull();
+    expect(result.identity!.motebit_id).toBe(DEFAULTS.motebitId);
+    expect(result.identity!.devices).toHaveLength(1);
+    expect(result.identity!.devices[0]!.name).toBe("Cross-compat Device");
+  });
+
+  it("standalone verify accepts update() output", async () => {
+    const kp = await makeKeypairHex();
+
+    const original = await generate(
+      { motebitId: DEFAULTS.motebitId, ownerId: DEFAULTS.ownerId, publicKeyHex: kp.publicKeyHex },
+      kp.privateKey,
+    );
+
+    const updated = await update(
+      original,
+      {
+        governance: {
+          trust_mode: "minimal",
+          max_risk_auto: "R0_READ",
+          require_approval_above: "R0_READ",
+          deny_above: "R2_WRITE",
+          operator_mode: false,
+        },
+      },
+      kp.privateKey,
+    );
+
+    const result = await standaloneVerify(updated);
+    expect(result.valid).toBe(true);
+    expect(result.identity!.governance.trust_mode).toBe("minimal");
+  });
+
+  it("standalone verify rejects tampered generate() output", async () => {
+    const kp = await makeKeypairHex();
+
+    const content = await generate(
+      { motebitId: DEFAULTS.motebitId, ownerId: DEFAULTS.ownerId, publicKeyHex: kp.publicKeyHex },
+      kp.privateKey,
+    );
+
+    // Tamper: flip one character in the owner_id
+    const tampered = content.replace(DEFAULTS.ownerId, "owner-evil");
+
+    const result = await standaloneVerify(tampered);
+    expect(result.valid).toBe(false);
+    expect(result.identity).toBeNull();
   });
 });
