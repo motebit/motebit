@@ -498,6 +498,7 @@ export function App(): React.ReactElement {
   const startAmbientMonitor = useCallback(() => {
     if (audioMonitorRef.current?.isRunning) return;
     const monitor = new AudioMonitor();
+    monitor.neuralVadEnabled = settings?.neuralVadEnabled ?? true;
     monitor.onAudio = (energy) => {
       app.current.setAudioReactivity(energy ?? null);
       setAudioLevel(energy?.rms ?? 0);
@@ -509,7 +510,7 @@ export function App(): React.ReactElement {
     };
     audioMonitorRef.current = monitor;
     void monitor.start();
-  }, []);
+  }, [settings?.neuralVadEnabled]);
 
   const stopAudioMonitor = useCallback(() => {
     if (audioMonitorRef.current) {

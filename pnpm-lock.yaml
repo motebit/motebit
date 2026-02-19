@@ -388,6 +388,9 @@ importers:
       expo-three:
         specifier: ^8.0.0
         version: 8.0.0(fy5aozigxazjdv3td535d6vo6y)
+      onnxruntime-react-native:
+        specifier: ^1.20.0
+        version: 1.24.1(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.0(@babel/core@7.29.0))(@types/react@18.3.28)(encoding@0.1.13)(react@18.3.1))(react@18.3.1)
       react:
         specifier: ^18.3.0
         version: 18.3.1
@@ -6939,6 +6942,13 @@ packages:
   onnxruntime-node@1.14.0:
     resolution: {integrity: sha512-5ba7TWomIV/9b6NH/1x/8QEeowsb+jBEvFzU6z0T4mNsFwdPqXeFUM7uxC6QeSRkEbWu3qEB0VMjrvzN/0S9+w==}
     os: [win32, darwin, linux]
+
+  onnxruntime-react-native@1.24.1:
+    resolution: {integrity: sha512-QG8mTtGnE6kCFOd0zXPuLiv3980XrgsUh4RFNGGeQcxhnrcd8E71JmKwEmQZiS96iAaIBbwObFJNXqwMkNvsFQ==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      react: '*'
+      react-native: '*'
 
   onnxruntime-web@1.14.0:
     resolution: {integrity: sha512-Kcqf43UMfW8mCydVGcX9OMXI2VN17c0p6XvR7IPSZzBf/6lteBzXHvcEVWDPmCKuGombl997HgLqj91F11DzXw==}
@@ -15776,6 +15786,12 @@ snapshots:
     dependencies:
       onnxruntime-common: 1.14.0
     optional: true
+
+  onnxruntime-react-native@1.24.1(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.0(@babel/core@7.29.0))(@types/react@18.3.28)(encoding@0.1.13)(react@18.3.1))(react@18.3.1):
+    dependencies:
+      onnxruntime-common: 1.24.1
+      react: 18.3.1
+      react-native: 0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.0(@babel/core@7.29.0))(@types/react@18.3.28)(encoding@0.1.13)(react@18.3.1)
 
   onnxruntime-web@1.14.0:
     dependencies:

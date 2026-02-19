@@ -292,6 +292,7 @@ describe("MobileApp.settings", () => {
       ttsVoice: "nova",
       voiceAutoSend: false,
       voiceResponseEnabled: true,
+      neuralVadEnabled: true,
     };
     await app.saveSettings(custom);
     const loaded = await app.loadSettings();

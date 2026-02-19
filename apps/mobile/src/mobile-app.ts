@@ -123,6 +123,7 @@ export interface MobileSettings {
   ttsVoice: string;
   voiceAutoSend: boolean;
   voiceResponseEnabled: boolean;
+  neuralVadEnabled: boolean;
 }
 
 const DEFAULT_SETTINGS: MobileSettings = {
@@ -139,6 +140,7 @@ const DEFAULT_SETTINGS: MobileSettings = {
   ttsVoice: "alloy",
   voiceAutoSend: true,
   voiceResponseEnabled: true,
+  neuralVadEnabled: true,
 };
 
 const SETTINGS_KEY = "@motebit/settings";

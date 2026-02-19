@@ -210,6 +210,7 @@ export function SettingsModal({
               voiceAutoSend={draft.voiceAutoSend}
               ttsVoice={draft.ttsVoice}
               openaiKey={openaiKey}
+              neuralVadEnabled={draft.neuralVadEnabled}
               onChangeProvider={(p) => updateDraft({ provider: p, model: p === "ollama" ? "llama3.2" : "claude-sonnet-4-20250514" })}
               onChangeModel={(m) => updateDraft({ model: m })}
               onChangeApiKey={setApiKey}
@@ -219,6 +220,7 @@ export function SettingsModal({
               onChangeVoiceAutoSend={(v) => updateDraft({ voiceAutoSend: v })}
               onChangeTtsVoice={(v) => updateDraft({ ttsVoice: v })}
               onChangeOpenaiKey={setOpenaiKey}
+              onChangeNeuralVadEnabled={(v) => updateDraft({ neuralVadEnabled: v })}
             />
           )}
           {tab === "governance" && (
@@ -330,6 +332,7 @@ function IntelligenceTab({
   voiceAutoSend,
   ttsVoice,
   openaiKey,
+  neuralVadEnabled,
   onChangeProvider,
   onChangeModel,
   onChangeApiKey,
@@ -339,6 +342,7 @@ function IntelligenceTab({
   onChangeVoiceAutoSend,
   onChangeTtsVoice,
   onChangeOpenaiKey,
+  onChangeNeuralVadEnabled,
 }: {
   provider: "ollama" | "anthropic";
   model: string;
@@ -349,6 +353,7 @@ function IntelligenceTab({
   voiceAutoSend: boolean;
   ttsVoice: string;
   openaiKey: string;
+  neuralVadEnabled: boolean;
   onChangeProvider: (p: "ollama" | "anthropic") => void;
   onChangeModel: (m: string) => void;
   onChangeApiKey: (k: string) => void;
@@ -358,6 +363,7 @@ function IntelligenceTab({
   onChangeVoiceAutoSend: (v: boolean) => void;
   onChangeTtsVoice: (v: string) => void;
   onChangeOpenaiKey: (k: string) => void;
+  onChangeNeuralVadEnabled: (v: boolean) => void;
 }) {
   return (
     <View>
@@ -455,6 +461,23 @@ function IntelligenceTab({
             />
           </View>
           <Text style={styles.voiceHint}>Send voice transcript immediately, or drop into input for review</Text>
+
+          {Platform.OS === "ios" && (
+            <>
+              <View style={styles.switchRow}>
+                <Text style={styles.switchLabel}>Neural VAD (Silero)</Text>
+                <Switch
+                  value={neuralVadEnabled}
+                  onValueChange={onChangeNeuralVadEnabled}
+                  trackColor={{ false: "#1a2030", true: "#2a4060" }}
+                  thumbColor={neuralVadEnabled ? "#c0d0e0" : "#607080"}
+                />
+              </View>
+              <Text style={styles.voiceHint}>
+                Use Silero neural network to confirm speech before triggering. Reduces false triggers from ambient noise.
+              </Text>
+            </>
+          )}
 
           <Text style={styles.sectionTitle}>TTS Voice</Text>
           <View style={styles.voiceGrid}>
