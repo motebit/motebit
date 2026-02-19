@@ -1,4 +1,4 @@
-import { DesktopApp, COLOR_PRESETS, isSlashCommand, parseSlashCommand, type DesktopAIConfig, type InvokeFn, type McpServerConfig, type PolicyConfig, type PairingSession } from "./index";
+import { DesktopApp, COLOR_PRESETS, isSlashCommand, parseSlashCommand, type DesktopAIConfig, type InvokeFn, type McpServerConfig, type PolicyConfig, type PairingSession, type GoalCompleteEvent } from "./index";
 import { stripTags } from "@motebit/ai-core";
 import { MicVAD } from "@ricky0123/vad-web";
 import { WebSpeechTTSProvider, WebSpeechSTTProvider, FallbackTTSProvider } from "@motebit/voice";
@@ -446,6 +446,12 @@ function refreshGoalList(): void {
         actions.appendChild(toggleBtn);
       }
 
+      // History toggle
+      const historyBtn = document.createElement("button");
+      historyBtn.className = "goal-toggle-outcomes";
+      historyBtn.textContent = "History";
+      actions.appendChild(historyBtn);
+
       const deleteBtn = document.createElement("button");
       deleteBtn.className = "goal-delete-btn";
       deleteBtn.textContent = "Delete";
@@ -455,10 +461,70 @@ function refreshGoalList(): void {
       actions.appendChild(deleteBtn);
 
       item.appendChild(actions);
+
+      // Expandable outcomes section
+      const outcomesDiv = document.createElement("div");
+      outcomesDiv.className = "goal-outcomes";
+      item.appendChild(outcomesDiv);
+
+      historyBtn.addEventListener("click", () => {
+        const isOpen = outcomesDiv.classList.contains("open");
+        if (isOpen) {
+          outcomesDiv.classList.remove("open");
+        } else {
+          outcomesDiv.classList.add("open");
+          loadGoalOutcomes(goalId, outcomesDiv);
+        }
+      });
+
       goalList.appendChild(item);
     }
   }).catch(() => {
     goalList.innerHTML = '<div class="goal-empty">Failed to load goals</div>';
+  });
+}
+
+function loadGoalOutcomes(goalId: string, container: HTMLDivElement): void {
+  if (!currentConfig?.isTauri || !currentConfig?.invoke) return;
+  const invoke = currentConfig.invoke;
+
+  container.innerHTML = '<div style="font-size:11px;color:rgba(0,0,0,0.3);padding:2px 0;">Loading...</div>';
+  void invoke<Array<Record<string, unknown>>>("goals_outcomes", { goalId, limit: 5 }).then(outcomes => {
+    container.innerHTML = "";
+    if (outcomes.length === 0) {
+      container.innerHTML = '<div style="font-size:11px;color:rgba(0,0,0,0.3);padding:2px 0;">No runs yet</div>';
+      return;
+    }
+    for (const outcome of outcomes) {
+      const row = document.createElement("div");
+      row.className = "goal-outcome-row";
+
+      const dot = document.createElement("span");
+      const oStatus = String(outcome.status || "");
+      dot.className = `goal-status-dot ${oStatus === "completed" ? "active" : "suspended"}`;
+      row.appendChild(dot);
+
+      const summary = document.createElement("span");
+      summary.className = "goal-outcome-summary";
+      if (oStatus === "completed" && outcome.summary) {
+        summary.textContent = String(outcome.summary);
+      } else if (outcome.error_message) {
+        summary.textContent = String(outcome.error_message);
+        summary.style.color = "rgba(248,113,113,0.8)";
+      } else {
+        summary.textContent = oStatus;
+      }
+      row.appendChild(summary);
+
+      const time = document.createElement("span");
+      time.className = "goal-outcome-time";
+      time.textContent = formatTimeAgo(Number(outcome.ran_at) || 0);
+      row.appendChild(time);
+
+      container.appendChild(row);
+    }
+  }).catch(() => {
+    container.innerHTML = '<div style="font-size:11px;color:rgba(0,0,0,0.3);">Failed to load</div>';
   });
 }
 
@@ -2414,6 +2480,16 @@ async function bootstrap(): Promise<void> {
       const goalStatus = document.getElementById("goal-status") as HTMLDivElement;
       app.onGoalStatus((executing) => {
         goalStatus.classList.toggle("active", executing);
+      });
+      app.onGoalComplete((event: GoalCompleteEvent) => {
+        const promptSnippet = event.prompt.length > 50 ? event.prompt.slice(0, 50) + "..." : event.prompt;
+        if (event.status === "completed") {
+          const summary = event.summary ? `: ${event.summary.slice(0, 120)}` : "";
+          addMessage("system", `Goal completed "${promptSnippet}"${summary}`);
+        } else {
+          const err = event.error ? `: ${event.error.slice(0, 80)}` : "";
+          addMessage("system", `Goal failed "${promptSnippet}"${err}`);
+        }
       });
       app.startGoalScheduler(config.invoke);
     }

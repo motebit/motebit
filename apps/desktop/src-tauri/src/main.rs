@@ -546,6 +546,42 @@ fn goals_delete(state: State<AppState>, goal_id: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn goals_outcomes(
+    state: State<AppState>,
+    goal_id: String,
+    limit: Option<i64>,
+) -> Result<Vec<JsonValue>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let max = limit.unwrap_or(5);
+    let mut stmt = db
+        .prepare(
+            "SELECT outcome_id, ran_at, status, summary, error_message \
+             FROM goal_outcomes WHERE goal_id = ? ORDER BY ran_at DESC LIMIT ?",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map(rusqlite::params![goal_id, max], |row| {
+            let mut obj = serde_json::Map::new();
+            obj.insert("outcome_id".into(), JsonValue::String(row.get::<_, String>(0)?));
+            obj.insert("ran_at".into(), JsonValue::Number(row.get::<_, i64>(1)?.into()));
+            obj.insert("status".into(), JsonValue::String(row.get::<_, String>(2)?));
+            let summary: Option<String> = row.get(3)?;
+            obj.insert("summary".into(), summary.map_or(JsonValue::Null, JsonValue::String));
+            let error: Option<String> = row.get(4)?;
+            obj.insert("error_message".into(), error.map_or(JsonValue::Null, JsonValue::String));
+            Ok(JsonValue::Object(obj))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(results)
+}
+
 // === TTS Command (OpenAI API key stays in keyring, never in webview) ===
 
 #[tauri::command]
@@ -668,6 +704,7 @@ fn main() {
             goals_create,
             goals_toggle,
             goals_delete,
+            goals_outcomes,
             tts_openai_speech,
         ])
         .run(tauri::generate_context!())

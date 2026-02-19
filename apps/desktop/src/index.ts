@@ -37,6 +37,14 @@ export type { InvokeFn } from "./tauri-storage.js";
 export type { TurnResult, StreamChunk, OperatorModeResult, InteriorColor, McpServerConfig, PolicyConfig, MemoryGovernanceConfig };
 export type { PairingSession, PairingStatus };
 
+export interface GoalCompleteEvent {
+  goalId: string;
+  prompt: string;
+  status: "completed" | "failed";
+  summary: string | null;
+  error: string | null;
+}
+
 // === Tauri Command Interface ===
 
 export interface TauriCommands {
@@ -190,6 +198,7 @@ export class DesktopApp {
   private goalSchedulerTimer: ReturnType<typeof setInterval> | null = null;
   private _goalExecuting = false;
   private _goalStatusCallback: ((executing: boolean) => void) | null = null;
+  private _goalCompleteCallback: ((event: GoalCompleteEvent) => void) | null = null;
   private conversationStoreRef: TauriConversationStore | null = null;
   private _autoTitlePending = false;
 
@@ -788,6 +797,11 @@ export class DesktopApp {
     this._goalStatusCallback = callback;
   }
 
+  /** Subscribe to goal completion events (success or failure, for chat surfacing). */
+  onGoalComplete(callback: (event: GoalCompleteEvent) => void): void {
+    this._goalCompleteCallback = callback;
+  }
+
   get isGoalExecuting(): boolean {
     return this._goalExecuting;
   }
@@ -910,6 +924,15 @@ export class DesktopApp {
               params: [goal.goal_id],
             });
           }
+
+          // Notify UI
+          this._goalCompleteCallback?.({
+            goalId: goal.goal_id,
+            prompt: goal.prompt,
+            status: "completed",
+            summary: result.response.slice(0, 200),
+            error: null,
+          });
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
 
@@ -932,6 +955,15 @@ export class DesktopApp {
               params: [goal.goal_id],
             }).catch(() => {});
           }
+
+          // Notify UI
+          this._goalCompleteCallback?.({
+            goalId: goal.goal_id,
+            prompt: goal.prompt,
+            status: "failed",
+            summary: null,
+            error: msg,
+          });
         } finally {
           this._goalExecuting = false;
           this._goalStatusCallback?.(false);
