@@ -550,6 +550,12 @@ importers:
       '@motebit/verify':
         specifier: workspace:*
         version: link:../verify
+      '@noble/ed25519':
+        specifier: ^3.0.0
+        version: 3.0.0
+      '@noble/hashes':
+        specifier: ^1.6.0
+        version: 1.8.0
     devDependencies:
       '@types/node':
         specifier: ^22.0.0

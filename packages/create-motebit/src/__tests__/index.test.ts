@@ -1,31 +1,37 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, rmSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 const BIN = join(__dirname, "../../dist/index.js");
 
-function run(args: string[], cwd?: string): { stdout: string; exitCode: number } {
+function run(
+  args: string[],
+  cwd?: string,
+  env?: Record<string, string>,
+): { stdout: string; stderr: string; exitCode: number } {
   try {
     const stdout = execFileSync("node", [BIN, ...args], {
       encoding: "utf-8",
       cwd,
-      env: { ...process.env, NO_COLOR: "1" },
+      env: { ...process.env, NO_COLOR: "1", ...env },
     });
-    return { stdout, exitCode: 0 };
+    return { stdout, stderr: "", exitCode: 0 };
   } catch (err: unknown) {
-    const e = err as { stdout?: string; status?: number };
-    return { stdout: e.stdout ?? "", exitCode: e.status ?? 1 };
+    const e = err as { stdout?: string; stderr?: string; status?: number };
+    return { stdout: e.stdout ?? "", stderr: e.stderr ?? "", exitCode: e.status ?? 1 };
   }
 }
 
 describe("create-motebit", () => {
   let testDir: string;
+  let configDir: string;
 
   beforeEach(() => {
-    testDir = join(tmpdir(), `create-motebit-test-${Date.now()}`);
-    execFileSync("mkdir", ["-p", testDir]);
+    testDir = join(tmpdir(), `create-motebit-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    configDir = join(testDir, ".motebit-config");
+    mkdirSync(testDir, { recursive: true });
   });
 
   afterEach(() => {
@@ -46,60 +52,76 @@ describe("create-motebit", () => {
     expect(stdout).toContain("create-motebit");
     expect(stdout).toContain("npm create motebit");
     expect(stdout).toContain("verify");
-    expect(stdout).toContain("Scaffold");
+    expect(stdout).toContain("--yes");
+    expect(stdout).toContain("MOTEBIT_PASSPHRASE");
   });
 
-  // -- scaffold in current directory --
+  // -- scaffold with --yes --
 
-  it("scaffolds project in current directory when no arg given", () => {
-    const { stdout, exitCode } = run([], testDir);
+  it("scaffolds project with --yes and MOTEBIT_PASSPHRASE", () => {
+    const subDir = "my-agent";
+    const { stdout, exitCode } = run(
+      [subDir, "--yes"],
+      testDir,
+      { MOTEBIT_PASSPHRASE: "test-pass-123", MOTEBIT_CONFIG_DIR: configDir },
+    );
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("Scaffolded");
+    expect(stdout).toContain("Created");
+    expect(stdout).toContain(subDir);
+
+    const projectDir = join(testDir, subDir);
 
     // All project files created
-    expect(existsSync(join(testDir, "package.json"))).toBe(true);
-    expect(existsSync(join(testDir, ".env.example"))).toBe(true);
-    expect(existsSync(join(testDir, ".gitignore"))).toBe(true);
-
-    // No identity file — that's the CLI's job
-    expect(existsSync(join(testDir, "motebit.md"))).toBe(false);
+    expect(existsSync(join(projectDir, "package.json"))).toBe(true);
+    expect(existsSync(join(projectDir, ".env.example"))).toBe(true);
+    expect(existsSync(join(projectDir, ".gitignore"))).toBe(true);
+    expect(existsSync(join(projectDir, "motebit.md"))).toBe(true);
 
     // package.json has correct content
-    const pkg = JSON.parse(readFileSync(join(testDir, "package.json"), "utf-8"));
+    const pkg = JSON.parse(readFileSync(join(projectDir, "package.json"), "utf-8"));
     expect(pkg.dependencies).toHaveProperty("motebit");
     expect(pkg.dependencies.motebit).toBe("0.1.0");
     expect(pkg.scripts.start).toBe("motebit");
     expect(pkg.type).toBe("module");
     expect(pkg.private).toBe(true);
+    expect(pkg.name).toBe(subDir);
 
     // .env.example has API key placeholder
-    const env = readFileSync(join(testDir, ".env.example"), "utf-8");
+    const env = readFileSync(join(projectDir, ".env.example"), "utf-8");
     expect(env).toContain("ANTHROPIC_API_KEY");
 
     // .gitignore has expected entries
-    const gi = readFileSync(join(testDir, ".gitignore"), "utf-8");
+    const gi = readFileSync(join(projectDir, ".gitignore"), "utf-8");
     expect(gi).toContain("node_modules/");
     expect(gi).toContain(".env");
     expect(gi).toContain("*.key");
+
+    // motebit.md exists and contains spec
+    const identity = readFileSync(join(projectDir, "motebit.md"), "utf-8");
+    expect(identity).toContain("motebit/identity@1.0");
+    expect(identity).toContain("<!-- motebit:sig:Ed25519:");
+
+    // Config was written
+    const config = JSON.parse(readFileSync(join(configDir, "config.json"), "utf-8"));
+    expect(config.motebit_id).toBeTruthy();
+    expect(config.device_id).toBeTruthy();
+    expect(config.device_public_key).toBeTruthy();
+    expect(config.cli_encrypted_key).toBeTruthy();
+    expect(config.cli_encrypted_key.ciphertext).toBeTruthy();
+    expect(config.cli_encrypted_key.nonce).toBeTruthy();
+    expect(config.cli_encrypted_key.tag).toBeTruthy();
+    expect(config.cli_encrypted_key.salt).toBeTruthy();
+    expect(config.default_provider).toBe("anthropic");
   });
 
-  // -- scaffold with directory arg --
-
-  it("scaffolds project in a named subdirectory", () => {
-    const subDir = "my-agent";
-    const { stdout, exitCode } = run([subDir], testDir);
-    expect(exitCode).toBe(0);
-    expect(stdout).toContain("Scaffolded");
-    expect(stdout).toContain(subDir);
-
-    const projectDir = join(testDir, subDir);
-    expect(existsSync(join(projectDir, "package.json"))).toBe(true);
-    expect(existsSync(join(projectDir, ".env.example"))).toBe(true);
-    expect(existsSync(join(projectDir, ".gitignore"))).toBe(true);
-
-    // package.json name matches directory
-    const pkg = JSON.parse(readFileSync(join(projectDir, "package.json"), "utf-8"));
-    expect(pkg.name).toBe(subDir);
+  it("--yes without MOTEBIT_PASSPHRASE fails", () => {
+    const { exitCode, stdout } = run(
+      ["my-agent", "--yes"],
+      testDir,
+      { MOTEBIT_PASSPHRASE: "", MOTEBIT_CONFIG_DIR: configDir },
+    );
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("MOTEBIT_PASSPHRASE");
   });
 
   // -- existing project guard --
@@ -107,7 +129,11 @@ describe("create-motebit", () => {
   it("refuses to scaffold over existing package.json", () => {
     writeFileSync(join(testDir, "package.json"), "{}", "utf-8");
 
-    const { stdout, exitCode } = run([], testDir);
+    const { stdout, exitCode } = run(
+      ["--yes"],
+      testDir,
+      { MOTEBIT_PASSPHRASE: "test", MOTEBIT_CONFIG_DIR: configDir },
+    );
     expect(exitCode).toBe(1);
     expect(stdout).toContain("already exists");
   });
@@ -115,21 +141,55 @@ describe("create-motebit", () => {
   // -- console output --
 
   it("prints next steps with cd when using directory arg", () => {
-    const { stdout } = run(["my-project"], testDir);
+    const { stdout } = run(
+      ["my-project", "--yes"],
+      testDir,
+      { MOTEBIT_PASSPHRASE: "test-pw", MOTEBIT_CONFIG_DIR: configDir },
+    );
     expect(stdout).toContain("cd my-project");
     expect(stdout).toContain("npm install");
     expect(stdout).toContain("npx motebit");
   });
 
-  it("omits cd when scaffolding in current directory", () => {
-    const { stdout } = run([], testDir);
-    expect(stdout).not.toMatch(/cd \S/);
-    expect(stdout).toContain("npm install");
+  it("shows Motebit ID in output", () => {
+    const { stdout } = run(
+      ["my-project", "--yes"],
+      testDir,
+      { MOTEBIT_PASSPHRASE: "test-pw", MOTEBIT_CONFIG_DIR: configDir },
+    );
+    expect(stdout).toContain("Motebit ID:");
   });
 
-  it("mentions motebit export for daemon mode", () => {
-    const { stdout } = run([], testDir);
-    expect(stdout).toContain("motebit export");
+  it("shows config path in output", () => {
+    const { stdout } = run(
+      ["my-project", "--yes"],
+      testDir,
+      { MOTEBIT_PASSPHRASE: "test-pw", MOTEBIT_CONFIG_DIR: configDir },
+    );
+    expect(stdout).toContain("config.json");
+  });
+
+  // -- config merge --
+
+  it("preserves existing config fields when writing identity", () => {
+    // Write a config with existing data
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, "config.json"),
+      JSON.stringify({ some_custom_field: "preserved", temperature: 0.7 }),
+      "utf-8",
+    );
+
+    run(
+      ["my-project", "--yes"],
+      testDir,
+      { MOTEBIT_PASSPHRASE: "test-pw", MOTEBIT_CONFIG_DIR: configDir },
+    );
+
+    const config = JSON.parse(readFileSync(join(configDir, "config.json"), "utf-8"));
+    expect(config.some_custom_field).toBe("preserved");
+    expect(config.temperature).toBe(0.7);
+    expect(config.motebit_id).toBeTruthy();
   });
 
   // -- verify --
@@ -138,5 +198,24 @@ describe("create-motebit", () => {
     const { stdout, exitCode } = run(["verify", "/tmp/does-not-exist.md"]);
     expect(exitCode).toBe(1);
     expect(stdout).toContain("Could not read");
+  });
+
+  it("verifies a generated motebit.md", () => {
+    // First scaffold
+    run(
+      ["my-project", "--yes"],
+      testDir,
+      { MOTEBIT_PASSPHRASE: "test-pw", MOTEBIT_CONFIG_DIR: configDir },
+    );
+
+    const identityPath = join(testDir, "my-project", "motebit.md");
+    expect(existsSync(identityPath)).toBe(true);
+
+    // Then verify
+    const { stdout, exitCode } = run(["verify", identityPath]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("valid");
+    expect(stdout).toContain("motebit_id");
+    expect(stdout).toContain("trust_mode");
   });
 });

@@ -1,16 +1,21 @@
 #!/usr/bin/env node
 
 /**
- * create-motebit — Scaffold a motebit agent project.
+ * create-motebit — Scaffold a motebit agent project with identity.
  *
  * Usage:
- *   npm create motebit [dir]         # Scaffold a new project
+ *   npm create motebit [dir]         # Guided scaffold with identity generation
+ *   npm create motebit [dir] --yes   # Non-interactive (uses defaults + env vars)
  *   npx create-motebit verify [path] # Verify an existing motebit.md
  */
 
 import { verify } from "@motebit/verify";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
+import { homedir } from "node:os";
+import { generateIdentity } from "./generate.js";
+import type { TrustMode, EncryptedKey } from "./generate.js";
+import { createRL, input, password, select } from "./prompts.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -28,6 +33,43 @@ const green = (s: string) => (noColor ? s : `\x1b[32m${s}\x1b[39m`);
 const red = (s: string) => (noColor ? s : `\x1b[31m${s}\x1b[39m`);
 const bold = (s: string) => (noColor ? s : `\x1b[1m${s}\x1b[22m`);
 const cyan = (s: string) => (noColor ? s : `\x1b[36m${s}\x1b[39m`);
+const yellow = (s: string) => (noColor ? s : `\x1b[33m${s}\x1b[39m`);
+
+// ---------------------------------------------------------------------------
+// Config directory
+// ---------------------------------------------------------------------------
+
+function configDir(): string {
+  return process.env["MOTEBIT_CONFIG_DIR"] ?? join(homedir(), ".motebit");
+}
+
+function configPath(): string {
+  return join(configDir(), "config.json");
+}
+
+interface MotebitConfig {
+  name?: string;
+  motebit_id?: string;
+  device_id?: string;
+  device_public_key?: string;
+  cli_encrypted_key?: EncryptedKey;
+  default_provider?: string;
+  [key: string]: unknown;
+}
+
+function loadConfig(): MotebitConfig {
+  try {
+    return JSON.parse(readFileSync(configPath(), "utf-8")) as MotebitConfig;
+  } catch {
+    return {};
+  }
+}
+
+function saveConfig(config: MotebitConfig): void {
+  const dir = configDir();
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(configPath(), JSON.stringify(config, null, 2) + "\n", "utf-8");
+}
 
 // ---------------------------------------------------------------------------
 // Scaffolded file contents
@@ -51,7 +93,19 @@ function makePackageJson(name: string): string {
   return JSON.stringify(pkg, null, 2) + "\n";
 }
 
-const ENV_EXAMPLE = `# AI provider — set at least one
+function makeEnvExample(provider: string): string {
+  if (provider === "ollama") {
+    return `# AI provider
+OLLAMA_HOST=http://localhost:11434
+
+# Anthropic (optional, for cloud fallback)
+# ANTHROPIC_API_KEY=your-key-here
+
+# Key passphrase (prompted interactively if not set)
+# MOTEBIT_PASSPHRASE=
+`;
+  }
+  return `# AI provider — set at least one
 ANTHROPIC_API_KEY=your-key-here
 
 # Local models (optional, instead of Anthropic)
@@ -60,6 +114,7 @@ ANTHROPIC_API_KEY=your-key-here
 # Key passphrase (prompted interactively if not set)
 # MOTEBIT_PASSPHRASE=
 `;
+}
 
 const GITIGNORE = `node_modules/
 .env
@@ -67,16 +122,16 @@ const GITIGNORE = `node_modules/
 `;
 
 // ---------------------------------------------------------------------------
-// scaffold command
+// guidedScaffold — interactive identity + project creation
 // ---------------------------------------------------------------------------
 
-function scaffold(targetDir: string): void {
+async function guidedScaffold(targetDir: string, nonInteractive: boolean): Promise<void> {
   console.log();
   console.log(`  ${bold("create-motebit")} ${dim(`v${VERSION}`)}`);
   console.log();
 
   const absDir = resolve(targetDir);
-  const dirName = basename(absDir);
+  let dirName = basename(absDir);
 
   // Check for existing package.json
   const pkgPath = join(absDir, "package.json");
@@ -87,21 +142,129 @@ function scaffold(targetDir: string): void {
     process.exit(1);
   }
 
+  // Gather options — interactive or defaults
+  let provider: string;
+  let trustMode: TrustMode;
+  let passphrase: string;
+  let rl: ReturnType<typeof createRL> | null = null;
+
+  if (nonInteractive) {
+    provider = "anthropic";
+    trustMode = "guarded";
+    passphrase = process.env["MOTEBIT_PASSPHRASE"] ?? "";
+    if (!passphrase) {
+      console.log(`  ${red("!")} --yes requires MOTEBIT_PASSPHRASE environment variable.`);
+      console.log();
+      process.exit(1);
+    }
+    // Prompt for project name if scaffolding in "."
+    if (targetDir === ".") {
+      dirName = "my-motebit";
+    }
+  } else {
+    rl = createRL();
+
+    // Project name (if scaffolding in ".")
+    if (targetDir === ".") {
+      dirName = await input(rl, "? Project name", "my-motebit");
+    }
+
+    // Provider
+    provider = await select(rl, "? AI provider", [
+      { label: "Anthropic (requires ANTHROPIC_API_KEY)", value: "anthropic" },
+      { label: "Ollama (local, no API key)", value: "ollama" },
+    ]);
+    console.log();
+
+    // Trust mode
+    trustMode = await select<TrustMode>(rl, "? Trust mode", [
+      { label: `Guarded ${dim("— moderate autonomy (recommended)")}`, value: "guarded" },
+      { label: `Minimal ${dim("— lowest autonomy")}`, value: "minimal" },
+      { label: `Full ${dim("— maximum autonomy")}`, value: "full" },
+    ]);
+    console.log();
+
+    // Check for existing identity
+    const existingConfig = loadConfig();
+    if (existingConfig.motebit_id) {
+      console.log(`  ${yellow("!")} Existing identity found: ${dim(existingConfig.motebit_id)}`);
+      const overwrite = await select(rl, "  Overwrite with new identity?", [
+        { label: "Yes, create new identity", value: true },
+        { label: "No, keep existing", value: false },
+      ]);
+      console.log();
+      if (!overwrite) {
+        rl.close();
+        console.log(`  ${dim("Aborted.")}`);
+        console.log();
+        process.exit(0);
+      }
+    }
+
+    // Passphrase
+    const envPassphrase = process.env["MOTEBIT_PASSPHRASE"];
+    if (envPassphrase) {
+      passphrase = envPassphrase;
+    } else {
+      passphrase = await password(rl, "? Set a passphrase for your agent's key: ");
+      if (!passphrase) {
+        rl.close();
+        console.log(`  ${red("!")} Passphrase cannot be empty.`);
+        console.log();
+        process.exit(1);
+      }
+      const confirm = await password(rl, "? Confirm passphrase: ");
+      if (confirm !== passphrase) {
+        rl.close();
+        console.log(`  ${red("!")} Passphrases do not match.`);
+        console.log();
+        process.exit(1);
+      }
+    }
+
+    rl.close();
+  }
+
+  // Generate identity
+  console.log(`  Generating Ed25519 keypair...`);
+  const result = await generateIdentity({
+    name: dirName,
+    trustMode,
+    passphrase,
+  });
+  console.log(`  Signing identity file...`);
+
   // Create directory if needed
   mkdirSync(absDir, { recursive: true });
 
-  // Write scaffolded files
+  // Write project files
   writeFileSync(pkgPath, makePackageJson(dirName), "utf-8");
-  writeFileSync(join(absDir, ".env.example"), ENV_EXAMPLE, "utf-8");
+  writeFileSync(join(absDir, ".env.example"), makeEnvExample(provider), "utf-8");
   writeFileSync(join(absDir, ".gitignore"), GITIGNORE, "utf-8");
+  writeFileSync(join(absDir, "motebit.md"), result.identityFileContent, "utf-8");
+
+  // Save identity to config (merge with existing)
+  const config = loadConfig();
+  config.name = dirName;
+  config.motebit_id = result.motebitId;
+  config.device_id = result.deviceId;
+  config.device_public_key = result.publicKeyHex;
+  config.cli_encrypted_key = result.encryptedKey;
+  config.default_provider = provider;
+  saveConfig(config);
 
   // Output
-  const relDir = targetDir === "." ? "." : `./${dirName}`;
-  console.log(`  ${green("+")} Scaffolded in ${bold(relDir)}`);
+  const relDir = targetDir === "." ? `./${dirName}` : `./${dirName}`;
   console.log();
-  console.log(`    package.json       motebit agent project`);
-  console.log(`    .env.example       API key configuration`);
-  console.log(`    .gitignore         secrets and build artifacts`);
+  console.log(`  ${green("+")} Created ${bold(relDir)}`);
+  console.log();
+  console.log(`    motebit.md         ${dim("Signed agent identity")}`);
+  console.log(`    package.json       ${dim("Node project with motebit CLI")}`);
+  console.log(`    .env.example       ${dim("Environment variable template")}`);
+  console.log(`    .gitignore         ${dim("Secrets excluded")}`);
+  console.log();
+  console.log(`  Identity stored in ${dim(configPath())}`);
+  console.log(`  Motebit ID: ${cyan(result.motebitId)}`);
   console.log();
   console.log(`  ${bold("Next steps:")}`);
   console.log();
@@ -109,10 +272,8 @@ function scaffold(targetDir: string): void {
     console.log(`    cd ${dirName}`);
   }
   console.log(`    npm install`);
-  console.log(`    cp .env.example .env       ${dim("# add your Anthropic API key")}`);
-  console.log(`    npx motebit                ${dim("# identity created on first run")}`);
-  console.log();
-  console.log(`  ${dim("Run")} ${cyan("npx motebit export")} ${dim("to export a signed motebit.md for daemon mode.")}`);
+  console.log(`    npx motebit                        ${dim("# Start interactive REPL")}`);
+  console.log(`    npx motebit run --identity motebit.md  ${dim("# Start daemon mode")}`);
   console.log();
 }
 
@@ -172,19 +333,27 @@ function printHelp(): void {
 
   ${bold("Usage:")}
 
-    npm create motebit [dir]          Scaffold a new agent project
+    npm create motebit [dir]          Guided scaffold with identity generation
+    npm create motebit [dir] --yes    Non-interactive (defaults + MOTEBIT_PASSPHRASE)
     npx create-motebit verify [path]  Verify a motebit.md signature
 
   ${bold("Options:")}
 
+    -y, --yes             Non-interactive mode (requires MOTEBIT_PASSPHRASE env var)
     -v, --version         Print version
     -h, --help            Print this help
 
   ${bold("What happens on scaffold:")}
 
-    1. Creates project directory with package.json, .env.example, .gitignore
-    2. On first ${cyan("npx motebit")}, identity is bootstrapped automatically
-    3. Run ${cyan("npx motebit export")} to export a signed motebit.md for daemon mode
+    1. Generates an Ed25519 keypair and signs a motebit.md identity file
+    2. Encrypts your private key and stores it in ~/.motebit/config.json
+    3. Scaffolds a project directory with package.json, .env.example, .gitignore
+    4. Run ${cyan("npx motebit")} to start — identity is already bootstrapped
+
+  ${bold("Environment variables:")}
+
+    MOTEBIT_PASSPHRASE    Passphrase for key encryption (required with --yes)
+    MOTEBIT_CONFIG_DIR    Override config directory (default: ~/.motebit)
 
   ${dim("https://github.com/motebit/motebit")}
 `);
@@ -209,17 +378,19 @@ async function main(): Promise<void> {
   }
 
   // Commands
-  const command = args[0];
+  const positional = args.filter((a) => !a.startsWith("-"));
+  const command = positional[0];
 
   if (command === "verify") {
-    const filePath = args[1] ?? "motebit.md";
+    const filePath = positional[1] ?? "motebit.md";
     await verifyCmd(filePath);
     return;
   }
 
-  // Default: scaffold
+  // Default: guided scaffold
+  const nonInteractive = args.includes("-y") || args.includes("--yes");
   const targetDir = command ?? ".";
-  scaffold(targetDir);
+  await guidedScaffold(targetDir, nonInteractive);
 }
 
 main().catch((err: unknown) => {
