@@ -10,12 +10,11 @@ export default function Layout({ children }: { children: any }) {
         title: (
           <>
             <img
-              src="/motebit-mark.png"
+              src="/motebit-mark.svg"
               alt=""
               width={22}
               height={22}
               aria-hidden="true"
-              style={{ borderRadius: "50%" }}
             />
             Motebit
           </>
