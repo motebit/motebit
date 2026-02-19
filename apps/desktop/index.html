@@ -158,6 +158,11 @@
     #mic-btn.ambient {
       background: var(--voice-glow-color, rgba(99, 102, 241, 0.12));
       color: rgba(0, 0, 0, 0.4);
+      animation: ambient-breathe 3s ease-in-out infinite;
+    }
+    @keyframes ambient-breathe {
+      0%, 100% { box-shadow: 0 0 0 transparent; }
+      50% { box-shadow: 0 0 8px var(--voice-glow-color, rgba(99, 102, 241, 0.2)); }
     }
     #mic-btn svg { width: 16px; height: 16px; }
 

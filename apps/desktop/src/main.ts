@@ -463,16 +463,16 @@ function selectColorPreset(name: string): void {
 
 // === Voice Input & Ambient Audio ===
 //
-// Two modes sharing one mic pipeline:
-//   voice:   SpeechRecognition active, waveform visible, creature body feels audio
-//   ambient: recognition off, waveform hidden, creature body feels audio
+// Walkie-talkie pattern. The mic button controls the mind, not the body.
+//   voice:        recording + waveform + creature senses (mind + body)
+//   transcribing: Whisper processing, creature senses (body)
+//   speaking:     TTS playing, creature pulses (body)
+//   ambient:      creature senses the room, ready for next voice turn (body only)
+//   off:          mic released, creature quiet (Escape only)
 //
 // The body always responds to pressure waves. The mind (recognition) is the toggle.
-// Noise floor gating absorbs constant ambient. Mid-band spectral flatness shapes
-// the response quality: tonal → shimmer, broadband → dampened.
-//
-// Flow: off → voice (mic click) → off (mic click) or ambient (Enter)
-// Escape from any state → off (full mic release)
+// Mic click toggles voice ↔ ambient. Escape is the only path to off.
+// Once the mic is acquired, the creature stays alive until explicit exit.
 
 type MicState = "off" | "ambient" | "voice" | "transcribing" | "speaking";
 let micState: MicState = "off";
@@ -488,6 +488,7 @@ const waveformSmoothed = new Float32Array(64);
 
 /** Whether Web Speech API STT is usable (set false on permission/service errors). */
 let sttAvailable = true;
+let sttErrorShown = false;
 
 /** MediaRecorder for Whisper fallback — captures audio alongside AnalyserNode pipeline. */
 let mediaRecorder: MediaRecorder | null = null;
@@ -574,14 +575,14 @@ function toggleVoice(): void {
     cancelTTS();
     void startVoice();      // interrupt TTS → start recording
   } else if (micState === "transcribing") {
-    // Cancel transcription attempt, go to off
-    micState = "off";
+    // Cancel transcription, body stays alive
     voiceTranscript.textContent = "";
     voiceTranscript.style.display = "";
     inputBarWrapper.classList.remove("listening");
-    micBtn.classList.remove("active", "ambient");
-    releaseAudioResources();
-    app.setAudioReactivity(null);
+    micBtn.classList.remove("active");
+    micBtn.classList.add("ambient");
+    micState = "ambient";
+    startAmbientLoop();
   } else {
     void startVoice();       // off or ambient → voice
   }
@@ -630,7 +631,10 @@ async function startVoice(): Promise<void> {
       if (event.error === "no-speech" || event.error === "aborted") return;
       if (event.error === "service-not-allowed" || event.error === "not-allowed") {
         sttAvailable = false;
-        addMessage("system", "Speech recognition needs permission — open System Settings > Privacy & Security > Speech Recognition, then grant access to Motebit. Using Whisper fallback.");
+        if (!sttErrorShown) {
+          sttErrorShown = true;
+          addMessage("system", "Speech recognition needs permission — open System Settings > Privacy & Security > Speech Recognition. Using Whisper fallback.");
+        }
         return;
       }
       addMessage("system", `Voice error: ${event.error}`);
