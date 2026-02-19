@@ -1,0 +1,103 @@
+---
+title: Identity & Cryptography
+description: How motebit creates and manages persistent sovereign identity
+---
+
+Session tokens expire. API keys are shared secrets managed by someone else. A motebit agent owns an Ed25519 keypair — the private key never leaves the device, and the identity persists across sessions, devices, and intelligence providers. This guide explains how the cryptographic identity works, from first launch through multi-device sync.
+
+For the conceptual foundation, see [Identity](/docs/concepts/identity). For where identity sits in the package architecture, see [Architecture](/docs/architecture).
+
+## The identity bootstrap
+
+On first launch, the system runs a shared bootstrap protocol (`bootstrapIdentity` in `@motebit/core-identity`):
+
+1. **Generate an Ed25519 keypair** using `@noble/ed25519` — a zero-dependency, audited library. The same signing scheme used by SSH, Signal, and WireGuard.
+2. **Store the private key** in the platform's secure storage. On desktop, the Tauri keyring. On CLI, a PBKDF2-encrypted file (`~/.motebit/keys/<id>.key`). On mobile, `expo-secure-store`. The private key never touches a plaintext config file.
+3. **Generate a UUID v7** `motebit_id` (time-ordered, sortable) and a `device_id`.
+4. **Register the device** against the identity, binding the device's public key to the `motebit_id`.
+5. **Write config** — the `motebit_id`, `device_id`, and public key are persisted to `~/.motebit/config.json` (non-secret metadata only).
+
+On subsequent launches, the identity loads from config and the keypair from the keyring. No network round-trip required.
+
+## The motebit.md identity file
+
+The `motebit.md` file is a human-readable, cryptographically signed identity document conforming to the [motebit/identity@1.0 specification](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md). It declares who the agent is, what it may do, and how it governs itself.
+
+The file has two parts:
+
+- **YAML frontmatter** — identity metadata, governance thresholds, privacy rules, memory configuration, and registered devices
+- **Signature comment** — `<!-- motebit:sig:Ed25519:{base64url_signature} -->` on the line immediately following the closing `---`
+
+The signature covers the exact UTF-8 bytes of the frontmatter. Any modification — even a single character — invalidates it. The public key is embedded in the frontmatter, making the file self-contained: verification requires no external service. See the [Identity Standard](/docs/guides/identity-standard) guide for the full file format, creation commands, and verification workflow.
+
+## Multi-device registration
+
+A single motebit identity spans multiple devices. Each device has its own Ed25519 keypair — there is no shared private key.
+
+| Step | What happens |
+|------|-------------|
+| **Device registration** | The device generates a keypair and registers its public key with the `IdentityManager`. The device receives a `device_id` and `device_token`. |
+| **Pairing** | A 6-character code exchange, relay-mediated, with no shared secrets. The new device proves it holds a valid keypair. |
+| **Sync authentication** | To communicate with the sync relay, the device signs a short-lived token with its private key. The relay verifies the signature against the registered public key. |
+
+Devices are listed in the `motebit.md` file under the `devices` array, each with its own `device_id`, `name`, `public_key`, and `registered_at` timestamp.
+
+## Signed tokens
+
+Signed tokens authenticate sync requests between a device and the relay server. They are lightweight, short-lived, and require no server-side secret storage.
+
+**Format:** `base64url(payload).base64url(signature)`
+
+**Payload fields:**
+
+| Field | Description |
+|-------|-------------|
+| `mid` | The `motebit_id` |
+| `did` | The `device_id` |
+| `iat` | Issued-at timestamp (milliseconds since epoch) |
+| `exp` | Expiration timestamp (default: 5 minutes from `iat`) |
+
+The device signs the JSON-serialized payload with its Ed25519 private key. The relay verifies in two steps: (1) parse the base64url payload without crypto to extract the `device_id` — O(1) lookup; (2) verify the Ed25519 signature against the device's registered public key. Expired tokens are rejected.
+
+## Encryption at rest
+
+Sensitive data is encrypted before leaving the agent boundary:
+
+| Context | Mechanism |
+|---------|-----------|
+| **Sync payloads** | AES-256-GCM with a 256-bit random key and 12-byte nonce. The 16-byte authentication tag is appended to the ciphertext. |
+| **CLI private key** | PBKDF2 key derivation (600,000 iterations, SHA-256) from a user passphrase, then AES-256-GCM encryption. |
+| **Desktop/mobile** | Private key stored in OS keyring (hardware-backed where available). No application-layer encryption needed. |
+
+All cryptographic operations use Web Crypto API or `@noble/hashes` and `@noble/ciphers` — zero-dependency, audited implementations. Sensitive byte arrays are securely erased (overwritten with random data, then zeroed) after use.
+
+## Verification
+
+Anyone can verify a motebit's identity. The `@motebit/verify` package has zero monorepo dependencies — only `@noble/ed25519`.
+
+```bash
+# CLI verification
+npx create-motebit verify motebit.md
+```
+
+```typescript
+// Programmatic verification
+import { verify } from "@motebit/verify";
+import fs from "node:fs";
+
+const result = await verify(fs.readFileSync("motebit.md", "utf-8"));
+if (result.valid) {
+  console.log("Verified:", result.identity.motebit_id);
+}
+```
+
+A valid signature proves the holder has the private key. It does not prove the holder is trustworthy. Trust is accumulated at the application layer through history, governance, and memory — not by the identity file alone.
+
+## Key management
+
+| Concern | Approach |
+|---------|----------|
+| **Key storage** | OS keychain (desktop/mobile) or PBKDF2-encrypted file (CLI). Never plaintext. |
+| **Key rotation** | Not yet supported. If a key is compromised, generate a new keypair and a new `motebit_id`. The old identity is abandoned, not revoked — there is no central authority. |
+| **Secure erasure** | `secureErase()` overwrites byte arrays with random data then zeros before garbage collection. |
+| **Private key scope** | The private key never appears in `motebit.md`, never crosses the network, and never enters a config file. |

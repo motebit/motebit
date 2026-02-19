@@ -118,10 +118,12 @@ export function SettingsModal({
       await SecureStore.setItemAsync("motebit_openai_api_key", openaiKey);
     }
 
-    // Apply governance settings to runtime
+    // Apply governance settings to runtime (include current operator mode to preserve it)
     app.updatePolicyConfig({
       requireApprovalAbove: APPROVAL_PRESET_CONFIGS[draft.approvalPreset]?.requireApprovalAbove as number | undefined,
       denyAbove: APPROVAL_PRESET_CONFIGS[draft.approvalPreset]?.denyAbove as number | undefined,
+      operatorMode: app.isOperatorMode,
+      budget: { maxCallsPerTurn: draft.budgetMaxCalls },
     });
     app.updateMemoryGovernance({
       persistenceThreshold: draft.persistenceThreshold,

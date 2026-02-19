@@ -2,6 +2,8 @@
   "title": "Guides",
   "pages": [
     "identity-standard",
+    "identity",
+    "governance",
     "desktop",
     "cli",
     "daemon-approvals",

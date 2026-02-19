@@ -194,6 +194,10 @@ export function App(): React.ReactElement {
   }, []);
 
   const initializeAI = useCallback(async (a: MobileApp, s: MobileSettings) => {
+    // Capture operator mode before re-init (initAI creates a new runtime/PolicyGate
+    // that resets to default operatorMode: false)
+    const wasOperatorMode = a.isOperatorMode;
+
     const apiKey = s.provider === "anthropic"
       ? (await SecureStore.getItemAsync("motebit_anthropic_api_key")) || undefined
       : undefined;
@@ -205,12 +209,14 @@ export function App(): React.ReactElement {
       ollamaEndpoint: s.provider === "ollama" ? s.ollamaEndpoint : undefined,
     });
 
-    // Apply governance
+    // Apply governance (restore operator mode captured before re-init)
     const preset = APPROVAL_PRESET_CONFIGS[s.approvalPreset];
     if (preset) {
       a.updatePolicyConfig({
         requireApprovalAbove: preset.requireApprovalAbove,
         denyAbove: preset.denyAbove,
+        operatorMode: wasOperatorMode,
+        budget: { maxCallsPerTurn: s.budgetMaxCalls },
       });
     }
     a.updateMemoryGovernance({
@@ -534,6 +540,9 @@ export function App(): React.ReactElement {
   // === Settings save ===
   const handleSettingsSave = useCallback(async (newSettings: MobileSettings, aiConfig?: MobileAIConfig) => {
     const a = app.current;
+    // Capture operator mode before potential re-init (initAI creates new runtime)
+    const wasOperatorMode = a.isOperatorMode;
+
     await a.saveSettings(newSettings);
     setSettings(newSettings);
 
@@ -545,6 +554,25 @@ export function App(): React.ReactElement {
         a.start();
         subscribeToState(a);
       }
+
+      // Re-apply governance to the new runtime (initAI resets PolicyGate to defaults).
+      // SettingsModal.handleSave already applied these to the old runtime, but the
+      // new runtime needs them too.
+      const preset = APPROVAL_PRESET_CONFIGS[newSettings.approvalPreset];
+      if (preset) {
+        a.updatePolicyConfig({
+          requireApprovalAbove: preset.requireApprovalAbove,
+          denyAbove: preset.denyAbove,
+          operatorMode: wasOperatorMode,
+          budget: { maxCallsPerTurn: newSettings.budgetMaxCalls },
+        });
+      }
+      a.updateMemoryGovernance({
+        persistenceThreshold: newSettings.persistenceThreshold,
+        rejectSecrets: newSettings.rejectSecrets,
+        maxMemoriesPerTurn: newSettings.maxMemoriesPerTurn,
+      });
+      a.setInteriorColor(newSettings.colorPreset);
     }
 
     // Re-init STT provider (user may have added/changed OpenAI key)
@@ -555,6 +583,45 @@ export function App(): React.ReactElement {
   }, [subscribeToState, addSystemMessage, initVoice]);
 
   // === PIN handler ===
+
+  /**
+   * When the user taps "Enable" operator mode, we first probe setOperatorMode(true)
+   * without a PIN to detect the correct flow:
+   * - needsSetup → show setup dialog
+   * - "PIN required" error → show verify dialog
+   * - success → no keyring / dev mode, just enable
+   * This matches the desktop pattern and avoids overwriting an existing PIN.
+   */
+  const handleRequestPin = useCallback(async (mode: "setup" | "verify" | "reset") => {
+    const a = app.current;
+
+    if (mode === "reset") {
+      setPinMode("reset");
+      setShowPin(true);
+      return;
+    }
+
+    // Disabling operator mode: always verify
+    if (a.isOperatorMode) {
+      setPinMode("verify");
+      setShowPin(true);
+      return;
+    }
+
+    // Enabling: probe to detect correct flow
+    const probe = await a.setOperatorMode(true);
+    if (probe.success) {
+      // No keyring / dev mode — enabled directly, no PIN needed
+      return;
+    }
+    if (probe.needsSetup) {
+      setPinMode("setup");
+    } else {
+      setPinMode("verify");
+    }
+    setShowPin(true);
+  }, []);
+
   const handlePinSubmit = useCallback(async (pin: string) => {
     const a = app.current;
     if (pinMode === "setup" || pinMode === "reset") {
@@ -914,10 +981,7 @@ export function App(): React.ReactElement {
           lastSyncTime={lastSyncTime}
           onSave={(s, ai) => void handleSettingsSave(s, ai)}
           onClose={() => setShowSettings(false)}
-          onRequestPin={(mode) => {
-            setPinMode(mode);
-            setShowPin(true);
-          }}
+          onRequestPin={(mode) => void handleRequestPin(mode)}
           onLinkDevice={() => void handleInitiatePairing()}
           onSyncNow={() => {
             void app.current.syncNow().then((result) => {

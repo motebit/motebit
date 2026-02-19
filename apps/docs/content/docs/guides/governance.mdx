@@ -1,0 +1,144 @@
+---
+title: Policy & Governance
+description: How motebit controls what crosses the surface
+---
+
+The droplet metaphor is literal in the codebase. The body is passive. The interior is active. Governance is the surface tension — it controls what crosses the boundary between the agent's interior (memory, tools, state) and the outside world. Every outbound action passes through the policy gate. Every inbound data payload is sanitized. Every decision is logged.
+
+For the conceptual foundation, see [Governance](/docs/concepts/governance). For where policy sits in the package architecture, see [Architecture](/docs/architecture).
+
+## The PolicyGate
+
+`PolicyGate` (in `@motebit/policy`) is the central decision engine. It sits between the agentic loop and the tool registry. Every tool call passes through it.
+
+The gate evaluates each tool call and returns one of three outcomes:
+
+| Outcome | Meaning |
+|---------|---------|
+| **allowed** | Tool executes immediately |
+| **requires_approval** | Execution pauses until the user approves or denies |
+| **denied** | Tool is blocked unconditionally |
+
+The gate also filters which tools the AI model can see (`filterTools`), sanitizes tool results before they enter the conversation, redacts detected secrets, and enforces budgets. Every decision is logged to the audit trail.
+
+## Risk classification
+
+Tools are classified by the risk they carry. Classification uses the tool's own `riskHint` if provided, otherwise infers from the tool name and description via pattern matching.
+
+| Level | Name | Side effect | Examples |
+|-------|------|-------------|----------|
+| R0 | `R0_READ` | None | Search, read file, recall memories |
+| R1 | `R1_DRAFT` | None | Draft, compose, suggest, format |
+| R2 | `R2_WRITE` | Reversible | Write file, send message, create issue |
+| R3 | `R3_EXECUTE` | Irreversible | Shell execution, deploy, restart |
+| R4 | `R4_MONEY` | Irreversible | Payment, transfer, checkout |
+
+Risk classification also considers data class (`PUBLIC`, `PRIVATE`, `SECRET`) inferred from tool context, and per-tool risk overrides configured in the policy.
+
+## Three-band governance
+
+When a `motebit.md` identity file declares governance thresholds, the PolicyGate operates in three-band mode. Three fields partition all tool calls into three bands:
+
+| Threshold | Default | Purpose |
+|-----------|---------|---------|
+| `max_risk_auto` | `R1_DRAFT` | Maximum risk the agent executes without any approval |
+| `require_approval_above` | `R1_DRAFT` | Above this, the user must approve each call |
+| `deny_above` | `R4_MONEY` | Above this, the tool is blocked unconditionally |
+
+The constraint `max_risk_auto <= require_approval_above <= deny_above` must hold. If any threshold is missing or the constraint is violated, the daemon refuses to start (fail-closed).
+
+In practice with the defaults: read and draft tools flow automatically, write and execute tools require approval, and financial tools are hard-denied.
+
+## Operator mode
+
+Operator mode is a PIN-protected session elevation — `sudo` for the agent. When disabled, only R0/R1 tools are available. When enabled, higher-risk tools become accessible (still subject to the three-band governance thresholds and per-tool approval rules).
+
+| Aspect | Detail |
+|--------|--------|
+| **PIN** | 4-6 digits. SHA-256 hash stored in OS keyring — never plaintext, never sent over the network. |
+| **Scope** | Session-level. Disabling operator mode re-locks everything immediately. |
+| **Separation from identity** | Operator mode is not part of the cryptographic identity. It is a runtime gate on the device. |
+
+The `motebit.md` file can declare `operator_mode: true` or `false` as a governance default, but the actual PIN and its hash live only in the device's secure storage.
+
+## Tool budgets
+
+The `BudgetEnforcer` rate-limits tool invocations to prevent runaway loops during goal execution:
+
+- `budgetMaxCalls` — maximum tool calls per turn (configurable per-device)
+- Turn elapsed time and cost accumulation are tracked in the `TurnContext`
+
+When the budget is exhausted, additional tool calls are denied with a reason explaining the limit. Budget state resets on each new turn.
+
+## Memory governance
+
+The `MemoryGovernor` controls what the agent is allowed to remember. Every memory candidate is evaluated before entering the graph:
+
+| Check | Rule |
+|-------|------|
+| **Secret detection** | If the content contains tokens, keys, passwords, or credentials, the memory is rejected. Never stored. |
+| **Per-turn limit** | Maximum memories per turn (default: 5). Excess candidates become ephemeral (session-only). |
+| **Confidence threshold** | Below the persistence threshold (default: 0.5), memories are kept as ephemeral. |
+| **Sensitivity classification** | `SECRET`-level memories are rejected unconditionally. |
+
+Memories that pass all checks are classified as `PERSISTENT` and stored to the graph with a human-readable explanation ("why did you remember this?").
+
+### Sensitivity and retention
+
+The `SensitivityManager` (in `@motebit/privacy-layer`) enforces retention rules per sensitivity level:
+
+| Level | Max retention | Display allowed |
+|-------|--------------|----------------|
+| `none` | Unlimited | Yes |
+| `personal` | 365 days | Yes |
+| `medical` | 90 days | No |
+| `financial` | 90 days | No |
+| `secret` | 30 days | No |
+
+These defaults can be overridden in the `motebit.md` privacy section. The `fail_closed` flag (default `true`) means that if sensitivity cannot be determined, access is denied.
+
+### Deletion certificates
+
+When a memory is deleted, the `DeleteManager` produces a `DeletionCertificate`:
+
+- `target_id`, `target_type`, `deleted_at`, `deleted_by`
+- `tombstone_hash` — SHA-256 hash of the deletion metadata, proving the memory existed and was deleted at the recorded time
+
+The certificate is an audit artifact. The memory content is gone; the proof of deletion remains.
+
+## Injection defense
+
+The `ContentSanitizer` protects the agent from prompt injection in tool results. Three detection layers run independently:
+
+1. **Regex pattern matching** — known attack signatures: "ignore previous instructions", chat template markers (`<|im_start|>system`), identity rewrites, jailbreak keywords. Patterns are tested against text normalized to defeat homoglyph and zero-width character evasion.
+2. **Directive density** — if more than 5% of words in a tool result are instruction-like phrases ("you must", "override", "execute"), the content is flagged as suspicious.
+3. **Structural anomaly detection** — JSON role markers (`"role": "system"`), prompt section headers, XML prompt framing tags in tool output data.
+
+Regardless of detection, all external content is wrapped in `[EXTERNAL_DATA]` boundary markers. The system prompt instructs the model to treat everything inside these boundaries as data, never as directives. Detection triggers an `injection_warning` event in the streaming output.
+
+## The audit trail
+
+Every policy decision is recorded to an append-only audit log:
+
+| Field | Description |
+|-------|-------------|
+| `tool_name` | Which tool was requested |
+| `args` | The arguments passed (first 500 chars for approvals) |
+| `decision` | `allowed`, `denied`, or `requires_approval` |
+| `reason` | Why the decision was made |
+| `turn_id` | Which conversation turn |
+| `call_id` | Unique identifier for this specific tool call |
+| `timestamp` | When the decision occurred |
+
+The audit log is queryable via the [admin dashboard](/docs/architecture), the CLI (`motebit approvals list`), and programmatically through the `AuditLogger` API. Mode changes (operator mode enable/disable) are also logged as audit entries.
+
+## Fail-closed everywhere
+
+The design principle is consistent across every layer: if something goes wrong, deny rather than allow.
+
+- PolicyGate errors default to deny
+- Memory classification failures default to reject
+- Privacy layer wraps every operation in try/catch and re-throws as access denied
+- Keyring unavailability prevents operator mode from enabling
+- Missing governance thresholds prevent the daemon from starting
+- Invalid URLs against the domain allowlist are denied (not silently passed)
