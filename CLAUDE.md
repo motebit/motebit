@@ -17,7 +17,7 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent — a ves
 
 **Where the implementation stands.** The desktop app is the flagship (~80%): identity bootstrap, operator mode, tool approval, sync relay, voice input, audio-reactive rendering. The CLI is the full operator console: REPL chat, daemon mode with goal scheduling, tool approval queue, operator mode, and the `motebit export`/`verify` commands. Mobile is an early MVP. The public-facing standard ships as `create-motebit` (npm create motebit) and `@motebit/verify` — lightweight, zero-monorepo-dep packages that let anyone create and verify signed agent identities. The infrastructure (identity, crypto, policy, memory, sync) is built. The agentic surface that exposes it is next.
 
-Read `DROPLET.md` for the full design thesis on form. Read `THE_SOVEREIGN_INTERIOR.md` for the identity thesis. Read `LIQUESCENTIA.md` for the world. Read `THE_MUSIC_OF_THE_MEDIUM.md` for the acoustic interface. Every visual and behavioral decision derives from droplet physics. If it can't be traced to surface tension, it doesn't belong.
+Read `DROPLET.md` for the full design thesis on form. Read `THE_SOVEREIGN_INTERIOR.md` for the identity thesis. Read `LIQUESCENTIA.md` for the world. Read `THE_MUSIC_OF_THE_MEDIUM.md` for the acoustic interface. Read `THE_METABOLIC_PRINCIPLE.md` for what to build vs. what to absorb. Every visual and behavioral decision derives from droplet physics. If it can't be traced to surface tension, it doesn't belong.
 
 ## Architecture
 
@@ -62,7 +62,8 @@ services/
 
 ## Key Patterns
 
-- **Adapter pattern everywhere.** All I/O abstracted — storage, rendering, AI providers, sync transport. In-memory for tests, SQLite/Tauri/Expo for production.
+- **Metabolic principle.** Do not build what the medium already carries. If the field has solved a problem (VAD, STT, TTS, embeddings, inference), absorb the best available implementation through an adapter boundary and keep a fallback chain for graceful degradation. Build the enzymes (identity, memory, trust, governance, agentic loops), not the glucose (raw capabilities). See `THE_METABOLIC_PRINCIPLE.md`.
+- **Adapter pattern everywhere.** All I/O abstracted — storage, rendering, AI providers, sync transport. In-memory for tests, SQLite/Tauri/Expo for production. The adapter is the surface tension boundary in code: the interior must not bind to a specific provider.
 - **Event sourcing.** Immutable append-only log with version clocks. Multi-device ordering, conflict detection, compaction after snapshot.
 - **Fail-closed privacy.** Deny on error. Sensitivity levels (none/personal/medical/financial/secret) with retention rules. Deletion certificates with SHA-256 hashes.
 - **Streaming first.** AI loops yield text chunks, tool status events, approval requests, injection warnings.
