@@ -199,6 +199,7 @@ export class DesktopApp {
   private renderer: ThreeJSAdapter;
   private mcpAdapters = new Map<string, { disconnect(): Promise<void> }>();
   private mcpConfigs = new Map<string, McpServerConfig>();
+  private mcpToolCounts = new Map<string, number>();
   motebitId: string = "desktop-local";
   deviceId: string = "desktop-local";
   publicKey: string = "";
@@ -616,13 +617,15 @@ export class DesktopApp {
 
     this.mcpAdapters.set(config.name, adapter);
     this.mcpConfigs.set(config.name, config);
+    const toolCount = adapter.getTools().length;
+    this.mcpToolCounts.set(config.name, toolCount);
 
     return {
       name: config.name,
       transport: config.transport,
       trusted: config.trusted ?? false,
       connected: true,
-      toolCount: adapter.getTools().length,
+      toolCount,
     };
   }
 
@@ -633,6 +636,7 @@ export class DesktopApp {
       this.mcpAdapters.delete(name);
     }
     this.mcpConfigs.delete(name);
+    this.mcpToolCounts.delete(name);
     if (this.runtime) {
       this.runtime.unregisterExternalTools(`mcp:${name}`);
     }
@@ -646,7 +650,7 @@ export class DesktopApp {
         transport: config.transport,
         trusted: config.trusted ?? false,
         connected: this.mcpAdapters.has(name),
-        toolCount: 0, // TODO: track per-server tool count
+        toolCount: this.mcpToolCounts.get(name) ?? 0,
       });
     }
     return result;
@@ -1230,6 +1234,7 @@ export class DesktopApp {
         }
 
         this.mcpConfigs.set(config.name, config);
+        this.mcpToolCounts.set(config.name, toolCount);
         return {
           name: config.name,
           transport: config.transport,
