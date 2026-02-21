@@ -17,7 +17,7 @@ const EYE_R = 0.035;
 // Sum of incommensurate sinusoids → quasi-periodic, non-repeating.
 // Reads as "suspended in a medium" rather than "programmed oscillation."
 
-function organicNoise(t: number, frequencies: number[]): number {
+export function organicNoise(t: number, frequencies: number[]): number {
   let sum = 0;
   for (const f of frequencies) sum += Math.sin(t * f);
   return sum / frequencies.length;
