@@ -894,6 +894,7 @@
     }
     #pin-dialog input:focus { border-color: rgba(99, 102, 241, 0.5); }
     #pin-dialog input::placeholder { letter-spacing: normal; font-size: 13px; color: rgba(0,0,0,0.3); }
+    #pin-hint { font-size: 11px; color: rgba(0,0,0,0.4); text-align: center; margin-top: 2px; }
     #pin-error {
       font-size: 12px;
       color: #f87171;
@@ -1933,6 +1934,7 @@
       <div id="pin-title">Enter PIN</div>
       <input id="pin-input" type="password" maxlength="6" placeholder="PIN" inputmode="numeric" pattern="\d*" />
       <input id="pin-confirm-input" type="password" maxlength="6" placeholder="Confirm PIN" inputmode="numeric" pattern="\d*" />
+      <div id="pin-hint">4–6 digits</div>
       <div id="pin-confirm-text" style="display:none;font-size:13px;color:rgba(0,0,0,0.5);text-align:center;"></div>
       <div id="pin-error"></div>
       <div class="pin-actions">

@@ -32,6 +32,7 @@ const pinBackdrop = document.getElementById("pin-backdrop") as HTMLDivElement;
 const pinInput = document.getElementById("pin-input") as HTMLInputElement;
 const pinConfirmInput = document.getElementById("pin-confirm-input") as HTMLInputElement;
 const pinConfirmText = document.getElementById("pin-confirm-text") as HTMLDivElement;
+const pinHint = document.getElementById("pin-hint") as HTMLDivElement;
 const pinError = document.getElementById("pin-error") as HTMLDivElement;
 const pinTitle = document.getElementById("pin-title") as HTMLDivElement;
 
@@ -455,6 +456,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     pinError.textContent = "";
     pinConfirmText.style.display = "none";
     pinConfirmText.textContent = "";
+    pinHint.style.display = mode === "reset" ? "none" : "block";
     if (mode === "setup") {
       pinTitle.textContent = "Set Operator PIN";
       pinInput.style.display = "block";
@@ -544,6 +546,17 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   });
   pinConfirmInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") { void handlePinSubmit(); }
+  });
+
+  settingsOperatorMode.addEventListener("change", () => {
+    if (settingsOperatorMode.checked && !ctx.app.isOperatorMode) {
+      const resultP = ctx.app.setOperatorMode(true);
+      void resultP.then((result) => {
+        if (!result.success) {
+          showPinDialog(result.needsSetup ? "setup" : "verify");
+        }
+      });
+    }
   });
 
   document.getElementById("settings-reset-pin")!.addEventListener("click", () => {
