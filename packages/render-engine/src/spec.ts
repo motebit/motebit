@@ -16,7 +16,7 @@ export const CANONICAL_MATERIAL: MaterialSpec = {
   surface_noise_amplitude: 0.002,
   base_color: [1.0, 1.0, 1.0],
   emissive_intensity: 0.0,                // Zero at rest — glows only during processing
-  tint: [0.9, 0.92, 1.0],                // Default: faint cool blue — borosilicate
+  tint: [0.95, 0.95, 1.0],               // Default: near-neutral cool white — moonlight
 };
 
 export const CANONICAL_LIGHTING: LightingSpec = {

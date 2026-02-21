@@ -163,14 +163,14 @@ function createDesktopStorage(config: DesktopAIConfig, stateSnapshot?: TauriStat
 // === Color Presets ===
 
 export const COLOR_PRESETS: Record<string, InteriorColor> = {
-  borosilicate: { tint: [0.9, 0.92, 1.0], glow: [0.6, 0.7, 0.9] },
+  moonlight:    { tint: [0.95, 0.95, 1.0], glow: [0.8, 0.85, 1.0] },
   amber:        { tint: [1.0, 0.85, 0.6], glow: [0.9, 0.7, 0.3] },
   rose:         { tint: [1.0, 0.82, 0.88], glow: [0.9, 0.5, 0.6] },
   violet:       { tint: [0.88, 0.8, 1.0], glow: [0.6, 0.4, 0.9] },
   cyan:         { tint: [0.8, 0.95, 1.0], glow: [0.3, 0.8, 0.9] },
   ember:        { tint: [1.0, 0.75, 0.65], glow: [0.9, 0.35, 0.2] },
   sage:         { tint: [0.82, 0.95, 0.85], glow: [0.4, 0.75, 0.5] },
-  moonlight:    { tint: [0.95, 0.95, 1.0], glow: [0.8, 0.85, 1.0] },
+  borosilicate: { tint: [0.9, 0.92, 1.0], glow: [0.6, 0.7, 0.9] },
 };
 
 // === MCP Server Status ===

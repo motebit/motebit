@@ -28,7 +28,7 @@ describe("CANONICAL_SPEC", () => {
     expect(CANONICAL_MATERIAL.surface_noise_amplitude).toBe(0.002);
     expect(CANONICAL_MATERIAL.base_color).toEqual([1.0, 1.0, 1.0]);
     expect(CANONICAL_MATERIAL.emissive_intensity).toBe(0.0);
-    expect(CANONICAL_MATERIAL.tint).toEqual([0.9, 0.92, 1.0]);
+    expect(CANONICAL_MATERIAL.tint).toEqual([0.95, 0.95, 1.0]);
   });
 
   it("has correct lighting values", () => {

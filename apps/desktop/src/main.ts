@@ -851,8 +851,8 @@ const settingsTtsVoice = document.getElementById("settings-tts-voice") as HTMLSe
 let hasWhisperKeyInKeyring = false;
 
 // Settings state
-let selectedColorPreset = "borosilicate";
-let previousColorPreset = "borosilicate";
+let selectedColorPreset = "moonlight";
+let previousColorPreset = "moonlight";
 let selectedApprovalPreset = "balanced";
 let mcpServersConfig: McpServerConfig[] = [];
 let hasApiKeyInKeyring = false;
