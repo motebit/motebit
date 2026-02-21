@@ -147,9 +147,10 @@ describe("generateIdentity", () => {
     expect(result.encryptedKey.nonce).toMatch(hexPattern);
     expect(result.encryptedKey.tag).toMatch(hexPattern);
     expect(result.encryptedKey.salt).toMatch(hexPattern);
-    // Nonce and salt are 12 bytes = 24 hex chars
+    // Nonce is 12 bytes = 24 hex chars
     expect(result.encryptedKey.nonce).toHaveLength(24);
-    expect(result.encryptedKey.salt).toHaveLength(24);
+    // Salt is 16 bytes = 32 hex chars (NIST SP 800-132: >= 128 bits)
+    expect(result.encryptedKey.salt).toHaveLength(32);
     // Tag is 16 bytes = 32 hex chars
     expect(result.encryptedKey.tag).toHaveLength(32);
   });
