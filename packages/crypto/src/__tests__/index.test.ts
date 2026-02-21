@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   generateKey,
   generateNonce,
+  generateSalt,
   encrypt,
   decrypt,
   deriveKey,
@@ -49,6 +50,24 @@ describe("generateNonce", () => {
   it("generates different nonces on successive calls", () => {
     const a = generateNonce();
     const b = generateNonce();
+    expect(a).not.toEqual(b);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// generateSalt()
+// ---------------------------------------------------------------------------
+
+describe("generateSalt", () => {
+  it("returns a Uint8Array of 16 bytes", () => {
+    const salt = generateSalt();
+    expect(salt).toBeInstanceOf(Uint8Array);
+    expect(salt.length).toBe(16);
+  });
+
+  it("generates different salts on successive calls", () => {
+    const a = generateSalt();
+    const b = generateSalt();
     expect(a).not.toEqual(b);
   });
 });

@@ -1182,11 +1182,15 @@ export class DesktopApp {
         params: {},
       });
 
+      // Combine payloads, escape for safe shell interpolation (single quotes → '\'' break-and-rejoin)
+      const stdinData = `${initPayload}\n{"jsonrpc":"2.0","method":"notifications/initialized"}\n${listPayload}`;
+      const escaped = stdinData.replace(/'/g, "'\\''");
+
       // Send init + initialized notification + tools/list through stdin
       const shellResult = await invoke<{ stdout: string; stderr: string; exit_code: number }>(
         "shell_exec_tool",
         {
-          command: `echo '${initPayload}\n{"jsonrpc":"2.0","method":"notifications/initialized"}\n${listPayload}' | ${fullCommand}`,
+          command: `printf '%s' '${escaped}' | ${fullCommand}`,
           cwd: null,
         },
       );
@@ -1269,9 +1273,10 @@ export class DesktopApp {
           }),
         ].join("\n");
 
+        const escapedPayload = callPayload.replace(/'/g, "'\\''");
         const result = await invoke<{ stdout: string; stderr: string; exit_code: number }>(
           "shell_exec_tool",
-          { command: `echo '${callPayload}' | ${fullCommand}`, cwd: null },
+          { command: `printf '%s' '${escapedPayload}' | ${fullCommand}`, cwd: null },
         );
 
         if (result.stdout) {

@@ -291,8 +291,15 @@ export async function bootstrapIdentity(opts: {
         isFirstLaunch: false,
       };
     }
-    // Config has ID but DB doesn't — re-create in DB
+    // Config has ID but DB doesn't — re-create in DB (crash recovery)
+    // Use create() to restore, then return existing config (keypair is already in keystore)
     await identityManager.create(surfaceName);
+    return {
+      motebitId: existing.motebit_id,
+      deviceId: existing.device_id,
+      publicKeyHex: existing.device_public_key,
+      isFirstLaunch: false,
+    };
   }
 
   // First launch — generate identity + keypair

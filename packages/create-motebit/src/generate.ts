@@ -71,6 +71,12 @@ function generateNonce(): Uint8Array {
   return nonce;
 }
 
+function generateSalt(): Uint8Array {
+  const salt = new Uint8Array(16);
+  crypto.getRandomValues(salt);
+  return salt;
+}
+
 async function deriveKey(
   password: string,
   salt: Uint8Array,
@@ -286,7 +292,7 @@ async function encryptPrivateKey(
   privKeyHex: string,
   passphrase: string,
 ): Promise<EncryptedKey> {
-  const salt = generateNonce(); // 12 bytes, same as CLI
+  const salt = generateSalt(); // 16 bytes (NIST SP 800-132)
   const key = await deriveKey(passphrase, salt);
   const payload = await encrypt(new TextEncoder().encode(privKeyHex), key);
   return {

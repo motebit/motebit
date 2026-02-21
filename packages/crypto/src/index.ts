@@ -58,6 +58,16 @@ export function generateNonce(): Uint8Array {
 }
 
 /**
+ * Generate a random salt (16 bytes) for PBKDF2 key derivation.
+ * Per NIST SP 800-132, salts should be at least 128 bits (16 bytes).
+ */
+export function generateSalt(): Uint8Array {
+  const salt = new Uint8Array(16);
+  crypto.getRandomValues(salt);
+  return salt;
+}
+
+/**
  * Encrypt plaintext with a 256-bit key using AES-256-GCM via Web Crypto API.
  */
 export async function encrypt(

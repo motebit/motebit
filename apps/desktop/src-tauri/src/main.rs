@@ -331,11 +331,14 @@ fn shell_exec_tool(command: String, cwd: Option<String>) -> Result<ShellExecResu
     }
 
     // Spawn and wait with timeout
-    let child = cmd
+    let mut child = cmd
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| format!("Failed to spawn process: {}", e))?;
+
+    // Capture PID before moving child into the wait thread
+    let child_pid = child.id();
 
     // Wait with a 30s timeout using a separate thread
     let (tx, rx) = std::sync::mpsc::channel();
@@ -355,7 +358,10 @@ fn shell_exec_tool(command: String, cwd: Option<String>) -> Result<ShellExecResu
             })
         }
         Err(_) => {
-            // Timeout — thread will clean up when child exits
+            // Timeout — kill the child process tree to prevent orphans
+            // Use SIGKILL via kill command (avoids libc dep)
+            let _ = Command::new("kill").args(["-9", &child_pid.to_string()]).output();
+            let _ = handle.join();
             Err("Command timed out after 30 seconds".to_string())
         }
     }

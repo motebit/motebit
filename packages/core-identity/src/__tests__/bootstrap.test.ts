@@ -165,7 +165,7 @@ describe("bootstrapIdentity", () => {
     expect(new Set(keys).size).toBe(surfaces.length);
   });
 
-  it("config exists but DB missing: re-creates in DB, returns isFirstLaunch=true", async () => {
+  it("config exists but DB missing: re-creates in DB, returns existing config", async () => {
     // Simulate: config has identity data but DB is empty (e.g. DB was wiped)
     configStore.data = {
       motebit_id: "orphaned-id",
@@ -181,13 +181,11 @@ describe("bootstrapIdentity", () => {
       keyStore,
     });
 
-    // Should create a new identity since the old one couldn't be verified
-    expect(result.isFirstLaunch).toBe(true);
-    expect(result.motebitId).toBeTruthy();
-    // The new identity should be in the DB
-    const loaded = await identityStorage.load(result.motebitId);
-    expect(loaded).not.toBeNull();
-    // Key should have been stored
-    expect(keyStore.storedKey).toBeTruthy();
+    // Recovery path: re-create identity in DB, return existing config
+    // Not a first launch — keypair already exists in keystore
+    expect(result.isFirstLaunch).toBe(false);
+    expect(result.motebitId).toBe("orphaned-id");
+    expect(result.deviceId).toBe("old-device");
+    expect(result.publicKeyHex).toBe("aa".repeat(32));
   });
 });

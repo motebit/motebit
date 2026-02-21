@@ -41,7 +41,7 @@ import {
 } from "@motebit/tools";
 import type { SearchProvider } from "@motebit/tools";
 import { connectMcpServers, type McpServerConfig } from "@motebit/mcp-client";
-import { deriveKey, encrypt, decrypt, generateNonce } from "@motebit/crypto";
+import { deriveKey, encrypt, decrypt, generateSalt } from "@motebit/crypto";
 import type { EncryptedPayload } from "@motebit/crypto";
 import {
   bootstrapIdentity as sharedBootstrapIdentity,
@@ -473,7 +473,7 @@ async function encryptPrivateKey(
   privKeyHex: string,
   passphrase: string,
 ): Promise<FullConfig["cli_encrypted_key"]> {
-  const salt = generateNonce(); // 12 bytes
+  const salt = generateSalt(); // 16 bytes (NIST SP 800-132)
   const key = await deriveKey(passphrase, salt);
   const payload: EncryptedPayload = await encrypt(new TextEncoder().encode(privKeyHex), key);
   return {
