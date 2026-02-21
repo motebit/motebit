@@ -1,6 +1,13 @@
 // ---------------------------------------------------------------------------
 // OpenAITTSProvider — OpenAI TTS API for React Native (expo-av playback)
 // ---------------------------------------------------------------------------
+//
+// NOTE: A platform-agnostic version of this adapter exists in
+// @motebit/voice (packages/voice/src/openai-tts.ts) which uses the
+// Web Audio API for playback. This mobile-specific version uses expo-av
+// and expo-file-system because React Native does not support AudioContext.
+// If the API call logic changes, update both adapters.
+// ---------------------------------------------------------------------------
 
 import { Audio } from "expo-av";
 import * as FileSystem from "expo-file-system";

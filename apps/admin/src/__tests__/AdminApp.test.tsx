@@ -40,6 +40,55 @@ const mockMemory = {
   edges: [],
 };
 
+const mockGoals = {
+  motebit_id: "default-motebit",
+  goals: [
+    {
+      goal_id: "g1",
+      motebit_id: "default-motebit",
+      prompt: "Check email every hour",
+      interval_ms: 3600000,
+      last_run_at: Date.now() - 60000,
+      enabled: true,
+      created_at: Date.now() - 86400000,
+      mode: "recurring",
+      status: "active",
+      parent_goal_id: null,
+      max_retries: 3,
+      consecutive_failures: 0,
+    },
+  ],
+};
+
+const mockConversations = {
+  motebit_id: "default-motebit",
+  conversations: [
+    {
+      conversation_id: "c1",
+      motebit_id: "default-motebit",
+      started_at: Date.now() - 3600000,
+      last_active_at: Date.now() - 60000,
+      title: "Test conversation",
+      summary: null,
+      message_count: 5,
+    },
+  ],
+};
+
+const mockDevices = {
+  motebit_id: "default-motebit",
+  devices: [
+    {
+      device_id: "d1-abcdef123456",
+      motebit_id: "default-motebit",
+      device_name: "MacBook Pro",
+      public_key: "abcdef0123456789abcdef0123456789",
+      registered_at: Date.now() - 86400000,
+      last_seen_at: Date.now() - 300000,
+    },
+  ],
+};
+
 const mockEvents = {
   motebit_id: "default-motebit",
   events: [
@@ -86,6 +135,34 @@ function setupFetchMock() {
         text: () => Promise.resolve(JSON.stringify({ motebit_id: "default-motebit", entries: [] })),
       });
     }
+    if (url.includes("/api/v1/goals/")) {
+      return Promise.resolve({
+        ok: true, status: 200, statusText: "OK",
+        json: () => Promise.resolve(mockGoals),
+        text: () => Promise.resolve(JSON.stringify(mockGoals)),
+      });
+    }
+    if (url.includes("/api/v1/conversations/") && url.includes("/messages")) {
+      return Promise.resolve({
+        ok: true, status: 200, statusText: "OK",
+        json: () => Promise.resolve({ motebit_id: "default-motebit", conversation_id: "c1", messages: [] }),
+        text: () => Promise.resolve(JSON.stringify({ motebit_id: "default-motebit", conversation_id: "c1", messages: [] })),
+      });
+    }
+    if (url.includes("/api/v1/conversations/")) {
+      return Promise.resolve({
+        ok: true, status: 200, statusText: "OK",
+        json: () => Promise.resolve(mockConversations),
+        text: () => Promise.resolve(JSON.stringify(mockConversations)),
+      });
+    }
+    if (url.includes("/api/v1/devices/")) {
+      return Promise.resolve({
+        ok: true, status: 200, statusText: "OK",
+        json: () => Promise.resolve(mockDevices),
+        text: () => Promise.resolve(JSON.stringify(mockDevices)),
+      });
+    }
     return Promise.reject(new Error(`Unexpected URL: ${url}`));
   });
 }
@@ -111,13 +188,17 @@ describe("AdminApp", () => {
     expect(screen.getByText("Motebit Admin")).toBeTruthy();
   });
 
-  it("shows all 4 navigation buttons", () => {
+  it("shows all 8 navigation buttons", () => {
     setupFailingFetch();
     render(React.createElement(AdminApp));
     expect(screen.getByText("state")).toBeTruthy();
     expect(screen.getByText("memory")).toBeTruthy();
     expect(screen.getByText("behavior")).toBeTruthy();
     expect(screen.getByText("events")).toBeTruthy();
+    expect(screen.getByText("audit")).toBeTruthy();
+    expect(screen.getByText("goals")).toBeTruthy();
+    expect(screen.getByText("conversations")).toBeTruthy();
+    expect(screen.getByText("devices")).toBeTruthy();
   });
 
   it("shows state panel by default with fetched values", async () => {
@@ -181,6 +262,84 @@ describe("AdminApp", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Event Log")).toBeTruthy();
+    });
+  });
+
+  it("switches to goals panel on click", async () => {
+    setupFetchMock();
+    render(React.createElement(AdminApp));
+
+    fireEvent.click(screen.getByText("goals"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Goals")).toBeTruthy();
+    });
+  });
+
+  it("shows goal data in goals panel", async () => {
+    setupFetchMock();
+    render(React.createElement(AdminApp));
+
+    fireEvent.click(screen.getByText("goals"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Check email every hour")).toBeTruthy();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("1 goals total")).toBeTruthy();
+    });
+  });
+
+  it("switches to conversations panel on click", async () => {
+    setupFetchMock();
+    render(React.createElement(AdminApp));
+
+    fireEvent.click(screen.getByText("conversations"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Conversations")).toBeTruthy();
+    });
+  });
+
+  it("shows conversation data in conversations panel", async () => {
+    setupFetchMock();
+    render(React.createElement(AdminApp));
+
+    fireEvent.click(screen.getByText("conversations"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Test conversation")).toBeTruthy();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("5 messages")).toBeTruthy();
+    });
+  });
+
+  it("switches to devices panel on click", async () => {
+    setupFetchMock();
+    render(React.createElement(AdminApp));
+
+    fireEvent.click(screen.getByText("devices"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Devices")).toBeTruthy();
+    });
+  });
+
+  it("shows device data in devices panel", async () => {
+    setupFetchMock();
+    render(React.createElement(AdminApp));
+
+    fireEvent.click(screen.getByText("devices"));
+
+    await waitFor(() => {
+      expect(screen.getByText("MacBook Pro")).toBeTruthy();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("1 devices registered")).toBeTruthy();
     });
   });
 });

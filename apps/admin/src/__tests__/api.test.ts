@@ -5,6 +5,10 @@ import {
   fetchEvents,
   deleteMemoryNode,
   fetchHealth,
+  fetchGoals,
+  fetchConversations,
+  fetchConversationMessages,
+  fetchDevices,
   ApiError,
   config,
 } from "../api";
@@ -125,6 +129,91 @@ describe("fetchHealth", () => {
     expect(call[0]).toBe(`${config.apiUrl}/health`);
     expectAuthHeader(call);
     expect(result).toEqual(data);
+  });
+});
+
+describe("fetchGoals", () => {
+  it("calls correct URL and returns typed response", async () => {
+    const data = { motebit_id: "m1", goals: [{ goal_id: "g1", prompt: "test" }] };
+    mockFetch(data);
+
+    const result = await fetchGoals();
+
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const call = fetchMock.mock.calls[0]!;
+    expect(call[0]).toBe(`${config.apiUrl}/api/v1/goals/${config.motebitId}`);
+    expectAuthHeader(call);
+    expect(result).toEqual(data);
+  });
+
+  it("passes AbortSignal", async () => {
+    mockFetch({ motebit_id: "m1", goals: [] });
+    const controller = new AbortController();
+
+    await fetchGoals(controller.signal);
+
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const call = fetchMock.mock.calls[0]!;
+    const init = call[1] as RequestInit;
+    expect(init.signal).toBe(controller.signal);
+  });
+});
+
+describe("fetchConversations", () => {
+  it("calls correct URL and returns typed response", async () => {
+    const data = { motebit_id: "m1", conversations: [] };
+    mockFetch(data);
+
+    const result = await fetchConversations();
+
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const call = fetchMock.mock.calls[0]!;
+    expect(call[0]).toBe(`${config.apiUrl}/api/v1/conversations/${config.motebitId}`);
+    expectAuthHeader(call);
+    expect(result).toEqual(data);
+  });
+});
+
+describe("fetchConversationMessages", () => {
+  it("calls correct URL with conversation ID", async () => {
+    const data = { motebit_id: "m1", conversation_id: "c1", messages: [] };
+    mockFetch(data);
+
+    const result = await fetchConversationMessages("c1");
+
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const call = fetchMock.mock.calls[0]!;
+    expect(call[0]).toBe(`${config.apiUrl}/api/v1/conversations/${config.motebitId}/c1/messages`);
+    expectAuthHeader(call);
+    expect(result).toEqual(data);
+  });
+});
+
+describe("fetchDevices", () => {
+  it("calls correct URL and returns typed response", async () => {
+    const data = { motebit_id: "m1", devices: [{ device_id: "d1", device_name: "Test" }] };
+    mockFetch(data);
+
+    const result = await fetchDevices();
+
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const call = fetchMock.mock.calls[0]!;
+    expect(call[0]).toBe(`${config.apiUrl}/api/v1/devices/${config.motebitId}`);
+    expectAuthHeader(call);
+    expect(result).toEqual(data);
+  });
+
+  it("passes AbortSignal", async () => {
+    mockFetch({ motebit_id: "m1", devices: [] });
+    const controller = new AbortController();
+
+    await fetchDevices(controller.signal);
+
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const call = fetchMock.mock.calls[0]!;
+    const init = call[1] as RequestInit;
+    expect(init.signal).toBe(controller.signal);
   });
 });
 

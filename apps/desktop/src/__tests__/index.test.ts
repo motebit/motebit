@@ -979,3 +979,264 @@ describe("DesktopApp.resumeGoalAfterApproval", () => {
     await expect(gen.next()).rejects.toThrow("No pending goal approval");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Helper: access private fields on DesktopApp for auto-title testing
+// ---------------------------------------------------------------------------
+
+type RuntimeInternals = {
+  conversationId: string | null;
+  conversationHistory: Array<{ role: string; content: string }>;
+};
+
+/** Cast to access DesktopApp private fields */
+function appInternals(app: DesktopApp) {
+  return app as unknown as {
+    runtime: RuntimeInternals | null;
+    conversationStoreRef: unknown;
+    _autoTitlePending: boolean;
+  };
+}
+
+/** Set up a DesktopApp with Tauri store, runtime initialized, and an active conversation with N messages. */
+async function setupAppWithConversation(opts: {
+  messageCount: number;
+  title?: string | null;
+  firstUserContent?: string;
+}): Promise<{ app: DesktopApp; db: MockDbState }> {
+  const db = emptyDb();
+  const convId = "conv-auto-title";
+
+  db.conversations.push({
+    conversation_id: convId,
+    motebit_id: "desktop-local",
+    started_at: 1000,
+    last_active_at: 2000,
+    title: opts.title ?? null,
+    summary: null,
+    message_count: opts.messageCount,
+  });
+
+  // Build messages for the mock DB
+  const firstContent = opts.firstUserContent ?? "Tell me about the history of computing and how it evolved over time";
+  for (let i = 0; i < opts.messageCount; i++) {
+    const isUser = i % 2 === 0;
+    db.messages.push({
+      message_id: `msg-${i}`,
+      conversation_id: convId,
+      motebit_id: "desktop-local",
+      role: isUser ? "user" : "assistant",
+      content: i === 0 ? firstContent : (isUser ? `Follow-up question ${i}` : `Response ${i}`),
+      tool_calls: null,
+      tool_call_id: null,
+      created_at: 1000 + i,
+      token_estimate: 10,
+    });
+  }
+
+  const app = new DesktopApp();
+  await app.initAI({ provider: "ollama", isTauri: true, invoke: createMockInvoke(db) });
+
+  // Set up the runtime's internal conversation state to match
+  const internals = appInternals(app);
+  const rt = internals.runtime!;
+  rt.conversationId = convId;
+  rt.conversationHistory = db.messages.map(m => ({ role: m.role, content: m.content }));
+
+  return { app, db };
+}
+
+// ---------------------------------------------------------------------------
+// DesktopApp.maybeAutoTitle
+// ---------------------------------------------------------------------------
+
+describe("DesktopApp.maybeAutoTitle", () => {
+  let app: DesktopApp;
+
+  afterEach(() => {
+    if (app) app.stop();
+  });
+
+  it("returns null without runtime", async () => {
+    app = new DesktopApp();
+    const result = await app.maybeAutoTitle();
+    expect(result).toBeNull();
+  });
+
+  it("returns null without conversation store (in-memory mode)", async () => {
+    app = new DesktopApp();
+    await app.initAI({ provider: "ollama", isTauri: false });
+    const result = await app.maybeAutoTitle();
+    expect(result).toBeNull();
+  });
+
+  it("returns null when _autoTitlePending is true", async () => {
+    const setup = await setupAppWithConversation({ messageCount: 6 });
+    app = setup.app;
+    appInternals(app)._autoTitlePending = true;
+    const result = await app.maybeAutoTitle();
+    expect(result).toBeNull();
+  });
+
+  it("returns null when runtime has no conversation ID", async () => {
+    app = new DesktopApp();
+    const db = emptyDb();
+    await app.initAI({ provider: "ollama", isTauri: true, invoke: createMockInvoke(db) });
+    // runtime exists but conversationId is null (no conversation started)
+    const result = await app.maybeAutoTitle();
+    expect(result).toBeNull();
+  });
+
+  it("returns null with fewer than 4 messages", async () => {
+    const setup = await setupAppWithConversation({ messageCount: 2 });
+    app = setup.app;
+    const result = await app.maybeAutoTitle();
+    expect(result).toBeNull();
+  });
+
+  it("returns existing title when conversation is already titled", async () => {
+    const setup = await setupAppWithConversation({
+      messageCount: 6,
+      title: "Existing Title",
+    });
+    app = setup.app;
+    const result = await app.maybeAutoTitle();
+    expect(result).toBe("Existing Title");
+  });
+
+  it("returns null when AI call fails (no real provider)", async () => {
+    // With 4+ messages and no title, maybeAutoTitle will try to call
+    // runtime.sendMessage for AI-based titling. Without a real provider,
+    // the call will fail and the method returns null gracefully.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error("Connection refused"));
+    try {
+      const setup = await setupAppWithConversation({ messageCount: 6 });
+      app = setup.app;
+      const result = await app.maybeAutoTitle();
+      expect(result).toBeNull();
+      // Verify that _autoTitlePending was reset in the finally block
+      expect(appInternals(app)._autoTitlePending).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DesktopApp.generateTitleInBackground
+// ---------------------------------------------------------------------------
+
+describe("DesktopApp.generateTitleInBackground", () => {
+  let app: DesktopApp;
+
+  afterEach(() => {
+    if (app) app.stop();
+  });
+
+  it("returns null without runtime", async () => {
+    app = new DesktopApp();
+    const result = await app.generateTitleInBackground();
+    expect(result).toBeNull();
+  });
+
+  it("returns null without conversation store (in-memory mode)", async () => {
+    app = new DesktopApp();
+    await app.initAI({ provider: "ollama", isTauri: false });
+    const result = await app.generateTitleInBackground();
+    expect(result).toBeNull();
+  });
+
+  it("returns null when runtime has no conversation ID", async () => {
+    app = new DesktopApp();
+    const db = emptyDb();
+    await app.initAI({ provider: "ollama", isTauri: true, invoke: createMockInvoke(db) });
+    const result = await app.generateTitleInBackground();
+    expect(result).toBeNull();
+  });
+
+  it("returns null with fewer than 4 messages (message count check)", async () => {
+    const setup = await setupAppWithConversation({ messageCount: 2 });
+    app = setup.app;
+    const result = await app.generateTitleInBackground();
+    expect(result).toBeNull();
+  });
+
+  it("returns null when conversation already has a title", async () => {
+    const setup = await setupAppWithConversation({
+      messageCount: 6,
+      title: "Already Titled",
+    });
+    app = setup.app;
+    const result = await app.generateTitleInBackground();
+    expect(result).toBeNull();
+  });
+
+  it("returns null when _autoTitlePending is true (concurrent guard)", async () => {
+    const setup = await setupAppWithConversation({ messageCount: 6 });
+    app = setup.app;
+    appInternals(app)._autoTitlePending = true;
+    const result = await app.generateTitleInBackground();
+    expect(result).toBeNull();
+  });
+
+  it("generates title from first 7 words of first user message with ellipsis", async () => {
+    const setup = await setupAppWithConversation({
+      messageCount: 6,
+      firstUserContent: "Tell me about the history of computing and how it evolved over time",
+    });
+    app = setup.app;
+    const result = await app.generateTitleInBackground();
+    expect(result).toBe("Tell me about the history of computing...");
+    // Verify the pending flag was reset
+    expect(appInternals(app)._autoTitlePending).toBe(false);
+  });
+
+  it("uses full text when first user message has 7 or fewer words", async () => {
+    const setup = await setupAppWithConversation({
+      messageCount: 6,
+      firstUserContent: "Hello how are you",
+    });
+    app = setup.app;
+    const result = await app.generateTitleInBackground();
+    expect(result).toBe("Hello how are you");
+    expect(appInternals(app)._autoTitlePending).toBe(false);
+  });
+
+  it("uses full text for exactly 7 words without ellipsis", async () => {
+    const setup = await setupAppWithConversation({
+      messageCount: 6,
+      firstUserContent: "one two three four five six seven",
+    });
+    app = setup.app;
+    const result = await app.generateTitleInBackground();
+    expect(result).toBe("one two three four five six seven");
+  });
+
+  it("appends ellipsis when first user message exceeds 7 words", async () => {
+    const setup = await setupAppWithConversation({
+      messageCount: 6,
+      firstUserContent: "one two three four five six seven eight nine",
+    });
+    app = setup.app;
+    const result = await app.generateTitleInBackground();
+    expect(result).toBe("one two three four five six seven...");
+  });
+
+  it("persists the title via updateTitle (db_execute)", async () => {
+    const setup = await setupAppWithConversation({
+      messageCount: 6,
+      firstUserContent: "What is machine learning",
+    });
+    app = setup.app;
+    await app.generateTitleInBackground();
+
+    // Check that the mock DB recorded the UPDATE for the title
+    const titleUpdates = setup.db.executions.filter(e =>
+      e.sql.includes("UPDATE conversations SET title"),
+    );
+    expect(titleUpdates).toHaveLength(1);
+    expect(titleUpdates[0]!.params).toContain("What is machine learning");
+    expect(titleUpdates[0]!.params).toContain("conv-auto-title");
+  });
+});

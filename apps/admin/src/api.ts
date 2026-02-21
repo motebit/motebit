@@ -109,3 +109,95 @@ export function fetchAudit(signal?: AbortSignal): Promise<AuditResponse> {
 export function fetchHealth(signal?: AbortSignal): Promise<HealthResponse> {
   return apiFetch<HealthResponse>("/health", { signal });
 }
+
+// === Goals ===
+
+export interface GoalEntry {
+  goal_id: string;
+  motebit_id: string;
+  prompt: string;
+  interval_ms: number;
+  last_run_at: number | null;
+  enabled: boolean;
+  created_at: number;
+  mode: "recurring" | "once";
+  status: "active" | "completed" | "failed" | "paused";
+  parent_goal_id: string | null;
+  max_retries: number;
+  consecutive_failures: number;
+}
+
+export interface GoalsResponse {
+  motebit_id: string;
+  goals: GoalEntry[];
+}
+
+export function fetchGoals(signal?: AbortSignal): Promise<GoalsResponse> {
+  return apiFetch<GoalsResponse>(`/api/v1/goals/${config.motebitId}`, { signal });
+}
+
+// === Conversations ===
+
+export interface ConversationEntry {
+  conversation_id: string;
+  motebit_id: string;
+  started_at: number;
+  last_active_at: number;
+  title: string | null;
+  summary: string | null;
+  message_count: number;
+}
+
+export interface ConversationMessageEntry {
+  message_id: string;
+  conversation_id: string;
+  motebit_id: string;
+  role: string;
+  content: string;
+  tool_calls: string | null;
+  tool_call_id: string | null;
+  created_at: number;
+  token_estimate: number;
+}
+
+export interface ConversationsResponse {
+  motebit_id: string;
+  conversations: ConversationEntry[];
+}
+
+export interface ConversationMessagesResponse {
+  motebit_id: string;
+  conversation_id: string;
+  messages: ConversationMessageEntry[];
+}
+
+export function fetchConversations(signal?: AbortSignal): Promise<ConversationsResponse> {
+  return apiFetch<ConversationsResponse>(`/api/v1/conversations/${config.motebitId}`, { signal });
+}
+
+export function fetchConversationMessages(conversationId: string, signal?: AbortSignal): Promise<ConversationMessagesResponse> {
+  return apiFetch<ConversationMessagesResponse>(
+    `/api/v1/conversations/${config.motebitId}/${conversationId}/messages`,
+    { signal },
+  );
+}
+
+// === Devices ===
+
+export interface DeviceEntry {
+  device_id: string;
+  motebit_id: string;
+  device_name: string | null;
+  public_key: string;
+  registered_at: number;
+  last_seen_at: number | null;
+}
+
+export interface DevicesResponse {
+  motebit_id: string;
+  devices: DeviceEntry[];
+}
+
+export function fetchDevices(signal?: AbortSignal): Promise<DevicesResponse> {
+  return apiFetch<DevicesResponse>(`/api/v1/devices/${config.motebitId}`, { signal });
+}
