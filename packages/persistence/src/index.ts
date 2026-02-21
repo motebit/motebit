@@ -1487,6 +1487,7 @@ export class SqlitePlanStore {
   private stmtSavePlan: PreparedStatement;
   private stmtGetPlan: PreparedStatement;
   private stmtGetPlanForGoal: PreparedStatement;
+  private stmtListPlans: PreparedStatement;
   private stmtSaveStep: PreparedStatement;
   private stmtGetStep: PreparedStatement;
   private stmtGetStepsForPlan: PreparedStatement;
@@ -1500,6 +1501,9 @@ export class SqlitePlanStore {
     this.stmtGetPlan = db.prepare(`SELECT * FROM plans WHERE plan_id = ?`);
     this.stmtGetPlanForGoal = db.prepare(
       `SELECT * FROM plans WHERE goal_id = ? ORDER BY created_at DESC LIMIT 1`,
+    );
+    this.stmtListPlans = db.prepare(
+      `SELECT * FROM plans WHERE motebit_id = ? ORDER BY created_at DESC`,
     );
     this.stmtSaveStep = db.prepare(
       `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count)
@@ -1538,6 +1542,11 @@ export class SqlitePlanStore {
     const row = this.stmtGetPlanForGoal.get(goalId) as PlanRow | undefined;
     if (row === undefined) return null;
     return rowToPlan(row);
+  }
+
+  listPlans(motebitId: string): Plan[] {
+    const rows = this.stmtListPlans.all(motebitId) as PlanRow[];
+    return rows.map(rowToPlan);
   }
 
   updatePlan(planId: string, updates: Partial<Plan>): void {

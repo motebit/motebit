@@ -36,6 +36,9 @@ import type {
 // Node-only packages (@motebit/tools, @motebit/mcp-client) are imported dynamically
 // to avoid bundling node:child_process / stdio into browser builds (desktop app).
 type McpClientAdapter = { disconnect(): Promise<void> };
+import { PlanEngine, InMemoryPlanStore } from "@motebit/planner";
+import type { PlanChunk } from "@motebit/planner";
+import type { PlanStoreAdapter } from "@motebit/planner";
 import { PolicyGate, MemoryGovernor } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 
@@ -51,6 +54,8 @@ export type { RenderAdapter, RenderFrame, InteriorColor, AudioReactivity } from 
 export type { RenderSpec } from "@motebit/sdk";
 export { PolicyGate } from "@motebit/policy";
 export type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
+export type { PlanChunk } from "@motebit/planner";
+export type { PlanStoreAdapter } from "@motebit/planner";
 
 // === McpServerConfig (inlined to avoid importing Node-only @motebit/mcp-client) ===
 
@@ -166,6 +171,7 @@ export interface StorageAdapters {
   stateSnapshot?: StateSnapshotAdapter;
   toolAuditSink?: AuditLogSink;
   conversationStore?: ConversationStoreAdapter;
+  planStore?: PlanStoreAdapter;
 }
 
 export interface PlatformAdapters {
@@ -285,6 +291,8 @@ export class MotebitRuntime {
   private conversationId: string | null = null;
   private externalToolSources = new Map<string, string[]>();
   private summarizeAfterMessages: number;
+  private planStore: PlanStoreAdapter;
+  private planEngine: PlanEngine;
   private _pendingApproval: {
     toolCallId: string;
     toolName: string;
@@ -372,6 +380,10 @@ export class MotebitRuntime {
       }
     }
 
+    // Plan-execute engine
+    this.planStore = adapters.storage.planStore ?? new InMemoryPlanStore();
+    this.planEngine = new PlanEngine(this.planStore);
+
     this.wireLoopDeps();
   }
 
@@ -446,6 +458,37 @@ export class MotebitRuntime {
   /** Access the loop dependencies for direct use by PlanEngine. */
   getLoopDeps(): MotebitLoopDependencies | null {
     return this.loopDeps;
+  }
+
+  /**
+   * Create and execute a plan for a goal prompt.
+   * Decomposes the goal into steps, then executes each step sequentially,
+   * streaming PlanChunk events for progress tracking.
+   */
+  async *executePlan(goalId: string, goalPrompt: string): AsyncGenerator<PlanChunk> {
+    if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
+
+    const availableTools = this.toolRegistry.size > 0
+      ? this.toolRegistry.list().map((t) => t.name)
+      : undefined;
+
+    const plan = await this.planEngine.createPlan(
+      goalId,
+      this.motebitId,
+      { goalPrompt, availableTools },
+      this.loopDeps,
+    );
+
+    yield* this.planEngine.executePlan(plan.plan_id, this.loopDeps);
+  }
+
+  /**
+   * Resume an existing plan that was paused (e.g. waiting for approval).
+   * Streams PlanChunk events starting from where the plan left off.
+   */
+  async *resumePlan(planId: string): AsyncGenerator<PlanChunk> {
+    if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
+    yield* this.planEngine.resumePlan(planId, this.loopDeps);
   }
 
   get isOperatorMode(): boolean {

@@ -1,4 +1,4 @@
-import { DesktopApp, COLOR_PRESETS, type DesktopAIConfig, type McpServerConfig, type GoalCompleteEvent, type GoalApprovalEvent } from "./index";
+import { DesktopApp, COLOR_PRESETS, type DesktopAIConfig, type McpServerConfig, type GoalCompleteEvent, type GoalApprovalEvent, type GoalPlanProgressEvent } from "./index";
 import type { DesktopContext } from "./types";
 import { loadDesktopConfig } from "./ui/config";
 import { addMessage, showToast, initChat, showGoalApprovalCard } from "./ui/chat";
@@ -275,11 +275,29 @@ async function bootstrap(): Promise<void> {
       app.onGoalComplete((event: GoalCompleteEvent) => {
         const promptSnippet = event.prompt.length > 50 ? event.prompt.slice(0, 50) + "..." : event.prompt;
         if (event.status === "completed") {
+          const planInfo = event.planTitle
+            ? ` [${event.stepsCompleted ?? 0}/${event.totalSteps ?? 0} steps]`
+            : "";
           const summary = event.summary ? `: ${event.summary.slice(0, 120)}` : "";
-          addMessage("system", `Goal completed "${promptSnippet}"${summary}`);
+          addMessage("system", `Goal completed "${promptSnippet}"${planInfo}${summary}`);
         } else {
           const err = event.error ? `: ${event.error.slice(0, 80)}` : "";
           addMessage("system", `Goal failed "${promptSnippet}"${err}`);
+        }
+      });
+      app.onGoalPlanProgress((event: GoalPlanProgressEvent) => {
+        const goalStatusEl = document.getElementById("goal-status") as HTMLDivElement;
+        const goalStatusText = goalStatusEl.querySelector(".goal-status-text") as HTMLSpanElement | null;
+        if (goalStatusText) {
+          if (event.type === "plan_created") {
+            goalStatusText.textContent = `Plan: ${event.planTitle}`;
+          } else if (event.type === "step_started") {
+            goalStatusText.textContent = `Step ${event.stepIndex}/${event.totalSteps}: ${event.stepDescription}`;
+          } else if (event.type === "step_completed") {
+            goalStatusText.textContent = `Step ${event.stepIndex}/${event.totalSteps} done`;
+          } else if (event.type === "step_failed") {
+            goalStatusText.textContent = `Step ${event.stepIndex}/${event.totalSteps} failed`;
+          }
         }
       });
       app.onGoalApproval((event: GoalApprovalEvent) => {

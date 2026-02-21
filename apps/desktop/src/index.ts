@@ -29,7 +29,10 @@ import { generate as generateIdentityFile, parse as parseIdentityFile, governanc
 import { PairingClient, ConversationSyncEngine, HttpConversationSyncAdapter, HttpEventStoreAdapter } from "@motebit/sync-engine";
 import type { PairingSession, PairingStatus, ConversationSyncStoreAdapter } from "@motebit/sync-engine";
 import type { SyncConversation, SyncConversationMessage } from "@motebit/sdk";
-import { TauriEventStore, TauriMemoryStorage, TauriIdentityStorage, TauriAuditLog, TauriStateSnapshotStorage, TauriConversationStore, type InvokeFn } from "./tauri-storage.js";
+import { PlanEngine, InMemoryPlanStore } from "@motebit/planner";
+import type { PlanChunk, PlanStoreAdapter } from "@motebit/planner";
+import { PlanStatus } from "@motebit/sdk";
+import { TauriEventStore, TauriMemoryStorage, TauriIdentityStorage, TauriAuditLog, TauriStateSnapshotStorage, TauriConversationStore, TauriPlanStore, type InvokeFn } from "./tauri-storage.js";
 import { registerDesktopTools } from "./desktop-tools.js";
 export type { InvokeFn } from "./tauri-storage.js";
 
@@ -44,6 +47,21 @@ export interface GoalCompleteEvent {
   status: "completed" | "failed";
   summary: string | null;
   error: string | null;
+  /** Plan title if the goal used plan-based execution. */
+  planTitle?: string;
+  /** Number of plan steps completed. */
+  stepsCompleted?: number;
+  /** Total plan steps. */
+  totalSteps?: number;
+}
+
+export interface GoalPlanProgressEvent {
+  goalId: string;
+  planTitle: string;
+  stepIndex: number;
+  totalSteps: number;
+  stepDescription: string;
+  type: "plan_created" | "step_started" | "step_completed" | "step_failed";
 }
 
 export interface GoalApprovalEvent {
@@ -209,12 +227,16 @@ export class DesktopApp {
   private _goalStatusCallback: ((executing: boolean) => void) | null = null;
   private _goalCompleteCallback: ((event: GoalCompleteEvent) => void) | null = null;
   private _goalApprovalCallback: ((event: GoalApprovalEvent) => void) | null = null;
+  private _goalPlanProgressCallback: ((event: GoalPlanProgressEvent) => void) | null = null;
   private _pendingGoalApproval: {
     goalId: string;
     prompt: string;
     invoke: InvokeFn;
     mode: string;
+    planId?: string;
   } | null = null;
+  private planEngine: PlanEngine | null = null;
+  private planStoreRef: TauriPlanStore | PlanStoreAdapter | null = null;
   private conversationStoreRef: TauriConversationStore | null = null;
   private _autoTitlePending = false;
 
@@ -514,6 +536,17 @@ export class DesktopApp {
       { motebitId: this.motebitId, tickRateHz: 2, policy: policyConfig },
       { storage, renderer: this.renderer, ai: provider, keyring },
     );
+
+    // Create PlanEngine for multi-step goal execution
+    if (config.isTauri && config.invoke) {
+      const tauriPlanStore = new TauriPlanStore(config.invoke);
+      this.planStoreRef = tauriPlanStore;
+      this.planEngine = new PlanEngine(tauriPlanStore);
+    } else {
+      const memPlanStore = new InMemoryPlanStore();
+      this.planStoreRef = memPlanStore;
+      this.planEngine = new PlanEngine(memPlanStore);
+    }
 
     // Fail-closed tool registration:
     // - Tauri mode: tools only register if governance thresholds are present
@@ -861,24 +894,64 @@ export class DesktopApp {
     this._goalApprovalCallback = callback;
   }
 
+  /** Subscribe to plan progress events (step started/completed/failed during goal execution). */
+  onGoalPlanProgress(callback: (event: GoalPlanProgressEvent) => void): void {
+    this._goalPlanProgressCallback = callback;
+  }
+
   /**
    * Resume a goal after the user approves/denies a tool call.
    * Streams the continuation back so main.ts can render it into chat.
    * After streaming completes, records the goal outcome and cleans up.
+   *
+   * If the goal was executing a plan (planId is set), this method:
+   * 1. Completes the current step via runtime.resumeAfterApproval()
+   * 2. Resumes the remaining plan steps via planEngine.resumePlan()
    */
   async *resumeGoalAfterApproval(approved: boolean): AsyncGenerator<StreamChunk> {
     if (!this.runtime) throw new Error("AI not initialized");
     if (!this._pendingGoalApproval) throw new Error("No pending goal approval");
 
-    const { goalId, prompt, invoke, mode } = this._pendingGoalApproval;
+    const { goalId, prompt, invoke, mode, planId } = this._pendingGoalApproval;
 
     try {
       let accumulated = "";
+      let toolCallsMade = 0;
+      let planTitle: string | undefined;
+      let stepsCompleted: number | undefined;
+      let totalSteps: number | undefined;
+
+      // Phase 1: Complete the current tool call / step via runtime approval
       for await (const chunk of this.runtime.resumeAfterApproval(approved)) {
         if (chunk.type === "text") {
           accumulated += chunk.text;
+        } else if (chunk.type === "tool_status" && chunk.status === "calling") {
+          toolCallsMade++;
         }
         yield chunk;
+      }
+
+      // Phase 2: If this was a plan-based goal, resume remaining steps
+      if (planId && this.planEngine) {
+        const loopDeps = this.runtime.getLoopDeps();
+        if (loopDeps) {
+          const planResult = await this.consumePlanStream(
+            this.planEngine.resumePlan(planId, loopDeps),
+            { goal_id: goalId, prompt, mode },
+            invoke,
+          );
+
+          if (planResult.suspended) {
+            // Another approval request during plan continuation — stay suspended
+            return;
+          }
+
+          accumulated += planResult.responseText;
+          toolCallsMade += planResult.toolCallsMade;
+          planTitle = planResult.planTitle;
+          stepsCompleted = planResult.stepsCompleted;
+          totalSteps = planResult.totalSteps;
+        }
       }
 
       // Record outcome to DB
@@ -890,8 +963,8 @@ export class DesktopApp {
 
       await invoke<number>("db_execute", {
         sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
-              VALUES (?, ?, ?, ?, 'completed', ?, 0, 0, NULL)`,
-        params: [crypto.randomUUID(), goalId, this.motebitId, now, accumulated.slice(0, 500)],
+              VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL)`,
+        params: [crypto.randomUUID(), goalId, this.motebitId, now, accumulated.slice(0, 500), toolCallsMade],
       });
 
       // One-shot auto-complete
@@ -909,6 +982,9 @@ export class DesktopApp {
         status: "completed",
         summary: accumulated.slice(0, 200),
         error: null,
+        planTitle,
+        stepsCompleted,
+        totalSteps,
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -921,10 +997,12 @@ export class DesktopApp {
       });
       throw err;
     } finally {
-      this._goalExecuting = false;
-      this._goalStatusCallback?.(false);
-      this._pendingGoalApproval = null;
-      this.runtime?.resetConversation();
+      if (!this._pendingGoalApproval || this._pendingGoalApproval.goalId === goalId) {
+        this._goalExecuting = false;
+        this._goalStatusCallback?.(false);
+        this._pendingGoalApproval = null;
+        this.runtime?.resetConversation();
+      }
     }
   }
 
@@ -1003,52 +1081,11 @@ export class DesktopApp {
             params: [goal.goal_id],
           });
 
-          let context = `You are executing a scheduled goal.\n\nGoal: ${goal.prompt}`;
-          if (outcomes && outcomes.length > 0) {
-            context += "\n\nPrevious executions (most recent first):";
-            for (const o of outcomes) {
-              const ago = formatTimeAgo(now - o.ran_at);
-              if (o.status === "failed" && o.error_message) {
-                context += `\n- ${ago}: failed — [error: ${o.error_message}]`;
-              } else if (o.summary) {
-                context += `\n- ${ago}: ${o.status} — "${o.summary.slice(0, 100)}"`;
-              } else {
-                context += `\n- ${ago}: ${o.status}`;
-              }
-            }
-          }
-          if (goal.mode === "once") {
-            context += "\n\nThis is a one-time goal. Complete it fully in this execution.";
-          }
+          // Use PlanEngine for multi-step execution if available
+          const result = await this.executePlanGoal(goal, outcomes ?? [], invoke);
 
-          // Stream instead of sendMessage so approval_request chunks surface
-          let accumulated = "";
-          let approvalRequested = false;
-
-          for await (const chunk of this.runtime.sendMessageStreaming(context)) {
-            if (chunk.type === "text") {
-              accumulated += chunk.text;
-            } else if (chunk.type === "approval_request") {
-              approvalRequested = true;
-              this._pendingGoalApproval = {
-                goalId: goal.goal_id,
-                prompt: goal.prompt,
-                invoke,
-                mode: goal.mode,
-              };
-              this._goalApprovalCallback?.({
-                goalId: goal.goal_id,
-                goalPrompt: goal.prompt,
-                toolName: chunk.name,
-                args: chunk.args,
-                riskLevel: chunk.risk_level,
-              });
-            }
-          }
-
-          if (approvalRequested) {
-            // Don't record outcome — waiting for user decision.
-            // _goalExecuting stays true to block further ticks.
+          if (result.suspended) {
+            // Approval requested — _goalExecuting stays true to block further ticks.
             return;
           }
 
@@ -1060,13 +1097,14 @@ export class DesktopApp {
 
           await invoke<number>("db_execute", {
             sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
-                  VALUES (?, ?, ?, ?, 'completed', ?, 0, 0, NULL)`,
+                  VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL)`,
             params: [
               crypto.randomUUID(),
               goal.goal_id,
               this.motebitId,
               now,
-              accumulated.slice(0, 500),
+              result.responseText.slice(0, 500),
+              result.toolCallsMade,
             ],
           });
 
@@ -1083,8 +1121,11 @@ export class DesktopApp {
             goalId: goal.goal_id,
             prompt: goal.prompt,
             status: "completed",
-            summary: accumulated.slice(0, 200),
+            summary: result.responseText.slice(0, 200),
             error: null,
+            planTitle: result.planTitle,
+            stepsCompleted: result.stepsCompleted,
+            totalSteps: result.totalSteps,
           });
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -1129,6 +1170,228 @@ export class DesktopApp {
       this._goalExecuting = false;
       this._goalStatusCallback?.(false);
     }
+  }
+
+  /**
+   * Execute a goal using PlanEngine for multi-step decomposition.
+   * Falls back to single-turn streaming if PlanEngine is unavailable.
+   */
+  private async executePlanGoal(
+    goal: { goal_id: string; prompt: string; mode: string },
+    outcomes: Array<{ ran_at: number; status: string; summary: string | null; error_message: string | null }>,
+    invoke: InvokeFn,
+  ): Promise<{
+    suspended: boolean;
+    toolCallsMade: number;
+    responseText: string;
+    planTitle?: string;
+    stepsCompleted?: number;
+    totalSteps?: number;
+  }> {
+    const loopDeps = this.runtime!.getLoopDeps();
+
+    // If PlanEngine or loopDeps are unavailable, fall back to single-turn execution
+    if (!this.planEngine || !loopDeps) {
+      return this.executeSingleTurnGoal(goal, outcomes, invoke);
+    }
+
+    const registry = this.runtime!.getToolRegistry();
+
+    // Pre-load any existing active plan for this goal (async cache warm-up for Tauri)
+    if (this.planStoreRef && "preloadForGoal" in this.planStoreRef) {
+      await (this.planStoreRef as TauriPlanStore).preloadForGoal(goal.goal_id);
+    }
+
+    // Check for existing active plan (resume interrupted plan)
+    let plan = this.planStoreRef!.getPlanForGoal(goal.goal_id);
+    let planStream: AsyncGenerator<PlanChunk>;
+
+    if (plan && plan.status === PlanStatus.Active) {
+      planStream = this.planEngine.resumePlan(plan.plan_id, loopDeps);
+    } else {
+      plan = await this.planEngine.createPlan(goal.goal_id, this.motebitId, {
+        goalPrompt: goal.prompt,
+        previousOutcomes: outcomes.map((o) =>
+          o.status === "failed" ? `failed: ${o.error_message ?? "unknown"}` : `${o.status}: ${o.summary ?? "no summary"}`,
+        ),
+        availableTools: registry.list().map((t) => t.name),
+      }, loopDeps);
+      planStream = this.planEngine.executePlan(plan.plan_id, loopDeps);
+    }
+
+    return this.consumePlanStream(planStream, goal, invoke);
+  }
+
+  /**
+   * Fallback: single-turn goal execution (pre-PlanEngine behavior).
+   */
+  private async executeSingleTurnGoal(
+    goal: { goal_id: string; prompt: string; mode: string },
+    outcomes: Array<{ ran_at: number; status: string; summary: string | null; error_message: string | null }>,
+    invoke: InvokeFn,
+  ): Promise<{
+    suspended: boolean;
+    toolCallsMade: number;
+    responseText: string;
+  }> {
+    const now = Date.now();
+    let context = `You are executing a scheduled goal.\n\nGoal: ${goal.prompt}`;
+    if (outcomes.length > 0) {
+      context += "\n\nPrevious executions (most recent first):";
+      for (const o of outcomes) {
+        const ago = formatTimeAgo(now - o.ran_at);
+        if (o.status === "failed" && o.error_message) {
+          context += `\n- ${ago}: failed — [error: ${o.error_message}]`;
+        } else if (o.summary) {
+          context += `\n- ${ago}: ${o.status} — "${o.summary.slice(0, 100)}"`;
+        } else {
+          context += `\n- ${ago}: ${o.status}`;
+        }
+      }
+    }
+    if (goal.mode === "once") {
+      context += "\n\nThis is a one-time goal. Complete it fully in this execution.";
+    }
+
+    let accumulated = "";
+    let toolCallsMade = 0;
+
+    for await (const chunk of this.runtime!.sendMessageStreaming(context)) {
+      if (chunk.type === "text") {
+        accumulated += chunk.text;
+      } else if (chunk.type === "tool_status" && chunk.status === "calling") {
+        toolCallsMade++;
+      } else if (chunk.type === "approval_request") {
+        this._pendingGoalApproval = {
+          goalId: goal.goal_id,
+          prompt: goal.prompt,
+          invoke,
+          mode: goal.mode,
+        };
+        this._goalApprovalCallback?.({
+          goalId: goal.goal_id,
+          goalPrompt: goal.prompt,
+          toolName: chunk.name,
+          args: chunk.args,
+          riskLevel: chunk.risk_level,
+        });
+        return { suspended: true, toolCallsMade, responseText: accumulated };
+      }
+    }
+
+    return { suspended: false, toolCallsMade, responseText: accumulated };
+  }
+
+  /**
+   * Consume a PlanEngine stream, forwarding progress to UI callbacks.
+   */
+  private async consumePlanStream(
+    stream: AsyncGenerator<PlanChunk>,
+    goal: { goal_id: string; prompt: string; mode: string },
+    invoke: InvokeFn,
+  ): Promise<{
+    suspended: boolean;
+    toolCallsMade: number;
+    responseText: string;
+    planTitle?: string;
+    stepsCompleted?: number;
+    totalSteps?: number;
+  }> {
+    let toolCallsMade = 0;
+    let responseText = "";
+    let planTitle: string | undefined;
+    let totalSteps = 0;
+    let stepsCompleted = 0;
+
+    for await (const chunk of stream) {
+      switch (chunk.type) {
+        case "plan_created":
+          planTitle = chunk.plan.title;
+          totalSteps = chunk.steps.length;
+          this._goalPlanProgressCallback?.({
+            goalId: goal.goal_id,
+            planTitle: chunk.plan.title,
+            stepIndex: 0,
+            totalSteps: chunk.steps.length,
+            stepDescription: chunk.steps[0]?.description ?? "",
+            type: "plan_created",
+          });
+          break;
+
+        case "step_started":
+          this._goalPlanProgressCallback?.({
+            goalId: goal.goal_id,
+            planTitle: planTitle ?? "",
+            stepIndex: chunk.step.ordinal + 1,
+            totalSteps,
+            stepDescription: chunk.step.description,
+            type: "step_started",
+          });
+          break;
+
+        case "step_chunk":
+          // Forward inner agentic chunks
+          if (chunk.chunk.type === "text") {
+            responseText += chunk.chunk.text;
+          } else if (chunk.chunk.type === "tool_status" && chunk.chunk.status === "calling") {
+            toolCallsMade++;
+          }
+          break;
+
+        case "step_completed":
+          stepsCompleted++;
+          this._goalPlanProgressCallback?.({
+            goalId: goal.goal_id,
+            planTitle: planTitle ?? "",
+            stepIndex: chunk.step.ordinal + 1,
+            totalSteps,
+            stepDescription: chunk.step.description,
+            type: "step_completed",
+          });
+          break;
+
+        case "step_failed":
+          this._goalPlanProgressCallback?.({
+            goalId: goal.goal_id,
+            planTitle: planTitle ?? "",
+            stepIndex: chunk.step.ordinal + 1,
+            totalSteps,
+            stepDescription: chunk.step.description,
+            type: "step_failed",
+          });
+          break;
+
+        case "approval_request": {
+          const innerChunk = chunk.chunk;
+          if (innerChunk.type !== "approval_request") break;
+          this._pendingGoalApproval = {
+            goalId: goal.goal_id,
+            prompt: goal.prompt,
+            invoke,
+            mode: goal.mode,
+            planId: chunk.step.plan_id,
+          };
+          this._goalApprovalCallback?.({
+            goalId: goal.goal_id,
+            goalPrompt: goal.prompt,
+            toolName: innerChunk.name,
+            args: innerChunk.args,
+            riskLevel: innerChunk.risk_level,
+          });
+          return { suspended: true, toolCallsMade, responseText, planTitle, stepsCompleted, totalSteps };
+        }
+
+        case "plan_completed":
+          // Plan finished successfully
+          break;
+
+        case "plan_failed":
+          // Plan failed — the error will surface through the outer catch
+          throw new Error(`Plan failed: ${chunk.reason}`);
+      }
+    }
+
+    return { suspended: false, toolCallsMade, responseText, planTitle, stepsCompleted, totalSteps };
   }
 
   // === MCP via Tauri Commands ===

@@ -1,4 +1,6 @@
-import type { EventLogEntry, EventType, MemoryNode, MemoryEdge, MotebitIdentity, AuditRecord, SensitivityLevel, RelationType } from "@motebit/sdk";
+import type { EventLogEntry, EventType, MemoryNode, MemoryEdge, MotebitIdentity, AuditRecord, SensitivityLevel, RelationType, Plan, PlanStep } from "@motebit/sdk";
+import { PlanStatus, StepStatus } from "@motebit/sdk";
+import type { PlanStoreAdapter } from "@motebit/planner";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import type { MemoryStorageAdapter, MemoryQuery } from "@motebit/memory-graph";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
@@ -881,4 +883,176 @@ export class TauriConversationStore implements ConversationStoreAdapter {
     title: string | null;
     messageCount: number;
   }> = [];
+}
+
+// === TauriPlanStore ===
+// PlanStoreAdapter is sync, but Tauri IPC is async.
+// Maintain an in-memory cache for sync reads; fire-and-forget async writes to DB.
+
+interface PlanRow {
+  plan_id: string;
+  goal_id: string;
+  motebit_id: string;
+  title: string;
+  status: string;
+  created_at: number;
+  updated_at: number;
+  current_step_index: number;
+  total_steps: number;
+}
+
+interface PlanStepRow {
+  step_id: string;
+  plan_id: string;
+  ordinal: number;
+  description: string;
+  prompt: string;
+  depends_on: string;
+  optional: number;
+  status: string;
+  result_summary: string | null;
+  error_message: string | null;
+  tool_calls_made: number;
+  started_at: number | null;
+  completed_at: number | null;
+  retry_count: number;
+}
+
+function rowToPlan(row: PlanRow): Plan {
+  return {
+    plan_id: row.plan_id,
+    goal_id: row.goal_id,
+    motebit_id: row.motebit_id,
+    title: row.title,
+    status: row.status as PlanStatus,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    current_step_index: row.current_step_index,
+    total_steps: row.total_steps,
+  };
+}
+
+function rowToPlanStep(row: PlanStepRow): PlanStep {
+  return {
+    step_id: row.step_id,
+    plan_id: row.plan_id,
+    ordinal: row.ordinal,
+    description: row.description,
+    prompt: row.prompt,
+    depends_on: JSON.parse(row.depends_on) as string[],
+    optional: row.optional === 1,
+    status: row.status as StepStatus,
+    result_summary: row.result_summary,
+    error_message: row.error_message,
+    tool_calls_made: row.tool_calls_made,
+    started_at: row.started_at,
+    completed_at: row.completed_at,
+    retry_count: row.retry_count,
+  };
+}
+
+export class TauriPlanStore implements PlanStoreAdapter {
+  private plans = new Map<string, Plan>();
+  private steps = new Map<string, PlanStep>();
+
+  constructor(private invoke: InvokeFn) {}
+
+  /** Pre-load active plans for a goal before execution. */
+  async preloadForGoal(goalId: string): Promise<void> {
+    const planRows = await dbQuery<PlanRow>(
+      this.invoke,
+      "SELECT * FROM plans WHERE goal_id = ? ORDER BY created_at DESC LIMIT 1",
+      [goalId],
+    );
+    for (const row of planRows) {
+      const plan = rowToPlan(row);
+      this.plans.set(plan.plan_id, plan);
+
+      const stepRows = await dbQuery<PlanStepRow>(
+        this.invoke,
+        "SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY ordinal ASC",
+        [plan.plan_id],
+      );
+      for (const sr of stepRows) {
+        const step = rowToPlanStep(sr);
+        this.steps.set(step.step_id, step);
+      }
+    }
+  }
+
+  savePlan(plan: Plan): void {
+    this.plans.set(plan.plan_id, { ...plan });
+    void dbExecute(
+      this.invoke,
+      `INSERT OR REPLACE INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [plan.plan_id, plan.goal_id, plan.motebit_id, plan.title, plan.status, plan.created_at, plan.updated_at, plan.current_step_index, plan.total_steps],
+    );
+  }
+
+  getPlan(planId: string): Plan | null {
+    const p = this.plans.get(planId);
+    return p ? { ...p } : null;
+  }
+
+  getPlanForGoal(goalId: string): Plan | null {
+    for (const plan of this.plans.values()) {
+      if (plan.goal_id === goalId) return { ...plan };
+    }
+    return null;
+  }
+
+  updatePlan(planId: string, updates: Partial<Plan>): void {
+    const existing = this.plans.get(planId);
+    if (!existing) return;
+    const merged = { ...existing, ...updates };
+    this.plans.set(planId, merged);
+    void dbExecute(
+      this.invoke,
+      `INSERT OR REPLACE INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [merged.plan_id, merged.goal_id, merged.motebit_id, merged.title, merged.status, merged.created_at, merged.updated_at, merged.current_step_index, merged.total_steps],
+    );
+  }
+
+  saveStep(step: PlanStep): void {
+    this.steps.set(step.step_id, { ...step });
+    void dbExecute(
+      this.invoke,
+      `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [step.step_id, step.plan_id, step.ordinal, step.description, step.prompt, JSON.stringify(step.depends_on), step.optional ? 1 : 0, step.status, step.result_summary, step.error_message, step.tool_calls_made, step.started_at, step.completed_at, step.retry_count],
+    );
+  }
+
+  getStep(stepId: string): PlanStep | null {
+    const s = this.steps.get(stepId);
+    return s ? { ...s } : null;
+  }
+
+  getStepsForPlan(planId: string): PlanStep[] {
+    const result: PlanStep[] = [];
+    for (const step of this.steps.values()) {
+      if (step.plan_id === planId) result.push({ ...step });
+    }
+    return result.sort((a, b) => a.ordinal - b.ordinal);
+  }
+
+  updateStep(stepId: string, updates: Partial<PlanStep>): void {
+    const existing = this.steps.get(stepId);
+    if (!existing) return;
+    const merged = { ...existing, ...updates };
+    this.steps.set(stepId, merged);
+    void dbExecute(
+      this.invoke,
+      `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [merged.step_id, merged.plan_id, merged.ordinal, merged.description, merged.prompt, JSON.stringify(merged.depends_on), merged.optional ? 1 : 0, merged.status, merged.result_summary, merged.error_message, merged.tool_calls_made, merged.started_at, merged.completed_at, merged.retry_count],
+    );
+  }
+
+  getNextPendingStep(planId: string): PlanStep | null {
+    const steps = this.getStepsForPlan(planId);
+    return steps.find((s) => s.status === StepStatus.Pending) ?? null;
+  }
 }

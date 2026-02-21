@@ -182,6 +182,56 @@ export function fetchConversationMessages(conversationId: string, signal?: Abort
   );
 }
 
+// === Plans ===
+
+export interface PlanStepEntry {
+  step_id: string;
+  plan_id: string;
+  ordinal: number;
+  description: string;
+  prompt: string;
+  depends_on: string[];
+  optional: boolean;
+  status: "pending" | "running" | "completed" | "failed" | "skipped";
+  result_summary: string | null;
+  error_message: string | null;
+  tool_calls_made: number;
+  started_at: number | null;
+  completed_at: number | null;
+  retry_count: number;
+}
+
+export interface PlanEntry {
+  plan_id: string;
+  goal_id: string;
+  motebit_id: string;
+  title: string;
+  status: "active" | "completed" | "failed" | "paused";
+  created_at: number;
+  updated_at: number;
+  current_step_index: number;
+  total_steps: number;
+  steps: PlanStepEntry[];
+}
+
+export interface PlansResponse {
+  motebit_id: string;
+  plans: PlanEntry[];
+}
+
+export interface SinglePlanResponse {
+  motebit_id: string;
+  plan: PlanEntry;
+}
+
+export function fetchPlans(signal?: AbortSignal): Promise<PlansResponse> {
+  return apiFetch<PlansResponse>(`/api/v1/plans/${config.motebitId}`, { signal });
+}
+
+export function fetchPlan(planId: string, signal?: AbortSignal): Promise<SinglePlanResponse> {
+  return apiFetch<SinglePlanResponse>(`/api/v1/plans/${config.motebitId}/${planId}`, { signal });
+}
+
 // === Devices ===
 
 export interface DeviceEntry {

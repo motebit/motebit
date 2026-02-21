@@ -23,6 +23,7 @@
     "@motebit/event-log": "workspace:*",
     "@motebit/identity-file": "workspace:*",
     "@motebit/mcp-client": "workspace:^",
+    "@motebit/planner": "workspace:*",
     "@motebit/memory-graph": "workspace:*",
     "@motebit/privacy-layer": "workspace:*",
     "@motebit/render-engine": "workspace:*",

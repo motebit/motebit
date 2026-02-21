@@ -317,3 +317,282 @@ body {
 .audit-decision.approval {
   color: var(--accent);
 }
+
+/* === Goals === */
+
+.goal-entry {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.goal-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.goal-status {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.goal-status.active { color: #60a5fa; }
+.goal-status.completed { color: var(--green); }
+.goal-status.failed { color: var(--red); }
+.goal-status.paused { color: #facc15; }
+
+.goal-mode,
+.goal-interval {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.goal-failures {
+  font-size: 11px;
+  color: var(--red);
+}
+
+.goal-prompt {
+  font-size: 12px;
+  color: var(--text);
+  padding-left: 2px;
+}
+
+.goal-meta {
+  display: flex;
+  gap: 12px;
+}
+
+/* === Plans === */
+
+.plan-entry {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.plan-entry:last-child {
+  border-bottom: none;
+}
+
+.plan-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.plan-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.plan-progress {
+  color: var(--text-dim);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.plan-running {
+  color: #60a5fa;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.plan-failed-count {
+  color: var(--red);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.plan-status {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.plan-status.active { color: #60a5fa; }
+.plan-status.completed { color: var(--green); }
+.plan-status.failed { color: var(--red); }
+.plan-status.paused { color: #facc15; }
+
+.plan-meta {
+  display: flex;
+  gap: 12px;
+  padding: 2px 0 4px 0;
+  font-size: 11px;
+}
+
+.plan-goal-id {
+  color: var(--text-dim);
+}
+
+.plan-steps {
+  margin-top: 4px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+}
+
+.plan-step {
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.plan-step:last-child {
+  border-bottom: none;
+}
+
+.plan-step-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.step-ordinal {
+  color: var(--text-dim);
+  font-size: 11px;
+  flex-shrink: 0;
+  width: 24px;
+}
+
+.step-description {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step-status {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.step-status.pending { color: var(--text-dim); }
+.step-status.running { color: #60a5fa; animation: pulse 1.5s ease-in-out infinite; }
+.step-status.completed { color: var(--green); }
+.step-status.failed { color: var(--red); }
+.step-status.skipped { color: #facc15; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.plan-step-meta {
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 1px 0;
+}
+
+.step-tools,
+.step-retries,
+.step-duration {
+  flex-shrink: 0;
+}
+
+.step-retries {
+  color: var(--accent);
+}
+
+.step-result {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 2px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.step-error {
+  font-size: 11px;
+  color: var(--red);
+  padding: 2px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* === Conversations === */
+
+.conversation-entry {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.conversation-entry:last-child {
+  border-bottom: none;
+}
+
+.conversation-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.conversation-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-count {
+  color: var(--text-dim);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.expand-indicator {
+  color: var(--text-dim);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.conversation-messages {
+  margin-top: 4px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+}
+
+.message {
+  padding: 3px 0;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.message:last-child {
+  border-bottom: none;
+}
+
+.message-role {
+  font-size: 11px;
+  color: var(--accent);
+  margin-right: 6px;
+}
+
+.message-content {
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.message-user .message-role { color: #60a5fa; }
+.message-assistant .message-role { color: var(--green); }
+.message-tool .message-role { color: #facc15; }
+
+.loading,
+.empty {
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 4px 0;
+}

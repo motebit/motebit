@@ -25,6 +25,7 @@
     "@motebit/render-engine": "workspace:*",
     "@motebit/crypto": "workspace:*",
     "@motebit/mcp-client": "workspace:*",
+    "@motebit/planner": "workspace:*",
     "@motebit/policy": "workspace:*"
   },
   "devDependencies": {

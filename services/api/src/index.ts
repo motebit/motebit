@@ -452,6 +452,29 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
     return c.json({ motebit_id: motebitId, entries });
   });
 
+  // --- Plans: list all plans for a motebit with their steps ---
+  app.get("/api/v1/plans/:motebitId", (c) => {
+    const motebitId = c.req.param("motebitId");
+    const plans = moteDb.planStore.listPlans(motebitId);
+    const plansWithSteps = plans.map((plan) => ({
+      ...plan,
+      steps: moteDb.planStore.getStepsForPlan(plan.plan_id),
+    }));
+    return c.json({ motebit_id: motebitId, plans: plansWithSteps });
+  });
+
+  // --- Plans: get single plan with steps ---
+  app.get("/api/v1/plans/:motebitId/:planId", (c) => {
+    const motebitId = c.req.param("motebitId");
+    const planId = c.req.param("planId");
+    const plan = moteDb.planStore.getPlan(planId);
+    if (!plan || plan.motebit_id !== motebitId) {
+      throw new HTTPException(404, { message: "Plan not found" });
+    }
+    const steps = moteDb.planStore.getStepsForPlan(planId);
+    return c.json({ motebit_id: motebitId, plan: { ...plan, steps } });
+  });
+
   // --- Identity: create ---
   app.post("/identity", async (c) => {
     const body = await c.req.json<{ owner_id: string }>();

@@ -89,6 +89,73 @@ const mockDevices = {
   ],
 };
 
+const mockPlans = {
+  motebit_id: "default-motebit",
+  plans: [
+    {
+      plan_id: "p1",
+      goal_id: "g1",
+      motebit_id: "default-motebit",
+      title: "Check email plan",
+      status: "active",
+      created_at: Date.now() - 60000,
+      updated_at: Date.now(),
+      current_step_index: 1,
+      total_steps: 3,
+      steps: [
+        {
+          step_id: "s1",
+          plan_id: "p1",
+          ordinal: 0,
+          description: "Open inbox",
+          prompt: "Open the email inbox",
+          depends_on: [],
+          optional: false,
+          status: "completed",
+          result_summary: "Inbox opened successfully",
+          error_message: null,
+          tool_calls_made: 1,
+          started_at: Date.now() - 50000,
+          completed_at: Date.now() - 40000,
+          retry_count: 0,
+        },
+        {
+          step_id: "s2",
+          plan_id: "p1",
+          ordinal: 1,
+          description: "Read unread messages",
+          prompt: "Read unread messages",
+          depends_on: ["s1"],
+          optional: false,
+          status: "running",
+          result_summary: null,
+          error_message: null,
+          tool_calls_made: 2,
+          started_at: Date.now() - 30000,
+          completed_at: null,
+          retry_count: 0,
+        },
+        {
+          step_id: "s3",
+          plan_id: "p1",
+          ordinal: 2,
+          description: "Summarize findings",
+          prompt: "Summarize the email findings",
+          depends_on: ["s2"],
+          optional: false,
+          status: "pending",
+          result_summary: null,
+          error_message: null,
+          tool_calls_made: 0,
+          started_at: null,
+          completed_at: null,
+          retry_count: 0,
+        },
+      ],
+    },
+  ],
+};
+
 const mockEvents = {
   motebit_id: "default-motebit",
   events: [
@@ -156,6 +223,13 @@ function setupFetchMock() {
         text: () => Promise.resolve(JSON.stringify(mockConversations)),
       });
     }
+    if (url.includes("/api/v1/plans/")) {
+      return Promise.resolve({
+        ok: true, status: 200, statusText: "OK",
+        json: () => Promise.resolve(mockPlans),
+        text: () => Promise.resolve(JSON.stringify(mockPlans)),
+      });
+    }
     if (url.includes("/api/v1/devices/")) {
       return Promise.resolve({
         ok: true, status: 200, statusText: "OK",
@@ -188,7 +262,7 @@ describe("AdminApp", () => {
     expect(screen.getByText("Motebit Admin")).toBeTruthy();
   });
 
-  it("shows all 8 navigation buttons", () => {
+  it("shows all 9 navigation buttons", () => {
     setupFailingFetch();
     render(React.createElement(AdminApp));
     expect(screen.getByText("state")).toBeTruthy();
@@ -197,6 +271,7 @@ describe("AdminApp", () => {
     expect(screen.getByText("events")).toBeTruthy();
     expect(screen.getByText("audit")).toBeTruthy();
     expect(screen.getByText("goals")).toBeTruthy();
+    expect(screen.getByText("plans")).toBeTruthy();
     expect(screen.getByText("conversations")).toBeTruthy();
     expect(screen.getByText("devices")).toBeTruthy();
   });
@@ -340,6 +415,81 @@ describe("AdminApp", () => {
 
     await waitFor(() => {
       expect(screen.getByText("1 devices registered")).toBeTruthy();
+    });
+  });
+
+  it("switches to plans panel on click", async () => {
+    setupFetchMock();
+    render(React.createElement(AdminApp));
+
+    fireEvent.click(screen.getByText("plans"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Plans")).toBeTruthy();
+    });
+  });
+
+  it("shows plan data in plans panel", async () => {
+    setupFetchMock();
+    render(React.createElement(AdminApp));
+
+    fireEvent.click(screen.getByText("plans"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Check email plan")).toBeTruthy();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("1 plans total")).toBeTruthy();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("1/3 steps")).toBeTruthy();
+    });
+  });
+
+  it("expands plan to show steps", async () => {
+    setupFetchMock();
+    render(React.createElement(AdminApp));
+
+    fireEvent.click(screen.getByText("plans"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Check email plan")).toBeTruthy();
+    });
+
+    // Click on the plan header to expand
+    fireEvent.click(screen.getByText("Check email plan"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Open inbox")).toBeTruthy();
+      expect(screen.getByText("Read unread messages")).toBeTruthy();
+      expect(screen.getByText("Summarize findings")).toBeTruthy();
+    });
+  });
+
+  it("shows step status badges and metadata", async () => {
+    setupFetchMock();
+    render(React.createElement(AdminApp));
+
+    fireEvent.click(screen.getByText("plans"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Check email plan")).toBeTruthy();
+    });
+
+    // Expand the plan
+    fireEvent.click(screen.getByText("Check email plan"));
+
+    await waitFor(() => {
+      expect(screen.getByText("completed")).toBeTruthy();
+      expect(screen.getByText("running")).toBeTruthy();
+      expect(screen.getByText("pending")).toBeTruthy();
+    });
+
+    // Check result summary from completed step
+    await waitFor(() => {
+      expect(screen.getByText("Inbox opened successfully")).toBeTruthy();
     });
   });
 });

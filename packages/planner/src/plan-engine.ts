@@ -6,6 +6,8 @@ import { runTurnStreaming } from "@motebit/ai-core";
 import type { PlanStoreAdapter } from "./types.js";
 import { decomposePlan } from "./decompose.js";
 import type { DecompositionContext } from "./decompose.js";
+import { reflectOnPlan } from "./reflect.js";
+import type { ReflectionResult } from "./reflect.js";
 
 export type PlanChunk =
   | { type: "plan_created"; plan: Plan; steps: PlanStep[] }
@@ -15,10 +17,14 @@ export type PlanChunk =
   | { type: "step_failed"; step: PlanStep; error: string }
   | { type: "plan_completed"; plan: Plan }
   | { type: "plan_failed"; plan: Plan; reason: string }
-  | { type: "approval_request"; step: PlanStep; chunk: AgenticChunk };
+  | { type: "approval_request"; step: PlanStep; chunk: AgenticChunk }
+  | { type: "plan_retrying"; failedPlan: Plan; newPlan: Plan }
+  | { type: "reflection"; result: ReflectionResult };
 
 export interface PlanEngineConfig {
   maxStepRetries?: number;
+  maxPlanRetries?: number;
+  enableReflection?: boolean;
 }
 
 export class PlanEngine {
@@ -84,6 +90,7 @@ export class PlanEngine {
   async *executePlan(
     planId: string,
     deps: MotebitLoopDependencies,
+    ctx?: DecompositionContext,
   ): AsyncGenerator<PlanChunk> {
     const plan = this.store.getPlan(planId);
     if (!plan) throw new Error(`Plan not found: ${planId}`);
@@ -92,12 +99,13 @@ export class PlanEngine {
 
     yield { type: "plan_created", plan, steps };
 
-    yield* this.runSteps(plan, steps, deps);
+    yield* this.runSteps(plan, steps, deps, ctx);
   }
 
   async *resumePlan(
     planId: string,
     deps: MotebitLoopDependencies,
+    ctx?: DecompositionContext,
   ): AsyncGenerator<PlanChunk> {
     const plan = this.store.getPlan(planId);
     if (!plan) throw new Error(`Plan not found: ${planId}`);
@@ -106,16 +114,20 @@ export class PlanEngine {
     }
 
     const steps = this.store.getStepsForPlan(planId);
-    yield* this.runSteps(plan, steps, deps);
+    yield* this.runSteps(plan, steps, deps, ctx);
   }
 
   private async *runSteps(
     plan: Plan,
     steps: PlanStep[],
     deps: MotebitLoopDependencies,
+    ctx?: DecompositionContext,
+    planRetryCount: number = 0,
   ): AsyncGenerator<PlanChunk> {
     this._isExecuting = true;
     const maxRetries = this.config.maxStepRetries ?? 2;
+    const maxPlanRetries = this.config.maxPlanRetries ?? 1;
+    const enableReflection = this.config.enableReflection ?? true;
     const completedResults: string[] = [];
 
     try {
@@ -137,8 +149,9 @@ export class PlanEngine {
             continue;
           }
           // Required step with unmet deps — fail plan
-          this.failPlan(plan, `Unmet dependencies for step ${step.ordinal + 1}`);
-          yield { type: "plan_failed", plan: this.store.getPlan(plan.plan_id)!, reason: `Unmet dependencies for step ${step.ordinal + 1}` };
+          const reason = `Unmet dependencies for step ${step.ordinal + 1}`;
+          this.failPlan(plan, reason);
+          yield { type: "plan_failed", plan: this.store.getPlan(plan.plan_id)!, reason };
           return;
         }
 
@@ -209,7 +222,30 @@ export class PlanEngine {
 
           if (!step.optional) {
             this.failPlan(plan, `Required step ${step.ordinal + 1} failed: ${lastError}`);
-            yield { type: "plan_failed", plan: this.store.getPlan(plan.plan_id)!, reason: lastError };
+            const failedPlan = this.store.getPlan(plan.plan_id)!;
+
+            // Adaptive re-planning: retry with failure context if we have a decomposition context
+            if (ctx && planRetryCount < maxPlanRetries) {
+              const retryOutcomes = this.buildRetryOutcomes(plan, steps, step, lastError, completedResults);
+              const retryCtx: DecompositionContext = {
+                ...ctx,
+                previousOutcomes: retryOutcomes,
+              };
+
+              try {
+                const newPlan = await this.createPlan(plan.goal_id, plan.motebit_id, retryCtx, deps);
+                yield { type: "plan_retrying", failedPlan, newPlan };
+
+                const newSteps = this.store.getStepsForPlan(newPlan.plan_id);
+                yield { type: "plan_created", plan: newPlan, steps: newSteps };
+                yield* this.runSteps(newPlan, newSteps, deps, ctx, planRetryCount + 1);
+                return;
+              } catch {
+                // Re-planning itself failed — fall through to plan_failed
+              }
+            }
+
+            yield { type: "plan_failed", plan: failedPlan, reason: lastError };
             return;
           }
 
@@ -223,10 +259,50 @@ export class PlanEngine {
         status: PlanStatus.Completed,
         updated_at: Date.now(),
       });
-      yield { type: "plan_completed", plan: this.store.getPlan(plan.plan_id)! };
+      const completedPlan = this.store.getPlan(plan.plan_id)!;
+      yield { type: "plan_completed", plan: completedPlan };
+
+      // Post-execution reflection
+      if (enableReflection) {
+        try {
+          const allSteps = this.store.getStepsForPlan(plan.plan_id);
+          const result = await reflectOnPlan(completedPlan, allSteps, deps.provider);
+          yield { type: "reflection", result };
+        } catch {
+          // Reflection failure should never break the plan flow
+        }
+      }
     } finally {
       this._isExecuting = false;
     }
+  }
+
+  private buildRetryOutcomes(
+    plan: Plan,
+    steps: PlanStep[],
+    failedStep: PlanStep,
+    error: string,
+    completedResults: string[],
+  ): string[] {
+    const outcomes: string[] = [];
+    outcomes.push(`Original plan "${plan.title}" failed at step ${failedStep.ordinal + 1}: ${failedStep.description}`);
+    outcomes.push(`Error: ${error}`);
+
+    if (completedResults.length > 0) {
+      outcomes.push(`Completed steps before failure:`);
+      for (const result of completedResults) {
+        // Trim each result to keep context manageable
+        outcomes.push(result.length > 300 ? result.slice(0, 300) + "..." : result);
+      }
+    }
+
+    // Include info about remaining steps that were never reached
+    const remainingSteps = steps.filter((s) => s.ordinal > failedStep.ordinal);
+    if (remainingSteps.length > 0) {
+      outcomes.push(`Steps not reached: ${remainingSteps.map((s) => s.description).join(", ")}`);
+    }
+
+    return outcomes;
   }
 
   private async *executeStep(

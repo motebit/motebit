@@ -4,9 +4,9 @@ import { TrustMode, BatteryMode } from "@motebit/sdk";
 import { computeRawCues } from "@motebit/behavior-engine";
 import {
   fetchState, fetchMemory, fetchEvents, fetchAudit, deleteMemoryNode,
-  fetchGoals, fetchConversations, fetchDevices,
+  fetchGoals, fetchConversations, fetchDevices, fetchPlans,
 } from "./api";
-import type { GoalEntry, ConversationEntry, DeviceEntry } from "./api";
+import type { GoalEntry, ConversationEntry, DeviceEntry, PlanEntry } from "./api";
 import { useStateHistory } from "./hooks/useStateHistory";
 import { ConnectionStatus } from "./components/ConnectionStatus";
 import { StateVectorPanel } from "./components/StateVectorPanel";
@@ -17,6 +17,7 @@ import { AuditPanel } from "./components/AuditPanel";
 import { GoalsPanel } from "./components/GoalsPanel";
 import { ConversationsPanel } from "./components/ConversationsPanel";
 import { DevicesPanel } from "./components/DevicesPanel";
+import { PlansPanel } from "./components/PlansPanel";
 
 const DEFAULT_STATE: MotebitState = {
   attention: 0,
@@ -39,6 +40,7 @@ export function AdminApp(): React.ReactElement {
   const [goals, setGoals] = useState<GoalEntry[]>([]);
   const [conversations, setConversations] = useState<ConversationEntry[]>([]);
   const [devices, setDevices] = useState<DeviceEntry[]>([]);
+  const [plans, setPlans] = useState<PlanEntry[]>([]);
   const [connected, setConnected] = useState(false);
   const [activePanel, setActivePanel] = useState<string>("state");
   const maxClockRef = useRef(0);
@@ -48,7 +50,7 @@ export function AdminApp(): React.ReactElement {
 
   const refresh = useCallback(async (signal: AbortSignal) => {
     try {
-      const [stateRes, memoryRes, eventsRes, auditRes, goalsRes, convRes, devicesRes] = await Promise.all([
+      const [stateRes, memoryRes, eventsRes, auditRes, goalsRes, convRes, devicesRes, plansRes] = await Promise.all([
         fetchState(signal),
         fetchMemory(signal),
         fetchEvents(maxClockRef.current, signal),
@@ -56,6 +58,7 @@ export function AdminApp(): React.ReactElement {
         fetchGoals(signal),
         fetchConversations(signal),
         fetchDevices(signal),
+        fetchPlans(signal),
       ]);
 
       setState(stateRes.state);
@@ -66,6 +69,7 @@ export function AdminApp(): React.ReactElement {
       setGoals(goalsRes.goals);
       setConversations(convRes.conversations);
       setDevices(devicesRes.devices);
+      setPlans(plansRes.plans);
 
       if (eventsRes.events.length > 0) {
         setEvents((prev) => {
@@ -107,7 +111,7 @@ export function AdminApp(): React.ReactElement {
   }, []);
 
   const nav = React.createElement("nav", { className: "admin-nav" },
-    ["state", "memory", "behavior", "events", "audit", "goals", "conversations", "devices"].map((panel) =>
+    ["state", "memory", "behavior", "events", "audit", "goals", "plans", "conversations", "devices"].map((panel) =>
       React.createElement("button", {
         key: panel,
         className: panel === activePanel ? "active" : "",
@@ -135,6 +139,9 @@ export function AdminApp(): React.ReactElement {
       break;
     case "goals":
       content = React.createElement(GoalsPanel, { goals });
+      break;
+    case "plans":
+      content = React.createElement(PlansPanel, { plans });
       break;
     case "conversations":
       content = React.createElement(ConversationsPanel, { conversations });

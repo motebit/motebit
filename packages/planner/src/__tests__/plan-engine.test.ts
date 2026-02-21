@@ -396,4 +396,351 @@ describe("PlanEngine", () => {
       }
     }).rejects.toThrow("not active");
   });
+
+  describe("reflection", () => {
+    it("emits reflection chunk after plan completion", async () => {
+      const deps = makeMockDeps();
+
+      // The provider.generate mock returns plan decomposition JSON by default.
+      // For reflection, it will also be called — we need to make it return
+      // reflection JSON on subsequent calls.
+      let generateCallCount = 0;
+      ((deps.provider as unknown as { generate: ReturnType<typeof vi.fn> }).generate).mockImplementation(async () => {
+        generateCallCount++;
+        if (generateCallCount === 1) {
+          // First call: decomposition
+          return {
+            text: JSON.stringify({
+              title: "Test plan",
+              steps: [{ description: "Single step", prompt: "Do it" }],
+            }),
+            confidence: 0.9,
+            memory_candidates: [],
+            state_updates: {},
+          };
+        }
+        // Subsequent calls: reflection
+        return {
+          text: JSON.stringify({
+            summary: "Plan completed successfully.",
+            memoryCandidates: ["Learned something useful"],
+          }),
+          confidence: 0.8,
+          memory_candidates: [],
+          state_updates: {},
+        };
+      });
+
+      setupStreamMock(["step done"]);
+
+      const plan = await engine.createPlan("goal-1", "mote-1", {
+        goalPrompt: "Do something",
+      }, deps);
+
+      const chunks = await collectChunks(engine.executePlan(plan.plan_id, deps));
+
+      const types = chunks.map((c) => c.type);
+      expect(types).toContain("plan_completed");
+      expect(types).toContain("reflection");
+
+      // Verify reflection comes after plan_completed
+      const completedIdx = types.indexOf("plan_completed");
+      const reflectionIdx = types.indexOf("reflection");
+      expect(reflectionIdx).toBeGreaterThan(completedIdx);
+
+      // Verify reflection content
+      const reflectionChunk = chunks.find((c) => c.type === "reflection") as { type: "reflection"; result: { summary: string; memoryCandidates: string[] } };
+      expect(reflectionChunk.result.summary).toBe("Plan completed successfully.");
+      expect(reflectionChunk.result.memoryCandidates).toEqual(["Learned something useful"]);
+    });
+
+    it("skips reflection when enableReflection is false", async () => {
+      store = new InMemoryPlanStore();
+      engine = new PlanEngine(store, { enableReflection: false });
+      mockRunTurnStreaming.mockReset();
+
+      const deps = makeMockDeps();
+      setupStreamMock(["step done"]);
+
+      const plan = await engine.createPlan("goal-1", "mote-1", {
+        goalPrompt: "Do something",
+      }, deps);
+
+      const chunks = await collectChunks(engine.executePlan(plan.plan_id, deps));
+
+      const types = chunks.map((c) => c.type);
+      expect(types).toContain("plan_completed");
+      expect(types).not.toContain("reflection");
+    });
+
+    it("does not fail the plan if reflection provider throws", async () => {
+      const deps = makeMockDeps();
+
+      let generateCallCount = 0;
+      ((deps.provider as unknown as { generate: ReturnType<typeof vi.fn> }).generate).mockImplementation(async () => {
+        generateCallCount++;
+        if (generateCallCount === 1) {
+          return {
+            text: JSON.stringify({
+              title: "Test plan",
+              steps: [{ description: "Single step", prompt: "Do it" }],
+            }),
+            confidence: 0.9,
+            memory_candidates: [],
+            state_updates: {},
+          };
+        }
+        // Reflection call throws — reflectOnPlan catches and returns fallback
+        throw new Error("Reflection provider error");
+      });
+
+      setupStreamMock(["step done"]);
+
+      const plan = await engine.createPlan("goal-1", "mote-1", {
+        goalPrompt: "Do something",
+      }, deps);
+
+      const chunks = await collectChunks(engine.executePlan(plan.plan_id, deps));
+
+      const types = chunks.map((c) => c.type);
+      expect(types).toContain("plan_completed");
+      // reflectOnPlan catches internally and returns fallback, so reflection chunk still emitted
+      expect(types).toContain("reflection");
+
+      // Verify it's the fallback content
+      const reflectionChunk = chunks.find((c) => c.type === "reflection") as { type: "reflection"; result: { summary: string; memoryCandidates: string[] } };
+      expect(reflectionChunk.result.summary).toContain("Test plan");
+      expect(reflectionChunk.result.memoryCandidates).toEqual([]);
+
+      // Plan should still be completed
+      const finalPlan = store.getPlan(plan.plan_id);
+      expect(finalPlan!.status).toBe(PlanStatus.Completed);
+    });
+  });
+
+  describe("adaptive re-planning", () => {
+    it("retries with a new plan when a required step fails and ctx is provided", async () => {
+      const deps = makeMockDeps();
+
+      // Make provider.generate return different plans on successive calls
+      let generateCallCount = 0;
+      ((deps.provider as unknown as { generate: ReturnType<typeof vi.fn> }).generate).mockImplementation(async () => {
+        generateCallCount++;
+        if (generateCallCount === 1) {
+          // First plan: has a step that will fail
+          return {
+            text: JSON.stringify({
+              title: "Original plan",
+              steps: [{ description: "Failing step", prompt: "Will fail" }],
+            }),
+            confidence: 0.9,
+            memory_candidates: [],
+            state_updates: {},
+          };
+        }
+        if (generateCallCount === 2) {
+          // Retry plan: simpler approach
+          return {
+            text: JSON.stringify({
+              title: "Retry plan",
+              steps: [{ description: "Alternative step", prompt: "Try differently" }],
+            }),
+            confidence: 0.9,
+            memory_candidates: [],
+            state_updates: {},
+          };
+        }
+        // Reflection call
+        return {
+          text: JSON.stringify({
+            summary: "Retry plan succeeded.",
+            memoryCandidates: ["Alternative approach works better"],
+          }),
+          confidence: 0.8,
+          memory_candidates: [],
+          state_updates: {},
+        };
+      });
+
+      // First step fails, second (retry plan) succeeds
+      let streamCallCount = 0;
+      mockRunTurnStreaming.mockImplementation(async function* () {
+        streamCallCount++;
+        if (streamCallCount <= 3) {
+          // First 3 calls fail (original step + 2 retries)
+          throw new Error("Step failed");
+        }
+        // Retry plan step succeeds
+        yield { type: "text" as const, text: "retry success" };
+        yield {
+          type: "result" as const,
+          result: {
+            response: "retry success",
+            memoriesFormed: [],
+            stateAfter: {} as never,
+            cues: {} as never,
+          },
+        };
+      });
+
+      const ctx = { goalPrompt: "Do something", availableTools: ["tool_a"] };
+      const plan = await engine.createPlan("goal-1", "mote-1", ctx, deps);
+
+      const chunks = await collectChunks(engine.executePlan(plan.plan_id, deps, ctx));
+
+      const types = chunks.map((c) => c.type);
+      expect(types).toContain("step_failed");
+      expect(types).toContain("plan_retrying");
+      expect(types).toContain("plan_completed");
+
+      // Verify plan_retrying chunk has both plans
+      const retryChunk = chunks.find((c) => c.type === "plan_retrying") as { type: "plan_retrying"; failedPlan: Plan; newPlan: Plan };
+      expect(retryChunk.failedPlan.title).toBe("Original plan");
+      expect(retryChunk.newPlan.title).toBe("Retry plan");
+
+      // Original plan should be failed
+      expect(retryChunk.failedPlan.status).toBe(PlanStatus.Failed);
+
+      // New plan should be completed
+      const newPlan = store.getPlan(retryChunk.newPlan.plan_id);
+      expect(newPlan!.status).toBe(PlanStatus.Completed);
+    });
+
+    it("does not re-plan when no ctx is provided", async () => {
+      const deps = makeMockDeps();
+
+      const plan: Plan = {
+        plan_id: "plan-no-ctx",
+        goal_id: "goal-1",
+        motebit_id: "mote-1",
+        title: "No context plan",
+        status: PlanStatus.Active,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+        current_step_index: 0,
+        total_steps: 1,
+      };
+      store.savePlan(plan);
+
+      store.saveStep({
+        step_id: "step-fail",
+        plan_id: "plan-no-ctx",
+        ordinal: 0,
+        description: "Failing step",
+        prompt: "Will fail",
+        depends_on: [],
+        optional: false,
+        status: StepStatus.Pending,
+        result_summary: null,
+        error_message: null,
+        tool_calls_made: 0,
+        started_at: null,
+        completed_at: null,
+        retry_count: 0,
+      });
+
+      mockRunTurnStreaming.mockImplementation(async function* () {
+        throw new Error("Step error");
+      });
+
+      // No ctx parameter — should not attempt re-planning
+      const chunks = await collectChunks(engine.executePlan(plan.plan_id, deps));
+
+      const types = chunks.map((c) => c.type);
+      expect(types).toContain("plan_failed");
+      expect(types).not.toContain("plan_retrying");
+    });
+
+    it("respects maxPlanRetries limit", async () => {
+      store = new InMemoryPlanStore();
+      engine = new PlanEngine(store, { maxPlanRetries: 0 });
+      mockRunTurnStreaming.mockReset();
+
+      const deps = makeMockDeps();
+
+      const plan: Plan = {
+        plan_id: "plan-no-retry",
+        goal_id: "goal-1",
+        motebit_id: "mote-1",
+        title: "No retry plan",
+        status: PlanStatus.Active,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+        current_step_index: 0,
+        total_steps: 1,
+      };
+      store.savePlan(plan);
+
+      store.saveStep({
+        step_id: "step-fail",
+        plan_id: "plan-no-retry",
+        ordinal: 0,
+        description: "Failing step",
+        prompt: "Will fail",
+        depends_on: [],
+        optional: false,
+        status: StepStatus.Pending,
+        result_summary: null,
+        error_message: null,
+        tool_calls_made: 0,
+        started_at: null,
+        completed_at: null,
+        retry_count: 0,
+      });
+
+      mockRunTurnStreaming.mockImplementation(async function* () {
+        throw new Error("Step error");
+      });
+
+      const ctx = { goalPrompt: "Do something" };
+      const chunks = await collectChunks(engine.executePlan(plan.plan_id, deps, ctx));
+
+      const types = chunks.map((c) => c.type);
+      expect(types).toContain("plan_failed");
+      expect(types).not.toContain("plan_retrying");
+    });
+
+    it("emits plan_failed for retry plan when retry also fails", async () => {
+      const deps = makeMockDeps();
+
+      // First generate: original plan, second: retry plan (decomposePlan catches errors)
+      let generateCallCount = 0;
+      ((deps.provider as unknown as { generate: ReturnType<typeof vi.fn> }).generate).mockImplementation(async () => {
+        generateCallCount++;
+        if (generateCallCount === 1) {
+          return {
+            text: JSON.stringify({
+              title: "Original plan",
+              steps: [{ description: "Failing step", prompt: "Will fail" }],
+            }),
+            confidence: 0.9,
+            memory_candidates: [],
+            state_updates: {},
+          };
+        }
+        // Subsequent generate calls throw — decomposePlan catches and returns fallback plan
+        throw new Error("Decomposition failed");
+      });
+
+      // All step executions fail
+      mockRunTurnStreaming.mockImplementation(async function* () {
+        throw new Error("Step error");
+      });
+
+      const ctx = { goalPrompt: "Do something" };
+      const plan = await engine.createPlan("goal-1", "mote-1", ctx, deps);
+
+      const chunks = await collectChunks(engine.executePlan(plan.plan_id, deps, ctx));
+
+      const types = chunks.map((c) => c.type);
+      // decomposePlan catches and returns fallback, so re-plan succeeds at creation
+      expect(types).toContain("plan_retrying");
+      // But the retry plan also fails (runTurnStreaming throws)
+      expect(types).toContain("plan_failed");
+
+      // Should not attempt a second re-plan (maxPlanRetries=1 exhausted)
+      const retryCount = types.filter((t) => t === "plan_retrying").length;
+      expect(retryCount).toBe(1);
+    });
+  });
 });
