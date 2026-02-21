@@ -1,0 +1,836 @@
+import { MicVAD } from "@ricky0123/vad-web";
+import { WebSpeechTTSProvider, WebSpeechSTTProvider, FallbackTTSProvider } from "@motebit/voice";
+import type { TTSProvider } from "@motebit/voice";
+import { stripTags } from "@motebit/ai-core";
+import type { InteriorColor, InvokeFn } from "../index";
+import { TauriTTSProvider } from "../tauri-tts";
+import type { DesktopContext, MicState } from "../types";
+import { addMessage } from "./chat";
+
+// === TTS Providers ===
+
+const webSpeechTts = new WebSpeechTTSProvider(["Samantha", "Karen", "Daniel", "Alex"]);
+let ttsProvider: TTSProvider = webSpeechTts;
+const sttProvider = new WebSpeechSTTProvider();
+let ttsVoice = "alloy";
+
+function rebuildTtsProvider(invoke?: InvokeFn): void {
+  if (invoke) {
+    const tauriTts = new TauriTTSProvider(invoke, { voice: ttsVoice });
+    ttsProvider = new FallbackTTSProvider([tauriTts, webSpeechTts]);
+  } else {
+    ttsProvider = webSpeechTts;
+  }
+}
+
+// === Voice State ===
+
+let micState: MicState = "off";
+let audioContext: AudioContext | null = null;
+let analyserNode: AnalyserNode | null = null;
+let micStream: MediaStream | null = null;
+let waveformAnimationId = 0;
+let ambientAnimationId = 0;
+let voiceFinalTranscript = "";
+let voiceInterimTranscript = "";
+const waveformSmoothed = new Float32Array(64);
+
+let sttAvailable = true;
+let sttErrorShown = false;
+
+let mediaRecorder: MediaRecorder | null = null;
+let mediaRecorderChunks: Blob[] = [];
+
+let voiceAutoSend = true;
+let voiceResponseEnabled = true;
+
+let ttsSpeaking = false;
+let ttsPulseAnimationId = 0;
+
+let noiseFloor = 0;
+
+let sileroVad: MicVAD | null = null;
+let sileroVadFailed = false;
+
+let fallbackSpeechConfidence = 0;
+let fallbackSpeechOnsetTime = 0;
+const VAD_ONSET_MS = 300;
+const VAD_CONFIDENCE_THRESHOLD = 0.55;
+
+let speechActiveInVoice = false;
+let silenceOnsetTime = 0;
+const SILENCE_DURATION_MS = 1500;
+const SPEECH_RMS_THRESHOLD = 0.015;
+
+let waveformColor = { r: 153, g: 163, b: 230 };
+let micErrorShown = false;
+
+// === DOM Refs ===
+
+const micBtn = document.getElementById("mic-btn") as HTMLButtonElement;
+const voiceWaveform = document.getElementById("voice-waveform") as HTMLCanvasElement;
+const voiceTranscript = document.getElementById("voice-transcript") as HTMLSpanElement;
+const inputBarWrapper = document.getElementById("input-bar-wrapper") as HTMLDivElement;
+const chatInput = document.getElementById("chat-input") as HTMLInputElement;
+
+// === Voice API ===
+
+export interface VoiceAPI {
+  getMicState(): MicState;
+  toggleVoice(): void;
+  stopVoice(transfer: boolean, toAmbient: boolean): void;
+  stopAmbient(): void;
+  speakAssistantResponse(text: string): void;
+  cancelTTS(): void;
+  updateVoiceGlowColor(): void;
+  rebuildTtsProvider(invoke?: InvokeFn): void;
+  sizeWaveformCanvas(): void;
+  getVoiceAutoSend(): boolean;
+  setVoiceAutoSend(v: boolean): void;
+  getVoiceResponseEnabled(): boolean;
+  setVoiceResponseEnabled(v: boolean): void;
+  getTtsVoice(): string;
+  setTtsVoice(v: string): void;
+  releaseAudioResources(): void;
+}
+
+export interface VoiceCallbacks {
+  onTranscriptReady(): Promise<void>;
+  getActiveColor(): InteriorColor | null;
+}
+
+export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): VoiceAPI {
+  function updateVoiceGlowColor(): void {
+    const color = callbacks.getActiveColor();
+    if (!color) return;
+    const glow = color.glow;
+
+    const r = Math.round(glow[0] * 255);
+    const green = Math.round(glow[1] * 255);
+    const b = Math.round(glow[2] * 255);
+    inputBarWrapper.style.setProperty("--voice-glow-color", `rgba(${r},${green},${b},0.55)`);
+
+    const maxG = Math.max(glow[0], glow[1], glow[2], 0.01);
+    const satPow = 1.3;
+    waveformColor = {
+      r: Math.min(255, Math.round(((glow[0] / maxG) ** (1 / satPow)) * glow[0] * 300)),
+      g: Math.min(255, Math.round(((glow[1] / maxG) ** (1 / satPow)) * glow[1] * 300)),
+      b: Math.min(255, Math.round(((glow[2] / maxG) ** (1 / satPow)) * glow[2] * 300)),
+    };
+  }
+
+  function permissionHint(target: "microphone" | "speech"): string {
+    const ua = navigator.userAgent;
+    if (/Macintosh|Mac OS X/i.test(ua)) {
+      const pane = target === "microphone" ? "Microphone" : "Speech Recognition";
+      return `open macOS System Settings > Privacy & Security > ${pane}`;
+    }
+    if (/Windows/i.test(ua)) {
+      const pane = target === "microphone" ? "Microphone" : "Speech";
+      return `open Windows Settings > Privacy > ${pane}`;
+    }
+    return `check your OS privacy settings for ${target} access`;
+  }
+
+  async function ensureAudioPipeline(): Promise<boolean> {
+    if (audioContext && analyserNode && micStream) return true;
+
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      if (!micErrorShown) {
+        micErrorShown = true;
+        addMessage("system", `Microphone access denied — ${permissionHint("microphone")}, then grant access to Motebit.`);
+      }
+      return false;
+    }
+    micStream = stream;
+
+    const acx = new AudioContext();
+    const source = acx.createMediaStreamSource(stream);
+    const analyser = acx.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.4;
+    source.connect(analyser);
+    audioContext = acx;
+    analyserNode = analyser;
+    return true;
+  }
+
+  function releaseAudioResources(): void {
+    if (audioContext) {
+      void audioContext.close();
+      audioContext = null;
+      analyserNode = null;
+    }
+    if (micStream) {
+      micStream.getTracks().forEach(t => t.stop());
+      micStream = null;
+    }
+    fallbackSpeechConfidence = 0;
+    fallbackSpeechOnsetTime = 0;
+    speechActiveInVoice = false;
+    silenceOnsetTime = 0;
+  }
+
+  async function initSileroVad(): Promise<void> {
+    if (sileroVad || sileroVadFailed) return;
+    if (!audioContext || !micStream) return;
+
+    const acx = audioContext;
+    const stream = micStream;
+
+    try {
+      sileroVad = await MicVAD.new({
+        audioContext: acx,
+        getStream: async () => stream,
+        pauseStream: async () => {},
+        resumeStream: async () => micStream!,
+        positiveSpeechThreshold: 0.5,
+        negativeSpeechThreshold: 0.35,
+        minSpeechMs: 100,
+        startOnLoad: false,
+        model: "v5",
+        baseAssetPath: "/",
+        onnxWASMBasePath: "/",
+        onSpeechStart: () => {
+          if (micState === "ambient") {
+            void startVoice();
+          }
+        },
+        onSpeechEnd: () => {},
+        onVADMisfire: () => {},
+      });
+    } catch (err: unknown) {
+      sileroVadFailed = true;
+      console.warn("Silero VAD failed to load, falling back to energy heuristic:", err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function toggleVoice(): void {
+    if (micState === "off") {
+      void enterAmbient();
+    } else if (micState === "ambient") {
+      stopAmbient();
+    } else if (micState === "voice") {
+      stopVoice(true, true);
+    } else if (micState === "speaking") {
+      cancelTTS();
+      void startVoice();
+    } else if (micState === "transcribing") {
+      voiceTranscript.textContent = "";
+      voiceTranscript.style.display = "";
+      inputBarWrapper.classList.remove("listening");
+      micBtn.classList.remove("active");
+      micBtn.classList.add("ambient");
+      micState = "ambient";
+      fallbackSpeechConfidence = 0;
+      fallbackSpeechOnsetTime = 0;
+      if (sileroVad) void sileroVad.start();
+      startAmbientLoop();
+    }
+  }
+
+  async function enterAmbient(): Promise<void> {
+    if (!await ensureAudioPipeline()) return;
+    micState = "ambient";
+    micBtn.classList.add("ambient");
+    micBtn.classList.remove("active");
+    fallbackSpeechConfidence = 0;
+    fallbackSpeechOnsetTime = 0;
+    updateVoiceGlowColor();
+    await initSileroVad();
+    if (sileroVad) {
+      await sileroVad.start();
+    }
+    startAmbientLoop();
+  }
+
+  async function startVoice(): Promise<void> {
+    cancelTTS();
+    stopAmbientLoop();
+    if (sileroVad) void sileroVad.pause();
+    ctx.app.setAudioReactivity(null);
+
+    fallbackSpeechConfidence = 0;
+    fallbackSpeechOnsetTime = 0;
+    speechActiveInVoice = false;
+    silenceOnsetTime = 0;
+
+    if (!await ensureAudioPipeline()) return;
+
+    if (sttAvailable) {
+      sttProvider.onResult = (transcript: string, isFinal: boolean) => {
+        if (isFinal) {
+          voiceFinalTranscript += transcript;
+          voiceInterimTranscript = "";
+        } else {
+          voiceInterimTranscript = transcript;
+        }
+        voiceTranscript.textContent = (voiceFinalTranscript + voiceInterimTranscript).trim();
+      };
+
+      sttProvider.onError = (error: string) => {
+        if (error === "no-speech" || error === "aborted") return;
+        if (error === "not-allowed" || error === "service-not-allowed"
+            || error === "Microphone permission denied"
+            || error === "SpeechRecognition API not available") {
+          sttAvailable = false;
+          if (!sttErrorShown) {
+            sttErrorShown = true;
+            addMessage("system", `Speech recognition needs permission — ${permissionHint("speech")}. Using Whisper fallback.`);
+          }
+          return;
+        }
+        addMessage("system", `Voice error: ${error}`);
+        stopVoice(false, false);
+      };
+
+      sttProvider.onEnd = () => {};
+
+      try {
+        sttProvider.start({ continuous: true, interimResults: true, language: "en-US" });
+      } catch {
+        sttAvailable = false;
+      }
+    }
+
+    mediaRecorderChunks = [];
+    if (micStream) {
+      try {
+        const mr = new MediaRecorder(micStream, { mimeType: "audio/webm;codecs=opus" });
+        mr.ondataavailable = (e) => {
+          if (e.data.size > 0) mediaRecorderChunks.push(e.data);
+        };
+        mr.start(250);
+        mediaRecorder = mr;
+      } catch {
+        // MediaRecorder not available
+      }
+    }
+
+    micState = "voice";
+    voiceFinalTranscript = "";
+    voiceInterimTranscript = "";
+    voiceTranscript.textContent = "";
+    inputBarWrapper.classList.add("listening");
+    micBtn.classList.add("active");
+    micBtn.classList.remove("ambient");
+    updateVoiceGlowColor();
+
+    sizeWaveformCanvas();
+    startWaveformLoop();
+  }
+
+  function stopVoice(transfer: boolean, toAmbient: boolean): void {
+    speechActiveInVoice = false;
+    silenceOnsetTime = 0;
+
+    if (sttProvider.listening) {
+      sttProvider.stop();
+    }
+
+    const recorderWasActive = mediaRecorder?.state === "recording";
+    if (mediaRecorder) {
+      try { mediaRecorder.stop(); } catch { /* */ }
+      mediaRecorder = null;
+    }
+
+    if (waveformAnimationId) {
+      cancelAnimationFrame(waveformAnimationId);
+      waveformAnimationId = 0;
+    }
+    const ctx2d = voiceWaveform.getContext("2d");
+    if (ctx2d) ctx2d.clearRect(0, 0, voiceWaveform.width, voiceWaveform.height);
+
+    const webSpeechText = (voiceFinalTranscript + voiceInterimTranscript).trim();
+    voiceFinalTranscript = "";
+    voiceInterimTranscript = "";
+
+    if (transfer && webSpeechText && sttAvailable) {
+      finishVoiceTranscript(webSpeechText, toAmbient);
+    } else if (transfer && recorderWasActive && mediaRecorderChunks.length > 0) {
+      micState = "transcribing";
+      inputBarWrapper.classList.remove("listening");
+      micBtn.classList.remove("active");
+      micBtn.classList.add("ambient");
+      voiceTranscript.textContent = "Transcribing...";
+      voiceTranscript.style.display = "block";
+      void transcribeWithWhisper(toAmbient);
+    } else {
+      finishVoiceTranscript("", toAmbient);
+    }
+  }
+
+  async function transcribeWithWhisper(toAmbient: boolean): Promise<void> {
+    try {
+      const blob = new Blob(mediaRecorderChunks, { type: "audio/webm;codecs=opus" });
+      mediaRecorderChunks = [];
+
+      const arrayBuf = await blob.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuf);
+      let binary = "";
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]!);
+      }
+      const audioBase64 = btoa(binary);
+
+      const config = ctx.getConfig();
+      if (!config?.isTauri || !config?.invoke) {
+        addMessage("system", "Whisper transcription requires the desktop app (Tauri)");
+        finishVoiceTranscript("", toAmbient);
+        return;
+      }
+
+      let whisperApiKey: string | undefined;
+      try {
+        const keyVal = await config.invoke<string | null>("keyring_get", { key: "whisper_api_key" });
+        whisperApiKey = keyVal ?? undefined;
+      } catch {
+        // No key available
+      }
+
+      const transcript = await config.invoke<string>("transcribe_audio", {
+        audioBase64,
+        apiKey: whisperApiKey ?? null,
+      });
+
+      finishVoiceTranscript(transcript.trim(), toAmbient);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addMessage("system", msg);
+      finishVoiceTranscript("", toAmbient);
+    }
+  }
+
+  function finishVoiceTranscript(text: string, toAmbient: boolean): void {
+    inputBarWrapper.classList.remove("listening");
+    micBtn.classList.remove("active");
+    voiceTranscript.textContent = "";
+    voiceTranscript.style.display = "";
+
+    if (text) {
+      chatInput.value = text;
+    }
+
+    if (toAmbient) {
+      micState = "ambient";
+      micBtn.classList.add("ambient");
+      if (sileroVad) void sileroVad.start();
+      startAmbientLoop();
+    } else {
+      micState = "off";
+      micBtn.classList.remove("ambient");
+      releaseAudioResources();
+      ctx.app.setAudioReactivity(null);
+    }
+
+    chatInput.focus();
+
+    if (voiceAutoSend && text) {
+      void callbacks.onTranscriptReady();
+    }
+  }
+
+  function stopAmbient(): void {
+    stopAmbientLoop();
+    if (sileroVad) {
+      void sileroVad.destroy();
+      sileroVad = null;
+    }
+    releaseAudioResources();
+    ctx.app.setAudioReactivity(null);
+    micState = "off";
+    micBtn.classList.remove("ambient");
+    fallbackSpeechConfidence = 0;
+    fallbackSpeechOnsetTime = 0;
+  }
+
+  function stopAmbientLoop(): void {
+    if (ambientAnimationId) {
+      cancelAnimationFrame(ambientAnimationId);
+      ambientAnimationId = 0;
+    }
+  }
+
+  function startAmbientLoop(): void {
+    if (!analyserNode) return;
+
+    const timeDomain = new Uint8Array(analyserNode.frequencyBinCount);
+    const freqDomain = new Uint8Array(analyserNode.frequencyBinCount);
+    let smoothedRms = 0;
+    let smoothedLow = 0;
+    let smoothedMid = 0;
+    let smoothedHigh = 0;
+    let smoothedFlatness = 0;
+
+    const analyze = (): void => {
+      if (micState !== "ambient" || !analyserNode) return;
+
+      analyserNode.getByteTimeDomainData(timeDomain);
+      analyserNode.getByteFrequencyData(freqDomain);
+
+      let sumSq = 0;
+      for (let j = 0; j < timeDomain.length; j++) {
+        const v = (timeDomain[j]! / 128.0) - 1.0;
+        sumSq += v * v;
+      }
+      const rms = Math.sqrt(sumSq / timeDomain.length);
+      smoothedRms += (rms > smoothedRms ? 0.3 : 0.04) * (rms - smoothedRms);
+
+      noiseFloor += (rms > noiseFloor ? 0.003 : 0.05) * (rms - noiseFloor);
+
+      const binCount = freqDomain.length;
+      const lowEnd = Math.max(1, Math.floor(binCount * 0.06));
+      const midEnd = Math.max(2, Math.floor(binCount * 0.25));
+      let lowE = 0, midE = 0, highE = 0;
+      for (let j = 0; j < binCount; j++) {
+        const v = freqDomain[j]! / 255;
+        if (j < lowEnd) lowE += v;
+        else if (j < midEnd) midE += v;
+        else highE += v;
+      }
+      lowE /= lowEnd;
+      midE /= (midEnd - lowEnd);
+      highE /= (binCount - midEnd);
+
+      smoothedLow += (lowE > smoothedLow ? 0.3 : 0.04) * (lowE - smoothedLow);
+      smoothedMid += (midE > smoothedMid ? 0.3 : 0.04) * (midE - smoothedMid);
+      smoothedHigh += (highE > smoothedHigh ? 0.25 : 0.03) * (highE - smoothedHigh);
+
+      let logSum = 0;
+      let linSum = 0;
+      for (let j = lowEnd; j < midEnd; j++) {
+        const v = freqDomain[j]! / 255 + 1e-10;
+        logSum += Math.log(v);
+        linSum += v;
+      }
+      const flatBins = midEnd - lowEnd;
+      const rawFlatness = linSum > 1e-8 ? Math.exp(logSum / flatBins) / (linSum / flatBins) : 0;
+      smoothedFlatness += 0.08 * (rawFlatness - smoothedFlatness);
+
+      const gatedRms = Math.max(0, smoothedRms - noiseFloor);
+      const gate = smoothedRms > 0.001 ? gatedRms / smoothedRms : 0;
+
+      const flat2 = smoothedFlatness * smoothedFlatness;
+      const damping = Math.max(0.15, 1 - flat2 * 0.9);
+      const shimmer = 1 + (1 - smoothedFlatness) * 0.6;
+
+      ctx.app.setAudioReactivity({
+        rms: gatedRms * damping,
+        low: smoothedLow * gate * damping,
+        mid: smoothedMid * gate * damping,
+        high: smoothedHigh * gate * damping * shimmer,
+      });
+
+      if (sileroVadFailed) {
+        const isSpeechLike =
+          smoothedFlatness < 0.65 &&
+          gatedRms > 0.02 &&
+          smoothedMid > 0.08;
+
+        if (isSpeechLike) {
+          fallbackSpeechConfidence += 0.08 * (1 - fallbackSpeechConfidence);
+          if (fallbackSpeechConfidence > VAD_CONFIDENCE_THRESHOLD) {
+            if (fallbackSpeechOnsetTime === 0) {
+              fallbackSpeechOnsetTime = performance.now();
+            } else if (performance.now() - fallbackSpeechOnsetTime > VAD_ONSET_MS) {
+              fallbackSpeechConfidence = 0;
+              fallbackSpeechOnsetTime = 0;
+              void startVoice();
+              return;
+            }
+          }
+        } else {
+          fallbackSpeechConfidence *= 0.9;
+          if (fallbackSpeechConfidence < 0.2) {
+            fallbackSpeechOnsetTime = 0;
+          }
+        }
+      }
+
+      ambientAnimationId = requestAnimationFrame(analyze);
+    };
+
+    ambientAnimationId = requestAnimationFrame(analyze);
+  }
+
+  // === TTS ===
+
+  function speakText(text: string): void {
+    if (!voiceResponseEnabled || !text.trim()) return;
+
+    ttsProvider.cancel();
+    ttsSpeaking = true;
+    micState = "speaking";
+    micBtn.classList.remove("active");
+    micBtn.classList.add("ambient");
+    startTTSPulse();
+
+    ttsProvider.speak(text).then(() => {
+      if (!ttsSpeaking) return;
+      ttsSpeaking = false;
+      stopTTSPulse();
+      if (micStream && audioContext && analyserNode) {
+        micState = "ambient";
+        micBtn.classList.add("ambient");
+        if (sileroVad) void sileroVad.start();
+        startAmbientLoop();
+      } else {
+        micState = "off";
+        micBtn.classList.remove("ambient");
+      }
+    }).catch(() => {
+      if (!ttsSpeaking) return;
+      ttsSpeaking = false;
+      stopTTSPulse();
+      if (micState === "speaking") {
+        micState = micStream ? "ambient" : "off";
+        if (micState === "ambient") {
+          if (sileroVad) void sileroVad.start();
+          startAmbientLoop();
+        }
+      }
+    });
+  }
+
+  function cancelTTS(): void {
+    if (ttsSpeaking) {
+      ttsProvider.cancel();
+      ttsSpeaking = false;
+      stopTTSPulse();
+    }
+  }
+
+  function startTTSPulse(): void {
+    stopTTSPulse();
+    let phase = 0;
+    const pulse = (): void => {
+      if (!ttsSpeaking) return;
+      phase += 0.05;
+      const base = 0.15;
+      const wave = Math.sin(phase * 3.7) * 0.08 + Math.sin(phase * 7.1) * 0.04;
+      ctx.app.setAudioReactivity({
+        rms: base + wave,
+        low: base * 0.8 + wave * 0.5,
+        mid: base * 1.2 + wave,
+        high: base * 0.4 + Math.sin(phase * 11.3) * 0.03,
+      });
+      ttsPulseAnimationId = requestAnimationFrame(pulse);
+    };
+    ttsPulseAnimationId = requestAnimationFrame(pulse);
+  }
+
+  function stopTTSPulse(): void {
+    if (ttsPulseAnimationId) {
+      cancelAnimationFrame(ttsPulseAnimationId);
+      ttsPulseAnimationId = 0;
+    }
+    if (!ttsSpeaking) {
+      ctx.app.setAudioReactivity(null);
+    }
+  }
+
+  function speakAssistantResponse(text: string): void {
+    if (!voiceResponseEnabled) return;
+    const clean = stripTags(text).trim();
+    if (clean) speakText(clean);
+  }
+
+  function sizeWaveformCanvas(): void {
+    const rect = inputBarWrapper.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    voiceWaveform.width = rect.width * dpr;
+    voiceWaveform.height = rect.height * dpr;
+    voiceWaveform.style.width = rect.width + "px";
+    voiceWaveform.style.height = rect.height + "px";
+  }
+
+  function startWaveformLoop(): void {
+    const ctx2d = voiceWaveform.getContext("2d");
+    if (!ctx2d || !analyserNode) return;
+
+    const timeDomain = new Uint8Array(analyserNode.frequencyBinCount);
+    const freqDomain = new Uint8Array(analyserNode.frequencyBinCount);
+    let smoothedRms = 0;
+    let smoothedLow = 0;
+    let smoothedMid = 0;
+    let smoothedHigh = 0;
+    let smoothedFlatness = 0;
+
+    const att = (x: number): number => {
+      const d = 2 * x - 1;
+      const d2 = d * d;
+      return 1 - d2 * d2 * d2;
+    };
+
+    const waves = [
+      { tf: 0.7,  sf: 6.5,  amp: 0.40, alpha: 0.10, lw: 16,  band: 0 },
+      { tf: 1.1,  sf: 9.3,  amp: 0.32, alpha: 0.28, lw: 4.5, band: 1 },
+      { tf: 1.5,  sf: 13.1, amp: 0.25, alpha: 0.50, lw: 2.5, band: 1 },
+      { tf: 2.1,  sf: 17.4, amp: 0.15, alpha: 0.88, lw: 1.5, band: 2 },
+    ];
+
+    const N = 64;
+    const waveY = new Float32Array(N);
+
+    const draw = (timestamp: number): void => {
+      if (micState !== "voice" || !analyserNode) return;
+
+      const t = timestamp / 1000;
+      const w = voiceWaveform.width;
+      const h = voiceWaveform.height;
+      const dpr = window.devicePixelRatio || 1;
+
+      ctx2d.clearRect(0, 0, w, h);
+
+      analyserNode.getByteTimeDomainData(timeDomain);
+      analyserNode.getByteFrequencyData(freqDomain);
+
+      let sumSq = 0;
+      for (let j = 0; j < timeDomain.length; j++) {
+        const v = (timeDomain[j]! / 128.0) - 1.0;
+        sumSq += v * v;
+      }
+      const rms = Math.sqrt(sumSq / timeDomain.length);
+      smoothedRms += (rms > smoothedRms ? 0.4 : 0.06) * (rms - smoothedRms);
+
+      noiseFloor += (rms > noiseFloor ? 0.003 : 0.05) * (rms - noiseFloor);
+
+      const binCount = freqDomain.length;
+      const lowEnd = Math.max(1, Math.floor(binCount * 0.06));
+      const midEnd = Math.max(2, Math.floor(binCount * 0.25));
+      let lowE = 0, midE = 0, highE = 0;
+      for (let j = 0; j < binCount; j++) {
+        const v = freqDomain[j]! / 255;
+        if (j < lowEnd) lowE += v;
+        else if (j < midEnd) midE += v;
+        else highE += v;
+      }
+      lowE /= lowEnd;
+      midE /= (midEnd - lowEnd);
+      highE /= (binCount - midEnd);
+
+      smoothedLow += (lowE > smoothedLow ? 0.35 : 0.05) * (lowE - smoothedLow);
+      smoothedMid += (midE > smoothedMid ? 0.35 : 0.05) * (midE - smoothedMid);
+      smoothedHigh += (highE > smoothedHigh ? 0.3 : 0.04) * (highE - smoothedHigh);
+      const bands = [smoothedLow, smoothedMid, smoothedHigh];
+
+      let logSum = 0;
+      let linSum = 0;
+      for (let j = lowEnd; j < midEnd; j++) {
+        const v = freqDomain[j]! / 255 + 1e-10;
+        logSum += Math.log(v);
+        linSum += v;
+      }
+      const flatBins = midEnd - lowEnd;
+      const rawFlatness = linSum > 1e-8 ? Math.exp(logSum / flatBins) / (linSum / flatBins) : 0;
+      smoothedFlatness += 0.08 * (rawFlatness - smoothedFlatness);
+
+      const gatedRms = Math.max(0, smoothedRms - noiseFloor);
+      const gate = smoothedRms > 0.001 ? gatedRms / smoothedRms : 0;
+
+      const flat2 = smoothedFlatness * smoothedFlatness;
+      const damping = Math.max(0.15, 1 - flat2 * 0.9);
+      const shimmer = 1 + (1 - smoothedFlatness) * 0.6;
+
+      ctx.app.setAudioReactivity({
+        rms: gatedRms * damping,
+        low: smoothedLow * gate * damping,
+        mid: smoothedMid * gate * damping,
+        high: smoothedHigh * gate * damping * shimmer,
+      });
+
+      if (gatedRms > 0.03) {
+        speechActiveInVoice = true;
+        silenceOnsetTime = 0;
+      } else if (speechActiveInVoice && gatedRms < SPEECH_RMS_THRESHOLD) {
+        if (silenceOnsetTime === 0) {
+          silenceOnsetTime = performance.now();
+        } else if (performance.now() - silenceOnsetTime > SILENCE_DURATION_MS) {
+          speechActiveInVoice = false;
+          silenceOnsetTime = 0;
+          stopVoice(true, true);
+          return;
+        }
+      }
+
+      const pad = 24 * dpr;
+      const drawW = w - pad * 2;
+      const midY = h / 2;
+
+      const voiceGain = Math.min(smoothedRms * 10, 1.8);
+      const amplitude = h * (0.22 + voiceGain * 0.18);
+      const sampleDecay = 0.08 + voiceGain * 0.15;
+
+      for (let i = 0; i < N; i++) {
+        const bufIdx = Math.floor((i / N) * timeDomain.length);
+        const raw = (timeDomain[bufIdx]! / 128.0) - 1.0;
+        const target = raw * (1 + voiceGain * 5);
+        waveformSmoothed[i] = waveformSmoothed[i]! + (target - waveformSmoothed[i]!) * sampleDecay;
+      }
+
+      const { r: cr, g: cg, b: cb } = waveformColor;
+
+      ctx2d.lineCap = "round";
+      ctx2d.lineJoin = "round";
+      const stepX = drawW / (N - 1);
+
+      const spread = voiceGain * 0.7;
+
+      for (const wave of waves) {
+        const bandVal = bands[wave.band] ?? 0;
+        const bandBoost = 1 + bandVal * 3.5;
+
+        for (let i = 0; i < N; i++) {
+          const pos = i / (N - 1);
+          const a = att(pos);
+
+          const organic =
+            Math.sin(t * wave.tf + pos * wave.sf) * wave.amp +
+            Math.sin(t * wave.tf * 1.73 + pos * wave.sf * 1.61) * wave.amp * 0.5;
+
+          const val = (waveformSmoothed[i]! + organic * (0.5 + spread)) * bandBoost * a;
+          waveY[i] = midY + val * amplitude;
+        }
+
+        ctx2d.beginPath();
+        ctx2d.moveTo(pad, waveY[0]!);
+        for (let i = 1; i < N - 1; i++) {
+          const x = pad + i * stepX;
+          const nx = pad + (i + 1) * stepX;
+          ctx2d.quadraticCurveTo(x, waveY[i]!, (x + nx) / 2, (waveY[i]! + waveY[i + 1]!) / 2);
+        }
+        ctx2d.lineTo(pad + drawW, waveY[N - 1]!);
+
+        ctx2d.strokeStyle = `rgba(${cr},${cg},${cb},${wave.alpha})`;
+        ctx2d.lineWidth = wave.lw * dpr;
+        ctx2d.stroke();
+      }
+
+      waveformAnimationId = requestAnimationFrame(draw);
+    };
+
+    waveformAnimationId = requestAnimationFrame(draw);
+  }
+
+  return {
+    getMicState() { return micState; },
+    toggleVoice,
+    stopVoice,
+    stopAmbient,
+    speakAssistantResponse,
+    cancelTTS,
+    updateVoiceGlowColor,
+    rebuildTtsProvider,
+    sizeWaveformCanvas,
+    getVoiceAutoSend() { return voiceAutoSend; },
+    setVoiceAutoSend(v: boolean) { voiceAutoSend = v; },
+    getVoiceResponseEnabled() { return voiceResponseEnabled; },
+    setVoiceResponseEnabled(v: boolean) { voiceResponseEnabled = v; },
+    getTtsVoice() { return ttsVoice; },
+    setTtsVoice(v: string) { ttsVoice = v; },
+    releaseAudioResources,
+  };
+}
