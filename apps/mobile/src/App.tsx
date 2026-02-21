@@ -25,7 +25,6 @@ import {
   Platform,
   ActivityIndicator,
   Modal,
-  Alert,
 } from "react-native";
 import { GLView } from "expo-gl";
 import type { ExpoWebGLRenderingContext } from "expo-gl";
@@ -113,6 +112,7 @@ export function App(): React.ReactElement {
   const [pairingStatus, setPairingStatusText] = useState("");
   const [pairingId, setPairingId] = useState<string | null>(null);
   const [pairingClaimName, setPairingClaimName] = useState("");
+  const [pairingSyncUrlInput, setPairingSyncUrlInput] = useState("");
   const pairingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Voice state — 5-state machine:
@@ -1001,50 +1001,53 @@ export function App(): React.ReactElement {
     setPairingCode("");
     setPairingCodeInput("");
     setPairingClaimName("");
+    setPairingSyncUrlInput("");
   }, [stopPairingPoll]);
 
-  // Device A: initiate from settings
-  const handleInitiatePairing = useCallback(async () => {
+  // Device A: initiate from settings — show pairing modal with sync URL input
+  const handleInitiatePairing = useCallback(() => {
+    setPairingMode("initiate");
+    setPairingSyncUrlInput("");
+    setPairingStatusText("Enter your sync relay URL");
+    setShowSettings(false);
+    setShowPairing(true);
+  }, []);
+
+  // Device A: after entering sync URL, generate pairing code
+  const handleInitiateConnect = useCallback(async () => {
+    const url = pairingSyncUrlInput.trim();
+    if (!url) {
+      setPairingStatusText("Sync relay URL required");
+      return;
+    }
     const a = app.current;
-    // TODO: pre-fill with (await a.loadSettings()).provider once settings UI exists
-    // For now, prompt for sync URL
-    Alert.prompt?.(
-      "Sync Relay URL",
-      "Enter your sync relay URL",
-      async (url: string) => {
-        if (!url) return;
-        pairingSyncUrlRef.current = url;
-        setPairingMode("initiate");
-        setPairingStatusText("Generating code...");
-        setShowSettings(false);
-        setShowPairing(true);
-        try {
-          const { pairingCode: code, pairingId: pid } = await a.initiatePairing(url);
-          setPairingCode(code);
-          setPairingId(pid);
-          setPairingStatusText("Enter this code on the other device");
+    pairingSyncUrlRef.current = url;
+    setPairingStatusText("Generating code...");
+    try {
+      const { pairingCode: code, pairingId: pid } = await a.initiatePairing(url);
+      setPairingCode(code);
+      setPairingId(pid);
+      setPairingStatusText("Enter this code on the other device");
 
-          // Poll for claim
-          pairingPollRef.current = setInterval(() => {
-            void (async () => {
-              try {
-                const session = await a.getPairingSession(url, pid);
-                if (session.status === "claimed") {
-                  stopPairingPoll();
-                  setPairingClaimName(session.claiming_device_name || "Unknown device");
-                  setPairingStatusText(`"${session.claiming_device_name}" wants to join`);
-                }
-              } catch {
-                // Non-fatal
-              }
-            })();
-          }, 2000);
-        } catch (err: unknown) {
-          setPairingStatusText(err instanceof Error ? err.message : String(err));
-        }
-      },
-    ) ?? Alert.alert("Not supported", "Pairing initiation requires Alert.prompt (iOS)");
-  }, [stopPairingPoll]);
+      // Poll for claim
+      pairingPollRef.current = setInterval(() => {
+        void (async () => {
+          try {
+            const session = await a.getPairingSession(url, pid);
+            if (session.status === "claimed") {
+              stopPairingPoll();
+              setPairingClaimName(session.claiming_device_name || "Unknown device");
+              setPairingStatusText(`"${session.claiming_device_name}" wants to join`);
+            }
+          } catch {
+            // Non-fatal
+          }
+        })();
+      }, 2000);
+    } catch (err: unknown) {
+      setPairingStatusText(err instanceof Error ? err.message : String(err));
+    }
+  }, [pairingSyncUrlInput, stopPairingPoll]);
 
   // Device B: submit claim code
   const handlePairingClaimSubmit = useCallback(async () => {
@@ -1056,17 +1059,9 @@ export function App(): React.ReactElement {
 
     const a = app.current;
 
-    // Need sync URL
-    const syncUrl = await new Promise<string>((resolve) => {
-      Alert.prompt?.(
-        "Sync Relay URL",
-        "Enter the sync relay URL",
-        (url: string) => resolve(url || ""),
-      ) ?? resolve("");
-    });
-
+    const syncUrl = pairingSyncUrlInput.trim();
     if (!syncUrl) {
-      setPairingStatusText("Sync relay URL required for pairing");
+      setPairingStatusText("Sync relay URL required");
       return;
     }
 
@@ -1118,7 +1113,7 @@ export function App(): React.ReactElement {
     } catch (err: unknown) {
       setPairingStatusText(err instanceof Error ? err.message : String(err));
     }
-  }, [pairingCodeInput, settings, initializeAI, subscribeToState, stopPairingPoll, closePairingDialog, addSystemMessage]);
+  }, [pairingCodeInput, pairingSyncUrlInput, settings, initializeAI, subscribeToState, stopPairingPoll, closePairingDialog, addSystemMessage]);
 
   // Device A: approve
   const handlePairingApprove = useCallback(async () => {
@@ -1427,6 +1422,20 @@ export function App(): React.ReactElement {
               {pairingMode === "initiate" ? "Link Another Device" : "Link Existing Motebit"}
             </Text>
 
+            {/* Sync URL input — shown before code generation (initiate) or submission (claim) */}
+            {((pairingMode === "initiate" && !pairingCode) || (pairingMode === "claim" && !pairingId)) && (
+              <TextInput
+                style={styles.pairingSyncUrlInput}
+                value={pairingSyncUrlInput}
+                onChangeText={setPairingSyncUrlInput}
+                placeholder="Sync relay URL"
+                placeholderTextColor="#405060"
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+              />
+            )}
+
             {pairingMode === "initiate" && pairingCode ? (
               <Text style={styles.pairingCodeDisplay}>{pairingCode}</Text>
             ) : null}
@@ -1453,6 +1462,15 @@ export function App(): React.ReactElement {
             <Text style={styles.pairingStatusText}>{pairingStatus}</Text>
 
             <View style={styles.pairingActions}>
+              {pairingMode === "initiate" && !pairingCode && (
+                <TouchableOpacity
+                  style={styles.pairingSubmitBtn}
+                  onPress={() => void handleInitiateConnect()}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.pairingSubmitText}>Connect</Text>
+                </TouchableOpacity>
+              )}
               {pairingMode === "claim" && !pairingId && (
                 <TouchableOpacity
                   style={styles.pairingSubmitBtn}
@@ -1752,6 +1770,15 @@ const styles = StyleSheet.create({
     letterSpacing: 6,
     textAlign: "center",
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  pairingSyncUrlInput: {
+    width: "100%",
+    backgroundColor: "#0a1018",
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    color: "#c0d0e0",
+    fontSize: 14,
   },
   pairingClaimInfo: {
     backgroundColor: "rgba(64, 128, 192, 0.1)",
