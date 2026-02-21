@@ -111,6 +111,7 @@ export function initPairing(ctx: DesktopContext): PairingAPI {
               denyBtn.disabled = true;
               pairingStatus.textContent = "Approving...";
               const result = await ctx.app.approvePairing(invoke, syncUrl, pairingId);
+              void ctx.app.startSync(invoke, syncUrl).catch(() => {});
               close();
               ctx.showToast(`Device linked (${result.deviceId.slice(0, 8)}...)`);
             } catch (err: unknown) {
@@ -194,6 +195,7 @@ export function initPairing(ctx: DesktopContext): PairingAPI {
                 deviceId: status.device_id,
                 deviceToken: status.device_token || "",
               });
+              void ctx.app.startSync(invoke, syncUrl).catch(() => {});
               close();
               const welcomeBackdrop = document.getElementById("welcome-backdrop") as HTMLDivElement;
               welcomeBackdrop.classList.remove("open");

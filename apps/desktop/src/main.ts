@@ -302,10 +302,10 @@ async function bootstrap(): Promise<void> {
       }
     }
 
-    // Sync conversations
-    if (config.syncUrl) {
-      void app.syncConversations(config.syncUrl, config.syncMasterToken).catch(() => {
-        // Conversation sync failures are non-fatal at startup
+    // Start full sync (event-level background polling + conversation sync)
+    if (config.syncUrl && config.isTauri && config.invoke) {
+      void app.startSync(config.invoke, config.syncUrl, config.syncMasterToken).catch(() => {
+        // Sync failures are non-fatal at startup
       });
     }
   } else {

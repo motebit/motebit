@@ -26,7 +26,7 @@ import {
 import { InMemoryAuditLog } from "@motebit/privacy-layer";
 import { createSignedToken } from "@motebit/crypto";
 import { generate as generateIdentityFile, parse as parseIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
-import { PairingClient, ConversationSyncEngine, HttpConversationSyncAdapter } from "@motebit/sync-engine";
+import { PairingClient, ConversationSyncEngine, HttpConversationSyncAdapter, HttpEventStoreAdapter } from "@motebit/sync-engine";
 import type { PairingSession, PairingStatus, ConversationSyncStoreAdapter } from "@motebit/sync-engine";
 import type { SyncConversation, SyncConversationMessage } from "@motebit/sdk";
 import { TauriEventStore, TauriMemoryStorage, TauriIdentityStorage, TauriAuditLog, TauriStateSnapshotStorage, TauriConversationStore, type InvokeFn } from "./tauri-storage.js";
@@ -1468,6 +1468,41 @@ export class DesktopApp {
     }));
 
     return syncEngine.sync();
+  }
+
+  /**
+   * Start full sync: event-level background polling + one-shot conversation sync.
+   * Call after pairing completes or at app startup when syncUrl is configured.
+   */
+  async startSync(invoke: InvokeFn, syncUrl: string, authToken?: string): Promise<void> {
+    if (!this.runtime) return;
+
+    // Get or create a signed auth token
+    let token = authToken;
+    if (!token) {
+      const keypair = await this.getDeviceKeypair(invoke);
+      if (!keypair) return;
+      token = await this.createSyncToken(keypair.privateKey);
+    }
+
+    // Event-level sync: connect remote adapter and start background polling
+    const remoteStore = new HttpEventStoreAdapter({
+      baseUrl: syncUrl,
+      motebitId: this.motebitId,
+      authToken: token,
+    });
+    this.runtime.connectSync(remoteStore);
+    this.runtime.startSync();
+
+    // One-shot conversation sync
+    void this.syncConversations(syncUrl, token).catch(() => {});
+  }
+
+  /**
+   * Stop background event sync.
+   */
+  stopSync(): void {
+    this.runtime?.sync.stop();
   }
 }
 
