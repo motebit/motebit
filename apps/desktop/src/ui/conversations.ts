@@ -5,9 +5,37 @@ import { addMessage } from "./chat";
 // === DOM Refs ===
 
 const chatLog = document.getElementById("chat-log") as HTMLDivElement;
+const chatInput = document.getElementById("chat-input") as HTMLInputElement;
 const conversationsPanel = document.getElementById("conversations-panel") as HTMLDivElement;
 const conversationsBackdrop = document.getElementById("conversations-backdrop") as HTMLDivElement;
 const convList = document.getElementById("conv-list") as HTMLDivElement;
+
+// === Fade Helpers ===
+
+/** Fade out all chat bubbles, then clear the log. Returns a promise that resolves when done. */
+function fadeOutMessages(): Promise<void> {
+  const bubbles = chatLog.querySelectorAll(".chat-bubble");
+  if (bubbles.length === 0) {
+    chatLog.innerHTML = "";
+    return Promise.resolve();
+  }
+
+  // Stagger fade-out slightly for visual flow
+  for (let i = 0; i < bubbles.length; i++) {
+    const bubble = bubbles[i] as HTMLElement;
+    bubble.style.transitionDelay = `${i * 20}ms`;
+    bubble.classList.add("fade-out");
+  }
+
+  return new Promise((resolve) => {
+    // Wait for the last bubble's transition to finish
+    const duration = 200 + (bubbles.length - 1) * 20;
+    setTimeout(() => {
+      chatLog.innerHTML = "";
+      resolve();
+    }, duration);
+  });
+}
 
 // === Conversations Panel ===
 
@@ -64,11 +92,10 @@ export function initConversations(ctx: DesktopContext): ConversationsAPI {
 
   async function loadConversation(conversationId: string): Promise<void> {
     close();
-    chatLog.innerHTML = "";
+    await fadeOutMessages();
 
     try {
       const messages = await ctx.app.loadConversationById(conversationId);
-      chatLog.innerHTML = "";
       for (const msg of messages) {
         if (msg.role === "user" || msg.role === "assistant") {
           addMessage(msg.role, msg.content);
@@ -76,9 +103,10 @@ export function initConversations(ctx: DesktopContext): ConversationsAPI {
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      chatLog.innerHTML = "";
       addMessage("system", `Failed to load conversation: ${msg}`);
     }
+
+    chatInput.focus();
   }
 
   // Event listeners
@@ -88,7 +116,9 @@ export function initConversations(ctx: DesktopContext): ConversationsAPI {
   document.getElementById("conv-new-btn")!.addEventListener("click", () => {
     close();
     ctx.app.startNewConversation();
-    chatLog.innerHTML = "";
+    void fadeOutMessages().then(() => {
+      chatInput.focus();
+    });
   });
 
   return { open, close };

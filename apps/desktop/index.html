@@ -42,6 +42,13 @@
       font-size: 14px;
       line-height: 1.45;
       word-wrap: break-word;
+      opacity: 1;
+      transform: translateY(0);
+      transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+    .chat-bubble.fade-out {
+      opacity: 0;
+      transform: translateY(-4px);
     }
     .chat-bubble.user {
       align-self: flex-end;
