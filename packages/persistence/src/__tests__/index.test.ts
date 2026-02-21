@@ -145,6 +145,60 @@ describe("SqliteEventStore", () => {
     const results = await mdb.eventStore.query({ motebit_id: "motebit-1" });
     expect(results[0]!.tombstoned).toBe(true);
   });
+
+  // --- Combined filters ---
+
+  it("combines motebit_id + event_types filter", async () => {
+    await mdb.eventStore.append(makeEvent({ motebit_id: "m1", event_type: EventType.MemoryFormed, version_clock: 1 }));
+    await mdb.eventStore.append(makeEvent({ motebit_id: "m1", event_type: EventType.ToolUsed, version_clock: 2 }));
+    await mdb.eventStore.append(makeEvent({ motebit_id: "m2", event_type: EventType.MemoryFormed, version_clock: 1 }));
+
+    const results = await mdb.eventStore.query({
+      motebit_id: "m1",
+      event_types: [EventType.MemoryFormed],
+    });
+    expect(results).toHaveLength(1);
+    expect(results[0]!.event_type).toBe(EventType.MemoryFormed);
+    expect(results[0]!.motebit_id).toBe("m1");
+  });
+
+  it("combines event_types + after_version_clock filter", async () => {
+    await mdb.eventStore.append(makeEvent({ event_type: EventType.ToolUsed, version_clock: 1 }));
+    await mdb.eventStore.append(makeEvent({ event_type: EventType.ToolUsed, version_clock: 5 }));
+    await mdb.eventStore.append(makeEvent({ event_type: EventType.MemoryFormed, version_clock: 10 }));
+
+    const results = await mdb.eventStore.query({
+      motebit_id: "motebit-1",
+      event_types: [EventType.ToolUsed],
+      after_version_clock: 3,
+    });
+    expect(results).toHaveLength(1);
+    expect(results[0]!.version_clock).toBe(5);
+  });
+
+  it("returns empty for non-matching combined filters", async () => {
+    await mdb.eventStore.append(makeEvent({ event_type: EventType.MemoryFormed, version_clock: 1 }));
+
+    const results = await mdb.eventStore.query({
+      motebit_id: "motebit-1",
+      event_types: [EventType.ToolUsed], // wrong type
+    });
+    expect(results).toHaveLength(0);
+  });
+
+  it("compact + countEvents", async () => {
+    for (let i = 1; i <= 5; i++) {
+      await mdb.eventStore.append(makeEvent({ version_clock: i }));
+    }
+    expect(await mdb.eventStore.countEvents("motebit-1")).toBe(5);
+
+    await mdb.eventStore.compact("motebit-1", 3); // compact events below clock 3
+    const remaining = await mdb.eventStore.query({ motebit_id: "motebit-1" });
+    // Only events with version_clock >= 3 should remain
+    for (const e of remaining) {
+      expect(e.version_clock).toBeGreaterThanOrEqual(3);
+    }
+  });
 });
 
 // === MemoryStorage ===
@@ -290,6 +344,122 @@ describe("SqliteMemoryStorage", () => {
 
     const mote2Edges = await mdb.memoryStorage.getAllEdges("motebit-2");
     expect(mote2Edges).toHaveLength(1);
+  });
+
+  // --- Decay-aware confidence filtering ---
+
+  it("queryNodes with min_confidence filters out decayed nodes", async () => {
+    const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+
+    // Fresh node (just created) — confidence 0.9, no decay
+    await mdb.memoryStorage.saveNode(makeNode({
+      node_id: "fresh-node",
+      confidence: 0.9,
+      half_life: SEVEN_DAYS,
+      created_at: now,
+    }));
+
+    // Old node (14 days ago) — confidence 0.9 but decayed: 0.9 * 0.5^2 = 0.225
+    await mdb.memoryStorage.saveNode(makeNode({
+      node_id: "old-node",
+      confidence: 0.9,
+      half_life: SEVEN_DAYS,
+      created_at: now - 2 * SEVEN_DAYS,
+    }));
+
+    const results = await mdb.memoryStorage.queryNodes({
+      motebit_id: "motebit-1",
+      min_confidence: 0.5,
+    });
+
+    // Only fresh node passes (0.9 >= 0.5); old node fails (0.225 < 0.5)
+    expect(results).toHaveLength(1);
+    expect(results[0]!.node_id).toBe("fresh-node");
+  });
+
+  it("queryNodes with min_confidence keeps nodes at half-life boundary", async () => {
+    const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+
+    // Node exactly at half-life — confidence 0.8 decays to 0.4
+    await mdb.memoryStorage.saveNode(makeNode({
+      node_id: "half-life-node",
+      confidence: 0.8,
+      half_life: SEVEN_DAYS,
+      created_at: now - SEVEN_DAYS,
+    }));
+
+    // Should pass at min_confidence=0.3 (0.4 >= 0.3)
+    const pass = await mdb.memoryStorage.queryNodes({
+      motebit_id: "motebit-1",
+      min_confidence: 0.3,
+    });
+    expect(pass).toHaveLength(1);
+
+    // Should fail at min_confidence=0.5 (0.4 < 0.5)
+    const fail = await mdb.memoryStorage.queryNodes({
+      motebit_id: "motebit-1",
+      min_confidence: 0.5,
+    });
+    expect(fail).toHaveLength(0);
+  });
+
+  it("queryNodes combines sensitivity_filter and min_confidence", async () => {
+    const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+
+    // Fresh, personal
+    await mdb.memoryStorage.saveNode(makeNode({
+      node_id: "fresh-personal",
+      confidence: 0.9,
+      sensitivity: SensitivityLevel.Personal,
+      half_life: SEVEN_DAYS,
+      created_at: now,
+    }));
+
+    // Fresh, medical — should be excluded by sensitivity filter
+    await mdb.memoryStorage.saveNode(makeNode({
+      node_id: "fresh-medical",
+      confidence: 0.9,
+      sensitivity: SensitivityLevel.Medical,
+      half_life: SEVEN_DAYS,
+      created_at: now,
+    }));
+
+    // Old, none — should be excluded by confidence decay
+    await mdb.memoryStorage.saveNode(makeNode({
+      node_id: "old-none",
+      confidence: 0.5,
+      sensitivity: SensitivityLevel.None,
+      half_life: SEVEN_DAYS,
+      created_at: now - 3 * SEVEN_DAYS, // decayed: 0.5 * 0.5^3 = 0.0625
+    }));
+
+    const results = await mdb.memoryStorage.queryNodes({
+      motebit_id: "motebit-1",
+      min_confidence: 0.5,
+      sensitivity_filter: [SensitivityLevel.None, SensitivityLevel.Personal],
+    });
+
+    // Only fresh-personal passes both filters
+    expect(results).toHaveLength(1);
+    expect(results[0]!.node_id).toBe("fresh-personal");
+  });
+
+  it("queryNodes returns empty when all nodes are below min_confidence", async () => {
+    const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+    await mdb.memoryStorage.saveNode(makeNode({
+      confidence: 0.1,
+      half_life: SEVEN_DAYS,
+      created_at: Date.now() - 5 * SEVEN_DAYS, // 0.1 * 0.5^5 ≈ 0.003
+    }));
+
+    const results = await mdb.memoryStorage.queryNodes({
+      motebit_id: "motebit-1",
+      min_confidence: 0.01,
+    });
+    expect(results).toHaveLength(0);
   });
 });
 
