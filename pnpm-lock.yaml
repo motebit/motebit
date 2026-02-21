@@ -131,6 +131,9 @@ importers:
       '@motebit/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence
+      '@motebit/planner':
+        specifier: workspace:*
+        version: link:../../packages/planner
       '@motebit/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
@@ -709,6 +712,28 @@ importers:
       '@types/better-sqlite3':
         specifier: ^7.6.0
         version: 7.6.13
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1)(lightningcss@1.30.2)(terser@5.46.0)
+
+  packages/planner:
+    dependencies:
+      '@motebit/ai-core':
+        specifier: workspace:*
+        version: link:../ai-core
+      '@motebit/event-log':
+        specifier: workspace:*
+        version: link:../event-log
+      '@motebit/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       typescript:
         specifier: ^5.6.0
         version: 5.9.3

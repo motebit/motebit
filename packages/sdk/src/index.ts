@@ -44,6 +44,12 @@ export enum EventType {
   GoalCompleted = "goal_completed",
   GoalProgress = "goal_progress",
   MemoryAudit = "memory_audit",
+  PlanCreated = "plan_created",
+  PlanStepStarted = "plan_step_started",
+  PlanStepCompleted = "plan_step_completed",
+  PlanStepFailed = "plan_step_failed",
+  PlanCompleted = "plan_completed",
+  PlanFailed = "plan_failed",
 }
 
 export enum RelationType {
@@ -365,4 +371,50 @@ export interface LightingSpec {
   environment: "hdri";
   exposure: number;
   ambient_intensity: number;
+}
+
+// === Plan-Execute Engine ===
+
+export enum PlanStatus {
+  Active = "active",
+  Completed = "completed",
+  Failed = "failed",
+  Paused = "paused",
+}
+
+export enum StepStatus {
+  Pending = "pending",
+  Running = "running",
+  Completed = "completed",
+  Failed = "failed",
+  Skipped = "skipped",
+}
+
+export interface PlanStep {
+  step_id: string;
+  plan_id: string;
+  ordinal: number;
+  description: string;
+  prompt: string;
+  depends_on: string[];
+  optional: boolean;
+  status: StepStatus;
+  result_summary: string | null;
+  error_message: string | null;
+  tool_calls_made: number;
+  started_at: number | null;
+  completed_at: number | null;
+  retry_count: number;
+}
+
+export interface Plan {
+  plan_id: string;
+  goal_id: string;
+  motebit_id: string;
+  title: string;
+  status: PlanStatus;
+  created_at: number;
+  updated_at: number;
+  current_step_index: number;
+  total_steps: number;
 }

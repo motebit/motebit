@@ -1,13 +1,15 @@
 import { createHash } from "node:crypto";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import type { SqliteGoalStore, SqliteApprovalStore, SqliteGoalOutcomeStore, Goal, GoalOutcome } from "@motebit/persistence";
-import { EventType, RiskLevel } from "@motebit/sdk";
+import { EventType, RiskLevel, PlanStatus } from "@motebit/sdk";
 import type { ToolHandler } from "@motebit/sdk";
 import {
   createSubGoalDefinition,
   completeGoalDefinition,
   reportProgressDefinition,
 } from "@motebit/tools";
+import type { PlanEngine, PlanChunk } from "@motebit/planner";
+import type { PlanStoreAdapter } from "@motebit/planner";
 import { parseInterval } from "./intervals.js";
 
 interface SuspendedTurn {
@@ -28,6 +30,8 @@ export class GoalScheduler {
   private ticking = false;
   private suspended = new Map<string, SuspendedTurn>();
   private currentGoalId: string | null = null;
+  private planEngine: PlanEngine | null = null;
+  private planStore: PlanStoreAdapter | null = null;
 
   constructor(
     private runtime: MotebitRuntime,
@@ -38,6 +42,12 @@ export class GoalScheduler {
     private denyAbove: RiskLevel,
     private defaultTtlMs = 3_600_000, // 1 hour
   ) {}
+
+  /** Attach a PlanEngine for multi-step goal execution. */
+  setPlanEngine(engine: PlanEngine, store: PlanStoreAdapter): void {
+    this.planEngine = engine;
+    this.planStore = store;
+  }
 
   start(tickMs = 60_000): void {
     if (this.timer) return;
@@ -254,8 +264,14 @@ export class GoalScheduler {
         this.currentGoalId = goal.goal_id;
 
         try {
-          const stream = this.runtime.sendMessageStreaming(enrichedPrompt);
-          const result = await this.consumeDaemonStream(stream, goal.goal_id);
+          let result: GoalStreamResult;
+
+          if (this.planEngine && this.planStore) {
+            result = await this.executePlanGoal(goal, outcomes);
+          } else {
+            const stream = this.runtime.sendMessageStreaming(enrichedPrompt);
+            result = await this.consumeDaemonStream(stream, goal.goal_id);
+          }
 
           if (result.suspended) {
             // Turn is suspended waiting for approval — don't update last_run_at,
@@ -413,6 +429,154 @@ export class GoalScheduler {
         }
       }
     }
+    return { suspended: false, toolCallsMade, memoriesFormed, responseText };
+  }
+
+  private async executePlanGoal(goal: Goal, outcomes: GoalOutcome[]): Promise<GoalStreamResult> {
+    const loopDeps = this.runtime.getLoopDeps();
+    if (!loopDeps) throw new Error("AI not initialized — no loop deps available");
+
+    const registry = this.runtime.getToolRegistry();
+
+    // Check for existing active plan (resume interrupted plan)
+    let plan = this.planStore!.getPlanForGoal(goal.goal_id);
+    let planStream: AsyncGenerator<PlanChunk>;
+
+    if (plan && plan.status === PlanStatus.Active) {
+      console.log(`[plan] resuming: ${plan.title} (${plan.plan_id.slice(0, 8)})`);
+      planStream = this.planEngine!.resumePlan(plan.plan_id, loopDeps);
+    } else {
+      plan = await this.planEngine!.createPlan(goal.goal_id, this.motebitId, {
+        goalPrompt: goal.prompt,
+        previousOutcomes: outcomes.map((o) =>
+          o.status === "failed" ? `failed: ${o.error_message ?? "unknown"}` : `${o.status}: ${o.summary ?? "no summary"}`,
+        ),
+        availableTools: registry.list().map((t) => t.name),
+      }, loopDeps);
+      planStream = this.planEngine!.executePlan(plan.plan_id, loopDeps);
+    }
+
+    return this.consumePlanStream(planStream, goal.goal_id);
+  }
+
+  private async consumePlanStream(
+    stream: AsyncGenerator<PlanChunk>,
+    goalId: string,
+  ): Promise<GoalStreamResult> {
+    let toolCallsMade = 0;
+    let memoriesFormed = 0;
+    let responseText = "";
+
+    for await (const chunk of stream) {
+      switch (chunk.type) {
+        case "plan_created":
+          console.log(`[plan] created: "${chunk.plan.title}" (${chunk.steps.length} steps)`);
+          void this.logGoalEvent(EventType.PlanCreated, goalId, {
+            plan_id: chunk.plan.plan_id,
+            title: chunk.plan.title,
+            total_steps: chunk.steps.length,
+          });
+          break;
+
+        case "step_started":
+          console.log(`[plan] step ${chunk.step.ordinal + 1}: ${chunk.step.description}`);
+          void this.logGoalEvent(EventType.PlanStepStarted, goalId, {
+            plan_id: chunk.step.plan_id,
+            step_id: chunk.step.step_id,
+            ordinal: chunk.step.ordinal,
+            description: chunk.step.description,
+          });
+          break;
+
+        case "step_chunk":
+          // Forward inner agentic chunks
+          if (chunk.chunk.type === "text") {
+            process.stdout.write(chunk.chunk.text);
+            responseText += chunk.chunk.text;
+          } else if (chunk.chunk.type === "tool_status") {
+            if (chunk.chunk.status === "calling") {
+              process.stdout.write(`\n  [tool] ${chunk.chunk.name}...`);
+              toolCallsMade++;
+            } else {
+              process.stdout.write(" done\n");
+            }
+          } else if (chunk.chunk.type === "injection_warning") {
+            console.warn(`\n  [warning] suspicious content in ${chunk.chunk.tool_name}`);
+          } else if (chunk.chunk.type === "result") {
+            if (chunk.chunk.result.memoriesFormed) {
+              memoriesFormed += chunk.chunk.result.memoriesFormed.length;
+            }
+          }
+          break;
+
+        case "step_completed":
+          console.log(`\n  [step ${chunk.step.ordinal + 1} complete]`);
+          void this.logGoalEvent(EventType.PlanStepCompleted, goalId, {
+            plan_id: chunk.step.plan_id,
+            step_id: chunk.step.step_id,
+            ordinal: chunk.step.ordinal,
+            tool_calls_made: chunk.step.tool_calls_made,
+          });
+          break;
+
+        case "step_failed":
+          console.error(`\n  [step ${chunk.step.ordinal + 1} failed: ${chunk.error}]`);
+          void this.logGoalEvent(EventType.PlanStepFailed, goalId, {
+            plan_id: chunk.step.plan_id,
+            step_id: chunk.step.step_id,
+            ordinal: chunk.step.ordinal,
+            error: chunk.error,
+          });
+          break;
+
+        case "approval_request": {
+          // Forward to the standard approval queue
+          const approvalId = crypto.randomUUID();
+          const innerChunk = chunk.chunk;
+          if (innerChunk.type !== "approval_request") break;
+          const argsJson = JSON.stringify(innerChunk.args);
+          const argsHash = hashArgs(argsJson);
+          const now = Date.now();
+
+          this.approvalStore.add({
+            approval_id: approvalId,
+            motebit_id: this.motebitId,
+            goal_id: goalId,
+            tool_name: innerChunk.name,
+            args_preview: argsJson.slice(0, 500),
+            args_hash: argsHash,
+            risk_level: innerChunk.risk_level ?? -1,
+            status: "pending",
+            created_at: now,
+            expires_at: now + this.defaultTtlMs,
+            resolved_at: null,
+            denied_reason: null,
+          });
+
+          this.suspended.set(approvalId, { approvalId, goalId, createdAt: now });
+          console.log(`\n  [approval-pending] ${innerChunk.name} — approval_id: ${approvalId.slice(0, 8)}`);
+          void this.logApprovalEvent(EventType.ApprovalRequested, goalId, approvalId, innerChunk.name, innerChunk.args);
+
+          return { suspended: true, toolCallsMade, memoriesFormed, responseText };
+        }
+
+        case "plan_completed":
+          console.log(`[plan] completed: ${chunk.plan.title}`);
+          void this.logGoalEvent(EventType.PlanCompleted, goalId, {
+            plan_id: chunk.plan.plan_id,
+          });
+          break;
+
+        case "plan_failed":
+          console.error(`[plan] failed: ${chunk.reason}`);
+          void this.logGoalEvent(EventType.PlanFailed, goalId, {
+            plan_id: chunk.plan.plan_id,
+            reason: chunk.reason,
+          });
+          break;
+      }
+    }
+
     return { suspended: false, toolCallsMade, memoriesFormed, responseText };
   }
 

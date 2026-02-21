@@ -55,6 +55,7 @@ import {
 } from "@motebit/identity-file";
 import { McpServerAdapter } from "@motebit/mcp-server";
 import type { MotebitServerDeps, McpServerConfig as McpServerAdapterConfig } from "@motebit/mcp-server";
+import { PlanEngine } from "@motebit/planner";
 import { GoalScheduler } from "./scheduler.js";
 import { parseInterval } from "./intervals.js";
 
@@ -1422,6 +1423,7 @@ async function handleRun(config: CliConfig): Promise<void> {
   // Start goal scheduler
   const goals = moteDb.goalStore.list(motebitId);
   const scheduler = new GoalScheduler(runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore, motebitId, denyAbove);
+  scheduler.setPlanEngine(new PlanEngine(moteDb.planStore), moteDb.planStore);
   scheduler.start();
 
   console.log(`Daemon running. motebit_id: ${motebitId.slice(0, 8)}... Goals: ${goals.length}. Policy: max_risk_auto=${RiskLevel[maxRiskAuto]}, deny_above=${RiskLevel[denyAbove]}`);

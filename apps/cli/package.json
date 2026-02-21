@@ -55,6 +55,7 @@
     "@motebit/state-vector": "workspace:*",
     "@motebit/behavior-engine": "workspace:*",
     "@motebit/persistence": "workspace:*",
+    "@motebit/planner": "workspace:*",
     "@motebit/sync-engine": "workspace:*",
     "@motebit/tools": "workspace:*",
     "@motebit/mcp-client": "workspace:*",

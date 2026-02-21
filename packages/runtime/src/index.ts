@@ -40,7 +40,7 @@ import { PolicyGate, MemoryGovernor } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 
 // Re-export key types for consumers
-export type { TurnResult, AgenticChunk, ReflectionResult } from "@motebit/ai-core";
+export type { TurnResult, AgenticChunk, ReflectionResult, MotebitLoopDependencies } from "@motebit/ai-core";
 export type { StreamingProvider } from "@motebit/ai-core";
 export type { MotebitState, BehaviorCues, ToolRegistry, ConversationMessage } from "@motebit/sdk";
 export type { EventStoreAdapter } from "@motebit/event-log";
@@ -441,6 +441,11 @@ export class MotebitRuntime {
   /** Access the tool registry to register additional tools at runtime. */
   getToolRegistry(): SimpleToolRegistry {
     return this.toolRegistry;
+  }
+
+  /** Access the loop dependencies for direct use by PlanEngine. */
+  getLoopDeps(): MotebitLoopDependencies | null {
+    return this.loopDeps;
   }
 
   get isOperatorMode(): boolean {

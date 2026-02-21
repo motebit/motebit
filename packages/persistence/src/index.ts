@@ -11,7 +11,10 @@ import type {
   AuditRecord,
   SensitivityLevel,
   RelationType,
+  Plan,
+  PlanStep,
 } from "@motebit/sdk";
+import { PlanStatus, StepStatus } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import type {
   MemoryStorageAdapter,
@@ -189,6 +192,40 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
 
 CREATE INDEX IF NOT EXISTS idx_conv_messages
   ON conversation_messages (conversation_id, created_at ASC);
+
+CREATE TABLE IF NOT EXISTS plans (
+  plan_id TEXT PRIMARY KEY,
+  goal_id TEXT NOT NULL,
+  motebit_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  current_step_index INTEGER NOT NULL DEFAULT 0,
+  total_steps INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_plans_goal ON plans (goal_id);
+
+CREATE TABLE IF NOT EXISTS plan_steps (
+  step_id TEXT PRIMARY KEY,
+  plan_id TEXT NOT NULL,
+  ordinal INTEGER NOT NULL,
+  description TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  depends_on TEXT NOT NULL DEFAULT '[]',
+  optional INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending',
+  result_summary TEXT,
+  error_message TEXT,
+  tool_calls_made INTEGER NOT NULL DEFAULT 0,
+  started_at INTEGER,
+  completed_at INTEGER,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY (plan_id) REFERENCES plans(plan_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_plan_steps_plan ON plan_steps (plan_id, ordinal ASC);
 `;
 
 function initSchema(db: DatabaseDriver): void {
@@ -1382,6 +1419,203 @@ export class SqliteConversationStore {
   }
 }
 
+// === Plan Store ===
+
+interface PlanRow {
+  plan_id: string;
+  goal_id: string;
+  motebit_id: string;
+  title: string;
+  status: string;
+  created_at: number;
+  updated_at: number;
+  current_step_index: number;
+  total_steps: number;
+}
+
+function rowToPlan(row: PlanRow): Plan {
+  return {
+    plan_id: row.plan_id,
+    goal_id: row.goal_id,
+    motebit_id: row.motebit_id,
+    title: row.title,
+    status: row.status as PlanStatus,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    current_step_index: row.current_step_index,
+    total_steps: row.total_steps,
+  };
+}
+
+interface PlanStepRow {
+  step_id: string;
+  plan_id: string;
+  ordinal: number;
+  description: string;
+  prompt: string;
+  depends_on: string;
+  optional: number;
+  status: string;
+  result_summary: string | null;
+  error_message: string | null;
+  tool_calls_made: number;
+  started_at: number | null;
+  completed_at: number | null;
+  retry_count: number;
+}
+
+function rowToPlanStep(row: PlanStepRow): PlanStep {
+  return {
+    step_id: row.step_id,
+    plan_id: row.plan_id,
+    ordinal: row.ordinal,
+    description: row.description,
+    prompt: row.prompt,
+    depends_on: JSON.parse(row.depends_on) as string[],
+    optional: row.optional === 1,
+    status: row.status as StepStatus,
+    result_summary: row.result_summary,
+    error_message: row.error_message,
+    tool_calls_made: row.tool_calls_made,
+    started_at: row.started_at,
+    completed_at: row.completed_at,
+    retry_count: row.retry_count,
+  };
+}
+
+export class SqlitePlanStore {
+  private stmtSavePlan: PreparedStatement;
+  private stmtGetPlan: PreparedStatement;
+  private stmtGetPlanForGoal: PreparedStatement;
+  private stmtSaveStep: PreparedStatement;
+  private stmtGetStep: PreparedStatement;
+  private stmtGetStepsForPlan: PreparedStatement;
+  private stmtGetNextPending: PreparedStatement;
+
+  constructor(db: DatabaseDriver) {
+    this.stmtSavePlan = db.prepare(
+      `INSERT OR REPLACE INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmtGetPlan = db.prepare(`SELECT * FROM plans WHERE plan_id = ?`);
+    this.stmtGetPlanForGoal = db.prepare(
+      `SELECT * FROM plans WHERE goal_id = ? ORDER BY created_at DESC LIMIT 1`,
+    );
+    this.stmtSaveStep = db.prepare(
+      `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmtGetStep = db.prepare(`SELECT * FROM plan_steps WHERE step_id = ?`);
+    this.stmtGetStepsForPlan = db.prepare(
+      `SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY ordinal ASC`,
+    );
+    this.stmtGetNextPending = db.prepare(
+      `SELECT * FROM plan_steps WHERE plan_id = ? AND status = 'pending' ORDER BY ordinal ASC LIMIT 1`,
+    );
+  }
+
+  savePlan(plan: Plan): void {
+    this.stmtSavePlan.run(
+      plan.plan_id,
+      plan.goal_id,
+      plan.motebit_id,
+      plan.title,
+      plan.status,
+      plan.created_at,
+      plan.updated_at,
+      plan.current_step_index,
+      plan.total_steps,
+    );
+  }
+
+  getPlan(planId: string): Plan | null {
+    const row = this.stmtGetPlan.get(planId) as PlanRow | undefined;
+    if (row === undefined) return null;
+    return rowToPlan(row);
+  }
+
+  getPlanForGoal(goalId: string): Plan | null {
+    const row = this.stmtGetPlanForGoal.get(goalId) as PlanRow | undefined;
+    if (row === undefined) return null;
+    return rowToPlan(row);
+  }
+
+  updatePlan(planId: string, updates: Partial<Plan>): void {
+    const existing = this.getPlan(planId);
+    if (!existing) return;
+    const merged = { ...existing, ...updates };
+    this.stmtSavePlan.run(
+      merged.plan_id,
+      merged.goal_id,
+      merged.motebit_id,
+      merged.title,
+      merged.status,
+      merged.created_at,
+      merged.updated_at,
+      merged.current_step_index,
+      merged.total_steps,
+    );
+  }
+
+  saveStep(step: PlanStep): void {
+    this.stmtSaveStep.run(
+      step.step_id,
+      step.plan_id,
+      step.ordinal,
+      step.description,
+      step.prompt,
+      JSON.stringify(step.depends_on),
+      step.optional ? 1 : 0,
+      step.status,
+      step.result_summary,
+      step.error_message,
+      step.tool_calls_made,
+      step.started_at,
+      step.completed_at,
+      step.retry_count,
+    );
+  }
+
+  getStep(stepId: string): PlanStep | null {
+    const row = this.stmtGetStep.get(stepId) as PlanStepRow | undefined;
+    if (row === undefined) return null;
+    return rowToPlanStep(row);
+  }
+
+  getStepsForPlan(planId: string): PlanStep[] {
+    const rows = this.stmtGetStepsForPlan.all(planId) as PlanStepRow[];
+    return rows.map(rowToPlanStep);
+  }
+
+  updateStep(stepId: string, updates: Partial<PlanStep>): void {
+    const existing = this.getStep(stepId);
+    if (!existing) return;
+    const merged = { ...existing, ...updates };
+    this.stmtSaveStep.run(
+      merged.step_id,
+      merged.plan_id,
+      merged.ordinal,
+      merged.description,
+      merged.prompt,
+      JSON.stringify(merged.depends_on),
+      merged.optional ? 1 : 0,
+      merged.status,
+      merged.result_summary,
+      merged.error_message,
+      merged.tool_calls_made,
+      merged.started_at,
+      merged.completed_at,
+      merged.retry_count,
+    );
+  }
+
+  getNextPendingStep(planId: string): PlanStep | null {
+    const row = this.stmtGetNextPending.get(planId) as PlanStepRow | undefined;
+    if (row === undefined) return null;
+    return rowToPlanStep(row);
+  }
+}
+
 // === Factory ===
 
 export interface MotebitDatabase {
@@ -1396,6 +1630,7 @@ export interface MotebitDatabase {
   goalOutcomeStore: SqliteGoalOutcomeStore;
   approvalStore: SqliteApprovalStore;
   conversationStore: SqliteConversationStore;
+  planStore: SqlitePlanStore;
   close(): void;
 }
 
@@ -1455,6 +1690,11 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     driver.pragma("user_version = 6");
   }
 
+  if (userVersion < 7) {
+    // Plans + plan_steps tables are in SCHEMA for new DBs; this handles upgrades
+    driver.pragma("user_version = 7");
+  }
+
   const eventStore = new SqliteEventStore(driver);
   const memoryStorage = new SqliteMemoryStorage(driver);
   const identityStorage = new SqliteIdentityStorage(driver);
@@ -1465,6 +1705,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   const goalOutcomeStore = new SqliteGoalOutcomeStore(driver);
   const approvalStore = new SqliteApprovalStore(driver);
   const conversationStore = new SqliteConversationStore(driver);
+  const planStore = new SqlitePlanStore(driver);
 
   return {
     db: driver,
@@ -1478,6 +1719,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     goalOutcomeStore,
     approvalStore,
     conversationStore,
+    planStore,
     close() {
       driver.close();
     },
