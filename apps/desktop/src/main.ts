@@ -989,6 +989,19 @@ function updateVoiceGlowColor(): void {
 
 let micErrorShown = false;
 
+function permissionHint(target: "microphone" | "speech"): string {
+  const ua = navigator.userAgent;
+  if (/Macintosh|Mac OS X/i.test(ua)) {
+    const pane = target === "microphone" ? "Microphone" : "Speech Recognition";
+    return `open macOS System Settings > Privacy & Security > ${pane}`;
+  }
+  if (/Windows/i.test(ua)) {
+    const pane = target === "microphone" ? "Microphone" : "Speech";
+    return `open Windows Settings > Privacy > ${pane}`;
+  }
+  return `check your OS privacy settings for ${target} access`;
+}
+
 /** Acquire mic and create audio analysis pipeline if not already running. */
 async function ensureAudioPipeline(): Promise<boolean> {
   if (audioContext && analyserNode && micStream) return true;
@@ -999,7 +1012,7 @@ async function ensureAudioPipeline(): Promise<boolean> {
   } catch {
     if (!micErrorShown) {
       micErrorShown = true;
-      addMessage("system", "Microphone access denied — open System Settings > Privacy & Security > Microphone, then grant access to Motebit.");
+      addMessage("system", `Microphone access denied — ${permissionHint("microphone")}, then grant access to Motebit.`);
     }
     return false;
   }
@@ -1146,7 +1159,7 @@ async function startVoice(): Promise<void> {
         sttAvailable = false;
         if (!sttErrorShown) {
           sttErrorShown = true;
-          addMessage("system", "Speech recognition needs permission — open System Settings > Privacy & Security > Speech Recognition. Using Whisper fallback.");
+          addMessage("system", `Speech recognition needs permission — ${permissionHint("speech")}. Using Whisper fallback.`);
         }
         return;
       }
