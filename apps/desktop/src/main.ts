@@ -1,4 +1,4 @@
-import { DesktopApp, COLOR_PRESETS, isSlashCommand, parseSlashCommand, type DesktopAIConfig, type InvokeFn, type McpServerConfig, type PolicyConfig, type PairingSession, type GoalCompleteEvent, type GoalApprovalEvent, type MemoryNode } from "./index";
+import { DesktopApp, COLOR_PRESETS, isSlashCommand, parseSlashCommand, type DesktopAIConfig, type InvokeFn, type McpServerConfig, type PolicyConfig, type PairingSession, type GoalCompleteEvent, type GoalApprovalEvent, type MemoryNode, type InteriorColor } from "./index";
 import { stripTags } from "@motebit/ai-core";
 import { MicVAD } from "@ricky0123/vad-web";
 import { WebSpeechTTSProvider, WebSpeechSTTProvider, FallbackTTSProvider } from "@motebit/voice";
@@ -47,6 +47,32 @@ function addMessage(role: "user" | "assistant" | "system", text: string): void {
   bubble.textContent = text;
   chatLog.appendChild(bubble);
   chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+const toastContainer = document.getElementById("toast-container") as HTMLDivElement;
+let activeToast: HTMLElement | null = null;
+let activeToastTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Show a transient toast notification. Auto-dismisses after `duration` ms. Replaces any active toast. */
+function showToast(text: string, duration = 3000): void {
+  // Remove any existing toast immediately
+  if (activeToast) {
+    activeToast.remove();
+    if (activeToastTimer) clearTimeout(activeToastTimer);
+  }
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.textContent = text;
+  toastContainer.appendChild(el);
+  // Trigger reflow then animate in
+  void el.offsetWidth;
+  el.classList.add("show");
+  activeToast = el;
+  activeToastTimer = setTimeout(() => {
+    el.classList.remove("show");
+    setTimeout(() => el.remove(), 300);
+    if (activeToast === el) activeToast = null;
+  }, duration);
 }
 
 function showToolStatus(name: string): void {
@@ -243,7 +269,6 @@ function handleSlashCommand(command: string, args: string): void {
       } else {
         try {
           app.setModel(args);
-          addMessage("system", `Model switched to: ${args}`);
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
           addMessage("system", `Error: ${msg}`);
@@ -259,16 +284,12 @@ function handleSlashCommand(command: string, args: string): void {
     case "new":
       app.startNewConversation();
       chatLog.innerHTML = "";
-      addMessage("system", "New conversation started");
       break;
     case "sync":
       if (currentConfig?.syncUrl) {
-        addMessage("system", "Syncing conversations...");
         void app.syncConversations(currentConfig.syncUrl, currentConfig.syncMasterToken).then(result => {
-          addMessage("system",
-            `Sync complete: ${result.conversations_pushed} pushed, ${result.conversations_pulled} pulled, ` +
-            `${result.messages_pushed} msgs pushed, ${result.messages_pulled} msgs pulled`
-          );
+          const total = result.conversations_pushed + result.conversations_pulled + result.messages_pushed + result.messages_pulled;
+          showToast(total > 0 ? `Synced (${total} changes)` : "Already up to date");
         }).catch((err: unknown) => {
           const msg = err instanceof Error ? err.message : String(err);
           addMessage("system", `Sync failed: ${msg}`);
@@ -414,7 +435,6 @@ function populateConversationsList(): void {
 async function loadConversation(conversationId: string): Promise<void> {
   closeConversationsPanel();
   chatLog.innerHTML = "";
-  addMessage("system", "Loading conversation...");
 
   try {
     const messages = await app.loadConversationById(conversationId);
@@ -439,7 +459,6 @@ document.getElementById("conv-new-btn")!.addEventListener("click", () => {
   closeConversationsPanel();
   app.startNewConversation();
   chatLog.innerHTML = "";
-  addMessage("system", "New conversation started");
 });
 
 // === Goals Panel ===
@@ -851,8 +870,12 @@ const settingsTtsVoice = document.getElementById("settings-tts-voice") as HTMLSe
 let hasWhisperKeyInKeyring = false;
 
 // Settings state
-let selectedColorPreset = "moonlight";
-let previousColorPreset = "moonlight";
+let selectedColorPreset: string = "moonlight";
+let previousColorPreset: string = "moonlight";
+let customHue = 220;
+let customSaturation = 0.7;
+let customInteriorColor: InteriorColor | null = null;
+let previousCustomState: { hue: number; saturation: number; color: InteriorColor | null } | null = null;
 let selectedApprovalPreset = "balanced";
 let mcpServersConfig: McpServerConfig[] = [];
 let hasApiKeyInKeyring = false;
@@ -878,21 +901,136 @@ document.querySelectorAll(".settings-tab").forEach(tab => {
 
 // === Color Presets ===
 
+// === HSL → RGB helper ===
+
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  h = ((h % 360) + 360) % 360;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (h < 60)       { r = c; g = x; }
+  else if (h < 120) { r = x; g = c; }
+  else if (h < 180) { g = c; b = x; }
+  else if (h < 240) { g = x; b = c; }
+  else if (h < 300) { r = x; b = c; }
+  else              { r = c; b = x; }
+  return [r + m, g + m, b + m];
+}
+
+function deriveInteriorColor(hue: number, saturation: number): InteriorColor {
+  // Saturation slider does double duty: controls both color intensity AND lightness.
+  // This maps the full preset range: Moonlight (sat=0, near-white) → Ember (sat=1, vivid).
+  //   sat=0 → tint L=0.92 S=0   (clear glass, moonlight-like)
+  //   sat=1 → tint L=0.80 S=0.9  (rich colored glass, amber/ember-like)
+  const tintL = 0.92 - saturation * 0.12;
+  const tintS = saturation * 0.9;
+  const tint = hslToRgb(hue, tintS, tintL);
+
+  // Glow follows the same principle: deeper and more saturated as vibrancy increases.
+  //   sat=0 → glow L=0.72 S=0.2  (soft, muted)
+  //   sat=1 → glow L=0.55 S=1.0  (vivid, punchy)
+  const glowL = 0.72 - saturation * 0.17;
+  const glowS = saturation * 0.8 + 0.2;
+  const glow = hslToRgb(hue, glowS, glowL);
+
+  return { tint, glow };
+}
+
+function swatchGradient(color: InteriorColor): string {
+  const t = color.tint;
+  const g = color.glow;
+  return `radial-gradient(circle at 40% 40%, rgba(${Math.round(g[0] * 255)},${Math.round(g[1] * 255)},${Math.round(g[2] * 255)},0.6), rgba(${Math.round(t[0] * 200)},${Math.round(t[1] * 200)},${Math.round(t[2] * 200)},0.8))`;
+}
+
+// === Custom Picker Elements ===
+
+const customPicker = document.getElementById("custom-picker") as HTMLDivElement;
+const hueStrip = document.getElementById("hue-strip") as HTMLDivElement;
+const satStrip = document.getElementById("sat-strip") as HTMLDivElement;
+const hueThumb = document.getElementById("hue-thumb") as HTMLDivElement;
+const satThumb = document.getElementById("sat-thumb") as HTMLDivElement;
+const pickerPreview = document.getElementById("picker-preview") as HTMLDivElement;
+
+function updatePickerUI(): void {
+  // Position thumbs
+  hueThumb.style.left = `${(customHue / 360) * 100}%`;
+  hueThumb.style.background = `hsl(${customHue}, 85%, 60%)`;
+  satThumb.style.left = `${customSaturation * 100}%`;
+  satThumb.style.background = `hsl(${customHue}, ${Math.round(customSaturation * 100)}%, 70%)`;
+  // Update saturation strip gradient to reflect current hue
+  satStrip.style.background = `linear-gradient(to right, hsl(${customHue},0%,90%), hsl(${customHue},100%,60%))`;
+  // Preview
+  const color = deriveInteriorColor(customHue, customSaturation);
+  pickerPreview.style.background = swatchGradient(color);
+}
+
+function applyCustomColor(): void {
+  customInteriorColor = deriveInteriorColor(customHue, customSaturation);
+  app.setInteriorColorDirect(customInteriorColor);
+  updateVoiceGlowColor();
+  // Update the custom swatch background if it exists
+  const customSwatch = document.querySelector('.color-swatch.custom') as HTMLElement | null;
+  if (customSwatch && customInteriorColor) {
+    customSwatch.style.background = swatchGradient(customInteriorColor);
+  }
+}
+
+function initPickerDrag(strip: HTMLElement, onUpdate: (fraction: number) => void): void {
+  const drag = (e: PointerEvent) => {
+    const rect = strip.getBoundingClientRect();
+    const fraction = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    onUpdate(fraction);
+    updatePickerUI();
+    applyCustomColor();
+  };
+  strip.addEventListener("pointerdown", (e: PointerEvent) => {
+    strip.setPointerCapture(e.pointerId);
+    drag(e);
+    const move = (ev: PointerEvent) => drag(ev);
+    const up = () => {
+      strip.removeEventListener("pointermove", move);
+      strip.removeEventListener("pointerup", up);
+    };
+    strip.addEventListener("pointermove", move);
+    strip.addEventListener("pointerup", up);
+  });
+}
+
+initPickerDrag(hueStrip, (f) => { customHue = Math.round(f * 360); });
+initPickerDrag(satStrip, (f) => { customSaturation = f; });
+
 function buildColorSwatches(): void {
   colorPresetGrid.innerHTML = "";
   for (const [name, preset] of Object.entries(COLOR_PRESETS)) {
     const btn = document.createElement("button");
     btn.className = "color-swatch" + (name === selectedColorPreset ? " selected" : "");
     btn.dataset.preset = name;
-    const t = preset.tint;
-    const g = preset.glow;
-    btn.style.background = `radial-gradient(circle at 40% 40%, rgba(${Math.round(g[0] * 255)},${Math.round(g[1] * 255)},${Math.round(g[2] * 255)},0.6), rgba(${Math.round(t[0] * 200)},${Math.round(t[1] * 200)},${Math.round(t[2] * 200)},0.8))`;
+    btn.style.background = swatchGradient(preset);
     const label = document.createElement("span");
     label.className = "swatch-name";
     label.textContent = name.charAt(0).toUpperCase() + name.slice(1);
     btn.appendChild(label);
     btn.addEventListener("click", () => selectColorPreset(name));
     colorPresetGrid.appendChild(btn);
+  }
+  // Custom swatch — 8th slot
+  const customBtn = document.createElement("button");
+  customBtn.className = "color-swatch custom" + (selectedColorPreset === "custom" ? " selected" : "");
+  customBtn.dataset.preset = "custom";
+  if (customInteriorColor) {
+    customBtn.style.background = swatchGradient(customInteriorColor);
+  }
+  const customLabel = document.createElement("span");
+  customLabel.className = "swatch-name";
+  customLabel.textContent = "Custom";
+  customBtn.appendChild(customLabel);
+  customBtn.addEventListener("click", () => selectColorPreset("custom"));
+  colorPresetGrid.appendChild(customBtn);
+  // Sync picker open state
+  customPicker.classList.toggle("open", selectedColorPreset === "custom");
+  if (selectedColorPreset === "custom") {
+    updatePickerUI();
   }
 }
 
@@ -901,7 +1039,17 @@ function selectColorPreset(name: string): void {
   document.querySelectorAll(".color-swatch").forEach(el => {
     el.classList.toggle("selected", (el as HTMLElement).dataset.preset === name);
   });
-  app.setInteriorColor(name);
+  if (name === "custom") {
+    customPicker.classList.add("open");
+    if (!customInteriorColor) {
+      customInteriorColor = deriveInteriorColor(customHue, customSaturation);
+    }
+    app.setInteriorColorDirect(customInteriorColor);
+    updatePickerUI();
+  } else {
+    customPicker.classList.remove("open");
+    app.setInteriorColor(name);
+  }
   updateVoiceGlowColor();
 }
 
@@ -967,9 +1115,9 @@ const SPEECH_RMS_THRESHOLD = 0.015;
 let waveformColor = { r: 153, g: 163, b: 230 };
 
 function updateVoiceGlowColor(): void {
-  const preset = COLOR_PRESETS[selectedColorPreset];
-  if (!preset) return;
-  const glow = preset.glow;
+  const color = selectedColorPreset === "custom" ? customInteriorColor : COLOR_PRESETS[selectedColorPreset];
+  if (!color) return;
+  const glow = color.glow;
 
   // CSS variable for border/shadow glow
   const r = Math.round(glow[0] * 255);
@@ -2019,7 +2167,7 @@ async function pollForClaim(invoke: InvokeFn, syncUrl: string, pairingId: string
           try {
             await app.denyPairing(invoke, syncUrl, pairingId);
             closePairingDialog();
-            addMessage("system", "Pairing denied");
+            showToast("Pairing denied");
           } catch (err: unknown) {
             pairingStatus.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -2037,7 +2185,7 @@ async function pollForClaim(invoke: InvokeFn, syncUrl: string, pairingId: string
             pairingStatus.textContent = "Approving...";
             const result = await app.approvePairing(invoke, syncUrl, pairingId);
             closePairingDialog();
-            addMessage("system", `Device linked (${result.deviceId.slice(0, 8)}...)`);
+            showToast(`Device linked (${result.deviceId.slice(0, 8)}...)`);
           } catch (err: unknown) {
             pairingStatus.textContent = err instanceof Error ? err.message : String(err);
             approveBtn.disabled = false;
@@ -2125,7 +2273,7 @@ async function handlePairingClaim(invoke: InvokeFn, syncUrl: string, code: strin
             // Close welcome if still open
             const welcomeBackdrop = document.getElementById("welcome-backdrop") as HTMLDivElement;
             welcomeBackdrop.classList.remove("open");
-            addMessage("system", "Linked to existing motebit");
+            showToast("Linked to existing motebit");
           } else if (status.status === "denied") {
             if (pairingPollTimer) {
               clearInterval(pairingPollTimer);
@@ -2175,6 +2323,7 @@ function openSettings(): void {
 
   // Appearance: track previous for cancel
   previousColorPreset = selectedColorPreset;
+  previousCustomState = { hue: customHue, saturation: customSaturation, color: customInteriorColor ? { ...customInteriorColor } : null };
   buildColorSwatches();
 
   // MCP
@@ -2197,9 +2346,19 @@ function closeSettings(): void {
 
 function cancelSettings(): void {
   // Restore previous color on cancel
-  if (selectedColorPreset !== previousColorPreset) {
+  if (selectedColorPreset !== previousColorPreset || selectedColorPreset === "custom") {
     selectedColorPreset = previousColorPreset;
-    app.setInteriorColor(previousColorPreset);
+    if (previousCustomState) {
+      customHue = previousCustomState.hue;
+      customSaturation = previousCustomState.saturation;
+      customInteriorColor = previousCustomState.color;
+    }
+    if (selectedColorPreset === "custom" && customInteriorColor) {
+      app.setInteriorColorDirect(customInteriorColor);
+    } else {
+      app.setInteriorColor(previousColorPreset);
+    }
+    updateVoiceGlowColor();
   }
   closeSettings();
 }
@@ -2225,6 +2384,9 @@ async function saveSettings(): Promise<void> {
     const configData: Record<string, unknown> = {
       default_provider: provider,
       interior_color_preset: selectedColorPreset,
+      ...(selectedColorPreset === "custom" && customInteriorColor ? {
+        custom_soul_color: { hue: customHue, saturation: customSaturation, tint: customInteriorColor.tint, glow: customInteriorColor.glow },
+      } : {}),
       approval_preset: selectedApprovalPreset,
       mcp_servers: mcpServersConfig,
       memory_governance: {
@@ -2316,10 +2478,7 @@ async function finishSaveSettings(
   };
   currentConfig = newConfig;
 
-  if (await app.initAI(newConfig)) {
-    const label = provider === "ollama" ? "Ollama" : "Anthropic";
-    addMessage("system", `Settings saved — AI reconnected (${label})`);
-  } else {
+  if (!await app.initAI(newConfig)) {
     addMessage("system", "Settings saved — AI initialization failed (check API key)");
   }
 
@@ -2385,7 +2544,7 @@ async function handlePinSubmit(): Promise<void> {
     }
     pinBackdrop.classList.remove("open");
     settingsOperatorMode.checked = false;
-    addMessage("system", "Operator PIN reset");
+    // Silent — checkbox unchecked IS the confirmation
     return;
   }
 
@@ -2604,9 +2763,24 @@ async function bootstrap(): Promise<void> {
     }
 
     // Load persisted settings from config
-    if (typeof parsed.interior_color_preset === "string" && COLOR_PRESETS[parsed.interior_color_preset]) {
-      selectedColorPreset = parsed.interior_color_preset;
-      app.setInteriorColor(selectedColorPreset);
+    if (typeof parsed.interior_color_preset === "string") {
+      if (parsed.interior_color_preset === "custom" && parsed.custom_soul_color && typeof parsed.custom_soul_color === "object") {
+        const csc = parsed.custom_soul_color as Record<string, unknown>;
+        if (typeof csc.hue === "number" && typeof csc.saturation === "number") {
+          customHue = csc.hue;
+          customSaturation = csc.saturation;
+          customInteriorColor = deriveInteriorColor(customHue, customSaturation);
+          selectedColorPreset = "custom";
+          app.setInteriorColorDirect(customInteriorColor);
+        }
+      } else if (parsed.interior_color_preset === "borosilicate" || !COLOR_PRESETS[parsed.interior_color_preset]) {
+        // Backward compat: removed presets fall back to moonlight
+        selectedColorPreset = "moonlight";
+        app.setInteriorColor("moonlight");
+      } else {
+        selectedColorPreset = parsed.interior_color_preset;
+        app.setInteriorColor(selectedColorPreset);
+      }
     }
     if (typeof parsed.approval_preset === "string") {
       selectedApprovalPreset = parsed.approval_preset;

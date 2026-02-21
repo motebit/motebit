@@ -123,6 +123,16 @@ Tauri app. Two key files for the UI layer:
 
 `hover_distance`, `drift_amplitude`, `glow_intensity`, `eye_dilation`, `smile_curvature` — computed deterministically from state vector by behavior-engine.
 
+## UI Feedback Rules
+
+Motebit is calm software. Do not confirm what the user can already see.
+
+- **Silent** (state is the confirmation) — modal closes, checkbox toggles, chat clears/populates, model changes. No toast, no message.
+- **Toast** (async/background outcomes the user can't directly observe) — sync results, pairing status, device linking. Short-lived, non-blocking, never stacked.
+- **Persistent system message** (requires attention) — errors with next steps, security warnings, first-launch milestones, background task failures. Rare (≤3-4 per session), actionable, clearly styled as system.
+- **Background autonomy** — background agents may only emit persistent messages for user-blocking failures or user-requested notifications. All other background events go to toast or internal log.
+- **Anti-patterns** — "Settings saved" after modal close, "Model switched" when dropdown shows it, "Loading…" when content is visibly populating, using chat as a continuous system log.
+
 ## Conventions
 
 - All packages export from `src/index.ts`

@@ -170,7 +170,6 @@ export const COLOR_PRESETS: Record<string, InteriorColor> = {
   cyan:         { tint: [0.8, 0.95, 1.0], glow: [0.3, 0.8, 0.9] },
   ember:        { tint: [1.0, 0.75, 0.65], glow: [0.9, 0.35, 0.2] },
   sage:         { tint: [0.82, 0.95, 0.85], glow: [0.4, 0.75, 0.5] },
-  borosilicate: { tint: [0.9, 0.92, 1.0], glow: [0.6, 0.7, 0.9] },
 };
 
 // === MCP Server Status ===
@@ -579,6 +578,11 @@ export class DesktopApp {
     const preset = COLOR_PRESETS[presetName];
     if (!preset) return;
     this.renderer.setInteriorColor(preset);
+  }
+
+  /** Apply an arbitrary interior color directly (bypasses preset lookup). Used for custom color picker live preview. */
+  setInteriorColorDirect(color: InteriorColor): void {
+    this.renderer.setInteriorColor(color);
   }
 
   setAudioReactivity(energy: { rms: number; low: number; mid: number; high: number } | null): void {

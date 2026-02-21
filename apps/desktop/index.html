@@ -98,6 +98,38 @@
         0 0.5px 0 rgba(255, 255, 255, 0.3);
     }
 
+    /* Toast notifications */
+    #toast-container {
+      position: fixed;
+      bottom: 80px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 50;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+    }
+    .toast {
+      padding: 8px 18px;
+      border-radius: 20px;
+      background: rgba(0, 0, 0, 0.55);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 13px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      white-space: nowrap;
+      opacity: 0;
+      transform: translateY(8px) scale(0.96);
+      transition: opacity 0.25s ease, transform 0.25s ease;
+    }
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+
     /* Voice input wrapper */
     #input-bar-wrapper {
       position: relative;
@@ -381,31 +413,117 @@
       cursor: pointer;
     }
 
-    /* Color swatches */
+    /* Color swatches — Apple-style circles with ring selection */
     #color-preset-grid {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
-      gap: 10px;
+      gap: 14px 14px;
+      row-gap: 28px;
+      justify-items: center;
+      padding-bottom: 12px;
     }
     .color-swatch {
-      aspect-ratio: 1;
-      border-radius: 12px;
-      border: 2px solid transparent;
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      border: none;
       cursor: pointer;
       position: relative;
-      transition: border-color 0.15s, transform 0.15s;
+      transition: transform 0.15s;
       display: flex;
-      align-items: flex-end;
+      align-items: center;
       justify-content: center;
-      padding-bottom: 6px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+      /* Ring lives in the outline — invisible by default */
+      outline: 2.5px solid transparent;
+      outline-offset: 3px;
     }
-    .color-swatch:hover { transform: scale(1.05); }
-    .color-swatch.selected { border-color: #6366f1; }
+    .color-swatch:hover { transform: scale(1.08); }
+    .color-swatch.selected {
+      /* Apple-style double ring: white inner + dark outer — reads on any swatch color */
+      outline: none;
+      box-shadow: 0 0 0 2.5px #fff, 0 0 0 4.5px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0,0,0,0.08);
+    }
+    .color-swatch.custom {
+      background: conic-gradient(from 0deg, hsl(0,70%,65%), hsl(60,70%,65%), hsl(120,70%,65%), hsl(180,70%,65%), hsl(240,70%,65%), hsl(300,70%,65%), hsl(360,70%,65%));
+    }
     .swatch-name {
-      font-size: 10px;
-      color: rgba(0, 0, 0, 0.7);
-      text-shadow: 0 1px 3px rgba(255,255,255,0.8);
+      font-size: 9px;
+      color: rgba(0, 0, 0, 0.55);
       pointer-events: none;
+      position: absolute;
+      bottom: -16px;
+      left: 50%;
+      transform: translateX(-50%);
+      white-space: nowrap;
+    }
+
+    /* Custom color picker — frosted card */
+    #custom-picker {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s ease, margin-top 0.3s ease, opacity 0.25s ease, padding 0.3s ease;
+      opacity: 0;
+      margin-top: 0;
+      padding: 0 12px;
+      background: rgba(255, 255, 255, 0.45);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-radius: 12px;
+    }
+    #custom-picker.open {
+      max-height: 200px;
+      opacity: 1;
+      margin-top: 20px;
+      padding: 14px 12px;
+    }
+    .picker-label {
+      font-size: 10px;
+      color: rgba(0, 0, 0, 0.4);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 8px;
+    }
+    .picker-strip {
+      position: relative;
+      height: 24px;
+      border-radius: 12px;
+      cursor: pointer;
+      touch-action: none;
+    }
+    .picker-strip + .picker-strip { margin-top: 10px; }
+    #hue-strip {
+      background: linear-gradient(to right,
+        hsl(0,85%,60%), hsl(30,85%,60%), hsl(60,85%,60%), hsl(90,85%,60%),
+        hsl(120,85%,60%), hsl(150,85%,60%), hsl(180,85%,60%), hsl(210,85%,60%),
+        hsl(240,85%,60%), hsl(270,85%,60%), hsl(300,85%,60%), hsl(330,85%,60%), hsl(360,85%,60%));
+    }
+    #sat-strip {
+      background: linear-gradient(to right, hsl(0,0%,90%), hsl(0,100%,60%));
+    }
+    .picker-thumb {
+      position: absolute;
+      top: 50%;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: 3px solid #fff;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.2), 0 2px 6px rgba(0,0,0,0.3);
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+    }
+    .picker-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .picker-row .picker-strip { flex: 1; }
+    #picker-preview {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.06), 0 1px 4px rgba(0,0,0,0.1);
     }
 
     /* Approval presets (radio group) */
@@ -1485,6 +1603,7 @@
 </head>
 <body>
   <canvas id="motebit-canvas"></canvas>
+  <div id="toast-container"></div>
   <button id="conversations-btn" title="Conversations">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
   </button>
@@ -1568,6 +1687,15 @@
         <div class="settings-card">
           <div class="card-title">Soul Color</div>
           <div id="color-preset-grid"></div>
+          <div id="custom-picker">
+            <div class="picker-label">Hue</div>
+            <div class="picker-strip" id="hue-strip"><div class="picker-thumb" id="hue-thumb"></div></div>
+            <div class="picker-label" style="margin-top: 10px;">Vibrancy</div>
+            <div class="picker-row">
+              <div class="picker-strip" id="sat-strip"><div class="picker-thumb" id="sat-thumb"></div></div>
+              <div id="picker-preview"></div>
+            </div>
+          </div>
         </div>
       </div>
       <!-- Intelligence pane -->
