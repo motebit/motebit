@@ -5,6 +5,7 @@ import type {
   ToolRiskProfile,
   PolicyDecision,
   TurnContext,
+  InjectionWarning,
 } from "@motebit/sdk";
 import { classifyTool, isToolAllowed } from "./risk-model.js";
 import { BudgetEnforcer } from "./budget.js";
@@ -326,6 +327,8 @@ export class PolicyGate {
     result: ToolResult;
     injectionDetected: boolean;
     injectionPatterns: string[];
+    directiveDensity?: number;
+    structuralFlags?: string[];
   } {
     if (!result.data) {
       return { result, injectionDetected: false, injectionPatterns: [] };
@@ -336,24 +339,32 @@ export class PolicyGate {
     // Redact secrets (always, even if pre-sanitized)
     const { text: redacted } = this.redaction.redact(text);
 
-    // If already boundary-wrapped by adapter (e.g. MCP client), skip re-wrapping
-    if (result._sanitized) {
-      // Still scan for injection in the redacted text
-      const scanResult = this.sanitizer.sanitize(redacted, `tool:${toolName}`);
-      return {
-        result: { ...result, data: redacted },
-        injectionDetected: scanResult.injectionDetected,
-        injectionPatterns: scanResult.injectionPatterns,
-      };
-    }
-
-    // Full sanitization: redact + boundary-wrap
+    // Always apply full sanitization (boundary-wrap + scan) at the enforcement
+    // boundary, regardless of upstream _sanitized flag. MCP client wrapping is
+    // defense-in-depth; inner boundaries get safely escaped.
     const sanitized = this.sanitizer.sanitize(redacted, `tool:${toolName}`);
     return {
       result: { ...result, data: sanitized.content },
       injectionDetected: sanitized.injectionDetected,
       injectionPatterns: sanitized.injectionPatterns,
+      directiveDensity: sanitized.directiveDensity,
+      structuralFlags: sanitized.structuralFlags,
     };
+  }
+
+  /**
+   * Log an injection detection event to the audit trail.
+   */
+  logInjection(
+    turnId: string,
+    callId: string,
+    tool: string,
+    args: Record<string, unknown>,
+    injection: InjectionWarning,
+    blocked: boolean,
+    runId?: string,
+  ): void {
+    this.audit.logInjection(turnId, callId, tool, args, injection, blocked, runId);
   }
 
   /**

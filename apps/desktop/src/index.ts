@@ -147,8 +147,8 @@ class TauriToolAuditSink implements AuditLogSink {
   append(entry: ToolAuditEntry): void {
     // Fire-and-forget — audit writes are best-effort
     void this.invoke("db_execute", {
-      sql: `INSERT OR REPLACE INTO tool_audit_log (call_id, turn_id, run_id, tool, args, decision, result, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      sql: `INSERT OR REPLACE INTO tool_audit_log (call_id, turn_id, run_id, tool, args, decision, result, injection, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params: [
         entry.callId,
         entry.turnId,
@@ -157,6 +157,7 @@ class TauriToolAuditSink implements AuditLogSink {
         JSON.stringify(entry.args),
         JSON.stringify(entry.decision),
         entry.result ? JSON.stringify(entry.result) : null,
+        entry.injection ? JSON.stringify(entry.injection) : null,
         entry.timestamp,
       ],
     });
@@ -219,6 +220,7 @@ export interface McpServerStatus {
   trusted: boolean;
   connected: boolean;
   toolCount: number;
+  manifestChanged?: boolean;
 }
 
 // === Desktop App (platform shell) ===
@@ -787,10 +789,22 @@ export class DesktopApp {
         disconnect(): Promise<void>;
         getTools(): unknown[];
         registerInto(registry: unknown): void;
+        checkManifest(pinnedHash?: string): Promise<{ ok: boolean; hash: string; previousHash?: string; toolCount: number }>;
       };
     }>);
     const adapter = new mcpModule.McpClientAdapter(config);
     await adapter.connect();
+
+    // Manifest pinning — verify tools haven't changed since last connection
+    const manifestCheck = await adapter.checkManifest(config.toolManifestHash);
+    let manifestChanged = false;
+    if (!manifestCheck.ok) {
+      // Tools changed since last pin — revoke trust, require re-approval
+      manifestChanged = true;
+      config.trusted = false;
+    }
+    // Pin the current manifest hash (first connect or re-pin after change)
+    config.toolManifestHash = manifestCheck.hash;
 
     // Register tools into a temporary registry, then merge into runtime
     const tempRegistry = new SimpleToolRegistry();
@@ -811,6 +825,7 @@ export class DesktopApp {
       trusted: config.trusted ?? false,
       connected: true,
       toolCount,
+      manifestChanged,
     };
   }
 

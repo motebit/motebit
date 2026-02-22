@@ -195,6 +195,13 @@ export interface TurnContext {
   costAccumulated: number;
 }
 
+export interface InjectionWarning {
+  detected: boolean;
+  patterns: string[];
+  directiveDensity?: number;
+  structuralFlags?: string[];
+}
+
 export interface ToolAuditEntry {
   turnId: string;
   runId?: string;
@@ -203,6 +210,7 @@ export interface ToolAuditEntry {
   args: Record<string, unknown>;
   decision: PolicyDecision;
   result?: { ok: boolean; durationMs: number };
+  injection?: InjectionWarning;
   timestamp: number;
 }
 

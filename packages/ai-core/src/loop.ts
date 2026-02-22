@@ -91,7 +91,18 @@ export interface LoopPolicyGate {
     result: ToolResult;
     injectionDetected: boolean;
     injectionPatterns: string[];
+    directiveDensity?: number;
+    structuralFlags?: string[];
   };
+  logInjection?(
+    turnId: string,
+    callId: string,
+    tool: string,
+    args: Record<string, unknown>,
+    injection: { detected: boolean; patterns: string[]; directiveDensity?: number; structuralFlags?: string[] },
+    blocked: boolean,
+    runId?: string,
+  ): void;
   createTurnContext(runId?: string): TurnContext;
   recordToolCall(ctx: TurnContext, cost?: number): TurnContext;
 }
@@ -322,6 +333,35 @@ export async function* runTurnStreaming(
           sanitized = check.result;
           if (check.injectionDetected) {
             yield { type: "injection_warning", tool_name: toolCall.name, patterns: check.injectionPatterns };
+
+            // Fail-closed: block on high-confidence injection (regex match or structural flag)
+            const highConfidence = check.injectionPatterns.length > 0 || ((check.structuralFlags ?? []).length > 0);
+            const injectionData = {
+              detected: true,
+              patterns: check.injectionPatterns,
+              directiveDensity: check.directiveDensity,
+              structuralFlags: check.structuralFlags,
+            };
+
+            // Log to audit trail
+            if (turnCtx && typeof deps.policyGate.logInjection === "function") {
+              deps.policyGate.logInjection(
+                turnCtx.turnId, toolCall.id, toolCall.name, toolCall.args,
+                injectionData, highConfidence, turnCtx.runId,
+              );
+            }
+
+            if (highConfidence) {
+              const reason = `Injection detected — tool result blocked (${[...check.injectionPatterns, ...(check.structuralFlags ?? [])].join(", ")})`;
+              yield { type: "tool_status", name: toolCall.name, status: "done", result: reason };
+              conversationHistory.push({
+                role: "tool",
+                tool_call_id: toolCall.id,
+                content: JSON.stringify({ ok: false, error: reason }),
+              });
+              continue;
+            }
+            // Low-confidence (directive density only): warn but allow through (boundary-wrapped)
           }
         } else {
           sanitized = deps.policyGate.sanitizeResult(result, toolCall.name);

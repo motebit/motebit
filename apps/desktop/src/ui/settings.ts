@@ -359,6 +359,15 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     badge.textContent = badgeClass;
     header.appendChild(badge);
 
+    // Injection indicator
+    const injData = parseJsonSafe(entry.injection) as Record<string, unknown> | null;
+    if (injData && injData.detected) {
+      const injBadge = document.createElement("span");
+      injBadge.className = "audit-decision-badge denied";
+      injBadge.textContent = "injection";
+      header.appendChild(injBadge);
+    }
+
     const time = document.createElement("span");
     time.className = "audit-time";
     time.textContent = formatTimeAgo(Number(entry.timestamp) || 0);
@@ -418,7 +427,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     emptyEl.style.display = "none";
 
     void invoke<Array<Record<string, unknown>>>("db_query", {
-      sql: `SELECT call_id, run_id, tool, args, decision, result, timestamp FROM tool_audit_log ORDER BY timestamp DESC LIMIT 50`,
+      sql: `SELECT call_id, run_id, tool, args, decision, result, injection, timestamp FROM tool_audit_log ORDER BY timestamp DESC LIMIT 50`,
       params: [],
     }).then((entries: Array<Record<string, unknown>>) => {
       if (!entries || entries.length === 0) {
@@ -634,7 +643,16 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
             parsed.mcp_servers = mcpServersConfig;
             return inv("write_config", { json: JSON.stringify(parsed) });
           }).catch(() => { /* non-fatal */ });
-          void ctx.app.connectMcpServerViaTauri(config, inv).then(() => {
+          void ctx.app.connectMcpServerViaTauri(config, inv).then((status) => {
+            if (status.manifestChanged) {
+              ctx.showToast(`${config.name}: tools changed — trust revoked, re-approve required`);
+            }
+            // Persist updated manifest hash
+            void inv<string>("read_config").then(raw => {
+              const parsed = JSON.parse(raw) as Record<string, unknown>;
+              parsed.mcp_servers = mcpServersConfig;
+              return inv("write_config", { json: JSON.stringify(parsed) });
+            }).catch(() => { /* non-fatal */ });
             renderMcpServerList();
           }).catch(() => {
             renderMcpServerList();

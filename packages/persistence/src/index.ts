@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS tool_audit_log (
   args TEXT NOT NULL,
   decision TEXT NOT NULL,
   result TEXT,
+  injection TEXT,
   timestamp INTEGER NOT NULL
 );
 
@@ -792,6 +793,7 @@ interface ToolAuditRow {
   args: string;
   decision: string;
   result: string | null;
+  injection: string | null;
   timestamp: number;
 }
 
@@ -808,6 +810,9 @@ function rowToToolAudit(row: ToolAuditRow): ToolAuditEntry {
   if (row.run_id !== null) {
     entry.runId = row.run_id;
   }
+  if (row.injection !== null) {
+    entry.injection = JSON.parse(row.injection) as ToolAuditEntry["injection"];
+  }
   return entry;
 }
 
@@ -818,8 +823,8 @@ export class SqliteToolAuditSink implements AuditLogSink {
 
   constructor(db: DatabaseDriver) {
     this.stmtAppend = db.prepare(
-      `INSERT OR REPLACE INTO tool_audit_log (call_id, turn_id, run_id, tool, args, decision, result, timestamp)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO tool_audit_log (call_id, turn_id, run_id, tool, args, decision, result, injection, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtQueryTurn = db.prepare(
       `SELECT * FROM tool_audit_log WHERE turn_id = ? ORDER BY timestamp ASC`,
@@ -838,6 +843,7 @@ export class SqliteToolAuditSink implements AuditLogSink {
       JSON.stringify(entry.args),
       JSON.stringify(entry.decision),
       entry.result ? JSON.stringify(entry.result) : null,
+      entry.injection ? JSON.stringify(entry.injection) : null,
       entry.timestamp,
     );
   }
@@ -1739,6 +1745,13 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
       driver.exec("CREATE INDEX IF NOT EXISTS idx_tool_audit_run ON tool_audit_log (run_id)");
     } catch (_) { /* already exists */ }
     driver.pragma("user_version = 9");
+  }
+
+  if (userVersion < 10) {
+    try {
+      driver.exec("ALTER TABLE tool_audit_log ADD COLUMN injection TEXT");
+    } catch (_) { /* already exists on new DBs */ }
+    driver.pragma("user_version = 10");
   }
 
   const eventStore = new SqliteEventStore(driver);

@@ -11,6 +11,19 @@ export interface McpServerConfig {
   env?: Record<string, string>;
   /** When false (default), all tools from this server require user approval. */
   trusted?: boolean;
+  /** SHA-256 hash of the tool manifest, set on first connect. */
+  toolManifestHash?: string;
+}
+
+export interface ManifestCheckResult {
+  /** Whether the manifest matches (or is being pinned for the first time). */
+  ok: boolean;
+  /** The computed hash of the current tool manifest. */
+  hash: string;
+  /** The previously pinned hash, if any. */
+  previousHash?: string;
+  /** Number of tools discovered. */
+  toolCount: number;
 }
 
 // === Inline boundary wrapping for MCP results ===
@@ -25,6 +38,18 @@ function wrapMcpResult(data: string, serverName: string, toolName: string): stri
   const safeServer = serverName.replace(/[\[\]"\\]/g, "_").slice(0, 50);
   const safeTool = toolName.replace(/[\[\]"\\]/g, "_").slice(0, 50);
   return `${EXTERNAL_DATA_START}"mcp:${safeServer}:${safeTool}"]\n${escaped}\n${EXTERNAL_DATA_END}`;
+}
+
+/** Compute a deterministic SHA-256 hash of a tool manifest for pinning. */
+async function computeManifestHash(tools: ToolDefinition[]): Promise<string> {
+  const sorted = [...tools].sort((a, b) => a.name.localeCompare(b.name));
+  const data = sorted
+    .map((t) => `${t.name}|${t.description}|${JSON.stringify(t.inputSchema)}`)
+    .join("\n");
+  const encoded = new TextEncoder().encode(data);
+  const hashBuffer = await globalThis.crypto.subtle.digest("SHA-256", encoded);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 export class McpClientAdapter {
@@ -94,6 +119,24 @@ export class McpClientAdapter {
 
   getTools(): ToolDefinition[] {
     return [...this.discoveredTools];
+  }
+
+  /**
+   * Compare the current tool manifest against a pinned hash.
+   * Returns the check result with the current hash and whether it matches.
+   */
+  async checkManifest(pinnedHash?: string): Promise<ManifestCheckResult> {
+    const hash = await computeManifestHash(this.discoveredTools);
+    if (!pinnedHash) {
+      // First connection — no pin exists, accept and pin
+      return { ok: true, hash, toolCount: this.discoveredTools.length };
+    }
+    return {
+      ok: hash === pinnedHash,
+      hash,
+      previousHash: pinnedHash,
+      toolCount: this.discoveredTools.length,
+    };
   }
 
   async executeTool(

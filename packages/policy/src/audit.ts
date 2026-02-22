@@ -1,4 +1,4 @@
-import type { ToolAuditEntry, PolicyDecision } from "@motebit/sdk";
+import type { ToolAuditEntry, PolicyDecision, InjectionWarning } from "@motebit/sdk";
 
 /**
  * AuditLogger — records every policy decision and tool execution for
@@ -99,6 +99,30 @@ export class AuditLogger {
       args,
       decision,
       result: { ok, durationMs },
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * Log an injection detection event for a tool call.
+   */
+  logInjection(
+    turnId: string,
+    callId: string,
+    tool: string,
+    args: Record<string, unknown>,
+    injection: InjectionWarning,
+    blocked: boolean,
+    runId?: string,
+  ): void {
+    this.sink.append({
+      turnId,
+      runId,
+      callId,
+      tool,
+      args,
+      decision: { allowed: !blocked, requiresApproval: false, reason: blocked ? "injection_blocked" : "injection_warned" },
+      injection,
       timestamp: Date.now(),
     });
   }

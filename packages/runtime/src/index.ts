@@ -72,6 +72,8 @@ export interface McpServerConfig {
   source?: string;
   /** Set to true after user confirms spawning a command-based discovered server. */
   spawnApproved?: boolean;
+  /** SHA-256 hash of the tool manifest, set on first connect. */
+  toolManifestHash?: string;
 }
 
 // === Browser-safe Tool Registry ===

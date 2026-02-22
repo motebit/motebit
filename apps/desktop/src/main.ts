@@ -260,7 +260,10 @@ async function tryConnectMcpServer(
   invoke: import("./tauri-storage.js").InvokeFn,
 ): Promise<void> {
   try {
-    await app.connectMcpServerViaTauri(mcpConfig, invoke);
+    const status = await app.connectMcpServerViaTauri(mcpConfig, invoke);
+    if (status.manifestChanged) {
+      showToast(`${mcpConfig.name}: tools changed since last connection — trust revoked`);
+    }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     addActionMessage(
