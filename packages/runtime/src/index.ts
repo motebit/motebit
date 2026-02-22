@@ -1188,6 +1188,16 @@ export class MotebitRuntime {
     return this.state.subscribe(fn);
   }
 
+  /**
+   * Push a partial state update into the state vector.
+   * Values are EMA-smoothed by the tick loop — not applied instantly.
+   * Use for external signals (presence state, sensor input) that should
+   * blend with AI-driven state updates.
+   */
+  pushStateUpdate(partial: Partial<MotebitState>): void {
+    this.state.pushUpdate(partial);
+  }
+
   // === Sync ===
 
   connectSync(remoteStore: EventStoreAdapter): void {

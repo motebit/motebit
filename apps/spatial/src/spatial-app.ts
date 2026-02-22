@@ -167,11 +167,7 @@ export class SpatialApp {
     // Push presence-derived values into the runtime state vector
     const mapping = PRESENCE_MAP[state];
     if (this.runtime) {
-      // The runtime's state engine will EMA-smooth these values
-      const stateVec = this.runtime as unknown as {
-        state: { pushUpdate: (partial: Partial<MotebitState>) => void };
-      };
-      stateVec.state.pushUpdate({
+      this.runtime.pushStateUpdate({
         social_distance: mapping.social_distance,
         attention: mapping.attention,
         processing: mapping.processing,
