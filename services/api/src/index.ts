@@ -16,6 +16,17 @@
  *   GET  /sync/:motebitId/messages?conversation_id=&since= — pull conversation messages
  *   POST /identity                                     — create identity for device registration
  *   GET  /identity/:motebitId                          — load identity
+ *   GET  /api/v1/state/:motebitId                      — current state vector
+ *   GET  /api/v1/memory/:motebitId                     — all memory nodes + edges
+ *   DELETE /api/v1/memory/:motebitId/:nodeId           — tombstone a memory node
+ *   GET  /api/v1/goals/:motebitId                      — list goals
+ *   GET  /api/v1/conversations/:motebitId              — list conversations
+ *   GET  /api/v1/conversations/:motebitId/:id/messages — conversation messages
+ *   GET  /api/v1/devices/:motebitId                    — registered devices
+ *   GET  /api/v1/audit/:motebitId                      — tool audit log
+ *   GET  /api/v1/plans/:motebitId                      — list plans with steps
+ *   GET  /api/v1/plans/:motebitId/:planId              — single plan with steps
+ *   GET  /api/v1/sync/:motebitId/pull                  — pull events (aliased for admin)
  *
  * WebSocket protocol:
  *   Client → Server:  { type: "push", events: EventLogEntry[] }
@@ -473,6 +484,87 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
     }
     const steps = moteDb.planStore.getStepsForPlan(planId);
     return c.json({ motebit_id: motebitId, plan: { ...plan, steps } });
+  });
+
+  // --- State: current state vector ---
+  app.get("/api/v1/state/:motebitId", (c) => {
+    const motebitId = c.req.param("motebitId");
+    const json = moteDb.stateSnapshot.loadState(motebitId);
+    if (!json) {
+      return c.json({ motebit_id: motebitId, state: null });
+    }
+    try {
+      const state = JSON.parse(json);
+      return c.json({ motebit_id: motebitId, state });
+    } catch {
+      return c.json({ motebit_id: motebitId, state: null });
+    }
+  });
+
+  // --- Memory: list all nodes and edges ---
+  app.get("/api/v1/memory/:motebitId", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const [memories, edges] = await Promise.all([
+      moteDb.memoryStorage.getAllNodes(motebitId),
+      moteDb.memoryStorage.getAllEdges(motebitId),
+    ]);
+    return c.json({ motebit_id: motebitId, memories, edges });
+  });
+
+  // --- Memory: tombstone a node ---
+  app.delete("/api/v1/memory/:motebitId/:nodeId", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const nodeId = c.req.param("nodeId");
+    try {
+      await moteDb.memoryStorage.tombstoneNode(nodeId);
+      return c.json({ motebit_id: motebitId, node_id: nodeId, deleted: true });
+    } catch {
+      return c.json({ motebit_id: motebitId, node_id: nodeId, deleted: false }, 404);
+    }
+  });
+
+  // --- Goals: list all goals ---
+  app.get("/api/v1/goals/:motebitId", (c) => {
+    const motebitId = c.req.param("motebitId");
+    const goals = moteDb.goalStore.list(motebitId);
+    return c.json({ motebit_id: motebitId, goals });
+  });
+
+  // --- Conversations: list all (from sync relay storage) ---
+  app.get("/api/v1/conversations/:motebitId", (c) => {
+    const motebitId = c.req.param("motebitId");
+    const conversations = moteDb.db.prepare(
+      `SELECT * FROM sync_conversations WHERE motebit_id = ? ORDER BY last_active_at DESC`,
+    ).all(motebitId) as Array<Record<string, unknown>>;
+    return c.json({ motebit_id: motebitId, conversations });
+  });
+
+  // --- Conversations: list messages for a conversation ---
+  app.get("/api/v1/conversations/:motebitId/:conversationId/messages", (c) => {
+    const motebitId = c.req.param("motebitId");
+    const conversationId = c.req.param("conversationId");
+    const messages = moteDb.db.prepare(
+      `SELECT * FROM sync_conversation_messages WHERE conversation_id = ? AND motebit_id = ? ORDER BY created_at ASC`,
+    ).all(conversationId, motebitId) as Array<Record<string, unknown>>;
+    return c.json({ motebit_id: motebitId, conversation_id: conversationId, messages });
+  });
+
+  // --- Devices: list registered devices ---
+  app.get("/api/v1/devices/:motebitId", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const devices = await identityManager.listDevices(motebitId);
+    return c.json({ motebit_id: motebitId, devices });
+  });
+
+  // --- Events: alias under /api/v1 prefix (admin dashboard uses this path) ---
+  app.get("/api/v1/sync/:motebitId/pull", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const afterClock = Number(c.req.query("after_clock") ?? "0");
+    const events = await eventStore.query({
+      motebit_id: motebitId,
+      after_version_clock: afterClock,
+    });
+    return c.json({ motebit_id: motebitId, events, after_clock: afterClock });
   });
 
   // --- Identity: create ---

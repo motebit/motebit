@@ -543,3 +543,203 @@ describe("Sync Relay — signed token auth", () => {
     expect(deviceRes.status).toBe(400);
   });
 });
+
+// === Admin API Endpoints ===
+
+describe("Sync Relay — admin API endpoints", () => {
+  let relay: SyncRelay;
+
+  beforeEach(() => {
+    relay = createTestRelay({ enableDeviceAuth: false });
+  });
+
+  afterEach(() => {
+    relay.close();
+  });
+
+  // --- State ---
+
+  it("GET /api/v1/state/:motebitId returns null when no state saved", async () => {
+    const res = await relay.app.request(`/api/v1/state/${MOTEBIT_ID}`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { motebit_id: string; state: unknown };
+    expect(body.motebit_id).toBe(MOTEBIT_ID);
+    expect(body.state).toBeNull();
+  });
+
+  it("GET /api/v1/state/:motebitId returns 401 without auth", async () => {
+    const res = await relay.app.request(`/api/v1/state/${MOTEBIT_ID}`, { method: "GET" });
+    expect(res.status).toBe(401);
+  });
+
+  // --- Memory ---
+
+  it("GET /api/v1/memory/:motebitId returns empty arrays when no memories", async () => {
+    const res = await relay.app.request(`/api/v1/memory/${MOTEBIT_ID}`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { motebit_id: string; memories: unknown[]; edges: unknown[] };
+    expect(body.motebit_id).toBe(MOTEBIT_ID);
+    expect(body.memories).toEqual([]);
+    expect(body.edges).toEqual([]);
+  });
+
+  // --- Goals ---
+
+  it("GET /api/v1/goals/:motebitId returns empty array when no goals", async () => {
+    const res = await relay.app.request(`/api/v1/goals/${MOTEBIT_ID}`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { motebit_id: string; goals: unknown[] };
+    expect(body.motebit_id).toBe(MOTEBIT_ID);
+    expect(body.goals).toEqual([]);
+  });
+
+  // --- Conversations ---
+
+  it("GET /api/v1/conversations/:motebitId returns synced conversations", async () => {
+    // Push a conversation via sync endpoint
+    await relay.app.request(`/sync/${MOTEBIT_ID}/conversations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        conversations: [{
+          conversation_id: "conv-1",
+          motebit_id: MOTEBIT_ID,
+          started_at: 1000,
+          last_active_at: 2000,
+          title: "Test Chat",
+          summary: null,
+          message_count: 5,
+        }],
+      }),
+    });
+
+    const res = await relay.app.request(`/api/v1/conversations/${MOTEBIT_ID}`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { motebit_id: string; conversations: Array<{ conversation_id: string; title: string }> };
+    expect(body.motebit_id).toBe(MOTEBIT_ID);
+    expect(body.conversations).toHaveLength(1);
+    expect(body.conversations[0]!.conversation_id).toBe("conv-1");
+    expect(body.conversations[0]!.title).toBe("Test Chat");
+  });
+
+  it("GET /api/v1/conversations/:motebitId/:id/messages returns messages", async () => {
+    // Push messages via sync endpoint
+    await relay.app.request(`/sync/${MOTEBIT_ID}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        messages: [{
+          message_id: "msg-1",
+          conversation_id: "conv-1",
+          motebit_id: MOTEBIT_ID,
+          role: "user",
+          content: "hello",
+          tool_calls: null,
+          tool_call_id: null,
+          created_at: 1000,
+          token_estimate: 5,
+        }, {
+          message_id: "msg-2",
+          conversation_id: "conv-1",
+          motebit_id: MOTEBIT_ID,
+          role: "assistant",
+          content: "hi there",
+          tool_calls: null,
+          tool_call_id: null,
+          created_at: 2000,
+          token_estimate: 8,
+        }],
+      }),
+    });
+
+    const res = await relay.app.request(`/api/v1/conversations/${MOTEBIT_ID}/conv-1/messages`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      motebit_id: string;
+      conversation_id: string;
+      messages: Array<{ message_id: string; role: string; content: string }>;
+    };
+    expect(body.conversation_id).toBe("conv-1");
+    expect(body.messages).toHaveLength(2);
+    expect(body.messages[0]!.role).toBe("user");
+    expect(body.messages[1]!.role).toBe("assistant");
+  });
+
+  // --- Devices ---
+
+  it("GET /api/v1/devices/:motebitId returns registered devices", async () => {
+    // Create identity + device
+    const identityRes = await relay.app.request("/identity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ owner_id: "owner-devices" }),
+    });
+    const identity = (await identityRes.json()) as { motebit_id: string };
+
+    await relay.app.request("/device/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ motebit_id: identity.motebit_id, device_name: "Laptop" }),
+    });
+
+    const res = await relay.app.request(`/api/v1/devices/${identity.motebit_id}`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { motebit_id: string; devices: Array<{ device_name: string }> };
+    expect(body.motebit_id).toBe(identity.motebit_id);
+    expect(body.devices).toHaveLength(1);
+    expect(body.devices[0]!.device_name).toBe("Laptop");
+  });
+
+  // --- Events alias ---
+
+  it("GET /api/v1/sync/:motebitId/pull returns events (alias)", async () => {
+    // Push events first
+    const events = [makeEvent(MOTEBIT_ID, 1)];
+    await relay.app.request(`/sync/${MOTEBIT_ID}/push`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ events }),
+    });
+
+    // Pull via /api/v1 alias
+    const res = await relay.app.request(`/api/v1/sync/${MOTEBIT_ID}/pull?after_clock=0`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { motebit_id: string; events: EventLogEntry[] };
+    expect(body.motebit_id).toBe(MOTEBIT_ID);
+    expect(body.events.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // --- Plans (existing, but verify they work) ---
+
+  it("GET /api/v1/plans/:motebitId returns empty when no plans", async () => {
+    const res = await relay.app.request(`/api/v1/plans/${MOTEBIT_ID}`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { motebit_id: string; plans: unknown[] };
+    expect(body.motebit_id).toBe(MOTEBIT_ID);
+    expect(body.plans).toEqual([]);
+  });
+});
