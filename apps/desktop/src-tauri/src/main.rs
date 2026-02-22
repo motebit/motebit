@@ -150,6 +150,38 @@ CREATE TABLE IF NOT EXISTS goal_outcomes (
   error_message TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_goal_outcomes_goal ON goal_outcomes (goal_id, ran_at DESC);
+
+CREATE TABLE IF NOT EXISTS plans (
+  plan_id TEXT PRIMARY KEY,
+  goal_id TEXT NOT NULL,
+  motebit_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  current_step_index INTEGER NOT NULL DEFAULT 0,
+  total_steps INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_plans_goal ON plans (goal_id);
+
+CREATE TABLE IF NOT EXISTS plan_steps (
+  step_id TEXT PRIMARY KEY,
+  plan_id TEXT NOT NULL,
+  ordinal INTEGER NOT NULL,
+  description TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  depends_on TEXT NOT NULL DEFAULT '[]',
+  optional INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending',
+  result_summary TEXT,
+  error_message TEXT,
+  tool_calls_made INTEGER NOT NULL DEFAULT 0,
+  started_at INTEGER,
+  completed_at INTEGER,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY (plan_id) REFERENCES plans(plan_id)
+);
+CREATE INDEX IF NOT EXISTS idx_plan_steps_plan ON plan_steps (plan_id, ordinal ASC);
 ";
 
 fn json_to_sql_value(v: &JsonValue) -> SqlValue {
@@ -545,6 +577,10 @@ fn goals_toggle(state: State<AppState>, goal_id: String) -> Result<String, Strin
 #[tauri::command]
 fn goals_delete(state: State<AppState>, goal_id: String) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.execute("DELETE FROM plan_steps WHERE plan_id IN (SELECT plan_id FROM plans WHERE goal_id = ?1)", [&goal_id])
+        .map_err(|e| e.to_string())?;
+    db.execute("DELETE FROM plans WHERE goal_id = ?1", [&goal_id])
+        .map_err(|e| e.to_string())?;
     db.execute("DELETE FROM goal_outcomes WHERE goal_id = ?1", [&goal_id])
         .map_err(|e| e.to_string())?;
     db.execute("DELETE FROM goals WHERE goal_id = ?1", [&goal_id])

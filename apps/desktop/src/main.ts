@@ -283,8 +283,6 @@ async function tryConnectMcpServer(
  */
 function onAIReady(config: DesktopAIConfig): void {
   settings.updateModelIndicator();
-  const label = config.provider === "ollama" ? "Ollama" : "Anthropic";
-  addMessage("system", `AI connected (${label})`);
 
   const gov = app.governanceStatus;
   if (!gov.governed && gov.reason !== "dev mode") {
@@ -508,8 +506,6 @@ async function bootstrap(): Promise<void> {
   const aiOk = await tryInitAI(config);
   if (aiOk) {
     settings.updateModelIndicator();
-    const label = config.provider === "ollama" ? "Ollama" : "Anthropic";
-    addMessage("system", `AI connected (${label})`);
 
     const gov = app.governanceStatus;
     if (!gov.governed && gov.reason !== "dev mode") {

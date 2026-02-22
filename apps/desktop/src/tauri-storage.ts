@@ -957,26 +957,31 @@ export class TauriPlanStore implements PlanStoreAdapter {
 
   constructor(private invoke: InvokeFn) {}
 
-  /** Pre-load active plans for a goal before execution. */
+  /** Pre-load active plans for a goal before execution. Silently continues on DB errors (pre-migration). */
   async preloadForGoal(goalId: string): Promise<void> {
-    const planRows = await dbQuery<PlanRow>(
-      this.invoke,
-      "SELECT * FROM plans WHERE goal_id = ? ORDER BY created_at DESC LIMIT 1",
-      [goalId],
-    );
-    for (const row of planRows) {
-      const plan = rowToPlan(row);
-      this.plans.set(plan.plan_id, plan);
-
-      const stepRows = await dbQuery<PlanStepRow>(
+    try {
+      const planRows = await dbQuery<PlanRow>(
         this.invoke,
-        "SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY ordinal ASC",
-        [plan.plan_id],
+        "SELECT * FROM plans WHERE goal_id = ? ORDER BY created_at DESC LIMIT 1",
+        [goalId],
       );
-      for (const sr of stepRows) {
-        const step = rowToPlanStep(sr);
-        this.steps.set(step.step_id, step);
+      for (const row of planRows) {
+        const plan = rowToPlan(row);
+        this.plans.set(plan.plan_id, plan);
+
+        const stepRows = await dbQuery<PlanStepRow>(
+          this.invoke,
+          "SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY ordinal ASC",
+          [plan.plan_id],
+        );
+        for (const sr of stepRows) {
+          const step = rowToPlanStep(sr);
+          this.steps.set(step.step_id, step);
+        }
       }
+    } catch {
+      // Pre-migration database — plans table may not exist yet.
+      // In-memory Maps stay empty; executePlanGoal will create a fresh plan.
     }
   }
 

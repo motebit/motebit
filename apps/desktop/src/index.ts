@@ -15,6 +15,7 @@ import {
   type MotebitPersonalityConfig,
 } from "@motebit/ai-core";
 import type { ToolAuditEntry, MemoryNode, MemoryEdge } from "@motebit/sdk";
+import { EventType } from "@motebit/sdk";
 import { InMemoryEventStore } from "@motebit/event-log";
 import { InMemoryMemoryStorage, computeDecayedConfidence } from "@motebit/memory-graph";
 import {
@@ -34,6 +35,11 @@ import type { PlanChunk, PlanStoreAdapter } from "@motebit/planner";
 import { PlanStatus } from "@motebit/sdk";
 import { TauriEventStore, TauriMemoryStorage, TauriIdentityStorage, TauriAuditLog, TauriStateSnapshotStorage, TauriConversationStore, TauriPlanStore, type InvokeFn } from "./tauri-storage.js";
 import { registerDesktopTools } from "./desktop-tools.js";
+import {
+  createSubGoalDefinition,
+  completeGoalDefinition,
+  reportProgressDefinition,
+} from "@motebit/tools/web-safe";
 export type { InvokeFn } from "./tauri-storage.js";
 
 // Re-export runtime types for main.ts consumption
@@ -237,6 +243,7 @@ export class DesktopApp {
   private _governanceStatus: GovernanceStatus = { governed: false, reason: "not initialized" };
   private goalSchedulerTimer: ReturnType<typeof setInterval> | null = null;
   private _goalExecuting = false;
+  private _currentGoalId: string | null = null;
   private _goalStatusCallback: ((executing: boolean) => void) | null = null;
   private _goalCompleteCallback: ((event: GoalCompleteEvent) => void) | null = null;
   private _goalApprovalCallback: ((event: GoalApprovalEvent) => void) | null = null;
@@ -583,7 +590,126 @@ export class DesktopApp {
       this._governanceStatus = { governed: false, reason: "missing or invalid governance in motebit.md" };
     }
 
+    // Register goal-management tools (available during goal execution)
+    if (config.isTauri && config.invoke) {
+      this.registerGoalTools(config.invoke);
+    }
+
     return true;
+  }
+
+  /**
+   * Register goal-management tools that the agent can use during goal execution.
+   * These tools let the agent create sub-goals, complete goals, and report progress.
+   * They are no-ops when called outside of an active goal context.
+   */
+  private registerGoalTools(invoke: InvokeFn): void {
+    const registry = this.runtime!.getToolRegistry();
+
+    // Helper: parse interval strings like "1h", "30m", "1d" to milliseconds
+    const parseInterval = (s: string): number => {
+      const match = s.match(/^(\d+)\s*(s|m|h|d)$/i);
+      if (!match) return 3_600_000; // default 1h
+      const n = parseInt(match[1]!, 10);
+      switch (match[2]!.toLowerCase()) {
+        case "s": return n * 1_000;
+        case "m": return n * 60_000;
+        case "h": return n * 3_600_000;
+        case "d": return n * 86_400_000;
+        default: return 3_600_000;
+      }
+    };
+
+    registry.register(
+      createSubGoalDefinition,
+      async (args: Record<string, unknown>) => {
+        if (!this._currentGoalId) {
+          return { ok: false, error: "No active goal context" };
+        }
+        const prompt = args.prompt as string;
+        const interval = args.interval as string | undefined;
+        const once = args.once as boolean | undefined;
+        const intervalMs = interval ? parseInterval(interval) : 3_600_000;
+        const mode = once ? "once" : "recurring";
+        const subGoalId = crypto.randomUUID();
+
+        try {
+          await invoke("goals_create", {
+            motebit_id: this.motebitId,
+            goal_id: subGoalId,
+            prompt,
+            interval_ms: intervalMs,
+            mode,
+          });
+          // Set parent_goal_id
+          await invoke<number>("db_execute", {
+            sql: "UPDATE goals SET parent_goal_id = ? WHERE goal_id = ?",
+            params: [this._currentGoalId, subGoalId],
+          });
+          return { ok: true, data: { goal_id: subGoalId, prompt, mode, interval_ms: intervalMs } };
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { ok: false, error: msg };
+        }
+      },
+    );
+
+    registry.register(
+      completeGoalDefinition,
+      async (args: Record<string, unknown>) => {
+        if (!this._currentGoalId) {
+          return { ok: false, error: "No active goal context" };
+        }
+        const reason = args.reason as string;
+        try {
+          await invoke<number>("db_execute", {
+            sql: "UPDATE goals SET status = 'completed' WHERE goal_id = ?",
+            params: [this._currentGoalId],
+          });
+          // Best-effort event log
+          try {
+            await this.runtime!.events.append({
+              event_id: crypto.randomUUID(),
+              motebit_id: this.motebitId,
+              event_type: EventType.GoalCompleted,
+              payload: { goal_id: this._currentGoalId, reason },
+              version_clock: await this.runtime!.events.getLatestClock(this.motebitId) + 1,
+              timestamp: Date.now(),
+              tombstoned: false,
+            });
+          } catch { /* best-effort */ }
+          return { ok: true, data: { goal_id: this._currentGoalId, status: "completed", reason } };
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { ok: false, error: msg };
+        }
+      },
+    );
+
+    registry.register(
+      reportProgressDefinition,
+      async (args: Record<string, unknown>) => {
+        if (!this._currentGoalId) {
+          return { ok: false, error: "No active goal context" };
+        }
+        const note = args.note as string;
+        try {
+          await this.runtime!.events.append({
+            event_id: crypto.randomUUID(),
+            motebit_id: this.motebitId,
+            event_type: EventType.GoalProgress,
+            payload: { goal_id: this._currentGoalId, note },
+            version_clock: await this.runtime!.events.getLatestClock(this.motebitId) + 1,
+            timestamp: Date.now(),
+            tombstoned: false,
+          });
+          return { ok: true, data: { goal_id: this._currentGoalId, note } };
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { ok: false, error: msg };
+        }
+      },
+    );
   }
 
   get isOperatorMode(): boolean {
@@ -982,6 +1108,7 @@ export class DesktopApp {
     if (!this._pendingGoalApproval) throw new Error("No pending goal approval");
 
     const { goalId, prompt, invoke, mode, planId } = this._pendingGoalApproval;
+    this._currentGoalId = goalId;
 
     try {
       let accumulated = "";
@@ -1068,6 +1195,7 @@ export class DesktopApp {
     } finally {
       if (!this._pendingGoalApproval || this._pendingGoalApproval.goalId === goalId) {
         this._goalExecuting = false;
+        this._currentGoalId = null;
         this._goalStatusCallback?.(false);
         this._pendingGoalApproval = null;
         this.runtime?.resetConversation();
@@ -1141,6 +1269,7 @@ export class DesktopApp {
         if (this.runtime.isProcessing) break;
 
         this._goalExecuting = true;
+        this._currentGoalId = goal.goal_id;
         this._goalStatusCallback?.(true);
 
         try {
@@ -1230,6 +1359,7 @@ export class DesktopApp {
         } finally {
           if (!this._pendingGoalApproval) {
             this._goalExecuting = false;
+            this._currentGoalId = null;
             this._goalStatusCallback?.(false);
             this.runtime?.resetConversation();
           }
@@ -1237,6 +1367,7 @@ export class DesktopApp {
       }
     } catch {
       this._goalExecuting = false;
+      this._currentGoalId = null;
       this._goalStatusCallback?.(false);
     }
   }

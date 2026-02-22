@@ -355,7 +355,7 @@ describe("DesktopApp.initAI tools", () => {
     expect(toolNames).toContain("list_events");
   });
 
-  it("does NOT register tools in Tauri mode without governance (fail-closed)", async () => {
+  it("does NOT register desktop tools in Tauri mode without governance (fail-closed)", async () => {
     app = new DesktopApp();
     // Mock invoke returns empty config — no _identity_file
     const mockInvoke: InvokeFn = (cmd: string) => {
@@ -367,9 +367,13 @@ describe("DesktopApp.initAI tools", () => {
     const toolNames = (app as unknown as { runtime: { getToolRegistry(): { list(): { name: string }[] } } })
       .runtime.getToolRegistry().list().map((t) => t.name);
 
+    // Desktop tools (web_search, recall_memories, etc.) require governance
     expect(toolNames).not.toContain("web_search");
     expect(toolNames).not.toContain("recall_memories");
-    expect(toolNames).toHaveLength(0);
+    // Goal tools are always registered in Tauri mode (low-risk internal tools)
+    expect(toolNames).toContain("create_sub_goal");
+    expect(toolNames).toContain("complete_goal");
+    expect(toolNames).toContain("report_progress");
   });
 });
 
@@ -400,6 +404,85 @@ describe("DesktopApp.governanceStatus", () => {
     await app.initAI({ provider: "ollama", isTauri: true, invoke: mockInvoke });
     expect(app.governanceStatus.governed).toBe(false);
     expect((app.governanceStatus as { reason: string }).reason).toContain("missing or invalid governance");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DesktopApp — Goal tools registration
+// ---------------------------------------------------------------------------
+
+describe("DesktopApp goal tools", () => {
+  let app: DesktopApp;
+
+  afterEach(() => {
+    if (app) app.stop();
+  });
+
+  it("goal tools are NOT registered in dev mode (non-Tauri)", async () => {
+    app = new DesktopApp();
+    await app.initAI({ provider: "ollama", isTauri: false });
+
+    const toolNames = (app as unknown as { runtime: { getToolRegistry(): { list(): { name: string }[] } } })
+      .runtime.getToolRegistry().list().map((t) => t.name);
+    expect(toolNames).not.toContain("create_sub_goal");
+    expect(toolNames).not.toContain("complete_goal");
+    expect(toolNames).not.toContain("report_progress");
+  });
+
+  it("goal tools appear in registry in Tauri mode", async () => {
+    app = new DesktopApp();
+    const db = emptyDb();
+    const invoke = createMockInvoke(db);
+    await app.initAI({ provider: "ollama", isTauri: true, invoke });
+
+    const toolNames = (app as unknown as { runtime: { getToolRegistry(): { list(): { name: string }[] } } })
+      .runtime.getToolRegistry().list().map((t) => t.name);
+
+    expect(toolNames).toContain("create_sub_goal");
+    expect(toolNames).toContain("complete_goal");
+    expect(toolNames).toContain("report_progress");
+  });
+
+  it("create_sub_goal returns error when called outside goal context", async () => {
+    app = new DesktopApp();
+    const db = emptyDb();
+    const invoke = createMockInvoke(db);
+    await app.initAI({ provider: "ollama", isTauri: true, invoke });
+
+    const registry = (app as unknown as { runtime: { getToolRegistry(): { execute(name: string, args: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> } } })
+      .runtime.getToolRegistry();
+
+    const result = await registry.execute("create_sub_goal", { prompt: "test sub-goal" });
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("No active goal context");
+  });
+
+  it("complete_goal returns error when called outside goal context", async () => {
+    app = new DesktopApp();
+    const db = emptyDb();
+    const invoke = createMockInvoke(db);
+    await app.initAI({ provider: "ollama", isTauri: true, invoke });
+
+    const registry = (app as unknown as { runtime: { getToolRegistry(): { execute(name: string, args: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> } } })
+      .runtime.getToolRegistry();
+
+    const result = await registry.execute("complete_goal", { reason: "done" });
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("No active goal context");
+  });
+
+  it("report_progress returns error when called outside goal context", async () => {
+    app = new DesktopApp();
+    const db = emptyDb();
+    const invoke = createMockInvoke(db);
+    await app.initAI({ provider: "ollama", isTauri: true, invoke });
+
+    const registry = (app as unknown as { runtime: { getToolRegistry(): { execute(name: string, args: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> } } })
+      .runtime.getToolRegistry();
+
+    const result = await registry.execute("report_progress", { note: "halfway done" });
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("No active goal context");
   });
 });
 
@@ -477,6 +560,33 @@ interface MockDbState {
     summary: string | null;
     error_message: string | null;
   }>;
+  plans: Array<{
+    plan_id: string;
+    goal_id: string;
+    motebit_id: string;
+    title: string;
+    status: string;
+    created_at: number;
+    updated_at: number;
+    current_step_index: number;
+    total_steps: number;
+  }>;
+  planSteps: Array<{
+    step_id: string;
+    plan_id: string;
+    ordinal: number;
+    description: string;
+    prompt: string;
+    depends_on: string;
+    optional: number;
+    status: string;
+    result_summary: string | null;
+    error_message: string | null;
+    tool_calls_made: number;
+    started_at: number | null;
+    completed_at: number | null;
+    retry_count: number;
+  }>;
   executions: Array<{ sql: string; params: unknown[] }>;
 }
 
@@ -505,18 +615,32 @@ function createMockInvoke(db: MockDbState): InvokeFn {
         const conv = db.conversations.find(c => c.conversation_id === convId);
         return Promise.resolve(conv ? [{ message_count: conv.message_count }] : []);
       }
+      if (sql.includes("FROM plans")) {
+        const goalId = (args?.params as unknown[])?.[0] as string;
+        return Promise.resolve(db.plans.filter(p => p.goal_id === goalId));
+      }
+      if (sql.includes("FROM plan_steps")) {
+        const planId = (args?.params as unknown[])?.[0] as string;
+        return Promise.resolve(db.planSteps.filter(s => s.plan_id === planId));
+      }
+      if (sql.includes("MAX(version_clock)")) {
+        return Promise.resolve([{ max_clock: 0 }]);
+      }
       return Promise.resolve([]);
     }
     if (cmd === "db_execute") {
       db.executions.push({ sql: args?.sql as string, params: args?.params as unknown[] });
       return Promise.resolve(1);
     }
+    if (cmd === "goals_create") {
+      return Promise.resolve(undefined);
+    }
     return Promise.resolve([] as never);
   }) as InvokeFn;
 }
 
 function emptyDb(): MockDbState {
-  return { conversations: [], messages: [], goals: [], goalOutcomes: [], executions: [] };
+  return { conversations: [], messages: [], goals: [], goalOutcomes: [], plans: [], planSteps: [], executions: [] };
 }
 
 // ---------------------------------------------------------------------------

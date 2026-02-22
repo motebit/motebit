@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "better-sqlite3";
-import { TauriEventStore, TauriMemoryStorage, type InvokeFn } from "../tauri-storage";
+import { TauriEventStore, TauriMemoryStorage, TauriPlanStore, type InvokeFn } from "../tauri-storage";
 
 // Schema matching main.rs SCHEMA constant
 const SCHEMA = `
@@ -40,6 +40,38 @@ CREATE TABLE IF NOT EXISTS memory_edges (
 );
 CREATE INDEX IF NOT EXISTS idx_memory_edges_source ON memory_edges (source_id);
 CREATE INDEX IF NOT EXISTS idx_memory_edges_target ON memory_edges (target_id);
+
+CREATE TABLE IF NOT EXISTS plans (
+  plan_id TEXT PRIMARY KEY,
+  goal_id TEXT NOT NULL,
+  motebit_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  current_step_index INTEGER NOT NULL DEFAULT 0,
+  total_steps INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_plans_goal ON plans (goal_id);
+
+CREATE TABLE IF NOT EXISTS plan_steps (
+  step_id TEXT PRIMARY KEY,
+  plan_id TEXT NOT NULL,
+  ordinal INTEGER NOT NULL,
+  description TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  depends_on TEXT NOT NULL DEFAULT '[]',
+  optional INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending',
+  result_summary TEXT,
+  error_message TEXT,
+  tool_calls_made INTEGER NOT NULL DEFAULT 0,
+  started_at INTEGER,
+  completed_at INTEGER,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY (plan_id) REFERENCES plans(plan_id)
+);
+CREATE INDEX IF NOT EXISTS idx_plan_steps_plan ON plan_steps (plan_id, ordinal ASC);
 `;
 
 /**
@@ -350,5 +382,205 @@ describe("TauriMemoryStorage", () => {
 
     const results = await storage.queryNodes({ motebit_id: "m1", limit: 2 });
     expect(results).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TauriPlanStore
+// ---------------------------------------------------------------------------
+
+describe("TauriPlanStore", () => {
+  let db: Database.Database;
+  let store: TauriPlanStore;
+
+  beforeEach(() => {
+    db = new Database(":memory:");
+    db.exec(SCHEMA);
+    store = new TauriPlanStore(createMockInvoke(db));
+  });
+
+  const makePlan = (overrides: Partial<{
+    plan_id: string;
+    goal_id: string;
+    motebit_id: string;
+    title: string;
+    status: string;
+  }> = {}) => ({
+    plan_id: overrides.plan_id ?? "plan-1",
+    goal_id: overrides.goal_id ?? "goal-1",
+    motebit_id: overrides.motebit_id ?? "m1",
+    title: overrides.title ?? "Test Plan",
+    status: (overrides.status ?? "active") as never,
+    created_at: Date.now(),
+    updated_at: Date.now(),
+    current_step_index: 0,
+    total_steps: 2,
+  });
+
+  const makeStep = (overrides: Partial<{
+    step_id: string;
+    plan_id: string;
+    ordinal: number;
+    description: string;
+    status: string;
+  }> = {}) => ({
+    step_id: overrides.step_id ?? "step-1",
+    plan_id: overrides.plan_id ?? "plan-1",
+    ordinal: overrides.ordinal ?? 0,
+    description: overrides.description ?? "Step 1",
+    prompt: "Do the thing",
+    depends_on: [] as string[],
+    optional: false,
+    status: (overrides.status ?? "pending") as never,
+    result_summary: null,
+    error_message: null,
+    tool_calls_made: 0,
+    started_at: null,
+    completed_at: null,
+    retry_count: 0,
+  });
+
+  it("savePlan + getPlan round-trip", () => {
+    const plan = makePlan();
+    store.savePlan(plan);
+
+    const loaded = store.getPlan("plan-1");
+    expect(loaded).not.toBeNull();
+    expect(loaded!.plan_id).toBe("plan-1");
+    expect(loaded!.title).toBe("Test Plan");
+    expect(loaded!.goal_id).toBe("goal-1");
+  });
+
+  it("getPlan returns null for missing plan", () => {
+    expect(store.getPlan("nonexistent")).toBeNull();
+  });
+
+  it("getPlanForGoal returns the plan for a goal", () => {
+    store.savePlan(makePlan({ plan_id: "plan-1", goal_id: "goal-1" }));
+
+    const found = store.getPlanForGoal("goal-1");
+    expect(found).not.toBeNull();
+    expect(found!.plan_id).toBe("plan-1");
+  });
+
+  it("getPlanForGoal returns null for missing goal", () => {
+    expect(store.getPlanForGoal("nonexistent")).toBeNull();
+  });
+
+  it("updatePlan merges updates", () => {
+    store.savePlan(makePlan());
+    store.updatePlan("plan-1", { current_step_index: 1 });
+
+    const loaded = store.getPlan("plan-1");
+    expect(loaded!.current_step_index).toBe(1);
+    expect(loaded!.title).toBe("Test Plan"); // unchanged
+  });
+
+  it("saveStep + getStep round-trip", () => {
+    store.savePlan(makePlan());
+    const step = makeStep();
+    store.saveStep(step);
+
+    const loaded = store.getStep("step-1");
+    expect(loaded).not.toBeNull();
+    expect(loaded!.step_id).toBe("step-1");
+    expect(loaded!.description).toBe("Step 1");
+    expect(loaded!.depends_on).toEqual([]);
+    expect(loaded!.optional).toBe(false);
+  });
+
+  it("getStepsForPlan returns sorted steps", () => {
+    store.savePlan(makePlan());
+    store.saveStep(makeStep({ step_id: "step-2", ordinal: 1, description: "Step 2" }));
+    store.saveStep(makeStep({ step_id: "step-1", ordinal: 0, description: "Step 1" }));
+
+    const steps = store.getStepsForPlan("plan-1");
+    expect(steps).toHaveLength(2);
+    expect(steps[0]!.ordinal).toBe(0);
+    expect(steps[1]!.ordinal).toBe(1);
+  });
+
+  it("getNextPendingStep returns first pending step", () => {
+    store.savePlan(makePlan());
+    store.saveStep(makeStep({ step_id: "step-1", ordinal: 0, status: "completed" }));
+    store.saveStep(makeStep({ step_id: "step-2", ordinal: 1, status: "pending" }));
+
+    const next = store.getNextPendingStep("plan-1");
+    expect(next).not.toBeNull();
+    expect(next!.step_id).toBe("step-2");
+  });
+
+  it("getNextPendingStep returns null when all completed", () => {
+    store.savePlan(makePlan());
+    store.saveStep(makeStep({ step_id: "step-1", ordinal: 0, status: "completed" }));
+
+    expect(store.getNextPendingStep("plan-1")).toBeNull();
+  });
+
+  it("updateStep merges updates", () => {
+    store.savePlan(makePlan());
+    store.saveStep(makeStep());
+    store.updateStep("step-1", { status: "completed" as never, result_summary: "Done" });
+
+    const loaded = store.getStep("step-1");
+    expect(loaded!.status).toBe("completed");
+    expect(loaded!.result_summary).toBe("Done");
+    expect(loaded!.description).toBe("Step 1"); // unchanged
+  });
+
+  it("preloadForGoal loads plan + steps from DB into cache", async () => {
+    // Insert directly via SQL to simulate existing DB data
+    const now = Date.now();
+    db.prepare(`INSERT INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run("plan-db", "goal-db", "m1", "DB Plan", "active", now, now, 0, 1);
+    db.prepare(`INSERT INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, tool_calls_made, retry_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run("step-db", "plan-db", 0, "DB Step", "Do it", "[]", 0, "pending", 0, 0);
+
+    // Create a fresh store and preload
+    const freshStore = new TauriPlanStore(createMockInvoke(db));
+    await freshStore.preloadForGoal("goal-db");
+
+    const plan = freshStore.getPlanForGoal("goal-db");
+    expect(plan).not.toBeNull();
+    expect(plan!.title).toBe("DB Plan");
+
+    const steps = freshStore.getStepsForPlan("plan-db");
+    expect(steps).toHaveLength(1);
+    expect(steps[0]!.description).toBe("DB Step");
+  });
+
+  it("preloadForGoal does not throw on missing table", async () => {
+    // Create a DB without the plans table
+    const emptyDb = new Database(":memory:");
+    const freshStore = new TauriPlanStore(createMockInvoke(emptyDb));
+
+    // Should not throw — silently continues with empty cache
+    await expect(freshStore.preloadForGoal("goal-1")).resolves.toBeUndefined();
+
+    // Store should be empty
+    expect(freshStore.getPlanForGoal("goal-1")).toBeNull();
+  });
+
+  it("savePlan persists to DB", async () => {
+    store.savePlan(makePlan());
+
+    // Give the fire-and-forget write a tick to complete
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    // Verify it's in the DB
+    const rows = db.prepare("SELECT * FROM plans WHERE plan_id = ?").all("plan-1");
+    expect(rows).toHaveLength(1);
+    expect((rows[0] as { title: string }).title).toBe("Test Plan");
+  });
+
+  it("saveStep persists to DB", async () => {
+    store.savePlan(makePlan());
+    store.saveStep(makeStep());
+
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    const rows = db.prepare("SELECT * FROM plan_steps WHERE step_id = ?").all("step-1");
+    expect(rows).toHaveLength(1);
+    expect((rows[0] as { description: string }).description).toBe("Step 1");
   });
 });
