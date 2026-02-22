@@ -651,6 +651,21 @@ export function App(): React.ReactElement {
       case "settings":
         setShowSettings(true);
         break;
+      case "summarize":
+        void (async () => {
+          try {
+            const summary = await a.summarizeConversation();
+            if (summary) {
+              addSystemMessage(`Summary:\n${summary}`);
+            } else {
+              addSystemMessage("No conversation to summarize (need at least 2 messages).");
+            }
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            addSystemMessage(`Summarization failed: ${msg}`);
+          }
+        })();
+        break;
       case "help":
         addSystemMessage(
           "Available commands:\n" +
@@ -659,6 +674,7 @@ export function App(): React.ReactElement {
           "/conversations — browse past conversations\n" +
           "/new — start a new conversation\n" +
           "/memories — browse memories\n" +
+          "/summarize — summarize current conversation\n" +
           "/sync — sync with relay\n" +
           "/export — export all data\n" +
           "/settings — open settings\n" +

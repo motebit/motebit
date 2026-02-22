@@ -38,6 +38,9 @@ import type { McpServerConfig } from "@motebit/mcp-client";
 export type { McpServerConfig } from "@motebit/mcp-client";
 export type { MemoryNode } from "@motebit/sdk";
 import { InMemoryToolRegistry } from "@motebit/tools";
+import { PlanEngine } from "@motebit/planner";
+import type { PlanChunk } from "@motebit/planner";
+import { PlanStatus } from "@motebit/sdk";
 import type { PairingSession, PairingStatus, SyncStatus } from "@motebit/sync-engine";
 import type { MotebitState, BehaviorCues, MemoryNode } from "@motebit/sdk";
 import { computeDecayedConfidence, embedText } from "@motebit/memory-graph";
@@ -51,6 +54,9 @@ import {
   listEventsDefinition,
   createListEventsHandler,
   DuckDuckGoSearchProvider,
+  createSubGoalDefinition,
+  completeGoalDefinition,
+  reportProgressDefinition,
 } from "@motebit/tools/web-safe";
 import type { EventFilter } from "@motebit/event-log";
 import type { EventType } from "@motebit/sdk";
@@ -190,6 +196,20 @@ function formatTimeAgo(ms: number): string {
   return `${Math.round(ms / 86_400_000)}d ago`;
 }
 
+/** Parse interval strings like "1h", "30m", "1d", "1w" to milliseconds. */
+function parseInterval(s: string): number {
+  const match = s.match(/^(\d+)\s*(m|h|d|w)$/i);
+  if (!match) return 3_600_000;
+  const n = parseInt(match[1]!, 10);
+  switch (match[2]!.toLowerCase()) {
+    case "m": return n * 60_000;
+    case "h": return n * 3_600_000;
+    case "d": return n * 86_400_000;
+    case "w": return n * 604_800_000;
+    default: return 3_600_000;
+  }
+}
+
 // === MobileApp ===
 
 export class MobileApp {
@@ -215,16 +235,22 @@ export class MobileApp {
   private _toolsChangedCallback: (() => void) | null = null;
   private static readonly MCP_SERVERS_KEY = "@motebit/mcp_servers";
 
+  // Plan engine
+  private planEngine: PlanEngine | null = null;
+
   // Goal scheduler state
   private goalSchedulerTimer: ReturnType<typeof setInterval> | null = null;
+  private goalTickCount = 0;
   private _goalExecuting = false;
   private _goalStatusCallback: ((executing: boolean) => void) | null = null;
   private _goalCompleteCallback: ((event: GoalCompleteEvent) => void) | null = null;
   private _goalApprovalCallback: ((event: GoalApprovalEvent) => void) | null = null;
+  private _currentGoalId: string | null = null;
   private _pendingGoalApproval: {
     goalId: string;
     prompt: string;
     mode: string;
+    planId?: string;
   } | null = null;
 
   motebitId = "mobile-local";
@@ -369,7 +395,12 @@ export class MobileApp {
       { storage, renderer: this.renderer, ai: provider, keyring: this.keyring },
     );
 
-    // Register builtin tools (web_search, read_url, recall_memories, list_events)
+    // Create PlanEngine for multi-step goal execution
+    if (storage.planStore) {
+      this.planEngine = new PlanEngine(storage.planStore);
+    }
+
+    // Register builtin tools (web_search, read_url, recall_memories, list_events, goal tools)
     this.registerBuiltinTools();
 
     // Reconnect any persisted MCP servers
@@ -419,6 +450,38 @@ export class MobileApp {
         }));
       }),
     );
+
+    // Goal management tools (available during goal execution)
+    const goalStore = this.storage?.goalStore;
+    registry.register(createSubGoalDefinition, async (args: Record<string, unknown>) => {
+      if (!this._currentGoalId || !goalStore) {
+        return { ok: false, error: "No active goal context" };
+      }
+      const prompt = args.prompt as string;
+      const interval = args.interval as string | undefined;
+      const once = args.once as boolean | undefined;
+      const intervalMs = interval ? parseInterval(interval) : 3_600_000;
+      const mode = once ? "once" : "recurring";
+      const subGoalId = goalStore.addGoal(this.motebitId, prompt, intervalMs, mode as "recurring" | "once");
+      return { ok: true, data: { goal_id: subGoalId, prompt, mode, interval_ms: intervalMs } };
+    });
+
+    registry.register(completeGoalDefinition, async (args: Record<string, unknown>) => {
+      if (!this._currentGoalId || !goalStore) {
+        return { ok: false, error: "No active goal context" };
+      }
+      const reason = args.reason as string;
+      goalStore.setStatus(this._currentGoalId, "completed");
+      return { ok: true, data: { goal_id: this._currentGoalId, status: "completed", reason } };
+    });
+
+    registry.register(reportProgressDefinition, async (args: Record<string, unknown>) => {
+      if (!this._currentGoalId) {
+        return { ok: false, error: "No active goal context" };
+      }
+      const note = args.note as string;
+      return { ok: true, data: { goal_id: this._currentGoalId, note } };
+    });
   }
 
   // === GL Init ===
@@ -739,6 +802,12 @@ export class MobileApp {
     }
 
     this._autoTitlePending = false;
+  }
+
+  /** Manually trigger conversation summarization. */
+  async summarizeConversation(): Promise<string | null> {
+    if (!this.runtime) return null;
+    return this.runtime.summarizeCurrentConversation();
   }
 
   // === Memory Browser ===
@@ -1148,6 +1217,8 @@ export class MobileApp {
       clearInterval(this.goalSchedulerTimer);
       this.goalSchedulerTimer = null;
     }
+    // Final housekeeping on stop
+    void this.runtime?.housekeeping();
   }
 
   /**
@@ -1162,10 +1233,12 @@ export class MobileApp {
     const goalStore = this.storage?.goalStore;
     if (!goalStore) throw new Error("Goal store not available");
 
-    const { goalId, prompt, mode } = this._pendingGoalApproval;
+    const { goalId, prompt, mode, planId } = this._pendingGoalApproval;
 
     try {
       let accumulated = "";
+
+      // Phase 1: Complete the current step via runtime approval resume
       for await (const chunk of this.runtime.resumeAfterApproval(approved)) {
         if (chunk.type === "text") {
           accumulated += chunk.text;
@@ -1173,48 +1246,30 @@ export class MobileApp {
         yield chunk;
       }
 
-      // Record outcome to DB
-      const now = Date.now();
-      goalStore.updateLastRun(goalId, now);
-      goalStore.resetFailures(goalId);
-
-      goalStore.insertOutcome({
-        outcome_id: crypto.randomUUID(),
-        goal_id: goalId,
-        motebit_id: this.motebitId,
-        ran_at: now,
-        status: "completed",
-        summary: accumulated.slice(0, 500),
-        tool_calls_made: 0,
-        memories_formed: 0,
-        error_message: null,
-      });
-
-      // One-shot auto-complete
-      if (mode === "once") {
-        goalStore.setStatus(goalId, "completed");
+      // Phase 2: If plan-based goal, resume remaining plan steps
+      if (planId && this.planEngine) {
+        const loopDeps = this.runtime.getLoopDeps();
+        if (loopDeps) {
+          const planResult = await this.consumePlanStream(
+            this.planEngine.resumePlan(planId, loopDeps),
+            { goal_id: goalId, prompt, mode },
+            planId,
+          );
+          accumulated += planResult.summary;
+          if (planResult.suspended) return; // Another approval needed
+        }
       }
 
-      // Notify UI
-      this._goalCompleteCallback?.({
-        goalId,
-        prompt,
-        status: "completed",
-        summary: accumulated.slice(0, 200),
-        error: null,
-      });
+      // Record outcome
+      const now = Date.now();
+      this.finishGoalSuccess({ goal_id: goalId, prompt, mode }, accumulated.slice(0, 500), now);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      this._goalCompleteCallback?.({
-        goalId,
-        prompt,
-        status: "failed",
-        summary: null,
-        error: msg,
-      });
+      this.finishGoalFailure({ goal_id: goalId, prompt, mode }, msg, Date.now());
       throw err;
     } finally {
       this._goalExecuting = false;
+      this._currentGoalId = null;
       this._goalStatusCallback?.(false);
       this._pendingGoalApproval = null;
       this.runtime?.resetConversation();
@@ -1227,6 +1282,12 @@ export class MobileApp {
     const goalStore = this.storage?.goalStore;
     if (!goalStore) return;
 
+    // Periodic housekeeping (every 10 ticks ≈ 10 min at 60s default)
+    this.goalTickCount++;
+    if (this.goalTickCount % 10 === 0) {
+      void this.runtime.housekeeping();
+    }
+
     try {
       const goals = goalStore.listActiveGoals(this.motebitId);
       if (goals.length === 0) return;
@@ -1238,127 +1299,31 @@ export class MobileApp {
         if (this.runtime.isProcessing) break;
 
         this._goalExecuting = true;
+        this._currentGoalId = goal.goal_id;
         this._goalStatusCallback?.(true);
 
         try {
-          // Build enriched context with previous outcomes
           const outcomes = goalStore.getRecentOutcomes(goal.goal_id, 3);
+          const loopDeps = this.runtime.getLoopDeps();
 
-          let context = `You are executing a scheduled goal.\n\nGoal: ${goal.prompt}`;
-          if (outcomes.length > 0) {
-            context += "\n\nPrevious executions (most recent first):";
-            for (const o of outcomes) {
-              const ago = formatTimeAgo(now - o.ran_at);
-              if (o.status === "failed" && o.error_message) {
-                context += `\n- ${ago}: failed — [error: ${o.error_message}]`;
-              } else if (o.summary) {
-                context += `\n- ${ago}: ${o.status} — "${o.summary.slice(0, 100)}"`;
-              } else {
-                context += `\n- ${ago}: ${o.status}`;
-              }
-            }
+          // Plan-based execution when PlanEngine is available
+          if (this.planEngine && loopDeps) {
+            const result = await this.executePlanGoal(goal, outcomes);
+            if (result.suspended) return; // Waiting for approval
+            this.finishGoalSuccess(goal, result.summary, now);
+          } else {
+            // Fallback: single-turn streaming
+            const result = await this.executeSingleTurnGoal(goal, outcomes, now);
+            if (result.suspended) return;
+            this.finishGoalSuccess(goal, result.summary, now);
           }
-          if (goal.mode === "once") {
-            context += "\n\nThis is a one-time goal. Complete it fully in this execution.";
-          }
-
-          // Stream so approval_request chunks surface
-          let accumulated = "";
-          let approvalRequested = false;
-
-          for await (const chunk of this.runtime.sendMessageStreaming(context)) {
-            if (chunk.type === "text") {
-              accumulated += chunk.text;
-            } else if (chunk.type === "approval_request") {
-              approvalRequested = true;
-              this._pendingGoalApproval = {
-                goalId: goal.goal_id,
-                prompt: goal.prompt,
-                mode: goal.mode,
-              };
-              this._goalApprovalCallback?.({
-                goalId: goal.goal_id,
-                goalPrompt: goal.prompt,
-                toolName: chunk.name,
-                args: chunk.args,
-                riskLevel: chunk.risk_level,
-              });
-            }
-          }
-
-          if (approvalRequested) {
-            // Don't record outcome — waiting for user decision.
-            // _goalExecuting stays true to block further ticks.
-            return;
-          }
-
-          // Normal completion: record outcome, update DB
-          goalStore.updateLastRun(goal.goal_id, now);
-          goalStore.resetFailures(goal.goal_id);
-
-          goalStore.insertOutcome({
-            outcome_id: crypto.randomUUID(),
-            goal_id: goal.goal_id,
-            motebit_id: this.motebitId,
-            ran_at: now,
-            status: "completed",
-            summary: accumulated.slice(0, 500),
-            tool_calls_made: 0,
-            memories_formed: 0,
-            error_message: null,
-          });
-
-          // One-shot auto-complete
-          if (goal.mode === "once") {
-            goalStore.setStatus(goal.goal_id, "completed");
-          }
-
-          // Notify UI
-          this._goalCompleteCallback?.({
-            goalId: goal.goal_id,
-            prompt: goal.prompt,
-            status: "completed",
-            summary: accumulated.slice(0, 200),
-            error: null,
-          });
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
-
-          // Record failed outcome
-          try {
-            goalStore.insertOutcome({
-              outcome_id: crypto.randomUUID(),
-              goal_id: goal.goal_id,
-              motebit_id: this.motebitId,
-              ran_at: now,
-              status: "failed",
-              summary: null,
-              tool_calls_made: 0,
-              memories_formed: 0,
-              error_message: msg,
-            });
-          } catch {
-            // Non-fatal
-          }
-
-          // Increment failures and auto-pause if threshold reached
-          try {
-            goalStore.incrementFailures(goal.goal_id);
-          } catch {
-            // Non-fatal
-          }
-
-          // Notify UI
-          this._goalCompleteCallback?.({
-            goalId: goal.goal_id,
-            prompt: goal.prompt,
-            status: "failed",
-            summary: null,
-            error: msg,
-          });
+          this.finishGoalFailure(goal, msg, now);
         } finally {
           if (!this._pendingGoalApproval) {
             this._goalExecuting = false;
+            this._currentGoalId = null;
             this._goalStatusCallback?.(false);
             this.runtime?.resetConversation();
           }
@@ -1366,7 +1331,197 @@ export class MobileApp {
       }
     } catch {
       this._goalExecuting = false;
+      this._currentGoalId = null;
       this._goalStatusCallback?.(false);
     }
+  }
+
+  /** Execute a goal with PlanEngine multi-step decomposition. */
+  private async executePlanGoal(
+    goal: { goal_id: string; prompt: string; mode: string },
+    outcomes: Array<{ ran_at: number; status: string; summary: string | null; error_message: string | null }>,
+  ): Promise<{ suspended: boolean; summary: string }> {
+    const loopDeps = this.runtime!.getLoopDeps()!;
+    const planStore = this.storage!.planStore;
+    const registry = this.runtime!.getToolRegistry();
+
+    // Check for existing active plan (resume interrupted plan)
+    let plan = planStore.getPlanForGoal(goal.goal_id);
+    let planStream: AsyncGenerator<PlanChunk>;
+
+    if (plan && plan.status === PlanStatus.Active) {
+      planStream = this.planEngine!.resumePlan(plan.plan_id, loopDeps);
+    } else {
+      const created = await this.planEngine!.createPlan(goal.goal_id, this.motebitId, {
+        goalPrompt: goal.prompt,
+        previousOutcomes: outcomes.map((o) =>
+          o.status === "failed" ? `failed: ${o.error_message ?? "unknown"}` : `${o.status}: ${o.summary ?? "no summary"}`,
+        ),
+        availableTools: registry.list().map((t) => t.name),
+      }, loopDeps);
+      plan = created.plan;
+      planStream = this.planEngine!.executePlan(created.plan.plan_id, loopDeps);
+    }
+
+    return this.consumePlanStream(planStream, goal, plan!.plan_id);
+  }
+
+  /** Consume a PlanEngine stream, handling approval requests. */
+  private async consumePlanStream(
+    stream: AsyncGenerator<PlanChunk>,
+    goal: { goal_id: string; prompt: string; mode: string },
+    planId: string,
+  ): Promise<{ suspended: boolean; summary: string }> {
+    let accumulated = "";
+
+    for await (const chunk of stream) {
+      switch (chunk.type) {
+        case "step_chunk":
+          if (chunk.chunk.type === "text") {
+            accumulated += chunk.chunk.text;
+          }
+          break;
+        case "approval_request": {
+          this._pendingGoalApproval = {
+            goalId: goal.goal_id,
+            prompt: goal.prompt,
+            mode: goal.mode,
+            planId,
+          };
+          this._goalApprovalCallback?.({
+            goalId: goal.goal_id,
+            goalPrompt: goal.prompt,
+            toolName: chunk.chunk.type === "approval_request" ? chunk.chunk.name : "unknown",
+            args: chunk.chunk.type === "approval_request" ? chunk.chunk.args : {},
+            riskLevel: chunk.chunk.type === "approval_request" ? chunk.chunk.risk_level : undefined,
+          });
+          return { suspended: true, summary: accumulated.slice(0, 500) };
+        }
+        case "plan_completed":
+        case "plan_failed":
+          break;
+      }
+    }
+
+    return { suspended: false, summary: accumulated.slice(0, 500) };
+  }
+
+  /** Execute a goal with simple single-turn streaming (fallback). */
+  private async executeSingleTurnGoal(
+    goal: { goal_id: string; prompt: string; mode: string },
+    outcomes: Array<{ ran_at: number; status: string; summary: string | null; error_message: string | null }>,
+    now: number,
+  ): Promise<{ suspended: boolean; summary: string }> {
+    let context = `You are executing a scheduled goal.\n\nGoal: ${goal.prompt}`;
+    if (outcomes.length > 0) {
+      context += "\n\nPrevious executions (most recent first):";
+      for (const o of outcomes) {
+        const ago = formatTimeAgo(now - o.ran_at);
+        if (o.status === "failed" && o.error_message) {
+          context += `\n- ${ago}: failed — [error: ${o.error_message}]`;
+        } else if (o.summary) {
+          context += `\n- ${ago}: ${o.status} — "${o.summary.slice(0, 100)}"`;
+        } else {
+          context += `\n- ${ago}: ${o.status}`;
+        }
+      }
+    }
+    if (goal.mode === "once") {
+      context += "\n\nThis is a one-time goal. Complete it fully in this execution.";
+    }
+
+    let accumulated = "";
+    for await (const chunk of this.runtime!.sendMessageStreaming(context)) {
+      if (chunk.type === "text") {
+        accumulated += chunk.text;
+      } else if (chunk.type === "approval_request") {
+        this._pendingGoalApproval = {
+          goalId: goal.goal_id,
+          prompt: goal.prompt,
+          mode: goal.mode,
+        };
+        this._goalApprovalCallback?.({
+          goalId: goal.goal_id,
+          goalPrompt: goal.prompt,
+          toolName: chunk.name,
+          args: chunk.args,
+          riskLevel: chunk.risk_level,
+        });
+        return { suspended: true, summary: accumulated.slice(0, 500) };
+      }
+    }
+
+    return { suspended: false, summary: accumulated.slice(0, 500) };
+  }
+
+  private finishGoalSuccess(
+    goal: { goal_id: string; prompt: string; mode: string },
+    summary: string,
+    now: number,
+  ): void {
+    const goalStore = this.storage?.goalStore;
+    if (!goalStore) return;
+
+    goalStore.updateLastRun(goal.goal_id, now);
+    goalStore.resetFailures(goal.goal_id);
+
+    goalStore.insertOutcome({
+      outcome_id: crypto.randomUUID(),
+      goal_id: goal.goal_id,
+      motebit_id: this.motebitId,
+      ran_at: now,
+      status: "completed",
+      summary,
+      tool_calls_made: 0,
+      memories_formed: 0,
+      error_message: null,
+    });
+
+    if (goal.mode === "once") {
+      goalStore.setStatus(goal.goal_id, "completed");
+    }
+
+    this._goalCompleteCallback?.({
+      goalId: goal.goal_id,
+      prompt: goal.prompt,
+      status: "completed",
+      summary: summary.slice(0, 200),
+      error: null,
+    });
+  }
+
+  private finishGoalFailure(
+    goal: { goal_id: string; prompt: string; mode: string },
+    error: string,
+    now: number,
+  ): void {
+    const goalStore = this.storage?.goalStore;
+    if (!goalStore) return;
+
+    try {
+      goalStore.insertOutcome({
+        outcome_id: crypto.randomUUID(),
+        goal_id: goal.goal_id,
+        motebit_id: this.motebitId,
+        ran_at: now,
+        status: "failed",
+        summary: null,
+        tool_calls_made: 0,
+        memories_formed: 0,
+        error_message: error,
+      });
+    } catch { /* non-fatal */ }
+
+    try {
+      goalStore.incrementFailures(goal.goal_id);
+    } catch { /* non-fatal */ }
+
+    this._goalCompleteCallback?.({
+      goalId: goal.goal_id,
+      prompt: goal.prompt,
+      status: "failed",
+      summary: null,
+      error,
+    });
   }
 }

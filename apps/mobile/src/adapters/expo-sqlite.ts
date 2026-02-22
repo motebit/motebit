@@ -9,7 +9,8 @@
  */
 
 import * as SQLite from "expo-sqlite";
-import type { EventLogEntry, EventType, MemoryNode, MemoryEdge, MotebitIdentity, AuditRecord, SensitivityLevel, RelationType } from "@motebit/sdk";
+import type { EventLogEntry, EventType, MemoryNode, MemoryEdge, MotebitIdentity, AuditRecord, SensitivityLevel, RelationType, Plan, PlanStep } from "@motebit/sdk";
+import { StepStatus } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import type { MemoryStorageAdapter, MemoryQuery } from "@motebit/memory-graph";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
@@ -18,6 +19,7 @@ import type { AuditLogAdapter } from "@motebit/privacy-layer";
 import type { StateSnapshotAdapter, ConversationStoreAdapter, StorageAdapters } from "@motebit/runtime";
 import type { SyncConversation, SyncConversationMessage } from "@motebit/sdk";
 import type { ConversationSyncStoreAdapter } from "@motebit/sync-engine";
+import type { PlanStoreAdapter } from "@motebit/planner";
 
 // === Schema (identical to packages/persistence) ===
 
@@ -111,6 +113,38 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_conv_messages
   ON conversation_messages (conversation_id, created_at ASC);
+
+CREATE TABLE IF NOT EXISTS plans (
+  plan_id TEXT PRIMARY KEY,
+  goal_id TEXT NOT NULL,
+  motebit_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  current_step_index INTEGER NOT NULL DEFAULT 0,
+  total_steps INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_plans_goal ON plans (goal_id);
+
+CREATE TABLE IF NOT EXISTS plan_steps (
+  step_id TEXT PRIMARY KEY,
+  plan_id TEXT NOT NULL,
+  ordinal INTEGER NOT NULL,
+  description TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  depends_on TEXT NOT NULL DEFAULT '[]',
+  optional INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending',
+  result_summary TEXT,
+  error_message TEXT,
+  tool_calls_made INTEGER NOT NULL DEFAULT 0,
+  started_at INTEGER,
+  completed_at INTEGER,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY (plan_id) REFERENCES plans(plan_id)
+);
+CREATE INDEX IF NOT EXISTS idx_plan_steps_plan ON plan_steps (plan_id, ordinal ASC);
 `;
 
 // === Row Types ===
@@ -819,6 +853,151 @@ export class ExpoGoalStore {
   }
 }
 
+// === PlanStore ===
+
+interface PlanRow {
+  plan_id: string;
+  goal_id: string;
+  motebit_id: string;
+  title: string;
+  status: string;
+  created_at: number;
+  updated_at: number;
+  current_step_index: number;
+  total_steps: number;
+}
+
+interface PlanStepRow {
+  step_id: string;
+  plan_id: string;
+  ordinal: number;
+  description: string;
+  prompt: string;
+  depends_on: string;
+  optional: number;
+  status: string;
+  result_summary: string | null;
+  error_message: string | null;
+  tool_calls_made: number;
+  started_at: number | null;
+  completed_at: number | null;
+  retry_count: number;
+}
+
+function rowToPlan(row: PlanRow): Plan {
+  return {
+    plan_id: row.plan_id,
+    goal_id: row.goal_id,
+    motebit_id: row.motebit_id,
+    title: row.title,
+    status: row.status as Plan["status"],
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    current_step_index: row.current_step_index,
+    total_steps: row.total_steps,
+  };
+}
+
+function rowToPlanStep(row: PlanStepRow): PlanStep {
+  let dependsOn: string[] = [];
+  try { dependsOn = JSON.parse(row.depends_on) as string[]; } catch { /* empty */ }
+  return {
+    step_id: row.step_id,
+    plan_id: row.plan_id,
+    ordinal: row.ordinal,
+    description: row.description,
+    prompt: row.prompt,
+    depends_on: dependsOn,
+    optional: row.optional === 1,
+    status: row.status as PlanStep["status"],
+    result_summary: row.result_summary,
+    error_message: row.error_message,
+    tool_calls_made: row.tool_calls_made,
+    started_at: row.started_at,
+    completed_at: row.completed_at,
+    retry_count: row.retry_count,
+  };
+}
+
+export class ExpoPlanStore implements PlanStoreAdapter {
+  constructor(private db: SQLite.SQLiteDatabase) {}
+
+  savePlan(plan: Plan): void {
+    this.db.runSync(
+      `INSERT OR REPLACE INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [plan.plan_id, plan.goal_id, plan.motebit_id, plan.title, plan.status, plan.created_at, plan.updated_at, plan.current_step_index, plan.total_steps],
+    );
+  }
+
+  getPlan(planId: string): Plan | null {
+    const row = this.db.getFirstSync("SELECT * FROM plans WHERE plan_id = ?", [planId]) as PlanRow | null;
+    return row ? rowToPlan(row) : null;
+  }
+
+  getPlanForGoal(goalId: string): Plan | null {
+    const row = this.db.getFirstSync(
+      "SELECT * FROM plans WHERE goal_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1",
+      [goalId],
+    ) as PlanRow | null;
+    return row ? rowToPlan(row) : null;
+  }
+
+  updatePlan(planId: string, updates: Partial<Plan>): void {
+    const fields: string[] = [];
+    const values: SQLite.SQLiteBindValue[] = [];
+    if (updates.title !== undefined) { fields.push("title = ?"); values.push(updates.title); }
+    if (updates.status !== undefined) { fields.push("status = ?"); values.push(updates.status); }
+    if (updates.updated_at !== undefined) { fields.push("updated_at = ?"); values.push(updates.updated_at); }
+    if (updates.current_step_index !== undefined) { fields.push("current_step_index = ?"); values.push(updates.current_step_index); }
+    if (updates.total_steps !== undefined) { fields.push("total_steps = ?"); values.push(updates.total_steps); }
+    if (fields.length === 0) return;
+    values.push(planId);
+    this.db.runSync(`UPDATE plans SET ${fields.join(", ")} WHERE plan_id = ?`, values);
+  }
+
+  saveStep(step: PlanStep): void {
+    this.db.runSync(
+      `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [step.step_id, step.plan_id, step.ordinal, step.description, step.prompt, JSON.stringify(step.depends_on), step.optional ? 1 : 0, step.status, step.result_summary, step.error_message, step.tool_calls_made, step.started_at, step.completed_at, step.retry_count],
+    );
+  }
+
+  getStep(stepId: string): PlanStep | null {
+    const row = this.db.getFirstSync("SELECT * FROM plan_steps WHERE step_id = ?", [stepId]) as PlanStepRow | null;
+    return row ? rowToPlanStep(row) : null;
+  }
+
+  getStepsForPlan(planId: string): PlanStep[] {
+    const rows = this.db.getAllSync("SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY ordinal ASC", [planId]) as PlanStepRow[];
+    return rows.map(rowToPlanStep);
+  }
+
+  updateStep(stepId: string, updates: Partial<PlanStep>): void {
+    const fields: string[] = [];
+    const values: SQLite.SQLiteBindValue[] = [];
+    if (updates.status !== undefined) { fields.push("status = ?"); values.push(updates.status); }
+    if (updates.result_summary !== undefined) { fields.push("result_summary = ?"); values.push(updates.result_summary); }
+    if (updates.error_message !== undefined) { fields.push("error_message = ?"); values.push(updates.error_message); }
+    if (updates.tool_calls_made !== undefined) { fields.push("tool_calls_made = ?"); values.push(updates.tool_calls_made); }
+    if (updates.started_at !== undefined) { fields.push("started_at = ?"); values.push(updates.started_at); }
+    if (updates.completed_at !== undefined) { fields.push("completed_at = ?"); values.push(updates.completed_at); }
+    if (updates.retry_count !== undefined) { fields.push("retry_count = ?"); values.push(updates.retry_count); }
+    if (fields.length === 0) return;
+    values.push(stepId);
+    this.db.runSync(`UPDATE plan_steps SET ${fields.join(", ")} WHERE step_id = ?`, values);
+  }
+
+  getNextPendingStep(planId: string): PlanStep | null {
+    const row = this.db.getFirstSync(
+      "SELECT * FROM plan_steps WHERE plan_id = ? AND status = ? ORDER BY ordinal ASC LIMIT 1",
+      [planId, StepStatus.Pending],
+    ) as PlanStepRow | null;
+    return row ? rowToPlanStep(row) : null;
+  }
+}
+
 // === ConversationSync Adapter (for SyncEngine) ===
 
 export class ExpoSqliteConversationSyncStore implements ConversationSyncStoreAdapter {
@@ -893,6 +1072,7 @@ export class ExpoSqliteConversationSyncStore implements ConversationSyncStoreAda
 
 export interface ExpoStorageResult extends StorageAdapters {
   goalStore: ExpoGoalStore;
+  planStore: ExpoPlanStore;
   conversationSyncStore: ExpoSqliteConversationSyncStore;
 }
 
@@ -1008,6 +1188,48 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
     db.execSync("PRAGMA user_version = 5");
   }
 
+  // Migration 6: plan tables
+  if (userVersion < 6) {
+    try {
+      db.execSync(`
+        CREATE TABLE IF NOT EXISTS plans (
+          plan_id TEXT PRIMARY KEY,
+          goal_id TEXT NOT NULL,
+          motebit_id TEXT NOT NULL,
+          title TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          current_step_index INTEGER NOT NULL DEFAULT 0,
+          total_steps INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_plans_goal ON plans (goal_id);
+
+        CREATE TABLE IF NOT EXISTS plan_steps (
+          step_id TEXT PRIMARY KEY,
+          plan_id TEXT NOT NULL,
+          ordinal INTEGER NOT NULL,
+          description TEXT NOT NULL,
+          prompt TEXT NOT NULL,
+          depends_on TEXT NOT NULL DEFAULT '[]',
+          optional INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'pending',
+          result_summary TEXT,
+          error_message TEXT,
+          tool_calls_made INTEGER NOT NULL DEFAULT 0,
+          started_at INTEGER,
+          completed_at INTEGER,
+          retry_count INTEGER NOT NULL DEFAULT 0,
+          FOREIGN KEY (plan_id) REFERENCES plans(plan_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_plan_steps_plan ON plan_steps (plan_id, ordinal ASC);
+      `);
+    } catch (_) {
+      // Tables may already exist on new DBs
+    }
+    db.execSync("PRAGMA user_version = 6");
+  }
+
   return {
     eventStore: new ExpoSqliteEventStore(db),
     memoryStorage: new ExpoSqliteMemoryStorage(db),
@@ -1016,6 +1238,7 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
     stateSnapshot: new ExpoSqliteStateSnapshot(db),
     conversationStore: new ExpoSqliteConversationStore(db),
     goalStore: new ExpoGoalStore(db),
+    planStore: new ExpoPlanStore(db),
     conversationSyncStore: new ExpoSqliteConversationSyncStore(db),
   };
 }

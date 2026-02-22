@@ -27,6 +27,7 @@
     "@motebit/behavior-engine": "workspace:*",
     "@motebit/sync-engine": "workspace:*",
     "@motebit/mcp-client": "workspace:*",
+    "@motebit/planner": "workspace:*",
     "@motebit/tools": "workspace:*",
     "@motebit/identity-file": "workspace:*",
     "@motebit/voice": "workspace:*",

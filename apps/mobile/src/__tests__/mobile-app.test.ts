@@ -97,6 +97,9 @@ vi.mock("@motebit/tools/web-safe", () => ({
   createRecallMemoriesHandler: vi.fn((_fn: unknown) => vi.fn(() => Promise.resolve({ ok: true, data: "mock memories" }))),
   listEventsDefinition: { name: "list_events", description: "List events", inputSchema: { type: "object", properties: {} } },
   createListEventsHandler: vi.fn((_fn: unknown) => vi.fn(() => Promise.resolve({ ok: true, data: "mock events" }))),
+  createSubGoalDefinition: { name: "create_sub_goal", description: "Create sub-goal", inputSchema: { type: "object", properties: { prompt: { type: "string" } }, required: ["prompt"] } },
+  completeGoalDefinition: { name: "complete_goal", description: "Complete goal", inputSchema: { type: "object", properties: { reason: { type: "string" } }, required: ["reason"] } },
+  reportProgressDefinition: { name: "report_progress", description: "Report progress", inputSchema: { type: "object", properties: { note: { type: "string" } }, required: ["note"] } },
   DuckDuckGoSearchProvider: vi.fn().mockImplementation(() => ({})),
 }));
 
