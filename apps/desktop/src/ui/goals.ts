@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-base-to-string -- UI rendering of untyped Tauri IPC data, String() wrapping is intentional */
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
 import type { GoalPlanProgressEvent, GoalCompleteEvent } from "../index";
@@ -254,7 +255,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
       if (resultData && typeof resultData === "object" && resultData.durationMs) {
         const durSpan = document.createElement("span");
         durSpan.className = "audit-inline-duration";
-        durSpan.textContent = `${resultData.durationMs}ms`;
+        durSpan.textContent = `${String(resultData.durationMs)}ms`;
         row.appendChild(durSpan);
       }
 

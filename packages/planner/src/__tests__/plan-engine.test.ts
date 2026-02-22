@@ -174,6 +174,7 @@ describe("PlanEngine", () => {
     let callCount = 0;
     mockRunTurnStreaming.mockImplementation(async function* () {
       callCount++;
+      yield { type: "text" as const, text: "" };
       throw new Error("Provider error");
     });
 
@@ -393,7 +394,7 @@ describe("PlanEngine", () => {
     store.savePlan(plan);
 
     await expect(async () => {
-      for await (const _ of engine.resumePlan(plan.plan_id, deps)) {
+      for await (const _chunk of engine.resumePlan(plan.plan_id, deps)) {
         /* consume */
       }
     }).rejects.toThrow("not active");
@@ -643,6 +644,7 @@ describe("PlanEngine", () => {
       });
 
       mockRunTurnStreaming.mockImplementation(async function* () {
+        yield { type: "text" as const, text: "" };
         throw new Error("Step error");
       });
 
@@ -692,6 +694,7 @@ describe("PlanEngine", () => {
       });
 
       mockRunTurnStreaming.mockImplementation(async function* () {
+        yield { type: "text" as const, text: "" };
         throw new Error("Step error");
       });
 
@@ -727,6 +730,7 @@ describe("PlanEngine", () => {
 
       // All step executions fail
       mockRunTurnStreaming.mockImplementation(async function* () {
+        yield { type: "text" as const, text: "" };
         throw new Error("Step error");
       });
 

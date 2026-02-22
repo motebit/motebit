@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-base-to-string -- UI rendering of untyped Tauri IPC data */
 import type { DesktopAIConfig, InvokeFn, McpServerConfig, PolicyConfig } from "../index";
 import type { NameCollision } from "../mcp-discovery";
 import type { DesktopContext } from "../types";
@@ -303,6 +304,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   });
 
   // Export Identity File button
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- DOM event handler
   document.getElementById("settings-export-identity")!.addEventListener("click", async () => {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
@@ -328,6 +330,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     const input = document.createElement("input");
     input.type = "file";
     input.accept = ".md,text/markdown";
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- DOM event handler
     input.addEventListener("change", async () => {
       const file = input.files?.[0];
       if (!file) return;
@@ -400,7 +403,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     resultDiv.className = "audit-detail-result";
     if (resultData && typeof resultData === "object") {
       const ok = resultData.ok !== undefined ? String(resultData.ok) : resultData.error ? "failed" : "ok";
-      const dur = resultData.durationMs ? `${resultData.durationMs}ms` : "";
+      const dur = resultData.durationMs ? `${String(resultData.durationMs)}ms` : "";
       resultDiv.textContent = [ok, dur].filter(Boolean).join(" · ");
     } else {
       resultDiv.textContent = String(entry.result || "");
@@ -480,12 +483,11 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         const stats = document.createElement("span");
         stats.className = "audit-run-stats";
 
-        let allowed = 0, denied = 0, approval = 0;
+        let denied = 0, approval = 0;
         for (const e of group.entries) {
           const c = classifyDecision(e.decision);
-          if (c === "allowed") allowed++;
-          else if (c === "denied") denied++;
-          else approval++;
+          if (c === "denied") denied++;
+          else if (c === "approval") approval++;
         }
 
         // Semantic trust badge — only surface when something noteworthy happened

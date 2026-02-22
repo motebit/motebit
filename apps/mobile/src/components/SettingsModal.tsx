@@ -132,8 +132,8 @@ export function SettingsModal({
 
     // Apply governance settings to runtime (include current operator mode to preserve it)
     app.updatePolicyConfig({
-      requireApprovalAbove: APPROVAL_PRESET_CONFIGS[draft.approvalPreset]?.requireApprovalAbove as number | undefined,
-      denyAbove: APPROVAL_PRESET_CONFIGS[draft.approvalPreset]?.denyAbove as number | undefined,
+      requireApprovalAbove: APPROVAL_PRESET_CONFIGS[draft.approvalPreset]?.requireApprovalAbove,
+      denyAbove: APPROVAL_PRESET_CONFIGS[draft.approvalPreset]?.denyAbove,
       operatorMode: app.isOperatorMode,
       budget: { maxCallsPerTurn: draft.budgetMaxCalls },
     });

@@ -414,7 +414,7 @@ export class MotebitRuntime {
         for (const msg of messages) {
           if (msg.role === "user" || msg.role === "assistant") {
             this.conversationHistory.push({
-              role: msg.role as "user" | "assistant",
+              role: msg.role,
               content: msg.content,
             });
           }
@@ -1088,7 +1088,7 @@ export class MotebitRuntime {
     for (const msg of messages) {
       if (msg.role === "user" || msg.role === "assistant") {
         this.conversationHistory.push({
-          role: msg.role as "user" | "assistant",
+          role: msg.role,
           content: msg.content,
         });
       }

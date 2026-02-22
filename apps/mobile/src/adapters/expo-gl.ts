@@ -246,7 +246,7 @@ export class ExpoGLAdapter implements RenderAdapter {
   /** True while user finger is down — suppresses momentum application. */
   private camTouching = false;
 
-  async init(gl: unknown): Promise<void> {
+  init(gl: unknown): Promise<void> {
     const glContext = gl as WebGLRenderingContext;
 
     this.renderer = new Renderer({ gl: glContext }) as unknown as THREE.WebGLRenderer;
@@ -327,6 +327,7 @@ export class ExpoGLAdapter implements RenderAdapter {
     this.smileMesh = createSmile();
     this.smileMesh.position.set(0, -0.025, 0.09);
     this.creature.add(this.smileMesh);
+    return Promise.resolve();
   }
 
   // === Touch gesture handlers (called from App.tsx) ===
@@ -600,7 +601,7 @@ export class ExpoGLAdapter implements RenderAdapter {
     if (this.leftEye) {
       this.leftEye.traverse((child) => {
         if (child instanceof THREE.Mesh) {
-          child.geometry.dispose();
+          (child as THREE.Mesh).geometry.dispose();
           if (child.material instanceof THREE.Material) child.material.dispose();
         }
       });
@@ -608,7 +609,7 @@ export class ExpoGLAdapter implements RenderAdapter {
     if (this.rightEye) {
       this.rightEye.traverse((child) => {
         if (child instanceof THREE.Mesh) {
-          child.geometry.dispose();
+          (child as THREE.Mesh).geometry.dispose();
           if (child.material instanceof THREE.Material) child.material.dispose();
         }
       });

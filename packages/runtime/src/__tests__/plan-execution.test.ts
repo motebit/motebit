@@ -136,7 +136,7 @@ describe("MotebitRuntime.executePlan", () => {
       createAdapters(),
     );
     await expect(async () => {
-      for await (const _ of headless.executePlan("goal-1", "Do something")) { /* consume */ }
+      for await (const _chunk of headless.executePlan("goal-1", "Do something")) { /* consume */ }
     }).rejects.toThrow("AI not initialized");
   });
 
@@ -238,7 +238,7 @@ describe("MotebitRuntime.resumePlan", () => {
       createAdapters(),
     );
     await expect(async () => {
-      for await (const _ of headless.resumePlan("plan-1")) { /* consume */ }
+      for await (const _chunk of headless.resumePlan("plan-1")) { /* consume */ }
     }).rejects.toThrow("AI not initialized");
   });
 
@@ -309,7 +309,7 @@ describe("MotebitRuntime.resumePlan", () => {
 
   it("throws when plan does not exist", async () => {
     await expect(async () => {
-      for await (const _ of runtime.resumePlan("nonexistent")) { /* consume */ }
+      for await (const _chunk of runtime.resumePlan("nonexistent")) { /* consume */ }
     }).rejects.toThrow("Plan not found");
   });
 
@@ -327,7 +327,7 @@ describe("MotebitRuntime.resumePlan", () => {
     });
 
     await expect(async () => {
-      for await (const _ of runtime.resumePlan("plan-completed")) { /* consume */ }
+      for await (const _chunk of runtime.resumePlan("plan-completed")) { /* consume */ }
     }).rejects.toThrow("not active");
   });
 });

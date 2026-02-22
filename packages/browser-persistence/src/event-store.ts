@@ -30,9 +30,9 @@ export class IdbEventStore implements EventStoreAdapter {
         [filter.motebit_id, -Infinity],
         [filter.motebit_id, Infinity],
       );
-      results = await idbRequest(index.getAll(range));
+      results = await idbRequest(index.getAll(range)) as EventLogEntry[];
     } else {
-      results = await idbRequest(store.getAll());
+      results = await idbRequest(store.getAll()) as EventLogEntry[];
     }
 
     // JS-side filtering (events bounded by compaction, so full-scan is fine)
@@ -77,7 +77,7 @@ export class IdbEventStore implements EventStoreAdapter {
           resolve(0);
         }
       };
-      req.onerror = () => reject(req.error);
+      req.onerror = () => reject(req.error ?? new Error("IDB cursor request failed"));
     });
   }
 
@@ -113,7 +113,7 @@ export class IdbEventStore implements EventStoreAdapter {
           resolve(deleted);
         }
       };
-      req.onerror = () => reject(req.error);
+      req.onerror = () => reject(req.error ?? new Error("IDB compact request failed"));
     });
   }
 

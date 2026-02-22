@@ -498,7 +498,7 @@ function onAIReady(config: DesktopAIConfig): void {
     });
     app.onGoalPlanProgress((event: GoalPlanProgressEvent) => {
       const goalStatusEl = document.getElementById("goal-status") as HTMLDivElement;
-      const goalStatusText = goalStatusEl.querySelector(".goal-status-text") as HTMLSpanElement | null;
+      const goalStatusText = goalStatusEl.querySelector(".goal-status-text");
       if (goalStatusText) {
         if (event.type === "plan_created") {
           goalStatusText.textContent = `Plan: ${event.planTitle}`;
@@ -676,7 +676,7 @@ async function bootstrap(): Promise<void> {
 
     // Theme preference from config (overrides localStorage)
     if (typeof parsed.theme === "string" && (parsed.theme === "light" || parsed.theme === "dark" || parsed.theme === "system")) {
-      theme.setPreference(parsed.theme as "light" | "dark" | "system");
+      theme.setPreference(parsed.theme);
     }
 
     voice.rebuildTtsProvider(invoke);

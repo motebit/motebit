@@ -37,12 +37,12 @@ describe("LocalStorageStateSnapshot", () => {
 
   it("persists version clock", () => {
     snapshot.saveState("mote-1", "{}", 42);
-    const clock = snapshot.getSnapshotClock!("mote-1");
+    const clock = snapshot.getSnapshotClock("mote-1");
     expect(clock).toBe(42);
   });
 
   it("returns 0 for missing clock", () => {
-    const clock = snapshot.getSnapshotClock!("mote-missing");
+    const clock = snapshot.getSnapshotClock("mote-missing");
     expect(clock).toBe(0);
   });
 

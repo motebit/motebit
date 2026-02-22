@@ -99,19 +99,19 @@ export class GoalScheduler {
   registerGoalTools(): void {
     const registry = this.runtime.getToolRegistry();
 
-    const createSubGoalHandler: ToolHandler = async (args) => {
+    const createSubGoalHandler: ToolHandler = (args) => {
       if (!this.currentGoalId) {
-        return { ok: false, error: "No active goal context — this tool can only be used during goal execution." };
+        return Promise.resolve({ ok: false, error: "No active goal context — this tool can only be used during goal execution." });
       }
       const prompt = args.prompt as string;
-      if (!prompt) return { ok: false, error: "Missing required parameter: prompt" };
+      if (!prompt) return Promise.resolve({ ok: false, error: "Missing required parameter: prompt" });
 
       const intervalStr = (args.interval as string) ?? "1h";
       let intervalMs: number;
       try {
         intervalMs = parseInterval(intervalStr);
       } catch {
-        return { ok: false, error: `Invalid interval: ${intervalStr}` };
+        return Promise.resolve({ ok: false, error: `Invalid interval: ${intervalStr}` });
       }
 
       const once = (args.once as boolean) ?? false;
@@ -133,7 +133,7 @@ export class GoalScheduler {
       });
 
       console.log(`[goal] sub-goal created: ${goalId.slice(0, 8)} — "${prompt.slice(0, 40)}"`);
-      return { ok: true, data: `Sub-goal created: ${goalId.slice(0, 8)} — "${prompt}"` };
+      return Promise.resolve({ ok: true, data: `Sub-goal created: ${goalId.slice(0, 8)} — "${prompt}"` });
     };
 
     const completeGoalHandler: ToolHandler = async (args) => {
@@ -695,6 +695,7 @@ export class GoalScheduler {
   }
 
   private async consumeAndDiscard(stream: AsyncGenerator<StreamChunk>): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     for await (const _chunk of stream) {
       // drain
     }

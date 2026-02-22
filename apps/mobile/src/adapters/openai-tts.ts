@@ -113,9 +113,9 @@ export class OpenAITTSProvider implements TTSProvider {
           resolve();
           return;
         }
-        sound.playAsync().catch((err) => {
+        sound.playAsync().catch((err: unknown) => {
           this._cleanup(tempPath);
-          reject(err);
+          reject(err instanceof Error ? err : new Error(String(err)));
         });
       });
     } catch (err) {

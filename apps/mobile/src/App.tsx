@@ -86,7 +86,7 @@ export function App(): React.ReactElement {
   const [inputText, setInputText] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [state, setState] = useState<MotebitState | null>(null);
-  const [_cues, setCues] = useState<BehaviorCues | null>(null);
+  const [, setCues] = useState<BehaviorCues | null>(null);
   const [initialized, setInitialized] = useState(false);
   const [settings, setSettings] = useState<MobileSettings | null>(null);
   const animFrameRef = useRef<number>(0);
@@ -146,7 +146,7 @@ export function App(): React.ReactElement {
   // Derive voice glow color from creature preset
   const activeGlow = useMemo((): [number, number, number] | undefined => {
     const preset = COLOR_PRESETS[settings?.colorPreset ?? "borosilicate"];
-    return preset?.glow as [number, number, number] | undefined;
+    return preset?.glow;
   }, [settings?.colorPreset]);
 
   // Dynamic mic button background from glow color
@@ -579,7 +579,7 @@ export function App(): React.ReactElement {
   }, [micState, startAmbientMonitor]);
 
   // === Mic button handler — 5-state machine ===
-  const handleMicPress = useCallback(async () => {
+  const handleMicPress = useCallback(() => {
     switch (micState) {
       case "off": {
         // off → ambient: start listening with VAD
@@ -1208,6 +1208,7 @@ export function App(): React.ReactElement {
         onResponderMove={handleGLResponderMove}
         onResponderRelease={handleGLResponderRelease}
       >
+        {/* eslint-disable-next-line @typescript-eslint/no-misused-promises */}
         <GLView style={styles.glView} onContextCreate={onGLContextCreate} />
         {state && (
           <View style={styles.stateOverlay}>
@@ -1278,13 +1279,13 @@ export function App(): React.ReactElement {
       )}
 
       {/* Chat Messages */}
-      <FlatList
+      <FlatList<ChatMessage>
         ref={flatListRef}
         data={messages}
         keyExtractor={(item) => item.id}
         style={styles.chatList}
         contentContainerStyle={styles.chatContent}
-        renderItem={({ item }) => {
+        renderItem={({ item }: { item: ChatMessage }) => {
           if (item.role === "approval") {
             return (
               <ApprovalCard

@@ -360,7 +360,7 @@ describe("sendMessageStreaming", () => {
       createAdapters(),
     );
     await expect(async () => {
-      for await (const _ of headless.sendMessageStreaming("hello")) { /* consume */ }
+      for await (const _chunk of headless.sendMessageStreaming("hello")) { /* consume */ }
     }).rejects.toThrow("AI not initialized");
   });
 
@@ -375,10 +375,10 @@ describe("sendMessageStreaming", () => {
     await gen.next();
 
     await expect(async () => {
-      for await (const _ of runtime.sendMessageStreaming("second")) { /* consume */ }
+      for await (const _chunk of runtime.sendMessageStreaming("second")) { /* consume */ }
     }).rejects.toThrow("Already processing");
 
-    for await (const _ of gen) { /* drain */ }
+    for await (const _chunk of gen) { /* drain */ }
   });
 
   it("pushes user and assistant messages to conversation history", async () => {
@@ -408,6 +408,7 @@ describe("sendMessageStreaming", () => {
 
   it("clears isProcessing even on error", async () => {
     mockRunTurnStreaming.mockReturnValue((async function*() {
+      yield { type: "text" as const, text: "" };
       throw new Error("stream failed");
     })());
 
@@ -527,7 +528,7 @@ describe("resumeAfterApproval", () => {
 
   it("throws without pending approval", async () => {
     await expect(async () => {
-      for await (const _ of runtime.resumeAfterApproval(true)) { /* consume */ }
+      for await (const _chunk of runtime.resumeAfterApproval(true)) { /* consume */ }
     }).rejects.toThrow("No pending approval to resume");
   });
 
@@ -544,7 +545,7 @@ describe("resumeAfterApproval", () => {
       userMessage: "test",
     };
     await expect(async () => {
-      for await (const _ of headless.resumeAfterApproval(true)) { /* consume */ }
+      for await (const _chunk of headless.resumeAfterApproval(true)) { /* consume */ }
     }).rejects.toThrow("AI not initialized");
   });
 
@@ -960,7 +961,7 @@ describe("logToolUsed (via tool_status done)", () => {
       event_types: [EventType.ToolUsed],
     });
     expect(events.length).toBeGreaterThanOrEqual(1);
-    expect((events[0]!.payload as Record<string, unknown>).tool).toBe("test_tool");
+    expect((events[0]!.payload).tool).toBe("test_tool");
   });
 });
 

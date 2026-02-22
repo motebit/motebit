@@ -156,7 +156,7 @@ export function addActionMessage(text: string, actions: ActionButton[]): void {
       btn.addEventListener("click", () => {
         // Disable all buttons in this message after click
         btnRow.querySelectorAll("button").forEach(b => {
-          (b as HTMLButtonElement).disabled = true;
+          (b).disabled = true;
         });
         action.onClick();
       });
@@ -229,8 +229,8 @@ function showApprovalCard(ctx: DesktopContext, name: string, args: Record<string
 
   if (riskLevel != null && RISK_LABELS[riskLevel]) {
     const badge = document.createElement("span");
-    badge.className = `approval-risk ${RISK_LABELS[riskLevel]!.cls}`;
-    badge.textContent = RISK_LABELS[riskLevel]!.label;
+    badge.className = `approval-risk ${RISK_LABELS[riskLevel].cls}`;
+    badge.textContent = RISK_LABELS[riskLevel].label;
     toolDiv.appendChild(badge);
   }
   card.appendChild(toolDiv);
@@ -891,11 +891,11 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
   }
 
   function scrollToRunId(runId: string): boolean {
-    const el = chatLog.querySelector(`[data-run-id="${CSS.escape(runId)}"]`) as HTMLElement | null;
+    const el = chatLog.querySelector(`[data-run-id="${CSS.escape(runId)}"]`);
     if (!el) return false;
     el.scrollIntoView({ behavior: "smooth", block: "center" });
-    el.style.outline = "1px solid rgba(255,255,255,0.3)";
-    setTimeout(() => { el.style.outline = ""; }, 2000);
+    (el as HTMLElement).style.outline = "1px solid rgba(255,255,255,0.3)";
+    setTimeout(() => { (el as HTMLElement).style.outline = ""; }, 2000);
     return true;
   }
 

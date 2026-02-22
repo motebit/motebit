@@ -18,7 +18,7 @@ export interface OpenAITTSConfig {
   /** OpenAI API key. Should come from a secure store, never hardcoded. */
   apiKey: string;
   /** Voice to use. Defaults to "alloy". */
-  voice?: OpenAITTSVoice | string;
+  voice?: string;
   /** Model to use. Defaults to "tts-1". */
   model?: string;
   /** API base URL. Defaults to "https://api.openai.com". */

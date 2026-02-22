@@ -471,34 +471,34 @@ export class MobileApp {
 
     // Goal management tools (available during goal execution)
     const goalStore = this.storage?.goalStore;
-    registry.register(createSubGoalDefinition, async (args: Record<string, unknown>) => {
+    registry.register(createSubGoalDefinition, (args: Record<string, unknown>) => {
       if (!this._currentGoalId || !goalStore) {
-        return { ok: false, error: "No active goal context" };
+        return Promise.resolve({ ok: false, error: "No active goal context" });
       }
       const prompt = args.prompt as string;
       const interval = args.interval as string | undefined;
       const once = args.once as boolean | undefined;
       const intervalMs = interval ? parseInterval(interval) : 3_600_000;
       const mode = once ? "once" : "recurring";
-      const subGoalId = goalStore.addGoal(this.motebitId, prompt, intervalMs, mode as "recurring" | "once");
-      return { ok: true, data: { goal_id: subGoalId, prompt, mode, interval_ms: intervalMs } };
+      const subGoalId = goalStore.addGoal(this.motebitId, prompt, intervalMs, mode);
+      return Promise.resolve({ ok: true, data: { goal_id: subGoalId, prompt, mode, interval_ms: intervalMs } });
     });
 
-    registry.register(completeGoalDefinition, async (args: Record<string, unknown>) => {
+    registry.register(completeGoalDefinition, (args: Record<string, unknown>) => {
       if (!this._currentGoalId || !goalStore) {
-        return { ok: false, error: "No active goal context" };
+        return Promise.resolve({ ok: false, error: "No active goal context" });
       }
       const reason = args.reason as string;
       goalStore.setStatus(this._currentGoalId, "completed");
-      return { ok: true, data: { goal_id: this._currentGoalId, status: "completed", reason } };
+      return Promise.resolve({ ok: true, data: { goal_id: this._currentGoalId, status: "completed", reason } });
     });
 
-    registry.register(reportProgressDefinition, async (args: Record<string, unknown>) => {
+    registry.register(reportProgressDefinition, (args: Record<string, unknown>) => {
       if (!this._currentGoalId) {
-        return { ok: false, error: "No active goal context" };
+        return Promise.resolve({ ok: false, error: "No active goal context" });
       }
       const note = args.note as string;
-      return { ok: true, data: { goal_id: this._currentGoalId, note } };
+      return Promise.resolve({ ok: true, data: { goal_id: this._currentGoalId, note } });
     });
   }
 
@@ -736,7 +736,7 @@ export class MobileApp {
       const def = {
         name: mcpTool.name,
         description: `[${config.name}] ${mcpTool.description ?? mcpTool.name}`,
-        inputSchema: (mcpTool.inputSchema ?? { type: "object", properties: {} }) as Record<string, unknown>,
+        inputSchema: (mcpTool.inputSchema ?? { type: "object", properties: {} }),
         ...(config.trusted ? {} : { requiresApproval: true as const }),
       };
       tempRegistry.register(def, (args: Record<string, unknown>) => adapter.executeTool(mcpTool.name, args));
@@ -750,7 +750,7 @@ export class MobileApp {
     const raw = await AsyncStorage.getItem(MobileApp.MCP_SERVERS_KEY);
     if (!raw) return;
     try {
-      const configs: McpServerConfig[] = JSON.parse(raw);
+      const configs = JSON.parse(raw) as McpServerConfig[];
       this._mcpServers = configs;
       let changed = false;
       for (const config of configs) {
@@ -1429,7 +1429,7 @@ export class MobileApp {
       planStream = this.planEngine!.executePlan(created.plan.plan_id, loopDeps);
     }
 
-    return this.consumePlanStream(planStream, goal, plan!.plan_id);
+    return this.consumePlanStream(planStream, goal, plan.plan_id);
   }
 
   /** Consume a PlanEngine stream, handling approval requests. */

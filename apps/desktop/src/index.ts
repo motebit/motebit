@@ -788,7 +788,6 @@ export class DesktopApp {
 
   async addMcpServer(config: McpServerConfig): Promise<McpServerStatus> {
     // Dynamic import to avoid bundling Node-only dependencies into the webview
-    // @ts-ignore — @motebit/mcp-client is a Node-only package, resolved at runtime in Tauri
     const mcpModule = await (import("@motebit/mcp-client") as Promise<{
       McpClientAdapter: new (config: McpServerConfig) => {
         connect(): Promise<void>;
@@ -1574,7 +1573,7 @@ export class DesktopApp {
 
     // Pre-load any existing active plan for this goal (async cache warm-up for Tauri)
     if (this.planStoreRef && "preloadForGoal" in this.planStoreRef) {
-      await (this.planStoreRef as TauriPlanStore).preloadForGoal(goal.goal_id);
+      await (this.planStoreRef).preloadForGoal(goal.goal_id);
     }
 
     // Check for existing active plan (resume interrupted plan)

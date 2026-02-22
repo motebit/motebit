@@ -184,9 +184,9 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
     try {
       sileroVad = await MicVAD.new({
         audioContext: acx,
-        getStream: async () => stream,
-        pauseStream: async () => {},
-        resumeStream: async () => micStream!,
+        getStream: () => Promise.resolve(stream),
+        pauseStream: () => Promise.resolve(),
+        resumeStream: () => Promise.resolve(micStream!),
         positiveSpeechThreshold: 0.5,
         negativeSpeechThreshold: 0.35,
         minSpeechMs: 100,

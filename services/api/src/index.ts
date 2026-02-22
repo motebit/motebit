@@ -187,6 +187,7 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
   const connections = new Map<string, ConnectedDevice[]>();
 
   const app = new Hono();
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- hono utility functions, not bound methods
   const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 
   // --- Middleware ---
@@ -264,6 +265,7 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
       const token = url.searchParams.get("token");
 
       return {
+        // eslint-disable-next-line @typescript-eslint/no-misused-promises -- hono ws adapter supports async handlers
         async onOpen(_event, ws) {
           // Validate token for WebSocket connections
           if (enableDeviceAuth && token) {
@@ -296,9 +298,11 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
           connections.get(motebitId)!.push({ ws, deviceId });
         },
 
+        // eslint-disable-next-line @typescript-eslint/no-misused-promises -- hono ws adapter supports async handlers
         async onMessage(event, ws) {
           try {
-            const msg = JSON.parse(String(event.data)) as {
+            const raw = event.data;
+            const msg = JSON.parse(typeof raw === "string" ? raw : new TextDecoder().decode(raw as ArrayBuffer)) as {
               type: string;
               events?: EventLogEntry[];
               conversations?: SyncConversation[];
@@ -451,7 +455,7 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
     app.use("/api/v1/*", bearerAuth({ token: apiToken }));
   }
 
-  app.get("/api/v1/audit/:motebitId", async (c) => {
+  app.get("/api/v1/audit/:motebitId", (c) => {
     const motebitId = c.req.param("motebitId");
     const turnId = c.req.query("turn_id");
     let entries: ToolAuditEntry[] = [];
@@ -494,7 +498,7 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
       return c.json({ motebit_id: motebitId, state: null });
     }
     try {
-      const state = JSON.parse(json);
+      const state = JSON.parse(json) as Record<string, unknown>;
       return c.json({ motebit_id: motebitId, state });
     } catch {
       return c.json({ motebit_id: motebitId, state: null });
@@ -712,7 +716,7 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
       throw new HTTPException(403, { message: "Not authorized for this pairing session" });
     }
     if ((session.status as string) !== "claimed") {
-      throw new HTTPException(409, { message: `Cannot approve — status is '${session.status}'` });
+      throw new HTTPException(409, { message: `Cannot approve — status is '${String(session.status)}'` });
     }
 
     // Register the claiming device under the same motebit identity

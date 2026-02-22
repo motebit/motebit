@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-base-to-string -- works with untyped audit data */
 export function parseJsonSafe(str: unknown): unknown {
   if (typeof str !== "string") return str;
   try { return JSON.parse(str); } catch { return str; }

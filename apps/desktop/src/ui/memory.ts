@@ -1,3 +1,4 @@
+import { RelationType, SensitivityLevel } from "@motebit/sdk";
 import type { MemoryNode, MemoryEdge, DeletionCertificate } from "../index";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
@@ -127,8 +128,8 @@ function runForceSimulation(nodes: GraphNode[], edges: GraphEdge[], iterations: 
       for (let j = i + 1; j < nodes.length; j++) {
         const a = nodes[i]!;
         const b = nodes[j]!;
-        let dx = b.x - a.x;
-        let dy = b.y - a.y;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
         let dist = Math.sqrt(dx * dx + dy * dy);
         if (dist < 1) dist = 1;
         const force = repulsionStrength / (dist * dist);
@@ -213,9 +214,9 @@ function renderGraph(ctx2d: CanvasRenderingContext2D, nodes: GraphNode[], edges:
 
     // Dash style by relation type
     const rel = e.edge.relation_type;
-    if (rel === "followed_by") {
+    if (rel === RelationType.FollowedBy) {
       ctx2d.setLineDash([4, 3]); // dashed for temporal
-    } else if (rel === "caused_by") {
+    } else if (rel === RelationType.CausedBy) {
       ctx2d.setLineDash([1, 3]); // dotted for causal
     } else {
       ctx2d.setLineDash([]); // solid for association/related/reinforces/etc
@@ -403,7 +404,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
 
     // Scroll to and highlight focused node
     if (focusNodeId) {
-      const target = memoryList.querySelector(`[data-node-id="${focusNodeId}"]`) as HTMLElement | null;
+      const target = memoryList.querySelector(`[data-node-id="${focusNodeId}"]`);
       if (target) {
         target.classList.add("mem-item-focused");
         target.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -427,7 +428,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
     const metaDiv = document.createElement("div");
     metaDiv.className = "mem-item-meta";
 
-    if (mem.sensitivity && mem.sensitivity !== "none") {
+    if (mem.sensitivity && mem.sensitivity !== SensitivityLevel.None) {
       const badge = document.createElement("span");
       badge.className = `mem-sensitivity-badge ${mem.sensitivity}`;
       badge.textContent = mem.sensitivity;
@@ -729,7 +730,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
   function showTooltip(node: GraphNode, canvasX: number, canvasY: number): void {
     const mem = node.mem;
     const decayed = ctx.app.getDecayedConfidence(mem);
-    const sensitivityText = mem.sensitivity !== "none" ? ` | ${mem.sensitivity}` : "";
+    const sensitivityText = mem.sensitivity !== SensitivityLevel.None ? ` | ${mem.sensitivity}` : "";
 
     memoryGraphTooltip.innerHTML =
       `<div class="mem-graph-tooltip-content">${escapeHtml(mem.content)}</div>` +

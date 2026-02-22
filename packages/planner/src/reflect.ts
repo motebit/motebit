@@ -1,4 +1,4 @@
-import { TrustMode, BatteryMode } from "@motebit/sdk";
+import { TrustMode, BatteryMode, StepStatus } from "@motebit/sdk";
 import type { Plan, PlanStep } from "@motebit/sdk";
 import type { StreamingProvider } from "@motebit/ai-core";
 
@@ -54,7 +54,7 @@ function buildReflectionPrompt(plan: Plan, steps: PlanStep[]): string {
   parts.push("");
 
   for (const step of steps) {
-    const statusLabel = step.status === "completed" ? "completed" : step.status === "skipped" ? "skipped" : step.status;
+    const statusLabel = step.status === StepStatus.Completed ? "completed" : step.status === StepStatus.Skipped ? "skipped" : step.status;
     parts.push(`Step ${step.ordinal + 1} (${statusLabel}): ${step.description}`);
     if (step.result_summary) {
       // Cap each step result to avoid blowing context

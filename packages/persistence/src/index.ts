@@ -713,7 +713,7 @@ export class SqliteAuditLog implements AuditLogAdapter {
     }
 
     // Match InMemoryAuditLog: return last N records (slice from end)
-    let sql = `SELECT * FROM audit_log WHERE ${conditions.join(" AND ")} ORDER BY timestamp ASC`;
+    const sql = `SELECT * FROM audit_log WHERE ${conditions.join(" AND ")} ORDER BY timestamp ASC`;
 
     const rows = this.db.prepare(sql).all(...params) as AuditRow[];
     let results = rows.map(rowToAudit);

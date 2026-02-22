@@ -33,7 +33,7 @@ export class ExpoSpeechTTSProvider implements TTSProvider {
         },
         onError: (err: { message: string }) => {
           this._speaking = false;
-          reject(err);
+          reject(new Error(err.message));
         },
         onStopped: () => {
           this._speaking = false;
@@ -44,7 +44,7 @@ export class ExpoSpeechTTSProvider implements TTSProvider {
   }
 
   cancel(): void {
-    Speech.stop();
+    void Speech.stop();
     this._speaking = false;
   }
 }

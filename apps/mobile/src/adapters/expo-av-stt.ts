@@ -65,7 +65,7 @@ export class ExpoAVSTTProvider implements STTProvider {
   private async _startRecording(): Promise<void> {
     try {
       const { status } = await Audio.requestPermissionsAsync();
-      if (status !== "granted") {
+      if (String(status) !== "granted") {
         this.onError?.("Microphone permission denied");
         return;
       }

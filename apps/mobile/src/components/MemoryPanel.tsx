@@ -10,6 +10,7 @@ import {
   Platform,
   Alert,
 } from "react-native";
+import { SensitivityLevel } from "@motebit/sdk";
 import type { MobileApp } from "../mobile-app";
 import type { MemoryNode } from "../mobile-app";
 
@@ -109,7 +110,7 @@ export function MemoryPanel({ visible, app, onClose }: MemoryPanelProps): React.
                       {item.content}
                     </Text>
                     <View style={styles.metaRow}>
-                      {item.sensitivity !== "none" && (
+                      {item.sensitivity !== SensitivityLevel.None && (
                         <View style={styles.sensitivityBadge}>
                           <Text style={styles.sensitivityText}>{item.sensitivity}</Text>
                         </View>

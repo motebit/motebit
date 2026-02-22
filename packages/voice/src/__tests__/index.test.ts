@@ -507,7 +507,7 @@ describe("FallbackTTSProvider", () => {
 
   it("wraps non-Error throws in Error", async () => {
     const p1: TTSProvider = {
-      speak: vi.fn(async () => { throw "string error"; }),
+      speak: vi.fn(async () => { throw new Error("string error"); }),
       cancel: vi.fn(),
       get speaking() { return false; },
     };

@@ -7,6 +7,8 @@
  * Uses the same schema as @motebit/persistence (better-sqlite3),
  * so data is wire-compatible across desktop and mobile.
  */
+/* eslint-disable @typescript-eslint/require-await -- sync SQLite methods implementing async interfaces */
+/* eslint-disable @typescript-eslint/no-unnecessary-type-assertion -- TS needs these casts, ESLint disagrees */
 
 import * as SQLite from "expo-sqlite";
 import type { EventLogEntry, EventType, MemoryNode, MemoryEdge, MotebitIdentity, AuditRecord, SensitivityLevel, RelationType, Plan, PlanStep } from "@motebit/sdk";
@@ -1089,7 +1091,7 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
   if (userVersion < 1) {
     try {
       db.execSync("ALTER TABLE events ADD COLUMN device_id TEXT");
-    } catch (_) {
+    } catch {
       // Column may already exist on new DBs that have it in CREATE TABLE
     }
     db.execSync("PRAGMA user_version = 1");
@@ -1098,7 +1100,7 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
   if (userVersion < 2) {
     try {
       db.execSync("ALTER TABLE state_snapshots ADD COLUMN version_clock INTEGER NOT NULL DEFAULT 0");
-    } catch (_) {
+    } catch {
       // Column may already exist on new DBs
     }
     db.execSync("PRAGMA user_version = 2");
@@ -1133,7 +1135,7 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
         CREATE INDEX IF NOT EXISTS idx_conv_messages
           ON conversation_messages (conversation_id, created_at ASC);
       `);
-    } catch (_) {
+    } catch {
       // Tables may already exist on new DBs that have them in the main SCHEMA
     }
     db.execSync("PRAGMA user_version = 3");
@@ -1173,7 +1175,7 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
         );
         CREATE INDEX IF NOT EXISTS idx_goal_outcomes_goal ON goal_outcomes (goal_id, ran_at DESC);
       `);
-    } catch (_) {
+    } catch {
       // Tables may already exist on new DBs
     }
     db.execSync("PRAGMA user_version = 4");
@@ -1182,7 +1184,7 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
   if (userVersion < 5) {
     try {
       db.execSync("ALTER TABLE memory_nodes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
-    } catch (_) {
+    } catch {
       // Column already exists on new DBs
     }
     db.execSync("PRAGMA user_version = 5");
@@ -1224,7 +1226,7 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
         );
         CREATE INDEX IF NOT EXISTS idx_plan_steps_plan ON plan_steps (plan_id, ordinal ASC);
       `);
-    } catch (_) {
+    } catch {
       // Tables may already exist on new DBs
     }
     db.execSync("PRAGMA user_version = 6");

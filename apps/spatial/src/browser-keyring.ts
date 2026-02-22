@@ -17,15 +17,17 @@ import type { KeyringAdapter } from "@motebit/runtime";
 const PREFIX = "motebit:";
 
 export class LocalStorageKeyringAdapter implements KeyringAdapter {
-  async get(key: string): Promise<string | null> {
-    return localStorage.getItem(PREFIX + key);
+  get(key: string): Promise<string | null> {
+    return Promise.resolve(localStorage.getItem(PREFIX + key));
   }
 
-  async set(key: string, value: string): Promise<void> {
+  set(key: string, value: string): Promise<void> {
     localStorage.setItem(PREFIX + key, value);
+    return Promise.resolve();
   }
 
-  async delete(key: string): Promise<void> {
+  delete(key: string): Promise<void> {
     localStorage.removeItem(PREFIX + key);
+    return Promise.resolve();
   }
 }

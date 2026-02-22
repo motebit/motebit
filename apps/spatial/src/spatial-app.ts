@@ -195,19 +195,20 @@ export class SpatialApp {
    */
   async bootstrap(): Promise<{ isFirstLaunch: boolean }> {
     const configStore: BootstrapConfigStore = {
-      async read() {
+      read() {
         const mid = localStorage.getItem("motebit:motebit_id");
-        if (!mid) return null;
-        return {
+        if (mid == null) return Promise.resolve(null);
+        return Promise.resolve({
           motebit_id: mid,
-          device_id: localStorage.getItem("motebit:device_id") || "",
-          device_public_key: localStorage.getItem("motebit:device_public_key") || "",
-        };
+          device_id: localStorage.getItem("motebit:device_id") ?? "",
+          device_public_key: localStorage.getItem("motebit:device_public_key") ?? "",
+        });
       },
-      async write(state) {
+      write(state): Promise<void> {
         localStorage.setItem("motebit:motebit_id", state.motebit_id);
         localStorage.setItem("motebit:device_id", state.device_id);
         localStorage.setItem("motebit:device_public_key", state.device_public_key);
+        return Promise.resolve();
       },
     };
 

@@ -13,8 +13,8 @@ export class IdbMemoryStorage implements MemoryStorageAdapter {
 
   async getNode(nodeId: string): Promise<MemoryNode | null> {
     const tx = this.db.transaction("memory_nodes", "readonly");
-    const result = await idbRequest(tx.objectStore("memory_nodes").get(nodeId));
-    return (result as MemoryNode | undefined) ?? null;
+    const result = (await idbRequest(tx.objectStore("memory_nodes").get(nodeId))) as MemoryNode | undefined;
+    return result ?? null;
   }
 
   async queryNodes(query: MemoryQuery): Promise<MemoryNode[]> {

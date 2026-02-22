@@ -589,10 +589,10 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     }
   }
 
-  async init(target: unknown): Promise<void> {
+  init(target: unknown): Promise<void> {
     if (typeof HTMLCanvasElement === "undefined" || !(target instanceof HTMLCanvasElement)) {
       this.initialized = true;
-      return;
+      return Promise.resolve();
     }
 
     const canvas = target;
@@ -654,6 +654,7 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     this.creature.position.set(this.basePosition.x, this.basePosition.y, this.basePosition.z);
 
     this.initialized = true;
+    return Promise.resolve();
   }
 
   render(frame: RenderFrame): void {

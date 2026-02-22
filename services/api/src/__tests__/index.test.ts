@@ -3,6 +3,7 @@ import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 import { EventType } from "@motebit/sdk";
 import type { EventLogEntry } from "@motebit/sdk";
+// eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
 import { generateKeypair, createSignedToken } from "@motebit/crypto";
 
 // === Helpers ===

@@ -506,19 +506,20 @@ async function bootstrapIdentity(
   passphrase: string,
 ): Promise<{ motebitId: string; isFirstLaunch: boolean }> {
   const configStore: BootstrapConfigStore = {
-    async read() {
-      if (!fullConfig.motebit_id) return null;
-      return {
+    read() {
+      if (!fullConfig.motebit_id) return Promise.resolve(null);
+      return Promise.resolve({
         motebit_id: fullConfig.motebit_id,
         device_id: fullConfig.device_id ?? "",
         device_public_key: fullConfig.device_public_key ?? "",
-      };
+      });
     },
-    async write(state) {
+    write(state): Promise<void> {
       fullConfig.motebit_id = state.motebit_id;
       fullConfig.device_id = state.device_id;
       fullConfig.device_public_key = state.device_public_key;
       saveFullConfig(fullConfig);
+      return Promise.resolve();
     },
   };
 
@@ -1379,7 +1380,7 @@ async function handleRun(config: CliConfig): Promise<void> {
 
   if (personalityConfig.default_provider && !process.argv.includes("--provider")) {
     const validProviders = ["anthropic", "ollama"] as const;
-    if (validProviders.includes(personalityConfig.default_provider!)) {
+    if (validProviders.includes(personalityConfig.default_provider)) {
       config.provider = personalityConfig.default_provider!;
     }
   }
@@ -1463,7 +1464,7 @@ async function handleServe(config: CliConfig): Promise<void> {
   // Determine transport and port
   const transport = (config.serveTransport ?? "stdio") as "stdio" | "http";
   if (transport !== "stdio" && transport !== "http") {
-    console.error(`Error: --serve-transport must be "stdio" or "http", got "${transport}"`);
+    console.error(`Error: --serve-transport must be "stdio" or "http", got "${transport as string}"`);
     process.exit(1);
   }
   const port = config.servePort ? parseInt(config.servePort, 10) : 3100;
@@ -1540,7 +1541,7 @@ async function handleServe(config: CliConfig): Promise<void> {
 
   if (personalityConfig.default_provider && !process.argv.includes("--provider")) {
     const validProviders = ["anthropic", "ollama"] as const;
-    if (validProviders.includes(personalityConfig.default_provider!)) {
+    if (validProviders.includes(personalityConfig.default_provider)) {
       config.provider = personalityConfig.default_provider!;
     }
   }
@@ -2189,7 +2190,7 @@ async function main(): Promise<void> {
 
   if (personalityConfig.default_provider && !process.argv.includes("--provider")) {
     const validProviders = ["anthropic", "ollama"] as const;
-    if (validProviders.includes(personalityConfig.default_provider!)) {
+    if (validProviders.includes(personalityConfig.default_provider)) {
       config.provider = personalityConfig.default_provider!;
     }
   }

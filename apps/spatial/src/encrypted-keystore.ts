@@ -42,7 +42,7 @@ function openKeystoreDB(): Promise<IDBDatabase> {
       }
     };
     req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onerror = () => reject(req.error ?? new Error("IDB open failed"));
   });
 }
 
@@ -52,7 +52,7 @@ function idbPut(db: IDBDatabase, key: string, value: unknown): Promise<void> {
     const store = tx.objectStore(IDB_STORE);
     const req = store.put(value, key);
     req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
+    req.onerror = () => reject(req.error ?? new Error("IDB put failed"));
   });
 }
 
@@ -62,7 +62,7 @@ function idbGet(db: IDBDatabase, key: string): Promise<unknown> {
     const store = tx.objectStore(IDB_STORE);
     const req = store.get(key);
     req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onerror = () => reject(req.error ?? new Error("IDB get failed"));
   });
 }
 

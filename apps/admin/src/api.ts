@@ -4,13 +4,13 @@ import type { MotebitState, MemoryNode, MemoryEdge, EventLogEntry, ToolAuditEntr
 
 export const config = {
   get apiUrl(): string {
-    return import.meta.env.VITE_API_URL || "http://localhost:8787";
+    return (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8787";
   },
   get motebitId(): string {
-    return import.meta.env.VITE_MOTEBIT_ID || "default-motebit";
+    return (import.meta.env.VITE_MOTEBIT_ID as string | undefined) ?? "default-motebit";
   },
   get apiToken(): string {
-    return import.meta.env.VITE_API_TOKEN || "";
+    return (import.meta.env.VITE_API_TOKEN as string | undefined) ?? "";
   },
 };
 

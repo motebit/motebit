@@ -127,22 +127,23 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
 
   // === EventStoreAdapter ===
 
-  async append(entry: EventLogEntry): Promise<void> {
+  append(entry: EventLogEntry): Promise<void> {
     if (this.connected && this.ws) {
       this.sendPush([entry]);
     } else {
       this.pendingEvents.push(entry);
     }
+    return Promise.resolve();
   }
 
-  async query(_filter: EventFilter): Promise<EventLogEntry[]> {
+  query(_filter: EventFilter): Promise<EventLogEntry[]> {
     // WebSocket adapter doesn't support query; SyncEngine uses local store for queries
-    return [];
+    return Promise.resolve([]);
   }
 
-  async getLatestClock(_motebitId: string): Promise<number> {
+  getLatestClock(_motebitId: string): Promise<number> {
     // Defer to HTTP fallback or local store
-    return 0;
+    return Promise.resolve(0);
   }
 
   async tombstone(_eventId: string, _motebitId: string): Promise<void> {

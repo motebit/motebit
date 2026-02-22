@@ -71,7 +71,7 @@ function wrapExternalData(data: unknown, toolName: string): string {
   const escaped = text
     .replace(/\[EXTERNAL_DATA\b/g, "[ESCAPED_DATA")
     .replace(/\[\/EXTERNAL_DATA\]/g, "[/ESCAPED_DATA]");
-  const safeName = toolName.replace(/[\[\]"\\]/g, "_").slice(0, 100);
+  const safeName = toolName.replace(/[[\]"\\]/g, "_").slice(0, 100);
   return `${EXTERNAL_DATA_START}"tool:${safeName}"]\n${escaped}\n${EXTERNAL_DATA_END}`;
 }
 

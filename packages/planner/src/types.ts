@@ -1,3 +1,4 @@
+import { StepStatus } from "@motebit/sdk";
 import type { Plan, PlanStep } from "@motebit/sdk";
 
 export interface PlanStoreAdapter {
@@ -63,6 +64,6 @@ export class InMemoryPlanStore implements PlanStoreAdapter {
 
   getNextPendingStep(planId: string): PlanStep | null {
     const steps = this.getStepsForPlan(planId);
-    return steps.find((s) => s.status === "pending") ?? null;
+    return steps.find((s) => s.status === StepStatus.Pending) ?? null;
   }
 }

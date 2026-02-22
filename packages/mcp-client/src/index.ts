@@ -98,7 +98,7 @@ export class McpClientAdapter {
       const transport = new StdioClientTransport({
         command: this.config.command,
         args: this.config.args ?? [],
-        env: this.config.env as Record<string, string> | undefined,
+        env: this.config.env,
       });
       await this.client.connect(transport);
     } else {

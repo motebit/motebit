@@ -173,7 +173,7 @@ function showMainOverlay(): void {
       startFlatPreview();
     } else {
       statusEl.textContent = app.isAIReady ? "Ready" : "Ready (no AI — configure in settings)";
-      enterButton.addEventListener("click", startAR);
+      enterButton.addEventListener("click", () => void startAR());
     }
   });
 }
@@ -190,7 +190,7 @@ function updateProviderUI(provider: string): void {
   }
 }
 
-settingsSave?.addEventListener("click", async (e) => {
+settingsSave?.addEventListener("click", (e) => void (async (e: Event) => {
   e.preventDefault();
   const settings: SpatialSettings = {
     provider: providerSelect.value as "anthropic" | "ollama",
@@ -212,7 +212,7 @@ settingsSave?.addEventListener("click", async (e) => {
   void initVoiceIfEnabled(settings);
   settingsOverlay.classList.add("hidden");
   showMainOverlay();
-});
+})(e));
 
 settingsSkip?.addEventListener("click", () => {
   // Skip AI — just run the creature with idle cues

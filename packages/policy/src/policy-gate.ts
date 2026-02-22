@@ -239,7 +239,7 @@ export class PolicyGate {
 
     // 4. Path allowlist check for file tools — uses segment boundary matching
     if (this.config.pathAllowList && args.path && typeof args.path === "string") {
-      const argPath = args.path as string;
+      const argPath = args.path;
       const allowed = this.config.pathAllowList.some((p) => {
         if (argPath === p) return true;
         // Ensure match is at a directory boundary: /home/user/project/file.ts is ok,
@@ -262,13 +262,13 @@ export class PolicyGate {
     if (this.config.domainAllowList && this.config.domainAllowList.length > 0 && args.url && typeof args.url === "string") {
       let hostname: string;
       try {
-        hostname = new URL(args.url as string).hostname;
+        hostname = new URL(args.url).hostname;
       } catch {
         // Invalid URL — deny rather than silently allowing
         const decision: PolicyDecision = {
           allowed: false,
           requiresApproval: false,
-          reason: `Invalid URL "${args.url as string}" — cannot verify domain allowlist`,
+          reason: `Invalid URL "${args.url}" — cannot verify domain allowlist`,
         };
         this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision, ctx.runId);
         return decision;

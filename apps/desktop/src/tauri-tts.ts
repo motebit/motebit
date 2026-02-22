@@ -76,7 +76,7 @@ export class TauriTTSProvider implements TTSProvider {
         }
         audio.play().catch((err) => {
           this._cleanup();
-          reject(err);
+          reject(err instanceof Error ? err : new Error(String(err)));
         });
       });
     } catch (err) {
