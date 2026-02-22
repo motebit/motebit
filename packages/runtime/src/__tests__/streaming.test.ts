@@ -183,6 +183,9 @@ function createMockConversationStore(): ConversationStoreAdapter {
       const conv = conversations.get(conversationId);
       if (conv) conv.summary = summary;
     },
+    updateTitle(_conversationId: string, _title: string): void {
+      // no-op for tests
+    },
     listConversations(motebitId: string, limit?: number) {
       const results: Array<{
         conversationId: string;

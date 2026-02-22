@@ -148,6 +148,7 @@ export interface ConversationStoreAdapter {
     summary: string | null;
   } | null;
   updateSummary(conversationId: string, summary: string): void;
+  updateTitle(conversationId: string, title: string): void;
   listConversations(motebitId: string, limit?: number): Array<{
     conversationId: string;
     startedAt: number;
@@ -1003,6 +1004,58 @@ export class MotebitRuntime {
   }> {
     if (!this.conversationStore) return [];
     return this.conversationStore.listConversations(this.motebitId, limit);
+  }
+
+  /** Generate a title for the current conversation via AI, with heuristic fallback. */
+  async autoTitle(): Promise<string | null> {
+    if (!this.conversationStore || !this.conversationId) return null;
+    const convos = this.conversationStore.listConversations(this.motebitId, 100);
+    const current = convos.find(c => c.conversationId === this.conversationId);
+    if (current?.title) return null; // already titled
+
+    const history = this.getConversationHistory();
+    if (history.length < 4) return null;
+
+    if (this.provider) {
+      try {
+        const snippet = history.slice(0, 6).map(m => `${m.role}: ${m.content.slice(0, 200)}`).join("\n");
+        const prompt = `Generate a very short title (5-7 words max) for this conversation. Return ONLY the title, no quotes, no explanation.\n\n${snippet}`;
+        const raw = await this.generateCompletion(prompt);
+        const title = raw.trim().replace(/^["']|["']$/g, "").slice(0, 100);
+        if (title.length > 0 && title.length < 100) {
+          this.conversationStore.updateTitle(this.conversationId, title);
+          return title;
+        }
+      } catch {
+        // Fall through to heuristic
+      }
+    }
+
+    // Heuristic fallback: first 7 words of first user message
+    const first = history.find(m => m.role === "user");
+    if (first) {
+      const words = first.content.split(/\s+/);
+      let title = words.slice(0, 7).join(" ");
+      if (words.length > 7) title += "...";
+      if (title.length > 0) {
+        this.conversationStore.updateTitle(this.conversationId, title);
+        return title;
+      }
+    }
+    return null;
+  }
+
+  /** Manually trigger summarization of the current conversation. */
+  async summarizeCurrentConversation(): Promise<string | null> {
+    if (!this.provider || !this.conversationStore || !this.conversationId) return null;
+    const history = this.getConversationHistory();
+    if (history.length < 2) return null;
+    const existingSummary = this.conversationStore.getActiveConversation(this.motebitId)?.summary ?? null;
+    const summary = await summarizeConversation(history, existingSummary, this.provider);
+    if (summary && this.conversationId) {
+      this.conversationStore.updateSummary(this.conversationId, summary);
+    }
+    return summary;
   }
 
   // === Rendering ===

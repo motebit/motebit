@@ -66,6 +66,7 @@ function createMockRuntime(opts: {
       }),
     }),
     stop: vi.fn(),
+    housekeeping: vi.fn().mockResolvedValue(undefined),
   } as unknown as MotebitRuntime;
 
   return { runtime, registeredTools, eventsAppended };

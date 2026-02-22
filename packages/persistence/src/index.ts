@@ -1377,6 +1377,12 @@ export class SqliteConversationStore {
     this.stmtUpdateSummary.run(summary, conversationId);
   }
 
+  updateTitle(conversationId: string, title: string): void {
+    this.db.prepare(
+      `UPDATE conversations SET title = ? WHERE conversation_id = ?`,
+    ).run(title, conversationId);
+  }
+
   listConversations(motebitId: string, limit = 20): Conversation[] {
     const rows = this.stmtListConversations.all(motebitId, limit) as ConversationRow[];
     return rows.map(rowToConversation);

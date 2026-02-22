@@ -36,6 +36,7 @@ export class GoalScheduler {
   private currentGoalId: string | null = null;
   private planEngine: PlanEngine | null = null;
   private planStore: PlanStoreAdapter | null = null;
+  private tickCount = 0;
 
   constructor(
     private runtime: MotebitRuntime,
@@ -85,6 +86,8 @@ export class GoalScheduler {
       this.approvalStore.resolve(id, "denied", "daemon_shutdown");
     }
     this.suspended.clear();
+    // Best-effort memory housekeeping on shutdown
+    void this.runtime.housekeeping();
   }
 
   /** Run a single scheduler tick. Exposed for deterministic testing. */
@@ -358,6 +361,11 @@ export class GoalScheduler {
         } finally {
           this.currentGoalId = null;
         }
+      }
+      // Phase 5: periodic memory housekeeping (every 10 ticks ≈ 10 min at default 60s)
+      this.tickCount++;
+      if (this.tickCount % 10 === 0) {
+        void this.runtime.housekeeping();
       }
     } catch (err: unknown) {
       console.error("[scheduler] tick failed", err);

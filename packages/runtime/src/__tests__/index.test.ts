@@ -630,6 +630,7 @@ describe("Session continuity", () => {
         summary: null,
       }),
       updateSummary: vi.fn(),
+      updateTitle: vi.fn(),
       listConversations: vi.fn().mockReturnValue([]),
     };
   }

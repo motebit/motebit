@@ -760,6 +760,7 @@ Available commands:
   /forget <nodeId>   Delete a memory by ID
   /export            Export all memories and state as JSON
   /clear             Clear conversation history
+  /summarize         Summarize current conversation
   /conversations     List recent conversations
   /conversation <id> Load a past conversation
   /model <name>      Switch AI model
@@ -829,6 +830,21 @@ Available commands:
       runtime.resetConversation();
       console.log("Conversation history cleared.");
       break;
+
+    case "summarize": {
+      try {
+        const summary = await runtime.summarizeCurrentConversation();
+        if (summary) {
+          console.log(`\nSummary:\n${summary}`);
+        } else {
+          console.log("No conversation to summarize (need at least 2 messages).");
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`Summarization failed: ${message}`);
+      }
+      break;
+    }
 
     case "model": {
       if (!args) {
@@ -2352,6 +2368,8 @@ async function main(): Promise<void> {
         process.stdout.write("\nmote> ");
         await consumeStream(runtime.sendMessageStreaming(trimmed, chatRunId), runtime, rl);
       }
+      // Best-effort auto-title after enough messages
+      void runtime.autoTitle();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`\n  [error: ${message}]\n`);
