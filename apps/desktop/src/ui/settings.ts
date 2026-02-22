@@ -340,6 +340,72 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
   // === Governance Audit Activity ===
 
+  function buildAuditRow(entry: Record<string, unknown>): HTMLDivElement {
+    const row = document.createElement("div");
+    row.className = "audit-row";
+
+    const header = document.createElement("div");
+    header.className = "audit-row-header";
+
+    const toolName = document.createElement("span");
+    toolName.className = "audit-tool-name";
+    toolName.textContent = String(entry.tool || "unknown");
+    header.appendChild(toolName);
+
+    const badgeClass = classifyDecision(entry.decision);
+    const badge = document.createElement("span");
+    badge.className = `audit-decision-badge ${badgeClass}`;
+    badge.textContent = badgeClass;
+    header.appendChild(badge);
+
+    const time = document.createElement("span");
+    time.className = "audit-time";
+    time.textContent = formatTimeAgo(Number(entry.timestamp) || 0);
+    header.appendChild(time);
+
+    row.appendChild(header);
+
+    // Expandable detail
+    const detail = document.createElement("div");
+    detail.className = "audit-row-detail";
+
+    const argsStr = typeof entry.args === "string" ? entry.args : JSON.stringify(entry.args || "");
+    const truncArgs = argsStr.length > 200 ? argsStr.slice(0, 200) + "..." : argsStr;
+    const argsDiv = document.createElement("div");
+    argsDiv.className = "audit-detail-args";
+    argsDiv.textContent = truncArgs;
+    detail.appendChild(argsDiv);
+
+    const resultData = parseJsonSafe(entry.result) as Record<string, unknown> | null;
+    const resultDiv = document.createElement("div");
+    resultDiv.className = "audit-detail-result";
+    if (resultData && typeof resultData === "object") {
+      const ok = resultData.ok !== undefined ? String(resultData.ok) : resultData.error ? "failed" : "ok";
+      const dur = resultData.durationMs ? `${resultData.durationMs}ms` : "";
+      resultDiv.textContent = [ok, dur].filter(Boolean).join(" · ");
+    } else {
+      resultDiv.textContent = String(entry.result || "");
+    }
+    if (resultDiv.textContent) detail.appendChild(resultDiv);
+
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "audit-copy-btn";
+    copyBtn.textContent = "Copy JSON";
+    const entryJson = JSON.stringify(entry, null, 2);
+    copyBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      void navigator.clipboard.writeText(entryJson).then(() => {
+        copyBtn.textContent = "Copied";
+        setTimeout(() => { copyBtn.textContent = "Copy JSON"; }, 1500);
+      });
+    });
+    detail.appendChild(copyBtn);
+
+    row.appendChild(detail);
+    row.addEventListener("click", () => { row.classList.toggle("expanded"); });
+    return row;
+  }
+
   function populateGovernanceTab(): void {
     const config = ctx.getConfig();
     if (!config?.isTauri || !config?.invoke) return;
@@ -351,7 +417,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     emptyEl.style.display = "none";
 
     void invoke<Array<Record<string, unknown>>>("db_query", {
-      sql: `SELECT call_id, run_id, tool, args, decision, result, timestamp FROM tool_audit_log ORDER BY timestamp DESC LIMIT 20`,
+      sql: `SELECT call_id, run_id, tool, args, decision, result, timestamp FROM tool_audit_log ORDER BY timestamp DESC LIMIT 50`,
       params: [],
     }).then((entries: Array<Record<string, unknown>>) => {
       if (!entries || entries.length === 0) {
@@ -359,88 +425,99 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         return;
       }
 
+      // Group by run_id, preserving order of first appearance
+      const groups: Array<{ runId: string | null; entries: Array<Record<string, unknown>> }> = [];
+      const runIndex = new Map<string, number>();
+
       for (const entry of entries) {
-        const row = document.createElement("div");
-        row.className = "audit-row";
-
-        // Header
-        const header = document.createElement("div");
-        header.className = "audit-row-header";
-
-        const toolName = document.createElement("span");
-        toolName.className = "audit-tool-name";
-        toolName.textContent = String(entry.tool || "unknown");
-        header.appendChild(toolName);
-
-        const badgeClass = classifyDecision(entry.decision);
-
-        const badge = document.createElement("span");
-        badge.className = `audit-decision-badge ${badgeClass}`;
-        badge.textContent = badgeClass;
-        header.appendChild(badge);
-
-        const time = document.createElement("span");
-        time.className = "audit-time";
-        time.textContent = formatTimeAgo(Number(entry.timestamp) || 0);
-        header.appendChild(time);
-
-        row.appendChild(header);
-
-        // Expandable detail
-        const detail = document.createElement("div");
-        detail.className = "audit-row-detail";
-
-        const argsStr = typeof entry.args === "string" ? entry.args : JSON.stringify(entry.args || "");
-        const truncArgs = argsStr.length > 200 ? argsStr.slice(0, 200) + "..." : argsStr;
-        const argsDiv = document.createElement("div");
-        argsDiv.className = "audit-detail-args";
-        argsDiv.textContent = truncArgs;
-        detail.appendChild(argsDiv);
-
-        const resultData = parseJsonSafe(entry.result) as Record<string, unknown> | null;
-        const resultDiv = document.createElement("div");
-        resultDiv.className = "audit-detail-result";
-        if (resultData && typeof resultData === "object") {
-          const ok = resultData.ok !== undefined ? String(resultData.ok) : resultData.error ? "failed" : "ok";
-          const dur = resultData.durationMs ? `${resultData.durationMs}ms` : "";
-          resultDiv.textContent = [ok, dur].filter(Boolean).join(" · ");
+        const rid = entry.run_id ? String(entry.run_id) : null;
+        if (rid && runIndex.has(rid)) {
+          groups[runIndex.get(rid)!]!.entries.push(entry);
         } else {
-          resultDiv.textContent = String(entry.result || "");
+          if (rid) runIndex.set(rid, groups.length);
+          groups.push({ runId: rid, entries: [entry] });
         }
-        if (resultDiv.textContent) {
-          detail.appendChild(resultDiv);
-        }
+      }
 
-        // Show run_id if present (links audit entry to goal outcome)
-        if (entry.run_id) {
-          const runSpan = document.createElement("div");
-          runSpan.className = "audit-detail-result";
-          runSpan.style.opacity = "0.6";
-          runSpan.textContent = `run: ${String(entry.run_id).slice(0, 8)}`;
-          detail.appendChild(runSpan);
+      for (const group of groups) {
+        // Single ungrouped entry (legacy, no run_id) — render flat
+        if (!group.runId) {
+          const row = buildAuditRow(group.entries[0]!);
+          listEl.appendChild(row);
+          continue;
         }
 
-        // Copy JSON button
-        const copyBtn = document.createElement("button");
-        copyBtn.className = "audit-copy-btn";
-        copyBtn.textContent = "Copy JSON";
-        const entryJson = JSON.stringify(entry, null, 2);
-        copyBtn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          void navigator.clipboard.writeText(entryJson).then(() => {
-            copyBtn.textContent = "Copied";
-            setTimeout(() => { copyBtn.textContent = "Copy JSON"; }, 1500);
-          });
-        });
-        detail.appendChild(copyBtn);
+        // Run group
+        const groupEl = document.createElement("div");
+        groupEl.className = "audit-run-group";
+        // Auto-expand the first (most recent) group
+        if (listEl.children.length === 0) groupEl.classList.add("expanded");
 
-        row.appendChild(detail);
+        const header = document.createElement("div");
+        header.className = "audit-run-header";
 
-        row.addEventListener("click", () => {
-          row.classList.toggle("expanded");
-        });
+        const idSpan = document.createElement("span");
+        idSpan.className = "audit-run-id";
+        idSpan.textContent = `run:${group.runId.slice(0, 8)}`;
+        header.appendChild(idSpan);
 
-        listEl.appendChild(row);
+        // Decision summary badges
+        const stats = document.createElement("span");
+        stats.className = "audit-run-stats";
+
+        let allowed = 0, denied = 0, approval = 0;
+        for (const e of group.entries) {
+          const c = classifyDecision(e.decision);
+          if (c === "allowed") allowed++;
+          else if (c === "denied") denied++;
+          else approval++;
+        }
+        if (allowed > 0) {
+          const b = document.createElement("span");
+          b.className = "audit-decision-badge allowed";
+          b.textContent = String(allowed);
+          stats.appendChild(b);
+        }
+        if (denied > 0) {
+          const b = document.createElement("span");
+          b.className = "audit-decision-badge denied";
+          b.textContent = String(denied);
+          stats.appendChild(b);
+        }
+        if (approval > 0) {
+          const b = document.createElement("span");
+          b.className = "audit-decision-badge approval";
+          b.textContent = String(approval);
+          stats.appendChild(b);
+        }
+
+        const countSpan = document.createElement("span");
+        countSpan.className = "audit-run-count";
+        countSpan.textContent = `${group.entries.length} tool${group.entries.length !== 1 ? "s" : ""}`;
+        stats.appendChild(countSpan);
+
+        header.appendChild(stats);
+
+        // Time — use earliest entry (entries are DESC, so last in array)
+        const earliest = group.entries[group.entries.length - 1]!;
+        const timeSpan = document.createElement("span");
+        timeSpan.className = "audit-run-time";
+        timeSpan.textContent = formatTimeAgo(Number(earliest.timestamp) || 0);
+        header.appendChild(timeSpan);
+
+        groupEl.appendChild(header);
+        header.addEventListener("click", () => { groupEl.classList.toggle("expanded"); });
+
+        // Body — individual tool rows (chronological: oldest first)
+        const body = document.createElement("div");
+        body.className = "audit-run-body";
+        const sorted = [...group.entries].reverse();
+        for (const entry of sorted) {
+          body.appendChild(buildAuditRow(entry));
+        }
+        groupEl.appendChild(body);
+
+        listEl.appendChild(groupEl);
       }
     }).catch(() => {
       emptyEl.style.display = "block";

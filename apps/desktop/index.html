@@ -957,6 +957,52 @@
     }
     .audit-copy-btn:hover { color: var(--text-secondary); border-color: var(--text-ghost); }
 
+    /* Audit run groups */
+    .audit-run-group {
+      margin-bottom: 6px;
+      border: 1px solid var(--border-light);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .audit-run-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 8px;
+      cursor: pointer;
+      transition: background 0.15s;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .audit-run-header:hover { background: var(--bg-card); }
+    .audit-run-id {
+      font-family: monospace;
+      font-size: 10px;
+      color: var(--text-ghost);
+    }
+    .audit-run-stats {
+      display: flex;
+      gap: 4px;
+      align-items: center;
+      margin-left: auto;
+    }
+    .audit-run-count {
+      font-size: 10px;
+      color: var(--text-ghost);
+    }
+    .audit-run-time {
+      font-size: 10px;
+      color: var(--text-ghost);
+    }
+    .audit-run-body {
+      display: none;
+      padding: 0 4px 4px;
+    }
+    .audit-run-group.expanded .audit-run-body { display: block; }
+    .audit-run-group.expanded .audit-run-header { background: var(--bg-card); }
+    .audit-run-body .audit-row { border: none; margin-bottom: 0; border-radius: 0; border-top: 1px solid var(--border-light); }
+    .audit-run-body .audit-row:hover { background: rgba(255,255,255,0.02); }
+
     /* Audit inline — goal outcomes */
     .audit-inline-list { margin-top: 4px; }
     .audit-inline-row {
