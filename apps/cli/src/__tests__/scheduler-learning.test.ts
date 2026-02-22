@@ -158,9 +158,6 @@ describe("GoalScheduler — learning loop", () => {
       expect(outcomes[0]!.status).toBe("completed");
 
       // Memory should be formed with [goal_outcome] prefix
-      // Wait briefly for the fire-and-forget promise
-      await new Promise((r) => setTimeout(r, 50));
-
       expect(memoryGraph.formMemory).toHaveBeenCalled();
       const call = memoryGraph.formMemory.mock.calls[0]!;
       expect(call[0].content).toContain("[goal_outcome]");
@@ -180,8 +177,6 @@ describe("GoalScheduler — learning loop", () => {
       );
       scheduler.registerGoalTools();
       await scheduler.tickOnce();
-
-      await new Promise((r) => setTimeout(r, 50));
 
       // formGoalOutcomeMemory returns early when responseText is empty
       expect(memoryGraph.formMemory).not.toHaveBeenCalled();
@@ -255,9 +250,6 @@ describe("GoalScheduler — learning loop", () => {
       scheduler.setPlanEngine(mockPlanEngine, planStore as unknown as PlanStoreAdapter);
       await scheduler.tickOnce();
 
-      // Wait for fire-and-forget goal outcome memory
-      await new Promise((r) => setTimeout(r, 50));
-
       // 2 reflection memories + 1 goal outcome memory = 3 total
       expect(memoryGraph.formMemory).toHaveBeenCalledTimes(3);
 
@@ -284,6 +276,7 @@ describe("GoalScheduler — learning loop", () => {
       );
       expect(reflectionEvents).toHaveLength(1);
       expect(reflectionEvents[0]!.payload).toMatchObject({
+        source: "plan_reflection",
         summary: "System health verified successfully.",
         memories_stored: 2,
       });

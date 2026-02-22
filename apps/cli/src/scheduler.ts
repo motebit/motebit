@@ -320,7 +320,7 @@ export class GoalScheduler {
           });
 
           // Form a memory from the goal outcome so the agent learns from its work
-          void this.formGoalOutcomeMemory(goal, result);
+          await this.formGoalOutcomeMemory(goal, result);
 
           // One-shot goal: check if completed (agent may have called complete_goal,
           // or if it's done and didn't call it, auto-complete)
@@ -627,6 +627,7 @@ export class GoalScheduler {
           const stored = await this.persistReflectionMemories(chunk.result.memoryCandidates, goalId);
           memoriesFormed += stored;
           void this.logGoalEvent(EventType.ReflectionCompleted, goalId, {
+            source: "plan_reflection",
             summary: chunk.result.summary,
             memories_stored: stored,
           });

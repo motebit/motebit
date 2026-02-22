@@ -909,6 +909,7 @@ export class MotebitRuntime {
         timestamp: Date.now(),
         event_type: EventType.ReflectionCompleted,
         payload: {
+          source: "runtime_reflect",
           insights_count: result.insights.length,
           adjustments_count: result.planAdjustments.length,
           self_assessment_preview: result.selfAssessment.slice(0, 100),

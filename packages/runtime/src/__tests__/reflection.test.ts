@@ -149,6 +149,7 @@ describe("Runtime reflection — learning loop", () => {
     );
     expect(reflectionEvents).toHaveLength(1);
     expect(reflectionEvents[0]!.payload).toMatchObject({
+      source: "runtime_reflect",
       insights_count: 2,
       adjustments_count: 1,
     });
