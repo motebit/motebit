@@ -24,6 +24,8 @@ export interface PlanEngineConfig {
   maxStepRetries?: number;
   maxPlanRetries?: number;
   enableReflection?: boolean;
+  /** Maximum number of steps a plan may contain (default 10). */
+  maxStepsPerPlan?: number;
 }
 
 export class PlanEngine {
@@ -45,6 +47,10 @@ export class PlanEngine {
     deps: MotebitLoopDependencies,
   ): Promise<Plan> {
     const rawPlan = await decomposePlan(ctx, deps.provider);
+    const maxSteps = this.config.maxStepsPerPlan ?? 10;
+    if (rawPlan.steps.length > maxSteps) {
+      rawPlan.steps = rawPlan.steps.slice(0, maxSteps);
+    }
     const now = Date.now();
     const planId = crypto.randomUUID();
 

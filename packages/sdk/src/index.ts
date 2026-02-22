@@ -276,6 +276,8 @@ export interface AIResponse {
   memory_candidates: MemoryCandidate[];
   state_updates: Partial<MotebitState>;
   tool_calls?: ToolCall[];
+  /** Token usage from the provider, if available. */
+  usage?: { input_tokens: number; output_tokens: number };
 }
 
 export interface IntelligenceProvider {

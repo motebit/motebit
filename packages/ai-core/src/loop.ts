@@ -133,6 +133,8 @@ export interface TurnResult {
   memoriesRetrieved: MemoryNode[];
   stateAfter: MotebitState;
   cues: BehaviorCues;
+  /** Total token usage across all LLM calls in this turn, if available. */
+  totalTokens?: number;
 }
 
 export interface TurnOptions {
@@ -262,6 +264,12 @@ export async function* runTurnStreaming(
 
     if (!aiResponse) {
       throw new Error("Stream ended without a final response");
+    }
+
+    // Accumulate token usage on turn context for budget enforcement
+    if (aiResponse.usage && turnCtx) {
+      const tokens = aiResponse.usage.input_tokens + aiResponse.usage.output_tokens;
+      turnCtx = { ...turnCtx, costAccumulated: turnCtx.costAccumulated + tokens };
     }
 
     finalText = aiResponse.text;
@@ -494,6 +502,7 @@ export async function* runTurnStreaming(
       memoriesRetrieved: relevantMemories,
       stateAfter,
       cues,
+      ...(turnCtx && turnCtx.costAccumulated > 0 ? { totalTokens: turnCtx.costAccumulated } : {}),
     },
   };
 }

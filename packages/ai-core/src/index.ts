@@ -106,6 +106,9 @@ interface AnthropicResponse {
 interface AnthropicSSEEvent {
   type: string;
   index?: number;
+  message?: {
+    usage?: { input_tokens: number; output_tokens: number };
+  };
   content_block?: {
     type: string;
     id?: string;
@@ -117,6 +120,7 @@ interface AnthropicSSEEvent {
     text?: string;
     partial_json?: string;
   };
+  usage?: { output_tokens: number };
 }
 
 // === Tag Extraction ===
@@ -363,6 +367,8 @@ export class CloudProvider implements StreamingProvider {
     let activeToolId: string | undefined;
     let activeToolName: string | undefined;
     let activeToolJson = "";
+    let inputTokens = 0;
+    let outputTokens = 0;
 
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
@@ -385,7 +391,11 @@ export class CloudProvider implements StreamingProvider {
           try {
             const event = JSON.parse(jsonStr) as AnthropicSSEEvent;
 
-            if (event.type === "content_block_start") {
+            if (event.type === "message_start" && event.message?.usage) {
+              inputTokens = event.message.usage.input_tokens;
+            } else if (event.type === "message_delta" && event.usage) {
+              outputTokens = event.usage.output_tokens;
+            } else if (event.type === "content_block_start") {
               if (event.content_block?.type === "tool_use") {
                 activeToolId = event.content_block.id;
                 activeToolName = event.content_block.name;
@@ -437,6 +447,7 @@ export class CloudProvider implements StreamingProvider {
         memory_candidates: memoryCandidates,
         state_updates: stateUpdates,
         ...(currentToolCalls.length > 0 ? { tool_calls: currentToolCalls } : {}),
+        ...((inputTokens || outputTokens) ? { usage: { input_tokens: inputTokens, output_tokens: outputTokens } } : {}),
       },
     };
   }
@@ -518,6 +529,7 @@ export class CloudProvider implements StreamingProvider {
       memory_candidates: memoryCandidates,
       state_updates: stateUpdates,
       ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+      usage: data.usage,
     };
   }
 

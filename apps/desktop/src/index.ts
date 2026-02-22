@@ -1387,7 +1387,15 @@ export class DesktopApp {
           });
 
           // Use PlanEngine for multi-step execution if available
-          const result = await this.executePlanGoal(goal, outcomes ?? [], invoke, runId);
+          // Wall-clock limit: 10 minutes per goal run
+          const GOAL_WALL_CLOCK_MS = 10 * 60 * 1000;
+          const deadline = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Goal exceeded 10-minute wall-clock limit")), GOAL_WALL_CLOCK_MS),
+          );
+          const result = await Promise.race([
+            this.executePlanGoal(goal, outcomes ?? [], invoke, runId),
+            deadline,
+          ]);
 
           if (result.suspended) {
             // Approval requested — _goalExecuting stays true to block further ticks.

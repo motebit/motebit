@@ -1195,14 +1195,32 @@
       font-weight: 600;
       margin-bottom: 4px;
     }
+    .approval-card .approval-risk {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 4px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    .approval-risk.risk-read { background: rgba(100,200,100,0.15); color: #6c6; }
+    .approval-risk.risk-draft { background: rgba(100,150,255,0.15); color: #8af; }
+    .approval-risk.risk-write { background: rgba(255,180,60,0.15); color: #fa4; }
+    .approval-risk.risk-execute { background: rgba(255,100,80,0.2); color: #f86; }
+    .approval-risk.risk-money { background: rgba(255,60,60,0.25); color: #f55; }
     .approval-card .approval-args {
       font-size: 11px;
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
       color: var(--text-muted);
       margin-bottom: 8px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      max-width: 100%;
+      max-height: 200px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      background: rgba(0,0,0,0.15);
+      border-radius: 6px;
+      padding: 6px 8px;
     }
     .approval-card .approval-buttons {
       display: flex;

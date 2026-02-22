@@ -269,11 +269,23 @@ export class GoalScheduler {
         try {
           let result: GoalStreamResult;
 
+          // Wall-clock limit: 10 minutes per goal run
+          const GOAL_WALL_CLOCK_MS = 10 * 60 * 1000;
+          const deadline = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Goal exceeded 10-minute wall-clock limit")), GOAL_WALL_CLOCK_MS),
+          );
+
           if (this.planEngine && this.planStore) {
-            result = await this.executePlanGoal(goal, outcomes, runId);
+            result = await Promise.race([
+              this.executePlanGoal(goal, outcomes, runId),
+              deadline,
+            ]);
           } else {
             const stream = this.runtime.sendMessageStreaming(enrichedPrompt, runId);
-            result = await this.consumeDaemonStream(stream, goal.goal_id);
+            result = await Promise.race([
+              this.consumeDaemonStream(stream, goal.goal_id),
+              deadline,
+            ]);
           }
 
           if (result.suspended) {

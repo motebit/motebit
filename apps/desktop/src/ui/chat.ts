@@ -205,18 +205,33 @@ function completeToolStatus(name: string): void {
   }, 1000);
 }
 
-function showApprovalCard(ctx: DesktopContext, name: string, args: Record<string, unknown>): void {
+const RISK_LABELS: Record<number, { label: string; cls: string }> = {
+  0: { label: "read", cls: "risk-read" },
+  1: { label: "draft", cls: "risk-draft" },
+  2: { label: "write", cls: "risk-write" },
+  3: { label: "execute", cls: "risk-execute" },
+  4: { label: "money", cls: "risk-money" },
+};
+
+function showApprovalCard(ctx: DesktopContext, name: string, args: Record<string, unknown>, riskLevel?: number): void {
   const card = document.createElement("div");
   card.className = "approval-card";
 
   const toolDiv = document.createElement("div");
   toolDiv.className = "approval-tool";
   toolDiv.textContent = name;
+
+  if (riskLevel != null && RISK_LABELS[riskLevel]) {
+    const badge = document.createElement("span");
+    badge.className = `approval-risk ${RISK_LABELS[riskLevel]!.cls}`;
+    badge.textContent = RISK_LABELS[riskLevel]!.label;
+    toolDiv.appendChild(badge);
+  }
   card.appendChild(toolDiv);
 
-  const argsDiv = document.createElement("div");
+  const argsDiv = document.createElement("pre");
   argsDiv.className = "approval-args";
-  argsDiv.textContent = JSON.stringify(args).slice(0, 120);
+  argsDiv.textContent = JSON.stringify(args, null, 2);
   card.appendChild(argsDiv);
 
   const btns = document.createElement("div");
@@ -273,7 +288,7 @@ async function consumeApproval(ctx: DesktopContext, approved: boolean): Promise<
           completeToolStatus(chunk.name);
         }
       } else if (chunk.type === "approval_request") {
-        showApprovalCard(ctx, chunk.name, chunk.args);
+        showApprovalCard(ctx, chunk.name, chunk.args, chunk.risk_level);
       } else if (chunk.type === "injection_warning") {
         addMessage("system", `Warning: suspicious content detected in ${chunk.tool_name} results`);
       }
@@ -294,11 +309,18 @@ export function showGoalApprovalCard(ctx: DesktopContext, event: GoalApprovalEve
   const toolDiv = document.createElement("div");
   toolDiv.className = "approval-tool";
   toolDiv.textContent = event.toolName;
+
+  if (event.riskLevel != null && RISK_LABELS[event.riskLevel]) {
+    const badge = document.createElement("span");
+    badge.className = `approval-risk ${RISK_LABELS[event.riskLevel]!.cls}`;
+    badge.textContent = RISK_LABELS[event.riskLevel]!.label;
+    toolDiv.appendChild(badge);
+  }
   card.appendChild(toolDiv);
 
-  const argsDiv = document.createElement("div");
+  const argsDiv = document.createElement("pre");
   argsDiv.className = "approval-args";
-  argsDiv.textContent = JSON.stringify(event.args).slice(0, 120);
+  argsDiv.textContent = JSON.stringify(event.args, null, 2);
   card.appendChild(argsDiv);
 
   const btns = document.createElement("div");
@@ -355,7 +377,7 @@ async function consumeGoalApproval(ctx: DesktopContext, approved: boolean): Prom
           completeToolStatus(chunk.name);
         }
       } else if (chunk.type === "approval_request") {
-        showApprovalCard(ctx, chunk.name, chunk.args);
+        showApprovalCard(ctx, chunk.name, chunk.args, chunk.risk_level);
       } else if (chunk.type === "injection_warning") {
         addMessage("system", `Warning: suspicious content detected in ${chunk.tool_name} results`);
       }
@@ -808,7 +830,7 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
             completeToolStatus(chunk.name);
           }
         } else if (chunk.type === "approval_request") {
-          showApprovalCard(ctx, chunk.name, chunk.args);
+          showApprovalCard(ctx, chunk.name, chunk.args, chunk.risk_level);
         } else if (chunk.type === "injection_warning") {
           addMessage("system", `Warning: suspicious content detected in ${chunk.tool_name} results`);
         } else if (chunk.type === "result") {
