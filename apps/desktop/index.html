@@ -875,6 +875,9 @@
     .sync-badge.connected { background: rgba(74, 222, 128, 0.15); color: #4ade80; }
     .sync-badge.disconnected { background: var(--bg-btn); color: var(--text-muted); }
 
+    .verify-valid { background: rgba(0,200,100,0.15); color: #4ade80; }
+    .verify-invalid { background: rgba(255,60,60,0.15); color: #f87171; }
+
     /* Settings footer */
     .settings-footer {
       display: flex;
@@ -945,6 +948,71 @@
     @keyframes pulse {
       0%, 100% { opacity: 0.4; }
       50% { opacity: 0.8; }
+    }
+
+    /* Memory footer on assistant bubbles */
+    .memory-footer {
+      margin-top: 6px;
+      padding-top: 4px;
+      border-top: 1px solid var(--border-light);
+    }
+    .memory-footer-summary {
+      font-size: 11px;
+      color: var(--text-faint);
+      font-style: italic;
+      cursor: pointer;
+      user-select: none;
+    }
+    .memory-footer-summary:hover {
+      color: var(--text-secondary);
+    }
+    .memory-footer-details {
+      margin-top: 4px;
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+    .memory-footer-item {
+      padding: 2px 0;
+      display: flex;
+      gap: 6px;
+      align-items: baseline;
+    }
+    .memory-footer-badge {
+      font-size: 10px;
+      color: var(--text-faint);
+      font-family: monospace;
+      flex-shrink: 0;
+    }
+    .memory-footer-content {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .memory-footer-redacted {
+      font-style: italic;
+      color: var(--text-faint);
+    }
+    .memory-footer-clickable {
+      cursor: pointer;
+      border-radius: 4px;
+      padding: 2px 4px;
+      margin: 0 -4px;
+    }
+    .memory-footer-clickable:hover {
+      background: var(--bg-btn-hover);
+    }
+    .memory-footer-divider {
+      font-size: 10px;
+      color: var(--text-faint);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-top: 4px;
+      padding-top: 4px;
+      border-top: 1px solid var(--border-light);
+    }
+    .memory-footer-new {
+      color: var(--accent);
+      font-weight: 600;
     }
 
     /* Approval cards */
@@ -1499,6 +1567,14 @@
       position: relative;
     }
     .mem-item:hover { background: var(--bg-card); }
+    .mem-item-focused {
+      background: var(--accent-bg);
+      animation: mem-focus-fade 2s ease-out forwards;
+    }
+    @keyframes mem-focus-fade {
+      0% { background: var(--accent-bg); }
+      100% { background: transparent; }
+    }
     .mem-item-content {
       font-size: 13px;
       color: var(--text-secondary);
@@ -1527,10 +1603,36 @@
     .mem-sensitivity-badge.medical { background: rgba(245, 158, 11, 0.12); color: #f59e0b; }
     .mem-sensitivity-badge.financial { background: rgba(34, 197, 94, 0.12); color: #22c55e; }
     .mem-sensitivity-badge.secret { background: rgba(239, 68, 68, 0.12); color: #ef4444; }
-    .mem-delete-btn {
+    .mem-pin-btn {
+      position: absolute;
+      top: 8px;
+      right: 28px;
+      background: none;
+      border: none;
+      color: var(--text-disabled);
+      cursor: pointer;
+      font-size: 13px;
+      padding: 2px 4px;
+      line-height: 1;
+    }
+    .mem-pin-btn:hover { color: var(--accent); }
+    .mem-pin-btn.pinned { color: var(--accent); }
+    .mem-section-header {
+      font-size: 10px;
+      color: var(--text-faint);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      padding: 8px 12px 2px;
+    }
+    .mem-delete-wrap {
       position: absolute;
       top: 8px;
       right: 8px;
+      display: flex;
+      gap: 4px;
+      align-items: center;
+    }
+    .mem-delete-btn {
       background: none;
       border: none;
       color: var(--text-disabled);
@@ -1540,6 +1642,23 @@
       line-height: 1;
     }
     .mem-delete-btn:hover { color: #f87171; }
+    .mem-delete-confirming .mem-delete-btn {
+      font-size: 11px;
+      color: #ef4444;
+      font-weight: 600;
+    }
+    .mem-delete-confirming .mem-delete-btn:hover {
+      color: #dc2626;
+    }
+    .mem-cancel-btn {
+      background: none;
+      border: none;
+      color: var(--text-faint);
+      cursor: pointer;
+      font-size: 11px;
+      padding: 2px 4px;
+    }
+    .mem-cancel-btn:hover { color: var(--text-secondary); }
     .mem-empty {
       font-size: 12px;
       color: var(--text-ghost);
@@ -3055,6 +3174,12 @@
           <button class="settings-outline-btn" id="settings-export" style="flex:1;">Export Data</button>
           <button class="settings-outline-btn" id="settings-docs" style="flex:1;">Documentation</button>
         </div>
+        <div class="card-title" style="margin-top:12px;">Identity File</div>
+        <div style="display:flex;gap:8px;">
+          <button class="settings-outline-btn" id="settings-export-identity" style="flex:1;">Export motebit.md</button>
+          <button class="settings-outline-btn" id="settings-verify-identity" style="flex:1;">Verify…</button>
+        </div>
+        <div id="verify-result" style="display:none;margin-top:6px;font-size:11px;padding:6px 8px;border-radius:4px;"></div>
       </div>
     </div>
     <div class="settings-footer">

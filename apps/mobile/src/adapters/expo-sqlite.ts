@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
   created_at INTEGER NOT NULL,
   last_accessed INTEGER NOT NULL,
   half_life REAL NOT NULL,
-  tombstoned INTEGER NOT NULL DEFAULT 0
+  tombstoned INTEGER NOT NULL DEFAULT 0,
+  pinned INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote ON memory_nodes (motebit_id);
 
@@ -136,6 +137,7 @@ interface NodeRow {
   last_accessed: number;
   half_life: number;
   tombstoned: number;
+  pinned: number;
 }
 
 interface EdgeRow {
@@ -194,6 +196,7 @@ function rowToNode(row: NodeRow): MemoryNode {
     last_accessed: row.last_accessed,
     half_life: row.half_life,
     tombstoned: row.tombstoned === 1,
+    pinned: row.pinned === 1,
   };
 }
 
@@ -308,9 +311,9 @@ export class ExpoSqliteMemoryStorage implements MemoryStorageAdapter {
   async saveNode(node: MemoryNode): Promise<void> {
     this.db.runSync(
       `INSERT OR REPLACE INTO memory_nodes
-       (node_id, motebit_id, content, embedding, confidence, sensitivity, created_at, last_accessed, half_life, tombstoned)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [node.node_id, node.motebit_id, node.content, JSON.stringify(node.embedding), node.confidence, node.sensitivity, node.created_at, node.last_accessed, node.half_life, node.tombstoned ? 1 : 0],
+       (node_id, motebit_id, content, embedding, confidence, sensitivity, created_at, last_accessed, half_life, tombstoned, pinned)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [node.node_id, node.motebit_id, node.content, JSON.stringify(node.embedding), node.confidence, node.sensitivity, node.created_at, node.last_accessed, node.half_life, node.tombstoned ? 1 : 0, node.pinned ? 1 : 0],
     );
   }
 
@@ -358,6 +361,10 @@ export class ExpoSqliteMemoryStorage implements MemoryStorageAdapter {
 
   async tombstoneNode(nodeId: string): Promise<void> {
     this.db.runSync("UPDATE memory_nodes SET tombstoned = 1 WHERE node_id = ?", [nodeId]);
+  }
+
+  async pinNode(nodeId: string, pinned: boolean): Promise<void> {
+    this.db.runSync("UPDATE memory_nodes SET pinned = ? WHERE node_id = ? AND tombstoned = 0", [pinned ? 1 : 0, nodeId]);
   }
 
   async getAllNodes(motebitId: string): Promise<MemoryNode[]> {
@@ -990,6 +997,15 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
       // Tables may already exist on new DBs
     }
     db.execSync("PRAGMA user_version = 4");
+  }
+
+  if (userVersion < 5) {
+    try {
+      db.execSync("ALTER TABLE memory_nodes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
+    } catch (_) {
+      // Column already exists on new DBs
+    }
+    db.execSync("PRAGMA user_version = 5");
   }
 
   return {

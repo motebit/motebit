@@ -92,6 +92,7 @@ function setupStreamMock(responses: string[]): void {
       result: {
         response,
         memoriesFormed: [],
+        memoriesRetrieved: [],
         stateAfter: {
           attention: 0.5, processing: 0.1, confidence: 0.5,
           affect_valence: 0, affect_arousal: 0, social_distance: 0.5,

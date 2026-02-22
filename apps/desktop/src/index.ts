@@ -26,7 +26,7 @@ import {
 } from "@motebit/core-identity";
 import { InMemoryAuditLog } from "@motebit/privacy-layer";
 import { createSignedToken } from "@motebit/crypto";
-import { generate as generateIdentityFile, parse as parseIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
+import { generate as generateIdentityFile, parse as parseIdentityFile, verify as verifyIdentity, governanceToPolicyConfig } from "@motebit/identity-file";
 import { PairingClient, ConversationSyncEngine, HttpConversationSyncAdapter, HttpEventStoreAdapter } from "@motebit/sync-engine";
 import type { PairingSession, PairingStatus, ConversationSyncStoreAdapter, SyncStatus } from "@motebit/sync-engine";
 import type { SyncConversation, SyncConversationMessage } from "@motebit/sdk";
@@ -890,6 +890,79 @@ export class DesktopApp {
     };
   }
 
+  /**
+   * Generate a signed motebit.md identity file from live config.
+   * Returns the file content string, or null if the keypair is unavailable.
+   */
+  async exportIdentityFile(invoke: InvokeFn): Promise<string | null> {
+    const keypair = await this.getDeviceKeypair(invoke);
+    if (!keypair) return null;
+
+    // Read live config for governance/memory settings
+    const raw = await invoke<string>("read_config");
+    const configData = JSON.parse(raw) as Record<string, unknown>;
+
+    // Map approval_preset → identity-file governance fields
+    const RISK_NAMES = ["R0_READ", "R1_DRAFT", "R2_WRITE", "R3_EXECUTE", "R4_MONEY"];
+    const preset = configData.approval_preset as string | undefined;
+    const PRESET_GOV: Record<string, { require: number; deny: number }> = {
+      cautious:   { require: 0, deny: 3 },
+      balanced:   { require: 1, deny: 3 },
+      autonomous: { require: 3, deny: 4 },
+    };
+    const presetGov = PRESET_GOV[preset ?? "balanced"] ?? PRESET_GOV.balanced!;
+    const governance = {
+      trust_mode: (preset === "autonomous" ? "full" : "guarded") as "full" | "guarded" | "minimal",
+      max_risk_auto: RISK_NAMES[presetGov.require]!,
+      require_approval_above: RISK_NAMES[presetGov.require]!,
+      deny_above: RISK_NAMES[presetGov.deny]!,
+      operator_mode: false,
+    };
+
+    // Map memory_governance config → identity-file memory fields
+    const memGov = configData.memory_governance as { persistence_threshold?: number; reject_secrets?: boolean } | undefined;
+    const memory = {
+      confidence_threshold: memGov?.persistence_threshold ?? 0.3,
+      half_life_days: 7,
+      per_turn_limit: 5,
+    };
+
+    // Build device list from current device
+    const devices = [{
+      device_id: this.deviceId,
+      name: "Desktop",
+      public_key: this.publicKey,
+      registered_at: new Date().toISOString(),
+    }];
+
+    // Convert hex private key to Uint8Array
+    const privHex = keypair.privateKey;
+    const privKeyBytes = new Uint8Array(privHex.length / 2);
+    for (let i = 0; i < privHex.length; i += 2) {
+      privKeyBytes[i / 2] = parseInt(privHex.slice(i, i + 2), 16);
+    }
+
+    return generateIdentityFile(
+      {
+        motebitId: this.motebitId,
+        ownerId: this.motebitId,
+        publicKeyHex: this.publicKey,
+        governance,
+        memory,
+        devices,
+      },
+      privKeyBytes,
+    );
+  }
+
+  /**
+   * Verify a motebit.md identity file's Ed25519 signature.
+   */
+  async verifyIdentityFile(content: string): Promise<{ valid: boolean; error?: string }> {
+    const result = await verifyIdentity(content);
+    return { valid: result.valid, error: result.error };
+  }
+
   async exportAllData(): Promise<string> {
     const data: Record<string, unknown> = {
       motebit_id: this.motebitId,
@@ -957,6 +1030,12 @@ export class DesktopApp {
   async deleteMemory(nodeId: string): Promise<void> {
     if (!this.runtime) return;
     await this.runtime.memory.deleteMemory(nodeId);
+  }
+
+  /** Pin or unpin a memory. */
+  async pinMemory(nodeId: string, pinned: boolean): Promise<void> {
+    if (!this.runtime) return;
+    await this.runtime.memory.pinMemory(nodeId, pinned);
   }
 
   /** Compute effective confidence after half-life decay. */

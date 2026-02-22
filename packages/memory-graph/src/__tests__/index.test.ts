@@ -97,6 +97,7 @@ describe("InMemoryMemoryStorage", () => {
       last_accessed: Date.now(),
       half_life: 7 * 24 * 60 * 60 * 1000,
       tombstoned: false,
+      pinned: false,
     };
     await storage.saveNode(node);
     const loaded = await storage.getNode("n1");
@@ -120,6 +121,7 @@ describe("InMemoryMemoryStorage", () => {
       last_accessed: Date.now(),
       half_life: 999999999,
       tombstoned: false,
+      pinned: false,
     });
     await storage.saveNode({
       node_id: "n2",
@@ -132,6 +134,7 @@ describe("InMemoryMemoryStorage", () => {
       last_accessed: Date.now(),
       half_life: 999999999,
       tombstoned: false,
+      pinned: false,
     });
     const results = await storage.queryNodes({ motebit_id: "m1" });
     expect(results).toHaveLength(1);
@@ -150,6 +153,7 @@ describe("InMemoryMemoryStorage", () => {
       last_accessed: Date.now(),
       half_life: 999999999,
       tombstoned: true,
+      pinned: false,
     });
     const results = await storage.queryNodes({ motebit_id: "m1" });
     expect(results).toHaveLength(0);
@@ -167,6 +171,7 @@ describe("InMemoryMemoryStorage", () => {
       last_accessed: Date.now(),
       half_life: 999999999,
       tombstoned: true,
+      pinned: false,
     });
     const results = await storage.queryNodes({
       motebit_id: "m1",
@@ -203,6 +208,7 @@ describe("InMemoryMemoryStorage", () => {
       last_accessed: Date.now(),
       half_life: 999999999,
       tombstoned: false,
+      pinned: false,
     });
     await storage.tombstoneNode("n1");
     const loaded = await storage.getNode("n1");
@@ -521,10 +527,11 @@ describe("MemoryGraph", () => {
 
     it("weight normalization handles non-unit-sum weights", async () => {
       // Weights (10, 0, 0) should normalize to (1, 0, 0) — same as similarity-only
+      // Use 0.2 (not 0.1) to avoid straddling the min_confidence=0.1 decay boundary
       await graph.formMemory(
         {
           content: "exact match",
-          confidence: 0.1,
+          confidence: 0.2,
           sensitivity: SensitivityLevel.None,
         },
         [1, 0, 0],
@@ -630,7 +637,7 @@ describe("MemoryGraph", () => {
       expect(results).toHaveLength(1);
     });
 
-    it("exponential recency decay gives half boost after one half-life", async () => {
+    it("exponential recency decay gives half boost after one half-life (recency scoring)", async () => {
       // Create a graph with recency-only scoring and a known half-life
       const halfLifeMs = 1000; // 1 second for test
       const customGraph = new MemoryGraph(storage, eventStore, motebitId, {
@@ -654,6 +661,7 @@ describe("MemoryGraph", () => {
         last_accessed: now, // just accessed
         half_life: 999999999,
         tombstoned: false,
+        pinned: false,
       });
       await storage.saveNode({
         node_id: "old",
@@ -666,12 +674,95 @@ describe("MemoryGraph", () => {
         last_accessed: now - 10000, // accessed 10s ago (10 half-lives)
         half_life: 999999999,
         tombstoned: false,
+        pinned: false,
       });
 
       const results = await customGraph.retrieve([1, 0]);
       // Recent memory should rank first with recency-only scoring
       expect(results[0]!.content).toBe("recent memory");
       expect(results[1]!.content).toBe("old memory");
+    });
+  });
+
+  describe("pinMemory / getPinnedMemories", () => {
+    it("pinMemory sets pinned to true", async () => {
+      const node = await graph.formMemory(
+        { content: "pinnable", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 0],
+      );
+
+      await graph.pinMemory(node.node_id, true);
+
+      const loaded = await storage.getNode(node.node_id);
+      expect(loaded!.pinned).toBe(true);
+    });
+
+    it("pinMemory appends a MemoryPinned event", async () => {
+      const node = await graph.formMemory(
+        { content: "pin event", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 0],
+      );
+
+      await graph.pinMemory(node.node_id, true);
+
+      const events = await eventStore.query({
+        motebit_id: motebitId,
+        event_types: [EventType.MemoryPinned],
+      });
+      expect(events).toHaveLength(1);
+      expect(events[0]!.payload).toEqual({ node_id: node.node_id, pinned: true });
+    });
+
+    it("pinMemory on tombstoned node is a no-op", async () => {
+      const node = await graph.formMemory(
+        { content: "will be deleted", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 0],
+      );
+      await graph.deleteMemory(node.node_id);
+
+      await graph.pinMemory(node.node_id, true);
+
+      const events = await eventStore.query({
+        motebit_id: motebitId,
+        event_types: [EventType.MemoryPinned],
+      });
+      expect(events).toHaveLength(0);
+    });
+
+    it("unpinMemory clears pin state", async () => {
+      const node = await graph.formMemory(
+        { content: "unpin me", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 0],
+      );
+
+      await graph.pinMemory(node.node_id, true);
+      await graph.pinMemory(node.node_id, false);
+
+      const loaded = await storage.getNode(node.node_id);
+      expect(loaded!.pinned).toBe(false);
+    });
+
+    it("getPinnedMemories returns only pinned non-tombstoned nodes", async () => {
+      const n1 = await graph.formMemory(
+        { content: "pinned one", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 0],
+      );
+      await graph.formMemory(
+        { content: "not pinned", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [0, 1],
+      );
+      const n3 = await graph.formMemory(
+        { content: "pinned then deleted", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 1],
+      );
+
+      await graph.pinMemory(n1.node_id, true);
+      await graph.pinMemory(n3.node_id, true);
+      await graph.deleteMemory(n3.node_id);
+
+      const pinned = await graph.getPinnedMemories();
+      expect(pinned).toHaveLength(1);
+      expect(pinned[0]!.content).toBe("pinned one");
     });
   });
 });

@@ -96,6 +96,16 @@ export class IdbMemoryStorage implements MemoryStorageAdapter {
     }
   }
 
+  async pinNode(nodeId: string, pinned: boolean): Promise<void> {
+    const tx = this.db.transaction("memory_nodes", "readwrite");
+    const store = tx.objectStore("memory_nodes");
+    const node = await idbRequest(store.get(nodeId)) as MemoryNode | undefined;
+    if (node && !node.tombstoned) {
+      node.pinned = pinned;
+      await idbRequest(store.put(node));
+    }
+  }
+
   async getAllNodes(motebitId: string): Promise<MemoryNode[]> {
     const tx = this.db.transaction("memory_nodes", "readonly");
     const store = tx.objectStore("memory_nodes");

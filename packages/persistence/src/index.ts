@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
   created_at INTEGER NOT NULL,
   last_accessed INTEGER NOT NULL,
   half_life REAL NOT NULL,
-  tombstoned INTEGER NOT NULL DEFAULT 0
+  tombstoned INTEGER NOT NULL DEFAULT 0,
+  pinned INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote ON memory_nodes (motebit_id);
@@ -365,12 +366,13 @@ export class SqliteMemoryStorage implements MemoryStorageAdapter {
   private stmtGetEdges: PreparedStatement;
   private stmtTombstoneNode: PreparedStatement;
   private stmtGetAllNodes: PreparedStatement;
+  private stmtPinNode: PreparedStatement;
 
   constructor(private db: DatabaseDriver) {
     this.stmtSaveNode = db.prepare(
       `INSERT OR REPLACE INTO memory_nodes
-       (node_id, motebit_id, content, embedding, confidence, sensitivity, created_at, last_accessed, half_life, tombstoned)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (node_id, motebit_id, content, embedding, confidence, sensitivity, created_at, last_accessed, half_life, tombstoned, pinned)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtGetNode = db.prepare(
       `SELECT * FROM memory_nodes WHERE node_id = ?`,
@@ -389,6 +391,9 @@ export class SqliteMemoryStorage implements MemoryStorageAdapter {
     this.stmtGetAllNodes = db.prepare(
       `SELECT * FROM memory_nodes WHERE motebit_id = ?`,
     );
+    this.stmtPinNode = db.prepare(
+      `UPDATE memory_nodes SET pinned = ? WHERE node_id = ? AND tombstoned = 0`,
+    );
   }
 
   async saveNode(node: MemoryNode): Promise<void> {
@@ -403,6 +408,7 @@ export class SqliteMemoryStorage implements MemoryStorageAdapter {
       node.last_accessed,
       node.half_life,
       node.tombstoned ? 1 : 0,
+      node.pinned ? 1 : 0,
     );
   }
 
@@ -484,6 +490,10 @@ export class SqliteMemoryStorage implements MemoryStorageAdapter {
       .all(motebitId) as EdgeRow[];
     return rows.map(rowToEdge);
   }
+
+  async pinNode(nodeId: string, pinned: boolean): Promise<void> {
+    this.stmtPinNode.run(pinned ? 1 : 0, nodeId);
+  }
 }
 
 interface NodeRow {
@@ -497,6 +507,7 @@ interface NodeRow {
   last_accessed: number;
   half_life: number;
   tombstoned: number;
+  pinned: number;
 }
 
 function rowToNode(row: NodeRow): MemoryNode {
@@ -511,6 +522,7 @@ function rowToNode(row: NodeRow): MemoryNode {
     last_accessed: row.last_accessed,
     half_life: row.half_life,
     tombstoned: row.tombstoned === 1,
+    pinned: row.pinned === 1,
   };
 }
 
@@ -1702,6 +1714,13 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   if (userVersion < 7) {
     // Plans + plan_steps tables are in SCHEMA for new DBs; this handles upgrades
     driver.pragma("user_version = 7");
+  }
+
+  if (userVersion < 8) {
+    try {
+      driver.exec("ALTER TABLE memory_nodes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
+    } catch (_) { /* already exists */ }
+    driver.pragma("user_version = 8");
   }
 
   const eventStore = new SqliteEventStore(driver);

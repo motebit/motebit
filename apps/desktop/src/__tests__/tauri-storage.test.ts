@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
   created_at INTEGER NOT NULL,
   last_accessed INTEGER NOT NULL,
   half_life REAL NOT NULL,
-  tombstoned INTEGER NOT NULL DEFAULT 0
+  tombstoned INTEGER NOT NULL DEFAULT 0,
+  pinned INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote ON memory_nodes (motebit_id);
 
@@ -262,6 +263,7 @@ describe("TauriMemoryStorage", () => {
     confidence: number;
     sensitivity: string;
     tombstoned: boolean;
+    pinned: boolean;
     half_life: number;
   }> = {}) => ({
     node_id: overrides.node_id ?? "n1",
@@ -274,6 +276,7 @@ describe("TauriMemoryStorage", () => {
     last_accessed: Date.now(),
     half_life: overrides.half_life ?? 604800000,
     tombstoned: overrides.tombstoned ?? false,
+    pinned: overrides.pinned ?? false,
   });
 
   it("saveNode + getNode round-trip", async () => {

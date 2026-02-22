@@ -71,7 +71,8 @@ export function packContext(contextPack: ContextPack): string {
   if (contextPack.relevant_memories.length > 0) {
     parts.push("[Relevant Memories]");
     for (const mem of contextPack.relevant_memories) {
-      parts.push(`  [confidence=${mem.confidence.toFixed(2)}] ${mem.content}`);
+      const prefix = mem.pinned ? "[pinned] " : "";
+      parts.push(`  ${prefix}[confidence=${mem.confidence.toFixed(2)}] ${mem.content}`);
     }
   }
 

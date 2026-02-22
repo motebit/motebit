@@ -18,7 +18,7 @@ const viewGraphBtn = document.getElementById("mem-view-graph") as HTMLButtonElem
 // === Memory Panel ===
 
 export interface MemoryAPI {
-  open(): void;
+  open(nodeId?: string): void;
   close(): void;
 }
 
@@ -288,7 +288,14 @@ function findNodeAt(nodes: GraphNode[], gx: number, gy: number): GraphNode | nul
 // === Init ===
 
 export function initMemory(ctx: DesktopContext): MemoryAPI {
-  function open(): void {
+  let focusNodeId: string | null = null;
+
+  function open(nodeId?: string): void {
+    focusNodeId = nodeId ?? null;
+    // If focusing a specific node, ensure list view
+    if (focusNodeId && currentView !== "list") {
+      setView("list");
+    }
     memoryPanel.classList.add("open");
     memoryBackdrop.classList.add("open");
     refreshMemoryData();
@@ -297,6 +304,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
   function close(): void {
     memoryPanel.classList.remove("open");
     memoryBackdrop.classList.remove("open");
+    focusNodeId = null;
     if (graphAnimFrame !== null) {
       cancelAnimationFrame(graphAnimFrame);
       graphAnimFrame = null;
@@ -366,50 +374,139 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
       return;
     }
 
-    for (const mem of filtered) {
-      const item = document.createElement("div");
-      item.className = "mem-item";
+    const pinned = filtered.filter(m => m.pinned);
+    const unpinned = filtered.filter(m => !m.pinned);
 
-      const contentDiv = document.createElement("div");
-      contentDiv.className = "mem-item-content";
-      contentDiv.textContent = mem.content;
-      item.appendChild(contentDiv);
+    if (pinned.length > 0) {
+      const header = document.createElement("div");
+      header.className = "mem-section-header";
+      header.textContent = `Pinned (${pinned.length})`;
+      memoryList.appendChild(header);
+      for (const mem of pinned) { renderMemoryItem(mem); }
+    }
 
-      const metaDiv = document.createElement("div");
-      metaDiv.className = "mem-item-meta";
-
-      if (mem.sensitivity && mem.sensitivity !== "none") {
-        const badge = document.createElement("span");
-        badge.className = `mem-sensitivity-badge ${mem.sensitivity}`;
-        badge.textContent = mem.sensitivity;
-        metaDiv.appendChild(badge);
+    if (unpinned.length > 0) {
+      if (pinned.length > 0) {
+        const header = document.createElement("div");
+        header.className = "mem-section-header";
+        header.textContent = "Recent";
+        memoryList.appendChild(header);
       }
+      for (const mem of unpinned) { renderMemoryItem(mem); }
+    }
 
-      const conf = document.createElement("span");
-      const decayed = ctx.app.getDecayedConfidence(mem);
-      conf.textContent = `${Math.round(decayed * 100)}%`;
-      metaDiv.appendChild(conf);
+    // Scroll to and highlight focused node
+    if (focusNodeId) {
+      const target = memoryList.querySelector(`[data-node-id="${focusNodeId}"]`) as HTMLElement | null;
+      if (target) {
+        target.classList.add("mem-item-focused");
+        target.scrollIntoView({ block: "center", behavior: "smooth" });
+        // Remove highlight after animation
+        setTimeout(() => target.classList.remove("mem-item-focused"), 2000);
+      }
+      focusNodeId = null;
+    }
+  }
 
-      const time = document.createElement("span");
-      time.textContent = formatTimeAgo(mem.created_at);
-      metaDiv.appendChild(time);
+  function renderMemoryItem(mem: MemoryNode): void {
+    const item = document.createElement("div");
+    item.className = "mem-item";
+    item.dataset.nodeId = mem.node_id;
 
-      item.appendChild(metaDiv);
+    const contentDiv = document.createElement("div");
+    contentDiv.className = "mem-item-content";
+    contentDiv.textContent = mem.content;
+    item.appendChild(contentDiv);
 
-      const deleteBtn = document.createElement("button");
-      deleteBtn.className = "mem-delete-btn";
-      deleteBtn.textContent = "\u00d7";
-      deleteBtn.title = "Delete memory";
-      deleteBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
+    const metaDiv = document.createElement("div");
+    metaDiv.className = "mem-item-meta";
+
+    if (mem.sensitivity && mem.sensitivity !== "none") {
+      const badge = document.createElement("span");
+      badge.className = `mem-sensitivity-badge ${mem.sensitivity}`;
+      badge.textContent = mem.sensitivity;
+      metaDiv.appendChild(badge);
+    }
+
+    const conf = document.createElement("span");
+    const decayed = ctx.app.getDecayedConfidence(mem);
+    conf.textContent = `${Math.round(decayed * 100)}%`;
+    metaDiv.appendChild(conf);
+
+    const time = document.createElement("span");
+    time.textContent = formatTimeAgo(mem.created_at);
+    metaDiv.appendChild(time);
+
+    item.appendChild(metaDiv);
+
+    // Pin button
+    const pinBtn = document.createElement("button");
+    pinBtn.className = `mem-pin-btn${mem.pinned ? " pinned" : ""}`;
+    pinBtn.textContent = mem.pinned ? "\u2605" : "\u2606";
+    pinBtn.title = mem.pinned ? "Unpin memory" : "Pin memory";
+    pinBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      void ctx.app.pinMemory(mem.node_id, !mem.pinned).then(() => {
+        refreshMemoryData();
+      });
+    });
+    item.appendChild(pinBtn);
+
+    // Delete button
+    const deleteBtnWrap = document.createElement("div");
+    deleteBtnWrap.className = "mem-delete-wrap";
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "mem-delete-btn";
+    deleteBtn.textContent = "\u00d7";
+    deleteBtn.title = "Forget memory";
+
+    let confirmTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    deleteBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+
+      // Already in confirm state — execute delete
+      if (deleteBtnWrap.classList.contains("mem-delete-confirming")) {
+        if (confirmTimeout) clearTimeout(confirmTimeout);
         void ctx.app.deleteMemory(mem.node_id).then(() => {
           refreshMemoryData();
         });
-      });
-      item.appendChild(deleteBtn);
+        return;
+      }
 
-      memoryList.appendChild(item);
+      // Enter confirm state
+      deleteBtnWrap.classList.add("mem-delete-confirming");
+      deleteBtn.textContent = "Forget";
+      deleteBtn.title = "Confirm forget";
+
+      const cancelBtn = document.createElement("button");
+      cancelBtn.className = "mem-cancel-btn";
+      cancelBtn.textContent = "Cancel";
+      cancelBtn.addEventListener("click", (ce) => {
+        ce.stopPropagation();
+        resetDeleteState();
+      });
+      deleteBtnWrap.appendChild(cancelBtn);
+
+      // Auto-cancel after 6 seconds
+      confirmTimeout = setTimeout(resetDeleteState, 6000);
+    });
+
+    function resetDeleteState(): void {
+      if (confirmTimeout) { clearTimeout(confirmTimeout); confirmTimeout = null; }
+      if (!deleteBtnWrap.isConnected) return;
+      deleteBtnWrap.classList.remove("mem-delete-confirming");
+      deleteBtn.textContent = "\u00d7";
+      deleteBtn.title = "Forget memory";
+      const cancel = deleteBtnWrap.querySelector(".mem-cancel-btn");
+      if (cancel) cancel.remove();
     }
+
+    deleteBtnWrap.appendChild(deleteBtn);
+    item.appendChild(deleteBtnWrap);
+
+    memoryList.appendChild(item);
   }
 
   // === Graph View ===
@@ -609,7 +706,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
   });
 
   // Event listeners
-  document.getElementById("memory-btn")!.addEventListener("click", open);
+  document.getElementById("memory-btn")!.addEventListener("click", () => open());
   document.getElementById("memory-close-btn")!.addEventListener("click", close);
   memoryBackdrop.addEventListener("click", close);
 

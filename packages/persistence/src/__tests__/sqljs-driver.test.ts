@@ -100,6 +100,7 @@ describe("sql.js driver (in-memory)", () => {
       last_accessed: Date.now(),
       half_life: 7 * 24 * 60 * 60 * 1000,
       tombstoned: false,
+      pinned: false,
     };
     await mdb.memoryStorage.saveNode(node);
     const loaded = await mdb.memoryStorage.getNode(node.node_id);
@@ -180,9 +181,9 @@ describe("sql.js driver (in-memory)", () => {
   // === Pragma handling ===
 
   it("user_version get/set works", async () => {
-    // After createMotebitDatabaseFromDriver, user_version should be 7
+    // After createMotebitDatabaseFromDriver, user_version should be 8
     const result = mdb.db.pragma("user_version") as { user_version: number }[];
-    expect(result[0]!.user_version).toBe(7);
+    expect(result[0]!.user_version).toBe(8);
 
     mdb.db.pragma("user_version = 99");
     const result2 = mdb.db.pragma("user_version") as { user_version: number }[];

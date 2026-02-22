@@ -289,6 +289,52 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     window.open("https://docs.motebit.dev", "_blank");
   });
 
+  // Export Identity File button
+  document.getElementById("settings-export-identity")!.addEventListener("click", async () => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const content = await ctx.app.exportIdentityFile(invoke as InvokeFn);
+      if (!content) {
+        ctx.showToast("Export failed — keypair not available");
+        return;
+      }
+      const blob = new Blob([content], { type: "text/markdown" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "motebit.md";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 250);
+    } catch {
+      ctx.showToast("Identity export failed");
+    }
+  });
+
+  // Verify Identity File button
+  document.getElementById("settings-verify-identity")!.addEventListener("click", () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".md,text/markdown";
+    input.addEventListener("change", async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      const content = await file.text();
+      const result = await ctx.app.verifyIdentityFile(content);
+      const el = document.getElementById("verify-result")!;
+      el.style.display = "block";
+      el.classList.remove("verify-valid", "verify-invalid");
+      if (result.valid) {
+        el.classList.add("verify-valid");
+        el.textContent = "Valid signature — identity verified";
+      } else {
+        el.classList.add("verify-invalid");
+        el.textContent = `Invalid — ${result.error || "signature mismatch"}`;
+      }
+      setTimeout(() => { el.style.display = "none"; }, 8000);
+    });
+    input.click();
+  });
+
   // === MCP Server List ===
 
   function renderMcpServerList(): void {

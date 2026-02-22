@@ -71,6 +71,7 @@ function makeTurnResult(response = "Mock response"): TurnResult {
   return {
     response,
     memoriesFormed: [],
+    memoriesRetrieved: [],
     stateAfter: {
       attention: 0.5,
       processing: 0.1,

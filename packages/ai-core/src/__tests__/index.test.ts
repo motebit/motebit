@@ -58,6 +58,7 @@ function makeMemory(overrides: Partial<MemoryNode> = {}): MemoryNode {
     last_accessed: 2000,
     half_life: 604800000,
     tombstoned: false,
+    pinned: false,
     ...overrides,
   };
 }

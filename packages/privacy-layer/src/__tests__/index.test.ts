@@ -26,6 +26,7 @@ function makeNode(overrides: Partial<MemoryNode> = {}): MemoryNode {
     last_accessed: Date.now(),
     half_life: 7 * 24 * 60 * 60 * 1000,
     tombstoned: false,
+    pinned: false,
     ...overrides,
   };
 }
@@ -262,6 +263,7 @@ describe("PrivacyLayer", () => {
         saveEdge: vi.fn(),
         getEdges: vi.fn(),
         tombstoneNode: vi.fn(),
+        pinNode: vi.fn(),
         getAllNodes: vi.fn(),
         getAllEdges: vi.fn(),
       };
@@ -287,6 +289,7 @@ describe("PrivacyLayer", () => {
         saveEdge: vi.fn(),
         getEdges: vi.fn(),
         tombstoneNode: vi.fn(),
+        pinNode: vi.fn(),
         getAllNodes: vi.fn(),
         getAllEdges: vi.fn(),
       };

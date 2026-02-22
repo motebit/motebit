@@ -369,13 +369,119 @@ async function consumeGoalApproval(ctx: DesktopContext, approved: boolean): Prom
   }
 }
 
+// === Memory Footer ===
+
+const SENSITIVE_LEVELS = new Set(["medical", "financial", "secret"]);
+
+function createMemoryFooter(
+  retrieved: Array<{ node_id: string; content: string; confidence: number; sensitivity: string }>,
+  formed: Array<{ node_id: string; content: string; sensitivity: string }>,
+  onOpenMemory?: (nodeId: string) => void,
+): HTMLElement {
+  const footer = document.createElement("div");
+  footer.className = "memory-footer";
+
+  const parts: string[] = [];
+  if (retrieved.length > 0) parts.push(`Recalled ${retrieved.length}`);
+  if (formed.length > 0) parts.push(`Formed ${formed.length}`);
+
+  const summary = document.createElement("div");
+  summary.className = "memory-footer-summary";
+  summary.textContent = parts.join(" · ");
+  footer.appendChild(summary);
+
+  const details = document.createElement("div");
+  details.className = "memory-footer-details";
+  details.style.display = "none";
+
+  // Recalled memories
+  for (const mem of retrieved) {
+    const item = document.createElement("div");
+    item.className = "memory-footer-item";
+    item.dataset.nodeId = mem.node_id;
+
+    if (onOpenMemory) {
+      item.classList.add("memory-footer-clickable");
+      item.addEventListener("click", () => onOpenMemory(mem.node_id));
+    }
+
+    const badge = document.createElement("span");
+    badge.className = "memory-footer-badge";
+    badge.textContent = mem.confidence.toFixed(2);
+    item.appendChild(badge);
+
+    const content = document.createElement("span");
+    content.className = "memory-footer-content";
+    if (SENSITIVE_LEVELS.has(mem.sensitivity)) {
+      content.textContent = "Sensitive memory";
+      content.classList.add("memory-footer-redacted");
+    } else {
+      content.textContent = mem.content.length > 80
+        ? mem.content.slice(0, 80) + "…"
+        : mem.content;
+    }
+    item.appendChild(content);
+
+    details.appendChild(item);
+  }
+
+  // Formed memories
+  if (formed.length > 0) {
+    if (retrieved.length > 0) {
+      const divider = document.createElement("div");
+      divider.className = "memory-footer-divider";
+      divider.textContent = "Formed this turn";
+      details.appendChild(divider);
+    }
+
+    for (const mem of formed) {
+      const item = document.createElement("div");
+      item.className = "memory-footer-item";
+      item.dataset.nodeId = mem.node_id;
+
+      if (onOpenMemory) {
+        item.classList.add("memory-footer-clickable");
+        item.addEventListener("click", () => onOpenMemory(mem.node_id));
+      }
+
+      const marker = document.createElement("span");
+      marker.className = "memory-footer-badge memory-footer-new";
+      marker.textContent = "new";
+      item.appendChild(marker);
+
+      const content = document.createElement("span");
+      content.className = "memory-footer-content";
+      if (SENSITIVE_LEVELS.has(mem.sensitivity)) {
+        content.textContent = "Sensitive memory";
+        content.classList.add("memory-footer-redacted");
+      } else {
+        content.textContent = mem.content.length > 80
+          ? mem.content.slice(0, 80) + "…"
+          : mem.content;
+      }
+      item.appendChild(content);
+
+      details.appendChild(item);
+    }
+  }
+
+  footer.appendChild(details);
+
+  summary.addEventListener("click", () => {
+    const visible = details.style.display !== "none";
+    details.style.display = visible ? "none" : "block";
+  });
+
+  return footer;
+}
+
 // === Chat Init ===
 
 export interface ChatCallbacks {
   openSettings(): void;
   openConversationsPanel(): void;
   openGoalsPanel(): void;
-  openMemoryPanel(): void;
+  openMemoryPanel(nodeId?: string): void;
   speakResponse(text: string): void;
   getMicState(): MicState;
   updateModelIndicator(): void;
@@ -678,15 +784,19 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
 
     const bubble = document.createElement("div");
     bubble.className = "chat-bubble assistant";
-    bubble.textContent = "";
+    const textEl = document.createElement("span");
+    textEl.className = "bubble-text";
+    bubble.appendChild(textEl);
     chatLog.appendChild(bubble);
 
     let accumulated = "";
+    let memoriesRetrieved: Array<{ node_id: string; content: string; confidence: number; sensitivity: string }> = [];
+    let memoriesFormed: Array<{ node_id: string; content: string; sensitivity: string }> = [];
     try {
       for await (const chunk of ctx.app.sendMessageStreaming(text)) {
         if (chunk.type === "text") {
           accumulated += chunk.text;
-          bubble.textContent = stripTags(accumulated);
+          textEl.textContent = stripTags(accumulated);
           chatLog.scrollTop = chatLog.scrollHeight;
         } else if (chunk.type === "tool_status") {
           if (chunk.status === "calling") {
@@ -698,7 +808,32 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
           showApprovalCard(ctx, chunk.name, chunk.args);
         } else if (chunk.type === "injection_warning") {
           addMessage("system", `Warning: suspicious content detected in ${chunk.tool_name} results`);
+        } else if (chunk.type === "result") {
+          const r = chunk.result as {
+            memoriesRetrieved?: Array<{ node_id: string; content: string; confidence: number; sensitivity: string }>;
+            memoriesFormed?: Array<{ node_id: string; content: string; sensitivity: string }>;
+          };
+          memoriesRetrieved = (r.memoriesRetrieved ?? []).map(m => ({
+            node_id: m.node_id,
+            content: m.content,
+            confidence: m.confidence,
+            sensitivity: String(m.sensitivity).toLowerCase(),
+          }));
+          memoriesFormed = (r.memoriesFormed ?? []).map(m => ({
+            node_id: m.node_id,
+            content: m.content,
+            sensitivity: String(m.sensitivity).toLowerCase(),
+          }));
         }
+      }
+
+      if (memoriesRetrieved.length > 0 || memoriesFormed.length > 0) {
+        const footer = createMemoryFooter(
+          memoriesRetrieved,
+          memoriesFormed,
+          (nodeId) => callbacks.openMemoryPanel(nodeId),
+        );
+        bubble.appendChild(footer);
       }
 
       void ctx.app.generateTitleInBackground();
@@ -709,7 +844,7 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (!bubble.textContent) {
+      if (!textEl.textContent) {
         bubble.remove();
       }
       addMessage("system", `Error: ${msg}`);

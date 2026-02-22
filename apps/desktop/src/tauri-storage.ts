@@ -158,6 +158,7 @@ interface NodeRow {
   last_accessed: number;
   half_life: number;
   tombstoned: number;
+  pinned: number;
 }
 
 function rowToNode(row: NodeRow): MemoryNode {
@@ -172,6 +173,7 @@ function rowToNode(row: NodeRow): MemoryNode {
     last_accessed: row.last_accessed,
     half_life: row.half_life,
     tombstoned: row.tombstoned === 1,
+    pinned: row.pinned === 1,
   };
 }
 
@@ -202,8 +204,8 @@ export class TauriMemoryStorage implements MemoryStorageAdapter {
     await dbExecute(
       this.invoke,
       `INSERT OR REPLACE INTO memory_nodes
-       (node_id, motebit_id, content, embedding, confidence, sensitivity, created_at, last_accessed, half_life, tombstoned)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (node_id, motebit_id, content, embedding, confidence, sensitivity, created_at, last_accessed, half_life, tombstoned, pinned)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         node.node_id,
         node.motebit_id,
@@ -215,6 +217,7 @@ export class TauriMemoryStorage implements MemoryStorageAdapter {
         node.last_accessed,
         node.half_life,
         node.tombstoned ? 1 : 0,
+        node.pinned ? 1 : 0,
       ],
     );
   }
@@ -297,6 +300,14 @@ export class TauriMemoryStorage implements MemoryStorageAdapter {
       this.invoke,
       "UPDATE memory_nodes SET tombstoned = 1 WHERE node_id = ?",
       [nodeId],
+    );
+  }
+
+  async pinNode(nodeId: string, pinned: boolean): Promise<void> {
+    await dbExecute(
+      this.invoke,
+      "UPDATE memory_nodes SET pinned = ? WHERE node_id = ? AND tombstoned = 0",
+      [pinned ? 1 : 0, nodeId],
     );
   }
 

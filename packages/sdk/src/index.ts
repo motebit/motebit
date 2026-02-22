@@ -44,6 +44,7 @@ export enum EventType {
   GoalCompleted = "goal_completed",
   GoalProgress = "goal_progress",
   MemoryAudit = "memory_audit",
+  MemoryPinned = "memory_pinned",
   PlanCreated = "plan_created",
   PlanStepStarted = "plan_step_started",
   PlanStepCompleted = "plan_step_completed",
@@ -118,6 +119,7 @@ export interface MemoryNode {
   last_accessed: number;
   half_life: number;
   tombstoned: boolean;
+  pinned: boolean;
 }
 
 export interface MemoryEdge {

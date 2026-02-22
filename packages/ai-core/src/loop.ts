@@ -119,6 +119,7 @@ export interface MotebitLoopDependencies {
 export interface TurnResult {
   response: string;
   memoriesFormed: MemoryNode[];
+  memoriesRetrieved: MemoryNode[];
   stateAfter: MotebitState;
   cues: BehaviorCues;
 }
@@ -188,11 +189,17 @@ export async function* runTurnStreaming(
     limit: 10,
   });
 
-  // 2. Embed user message and retrieve relevant memories
+  // 2. Embed user message and retrieve relevant memories (two-bucket: pinned + similarity)
   const queryEmbedding = await embedText(userMessage);
-  const relevantMemories = await memoryGraph.retrieve(queryEmbedding, {
+  const pinnedMemories = await memoryGraph.getPinnedMemories();
+  const similarityMemories = await memoryGraph.retrieve(queryEmbedding, {
     limit: 5,
   });
+
+  // Merge: pinned first (cap 5), then similarity (deduplicated)
+  const pinnedIds = new Set(pinnedMemories.map(m => m.node_id));
+  const dedupedSimilarity = similarityMemories.filter(m => !pinnedIds.has(m.node_id));
+  const relevantMemories = [...pinnedMemories.slice(0, 5), ...dedupedSimilarity];
 
   // 3. Pack context and stream from provider (agentic loop)
   const currentState = stateEngine.getState();
@@ -443,6 +450,7 @@ export async function* runTurnStreaming(
     result: {
       response: finalText,
       memoriesFormed,
+      memoriesRetrieved: relevantMemories,
       stateAfter,
       cues,
     },

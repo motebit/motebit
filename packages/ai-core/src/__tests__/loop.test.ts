@@ -609,6 +609,145 @@ describe("runTurnStreaming (agentic loop)", () => {
     expect(resultChunk).toBeDefined();
   });
 
+  it("includes memoriesRetrieved in result chunk", async () => {
+    const deps = makeDepsWithProvider(makeMockProvider([
+      {
+        text: 'Nice! <memory confidence="0.9" sensitivity="none">User likes cats</memory>',
+        confidence: 0.8,
+        memory_candidates: [{ content: "User likes cats", confidence: 0.9, sensitivity: SensitivityLevel.None }],
+        state_updates: {},
+      },
+    ]));
+
+    // Turn 1: form a memory
+    const chunks1: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, "I like cats")) {
+      chunks1.push(chunk);
+    }
+    const result1 = chunks1.find((c) => c.type === "result") as { type: "result"; result: { memoriesFormed: unknown[]; memoriesRetrieved: unknown[] } };
+    expect(result1.result.memoriesFormed).toHaveLength(1);
+    expect(result1.result.memoriesRetrieved).toHaveLength(0); // no prior memories
+
+    // Turn 2: the formed memory should appear in memoriesRetrieved
+    const provider2 = makeMockProvider([
+      {
+        text: "You like cats!",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+      },
+    ]);
+    // Swap provider for turn 2
+    (deps as { provider: StreamingProvider }).provider = provider2;
+
+    const chunks2: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, "What animals do I like?")) {
+      chunks2.push(chunk);
+    }
+    const result2 = chunks2.find((c) => c.type === "result") as { type: "result"; result: { memoriesRetrieved: Array<{ content: string }> } };
+    expect(result2.result.memoriesRetrieved.length).toBeGreaterThan(0);
+    expect(result2.result.memoriesRetrieved[0]!.content).toBe("User likes cats");
+  });
+
+  it("pinned memories appear in memoriesRetrieved", async () => {
+    const deps = makeDepsWithProvider(makeMockProvider([
+      {
+        text: 'Nice! <memory confidence="0.9" sensitivity="none">User likes dogs</memory>',
+        confidence: 0.8,
+        memory_candidates: [{ content: "User likes dogs", confidence: 0.9, sensitivity: SensitivityLevel.None }],
+        state_updates: {},
+      },
+    ]));
+
+    // Turn 1: form a memory and pin it
+    const chunks1: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, "I like dogs")) {
+      chunks1.push(chunk);
+    }
+    const result1 = chunks1.find((c) => c.type === "result") as { type: "result"; result: { memoriesFormed: Array<{ node_id: string }> } };
+    const nodeId = result1.result.memoriesFormed[0]!.node_id;
+    await deps.memoryGraph.pinMemory(nodeId, true);
+
+    // Turn 2: pinned memory should appear in memoriesRetrieved
+    const provider2 = makeMockProvider([
+      {
+        text: "You like dogs!",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+      },
+    ]);
+    (deps as { provider: StreamingProvider }).provider = provider2;
+
+    const chunks2: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, "What do I like?")) {
+      chunks2.push(chunk);
+    }
+    const result2 = chunks2.find((c) => c.type === "result") as { type: "result"; result: { memoriesRetrieved: Array<{ node_id: string; pinned: boolean }> } };
+    const retrieved = result2.result.memoriesRetrieved;
+    expect(retrieved.some(m => m.node_id === nodeId && m.pinned)).toBe(true);
+  });
+
+  it("pinned memories are not duplicated when also similarity-matched", async () => {
+    const deps = makeDepsWithProvider(makeMockProvider([
+      {
+        text: 'Cool! <memory confidence="0.9" sensitivity="none">User enjoys cycling</memory>',
+        confidence: 0.8,
+        memory_candidates: [{ content: "User enjoys cycling", confidence: 0.9, sensitivity: SensitivityLevel.None }],
+        state_updates: {},
+      },
+    ]));
+
+    // Turn 1: form and pin
+    const chunks1: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, "I enjoy cycling")) {
+      chunks1.push(chunk);
+    }
+    const result1 = chunks1.find((c) => c.type === "result") as { type: "result"; result: { memoriesFormed: Array<{ node_id: string }> } };
+    const nodeId = result1.result.memoriesFormed[0]!.node_id;
+    await deps.memoryGraph.pinMemory(nodeId, true);
+
+    // Turn 2: query about cycling — will match both pinned and similarity
+    const provider2 = makeMockProvider([
+      {
+        text: "Cycling is great!",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+      },
+    ]);
+    (deps as { provider: StreamingProvider }).provider = provider2;
+
+    const chunks2: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, "Tell me about cycling")) {
+      chunks2.push(chunk);
+    }
+    const result2 = chunks2.find((c) => c.type === "result") as { type: "result"; result: { memoriesRetrieved: Array<{ node_id: string }> } };
+    const ids = result2.result.memoriesRetrieved.map(m => m.node_id);
+    const occurrences = ids.filter(id => id === nodeId);
+    expect(occurrences).toHaveLength(1); // no duplicates
+  });
+
+  it("returns empty memoriesRetrieved when no memories exist", async () => {
+    const provider = makeMockProvider([
+      {
+        text: "Hello!",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+      },
+    ]);
+    const deps = makeDepsWithProvider(provider);
+
+    const chunks: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, "Hi")) {
+      chunks.push(chunk);
+    }
+
+    const resultChunk = chunks.find((c) => c.type === "result") as { type: "result"; result: { memoriesRetrieved: unknown[] } };
+    expect(resultChunk.result.memoriesRetrieved).toEqual([]);
+  });
+
   it("falls back to single-pass when tools registry is provided but response has no tool_calls", async () => {
     const toolRegistry = makeMockToolRegistry(
       new Map([

@@ -65,6 +65,7 @@ export interface MemoryStorageAdapter {
   saveEdge(edge: MemoryEdge): Promise<void>;
   getEdges(nodeId: string): Promise<MemoryEdge[]>;
   tombstoneNode(nodeId: string): Promise<void>;
+  pinNode(nodeId: string, pinned: boolean): Promise<void>;
   getAllNodes(motebitId: string): Promise<MemoryNode[]>;
   getAllEdges(motebitId: string): Promise<MemoryEdge[]>;
 }
@@ -167,6 +168,14 @@ export class InMemoryMemoryStorage implements MemoryStorageAdapter {
     return Promise.resolve();
   }
 
+  pinNode(nodeId: string, pinned: boolean): Promise<void> {
+    const node = this.nodes.get(nodeId);
+    if (node !== undefined && !node.tombstoned) {
+      node.pinned = pinned;
+    }
+    return Promise.resolve();
+  }
+
   getAllNodes(motebitId: string): Promise<MemoryNode[]> {
     return Promise.resolve(
       Array.from(this.nodes.values()).filter((n) => n.motebit_id === motebitId),
@@ -223,6 +232,7 @@ export class MemoryGraph {
       last_accessed: now,
       half_life: halfLife,
       tombstoned: false,
+      pinned: false,
     };
 
     await this.storage.saveNode(node);
@@ -331,6 +341,35 @@ export class MemoryGraph {
       version_clock: clock + 1,
       tombstoned: false,
     });
+  }
+
+  /**
+   * Pin or unpin a memory. No-op if tombstoned.
+   */
+  async pinMemory(nodeId: string, pinned: boolean): Promise<void> {
+    const node = await this.storage.getNode(nodeId);
+    if (!node || node.tombstoned) return;
+
+    await this.storage.pinNode(nodeId, pinned);
+
+    const clock = await this.eventStore.getLatestClock(this.motebitId);
+    await this.eventStore.append({
+      event_id: crypto.randomUUID(),
+      motebit_id: this.motebitId,
+      timestamp: Date.now(),
+      event_type: EventType.MemoryPinned,
+      payload: { node_id: nodeId, pinned },
+      version_clock: clock + 1,
+      tombstoned: false,
+    });
+  }
+
+  /**
+   * Get all pinned, non-tombstoned memories.
+   */
+  async getPinnedMemories(): Promise<MemoryNode[]> {
+    const all = await this.storage.queryNodes({ motebit_id: this.motebitId });
+    return all.filter(n => n.pinned && !n.tombstoned);
   }
 
   /**

@@ -24,6 +24,7 @@ describe("IdbMemoryStorage", () => {
       last_accessed: Date.now(),
       half_life: 7 * 24 * 60 * 60 * 1000,
       tombstoned: false,
+      pinned: false,
       ...overrides,
     };
   }
