@@ -29,7 +29,7 @@ apps/
   cli/         Node.js REPL, developer/debugging interface, same runtime
   mobile/      React Native + Expo, expo-gl + Three.js, full-featured
   admin/       React + Vite dashboard, real-time state/memory/audit monitoring
-  spatial/     AR/VR positioning library, body-relative orbital mechanics (stub runtime)
+  spatial/     AR/VR positioning library, body-relative orbital mechanics, WebXR audio reactivity
 
 packages/
   sdk/             Core types: MotebitState, BehaviorCues, MemoryNode, EventLogEntry, PolicyDecision, RenderSpec

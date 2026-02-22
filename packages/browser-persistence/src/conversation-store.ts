@@ -115,6 +115,19 @@ export class IdbConversationStore implements ConversationStoreAdapter {
     };
   }
 
+  updateTitle(conversationId: string, title: string): void {
+    const tx = this.db.transaction("conversations", "readwrite");
+    const store = tx.objectStore("conversations");
+    const getReq = store.get(conversationId);
+    getReq.onsuccess = () => {
+      const conv = getReq.result as ConversationRecord | undefined;
+      if (conv) {
+        conv.title = title;
+        store.put(conv);
+      }
+    };
+  }
+
   listConversations(motebitId: string, limit?: number): Array<{
     conversationId: string;
     startedAt: number;

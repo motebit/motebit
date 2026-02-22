@@ -9,11 +9,11 @@ Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Nod
 
 | Directory | Contents |
 |-----------|----------|
-| `apps/desktop` | Tauri (Rust + webview). Flagship client (~80%). Three.js glass creature, identity bootstrap, operator mode, voice input, audio-reactive rendering. |
-| `apps/cli` | Node.js REPL + daemon. Full operator console — chat, goal scheduling, tool approval queue, `motebit export` / `verify`. |
-| `apps/mobile` | React Native + Expo. Early MVP (~30%). expo-gl + Three.js rendering, SQLite adapters, Ollama-only. |
-| `apps/admin` | React + Vite dashboard. Real-time state vector, memory graph, behavior cues, event log, tool audit. |
-| `apps/spatial` | AR/VR positioning library. Body-relative orbital mechanics. Stub runtime. |
+| `apps/desktop` | Tauri (Rust + webview). Flagship client. Three.js glass creature, identity bootstrap, operator mode, voice input, audio-reactive rendering, goal execution, multi-device pairing, MCP discovery with manifest pinning. |
+| `apps/cli` | Node.js REPL + daemon. Full operator console — chat, goal scheduling, tool approval queue, operator mode, `motebit export` / `verify`. |
+| `apps/mobile` | React Native + Expo. Full parity. expo-gl + Three.js rendering, SQLite adapters, dual providers (Anthropic + Ollama + Hybrid), plan-based goal execution, MCP per-server trust, approval queue UI, voice input. |
+| `apps/admin` | React + Vite dashboard. 9-tab real-time monitoring — state vector, memory graph, behavior cues, event log, tool audit, goals, plans, conversations, devices. |
+| `apps/spatial` | AR/VR positioning library. Body-relative orbital mechanics, WebXR audio reactivity. |
 | `apps/docs` | Fumadocs + Next.js. This site. |
 | `packages/` | 18 shared TypeScript packages — the interior of the system. |
 | `services/api` | Sync relay server. REST + WebSocket, device auth, fan-out. |
@@ -58,7 +58,7 @@ The outermost layer. These packages face the renderer, the public npm registry, 
 
 | Package | Role |
 |---------|------|
-| `render-engine` | `RenderSpec` (droplet geometry, glass material), `ThreeJSAdapter` (organic noise, breathing, sag). |
+| `render-engine` | `RenderSpec` (droplet geometry, glass material), `ThreeJSAdapter` (organic noise, breathing, sag, audio reactivity), `WebXRThreeJSAdapter` (AR), `SpatialAdapter` (body-relative orbital mechanics). |
 | `identity-file` | Generate, parse, verify `motebit.md` — signed agent identity files (internal). |
 | `verify` | Standalone public verifier for `motebit.md`. Zero monorepo deps, MIT licensed. |
 | `create-motebit` | Public CLI — `npm create motebit`. Generates and verifies signed identity files. |
@@ -76,7 +76,7 @@ A message enters the system and flows through a single pipeline:
 5. **State vector update** — the outcome updates the 9-field state vector via EMA smoothing.
 6. **Behavior engine** — `computeRawCues(state)` produces 5 behavior cues deterministically.
 7. **Render spec** — cues are mapped to droplet geometry, glow, and motion parameters.
-8. **Platform renderer** — Three.js on desktop, expo-gl on mobile, stub on spatial.
+8. **Platform renderer** — Three.js on desktop, expo-gl on mobile, WebXR on spatial.
 
 The pipeline is streaming end-to-end. Text appears as it arrives. Tool status events surface in real time. The creature's glow and breathing respond to processing state within the same frame loop.
 

@@ -548,6 +548,7 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
 
   private basePosition = { x: 0, y: -0.2, z: -0.5 };
   private envMap: THREE.Texture | null = null;
+  private audio: AudioReactivity | null = null;
 
   /** Check if WebXR immersive-ar is available in this browser. */
   static async isSupported(): Promise<boolean> {
@@ -641,6 +642,14 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     };
 
     const cues = this.currentCues;
+    const a = this.audio;
+
+    // Audio reactivity — sound pressure modulates the creature's body language.
+    // Additive: layers on top of behavior cues, not replacing them.
+    const audioBreathScale = a ? 1 + a.rms * 2.5 : 1;             // breathe bigger with sound energy
+    const audioGlow = a ? a.low * 0.25 : 0;                       // bass → interior heat
+    const audioDrift = a ? a.mid * 0.015 : 0;                     // melody → swaying
+    const audioShimmer = a ? a.high * 0.35 : 0;                   // transients → glass iridescence
 
     // === Perturbations relative to base position ===
     // In AR, the creature has a world position (set by orbital dynamics or manual placement).
@@ -650,8 +659,9 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     const bobY = organicNoise(t, [1.5, 2.37, 0.73]) * 0.01 * cues.hover_distance;
 
     // Brownian drift — the medium is not perfectly still
-    const driftX = organicNoise(t, [0.7, 1.13, 0.31]) * cues.drift_amplitude;
-    const driftZ = organicNoise(t, [0.5, 0.83, 0.23]) * cues.drift_amplitude * 0.25;
+    const drift = cues.drift_amplitude + audioDrift;
+    const driftX = organicNoise(t, [0.7, 1.13, 0.31]) * drift;
+    const driftZ = organicNoise(t, [0.5, 0.83, 0.23]) * drift * 0.25;
 
     // Gravity sag — slow cycle, weight pulls down, tension recovers
     const sagRaw = Math.sin(t * 0.32 * Math.PI * 2);
@@ -669,9 +679,9 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     const REST_Y = 0.97;
     const breatheRate = 2.0 + cues.glow_intensity * 1.5;
     const breatheRaw = Math.sin(t * breatheRate);
-    const breathe = breatheRaw > 0
+    const breathe = (breatheRaw > 0
       ? breatheRaw * 0.015
-      : Math.sign(breatheRaw) * Math.pow(Math.abs(breatheRaw), 0.6) * 0.015;
+      : Math.sign(breatheRaw) * Math.pow(Math.abs(breatheRaw), 0.6) * 0.015) * audioBreathScale;
 
     this.bodyMesh.scale.set(
       1.0 + breathe + sag * 0.15,
@@ -680,7 +690,10 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     );
 
     // Interior luminosity — zero at rest, visible only during processing (§6.4)
-    this.bodyMaterial.emissiveIntensity = Math.max(0, (cues.glow_intensity - 0.3) * 0.6);
+    this.bodyMaterial.emissiveIntensity = Math.max(0, (cues.glow_intensity - 0.3) * 0.6 + audioGlow);
+
+    // Iridescence — high-frequency transients shimmer the glass surface
+    this.bodyMaterial.iridescence = 0.4 + audioShimmer;
 
     // Eye dilation
     if (this.leftEye && this.rightEye) {
@@ -805,8 +818,8 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     }
   }
 
-  setAudioReactivity(_energy: AudioReactivity | null): void {
-    // TODO: apply audio modulation to WebXR creature
+  setAudioReactivity(energy: AudioReactivity | null): void {
+    this.audio = energy;
   }
 
   dispose(): void {

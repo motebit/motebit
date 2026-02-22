@@ -528,10 +528,14 @@ describe("WebXRThreeJSAdapter", () => {
     })).not.toThrow();
   });
 
-  it("setAudioReactivity is safe (TODO: not yet wired)", async () => {
+  it("setAudioReactivity stores and clears value", async () => {
     await adapter.init(null);
-    expect(() => adapter.setAudioReactivity({ rms: 1, low: 1, mid: 1, high: 1 })).not.toThrow();
-    expect(() => adapter.setAudioReactivity(null)).not.toThrow();
+    const audio: AudioReactivity = { rms: 0.5, low: 0.3, mid: 0.4, high: 0.2 };
+    adapter.setAudioReactivity(audio);
+    expect((adapter as unknown as { audio: AudioReactivity | null }).audio).toBe(audio);
+
+    adapter.setAudioReactivity(null);
+    expect((adapter as unknown as { audio: AudioReactivity | null }).audio).toBeNull();
   });
 
   it("resize is safe headless", async () => {
