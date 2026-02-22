@@ -192,7 +192,7 @@ export class PolicyGate {
         requiresApproval: false,
         reason: `Tool "${tool.name}" is on the deny list`,
       };
-      this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision);
+      this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision, ctx.runId);
       return decision;
     }
 
@@ -207,7 +207,7 @@ export class PolicyGate {
           requiresApproval: false,
           reason: `Tool "${tool.name}" risk ${RiskLevel[profile.risk]} exceeds deny threshold ${RiskLevel[this.config.denyAbove!]}`,
         };
-        this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision);
+        this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision, ctx.runId);
         return decision;
       }
     } else {
@@ -218,7 +218,7 @@ export class PolicyGate {
           requiresApproval: false,
           reason: `Tool "${tool.name}" requires risk level ${RiskLevel[profile.risk]} but max allowed is ${RiskLevel[maxRisk]}. Enable Operator Mode for higher-risk tools.`,
         };
-        this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision);
+        this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision, ctx.runId);
         return decision;
       }
     }
@@ -232,7 +232,7 @@ export class PolicyGate {
         reason: budgetResult.reason,
         budgetRemaining: { calls: budgetResult.remaining.calls, timeMs: budgetResult.remaining.timeMs },
       };
-      this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision);
+      this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision, ctx.runId);
       return decision;
     }
 
@@ -252,7 +252,7 @@ export class PolicyGate {
           requiresApproval: false,
           reason: `Path "${argPath}" is outside allowed paths`,
         };
-        this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision);
+        this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision, ctx.runId);
         return decision;
       }
     }
@@ -269,7 +269,7 @@ export class PolicyGate {
           requiresApproval: false,
           reason: `Invalid URL "${args.url as string}" — cannot verify domain allowlist`,
         };
-        this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision);
+        this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision, ctx.runId);
         return decision;
       }
 
@@ -282,7 +282,7 @@ export class PolicyGate {
           requiresApproval: false,
           reason: `Domain "${hostname}" is not in the allowed domains list`,
         };
-        this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision);
+        this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision, ctx.runId);
         return decision;
       }
     }
@@ -303,7 +303,7 @@ export class PolicyGate {
       budgetRemaining: { calls: budgetResult.remaining.calls, timeMs: budgetResult.remaining.timeMs },
     };
 
-    this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision);
+    this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision, ctx.runId);
     return decision;
   }
 
@@ -375,9 +375,10 @@ export class PolicyGate {
   /**
    * Create a new turn context.
    */
-  createTurnContext(): TurnContext {
+  createTurnContext(runId?: string): TurnContext {
     return {
       turnId: crypto.randomUUID(),
+      runId,
       toolCallCount: 0,
       turnStartMs: Date.now(),
       costAccumulated: 0,

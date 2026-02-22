@@ -189,6 +189,7 @@ export interface PolicyDecision {
 
 export interface TurnContext {
   turnId: string;
+  runId?: string;
   toolCallCount: number;
   turnStartMs: number;
   costAccumulated: number;
@@ -196,6 +197,7 @@ export interface TurnContext {
 
 export interface ToolAuditEntry {
   turnId: string;
+  runId?: string;
   callId: string;
   tool: string;
   args: Record<string, unknown>;

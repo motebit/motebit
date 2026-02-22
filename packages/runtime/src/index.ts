@@ -302,6 +302,7 @@ export class MotebitRuntime {
     toolName: string;
     args: Record<string, unknown>;
     userMessage: string;
+    runId?: string;
   } | null = null;
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
@@ -469,7 +470,7 @@ export class MotebitRuntime {
    * Decomposes the goal into steps, then executes each step sequentially,
    * streaming PlanChunk events for progress tracking.
    */
-  async *executePlan(goalId: string, goalPrompt: string): AsyncGenerator<PlanChunk> {
+  async *executePlan(goalId: string, goalPrompt: string, runId?: string): AsyncGenerator<PlanChunk> {
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
 
     const availableTools = this.toolRegistry.size > 0
@@ -483,16 +484,16 @@ export class MotebitRuntime {
       this.loopDeps,
     );
 
-    yield* this.planEngine.executePlan(plan.plan_id, this.loopDeps);
+    yield* this.planEngine.executePlan(plan.plan_id, this.loopDeps, undefined, runId);
   }
 
   /**
    * Resume an existing plan that was paused (e.g. waiting for approval).
    * Streams PlanChunk events starting from where the plan left off.
    */
-  async *resumePlan(planId: string): AsyncGenerator<PlanChunk> {
+  async *resumePlan(planId: string, runId?: string): AsyncGenerator<PlanChunk> {
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
-    yield* this.planEngine.resumePlan(planId, this.loopDeps);
+    yield* this.planEngine.resumePlan(planId, this.loopDeps, undefined, runId);
   }
 
   get isOperatorMode(): boolean {
@@ -609,7 +610,7 @@ export class MotebitRuntime {
     }
   }
 
-  async sendMessage(text: string): Promise<TurnResult> {
+  async sendMessage(text: string, runId?: string): Promise<TurnResult> {
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
     if (this._isProcessing) throw new Error("Already processing a message");
 
@@ -621,6 +622,7 @@ export class MotebitRuntime {
       const result = await runTurn(this.loopDeps, text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
+        runId,
       });
       this.pushToHistory(text, result.response);
       return result;
@@ -630,7 +632,7 @@ export class MotebitRuntime {
     }
   }
 
-  async *sendMessageStreaming(text: string): AsyncGenerator<StreamChunk> {
+  async *sendMessageStreaming(text: string, runId?: string): AsyncGenerator<StreamChunk> {
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
     if (this._isProcessing) throw new Error("Already processing a message");
 
@@ -643,8 +645,9 @@ export class MotebitRuntime {
       const stream = runTurnStreaming(this.loopDeps, text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
+        runId,
       });
-      yield* this.processStream(stream, text);
+      yield* this.processStream(stream, text, runId);
     } finally {
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
@@ -702,8 +705,9 @@ export class MotebitRuntime {
       const stream = runTurnStreaming(this.loopDeps, pending.userMessage, {
         conversationHistory: this.conversationHistory,
         previousCues: this.latestCues,
+        runId: pending.runId,
       });
-      yield* this.processStream(stream, pending.userMessage);
+      yield* this.processStream(stream, pending.userMessage, pending.runId);
     } finally {
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
@@ -723,6 +727,7 @@ export class MotebitRuntime {
   private async *processStream(
     stream: AsyncGenerator<AgenticChunk>,
     userMessage: string,
+    runId?: string,
   ): AsyncGenerator<StreamChunk> {
     let result: TurnResult | null = null;
     let accumulated = "";
@@ -771,6 +776,7 @@ export class MotebitRuntime {
           toolName: chunk.name,
           args: chunk.args,
           userMessage,
+          runId,
         };
         this.state.pushUpdate({ processing: 0.5, attention: 0.95, affect_arousal: 0.2 });
       }

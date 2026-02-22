@@ -1,6 +1,7 @@
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
 import type { GoalPlanProgressEvent, GoalCompleteEvent } from "../index";
+import { parseJsonSafe, classifyDecision } from "./audit-utils";
 import { addMessage } from "./chat";
 
 // === DOM Refs ===
@@ -171,6 +172,100 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
       progressDots = [];
       progressStepEl = null;
     }, 400);
+  }
+
+  // === Audit Entries for Outcomes ===
+
+  function loadOutcomeAuditEntries(
+    outcomeId: string,
+    ranAt: number,
+    allOutcomes: Array<Record<string, unknown>>,
+    currentIndex: number,
+    container: HTMLDivElement,
+    invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>,
+  ): void {
+    container.innerHTML = '<span style="font-size:10px;color:var(--text-ghost)">Loading...</span>';
+
+    // Helper: timestamp-range fallback for legacy rows without run_id
+    const loadFallback = (): void => {
+      const startTs = ranAt - 5000;
+      const endTs = currentIndex > 0
+        ? Number(allOutcomes[currentIndex - 1]!.ran_at) || Date.now()
+        : Date.now();
+
+      void invoke<Array<Record<string, unknown>>>("db_query", {
+        sql: `SELECT tool, decision, result, timestamp FROM tool_audit_log WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC LIMIT 50`,
+        params: [startTs, endTs],
+      }).then((fallbackEntries: Array<Record<string, unknown>>) => {
+        renderAuditEntries(fallbackEntries, container, true);
+      }).catch(() => {
+        container.innerHTML = '<span style="font-size:10px;color:var(--text-ghost)">Failed to load</span>';
+      });
+    };
+
+    // Skip run_id query if outcomeId is empty (legacy row)
+    if (!outcomeId) {
+      loadFallback();
+      return;
+    }
+
+    // Primary: query by run_id (= outcome_id). Falls back to timestamp range for pre-migration data.
+    void invoke<Array<Record<string, unknown>>>("db_query", {
+      sql: `SELECT tool, decision, result, timestamp FROM tool_audit_log WHERE run_id = ? ORDER BY timestamp ASC LIMIT 50`,
+      params: [outcomeId],
+    }).then((entries: Array<Record<string, unknown>>) => {
+      if (entries && entries.length > 0) {
+        renderAuditEntries(entries, container, false);
+        return;
+      }
+      loadFallback();
+    }).catch(() => {
+      container.innerHTML = '<span style="font-size:10px;color:var(--text-ghost)">Failed to load</span>';
+    });
+  }
+
+  function renderAuditEntries(
+    entries: Array<Record<string, unknown>>,
+    container: HTMLDivElement,
+    isTimeFallback: boolean,
+  ): void {
+    container.innerHTML = "";
+    if (!entries || entries.length === 0) {
+      container.innerHTML = '<span style="font-size:10px;color:var(--text-ghost)">No tool details</span>';
+      return;
+    }
+    for (const entry of entries) {
+      const row = document.createElement("div");
+      row.className = "audit-inline-row";
+
+      const toolSpan = document.createElement("span");
+      toolSpan.className = "audit-inline-tool";
+      toolSpan.textContent = String(entry.tool || "unknown");
+      row.appendChild(toolSpan);
+
+      const badgeClass = classifyDecision(entry.decision);
+
+      const badge = document.createElement("span");
+      badge.className = `audit-inline-badge ${badgeClass}`;
+      badge.textContent = badgeClass;
+      row.appendChild(badge);
+
+      const resultData = parseJsonSafe(entry.result) as Record<string, unknown> | null;
+      if (resultData && typeof resultData === "object" && resultData.durationMs) {
+        const durSpan = document.createElement("span");
+        durSpan.className = "audit-inline-duration";
+        durSpan.textContent = `${resultData.durationMs}ms`;
+        row.appendChild(durSpan);
+      }
+
+      container.appendChild(row);
+    }
+    if (isTimeFallback) {
+      const hint = document.createElement("div");
+      hint.style.cssText = "font-size:9px;color:var(--text-ghost);margin-top:2px;";
+      hint.textContent = "correlated by time";
+      container.appendChild(hint);
+    }
   }
 
   // === Goal List ===
@@ -345,7 +440,8 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
       }
       goalRecentHeader.style.display = "flex";
 
-      for (const outcome of outcomes) {
+      for (let i = 0; i < outcomes.length; i++) {
+        const outcome = outcomes[i]!;
         const row = document.createElement("div");
         row.className = "goal-recent-row";
 
@@ -400,11 +496,26 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
           detail.appendChild(meta);
         }
 
+        // Audit inline container for tool call details
+        const auditContainer = document.createElement("div");
+        auditContainer.className = "audit-inline-list";
+        if (toolCalls > 0) {
+          detail.appendChild(auditContainer);
+        }
+
         row.appendChild(detail);
 
-        // Toggle expand
+        // Toggle expand with lazy audit loading
+        let auditLoaded = false;
+        const outcomeIndex = i;
         row.addEventListener("click", () => {
           row.classList.toggle("expanded");
+          if (row.classList.contains("expanded") && toolCalls > 0 && !auditLoaded) {
+            auditLoaded = true;
+            const oId = String(outcome.outcome_id || "");
+            const ranAt = Number(outcome.ran_at) || 0;
+            loadOutcomeAuditEntries(oId, ranAt, outcomes, outcomeIndex, auditContainer, invoke);
+          }
         });
 
         goalRecentList.appendChild(row);

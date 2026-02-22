@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS state_snapshots (
 CREATE TABLE IF NOT EXISTS tool_audit_log (
   call_id TEXT PRIMARY KEY,
   turn_id TEXT NOT NULL,
+  run_id TEXT,
   tool TEXT NOT NULL,
   args TEXT NOT NULL,
   decision TEXT NOT NULL,
@@ -109,6 +110,7 @@ CREATE TABLE IF NOT EXISTS tool_audit_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tool_audit_turn ON tool_audit_log (turn_id);
+CREATE INDEX IF NOT EXISTS idx_tool_audit_run ON tool_audit_log (run_id);
 
 CREATE TABLE IF NOT EXISTS devices (
   device_id TEXT PRIMARY KEY,
@@ -785,6 +787,7 @@ export class SqliteStateSnapshot {
 interface ToolAuditRow {
   call_id: string;
   turn_id: string;
+  run_id: string | null;
   tool: string;
   args: string;
   decision: string;
@@ -793,7 +796,7 @@ interface ToolAuditRow {
 }
 
 function rowToToolAudit(row: ToolAuditRow): ToolAuditEntry {
-  return {
+  const entry: ToolAuditEntry = {
     callId: row.call_id,
     turnId: row.turn_id,
     tool: row.tool,
@@ -802,6 +805,10 @@ function rowToToolAudit(row: ToolAuditRow): ToolAuditEntry {
     result: row.result ? (JSON.parse(row.result) as { ok: boolean; durationMs: number }) : undefined,
     timestamp: row.timestamp,
   };
+  if (row.run_id !== null) {
+    entry.runId = row.run_id;
+  }
+  return entry;
 }
 
 export class SqliteToolAuditSink implements AuditLogSink {
@@ -811,8 +818,8 @@ export class SqliteToolAuditSink implements AuditLogSink {
 
   constructor(db: DatabaseDriver) {
     this.stmtAppend = db.prepare(
-      `INSERT OR REPLACE INTO tool_audit_log (call_id, turn_id, tool, args, decision, result, timestamp)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO tool_audit_log (call_id, turn_id, run_id, tool, args, decision, result, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtQueryTurn = db.prepare(
       `SELECT * FROM tool_audit_log WHERE turn_id = ? ORDER BY timestamp ASC`,
@@ -826,6 +833,7 @@ export class SqliteToolAuditSink implements AuditLogSink {
     this.stmtAppend.run(
       entry.callId,
       entry.turnId,
+      entry.runId ?? null,
       entry.tool,
       JSON.stringify(entry.args),
       JSON.stringify(entry.decision),
@@ -1721,6 +1729,16 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
       driver.exec("ALTER TABLE memory_nodes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
     } catch (_) { /* already exists */ }
     driver.pragma("user_version = 8");
+  }
+
+  if (userVersion < 9) {
+    try {
+      driver.exec("ALTER TABLE tool_audit_log ADD COLUMN run_id TEXT");
+    } catch (_) { /* already exists on new DBs */ }
+    try {
+      driver.exec("CREATE INDEX IF NOT EXISTS idx_tool_audit_run ON tool_audit_log (run_id)");
+    } catch (_) { /* already exists */ }
+    driver.pragma("user_version = 9");
   }
 
   const eventStore = new SqliteEventStore(driver);

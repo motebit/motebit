@@ -878,6 +878,113 @@
     .verify-valid { background: rgba(0,200,100,0.15); color: #4ade80; }
     .verify-invalid { background: rgba(255,60,60,0.15); color: #f87171; }
 
+    /* Audit activity — governance card */
+    .audit-activity-list { max-height: 240px; overflow-y: auto; }
+    .audit-activity-empty { font-size: 11px; color: var(--text-ghost); padding: 4px 0; }
+    .audit-row {
+      padding: 6px 8px;
+      border-radius: 8px;
+      border: 1px solid var(--border-light);
+      margin-bottom: 3px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .audit-row:hover { background: var(--bg-card); }
+    .audit-row-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .audit-tool-name {
+      font-size: 12px;
+      font-family: monospace;
+      color: var(--text-secondary);
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .audit-decision-badge {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-weight: 500;
+      flex-shrink: 0;
+    }
+    .audit-decision-badge.allowed { background: rgba(74,222,128,0.15); color: #22c55e; }
+    .audit-decision-badge.denied { background: rgba(248,113,113,0.15); color: #ef4444; }
+    .audit-decision-badge.approval { background: rgba(245,158,11,0.15); color: #f59e0b; }
+    .audit-time {
+      font-size: 10px;
+      color: var(--text-ghost);
+      flex-shrink: 0;
+    }
+    .audit-row-detail {
+      display: none;
+      margin-top: 4px;
+      padding-top: 4px;
+      border-top: 1px solid var(--border-light);
+    }
+    .audit-row.expanded .audit-row-detail { display: block; }
+    .audit-detail-args {
+      font-size: 10px;
+      font-family: monospace;
+      background: var(--bg-card);
+      border-radius: 4px;
+      padding: 4px 6px;
+      max-height: 80px;
+      overflow-y: auto;
+      word-break: break-all;
+      color: var(--text-muted);
+    }
+    .audit-detail-result {
+      font-size: 10px;
+      display: flex;
+      gap: 8px;
+      margin-top: 3px;
+      color: var(--text-ghost);
+    }
+    .audit-copy-btn {
+      margin-top: 4px;
+      font-size: 10px;
+      color: var(--text-ghost);
+      background: none;
+      border: 1px solid var(--border-light);
+      border-radius: 4px;
+      padding: 2px 8px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .audit-copy-btn:hover { color: var(--text-secondary); border-color: var(--text-ghost); }
+
+    /* Audit inline — goal outcomes */
+    .audit-inline-list { margin-top: 4px; }
+    .audit-inline-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 10px;
+      padding: 2px 0;
+    }
+    .audit-inline-tool {
+      font-family: monospace;
+      color: var(--text-muted);
+      max-width: 120px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .audit-inline-badge {
+      font-size: 9px;
+      padding: 0 4px;
+      border-radius: 3px;
+      font-weight: 500;
+    }
+    .audit-inline-badge.allowed { background: rgba(74,222,128,0.15); color: #22c55e; }
+    .audit-inline-badge.denied { background: rgba(248,113,113,0.15); color: #ef4444; }
+    .audit-inline-badge.approval { background: rgba(245,158,11,0.15); color: #f59e0b; }
+    .audit-inline-duration { color: var(--text-ghost); }
+
     /* Settings footer */
     .settings-footer {
       display: flex;
@@ -3143,6 +3250,11 @@
             <label for="settings-max-calls">Max tool calls per turn</label>
             <input id="settings-max-calls" type="number" min="1" max="50" value="10" />
           </div>
+        </div>
+        <div class="settings-card">
+          <div class="card-title">Recent Activity</div>
+          <div id="audit-activity-list" class="audit-activity-list"></div>
+          <div id="audit-activity-empty" class="audit-activity-empty" style="display:none;">No tool activity yet</div>
         </div>
       </div>
       <!-- Identity pane -->

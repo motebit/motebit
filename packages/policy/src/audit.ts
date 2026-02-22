@@ -65,9 +65,11 @@ export class AuditLogger {
     tool: string,
     args: Record<string, unknown>,
     decision: PolicyDecision,
+    runId?: string,
   ): void {
     this.sink.append({
       turnId,
+      runId,
       callId,
       tool,
       args,
@@ -87,9 +89,11 @@ export class AuditLogger {
     decision: PolicyDecision,
     ok: boolean,
     durationMs: number,
+    runId?: string,
   ): void {
     this.sink.append({
       turnId,
+      runId,
       callId,
       tool,
       args,

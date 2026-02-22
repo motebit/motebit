@@ -92,7 +92,7 @@ export interface LoopPolicyGate {
     injectionDetected: boolean;
     injectionPatterns: string[];
   };
-  createTurnContext(): TurnContext;
+  createTurnContext(runId?: string): TurnContext;
   recordToolCall(ctx: TurnContext, cost?: number): TurnContext;
 }
 
@@ -127,6 +127,7 @@ export interface TurnResult {
 export interface TurnOptions {
   conversationHistory?: ConversationMessage[];
   previousCues?: BehaviorCues;
+  runId?: string;
 }
 
 export type AgenticChunk =
@@ -208,7 +209,7 @@ export async function* runTurnStreaming(
     ? deps.policyGate.filterTools(rawToolDefs)
     : rawToolDefs;
 
-  let turnCtx = deps.policyGate?.createTurnContext();
+  let turnCtx = deps.policyGate?.createTurnContext(options?.runId);
 
   const conversationHistory: ConversationMessage[] = [
     ...(options?.conversationHistory ?? []),

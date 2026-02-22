@@ -147,11 +147,12 @@ class TauriToolAuditSink implements AuditLogSink {
   append(entry: ToolAuditEntry): void {
     // Fire-and-forget — audit writes are best-effort
     void this.invoke("db_execute", {
-      sql: `INSERT OR REPLACE INTO tool_audit_log (call_id, turn_id, tool, args, decision, result, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      sql: `INSERT OR REPLACE INTO tool_audit_log (call_id, turn_id, run_id, tool, args, decision, result, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       params: [
         entry.callId,
         entry.turnId,
+        entry.runId ?? null,
         entry.tool,
         JSON.stringify(entry.args),
         JSON.stringify(entry.decision),
@@ -255,6 +256,7 @@ export class DesktopApp {
     invoke: InvokeFn;
     mode: string;
     planId?: string;
+    runId?: string;
   } | null = null;
   private planEngine: PlanEngine | null = null;
   private planStoreRef: TauriPlanStore | PlanStoreAdapter | null = null;
@@ -1193,7 +1195,7 @@ export class DesktopApp {
     if (!this.runtime) throw new Error("AI not initialized");
     if (!this._pendingGoalApproval) throw new Error("No pending goal approval");
 
-    const { goalId, prompt, invoke, mode, planId } = this._pendingGoalApproval;
+    const { goalId, prompt, invoke, mode, planId, runId } = this._pendingGoalApproval;
     this._currentGoalId = goalId;
 
     try {
@@ -1218,7 +1220,7 @@ export class DesktopApp {
         const loopDeps = this.runtime.getLoopDeps();
         if (loopDeps) {
           const planResult = await this.consumePlanStream(
-            this.planEngine.resumePlan(planId, loopDeps),
+            this.planEngine.resumePlan(planId, loopDeps, undefined, runId),
             { goal_id: goalId, prompt, mode },
             invoke,
           );
@@ -1236,7 +1238,8 @@ export class DesktopApp {
         }
       }
 
-      // Record outcome to DB
+      // Record outcome to DB (use runId as outcome_id for audit correlation)
+      const outcomeId = runId ?? crypto.randomUUID();
       const now = Date.now();
       await invoke<number>("db_execute", {
         sql: "UPDATE goals SET last_run_at = ?, consecutive_failures = 0 WHERE goal_id = ?",
@@ -1246,7 +1249,7 @@ export class DesktopApp {
       await invoke<number>("db_execute", {
         sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
               VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL)`,
-        params: [crypto.randomUUID(), goalId, this.motebitId, now, accumulated.slice(0, 500), toolCallsMade],
+        params: [outcomeId, goalId, this.motebitId, now, accumulated.slice(0, 500), toolCallsMade],
       });
 
       // One-shot auto-complete
@@ -1358,6 +1361,9 @@ export class DesktopApp {
         this._currentGoalId = goal.goal_id;
         this._goalStatusCallback?.(true);
 
+        // Generate a stable runId for this goal execution (= outcome_id for audit correlation)
+        const runId = crypto.randomUUID();
+
         try {
           // Build enriched context with previous outcomes
           const outcomes = await invoke<OutcomeRow[]>("db_query", {
@@ -1366,14 +1372,14 @@ export class DesktopApp {
           });
 
           // Use PlanEngine for multi-step execution if available
-          const result = await this.executePlanGoal(goal, outcomes ?? [], invoke);
+          const result = await this.executePlanGoal(goal, outcomes ?? [], invoke, runId);
 
           if (result.suspended) {
             // Approval requested — _goalExecuting stays true to block further ticks.
             return;
           }
 
-          // Normal completion: record outcome, update DB
+          // Normal completion: record outcome, update DB (runId = outcome_id for audit correlation)
           await invoke<number>("db_execute", {
             sql: "UPDATE goals SET last_run_at = ?, consecutive_failures = 0 WHERE goal_id = ?",
             params: [now, goal.goal_id],
@@ -1383,7 +1389,7 @@ export class DesktopApp {
             sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
                   VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL)`,
             params: [
-              crypto.randomUUID(),
+              runId,
               goal.goal_id,
               this.motebitId,
               now,
@@ -1414,11 +1420,11 @@ export class DesktopApp {
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
 
-          // Record failed outcome
+          // Record failed outcome (runId = outcome_id for audit correlation)
           await invoke<number>("db_execute", {
             sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
                   VALUES (?, ?, ?, ?, 'failed', NULL, 0, 0, ?)`,
-            params: [crypto.randomUUID(), goal.goal_id, this.motebitId, now, msg],
+            params: [runId, goal.goal_id, this.motebitId, now, msg],
           }).catch(() => {});
 
           // Increment failures and auto-pause if threshold reached
@@ -1466,6 +1472,7 @@ export class DesktopApp {
     goal: { goal_id: string; prompt: string; mode: string },
     outcomes: Array<{ ran_at: number; status: string; summary: string | null; error_message: string | null }>,
     invoke: InvokeFn,
+    runId?: string,
   ): Promise<{
     suspended: boolean;
     toolCallsMade: number;
@@ -1478,7 +1485,7 @@ export class DesktopApp {
 
     // If PlanEngine or loopDeps are unavailable, fall back to single-turn execution
     if (!this.planEngine || !loopDeps) {
-      return this.executeSingleTurnGoal(goal, outcomes, invoke);
+      return this.executeSingleTurnGoal(goal, outcomes, invoke, runId);
     }
 
     const registry = this.runtime!.getToolRegistry();
@@ -1493,7 +1500,7 @@ export class DesktopApp {
     let planStream: AsyncGenerator<PlanChunk>;
 
     if (plan && plan.status === PlanStatus.Active) {
-      planStream = this.planEngine.resumePlan(plan.plan_id, loopDeps);
+      planStream = this.planEngine.resumePlan(plan.plan_id, loopDeps, undefined, runId);
     } else {
       plan = await this.planEngine.createPlan(goal.goal_id, this.motebitId, {
         goalPrompt: goal.prompt,
@@ -1502,10 +1509,10 @@ export class DesktopApp {
         ),
         availableTools: registry.list().map((t) => t.name),
       }, loopDeps);
-      planStream = this.planEngine.executePlan(plan.plan_id, loopDeps);
+      planStream = this.planEngine.executePlan(plan.plan_id, loopDeps, undefined, runId);
     }
 
-    return this.consumePlanStream(planStream, goal, invoke);
+    return this.consumePlanStream(planStream, goal, invoke, runId);
   }
 
   /**
@@ -1515,6 +1522,7 @@ export class DesktopApp {
     goal: { goal_id: string; prompt: string; mode: string },
     outcomes: Array<{ ran_at: number; status: string; summary: string | null; error_message: string | null }>,
     invoke: InvokeFn,
+    runId?: string,
   ): Promise<{
     suspended: boolean;
     toolCallsMade: number;
@@ -1542,7 +1550,7 @@ export class DesktopApp {
     let accumulated = "";
     let toolCallsMade = 0;
 
-    for await (const chunk of this.runtime!.sendMessageStreaming(context)) {
+    for await (const chunk of this.runtime!.sendMessageStreaming(context, runId)) {
       if (chunk.type === "text") {
         accumulated += chunk.text;
       } else if (chunk.type === "tool_status" && chunk.status === "calling") {
@@ -1553,6 +1561,7 @@ export class DesktopApp {
           prompt: goal.prompt,
           invoke,
           mode: goal.mode,
+          runId,
         };
         this._goalApprovalCallback?.({
           goalId: goal.goal_id,
@@ -1575,6 +1584,7 @@ export class DesktopApp {
     stream: AsyncGenerator<PlanChunk>,
     goal: { goal_id: string; prompt: string; mode: string },
     invoke: InvokeFn,
+    runId?: string,
   ): Promise<{
     suspended: boolean;
     toolCallsMade: number;
@@ -1656,6 +1666,7 @@ export class DesktopApp {
             invoke,
             mode: goal.mode,
             planId: chunk.step.plan_id,
+            runId,
           };
           this._goalApprovalCallback?.({
             goalId: goal.goal_id,

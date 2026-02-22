@@ -90,6 +90,7 @@ export class PlanEngine {
     planId: string,
     deps: MotebitLoopDependencies,
     ctx?: DecompositionContext,
+    runId?: string,
   ): AsyncGenerator<PlanChunk> {
     const plan = this.store.getPlan(planId);
     if (!plan) throw new Error(`Plan not found: ${planId}`);
@@ -98,13 +99,14 @@ export class PlanEngine {
 
     yield { type: "plan_created", plan, steps };
 
-    yield* this.runSteps(plan, steps, deps, ctx);
+    yield* this.runSteps(plan, steps, deps, ctx, 0, runId);
   }
 
   async *resumePlan(
     planId: string,
     deps: MotebitLoopDependencies,
     ctx?: DecompositionContext,
+    runId?: string,
   ): AsyncGenerator<PlanChunk> {
     const plan = this.store.getPlan(planId);
     if (!plan) throw new Error(`Plan not found: ${planId}`);
@@ -113,7 +115,7 @@ export class PlanEngine {
     }
 
     const steps = this.store.getStepsForPlan(planId);
-    yield* this.runSteps(plan, steps, deps, ctx);
+    yield* this.runSteps(plan, steps, deps, ctx, 0, runId);
   }
 
   private async *runSteps(
@@ -122,6 +124,7 @@ export class PlanEngine {
     deps: MotebitLoopDependencies,
     ctx?: DecompositionContext,
     planRetryCount: number = 0,
+    runId?: string,
   ): AsyncGenerator<PlanChunk> {
     this._isExecuting = true;
     const maxRetries = this.config.maxStepRetries ?? 2;
@@ -178,7 +181,7 @@ export class PlanEngine {
           yield { type: "step_started", step: updatedStep };
 
           try {
-            const result = yield* this.executeStep(updatedStep, completedResults, deps);
+            const result = yield* this.executeStep(updatedStep, completedResults, deps, runId);
 
             if (result.suspended) {
               // Approval request — pause plan, caller will resumePlan later
@@ -237,7 +240,7 @@ export class PlanEngine {
 
                 const newSteps = this.store.getStepsForPlan(newPlan.plan_id);
                 yield { type: "plan_created", plan: newPlan, steps: newSteps };
-                yield* this.runSteps(newPlan, newSteps, deps, ctx, planRetryCount + 1);
+                yield* this.runSteps(newPlan, newSteps, deps, ctx, planRetryCount + 1, runId);
                 return;
               } catch {
                 // Re-planning itself failed — fall through to plan_failed
@@ -308,6 +311,7 @@ export class PlanEngine {
     step: PlanStep,
     priorResults: string[],
     deps: MotebitLoopDependencies,
+    runId?: string,
   ): AsyncGenerator<PlanChunk, { suspended: boolean; toolCallsMade: number; responseText: string }> {
     // Build step prompt with accumulated context
     const contextParts: string[] = [];
@@ -334,6 +338,7 @@ export class PlanEngine {
 
     const stream = runTurnStreaming(deps, stepPrompt, {
       conversationHistory: conversationHistory.length > 0 ? conversationHistory : undefined,
+      runId,
     });
 
     let responseText = "";

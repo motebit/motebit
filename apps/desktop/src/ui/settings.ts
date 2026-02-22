@@ -1,6 +1,8 @@
 import type { DesktopAIConfig, InvokeFn, McpServerConfig, PolicyConfig } from "../index";
 import type { NameCollision } from "../mcp-discovery";
 import type { DesktopContext } from "../types";
+import { formatTimeAgo } from "../types";
+import { parseJsonSafe, classifyDecision } from "./audit-utils";
 import { addMessage } from "./chat";
 import type { ColorPickerAPI } from "./color-picker";
 import type { VoiceAPI } from "./voice";
@@ -133,6 +135,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       pane.classList.toggle("active", pane.id === `pane-${tabName}`);
     });
     if (tabName === "identity") populateIdentityTab();
+    if (tabName === "governance") populateGovernanceTab();
   }
 
   document.querySelectorAll(".settings-tab").forEach(tab => {
@@ -334,6 +337,115 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     });
     input.click();
   });
+
+  // === Governance Audit Activity ===
+
+  function populateGovernanceTab(): void {
+    const config = ctx.getConfig();
+    if (!config?.isTauri || !config?.invoke) return;
+    const invoke = config.invoke;
+    const listEl = document.getElementById("audit-activity-list")!;
+    const emptyEl = document.getElementById("audit-activity-empty")!;
+
+    listEl.innerHTML = "";
+    emptyEl.style.display = "none";
+
+    void invoke<Array<Record<string, unknown>>>("db_query", {
+      sql: `SELECT call_id, run_id, tool, args, decision, result, timestamp FROM tool_audit_log ORDER BY timestamp DESC LIMIT 20`,
+      params: [],
+    }).then((entries: Array<Record<string, unknown>>) => {
+      if (!entries || entries.length === 0) {
+        emptyEl.style.display = "block";
+        return;
+      }
+
+      for (const entry of entries) {
+        const row = document.createElement("div");
+        row.className = "audit-row";
+
+        // Header
+        const header = document.createElement("div");
+        header.className = "audit-row-header";
+
+        const toolName = document.createElement("span");
+        toolName.className = "audit-tool-name";
+        toolName.textContent = String(entry.tool || "unknown");
+        header.appendChild(toolName);
+
+        const badgeClass = classifyDecision(entry.decision);
+
+        const badge = document.createElement("span");
+        badge.className = `audit-decision-badge ${badgeClass}`;
+        badge.textContent = badgeClass;
+        header.appendChild(badge);
+
+        const time = document.createElement("span");
+        time.className = "audit-time";
+        time.textContent = formatTimeAgo(Number(entry.timestamp) || 0);
+        header.appendChild(time);
+
+        row.appendChild(header);
+
+        // Expandable detail
+        const detail = document.createElement("div");
+        detail.className = "audit-row-detail";
+
+        const argsStr = typeof entry.args === "string" ? entry.args : JSON.stringify(entry.args || "");
+        const truncArgs = argsStr.length > 200 ? argsStr.slice(0, 200) + "..." : argsStr;
+        const argsDiv = document.createElement("div");
+        argsDiv.className = "audit-detail-args";
+        argsDiv.textContent = truncArgs;
+        detail.appendChild(argsDiv);
+
+        const resultData = parseJsonSafe(entry.result) as Record<string, unknown> | null;
+        const resultDiv = document.createElement("div");
+        resultDiv.className = "audit-detail-result";
+        if (resultData && typeof resultData === "object") {
+          const ok = resultData.ok !== undefined ? String(resultData.ok) : resultData.error ? "failed" : "ok";
+          const dur = resultData.durationMs ? `${resultData.durationMs}ms` : "";
+          resultDiv.textContent = [ok, dur].filter(Boolean).join(" · ");
+        } else {
+          resultDiv.textContent = String(entry.result || "");
+        }
+        if (resultDiv.textContent) {
+          detail.appendChild(resultDiv);
+        }
+
+        // Show run_id if present (links audit entry to goal outcome)
+        if (entry.run_id) {
+          const runSpan = document.createElement("div");
+          runSpan.className = "audit-detail-result";
+          runSpan.style.opacity = "0.6";
+          runSpan.textContent = `run: ${String(entry.run_id).slice(0, 8)}`;
+          detail.appendChild(runSpan);
+        }
+
+        // Copy JSON button
+        const copyBtn = document.createElement("button");
+        copyBtn.className = "audit-copy-btn";
+        copyBtn.textContent = "Copy JSON";
+        const entryJson = JSON.stringify(entry, null, 2);
+        copyBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          void navigator.clipboard.writeText(entryJson).then(() => {
+            copyBtn.textContent = "Copied";
+            setTimeout(() => { copyBtn.textContent = "Copy JSON"; }, 1500);
+          });
+        });
+        detail.appendChild(copyBtn);
+
+        row.appendChild(detail);
+
+        row.addEventListener("click", () => {
+          row.classList.toggle("expanded");
+        });
+
+        listEl.appendChild(row);
+      }
+    }).catch(() => {
+      emptyEl.style.display = "block";
+    });
+  }
 
   // === MCP Server List ===
 

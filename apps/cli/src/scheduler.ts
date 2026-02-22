@@ -263,13 +263,16 @@ export class GoalScheduler {
 
         this.currentGoalId = goal.goal_id;
 
+        // Generate a stable runId for this goal execution (= outcome_id for audit correlation)
+        const runId = crypto.randomUUID();
+
         try {
           let result: GoalStreamResult;
 
           if (this.planEngine && this.planStore) {
-            result = await this.executePlanGoal(goal, outcomes);
+            result = await this.executePlanGoal(goal, outcomes, runId);
           } else {
-            const stream = this.runtime.sendMessageStreaming(enrichedPrompt);
+            const stream = this.runtime.sendMessageStreaming(enrichedPrompt, runId);
             result = await this.consumeDaemonStream(stream, goal.goal_id);
           }
 
@@ -280,9 +283,9 @@ export class GoalScheduler {
             return;
           }
 
-          // Record outcome
+          // Record outcome (runId = outcome_id for audit correlation)
           this.goalOutcomeStore.add({
-            outcome_id: crypto.randomUUID(),
+            outcome_id: runId,
             goal_id: goal.goal_id,
             motebit_id: this.motebitId,
             ran_at: Date.now(),
@@ -316,9 +319,9 @@ export class GoalScheduler {
           const msg = err instanceof Error ? err.message : String(err);
           console.error(`[goal] error for ${goal.goal_id.slice(0, 8)}: ${msg}`);
 
-          // Record failed outcome
+          // Record failed outcome (runId = outcome_id for audit correlation)
           this.goalOutcomeStore.add({
-            outcome_id: crypto.randomUUID(),
+            outcome_id: runId,
             goal_id: goal.goal_id,
             motebit_id: this.motebitId,
             ran_at: Date.now(),
@@ -432,7 +435,7 @@ export class GoalScheduler {
     return { suspended: false, toolCallsMade, memoriesFormed, responseText };
   }
 
-  private async executePlanGoal(goal: Goal, outcomes: GoalOutcome[]): Promise<GoalStreamResult> {
+  private async executePlanGoal(goal: Goal, outcomes: GoalOutcome[], runId?: string): Promise<GoalStreamResult> {
     const loopDeps = this.runtime.getLoopDeps();
     if (!loopDeps) throw new Error("AI not initialized — no loop deps available");
 
@@ -444,7 +447,7 @@ export class GoalScheduler {
 
     if (plan && plan.status === PlanStatus.Active) {
       console.log(`[plan] resuming: ${plan.title} (${plan.plan_id.slice(0, 8)})`);
-      planStream = this.planEngine!.resumePlan(plan.plan_id, loopDeps);
+      planStream = this.planEngine!.resumePlan(plan.plan_id, loopDeps, undefined, runId);
     } else {
       plan = await this.planEngine!.createPlan(goal.goal_id, this.motebitId, {
         goalPrompt: goal.prompt,
@@ -453,7 +456,7 @@ export class GoalScheduler {
         ),
         availableTools: registry.list().map((t) => t.name),
       }, loopDeps);
-      planStream = this.planEngine!.executePlan(plan.plan_id, loopDeps);
+      planStream = this.planEngine!.executePlan(plan.plan_id, loopDeps, undefined, runId);
     }
 
     return this.consumePlanStream(planStream, goal.goal_id);
