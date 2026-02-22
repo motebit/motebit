@@ -378,6 +378,71 @@ describe("DesktopApp.initAI tools", () => {
 });
 
 // ---------------------------------------------------------------------------
+// DesktopApp.initAI — memoryGovernance config passthrough
+// ---------------------------------------------------------------------------
+
+describe("DesktopApp.initAI memoryGovernance", () => {
+  let app: DesktopApp;
+
+  afterEach(() => {
+    if (app) app.stop();
+  });
+
+  it("passes memoryGovernance through to runtime (not defaults)", async () => {
+    app = new DesktopApp();
+    await app.initAI({
+      provider: "ollama",
+      isTauri: false,
+      memoryGovernance: { persistenceThreshold: 0.9, rejectSecrets: false },
+    });
+
+    const gov = app.getMemoryGovernance();
+    expect(gov).not.toBeNull();
+    expect(gov!.persistenceThreshold).toBe(0.9);
+    expect(gov!.rejectSecrets).toBe(false);
+  });
+
+  it("uses defaults when memoryGovernance is omitted", async () => {
+    app = new DesktopApp();
+    await app.initAI({
+      provider: "ollama",
+      isTauri: false,
+    });
+
+    const gov = app.getMemoryGovernance();
+    expect(gov).not.toBeNull();
+    expect(gov!.persistenceThreshold).toBe(0.5);
+    expect(gov!.rejectSecrets).toBe(true);
+  });
+
+  it("partial config merges with defaults (only persistenceThreshold)", async () => {
+    app = new DesktopApp();
+    await app.initAI({
+      provider: "ollama",
+      isTauri: false,
+      memoryGovernance: { persistenceThreshold: 0.8 },
+    });
+
+    const gov = app.getMemoryGovernance();
+    expect(gov!.persistenceThreshold).toBe(0.8);
+    expect(gov!.rejectSecrets).toBe(true); // default preserved
+  });
+
+  it("partial config merges with defaults (only rejectSecrets)", async () => {
+    app = new DesktopApp();
+    await app.initAI({
+      provider: "ollama",
+      isTauri: false,
+      memoryGovernance: { rejectSecrets: false },
+    });
+
+    const gov = app.getMemoryGovernance();
+    expect(gov!.persistenceThreshold).toBe(0.5); // default preserved
+    expect(gov!.rejectSecrets).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // DesktopApp.governanceStatus
 // ---------------------------------------------------------------------------
 

@@ -49,6 +49,11 @@ export class MemoryGovernor {
     this.redaction = new RedactionEngine();
   }
 
+  /** Read-only snapshot of the effective governance config. */
+  getConfig(): Readonly<MemoryGovernanceConfig> {
+    return this.config;
+  }
+
   /**
    * Evaluate a batch of memory candidates from a turn.
    * Returns decisions for each candidate: persist, make ephemeral, or reject.

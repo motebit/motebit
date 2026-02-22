@@ -618,6 +618,11 @@ async function bootstrap(): Promise<void> {
       if (typeof mg.reject_secrets === "boolean") {
         (document.getElementById("settings-reject-secrets") as HTMLInputElement).checked = mg.reject_secrets;
       }
+      // Pass persisted governance to config so initAI forwards it to MotebitRuntime
+      config.memoryGovernance = {
+        persistenceThreshold: typeof mg.persistence_threshold === "number" ? mg.persistence_threshold : undefined,
+        rejectSecrets: typeof mg.reject_secrets === "boolean" ? mg.reject_secrets : undefined,
+      };
     }
     if (parsed.budget && typeof parsed.budget === "object") {
       const b = parsed.budget as Record<string, unknown>;

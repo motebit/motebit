@@ -118,6 +118,7 @@ export interface DesktopAIConfig {
   invoke?: InvokeFn;
   syncUrl?: string;
   syncMasterToken?: string;
+  memoryGovernance?: { persistenceThreshold?: number; rejectSecrets?: boolean };
 }
 
 // === Tauri Keyring Adapter ===
@@ -563,7 +564,7 @@ export class DesktopApp {
     }
 
     this.runtime = new MotebitRuntime(
-      { motebitId: this.motebitId, tickRateHz: 2, policy: policyConfig },
+      { motebitId: this.motebitId, tickRateHz: 2, policy: policyConfig, memoryGovernance: config.memoryGovernance },
       { storage, renderer: this.renderer, ai: provider, keyring },
     );
 
@@ -848,6 +849,12 @@ export class DesktopApp {
   updateMemoryGovernance(config: Partial<MemoryGovernanceConfig>): void {
     if (!this.runtime) return;
     this.runtime.updateMemoryGovernance(config);
+  }
+
+  /** Read-only snapshot of the effective memory governance config. Returns null if runtime not initialized. */
+  getMemoryGovernance(): { persistenceThreshold: number; maxMemoriesPerTurn: number; rejectSecrets: boolean } | null {
+    if (!this.runtime) return null;
+    return { ...this.runtime.memoryGovernor.getConfig() };
   }
 
   // === Governance ===
