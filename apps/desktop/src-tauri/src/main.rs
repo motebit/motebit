@@ -336,29 +336,32 @@ fn discover_mcp_configs() -> Vec<McpConfigSource> {
         None => return vec![],
     };
 
+    let mut sources: Vec<(&str, String)> = Vec::new();
+
     #[cfg(target_os = "macos")]
-    let sources = [
-        ("Claude Desktop", format!("{}/Library/Application Support/Claude/claude_desktop_config.json", home)),
-        ("Claude Code", format!("{}/.claude.json", home)),
-        ("VS Code", format!("{}/Library/Application Support/Code/User/settings.json", home)),
-    ];
+    {
+        sources.push(("Claude Desktop", format!("{}/Library/Application Support/Claude/claude_desktop_config.json", home)));
+        sources.push(("Claude Code", format!("{}/.claude.json", home)));
+        sources.push(("VS Code", format!("{}/Library/Application Support/Code/User/settings.json", home)));
+    }
 
     #[cfg(target_os = "linux")]
-    let sources = [
-        ("Claude Desktop", format!("{}/.config/Claude/claude_desktop_config.json", home)),
-        ("Claude Code", format!("{}/.claude.json", home)),
-        ("VS Code", format!("{}/.config/Code/User/settings.json", home)),
-    ];
+    {
+        // Claude Desktop uses lowercase "claude" on Linux
+        sources.push(("Claude Desktop", format!("{}/.config/claude/claude_desktop_config.json", home)));
+        sources.push(("Claude Code", format!("{}/.claude.json", home)));
+        sources.push(("VS Code", format!("{}/.config/Code/User/settings.json", home)));
+        // Code - OSS (open-source VS Code on some Linux distros)
+        sources.push(("VS Code", format!("{}/.config/Code - OSS/User/settings.json", home)));
+    }
 
     #[cfg(target_os = "windows")]
-    let sources = {
-        let appdata = std::env::var("APPDATA").unwrap_or_else(|_| format!("{}/AppData/Roaming", home));
-        [
-            ("Claude Desktop", format!("{}/Claude/claude_desktop_config.json", appdata)),
-            ("Claude Code", format!("{}/.claude.json", home)),
-            ("VS Code", format!("{}/Code/User/settings.json", appdata)),
-        ]
-    };
+    {
+        let appdata = std::env::var("APPDATA").unwrap_or_else(|_| format!("{}\\AppData\\Roaming", home));
+        sources.push(("Claude Desktop", format!("{}\\Claude\\claude_desktop_config.json", appdata)));
+        sources.push(("Claude Code", format!("{}\\.claude.json", home)));
+        sources.push(("VS Code", format!("{}\\Code\\User\\settings.json", appdata)));
+    }
 
     sources
         .into_iter()
