@@ -15,9 +15,9 @@ import {
   type MotebitPersonalityConfig,
 } from "@motebit/ai-core";
 import type { ToolAuditEntry, MemoryNode, MemoryEdge } from "@motebit/sdk";
-import { EventType } from "@motebit/sdk";
+import { EventType, SensitivityLevel } from "@motebit/sdk";
 import { InMemoryEventStore } from "@motebit/event-log";
-import { InMemoryMemoryStorage, computeDecayedConfidence } from "@motebit/memory-graph";
+import { InMemoryMemoryStorage, computeDecayedConfidence, embedText } from "@motebit/memory-graph";
 import {
   InMemoryIdentityStorage,
   bootstrapIdentity as sharedBootstrapIdentity,
@@ -1047,6 +1047,17 @@ export class DesktopApp {
   }
 
   /** Soft-delete a memory with audit trail. */
+  /** Internal: form a memory directly, bypassing the agentic loop.
+   * Used only for first-run greeting fallback. Local embeddings (no network). */
+  async formMemoryDirect(content: string, confidence: number): Promise<MemoryNode | null> {
+    if (!this.runtime) return null;
+    const embedding = await embedText(content);
+    return this.runtime.memory.formMemory(
+      { content, confidence, sensitivity: SensitivityLevel.None },
+      embedding,
+    );
+  }
+
   async deleteMemory(nodeId: string): Promise<void> {
     if (!this.runtime) return;
     await this.runtime.memory.deleteMemory(nodeId);

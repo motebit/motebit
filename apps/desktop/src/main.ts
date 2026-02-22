@@ -2,7 +2,7 @@ import { DesktopApp, COLOR_PRESETS, type DesktopAIConfig, type McpServerConfig, 
 import type { DesktopContext } from "./types";
 import { formatTimeAgo } from "./types";
 import { loadDesktopConfig } from "./ui/config";
-import { addMessage, addActionMessage, showToast, showBanner, dismissBanner, initChat, showGoalApprovalCard } from "./ui/chat";
+import { addMessage, addActionMessage, showToast, showBanner, dismissBanner, initChat, showGoalApprovalCard, streamGreeting, GREETING_PROMPT_MARKER } from "./ui/chat";
 import { deriveInteriorColor } from "./ui/color-picker";
 import { initColorPicker } from "./ui/color-picker";
 import { initConversations } from "./ui/conversations";
@@ -28,6 +28,8 @@ if (!canvas) throw new Error("Canvas element #motebit-canvas not found");
 
 const app = new DesktopApp();
 let currentConfig: DesktopAIConfig | null = null;
+let isFirstLaunch = false;
+let greetingSent = false;
 
 // === Desktop Context ===
 
@@ -136,7 +138,10 @@ async function tryBootstrapIdentity(invoke: import("./tauri-storage.js").InvokeF
           primary: true,
           onClick: () => {
             void tryBootstrapIdentity(invoke).then(result => {
-              if (result?.isFirstLaunch) addMessage("system", "Your mote has been created");
+              if (result?.isFirstLaunch) {
+                isFirstLaunch = true;
+                addMessage("system", "Your mote has been created");
+              }
             });
           },
         },
@@ -151,7 +156,10 @@ async function tryBootstrapIdentity(invoke: import("./tauri-storage.js").InvokeF
                 void tryBootstrapIdentity(invoke).then(result => {
                   if (result) {
                     dismissBanner("identity-limited");
-                    if (result.isFirstLaunch) addMessage("system", "Your mote has been created");
+                    if (result.isFirstLaunch) {
+                      isFirstLaunch = true;
+                      addMessage("system", "Your mote has been created");
+                    }
                   }
                 });
               },
@@ -444,10 +452,18 @@ function onAIReady(config: DesktopAIConfig): void {
   const previousMessages = app.getConversationHistory();
   if (previousMessages.length > 0) {
     for (const msg of previousMessages) {
+      if (msg.role === "user" && msg.content.startsWith(GREETING_PROMPT_MARKER)) continue;
       if (msg.role === "user" || msg.role === "assistant") {
         addMessage(msg.role, msg.content);
       }
     }
+  }
+
+  // First-run greeting — agent introduces itself via real streaming pipeline
+  if (isFirstLaunch && !greetingSent && previousMessages.length === 0) {
+    setTimeout(() => {
+      void streamGreeting(ctx);
+    }, 1500);
   }
 
   // Start goal scheduler (Tauri only)
@@ -553,6 +569,7 @@ async function bootstrap(): Promise<void> {
     const invoke = config.invoke;
     const raw = await invoke<string>("read_config");
     const parsed = JSON.parse(raw) as Record<string, unknown>;
+    greetingSent = Boolean(parsed.first_run_greeting_sent);
 
     if (parsed.motebit_id) {
       welcomeBackdrop.classList.remove("open");
@@ -569,7 +586,10 @@ async function bootstrap(): Promise<void> {
           welcomeBackdrop.classList.remove("open");
           addMessage("system", "No sync relay configured \u2014 set sync_url in config to link devices");
           const result = await tryBootstrapIdentity(invoke);
-          if (result?.isFirstLaunch) addMessage("system", "Your mote has been created");
+          if (result?.isFirstLaunch) {
+            isFirstLaunch = true;
+            addMessage("system", "Your mote has been created");
+          }
         } else {
           try { await app.bootstrap(invoke); } catch { /* Non-fatal — we just need the keypair */ }
           pairing.startClaim(invoke, linkSyncUrl);
@@ -577,7 +597,10 @@ async function bootstrap(): Promise<void> {
       } else {
         welcomeBackdrop.classList.remove("open");
         const result = await tryBootstrapIdentity(invoke);
-        if (result?.isFirstLaunch) addMessage("system", "Your mote has been created");
+        if (result?.isFirstLaunch) {
+          isFirstLaunch = true;
+          addMessage("system", "Your mote has been created");
+        }
 
         if (config.syncUrl && config.syncMasterToken) {
           void trySyncRegistration(invoke, config.syncUrl, config.syncMasterToken);
@@ -679,6 +702,13 @@ async function bootstrap(): Promise<void> {
           addMessage(msg.role, msg.content);
         }
       }
+    }
+
+    // First-run greeting — agent introduces itself via real streaming pipeline
+    if (isFirstLaunch && !greetingSent && previousMessages.length === 0) {
+      setTimeout(() => {
+        void streamGreeting(ctx);
+      }, 1500);
     }
 
     // Start goal scheduler (Tauri only)

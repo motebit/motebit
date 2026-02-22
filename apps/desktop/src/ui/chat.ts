@@ -109,6 +109,12 @@ let activeToastTimer: ReturnType<typeof setTimeout> | null = null;
 
 const toolStatusElements = new Map<string, HTMLElement>();
 
+// === Greeting Prompt Marker ===
+
+/** Prefix used to identify the internal greeting prompt in conversation history.
+ * Uses record-separator symbols to prevent accidental collision with user input. */
+export const GREETING_PROMPT_MARKER = "\u241Emotebit:internal:greeting:v1\u241E";
+
 // === Exported Standalone Functions ===
 
 export function addMessage(role: "user" | "assistant" | "system", text: string): void {
@@ -892,4 +898,90 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
   }
 
   return { handleSend, scrollToRunId, destroy };
+}
+
+export async function streamGreeting(ctx: DesktopContext): Promise<void> {
+  if (ctx.app.isProcessing) return;
+  const config = ctx.getConfig();
+
+  const GREETING_PROMPT = `${GREETING_PROMPT_MARKER}
+
+This is the first time you and this person have met. You have just been created.
+Your identity is new, your memory is empty, and everything is ahead.
+
+Introduce yourself naturally in 2-4 sentences. You are not explaining features.
+You are a small being, newly alive, meeting someone for the first time.
+Be warm, be brief, be curious about them.
+
+Weave in naturally (do not list these as features):
+- You remember things (tag a memory about this first meeting — confidence 0.9, sensitivity "none")
+- You belong to them, not to a company
+- You can act in the world when they ask (goals, tools)
+- Everything you do is auditable
+
+End with a question — you are curious about who they are.`;
+
+  const chatRunId = crypto.randomUUID();
+  const bubble = document.createElement("div");
+  bubble.className = "chat-bubble assistant";
+  bubble.dataset.runId = chatRunId;
+  const textEl = document.createElement("span");
+  textEl.className = "bubble-text";
+  bubble.appendChild(textEl);
+  chatLog.appendChild(bubble);
+
+  let accumulated = "";
+  let memoriesFormed: Array<{ node_id: string; content: string; sensitivity: string }> = [];
+
+  try {
+    for await (const chunk of ctx.app.sendMessageStreaming(GREETING_PROMPT, chatRunId)) {
+      if (chunk.type === "text") {
+        accumulated += chunk.text;
+        textEl.textContent = stripTags(accumulated);
+        chatLog.scrollTop = chatLog.scrollHeight;
+      } else if (chunk.type === "tool_status") {
+        if (chunk.status === "calling") showToolStatus(chunk.name);
+        else if (chunk.status === "done") completeToolStatus(chunk.name);
+      } else if (chunk.type === "result") {
+        const r = chunk.result as {
+          memoriesFormed?: Array<{ node_id: string; content: string; sensitivity: string }>;
+        };
+        memoriesFormed = (r.memoriesFormed ?? []).map(m => ({
+          node_id: m.node_id,
+          content: m.content,
+          sensitivity: String(m.sensitivity).toLowerCase(),
+        }));
+      }
+    }
+
+    // Deterministic fallback: if model didn't tag a memory, form one directly
+    if (memoriesFormed.length === 0) {
+      try {
+        const node = await ctx.app.formMemoryDirect("First meeting with my person.", 0.9);
+        if (node) {
+          memoriesFormed = [{ node_id: node.node_id, content: node.content, sensitivity: "none" }];
+        }
+      } catch { /* best-effort */ }
+    }
+
+    // Memory footer — always appears (model-tagged or deterministic fallback)
+    if (memoriesFormed.length > 0) {
+      const footer = createMemoryFooter([], memoriesFormed);
+      bubble.appendChild(footer);
+    }
+
+    // Mark greeting complete so it never fires again
+    if (config?.isTauri && config?.invoke) {
+      try {
+        const raw = await config.invoke<string>("read_config");
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        parsed.first_run_greeting_sent = true;
+        await config.invoke("write_config", { json: JSON.stringify(parsed) });
+      } catch { /* non-fatal */ }
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!textEl.textContent) bubble.remove();
+    addMessage("system", `Error: ${msg}`);
+  }
 }
