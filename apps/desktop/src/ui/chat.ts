@@ -781,6 +781,19 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
         break;
       }
 
+      case "summarize":
+        void ctx.app.summarizeConversation().then(summary => {
+          if (summary) {
+            addMessage("system", `Summary: ${summary}`);
+          } else {
+            addMessage("system", "No conversation to summarize");
+          }
+        }).catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          addMessage("system", `Summarization failed: ${msg}`);
+        });
+        break;
+
       case "new":
         ctx.app.startNewConversation();
         chatLog.innerHTML = "";

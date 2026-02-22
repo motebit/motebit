@@ -1490,3 +1490,185 @@ describe("DesktopApp.generateTitleInBackground", () => {
     expect(result).toBe("Today's Weather Forecast");
   });
 });
+
+// ---------------------------------------------------------------------------
+// DesktopApp.getConversationSummary
+// ---------------------------------------------------------------------------
+
+describe("DesktopApp.getConversationSummary", () => {
+  let app: DesktopApp;
+
+  afterEach(() => {
+    if (app) app.stop();
+  });
+
+  it("returns null without conversation store", async () => {
+    app = new DesktopApp();
+    await app.initAI({ provider: "ollama", isTauri: false });
+    const result = await app.getConversationSummary("conv-1");
+    expect(result).toBeNull();
+  });
+
+  it("returns null for conversation without summary", async () => {
+    const db = emptyDb();
+    db.conversations.push({
+      conversation_id: "conv-1",
+      motebit_id: "desktop-local",
+      started_at: 1000,
+      last_active_at: 2000,
+      title: "Test Chat",
+      summary: null,
+      message_count: 5,
+    });
+    app = new DesktopApp();
+    await app.initAI({ provider: "ollama", isTauri: true, invoke: createMockInvoke(db) });
+
+    const result = await app.getConversationSummary("conv-1");
+    expect(result).toBeNull();
+  });
+
+  it("returns summary for conversation with one", async () => {
+    const db = emptyDb();
+    db.conversations.push({
+      conversation_id: "conv-1",
+      motebit_id: "desktop-local",
+      started_at: 1000,
+      last_active_at: 2000,
+      title: "Test Chat",
+      summary: "Discussed testing strategies for TypeScript apps.",
+      message_count: 10,
+    });
+    app = new DesktopApp();
+    await app.initAI({ provider: "ollama", isTauri: true, invoke: createMockInvoke(db) });
+
+    const result = await app.getConversationSummary("conv-1");
+    expect(result).toBe("Discussed testing strategies for TypeScript apps.");
+  });
+
+  it("returns null for non-existent conversation", async () => {
+    const db = emptyDb();
+    app = new DesktopApp();
+    await app.initAI({ provider: "ollama", isTauri: true, invoke: createMockInvoke(db) });
+
+    const result = await app.getConversationSummary("non-existent");
+    expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DesktopApp.summarizeConversation
+// ---------------------------------------------------------------------------
+
+describe("DesktopApp.summarizeConversation", () => {
+  let app: DesktopApp;
+
+  afterEach(() => {
+    if (app) app.stop();
+  });
+
+  it("returns null without runtime", async () => {
+    app = new DesktopApp();
+    const result = await app.summarizeConversation();
+    expect(result).toBeNull();
+  });
+
+  it("returns null without conversation store (in-memory mode)", async () => {
+    app = new DesktopApp();
+    await app.initAI({ provider: "ollama", isTauri: false });
+    const result = await app.summarizeConversation();
+    expect(result).toBeNull();
+  });
+
+  it("returns null when no active conversation", async () => {
+    const db = emptyDb();
+    app = new DesktopApp();
+    await app.initAI({ provider: "ollama", isTauri: true, invoke: createMockInvoke(db) });
+    const result = await app.summarizeConversation();
+    expect(result).toBeNull();
+  });
+
+  it("returns null when conversation has fewer than 2 messages", async () => {
+    const setup = await setupAppWithConversation({ messageCount: 1 });
+    app = setup.app;
+    const result = await app.summarizeConversation();
+    expect(result).toBeNull();
+  });
+
+  it("returns summary when generateCompletion succeeds", async () => {
+    const setup = await setupAppWithConversation({ messageCount: 6 });
+    app = setup.app;
+
+    // Mock generateCompletion
+    const rt = appInternals(app).runtime as unknown as { generateCompletion: (p: string) => Promise<string> };
+    rt.generateCompletion = vi.fn().mockResolvedValue("A conversation about computing history and evolution.");
+
+    const result = await app.summarizeConversation();
+    expect(result).toBe("A conversation about computing history and evolution.");
+
+    // Verify it called generateCompletion with a summarization prompt
+    expect(rt.generateCompletion).toHaveBeenCalledOnce();
+    const prompt = (rt.generateCompletion as ReturnType<typeof vi.fn>).mock.calls[0]![0] as string;
+    expect(prompt).toContain("Summarize this conversation");
+  });
+
+  it("persists summary via updateSummary (db_execute)", async () => {
+    const setup = await setupAppWithConversation({ messageCount: 6 });
+    app = setup.app;
+
+    const rt = appInternals(app).runtime as unknown as { generateCompletion: (p: string) => Promise<string> };
+    rt.generateCompletion = vi.fn().mockResolvedValue("Summary of the conversation.");
+
+    await app.summarizeConversation();
+
+    const summaryUpdates = setup.db.executions.filter(e =>
+      e.sql.includes("UPDATE conversations SET summary"),
+    );
+    expect(summaryUpdates).toHaveLength(1);
+    expect(summaryUpdates[0]!.params).toContain("Summary of the conversation.");
+    expect(summaryUpdates[0]!.params).toContain("conv-auto-title");
+  });
+
+  it("includes existing summary in the prompt for updates", async () => {
+    const db = emptyDb();
+    db.conversations.push({
+      conversation_id: "conv-summ",
+      motebit_id: "desktop-local",
+      started_at: 1000,
+      last_active_at: 2000,
+      title: null,
+      summary: "Previous summary content.",
+      message_count: 6,
+    });
+    for (let i = 0; i < 6; i++) {
+      db.messages.push({
+        message_id: `msg-${i}`,
+        conversation_id: "conv-summ",
+        motebit_id: "desktop-local",
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: `Message ${i}`,
+        tool_calls: null,
+        tool_call_id: null,
+        created_at: 1000 + i,
+        token_estimate: 10,
+      });
+    }
+
+    app = new DesktopApp();
+    await app.initAI({ provider: "ollama", isTauri: true, invoke: createMockInvoke(db) });
+
+    const internals = appInternals(app);
+    const rt = internals.runtime!;
+    rt.conversationId = "conv-summ";
+    rt.conversationHistory = db.messages.map(m => ({ role: m.role, content: m.content }));
+
+    const rtTyped = rt as unknown as { generateCompletion: (p: string) => Promise<string> };
+    rtTyped.generateCompletion = vi.fn().mockResolvedValue("Updated summary.");
+
+    const result = await app.summarizeConversation();
+    expect(result).toBe("Updated summary.");
+
+    const prompt = (rtTyped.generateCompletion as ReturnType<typeof vi.fn>).mock.calls[0]![0] as string;
+    expect(prompt).toContain("Update this conversation summary");
+    expect(prompt).toContain("Previous summary content.");
+  });
+});

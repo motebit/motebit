@@ -2,7 +2,7 @@ import type { MotebitState, BehaviorCues, ConversationMessage, ToolRegistry } fr
 import { EventType, SensitivityLevel } from "@motebit/sdk";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 import type { EventStoreAdapter } from "@motebit/event-log";
-import { MemoryGraph, InMemoryMemoryStorage, embedText } from "@motebit/memory-graph";
+import { MemoryGraph, InMemoryMemoryStorage, embedText, computeDecayedConfidence } from "@motebit/memory-graph";
 import type { MemoryStorageAdapter } from "@motebit/memory-graph";
 import { StateVectorEngine } from "@motebit/state-vector";
 import { BehaviorEngine } from "@motebit/behavior-engine";
@@ -50,6 +50,7 @@ export type { EventStoreAdapter } from "@motebit/event-log";
 export type { MemoryStorageAdapter } from "@motebit/memory-graph";
 export type { IdentityStorage } from "@motebit/core-identity";
 export type { AuditLogAdapter } from "@motebit/privacy-layer";
+export type { DeletionCertificate } from "@motebit/crypto";
 export type { RenderAdapter, RenderFrame, InteriorColor, AudioReactivity } from "@motebit/render-engine/spec";
 export type { RenderSpec } from "@motebit/sdk";
 export { PolicyGate } from "@motebit/policy";
@@ -267,6 +268,7 @@ export class MotebitRuntime {
   readonly memory: MemoryGraph;
   readonly identity: IdentityManager;
   readonly privacy: PrivacyLayer;
+  readonly auditLog: AuditLogAdapter;
   readonly sync: SyncEngine;
   policy: PolicyGate;
   memoryGovernor: MemoryGovernor;
@@ -340,6 +342,7 @@ export class MotebitRuntime {
       adapters.storage.identityStorage,
       this.events,
     );
+    this.auditLog = adapters.storage.auditLog;
     this.privacy = new PrivacyLayer(
       adapters.storage.memoryStorage,
       this.memory,
@@ -428,6 +431,7 @@ export class MotebitRuntime {
       this.stateSnapshot.saveState(this.motebitId, this.state.serialize(), clock);
     }
     void this.autoCompact();
+    void this.housekeeping();
     // Disconnect MCP servers in background
     void Promise.allSettled(this.mcpAdapters.map((a) => a.disconnect()));
     this.renderer.dispose();
@@ -1079,6 +1083,76 @@ export class MotebitRuntime {
       }
     } catch {
       // Compaction is best-effort — don't crash the runtime
+    }
+  }
+
+  /**
+   * Prune decayed and retention-expired memories.
+   * Tombstones memories where:
+   *   1. Decayed confidence falls below memoryGovernor.persistenceThreshold
+   *   2. Age exceeds the sensitivity-level retention period
+   * Pinned memories are always preserved.
+   */
+  async housekeeping(): Promise<void> {
+    try {
+      const { nodes } = await this.memory.exportAll();
+      const now = Date.now();
+      const threshold = this.memoryGovernor.getConfig().persistenceThreshold;
+      const MS_PER_DAY = 24 * 60 * 60 * 1000;
+      let tombstonedDecay = 0;
+      let tombstonedRetention = 0;
+      let skippedPinned = 0;
+
+      for (const node of nodes) {
+        // Skip already tombstoned
+        if (node.tombstoned) continue;
+
+        // Never touch pinned memories
+        if (node.pinned) {
+          skippedPinned++;
+          continue;
+        }
+
+        // Check retention period by sensitivity level
+        const retention = this.privacy.getRetentionRules(node.sensitivity);
+        if (retention.max_retention_days !== Infinity) {
+          const ageMs = now - node.created_at;
+          const maxMs = retention.max_retention_days * MS_PER_DAY;
+          if (ageMs > maxMs) {
+            await this.memory.deleteMemory(node.node_id);
+            tombstonedRetention++;
+            continue;
+          }
+        }
+
+        // Check decayed confidence against persistence threshold
+        const elapsed = now - node.last_accessed;
+        const decayed = computeDecayedConfidence(node.confidence, node.half_life, elapsed);
+        if (decayed < threshold) {
+          await this.memory.deleteMemory(node.node_id);
+          tombstonedDecay++;
+        }
+      }
+
+      // Log housekeeping run
+      const clock = await this.events.getLatestClock(this.motebitId);
+      await this.events.append({
+        event_id: crypto.randomUUID(),
+        motebit_id: this.motebitId,
+        timestamp: now,
+        event_type: EventType.HousekeepingRun,
+        payload: {
+          source: "memory_housekeeping",
+          total_memories: nodes.length,
+          tombstoned_decay: tombstonedDecay,
+          tombstoned_retention: tombstonedRetention,
+          skipped_pinned: skippedPinned,
+        },
+        version_clock: clock + 1,
+        tombstoned: false,
+      });
+    } catch {
+      // Housekeeping is best-effort — don't crash the runtime
     }
   }
 

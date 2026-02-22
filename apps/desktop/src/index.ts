@@ -46,6 +46,7 @@ export type { InvokeFn } from "./tauri-storage.js";
 export type { TurnResult, StreamChunk, OperatorModeResult, InteriorColor, McpServerConfig, PolicyConfig, MemoryGovernanceConfig };
 export type { PairingSession, PairingStatus };
 export type { MemoryNode, MemoryEdge };
+export type { DeletionCertificate } from "@motebit/crypto";
 
 // === Sync Status ===
 
@@ -1058,9 +1059,40 @@ export class DesktopApp {
     );
   }
 
-  async deleteMemory(nodeId: string): Promise<void> {
-    if (!this.runtime) return;
-    await this.runtime.memory.deleteMemory(nodeId);
+  async deleteMemory(nodeId: string): Promise<import("@motebit/crypto").DeletionCertificate | null> {
+    if (!this.runtime) return null;
+    try {
+      return await this.runtime.privacy.deleteMemory(nodeId, this.motebitId);
+    } catch {
+      // Fall back to direct deletion if privacy layer fails
+      await this.runtime.memory.deleteMemory(nodeId);
+      return null;
+    }
+  }
+
+  /** List deletion certificates from the audit log. */
+  async listDeletionCertificates(): Promise<Array<{
+    auditId: string;
+    timestamp: number;
+    targetId: string;
+    tombstoneHash: string;
+    deletedBy: string;
+  }>> {
+    if (!this.runtime) return [];
+    try {
+      const records = await this.runtime.auditLog.query(this.motebitId);
+      return records
+        .filter((r) => r.action === "delete_memory")
+        .map((r) => ({
+          auditId: r.audit_id,
+          timestamp: r.timestamp,
+          targetId: r.target_id,
+          tombstoneHash: (r.details as Record<string, string>).tombstone_hash ?? "",
+          deletedBy: (r.details as Record<string, string>).deleted_by ?? "",
+        }));
+    } catch {
+      return [];
+    }
   }
 
   /** Pin or unpin a memory. */
@@ -1978,6 +2010,54 @@ export class DesktopApp {
   /** Get the current conversation ID. */
   get currentConversationId(): string | null {
     return this.runtime?.getConversationId() ?? null;
+  }
+
+  /**
+   * Get the summary for a specific conversation by ID.
+   * Returns null if no summary exists or conversation store is unavailable.
+   */
+  async getConversationSummary(conversationId: string): Promise<string | null> {
+    if (!this.conversationStoreRef) return null;
+    const conversations = await this.conversationStoreRef.listConversationsAsync(this.motebitId, 100);
+    const conv = conversations.find(c => c.conversationId === conversationId);
+    return conv?.summary ?? null;
+  }
+
+  /**
+   * Manually trigger summarization of the current conversation.
+   * Uses the AI provider via a side-channel call (no conversation pollution).
+   * Returns the generated summary, or null if there's nothing to summarize.
+   */
+  async summarizeConversation(): Promise<string | null> {
+    if (!this.runtime || !this.conversationStoreRef) return null;
+
+    const conversationId = this.runtime.getConversationId();
+    if (!conversationId) return null;
+
+    const history = this.runtime.getConversationHistory();
+    if (history.length < 2) return null;
+
+    // Get existing summary if any
+    const existingSummary = await this.getConversationSummary(conversationId);
+
+    // Use the ai-core summarizeConversation via generateCompletion (side-channel)
+    const formatted = history
+      .map(m => `${m.role}: ${m.content}`)
+      .join("\n");
+
+    const prompt = existingSummary
+      ? `Update this conversation summary with the new messages.\n\nExisting summary:\n${existingSummary}\n\nNew messages:\n${formatted}\n\nReturn ONLY the updated summary (2-4 sentences). No quotes, no explanation.`
+      : `Summarize this conversation in 2-4 concise sentences. Return ONLY the summary, no quotes, no explanation.\n\n${formatted}`;
+
+    const summary = await this.runtime.generateCompletion(prompt);
+    const cleaned = summary.trim();
+
+    if (cleaned.length > 0) {
+      this.conversationStoreRef.updateSummary(conversationId, cleaned);
+      return cleaned;
+    }
+
+    return null;
   }
 
   // === Auto-Title ===

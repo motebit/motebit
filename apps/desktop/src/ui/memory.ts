@@ -1,4 +1,4 @@
-import type { MemoryNode, MemoryEdge } from "../index";
+import type { MemoryNode, MemoryEdge, DeletionCertificate } from "../index";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
 
@@ -14,6 +14,7 @@ const memoryGraphCanvas = document.getElementById("memory-graph-canvas") as HTML
 const memoryGraphTooltip = document.getElementById("memory-graph-tooltip") as HTMLDivElement;
 const viewListBtn = document.getElementById("mem-view-list") as HTMLButtonElement;
 const viewGraphBtn = document.getElementById("mem-view-graph") as HTMLButtonElement;
+const viewDeletionsBtn = document.getElementById("mem-view-deletions") as HTMLButtonElement;
 
 // === Memory Panel ===
 
@@ -22,7 +23,7 @@ export interface MemoryAPI {
   close(): void;
 }
 
-type ViewMode = "list" | "graph";
+type ViewMode = "list" | "graph" | "deletions";
 
 let allMemories: MemoryNode[] = [];
 let allEdges: MemoryEdge[] = [];
@@ -339,22 +340,27 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
     if (mode === currentView) return;
     currentView = mode;
 
+    viewListBtn.classList.toggle("active", mode === "list");
+    viewGraphBtn.classList.toggle("active", mode === "graph");
+    viewDeletionsBtn.classList.toggle("active", mode === "deletions");
+
+    if (graphAnimFrame !== null) {
+      cancelAnimationFrame(graphAnimFrame);
+      graphAnimFrame = null;
+    }
+
     if (mode === "list") {
-      viewListBtn.classList.add("active");
-      viewGraphBtn.classList.remove("active");
       memoryList.style.display = "";
       memoryGraphWrap.style.display = "none";
-      if (graphAnimFrame !== null) {
-        cancelAnimationFrame(graphAnimFrame);
-        graphAnimFrame = null;
-      }
       renderMemoryItems(allMemories, memorySearch.value.trim());
-    } else {
-      viewListBtn.classList.remove("active");
-      viewGraphBtn.classList.add("active");
+    } else if (mode === "graph") {
       memoryList.style.display = "none";
       memoryGraphWrap.style.display = "";
       renderGraphView();
+    } else if (mode === "deletions") {
+      memoryList.style.display = "";
+      memoryGraphWrap.style.display = "none";
+      renderDeletionLog();
     }
   }
 
@@ -469,8 +475,12 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
       // Already in confirm state — execute delete
       if (deleteBtnWrap.classList.contains("mem-delete-confirming")) {
         if (confirmTimeout) clearTimeout(confirmTimeout);
-        void ctx.app.deleteMemory(mem.node_id).then(() => {
-          refreshMemoryData();
+        void ctx.app.deleteMemory(mem.node_id).then((cert) => {
+          if (cert) {
+            showDeletionCertificate(item, cert);
+          } else {
+            refreshMemoryData();
+          }
         });
         return;
       }
@@ -507,6 +517,76 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
     item.appendChild(deleteBtnWrap);
 
     memoryList.appendChild(item);
+  }
+
+  // === Deletion Certificate Display ===
+
+  function showDeletionCertificate(item: HTMLElement, cert: DeletionCertificate): void {
+    // Replace the item content with a brief certificate confirmation
+    item.classList.add("mem-item-deleted");
+    const shortHash = cert.tombstone_hash.slice(0, 12);
+    item.innerHTML = "";
+
+    const certDiv = document.createElement("div");
+    certDiv.className = "mem-cert-notice";
+    certDiv.innerHTML =
+      `<span class="mem-cert-label">Deleted</span>` +
+      `<span class="mem-cert-hash" title="${cert.tombstone_hash}">cert: ${shortHash}...</span>`;
+    item.appendChild(certDiv);
+
+    // Fade out and refresh after a brief display
+    setTimeout(() => {
+      item.classList.add("mem-item-fading");
+      setTimeout(() => refreshMemoryData(), 400);
+    }, 1600);
+  }
+
+  // === Deletion Log View ===
+
+  function renderDeletionLog(): void {
+    memoryList.innerHTML = "";
+    const loading = document.createElement("div");
+    loading.className = "mem-empty";
+    loading.textContent = "Loading deletion log...";
+    memoryList.appendChild(loading);
+
+    void ctx.app.listDeletionCertificates().then((certs) => {
+      memoryList.innerHTML = "";
+
+      if (certs.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "mem-empty";
+        empty.textContent = "No deletion records";
+        memoryList.appendChild(empty);
+        return;
+      }
+
+      for (const cert of certs) {
+        const row = document.createElement("div");
+        row.className = "mem-cert-row";
+
+        const hashSpan = document.createElement("span");
+        hashSpan.className = "mem-cert-hash";
+        hashSpan.title = cert.tombstoneHash || "No hash recorded";
+        hashSpan.textContent = cert.tombstoneHash
+          ? `${cert.tombstoneHash.slice(0, 16)}...`
+          : "no hash";
+
+        const idSpan = document.createElement("span");
+        idSpan.className = "mem-cert-target";
+        idSpan.textContent = cert.targetId.slice(0, 8) + "...";
+        idSpan.title = cert.targetId;
+
+        const timeSpan = document.createElement("span");
+        timeSpan.className = "mem-cert-time";
+        timeSpan.textContent = formatTimeAgo(cert.timestamp);
+
+        row.appendChild(hashSpan);
+        row.appendChild(idSpan);
+        row.appendChild(timeSpan);
+        memoryList.appendChild(row);
+      }
+    });
   }
 
   // === Graph View ===
@@ -693,6 +773,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
 
   viewListBtn.addEventListener("click", () => setView("list"));
   viewGraphBtn.addEventListener("click", () => setView("graph"));
+  viewDeletionsBtn.addEventListener("click", () => setView("deletions"));
 
   // Debounced search (list view only)
   let memorySearchTimeout: ReturnType<typeof setTimeout> | null = null;

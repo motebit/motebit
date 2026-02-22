@@ -109,6 +109,7 @@ describe("filterCommands", () => {
     const names = result.map(cmd => cmd.name);
     expect(names).toContain("state");
     expect(names).toContain("settings");
+    expect(names).toContain("summarize");
     expect(names).toContain("sync");
   });
 });
@@ -167,11 +168,11 @@ describe("SLASH_COMMANDS", () => {
     }
   });
 
-  it("includes the 13 expected commands", () => {
+  it("includes the 14 expected commands", () => {
     const expected = [
       "model", "memories", "state", "forget", "export",
       "clear", "conversations", "goals", "tools", "settings",
-      "operator", "sync", "help",
+      "operator", "summarize", "sync", "help",
     ];
     const names = SLASH_COMMANDS.map(cmd => cmd.name);
     for (const name of expected) {

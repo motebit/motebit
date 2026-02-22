@@ -1553,6 +1553,16 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .conv-item-summary {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 2px;
+      line-height: 1.3;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
     .conv-item-meta {
       display: flex;
       justify-content: space-between;
@@ -1920,6 +1930,51 @@
     .mem-graph-tooltip-meta {
       font-size: 10px;
       color: rgba(0, 0, 0, 0.4);
+    }
+
+    /* Deletion certificate display */
+    .mem-item-deleted {
+      opacity: 0.7;
+      border-left: 2px solid #ef4444;
+      transition: opacity 0.4s ease;
+    }
+    .mem-item-fading {
+      opacity: 0;
+    }
+    .mem-cert-notice {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 0;
+    }
+    .mem-cert-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: #ef4444;
+    }
+    .mem-cert-hash {
+      font-size: 10px;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      color: rgba(0, 0, 0, 0.4);
+    }
+    .mem-cert-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+      font-size: 11px;
+    }
+    .mem-cert-row:last-child { border-bottom: none; }
+    .mem-cert-target {
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 10px;
+      color: rgba(0, 0, 0, 0.5);
+    }
+    .mem-cert-time {
+      font-size: 10px;
+      color: rgba(0, 0, 0, 0.35);
+      margin-left: auto;
     }
 
     /* Goals panel — slide-in from right */
@@ -2998,6 +3053,9 @@
         </button>
         <button class="mem-view-btn" id="mem-view-graph" title="Graph view">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="3" cy="3" r="1.5"/><circle cx="11" cy="5" r="1.5"/><circle cx="5" cy="11" r="1.5"/><line x1="4.2" y1="4" x2="9.8" y2="4.6"/><line x1="3.6" y1="4.4" x2="4.6" y2="9.6"/></svg>
+        </button>
+        <button class="mem-view-btn" id="mem-view-deletions" title="Deletion log">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 4h8M5 4V3h4v1M4 4v7.5a1 1 0 001 1h4a1 1 0 001-1V4"/></svg>
         </button>
       </span>
       <button class="mem-panel-close" id="memory-close-btn">&times;</button>

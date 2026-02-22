@@ -29,6 +29,7 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "tools", description: "List registered tools" },
   { name: "settings", description: "Open settings" },
   { name: "operator", description: "Show operator mode status" },
+  { name: "summarize", description: "Summarize current conversation" },
   { name: "sync", description: "Sync with relay server" },
   { name: "help", description: "Show available commands" },
 ];
