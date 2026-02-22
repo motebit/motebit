@@ -273,6 +273,7 @@ async function bootstrap(): Promise<void> {
       const goalStatus = document.getElementById("goal-status") as HTMLDivElement;
       app.onGoalStatus((executing) => {
         goalStatus.classList.toggle("active", executing);
+        goals.onGoalExecuting(executing);
       });
       app.onGoalComplete((event: GoalCompleteEvent) => {
         const promptSnippet = event.prompt.length > 50 ? event.prompt.slice(0, 50) + "..." : event.prompt;
@@ -286,6 +287,7 @@ async function bootstrap(): Promise<void> {
           const err = event.error ? `: ${event.error.slice(0, 80)}` : "";
           addMessage("system", `Goal failed "${promptSnippet}"${err}`);
         }
+        goals.onGoalComplete(event);
       });
       app.onGoalPlanProgress((event: GoalPlanProgressEvent) => {
         const goalStatusEl = document.getElementById("goal-status") as HTMLDivElement;
@@ -301,6 +303,7 @@ async function bootstrap(): Promise<void> {
             goalStatusText.textContent = `Step ${event.stepIndex}/${event.totalSteps} failed`;
           }
         }
+        goals.onPlanProgress(event);
       });
       app.onGoalApproval((event: GoalApprovalEvent) => {
         const promptSnippet = event.goalPrompt.length > 50

@@ -1,5 +1,6 @@
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
+import type { GoalPlanProgressEvent, GoalCompleteEvent } from "../index";
 import { addMessage } from "./chat";
 
 // === DOM Refs ===
@@ -7,12 +8,19 @@ import { addMessage } from "./chat";
 const goalsPanel = document.getElementById("goals-panel") as HTMLDivElement;
 const goalsBackdrop = document.getElementById("goals-backdrop") as HTMLDivElement;
 const goalList = document.getElementById("goal-list") as HTMLDivElement;
+const goalProgressContainer = document.getElementById("goal-progress-container") as HTMLDivElement;
+const goalRecentHeader = document.getElementById("goal-recent-header") as HTMLDivElement;
+const goalRecentList = document.getElementById("goal-recent-list") as HTMLDivElement;
+const goalsBtn = document.getElementById("goals-btn") as HTMLButtonElement;
 
 // === Goals Panel ===
 
 export interface GoalsAPI {
   open(): void;
   close(): void;
+  onPlanProgress(event: GoalPlanProgressEvent): void;
+  onGoalComplete(event: GoalCompleteEvent): void;
+  onGoalExecuting(executing: boolean): void;
 }
 
 function formatInterval(ms: number): string {
@@ -23,16 +31,145 @@ function formatInterval(ms: number): string {
 }
 
 export function initGoals(ctx: DesktopContext): GoalsAPI {
+  // Track active progress card state
+  let progressCard: HTMLDivElement | null = null;
+  let progressDots: HTMLSpanElement[] = [];
+  let progressStepEl: HTMLDivElement | null = null;
+  let fadeTimer: ReturnType<typeof setTimeout> | null = null;
+
   function open(): void {
     goalsPanel.classList.add("open");
     goalsBackdrop.classList.add("open");
     refreshGoalList();
+    loadRecentOutcomes();
   }
 
   function close(): void {
     goalsPanel.classList.remove("open");
     goalsBackdrop.classList.remove("open");
   }
+
+  // === Plan Execution Progress ===
+
+  function onGoalExecuting(executing: boolean): void {
+    goalsBtn.classList.toggle("executing", executing);
+    if (!executing) {
+      removeProgressCard();
+    }
+  }
+
+  function onPlanProgress(event: GoalPlanProgressEvent): void {
+    if (event.type === "plan_created") {
+      createProgressCard(event.planTitle, event.totalSteps);
+    } else if (event.type === "step_started") {
+      updateStepDot(event.stepIndex - 1, "running");
+      updateStepText(event.stepIndex, event.totalSteps, event.stepDescription);
+    } else if (event.type === "step_completed") {
+      updateStepDot(event.stepIndex - 1, "completed");
+      flashDot(event.stepIndex - 1, "completed");
+      updateStepText(event.stepIndex, event.totalSteps, "Done");
+    } else if (event.type === "step_failed") {
+      updateStepDot(event.stepIndex - 1, "failed");
+      flashDot(event.stepIndex - 1, "failed");
+      updateStepText(event.stepIndex, event.totalSteps, "Failed");
+    }
+  }
+
+  function onGoalComplete(event: GoalCompleteEvent): void {
+    // Show brief completion summary on the progress card before fading
+    if (progressCard && progressStepEl) {
+      const statusLabel = event.status === "completed" ? "Completed" : "Failed";
+      const summary = event.summary ? `: ${event.summary.slice(0, 80)}` : "";
+      progressStepEl.textContent = `${statusLabel}${summary}`;
+      progressStepEl.style.color = event.status === "completed"
+        ? "rgba(34, 197, 94, 0.8)"
+        : "rgba(248, 113, 113, 0.8)";
+    }
+
+    // Fade the card after a short delay
+    if (fadeTimer) clearTimeout(fadeTimer);
+    fadeTimer = setTimeout(() => {
+      removeProgressCard();
+      fadeTimer = null;
+    }, 3000);
+
+    // Refresh recent outcomes
+    loadRecentOutcomes();
+  }
+
+  function createProgressCard(planTitle: string, totalSteps: number): void {
+    // Remove any existing card
+    if (progressCard) {
+      progressCard.remove();
+    }
+    if (fadeTimer) {
+      clearTimeout(fadeTimer);
+      fadeTimer = null;
+    }
+
+    progressDots = [];
+
+    const card = document.createElement("div");
+    card.className = "goal-progress-card";
+
+    const title = document.createElement("div");
+    title.className = "goal-progress-title";
+    title.textContent = planTitle;
+    card.appendChild(title);
+
+    const dotsRow = document.createElement("div");
+    dotsRow.className = "goal-progress-dots";
+    for (let i = 0; i < totalSteps; i++) {
+      const dot = document.createElement("span");
+      dot.className = "goal-step-dot";
+      dotsRow.appendChild(dot);
+      progressDots.push(dot);
+    }
+    card.appendChild(dotsRow);
+
+    const stepText = document.createElement("div");
+    stepText.className = "goal-progress-step";
+    stepText.innerHTML = '<span class="step-index">0/' + totalSteps + '</span>Starting...';
+    card.appendChild(stepText);
+
+    goalProgressContainer.innerHTML = "";
+    goalProgressContainer.appendChild(card);
+    progressCard = card;
+    progressStepEl = stepText;
+  }
+
+  function updateStepDot(index: number, status: "running" | "completed" | "failed"): void {
+    if (index < 0 || index >= progressDots.length) return;
+    const dot = progressDots[index]!;
+    dot.classList.remove("running", "completed", "failed");
+    dot.classList.add(status);
+  }
+
+  function flashDot(index: number, _status: "completed" | "failed"): void {
+    if (index < 0 || index >= progressDots.length) return;
+    const dot = progressDots[index]!;
+    dot.classList.add("flash");
+    setTimeout(() => dot.classList.remove("flash"), 600);
+  }
+
+  function updateStepText(stepIndex: number, totalSteps: number, description: string): void {
+    if (!progressStepEl) return;
+    progressStepEl.style.color = "";
+    progressStepEl.innerHTML = `<span class="step-index">${stepIndex}/${totalSteps}</span>${escapeHtml(description)}`;
+  }
+
+  function removeProgressCard(): void {
+    if (!progressCard) return;
+    progressCard.classList.add("fading");
+    setTimeout(() => {
+      progressCard?.remove();
+      progressCard = null;
+      progressDots = [];
+      progressStepEl = null;
+    }, 400);
+  }
+
+  // === Goal List ===
 
   function refreshGoalList(): void {
     const config = ctx.getConfig();
@@ -179,6 +316,103 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
     });
   }
 
+  // === Recent Outcomes (cross-goal) ===
+
+  function loadRecentOutcomes(): void {
+    const config = ctx.getConfig();
+    if (!config?.isTauri || !config?.invoke) return;
+    const motebitId = ctx.app.motebitId;
+    if (!motebitId) return;
+    const invoke = config.invoke;
+
+    void invoke<Array<Record<string, unknown>>>("db_query", {
+      sql: `SELECT o.outcome_id, o.goal_id, o.ran_at, o.status, o.summary, o.error_message, o.tool_calls_made, g.prompt
+            FROM goal_outcomes o
+            LEFT JOIN goals g ON o.goal_id = g.goal_id
+            WHERE o.motebit_id = ?
+            ORDER BY o.ran_at DESC
+            LIMIT 15`,
+      params: [motebitId],
+    }).then((outcomes: Array<Record<string, unknown>>) => {
+      goalRecentList.innerHTML = "";
+      if (!outcomes || outcomes.length === 0) {
+        goalRecentHeader.style.display = "none";
+        return;
+      }
+      goalRecentHeader.style.display = "flex";
+
+      for (const outcome of outcomes) {
+        const row = document.createElement("div");
+        row.className = "goal-recent-row";
+
+        const header = document.createElement("div");
+        header.className = "goal-recent-row-header";
+
+        const statusBadge = document.createElement("span");
+        const oStatus = String(outcome.status || "");
+        statusBadge.className = `goal-recent-status ${oStatus}`;
+        statusBadge.textContent = oStatus;
+        header.appendChild(statusBadge);
+
+        const prompt = document.createElement("span");
+        prompt.className = "goal-recent-prompt";
+        const promptText = String(outcome.prompt || "");
+        prompt.textContent = promptText.length > 40 ? promptText.slice(0, 40) + "..." : promptText;
+        prompt.title = promptText;
+        header.appendChild(prompt);
+
+        const time = document.createElement("span");
+        time.className = "goal-recent-time";
+        time.textContent = formatTimeAgo(Number(outcome.ran_at) || 0);
+        header.appendChild(time);
+
+        row.appendChild(header);
+
+        // Expandable detail
+        const detail = document.createElement("div");
+        detail.className = "goal-recent-detail";
+
+        const summaryDiv = document.createElement("div");
+        if (oStatus === "completed" && outcome.summary) {
+          summaryDiv.className = "goal-recent-summary";
+          summaryDiv.textContent = String(outcome.summary);
+        } else if (outcome.error_message) {
+          summaryDiv.className = "goal-recent-summary error";
+          summaryDiv.textContent = String(outcome.error_message);
+        }
+        if (summaryDiv.textContent) {
+          detail.appendChild(summaryDiv);
+        }
+
+        const meta = document.createElement("div");
+        meta.className = "goal-recent-meta";
+        const toolCalls = Number(outcome.tool_calls_made) || 0;
+        if (toolCalls > 0) {
+          const toolSpan = document.createElement("span");
+          toolSpan.textContent = `${toolCalls} tool call${toolCalls !== 1 ? "s" : ""}`;
+          meta.appendChild(toolSpan);
+        }
+        if (meta.children.length > 0) {
+          detail.appendChild(meta);
+        }
+
+        row.appendChild(detail);
+
+        // Toggle expand
+        row.addEventListener("click", () => {
+          row.classList.toggle("expanded");
+        });
+
+        goalRecentList.appendChild(row);
+      }
+    }).catch(() => {
+      goalRecentHeader.style.display = "none";
+      goalRecentList.innerHTML = "";
+    });
+  }
+
+  // === Goal CRUD ===
+
   async function createGoal(): Promise<void> {
     const config = ctx.getConfig();
     if (!config?.isTauri || !config?.invoke) return;
@@ -244,5 +478,9 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
     void createGoal();
   });
 
-  return { open, close };
+  return { open, close, onPlanProgress, onGoalComplete, onGoalExecuting };
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }

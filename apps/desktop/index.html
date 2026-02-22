@@ -1621,6 +1621,184 @@
       background: #6366f1;
     }
 
+    /* Goals button execution indicator */
+    #goals-btn .goal-exec-ring {
+      display: none;
+      position: absolute;
+      inset: -3px;
+      border-radius: 50%;
+      border: 2px solid transparent;
+      border-top-color: rgba(99, 102, 241, 0.7);
+      animation: goal-exec-spin 1s linear infinite;
+    }
+    #goals-btn.executing .goal-exec-ring { display: block; }
+    #goals-btn.executing {
+      background: rgba(99, 102, 241, 0.12);
+    }
+    @keyframes goal-exec-spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Plan execution progress card */
+    .goal-progress-card {
+      margin: 8px 8px 0;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(99, 102, 241, 0.2);
+      background: rgba(99, 102, 241, 0.05);
+      flex-shrink: 0;
+      transition: opacity 0.4s ease, max-height 0.4s ease;
+      overflow: hidden;
+    }
+    .goal-progress-card.fading {
+      opacity: 0;
+      max-height: 0 !important;
+      margin: 0 8px;
+      padding: 0 12px;
+    }
+    .goal-progress-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: rgba(99, 102, 241, 0.85);
+      margin-bottom: 6px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .goal-progress-dots {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 6px;
+    }
+    .goal-step-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: rgba(0, 0, 0, 0.1);
+      transition: background 0.3s ease, box-shadow 0.3s ease;
+      flex-shrink: 0;
+    }
+    .goal-step-dot.running {
+      background: rgba(99, 102, 241, 0.7);
+      box-shadow: 0 0 6px rgba(99, 102, 241, 0.4);
+      animation: step-dot-pulse 1.2s ease-in-out infinite;
+    }
+    .goal-step-dot.completed {
+      background: #4ade80;
+    }
+    .goal-step-dot.completed.flash {
+      box-shadow: 0 0 8px rgba(74, 222, 128, 0.6);
+    }
+    .goal-step-dot.failed {
+      background: #f87171;
+    }
+    .goal-step-dot.failed.flash {
+      box-shadow: 0 0 8px rgba(248, 113, 113, 0.6);
+    }
+    @keyframes step-dot-pulse {
+      0%, 100% { opacity: 0.6; transform: scale(0.9); }
+      50% { opacity: 1; transform: scale(1.15); }
+    }
+    .goal-progress-step {
+      font-size: 11px;
+      color: rgba(0, 0, 0, 0.5);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .goal-progress-step .step-index {
+      color: rgba(0, 0, 0, 0.3);
+      margin-right: 4px;
+    }
+
+    /* Recent outcomes section */
+    .goal-recent-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px 4px;
+      flex-shrink: 0;
+    }
+    .goal-recent-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: rgba(0, 0, 0, 0.35);
+    }
+    #goal-recent-list {
+      overflow-y: auto;
+      padding: 0 8px 8px;
+      max-height: 200px;
+    }
+    .goal-recent-row {
+      padding: 6px 8px;
+      border-radius: 8px;
+      border: 1px solid rgba(0, 0, 0, 0.04);
+      margin-bottom: 3px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .goal-recent-row:hover { background: rgba(0, 0, 0, 0.02); }
+    .goal-recent-row-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .goal-recent-status {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-weight: 500;
+      flex-shrink: 0;
+    }
+    .goal-recent-status.completed {
+      background: rgba(74, 222, 128, 0.15);
+      color: #22c55e;
+    }
+    .goal-recent-status.failed {
+      background: rgba(248, 113, 113, 0.15);
+      color: #ef4444;
+    }
+    .goal-recent-prompt {
+      font-size: 12px;
+      color: rgba(0, 0, 0, 0.6);
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .goal-recent-time {
+      font-size: 10px;
+      color: rgba(0, 0, 0, 0.3);
+      flex-shrink: 0;
+    }
+    .goal-recent-detail {
+      display: none;
+      margin-top: 4px;
+      padding-top: 4px;
+      border-top: 1px solid rgba(0, 0, 0, 0.05);
+    }
+    .goal-recent-row.expanded .goal-recent-detail {
+      display: block;
+    }
+    .goal-recent-summary {
+      font-size: 11px;
+      color: rgba(0, 0, 0, 0.5);
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .goal-recent-summary.error {
+      color: rgba(239, 68, 68, 0.8);
+    }
+    .goal-recent-meta {
+      display: flex;
+      gap: 8px;
+      margin-top: 3px;
+      font-size: 10px;
+      color: rgba(0, 0, 0, 0.3);
+    }
+
     /* Welcome dialog */
     #welcome-backdrop {
       position: fixed;
@@ -1705,8 +1883,9 @@
     </div>
     <div class="mem-list" id="memory-list"></div>
   </div>
-  <button id="goals-btn" title="Goals">
+  <button id="goals-btn" title="Goals" style="position:relative;">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+    <span class="goal-exec-ring"></span>
   </button>
   <div id="goals-backdrop"></div>
   <div id="goals-panel">
@@ -1714,7 +1893,12 @@
       <span class="goals-panel-title">Goals</span>
       <button class="goals-panel-close" id="goals-close-btn">&times;</button>
     </div>
+    <div id="goal-progress-container"></div>
     <div id="goal-list"></div>
+    <div class="goal-recent-header" id="goal-recent-header" style="display:none;">
+      <span class="goal-recent-title">Recent Outcomes</span>
+    </div>
+    <div id="goal-recent-list"></div>
     <div id="goal-add-form">
       <textarea id="goal-prompt" placeholder="What should the agent do?"></textarea>
       <div class="goal-form-row">
