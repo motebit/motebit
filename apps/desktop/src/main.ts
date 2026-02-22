@@ -408,6 +408,16 @@ async function discoverAndConnectMcpServers(
           },
         },
         {
+          label: "Review",
+          onClick: () => {
+            settings.openToTab("intelligence");
+            // Wait one layout pass for panel to be visible before scrolling
+            requestAnimationFrame(() => {
+              document.getElementById("mcp-server-list")?.scrollIntoView({ behavior: "smooth", block: "center" });
+            });
+          },
+        },
+        {
           label: "Dismiss",
           onClick: () => { /* Servers remain in config for later manual connect */ },
         },
