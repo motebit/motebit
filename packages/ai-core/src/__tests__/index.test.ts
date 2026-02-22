@@ -270,8 +270,15 @@ describe("HybridProvider", () => {
     expect(response.text).toBe("Cloud response");
   });
 
-  it("falls back to local on cloud failure when configured", async () => {
-    mockFetchReject(new Error("Network error"));
+  it("falls back to ollama on cloud failure when configured", async () => {
+    // First call (cloud) fails, second call (Ollama) succeeds
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new Error("Network error"))
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ message: { content: "Ollama fallback response" } }),
+      } as unknown as Response);
+    globalThis.fetch = fetchMock;
 
     const config: HybridProviderConfig = {
       cloud: {
@@ -279,14 +286,16 @@ describe("HybridProvider", () => {
         api_key: "test-key",
         model: "claude-sonnet-4-5-20250514",
       },
-      local: {
-        model_path: "/path/to/model",
+      ollama: {
+        model: "llama3.2",
+        base_url: "http://localhost:11434",
       },
       fallback_to_local: true,
     };
     const provider = new HybridProvider(config);
     const response: AIResponse = await provider.generate(makeContextPack());
-    expect(response.text).toContain("LocalProvider");
+    expect(response.text).toBe("Ollama fallback response");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("throws when cloud fails and no local fallback", async () => {
@@ -307,7 +316,7 @@ describe("HybridProvider", () => {
     );
   });
 
-  it("throws when cloud fails and fallback_to_local is true but no local config", async () => {
+  it("throws when cloud fails and fallback_to_local is true but no ollama config", async () => {
     mockFetchReject(new Error("Network error"));
 
     const config: HybridProviderConfig = {

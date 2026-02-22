@@ -71,9 +71,10 @@ interface SettingsModalProps {
   settings: MobileSettings;
   syncStatus?: "idle" | "syncing" | "error" | "offline";
   lastSyncTime?: number;
-  mcpServers?: Array<{ name: string; url: string; connected: boolean; toolCount: number }>;
-  onAddMcpServer?: (url: string, name: string) => Promise<void>;
+  mcpServers?: Array<{ name: string; url: string; connected: boolean; toolCount: number; trusted: boolean }>;
+  onAddMcpServer?: (url: string, name: string, trusted?: boolean) => Promise<void>;
   onRemoveMcpServer?: (name: string) => Promise<void>;
+  onToggleMcpTrust?: (name: string, trusted: boolean) => Promise<void>;
   onSave: (settings: MobileSettings, aiConfig?: MobileAIConfig) => void;
   onClose: () => void;
   onRequestPin: (mode: "setup" | "verify" | "reset") => void;
@@ -91,6 +92,7 @@ export function SettingsModal({
   mcpServers,
   onAddMcpServer,
   onRemoveMcpServer,
+  onToggleMcpTrust,
   onSave,
   onClose,
   onRequestPin,
@@ -121,7 +123,7 @@ export function SettingsModal({
 
   const handleSave = useCallback(async () => {
     // Store API keys securely (not in AsyncStorage)
-    if (draft.provider === "anthropic" && apiKey) {
+    if ((draft.provider === "anthropic" || draft.provider === "hybrid") && apiKey) {
       await SecureStore.setItemAsync("motebit_anthropic_api_key", apiKey);
     }
     if (openaiKey) {
@@ -150,8 +152,8 @@ export function SettingsModal({
       aiConfig = {
         provider: draft.provider,
         model: draft.model,
-        apiKey: draft.provider === "anthropic" ? apiKey : undefined,
-        ollamaEndpoint: draft.provider === "ollama" ? draft.ollamaEndpoint : undefined,
+        apiKey: (draft.provider === "anthropic" || draft.provider === "hybrid") ? apiKey : undefined,
+        ollamaEndpoint: (draft.provider === "ollama" || draft.provider === "hybrid") ? draft.ollamaEndpoint : undefined,
       };
     }
 
@@ -212,6 +214,7 @@ export function SettingsModal({
               openaiKey={openaiKey}
               neuralVadEnabled={draft.neuralVadEnabled}
               onChangeProvider={(p) => updateDraft({ provider: p, model: p === "ollama" ? "llama3.2" : "claude-sonnet-4-20250514" })}
+
               onChangeModel={(m) => updateDraft({ model: m })}
               onChangeApiKey={setApiKey}
               onChangeOllamaEndpoint={(e) => updateDraft({ ollamaEndpoint: e })}
@@ -248,6 +251,7 @@ export function SettingsModal({
               servers={mcpServers ?? []}
               onAdd={onAddMcpServer}
               onRemove={onRemoveMcpServer}
+              onToggleTrust={onToggleMcpTrust}
             />
           )}
           {tab === "identity" && (
@@ -344,7 +348,7 @@ function IntelligenceTab({
   onChangeOpenaiKey,
   onChangeNeuralVadEnabled,
 }: {
-  provider: "ollama" | "anthropic";
+  provider: "ollama" | "anthropic" | "hybrid";
   model: string;
   apiKey: string;
   ollamaEndpoint: string;
@@ -354,7 +358,7 @@ function IntelligenceTab({
   ttsVoice: string;
   openaiKey: string;
   neuralVadEnabled: boolean;
-  onChangeProvider: (p: "ollama" | "anthropic") => void;
+  onChangeProvider: (p: "ollama" | "anthropic" | "hybrid") => void;
   onChangeModel: (m: string) => void;
   onChangeApiKey: (k: string) => void;
   onChangeOllamaEndpoint: (e: string) => void;
@@ -383,6 +387,13 @@ function IntelligenceTab({
         >
           <Text style={[styles.radioText, provider === "anthropic" && styles.radioTextActive]}>Anthropic (Cloud)</Text>
         </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.radioItem, provider === "hybrid" && styles.radioActive]}
+          onPress={() => onChangeProvider("hybrid")}
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.radioText, provider === "hybrid" && styles.radioTextActive]}>Hybrid (Cloud + Ollama fallback)</Text>
+        </TouchableOpacity>
       </View>
 
       <Text style={styles.sectionTitle}>Model</Text>
@@ -394,9 +405,9 @@ function IntelligenceTab({
         placeholderTextColor="#405060"
       />
 
-      {provider === "ollama" && (
+      {(provider === "ollama" || provider === "hybrid") && (
         <>
-          <Text style={styles.sectionTitle}>Endpoint URL</Text>
+          <Text style={styles.sectionTitle}>Ollama Endpoint</Text>
           <TextInput
             style={styles.textField}
             value={ollamaEndpoint}
@@ -410,9 +421,9 @@ function IntelligenceTab({
         </>
       )}
 
-      {provider === "anthropic" && (
+      {(provider === "anthropic" || provider === "hybrid") && (
         <>
-          <Text style={styles.sectionTitle}>API Key</Text>
+          <Text style={styles.sectionTitle}>Anthropic API Key</Text>
           <TextInput
             style={styles.textField}
             value={apiKey}
@@ -935,13 +946,16 @@ function ToolsTab({
   servers,
   onAdd,
   onRemove,
+  onToggleTrust,
 }: {
-  servers: Array<{ name: string; url: string; connected: boolean; toolCount: number }>;
-  onAdd?: (url: string, name: string) => Promise<void>;
+  servers: Array<{ name: string; url: string; connected: boolean; toolCount: number; trusted: boolean }>;
+  onAdd?: (url: string, name: string, trusted?: boolean) => Promise<void>;
   onRemove?: (name: string) => Promise<void>;
+  onToggleTrust?: (name: string, trusted: boolean) => Promise<void>;
 }) {
   const [newName, setNewName] = useState("");
   const [newUrl, setNewUrl] = useState("");
+  const [newTrusted, setNewTrusted] = useState(false);
   const [adding, setAdding] = useState(false);
 
   const handleConnect = useCallback(async () => {
@@ -958,9 +972,10 @@ function ToolsTab({
 
     setAdding(true);
     try {
-      await onAdd(url, name);
+      await onAdd(url, name, newTrusted);
       setNewName("");
       setNewUrl("");
+      setNewTrusted(false);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       Alert.alert("Connection Failed", msg);
@@ -1006,8 +1021,22 @@ function ToolsTab({
                     <Text style={styles.toolsCountText}>{server.toolCount}</Text>
                   </View>
                 )}
+                {server.trusted && (
+                  <View style={styles.toolsTrustBadge}>
+                    <Text style={styles.toolsTrustText}>trusted</Text>
+                  </View>
+                )}
               </View>
               <Text style={styles.toolsServerUrl} numberOfLines={1}>{server.url}</Text>
+              <View style={styles.toolsTrustRow}>
+                <Text style={styles.toolsTrustLabel}>Auto-approve tools</Text>
+                <Switch
+                  value={server.trusted}
+                  onValueChange={(v) => void onToggleTrust?.(server.name, v)}
+                  trackColor={{ false: "#1a2030", true: "#2a4060" }}
+                  thumbColor={server.trusted ? "#c0d0e0" : "#607080"}
+                />
+              </View>
             </View>
             <TouchableOpacity
               onPress={() => handleRemove(server.name)}
@@ -1041,6 +1070,16 @@ function ToolsTab({
         autoCorrect={false}
         keyboardType="url"
       />
+      <View style={styles.toolsTrustRow}>
+        <Text style={styles.toolsTrustLabel}>Trusted (auto-approve all tools)</Text>
+        <Switch
+          value={newTrusted}
+          onValueChange={setNewTrusted}
+          trackColor={{ false: "#1a2030", true: "#2a4060" }}
+          thumbColor={newTrusted ? "#c0d0e0" : "#607080"}
+        />
+      </View>
+
       <TouchableOpacity
         style={[styles.toolsConnectBtn, (!newName.trim() || !newUrl.trim() || adding) && styles.toolsConnectBtnDisabled]}
         onPress={() => void handleConnect()}
@@ -1052,6 +1091,7 @@ function ToolsTab({
 
       <Text style={styles.toolsNote}>
         Mobile supports HTTP MCP servers only. Stdio servers require the desktop or CLI app.
+        {"\n"}Untrusted servers require approval for each tool call.
       </Text>
     </View>
   );
@@ -1513,6 +1553,27 @@ const styles = StyleSheet.create({
     color: "#c0d0e0",
     fontSize: 15,
     fontWeight: "600",
+  },
+  toolsTrustBadge: {
+    backgroundColor: "#1a2838",
+    borderRadius: 10,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  toolsTrustText: {
+    color: "#4ade80",
+    fontSize: 10,
+    fontWeight: "600",
+  },
+  toolsTrustRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 8,
+  },
+  toolsTrustLabel: {
+    color: "#607080",
+    fontSize: 12,
   },
   toolsNote: {
     color: "#405060",

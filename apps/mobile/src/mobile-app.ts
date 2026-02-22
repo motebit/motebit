@@ -19,7 +19,7 @@ import type {
   PolicyConfig,
   MemoryGovernanceConfig,
 } from "@motebit/runtime";
-import { CloudProvider, OllamaProvider } from "@motebit/ai-core";
+import { CloudProvider, OllamaProvider, HybridProvider } from "@motebit/ai-core";
 import { createSignedToken } from "@motebit/crypto";
 import {
   bootstrapIdentity as sharedBootstrapIdentity,
@@ -116,7 +116,7 @@ export const APPROVAL_PRESET_CONFIGS: Record<string, ApprovalPresetConfig> = {
 // === Settings ===
 
 export interface MobileSettings {
-  provider: "ollama" | "anthropic";
+  provider: "ollama" | "anthropic" | "hybrid";
   model: string;
   ollamaEndpoint: string;
   colorPreset: string;
@@ -155,7 +155,7 @@ const IDENTITY_FILE_KEY = "@motebit/identity_file";
 // === AI Config ===
 
 export interface MobileAIConfig {
-  provider: "ollama" | "anthropic";
+  provider: "ollama" | "anthropic" | "hybrid";
   model?: string;
   apiKey?: string;
   ollamaEndpoint?: string;
@@ -350,6 +350,24 @@ export class MobileApp {
       const model = config.model || "llama3.2";
       const base_url = config.ollamaEndpoint || "http://localhost:11434";
       provider = new OllamaProvider({ model, base_url, max_tokens: 1024 });
+    } else if (config.provider === "hybrid") {
+      if (!config.apiKey) return false;
+      const model = config.model || "claude-sonnet-4-20250514";
+      provider = new HybridProvider({
+        cloud: {
+          provider: "anthropic",
+          api_key: config.apiKey,
+          model,
+          base_url: "https://api.anthropic.com",
+          max_tokens: 1024,
+        },
+        ollama: {
+          model: "llama3.2",
+          base_url: config.ollamaEndpoint || "http://localhost:11434",
+          max_tokens: 1024,
+        },
+        fallback_to_local: true,
+      });
     } else {
       if (!config.apiKey) return false;
       const model = config.model || "claude-sonnet-4-20250514";
@@ -642,12 +660,15 @@ export class MobileApp {
     const adapter = new McpClientAdapter(config);
     await adapter.connect();
 
-    // Register tools into runtime
-    const tempRegistry = new InMemoryToolRegistry();
-    adapter.registerInto(tempRegistry);
-    if (this.runtime) {
-      this.runtime.registerExternalTools(`mcp:${config.name}`, tempRegistry);
+    // Manifest pinning: pin hash on first connect, revoke trust on mismatch
+    const manifestResult = await adapter.checkManifest(config.toolManifestHash);
+    if (!manifestResult.ok) {
+      config.trusted = false; // Tools changed — revoke trust
     }
+    config.toolManifestHash = manifestResult.hash;
+
+    // Register tools with trust-aware approval flags
+    this.registerMcpTools(adapter, config);
 
     this.mcpAdapters.set(config.name, adapter);
     this._mcpServers = this._mcpServers.filter((s) => s.name !== config.name);
@@ -673,7 +694,7 @@ export class MobileApp {
     this._toolsChangedCallback?.();
   }
 
-  getMcpServers(): Array<{ name: string; url: string; connected: boolean; toolCount: number }> {
+  getMcpServers(): Array<{ name: string; url: string; connected: boolean; toolCount: number; trusted: boolean }> {
     return this._mcpServers.map((config) => {
       const adapter = this.mcpAdapters.get(config.name);
       return {
@@ -681,12 +702,47 @@ export class MobileApp {
         url: config.url || "",
         connected: adapter?.isConnected ?? false,
         toolCount: adapter?.getTools().length ?? 0,
+        trusted: config.trusted ?? false,
       };
     });
   }
 
+  /** Toggle trust for an MCP server. Re-registers tools with updated approval requirements. */
+  async setMcpServerTrust(name: string, trusted: boolean): Promise<void> {
+    const config = this._mcpServers.find((s) => s.name === name);
+    if (!config) return;
+    config.trusted = trusted;
+
+    // Re-register tools with updated approval flags
+    const adapter = this.mcpAdapters.get(name);
+    if (adapter && this.runtime) {
+      this.runtime.unregisterExternalTools(`mcp:${name}`);
+      this.registerMcpTools(adapter, config);
+    }
+
+    await AsyncStorage.setItem(MobileApp.MCP_SERVERS_KEY, JSON.stringify(this._mcpServers));
+    this._toolsChangedCallback?.();
+  }
+
   onToolsChanged(callback: () => void): void {
     this._toolsChangedCallback = callback;
+  }
+
+  /** Register MCP tools into the runtime with trust-aware approval flags. */
+  private registerMcpTools(adapter: McpClientAdapter, config: McpServerConfig): void {
+    const tempRegistry = new InMemoryToolRegistry();
+    for (const mcpTool of adapter.getTools()) {
+      const def = {
+        name: mcpTool.name,
+        description: `[${config.name}] ${mcpTool.description ?? mcpTool.name}`,
+        inputSchema: (mcpTool.inputSchema ?? { type: "object", properties: {} }) as Record<string, unknown>,
+        ...(config.trusted ? {} : { requiresApproval: true as const }),
+      };
+      tempRegistry.register(def, (args: Record<string, unknown>) => adapter.executeTool(mcpTool.name, args));
+    }
+    if (this.runtime) {
+      this.runtime.registerExternalTools(`mcp:${config.name}`, tempRegistry);
+    }
   }
 
   private async reconnectMcpServers(): Promise<void> {
@@ -695,22 +751,30 @@ export class MobileApp {
     try {
       const configs: McpServerConfig[] = JSON.parse(raw);
       this._mcpServers = configs;
+      let changed = false;
       for (const config of configs) {
         try {
           const adapter = new McpClientAdapter(config);
           await adapter.connect();
-          const tempRegistry = new InMemoryToolRegistry();
-          adapter.registerInto(tempRegistry);
-          if (this.runtime) {
-            this.runtime.registerExternalTools(`mcp:${config.name}`, tempRegistry);
+
+          // Check manifest integrity on reconnect
+          const manifestResult = await adapter.checkManifest(config.toolManifestHash);
+          if (!manifestResult.ok) {
+            config.trusted = false;
           }
+          config.toolManifestHash = manifestResult.hash;
+
+          this.registerMcpTools(adapter, config);
           this.mcpAdapters.set(config.name, adapter);
+          changed = true;
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
           console.warn(`Failed to reconnect MCP server "${config.name}": ${msg}`);
         }
       }
-      if (this.mcpAdapters.size > 0) {
+      if (changed) {
+        // Persist any manifest hash / trust updates
+        await AsyncStorage.setItem(MobileApp.MCP_SERVERS_KEY, JSON.stringify(this._mcpServers));
         this._toolsChangedCallback?.();
       }
     } catch {

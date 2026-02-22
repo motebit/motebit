@@ -46,6 +46,8 @@ export interface LocalProviderConfig {
 export interface HybridProviderConfig {
   cloud: CloudProviderConfig;
   local?: LocalProviderConfig;
+  /** Ollama config for streaming-capable local fallback. Preferred over `local`. */
+  ollama?: OllamaProviderConfig;
   fallback_to_local: boolean;
 }
 
@@ -576,15 +578,41 @@ export class LocalProvider implements IntelligenceProvider {
 
 // === Hybrid Provider ===
 
-export class HybridProvider implements IntelligenceProvider {
+export class HybridProvider implements StreamingProvider {
   private cloud: CloudProvider;
-  private local: LocalProvider | null;
+  private local: OllamaProvider | null;
   private config: HybridProviderConfig;
 
   constructor(config: HybridProviderConfig) {
     this.config = config;
     this.cloud = new CloudProvider(config.cloud);
-    this.local = config.local !== undefined ? new LocalProvider(config.local) : null;
+    this.local = config.ollama
+      ? new OllamaProvider(config.ollama)
+      : null;
+  }
+
+  get model(): string {
+    return this.cloud.model;
+  }
+
+  get temperature(): number | undefined {
+    return this.cloud.temperature;
+  }
+
+  get maxTokens(): number | undefined {
+    return this.cloud.maxTokens;
+  }
+
+  setModel(model: string): void {
+    this.cloud.setModel(model);
+  }
+
+  setTemperature(temperature: number): void {
+    this.cloud.setTemperature(temperature);
+  }
+
+  setMaxTokens(maxTokens: number): void {
+    this.cloud.setMaxTokens(maxTokens);
   }
 
   async generate(contextPack: ContextPack): Promise<AIResponse> {
@@ -595,6 +623,20 @@ export class HybridProvider implements IntelligenceProvider {
         return this.local.generate(contextPack);
       }
       throw new Error("Cloud provider failed and no local fallback available");
+    }
+  }
+
+  async *generateStream(contextPack: ContextPack): AsyncGenerator<
+    { type: "text"; text: string } | { type: "done"; response: AIResponse }
+  > {
+    try {
+      yield* this.cloud.generateStream(contextPack);
+    } catch {
+      if (this.config.fallback_to_local && this.local !== null) {
+        yield* this.local.generateStream(contextPack);
+      } else {
+        throw new Error("Cloud provider failed and no local fallback available");
+      }
     }
   }
 

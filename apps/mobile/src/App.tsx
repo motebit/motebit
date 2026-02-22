@@ -138,7 +138,7 @@ export function App(): React.ReactElement {
   const pairingSyncUrlRef = useRef("");
 
   // MCP state
-  const [mcpServers, setMcpServers] = useState<Array<{ name: string; url: string; connected: boolean; toolCount: number }>>([]);
+  const [mcpServers, setMcpServers] = useState<Array<{ name: string; url: string; connected: boolean; toolCount: number; trusted: boolean }>>([]);
 
   // Goal scheduler state
   const [goalRunning, setGoalRunning] = useState(false);
@@ -257,7 +257,7 @@ export function App(): React.ReactElement {
     // that resets to default operatorMode: false)
     const wasOperatorMode = a.isOperatorMode;
 
-    const apiKey = s.provider === "anthropic"
+    const apiKey = (s.provider === "anthropic" || s.provider === "hybrid")
       ? (await SecureStore.getItemAsync("motebit_anthropic_api_key")) || undefined
       : undefined;
 
@@ -265,7 +265,7 @@ export function App(): React.ReactElement {
       provider: s.provider,
       model: s.model,
       apiKey,
-      ollamaEndpoint: s.provider === "ollama" ? s.ollamaEndpoint : undefined,
+      ollamaEndpoint: (s.provider === "ollama" || s.provider === "hybrid") ? s.ollamaEndpoint : undefined,
     });
 
     // Apply governance (restore operator mode captured before re-init)
@@ -409,9 +409,9 @@ export function App(): React.ReactElement {
     setMcpServers(app.current.getMcpServers());
   }, []);
 
-  const handleAddMcpServer = useCallback(async (url: string, name: string) => {
+  const handleAddMcpServer = useCallback(async (url: string, name: string, trusted?: boolean) => {
     try {
-      await app.current.addMcpServer({ name, transport: "http", url });
+      await app.current.addMcpServer({ name, transport: "http", url, trusted: trusted ?? false });
       refreshMcpServers();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -422,6 +422,16 @@ export function App(): React.ReactElement {
   const handleRemoveMcpServer = useCallback(async (name: string) => {
     try {
       await app.current.removeMcpServer(name);
+      refreshMcpServers();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addSystemMessage(`MCP error: ${msg}`);
+    }
+  }, [refreshMcpServers, addSystemMessage]);
+
+  const handleToggleMcpTrust = useCallback(async (name: string, trusted: boolean) => {
+    try {
+      await app.current.setMcpServerTrust(name, trusted);
       refreshMcpServers();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1377,6 +1387,7 @@ export function App(): React.ReactElement {
           mcpServers={mcpServers}
           onAddMcpServer={handleAddMcpServer}
           onRemoveMcpServer={handleRemoveMcpServer}
+          onToggleMcpTrust={handleToggleMcpTrust}
           onSave={(s, ai) => void handleSettingsSave(s, ai)}
           onClose={() => setShowSettings(false)}
           onRequestPin={(mode) => void handleRequestPin(mode)}

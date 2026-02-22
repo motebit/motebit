@@ -15,7 +15,7 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent — a ves
 2. **Accumulated trust** — memory, state history, audit trails that make the agent more capable the longer it runs
 3. **Governance at the boundary** — sensitivity-aware privacy and policy that controls what crosses the surface
 
-**Where the implementation stands.** The desktop app is the flagship (100%): identity bootstrap, operator mode, tool approval, sync relay, voice input, audio-reactive rendering, conversation summarization, memory retention enforcement, deletion certificates, goal execution, multi-device pairing, MCP discovery with manifest pinning. The CLI is the full operator console (100%): REPL chat, daemon mode with goal scheduling, tool approval queue, operator mode, `/summarize`, AI auto-titling, periodic housekeeping, and the `motebit export`/`verify` commands. The API sync relay (100%): event sync, conversation sync, device auth (master token + Ed25519 signed tokens), pairing protocol, plus admin query endpoints for state/memory/goals/conversations/devices/audit/plans. The admin dashboard (100%): 9-tab real-time monitoring (state, memory graph, behavior, events, audit, goals, plans, conversations, devices). Mobile is ~95% (plan-based goal execution, goal tools, /summarize, periodic housekeeping; remaining: hybrid provider, approval queue UI, MCP per-server trust). The public-facing standard ships as `create-motebit` (npm create motebit) and `@motebit/verify` — lightweight, zero-monorepo-dep packages that let anyone create and verify signed agent identities. The infrastructure (identity, crypto, policy, memory, sync) is built. The agentic surface that exposes it is next.
+**Where the implementation stands.** The desktop app is the flagship (100%): identity bootstrap, operator mode, tool approval, sync relay, voice input, audio-reactive rendering, conversation summarization, memory retention enforcement, deletion certificates, goal execution, multi-device pairing, MCP discovery with manifest pinning. The CLI is the full operator console (100%): REPL chat, daemon mode with goal scheduling, tool approval queue, operator mode, `/summarize`, AI auto-titling, periodic housekeeping, and the `motebit export`/`verify` commands. The API sync relay (100%): event sync, conversation sync, device auth (master token + Ed25519 signed tokens), pairing protocol, plus admin query endpoints for state/memory/goals/conversations/devices/audit/plans. The admin dashboard (100%): 9-tab real-time monitoring (state, memory graph, behavior, events, audit, goals, plans, conversations, devices). Mobile is at full parity (100%): dual providers (Anthropic + Ollama + Hybrid fallback), plan-based goal execution, goal tools, /summarize, periodic housekeeping, approval queue UI, MCP per-server trust with manifest pinning. The public-facing standard ships as `create-motebit` (npm create motebit) and `@motebit/verify` — lightweight, zero-monorepo-dep packages that let anyone create and verify signed agent identities. The infrastructure (identity, crypto, policy, memory, sync) is built. The agentic surface that exposes it is next.
 
 Read `DROPLET.md` for the full design thesis on form. Read `THE_SOVEREIGN_INTERIOR.md` for the identity thesis. Read `LIQUESCENTIA.md` for the world. Read `THE_MUSIC_OF_THE_MEDIUM.md` for the acoustic interface. Read `THE_METABOLIC_PRINCIPLE.md` for what to build vs. what to absorb. Every visual and behavioral decision derives from droplet physics. If it can't be traced to surface tension, it doesn't belong.
 
@@ -27,7 +27,7 @@ pnpm monorepo, Turborepo orchestration, TypeScript throughout. Node >= 20, pnpm 
 apps/
   desktop/     Tauri (Rust + webview), Three.js creature, full identity/crypto/operator mode
   cli/         Node.js REPL, developer/debugging interface, same runtime
-  mobile/      React Native + Expo, expo-gl + Three.js, early MVP (~30%)
+  mobile/      React Native + Expo, expo-gl + Three.js, full-featured
   admin/       React + Vite dashboard, real-time state/memory/audit monitoring
   spatial/     AR/VR positioning library, body-relative orbital mechanics (stub runtime)
 
@@ -109,7 +109,7 @@ Tauri app. Two key files for the UI layer:
 
 ## Mobile App
 
-`apps/mobile/src/App.tsx` — React Native + Expo. Chat + 3D rendering via expo-gl. Full SQLite adapters (expo-sqlite), secure keychain (expo-secure-store). Dual providers (Anthropic + Ollama), 7-tab settings UI, identity bootstrap, voice input (VAD + Whisper + TTS), multi-device pairing, goal scheduling with PlanEngine, MCP HTTP support, conversation management, memory browser.
+`apps/mobile/src/App.tsx` — React Native + Expo. Chat + 3D rendering via expo-gl. Full SQLite adapters (expo-sqlite), secure keychain (expo-secure-store). Triple providers (Anthropic + Ollama + Hybrid fallback), 7-tab settings UI, identity bootstrap, voice input (VAD + Whisper + TTS), multi-device pairing, goal scheduling with PlanEngine, MCP HTTP support with per-server trust and manifest pinning, approval queue UI (chat-inline + goal approvals), /summarize, periodic housekeeping, conversation management, memory browser.
 
 ## Admin Dashboard
 
