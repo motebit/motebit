@@ -11,6 +11,8 @@ import { initMemory } from "./ui/memory";
 import { initPairing } from "./ui/pairing";
 import { initVoice } from "./ui/voice";
 import { initSettings } from "./ui/settings";
+import { initTheme } from "./ui/theme";
+import { initKeyboard } from "./ui/keyboard";
 
 // === Core Objects ===
 
@@ -53,6 +55,15 @@ const chat = initChat(ctx, {
 });
 
 const settings = initSettings(ctx, { colorPicker, voice, pairing });
+
+// === Theme ===
+
+const isTauri = typeof window !== "undefined" && !!window.__TAURI__;
+const theme = initTheme(isTauri);
+
+// === Keyboard Shortcuts ===
+
+initKeyboard({ settings, goals, memory, conversations });
 
 // === Escape Key Handler ===
 
@@ -469,6 +480,11 @@ async function bootstrap(): Promise<void> {
       if (typeof v.auto_send === "boolean") voice.setVoiceAutoSend(v.auto_send);
       if (typeof v.voice_response === "boolean") voice.setVoiceResponseEnabled(v.voice_response);
       if (typeof v.tts_voice === "string") voice.setTtsVoice(v.tts_voice);
+    }
+
+    // Theme preference from config (overrides localStorage)
+    if (typeof parsed.theme === "string" && (parsed.theme === "light" || parsed.theme === "dark" || parsed.theme === "system")) {
+      theme.setPreference(parsed.theme as "light" | "dark" | "system");
     }
 
     voice.rebuildTtsProvider(invoke);
