@@ -347,8 +347,9 @@ fn discover_mcp_configs() -> Vec<McpConfigSource> {
 
     #[cfg(target_os = "linux")]
     {
-        // Claude Desktop uses lowercase "claude" on Linux
+        // Claude Desktop on Linux — casing varies by distro
         sources.push(("Claude Desktop", format!("{}/.config/claude/claude_desktop_config.json", home)));
+        sources.push(("Claude Desktop", format!("{}/.config/Claude/claude_desktop_config.json", home)));
         sources.push(("Claude Code", format!("{}/.claude.json", home)));
         sources.push(("VS Code", format!("{}/.config/Code/User/settings.json", home)));
         // Code - OSS (open-source VS Code on some Linux distros)
