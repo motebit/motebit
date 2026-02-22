@@ -1,7 +1,7 @@
 import { DesktopApp, COLOR_PRESETS, type DesktopAIConfig, type McpServerConfig, type GoalCompleteEvent, type GoalApprovalEvent, type GoalPlanProgressEvent } from "./index";
 import type { DesktopContext } from "./types";
 import { loadDesktopConfig } from "./ui/config";
-import { addMessage, showToast, initChat, showGoalApprovalCard } from "./ui/chat";
+import { addMessage, addActionMessage, showToast, showBanner, dismissBanner, initChat, showGoalApprovalCard } from "./ui/chat";
 import { deriveInteriorColor } from "./ui/color-picker";
 import { initColorPicker } from "./ui/color-picker";
 import { initConversations } from "./ui/conversations";
@@ -92,6 +92,258 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+// === Error Recovery Helpers ===
+
+/**
+ * Attempt identity bootstrap with error recovery UI.
+ * On failure, shows an actionable message with Retry and Skip options.
+ * On skip, closes welcome overlay and runs in limited mode.
+ */
+async function tryBootstrapIdentity(invoke: import("./tauri-storage.js").InvokeFn): Promise<import("./index").BootstrapResult | null> {
+  try {
+    const result = await app.bootstrap(invoke);
+    dismissBanner("identity-limited");
+    return result;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    addActionMessage(
+      `Identity setup failed: ${msg}`,
+      [
+        {
+          label: "Retry",
+          primary: true,
+          onClick: () => {
+            void tryBootstrapIdentity(invoke).then(result => {
+              if (result?.isFirstLaunch) addMessage("system", "Your mote has been created");
+            });
+          },
+        },
+        {
+          label: "Skip",
+          onClick: () => {
+            showBanner({
+              id: "identity-limited",
+              text: "Running in limited mode \u2014 identity not set up",
+              actionLabel: "Setup",
+              onAction: () => {
+                void tryBootstrapIdentity(invoke).then(result => {
+                  if (result) {
+                    dismissBanner("identity-limited");
+                    if (result.isFirstLaunch) addMessage("system", "Your mote has been created");
+                  }
+                });
+              },
+            });
+          },
+        },
+      ],
+    );
+    return null;
+  }
+}
+
+/**
+ * Attempt AI initialization with error recovery UI.
+ * On failure, shows an actionable message with Retry and Settings options.
+ */
+async function tryInitAI(config: DesktopAIConfig): Promise<boolean> {
+  const success = await app.initAI(config);
+  if (success) {
+    dismissBanner("ai-disconnected");
+    return true;
+  }
+
+  if (config.provider === "anthropic") {
+    addActionMessage(
+      "AI connection failed: no API key configured",
+      [
+        {
+          label: "Retry",
+          primary: true,
+          onClick: () => {
+            const latestConfig = currentConfig;
+            if (latestConfig) void tryInitAI(latestConfig).then(ok => { if (ok) onAIReady(latestConfig); });
+          },
+        },
+        {
+          label: "Settings",
+          onClick: () => settings.openToTab("intelligence"),
+        },
+      ],
+    );
+  } else {
+    addActionMessage(
+      "AI connection failed: could not reach provider",
+      [
+        {
+          label: "Retry",
+          primary: true,
+          onClick: () => {
+            const latestConfig = currentConfig;
+            if (latestConfig) void tryInitAI(latestConfig).then(ok => { if (ok) onAIReady(latestConfig); });
+          },
+        },
+        {
+          label: "Settings",
+          onClick: () => settings.openToTab("intelligence"),
+        },
+      ],
+    );
+  }
+
+  showBanner({
+    id: "ai-disconnected",
+    text: "No AI provider connected",
+    actionLabel: "Connect",
+    onAction: () => settings.openToTab("intelligence"),
+  });
+
+  return false;
+}
+
+/**
+ * Attempt sync relay registration with error recovery UI.
+ */
+async function trySyncRegistration(
+  invoke: import("./tauri-storage.js").InvokeFn,
+  syncUrl: string,
+  masterToken: string,
+): Promise<void> {
+  try {
+    await app.registerWithRelay(invoke, syncUrl, masterToken);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    addActionMessage(
+      `Sync relay connection failed: ${msg}`,
+      [
+        {
+          label: "Retry",
+          primary: true,
+          onClick: () => { void trySyncRegistration(invoke, syncUrl, masterToken); },
+        },
+        {
+          label: "Dismiss",
+          onClick: () => { /* User chose to continue without sync */ },
+        },
+      ],
+    );
+  }
+}
+
+/**
+ * Connect an MCP server with error recovery UI.
+ */
+async function tryConnectMcpServer(
+  mcpConfig: McpServerConfig,
+  invoke: import("./tauri-storage.js").InvokeFn,
+): Promise<void> {
+  try {
+    await app.connectMcpServerViaTauri(mcpConfig, invoke);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    addActionMessage(
+      `MCP server "${mcpConfig.name}" failed to connect: ${msg}`,
+      [
+        {
+          label: "Retry",
+          primary: true,
+          onClick: () => { void tryConnectMcpServer(mcpConfig, invoke); },
+        },
+        {
+          label: "Remove",
+          onClick: () => {
+            void app.removeMcpServer(mcpConfig.name);
+            const configs = settings.getMcpServersConfig().filter(c => c.name !== mcpConfig.name);
+            settings.setMcpServersConfig(configs);
+          },
+        },
+      ],
+    );
+  }
+}
+
+/**
+ * Called after AI successfully initializes to set up goal scheduler,
+ * connect MCP servers, start sync, and load conversation history.
+ */
+function onAIReady(config: DesktopAIConfig): void {
+  const label = config.provider === "ollama" ? "Ollama" : "Anthropic";
+  addMessage("system", `AI connected (${label})`);
+
+  const gov = app.governanceStatus;
+  if (!gov.governed && gov.reason !== "dev mode") {
+    addMessage("system", `Tools disabled \u2014 ${gov.reason}. The agent can chat but cannot act.`);
+  }
+
+  const previousMessages = app.getConversationHistory();
+  if (previousMessages.length > 0) {
+    for (const msg of previousMessages) {
+      if (msg.role === "user" || msg.role === "assistant") {
+        addMessage(msg.role, msg.content);
+      }
+    }
+  }
+
+  // Start goal scheduler (Tauri only)
+  if (config.isTauri && config.invoke) {
+    const goalStatus = document.getElementById("goal-status") as HTMLDivElement;
+    app.onGoalStatus((executing) => {
+      goalStatus.classList.toggle("active", executing);
+    });
+    app.onGoalComplete((event: GoalCompleteEvent) => {
+      const promptSnippet = event.prompt.length > 50 ? event.prompt.slice(0, 50) + "..." : event.prompt;
+      if (event.status === "completed") {
+        const planInfo = event.planTitle
+          ? ` [${event.stepsCompleted ?? 0}/${event.totalSteps ?? 0} steps]`
+          : "";
+        const summary = event.summary ? `: ${event.summary.slice(0, 120)}` : "";
+        addMessage("system", `Goal completed "${promptSnippet}"${planInfo}${summary}`);
+      } else {
+        const err = event.error ? `: ${event.error.slice(0, 80)}` : "";
+        addMessage("system", `Goal failed "${promptSnippet}"${err}`);
+      }
+    });
+    app.onGoalPlanProgress((event: GoalPlanProgressEvent) => {
+      const goalStatusEl = document.getElementById("goal-status") as HTMLDivElement;
+      const goalStatusText = goalStatusEl.querySelector(".goal-status-text") as HTMLSpanElement | null;
+      if (goalStatusText) {
+        if (event.type === "plan_created") {
+          goalStatusText.textContent = `Plan: ${event.planTitle}`;
+        } else if (event.type === "step_started") {
+          goalStatusText.textContent = `Step ${event.stepIndex}/${event.totalSteps}: ${event.stepDescription}`;
+        } else if (event.type === "step_completed") {
+          goalStatusText.textContent = `Step ${event.stepIndex}/${event.totalSteps} done`;
+        } else if (event.type === "step_failed") {
+          goalStatusText.textContent = `Step ${event.stepIndex}/${event.totalSteps} failed`;
+        }
+      }
+    });
+    app.onGoalApproval((event: GoalApprovalEvent) => {
+      const promptSnippet = event.goalPrompt.length > 50
+        ? event.goalPrompt.slice(0, 50) + "..."
+        : event.goalPrompt;
+      addMessage("system", `Goal "${promptSnippet}" needs approval:`);
+      showGoalApprovalCard(ctx, event);
+    });
+    app.startGoalScheduler(config.invoke);
+  }
+
+  // Connect MCP servers via Tauri IPC bridge
+  if (config.isTauri && config.invoke) {
+    const invoke = config.invoke;
+    for (const mcpConfig of settings.getMcpServersConfig()) {
+      void tryConnectMcpServer(mcpConfig, invoke);
+    }
+  }
+
+  // Start full sync (event-level background polling + conversation sync)
+  if (config.syncUrl && config.isTauri && config.invoke) {
+    void app.startSync(config.invoke, config.syncUrl, config.syncMasterToken).catch(() => {
+      // Sync failures are non-fatal at startup
+    });
+  }
+}
+
 // === Bootstrap ===
 
 async function bootstrap(): Promise<void> {
@@ -131,12 +383,7 @@ async function bootstrap(): Promise<void> {
 
     if (parsed.motebit_id) {
       welcomeBackdrop.classList.remove("open");
-      try {
-        await app.bootstrap(invoke);
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        addMessage("system", `Identity bootstrap failed: ${msg}`);
-      }
+      await tryBootstrapIdentity(invoke);
     } else {
       const action = await new Promise<"create" | "link">((resolve) => {
         document.getElementById("welcome-start")!.addEventListener("click", () => resolve("create"));
@@ -147,35 +394,20 @@ async function bootstrap(): Promise<void> {
         const linkSyncUrl = (parsed.sync_url as string) || "";
         if (!linkSyncUrl) {
           welcomeBackdrop.classList.remove("open");
-          addMessage("system", "No sync relay configured — set sync_url in config to link devices");
-          try {
-            const result = await app.bootstrap(invoke);
-            if (result.isFirstLaunch) addMessage("system", "Your mote has been created");
-          } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : String(err);
-            addMessage("system", `Identity bootstrap failed: ${msg}`);
-          }
+          addMessage("system", "No sync relay configured \u2014 set sync_url in config to link devices");
+          const result = await tryBootstrapIdentity(invoke);
+          if (result?.isFirstLaunch) addMessage("system", "Your mote has been created");
         } else {
           try { await app.bootstrap(invoke); } catch { /* Non-fatal — we just need the keypair */ }
           pairing.startClaim(invoke, linkSyncUrl);
         }
       } else {
         welcomeBackdrop.classList.remove("open");
-        try {
-          const result = await app.bootstrap(invoke);
-          if (result.isFirstLaunch) addMessage("system", "Your mote has been created");
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          addMessage("system", `Identity bootstrap failed: ${msg}`);
-        }
+        const result = await tryBootstrapIdentity(invoke);
+        if (result?.isFirstLaunch) addMessage("system", "Your mote has been created");
 
         if (config.syncUrl && config.syncMasterToken) {
-          try {
-            await app.registerWithRelay(invoke, config.syncUrl, config.syncMasterToken);
-          } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : String(err);
-            addMessage("system", `Sync relay registration failed: ${msg}`);
-          }
+          void trySyncRegistration(invoke, config.syncUrl, config.syncMasterToken);
         }
       }
     }
@@ -247,91 +479,10 @@ async function bootstrap(): Promise<void> {
     welcomeBackdrop.classList.remove("open");
   }
 
-  // AI init
-  if (await app.initAI(config)) {
-    const label = config.provider === "ollama" ? "Ollama" : "Anthropic";
-    addMessage("system", `AI connected (${label})`);
-
-    const gov = app.governanceStatus;
-    if (!gov.governed && gov.reason !== "dev mode") {
-      addMessage("system", `Tools disabled — ${gov.reason}. The agent can chat but cannot act.`);
-    }
-
-    const previousMessages = app.getConversationHistory();
-    if (previousMessages.length > 0) {
-      for (const msg of previousMessages) {
-        if (msg.role === "user" || msg.role === "assistant") {
-          addMessage(msg.role, msg.content);
-        }
-      }
-    }
-
-    // Start goal scheduler (Tauri only)
-    if (config.isTauri && config.invoke) {
-      const goalStatus = document.getElementById("goal-status") as HTMLDivElement;
-      app.onGoalStatus((executing) => {
-        goalStatus.classList.toggle("active", executing);
-      });
-      app.onGoalComplete((event: GoalCompleteEvent) => {
-        const promptSnippet = event.prompt.length > 50 ? event.prompt.slice(0, 50) + "..." : event.prompt;
-        if (event.status === "completed") {
-          const planInfo = event.planTitle
-            ? ` [${event.stepsCompleted ?? 0}/${event.totalSteps ?? 0} steps]`
-            : "";
-          const summary = event.summary ? `: ${event.summary.slice(0, 120)}` : "";
-          addMessage("system", `Goal completed "${promptSnippet}"${planInfo}${summary}`);
-        } else {
-          const err = event.error ? `: ${event.error.slice(0, 80)}` : "";
-          addMessage("system", `Goal failed "${promptSnippet}"${err}`);
-        }
-      });
-      app.onGoalPlanProgress((event: GoalPlanProgressEvent) => {
-        const goalStatusEl = document.getElementById("goal-status") as HTMLDivElement;
-        const goalStatusText = goalStatusEl.querySelector(".goal-status-text") as HTMLSpanElement | null;
-        if (goalStatusText) {
-          if (event.type === "plan_created") {
-            goalStatusText.textContent = `Plan: ${event.planTitle}`;
-          } else if (event.type === "step_started") {
-            goalStatusText.textContent = `Step ${event.stepIndex}/${event.totalSteps}: ${event.stepDescription}`;
-          } else if (event.type === "step_completed") {
-            goalStatusText.textContent = `Step ${event.stepIndex}/${event.totalSteps} done`;
-          } else if (event.type === "step_failed") {
-            goalStatusText.textContent = `Step ${event.stepIndex}/${event.totalSteps} failed`;
-          }
-        }
-      });
-      app.onGoalApproval((event: GoalApprovalEvent) => {
-        const promptSnippet = event.goalPrompt.length > 50
-          ? event.goalPrompt.slice(0, 50) + "..."
-          : event.goalPrompt;
-        addMessage("system", `Goal "${promptSnippet}" needs approval:`);
-        showGoalApprovalCard(ctx, event);
-      });
-      app.startGoalScheduler(config.invoke);
-    }
-
-    // Connect MCP servers via Tauri IPC bridge
-    if (config.isTauri && config.invoke) {
-      const invoke = config.invoke;
-      for (const mcpConfig of settings.getMcpServersConfig()) {
-        void app.connectMcpServerViaTauri(mcpConfig, invoke).catch(() => {
-          // MCP connection failures are non-fatal
-        });
-      }
-    }
-
-    // Start full sync (event-level background polling + conversation sync)
-    if (config.syncUrl && config.isTauri && config.invoke) {
-      void app.startSync(config.invoke, config.syncUrl, config.syncMasterToken).catch(() => {
-        // Sync failures are non-fatal at startup
-      });
-    }
-  } else {
-    if (config.provider === "anthropic") {
-      addMessage("system", "No API key — set VITE_ANTHROPIC_API_KEY in .env or api_key in ~/.motebit/config.json");
-    } else {
-      addMessage("system", "AI initialization failed");
-    }
+  // AI init (with error recovery)
+  const aiOk = await tryInitAI(config);
+  if (aiOk) {
+    onAIReady(config);
   }
 
   // Chat input

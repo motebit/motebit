@@ -72,6 +72,7 @@ const APPROVAL_PRESET_CONFIGS: Record<string, Partial<PolicyConfig>> = {
 
 export interface SettingsAPI {
   open(): void;
+  openToTab(tabName: string): void;
   close(): void;
   getHasApiKeyInKeyring(): boolean;
   setHasApiKeyInKeyring(v: boolean): void;
@@ -326,6 +327,11 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
     settingsBackdrop.classList.add("open");
     settingsModal.classList.add("open");
+  }
+
+  function openToTab(tabName: string): void {
+    open();
+    switchTab(tabName);
   }
 
   function close(): void {
@@ -590,6 +596,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
   return {
     open,
+    openToTab,
     close,
     getHasApiKeyInKeyring() { return hasApiKeyInKeyring; },
     setHasApiKeyInKeyring(v: boolean) { hasApiKeyInKeyring = v; },

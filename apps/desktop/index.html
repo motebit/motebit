@@ -1607,6 +1607,119 @@
       margin-top: 4px;
     }
     #welcome-start:hover { background: rgba(99, 102, 241, 1); }
+
+    /* System action messages (error recovery buttons in chat) */
+    .chat-bubble.system.system-action {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 10px;
+    }
+    .system-action-text {
+      flex: 1 1 100%;
+    }
+    .system-action-buttons {
+      display: flex;
+      gap: 6px;
+      margin-top: 2px;
+    }
+    .system-action-btn {
+      padding: 3px 12px;
+      border: 1px solid rgba(0, 0, 0, 0.1);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.6);
+      color: rgba(0, 0, 0, 0.5);
+      font-size: 11px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .system-action-btn:hover {
+      background: rgba(0, 0, 0, 0.06);
+      color: rgba(0, 0, 0, 0.7);
+    }
+    .system-action-btn.primary {
+      background: rgba(99, 102, 241, 0.15);
+      border-color: rgba(99, 102, 241, 0.3);
+      color: #6366f1;
+    }
+    .system-action-btn.primary:hover {
+      background: rgba(99, 102, 241, 0.25);
+    }
+    .system-action-btn:disabled {
+      opacity: 0.35;
+      cursor: default;
+      pointer-events: none;
+    }
+
+    /* Persistent error banner */
+    .error-banner {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 55;
+      display: flex;
+      flex-direction: column;
+      pointer-events: none;
+      transform: translateY(-100%);
+      transition: transform 0.3s ease;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .error-banner.visible {
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+    .error-banner-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 16px;
+      background: rgba(217, 165, 78, 0.12);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-bottom: 1px solid rgba(217, 165, 78, 0.15);
+      opacity: 0;
+      transform: translateY(-4px);
+      transition: opacity 0.25s ease, transform 0.25s ease;
+    }
+    .error-banner-item.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .error-banner-text {
+      flex: 1;
+      font-size: 12px;
+      color: rgba(0, 0, 0, 0.55);
+    }
+    .error-banner-action {
+      padding: 2px 10px;
+      border: 1px solid rgba(217, 165, 78, 0.35);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.5);
+      color: rgba(180, 120, 30, 0.85);
+      font-size: 11px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .error-banner-action:hover {
+      background: rgba(255, 255, 255, 0.75);
+      border-color: rgba(217, 165, 78, 0.55);
+    }
+    .error-banner-dismiss {
+      background: none;
+      border: none;
+      color: rgba(0, 0, 0, 0.25);
+      font-size: 16px;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+      transition: color 0.15s;
+    }
+    .error-banner-dismiss:hover {
+      color: rgba(0, 0, 0, 0.5);
+    }
   </style>
 </head>
 <body>
