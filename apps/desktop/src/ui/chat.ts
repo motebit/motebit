@@ -15,6 +15,91 @@ const chatLog = document.getElementById("chat-log") as HTMLDivElement;
 const chatInput = document.getElementById("chat-input") as HTMLInputElement;
 const toastContainer = document.getElementById("toast-container") as HTMLDivElement;
 
+// === Error Banner ===
+
+let errorBanner: HTMLElement | null = null;
+
+function ensureBannerContainer(): HTMLElement {
+  if (errorBanner) return errorBanner;
+  errorBanner = document.createElement("div");
+  errorBanner.id = "error-banner";
+  errorBanner.className = "error-banner";
+  document.body.appendChild(errorBanner);
+  return errorBanner;
+}
+
+export interface BannerConfig {
+  id: string;
+  text: string;
+  actionLabel: string;
+  onAction: () => void;
+}
+
+const activeBanners = new Map<string, HTMLElement>();
+
+/**
+ * Show a persistent thin banner at the top of the app.
+ * Each banner has a unique id so it can be updated or dismissed.
+ */
+export function showBanner(config: BannerConfig): void {
+  // Remove existing banner with same id
+  dismissBanner(config.id);
+
+  const container = ensureBannerContainer();
+
+  const item = document.createElement("div");
+  item.className = "error-banner-item";
+  item.dataset.bannerId = config.id;
+
+  const text = document.createElement("span");
+  text.className = "error-banner-text";
+  text.textContent = config.text;
+  item.appendChild(text);
+
+  const actionBtn = document.createElement("button");
+  actionBtn.className = "error-banner-action";
+  actionBtn.textContent = config.actionLabel;
+  actionBtn.addEventListener("click", () => {
+    config.onAction();
+  });
+  item.appendChild(actionBtn);
+
+  const dismissBtn = document.createElement("button");
+  dismissBtn.className = "error-banner-dismiss";
+  dismissBtn.innerHTML = "&times;";
+  dismissBtn.addEventListener("click", () => {
+    dismissBanner(config.id);
+  });
+  item.appendChild(dismissBtn);
+
+  activeBanners.set(config.id, item);
+  container.appendChild(item);
+
+  // Trigger show transition
+  requestAnimationFrame(() => {
+    container.classList.add("visible");
+    item.classList.add("visible");
+  });
+}
+
+/**
+ * Dismiss a banner by id.
+ */
+export function dismissBanner(id: string): void {
+  const existing = activeBanners.get(id);
+  if (existing) {
+    existing.classList.remove("visible");
+    setTimeout(() => {
+      existing.remove();
+      activeBanners.delete(id);
+      // Hide container if no banners left
+      if (activeBanners.size === 0 && errorBanner) {
+        errorBanner.classList.remove("visible");
+      }
+    }, 250);
+  }
+}
+
 // === Toast State ===
 
 let activeToast: HTMLElement | null = null;
@@ -30,6 +115,51 @@ export function addMessage(role: "user" | "assistant" | "system", text: string):
   const bubble = document.createElement("div");
   bubble.className = `chat-bubble ${role}`;
   bubble.textContent = text;
+  chatLog.appendChild(bubble);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+export interface ActionButton {
+  label: string;
+  onClick: () => void;
+  /** If true, use primary (indigo) styling. Default is secondary (muted). */
+  primary?: boolean;
+}
+
+/**
+ * Add a system message with inline action buttons.
+ * Used for error recovery flows where the user needs to take action.
+ */
+export function addActionMessage(text: string, actions: ActionButton[]): void {
+  const bubble = document.createElement("div");
+  bubble.className = "chat-bubble system system-action";
+
+  const textSpan = document.createElement("span");
+  textSpan.className = "system-action-text";
+  textSpan.textContent = text;
+  bubble.appendChild(textSpan);
+
+  if (actions.length > 0) {
+    const btnRow = document.createElement("span");
+    btnRow.className = "system-action-buttons";
+
+    for (const action of actions) {
+      const btn = document.createElement("button");
+      btn.className = action.primary ? "system-action-btn primary" : "system-action-btn";
+      btn.textContent = action.label;
+      btn.addEventListener("click", () => {
+        // Disable all buttons in this message after click
+        btnRow.querySelectorAll("button").forEach(b => {
+          (b as HTMLButtonElement).disabled = true;
+        });
+        action.onClick();
+      });
+      btnRow.appendChild(btn);
+    }
+
+    bubble.appendChild(btnRow);
+  }
+
   chatLog.appendChild(bubble);
   chatLog.scrollTop = chatLog.scrollHeight;
 }

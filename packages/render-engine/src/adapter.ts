@@ -43,7 +43,7 @@ function createBody(): { mesh: THREE.Mesh; material: THREE.MeshPhysicalMaterial 
     clearcoat: 0.4,
     clearcoatRoughness: 0.02,
     envMapIntensity: 1.2,
-    emissive: new THREE.Color(0.6, 0.7, 0.9), // §6.4 — processing heat visible through glass
+    emissive: new THREE.Color(0.8, 0.85, 1.0), // §6.4 — processing heat visible through glass (moonlight default)
     emissiveIntensity: 0.0,                    // Zero at rest — only glows during processing
     iridescence: 0.4,                         // Thin-film interference — bumped for spectral env
     iridescenceIOR: 1.3,
@@ -346,7 +346,9 @@ export class ThreeJSAdapter implements RenderAdapter {
 
     // Breathing — asymmetric oblate/prolate oscillation via scale
     // Gravity deforms slowly, surface tension snaps back fast
-    const breatheRaw = Math.sin(t * 2.0);
+    // Rate rises with glow (proxy for processing): calm ~2 Hz, thinking ~3.1 Hz
+    const breatheRate = 2.0 + cues.glow_intensity * 1.5;
+    const breatheRaw = Math.sin(t * breatheRate);
     const breathe = (breatheRaw > 0
       ? breatheRaw * 0.015
       : Math.sign(breatheRaw) * Math.pow(Math.abs(breatheRaw), 0.6) * 0.015) * audioBreathScale;
@@ -367,7 +369,9 @@ export class ThreeJSAdapter implements RenderAdapter {
     );
 
     // Interior luminosity — zero at rest, visible only during processing (§6.4)
-    this.bodyMaterial.emissiveIntensity = Math.max(0, (cues.glow_intensity - 0.3) * 0.2 + audioGlow);
+    // At rest (glow ~0.3): intensity ≈ 0. At full processing (glow ~0.7): intensity ≈ 0.24.
+    // The 0.3 threshold ensures glass stays clear at rest. 0.6 multiplier makes thinking visible.
+    this.bodyMaterial.emissiveIntensity = Math.max(0, (cues.glow_intensity - 0.3) * 0.6 + audioGlow);
 
     // Iridescence — high-frequency transients shimmer the glass surface
     this.bodyMaterial.iridescence = 0.4 + audioShimmer;
@@ -382,9 +386,12 @@ export class ThreeJSAdapter implements RenderAdapter {
       this.rightEye.position.z = eyeZ;
     }
 
-    // Smile
+    // Smile — baseline arc visible at rest, modulated by affect
+    // curvature 0 (neutral) → scale 0.6 (gentle resting smile)
+    // curvature 0.15 (happy) → scale 1.2 (full smile)
+    // curvature -0.1 (sad) → scale 0.2 (nearly flat)
     if (this.smileMesh) {
-      this.smileMesh.scale.y = cues.smile_curvature;
+      this.smileMesh.scale.y = 0.6 + cues.smile_curvature * 4.0;
     }
 
     if (this.controls) this.controls.update();
@@ -660,7 +667,8 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
 
     // Bo > 0: gravity perturbs the sphere at rest (§2.2)
     const REST_Y = 0.97;
-    const breatheRaw = Math.sin(t * 2.0);
+    const breatheRate = 2.0 + cues.glow_intensity * 1.5;
+    const breatheRaw = Math.sin(t * breatheRate);
     const breathe = breatheRaw > 0
       ? breatheRaw * 0.015
       : Math.sign(breatheRaw) * Math.pow(Math.abs(breatheRaw), 0.6) * 0.015;
@@ -672,7 +680,7 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     );
 
     // Interior luminosity — zero at rest, visible only during processing (§6.4)
-    this.bodyMaterial.emissiveIntensity = Math.max(0, (cues.glow_intensity - 0.3) * 0.2);
+    this.bodyMaterial.emissiveIntensity = Math.max(0, (cues.glow_intensity - 0.3) * 0.6);
 
     // Eye dilation
     if (this.leftEye && this.rightEye) {
@@ -684,9 +692,12 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
       this.rightEye.position.z = eyeZ;
     }
 
-    // Smile
+    // Smile — baseline arc visible at rest, modulated by affect
+    // curvature 0 (neutral) → scale 0.6 (gentle resting smile)
+    // curvature 0.15 (happy) → scale 1.2 (full smile)
+    // curvature -0.1 (sad) → scale 0.2 (nearly flat)
     if (this.smileMesh) {
-      this.smileMesh.scale.y = cues.smile_curvature;
+      this.smileMesh.scale.y = 0.6 + cues.smile_curvature * 4.0;
     }
 
     this.renderer.render(this.scene, this.camera);

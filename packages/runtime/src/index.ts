@@ -845,6 +845,12 @@ export class MotebitRuntime {
           },
           embedding,
         );
+        // Memory formed — brief confidence + warmth spike visible through glass
+        const cur = this.state.getState();
+        this.state.pushUpdate({
+          confidence: Math.min(1, cur.confidence + 0.2),
+          affect_valence: Math.min(1, cur.affect_valence + 0.15),
+        });
       } catch {
         // Memory formation is best-effort during reflection
       }
