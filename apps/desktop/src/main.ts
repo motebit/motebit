@@ -45,6 +45,8 @@ const voice = initVoice(ctx, {
 const chat = initChat(ctx, {
   openSettings: () => settings.open(),
   openConversationsPanel: () => conversations.open(),
+  openGoalsPanel: () => goals.open(),
+  openMemoryPanel: () => memory.open(),
   speakResponse: (text) => voice.speakAssistantResponse(text),
   getMicState: () => voice.getMicState(),
 });

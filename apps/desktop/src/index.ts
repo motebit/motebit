@@ -707,6 +707,23 @@ export class DesktopApp {
     return this._governanceStatus;
   }
 
+  // === State & Tools ===
+
+  /** Get the current state vector. Returns null if runtime not initialized. */
+  getState(): Record<string, unknown> | null {
+    if (!this.runtime) return null;
+    return this.runtime.getState() as unknown as Record<string, unknown>;
+  }
+
+  /** List all registered tool names and descriptions. */
+  listTools(): Array<{ name: string; description: string }> {
+    if (!this.runtime) return [];
+    return this.runtime.getToolRegistry().list().map(t => ({
+      name: t.name,
+      description: t.description ?? "",
+    }));
+  }
+
   // === Identity ===
 
   getIdentityInfo(): { motebitId: string; deviceId: string; publicKey: string } {
