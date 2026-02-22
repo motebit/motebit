@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { PlanStatus, StepStatus } from "@motebit/sdk";
 import type { Plan, PlanStep } from "@motebit/sdk";
 import type { MotebitLoopDependencies, AgenticChunk } from "@motebit/ai-core";
@@ -47,7 +46,7 @@ export class PlanEngine {
   ): Promise<Plan> {
     const rawPlan = await decomposePlan(ctx, deps.provider);
     const now = Date.now();
-    const planId = randomUUID();
+    const planId = crypto.randomUUID();
 
     const plan: Plan = {
       plan_id: planId,
@@ -66,7 +65,7 @@ export class PlanEngine {
     for (let i = 0; i < rawPlan.steps.length; i++) {
       const rawStep = rawPlan.steps[i]!;
       const step: PlanStep = {
-        step_id: randomUUID(),
+        step_id: crypto.randomUUID(),
         plan_id: planId,
         ordinal: i,
         description: rawStep.description,
