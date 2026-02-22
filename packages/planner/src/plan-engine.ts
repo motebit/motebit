@@ -10,6 +10,7 @@ import type { ReflectionResult } from "./reflect.js";
 
 export type PlanChunk =
   | { type: "plan_created"; plan: Plan; steps: PlanStep[] }
+  | { type: "plan_truncated"; requestedSteps: number; maxSteps: number }
   | { type: "step_started"; step: PlanStep }
   | { type: "step_chunk"; chunk: AgenticChunk }
   | { type: "step_completed"; step: PlanStep }
@@ -45,10 +46,12 @@ export class PlanEngine {
     motebitId: string,
     ctx: DecompositionContext,
     deps: MotebitLoopDependencies,
-  ): Promise<Plan> {
+  ): Promise<{ plan: Plan; truncatedFrom?: number }> {
     const rawPlan = await decomposePlan(ctx, deps.provider);
     const maxSteps = this.config.maxStepsPerPlan ?? 10;
+    let truncatedFrom: number | undefined;
     if (rawPlan.steps.length > maxSteps) {
+      truncatedFrom = rawPlan.steps.length;
       rawPlan.steps = rawPlan.steps.slice(0, maxSteps);
     }
     const now = Date.now();
@@ -89,7 +92,7 @@ export class PlanEngine {
       this.store.saveStep(step);
     }
 
-    return plan;
+    return { plan, truncatedFrom };
   }
 
   async *executePlan(
@@ -241,8 +244,11 @@ export class PlanEngine {
               };
 
               try {
-                const newPlan = await this.createPlan(plan.goal_id, plan.motebit_id, retryCtx, deps);
+                const { plan: newPlan, truncatedFrom: retryTruncated } = await this.createPlan(plan.goal_id, plan.motebit_id, retryCtx, deps);
                 yield { type: "plan_retrying", failedPlan, newPlan };
+                if (retryTruncated) {
+                  yield { type: "plan_truncated", requestedSteps: retryTruncated, maxSteps: this.config.maxStepsPerPlan ?? 10 };
+                }
 
                 const newSteps = this.store.getStepsForPlan(newPlan.plan_id);
                 yield { type: "plan_created", plan: newPlan, steps: newSteps };

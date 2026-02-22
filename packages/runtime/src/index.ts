@@ -479,7 +479,7 @@ export class MotebitRuntime {
       ? this.toolRegistry.list().map((t) => t.name)
       : undefined;
 
-    const plan = await this.planEngine.createPlan(
+    const { plan } = await this.planEngine.createPlan(
       goalId,
       this.motebitId,
       { goalPrompt, availableTools },

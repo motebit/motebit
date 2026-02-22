@@ -497,6 +497,20 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         countSpan.textContent = `${group.entries.length} tool${group.entries.length !== 1 ? "s" : ""}`;
         stats.appendChild(countSpan);
 
+        // Query token count for this run from goal_outcomes (async, fills in when ready)
+        void invoke<Array<{ tokens_used: number | null }>>("db_query", {
+          sql: "SELECT tokens_used FROM goal_outcomes WHERE outcome_id = ?",
+          params: [group.runId],
+        }).then((rows) => {
+          const tokens = rows?.[0]?.tokens_used;
+          if (tokens && tokens > 0) {
+            const tokenSpan = document.createElement("span");
+            tokenSpan.className = "audit-run-tokens";
+            tokenSpan.textContent = `${tokens.toLocaleString()} tok`;
+            stats.appendChild(tokenSpan);
+          }
+        }).catch(() => {});
+
         header.appendChild(stats);
 
         // Time — use earliest entry (entries are DESC, so last in array)

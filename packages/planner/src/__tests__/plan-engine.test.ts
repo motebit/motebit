@@ -96,7 +96,7 @@ describe("PlanEngine", () => {
     const deps = makeMockDeps();
     setupStreamMock(["step 1 result", "step 2 result"]);
 
-    const plan = await engine.createPlan("goal-1", "mote-1", {
+    const { plan } = await engine.createPlan("goal-1", "mote-1", {
       goalPrompt: "Research competitors",
     }, deps);
 
@@ -117,7 +117,7 @@ describe("PlanEngine", () => {
     const deps = makeMockDeps();
     setupStreamMock(["step 1 done", "step 2 done"]);
 
-    const plan = await engine.createPlan("goal-1", "mote-1", {
+    const { plan } = await engine.createPlan("goal-1", "mote-1", {
       goalPrompt: "Do something",
     }, deps);
 
@@ -435,7 +435,7 @@ describe("PlanEngine", () => {
 
       setupStreamMock(["step done"]);
 
-      const plan = await engine.createPlan("goal-1", "mote-1", {
+      const { plan } = await engine.createPlan("goal-1", "mote-1", {
         goalPrompt: "Do something",
       }, deps);
 
@@ -464,7 +464,7 @@ describe("PlanEngine", () => {
       const deps = makeMockDeps();
       setupStreamMock(["step done"]);
 
-      const plan = await engine.createPlan("goal-1", "mote-1", {
+      const { plan } = await engine.createPlan("goal-1", "mote-1", {
         goalPrompt: "Do something",
       }, deps);
 
@@ -498,7 +498,7 @@ describe("PlanEngine", () => {
 
       setupStreamMock(["step done"]);
 
-      const plan = await engine.createPlan("goal-1", "mote-1", {
+      const { plan } = await engine.createPlan("goal-1", "mote-1", {
         goalPrompt: "Do something",
       }, deps);
 
@@ -587,7 +587,7 @@ describe("PlanEngine", () => {
       });
 
       const ctx = { goalPrompt: "Do something", availableTools: ["tool_a"] };
-      const plan = await engine.createPlan("goal-1", "mote-1", ctx, deps);
+      const { plan } = await engine.createPlan("goal-1", "mote-1", ctx, deps);
 
       const chunks = await collectChunks(engine.executePlan(plan.plan_id, deps, ctx));
 
@@ -731,7 +731,7 @@ describe("PlanEngine", () => {
       });
 
       const ctx = { goalPrompt: "Do something" };
-      const plan = await engine.createPlan("goal-1", "mote-1", ctx, deps);
+      const { plan } = await engine.createPlan("goal-1", "mote-1", ctx, deps);
 
       const chunks = await collectChunks(engine.executePlan(plan.plan_id, deps, ctx));
 

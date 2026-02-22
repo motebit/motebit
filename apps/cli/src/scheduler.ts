@@ -25,6 +25,9 @@ export interface GoalStreamResult {
   responseText: string;
 }
 
+/** Maximum tool calls across all turns in a single goal run (default 50). */
+const MAX_TOOL_CALLS_PER_RUN = 50;
+
 export class GoalScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
@@ -271,21 +274,18 @@ export class GoalScheduler {
 
           // Wall-clock limit: 10 minutes per goal run
           const GOAL_WALL_CLOCK_MS = 10 * 60 * 1000;
-          const deadline = new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("Goal exceeded 10-minute wall-clock limit")), GOAL_WALL_CLOCK_MS),
-          );
+          const abortController = new AbortController();
+          const deadlineTimer = setTimeout(() => abortController.abort(new Error("Goal exceeded 10-minute wall-clock limit")), GOAL_WALL_CLOCK_MS);
 
-          if (this.planEngine && this.planStore) {
-            result = await Promise.race([
-              this.executePlanGoal(goal, outcomes, runId),
-              deadline,
-            ]);
-          } else {
-            const stream = this.runtime.sendMessageStreaming(enrichedPrompt, runId);
-            result = await Promise.race([
-              this.consumeDaemonStream(stream, goal.goal_id),
-              deadline,
-            ]);
+          try {
+            if (this.planEngine && this.planStore) {
+              result = await this.executePlanGoal(goal, outcomes, runId, abortController.signal);
+            } else {
+              const stream = this.runtime.sendMessageStreaming(enrichedPrompt, runId);
+              result = await this.consumeDaemonStream(stream, goal.goal_id, abortController.signal);
+            }
+          } finally {
+            clearTimeout(deadlineTimer);
           }
 
           if (result.suspended) {
@@ -365,12 +365,16 @@ export class GoalScheduler {
   private async consumeDaemonStream(
     stream: AsyncGenerator<StreamChunk>,
     goalId: string,
+    signal?: AbortSignal,
   ): Promise<GoalStreamResult> {
     let toolCallsMade = 0;
     let memoriesFormed = 0;
     let responseText = "";
 
     for await (const chunk of stream) {
+      if (signal?.aborted) {
+        throw signal.reason instanceof Error ? signal.reason : new Error("Goal aborted");
+      }
       switch (chunk.type) {
         case "text":
           process.stdout.write(chunk.text);
@@ -381,6 +385,9 @@ export class GoalScheduler {
           if (chunk.status === "calling") {
             process.stdout.write(`\n  [tool] ${chunk.name}...`);
             toolCallsMade++;
+            if (toolCallsMade > MAX_TOOL_CALLS_PER_RUN) {
+              throw new Error(`Goal exceeded ${MAX_TOOL_CALLS_PER_RUN} tool calls — run stopped`);
+            }
           } else {
             process.stdout.write(" done\n");
           }
@@ -447,7 +454,7 @@ export class GoalScheduler {
     return { suspended: false, toolCallsMade, memoriesFormed, responseText };
   }
 
-  private async executePlanGoal(goal: Goal, outcomes: GoalOutcome[], runId?: string): Promise<GoalStreamResult> {
+  private async executePlanGoal(goal: Goal, outcomes: GoalOutcome[], runId?: string, signal?: AbortSignal): Promise<GoalStreamResult> {
     const loopDeps = this.runtime.getLoopDeps();
     if (!loopDeps) throw new Error("AI not initialized — no loop deps available");
 
@@ -461,28 +468,36 @@ export class GoalScheduler {
       console.log(`[plan] resuming: ${plan.title} (${plan.plan_id.slice(0, 8)})`);
       planStream = this.planEngine!.resumePlan(plan.plan_id, loopDeps, undefined, runId);
     } else {
-      plan = await this.planEngine!.createPlan(goal.goal_id, this.motebitId, {
+      const created = await this.planEngine!.createPlan(goal.goal_id, this.motebitId, {
         goalPrompt: goal.prompt,
         previousOutcomes: outcomes.map((o) =>
           o.status === "failed" ? `failed: ${o.error_message ?? "unknown"}` : `${o.status}: ${o.summary ?? "no summary"}`,
         ),
         availableTools: registry.list().map((t) => t.name),
       }, loopDeps);
+      plan = created.plan;
+      if (created.truncatedFrom) {
+        console.warn(`[plan] truncated from ${created.truncatedFrom} to ${plan.total_steps} steps (max ${plan.total_steps})`);
+      }
       planStream = this.planEngine!.executePlan(plan.plan_id, loopDeps, undefined, runId);
     }
 
-    return this.consumePlanStream(planStream, goal.goal_id);
+    return this.consumePlanStream(planStream, goal.goal_id, signal);
   }
 
   private async consumePlanStream(
     stream: AsyncGenerator<PlanChunk>,
     goalId: string,
+    signal?: AbortSignal,
   ): Promise<GoalStreamResult> {
     let toolCallsMade = 0;
     let memoriesFormed = 0;
     let responseText = "";
 
     for await (const chunk of stream) {
+      if (signal?.aborted) {
+        throw signal.reason instanceof Error ? signal.reason : new Error("Goal aborted");
+      }
       switch (chunk.type) {
         case "plan_created":
           console.log(`[plan] created: "${chunk.plan.title}" (${chunk.steps.length} steps)`);
@@ -491,6 +506,10 @@ export class GoalScheduler {
             title: chunk.plan.title,
             total_steps: chunk.steps.length,
           });
+          break;
+
+        case "plan_truncated":
+          console.warn(`[plan] truncated from ${chunk.requestedSteps} to ${chunk.maxSteps} steps`);
           break;
 
         case "step_started":
@@ -512,6 +531,11 @@ export class GoalScheduler {
             if (chunk.chunk.status === "calling") {
               process.stdout.write(`\n  [tool] ${chunk.chunk.name}...`);
               toolCallsMade++;
+              if (toolCallsMade > MAX_TOOL_CALLS_PER_RUN) {
+                throw new Error(
+                  `Goal exceeded ${MAX_TOOL_CALLS_PER_RUN} tool calls — run stopped`,
+                );
+              }
             } else {
               process.stdout.write(" done\n");
             }

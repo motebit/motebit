@@ -146,7 +146,8 @@ CREATE TABLE IF NOT EXISTS goal_outcomes (
   summary TEXT,
   tool_calls_made INTEGER NOT NULL DEFAULT 0,
   memories_formed INTEGER NOT NULL DEFAULT 0,
-  error_message TEXT
+  error_message TEXT,
+  tokens_used INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_goal_outcomes_goal ON goal_outcomes (goal_id, ran_at DESC);
@@ -1015,6 +1016,7 @@ export interface GoalOutcome {
   tool_calls_made: number;
   memories_formed: number;
   error_message: string | null;
+  tokens_used?: number;
 }
 
 interface GoalOutcomeRow {
@@ -1027,6 +1029,7 @@ interface GoalOutcomeRow {
   tool_calls_made: number;
   memories_formed: number;
   error_message: string | null;
+  tokens_used: number | null;
 }
 
 function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
@@ -1040,6 +1043,7 @@ function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
     tool_calls_made: row.tool_calls_made,
     memories_formed: row.memories_formed,
     error_message: row.error_message,
+    ...(row.tokens_used != null ? { tokens_used: row.tokens_used } : {}),
   };
 }
 
@@ -1051,8 +1055,8 @@ export class SqliteGoalOutcomeStore {
   constructor(db: DatabaseDriver) {
     this.stmtAdd = db.prepare(
       `INSERT OR REPLACE INTO goal_outcomes
-       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtListForGoal = db.prepare(
       `SELECT * FROM goal_outcomes WHERE goal_id = ? ORDER BY ran_at DESC LIMIT ?`,
@@ -1073,6 +1077,7 @@ export class SqliteGoalOutcomeStore {
       outcome.tool_calls_made,
       outcome.memories_formed,
       outcome.error_message,
+      outcome.tokens_used ?? null,
     );
   }
 
@@ -1752,6 +1757,13 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
       driver.exec("ALTER TABLE tool_audit_log ADD COLUMN injection TEXT");
     } catch (_) { /* already exists on new DBs */ }
     driver.pragma("user_version = 10");
+  }
+
+  if (userVersion < 11) {
+    try {
+      driver.exec("ALTER TABLE goal_outcomes ADD COLUMN tokens_used INTEGER");
+    } catch (_) { /* already exists on new DBs */ }
+    driver.pragma("user_version = 11");
   }
 
   const eventStore = new SqliteEventStore(driver);

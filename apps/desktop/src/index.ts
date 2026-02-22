@@ -74,6 +74,9 @@ export interface GoalCompleteEvent {
   totalSteps?: number;
 }
 
+/** Maximum tool calls across all turns in a single goal run (default 50). */
+const MAX_TOOL_CALLS_PER_RUN = 50;
+
 export interface GoalPlanProgressEvent {
   goalId: string;
   planTitle: string;
@@ -1389,13 +1392,14 @@ export class DesktopApp {
           // Use PlanEngine for multi-step execution if available
           // Wall-clock limit: 10 minutes per goal run
           const GOAL_WALL_CLOCK_MS = 10 * 60 * 1000;
-          const deadline = new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("Goal exceeded 10-minute wall-clock limit")), GOAL_WALL_CLOCK_MS),
-          );
-          const result = await Promise.race([
-            this.executePlanGoal(goal, outcomes ?? [], invoke, runId),
-            deadline,
-          ]);
+          const abortController = new AbortController();
+          const deadlineTimer = setTimeout(() => abortController.abort(new Error("Goal exceeded 10-minute wall-clock limit")), GOAL_WALL_CLOCK_MS);
+          let result: Awaited<ReturnType<typeof this.executePlanGoal>>;
+          try {
+            result = await this.executePlanGoal(goal, outcomes ?? [], invoke, runId, abortController.signal);
+          } finally {
+            clearTimeout(deadlineTimer);
+          }
 
           if (result.suspended) {
             // Approval requested — _goalExecuting stays true to block further ticks.
@@ -1409,8 +1413,8 @@ export class DesktopApp {
           });
 
           await invoke<number>("db_execute", {
-            sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
-                  VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL)`,
+            sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used)
+                  VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL, ?)`,
             params: [
               runId,
               goal.goal_id,
@@ -1418,6 +1422,7 @@ export class DesktopApp {
               now,
               result.responseText.slice(0, 500),
               result.toolCallsMade,
+              result.tokensUsed ?? null,
             ],
           });
 
@@ -1496,6 +1501,7 @@ export class DesktopApp {
     outcomes: Array<{ ran_at: number; status: string; summary: string | null; error_message: string | null }>,
     invoke: InvokeFn,
     runId?: string,
+    signal?: AbortSignal,
   ): Promise<{
     suspended: boolean;
     toolCallsMade: number;
@@ -1503,12 +1509,13 @@ export class DesktopApp {
     planTitle?: string;
     stepsCompleted?: number;
     totalSteps?: number;
+    tokensUsed?: number;
   }> {
     const loopDeps = this.runtime!.getLoopDeps();
 
     // If PlanEngine or loopDeps are unavailable, fall back to single-turn execution
     if (!this.planEngine || !loopDeps) {
-      return this.executeSingleTurnGoal(goal, outcomes, invoke, runId);
+      return this.executeSingleTurnGoal(goal, outcomes, invoke, runId, signal);
     }
 
     const registry = this.runtime!.getToolRegistry();
@@ -1525,17 +1532,22 @@ export class DesktopApp {
     if (plan && plan.status === PlanStatus.Active) {
       planStream = this.planEngine.resumePlan(plan.plan_id, loopDeps, undefined, runId);
     } else {
-      plan = await this.planEngine.createPlan(goal.goal_id, this.motebitId, {
+      const created = await this.planEngine.createPlan(goal.goal_id, this.motebitId, {
         goalPrompt: goal.prompt,
         previousOutcomes: outcomes.map((o) =>
           o.status === "failed" ? `failed: ${o.error_message ?? "unknown"}` : `${o.status}: ${o.summary ?? "no summary"}`,
         ),
         availableTools: registry.list().map((t) => t.name),
       }, loopDeps);
-      planStream = this.planEngine.executePlan(plan.plan_id, loopDeps, undefined, runId);
+      const newPlan = created.plan;
+      plan = newPlan;
+      if (created.truncatedFrom) {
+        console.warn(`Plan truncated from ${created.truncatedFrom} to ${newPlan.total_steps} steps (max ${newPlan.total_steps})`);
+      }
+      planStream = this.planEngine.executePlan(newPlan.plan_id, loopDeps, undefined, runId);
     }
 
-    return this.consumePlanStream(planStream, goal, invoke, runId);
+    return this.consumePlanStream(planStream, goal, invoke, runId, signal);
   }
 
   /**
@@ -1546,10 +1558,12 @@ export class DesktopApp {
     outcomes: Array<{ ran_at: number; status: string; summary: string | null; error_message: string | null }>,
     invoke: InvokeFn,
     runId?: string,
+    signal?: AbortSignal,
   ): Promise<{
     suspended: boolean;
     toolCallsMade: number;
     responseText: string;
+    tokensUsed?: number;
   }> {
     const now = Date.now();
     let context = `You are executing a scheduled goal.\n\nGoal: ${goal.prompt}`;
@@ -1572,12 +1586,21 @@ export class DesktopApp {
 
     let accumulated = "";
     let toolCallsMade = 0;
+    let tokensUsed = 0;
 
     for await (const chunk of this.runtime!.sendMessageStreaming(context, runId)) {
+      if (signal?.aborted) {
+        throw signal.reason instanceof Error ? signal.reason : new Error("Goal aborted");
+      }
       if (chunk.type === "text") {
         accumulated += chunk.text;
       } else if (chunk.type === "tool_status" && chunk.status === "calling") {
         toolCallsMade++;
+        if (toolCallsMade > MAX_TOOL_CALLS_PER_RUN) {
+          throw new Error(`Goal exceeded ${MAX_TOOL_CALLS_PER_RUN} tool calls — run stopped`);
+        }
+      } else if (chunk.type === "result" && chunk.result.totalTokens) {
+        tokensUsed += chunk.result.totalTokens;
       } else if (chunk.type === "approval_request") {
         this._pendingGoalApproval = {
           goalId: goal.goal_id,
@@ -1593,11 +1616,11 @@ export class DesktopApp {
           args: chunk.args,
           riskLevel: chunk.risk_level,
         });
-        return { suspended: true, toolCallsMade, responseText: accumulated };
+        return { suspended: true, toolCallsMade, responseText: accumulated, tokensUsed: tokensUsed || undefined };
       }
     }
 
-    return { suspended: false, toolCallsMade, responseText: accumulated };
+    return { suspended: false, toolCallsMade, responseText: accumulated, tokensUsed: tokensUsed || undefined };
   }
 
   /**
@@ -1608,6 +1631,7 @@ export class DesktopApp {
     goal: { goal_id: string; prompt: string; mode: string },
     invoke: InvokeFn,
     runId?: string,
+    signal?: AbortSignal,
   ): Promise<{
     suspended: boolean;
     toolCallsMade: number;
@@ -1615,14 +1639,19 @@ export class DesktopApp {
     planTitle?: string;
     stepsCompleted?: number;
     totalSteps?: number;
+    tokensUsed?: number;
   }> {
     let toolCallsMade = 0;
     let responseText = "";
+    let tokensUsed = 0;
     let planTitle: string | undefined;
     let totalSteps = 0;
     let stepsCompleted = 0;
 
     for await (const chunk of stream) {
+      if (signal?.aborted) {
+        throw signal.reason instanceof Error ? signal.reason : new Error("Goal aborted");
+      }
       switch (chunk.type) {
         case "plan_created":
           planTitle = chunk.plan.title;
@@ -1654,6 +1683,11 @@ export class DesktopApp {
             responseText += chunk.chunk.text;
           } else if (chunk.chunk.type === "tool_status" && chunk.chunk.status === "calling") {
             toolCallsMade++;
+            if (toolCallsMade > MAX_TOOL_CALLS_PER_RUN) {
+              throw new Error(`Goal exceeded ${MAX_TOOL_CALLS_PER_RUN} tool calls — run stopped`);
+            }
+          } else if (chunk.chunk.type === "result" && chunk.chunk.result.totalTokens) {
+            tokensUsed += chunk.chunk.result.totalTokens;
           }
           break;
 
@@ -1698,7 +1732,7 @@ export class DesktopApp {
             args: innerChunk.args,
             riskLevel: innerChunk.risk_level,
           });
-          return { suspended: true, toolCallsMade, responseText, planTitle, stepsCompleted, totalSteps };
+          return { suspended: true, toolCallsMade, responseText, planTitle, stepsCompleted, totalSteps, tokensUsed: tokensUsed || undefined };
         }
 
         case "plan_completed":
@@ -1711,7 +1745,7 @@ export class DesktopApp {
       }
     }
 
-    return { suspended: false, toolCallsMade, responseText, planTitle, stepsCompleted, totalSteps };
+    return { suspended: false, toolCallsMade, responseText, planTitle, stepsCompleted, totalSteps, tokensUsed: tokensUsed || undefined };
   }
 
   // === MCP via Tauri Commands ===
