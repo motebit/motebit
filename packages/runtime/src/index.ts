@@ -1126,7 +1126,7 @@ export class MotebitRuntime {
         }
 
         // Check decayed confidence against persistence threshold
-        const elapsed = now - node.last_accessed;
+        const elapsed = now - node.created_at;
         const decayed = computeDecayedConfidence(node.confidence, node.half_life, elapsed);
         if (decayed < threshold) {
           await this.memory.deleteMemory(node.node_id);

@@ -134,6 +134,30 @@ describe("Runtime housekeeping — memory retention enforcement", () => {
     expect(alive[0]!.content).toBe("fresh fact");
   });
 
+  it("tombstones old memory even if recently accessed", async () => {
+    // Regression: decay must use created_at, not last_accessed.
+    // A memory created 30 days ago but accessed 1 minute ago should still decay
+    // based on creation time.
+    const embedding = new Array(384).fill(0.1);
+    const node = await runtime.memory.formMemory(
+      { content: "old but accessed", confidence: 0.6, sensitivity: SensitivityLevel.None },
+      embedding,
+      SEVEN_DAYS,
+    );
+
+    // Backdate created_at to 30 days ago, but keep last_accessed recent
+    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    node.created_at = thirtyDaysAgo;
+    node.last_accessed = Date.now(); // accessed just now
+    await (runtime as any).memory["storage"].saveNode(node);
+
+    await runtime.housekeeping();
+
+    const after = await runtime.memory.exportAll();
+    const alive = after.nodes.filter((n) => !n.tombstoned);
+    expect(alive).toHaveLength(0);
+  });
+
   it("tombstones memory exceeding sensitivity retention period", async () => {
     const embedding = new Array(384).fill(0.1);
     const node = await runtime.memory.formMemory(

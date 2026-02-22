@@ -794,11 +794,6 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
         });
         break;
 
-      case "new":
-        ctx.app.startNewConversation();
-        chatLog.innerHTML = "";
-        break;
-
       case "help":
         addMessage("system", formatHelpText());
         break;
