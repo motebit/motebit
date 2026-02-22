@@ -743,14 +743,14 @@ export class DesktopApp {
     return this.runtime?.getConversationHistory() ?? [];
   }
 
-  async sendMessage(text: string): Promise<TurnResult> {
+  async sendMessage(text: string, runId?: string): Promise<TurnResult> {
     if (!this.runtime) throw new Error("AI not initialized — call initAI() first");
-    return this.runtime.sendMessage(text);
+    return this.runtime.sendMessage(text, runId);
   }
 
-  async *sendMessageStreaming(text: string): AsyncGenerator<StreamChunk> {
+  async *sendMessageStreaming(text: string, runId?: string): AsyncGenerator<StreamChunk> {
     if (!this.runtime) throw new Error("AI not initialized — call initAI() first");
-    yield* this.runtime.sendMessageStreaming(text);
+    yield* this.runtime.sendMessageStreaming(text, runId);
   }
 
   async *resumeAfterApproval(approved: boolean): AsyncGenerator<StreamChunk> {

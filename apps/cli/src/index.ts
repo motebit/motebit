@@ -2333,8 +2333,9 @@ async function main(): Promise<void> {
     }
 
     try {
+      const chatRunId = crypto.randomUUID();
       if (config.noStream) {
-        const result = await runtime.sendMessage(trimmed);
+        const result = await runtime.sendMessage(trimmed, chatRunId);
 
         console.log(`\nmote> ${result.response}\n`);
 
@@ -2349,7 +2350,7 @@ async function main(): Promise<void> {
         console.log();
       } else {
         process.stdout.write("\nmote> ");
-        await consumeStream(runtime.sendMessageStreaming(trimmed), runtime, rl);
+        await consumeStream(runtime.sendMessageStreaming(trimmed, chatRunId), runtime, rl);
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);

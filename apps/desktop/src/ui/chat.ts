@@ -789,11 +789,12 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
     bubble.appendChild(textEl);
     chatLog.appendChild(bubble);
 
+    const chatRunId = crypto.randomUUID();
     let accumulated = "";
     let memoriesRetrieved: Array<{ node_id: string; content: string; confidence: number; sensitivity: string }> = [];
     let memoriesFormed: Array<{ node_id: string; content: string; sensitivity: string }> = [];
     try {
-      for await (const chunk of ctx.app.sendMessageStreaming(text)) {
+      for await (const chunk of ctx.app.sendMessageStreaming(text, chatRunId)) {
         if (chunk.type === "text") {
           accumulated += chunk.text;
           textEl.textContent = stripTags(accumulated);
