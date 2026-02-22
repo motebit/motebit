@@ -255,8 +255,17 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     (document.getElementById("identity-public-key") as HTMLElement).textContent =
       info.publicKey ? info.publicKey.slice(0, 16) + "..." : "-";
     const syncBadge = document.getElementById("identity-sync-status") as HTMLElement;
-    syncBadge.className = "sync-badge disconnected";
-    syncBadge.textContent = "Not connected";
+    const syncState = ctx.app.syncStatus;
+    const statusLabels: Record<string, string> = {
+      disconnected: "Not connected",
+      connecting: "Connecting\u2026",
+      connected: "Connected",
+      syncing: "Syncing\u2026",
+      conflict: "Conflict",
+      error: "Error",
+    };
+    syncBadge.className = `sync-badge ${syncState.status}`;
+    syncBadge.textContent = statusLabels[syncState.status] ?? syncState.status;
   }
 
   // Copy buttons
