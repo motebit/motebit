@@ -161,7 +161,7 @@ describe("BehaviorEngine", () => {
 
   it("successive computes converge toward target cues", () => {
     const highState = makeDefaultState({ processing: 1, confidence: 1, attention: 1 });
-    let prev = engine.getPreviousCues();
+    const prev = engine.getPreviousCues();
 
     // Run multiple ticks — glow should converge upward
     for (let i = 0; i < 20; i++) {
