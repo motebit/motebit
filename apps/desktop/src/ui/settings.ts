@@ -118,10 +118,11 @@ export interface SettingsDeps {
   colorPicker: ColorPickerAPI;
   voice: VoiceAPI;
   pairing: PairingAPI;
+  scrollToRunId?: (runId: string) => boolean;
 }
 
 export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsAPI {
-  const { colorPicker, voice, pairing } = deps;
+  const { colorPicker, voice, pairing, scrollToRunId } = deps;
 
   // === Tab Switching ===
 
@@ -439,15 +440,11 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         }
       }
 
-      for (const group of groups) {
-        // Single ungrouped entry (legacy, no run_id) — render flat
-        if (!group.runId) {
-          const row = buildAuditRow(group.entries[0]!);
-          listEl.appendChild(row);
-          continue;
-        }
+      // Separate grouped runs from legacy (no run_id)
+      const runGroups = groups.filter(g => g.runId);
+      const legacyEntries = groups.filter(g => !g.runId).flatMap(g => g.entries);
 
-        // Run group
+      for (const group of runGroups) {
         const groupEl = document.createElement("div");
         groupEl.className = "audit-run-group";
         // Auto-expand the first (most recent) group
@@ -458,10 +455,10 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
         const idSpan = document.createElement("span");
         idSpan.className = "audit-run-id";
-        idSpan.textContent = `run:${group.runId.slice(0, 8)}`;
+        idSpan.textContent = `run:${group.runId!.slice(0, 8)}`;
         header.appendChild(idSpan);
 
-        // Decision summary badges
+        // Decision summary badges + semantic label
         const stats = document.createElement("span");
         stats.className = "audit-run-stats";
 
@@ -472,23 +469,18 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
           else if (c === "denied") denied++;
           else approval++;
         }
-        if (allowed > 0) {
-          const b = document.createElement("span");
-          b.className = "audit-decision-badge allowed";
-          b.textContent = String(allowed);
-          stats.appendChild(b);
-        }
+
+        // Semantic trust badge — only surface when something noteworthy happened
         if (denied > 0) {
-          const b = document.createElement("span");
-          b.className = "audit-decision-badge denied";
-          b.textContent = String(denied);
-          stats.appendChild(b);
-        }
-        if (approval > 0) {
-          const b = document.createElement("span");
-          b.className = "audit-decision-badge approval";
-          b.textContent = String(approval);
-          stats.appendChild(b);
+          const tb = document.createElement("span");
+          tb.className = "audit-decision-badge denied";
+          tb.textContent = "denied";
+          stats.appendChild(tb);
+        } else if (approval > 0) {
+          const tb = document.createElement("span");
+          tb.className = "audit-decision-badge approval";
+          tb.textContent = "approval";
+          stats.appendChild(tb);
         }
 
         const countSpan = document.createElement("span");
@@ -505,6 +497,22 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         timeSpan.textContent = formatTimeAgo(Number(earliest.timestamp) || 0);
         header.appendChild(timeSpan);
 
+        // "View" link — only if the bubble exists in current session
+        if (scrollToRunId) {
+          const viewLink = document.createElement("span");
+          viewLink.className = "audit-run-view";
+          viewLink.textContent = "View";
+          viewLink.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const found = scrollToRunId(group.runId!);
+            if (!found) {
+              viewLink.textContent = "not in session";
+              setTimeout(() => { viewLink.textContent = "View"; }, 1500);
+            }
+          });
+          header.appendChild(viewLink);
+        }
+
         groupEl.appendChild(header);
         header.addEventListener("click", () => { groupEl.classList.toggle("expanded"); });
 
@@ -518,6 +526,37 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         groupEl.appendChild(body);
 
         listEl.appendChild(groupEl);
+      }
+
+      // Legacy entries — collapsed section at the bottom
+      if (legacyEntries.length > 0) {
+        const legacyGroup = document.createElement("div");
+        legacyGroup.className = "audit-run-group";
+
+        const legacyHeader = document.createElement("div");
+        legacyHeader.className = "audit-run-header";
+        const legacyLabel = document.createElement("span");
+        legacyLabel.className = "audit-run-id";
+        legacyLabel.textContent = "Older activity";
+        legacyHeader.appendChild(legacyLabel);
+
+        const legacyCount = document.createElement("span");
+        legacyCount.className = "audit-run-count";
+        legacyCount.style.marginLeft = "auto";
+        legacyCount.textContent = `${legacyEntries.length} tool${legacyEntries.length !== 1 ? "s" : ""}`;
+        legacyHeader.appendChild(legacyCount);
+
+        legacyGroup.appendChild(legacyHeader);
+        legacyHeader.addEventListener("click", () => { legacyGroup.classList.toggle("expanded"); });
+
+        const legacyBody = document.createElement("div");
+        legacyBody.className = "audit-run-body";
+        for (const entry of legacyEntries) {
+          legacyBody.appendChild(buildAuditRow(entry));
+        }
+        legacyGroup.appendChild(legacyBody);
+
+        listEl.appendChild(legacyGroup);
       }
     }).catch(() => {
       emptyEl.style.display = "block";

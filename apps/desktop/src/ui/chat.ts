@@ -489,6 +489,8 @@ export interface ChatCallbacks {
 
 export interface ChatAPI {
   handleSend(): Promise<void>;
+  /** Scroll to the assistant bubble associated with a run_id, if it exists in this session. */
+  scrollToRunId(runId: string): boolean;
   /** Tear down autocomplete listeners (for tests or cleanup). */
   destroy(): void;
 }
@@ -782,14 +784,14 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
 
     addMessage("user", text);
 
+    const chatRunId = crypto.randomUUID();
     const bubble = document.createElement("div");
     bubble.className = "chat-bubble assistant";
+    bubble.dataset.runId = chatRunId;
     const textEl = document.createElement("span");
     textEl.className = "bubble-text";
     bubble.appendChild(textEl);
     chatLog.appendChild(bubble);
-
-    const chatRunId = crypto.randomUUID();
     let accumulated = "";
     let memoriesRetrieved: Array<{ node_id: string; content: string; confidence: number; sensitivity: string }> = [];
     let memoriesFormed: Array<{ node_id: string; content: string; sensitivity: string }> = [];
@@ -852,11 +854,20 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
     }
   }
 
+  function scrollToRunId(runId: string): boolean {
+    const el = chatLog.querySelector(`[data-run-id="${CSS.escape(runId)}"]`) as HTMLElement | null;
+    if (!el) return false;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.style.outline = "1px solid rgba(255,255,255,0.3)";
+    setTimeout(() => { el.style.outline = ""; }, 2000);
+    return true;
+  }
+
   function destroy(): void {
     chatInput.removeEventListener("input", handleAutocompleteInput);
     chatInput.removeEventListener("keydown", handleAutocompleteKeydown);
     hideAutocomplete();
   }
 
-  return { handleSend, destroy };
+  return { handleSend, scrollToRunId, destroy };
 }

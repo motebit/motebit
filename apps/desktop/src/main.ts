@@ -62,7 +62,7 @@ const chat = initChat(ctx, {
   updateModelIndicator: () => settings.updateModelIndicator(),
 });
 
-const settings = initSettings(ctx, { colorPicker, voice, pairing });
+const settings = initSettings(ctx, { colorPicker, voice, pairing, scrollToRunId: (id) => chat.scrollToRunId(id) });
 
 // === Theme ===
 
