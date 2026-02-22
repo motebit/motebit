@@ -41,3 +41,4 @@ apps/mobile/.expo/
 infra/terraform/.terraform/
 infra/terraform/*.tfstate*
 infra/secrets/
+.claude/worktrees/
