@@ -331,6 +331,8 @@ export class WebXRAdapter implements RenderAdapter {
   setLightEnvironment(): void {}
   setInteriorColor(_color: InteriorColor): void {}
   setAudioReactivity(_energy: AudioReactivity | null): void {}
+  setTrustMode(_mode: import("@motebit/sdk").TrustMode): void {}
+  setListeningIndicator(_active: boolean): void {}
 
   dispose(): void {
     this.session = null;

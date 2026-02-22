@@ -9,6 +9,10 @@ export default defineConfig({
   build: {
     target: "esnext",
   },
+  optimizeDeps: {
+    // ONNX Runtime WASM used by @ricky0123/vad-web — let Vite pre-bundle it
+    exclude: ["onnxruntime-web"],
+  },
   test: {
     environment: "node",
   },

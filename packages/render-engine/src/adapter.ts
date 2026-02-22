@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import type { BehaviorCues, RenderSpec } from "@motebit/sdk";
+import { TrustMode, type BehaviorCues, type RenderSpec } from "@motebit/sdk";
 import {
   CANONICAL_SPEC,
   CANONICAL_MATERIAL,
@@ -235,6 +235,8 @@ export class ThreeJSAdapter implements RenderAdapter {
     smile_curvature: 0,
   };
   private audio: AudioReactivity | null = null;
+  private trustMode: TrustMode = TrustMode.Full;
+  private listeningActive = false;
 
   private renderer: THREE.WebGLRenderer | null = null;
   private scene: THREE.Scene | null = null;
@@ -368,17 +370,32 @@ export class ThreeJSAdapter implements RenderAdapter {
       1.0 + breathe + sag * 0.15,       // Z: widens as Y compresses
     );
 
+    // Trust mode visual modulation — glass clarity maps to trust level
+    const trustThickness = this.trustMode === TrustMode.Full ? 0.18
+      : this.trustMode === TrustMode.Guarded ? 0.25 : 0.35;
+    const trustTint: [number, number, number] = this.trustMode === TrustMode.Full ? [0.95, 0.95, 1.0]
+      : this.trustMode === TrustMode.Guarded ? [0.8, 0.85, 1.0] : [0.7, 0.75, 0.9];
+    this.bodyMaterial.thickness = smoothDelta(this.bodyMaterial.thickness, trustThickness, dt, 2.0);
+    this.bodyMaterial.attenuationColor.lerp(
+      new THREE.Color(trustTint[0], trustTint[1], trustTint[2]), 1 - Math.exp(-2.0 * dt));
+
     // Interior luminosity — zero at rest, visible only during processing (§6.4)
     // At rest (glow ~0.3): intensity ≈ 0. At full processing (glow ~0.7): intensity ≈ 0.24.
     // The 0.3 threshold ensures glass stays clear at rest. 0.6 multiplier makes thinking visible.
-    this.bodyMaterial.emissiveIntensity = Math.max(0, (cues.glow_intensity - 0.3) * 0.6 + audioGlow);
+    // Minimal trust: suppress interior glow entirely
+    const trustGlowScale = this.trustMode === TrustMode.Minimal ? 0 : 1;
+    this.bodyMaterial.emissiveIntensity = Math.max(0, (cues.glow_intensity - 0.3) * 0.6 + audioGlow) * trustGlowScale;
 
     // Iridescence — high-frequency transients shimmer the glass surface
-    this.bodyMaterial.iridescence = 0.4 + audioShimmer;
+    // Active listening indicator: subtle ~1Hz oscillation (visual recording light)
+    const listeningIridescence = this.listeningActive ? Math.sin(t * Math.PI * 2) * 0.08 : 0;
+    this.bodyMaterial.iridescence = 0.4 + audioShimmer + listeningIridescence;
 
     // Eye dilation
     if (this.leftEye && this.rightEye) {
-      const eyeScale = 0.8 + cues.eye_dilation * 0.4;
+      // Minimal trust: narrower eyes
+      const trustEyeMax = this.trustMode === TrustMode.Minimal ? 0.2 : 0.4;
+      const eyeScale = 0.8 + cues.eye_dilation * trustEyeMax;
       this.leftEye.scale.setScalar(eyeScale);
       this.rightEye.scale.setScalar(eyeScale);
       const eyeZ = 0.08 + Math.sin(t * 0.25) * 0.001;
@@ -447,6 +464,14 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.audio = energy;
   }
 
+  setTrustMode(mode: TrustMode): void {
+    this.trustMode = mode;
+  }
+
+  setListeningIndicator(active: boolean): void {
+    this.listeningActive = active;
+  }
+
   enableOrbitControls(): void {
     if (!this.camera || !this.renderer) return;
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -506,6 +531,8 @@ export class SpatialAdapter implements RenderAdapter {
   setLightEnvironment(): void {}
   setInteriorColor(_color: InteriorColor): void {}
   setAudioReactivity(_energy: AudioReactivity | null): void {}
+  setTrustMode(_mode: TrustMode): void {}
+  setListeningIndicator(_active: boolean): void {}
   dispose(): void {}
 }
 
@@ -549,6 +576,8 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
   private basePosition = { x: 0, y: -0.2, z: -0.5 };
   private envMap: THREE.Texture | null = null;
   private audio: AudioReactivity | null = null;
+  private trustMode: TrustMode = TrustMode.Full;
+  private listeningActive = false;
 
   /** Check if WebXR immersive-ar is available in this browser. */
   static async isSupported(): Promise<boolean> {
@@ -689,15 +718,30 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
       1.0 + breathe + sag * 0.15,
     );
 
+    // Trust mode visual modulation — glass clarity maps to trust level
+    const trustThickness = this.trustMode === TrustMode.Full ? 0.18
+      : this.trustMode === TrustMode.Guarded ? 0.25 : 0.35;
+    const trustTint: [number, number, number] = this.trustMode === TrustMode.Full ? [0.95, 0.95, 1.0]
+      : this.trustMode === TrustMode.Guarded ? [0.8, 0.85, 1.0] : [0.7, 0.75, 0.9];
+    this.bodyMaterial.thickness = smoothDelta(this.bodyMaterial.thickness, trustThickness, dt, 2.0);
+    this.bodyMaterial.attenuationColor.lerp(
+      new THREE.Color(trustTint[0], trustTint[1], trustTint[2]), 1 - Math.exp(-2.0 * dt));
+
     // Interior luminosity — zero at rest, visible only during processing (§6.4)
-    this.bodyMaterial.emissiveIntensity = Math.max(0, (cues.glow_intensity - 0.3) * 0.6 + audioGlow);
+    // Minimal trust: suppress interior glow entirely
+    const trustGlowScale = this.trustMode === TrustMode.Minimal ? 0 : 1;
+    this.bodyMaterial.emissiveIntensity = Math.max(0, (cues.glow_intensity - 0.3) * 0.6 + audioGlow) * trustGlowScale;
 
     // Iridescence — high-frequency transients shimmer the glass surface
-    this.bodyMaterial.iridescence = 0.4 + audioShimmer;
+    // Active listening indicator: subtle ~1Hz oscillation (visual recording light)
+    const listeningIridescence = this.listeningActive ? Math.sin(t * Math.PI * 2) * 0.08 : 0;
+    this.bodyMaterial.iridescence = 0.4 + audioShimmer + listeningIridescence;
 
     // Eye dilation
     if (this.leftEye && this.rightEye) {
-      const eyeScale = 0.8 + cues.eye_dilation * 0.4;
+      // Minimal trust: narrower eyes
+      const trustEyeMax = this.trustMode === TrustMode.Minimal ? 0.2 : 0.4;
+      const eyeScale = 0.8 + cues.eye_dilation * trustEyeMax;
       this.leftEye.scale.setScalar(eyeScale);
       this.rightEye.scale.setScalar(eyeScale);
       const eyeZ = 0.08 + Math.sin(t * 0.25) * 0.001;
@@ -820,6 +864,14 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
 
   setAudioReactivity(energy: AudioReactivity | null): void {
     this.audio = energy;
+  }
+
+  setTrustMode(mode: TrustMode): void {
+    this.trustMode = mode;
+  }
+
+  setListeningIndicator(active: boolean): void {
+    this.listeningActive = active;
   }
 
   dispose(): void {

@@ -1,4 +1,4 @@
-import type { BehaviorCues, RenderSpec, GeometrySpec, MaterialSpec, LightingSpec } from "@motebit/sdk";
+import type { BehaviorCues, RenderSpec, GeometrySpec, MaterialSpec, LightingSpec, TrustMode } from "@motebit/sdk";
 
 // === Canonical Render Spec ===
 
@@ -63,6 +63,8 @@ export interface RenderAdapter {
   setLightEnvironment(): void;
   setInteriorColor(color: InteriorColor): void;
   setAudioReactivity(energy: AudioReactivity | null): void;
+  setTrustMode(mode: TrustMode): void;
+  setListeningIndicator(active: boolean): void;
   dispose(): void;
 }
 

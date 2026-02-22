@@ -21,7 +21,9 @@
     "@motebit/ai-core": "workspace:*",
     "@motebit/crypto": "workspace:*",
     "@motebit/core-identity": "workspace:*",
-    "@motebit/browser-persistence": "workspace:*"
+    "@motebit/browser-persistence": "workspace:*",
+    "@motebit/voice": "workspace:*",
+    "@ricky0123/vad-web": "^0.0.22"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

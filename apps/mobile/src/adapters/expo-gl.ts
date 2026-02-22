@@ -587,6 +587,9 @@ export class ExpoGLAdapter implements RenderAdapter {
     this.audio = energy;
   }
 
+  setTrustMode(_mode: import("@motebit/sdk").TrustMode): void {}
+  setListeningIndicator(_active: boolean): void {}
+
   dispose(): void {
     if (this.bodyMesh) {
       this.bodyMesh.geometry.dispose();

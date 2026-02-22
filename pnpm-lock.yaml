@@ -458,6 +458,12 @@ importers:
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
+      '@motebit/voice':
+        specifier: workspace:*
+        version: link:../../packages/voice
+      '@ricky0123/vad-web':
+        specifier: ^0.0.22
+        version: 0.0.22
     devDependencies:
       typescript:
         specifier: ^5.6.0
@@ -2249,7 +2255,7 @@ packages:
 
   '@expo/bunyan@4.0.1':
     resolution: {integrity: sha512-+Lla7nYSiHZirgK+U/uYzsLv/X+HaJienbD5AKX1UQZHYfWaP+9uuQluRB4GrEVWF0GZ7vEVp/jzaOT9k/SQlg==}
-    engines: {'0': node >=0.10.0}
+    engines: {node: '>=0.10.0'}
 
   '@expo/cli@0.22.28':
     resolution: {integrity: sha512-lvt72KNitGuixYD2l3SZmRKVu2G4zJpmg5V7WfUBNpmUU5oODBw/6qmiJ6kSLAlfDozscUk+BBGknBBzxUrwrA==}
@@ -3232,6 +3238,9 @@ packages:
 
   '@react-navigation/routers@7.5.3':
     resolution: {integrity: sha512-1tJHg4KKRJuQ1/EvJxatrMef3NZXEPzwUIUZ3n1yJ2t7Q97siwRtbynRpQG9/69ebbtiZ8W3ScOZF/OmhvM4Rg==}
+
+  '@ricky0123/vad-web@0.0.22':
+    resolution: {integrity: sha512-679R6sfwXx4jkquK+FJ9RC2W29oulWC+9ZINK6LVpuy90IBV7UaTGNN79oQXufpJTJs5z4X/22nw1DQ4+Rh8CA==}
 
   '@ricky0123/vad-web@0.0.30':
     resolution: {integrity: sha512-cJyYrh4YeeUBJcbR9Bic/bFDyB9qBkAepvpuWM3vLxnAi7bC3VHzf51UeNdT+OtY4D7MLAgV8iJMc4z41ZnaWg==}
@@ -11423,6 +11432,10 @@ snapshots:
   '@react-navigation/routers@7.5.3':
     dependencies:
       nanoid: 3.3.11
+
+  '@ricky0123/vad-web@0.0.22':
+    dependencies:
+      onnxruntime-web: 1.14.0
 
   '@ricky0123/vad-web@0.0.30':
     dependencies:
