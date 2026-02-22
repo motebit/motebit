@@ -1865,6 +1865,181 @@
       color: rgba(0, 0, 0, 0.3);
     }
 
+    /* Plan history section */
+    .plan-history-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px 4px;
+      flex-shrink: 0;
+      cursor: pointer;
+    }
+    .plan-history-header:hover .plan-history-title { color: rgba(0, 0, 0, 0.5); }
+    .plan-history-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: rgba(0, 0, 0, 0.35);
+      transition: color 0.15s;
+    }
+    .plan-history-toggle {
+      font-size: 10px;
+      color: rgba(0, 0, 0, 0.25);
+      transition: transform 0.2s;
+    }
+    .plan-history-header.open .plan-history-toggle { transform: rotate(180deg); }
+    #plan-history-list {
+      overflow-y: auto;
+      padding: 0 8px 8px;
+      max-height: 0;
+      opacity: 0;
+      transition: max-height 0.3s ease, opacity 0.2s ease;
+    }
+    #plan-history-list.open {
+      max-height: 300px;
+      opacity: 1;
+    }
+    .plan-entry {
+      padding: 6px 8px;
+      border-radius: 8px;
+      border: 1px solid rgba(0, 0, 0, 0.04);
+      margin-bottom: 3px;
+    }
+    .plan-entry-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      transition: background 0.15s;
+      border-radius: 6px;
+      padding: 2px 0;
+    }
+    .plan-entry-header:hover { background: rgba(0, 0, 0, 0.02); }
+    .plan-status-badge {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-weight: 500;
+      flex-shrink: 0;
+    }
+    .plan-status-badge.active {
+      background: rgba(99, 102, 241, 0.15);
+      color: #6366f1;
+    }
+    .plan-status-badge.completed {
+      background: rgba(74, 222, 128, 0.15);
+      color: #22c55e;
+    }
+    .plan-status-badge.failed {
+      background: rgba(248, 113, 113, 0.15);
+      color: #ef4444;
+    }
+    .plan-status-badge.paused {
+      background: rgba(251, 191, 36, 0.15);
+      color: #d97706;
+    }
+    .plan-entry-title {
+      font-size: 12px;
+      color: rgba(0, 0, 0, 0.6);
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .plan-entry-steps {
+      font-size: 10px;
+      color: rgba(0, 0, 0, 0.3);
+      flex-shrink: 0;
+    }
+    .plan-entry-time {
+      font-size: 10px;
+      color: rgba(0, 0, 0, 0.25);
+      flex-shrink: 0;
+    }
+    .plan-entry-expand {
+      font-size: 9px;
+      color: rgba(0, 0, 0, 0.2);
+      flex-shrink: 0;
+      transition: transform 0.2s;
+    }
+    .plan-entry.expanded .plan-entry-expand { transform: rotate(180deg); }
+    .plan-steps-detail {
+      display: none;
+      margin-top: 6px;
+      padding-top: 6px;
+      border-top: 1px solid rgba(0, 0, 0, 0.05);
+    }
+    .plan-entry.expanded .plan-steps-detail { display: block; }
+    .plan-step-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      padding: 3px 0;
+      font-size: 11px;
+      color: rgba(0, 0, 0, 0.5);
+    }
+    .plan-step-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      margin-top: 3px;
+      background: rgba(0, 0, 0, 0.1);
+    }
+    .plan-step-dot.pending { background: rgba(0, 0, 0, 0.1); }
+    .plan-step-dot.running {
+      background: rgba(99, 102, 241, 0.7);
+      box-shadow: 0 0 4px rgba(99, 102, 241, 0.3);
+      animation: step-dot-pulse 1.2s ease-in-out infinite;
+    }
+    .plan-step-dot.completed { background: #4ade80; }
+    .plan-step-dot.failed { background: #f87171; }
+    .plan-step-dot.skipped { background: #fbbf24; }
+    .plan-step-content {
+      flex: 1;
+      min-width: 0;
+    }
+    .plan-step-desc {
+      font-size: 11px;
+      color: rgba(0, 0, 0, 0.6);
+      line-height: 1.3;
+    }
+    .plan-step-meta {
+      display: flex;
+      gap: 6px;
+      margin-top: 2px;
+      font-size: 10px;
+      color: rgba(0, 0, 0, 0.3);
+    }
+    .plan-step-result {
+      font-size: 10px;
+      color: rgba(0, 0, 0, 0.4);
+      margin-top: 2px;
+      line-height: 1.3;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      cursor: pointer;
+    }
+    .plan-step-result.expanded-text {
+      -webkit-line-clamp: unset;
+    }
+    .plan-step-error {
+      font-size: 10px;
+      color: rgba(239, 68, 68, 0.8);
+      margin-top: 2px;
+      line-height: 1.3;
+      word-break: break-word;
+    }
+    .plan-history-empty {
+      font-size: 11px;
+      color: rgba(0, 0, 0, 0.25);
+      padding: 8px 4px;
+      text-align: center;
+    }
+
     /* Sync status indicator */
     #sync-status {
       position: fixed;
@@ -2230,6 +2405,11 @@
       <span class="goal-recent-title">Recent Outcomes</span>
     </div>
     <div id="goal-recent-list"></div>
+    <div class="plan-history-header" id="plan-history-header" style="display:none;">
+      <span class="plan-history-title">Plans</span>
+      <span class="plan-history-toggle">&#9660;</span>
+    </div>
+    <div id="plan-history-list"></div>
     <div id="goal-add-form">
       <textarea id="goal-prompt" placeholder="What should the agent do?"></textarea>
       <div class="goal-form-row">

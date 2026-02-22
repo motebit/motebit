@@ -12,6 +12,8 @@ const goalProgressContainer = document.getElementById("goal-progress-container")
 const goalRecentHeader = document.getElementById("goal-recent-header") as HTMLDivElement;
 const goalRecentList = document.getElementById("goal-recent-list") as HTMLDivElement;
 const goalsBtn = document.getElementById("goals-btn") as HTMLButtonElement;
+const planHistoryHeader = document.getElementById("plan-history-header") as HTMLDivElement;
+const planHistoryList = document.getElementById("plan-history-list") as HTMLDivElement;
 
 // === Goals Panel ===
 
@@ -42,6 +44,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
     goalsBackdrop.classList.add("open");
     refreshGoalList();
     loadRecentOutcomes();
+    loadPlanHistory();
   }
 
   function close(): void {
@@ -93,8 +96,9 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
       fadeTimer = null;
     }, 3000);
 
-    // Refresh recent outcomes
+    // Refresh recent outcomes and plan history
     loadRecentOutcomes();
+    loadPlanHistory();
   }
 
   function createProgressCard(planTitle: string, totalSteps: number): void {
@@ -410,6 +414,222 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
       goalRecentList.innerHTML = "";
     });
   }
+
+  // === Plan History ===
+
+  let planHistoryOpen = false;
+
+  function loadPlanHistory(): void {
+    const config = ctx.getConfig();
+    if (!config?.isTauri || !config?.invoke) return;
+    const motebitId = ctx.app.motebitId;
+    if (!motebitId) return;
+    const invoke = config.invoke;
+
+    void invoke<Array<Record<string, unknown>>>("db_query", {
+      sql: `SELECT * FROM plans WHERE motebit_id = ? ORDER BY created_at DESC LIMIT 10`,
+      params: [motebitId],
+    }).then((plans: Array<Record<string, unknown>>) => {
+      if (!plans || plans.length === 0) {
+        planHistoryHeader.style.display = "none";
+        planHistoryList.innerHTML = "";
+        planHistoryList.classList.remove("open");
+        return;
+      }
+      planHistoryHeader.style.display = "flex";
+      renderPlanList(plans, invoke);
+    }).catch(() => {
+      planHistoryHeader.style.display = "none";
+      planHistoryList.innerHTML = "";
+    });
+  }
+
+  function renderPlanList(plans: Array<Record<string, unknown>>, invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>): void {
+    planHistoryList.innerHTML = "";
+
+    for (const plan of plans) {
+      const entry = document.createElement("div");
+      entry.className = "plan-entry";
+
+      const header = document.createElement("div");
+      header.className = "plan-entry-header";
+
+      // Status badge
+      const badge = document.createElement("span");
+      const status = String(plan.status || "active");
+      badge.className = `plan-status-badge ${status}`;
+      badge.textContent = status;
+      header.appendChild(badge);
+
+      // Title
+      const title = document.createElement("span");
+      title.className = "plan-entry-title";
+      const titleText = String(plan.title || "Untitled plan");
+      title.textContent = titleText.length > 30 ? titleText.slice(0, 30) + "..." : titleText;
+      title.title = titleText;
+      header.appendChild(title);
+
+      // Step count
+      const stepsSpan = document.createElement("span");
+      stepsSpan.className = "plan-entry-steps";
+      const currentStep = Number(plan.current_step_index) || 0;
+      const totalSteps = Number(plan.total_steps) || 0;
+      stepsSpan.textContent = `${currentStep}/${totalSteps}`;
+      header.appendChild(stepsSpan);
+
+      // Time
+      const time = document.createElement("span");
+      time.className = "plan-entry-time";
+      time.textContent = formatTimeAgo(Number(plan.created_at) || 0);
+      header.appendChild(time);
+
+      // Expand indicator
+      const expand = document.createElement("span");
+      expand.className = "plan-entry-expand";
+      expand.textContent = "\u25BC";
+      header.appendChild(expand);
+
+      entry.appendChild(header);
+
+      // Expandable steps detail container
+      const stepsDetail = document.createElement("div");
+      stepsDetail.className = "plan-steps-detail";
+      entry.appendChild(stepsDetail);
+
+      // Toggle expand
+      let stepsLoaded = false;
+      header.addEventListener("click", () => {
+        const isExpanded = entry.classList.contains("expanded");
+        if (isExpanded) {
+          entry.classList.remove("expanded");
+        } else {
+          entry.classList.add("expanded");
+          if (!stepsLoaded) {
+            stepsLoaded = true;
+            loadPlanSteps(String(plan.plan_id), stepsDetail, invoke);
+          }
+        }
+      });
+
+      planHistoryList.appendChild(entry);
+    }
+
+    // Update open state
+    if (planHistoryOpen) {
+      planHistoryList.classList.add("open");
+    }
+  }
+
+  function loadPlanSteps(planId: string, container: HTMLDivElement, invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>): void {
+    container.innerHTML = '<div class="plan-history-empty">Loading...</div>';
+
+    void invoke<Array<Record<string, unknown>>>("db_query", {
+      sql: `SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY ordinal ASC`,
+      params: [planId],
+    }).then((steps: Array<Record<string, unknown>>) => {
+      container.innerHTML = "";
+      if (!steps || steps.length === 0) {
+        container.innerHTML = '<div class="plan-history-empty">No steps</div>';
+        return;
+      }
+
+      for (const step of steps) {
+        const row = document.createElement("div");
+        row.className = "plan-step-row";
+
+        // Status dot
+        const dot = document.createElement("span");
+        const stepStatus = String(step.status || "pending");
+        dot.className = `plan-step-dot ${stepStatus}`;
+        row.appendChild(dot);
+
+        // Content column
+        const content = document.createElement("div");
+        content.className = "plan-step-content";
+
+        // Description
+        const desc = document.createElement("div");
+        desc.className = "plan-step-desc";
+        const ordinal = Number(step.ordinal) + 1;
+        desc.textContent = `${ordinal}. ${String(step.description || "")}`;
+        content.appendChild(desc);
+
+        // Meta (duration, tool calls, retries)
+        const meta = document.createElement("div");
+        meta.className = "plan-step-meta";
+
+        const startedAt = step.started_at ? Number(step.started_at) : null;
+        const completedAt = step.completed_at ? Number(step.completed_at) : null;
+        if (startedAt) {
+          const duration = formatStepDuration(startedAt, completedAt);
+          if (duration) {
+            const durationSpan = document.createElement("span");
+            durationSpan.textContent = duration;
+            meta.appendChild(durationSpan);
+          }
+        }
+
+        const toolCalls = Number(step.tool_calls_made) || 0;
+        if (toolCalls > 0) {
+          const toolSpan = document.createElement("span");
+          toolSpan.textContent = `${toolCalls} tool${toolCalls !== 1 ? "s" : ""}`;
+          meta.appendChild(toolSpan);
+        }
+
+        const retries = Number(step.retry_count) || 0;
+        if (retries > 0) {
+          const retrySpan = document.createElement("span");
+          retrySpan.textContent = `${retries} retr${retries !== 1 ? "ies" : "y"}`;
+          meta.appendChild(retrySpan);
+        }
+
+        if (meta.children.length > 0) {
+          content.appendChild(meta);
+        }
+
+        // Result summary (truncated, expandable)
+        if (step.result_summary) {
+          const result = document.createElement("div");
+          result.className = "plan-step-result";
+          result.textContent = String(step.result_summary);
+          result.addEventListener("click", (e) => {
+            e.stopPropagation();
+            result.classList.toggle("expanded-text");
+          });
+          content.appendChild(result);
+        }
+
+        // Error message
+        if (step.error_message) {
+          const error = document.createElement("div");
+          error.className = "plan-step-error";
+          error.textContent = String(step.error_message);
+          content.appendChild(error);
+        }
+
+        row.appendChild(content);
+        container.appendChild(row);
+      }
+    }).catch(() => {
+      container.innerHTML = '<div class="plan-history-empty">Failed to load steps</div>';
+    });
+  }
+
+  function formatStepDuration(startedAt: number, completedAt: number | null): string {
+    const end = completedAt ?? Date.now();
+    const ms = end - startedAt;
+    if (ms < 1000) return `${ms}ms`;
+    if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+    if (ms < 3600000) return `${Math.round(ms / 60000)}m`;
+    return `${(ms / 3600000).toFixed(1)}h`;
+  }
+
+  // Plan history toggle
+  planHistoryHeader.addEventListener("click", () => {
+    planHistoryOpen = !planHistoryOpen;
+    planHistoryHeader.classList.toggle("open", planHistoryOpen);
+    planHistoryList.classList.toggle("open", planHistoryOpen);
+  });
 
   // === Goal CRUD ===
 
