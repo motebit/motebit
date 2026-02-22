@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import type { SqliteGoalStore, SqliteApprovalStore, SqliteGoalOutcomeStore, Goal, GoalOutcome } from "@motebit/persistence";
-import { EventType, RiskLevel, PlanStatus } from "@motebit/sdk";
+import { EventType, RiskLevel, PlanStatus, SensitivityLevel } from "@motebit/sdk";
 import type { ToolHandler } from "@motebit/sdk";
 import {
   createSubGoalDefinition,
@@ -10,6 +10,7 @@ import {
 } from "@motebit/tools";
 import type { PlanEngine, PlanChunk } from "@motebit/planner";
 import type { PlanStoreAdapter } from "@motebit/planner";
+import { embedText } from "@motebit/memory-graph";
 import { parseInterval } from "./intervals.js";
 
 interface SuspendedTurn {
@@ -318,6 +319,9 @@ export class GoalScheduler {
             memories: result.memoriesFormed,
           });
 
+          // Form a memory from the goal outcome so the agent learns from its work
+          void this.formGoalOutcomeMemory(goal, result);
+
           // One-shot goal: check if completed (agent may have called complete_goal,
           // or if it's done and didn't call it, auto-complete)
           const refreshed = this.goalStore.get(goal.goal_id);
@@ -468,12 +472,16 @@ export class GoalScheduler {
       console.log(`[plan] resuming: ${plan.title} (${plan.plan_id.slice(0, 8)})`);
       planStream = this.planEngine!.resumePlan(plan.plan_id, loopDeps, undefined, runId);
     } else {
+      // Retrieve relevant memories to inform plan decomposition
+      const relevantMemories = await this.retrieveRelevantMemories(goal.prompt);
+
       const created = await this.planEngine!.createPlan(goal.goal_id, this.motebitId, {
         goalPrompt: goal.prompt,
         previousOutcomes: outcomes.map((o) =>
           o.status === "failed" ? `failed: ${o.error_message ?? "unknown"}` : `${o.status}: ${o.summary ?? "no summary"}`,
         ),
         availableTools: registry.list().map((t) => t.name),
+        relevantMemories: relevantMemories.length > 0 ? relevantMemories : undefined,
       }, loopDeps);
       plan = created.plan;
       if (created.truncatedFrom) {
@@ -613,6 +621,17 @@ export class GoalScheduler {
             reason: chunk.reason,
           });
           break;
+
+        case "reflection": {
+          console.log(`[plan] reflection: ${chunk.result.summary}`);
+          const stored = await this.persistReflectionMemories(chunk.result.memoryCandidates, goalId);
+          memoriesFormed += stored;
+          void this.logGoalEvent(EventType.ReflectionCompleted, goalId, {
+            summary: chunk.result.summary,
+            memories_stored: stored,
+          });
+          break;
+        }
       }
     }
 
@@ -669,6 +688,69 @@ export class GoalScheduler {
   private async consumeAndDiscard(stream: AsyncGenerator<StreamChunk>): Promise<void> {
     for await (const _chunk of stream) {
       // drain
+    }
+  }
+
+  /**
+   * Persist memory candidates from plan reflection into the memory graph.
+   * Returns the number of memories successfully formed.
+   */
+  private async persistReflectionMemories(candidates: string[], _goalId: string): Promise<number> {
+    let stored = 0;
+    for (const text of candidates) {
+      try {
+        const embedding = await embedText(`[goal_learning] ${text}`);
+        await this.runtime.memory.formMemory(
+          {
+            content: `[goal_learning] ${text}`,
+            confidence: 0.7,
+            sensitivity: SensitivityLevel.None,
+          },
+          embedding,
+        );
+        stored++;
+      } catch {
+        // Memory formation is best-effort
+      }
+    }
+    if (stored > 0) {
+      console.log(`[plan] stored ${stored} learning memor${stored === 1 ? "y" : "ies"}`);
+    }
+    return stored;
+  }
+
+  /**
+   * Form a memory from a completed goal outcome so the agent learns from its work.
+   */
+  private async formGoalOutcomeMemory(goal: Goal, result: GoalStreamResult): Promise<void> {
+    if (!result.responseText) return;
+    try {
+      const summary = result.responseText.slice(0, 200);
+      const content = `[goal_outcome] Goal "${goal.prompt.slice(0, 60)}" completed: ${summary}`;
+      const embedding = await embedText(content);
+      await this.runtime.memory.formMemory(
+        {
+          content,
+          confidence: 0.6,
+          sensitivity: SensitivityLevel.None,
+        },
+        embedding,
+      );
+    } catch {
+      // Memory formation is best-effort
+    }
+  }
+
+  /**
+   * Retrieve memories relevant to a goal prompt for informing plan decomposition.
+   */
+  private async retrieveRelevantMemories(goalPrompt: string): Promise<string[]> {
+    try {
+      const goalEmbedding = await embedText(goalPrompt);
+      const nodes = await this.runtime.memory.retrieve(goalEmbedding, { limit: 5 });
+      return nodes.map((n) => n.content);
+    } catch {
+      return [];
     }
   }
 

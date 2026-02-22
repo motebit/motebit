@@ -822,7 +822,7 @@ export class MotebitRuntime {
    * The agent reviews its performance, learns insights, and stores them as memories.
    * Returns the reflection result for display (e.g. in the CLI).
    */
-  async reflect(): Promise<ReflectionResult> {
+  async reflect(goals?: Array<{ description: string; status: string }>): Promise<ReflectionResult> {
     if (!this.provider) throw new Error("No AI provider configured");
 
     const summary = this.conversationId && this.conversationStore
@@ -837,13 +837,16 @@ export class MotebitRuntime {
     const result = await aiReflect(
       summary,
       this.conversationHistory,
-      [], // Goals are managed at the CLI/daemon level, not here
+      goals ?? [],
       memories,
       this.provider,
     );
 
-    // Store insights as memories
+    // Store insights and plan adjustments as memories
     await this.storeReflectionInsights(result);
+
+    // Audit: log that reflection occurred
+    void this.logReflectionCompleted(result);
 
     return result;
   }
@@ -877,6 +880,44 @@ export class MotebitRuntime {
       } catch {
         // Memory formation is best-effort during reflection
       }
+    }
+
+    // Store plan adjustments as memories — behavioral learnings for future planning
+    for (const adjustment of result.planAdjustments) {
+      try {
+        const embedding = await embedText(`[plan_adjustment] ${adjustment}`);
+        await this.memory.formMemory(
+          {
+            content: `[plan_adjustment] ${adjustment}`,
+            confidence: 0.6,
+            sensitivity: SensitivityLevel.None,
+          },
+          embedding,
+        );
+      } catch {
+        // Memory formation is best-effort during reflection
+      }
+    }
+  }
+
+  private async logReflectionCompleted(result: ReflectionResult): Promise<void> {
+    try {
+      const clock = await this.events.getLatestClock(this.motebitId);
+      await this.events.append({
+        event_id: crypto.randomUUID(),
+        motebit_id: this.motebitId,
+        timestamp: Date.now(),
+        event_type: EventType.ReflectionCompleted,
+        payload: {
+          insights_count: result.insights.length,
+          adjustments_count: result.planAdjustments.length,
+          self_assessment_preview: result.selfAssessment.slice(0, 100),
+        },
+        version_clock: clock + 1,
+        tombstoned: false,
+      });
+    } catch {
+      // Audit logging is best-effort
     }
   }
 

@@ -52,6 +52,7 @@ export enum EventType {
   PlanCompleted = "plan_completed",
   PlanFailed = "plan_failed",
   HousekeepingRun = "housekeeping_run",
+  ReflectionCompleted = "reflection_completed",
 }
 
 export enum RelationType {
