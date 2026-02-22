@@ -68,6 +68,10 @@ export interface McpServerConfig {
   env?: Record<string, string>;
   /** When false (default), all tools from this server require user approval. */
   trusted?: boolean;
+  /** Origin of this config entry (e.g. "Claude Desktop", "Claude Code", "VS Code"). */
+  source?: string;
+  /** Set to true after user confirms spawning a command-based discovered server. */
+  spawnApproved?: boolean;
 }
 
 // === Browser-safe Tool Registry ===

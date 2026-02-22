@@ -13,6 +13,13 @@ import { initVoice } from "./ui/voice";
 import { initSettings } from "./ui/settings";
 import { initTheme } from "./ui/theme";
 import { initKeyboard } from "./ui/keyboard";
+import {
+  parseClaudeDesktopConfig,
+  parseClaudeCodeConfig,
+  parseVSCodeMcpConfig,
+  mergeDiscoveredServers,
+  type DiscoveryResult,
+} from "./mcp-discovery";
 
 // === Core Objects ===
 
@@ -277,6 +284,141 @@ async function tryConnectMcpServer(
   }
 }
 
+/** Transports that spawn a local process — require user confirmation. */
+function isSpawnTransport(transport: string): boolean {
+  return transport === "stdio" || transport === "command";
+}
+
+/** Transports that connect to an already-running server — safe to auto-connect. */
+function isRemoteTransport(transport: string): boolean {
+  return transport === "http";
+}
+
+/**
+ * Persist the current MCP server config to disk.
+ */
+async function persistMcpConfig(
+  invoke: import("./tauri-storage.js").InvokeFn,
+  servers: McpServerConfig[],
+): Promise<void> {
+  try {
+    const raw = await invoke<string>("read_config");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    parsed.mcp_servers = servers;
+    await invoke("write_config", { json: JSON.stringify(parsed) });
+  } catch {
+    // Config write failed — servers are still in memory for this session
+  }
+}
+
+/**
+ * Discover MCP servers from external tools (Claude Desktop, Claude Code, VS Code)
+ * and connect any newly found servers.
+ *
+ * Transport-aware connect policy:
+ * - Remote servers (http): auto-connect (no process spawn, low risk)
+ * - Spawn servers (stdio): persist config but require one-time user confirmation
+ *   before spawning processes. Confirmation is persisted via `spawnApproved`
+ *   so it only prompts once.
+ */
+async function discoverAndConnectMcpServers(
+  invoke: import("./tauri-storage.js").InvokeFn,
+): Promise<void> {
+  let home: string;
+  try {
+    home = await invoke<string>("get_home_dir");
+    if (!home) return;
+  } catch {
+    return;
+  }
+
+  const sources: Array<{
+    name: string;
+    path: string;
+    parser: (content: string) => McpServerConfig[];
+  }> = [
+    { name: "Claude Desktop", path: `${home}/Library/Application Support/Claude/claude_desktop_config.json`, parser: parseClaudeDesktopConfig },
+    { name: "Claude Code", path: `${home}/.claude.json`, parser: parseClaudeCodeConfig },
+    { name: "VS Code", path: `${home}/Library/Application Support/Code/User/settings.json`, parser: parseVSCodeMcpConfig },
+  ];
+
+  const discovered: DiscoveryResult[] = [];
+
+  for (const src of sources) {
+    try {
+      const content = await invoke<string>("read_file_tool", { path: src.path });
+      const servers = src.parser(content);
+      if (servers.length > 0) {
+        discovered.push({ servers, source: src.name });
+      }
+    } catch {
+      // File not found or unreadable — skip silently
+    }
+  }
+
+  if (discovered.length === 0) return;
+
+  const { merged, newServers, collisions } = mergeDiscoveredServers(
+    settings.getMcpServersConfig(),
+    discovered,
+  );
+
+  // Log name collisions (kept existing config, but worth noting)
+  for (const c of collisions) {
+    console.warn(`MCP discovery: name collision for "${c.name}" — kept existing (${c.existingCommand}), skipped ${c.discoveredSource} (${c.discoveredCommand})`);
+  }
+
+  if (newServers.length === 0) return;
+
+  // Persist the merged config (both types get saved so they appear in Settings)
+  settings.setMcpServersConfig(merged);
+  await persistMcpConfig(invoke, merged);
+
+  // Split by transport type — unknown transports are not auto-connected
+  const remoteServers = newServers.filter(s => isRemoteTransport(s.transport));
+  const spawnServers = newServers.filter(s => isSpawnTransport(s.transport) && !s.spawnApproved);
+  const preApproved = newServers.filter(s => isSpawnTransport(s.transport) && s.spawnApproved);
+  const unknownTransport = newServers.filter(s => !isRemoteTransport(s.transport) && !isSpawnTransport(s.transport));
+  for (const s of unknownTransport) {
+    console.warn(`MCP discovery: unknown transport "${s.transport}" for "${s.name}" — not auto-connecting`);
+  }
+
+  // Auto-connect remote servers (no process spawn)
+  for (const mcpConfig of [...remoteServers, ...preApproved]) {
+    void tryConnectMcpServer(mcpConfig, invoke);
+  }
+  if (remoteServers.length > 0) {
+    showToast(`Connected ${remoteServers.length} discovered MCP server${remoteServers.length !== 1 ? "s" : ""}`);
+  }
+
+  // Spawn-transport servers require one-time user confirmation
+  if (spawnServers.length > 0) {
+    const names = spawnServers.map(s => s.name).join(", ");
+    addActionMessage(
+      `Discovered ${spawnServers.length} MCP server${spawnServers.length !== 1 ? "s" : ""}: ${names}`,
+      [
+        {
+          label: "Connect",
+          primary: true,
+          onClick: () => {
+            for (const mcpConfig of spawnServers) {
+              mcpConfig.spawnApproved = true;
+              void tryConnectMcpServer(mcpConfig, invoke);
+            }
+            // Persist spawnApproved so we don't ask again
+            void persistMcpConfig(invoke, settings.getMcpServersConfig());
+            showToast(`Connecting ${spawnServers.length} MCP server${spawnServers.length !== 1 ? "s" : ""}`);
+          },
+        },
+        {
+          label: "Dismiss",
+          onClick: () => { /* Servers remain in config for later manual connect */ },
+        },
+      ],
+    );
+  }
+}
+
 /**
  * Called after AI successfully initializes to set up goal scheduler,
  * connect MCP servers, start sync, and load conversation history.
@@ -351,6 +493,9 @@ function onAIReady(config: DesktopAIConfig): void {
     for (const mcpConfig of settings.getMcpServersConfig()) {
       void tryConnectMcpServer(mcpConfig, invoke);
     }
+
+    // Discover MCP servers from external tools (runs after user-configured servers)
+    void discoverAndConnectMcpServers(invoke);
   }
 
   // Sync status indicator
@@ -574,6 +719,9 @@ async function bootstrap(): Promise<void> {
       for (const mcpConfig of settings.getMcpServersConfig()) {
         void tryConnectMcpServer(mcpConfig, invoke);
       }
+
+      // Discover MCP servers from external tools (runs after user-configured servers)
+      void discoverAndConnectMcpServers(invoke);
     }
 
     // Sync status indicator

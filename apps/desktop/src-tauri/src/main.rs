@@ -318,6 +318,14 @@ fn keyring_delete(key: String) -> Result<(), String> {
     }
 }
 
+// === Path Helpers ===
+
+#[tauri::command]
+fn get_home_dir() -> Result<String, String> {
+    std::env::var("HOME")
+        .map_err(|_| "Could not determine home directory".to_string())
+}
+
 // === Privileged Tool Commands ===
 
 #[tauri::command]
@@ -738,6 +746,7 @@ fn main() {
             keyring_get,
             keyring_set,
             keyring_delete,
+            get_home_dir,
             read_file_tool,
             write_file_tool,
             shell_exec_tool,

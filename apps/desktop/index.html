@@ -764,6 +764,7 @@
       color: var(--text-muted);
     }
     .mcp-badge.trusted { background: var(--accent-bg-strong); color: var(--accent-text-light); }
+    .mcp-badge.discovered { background: rgba(139, 92, 246, 0.15); color: rgba(167, 139, 250, 0.9); }
     .mcp-status-dot {
       width: 6px;
       height: 6px;
@@ -780,6 +781,16 @@
       padding: 2px 4px;
     }
     .mcp-remove-btn:hover { color: #f87171; }
+    .mcp-connect-btn {
+      background: none;
+      border: 1px solid var(--text-disabled);
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+    .mcp-connect-btn:hover { border-color: var(--text-muted); color: var(--text-primary); }
     .mcp-add-btn {
       width: 100%;
       padding: 8px 0;

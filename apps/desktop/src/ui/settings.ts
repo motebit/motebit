@@ -313,6 +313,14 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       transportBadge.textContent = config.transport;
       row.appendChild(transportBadge);
 
+      if (config.source) {
+        const discoveredBadge = document.createElement("span");
+        discoveredBadge.className = "mcp-badge discovered";
+        discoveredBadge.textContent = "discovered";
+        discoveredBadge.title = config.source;
+        row.appendChild(discoveredBadge);
+      }
+
       if (config.trusted) {
         const trustedBadge = document.createElement("span");
         trustedBadge.className = "mcp-badge trusted";
@@ -323,6 +331,31 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       const statusDot = document.createElement("span");
       statusDot.className = "mcp-status-dot" + (status?.connected ? " connected" : "");
       row.appendChild(statusDot);
+
+      // Connect button for disconnected servers
+      if (!status?.connected) {
+        const connectBtn = document.createElement("button");
+        connectBtn.className = "mcp-connect-btn";
+        connectBtn.textContent = "Connect";
+        connectBtn.addEventListener("click", () => {
+          const appConfig = ctx.getConfig();
+          if (!appConfig?.invoke) return;
+          const inv = appConfig.invoke;
+          config.spawnApproved = true;
+          // Persist spawnApproved so we don't re-prompt after restart
+          void inv<string>("read_config").then(raw => {
+            const parsed = JSON.parse(raw) as Record<string, unknown>;
+            parsed.mcp_servers = mcpServersConfig;
+            return inv("write_config", { json: JSON.stringify(parsed) });
+          }).catch(() => { /* non-fatal */ });
+          void ctx.app.connectMcpServerViaTauri(config, inv).then(() => {
+            renderMcpServerList();
+          }).catch(() => {
+            renderMcpServerList();
+          });
+        });
+        row.appendChild(connectBtn);
+      }
 
       const removeBtn = document.createElement("button");
       removeBtn.className = "mcp-remove-btn";
