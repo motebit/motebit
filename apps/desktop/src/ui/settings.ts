@@ -1,4 +1,5 @@
 import type { DesktopAIConfig, InvokeFn, McpServerConfig, PolicyConfig } from "../index";
+import type { NameCollision } from "../mcp-discovery";
 import type { DesktopContext } from "../types";
 import { addMessage } from "./chat";
 import type { ColorPickerAPI } from "./color-picker";
@@ -53,6 +54,7 @@ let hasApiKeyInKeyring = false;
 let hasWhisperKeyInKeyring = false;
 let selectedApprovalPreset = "balanced";
 let mcpServersConfig: McpServerConfig[] = [];
+let discoveryCollisions: NameCollision[] = [];
 let pinMode: "setup" | "verify" | "reset" = "verify";
 
 interface PendingSave {
@@ -105,6 +107,7 @@ export interface SettingsAPI {
   setSelectedApprovalPreset(v: string): void;
   getMcpServersConfig(): McpServerConfig[];
   setMcpServersConfig(v: McpServerConfig[]): void;
+  setDiscoveryCollisions(v: NameCollision[]): void;
   isPinDialogOpen(): boolean;
   closePinDialog(): void;
 }
@@ -326,6 +329,15 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         trustedBadge.className = "mcp-badge trusted";
         trustedBadge.textContent = "trusted";
         row.appendChild(trustedBadge);
+      }
+
+      const collision = discoveryCollisions.find(c => c.name === config.name);
+      if (collision) {
+        const warnBadge = document.createElement("span");
+        warnBadge.className = "mcp-badge collision";
+        warnBadge.textContent = "collision";
+        warnBadge.title = `Discovered different config from ${collision.discoveredSource} (${collision.discoveredCommand})`;
+        row.appendChild(warnBadge);
       }
 
       const statusDot = document.createElement("span");
@@ -754,6 +766,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     setSelectedApprovalPreset(v: string) { selectedApprovalPreset = v; },
     getMcpServersConfig() { return mcpServersConfig; },
     setMcpServersConfig(v: McpServerConfig[]) { mcpServersConfig = v; },
+    setDiscoveryCollisions(v: NameCollision[]) { discoveryCollisions = v; },
     isPinDialogOpen() { return pinBackdrop.classList.contains("open"); },
     closePinDialog,
   };

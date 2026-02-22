@@ -324,35 +324,31 @@ async function persistMcpConfig(
 async function discoverAndConnectMcpServers(
   invoke: import("./tauri-storage.js").InvokeFn,
 ): Promise<void> {
-  let home: string;
+  // Single allowlisted IPC — Rust reads only known config paths
+  let configSources: Array<{ name: string; path: string; content: string | null }>;
   try {
-    home = await invoke<string>("get_home_dir");
-    if (!home) return;
+    configSources = await invoke<Array<{ name: string; path: string; content: string | null }>>(
+      "discover_mcp_configs",
+    );
   } catch {
     return;
   }
 
-  const sources: Array<{
-    name: string;
-    path: string;
-    parser: (content: string) => McpServerConfig[];
-  }> = [
-    { name: "Claude Desktop", path: `${home}/Library/Application Support/Claude/claude_desktop_config.json`, parser: parseClaudeDesktopConfig },
-    { name: "Claude Code", path: `${home}/.claude.json`, parser: parseClaudeCodeConfig },
-    { name: "VS Code", path: `${home}/Library/Application Support/Code/User/settings.json`, parser: parseVSCodeMcpConfig },
-  ];
+  const parsers: Record<string, (content: string) => McpServerConfig[]> = {
+    "Claude Desktop": parseClaudeDesktopConfig,
+    "Claude Code": parseClaudeCodeConfig,
+    "VS Code": parseVSCodeMcpConfig,
+  };
 
   const discovered: DiscoveryResult[] = [];
 
-  for (const src of sources) {
-    try {
-      const content = await invoke<string>("read_file_tool", { path: src.path });
-      const servers = src.parser(content);
-      if (servers.length > 0) {
-        discovered.push({ servers, source: src.name });
-      }
-    } catch {
-      // File not found or unreadable — skip silently
+  for (const src of configSources) {
+    if (!src.content) continue;
+    const parser = parsers[src.name];
+    if (!parser) continue;
+    const servers = parser(src.content);
+    if (servers.length > 0) {
+      discovered.push({ servers, source: src.name });
     }
   }
 
@@ -363,7 +359,8 @@ async function discoverAndConnectMcpServers(
     discovered,
   );
 
-  // Log name collisions (kept existing config, but worth noting)
+  // Surface collisions in Settings UI (always set, even if empty, to clear stale state)
+  settings.setDiscoveryCollisions(collisions);
   for (const c of collisions) {
     console.warn(`MCP discovery: name collision for "${c.name}" — kept existing (${c.existingCommand}), skipped ${c.discoveredSource} (${c.discoveredCommand})`);
   }

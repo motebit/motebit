@@ -318,12 +318,37 @@ fn keyring_delete(key: String) -> Result<(), String> {
     }
 }
 
-// === Path Helpers ===
+// === MCP Discovery ===
+
+/// Read MCP config files from known, allowlisted locations only.
+/// Returns contents of each file (null if not found/unreadable).
+#[derive(serde::Serialize)]
+struct McpConfigSource {
+    name: String,
+    path: String,
+    content: Option<String>,
+}
 
 #[tauri::command]
-fn get_home_dir() -> Result<String, String> {
-    std::env::var("HOME")
-        .map_err(|_| "Could not determine home directory".to_string())
+fn discover_mcp_configs() -> Vec<McpConfigSource> {
+    let home = match std::env::var("HOME") {
+        Ok(h) => h,
+        Err(_) => return vec![],
+    };
+
+    let sources = [
+        ("Claude Desktop", format!("{}/Library/Application Support/Claude/claude_desktop_config.json", home)),
+        ("Claude Code", format!("{}/.claude.json", home)),
+        ("VS Code", format!("{}/Library/Application Support/Code/User/settings.json", home)),
+    ];
+
+    sources
+        .into_iter()
+        .map(|(name, path)| {
+            let content = std::fs::read_to_string(&path).ok();
+            McpConfigSource { name: name.to_string(), path, content }
+        })
+        .collect()
 }
 
 // === Privileged Tool Commands ===
@@ -746,7 +771,7 @@ fn main() {
             keyring_get,
             keyring_set,
             keyring_delete,
-            get_home_dir,
+            discover_mcp_configs,
             read_file_tool,
             write_file_tool,
             shell_exec_tool,
