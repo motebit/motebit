@@ -12,73 +12,94 @@ export function HeroCreature() {
 
     let disposed = false;
     let animId: number | undefined;
+    let themeObserver: MutationObserver | undefined;
+    let resizeObserver: ResizeObserver | undefined;
+    let adapter: { render: (opts: unknown) => void; resize: (w: number, h: number) => void; dispose: () => void; setLightEnvironment: () => void; setDarkEnvironment: () => void } | undefined;
 
     (async () => {
-      const { ThreeJSAdapter } = await import("@motebit/render-engine");
-      if (disposed) return;
-
-      const adapter = new ThreeJSAdapter();
-      await adapter.init(canvas);
-      adapter.setBackground(null);
-      adapter.setLightEnvironment();
-
-      const observer = new ResizeObserver((entries) => {
-        for (const entry of entries) {
-          const { width, height } = entry.contentRect;
-          if (width > 0 && height > 0) {
-            adapter.resize(width * devicePixelRatio, height * devicePixelRatio);
-          }
-        }
-      });
-      observer.observe(canvas);
-
-      setLoaded(true);
-
-      let lastTime = performance.now();
-      const startTime = lastTime;
-
-      function loop() {
+      try {
+        const { ThreeJSAdapter } = await import("@motebit/render-engine");
         if (disposed) return;
-        const now = performance.now();
-        const delta = (now - lastTime) / 1000;
-        const time = (now - startTime) / 1000;
-        lastTime = now;
 
-        adapter.render({
-          cues: {
-            hover_distance: 0.4,
-            drift_amplitude: 0.015,
-            glow_intensity: 0.35,
-            eye_dilation: 0.35,
-            smile_curvature: 0.3,
-          },
-          delta_time: delta,
-          time,
+        const a = new ThreeJSAdapter();
+        await a.init(canvas);
+        adapter = a as typeof adapter;
+
+        // Match environment to current theme — same as desktop app
+        const applyTheme = () => {
+          const isDark = document.documentElement.classList.contains("dark");
+          if (isDark) {
+            a.setDarkEnvironment();
+          } else {
+            a.setLightEnvironment();
+          }
+        };
+        applyTheme();
+
+        // Watch for theme changes
+        themeObserver = new MutationObserver(applyTheme);
+        themeObserver.observe(document.documentElement, {
+          attributes: true,
+          attributeFilter: ["class"],
         });
 
-        animId = requestAnimationFrame(loop);
-      }
-      animId = requestAnimationFrame(loop);
+        resizeObserver = new ResizeObserver((entries) => {
+          for (const entry of entries) {
+            const { width, height } = entry.contentRect;
+            if (width > 0 && height > 0) {
+              a.resize(width * devicePixelRatio, height * devicePixelRatio);
+            }
+          }
+        });
+        resizeObserver.observe(canvas);
 
-      (canvas as unknown as Record<string, unknown>).__creatureCleanup = () => {
-        observer.disconnect();
-        adapter.dispose();
-      };
+        setLoaded(true);
+
+        let lastTime = performance.now();
+        const startTime = lastTime;
+
+        function loop() {
+          if (disposed) return;
+          const now = performance.now();
+          const delta = (now - lastTime) / 1000;
+          const time = (now - startTime) / 1000;
+          lastTime = now;
+
+          // Canonical calm cues — identical to desktop app
+          a.render({
+            cues: {
+              hover_distance: 0.4,
+              drift_amplitude: 0.02,
+              glow_intensity: 0.3,
+              eye_dilation: 0.3,
+              smile_curvature: 0.04,
+            },
+            delta_time: delta,
+            time,
+          });
+
+          animId = requestAnimationFrame(loop);
+        }
+        animId = requestAnimationFrame(loop);
+      } catch {
+        // WebGL unavailable or chunk load failure — canvas stays hidden
+      }
     })();
 
     return () => {
       disposed = true;
       if (animId !== undefined) cancelAnimationFrame(animId);
-      const cleanup = (canvas as unknown as Record<string, unknown>).__creatureCleanup as (() => void) | undefined;
-      if (cleanup) cleanup();
+      themeObserver?.disconnect();
+      resizeObserver?.disconnect();
+      adapter?.dispose();
     };
   }, []);
 
   return (
-    <div className="relative mx-auto w-[320px] h-[320px] md:w-[480px] md:h-[480px]">
+    <div className="w-full h-full">
       <canvas
         ref={canvasRef}
-        className="relative w-full h-full"
+        className="w-full h-full"
         style={{
           opacity: loaded ? 1 : 0,
           transition: "opacity 1.2s ease-out",

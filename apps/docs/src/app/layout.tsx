@@ -11,13 +11,9 @@ export const metadata: Metadata = {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export default function RootLayout({ children }: { children: any }) {
   return (
-    <html lang="en" className="dark" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning>
       <body>
-        <RootProvider
-          theme={{
-            enabled: false,
-          }}
-        >
+        <RootProvider>
           {children}
         </RootProvider>
       </body>

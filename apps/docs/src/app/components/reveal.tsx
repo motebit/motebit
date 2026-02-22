@@ -6,11 +6,9 @@ import type { ReactNode } from "react";
 
 export function Reveal({
   children,
-  className = "",
   hold = false,
 }: {
   children: ReactNode;
-  className?: string;
   /** If true, element fades in but never fades out (for final sections). */
   hold?: boolean;
 }) {
@@ -33,11 +31,7 @@ export function Reveal({
   );
 
   return (
-    <motion.div
-      ref={ref}
-      style={{ opacity, y }}
-      className={className}
-    >
+    <motion.div ref={ref} style={{ opacity, y }}>
       {/* eslint-disable-next-line @typescript-eslint/no-explicit-any -- framer-motion types incompatible with React 19 ReactNode */}
       {children as any}
     </motion.div>
