@@ -27,7 +27,7 @@ import { InMemoryAuditLog } from "@motebit/privacy-layer";
 import { createSignedToken } from "@motebit/crypto";
 import { generate as generateIdentityFile, parse as parseIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
 import { PairingClient, ConversationSyncEngine, HttpConversationSyncAdapter, HttpEventStoreAdapter } from "@motebit/sync-engine";
-import type { PairingSession, PairingStatus, ConversationSyncStoreAdapter } from "@motebit/sync-engine";
+import type { PairingSession, PairingStatus, ConversationSyncStoreAdapter, SyncStatus } from "@motebit/sync-engine";
 import type { SyncConversation, SyncConversationMessage } from "@motebit/sdk";
 import { PlanEngine, InMemoryPlanStore } from "@motebit/planner";
 import type { PlanChunk, PlanStoreAdapter } from "@motebit/planner";
@@ -40,6 +40,19 @@ export type { InvokeFn } from "./tauri-storage.js";
 export type { TurnResult, StreamChunk, OperatorModeResult, InteriorColor, McpServerConfig, PolicyConfig, MemoryGovernanceConfig };
 export type { PairingSession, PairingStatus };
 export type { MemoryNode };
+
+// === Sync Status ===
+
+export type SyncIndicatorStatus = "disconnected" | "connecting" | "connected" | "syncing" | "conflict" | "error";
+
+export interface SyncStatusEvent {
+  status: SyncIndicatorStatus;
+  lastSyncAt: number | null;
+  eventsPushed: number;
+  eventsPulled: number;
+  conflictCount: number;
+  error: string | null;
+}
 
 export interface GoalCompleteEvent {
   goalId: string;
@@ -239,6 +252,16 @@ export class DesktopApp {
   private planStoreRef: TauriPlanStore | PlanStoreAdapter | null = null;
   private conversationStoreRef: TauriConversationStore | null = null;
   private _autoTitlePending = false;
+  private _syncStatusCallback: ((event: SyncStatusEvent) => void) | null = null;
+  private _lastSyncStatus: SyncStatusEvent = {
+    status: "disconnected",
+    lastSyncAt: null,
+    eventsPushed: 0,
+    eventsPulled: 0,
+    conflictCount: 0,
+    error: null,
+  };
+  private _syncUnsubscribe: (() => void) | null = null;
 
   constructor() {
     this.renderer = new ThreeJSAdapter();
@@ -914,6 +937,24 @@ export class DesktopApp {
   /** Subscribe to plan progress events (step started/completed/failed during goal execution). */
   onGoalPlanProgress(callback: (event: GoalPlanProgressEvent) => void): void {
     this._goalPlanProgressCallback = callback;
+  }
+
+  /** Subscribe to sync status changes (for UI indicator). */
+  onSyncStatus(callback: (event: SyncStatusEvent) => void): void {
+    this._syncStatusCallback = callback;
+    // Immediately emit current status so the UI can initialize
+    callback(this._lastSyncStatus);
+  }
+
+  /** Get the current sync status snapshot. */
+  get syncStatus(): SyncStatusEvent {
+    return { ...this._lastSyncStatus };
+  }
+
+  /** Emit a sync status event and update internal state. */
+  private emitSyncStatus(partial: Partial<SyncStatusEvent>): void {
+    this._lastSyncStatus = { ...this._lastSyncStatus, ...partial };
+    this._syncStatusCallback?.(this._lastSyncStatus);
   }
 
   /**
@@ -1741,6 +1782,8 @@ export class DesktopApp {
       return { conversations_pushed: 0, conversations_pulled: 0, messages_pushed: 0, messages_pulled: 0 };
     }
 
+    this.emitSyncStatus({ status: "syncing" });
+
     const storeAdapter = new TauriConversationSyncStoreAdapter(this.conversationStoreRef, this.motebitId);
     // Pre-fetch local data before sync (async Tauri -> sync adapter bridge)
     await storeAdapter.prefetch(0);
@@ -1752,7 +1795,20 @@ export class DesktopApp {
       authToken,
     }));
 
-    return syncEngine.sync();
+    try {
+      const result = await syncEngine.sync();
+      this.emitSyncStatus({
+        status: "connected",
+        lastSyncAt: Date.now(),
+        eventsPushed: this._lastSyncStatus.eventsPushed + result.conversations_pushed + result.messages_pushed,
+        eventsPulled: this._lastSyncStatus.eventsPulled + result.conversations_pulled + result.messages_pulled,
+      });
+      return result;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.emitSyncStatus({ status: "error", error: msg });
+      throw err;
+    }
   }
 
   /**
@@ -1762,11 +1818,16 @@ export class DesktopApp {
   async startSync(invoke: InvokeFn, syncUrl: string, authToken?: string): Promise<void> {
     if (!this.runtime) return;
 
+    this.emitSyncStatus({ status: "connecting", error: null });
+
     // Get or create a signed auth token
     let token = authToken;
     if (!token) {
       const keypair = await this.getDeviceKeypair(invoke);
-      if (!keypair) return;
+      if (!keypair) {
+        this.emitSyncStatus({ status: "error", error: "No device keypair available" });
+        return;
+      }
       token = await this.createSyncToken(keypair.privateKey);
     }
 
@@ -1777,17 +1838,49 @@ export class DesktopApp {
       authToken: token,
     });
     this.runtime.connectSync(remoteStore);
+
+    // Subscribe to SyncEngine status changes
+    if (this._syncUnsubscribe) this._syncUnsubscribe();
+    this._syncUnsubscribe = this.runtime.sync.onStatusChange((engineStatus: SyncStatus) => {
+      if (engineStatus === "syncing") {
+        this.emitSyncStatus({ status: "syncing" });
+      } else if (engineStatus === "idle") {
+        const conflicts = this.runtime?.sync.getConflicts() ?? [];
+        this.emitSyncStatus({
+          status: conflicts.length > 0 ? "conflict" : "connected",
+          lastSyncAt: Date.now(),
+          conflictCount: conflicts.length,
+        });
+      } else if (engineStatus === "error") {
+        this.emitSyncStatus({ status: "error", error: "Sync cycle failed" });
+      } else if (engineStatus === "offline") {
+        this.emitSyncStatus({ status: "disconnected" });
+      }
+    });
+
     this.runtime.startSync();
+    this.emitSyncStatus({ status: "connected" });
 
     // One-shot conversation sync
-    void this.syncConversations(syncUrl, token).catch(() => {});
+    void this.syncConversations(syncUrl, token).then((result) => {
+      this.emitSyncStatus({
+        lastSyncAt: Date.now(),
+        eventsPushed: this._lastSyncStatus.eventsPushed + result.conversations_pushed + result.messages_pushed,
+        eventsPulled: this._lastSyncStatus.eventsPulled + result.conversations_pulled + result.messages_pulled,
+      });
+    }).catch(() => {});
   }
 
   /**
    * Stop background event sync.
    */
   stopSync(): void {
+    if (this._syncUnsubscribe) {
+      this._syncUnsubscribe();
+      this._syncUnsubscribe = null;
+    }
     this.runtime?.sync.stop();
+    this.emitSyncStatus({ status: "disconnected" });
   }
 }
 

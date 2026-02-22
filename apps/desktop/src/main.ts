@@ -1,5 +1,6 @@
-import { DesktopApp, COLOR_PRESETS, type DesktopAIConfig, type McpServerConfig, type GoalCompleteEvent, type GoalApprovalEvent, type GoalPlanProgressEvent } from "./index";
+import { DesktopApp, COLOR_PRESETS, type DesktopAIConfig, type McpServerConfig, type GoalCompleteEvent, type GoalApprovalEvent, type GoalPlanProgressEvent, type SyncStatusEvent, type SyncIndicatorStatus } from "./index";
 import type { DesktopContext } from "./types";
+import { formatTimeAgo } from "./types";
 import { loadDesktopConfig } from "./ui/config";
 import { addMessage, showToast, initChat, showGoalApprovalCard } from "./ui/chat";
 import { deriveInteriorColor } from "./ui/color-picker";
@@ -325,6 +326,9 @@ async function bootstrap(): Promise<void> {
       }
     }
 
+    // Sync status indicator
+    initSyncStatusIndicator(ctx);
+
     // Start full sync (event-level background polling + conversation sync)
     if (config.syncUrl && config.isTauri && config.invoke) {
       void app.startSync(config.invoke, config.syncUrl, config.syncMasterToken).catch(() => {
@@ -355,6 +359,206 @@ async function bootstrap(): Promise<void> {
   micBtn.style.display = "flex";
   micBtn.addEventListener("click", () => voice.toggleVoice());
   voice.updateVoiceGlowColor();
+}
+
+// === Sync Status Indicator ===
+
+function initSyncStatusIndicator(ctx: DesktopContext): void {
+  const indicator = document.getElementById("sync-status") as HTMLDivElement;
+  const tooltip = document.getElementById("sync-tooltip") as HTMLDivElement;
+  const popup = document.getElementById("sync-popup") as HTMLDivElement;
+  const popupStatus = document.getElementById("sync-popup-status") as HTMLSpanElement;
+  const popupLastSync = document.getElementById("sync-popup-last-sync") as HTMLSpanElement;
+  const popupPushed = document.getElementById("sync-popup-pushed") as HTMLSpanElement;
+  const popupPulled = document.getElementById("sync-popup-pulled") as HTMLSpanElement;
+  const popupAction = document.getElementById("sync-popup-action") as HTMLButtonElement;
+
+  const arrowsEl = indicator.querySelector(".sync-arrows") as SVGElement;
+  const slashEl = indicator.querySelector(".sync-slash") as SVGElement;
+  const checkEl = indicator.querySelector(".sync-check") as SVGElement;
+  const xEl = indicator.querySelector(".sync-x") as SVGElement;
+  const warnEl = indicator.querySelector(".sync-warn") as SVGElement;
+
+  let currentStatus: SyncIndicatorStatus = "disconnected";
+  let lastEvent: SyncStatusEvent | null = null;
+  let popupOpen = false;
+  let tooltipTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function hideAllOverlays(): void {
+    arrowsEl.style.display = "none";
+    slashEl.style.display = "none";
+    checkEl.style.display = "none";
+    xEl.style.display = "none";
+    warnEl.style.display = "none";
+  }
+
+  function updateIndicator(event: SyncStatusEvent): void {
+    lastEvent = event;
+    currentStatus = event.status;
+
+    // Remove all state classes
+    indicator.className = event.status;
+
+    // Show/hide SVG overlays
+    hideAllOverlays();
+    switch (event.status) {
+      case "disconnected":
+        slashEl.style.display = "";
+        indicator.title = "Sync: Not connected";
+        break;
+      case "connecting":
+        indicator.title = "Sync: Connecting...";
+        break;
+      case "connected":
+        checkEl.style.display = "";
+        indicator.title = event.lastSyncAt
+          ? `Sync: Connected (last sync ${formatTimeAgo(event.lastSyncAt)})`
+          : "Sync: Connected";
+        break;
+      case "syncing":
+        arrowsEl.style.display = "";
+        indicator.title = "Sync: Syncing...";
+        break;
+      case "conflict":
+        warnEl.style.display = "";
+        indicator.title = `Sync: ${event.conflictCount} conflict${event.conflictCount !== 1 ? "s" : ""} detected`;
+        break;
+      case "error":
+        xEl.style.display = "";
+        indicator.title = `Sync: Error${event.error ? " — " + event.error : ""}`;
+        break;
+    }
+
+    // Update popup if it's open
+    if (popupOpen) {
+      updatePopup();
+    }
+  }
+
+  function updatePopup(): void {
+    if (!lastEvent) return;
+
+    const statusLabels: Record<SyncIndicatorStatus, string> = {
+      disconnected: "Not connected",
+      connecting: "Connecting...",
+      connected: "Connected",
+      syncing: "Syncing...",
+      conflict: "Conflicts detected",
+      error: "Error",
+    };
+    popupStatus.textContent = statusLabels[lastEvent.status];
+    popupLastSync.textContent = lastEvent.lastSyncAt ? formatTimeAgo(lastEvent.lastSyncAt) : "Never";
+    popupPushed.textContent = String(lastEvent.eventsPushed);
+    popupPulled.textContent = String(lastEvent.eventsPulled);
+
+    // Update action button text
+    if (lastEvent.status === "error" || lastEvent.status === "disconnected") {
+      popupAction.textContent = "Reconnect";
+    } else if (lastEvent.status === "conflict") {
+      popupAction.textContent = "View conflicts";
+    } else {
+      popupAction.textContent = "Sync now";
+    }
+  }
+
+  function positionPopup(): void {
+    const rect = indicator.getBoundingClientRect();
+    popup.style.top = `${rect.bottom + 8}px`;
+    popup.style.right = `${window.innerWidth - rect.right}px`;
+  }
+
+  // Tooltip on hover
+  indicator.addEventListener("mouseenter", () => {
+    if (popupOpen) return;
+    tooltipTimer = setTimeout(() => {
+      const rect = indicator.getBoundingClientRect();
+      tooltip.textContent = indicator.title;
+      tooltip.style.top = `${rect.bottom + 6}px`;
+      tooltip.style.right = `${window.innerWidth - rect.right}px`;
+      tooltip.classList.add("visible");
+    }, 400);
+  });
+
+  indicator.addEventListener("mouseleave", () => {
+    if (tooltipTimer) { clearTimeout(tooltipTimer); tooltipTimer = null; }
+    tooltip.classList.remove("visible");
+  });
+
+  // Click handler
+  indicator.addEventListener("click", () => {
+    tooltip.classList.remove("visible");
+    if (tooltipTimer) { clearTimeout(tooltipTimer); tooltipTimer = null; }
+
+    if (popupOpen) {
+      popup.classList.remove("open");
+      popupOpen = false;
+      return;
+    }
+
+    // If error/disconnected, attempt reconnect via toast
+    if (currentStatus === "error" || currentStatus === "disconnected") {
+      const config = ctx.getConfig();
+      if (config?.syncUrl && config.isTauri && config.invoke) {
+        void ctx.app.startSync(config.invoke, config.syncUrl, config.syncMasterToken).then(() => {
+          ctx.showToast("Sync reconnected");
+        }).catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          ctx.showToast(`Sync failed: ${msg}`);
+        });
+      } else {
+        ctx.showToast("No sync relay configured");
+      }
+      return;
+    }
+
+    // If conflict, show toast with conflict info
+    if (currentStatus === "conflict" && lastEvent) {
+      ctx.showToast(`${lastEvent.conflictCount} sync conflict${lastEvent.conflictCount !== 1 ? "s" : ""} detected`);
+      return;
+    }
+
+    // Otherwise, show popup with details
+    updatePopup();
+    positionPopup();
+    popup.classList.add("open");
+    popupOpen = true;
+  });
+
+  // Popup action button
+  popupAction.addEventListener("click", () => {
+    popup.classList.remove("open");
+    popupOpen = false;
+
+    const config = ctx.getConfig();
+    if (lastEvent?.status === "error" || lastEvent?.status === "disconnected") {
+      if (config?.syncUrl && config.isTauri && config.invoke) {
+        void ctx.app.startSync(config.invoke, config.syncUrl, config.syncMasterToken).catch(() => {});
+      }
+    } else if (lastEvent?.status === "conflict") {
+      ctx.showToast(`${lastEvent.conflictCount} conflict${lastEvent.conflictCount !== 1 ? "s" : ""} — resolve in settings`);
+    } else {
+      if (config?.syncUrl) {
+        void ctx.app.syncConversations(config.syncUrl, config.syncMasterToken).then(result => {
+          const total = result.conversations_pushed + result.conversations_pulled + result.messages_pushed + result.messages_pulled;
+          ctx.showToast(total > 0 ? `Synced (${total} changes)` : "Already up to date");
+        }).catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          ctx.showToast(`Sync failed: ${msg}`);
+        });
+      }
+    }
+  });
+
+  // Close popup on click outside
+  document.addEventListener("click", (e) => {
+    if (popupOpen && !popup.contains(e.target as Node) && !indicator.contains(e.target as Node)) {
+      popup.classList.remove("open");
+      popupOpen = false;
+    }
+  });
+
+  // Subscribe to sync status events
+  ctx.app.onSyncStatus(updateIndicator);
 }
 
 bootstrap().catch((err: unknown) => {
