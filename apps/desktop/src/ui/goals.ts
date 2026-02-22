@@ -204,7 +204,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
     };
 
     // Skip run_id query if outcomeId is empty (legacy row)
-    if (!outcomeId) {
+    if (!outcomeId || !outcomeId.trim()) {
       loadFallback();
       return;
     }

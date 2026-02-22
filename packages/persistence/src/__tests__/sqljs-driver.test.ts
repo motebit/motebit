@@ -13,6 +13,8 @@ import type {
   MemoryNode,
   MotebitIdentity,
   AuditRecord,
+  ToolAuditEntry,
+  PolicyDecision,
 } from "@motebit/sdk";
 
 let mdb: MotebitDatabase;
@@ -207,6 +209,93 @@ describe("sql.js driver (in-memory)", () => {
     expect(results).toHaveLength(1);
     expect(results[0]!.action).toBe("test_action");
     expect(results[0]!.details).toEqual({ foo: "bar" });
+  });
+
+  // === ToolAuditSink (run_id) ===
+
+  it("tool audit round-trips run_id and queries by run_id", () => {
+    const runId = crypto.randomUUID();
+    const otherRunId = crypto.randomUUID();
+
+    const entry1: ToolAuditEntry = {
+      callId: "call-1",
+      turnId: "turn-1",
+      runId,
+      tool: "shell_exec",
+      args: { cmd: "ls" },
+      decision: { allowed: true, reason: "auto" } as PolicyDecision,
+      result: { ok: true, durationMs: 42 },
+      timestamp: Date.now(),
+    };
+    const entry2: ToolAuditEntry = {
+      callId: "call-2",
+      turnId: "turn-2",
+      runId,
+      tool: "web_search",
+      args: { q: "test" },
+      decision: { allowed: true, reason: "auto" } as PolicyDecision,
+      timestamp: Date.now() + 1,
+    };
+    const entryOther: ToolAuditEntry = {
+      callId: "call-3",
+      turnId: "turn-3",
+      runId: otherRunId,
+      tool: "file_read",
+      args: { path: "/tmp" },
+      decision: { allowed: false, reason: "denied" } as PolicyDecision,
+      timestamp: Date.now() + 2,
+    };
+
+    mdb.toolAuditSink.append(entry1);
+    mdb.toolAuditSink.append(entry2);
+    mdb.toolAuditSink.append(entryOther);
+
+    // Query all — all 3 present
+    const all = mdb.toolAuditSink.getAll();
+    expect(all).toHaveLength(3);
+
+    // Verify run_id round-trips
+    const first = all.find((e) => e.callId === "call-1")!;
+    expect(first.runId).toBe(runId);
+    expect(first.tool).toBe("shell_exec");
+    expect(first.result).toEqual({ ok: true, durationMs: 42 });
+
+    // Verify entry without result still round-trips
+    const second = all.find((e) => e.callId === "call-2")!;
+    expect(second.runId).toBe(runId);
+    expect(second.result).toBeUndefined();
+
+    // Query by run_id via raw SQL (mirrors goals UI query)
+    const rows = mdb.db
+      .prepare(
+        `SELECT call_id, run_id, tool FROM tool_audit_log WHERE run_id = ? ORDER BY timestamp ASC`,
+      )
+      .all(runId) as { call_id: string; run_id: string; tool: string }[];
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.tool)).toEqual(["shell_exec", "web_search"]);
+    expect(rows.every((r) => r.run_id === runId)).toBe(true);
+  });
+
+  it("tool audit entry without run_id stores NULL", () => {
+    const entry: ToolAuditEntry = {
+      callId: "call-no-run",
+      turnId: "turn-no-run",
+      tool: "test_tool",
+      args: {},
+      decision: { allowed: true, reason: "auto" } as PolicyDecision,
+      timestamp: Date.now(),
+    };
+    mdb.toolAuditSink.append(entry);
+
+    const loaded = mdb.toolAuditSink.getAll();
+    const found = loaded.find((e) => e.callId === "call-no-run")!;
+    expect(found.runId).toBeUndefined();
+
+    // Raw SQL confirms NULL
+    const rows = mdb.db
+      .prepare(`SELECT run_id FROM tool_audit_log WHERE call_id = ?`)
+      .all("call-no-run") as { run_id: string | null }[];
+    expect(rows[0]!.run_id).toBeNull();
   });
 
   // === ConversationStore ===
