@@ -1,0 +1,133 @@
+---
+title: Spatial App
+description: WebXR, orbital mechanics, hand tracking, and flat preview.
+---
+
+The spatial app places your motebit in augmented reality. The creature orbits your body using Keplerian physics, responds to your voice, and reacts to your attention. Built on WebXR with a flat browser fallback for non-AR devices.
+
+## Requirements
+
+- A WebXR-capable browser (Chrome on Android, Meta Quest Browser, etc.)
+- For AR: a device with `immersive-ar` support and `local-floor` tracking
+- Optional: hand tracking support for hand-relative positioning
+
+## Running the spatial app
+
+```bash
+pnpm --filter @motebit/spatial dev
+```
+
+This starts a Vite dev server. Open the URL on a WebXR-capable device (or use Chrome DevTools WebXR emulation for testing).
+
+## First launch
+
+On first load, the app bootstraps a cryptographic identity — same as desktop and mobile. The keypair is stored in an encrypted IndexedDB key store (WebCrypto). Identity metadata lives in localStorage.
+
+A settings panel appears to configure your LLM provider:
+
+| Provider | Setup |
+|---|---|
+| **Anthropic** | Enter your API key |
+| **Ollama** | Uses `localhost:11434` by default |
+
+You can also toggle **Voice** on/off and set the model name. Click **Save** to start, or **Skip** to run in idle mode (rendering only, no AI).
+
+Settings persist in localStorage (`motebit:spatial_settings`). On subsequent launches, the app auto-configures from saved settings.
+
+## Entering AR
+
+After setup, the main overlay shows an **Enter AR** button. Clicking it:
+
+1. Requests a WebXR `immersive-ar` session
+2. Features: `local-floor` (required), `hand-tracking` and `light-estimation` (optional)
+3. Hides the 2D overlay
+4. Starts the XR animation loop
+
+The creature appears in your physical space, orbiting near your right shoulder. When the AR session ends, the overlay reappears.
+
+## Orbital mechanics
+
+The creature follows Keplerian orbital dynamics relative to your body:
+
+**Orbit radius** adjusts with attention:
+
+| Attention level | Orbit radius | Behavior |
+|---|---|---|
+| 0 (idle) | 0.3m (base) | Gentle orbit at shoulder distance |
+| 0.5 (engaged) | ~0.21m | Closer orbit, faster angular speed |
+| 1.0 (focused) | ~0.12m | Tight orbit, intimate distance |
+
+The radial motion uses an **underdamped spring** — the creature overshoots slightly before settling, giving organic weight to transitions.
+
+**Angular speed** follows conservation of angular momentum: as the orbit tightens, the creature speeds up (like a figure skater pulling in their arms).
+
+**Vertical bob** uses three incommensurate frequencies (1.5, 2.37, 0.73 Hz) to create organic, non-repeating oscillation — the same `organicNoise` function used in the desktop and mobile renderers.
+
+### Attention control
+
+- **Tap/touch** the screen: bumps attention by 0.3 (creature spirals closer)
+- **Release**: attention decays back to idle over ~2 seconds
+
+### Body tracking
+
+The creature's orbit anchor is your right shoulder, estimated from your head position:
+
+| Body part | Derivation |
+|---|---|
+| Head | Directly from XRViewerPose camera position |
+| Shoulders | 35cm below head, 20cm lateral |
+| Chest | Between shoulders, 5cm below |
+| Hands | From XR hand tracking (if available) |
+
+When anchor reference changes (e.g., switching from shoulder to hand), transitions are smooth-lerped to avoid jumps.
+
+### Configuration
+
+Default orbital parameters:
+
+| Parameter | Default | Description |
+|---|---|---|
+| `baseRadius` | 0.3m | Neutral orbit size |
+| `minRadius` | 0.15m | Minimum orbit distance |
+| `maxRadius` | 0.8m | Maximum orbit distance |
+| `angularSpeed` | 0.3 rad/s | Base angular velocity |
+| `dampingRatio` | 0.7 | Spring damping (< 1 = underdamped) |
+| `springStiffness` | 4.0 | Radial spring constant |
+| `bobAmplitude` | 0.015m | Vertical oscillation amplitude |
+| `attentionShrink` | 0.6 | Full attention = 40% of base radius |
+
+## Audio reactivity
+
+When voice is active, the creature responds to sound:
+
+| Energy band | Effect |
+|---|---|
+| RMS (overall) | Breathing amplitude scales up |
+| Low (bass) | Interior glow intensifies |
+| Mid (melody) | Drift/swaying increases |
+| High (transients) | Glass iridescence shimmers |
+
+These modulations layer on top of behavior cues — they don't replace them.
+
+## Flat preview
+
+On devices without WebXR support, the app falls back to a **flat preview**: the creature renders on a 2D canvas at a fixed position (no orbital dynamics, no body tracking). The chat and voice interface still work.
+
+## Voice
+
+The spatial app uses the same voice interface as the desktop:
+
+- Ambient listening with VAD (if browser supports `SpeechRecognition` or `webkitSpeechRecognition`)
+- Transcripts are sent to the agent automatically
+- Responses are spoken aloud via Web Speech API
+
+Enable voice in the settings panel or skip to run text-only.
+
+## Configuration storage
+
+| Data | Storage |
+|---|---|
+| Settings | localStorage (`motebit:spatial_settings`) |
+| Private key | IndexedDB (encrypted via WebCrypto) |
+| Identity metadata | localStorage (`motebit:` prefix) |
+| Events, memories | IndexedDB (via `@motebit/browser-persistence`) |

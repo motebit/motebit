@@ -1,0 +1,149 @@
+---
+title: Mobile App
+description: Expo setup, dual providers, voice input, goals, and MCP trust.
+---
+
+The mobile app is a React Native + Expo surface with full parity to the desktop. Same identity, memory, and governance — different body. The creature renders via expo-gl + Three.js, and all persistence uses expo-sqlite with the same adapter pattern.
+
+## Running the mobile app
+
+```bash
+pnpm --filter @motebit/mobile start
+```
+
+This launches the Expo dev server. Scan the QR code with Expo Go, or press `i` for iOS simulator / `a` for Android emulator.
+
+## First launch
+
+On first launch, the app generates an Ed25519 keypair, stores the private key in the device keychain (expo-secure-store), and creates your motebit identity. No account creation, no server — the identity lives on your device.
+
+## Choosing a provider
+
+Open settings (gear icon, top right) to configure your LLM:
+
+| Provider | Setup |
+|---|---|
+| **Ollama** (default) | Requires a running Ollama instance. Set the endpoint URL in settings (default `http://localhost:11434`). |
+| **Anthropic** | Enter your API key. Stored in the device keychain, never on disk. |
+| **Hybrid** | Uses Anthropic as primary, falls back to Ollama on failure. Requires both an API key and an Ollama endpoint. |
+
+Set the model name in the **Model** field. Default: `llama3.2`.
+
+## Voice input
+
+Voice input uses a 5-state pipeline:
+
+1. **Off** — Microphone disabled
+2. **Ambient** — VAD (Voice Activity Detection) listens for speech onset
+3. **Voice** — Recording active, user is speaking
+4. **Transcribing** — Whisper STT processes the audio
+5. **Speaking** — TTS plays the agent's response
+
+Enable voice in the **Voice** settings tab. Requirements:
+
+- **STT**: Requires an OpenAI API key (Whisper transcription)
+- **TTS**: OpenAI TTS (with expo-speech as fallback if no key)
+- **VAD**: Neural model enabled by default for accurate speech detection
+
+Voice settings:
+
+| Setting | Default | Description |
+|---|---|---|
+| Voice enabled | Off | Master toggle for voice pipeline |
+| TTS voice | alloy | OpenAI voice (alloy, echo, fable, onyx, nova, shimmer) |
+| Auto-send | On | Automatically send transcribed text |
+| Voice response | On | Speak the agent's reply aloud |
+| Neural VAD | On | Use neural model for speech detection |
+
+## Slash commands
+
+Type `/` in the chat input to use commands:
+
+| Command | Action |
+|---|---|
+| `/model <name>` | Switch model |
+| `/conversations` | List past conversations |
+| `/new` | Start a new conversation |
+| `/memories` | Browse stored memories |
+| `/sync` | Trigger manual sync |
+| `/export` | Export all data (JSON) |
+| `/settings` | Open settings |
+| `/summarize` | Summarize current conversation |
+| `/help` | Show available commands |
+
+## Goal execution
+
+The mobile app supports plan-based goal execution — the same system as the desktop and CLI. Goals run on a 60-second scheduler tick in the background.
+
+Access goals from the top-left **Goals** button. When a goal executes:
+
+1. The PlanEngine breaks it into steps
+2. Each step runs with tool access
+3. Tool calls that require approval surface as approval cards in chat
+4. A running indicator shows goal status
+
+Goal outcomes (completed/failed) appear as system messages with summaries.
+
+## MCP servers
+
+Connect external tools via MCP (Model Context Protocol). Mobile supports **HTTP transport only** (no stdio).
+
+In the **Tools** settings tab:
+
+1. Tap **Add Server** — enter name, URL, and optional trust toggle
+2. On connect, the manifest is SHA-256 hashed and pinned
+3. Subsequent connections verify the manifest matches — trust is revoked on mismatch
+
+### Per-server trust
+
+Each MCP server has a trust toggle:
+
+| Trust level | Behavior |
+|---|---|
+| **Untrusted** (default) | Every tool call requires explicit approval |
+| **Trusted** | Tools execute automatically (same as builtin tools) |
+
+Toggle trust on any connected server from the Tools tab. Trust changes take effect immediately — tools are re-registered with updated approval requirements.
+
+## Operator mode
+
+Operator mode unlocks high-risk tools. Toggle it in settings:
+
+1. First time: set a 4-6 digit PIN
+2. Subsequent times: enter your PIN to enable
+3. Reset PIN available in settings
+
+## Multi-device pairing
+
+Pair with another device running the same motebit identity:
+
+1. **On existing device**: Initiate pairing (generates a 6-character code)
+2. **On new device**: Claim pairing with the code
+3. **On existing device**: Approve or deny the claim
+4. Sync link establishes automatically
+
+Requires a sync relay URL (configured in settings).
+
+## Settings overview
+
+The settings modal has 7 tabs:
+
+| Tab | Controls |
+|---|---|
+| **Intelligence** | Provider, model, API key, Ollama endpoint |
+| **Appearance** | Color preset (8 options: borosilicate, amber, rose, violet, cyan, ember, sage, moonlight) |
+| **Governance** | Approval preset (cautious/balanced/autonomous), operator mode |
+| **Memory** | Persistence threshold, secret rejection, max memories per turn |
+| **Voice** | Enable/disable, TTS voice, auto-send, response, VAD |
+| **Tools** | MCP servers, trust management, budget (max calls per turn) |
+| **Sync** | Relay URL, device linking, pairing |
+
+## Configuration storage
+
+| Data | Storage |
+|---|---|
+| Settings JSON | AsyncStorage (`@motebit/settings`) |
+| API keys | Device keychain (expo-secure-store) |
+| Identity, events, memories | SQLite (expo-sqlite, WAL mode) |
+| MCP server configs | AsyncStorage (`@motebit/mcp_servers`) |
+| Identity file | AsyncStorage (`@motebit/identity_file`) |

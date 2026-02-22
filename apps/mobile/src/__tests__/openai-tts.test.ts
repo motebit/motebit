@@ -5,10 +5,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // ---------------------------------------------------------------------------
 
 const mockSetAudioMode = vi.fn();
-const mockSoundPlay = vi.fn();
 const mockSoundStop = vi.fn();
 const mockSoundUnload = vi.fn();
-const mockSoundSetCallback = vi.fn();
 const mockCreateSound = vi.fn();
 const mockWriteString = vi.fn();
 const mockDeleteAsync = vi.fn();

@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { TTSProvider } from "../tts.js";
+import type { TTSProvider, TTSOptions } from "../tts.js";
 import type { STTProvider } from "../stt.js";
 import { WebSpeechTTSProvider } from "../web-speech-tts.js";
 import { WebSpeechSTTProvider } from "../web-speech-stt.js";
+import { FallbackTTSProvider } from "../fallback-tts.js";
 
 // ---------------------------------------------------------------------------
 // Browser API mocks
@@ -275,5 +276,243 @@ describe("WebSpeechSTTProvider", () => {
 
     provider.stop();
     expect(provider.listening).toBe(false);
+  });
+
+  it("sets permission denied on service-not-allowed error", () => {
+    const provider = new WebSpeechSTTProvider();
+    const onError = vi.fn();
+    provider.onError = onError;
+    provider.start();
+
+    const recognition = (provider as unknown as { _recognition: MockRecognition })
+      ._recognition;
+    recognition.onerror?.({ error: "service-not-allowed" });
+    expect(onError).toHaveBeenCalledWith("service-not-allowed");
+
+    // Subsequent start should fail immediately
+    provider.stop();
+    provider.start();
+    expect(onError).toHaveBeenCalledWith("Microphone permission denied");
+  });
+
+  it("start() is no-op if already listening", () => {
+    const provider = new WebSpeechSTTProvider();
+    provider.start();
+    expect(provider.listening).toBe(true);
+
+    // Second start should not throw or change state
+    provider.start();
+    expect(provider.listening).toBe(true);
+  });
+
+  it("fires onResult with transcript and isFinal flag", () => {
+    const provider = new WebSpeechSTTProvider();
+    const onResult = vi.fn();
+    provider.onResult = onResult;
+    provider.start({ interimResults: true });
+
+    const recognition = (provider as unknown as { _recognition: MockRecognition })
+      ._recognition;
+
+    // Simulate interim result
+    recognition.onresult?.({
+      results: {
+        length: 1,
+        0: { 0: { transcript: "hello" }, isFinal: false, length: 1 },
+      },
+    } as unknown as SpeechRecognitionEvent);
+
+    expect(onResult).toHaveBeenCalledWith("hello", false);
+
+    // Simulate final result
+    recognition.onresult?.({
+      results: {
+        length: 1,
+        0: { 0: { transcript: "hello world" }, isFinal: true, length: 1 },
+      },
+    } as unknown as SpeechRecognitionEvent);
+
+    expect(onResult).toHaveBeenCalledWith("hello world", true);
+  });
+
+  it("auto-restarts in continuous mode after recognition ends", () => {
+    const provider = new WebSpeechSTTProvider();
+    provider.start({ continuous: true });
+    expect(provider.listening).toBe(true);
+
+    // Simulate recognition ending (not manual stop)
+    const recognition = (provider as unknown as { _recognition: MockRecognition })
+      ._recognition;
+    recognition.onend?.();
+
+    // Should have restarted — listening should be true again
+    expect(provider.listening).toBe(true);
+  });
+
+  it("does not auto-restart after permission denied in continuous mode", () => {
+    const provider = new WebSpeechSTTProvider();
+    const onEnd = vi.fn();
+    provider.onEnd = onEnd;
+    provider.start({ continuous: true });
+
+    const recognition = (provider as unknown as { _recognition: MockRecognition })
+      ._recognition;
+
+    // Simulate permission denied
+    recognition.onerror?.({ error: "not-allowed" });
+    // Simulate recognition ending
+    recognition.onend?.();
+
+    expect(provider.listening).toBe(false);
+    expect(onEnd).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FallbackTTSProvider
+// ---------------------------------------------------------------------------
+
+describe("FallbackTTSProvider", () => {
+  function makeMockProvider(options?: {
+    speakFail?: Error;
+    speakDelay?: number;
+  }): TTSProvider {
+    let _speaking = false;
+    return {
+      speak: vi.fn(async () => {
+        if (options?.speakFail) throw options.speakFail;
+        _speaking = true;
+        if (options?.speakDelay) {
+          await new Promise((r) => setTimeout(r, options.speakDelay));
+        }
+        _speaking = false;
+      }),
+      cancel: vi.fn(() => {
+        _speaking = false;
+      }),
+      get speaking() {
+        return _speaking;
+      },
+    };
+  }
+
+  it("implements TTSProvider interface", () => {
+    const provider: TTSProvider = new FallbackTTSProvider([]);
+    expect(typeof provider.speak).toBe("function");
+    expect(typeof provider.cancel).toBe("function");
+    expect(typeof provider.speaking).toBe("boolean");
+  });
+
+  it("speaking is false when no active provider", () => {
+    const provider = new FallbackTTSProvider([]);
+    expect(provider.speaking).toBe(false);
+  });
+
+  it("uses first provider when it succeeds", async () => {
+    const p1 = makeMockProvider();
+    const p2 = makeMockProvider();
+    const provider = new FallbackTTSProvider([p1, p2]);
+
+    await provider.speak("hello");
+
+    expect(p1.speak).toHaveBeenCalledWith("hello", undefined);
+    expect(p2.speak).not.toHaveBeenCalled();
+  });
+
+  it("passes options to the active provider", async () => {
+    const p1 = makeMockProvider();
+    const opts: TTSOptions = { rate: 1.5, pitch: 0.8 };
+    const provider = new FallbackTTSProvider([p1]);
+
+    await provider.speak("test", opts);
+
+    expect(p1.speak).toHaveBeenCalledWith("test", opts);
+  });
+
+  it("falls back to second provider when first fails", async () => {
+    const p1 = makeMockProvider({ speakFail: new Error("p1 failed") });
+    const p2 = makeMockProvider();
+    const provider = new FallbackTTSProvider([p1, p2]);
+
+    await provider.speak("fallback");
+
+    expect(p1.speak).toHaveBeenCalled();
+    expect(p2.speak).toHaveBeenCalledWith("fallback", undefined);
+  });
+
+  it("falls back to third provider when first two fail", async () => {
+    const p1 = makeMockProvider({ speakFail: new Error("p1 failed") });
+    const p2 = makeMockProvider({ speakFail: new Error("p2 failed") });
+    const p3 = makeMockProvider();
+    const provider = new FallbackTTSProvider([p1, p2, p3]);
+
+    await provider.speak("deep fallback");
+
+    expect(p1.speak).toHaveBeenCalled();
+    expect(p2.speak).toHaveBeenCalled();
+    expect(p3.speak).toHaveBeenCalledWith("deep fallback", undefined);
+  });
+
+  it("throws last error when all providers fail", async () => {
+    const p1 = makeMockProvider({ speakFail: new Error("p1 failed") });
+    const p2 = makeMockProvider({ speakFail: new Error("p2 failed") });
+    const provider = new FallbackTTSProvider([p1, p2]);
+
+    await expect(provider.speak("fail")).rejects.toThrow("p2 failed");
+  });
+
+  it("resolves without error for empty provider list", async () => {
+    const provider = new FallbackTTSProvider([]);
+    // No providers, no lastError — should resolve silently
+    await provider.speak("nothing");
+  });
+
+  it("cancel() cancels the active provider", async () => {
+    const cancelFn = vi.fn();
+    const holder: { resolve: (() => void) | null } = { resolve: null };
+    const p1: TTSProvider = {
+      speak: vi.fn(() => new Promise<void>((r) => { holder.resolve = r; })),
+      cancel: cancelFn,
+      get speaking() { return true; },
+    };
+    const provider = new FallbackTTSProvider([p1]);
+
+    // Start speaking (will hang until resolved)
+    const speakPromise = provider.speak("cancel me");
+    provider.cancel();
+
+    expect(cancelFn).toHaveBeenCalled();
+
+    // Resolve the hung promise to clean up
+    holder.resolve?.();
+    await speakPromise;
+  });
+
+  it("cancel() is safe when no active provider", () => {
+    const provider = new FallbackTTSProvider([]);
+    expect(() => provider.cancel()).not.toThrow();
+  });
+
+  it("cancel() nulls the active provider reference", () => {
+    const p1 = makeMockProvider();
+    const provider = new FallbackTTSProvider([p1]);
+
+    // Set active provider by inspecting internals
+    (provider as unknown as { _activeProvider: TTSProvider | null })._activeProvider = p1;
+    provider.cancel();
+    expect(
+      (provider as unknown as { _activeProvider: TTSProvider | null })._activeProvider,
+    ).toBeNull();
+  });
+
+  it("wraps non-Error throws in Error", async () => {
+    const p1: TTSProvider = {
+      speak: vi.fn(async () => { throw "string error"; }),
+      cancel: vi.fn(),
+      get speaking() { return false; },
+    };
+    const provider = new FallbackTTSProvider([p1]);
+
+    await expect(provider.speak("fail")).rejects.toThrow("string error");
   });
 });

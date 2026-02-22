@@ -5,6 +5,8 @@
     "identity",
     "governance",
     "desktop",
+    "mobile",
+    "spatial",
     "cli",
     "daemon-approvals",
     "configuration",
