@@ -331,16 +331,34 @@ struct McpConfigSource {
 
 #[tauri::command]
 fn discover_mcp_configs() -> Vec<McpConfigSource> {
-    let home = match std::env::var("HOME") {
-        Ok(h) => h,
-        Err(_) => return vec![],
+    let home = match home_dir() {
+        Some(h) => h,
+        None => return vec![],
     };
 
+    #[cfg(target_os = "macos")]
     let sources = [
         ("Claude Desktop", format!("{}/Library/Application Support/Claude/claude_desktop_config.json", home)),
         ("Claude Code", format!("{}/.claude.json", home)),
         ("VS Code", format!("{}/Library/Application Support/Code/User/settings.json", home)),
     ];
+
+    #[cfg(target_os = "linux")]
+    let sources = [
+        ("Claude Desktop", format!("{}/.config/Claude/claude_desktop_config.json", home)),
+        ("Claude Code", format!("{}/.claude.json", home)),
+        ("VS Code", format!("{}/.config/Code/User/settings.json", home)),
+    ];
+
+    #[cfg(target_os = "windows")]
+    let sources = {
+        let appdata = std::env::var("APPDATA").unwrap_or_else(|_| format!("{}/AppData/Roaming", home));
+        [
+            ("Claude Desktop", format!("{}/Claude/claude_desktop_config.json", appdata)),
+            ("Claude Code", format!("{}/.claude.json", home)),
+            ("VS Code", format!("{}/Code/User/settings.json", appdata)),
+        ]
+    };
 
     sources
         .into_iter()
@@ -349,6 +367,15 @@ fn discover_mcp_configs() -> Vec<McpConfigSource> {
             McpConfigSource { name: name.to_string(), path, content }
         })
         .collect()
+}
+
+/// Resolve home directory across platforms.
+fn home_dir() -> Option<String> {
+    #[cfg(not(target_os = "windows"))]
+    { std::env::var("HOME").ok() }
+
+    #[cfg(target_os = "windows")]
+    { std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).ok() }
 }
 
 // === Privileged Tool Commands ===
