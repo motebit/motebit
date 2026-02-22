@@ -11,6 +11,8 @@ const settingsBackdrop = document.getElementById("settings-backdrop") as HTMLDiv
 const settingsModal = document.getElementById("settings-modal") as HTMLDivElement;
 const settingsProvider = document.getElementById("settings-provider") as HTMLSelectElement;
 const settingsModel = document.getElementById("settings-model") as HTMLInputElement;
+const settingsModelSelect = document.getElementById("settings-model-select") as HTMLSelectElement;
+const settingsModelCustom = document.getElementById("settings-model-custom") as HTMLInputElement;
 const settingsApiKey = document.getElementById("settings-apikey") as HTMLInputElement;
 const settingsApiKeyToggle = document.getElementById("settings-apikey-toggle") as HTMLButtonElement;
 const settingsOperatorMode = document.getElementById("settings-operator-mode") as HTMLInputElement;
@@ -60,6 +62,25 @@ interface PendingSave {
 }
 let pendingSettingsSave: PendingSave | null = null;
 
+// === Model Lists ===
+
+const ANTHROPIC_MODELS = [
+  "claude-sonnet-4-20250514",
+  "claude-haiku-4-5-20251001",
+  "claude-opus-4-20250514",
+];
+
+const OLLAMA_MODELS = [
+  "llama3.2",
+  "llama3.1",
+  "llama3",
+  "mistral",
+  "codellama",
+  "gemma2",
+  "phi3",
+  "qwen2",
+];
+
 // === Approval Presets ===
 
 const APPROVAL_PRESET_CONFIGS: Record<string, Partial<PolicyConfig>> = {
@@ -74,6 +95,7 @@ export interface SettingsAPI {
   open(): void;
   openToTab(tabName: string): void;
   close(): void;
+  updateModelIndicator(): void;
   getHasApiKeyInKeyring(): boolean;
   setHasApiKeyInKeyring(v: boolean): void;
   getHasWhisperKeyInKeyring(): boolean;
@@ -113,6 +135,83 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       if (name) switchTab(name);
     });
   });
+
+  // === Model Selector ===
+
+  function populateModelSelect(provider: string, currentModel?: string): void {
+    settingsModelSelect.innerHTML = "";
+    const models = provider === "anthropic" ? ANTHROPIC_MODELS : OLLAMA_MODELS;
+
+    for (const model of models) {
+      const opt = document.createElement("option");
+      opt.value = model;
+      opt.textContent = model;
+      settingsModelSelect.appendChild(opt);
+    }
+
+    if (provider === "ollama") {
+      const customOpt = document.createElement("option");
+      customOpt.value = "__custom__";
+      customOpt.textContent = "Custom...";
+      settingsModelSelect.appendChild(customOpt);
+    }
+
+    // Pre-select current model
+    if (currentModel) {
+      const hasModel = models.includes(currentModel);
+      if (hasModel) {
+        settingsModelSelect.value = currentModel;
+        settingsModelCustom.style.display = "none";
+      } else if (provider === "ollama") {
+        settingsModelSelect.value = "__custom__";
+        settingsModelCustom.value = currentModel;
+        settingsModelCustom.style.display = "block";
+      } else {
+        // Anthropic with unknown model — add it as an option
+        const opt = document.createElement("option");
+        opt.value = currentModel;
+        opt.textContent = currentModel;
+        settingsModelSelect.insertBefore(opt, settingsModelSelect.firstChild);
+        settingsModelSelect.value = currentModel;
+        settingsModelCustom.style.display = "none";
+      }
+    } else {
+      settingsModelCustom.style.display = "none";
+    }
+
+    syncModelHiddenField();
+  }
+
+  function syncModelHiddenField(): void {
+    if (settingsModelSelect.value === "__custom__") {
+      settingsModel.value = settingsModelCustom.value.trim();
+    } else {
+      settingsModel.value = settingsModelSelect.value;
+    }
+  }
+
+  settingsModelSelect.addEventListener("change", () => {
+    settingsModelCustom.style.display = settingsModelSelect.value === "__custom__" ? "block" : "none";
+    if (settingsModelSelect.value === "__custom__") {
+      settingsModelCustom.focus();
+    }
+    syncModelHiddenField();
+  });
+
+  settingsModelCustom.addEventListener("input", syncModelHiddenField);
+
+  settingsProvider.addEventListener("change", () => {
+    populateModelSelect(settingsProvider.value);
+  });
+
+  // === Model Indicator ===
+
+  const modelIndicator = document.getElementById("model-indicator") as HTMLDivElement;
+
+  function updateModelIndicator(): void {
+    const model = ctx.app.currentModel;
+    modelIndicator.textContent = model ?? "";
+  }
 
   // === Approval Presets ===
 
@@ -299,7 +398,10 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     const config = ctx.getConfig();
     if (config) {
       settingsProvider.value = config.provider;
-      settingsModel.value = config.model || "";
+      const currentModel = ctx.app.currentModel || config.model || "";
+      populateModelSelect(config.provider, currentModel);
+    } else {
+      populateModelSelect("ollama");
     }
     settingsApiKey.value = "";
     settingsApiKey.type = "password";
@@ -450,6 +552,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       addMessage("system", "Settings saved — AI initialization failed (check API key)");
     }
 
+    updateModelIndicator();
     close();
   }
 
@@ -598,6 +701,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     open,
     openToTab,
     close,
+    updateModelIndicator,
     getHasApiKeyInKeyring() { return hasApiKeyInKeyring; },
     setHasApiKeyInKeyring(v: boolean) { hasApiKeyInKeyring = v; },
     getHasWhisperKeyInKeyring() { return hasWhisperKeyInKeyring; },

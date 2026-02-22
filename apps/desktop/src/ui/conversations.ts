@@ -1,6 +1,6 @@
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
-import { addMessage } from "./chat";
+import { addMessage, showToast } from "./chat";
 
 // === DOM Refs ===
 
@@ -9,6 +9,8 @@ const chatInput = document.getElementById("chat-input") as HTMLInputElement;
 const conversationsPanel = document.getElementById("conversations-panel") as HTMLDivElement;
 const conversationsBackdrop = document.getElementById("conversations-backdrop") as HTMLDivElement;
 const convList = document.getElementById("conv-list") as HTMLDivElement;
+const exportBtn = document.getElementById("conv-export-btn") as HTMLButtonElement;
+const exportMenu = document.getElementById("conv-export-menu") as HTMLDivElement;
 
 // === Fade Helpers ===
 
@@ -37,6 +39,37 @@ function fadeOutMessages(): Promise<void> {
   });
 }
 
+// === Download Helpers ===
+
+function downloadFile(content: string, filename: string, mimeType: string): void {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function formatDateForFilename(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function messagesToMarkdown(messages: Array<{ role: string; content: string }>, title?: string): string {
+  const lines: string[] = [];
+  if (title) {
+    lines.push(`# ${title}`, "");
+  }
+  for (const msg of messages) {
+    if (msg.role === "user" || msg.role === "assistant") {
+      const heading = msg.role === "user" ? "User" : "Assistant";
+      lines.push(`## ${heading}`, "", msg.content, "");
+    }
+  }
+  return lines.join("\n");
+}
+
 // === Conversations Panel ===
 
 export interface ConversationsAPI {
@@ -54,6 +87,7 @@ export function initConversations(ctx: DesktopContext): ConversationsAPI {
   function close(): void {
     conversationsPanel.classList.remove("open");
     conversationsBackdrop.classList.remove("open");
+    exportMenu.classList.remove("open");
   }
 
   function populateConversationsList(): void {
@@ -109,7 +143,118 @@ export function initConversations(ctx: DesktopContext): ConversationsAPI {
     chatInput.focus();
   }
 
-  // Event listeners
+  // === Export Logic ===
+
+  function exportCurrentJson(): void {
+    const conversationId = ctx.app.currentConversationId;
+    if (!conversationId) {
+      showToast("No active conversation");
+      return;
+    }
+    const messages = ctx.app.getConversationHistory();
+    if (messages.length === 0) {
+      showToast("No messages to export");
+      return;
+    }
+    const date = formatDateForFilename();
+    const data = {
+      motebit_id: ctx.app.motebitId,
+      conversation_id: conversationId,
+      exported_at: new Date().toISOString(),
+      messages: messages.map(m => ({
+        role: m.role,
+        content: m.content,
+      })),
+    };
+    downloadFile(JSON.stringify(data, null, 2), `motebit-conversation-${conversationId.slice(0, 8)}-${date}.json`, "application/json");
+    exportMenu.classList.remove("open");
+  }
+
+  function exportCurrentMarkdown(): void {
+    const conversationId = ctx.app.currentConversationId;
+    if (!conversationId) {
+      showToast("No active conversation");
+      return;
+    }
+    const messages = ctx.app.getConversationHistory();
+    if (messages.length === 0) {
+      showToast("No messages to export");
+      return;
+    }
+    const date = formatDateForFilename();
+    const md = messagesToMarkdown(messages);
+    downloadFile(md, `motebit-conversation-${date}.md`, "text/markdown");
+    exportMenu.classList.remove("open");
+  }
+
+  async function exportAllJson(): Promise<void> {
+    try {
+      const conversations = await ctx.app.listConversationsAsync(100);
+      if (conversations.length === 0) {
+        showToast("No conversations to export");
+        return;
+      }
+
+      const allData: Array<{
+        conversation_id: string;
+        title: string | null;
+        started_at: number;
+        last_active_at: number;
+        messages: Array<{ role: string; content: string }>;
+      }> = [];
+
+      for (const conv of conversations) {
+        const messages = await ctx.app.loadConversationById(conv.conversationId);
+        allData.push({
+          conversation_id: conv.conversationId,
+          title: conv.title,
+          started_at: conv.startedAt,
+          last_active_at: conv.lastActiveAt,
+          messages: messages.map(m => ({ role: m.role, content: m.content })),
+        });
+      }
+
+      const date = formatDateForFilename();
+      const data = {
+        motebit_id: ctx.app.motebitId,
+        exported_at: new Date().toISOString(),
+        conversations: allData,
+      };
+      downloadFile(JSON.stringify(data, null, 2), `motebit-conversations-${date}.json`, "application/json");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(`Export failed: ${msg}`);
+    }
+    exportMenu.classList.remove("open");
+  }
+
+  async function exportAllMarkdown(): Promise<void> {
+    try {
+      const conversations = await ctx.app.listConversationsAsync(100);
+      if (conversations.length === 0) {
+        showToast("No conversations to export");
+        return;
+      }
+
+      const sections: string[] = [];
+      for (const conv of conversations) {
+        const messages = await ctx.app.loadConversationById(conv.conversationId);
+        const title = conv.title || "Untitled conversation";
+        sections.push(messagesToMarkdown(messages, title));
+      }
+
+      const date = formatDateForFilename();
+      const md = sections.join("\n---\n\n");
+      downloadFile(md, `motebit-conversations-${date}.md`, "text/markdown");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(`Export failed: ${msg}`);
+    }
+    exportMenu.classList.remove("open");
+  }
+
+  // === Event Listeners ===
+
   document.getElementById("conversations-btn")!.addEventListener("click", open);
   document.getElementById("conv-close-btn")!.addEventListener("click", close);
   conversationsBackdrop.addEventListener("click", close);
@@ -120,6 +265,25 @@ export function initConversations(ctx: DesktopContext): ConversationsAPI {
       chatInput.focus();
     });
   });
+
+  // Export menu toggle
+  exportBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    exportMenu.classList.toggle("open");
+  });
+
+  // Close export menu on outside click
+  document.addEventListener("click", (e) => {
+    if (!exportMenu.contains(e.target as Node) && e.target !== exportBtn) {
+      exportMenu.classList.remove("open");
+    }
+  });
+
+  // Export handlers
+  document.getElementById("conv-export-json")!.addEventListener("click", exportCurrentJson);
+  document.getElementById("conv-export-md")!.addEventListener("click", exportCurrentMarkdown);
+  document.getElementById("conv-export-all-json")!.addEventListener("click", () => { void exportAllJson(); });
+  document.getElementById("conv-export-all-md")!.addEventListener("click", () => { void exportAllMarkdown(); });
 
   return { open, close };
 }

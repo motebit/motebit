@@ -35,6 +35,17 @@
       pointer-events: auto;
     }
     #chat-log:empty { display: none; }
+    #model-indicator {
+      font-size: 11px;
+      color: rgba(0, 0, 0, 0.3);
+      text-align: center;
+      padding: 2px 0 4px;
+      pointer-events: auto;
+      cursor: default;
+      user-select: none;
+      letter-spacing: 0.02em;
+    }
+    #model-indicator:empty { display: none; }
     .chat-bubble {
       max-width: 70%;
       padding: 8px 14px;
@@ -1189,6 +1200,61 @@
       transition: opacity 0.25s;
     }
     #conversations-backdrop.open { opacity: 1; pointer-events: auto; }
+    .conv-export-group { position: relative; }
+    .conv-export-btn {
+      padding: 5px 7px;
+      border: 1px solid rgba(0, 0, 0, 0.1);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.7);
+      color: rgba(0, 0, 0, 0.5);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+    }
+    .conv-export-btn:hover {
+      background: rgba(99, 102, 241, 0.1);
+      border-color: rgba(99, 102, 241, 0.3);
+      color: #6366f1;
+    }
+    .conv-export-menu {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 4px;
+      min-width: 180px;
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+      padding: 4px;
+      z-index: 30;
+      display: none;
+    }
+    .conv-export-menu.open { display: block; }
+    .conv-export-menu-item {
+      display: block;
+      width: 100%;
+      padding: 7px 10px;
+      border: none;
+      background: none;
+      text-align: left;
+      font-size: 12px;
+      color: rgba(0, 0, 0, 0.7);
+      cursor: pointer;
+      border-radius: 5px;
+      font-family: inherit;
+    }
+    .conv-export-menu-item:hover {
+      background: rgba(99, 102, 241, 0.08);
+      color: #6366f1;
+    }
+    .conv-export-divider {
+      height: 1px;
+      background: rgba(0, 0, 0, 0.06);
+      margin: 3px 6px;
+    }
 
     /* Memory panel — slide-in from left */
     #memory-btn {
@@ -2115,7 +2181,19 @@
   <div id="conversations-panel">
     <div class="conv-panel-header">
       <span class="conv-panel-title">Conversations</span>
-      <div style="display:flex;gap:6px;">
+      <div style="display:flex;gap:6px;align-items:center;">
+        <div class="conv-export-group" id="conv-export-group">
+          <button class="conv-export-btn" id="conv-export-btn" title="Export">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          </button>
+          <div class="conv-export-menu" id="conv-export-menu">
+            <button class="conv-export-menu-item" id="conv-export-json">Export current (JSON)</button>
+            <button class="conv-export-menu-item" id="conv-export-md">Export current (Markdown)</button>
+            <div class="conv-export-divider"></div>
+            <button class="conv-export-menu-item" id="conv-export-all-json">Export all (JSON)</button>
+            <button class="conv-export-menu-item" id="conv-export-all-md">Export all (Markdown)</button>
+          </div>
+        </div>
         <button class="conv-new-btn" id="conv-new-btn">New</button>
         <button class="conv-panel-close" id="conv-close-btn">&times;</button>
       </div>
@@ -2266,8 +2344,10 @@
             </select>
           </div>
           <div class="settings-field">
-            <label for="settings-model">Model</label>
-            <input id="settings-model" type="text" placeholder="e.g. llama3.2, claude-sonnet-4-20250514" />
+            <label for="settings-model-select">Model</label>
+            <select id="settings-model-select"></select>
+            <input id="settings-model-custom" type="text" placeholder="Custom model name..." style="display:none;margin-top:4px;" />
+            <input id="settings-model" type="hidden" />
           </div>
           <div class="settings-field">
             <label for="settings-apikey">API Key</label>
@@ -2520,6 +2600,7 @@
   </div>
   <div id="chat-container">
     <div id="chat-log"></div>
+    <div id="model-indicator"></div>
     <div id="chat-input-row">
       <div id="input-bar-wrapper">
         <canvas id="voice-waveform"></canvas>

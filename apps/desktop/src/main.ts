@@ -50,6 +50,7 @@ const chat = initChat(ctx, {
   openMemoryPanel: () => memory.open(),
   speakResponse: (text) => voice.speakAssistantResponse(text),
   getMicState: () => voice.getMicState(),
+  updateModelIndicator: () => settings.updateModelIndicator(),
 });
 
 const settings = initSettings(ctx, { colorPicker, voice, pairing });
@@ -270,6 +271,7 @@ async function tryConnectMcpServer(
  * connect MCP servers, start sync, and load conversation history.
  */
 function onAIReady(config: DesktopAIConfig): void {
+  settings.updateModelIndicator();
   const label = config.provider === "ollama" ? "Ollama" : "Anthropic";
   addMessage("system", `AI connected (${label})`);
 
@@ -489,6 +491,7 @@ async function bootstrap(): Promise<void> {
   // AI init (with error recovery)
   const aiOk = await tryInitAI(config);
   if (aiOk) {
+    settings.updateModelIndicator();
     const label = config.provider === "ollama" ? "Ollama" : "Anthropic";
     addMessage("system", `AI connected (${label})`);
 

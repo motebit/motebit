@@ -378,6 +378,7 @@ export interface ChatCallbacks {
   openMemoryPanel(): void;
   speakResponse(text: string): void;
   getMicState(): MicState;
+  updateModelIndicator(): void;
 }
 
 export interface ChatAPI {
@@ -534,6 +535,7 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
         } else {
           try {
             ctx.app.setModel(args);
+            callbacks.updateModelIndicator();
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
             addMessage("system", `Error: ${msg}`);
