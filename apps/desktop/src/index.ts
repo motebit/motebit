@@ -2029,6 +2029,8 @@ export class DesktopApp {
 
   /**
    * Generate a title using a lightweight AI call that doesn't affect conversation history.
+   * Uses runtime.generateCompletion() (side-channel) so the title prompt never enters
+   * the conversation. Falls back to heuristic (first 7 words) if the AI call fails.
    * Called after pushToHistory when message count crosses 4.
    */
   async generateTitleInBackground(): Promise<string | null> {
@@ -2051,14 +2053,27 @@ export class DesktopApp {
 
     try {
       const history = this.runtime.getConversationHistory();
+      const firstMessages = history.slice(0, 6).map(m => `${m.role}: ${m.content.slice(0, 200)}`).join("\n");
+
+      // Try AI-generated title via side-channel (no conversation pollution)
+      try {
+        const prompt = `Generate a very short title (5-7 words max) for this conversation. Return ONLY the title, no quotes, no explanation.\n\n${firstMessages}`;
+        const raw = await this.runtime.generateCompletion(prompt);
+        const title = raw.trim().replace(/^["']|["']$/g, "").slice(0, 100);
+        if (title.length > 0 && title.length < 100) {
+          this.conversationStoreRef.updateTitle(conversationId, title);
+          return title;
+        }
+      } catch {
+        // AI title generation failed — fall through to heuristic
+      }
+
+      // Heuristic fallback: first 7 words of first user message
       const firstUserMsg = history.find(m => m.role === "user");
       if (firstUserMsg) {
-        // Simple heuristic: use first 7 words of first user message as title
-        const titleWords = firstUserMsg.content.split(/\s+/).slice(0, 7);
-        let title = titleWords.join(" ");
-        if (firstUserMsg.content.split(/\s+/).length > 7) {
-          title += "...";
-        }
+        const words = firstUserMsg.content.split(/\s+/);
+        let title = words.slice(0, 7).join(" ");
+        if (words.length > 7) title += "...";
         if (title.length > 0) {
           this.conversationStoreRef.updateTitle(conversationId, title);
           return title;

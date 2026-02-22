@@ -183,6 +183,33 @@ describe("runTurn", () => {
     expect(contextPack.behavior_cues).toEqual(cues);
   });
 
+  it("sessionInfo in options propagates to context pack", async () => {
+    const session = { continued: true, lastActiveAt: Date.now() - 3600_000 };
+
+    mockFetchSuccess("Welcome back!");
+
+    const deps = makeDeps();
+    const streamSpy = vi.spyOn(deps.provider, "generateStream");
+
+    await runTurn(deps, "I'm back", { sessionInfo: session });
+
+    expect(streamSpy).toHaveBeenCalledTimes(1);
+    const contextPack = streamSpy.mock.calls[0]![0];
+    expect(contextPack.sessionInfo).toEqual(session);
+  });
+
+  it("sessionInfo is undefined when not provided", async () => {
+    mockFetchSuccess("Hello!");
+
+    const deps = makeDeps();
+    const streamSpy = vi.spyOn(deps.provider, "generateStream");
+
+    await runTurn(deps, "Hello");
+
+    const contextPack = streamSpy.mock.calls[0]![0];
+    expect(contextPack.sessionInfo).toBeUndefined();
+  });
+
   it("infers state from text when no state tags are present", async () => {
     // Response with positive words, a question, and length > 200 chars — but no <state> tags
     const responseText =

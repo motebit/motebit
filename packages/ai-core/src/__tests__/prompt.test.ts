@@ -217,4 +217,46 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("trust=");
     expect(prompt).toContain("battery=");
   });
+
+  it("includes session continuation when sessionInfo is present", () => {
+    const pack = makeContextPack({
+      sessionInfo: { continued: true, lastActiveAt: Date.now() - 30 * 60_000 }, // 30 min ago
+    });
+    const prompt = buildSystemPrompt(pack);
+    expect(prompt).toContain("[Session]");
+    expect(prompt).toContain("continuing a conversation from");
+    expect(prompt).toContain("30 minutes ago");
+  });
+
+  it("shows hours for session continuation > 60 minutes", () => {
+    const pack = makeContextPack({
+      sessionInfo: { continued: true, lastActiveAt: Date.now() - 3 * 3600_000 }, // 3 hours ago
+    });
+    const prompt = buildSystemPrompt(pack);
+    expect(prompt).toContain("3 hours ago");
+  });
+
+  it("uses singular 'minute' for exactly 1 minute", () => {
+    const pack = makeContextPack({
+      sessionInfo: { continued: true, lastActiveAt: Date.now() - 60_000 }, // 1 min ago
+    });
+    const prompt = buildSystemPrompt(pack);
+    expect(prompt).toContain("1 minute ago");
+    expect(prompt).not.toContain("1 minutes ago");
+  });
+
+  it("uses singular 'hour' for exactly 1 hour", () => {
+    const pack = makeContextPack({
+      sessionInfo: { continued: true, lastActiveAt: Date.now() - 3600_000 }, // 1 hour ago
+    });
+    const prompt = buildSystemPrompt(pack);
+    expect(prompt).toContain("1 hour ago");
+    expect(prompt).not.toContain("1 hours ago");
+  });
+
+  it("omits session continuation when sessionInfo is absent", () => {
+    const prompt = buildSystemPrompt(makeContextPack());
+    expect(prompt).not.toContain("[Session]");
+    expect(prompt).not.toContain("continuing a conversation");
+  });
 });

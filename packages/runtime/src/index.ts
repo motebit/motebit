@@ -306,6 +306,7 @@ export class MotebitRuntime {
     userMessage: string;
     runId?: string;
   } | null = null;
+  private sessionInfo: { continued: boolean; lastActiveAt: number } | null = null;
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
     this.motebitId = config.motebitId;
@@ -383,6 +384,10 @@ export class MotebitRuntime {
               content: msg.content,
             });
           }
+        }
+        // Mark as continued session so the LLM knows it's resuming
+        if (this.conversationHistory.length > 0) {
+          this.sessionInfo = { continued: true, lastActiveAt: active.lastActiveAt };
         }
       }
     }
@@ -625,8 +630,11 @@ export class MotebitRuntime {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
         runId,
+        sessionInfo: this.sessionInfo ?? undefined,
       });
       this.pushToHistory(text, result.response);
+      // Session info applies only to the first message after resume
+      this.sessionInfo = null;
       return result;
     } finally {
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
@@ -648,7 +656,10 @@ export class MotebitRuntime {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
         runId,
+        sessionInfo: this.sessionInfo ?? undefined,
       });
+      // Session info applies only to the first message after resume
+      this.sessionInfo = null;
       yield* this.processStream(stream, text, runId);
     } finally {
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
@@ -866,6 +877,49 @@ export class MotebitRuntime {
       } catch {
         // Memory formation is best-effort during reflection
       }
+    }
+  }
+
+  /**
+   * Generate a completion from the AI provider without affecting conversation
+   * history or state. Useful for housekeeping tasks (title generation,
+   * classification, summarization) that should not appear in the chat.
+   */
+  async generateCompletion(prompt: string): Promise<string> {
+    if (!this.provider) throw new Error("No AI provider configured");
+
+    const contextPack = {
+      recent_events: [],
+      relevant_memories: [],
+      current_state: this.state.getState(),
+      user_message: prompt,
+    };
+
+    const response = await this.provider.generate(contextPack);
+
+    // Audit: log housekeeping run without affecting user-facing state
+    void this.logHousekeepingRun(prompt, response.text);
+
+    return response.text;
+  }
+
+  private async logHousekeepingRun(prompt: string, result: string): Promise<void> {
+    try {
+      const clock = await this.events.getLatestClock(this.motebitId);
+      await this.events.append({
+        event_id: crypto.randomUUID(),
+        motebit_id: this.motebitId,
+        timestamp: Date.now(),
+        event_type: EventType.HousekeepingRun,
+        payload: {
+          prompt_preview: prompt.slice(0, 100),
+          result_preview: result.slice(0, 100),
+        },
+        version_clock: clock + 1,
+        tombstoned: false,
+      });
+    } catch {
+      // Audit logging is best-effort
     }
   }
 

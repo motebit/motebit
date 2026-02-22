@@ -51,6 +51,7 @@ export enum EventType {
   PlanStepFailed = "plan_step_failed",
   PlanCompleted = "plan_completed",
   PlanFailed = "plan_failed",
+  HousekeepingRun = "housekeeping_run",
 }
 
 export enum RelationType {
@@ -256,7 +257,7 @@ export interface ContextPack {
   behavior_cues?: BehaviorCues;
   tools?: ToolDefinition[];
   /** Session resumption info — set when continuing a persisted conversation. */
-  sessionInfo?: { continued: boolean; startedAt: number };
+  sessionInfo?: { continued: boolean; lastActiveAt: number };
 }
 
 export type ConversationMessage =

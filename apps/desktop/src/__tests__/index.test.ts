@@ -1369,12 +1369,19 @@ describe("DesktopApp.generateTitleInBackground", () => {
     expect(result).toBeNull();
   });
 
+  /** Force AI path to fail so heuristic fallback is tested. */
+  function forceHeuristicPath(desktopApp: DesktopApp): void {
+    const rt = appInternals(desktopApp).runtime as unknown as { generateCompletion: (p: string) => Promise<string> };
+    rt.generateCompletion = vi.fn().mockRejectedValue(new Error("No provider"));
+  }
+
   it("generates title from first 7 words of first user message with ellipsis", async () => {
     const setup = await setupAppWithConversation({
       messageCount: 6,
       firstUserContent: "Tell me about the history of computing and how it evolved over time",
     });
     app = setup.app;
+    forceHeuristicPath(app);
     const result = await app.generateTitleInBackground();
     expect(result).toBe("Tell me about the history of computing...");
     // Verify the pending flag was reset
@@ -1387,6 +1394,7 @@ describe("DesktopApp.generateTitleInBackground", () => {
       firstUserContent: "Hello how are you",
     });
     app = setup.app;
+    forceHeuristicPath(app);
     const result = await app.generateTitleInBackground();
     expect(result).toBe("Hello how are you");
     expect(appInternals(app)._autoTitlePending).toBe(false);
@@ -1398,6 +1406,7 @@ describe("DesktopApp.generateTitleInBackground", () => {
       firstUserContent: "one two three four five six seven",
     });
     app = setup.app;
+    forceHeuristicPath(app);
     const result = await app.generateTitleInBackground();
     expect(result).toBe("one two three four five six seven");
   });
@@ -1408,6 +1417,7 @@ describe("DesktopApp.generateTitleInBackground", () => {
       firstUserContent: "one two three four five six seven eight nine",
     });
     app = setup.app;
+    forceHeuristicPath(app);
     const result = await app.generateTitleInBackground();
     expect(result).toBe("one two three four five six seven...");
   });
@@ -1418,6 +1428,7 @@ describe("DesktopApp.generateTitleInBackground", () => {
       firstUserContent: "What is machine learning",
     });
     app = setup.app;
+    forceHeuristicPath(app);
     await app.generateTitleInBackground();
 
     // Check that the mock DB recorded the UPDATE for the title
@@ -1427,5 +1438,55 @@ describe("DesktopApp.generateTitleInBackground", () => {
     expect(titleUpdates).toHaveLength(1);
     expect(titleUpdates[0]!.params).toContain("What is machine learning");
     expect(titleUpdates[0]!.params).toContain("conv-auto-title");
+  });
+
+  it("uses AI-generated title when runtime.generateCompletion succeeds", async () => {
+    const setup = await setupAppWithConversation({
+      messageCount: 6,
+      firstUserContent: "Tell me about quantum computing and its implications for cryptography",
+    });
+    app = setup.app;
+
+    // Mock generateCompletion on the runtime to simulate successful AI response
+    const rt = appInternals(app).runtime as unknown as { generateCompletion: (p: string) => Promise<string> };
+    rt.generateCompletion = vi.fn().mockResolvedValue("Quantum Computing and Cryptography");
+
+    const result = await app.generateTitleInBackground();
+    expect(result).toBe("Quantum Computing and Cryptography");
+
+    // Verify it used AI, not the heuristic
+    expect(rt.generateCompletion).toHaveBeenCalledOnce();
+    const prompt = (rt.generateCompletion as ReturnType<typeof vi.fn>).mock.calls[0]![0] as string;
+    expect(prompt).toContain("Generate a very short title");
+  });
+
+  it("falls back to heuristic when runtime.generateCompletion fails", async () => {
+    const setup = await setupAppWithConversation({
+      messageCount: 6,
+      firstUserContent: "Tell me about quantum computing and its implications for cryptography",
+    });
+    app = setup.app;
+
+    // Mock generateCompletion to throw (simulating provider failure)
+    const rt = appInternals(app).runtime as unknown as { generateCompletion: (p: string) => Promise<string> };
+    rt.generateCompletion = vi.fn().mockRejectedValue(new Error("Connection refused"));
+
+    const result = await app.generateTitleInBackground();
+    // Falls back to heuristic: first 7 words + ellipsis
+    expect(result).toBe("Tell me about quantum computing and its...");
+  });
+
+  it("strips quotes from AI-generated titles", async () => {
+    const setup = await setupAppWithConversation({
+      messageCount: 6,
+      firstUserContent: "What is the weather today",
+    });
+    app = setup.app;
+
+    const rt = appInternals(app).runtime as unknown as { generateCompletion: (p: string) => Promise<string> };
+    rt.generateCompletion = vi.fn().mockResolvedValue('"Today\'s Weather Forecast"');
+
+    const result = await app.generateTitleInBackground();
+    expect(result).toBe("Today's Weather Forecast");
   });
 });
