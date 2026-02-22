@@ -273,7 +273,13 @@ async function tryConnectMcpServer(
   try {
     const status = await app.connectMcpServerViaTauri(mcpConfig, invoke);
     if (status.manifestChanged) {
-      showToast(`${mcpConfig.name}: tools changed since last connection — trust revoked`);
+      const diff = status.manifestDiff;
+      const parts = [`${mcpConfig.name}: tools changed — trust revoked`];
+      if (diff) {
+        if (diff.added.length) parts.push(`+${diff.added.length} added`);
+        if (diff.removed.length) parts.push(`-${diff.removed.length} removed`);
+      }
+      showToast(parts.join(", "));
     }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

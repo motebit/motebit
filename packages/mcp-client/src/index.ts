@@ -13,6 +13,13 @@ export interface McpServerConfig {
   trusted?: boolean;
   /** SHA-256 hash of the tool manifest, set on first connect. */
   toolManifestHash?: string;
+  /** Tool names from the last pinned manifest, used for diffing on change. */
+  pinnedToolNames?: string[];
+}
+
+export interface ManifestDiff {
+  added: string[];
+  removed: string[];
 }
 
 export interface ManifestCheckResult {
@@ -24,6 +31,10 @@ export interface ManifestCheckResult {
   previousHash?: string;
   /** Number of tools discovered. */
   toolCount: number;
+  /** Current tool names (for persisting alongside the hash). */
+  toolNames: string[];
+  /** If manifest changed, what tools were added/removed. Only present when !ok. */
+  diff?: ManifestDiff;
 }
 
 // === Inline boundary wrapping for MCP results ===
@@ -50,6 +61,14 @@ async function computeManifestHash(tools: ToolDefinition[]): Promise<string> {
   const hashBuffer = await globalThis.crypto.subtle.digest("SHA-256", encoded);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function computeManifestDiff(previous: string[], current: string[]): ManifestDiff {
+  const prevSet = new Set(previous);
+  const currSet = new Set(current);
+  const added = current.filter((n) => !prevSet.has(n));
+  const removed = previous.filter((n) => !currSet.has(n));
+  return { added, removed };
 }
 
 export class McpClientAdapter {
@@ -123,19 +142,26 @@ export class McpClientAdapter {
 
   /**
    * Compare the current tool manifest against a pinned hash.
-   * Returns the check result with the current hash and whether it matches.
+   * Returns the check result with the current hash, tool names, and diff (if changed).
    */
-  async checkManifest(pinnedHash?: string): Promise<ManifestCheckResult> {
+  async checkManifest(pinnedHash?: string, pinnedToolNames?: string[]): Promise<ManifestCheckResult> {
     const hash = await computeManifestHash(this.discoveredTools);
+    const toolNames = this.discoveredTools.map((t) => t.name);
     if (!pinnedHash) {
       // First connection — no pin exists, accept and pin
-      return { ok: true, hash, toolCount: this.discoveredTools.length };
+      return { ok: true, hash, toolCount: this.discoveredTools.length, toolNames };
     }
+    const ok = hash === pinnedHash;
+    const diff = !ok && pinnedToolNames
+      ? computeManifestDiff(pinnedToolNames, toolNames)
+      : undefined;
     return {
-      ok: hash === pinnedHash,
+      ok,
       hash,
       previousHash: pinnedHash,
       toolCount: this.discoveredTools.length,
+      toolNames,
+      diff,
     };
   }
 

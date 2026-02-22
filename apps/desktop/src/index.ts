@@ -225,6 +225,8 @@ export interface McpServerStatus {
   connected: boolean;
   toolCount: number;
   manifestChanged?: boolean;
+  /** If manifest changed, tools added/removed since last pin. */
+  manifestDiff?: { added: string[]; removed: string[] };
 }
 
 // === Desktop App (platform shell) ===
@@ -793,22 +795,28 @@ export class DesktopApp {
         disconnect(): Promise<void>;
         getTools(): unknown[];
         registerInto(registry: unknown): void;
-        checkManifest(pinnedHash?: string): Promise<{ ok: boolean; hash: string; previousHash?: string; toolCount: number }>;
+        checkManifest(pinnedHash?: string, pinnedToolNames?: string[]): Promise<{
+          ok: boolean; hash: string; previousHash?: string; toolCount: number;
+          toolNames: string[]; diff?: { added: string[]; removed: string[] };
+        }>;
       };
     }>);
     const adapter = new mcpModule.McpClientAdapter(config);
     await adapter.connect();
 
     // Manifest pinning — verify tools haven't changed since last connection
-    const manifestCheck = await adapter.checkManifest(config.toolManifestHash);
+    const manifestCheck = await adapter.checkManifest(config.toolManifestHash, config.pinnedToolNames);
     let manifestChanged = false;
+    let manifestDiff: { added: string[]; removed: string[] } | undefined;
     if (!manifestCheck.ok) {
       // Tools changed since last pin — revoke trust, require re-approval
       manifestChanged = true;
+      manifestDiff = manifestCheck.diff;
       config.trusted = false;
     }
-    // Pin the current manifest hash (first connect or re-pin after change)
+    // Pin the current manifest hash and tool names
     config.toolManifestHash = manifestCheck.hash;
+    config.pinnedToolNames = manifestCheck.toolNames;
 
     // Register tools into a temporary registry, then merge into runtime
     const tempRegistry = new SimpleToolRegistry();
@@ -830,6 +838,7 @@ export class DesktopApp {
       connected: true,
       toolCount,
       manifestChanged,
+      manifestDiff,
     };
   }
 

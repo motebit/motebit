@@ -720,3 +720,122 @@ describe("connectMcpServers", () => {
     warnSpy.mockRestore();
   });
 });
+
+// ============================================================
+// checkManifest() — manifest pinning and diff
+// ============================================================
+
+describe("McpClientAdapter — checkManifest", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListTools.mockResolvedValue(mcpToolsResponse([]));
+    mockConnect.mockResolvedValue(undefined);
+  });
+
+  it("returns ok:true and hash on first pin (no previousHash)", async () => {
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
+      { name: "tool_a", description: "A" },
+    ]));
+    const adapter = new McpClientAdapter(stdioConfig({ name: "srv" }));
+    await adapter.connect();
+
+    const result = await adapter.checkManifest();
+    expect(result.ok).toBe(true);
+    expect(result.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.toolCount).toBe(1);
+    expect(result.toolNames).toEqual(["srv__tool_a"]);
+    expect(result.diff).toBeUndefined();
+  });
+
+  it("returns ok:true when hash matches", async () => {
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
+      { name: "tool_a", description: "A" },
+    ]));
+    const adapter = new McpClientAdapter(stdioConfig({ name: "srv" }));
+    await adapter.connect();
+
+    const first = await adapter.checkManifest();
+    const second = await adapter.checkManifest(first.hash, first.toolNames);
+    expect(second.ok).toBe(true);
+    expect(second.diff).toBeUndefined();
+  });
+
+  it("returns ok:false when hash mismatches", async () => {
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
+      { name: "tool_a", description: "A" },
+    ]));
+    const adapter = new McpClientAdapter(stdioConfig({ name: "srv" }));
+    await adapter.connect();
+
+    const result = await adapter.checkManifest("0000000000000000000000000000000000000000000000000000000000000000");
+    expect(result.ok).toBe(false);
+    expect(result.previousHash).toBe("0000000000000000000000000000000000000000000000000000000000000000");
+  });
+
+  it("computes diff showing added tools", async () => {
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
+      { name: "tool_a", description: "A" },
+      { name: "tool_b", description: "B" },
+    ]));
+    const adapter = new McpClientAdapter(stdioConfig({ name: "srv" }));
+    await adapter.connect();
+
+    // Previous manifest only had tool_a
+    const result = await adapter.checkManifest(
+      "stale_hash",
+      ["srv__tool_a"],
+    );
+    expect(result.ok).toBe(false);
+    expect(result.diff).toBeDefined();
+    expect(result.diff!.added).toEqual(["srv__tool_b"]);
+    expect(result.diff!.removed).toEqual([]);
+  });
+
+  it("computes diff showing removed tools", async () => {
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
+      { name: "tool_a", description: "A" },
+    ]));
+    const adapter = new McpClientAdapter(stdioConfig({ name: "srv" }));
+    await adapter.connect();
+
+    // Previous manifest had tool_a + tool_b
+    const result = await adapter.checkManifest(
+      "stale_hash",
+      ["srv__tool_a", "srv__tool_b"],
+    );
+    expect(result.ok).toBe(false);
+    expect(result.diff).toBeDefined();
+    expect(result.diff!.added).toEqual([]);
+    expect(result.diff!.removed).toEqual(["srv__tool_b"]);
+  });
+
+  it("computes diff showing both added and removed", async () => {
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
+      { name: "tool_b", description: "B" },
+      { name: "tool_c", description: "C" },
+    ]));
+    const adapter = new McpClientAdapter(stdioConfig({ name: "srv" }));
+    await adapter.connect();
+
+    const result = await adapter.checkManifest(
+      "stale_hash",
+      ["srv__tool_a", "srv__tool_b"],
+    );
+    expect(result.ok).toBe(false);
+    expect(result.diff!.added).toEqual(["srv__tool_c"]);
+    expect(result.diff!.removed).toEqual(["srv__tool_a"]);
+  });
+
+  it("no diff when pinnedToolNames not provided", async () => {
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
+      { name: "tool_a", description: "A" },
+    ]));
+    const adapter = new McpClientAdapter(stdioConfig({ name: "srv" }));
+    await adapter.connect();
+
+    // Hash mismatch but no pinnedToolNames — no diff computed
+    const result = await adapter.checkManifest("stale_hash");
+    expect(result.ok).toBe(false);
+    expect(result.diff).toBeUndefined();
+  });
+});

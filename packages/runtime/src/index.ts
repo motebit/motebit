@@ -75,6 +75,8 @@ export interface McpServerConfig {
   spawnApproved?: boolean;
   /** SHA-256 hash of the tool manifest, set on first connect. */
   toolManifestHash?: string;
+  /** Tool names from the last pinned manifest, used for diffing on change. */
+  pinnedToolNames?: string[];
 }
 
 // === Browser-safe Tool Registry ===
@@ -221,6 +223,8 @@ export interface RuntimeConfig {
   memoryGovernance?: Partial<MemoryGovernanceConfig>;
   /** Summarize conversation after this many messages (0 = disabled, default 20). */
   summarizeAfterMessages?: number;
+  /** Auto-deny pending tool approvals after this many ms (0 = disabled, default 600000 = 10 min). */
+  approvalTimeoutMs?: number;
 }
 
 // === Stream Chunk ===
@@ -230,6 +234,7 @@ export type StreamChunk =
   | { type: "tool_status"; name: string; status: "calling" | "done"; result?: unknown }
   | { type: "approval_request"; tool_call_id: string; name: string; args: Record<string, unknown>; risk_level?: number }
   | { type: "injection_warning"; tool_name: string; patterns: string[] }
+  | { type: "approval_expired"; tool_name: string }
   | { type: "result"; result: TurnResult };
 
 // === Operator Mode Result ===
@@ -238,9 +243,28 @@ export interface OperatorModeResult {
   success: boolean;
   needsSetup?: boolean;
   error?: string;
+  /** If locked out, the timestamp (ms) when the lockout expires. */
+  lockedUntil?: number;
 }
 
 const OPERATOR_PIN_KEY = "operator_pin_hash";
+const OPERATOR_PIN_ATTEMPTS_KEY = "operator_pin_attempts";
+const MAX_PIN_ATTEMPTS = 5;
+const PIN_LOCKOUT_BASE_MS = 30_000; // 30 seconds
+
+interface PinAttemptState {
+  /** Number of consecutive failed attempts. */
+  count: number;
+  /** Timestamp (ms) of the last failed attempt. */
+  lastFailedAt: number;
+}
+
+function pinLockoutMs(attempts: number): number {
+  if (attempts < MAX_PIN_ATTEMPTS) return 0;
+  // Exponential backoff: 30s, 5m, 30m, capped at 30m
+  const exponent = attempts - MAX_PIN_ATTEMPTS;
+  return Math.min(PIN_LOCKOUT_BASE_MS * Math.pow(10, exponent), 30 * 60_000);
+}
 
 async function hashPin(pin: string): Promise<string> {
   const data = new TextEncoder().encode(pin);
@@ -309,6 +333,9 @@ export class MotebitRuntime {
     userMessage: string;
     runId?: string;
   } | null = null;
+  private approvalTimeoutMs: number;
+  private approvalTimer: ReturnType<typeof setTimeout> | null = null;
+  private approvalExpiredCallback: (() => void) | null = null;
   private sessionInfo: { continued: boolean; lastActiveAt: number } | null = null;
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
@@ -317,6 +344,7 @@ export class MotebitRuntime {
     this.compactionThreshold = config.compactionThreshold ?? 1000;
     this.mcpConfigs = config.mcpServers ?? [];
     this.summarizeAfterMessages = config.summarizeAfterMessages ?? 20;
+    this.approvalTimeoutMs = config.approvalTimeoutMs ?? 600_000; // 10 min default
     this.renderer = adapters.renderer;
     this.provider = adapters.ai ?? null;
     this.stateSnapshot = adapters.storage.stateSnapshot;
@@ -516,6 +544,7 @@ export class MotebitRuntime {
    * Enable/disable operator mode with PIN authentication.
    * Disabling never requires a PIN (safe direction).
    * If no keyring is available, falls through (dev mode).
+   * Rate-limited: after 5 failed attempts, exponential lockout (30s → 5m → 30m).
    */
   async setOperatorMode(enabled: boolean, pin?: string): Promise<OperatorModeResult> {
     // Disabling is always allowed (safe direction)
@@ -543,14 +572,49 @@ export class MotebitRuntime {
       return { success: false, error: "PIN required" };
     }
 
+    // Check rate limiting
+    const attemptState = await this.getPinAttemptState();
+    const lockoutMs = pinLockoutMs(attemptState.count);
+    if (lockoutMs > 0) {
+      const lockedUntil = attemptState.lastFailedAt + lockoutMs;
+      if (Date.now() < lockedUntil) {
+        return { success: false, error: "Too many failed attempts", lockedUntil };
+      }
+    }
+
     const inputHash = await hashPin(pin);
     if (inputHash !== storedHash) {
+      await this.recordPinFailure(attemptState);
       return { success: false, error: "Incorrect PIN" };
     }
 
+    // Success — reset attempt counter
+    await this.clearPinAttempts();
     this.policy.setOperatorMode(true);
     this.wireLoopDeps();
     return { success: true };
+  }
+
+  private async getPinAttemptState(): Promise<PinAttemptState> {
+    if (!this.keyring) return { count: 0, lastFailedAt: 0 };
+    const raw = await this.keyring.get(OPERATOR_PIN_ATTEMPTS_KEY);
+    if (!raw) return { count: 0, lastFailedAt: 0 };
+    try {
+      return JSON.parse(raw) as PinAttemptState;
+    } catch {
+      return { count: 0, lastFailedAt: 0 };
+    }
+  }
+
+  private async recordPinFailure(prev: PinAttemptState): Promise<void> {
+    if (!this.keyring) return;
+    const state: PinAttemptState = { count: prev.count + 1, lastFailedAt: Date.now() };
+    await this.keyring.set(OPERATOR_PIN_ATTEMPTS_KEY, JSON.stringify(state));
+  }
+
+  private async clearPinAttempts(): Promise<void> {
+    if (!this.keyring) return;
+    await this.keyring.delete(OPERATOR_PIN_ATTEMPTS_KEY);
   }
 
   /**
@@ -570,6 +634,7 @@ export class MotebitRuntime {
   async resetOperatorPin(): Promise<void> {
     if (!this.keyring) throw new Error("Keyring not available");
     await this.keyring.delete(OPERATOR_PIN_KEY);
+    await this.clearPinAttempts();
     this.policy.setOperatorMode(false);
     this.wireLoopDeps();
   }
@@ -680,6 +745,7 @@ export class MotebitRuntime {
     if (!this._pendingApproval) throw new Error("No pending approval to resume");
     if (!this.loopDeps) throw new Error("AI not initialized");
 
+    this.clearApprovalTimeout();
     const pending = this._pendingApproval;
     this._pendingApproval = null;
     this._isProcessing = true;
@@ -741,6 +807,39 @@ export class MotebitRuntime {
     return { toolName: this._pendingApproval.toolName, args: this._pendingApproval.args };
   }
 
+  /**
+   * Register a callback invoked when a pending approval expires.
+   * Apps should use this to auto-deny and update UI (e.g. dismiss dialog, show toast).
+   */
+  onApprovalExpired(cb: () => void): void {
+    this.approvalExpiredCallback = cb;
+  }
+
+  private startApprovalTimeout(): void {
+    this.clearApprovalTimeout();
+    if (this.approvalTimeoutMs <= 0) return;
+    this.approvalTimer = setTimeout(() => {
+      if (!this._pendingApproval) return;
+      const expired = this._pendingApproval;
+      this._pendingApproval = null;
+      // Push denial into conversation history so LLM sees it on next turn
+      this.conversationHistory.push(
+        { role: "assistant" as const, content: `[tool_use: ${expired.toolName}(${JSON.stringify(expired.args)})]` },
+        { role: "user" as const, content: `[tool_result: {"ok":false,"error":"Approval timed out after ${this.approvalTimeoutMs}ms"}]` },
+      );
+      this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
+      this._isProcessing = false;
+      this.approvalExpiredCallback?.();
+    }, this.approvalTimeoutMs);
+  }
+
+  private clearApprovalTimeout(): void {
+    if (this.approvalTimer) {
+      clearTimeout(this.approvalTimer);
+      this.approvalTimer = null;
+    }
+  }
+
   /** Shared stream processing — extracts state tags, actions, handles tool/approval/injection chunks. */
   private async *processStream(
     stream: AsyncGenerator<AgenticChunk>,
@@ -787,7 +886,7 @@ export class MotebitRuntime {
         }
       }
 
-      // Approval request: capture pending state before yielding
+      // Approval request: capture pending state and start timeout
       if (chunk.type === "approval_request") {
         this._pendingApproval = {
           toolCallId: chunk.tool_call_id,
@@ -796,6 +895,7 @@ export class MotebitRuntime {
           userMessage,
           runId,
         };
+        this.startApprovalTimeout();
         this.state.pushUpdate({ processing: 0.5, attention: 0.95, affect_arousal: 0.2 });
       }
 

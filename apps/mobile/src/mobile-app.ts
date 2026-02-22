@@ -661,11 +661,12 @@ export class MobileApp {
     await adapter.connect();
 
     // Manifest pinning: pin hash on first connect, revoke trust on mismatch
-    const manifestResult = await adapter.checkManifest(config.toolManifestHash);
+    const manifestResult = await adapter.checkManifest(config.toolManifestHash, config.pinnedToolNames);
     if (!manifestResult.ok) {
       config.trusted = false; // Tools changed — revoke trust
     }
     config.toolManifestHash = manifestResult.hash;
+    config.pinnedToolNames = manifestResult.toolNames;
 
     // Register tools with trust-aware approval flags
     this.registerMcpTools(adapter, config);
@@ -758,11 +759,12 @@ export class MobileApp {
           await adapter.connect();
 
           // Check manifest integrity on reconnect
-          const manifestResult = await adapter.checkManifest(config.toolManifestHash);
+          const manifestResult = await adapter.checkManifest(config.toolManifestHash, config.pinnedToolNames);
           if (!manifestResult.ok) {
             config.trusted = false;
           }
           config.toolManifestHash = manifestResult.hash;
+          config.pinnedToolNames = manifestResult.toolNames;
 
           this.registerMcpTools(adapter, config);
           this.mcpAdapters.set(config.name, adapter);

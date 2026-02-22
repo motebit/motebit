@@ -557,6 +557,127 @@ describe("Operator mode PIN auth", () => {
   });
 });
 
+// === Operator Mode PIN Rate Limiting ===
+
+describe("Operator mode PIN rate limiting", () => {
+  function createRuntimeWithKeyring(keyring?: KeyringAdapter) {
+    return new MotebitRuntime(
+      { motebitId: "rate-limit-test", tickRateHz: 0 },
+      {
+        storage: createInMemoryStorage(),
+        renderer: new NullRenderer(),
+        keyring: keyring ?? undefined,
+      },
+    );
+  }
+
+  it("allows retries below the threshold", async () => {
+    const keyring = createMockKeyring();
+    const rt = createRuntimeWithKeyring(keyring);
+    await rt.setupOperatorPin("1234");
+
+    // 4 failures should still allow attempts (threshold is 5)
+    for (let i = 0; i < 4; i++) {
+      const result = await rt.setOperatorMode(true, "9999");
+      expect(result.success).toBe(false);
+      expect(result.error).toBe("Incorrect PIN");
+      expect(result.lockedUntil).toBeUndefined();
+    }
+
+    // 5th attempt with correct PIN still works
+    const result = await rt.setOperatorMode(true, "1234");
+    expect(result.success).toBe(true);
+  });
+
+  it("locks out after 5 failed attempts", async () => {
+    const keyring = createMockKeyring();
+    const rt = createRuntimeWithKeyring(keyring);
+    await rt.setupOperatorPin("1234");
+
+    for (let i = 0; i < 5; i++) {
+      await rt.setOperatorMode(true, "9999");
+    }
+
+    // 6th attempt should be locked out even with correct PIN
+    const result = await rt.setOperatorMode(true, "1234");
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Too many failed attempts");
+    expect(result.lockedUntil).toBeDefined();
+    expect(result.lockedUntil!).toBeGreaterThan(Date.now());
+  });
+
+  it("lockout expires and correct PIN works", async () => {
+    const keyring = createMockKeyring();
+    const rt = createRuntimeWithKeyring(keyring);
+    await rt.setupOperatorPin("1234");
+
+    // Simulate 5 failed attempts with lastFailedAt in the past
+    const pastState = JSON.stringify({ count: 5, lastFailedAt: Date.now() - 60_000 });
+    await keyring.set("operator_pin_attempts", pastState);
+
+    // Lockout was 30s, and 60s has passed — should be unlocked
+    const result = await rt.setOperatorMode(true, "1234");
+    expect(result.success).toBe(true);
+  });
+
+  it("successful PIN clears attempt counter", async () => {
+    const keyring = createMockKeyring();
+    const rt = createRuntimeWithKeyring(keyring);
+    await rt.setupOperatorPin("1234");
+
+    // 3 failures
+    for (let i = 0; i < 3; i++) {
+      await rt.setOperatorMode(true, "9999");
+    }
+
+    // Correct PIN
+    await rt.setOperatorMode(true, "1234");
+
+    // Counter should be cleared — verify via keyring
+    const raw = await keyring.get("operator_pin_attempts");
+    expect(raw).toBeNull();
+  });
+
+  it("resetOperatorPin clears attempt counter", async () => {
+    const keyring = createMockKeyring();
+    const rt = createRuntimeWithKeyring(keyring);
+    await rt.setupOperatorPin("1234");
+
+    // Accumulate failures
+    for (let i = 0; i < 3; i++) {
+      await rt.setOperatorMode(true, "9999");
+    }
+
+    await rt.resetOperatorPin();
+    const raw = await keyring.get("operator_pin_attempts");
+    expect(raw).toBeNull();
+  });
+
+  it("lockout escalates with repeated lockouts", async () => {
+    const keyring = createMockKeyring();
+    const rt = createRuntimeWithKeyring(keyring);
+    await rt.setupOperatorPin("1234");
+
+    // 5 failures (exponent=0): lockout = 30s * 10^0 = 30s
+    const state5 = JSON.stringify({ count: 5, lastFailedAt: Date.now() });
+    await keyring.set("operator_pin_attempts", state5);
+    const r1 = await rt.setOperatorMode(true, "1234");
+    expect(r1.success).toBe(false);
+    const lockout1 = r1.lockedUntil! - Date.now();
+    expect(lockout1).toBeLessThanOrEqual(30_000);
+    expect(lockout1).toBeGreaterThan(0);
+
+    // 6 failures (exponent=1): lockout = 30s * 10^1 = 300s (5min)
+    const state6 = JSON.stringify({ count: 6, lastFailedAt: Date.now() });
+    await keyring.set("operator_pin_attempts", state6);
+    const r2 = await rt.setOperatorMode(true, "1234");
+    expect(r2.success).toBe(false);
+    const lockout2 = r2.lockedUntil! - Date.now();
+    expect(lockout2).toBeGreaterThan(30_000);
+    expect(lockout2).toBeLessThanOrEqual(300_000);
+  });
+});
+
 // === generateCompletion ===
 
 describe("generateCompletion", () => {

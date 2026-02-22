@@ -668,7 +668,13 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
           }).catch(() => { /* non-fatal */ });
           void ctx.app.connectMcpServerViaTauri(config, inv).then((status) => {
             if (status.manifestChanged) {
-              ctx.showToast(`${config.name}: tools changed — trust revoked, re-approve required`);
+              const diff = status.manifestDiff;
+              const parts = [`${config.name}: tools changed — trust revoked`];
+              if (diff) {
+                if (diff.added.length) parts.push(`+${diff.added.length} added`);
+                if (diff.removed.length) parts.push(`-${diff.removed.length} removed`);
+              }
+              ctx.showToast(parts.join(", "));
             }
             // Persist updated manifest hash
             void inv<string>("read_config").then(raw => {

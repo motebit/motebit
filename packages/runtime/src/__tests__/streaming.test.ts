@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   MotebitRuntime,
   NullRenderer,
@@ -1022,5 +1022,124 @@ describe("Conversation resume from store", () => {
     expect(history[0]).toEqual({ role: "user", content: "previous message" });
     expect(history[1]).toEqual({ role: "assistant", content: "previous reply" });
     expect(runtime.getConversationId()).toBe(convId);
+  });
+});
+
+// === Approval Timeout ===
+
+describe("Approval timeout", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockRunTurnStreaming.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("auto-denies pending approval after timeout", async () => {
+    // Set up a stream that yields an approval request then stops
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks(
+        { type: "approval_request", tool_call_id: "tc-timeout", name: "risky_tool", args: { x: 1 } },
+      ),
+    );
+
+    const runtime = new MotebitRuntime(
+      { motebitId: "timeout-test", tickRateHz: 0, approvalTimeoutMs: 5000 },
+      createAdapters(createMockProvider()),
+    );
+    // AI initialized via constructor
+
+    // Consume stream to trigger approval capture
+    await collectChunks(runtime.sendMessageStreaming("do something risky"));
+
+    expect(runtime.hasPendingApproval).toBe(true);
+
+    // Advance past timeout
+    vi.advanceTimersByTime(5001);
+
+    expect(runtime.hasPendingApproval).toBe(false);
+  });
+
+  it("fires onApprovalExpired callback", async () => {
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks(
+        { type: "approval_request", tool_call_id: "tc-cb", name: "risky_tool", args: {} },
+      ),
+    );
+
+    const runtime = new MotebitRuntime(
+      { motebitId: "cb-test", tickRateHz: 0, approvalTimeoutMs: 3000 },
+      createAdapters(createMockProvider()),
+    );
+    // AI initialized via constructor
+
+    const cb = vi.fn();
+    runtime.onApprovalExpired(cb);
+
+    await collectChunks(runtime.sendMessageStreaming("test"));
+    expect(cb).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(3001);
+
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire timeout if approval resolved before expiry", async () => {
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks(
+        { type: "approval_request", tool_call_id: "tc-fast", name: "tool", args: {} },
+      ),
+    );
+    // Continuation stream after denial
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks(
+        { type: "text", text: "denied" },
+        { type: "result", result: makeTurnResult("denied") },
+      ),
+    );
+
+    const runtime = new MotebitRuntime(
+      { motebitId: "fast-test", tickRateHz: 0, approvalTimeoutMs: 5000 },
+      createAdapters(createMockProvider()),
+    );
+    // AI initialized via constructor
+
+    const cb = vi.fn();
+    runtime.onApprovalExpired(cb);
+
+    await collectChunks(runtime.sendMessageStreaming("test"));
+    expect(runtime.hasPendingApproval).toBe(true);
+
+    // Deny before timeout
+    await collectChunks(runtime.resumeAfterApproval(false));
+
+    // Advance past would-be timeout
+    vi.advanceTimersByTime(6000);
+
+    expect(cb).not.toHaveBeenCalled();
+    expect(runtime.hasPendingApproval).toBe(false);
+  });
+
+  it("disabled when approvalTimeoutMs is 0", async () => {
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks(
+        { type: "approval_request", tool_call_id: "tc-no", name: "tool", args: {} },
+      ),
+    );
+
+    const runtime = new MotebitRuntime(
+      { motebitId: "no-timeout-test", tickRateHz: 0, approvalTimeoutMs: 0 },
+      createAdapters(createMockProvider()),
+    );
+    // AI initialized via constructor
+
+    await collectChunks(runtime.sendMessageStreaming("test"));
+    expect(runtime.hasPendingApproval).toBe(true);
+
+    // Advance a long time — should still be pending
+    vi.advanceTimersByTime(999_999);
+    expect(runtime.hasPendingApproval).toBe(true);
   });
 });
