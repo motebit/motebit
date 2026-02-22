@@ -4,6 +4,7 @@ import { addMessage } from "./chat";
 import type { ColorPickerAPI } from "./color-picker";
 import type { VoiceAPI } from "./voice";
 import type { PairingAPI } from "./pairing";
+import { saveFocus, restoreFocus, focusFirst } from "./focus";
 
 // === DOM Refs ===
 
@@ -121,7 +122,9 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
   function switchTab(tabName: string): void {
     document.querySelectorAll(".settings-tab").forEach(tab => {
-      tab.classList.toggle("active", (tab as HTMLElement).dataset.tab === tabName);
+      const isActive = (tab as HTMLElement).dataset.tab === tabName;
+      tab.classList.toggle("active", isActive);
+      tab.setAttribute("aria-selected", String(isActive));
     });
     document.querySelectorAll(".settings-pane").forEach(pane => {
       pane.classList.toggle("active", pane.id === `pane-${tabName}`);
@@ -395,6 +398,8 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   // === Settings Open / Close ===
 
   function open(): void {
+    saveFocus();
+
     const config = ctx.getConfig();
     if (config) {
       settingsProvider.value = config.provider;
@@ -429,6 +434,9 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
     settingsBackdrop.classList.add("open");
     settingsModal.classList.add("open");
+
+    // Focus the first focusable element in the modal
+    requestAnimationFrame(() => focusFirst(settingsModal));
   }
 
   function openToTab(tabName: string): void {
@@ -439,6 +447,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   function close(): void {
     settingsBackdrop.classList.remove("open");
     settingsModal.classList.remove("open");
+    restoreFocus();
   }
 
   function cancel(): void {
@@ -585,7 +594,9 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       (document.getElementById("pin-submit") as HTMLButtonElement).textContent = "OK";
     }
     pinBackdrop.classList.add("open");
-    if (mode !== "reset") pinInput.focus();
+    if (mode !== "reset") {
+      requestAnimationFrame(() => pinInput.focus());
+    }
   }
 
   function closePinDialog(): void {
