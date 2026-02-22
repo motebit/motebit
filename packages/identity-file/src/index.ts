@@ -71,7 +71,7 @@ function serializeValue(value: unknown, level: number): string {
     return "\n" + lines.join("\n");
   }
 
-  return String(value);
+  return String(value as string | number | boolean | bigint | symbol);
 }
 
 function serializeYaml(data: MotebitIdentityFile): string {

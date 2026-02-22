@@ -158,4 +158,126 @@ describe("BehaviorEngine", () => {
     a.hover_distance = 999;
     expect(b.hover_distance).toBe(0.4);
   });
+
+  it("successive computes converge toward target cues", () => {
+    const highState = makeDefaultState({ processing: 1, confidence: 1, attention: 1 });
+    let prev = engine.getPreviousCues();
+
+    // Run multiple ticks — glow should converge upward
+    for (let i = 0; i < 20; i++) {
+      engine.compute(highState);
+    }
+    const after = engine.getPreviousCues();
+    expect(after.glow_intensity).toBeGreaterThan(prev.glow_intensity);
+  });
+
+  it("compute with all-zero state produces calm baseline", () => {
+    const cues = engine.compute(makeDefaultState({
+      attention: 0,
+      processing: 0,
+      confidence: 0,
+      affect_valence: 0,
+      curiosity: 0,
+    }));
+    // Should be near baseline values
+    expect(cues.smile_curvature).toBe(0);
+    expect(cues.eye_dilation).toBeCloseTo(0.3, 1);
+    expect(cues.drift_amplitude).toBeCloseTo(0.02, 2);
+  });
+
+  it("compute with all-max state still produces valid cues", () => {
+    const cues = engine.compute(makeDefaultState({
+      attention: 1,
+      processing: 1,
+      confidence: 1,
+      affect_valence: 1,
+      affect_arousal: 0.35,
+      curiosity: 1,
+    }));
+    // All values should be finite
+    expect(Number.isFinite(cues.hover_distance)).toBe(true);
+    expect(Number.isFinite(cues.drift_amplitude)).toBe(true);
+    expect(Number.isFinite(cues.glow_intensity)).toBe(true);
+    expect(Number.isFinite(cues.eye_dilation)).toBe(true);
+    expect(Number.isFinite(cues.smile_curvature)).toBe(true);
+    // Glow should be clamped to [0, 1]
+    expect(cues.glow_intensity).toBeLessThanOrEqual(1);
+    expect(cues.glow_intensity).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computeRawCues — boundary conditions
+// ---------------------------------------------------------------------------
+
+describe("computeRawCues boundary conditions", () => {
+  it("eye_dilation is clamped to [0, 1]", () => {
+    const cues = computeRawCues(makeDefaultState({ attention: 1, curiosity: 1 }));
+    expect(cues.eye_dilation).toBeLessThanOrEqual(1);
+    expect(cues.eye_dilation).toBeGreaterThanOrEqual(0);
+  });
+
+  it("smile_curvature is clamped to [-0.1, 0.15]", () => {
+    const positive = computeRawCues(makeDefaultState({ affect_valence: 1 }));
+    expect(positive.smile_curvature).toBeLessThanOrEqual(0.15);
+
+    const negative = computeRawCues(makeDefaultState({ affect_valence: -1 }));
+    expect(negative.smile_curvature).toBeGreaterThanOrEqual(-0.1);
+  });
+
+  it("glow_intensity is clamped to [0, 1]", () => {
+    const maxGlow = computeRawCues(makeDefaultState({ processing: 1, confidence: 1 }));
+    expect(maxGlow.glow_intensity).toBeLessThanOrEqual(1);
+    expect(maxGlow.glow_intensity).toBeGreaterThanOrEqual(0);
+
+    const minGlow = computeRawCues(makeDefaultState({ processing: 0, confidence: 0 }));
+    expect(minGlow.glow_intensity).toBeLessThanOrEqual(1);
+    expect(minGlow.glow_intensity).toBeGreaterThanOrEqual(0);
+  });
+
+  it("low-power battery mode reduces drift more than normal", () => {
+    const normal = computeRawCues(makeDefaultState({ battery_mode: BatteryMode.Normal, curiosity: 0.5 }));
+    const lowPower = computeRawCues(makeDefaultState({ battery_mode: BatteryMode.LowPower, curiosity: 0.5 }));
+    const critical = computeRawCues(makeDefaultState({ battery_mode: BatteryMode.Critical, curiosity: 0.5 }));
+
+    expect(lowPower.drift_amplitude).toBeLessThan(normal.drift_amplitude);
+    expect(critical.drift_amplitude).toBeLessThan(lowPower.drift_amplitude);
+  });
+
+  it("curiosity increases drift amplitude", () => {
+    const noCuriosity = computeRawCues(makeDefaultState({ curiosity: 0 }));
+    const fullCuriosity = computeRawCues(makeDefaultState({ curiosity: 1 }));
+    expect(fullCuriosity.drift_amplitude).toBeGreaterThan(noCuriosity.drift_amplitude);
+  });
+
+  it("higher confidence increases glow", () => {
+    const lowConf = computeRawCues(makeDefaultState({ confidence: 0 }));
+    const highConf = computeRawCues(makeDefaultState({ confidence: 1 }));
+    expect(highConf.glow_intensity).toBeGreaterThan(lowConf.glow_intensity);
+  });
+
+  it("zero valence produces zero smile curvature", () => {
+    const cues = computeRawCues(makeDefaultState({ affect_valence: 0 }));
+    expect(cues.smile_curvature).toBe(0);
+  });
+
+  it("hover distance reaches minimum at full attention", () => {
+    const full = computeRawCues(makeDefaultState({ attention: 1, processing: 1, curiosity: 1 }));
+    // With maximum attention/processing/curiosity, idleBlend = 0, so hover = attentionDistance
+    // attentionDistance at attention=1 is FACE_DISTANCE (0.15)
+    expect(full.hover_distance).toBeCloseTo(0.15, 1);
+  });
+
+  it("hover distance reaches maximum when fully idle", () => {
+    const idle = computeRawCues(makeDefaultState({ attention: 0, processing: 0, curiosity: 0 }));
+    // idleBlend = 1, attentionDistance = SHOULDER_DISTANCE (0.4)
+    // hover = 0.4 + 1 * (0.8 - 0.4) = 0.8 (RETREAT_DISTANCE)
+    expect(idle.hover_distance).toBeCloseTo(0.8, 1);
+  });
+
+  it("attention + curiosity increase eye dilation", () => {
+    const low = computeRawCues(makeDefaultState({ attention: 0, curiosity: 0 }));
+    const high = computeRawCues(makeDefaultState({ attention: 1, curiosity: 1 }));
+    expect(high.eye_dilation).toBeGreaterThan(low.eye_dilation);
+  });
 });

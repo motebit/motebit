@@ -79,21 +79,22 @@ export class InMemoryIdentityStorage implements IdentityStorage {
     return Promise.resolve(null);
   }
 
-  async saveDevice(device: DeviceRegistration): Promise<void> {
+  saveDevice(device: DeviceRegistration): Promise<void> {
     this.devices.set(device.device_id, { ...device });
     this.devicesByToken.set(device.device_token, { ...device });
+    return Promise.resolve();
   }
 
-  async loadDevice(deviceId: string): Promise<DeviceRegistration | null> {
-    return this.devices.get(deviceId) ?? null;
+  loadDevice(deviceId: string): Promise<DeviceRegistration | null> {
+    return Promise.resolve(this.devices.get(deviceId) ?? null);
   }
 
-  async loadDeviceByToken(token: string): Promise<DeviceRegistration | null> {
-    return this.devicesByToken.get(token) ?? null;
+  loadDeviceByToken(token: string): Promise<DeviceRegistration | null> {
+    return Promise.resolve(this.devicesByToken.get(token) ?? null);
   }
 
-  async listDevices(motebitId: string): Promise<DeviceRegistration[]> {
-    return [...this.devices.values()].filter(d => d.motebit_id === motebitId);
+  listDevices(motebitId: string): Promise<DeviceRegistration[]> {
+    return Promise.resolve([...this.devices.values()].filter(d => d.motebit_id === motebitId));
   }
 }
 
@@ -334,20 +335,21 @@ class InMemoryDeviceStore {
   private devices = new Map<string, DeviceRegistration>();
   private devicesByToken = new Map<string, DeviceRegistration>();
 
-  async saveDevice(device: DeviceRegistration): Promise<void> {
+  saveDevice(device: DeviceRegistration): Promise<void> {
     this.devices.set(device.device_id, { ...device });
     this.devicesByToken.set(device.device_token, { ...device });
+    return Promise.resolve();
   }
 
-  async loadDevice(deviceId: string): Promise<DeviceRegistration | null> {
-    return this.devices.get(deviceId) ?? null;
+  loadDevice(deviceId: string): Promise<DeviceRegistration | null> {
+    return Promise.resolve(this.devices.get(deviceId) ?? null);
   }
 
-  async loadDeviceByToken(token: string): Promise<DeviceRegistration | null> {
-    return this.devicesByToken.get(token) ?? null;
+  loadDeviceByToken(token: string): Promise<DeviceRegistration | null> {
+    return Promise.resolve(this.devicesByToken.get(token) ?? null);
   }
 
-  async listDevices(motebitId: string): Promise<DeviceRegistration[]> {
-    return [...this.devices.values()].filter(d => d.motebit_id === motebitId);
+  listDevices(motebitId: string): Promise<DeviceRegistration[]> {
+    return Promise.resolve([...this.devices.values()].filter(d => d.motebit_id === motebitId));
   }
 }

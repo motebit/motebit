@@ -482,7 +482,7 @@ describe("StateVectorEngine", () => {
 
   it("serialize produces valid JSON", () => {
     const serialized = engine.serialize();
-    expect(() => JSON.parse(serialized)).not.toThrow();
+    expect(() => JSON.parse(serialized) as unknown).not.toThrow();
   });
 
   // ============================================================

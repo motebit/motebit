@@ -13,12 +13,13 @@ import { InMemoryEventStore } from "@motebit/event-log";
 class TestConfigStore implements BootstrapConfigStore {
   data: { motebit_id: string; device_id: string; device_public_key: string } | null = null;
 
-  async read() {
-    return this.data;
+  read() {
+    return Promise.resolve(this.data);
   }
 
-  async write(state: { motebit_id: string; device_id: string; device_public_key: string }) {
+  write(state: { motebit_id: string; device_id: string; device_public_key: string }) {
     this.data = { ...state };
+    return Promise.resolve();
   }
 }
 
@@ -27,8 +28,9 @@ class TestConfigStore implements BootstrapConfigStore {
 class TestKeyStore implements BootstrapKeyStore {
   storedKey: string | null = null;
 
-  async storePrivateKey(privKeyHex: string) {
+  storePrivateKey(privKeyHex: string) {
     this.storedKey = privKeyHex;
+    return Promise.resolve();
   }
 }
 
