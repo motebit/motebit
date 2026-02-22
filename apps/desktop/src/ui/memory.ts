@@ -1,4 +1,4 @@
-import type { MemoryNode } from "../index";
+import type { MemoryNode, MemoryEdge } from "../index";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
 
@@ -9,6 +9,11 @@ const memoryBackdrop = document.getElementById("memory-backdrop") as HTMLDivElem
 const memoryList = document.getElementById("memory-list") as HTMLDivElement;
 const memoryCount = document.getElementById("memory-count") as HTMLSpanElement;
 const memorySearch = document.getElementById("memory-search") as HTMLInputElement;
+const memoryGraphWrap = document.getElementById("memory-graph-wrap") as HTMLDivElement;
+const memoryGraphCanvas = document.getElementById("memory-graph-canvas") as HTMLCanvasElement;
+const memoryGraphTooltip = document.getElementById("memory-graph-tooltip") as HTMLDivElement;
+const viewListBtn = document.getElementById("mem-view-list") as HTMLButtonElement;
+const viewGraphBtn = document.getElementById("mem-view-graph") as HTMLButtonElement;
 
 // === Memory Panel ===
 
@@ -17,28 +22,335 @@ export interface MemoryAPI {
   close(): void;
 }
 
+type ViewMode = "list" | "graph";
+
 let allMemories: MemoryNode[] = [];
+let allEdges: MemoryEdge[] = [];
+let currentView: ViewMode = "list";
+
+// === Graph Layout Types ===
+
+interface GraphNode {
+  id: string;
+  mem: MemoryNode;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  radius: number;
+  color: string;
+  label: string;
+}
+
+interface GraphEdge {
+  edge: MemoryEdge;
+  source: GraphNode;
+  target: GraphNode;
+}
+
+// Cached graph layout
+let cachedGraphNodes: GraphNode[] | null = null;
+let cachedGraphEdges: GraphEdge[] | null = null;
+let cachedMemoryCount = -1;
+
+// Graph interaction state
+let graphZoom = 1;
+let graphPanX = 0;
+let graphPanY = 0;
+let selectedNodeId: string | null = null;
+let hoveredNode: GraphNode | null = null;
+let dragNode: GraphNode | null = null;
+let dragOffsetX = 0;
+let dragOffsetY = 0;
+let graphAnimFrame: number | null = null;
+
+// === Sensitivity Colors ===
+
+const SENSITIVITY_COLORS: Record<string, string> = {
+  none: "#22c55e",
+  personal: "#3b82f6",
+  medical: "#a855f7",
+  financial: "#f59e0b",
+  secret: "#ef4444",
+};
+
+// === Force-Directed Layout ===
+
+function buildGraph(memories: MemoryNode[], edges: MemoryEdge[]): { nodes: GraphNode[]; edges: GraphEdge[] } {
+  const nodeMap = new Map<string, GraphNode>();
+  const cx = 150;
+  const cy = 150;
+
+  for (const mem of memories) {
+    const confidence = Math.max(0.5, mem.confidence);
+    const radius = 8 + (confidence - 0.5) * 24; // 8-20px
+    const color = SENSITIVITY_COLORS[mem.sensitivity] ?? SENSITIVITY_COLORS["none"]!;
+    const label = mem.content.length > 30 ? mem.content.slice(0, 30) + "..." : mem.content;
+
+    nodeMap.set(mem.node_id, {
+      id: mem.node_id,
+      mem,
+      x: cx + (Math.random() - 0.5) * 200,
+      y: cy + (Math.random() - 0.5) * 200,
+      vx: 0,
+      vy: 0,
+      radius,
+      color,
+      label,
+    });
+  }
+
+  const graphEdges: GraphEdge[] = [];
+  for (const edge of edges) {
+    const source = nodeMap.get(edge.source_id);
+    const target = nodeMap.get(edge.target_id);
+    if (source && target) {
+      graphEdges.push({ edge, source, target });
+    }
+  }
+
+  return { nodes: Array.from(nodeMap.values()), edges: graphEdges };
+}
+
+function runForceSimulation(nodes: GraphNode[], edges: GraphEdge[], iterations: number): void {
+  const repulsionStrength = 3000;
+  const attractionStrength = 0.01;
+  const centerStrength = 0.005;
+  const damping = 0.85;
+  const cx = 150;
+  const cy = 150;
+
+  for (let iter = 0; iter < iterations; iter++) {
+    // Repulsion between all pairs (Coulomb's law)
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i]!;
+        const b = nodes[j]!;
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        let dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 1) dist = 1;
+        const force = repulsionStrength / (dist * dist);
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+        a.vx -= fx;
+        a.vy -= fy;
+        b.vx += fx;
+        b.vy += fy;
+      }
+    }
+
+    // Attraction along edges (Hooke's law)
+    for (const e of edges) {
+      const dx = e.target.x - e.source.x;
+      const dy = e.target.y - e.source.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const force = dist * attractionStrength;
+      const fx = (dx / (dist || 1)) * force;
+      const fy = (dy / (dist || 1)) * force;
+      e.source.vx += fx;
+      e.source.vy += fy;
+      e.target.vx -= fx;
+      e.target.vy -= fy;
+    }
+
+    // Centering force
+    for (const node of nodes) {
+      node.vx += (cx - node.x) * centerStrength;
+      node.vy += (cy - node.y) * centerStrength;
+    }
+
+    // Apply velocities with damping
+    for (const node of nodes) {
+      node.vx *= damping;
+      node.vy *= damping;
+      node.x += node.vx;
+      node.y += node.vy;
+    }
+  }
+}
+
+// === Graph Rendering ===
+
+function renderGraph(ctx2d: CanvasRenderingContext2D, nodes: GraphNode[], edges: GraphEdge[]): void {
+  const canvas = ctx2d.canvas;
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+
+  // Resize canvas for HiDPI
+  if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+  }
+
+  ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx2d.clearRect(0, 0, w, h);
+
+  ctx2d.save();
+  ctx2d.translate(graphPanX, graphPanY);
+  ctx2d.scale(graphZoom, graphZoom);
+
+  // Determine highlighted set for selection
+  const highlightedNodes = new Set<string>();
+  if (selectedNodeId) {
+    highlightedNodes.add(selectedNodeId);
+    for (const e of edges) {
+      if (e.source.id === selectedNodeId) highlightedNodes.add(e.target.id);
+      if (e.target.id === selectedNodeId) highlightedNodes.add(e.source.id);
+    }
+  }
+
+  // Draw edges
+  for (const e of edges) {
+    const isHighlighted = selectedNodeId && highlightedNodes.has(e.source.id) && highlightedNodes.has(e.target.id);
+    ctx2d.beginPath();
+    ctx2d.moveTo(e.source.x, e.source.y);
+    ctx2d.lineTo(e.target.x, e.target.y);
+    ctx2d.strokeStyle = isHighlighted ? "rgba(100, 100, 100, 0.5)" : "rgba(0, 0, 0, 0.1)";
+    ctx2d.lineWidth = isHighlighted ? 1.5 : 1;
+
+    // Dash style by relation type
+    const rel = e.edge.relation_type;
+    if (rel === "followed_by") {
+      ctx2d.setLineDash([4, 3]); // dashed for temporal
+    } else if (rel === "caused_by") {
+      ctx2d.setLineDash([1, 3]); // dotted for causal
+    } else {
+      ctx2d.setLineDash([]); // solid for association/related/reinforces/etc
+    }
+    ctx2d.stroke();
+    ctx2d.setLineDash([]);
+  }
+
+  // Draw nodes
+  for (const node of nodes) {
+    const isSelected = node.id === selectedNodeId;
+    const isHovered = node === hoveredNode;
+    const isDimmed = selectedNodeId !== null && !highlightedNodes.has(node.id);
+
+    ctx2d.beginPath();
+    ctx2d.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
+    ctx2d.fillStyle = isDimmed ? hexWithAlpha(node.color, 0.2) : node.color;
+    ctx2d.globalAlpha = isDimmed ? 0.4 : 1;
+    ctx2d.fill();
+    ctx2d.globalAlpha = 1;
+
+    if (isSelected || isHovered) {
+      ctx2d.strokeStyle = isSelected ? "rgba(0, 0, 0, 0.6)" : "rgba(0, 0, 0, 0.3)";
+      ctx2d.lineWidth = isSelected ? 2 : 1;
+      ctx2d.stroke();
+    }
+
+    // Label
+    if (!isDimmed) {
+      ctx2d.fillStyle = "rgba(0, 0, 0, 0.55)";
+      ctx2d.font = "10px -apple-system, BlinkMacSystemFont, sans-serif";
+      ctx2d.textAlign = "center";
+      ctx2d.textBaseline = "top";
+      ctx2d.fillText(node.label, node.x, node.y + node.radius + 3);
+    }
+  }
+
+  ctx2d.restore();
+}
+
+function hexWithAlpha(hex: string, alpha: number): string {
+  // Convert hex like #22c55e to rgba
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+// === Coordinate Helpers ===
+
+function canvasToGraph(canvasX: number, canvasY: number): { x: number; y: number } {
+  return {
+    x: (canvasX - graphPanX) / graphZoom,
+    y: (canvasY - graphPanY) / graphZoom,
+  };
+}
+
+function findNodeAt(nodes: GraphNode[], gx: number, gy: number): GraphNode | null {
+  // Search in reverse so topmost (last-drawn) nodes are hit first
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    const node = nodes[i]!;
+    const dx = gx - node.x;
+    const dy = gy - node.y;
+    if (dx * dx + dy * dy <= node.radius * node.radius) {
+      return node;
+    }
+  }
+  return null;
+}
+
+// === Init ===
 
 export function initMemory(ctx: DesktopContext): MemoryAPI {
   function open(): void {
     memoryPanel.classList.add("open");
     memoryBackdrop.classList.add("open");
-    refreshMemoryList();
+    refreshMemoryData();
   }
 
   function close(): void {
     memoryPanel.classList.remove("open");
     memoryBackdrop.classList.remove("open");
+    if (graphAnimFrame !== null) {
+      cancelAnimationFrame(graphAnimFrame);
+      graphAnimFrame = null;
+    }
   }
 
-  function refreshMemoryList(): void {
-    memoryList.innerHTML = "";
-    void ctx.app.listMemories().then(memories => {
+  function refreshMemoryData(): void {
+    void Promise.all([
+      ctx.app.listMemories(),
+      ctx.app.listMemoryEdges(),
+    ]).then(([memories, edges]) => {
       allMemories = memories;
+      allEdges = edges;
       memoryCount.textContent = String(memories.length);
-      renderMemoryItems(memories, memorySearch.value.trim());
+
+      // Invalidate graph cache if memory count changed
+      if (memories.length !== cachedMemoryCount) {
+        cachedGraphNodes = null;
+        cachedGraphEdges = null;
+        cachedMemoryCount = memories.length;
+      }
+
+      if (currentView === "list") {
+        renderMemoryItems(memories, memorySearch.value.trim());
+      } else {
+        renderGraphView();
+      }
     });
   }
+
+  function setView(mode: ViewMode): void {
+    if (mode === currentView) return;
+    currentView = mode;
+
+    if (mode === "list") {
+      viewListBtn.classList.add("active");
+      viewGraphBtn.classList.remove("active");
+      memoryList.style.display = "";
+      memoryGraphWrap.style.display = "none";
+      if (graphAnimFrame !== null) {
+        cancelAnimationFrame(graphAnimFrame);
+        graphAnimFrame = null;
+      }
+      renderMemoryItems(allMemories, memorySearch.value.trim());
+    } else {
+      viewListBtn.classList.remove("active");
+      viewGraphBtn.classList.add("active");
+      memoryList.style.display = "none";
+      memoryGraphWrap.style.display = "";
+      renderGraphView();
+    }
+  }
+
+  // === List View ===
 
   function renderMemoryItems(memories: MemoryNode[], query: string): void {
     memoryList.innerHTML = "";
@@ -91,7 +403,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
       deleteBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         void ctx.app.deleteMemory(mem.node_id).then(() => {
-          refreshMemoryList();
+          refreshMemoryData();
         });
       });
       item.appendChild(deleteBtn);
@@ -100,12 +412,199 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
     }
   }
 
-  // Debounced search
+  // === Graph View ===
+
+  function renderGraphView(): void {
+    if (allMemories.length === 0) {
+      memoryGraphWrap.style.display = "none";
+      memoryList.style.display = "";
+      memoryList.innerHTML = '<div class="mem-empty">No memories yet</div>';
+      return;
+    }
+
+    // Build or reuse cached layout
+    if (!cachedGraphNodes || !cachedGraphEdges) {
+      const graph = buildGraph(allMemories, allEdges);
+      runForceSimulation(graph.nodes, graph.edges, 120);
+      cachedGraphNodes = graph.nodes;
+      cachedGraphEdges = graph.edges;
+
+      // Center the graph in the canvas
+      if (graph.nodes.length > 0) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const n of graph.nodes) {
+          minX = Math.min(minX, n.x - n.radius);
+          minY = Math.min(minY, n.y - n.radius);
+          maxX = Math.max(maxX, n.x + n.radius);
+          maxY = Math.max(maxY, n.y + n.radius);
+        }
+        const gw = maxX - minX;
+        const gh = maxY - minY;
+        const cw = memoryGraphCanvas.clientWidth || 280;
+        const ch = memoryGraphCanvas.clientHeight || 400;
+        const padding = 40;
+        graphZoom = Math.min(1.5, (cw - padding * 2) / gw, (ch - padding * 2) / gh);
+        graphZoom = Math.max(0.3, graphZoom);
+        const gcx = (minX + maxX) / 2;
+        const gcy = (minY + maxY) / 2;
+        graphPanX = cw / 2 - gcx * graphZoom;
+        graphPanY = ch / 2 - gcy * graphZoom;
+      }
+
+      selectedNodeId = null;
+      hoveredNode = null;
+    }
+
+    drawGraph();
+  }
+
+  function drawGraph(): void {
+    const ctx2d = memoryGraphCanvas.getContext("2d");
+    if (!ctx2d || !cachedGraphNodes || !cachedGraphEdges) return;
+    renderGraph(ctx2d, cachedGraphNodes, cachedGraphEdges);
+  }
+
+  // === Graph Interaction ===
+
+  function getCanvasPos(e: MouseEvent): { x: number; y: number } {
+    const rect = memoryGraphCanvas.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+
+  memoryGraphCanvas.addEventListener("mousedown", (e) => {
+    if (!cachedGraphNodes) return;
+    const pos = getCanvasPos(e);
+    const gpos = canvasToGraph(pos.x, pos.y);
+    const node = findNodeAt(cachedGraphNodes, gpos.x, gpos.y);
+
+    if (node) {
+      dragNode = node;
+      dragOffsetX = gpos.x - node.x;
+      dragOffsetY = gpos.y - node.y;
+      selectedNodeId = node.id;
+      drawGraph();
+    } else {
+      // Clicked empty space — deselect
+      if (selectedNodeId) {
+        selectedNodeId = null;
+        drawGraph();
+      }
+    }
+  });
+
+  memoryGraphCanvas.addEventListener("mousemove", (e) => {
+    if (!cachedGraphNodes) return;
+    const pos = getCanvasPos(e);
+    const gpos = canvasToGraph(pos.x, pos.y);
+
+    if (dragNode) {
+      dragNode.x = gpos.x - dragOffsetX;
+      dragNode.y = gpos.y - dragOffsetY;
+      drawGraph();
+      return;
+    }
+
+    const node = findNodeAt(cachedGraphNodes, gpos.x, gpos.y);
+    if (node !== hoveredNode) {
+      hoveredNode = node;
+      drawGraph();
+
+      if (node) {
+        showTooltip(node, pos.x, pos.y);
+      } else {
+        hideTooltip();
+      }
+    } else if (node) {
+      // Update tooltip position as mouse moves over the same node
+      positionTooltip(pos.x, pos.y);
+    }
+  });
+
+  memoryGraphCanvas.addEventListener("mouseup", () => {
+    dragNode = null;
+  });
+
+  memoryGraphCanvas.addEventListener("mouseleave", () => {
+    dragNode = null;
+    if (hoveredNode) {
+      hoveredNode = null;
+      hideTooltip();
+      drawGraph();
+    }
+  });
+
+  memoryGraphCanvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const pos = getCanvasPos(e);
+    const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
+    const newZoom = Math.max(0.15, Math.min(5, graphZoom * zoomFactor));
+
+    // Zoom toward mouse position
+    graphPanX = pos.x - (pos.x - graphPanX) * (newZoom / graphZoom);
+    graphPanY = pos.y - (pos.y - graphPanY) * (newZoom / graphZoom);
+    graphZoom = newZoom;
+
+    drawGraph();
+  }, { passive: false });
+
+  // === Tooltip ===
+
+  function showTooltip(node: GraphNode, canvasX: number, canvasY: number): void {
+    const mem = node.mem;
+    const decayed = ctx.app.getDecayedConfidence(mem);
+    const sensitivityText = mem.sensitivity !== "none" ? ` | ${mem.sensitivity}` : "";
+
+    memoryGraphTooltip.innerHTML =
+      `<div class="mem-graph-tooltip-content">${escapeHtml(mem.content)}</div>` +
+      `<div class="mem-graph-tooltip-meta">${Math.round(decayed * 100)}% confidence${sensitivityText}</div>` +
+      `<div class="mem-graph-tooltip-meta">${formatTimeAgo(mem.created_at)}</div>`;
+
+    memoryGraphTooltip.classList.add("visible");
+    positionTooltip(canvasX, canvasY);
+  }
+
+  function positionTooltip(canvasX: number, canvasY: number): void {
+    const wrapRect = memoryGraphWrap.getBoundingClientRect();
+    const tooltipW = memoryGraphTooltip.offsetWidth || 180;
+    let left = canvasX + 12;
+    let top = canvasY - 10;
+
+    // Keep tooltip within the panel
+    if (left + tooltipW > wrapRect.width) {
+      left = canvasX - tooltipW - 12;
+    }
+    if (top < 0) top = 4;
+    if (top + memoryGraphTooltip.offsetHeight > wrapRect.height) {
+      top = wrapRect.height - memoryGraphTooltip.offsetHeight - 4;
+    }
+
+    memoryGraphTooltip.style.left = `${left}px`;
+    memoryGraphTooltip.style.top = `${top}px`;
+  }
+
+  function hideTooltip(): void {
+    memoryGraphTooltip.classList.remove("visible");
+  }
+
+  function escapeHtml(text: string): string {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  // === View Toggle Listeners ===
+
+  viewListBtn.addEventListener("click", () => setView("list"));
+  viewGraphBtn.addEventListener("click", () => setView("graph"));
+
+  // Debounced search (list view only)
   let memorySearchTimeout: ReturnType<typeof setTimeout> | null = null;
   memorySearch.addEventListener("input", () => {
     if (memorySearchTimeout) clearTimeout(memorySearchTimeout);
     memorySearchTimeout = setTimeout(() => {
-      renderMemoryItems(allMemories, memorySearch.value.trim());
+      if (currentView === "list") {
+        renderMemoryItems(allMemories, memorySearch.value.trim());
+      }
     }, 200);
   });
 

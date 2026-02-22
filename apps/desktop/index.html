@@ -1422,6 +1422,76 @@
       text-align: center;
     }
 
+    /* Memory view toggle */
+    .mem-view-toggle {
+      display: inline-flex;
+      gap: 2px;
+      margin-left: auto;
+      margin-right: 8px;
+      background: rgba(0, 0, 0, 0.04);
+      border-radius: 6px;
+      padding: 2px;
+    }
+    .mem-view-btn {
+      background: none;
+      border: none;
+      color: rgba(0, 0, 0, 0.3);
+      cursor: pointer;
+      padding: 3px 5px;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.15s, background 0.15s;
+    }
+    .mem-view-btn:hover { color: rgba(0, 0, 0, 0.5); }
+    .mem-view-btn.active {
+      background: rgba(255, 255, 255, 0.8);
+      color: rgba(0, 0, 0, 0.65);
+      box-shadow: 0 0.5px 2px rgba(0, 0, 0, 0.08);
+    }
+
+    /* Memory graph */
+    .mem-graph-wrap {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+    #memory-graph-canvas {
+      width: 100%;
+      height: 100%;
+      cursor: grab;
+    }
+    #memory-graph-canvas:active { cursor: grabbing; }
+    .mem-graph-tooltip {
+      position: absolute;
+      display: none;
+      max-width: 220px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.85);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(0, 0, 0, 0.06);
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+      font-size: 11px;
+      color: rgba(0, 0, 0, 0.7);
+      line-height: 1.4;
+      pointer-events: none;
+      z-index: 30;
+    }
+    .mem-graph-tooltip.visible { display: block; }
+    .mem-graph-tooltip-content {
+      font-size: 12px;
+      color: rgba(0, 0, 0, 0.75);
+      margin-bottom: 4px;
+      word-break: break-word;
+    }
+    .mem-graph-tooltip-meta {
+      font-size: 10px;
+      color: rgba(0, 0, 0, 0.4);
+    }
+
     /* Goals panel — slide-in from right */
     #goals-btn {
       position: fixed;
@@ -2382,12 +2452,24 @@
   <div id="memory-panel">
     <div class="mem-panel-header">
       <span class="mem-panel-title">Memories <span class="mem-count-badge" id="memory-count">0</span></span>
+      <span class="mem-view-toggle">
+        <button class="mem-view-btn active" id="mem-view-list" title="List view">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="3" y1="3" x2="11" y2="3"/><line x1="3" y1="7" x2="11" y2="7"/><line x1="3" y1="11" x2="11" y2="11"/></svg>
+        </button>
+        <button class="mem-view-btn" id="mem-view-graph" title="Graph view">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="3" cy="3" r="1.5"/><circle cx="11" cy="5" r="1.5"/><circle cx="5" cy="11" r="1.5"/><line x1="4.2" y1="4" x2="9.8" y2="4.6"/><line x1="3.6" y1="4.4" x2="4.6" y2="9.6"/></svg>
+        </button>
+      </span>
       <button class="mem-panel-close" id="memory-close-btn">&times;</button>
     </div>
     <div class="mem-search-wrap">
       <input id="memory-search" type="text" placeholder="Search memories..." autocomplete="off" />
     </div>
     <div class="mem-list" id="memory-list"></div>
+    <div class="mem-graph-wrap" id="memory-graph-wrap" style="display:none;">
+      <canvas id="memory-graph-canvas"></canvas>
+      <div class="mem-graph-tooltip" id="memory-graph-tooltip"></div>
+    </div>
   </div>
   <button id="goals-btn" title="Goals" style="position:relative;">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>

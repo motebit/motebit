@@ -14,7 +14,7 @@ import {
   resolveConfig,
   type MotebitPersonalityConfig,
 } from "@motebit/ai-core";
-import type { ToolAuditEntry, MemoryNode } from "@motebit/sdk";
+import type { ToolAuditEntry, MemoryNode, MemoryEdge } from "@motebit/sdk";
 import { InMemoryEventStore } from "@motebit/event-log";
 import { InMemoryMemoryStorage, computeDecayedConfidence } from "@motebit/memory-graph";
 import {
@@ -39,7 +39,7 @@ export type { InvokeFn } from "./tauri-storage.js";
 // Re-export runtime types for main.ts consumption
 export type { TurnResult, StreamChunk, OperatorModeResult, InteriorColor, McpServerConfig, PolicyConfig, MemoryGovernanceConfig };
 export type { PairingSession, PairingStatus };
-export type { MemoryNode };
+export type { MemoryNode, MemoryEdge };
 
 // === Sync Status ===
 
@@ -804,6 +804,17 @@ export class DesktopApp {
       return nodes
         .filter(n => !n.tombstoned)
         .sort((a, b) => b.created_at - a.created_at);
+    } catch {
+      return [];
+    }
+  }
+
+  /** List all edges for the current motebit. */
+  async listMemoryEdges(): Promise<MemoryEdge[]> {
+    if (!this.runtime) return [];
+    try {
+      const { edges } = await this.runtime.memory.exportAll();
+      return edges;
     } catch {
       return [];
     }
