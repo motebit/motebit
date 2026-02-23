@@ -399,35 +399,35 @@ export class ThreeJSAdapter implements RenderAdapter {
       const trustEyeMax = this.trustMode === TrustMode.Minimal ? 0.2 : 0.4;
       const baseEyeScale = 0.8 + cues.eye_dilation * trustEyeMax;
       // Smile squint: Duchenne effect narrows eyes during genuine smile
-      const smileSquint = Math.max(0, cues.smile_curvature) * 0.3;
+      const smileSquint = Math.max(0, cues.smile_curvature) * 0.5;
       const eyeScale = baseEyeScale - smileSquint;
-      this.leftEye.scale.setScalar(eyeScale);
       // Asymmetric curiosity: left eye slightly wider when curious
-      const curiosityAsym = Math.max(0, cues.eye_dilation - 0.5) * 0.06;
+      const curiosityAsym = Math.max(0, cues.eye_dilation - 0.4) * 0.15;
       this.leftEye.scale.setScalar(eyeScale + curiosityAsym);
       this.rightEye.scale.setScalar(eyeScale);
       const eyeZ = 0.08 + Math.sin(t * 0.25) * 0.001;
       this.leftEye.position.z = eyeZ;
       this.rightEye.position.z = eyeZ;
-      // Thinking lift: eyes drift upward slightly during processing
-      const thinkLift = Math.max(0, cues.glow_intensity - 0.5) * 0.008;
+      // Thinking lift: eyes drift upward during processing
+      const thinkLift = Math.max(0, cues.glow_intensity - 0.4) * 0.025;
       this.leftEye.position.y = 0.015 + thinkLift;
       this.rightEye.position.y = 0.015 + thinkLift;
     }
 
     // Smile — baseline arc visible at rest, modulated by affect + speaking oscillation
+    // Speaking frequencies in Hz-range (×2π to convert Hz→rad/s)
     if (this.smileMesh) {
       const baseSmile = 0.6 + cues.smile_curvature * 4.0;
       const speakOsc = cues.speaking_activity > 0.01
-        ? organicNoise(t, [3.7, 4.3, 5.1]) * cues.speaking_activity * 0.25
+        ? organicNoise(t, [23.2, 27.0, 32.0]) * cues.speaking_activity * 0.35
         : 0;
       this.smileMesh.scale.y = baseSmile + speakOsc;
-      this.smileMesh.scale.x = 1.0 + cues.speaking_activity * organicNoise(t, [2.9, 3.8]) * 0.1;
+      this.smileMesh.scale.x = 1.0 + cues.speaking_activity * organicNoise(t, [18.2, 23.9]) * 0.15;
     }
 
-    // Curiosity tilt — subtle head tilt when eye_dilation is high
+    // Curiosity tilt — gentle head tilt when eye_dilation is high
     if (this.creature) {
-      const tiltAmount = Math.max(0, cues.eye_dilation - 0.4) * 0.06;
+      const tiltAmount = Math.max(0, cues.eye_dilation - 0.35) * 0.12;
       this.creature.rotation.z = organicNoise(t, [0.4, 0.67]) * tiltAmount;
     }
 
@@ -766,34 +766,35 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
       const trustEyeMax = this.trustMode === TrustMode.Minimal ? 0.2 : 0.4;
       const baseEyeScale = 0.8 + cues.eye_dilation * trustEyeMax;
       // Smile squint: Duchenne effect narrows eyes during genuine smile
-      const smileSquint = Math.max(0, cues.smile_curvature) * 0.3;
+      const smileSquint = Math.max(0, cues.smile_curvature) * 0.5;
       const eyeScale = baseEyeScale - smileSquint;
       // Asymmetric curiosity: left eye slightly wider when curious
-      const curiosityAsym = Math.max(0, cues.eye_dilation - 0.5) * 0.06;
+      const curiosityAsym = Math.max(0, cues.eye_dilation - 0.4) * 0.15;
       this.leftEye.scale.setScalar(eyeScale + curiosityAsym);
       this.rightEye.scale.setScalar(eyeScale);
       const eyeZ = 0.08 + Math.sin(t * 0.25) * 0.001;
       this.leftEye.position.z = eyeZ;
       this.rightEye.position.z = eyeZ;
-      // Thinking lift: eyes drift upward slightly during processing
-      const thinkLift = Math.max(0, cues.glow_intensity - 0.5) * 0.008;
+      // Thinking lift: eyes drift upward during processing
+      const thinkLift = Math.max(0, cues.glow_intensity - 0.4) * 0.025;
       this.leftEye.position.y = 0.015 + thinkLift;
       this.rightEye.position.y = 0.015 + thinkLift;
     }
 
     // Smile — baseline arc visible at rest, modulated by affect + speaking oscillation
+    // Speaking frequencies in Hz-range (×2π to convert Hz→rad/s)
     if (this.smileMesh) {
       const baseSmile = 0.6 + cues.smile_curvature * 4.0;
       const speakOsc = cues.speaking_activity > 0.01
-        ? organicNoise(t, [3.7, 4.3, 5.1]) * cues.speaking_activity * 0.25
+        ? organicNoise(t, [23.2, 27.0, 32.0]) * cues.speaking_activity * 0.35
         : 0;
       this.smileMesh.scale.y = baseSmile + speakOsc;
-      this.smileMesh.scale.x = 1.0 + cues.speaking_activity * organicNoise(t, [2.9, 3.8]) * 0.1;
+      this.smileMesh.scale.x = 1.0 + cues.speaking_activity * organicNoise(t, [18.2, 23.9]) * 0.15;
     }
 
-    // Curiosity tilt — subtle head tilt when eye_dilation is high
+    // Curiosity tilt — gentle head tilt when eye_dilation is high
     if (this.creature) {
-      const tiltAmount = Math.max(0, cues.eye_dilation - 0.4) * 0.06;
+      const tiltAmount = Math.max(0, cues.eye_dilation - 0.35) * 0.12;
       this.creature.rotation.z = organicNoise(t, [0.4, 0.67]) * tiltAmount;
     }
 
