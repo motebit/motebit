@@ -56,14 +56,14 @@ function buildReflectionPrompt(plan: Plan, steps: PlanStep[]): string {
   for (const step of steps) {
     const statusLabel = step.status === StepStatus.Completed ? "completed" : step.status === StepStatus.Skipped ? "skipped" : step.status;
     parts.push(`Step ${step.ordinal + 1} (${statusLabel}): ${step.description}`);
-    if (step.result_summary) {
+    if (step.result_summary != null && step.result_summary !== "") {
       // Cap each step result to avoid blowing context
       const trimmed = step.result_summary.length > 500
         ? step.result_summary.slice(0, 500) + "..."
         : step.result_summary;
       parts.push(`  Result: ${trimmed}`);
     }
-    if (step.error_message) {
+    if (step.error_message != null && step.error_message !== "") {
       parts.push(`  Error: ${step.error_message}`);
     }
   }

@@ -18,7 +18,7 @@ export function DevicesPanel({ devices }: { devices: DeviceEntry[] }): React.Rea
       React.createElement("div", { key: d.device_id, className: "event-entry device-entry" },
         React.createElement("div", { className: "device-header" },
           React.createElement("span", { className: "device-name" },
-            d.device_name || d.device_id.slice(0, 12),
+            d.device_name != null && d.device_name !== "" ? d.device_name : d.device_id.slice(0, 12),
           ),
           React.createElement("span", { className: "device-id" },
             d.device_id.slice(0, 12) + "...",
@@ -31,7 +31,7 @@ export function DevicesPanel({ devices }: { devices: DeviceEntry[] }): React.Rea
           React.createElement("span", { className: "timestamp" },
             `registered ${new Date(d.registered_at).toISOString()}`,
           ),
-          d.last_seen_at
+          d.last_seen_at != null
             ? React.createElement("span", { className: "timestamp" },
               `last seen ${new Date(d.last_seen_at).toISOString()}`,
             )

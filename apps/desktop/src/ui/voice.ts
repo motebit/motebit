@@ -204,6 +204,7 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
       });
     } catch (err: unknown) {
       sileroVadFailed = true;
+      // eslint-disable-next-line no-console
       console.warn("Silero VAD failed to load, falling back to energy heuristic:", err instanceof Error ? err.message : String(err));
     }
   }
@@ -377,7 +378,7 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
       const audioBase64 = btoa(binary);
 
       const config = ctx.getConfig();
-      if (!config?.isTauri || !config?.invoke) {
+      if (config?.isTauri !== true || config.invoke == null) {
         addMessage("system", "Whisper transcription requires the desktop app (Tauri)");
         finishVoiceTranscript("", toAmbient);
         return;

@@ -23,7 +23,7 @@ function stepStatusBadge(status: PlanStepEntry["status"]): { text: string; class
 }
 
 function formatDuration(startedAt: number | null, completedAt: number | null): string {
-  if (!startedAt) return "";
+  if (startedAt == null) return "";
   const end = completedAt ?? Date.now();
   const ms = end - startedAt;
   if (ms < 1000) return `${ms}ms`;
@@ -33,7 +33,7 @@ function formatDuration(startedAt: number | null, completedAt: number | null): s
 }
 
 function truncate(s: string | null, maxLen: number): string {
-  if (!s) return "";
+  if (s == null || s === "") return "";
   return s.length > maxLen ? s.slice(0, maxLen) + "..." : s;
 }
 
@@ -66,12 +66,12 @@ function StepRow({ step }: { step: PlanStepEntry }): React.ReactElement {
         ? React.createElement("span", { className: "step-duration" }, duration)
         : null,
     ),
-    step.result_summary
+    step.result_summary != null && step.result_summary !== ""
       ? React.createElement("div", { className: "step-result" },
         truncate(step.result_summary, 200),
       )
       : null,
-    step.error_message
+    step.error_message != null && step.error_message !== ""
       ? React.createElement("div", { className: "step-error" },
         truncate(step.error_message, 200),
       )

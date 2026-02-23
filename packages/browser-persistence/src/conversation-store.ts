@@ -87,7 +87,7 @@ export class IdbConversationStore implements ConversationStoreAdapter {
     // For simplicity, return from the sync cache if available.
     const cached = this._messageCache.get(conversationId);
     if (cached) {
-      return limit ? cached.slice(-limit) : cached;
+      return limit != null ? cached.slice(-limit) : cached;
     }
     return [];
   }
@@ -138,7 +138,7 @@ export class IdbConversationStore implements ConversationStoreAdapter {
     // Return from preloaded cache
     const cached = this._conversationListCache.get(motebitId);
     if (cached) {
-      return limit ? cached.slice(0, limit) : cached;
+      return limit != null ? cached.slice(0, limit) : cached;
     }
     return [];
   }

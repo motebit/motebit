@@ -43,7 +43,7 @@ export function MemoryGraphPanel({ memories, edges, onDelete }: MemoryGraphPanel
   const nodeElements = nodes.map((node) => {
     if (node.x == null || node.y == null) return null;
     const radius = 5 + node.confidence * 10;
-    const fill = SENSITIVITY_COLORS[node.sensitivity] || "#e0e0e0";
+    const fill = SENSITIVITY_COLORS[node.sensitivity] ?? "#e0e0e0";
     const label = node.confidence > 0.5
       ? node.content.length > 20 ? node.content.slice(0, 20) + "..." : node.content
       : null;
@@ -60,7 +60,7 @@ export function MemoryGraphPanel({ memories, edges, onDelete }: MemoryGraphPanel
         fill,
         className: "memory-graph-node",
       }),
-      label
+      label != null && label !== ""
         ? h("text", {
             x: node.x,
             y: node.y - radius - 4,

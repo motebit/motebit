@@ -195,7 +195,7 @@ function renderGraph(ctx2d: CanvasRenderingContext2D, nodes: GraphNode[], edges:
 
   // Determine highlighted set for selection
   const highlightedNodes = new Set<string>();
-  if (selectedNodeId) {
+  if (selectedNodeId != null && selectedNodeId !== "") {
     highlightedNodes.add(selectedNodeId);
     for (const e of edges) {
       if (e.source.id === selectedNodeId) highlightedNodes.add(e.target.id);
@@ -205,7 +205,7 @@ function renderGraph(ctx2d: CanvasRenderingContext2D, nodes: GraphNode[], edges:
 
   // Draw edges
   for (const e of edges) {
-    const isHighlighted = selectedNodeId && highlightedNodes.has(e.source.id) && highlightedNodes.has(e.target.id);
+    const isHighlighted = selectedNodeId != null && selectedNodeId !== "" && highlightedNodes.has(e.source.id) && highlightedNodes.has(e.target.id);
     ctx2d.beginPath();
     ctx2d.moveTo(e.source.x, e.source.y);
     ctx2d.lineTo(e.target.x, e.target.y);
@@ -295,7 +295,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
   function open(nodeId?: string): void {
     focusNodeId = nodeId ?? null;
     // If focusing a specific node, ensure list view
-    if (focusNodeId && currentView !== "list") {
+    if (focusNodeId != null && focusNodeId !== "" && currentView !== "list") {
       setView("list");
     }
     memoryPanel.classList.add("open");
@@ -403,7 +403,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
     }
 
     // Scroll to and highlight focused node
-    if (focusNodeId) {
+    if (focusNodeId != null && focusNodeId !== "") {
       const target = memoryList.querySelector(`[data-node-id="${focusNodeId}"]`);
       if (target) {
         target.classList.add("mem-item-focused");
@@ -428,7 +428,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
     const metaDiv = document.createElement("div");
     metaDiv.className = "mem-item-meta";
 
-    if (mem.sensitivity && mem.sensitivity !== SensitivityLevel.None) {
+    if (mem.sensitivity != null && mem.sensitivity !== SensitivityLevel.None) {
       const badge = document.createElement("span");
       badge.className = `mem-sensitivity-badge ${mem.sensitivity}`;
       badge.textContent = mem.sensitivity;
@@ -663,7 +663,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
       drawGraph();
     } else {
       // Clicked empty space — deselect
-      if (selectedNodeId) {
+      if (selectedNodeId != null && selectedNodeId !== "") {
         selectedNodeId = null;
         drawGraph();
       }

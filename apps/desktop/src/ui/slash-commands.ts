@@ -73,7 +73,7 @@ export function filterCommands(partial: string): SlashCommandDef[] {
 export function formatHelpText(): string {
   const lines = ["Available commands:"];
   for (const cmd of SLASH_COMMANDS) {
-    const argText = cmd.hasArgs ? ` ${cmd.argHint ?? "<arg>"}` : "";
+    const argText = cmd.hasArgs === true ? ` ${cmd.argHint ?? "<arg>"}` : "";
     lines.push(`/${cmd.name}${argText} — ${cmd.description}`);
   }
   return lines.join("\n");

@@ -19,7 +19,7 @@ export function ApprovalCard({ toolName, args, onAllow, onDeny, disabled }: Appr
       <Text style={styles.args} numberOfLines={2}>{argsPreview}</Text>
       <View style={styles.buttonRow}>
         <TouchableOpacity
-          style={[styles.button, styles.denyButton, disabled && styles.disabled]}
+          style={[styles.button, styles.denyButton, disabled === true && styles.disabled]}
           onPress={onDeny}
           disabled={disabled}
           activeOpacity={0.7}
@@ -27,7 +27,7 @@ export function ApprovalCard({ toolName, args, onAllow, onDeny, disabled }: Appr
           <Text style={styles.denyText}>Deny</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.button, styles.allowButton, disabled && styles.disabled]}
+          style={[styles.button, styles.allowButton, disabled === true && styles.disabled]}
           onPress={onAllow}
           disabled={disabled}
           activeOpacity={0.7}

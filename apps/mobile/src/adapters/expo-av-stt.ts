@@ -64,8 +64,8 @@ export class ExpoAVSTTProvider implements STTProvider {
 
   private async _startRecording(): Promise<void> {
     try {
-      const { status } = await Audio.requestPermissionsAsync();
-      if (String(status) !== "granted") {
+      const { granted } = await Audio.requestPermissionsAsync();
+      if (!granted) {
         this.onError?.("Microphone permission denied");
         return;
       }
@@ -99,7 +99,7 @@ export class ExpoAVSTTProvider implements STTProvider {
       this._recording = null;
       this._listening = false;
 
-      if (!uri) {
+      if (uri == null || uri === "") {
         this.onEnd?.();
         return;
       }
@@ -107,7 +107,7 @@ export class ExpoAVSTTProvider implements STTProvider {
       await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
 
       const transcript = await this._transcribe(uri);
-      if (transcript) {
+      if (transcript !== "") {
         this.onResult?.(transcript, true);
       }
     } catch (err: unknown) {
@@ -133,8 +133,8 @@ export class ExpoAVSTTProvider implements STTProvider {
           uploadType: FileSystem.FileSystemUploadType.MULTIPART,
           fieldName: "file",
           parameters: {
-            model: this.config.model || "whisper-1",
-            language: this.config.language || "en",
+            model: this.config.model ?? "whisper-1",
+            language: this.config.language ?? "en",
           },
           headers: {
             Authorization: `Bearer ${this.config.apiKey}`,
@@ -143,9 +143,10 @@ export class ExpoAVSTTProvider implements STTProvider {
       );
 
       const result = JSON.parse(response.body) as { text?: string };
-      return result.text || "";
+      return result.text ?? "";
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line no-console
       console.error("Whisper transcription failed:", msg);
       return "";
     }

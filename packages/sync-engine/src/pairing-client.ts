@@ -48,7 +48,7 @@ export class PairingClient {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
-      throw new Error(err.error || `Pairing initiate failed: ${res.status}`);
+      throw new Error(err.error ?? `Pairing initiate failed: ${res.status}`);
     }
     const body = await res.json() as { pairing_id: string; pairing_code: string; expires_at: number };
     return { pairingId: body.pairing_id, pairingCode: body.pairing_code, expiresAt: body.expires_at };
@@ -66,7 +66,7 @@ export class PairingClient {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
-      throw new Error(err.error || `Pairing claim failed: ${res.status}`);
+      throw new Error(err.error ?? `Pairing claim failed: ${res.status}`);
     }
     const body = await res.json() as { pairing_id: string; motebit_id: string };
     return { pairingId: body.pairing_id, motebitId: body.motebit_id };
@@ -81,7 +81,7 @@ export class PairingClient {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
-      throw new Error(err.error || `Failed to get pairing session: ${res.status}`);
+      throw new Error(err.error ?? `Failed to get pairing session: ${res.status}`);
     }
     return res.json() as Promise<PairingSession>;
   }
@@ -96,7 +96,7 @@ export class PairingClient {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
-      throw new Error(err.error || `Pairing approve failed: ${res.status}`);
+      throw new Error(err.error ?? `Pairing approve failed: ${res.status}`);
     }
     const body = await res.json() as { device_id: string; device_token: string; motebit_id: string };
     return { deviceId: body.device_id, deviceToken: body.device_token, motebitId: body.motebit_id };
@@ -112,7 +112,7 @@ export class PairingClient {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
-      throw new Error(err.error || `Pairing deny failed: ${res.status}`);
+      throw new Error(err.error ?? `Pairing deny failed: ${res.status}`);
     }
   }
 
@@ -123,7 +123,7 @@ export class PairingClient {
     const res = await fetch(`${this.relayUrl}/pairing/${pairingId}/status`);
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
-      throw new Error(err.error || `Pairing status poll failed: ${res.status}`);
+      throw new Error(err.error ?? `Pairing status poll failed: ${res.status}`);
     }
     return res.json() as Promise<PairingStatus>;
   }

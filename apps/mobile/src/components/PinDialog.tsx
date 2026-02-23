@@ -68,7 +68,7 @@ export function PinDialog({ visible, mode, onSubmit, onCancel, error }: PinDialo
     onCancel();
   };
 
-  const displayError = error || localError;
+  const displayError = (error != null && error !== "") ? error : localError;
 
   return (
     <Modal visible={visible} animationType="fade" transparent statusBarTranslucent>

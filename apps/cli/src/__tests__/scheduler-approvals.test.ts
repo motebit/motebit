@@ -29,7 +29,7 @@ function createMockRuntime(opts: {
       return _hasPending ? { toolName: opts.approvalToolName ?? "shell_exec", args: opts.approvalArgs ?? {} } : null;
     },
     async *sendMessageStreaming(_text: string): AsyncGenerator<StreamChunk> {
-      if (opts.yieldApproval) {
+      if (opts.yieldApproval === true) {
         _hasPending = true;
         yield {
           type: "approval_request" as const,

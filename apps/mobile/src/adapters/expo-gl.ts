@@ -526,7 +526,7 @@ export class ExpoGLAdapter implements RenderAdapter {
 
     // expo-gl requires endFrameEXP to flush
     const gl = (this.renderer as unknown as { getContext(): WebGLRenderingContext }).getContext?.();
-    if (gl && "endFrameEXP" in gl) {
+    if (gl != null && "endFrameEXP" in gl) {
       (gl as unknown as { endFrameEXP(): void }).endFrameEXP();
     }
   }

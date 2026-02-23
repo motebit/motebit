@@ -151,7 +151,7 @@ export function addActionMessage(text: string, actions: ActionButton[]): void {
 
     for (const action of actions) {
       const btn = document.createElement("button");
-      btn.className = action.primary ? "system-action-btn primary" : "system-action-btn";
+      btn.className = action.primary === true ? "system-action-btn primary" : "system-action-btn";
       btn.textContent = action.label;
       btn.addEventListener("click", () => {
         // Disable all buttons in this message after click
@@ -606,7 +606,7 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
   function selectAutocompleteItem(index: number): void {
     if (index < 0 || index >= filteredItems.length) return;
     const cmd = filteredItems[index]!;
-    chatInput.value = `/${cmd.name}${cmd.hasArgs ? " " : ""}`;
+    chatInput.value = `/${cmd.name}${cmd.hasArgs === true ? " " : ""}`;
     hideAutocomplete();
     chatInput.focus();
   }
@@ -767,7 +767,7 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
 
       case "sync": {
         const config = ctx.getConfig();
-        if (config?.syncUrl) {
+        if (config?.syncUrl != null && config.syncUrl !== "") {
           void ctx.app.syncConversations(config.syncUrl, config.syncMasterToken).then(result => {
             const total = result.conversations_pushed + result.conversations_pulled + result.messages_pushed + result.messages_pulled;
             showToast(total > 0 ? `Synced (${total} changes)` : "Already up to date");
@@ -783,7 +783,7 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
 
       case "summarize":
         void ctx.app.summarizeConversation().then(summary => {
-          if (summary) {
+          if (summary != null && summary !== "") {
             addMessage("system", `Summary: ${summary}`);
           } else {
             addMessage("system", "No conversation to summarize");
@@ -979,7 +979,7 @@ End with a question — you are curious about who they are.`;
     }
 
     // Mark greeting complete so it never fires again
-    if (config?.isTauri && config?.invoke) {
+    if (config?.isTauri === true && config.invoke != null) {
       try {
         const raw = await config.invoke<string>("read_config");
         const parsed = JSON.parse(raw) as Record<string, unknown>;

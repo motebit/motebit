@@ -156,7 +156,7 @@ export class GestureRecognizer {
         "pinky-finger-metacarpal", "pinky-finger-phalanx-proximal", "pinky-finger-phalanx-intermediate", "pinky-finger-phalanx-distal", "pinky-finger-tip",
       ];
       const name = jointNames[index];
-      if (!name) return null;
+      if (name == null) return null;
       const jointSpace = hand.get(name as XRHandJoint);
       if (!jointSpace) return null;
       const pose = getJointPose(jointSpace, referenceSpace);

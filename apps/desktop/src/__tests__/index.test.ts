@@ -13,7 +13,7 @@ describe("DesktopApp", () => {
 
   afterEach(() => {
     // Ensure timers and resources are cleaned up
-    if (app) {
+    if (app != null) {
       app.stop();
     }
   });
@@ -76,7 +76,7 @@ describe("DesktopApp.initAI", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) {
+    if (app != null) {
       app.stop();
     }
   });
@@ -190,7 +190,7 @@ describe("DesktopApp.currentModel", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
   });
 
   it("returns null before initAI", () => {
@@ -221,7 +221,7 @@ describe("DesktopApp.setModel", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
   });
 
   it("throws before initAI", () => {
@@ -253,7 +253,7 @@ describe("DesktopApp.sendMessageStreaming", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
   });
 
   it("throws before initAI", async () => {
@@ -295,7 +295,7 @@ describe("DesktopApp.initAI storage selection", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
   });
 
   it("uses in-memory storage when isTauri is false", async () => {
@@ -338,7 +338,7 @@ describe("DesktopApp.initAI tools", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
   });
 
   it("registers browser-safe builtin tools in dev mode", async () => {
@@ -385,7 +385,7 @@ describe("DesktopApp.initAI memoryGovernance", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
   });
 
   it("passes memoryGovernance through to runtime (not defaults)", async () => {
@@ -450,7 +450,7 @@ describe("DesktopApp.governanceStatus", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
   });
 
   it("reports dev mode when isTauri is false", async () => {
@@ -480,7 +480,7 @@ describe("DesktopApp goal tools", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
   });
 
   it("goal tools are NOT registered in dev mode (non-Tauri)", async () => {
@@ -559,7 +559,7 @@ describe("DesktopApp.exportAllData", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
   });
 
   it("includes identity fields even without runtime", async () => {
@@ -716,7 +716,7 @@ describe("DesktopApp.listConversationsAsync", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
   });
 
   it("returns empty array without Tauri store", async () => {
@@ -752,7 +752,7 @@ describe("DesktopApp.loadConversationById", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
   });
 
   it("returns empty array without runtime", async () => {
@@ -820,7 +820,7 @@ describe("DesktopApp.startNewConversation", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
   });
 
   it("does not throw without runtime", () => {
@@ -842,7 +842,7 @@ describe("DesktopApp.currentConversationId", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
   });
 
   it("returns null before initAI", () => {
@@ -862,7 +862,7 @@ describe("DesktopApp.syncConversations", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
   });
 
   it("returns zeros when no conversation store", async () => {
@@ -882,7 +882,7 @@ describe("DesktopApp.stopSync", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
   });
 
   it("does not throw without runtime", () => {
@@ -909,7 +909,7 @@ describe("DesktopApp.startGoalScheduler / stopGoalScheduler", () => {
   });
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
     vi.useRealTimers();
   });
 
@@ -961,7 +961,7 @@ describe("DesktopApp.isGoalExecuting", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
   });
 
   it("is false initially", () => {
@@ -974,7 +974,7 @@ describe("DesktopApp goal callbacks", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
   });
 
   it("onGoalStatus and onGoalComplete accept callbacks", async () => {
@@ -1004,7 +1004,7 @@ describe("DesktopApp.goalTick (via startGoalScheduler)", () => {
   });
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
     vi.useRealTimers();
     globalThis.fetch = originalFetch;
   });
@@ -1152,7 +1152,7 @@ describe("DesktopApp.resumeGoalAfterApproval", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
   });
 
   it("throws without runtime", async () => {
@@ -1243,7 +1243,7 @@ describe("DesktopApp.maybeAutoTitle", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
   });
 
   it("returns null without runtime", async () => {
@@ -1320,7 +1320,7 @@ describe("DesktopApp.generateTitleInBackground", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
   });
 
   it("returns null without runtime", async () => {
@@ -1499,7 +1499,7 @@ describe("DesktopApp.getConversationSummary", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
   });
 
   it("returns null without conversation store", async () => {
@@ -1563,7 +1563,7 @@ describe("DesktopApp.summarizeConversation", () => {
   let app: DesktopApp;
 
   afterEach(() => {
-    if (app) app.stop();
+    if (app != null) app.stop();
   });
 
   it("returns null without runtime", async () => {

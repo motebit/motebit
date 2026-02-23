@@ -42,7 +42,7 @@ export class WebSpeechTTSProvider implements TTSProvider {
       const utterance = new SpeechSynthesisUtterance(text);
 
       // Voice selection — option override > resolved preferred voice.
-      if (options?.voice) {
+      if (options?.voice != null && options.voice !== "") {
         const match = speechSynthesis
           .getVoices()
           .find((v) => v.name === options.voice);

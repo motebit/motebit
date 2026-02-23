@@ -138,7 +138,7 @@ export class OpenAITTSProvider implements TTSProvider {
       void this._sound.unloadAsync().catch(() => {});
       this._sound = null;
     }
-    if (tempPath) {
+    if (tempPath != null && tempPath !== "") {
       void FileSystem.deleteAsync(tempPath, { idempotent: true }).catch(() => {});
     }
   }

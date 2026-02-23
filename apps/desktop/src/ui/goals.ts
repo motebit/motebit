@@ -1,8 +1,7 @@
-/* eslint-disable @typescript-eslint/no-base-to-string -- UI rendering of untyped Tauri IPC data, String() wrapping is intentional */
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
 import type { GoalPlanProgressEvent, GoalCompleteEvent } from "../index";
-import { parseJsonSafe, classifyDecision } from "./audit-utils";
+import { parseJsonSafe, classifyDecision, ipcString } from "./audit-utils";
 import { addMessage } from "./chat";
 
 // === DOM Refs ===
@@ -84,7 +83,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
     // Show brief completion summary on the progress card before fading
     if (progressCard && progressStepEl) {
       const statusLabel = event.status === "completed" ? "Completed" : "Failed";
-      const summary = event.summary ? `: ${event.summary.slice(0, 80)}` : "";
+      const summary = event.summary != null && event.summary !== "" ? `: ${event.summary.slice(0, 80)}` : "";
       progressStepEl.textContent = `${statusLabel}${summary}`;
       progressStepEl.style.color = event.status === "completed"
         ? "rgba(34, 197, 94, 0.8)"
@@ -215,7 +214,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
       sql: `SELECT tool, decision, result, timestamp FROM tool_audit_log WHERE run_id = ? ORDER BY timestamp ASC LIMIT 50`,
       params: [outcomeId],
     }).then((entries: Array<Record<string, unknown>>) => {
-      if (entries && entries.length > 0) {
+      if (entries.length > 0) {
         renderAuditEntries(entries, container, false);
         return;
       }
@@ -231,7 +230,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
     isTimeFallback: boolean,
   ): void {
     container.innerHTML = "";
-    if (!entries || entries.length === 0) {
+    if (entries.length === 0) {
       container.innerHTML = '<span style="font-size:10px;color:var(--text-ghost)">No tool details</span>';
       return;
     }
@@ -241,7 +240,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
 
       const toolSpan = document.createElement("span");
       toolSpan.className = "audit-inline-tool";
-      toolSpan.textContent = String(entry.tool || "unknown");
+      toolSpan.textContent = ipcString(entry.tool, "unknown");
       row.appendChild(toolSpan);
 
       const badgeClass = classifyDecision(entry.decision);
@@ -252,10 +251,10 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
       row.appendChild(badge);
 
       const resultData = parseJsonSafe(entry.result) as Record<string, unknown> | null;
-      if (resultData && typeof resultData === "object" && resultData.durationMs) {
+      if (resultData != null && typeof resultData === "object" && resultData.durationMs != null) {
         const durSpan = document.createElement("span");
         durSpan.className = "audit-inline-duration";
-        durSpan.textContent = `${String(resultData.durationMs)}ms`;
+        durSpan.textContent = `${ipcString(resultData.durationMs)}ms`;
         row.appendChild(durSpan);
       }
 
@@ -273,7 +272,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
 
   function refreshGoalList(): void {
     const config = ctx.getConfig();
-    if (!config?.isTauri || !config?.invoke) return;
+    if (config?.isTauri !== true || config.invoke == null) return;
     const motebitId = ctx.app.motebitId;
     if (!motebitId) return;
     const invoke = config.invoke;
@@ -294,7 +293,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
 
         const promptDiv = document.createElement("div");
         promptDiv.className = "goal-item-prompt";
-        const promptText = String(goal.prompt || "");
+        const promptText = ipcString(goal.prompt);
         promptDiv.textContent = promptText.length > 60 ? promptText.slice(0, 60) + "..." : promptText;
         promptDiv.title = promptText;
         item.appendChild(promptDiv);
@@ -303,7 +302,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
         metaDiv.className = "goal-item-meta";
 
         const statusDot = document.createElement("span");
-        const status = String(goal.status || "active");
+        const status = ipcString(goal.status, "active");
         statusDot.className = `goal-status-dot ${status}`;
         metaDiv.appendChild(statusDot);
 
@@ -316,7 +315,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
         metaDiv.appendChild(intervalSpan);
 
         const modeSpan = document.createElement("span");
-        modeSpan.textContent = String(goal.mode || "recurring");
+        modeSpan.textContent = ipcString(goal.mode, "recurring");
         metaDiv.appendChild(modeSpan);
 
         item.appendChild(metaDiv);
@@ -373,7 +372,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
 
   function loadGoalOutcomes(goalId: string, container: HTMLDivElement): void {
     const config = ctx.getConfig();
-    if (!config?.isTauri || !config?.invoke) return;
+    if (config?.isTauri !== true || config.invoke == null) return;
     const invoke = config.invoke;
 
     container.innerHTML = '<div style="font-size:11px;color:rgba(0,0,0,0.3);padding:2px 0;">Loading...</div>';
@@ -388,16 +387,16 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
         row.className = "goal-outcome-row";
 
         const dot = document.createElement("span");
-        const oStatus = String(outcome.status || "");
+        const oStatus = ipcString(outcome.status);
         dot.className = `goal-status-dot ${oStatus === "completed" ? "active" : "suspended"}`;
         row.appendChild(dot);
 
         const summary = document.createElement("span");
         summary.className = "goal-outcome-summary";
-        if (oStatus === "completed" && outcome.summary) {
-          summary.textContent = String(outcome.summary);
-        } else if (outcome.error_message) {
-          summary.textContent = String(outcome.error_message);
+        if (oStatus === "completed" && outcome.summary != null) {
+          summary.textContent = ipcString(outcome.summary);
+        } else if (outcome.error_message != null) {
+          summary.textContent = ipcString(outcome.error_message);
           summary.style.color = "rgba(248,113,113,0.8)";
         } else {
           summary.textContent = oStatus;
@@ -420,7 +419,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
 
   function loadRecentOutcomes(): void {
     const config = ctx.getConfig();
-    if (!config?.isTauri || !config?.invoke) return;
+    if (config?.isTauri !== true || config.invoke == null) return;
     const motebitId = ctx.app.motebitId;
     if (!motebitId) return;
     const invoke = config.invoke;
@@ -435,7 +434,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
       params: [motebitId],
     }).then((outcomes: Array<Record<string, unknown>>) => {
       goalRecentList.innerHTML = "";
-      if (!outcomes || outcomes.length === 0) {
+      if (outcomes.length === 0) {
         goalRecentHeader.style.display = "none";
         return;
       }
@@ -450,14 +449,14 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
         header.className = "goal-recent-row-header";
 
         const statusBadge = document.createElement("span");
-        const oStatus = String(outcome.status || "");
+        const oStatus = ipcString(outcome.status);
         statusBadge.className = `goal-recent-status ${oStatus}`;
         statusBadge.textContent = oStatus;
         header.appendChild(statusBadge);
 
         const prompt = document.createElement("span");
         prompt.className = "goal-recent-prompt";
-        const promptText = String(outcome.prompt || "");
+        const promptText = ipcString(outcome.prompt);
         prompt.textContent = promptText.length > 40 ? promptText.slice(0, 40) + "..." : promptText;
         prompt.title = promptText;
         header.appendChild(prompt);
@@ -474,12 +473,12 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
         detail.className = "goal-recent-detail";
 
         const summaryDiv = document.createElement("div");
-        if (oStatus === "completed" && outcome.summary) {
+        if (oStatus === "completed" && outcome.summary != null) {
           summaryDiv.className = "goal-recent-summary";
-          summaryDiv.textContent = String(outcome.summary);
-        } else if (outcome.error_message) {
+          summaryDiv.textContent = ipcString(outcome.summary);
+        } else if (outcome.error_message != null) {
           summaryDiv.className = "goal-recent-summary error";
-          summaryDiv.textContent = String(outcome.error_message);
+          summaryDiv.textContent = ipcString(outcome.error_message);
         }
         if (summaryDiv.textContent) {
           detail.appendChild(summaryDiv);
@@ -513,7 +512,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
           row.classList.toggle("expanded");
           if (row.classList.contains("expanded") && toolCalls > 0 && !auditLoaded) {
             auditLoaded = true;
-            const oId = String(outcome.outcome_id || "");
+            const oId = ipcString(outcome.outcome_id);
             const ranAt = Number(outcome.ran_at) || 0;
             loadOutcomeAuditEntries(oId, ranAt, outcomes, outcomeIndex, auditContainer, invoke);
           }
@@ -533,7 +532,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
 
   function loadPlanHistory(): void {
     const config = ctx.getConfig();
-    if (!config?.isTauri || !config?.invoke) return;
+    if (config?.isTauri !== true || config.invoke == null) return;
     const motebitId = ctx.app.motebitId;
     if (!motebitId) return;
     const invoke = config.invoke;
@@ -542,7 +541,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
       sql: `SELECT * FROM plans WHERE motebit_id = ? ORDER BY created_at DESC LIMIT 10`,
       params: [motebitId],
     }).then((plans: Array<Record<string, unknown>>) => {
-      if (!plans || plans.length === 0) {
+      if (plans.length === 0) {
         planHistoryHeader.style.display = "none";
         planHistoryList.innerHTML = "";
         planHistoryList.classList.remove("open");
@@ -568,7 +567,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
 
       // Status badge
       const badge = document.createElement("span");
-      const status = String(plan.status || "active");
+      const status = ipcString(plan.status, "active");
       badge.className = `plan-status-badge ${status}`;
       badge.textContent = status;
       header.appendChild(badge);
@@ -576,7 +575,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
       // Title
       const title = document.createElement("span");
       title.className = "plan-entry-title";
-      const titleText = String(plan.title || "Untitled plan");
+      const titleText = ipcString(plan.title, "Untitled plan");
       title.textContent = titleText.length > 30 ? titleText.slice(0, 30) + "..." : titleText;
       title.title = titleText;
       header.appendChild(title);
@@ -640,7 +639,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
       params: [planId],
     }).then((steps: Array<Record<string, unknown>>) => {
       container.innerHTML = "";
-      if (!steps || steps.length === 0) {
+      if (steps.length === 0) {
         container.innerHTML = '<div class="plan-history-empty">No steps</div>';
         return;
       }
@@ -651,7 +650,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
 
         // Status dot
         const dot = document.createElement("span");
-        const stepStatus = String(step.status || "pending");
+        const stepStatus = ipcString(step.status, "pending");
         dot.className = `plan-step-dot ${stepStatus}`;
         row.appendChild(dot);
 
@@ -663,16 +662,16 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
         const desc = document.createElement("div");
         desc.className = "plan-step-desc";
         const ordinal = Number(step.ordinal) + 1;
-        desc.textContent = `${ordinal}. ${String(step.description || "")}`;
+        desc.textContent = `${ordinal}. ${ipcString(step.description)}`;
         content.appendChild(desc);
 
         // Meta (duration, tool calls, retries)
         const meta = document.createElement("div");
         meta.className = "plan-step-meta";
 
-        const startedAt = step.started_at ? Number(step.started_at) : null;
-        const completedAt = step.completed_at ? Number(step.completed_at) : null;
-        if (startedAt) {
+        const startedAt = step.started_at != null ? Number(step.started_at) : null;
+        const completedAt = step.completed_at != null ? Number(step.completed_at) : null;
+        if (startedAt != null) {
           const duration = formatStepDuration(startedAt, completedAt);
           if (duration) {
             const durationSpan = document.createElement("span");
@@ -700,10 +699,10 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
         }
 
         // Result summary (truncated, expandable)
-        if (step.result_summary) {
+        if (step.result_summary != null) {
           const result = document.createElement("div");
           result.className = "plan-step-result";
-          result.textContent = String(step.result_summary);
+          result.textContent = ipcString(step.result_summary);
           result.addEventListener("click", (e) => {
             e.stopPropagation();
             result.classList.toggle("expanded-text");
@@ -712,10 +711,10 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
         }
 
         // Error message
-        if (step.error_message) {
+        if (step.error_message != null) {
           const error = document.createElement("div");
           error.className = "plan-step-error";
-          error.textContent = String(step.error_message);
+          error.textContent = ipcString(step.error_message);
           content.appendChild(error);
         }
 
@@ -747,7 +746,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
 
   async function createGoal(): Promise<void> {
     const config = ctx.getConfig();
-    if (!config?.isTauri || !config?.invoke) return;
+    if (config?.isTauri !== true || config.invoke == null) return;
     const motebitId = ctx.app.motebitId;
     if (!motebitId) return;
 
@@ -780,7 +779,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
 
   async function toggleGoal(goalId: string): Promise<void> {
     const config = ctx.getConfig();
-    if (!config?.isTauri || !config?.invoke) return;
+    if (config?.isTauri !== true || config.invoke == null) return;
     try {
       await config.invoke("goals_toggle", { goalId });
       refreshGoalList();
@@ -792,7 +791,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
 
   async function deleteGoal(goalId: string): Promise<void> {
     const config = ctx.getConfig();
-    if (!config?.isTauri || !config?.invoke) return;
+    if (config?.isTauri !== true || config.invoke == null) return;
     try {
       await config.invoke("goals_delete", { goalId });
       refreshGoalList();

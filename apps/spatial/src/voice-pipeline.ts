@@ -186,7 +186,7 @@ export class SpatialVoicePipeline {
   stop(): void {
     this.stopAnalysisLoop();
 
-    if (this.stt?.listening) {
+    if (this.stt?.listening === true) {
       this.stt.stop();
     }
 
@@ -234,7 +234,7 @@ export class SpatialVoicePipeline {
     if (!clean.trim()) return;
 
     // Pause STT while speaking to avoid feedback loop
-    if (this.stt?.listening) {
+    if (this.stt?.listening === true) {
       this.stt.stop();
     }
 
@@ -243,6 +243,7 @@ export class SpatialVoicePipeline {
     try {
       await this.tts.speak(clean);
     } catch (err: unknown) {
+      // eslint-disable-next-line no-console
       console.warn("[voice-pipeline] TTS error:", err instanceof Error ? err.message : String(err));
     } finally {
       this.transitionTo("ambient");
@@ -320,7 +321,7 @@ export class SpatialVoicePipeline {
       const vadModule = await import("@ricky0123/vad-web");
       const MicVAD = vadModule.MicVAD;
 
-      if (!MicVAD || !this.mediaStream) {
+      if (MicVAD == null || !this.mediaStream) {
         this.sileroFailed = true;
         return;
       }
@@ -444,7 +445,7 @@ export class SpatialVoicePipeline {
       // Silence detection — return to ambient if no speech for SILENCE_DURATION_MS
       if (this._state === "listening" && gatedRms < SPEECH_RMS_THRESHOLD) {
         if (performance.now() - this.lastSpeechTime > SILENCE_DURATION_MS) {
-          if (this.stt?.listening) this.stt.stop();
+          if (this.stt?.listening === true) this.stt.stop();
           this.transitionTo("ambient");
         }
       } else if (this._state === "listening" && gatedRms >= SPEECH_RMS_THRESHOLD) {

@@ -205,7 +205,7 @@ export function App(): React.ReactElement {
 
       // 9. Auto-start sync if relay URL persisted
       const syncUrl = await a.getSyncUrl();
-      if (syncUrl) {
+      if (syncUrl != null && syncUrl !== "") {
         a.onSyncStatus((status, lastSync) => {
           setSyncStatus(status);
           setLastSyncTime(lastSync);
@@ -237,7 +237,7 @@ export function App(): React.ReactElement {
 
     // Build TTS chain: OpenAI (if key available) → system TTS fallback
     const systemTts = new ExpoSpeechTTSProvider();
-    if (openaiKey) {
+    if (openaiKey != null && openaiKey !== "") {
       const openaiTts = new OpenAITTSProvider({ apiKey: openaiKey, voice });
       ttsRef.current = new FallbackTTSProvider([openaiTts, systemTts]);
     } else {
@@ -246,7 +246,7 @@ export function App(): React.ReactElement {
 
     if (!sttRef.current) {
       // STT needs an OpenAI API key for Whisper
-      if (openaiKey) {
+      if (openaiKey != null && openaiKey !== "") {
         sttRef.current = new ExpoAVSTTProvider({ apiKey: openaiKey });
       }
     }
@@ -258,7 +258,7 @@ export function App(): React.ReactElement {
     const wasOperatorMode = a.isOperatorMode;
 
     const apiKey = (s.provider === "anthropic" || s.provider === "hybrid")
-      ? (await SecureStore.getItemAsync("motebit_anthropic_api_key")) || undefined
+      ? (await SecureStore.getItemAsync("motebit_anthropic_api_key")) ?? undefined
       : undefined;
 
     await a.initAI({
@@ -302,12 +302,12 @@ export function App(): React.ReactElement {
     });
 
     a.onGoalComplete((event: GoalCompleteEvent) => {
-      const content = event.status === "completed" && event.summary
+      const content = event.status === "completed" && (event.summary != null && event.summary !== "")
         ? `Goal completed: ${event.summary}`
-        : event.status === "failed" && event.error
+        : event.status === "failed" && (event.error != null && event.error !== "")
           ? `Goal failed: ${event.error}`
           : null;
-      if (content) {
+      if (content != null) {
         setMessages((prev) => [
           ...prev,
           { id: crypto.randomUUID(), role: "system" as const, content, timestamp: Date.now() },
@@ -506,7 +506,7 @@ export function App(): React.ReactElement {
 
   /** Start ambient listening — AudioMonitor with VAD that auto-triggers voice recording. */
   const startAmbientMonitor = useCallback(() => {
-    if (audioMonitorRef.current?.isRunning) return;
+    if (audioMonitorRef.current?.isRunning === true) return;
     const monitor = new AudioMonitor();
     monitor.neuralVadEnabled = settings?.neuralVadEnabled ?? true;
     monitor.onAudio = (energy) => {
@@ -573,7 +573,7 @@ export function App(): React.ReactElement {
 
   // Auto-restart ambient monitor when returning from transcribing/speaking
   useEffect(() => {
-    if (micState === "ambient" && !audioMonitorRef.current?.isRunning) {
+    if (micState === "ambient" && audioMonitorRef.current?.isRunning !== true) {
       startAmbientMonitor();
     }
   }, [micState, startAmbientMonitor]);
@@ -665,7 +665,7 @@ export function App(): React.ReactElement {
         void (async () => {
           try {
             const summary = await a.summarizeConversation();
-            if (summary) {
+            if (summary != null && summary !== "") {
               addSystemMessage(`Summary:\n${summary}`);
             } else {
               addSystemMessage("No conversation to summarize (need at least 2 messages).");
@@ -826,10 +826,10 @@ export function App(): React.ReactElement {
       // TTS — speak the response if voice is active and response is enabled
       const voiceActive = micState !== "off";
       const responseEnabled = settings?.voiceResponseEnabled !== false;
-      if (voiceActive && responseEnabled && settings?.voiceEnabled && ttsRef.current && finalText) {
+      if (voiceActive && responseEnabled && settings?.voiceEnabled === true && ttsRef.current != null && (finalText != null && finalText !== "")) {
         setMicState("speaking");
         // Stop ambient monitor during TTS (avoid feedback)
-        if (audioMonitorRef.current?.isRunning) {
+        if (audioMonitorRef.current?.isRunning === true) {
           void audioMonitorRef.current.stop();
         }
 
@@ -855,7 +855,7 @@ export function App(): React.ReactElement {
           // Non-fatal — TTS failure should not block the UI
         } finally {
           // Stop TTS pulse
-          if (ttsPulseRef.current) {
+          if (ttsPulseRef.current != null) {
             clearInterval(ttsPulseRef.current);
             ttsPulseRef.current = null;
           }
@@ -983,7 +983,7 @@ export function App(): React.ReactElement {
       // No keyring / dev mode — enabled directly, no PIN needed
       return;
     }
-    if (probe.needsSetup) {
+    if (probe.needsSetup === true) {
       setPinMode("setup");
     } else {
       setPinMode("verify");
@@ -997,13 +997,13 @@ export function App(): React.ReactElement {
       await a.setupOperatorPin(pin);
       const result = await a.setOperatorMode(true, pin);
       if (!result.success) {
-        setPinError(result.error || "Failed");
+        setPinError(result.error ?? "Failed");
         return;
       }
     } else {
       const result = await a.setOperatorMode(!a.isOperatorMode, pin);
       if (!result.success) {
-        setPinError(result.error || "Incorrect PIN");
+        setPinError(result.error ?? "Incorrect PIN");
         return;
       }
     }
@@ -1062,7 +1062,7 @@ export function App(): React.ReactElement {
             const session = await a.getPairingSession(url, pid);
             if (session.status === "claimed") {
               stopPairingPoll();
-              setPairingClaimName(session.claiming_device_name || "Unknown device");
+              setPairingClaimName(session.claiming_device_name ?? "Unknown device");
               setPairingStatusText(`"${session.claiming_device_name}" wants to join`);
             }
           } catch {
@@ -1103,12 +1103,12 @@ export function App(): React.ReactElement {
         void (async () => {
           try {
             const status = await a.pollPairingStatus(syncUrl, pid);
-            if (status.status === "approved" && status.device_id && status.motebit_id) {
+            if (status.status === "approved" && (status.device_id != null && status.device_id !== "") && (status.motebit_id != null && status.motebit_id !== "")) {
               stopPairingPoll();
               await a.completePairing({
                 motebitId: status.motebit_id,
                 deviceId: status.device_id,
-                deviceToken: status.device_token || "",
+                deviceToken: status.device_token ?? "",
               }, syncUrl);
               closePairingDialog();
               addSystemMessage("Linked to existing motebit");
@@ -1143,7 +1143,7 @@ export function App(): React.ReactElement {
 
   // Device A: approve
   const handlePairingApprove = useCallback(async () => {
-    if (!pairingId) return;
+    if (pairingId == null || pairingId === "") return;
     const a = app.current;
 
     const syncUrl = pairingSyncUrlRef.current;
@@ -1159,7 +1159,7 @@ export function App(): React.ReactElement {
 
   // Device A: deny
   const handlePairingDeny = useCallback(async () => {
-    if (!pairingId) return;
+    if (pairingId == null || pairingId === "") return;
     const a = app.current;
     const syncUrl = pairingSyncUrlRef.current;
     try {
@@ -1289,7 +1289,7 @@ export function App(): React.ReactElement {
           if (item.role === "approval") {
             return (
               <ApprovalCard
-                toolName={item.toolName || "unknown"}
+                toolName={item.toolName ?? "unknown"}
                 args={item.toolArgs || {}}
                 onAllow={() => void handleApproval(item.id, true)}
                 onDeny={() => void handleApproval(item.id, false)}
@@ -1451,7 +1451,7 @@ export function App(): React.ReactElement {
             </Text>
 
             {/* Sync URL input — shown before code generation (initiate) or submission (claim) */}
-            {((pairingMode === "initiate" && !pairingCode) || (pairingMode === "claim" && !pairingId)) && (
+            {((pairingMode === "initiate" && (pairingCode == null || pairingCode === "")) || (pairingMode === "claim" && (pairingId == null || pairingId === ""))) && (
               <TextInput
                 style={styles.pairingSyncUrlInput}
                 value={pairingSyncUrlInput}
@@ -1464,11 +1464,11 @@ export function App(): React.ReactElement {
               />
             )}
 
-            {pairingMode === "initiate" && pairingCode ? (
+            {pairingMode === "initiate" && (pairingCode != null && pairingCode !== "") ? (
               <Text style={styles.pairingCodeDisplay}>{pairingCode}</Text>
             ) : null}
 
-            {pairingMode === "claim" && !pairingId && (
+            {pairingMode === "claim" && (pairingId == null || pairingId === "") && (
               <TextInput
                 style={styles.pairingInput}
                 value={pairingCodeInput}
@@ -1499,7 +1499,7 @@ export function App(): React.ReactElement {
                   <Text style={styles.pairingSubmitText}>Connect</Text>
                 </TouchableOpacity>
               )}
-              {pairingMode === "claim" && !pairingId && (
+              {pairingMode === "claim" && (pairingId == null || pairingId === "") && (
                 <TouchableOpacity
                   style={styles.pairingSubmitBtn}
                   onPress={() => void handlePairingClaimSubmit()}

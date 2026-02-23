@@ -294,7 +294,7 @@ export class DesktopApp {
       async read() {
         const raw = await invoke<string>("read_config");
         const config = JSON.parse(raw) as Record<string, unknown>;
-        if (!config.motebit_id || typeof config.motebit_id !== "string") return null;
+        if (config.motebit_id == null || typeof config.motebit_id !== "string") return null;
         return {
           motebit_id: config.motebit_id,
           device_id: (config.device_id as string) ?? "",
@@ -369,7 +369,7 @@ export class DesktopApp {
     const raw = await invoke<string>("read_config");
     const config = JSON.parse(raw) as Record<string, unknown>;
     const publicKey = config.device_public_key as string | undefined;
-    if (!publicKey) return null;
+    if (publicKey == null || publicKey === "") return null;
 
     let privateKey: string | null = null;
     try {
@@ -377,7 +377,7 @@ export class DesktopApp {
     } catch {
       return null;
     }
-    if (!privateKey) return null;
+    if (privateKey == null || privateKey === "") return null;
 
     return { publicKey, privateKey };
   }
@@ -509,12 +509,12 @@ export class DesktopApp {
 
     let provider;
     if (config.provider === "ollama") {
-      const model = config.model || "llama3.2";
+      const model = config.model != null && config.model !== "" ? config.model : "llama3.2";
       const base_url = config.isTauri ? "http://localhost:11434" : "/api/ollama";
       provider = new OllamaProvider({ model, base_url, max_tokens: 1024, temperature });
     } else {
-      if (!config.apiKey) return false;
-      const model = config.model || "claude-sonnet-4-20250514";
+      if (config.apiKey == null || config.apiKey === "") return false;
+      const model = config.model != null && config.model !== "" ? config.model : "claude-sonnet-4-20250514";
       const base_url = config.isTauri ? "https://api.anthropic.com" : "/api/anthropic";
       provider = new CloudProvider({
         provider: "anthropic",
@@ -555,10 +555,10 @@ export class DesktopApp {
         const raw = await config.invoke<string>("read_config");
         const configData = JSON.parse(raw) as Record<string, unknown>;
         const identityFileContent = configData._identity_file as string | undefined;
-        if (identityFileContent) {
+        if (identityFileContent != null && identityFileContent !== "") {
           const parsed = parseIdentityFile(identityFileContent);
           const gov = parsed.frontmatter.governance;
-          if (gov?.max_risk_auto && gov?.require_approval_above && gov?.deny_above) {
+          if (gov?.max_risk_auto != null && gov?.require_approval_above != null && gov?.deny_above != null) {
             const govPolicy = governanceToPolicyConfig(gov);
             policyConfig = {
               maxRiskLevel: govPolicy.maxRiskAuto,
@@ -634,14 +634,14 @@ export class DesktopApp {
     registry.register(
       createSubGoalDefinition,
       async (args: Record<string, unknown>) => {
-        if (!this._currentGoalId) {
+        if (this._currentGoalId == null || this._currentGoalId === "") {
           return { ok: false, error: "No active goal context" };
         }
         const prompt = args.prompt as string;
         const interval = args.interval as string | undefined;
         const once = args.once as boolean | undefined;
-        const intervalMs = interval ? parseInterval(interval) : 3_600_000;
-        const mode = once ? "once" : "recurring";
+        const intervalMs = interval != null && interval !== "" ? parseInterval(interval) : 3_600_000;
+        const mode = once === true ? "once" : "recurring";
         const subGoalId = crypto.randomUUID();
 
         try {
@@ -668,7 +668,7 @@ export class DesktopApp {
     registry.register(
       completeGoalDefinition,
       async (args: Record<string, unknown>) => {
-        if (!this._currentGoalId) {
+        if (this._currentGoalId == null || this._currentGoalId === "") {
           return { ok: false, error: "No active goal context" };
         }
         const reason = args.reason as string;
@@ -700,7 +700,7 @@ export class DesktopApp {
     registry.register(
       reportProgressDefinition,
       async (args: Record<string, unknown>) => {
-        if (!this._currentGoalId) {
+        if (this._currentGoalId == null || this._currentGoalId === "") {
           return { ok: false, error: "No active goal context" };
         }
         const note = args.note as string;
@@ -1285,7 +1285,7 @@ export class DesktopApp {
       }
 
       // Phase 2: If this was a plan-based goal, resume remaining steps
-      if (planId && this.planEngine) {
+      if (planId != null && planId !== "" && this.planEngine != null) {
         const loopDeps = this.runtime.getLoopDeps();
         if (loopDeps) {
           const planResult = await this.consumePlanStream(
@@ -1351,7 +1351,7 @@ export class DesktopApp {
       });
       throw err;
     } finally {
-      if (!this._pendingGoalApproval || this._pendingGoalApproval.goalId === goalId) {
+      if (this._pendingGoalApproval == null || this._pendingGoalApproval.goalId === goalId) {
         this._goalExecuting = false;
         this._currentGoalId = null;
         this._goalStatusCallback?.(false);
@@ -1418,11 +1418,11 @@ export class DesktopApp {
         params: [this.motebitId],
       });
 
-      if (!goals || goals.length === 0) return;
+      if (goals.length === 0) return;
 
       const now = Date.now();
       for (const goal of goals) {
-        const elapsed = goal.last_run_at ? now - goal.last_run_at : Infinity;
+        const elapsed = goal.last_run_at != null ? now - goal.last_run_at : Infinity;
         if (elapsed < goal.interval_ms) continue;
         if (this.runtime.isProcessing) break;
 
@@ -1592,7 +1592,8 @@ export class DesktopApp {
       }, loopDeps);
       const newPlan = created.plan;
       plan = newPlan;
-      if (created.truncatedFrom) {
+      if (created.truncatedFrom != null && created.truncatedFrom > 0) {
+        // eslint-disable-next-line no-console
         console.warn(`Plan truncated from ${created.truncatedFrom} to ${newPlan.total_steps} steps (max ${newPlan.total_steps})`);
       }
       planStream = this.planEngine.executePlan(newPlan.plan_id, loopDeps, undefined, runId);
@@ -1622,9 +1623,9 @@ export class DesktopApp {
       context += "\n\nPrevious executions (most recent first):";
       for (const o of outcomes) {
         const ago = formatTimeAgo(now - o.ran_at);
-        if (o.status === "failed" && o.error_message) {
+        if (o.status === "failed" && o.error_message != null && o.error_message !== "") {
           context += `\n- ${ago}: failed — [error: ${o.error_message}]`;
-        } else if (o.summary) {
+        } else if (o.summary != null && o.summary !== "") {
           context += `\n- ${ago}: ${o.status} — "${o.summary.slice(0, 100)}"`;
         } else {
           context += `\n- ${ago}: ${o.status}`;
@@ -1640,7 +1641,7 @@ export class DesktopApp {
     let tokensUsed = 0;
 
     for await (const chunk of this.runtime!.sendMessageStreaming(context, runId)) {
-      if (signal?.aborted) {
+      if (signal?.aborted === true) {
         throw signal.reason instanceof Error ? signal.reason : new Error("Goal aborted");
       }
       if (chunk.type === "text") {
@@ -1650,7 +1651,7 @@ export class DesktopApp {
         if (toolCallsMade > MAX_TOOL_CALLS_PER_RUN) {
           throw new Error(`Goal exceeded ${MAX_TOOL_CALLS_PER_RUN} tool calls — run stopped`);
         }
-      } else if (chunk.type === "result" && chunk.result.totalTokens) {
+      } else if (chunk.type === "result" && chunk.result.totalTokens != null && chunk.result.totalTokens > 0) {
         tokensUsed += chunk.result.totalTokens;
       } else if (chunk.type === "approval_request") {
         this._pendingGoalApproval = {
@@ -1667,11 +1668,11 @@ export class DesktopApp {
           args: chunk.args,
           riskLevel: chunk.risk_level,
         });
-        return { suspended: true, toolCallsMade, responseText: accumulated, tokensUsed: tokensUsed || undefined };
+        return { suspended: true, toolCallsMade, responseText: accumulated, tokensUsed: tokensUsed > 0 ? tokensUsed : undefined };
       }
     }
 
-    return { suspended: false, toolCallsMade, responseText: accumulated, tokensUsed: tokensUsed || undefined };
+    return { suspended: false, toolCallsMade, responseText: accumulated, tokensUsed: tokensUsed > 0 ? tokensUsed : undefined };
   }
 
   /**
@@ -1700,7 +1701,7 @@ export class DesktopApp {
     let stepsCompleted = 0;
 
     for await (const chunk of stream) {
-      if (signal?.aborted) {
+      if (signal?.aborted === true) {
         throw signal.reason instanceof Error ? signal.reason : new Error("Goal aborted");
       }
       switch (chunk.type) {
@@ -1737,7 +1738,7 @@ export class DesktopApp {
             if (toolCallsMade > MAX_TOOL_CALLS_PER_RUN) {
               throw new Error(`Goal exceeded ${MAX_TOOL_CALLS_PER_RUN} tool calls — run stopped`);
             }
-          } else if (chunk.chunk.type === "result" && chunk.chunk.result.totalTokens) {
+          } else if (chunk.chunk.type === "result" && chunk.chunk.result.totalTokens != null && chunk.chunk.result.totalTokens > 0) {
             tokensUsed += chunk.chunk.result.totalTokens;
           }
           break;
@@ -1783,7 +1784,7 @@ export class DesktopApp {
             args: innerChunk.args,
             riskLevel: innerChunk.risk_level,
           });
-          return { suspended: true, toolCallsMade, responseText, planTitle, stepsCompleted, totalSteps, tokensUsed: tokensUsed || undefined };
+          return { suspended: true, toolCallsMade, responseText, planTitle, stepsCompleted, totalSteps, tokensUsed: tokensUsed > 0 ? tokensUsed : undefined };
         }
 
         case "plan_completed":
@@ -1796,7 +1797,7 @@ export class DesktopApp {
       }
     }
 
-    return { suspended: false, toolCallsMade, responseText, planTitle, stepsCompleted, totalSteps, tokensUsed: tokensUsed || undefined };
+    return { suspended: false, toolCallsMade, responseText, planTitle, stepsCompleted, totalSteps, tokensUsed: tokensUsed > 0 ? tokensUsed : undefined };
   }
 
   // === MCP via Tauri Commands ===
@@ -1822,7 +1823,7 @@ export class DesktopApp {
     }
 
     // Tauri IPC bridge: spawn MCP server, discover tools, register as proxied tools
-    if (config.transport !== "stdio" || !config.command) {
+    if (config.transport !== "stdio" || config.command == null || config.command === "") {
       this.mcpConfigs.set(config.name, config);
       return {
         name: config.name,
@@ -1883,7 +1884,7 @@ export class DesktopApp {
                   name: qualifiedName,
                   description: `[${config.name}] ${mcpTool.description ?? mcpTool.name}`,
                   inputSchema: mcpTool.inputSchema ?? { type: "object" as const, properties: {} },
-                  ...(config.trusted ? {} : { requiresApproval: true as const }),
+                  ...(config.trusted === true ? {} : { requiresApproval: true as const }),
                 };
 
                 // Create a handler that calls the tool via Tauri shell
@@ -1963,9 +1964,9 @@ export class DesktopApp {
                   .map(c => c.text ?? "")
                   .join("\n");
                 return {
-                  ok: !response.result.isError,
-                  data: textContent || response.result.content,
-                  error: response.result.isError ? textContent : undefined,
+                  ok: response.result.isError !== true,
+                  data: textContent !== "" ? textContent : response.result.content,
+                  error: response.result.isError === true ? textContent : undefined,
                 };
               }
             } catch { /* skip */ }
@@ -2040,7 +2041,7 @@ export class DesktopApp {
     if (!this.runtime || !this.conversationStoreRef) return null;
 
     const conversationId = this.runtime.getConversationId();
-    if (!conversationId) return null;
+    if (conversationId == null || conversationId === "") return null;
 
     const history = this.runtime.getConversationHistory();
     if (history.length < 2) return null;
@@ -2053,7 +2054,7 @@ export class DesktopApp {
       .map(m => `${m.role}: ${m.content}`)
       .join("\n");
 
-    const prompt = existingSummary
+    const prompt = existingSummary != null && existingSummary !== ""
       ? `Update this conversation summary with the new messages.\n\nExisting summary:\n${existingSummary}\n\nNew messages:\n${formatted}\n\nReturn ONLY the updated summary (2-4 sentences). No quotes, no explanation.`
       : `Summarize this conversation in 2-4 concise sentences. Return ONLY the summary, no quotes, no explanation.\n\n${formatted}`;
 
@@ -2079,7 +2080,7 @@ export class DesktopApp {
     if (!this.runtime || !this.conversationStoreRef || this._autoTitlePending) return null;
 
     const conversationId = this.runtime.getConversationId();
-    if (!conversationId) return null;
+    if (conversationId == null || conversationId === "") return null;
 
     const history = this.runtime.getConversationHistory();
     if (history.length < 4) return null;
@@ -2087,7 +2088,7 @@ export class DesktopApp {
     // Check if already titled
     const convos = await this.conversationStoreRef.listConversationsAsync(this.motebitId, 50);
     const current = convos.find(c => c.conversationId === conversationId);
-    if (current?.title) return current.title;
+    if (current?.title != null && current.title !== "") return current.title;
 
     this._autoTitlePending = true;
 
@@ -2125,7 +2126,7 @@ export class DesktopApp {
     if (!this.runtime || !this.conversationStoreRef) return null;
 
     const conversationId = this.runtime.getConversationId();
-    if (!conversationId) return null;
+    if (conversationId == null || conversationId === "") return null;
 
     // Check message count
     const count = await this.conversationStoreRef.getMessageCount(conversationId);
@@ -2134,7 +2135,7 @@ export class DesktopApp {
     // Check if already titled
     const convos = await this.conversationStoreRef.listConversationsAsync(this.motebitId, 50);
     const current = convos.find(c => c.conversationId === conversationId);
-    if (current?.title) return null; // Already has a title
+    if (current?.title != null && current.title !== "") return null; // Already has a title
 
     if (this._autoTitlePending) return null;
     this._autoTitlePending = true;
@@ -2232,7 +2233,7 @@ export class DesktopApp {
 
     // Get or create a signed auth token
     let token = authToken;
-    if (!token) {
+    if (token == null || token === "") {
       const keypair = await this.getDeviceKeypair(invoke);
       if (!keypair) {
         this.emitSyncStatus({ status: "error", error: "No device keypair available" });

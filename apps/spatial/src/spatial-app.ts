@@ -245,7 +245,7 @@ export class SpatialApp {
 
     let provider;
     if (config.provider === "ollama") {
-      const model = config.model || "llama3.2";
+      const model = config.model != null && config.model !== "" ? config.model : "llama3.2";
       provider = new OllamaProvider({
         model,
         base_url: "http://localhost:11434",
@@ -253,8 +253,8 @@ export class SpatialApp {
         temperature,
       });
     } else {
-      if (!config.apiKey) return false;
-      const model = config.model || "claude-sonnet-4-20250514";
+      if (config.apiKey == null || config.apiKey === "") return false;
+      const model = config.model != null && config.model !== "" ? config.model : "claude-sonnet-4-20250514";
       provider = new CloudProvider({
         provider: "anthropic",
         api_key: config.apiKey,

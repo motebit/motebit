@@ -103,7 +103,7 @@ export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.Re
           ]}>
             {goal.status}
           </Text>
-          {goal.last_run_at ? (
+          {goal.last_run_at != null ? (
             <Text style={styles.goalMetaText}>ran {formatTimeAgo(goal.last_run_at)}</Text>
           ) : null}
           {goal.consecutive_failures > 0 ? (

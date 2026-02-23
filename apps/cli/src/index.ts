@@ -172,7 +172,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
   }
 
   const defaultModel = provider === "ollama" ? "llama3.2" : "claude-sonnet-4-5-20250514";
-  const allowedPaths = values["allowed-paths"]
+  const allowedPaths = values["allowed-paths"] != null && values["allowed-paths"] !== ""
     ? values["allowed-paths"].split(",").map((p) => p.trim())
     : [process.cwd()];
 
@@ -407,7 +407,7 @@ function formatState(state: Record<string, unknown>): string {
 
 function getApiKey(): string {
   const key = process.env["ANTHROPIC_API_KEY"];
-  if (!key) {
+  if (key == null || key === "") {
     console.error(
       "Error: ANTHROPIC_API_KEY environment variable is not set.\n" +
         "Set it with: export ANTHROPIC_API_KEY=sk-ant-...",
@@ -418,9 +418,9 @@ function getApiKey(): string {
 }
 
 function getDbPath(override?: string): string {
-  if (override) return override;
+  if (override != null && override !== "") return override;
   const envPath = process.env["MOTEBIT_DB_PATH"];
-  if (envPath) return envPath;
+  if (envPath != null && envPath !== "") return envPath;
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
   return path.join(CONFIG_DIR, "motebit.db");
 }
@@ -507,7 +507,7 @@ async function bootstrapIdentity(
 ): Promise<{ motebitId: string; isFirstLaunch: boolean }> {
   const configStore: BootstrapConfigStore = {
     read() {
-      if (!fullConfig.motebit_id) return Promise.resolve(null);
+      if (fullConfig.motebit_id == null || fullConfig.motebit_id === "") return Promise.resolve(null);
       return Promise.resolve({
         motebit_id: fullConfig.motebit_id,
         device_id: fullConfig.device_id ?? "",
@@ -557,7 +557,7 @@ function buildToolRegistry(
   // Search provider chain: Brave (if API key configured) → DuckDuckGo fallback
   const braveKey = process.env["BRAVE_SEARCH_API_KEY"];
   let searchProvider: SearchProvider | undefined;
-  if (braveKey) {
+  if (braveKey != null && braveKey !== "") {
     searchProvider = new FallbackSearchProvider([
       new BraveSearchProvider(braveKey),
       new DuckDuckGoSearchProvider(),
@@ -579,7 +579,7 @@ function buildToolRegistry(
       motebit_id: motebitId,
       limit,
     };
-    if (eventType) {
+    if (eventType != null && eventType !== "") {
       filter.event_types = [eventType as EventType];
     }
     const events = await runtimeRef.current.events.query(filter);
@@ -652,7 +652,7 @@ async function createRuntime(
   const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
   const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
 
-  if (syncUrl) {
+  if (syncUrl != null && syncUrl !== "") {
     const remoteStore = new HttpEventStoreAdapter({
       baseUrl: syncUrl,
       motebitId,
@@ -835,7 +835,7 @@ Available commands:
     case "summarize": {
       try {
         const summary = await runtime.summarizeCurrentConversation();
-        if (summary) {
+        if (summary != null && summary !== "") {
           console.log(`\nSummary:\n${summary}`);
         } else {
           console.log("No conversation to summarize (need at least 2 messages).");
@@ -873,7 +873,7 @@ Available commands:
       // Conversation sync
       if (repl) {
         const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
-        if (syncUrl) {
+        if (syncUrl != null && syncUrl !== "") {
           try {
             console.log("Syncing conversations...");
             const convStoreAdapter = new SqliteConversationSyncStoreAdapter(repl.moteDb.conversationStore);
@@ -929,9 +929,9 @@ Available commands:
     }
 
     case "conversation": {
-      if (!args) {
+      if (args == null || args === "") {
         const convId = runtime.getConversationId();
-        if (convId) {
+        if (convId != null && convId !== "") {
           console.log(`Active conversation: ${convId.slice(0, 8)}...`);
         } else {
           console.log("No active conversation. Use /conversations to list past ones.");
@@ -972,7 +972,7 @@ Available commands:
         const mode = g.mode === "once" ? " (once)" : "";
         const outcomes = repl.moteDb.goalOutcomeStore.listForGoal(g.goal_id, 1);
         const lastOutcome = outcomes.length > 0
-          ? ` — last: ${outcomes[0]!.status}${outcomes[0]!.summary ? ` "${outcomes[0]!.summary.slice(0, 30)}"` : ""}`
+          ? ` — last: ${outcomes[0]!.status}${outcomes[0]!.summary != null && outcomes[0]!.summary !== "" ? ` "${outcomes[0]!.summary.slice(0, 30)}"` : ""}`
           : "";
         console.log(`  [${statusIcon}] ${id}  "${g.prompt.slice(0, 45)}" every ${interval}${mode}${lastOutcome}`);
       }
@@ -1060,9 +1060,9 @@ Available commands:
         console.log(`\nOutcomes for ${match.goal_id.slice(0, 8)} (${outcomes.length}):\n`);
         for (const o of outcomes) {
           const ago = formatTimeAgo(Date.now() - o.ran_at);
-          const detail = o.error_message
+          const detail = o.error_message != null && o.error_message !== ""
             ? `[error: ${o.error_message.slice(0, 40)}]`
-            : (o.summary ? `"${o.summary.slice(0, 50)}"` : "—");
+            : (o.summary != null && o.summary !== "" ? `"${o.summary.slice(0, 50)}"` : "—");
           console.log(`  ${ago.padEnd(10)} ${o.status.padEnd(11)} tools:${o.tool_calls_made} mem:${o.memories_formed}  ${detail}`);
         }
       } else {
@@ -1137,7 +1137,7 @@ Available commands:
       const [subCmd, ...subArgs] = args.split(/\s+/);
       const serverName = subArgs.join(" ");
 
-      if (!subCmd || subCmd === "list") {
+      if (subCmd == null || subCmd === "" || subCmd === "list") {
         const servers = fullConfig.mcp_servers ?? [];
         const trusted = fullConfig.mcp_trusted_servers ?? [];
         if (servers.length === 0) {
@@ -1224,7 +1224,7 @@ async function handleDoctor(): Promise<void> {
 
   // Existing identity
   const fullCfg = loadFullConfig();
-  if (fullCfg.motebit_id) {
+  if (fullCfg.motebit_id != null && fullCfg.motebit_id !== "") {
     checks.push({ name: "Identity", ok: true, detail: `${fullCfg.motebit_id.slice(0, 8)}...` });
   } else {
     checks.push({ name: "Identity", ok: true, detail: "not created yet (run motebit to create)" });
@@ -1267,9 +1267,9 @@ async function handleExport(config: CliConfig): Promise<void> {
       rl.close();
       process.exit(1);
     }
-  } else if (fullConfig.cli_private_key) {
+  } else if (fullConfig.cli_private_key != null && fullConfig.cli_private_key !== "") {
     passphrase = envPassphrase ?? await promptPassphrase(rl, "Set a passphrase for key encryption: ");
-    if (!passphrase) { console.error("Error: passphrase cannot be empty."); rl.close(); process.exit(1); }
+    if (passphrase === "") { console.error("Error: passphrase cannot be empty."); rl.close(); process.exit(1); }
     fullConfig.cli_encrypted_key = await encryptPrivateKey(fullConfig.cli_private_key, passphrase);
     delete fullConfig.cli_private_key;
     saveFullConfig(fullConfig);
@@ -1299,7 +1299,7 @@ async function handleExport(config: CliConfig): Promise<void> {
 
   // Collect device info
   const devices = [];
-  if (updatedConfig.device_id && updatedConfig.device_public_key) {
+  if (updatedConfig.device_id != null && updatedConfig.device_id !== "" && updatedConfig.device_public_key != null && updatedConfig.device_public_key !== "") {
     devices.push({
       device_id: updatedConfig.device_id,
       name: "cli",
@@ -1320,7 +1320,7 @@ async function handleExport(config: CliConfig): Promise<void> {
   );
 
   // Determine output path
-  const outputPath = config.output
+  const outputPath = config.output != null && config.output !== ""
     ? path.resolve(config.output)
     : path.resolve("motebit.md");
 
@@ -1332,7 +1332,7 @@ async function handleExport(config: CliConfig): Promise<void> {
 // --- Subcommand: run (daemon mode) ---
 
 async function handleRun(config: CliConfig): Promise<void> {
-  const identityPath = config.identity
+  const identityPath = config.identity != null && config.identity !== ""
     ? path.resolve(config.identity)
     : path.resolve("motebit.md");
 
@@ -1348,7 +1348,7 @@ async function handleRun(config: CliConfig): Promise<void> {
   const verifyResult = await verifyIdentityFile(identityContent);
   if (!verifyResult.valid || !verifyResult.identity) {
     console.error(`Error: invalid identity file signature.`);
-    if (verifyResult.error) console.error(`  ${verifyResult.error}`);
+    if (verifyResult.error != null && verifyResult.error !== "") console.error(`  ${verifyResult.error}`);
     process.exit(1);
   }
 
@@ -1384,7 +1384,7 @@ async function handleRun(config: CliConfig): Promise<void> {
       config.provider = personalityConfig.default_provider!;
     }
   }
-  if (personalityConfig.default_model && !process.argv.includes("--model")) {
+  if (personalityConfig.default_model != null && personalityConfig.default_model !== "" && !process.argv.includes("--model")) {
     config.model = personalityConfig.default_model;
   }
 
@@ -1467,7 +1467,7 @@ async function handleServe(config: CliConfig): Promise<void> {
     console.error(`Error: --serve-transport must be "stdio" or "http", got "${transport as string}"`);
     process.exit(1);
   }
-  const port = config.servePort ? parseInt(config.servePort, 10) : 3100;
+  const port = config.servePort != null && config.servePort !== "" ? parseInt(config.servePort, 10) : 3100;
 
   // For stdio mode, all diagnostic output must go to stderr (stdout is the MCP JSON-RPC transport)
   const log = transport === "stdio"
@@ -1484,7 +1484,7 @@ async function handleServe(config: CliConfig): Promise<void> {
     denyAbove?: RiskLevel;
   } = {};
 
-  if (config.identity) {
+  if (config.identity != null && config.identity !== "") {
     const identityPath = path.resolve(config.identity);
     let identityContent: string;
     try {
@@ -1497,7 +1497,7 @@ async function handleServe(config: CliConfig): Promise<void> {
     const verifyResult = await verifyIdentityFile(identityContent);
     if (!verifyResult.valid || !verifyResult.identity) {
       console.error(`Error: invalid identity file signature.`);
-      if (verifyResult.error) console.error(`  ${verifyResult.error}`);
+      if (verifyResult.error != null && verifyResult.error !== "") console.error(`  ${verifyResult.error}`);
       process.exit(1);
     }
 
@@ -1523,7 +1523,7 @@ async function handleServe(config: CliConfig): Promise<void> {
   } else {
     // Ambient mode — use config identity
     const fullConfig = loadFullConfig();
-    if (!fullConfig.motebit_id) {
+    if (fullConfig.motebit_id == null || fullConfig.motebit_id === "") {
       console.error("Error: no motebit identity found. Run `motebit` first to create an identity, or use --identity <path>.");
       process.exit(1);
     }
@@ -1545,7 +1545,7 @@ async function handleServe(config: CliConfig): Promise<void> {
       config.provider = personalityConfig.default_provider!;
     }
   }
-  if (personalityConfig.default_model && !process.argv.includes("--model")) {
+  if (personalityConfig.default_model != null && personalityConfig.default_model !== "" && !process.argv.includes("--model")) {
     config.model = personalityConfig.default_model;
   }
 
@@ -1676,11 +1676,11 @@ async function handleServe(config: CliConfig): Promise<void> {
 async function handleGoalAdd(config: CliConfig): Promise<void> {
   // positionals: ["goal", "add", "<prompt>"]
   const prompt = config.positionals[2];
-  if (!prompt) {
+  if (prompt == null || prompt === "") {
     console.error('Usage: motebit goal add "<prompt>" --every <interval>');
     process.exit(1);
   }
-  if (!config.every) {
+  if (config.every == null || config.every === "") {
     console.error('Error: --every <interval> is required. E.g. --every 30m');
     process.exit(1);
   }
@@ -1696,7 +1696,7 @@ async function handleGoalAdd(config: CliConfig): Promise<void> {
 
   const fullConfig = loadFullConfig();
   const motebitId = fullConfig.motebit_id;
-  if (!motebitId) {
+  if (motebitId == null || motebitId === "") {
     console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
     process.exit(1);
   }
@@ -1741,7 +1741,7 @@ async function handleGoalAdd(config: CliConfig): Promise<void> {
 async function handleGoalList(config: CliConfig): Promise<void> {
   const fullConfig = loadFullConfig();
   const motebitId = fullConfig.motebit_id;
-  if (!motebitId) {
+  if (motebitId == null || motebitId === "") {
     console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
     process.exit(1);
   }
@@ -1771,7 +1771,7 @@ async function handleGoalList(config: CliConfig): Promise<void> {
     let lastOutcome = "—";
     if (outcomes.length > 0) {
       const o = outcomes[0]!;
-      const summary = o.summary ? o.summary.slice(0, 30) : o.status;
+      const summary = o.summary != null && o.summary !== "" ? o.summary.slice(0, 30) : o.status;
       lastOutcome = summary;
     }
 
@@ -1783,14 +1783,14 @@ async function handleGoalList(config: CliConfig): Promise<void> {
 
 async function handleGoalOutcomes(config: CliConfig): Promise<void> {
   const goalId = config.positionals[2];
-  if (!goalId) {
+  if (goalId == null || goalId === "") {
     console.error("Usage: motebit goal outcomes <goal_id>");
     process.exit(1);
   }
 
   const fullConfig = loadFullConfig();
   const motebitId = fullConfig.motebit_id;
-  if (!motebitId) {
+  if (motebitId == null || motebitId === "") {
     console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
     process.exit(1);
   }
@@ -1824,9 +1824,9 @@ async function handleGoalOutcomes(config: CliConfig): Promise<void> {
     const status = o.status.padEnd(11);
     const tools = String(o.tool_calls_made).padEnd(6);
     const memories = String(o.memories_formed).padEnd(9);
-    const detail = o.error_message
+    const detail = o.error_message != null && o.error_message !== ""
       ? `[error: ${o.error_message.slice(0, 40)}]`
-      : (o.summary ? o.summary.slice(0, 50) : "—");
+      : (o.summary != null && o.summary !== "" ? o.summary.slice(0, 50) : "—");
     console.log(`  ${ranAt}  ${status} ${tools} ${memories} ${detail}`);
   }
   console.log();
@@ -1847,14 +1847,14 @@ function formatTimeAgo(ms: number): string {
 
 async function handleGoalRemove(config: CliConfig): Promise<void> {
   const goalId = config.positionals[2];
-  if (!goalId) {
+  if (goalId == null || goalId === "") {
     console.error("Usage: motebit goal remove <goal_id>");
     process.exit(1);
   }
 
   const fullConfig = loadFullConfig();
   const motebitId = fullConfig.motebit_id;
-  if (!motebitId) {
+  if (motebitId == null || motebitId === "") {
     console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
     process.exit(1);
   }
@@ -1892,14 +1892,14 @@ async function handleGoalRemove(config: CliConfig): Promise<void> {
 async function handleGoalSetEnabled(config: CliConfig, enabled: boolean): Promise<void> {
   const goalId = config.positionals[2];
   const verb = enabled ? "resume" : "pause";
-  if (!goalId) {
+  if (goalId == null || goalId === "") {
     console.error(`Usage: motebit goal ${verb} <goal_id>`);
     process.exit(1);
   }
 
   const fullConfig = loadFullConfig();
   const motebitId = fullConfig.motebit_id;
-  if (!motebitId) {
+  if (motebitId == null || motebitId === "") {
     console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
     process.exit(1);
   }
@@ -1925,7 +1925,7 @@ async function handleGoalSetEnabled(config: CliConfig, enabled: boolean): Promis
 async function handleApprovalList(config: CliConfig): Promise<void> {
   const fullConfig = loadFullConfig();
   const motebitId = fullConfig.motebit_id;
-  if (!motebitId) {
+  if (motebitId == null || motebitId === "") {
     console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
     process.exit(1);
   }
@@ -1954,14 +1954,14 @@ async function handleApprovalList(config: CliConfig): Promise<void> {
 
 async function handleApprovalShow(config: CliConfig): Promise<void> {
   const approvalId = config.positionals[2];
-  if (!approvalId) {
+  if (approvalId == null || approvalId === "") {
     console.error("Usage: motebit approvals show <approval_id>");
     process.exit(1);
   }
 
   const fullConfig = loadFullConfig();
   const motebitId = fullConfig.motebit_id;
-  if (!motebitId) {
+  if (motebitId == null || motebitId === "") {
     console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
     process.exit(1);
   }
@@ -1988,24 +1988,24 @@ async function handleApprovalShow(config: CliConfig): Promise<void> {
   console.log(`Args Hash:      ${match.args_hash.slice(0, 16)}...`);
   console.log(`Created:        ${new Date(match.created_at).toISOString()}`);
   console.log(`Expires:        ${new Date(match.expires_at).toISOString()}`);
-  if (match.resolved_at) {
+  if (match.resolved_at != null) {
     console.log(`Resolved:       ${new Date(match.resolved_at).toISOString()}`);
   }
-  if (match.denied_reason) {
+  if (match.denied_reason != null && match.denied_reason !== "") {
     console.log(`Denied Reason:  ${match.denied_reason}`);
   }
 }
 
 async function handleApprovalApprove(config: CliConfig): Promise<void> {
   const approvalId = config.positionals[2];
-  if (!approvalId) {
+  if (approvalId == null || approvalId === "") {
     console.error("Usage: motebit approvals approve <approval_id>");
     process.exit(1);
   }
 
   const fullConfig = loadFullConfig();
   const motebitId = fullConfig.motebit_id;
-  if (!motebitId) {
+  if (motebitId == null || motebitId === "") {
     console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
     process.exit(1);
   }
@@ -2036,14 +2036,14 @@ async function handleApprovalApprove(config: CliConfig): Promise<void> {
 
 async function handleApprovalDeny(config: CliConfig): Promise<void> {
   const approvalId = config.positionals[2];
-  if (!approvalId) {
+  if (approvalId == null || approvalId === "") {
     console.error("Usage: motebit approvals deny <approval_id> [--reason <text>]");
     process.exit(1);
   }
 
   const fullConfig = loadFullConfig();
   const motebitId = fullConfig.motebit_id;
-  if (!motebitId) {
+  if (motebitId == null || motebitId === "") {
     console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
     process.exit(1);
   }
@@ -2069,7 +2069,7 @@ async function handleApprovalDeny(config: CliConfig): Promise<void> {
   moteDb.approvalStore.resolve(match.approval_id, "denied", config.reason);
   moteDb.close();
   console.log(`Denied: ${match.approval_id.slice(0, 8)} (${match.tool_name})`);
-  if (config.reason) {
+  if (config.reason != null && config.reason !== "") {
     console.log(`Reason: ${config.reason}`);
   }
 }
@@ -2096,7 +2096,7 @@ async function main(): Promise<void> {
 
   if (subcommand === "verify") {
     const filePath = config.positionals[1];
-    if (!filePath) {
+    if (filePath == null || filePath === "") {
       console.error("Usage: motebit verify <path>");
       process.exit(1);
     }
@@ -2118,7 +2118,7 @@ async function main(): Promise<void> {
       process.exit(0);
     } else {
       console.error(`Signature:   invalid`);
-      if (result.error) console.error(`Error:       ${result.error}`);
+      if (result.error != null && result.error !== "") console.error(`Error:       ${result.error}`);
       process.exit(1);
     }
   }
@@ -2194,7 +2194,7 @@ async function main(): Promise<void> {
       config.provider = personalityConfig.default_provider!;
     }
   }
-  if (personalityConfig.default_model && !process.argv.includes("--model")) {
+  if (personalityConfig.default_model != null && personalityConfig.default_model !== "" && !process.argv.includes("--model")) {
     config.model = personalityConfig.default_model;
   }
 
@@ -2215,11 +2215,11 @@ async function main(): Promise<void> {
       rl.close();
       process.exit(1);
     }
-  } else if (fullConfig.cli_private_key) {
+  } else if (fullConfig.cli_private_key != null && fullConfig.cli_private_key !== "") {
     // Migration: plaintext key exists — encrypt it
     console.log("Migrating private key to encrypted storage...");
     passphrase = envPassphrase ?? await promptPassphrase(rl, "Set a passphrase for key encryption: ");
-    if (!passphrase) {
+    if (passphrase === "") {
       console.error("Error: passphrase cannot be empty.");
       rl.close();
       process.exit(1);

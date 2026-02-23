@@ -382,7 +382,7 @@ describe("FallbackTTSProvider", () => {
       speak: vi.fn(async () => {
         if (options?.speakFail) throw options.speakFail;
         _speaking = true;
-        if (options?.speakDelay) {
+        if (options?.speakDelay != null) {
           await new Promise((r) => setTimeout(r, options.speakDelay));
         }
         _speaking = false;

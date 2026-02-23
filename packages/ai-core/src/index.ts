@@ -404,14 +404,14 @@ export class CloudProvider implements StreamingProvider {
                 activeToolJson = "";
               }
             } else if (event.type === "content_block_delta") {
-              if (event.delta?.type === "text_delta" && event.delta.text) {
+              if (event.delta?.type === "text_delta" && event.delta.text != null && event.delta.text !== "") {
                 accumulated += event.delta.text;
                 yield { type: "text", text: event.delta.text };
-              } else if (event.delta?.type === "input_json_delta" && event.delta.partial_json) {
+              } else if (event.delta?.type === "input_json_delta" && event.delta.partial_json != null && event.delta.partial_json !== "") {
                 activeToolJson += event.delta.partial_json;
               }
             } else if (event.type === "content_block_stop") {
-              if (activeToolId && activeToolName) {
+              if (activeToolId != null && activeToolId !== "" && activeToolName != null && activeToolName !== "") {
                 let args: Record<string, unknown> = {};
                 try {
                   args = JSON.parse(activeToolJson || "{}") as Record<string, unknown>;
@@ -851,7 +851,7 @@ export class OllamaProvider implements StreamingProvider {
               };
               done: boolean;
             };
-            if (chunk.message?.content) {
+            if (chunk.message?.content != null && chunk.message.content !== "") {
               accumulated += chunk.message.content;
               yield { type: "text", text: chunk.message.content };
             }

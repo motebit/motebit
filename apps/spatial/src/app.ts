@@ -63,7 +63,7 @@ interface SpatialSettings {
 function loadSettings(): SpatialSettings {
   try {
     const raw = localStorage.getItem("motebit:spatial_settings");
-    if (raw) {
+    if (raw != null && raw !== "") {
       const parsed = JSON.parse(raw) as Partial<SpatialSettings>;
       return {
         provider: parsed.provider ?? "anthropic",
@@ -157,7 +157,7 @@ async function initVoiceIfEnabled(settings: SpatialSettings): Promise<void> {
     vadSensitivity: settings.vadSensitivity,
   });
 
-  if (started && voiceIndicator) {
+  if (started && voiceIndicator != null) {
     voiceIndicator.classList.remove("hidden");
   }
 }
@@ -185,7 +185,7 @@ providerSelect?.addEventListener("change", () => {
 });
 
 function updateProviderUI(provider: string): void {
-  if (apiKeyGroup) {
+  if (apiKeyGroup != null) {
     apiKeyGroup.style.display = provider === "anthropic" ? "block" : "none";
   }
 }

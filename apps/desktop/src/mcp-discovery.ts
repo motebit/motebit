@@ -77,7 +77,7 @@ function parseServerEntries(
 ): McpServerConfig[] {
   const results: McpServerConfig[] = [];
   for (const [name, value] of Object.entries(entries)) {
-    if (!value || typeof value !== "object") continue;
+    if (value == null || typeof value !== "object") continue;
     const entry = value as Record<string, unknown>;
 
     const config: McpServerConfig = {
@@ -90,7 +90,7 @@ function parseServerEntries(
     if (typeof entry.command === "string") config.command = entry.command;
     if (Array.isArray(entry.args)) config.args = entry.args.filter((a): a is string => typeof a === "string");
     if (typeof entry.url === "string") config.url = entry.url;
-    if (entry.env && typeof entry.env === "object") {
+    if (entry.env != null && typeof entry.env === "object") {
       config.env = Object.fromEntries(
         Object.entries(entry.env as Record<string, unknown>)
           .filter(([, v]) => typeof v === "string")
@@ -99,7 +99,7 @@ function parseServerEntries(
     }
 
     // Skip entries that have neither command nor url — not connectable
-    if (!config.command && !config.url) continue;
+    if ((config.command == null || config.command === "") && (config.url == null || config.url === "")) continue;
 
     results.push(config);
   }

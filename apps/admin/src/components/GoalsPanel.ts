@@ -42,7 +42,7 @@ export function GoalsPanel({ goals }: { goals: GoalEntry[] }): React.ReactElemen
           React.createElement("span", { className: "timestamp" },
             `created ${new Date(g.created_at).toISOString()}`,
           ),
-          g.last_run_at
+          g.last_run_at != null
             ? React.createElement("span", { className: "timestamp" },
               `last run ${new Date(g.last_run_at).toISOString()}`,
             )

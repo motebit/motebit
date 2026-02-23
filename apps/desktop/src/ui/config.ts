@@ -7,8 +7,8 @@ export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
     const { invoke } = await import("@tauri-apps/api/core");
     const raw = await invoke<string>("read_config");
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const provider = (parsed.default_provider as DesktopAIConfig["provider"]) || "ollama";
-    const model = (parsed.default_model as string) || undefined;
+    const provider: DesktopAIConfig["provider"] = (parsed.default_provider as DesktopAIConfig["provider"] | undefined) ?? "ollama";
+    const model = (parsed.default_model as string | undefined) ?? undefined;
 
     // Try keyring first, fall back to config file
     let apiKey: string | undefined;
@@ -18,14 +18,14 @@ export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
     } catch {
       // Keyring unavailable — fall through
     }
-    if (!apiKey) {
-      apiKey = (parsed.api_key as string) || undefined;
+    if (apiKey == null || apiKey === "") {
+      apiKey = (parsed.api_key as string | undefined) ?? undefined;
     }
 
     // Sync relay config (optional)
-    const syncUrl = (parsed.sync_url as string) || undefined;
+    const syncUrl = (parsed.sync_url as string | undefined) ?? undefined;
     let syncMasterToken: string | undefined;
-    if (syncUrl) {
+    if (syncUrl != null && syncUrl !== "") {
       try {
         const keyringVal = await invoke<string | null>("keyring_get", { key: "sync_master_token" });
         syncMasterToken = keyringVal ?? undefined;

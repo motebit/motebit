@@ -185,7 +185,7 @@ export function initPairing(ctx: DesktopContext): PairingAPI {
         void (async () => {
           try {
             const status = await ctx.app.pollPairingStatus(syncUrl, pairingId);
-            if (status.status === "approved" && status.device_id && status.motebit_id) {
+            if (status.status === "approved" && status.device_id != null && status.device_id !== "" && status.motebit_id != null && status.motebit_id !== "") {
               if (pairingPollTimer) {
                 clearInterval(pairingPollTimer);
                 pairingPollTimer = null;
@@ -193,7 +193,7 @@ export function initPairing(ctx: DesktopContext): PairingAPI {
               await ctx.app.completePairing(invoke, {
                 motebitId: status.motebit_id,
                 deviceId: status.device_id,
-                deviceToken: status.device_token || "",
+                deviceToken: status.device_token ?? "",
               });
               void ctx.app.startSync(invoke, syncUrl).catch(() => {});
               close();

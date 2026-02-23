@@ -75,7 +75,7 @@ export async function summarizeConversation(
 
   // Build the prompt
   let userMessage: string;
-  if (existingSummary) {
+  if (existingSummary != null && existingSummary !== "") {
     userMessage = `${SUMMARIZE_UPDATE_PROMPT}\n\n[Existing Summary]\n${existingSummary}\n\n[New Messages]\n${formatted}`;
   } else {
     userMessage = `${SUMMARIZE_NEW_PROMPT}\n\n[Conversation]\n${formatted}`;

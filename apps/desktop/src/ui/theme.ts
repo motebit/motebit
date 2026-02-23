@@ -39,7 +39,7 @@ function persist(pref: ThemePreference, isTauri: boolean, invoke?: unknown): voi
   }
 
   // Also persist to Tauri config if available
-  if (isTauri && invoke) {
+  if (isTauri && invoke != null) {
     const invokeFn = invoke as (cmd: string, args: Record<string, unknown>) => Promise<string>;
     void invokeFn("read_config", {}).then((raw: string) => {
       const parsed = JSON.parse(raw) as Record<string, unknown>;

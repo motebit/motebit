@@ -30,6 +30,6 @@ export class LocalStorageStateSnapshot implements StateSnapshotAdapter {
 
   getSnapshotClock(motebitId: string): number {
     const raw = localStorage.getItem(CLOCK_PREFIX + motebitId);
-    return raw ? Number(raw) : 0;
+    return raw != null && raw !== "" ? Number(raw) : 0;
   }
 }

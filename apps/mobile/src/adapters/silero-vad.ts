@@ -32,11 +32,13 @@ async function ensureModel(): Promise<string> {
   const info = await FileSystem.getInfoAsync(MODEL_PATH);
   if (info.exists) return MODEL_PATH;
 
+  // eslint-disable-next-line no-console
   console.log("[SileroVAD] Downloading model...");
   const result = await FileSystem.downloadAsync(MODEL_URL, MODEL_PATH);
   if (result.status !== 200) {
     throw new Error(`Model download failed with status ${result.status}`);
   }
+  // eslint-disable-next-line no-console
   console.log("[SileroVAD] Model cached at", MODEL_PATH);
   return MODEL_PATH;
 }
@@ -59,10 +61,12 @@ export class SileroVAD {
     try {
       const modelPath = await ensureModel();
       this.session = await InferenceSession.create(modelPath);
+      // eslint-disable-next-line no-console
       console.log("[SileroVAD] Initialized");
       return true;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line no-console
       console.warn("[SileroVAD] Init failed:", msg);
       return false;
     }

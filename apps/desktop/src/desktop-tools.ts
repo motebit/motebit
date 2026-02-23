@@ -55,7 +55,7 @@ export function registerDesktopTools(
   // Search provider chain: Brave (if API key configured) → DuckDuckGo fallback
   const braveKey = import.meta.env.VITE_BRAVE_SEARCH_API_KEY as string | undefined;
   let searchProvider: SearchProvider | undefined;
-  if (braveKey) {
+  if (braveKey != null && braveKey !== "") {
     searchProvider = new FallbackSearchProvider([
       new BraveSearchProvider(braveKey),
       new DuckDuckGoSearchProvider(),
@@ -82,7 +82,7 @@ export function registerDesktopTools(
         motebit_id: runtime.motebitId,
         limit,
       };
-      if (eventType) {
+      if (eventType != null && eventType !== "") {
         filter.event_types = [eventType as EventType];
       }
       const events = await runtime.events.query(filter);

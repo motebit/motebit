@@ -110,10 +110,10 @@ export function SettingsModal({
     setDraft(settings);
     // Load stored API keys
     void SecureStore.getItemAsync("motebit_anthropic_api_key").then((k) => {
-      if (k) setApiKey(k);
+      if (k != null && k !== "") setApiKey(k);
     });
     void SecureStore.getItemAsync("motebit_openai_api_key").then((k) => {
-      if (k) setOpenaiKey(k);
+      if (k != null && k !== "") setOpenaiKey(k);
     });
   }, [settings, visible]);
 
@@ -300,7 +300,7 @@ function AppearanceTab({ selected, onSelect }: { selected: string; onSelect: (p:
             key={name}
             style={[
               styles.presetCircle,
-              { backgroundColor: PRESET_COLORS[name] || "#888" },
+              { backgroundColor: PRESET_COLORS[name] ?? "#888" },
               selected === name && styles.presetSelected,
             ]}
             onPress={() => onSelect(name)}
@@ -654,14 +654,14 @@ function SyncTab({
         <Text style={styles.syncLastTime}>Last synced: {formatTimeAgo(lastSyncTime)}</Text>
       )}
 
-      {syncUrl && (
+      {syncUrl != null && syncUrl !== "" && (
         <>
           <Text style={styles.sectionTitle}>Relay</Text>
           <Text style={styles.monoValue} numberOfLines={1}>{syncUrl}</Text>
         </>
       )}
 
-      {syncUrl && onSyncNow && (
+      {syncUrl != null && syncUrl !== "" && onSyncNow != null && (
         <TouchableOpacity
           style={[styles.syncActionButton, syncStatus === "syncing" && styles.syncActionDisabled]}
           onPress={onSyncNow}
@@ -672,7 +672,7 @@ function SyncTab({
         </TouchableOpacity>
       )}
 
-      {syncUrl && onDisconnect && (
+      {syncUrl != null && syncUrl !== "" && onDisconnect != null && (
         <TouchableOpacity
           style={styles.syncDisconnectButton}
           onPress={() => {
@@ -691,7 +691,7 @@ function SyncTab({
         </TouchableOpacity>
       )}
 
-      {!syncUrl && (
+      {(syncUrl == null || syncUrl === "") && (
         <Text style={styles.syncHint}>
           Link another device from the Identity tab to set up sync, or pair from your desktop app.
         </Text>
@@ -852,7 +852,7 @@ function GoalsTab({ app }: { app: MobileApp }) {
                 ]}>
                   {goal.status}
                 </Text>
-                {goal.last_run_at ? (
+                {goal.last_run_at != null ? (
                   <Text style={styles.goalMetaText}>ran {formatTimeAgo(goal.last_run_at)}</Text>
                 ) : null}
                 {goal.consecutive_failures > 0 ? (

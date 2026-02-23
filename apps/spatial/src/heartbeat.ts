@@ -130,6 +130,7 @@ export class AmbientHeartbeat {
       this.callbacks.onProactiveUtterance?.(text);
     } catch (err: unknown) {
       // Fail silently — proactive behavior should never crash the app
+      // eslint-disable-next-line no-console
       console.warn("[heartbeat] tick error:", err instanceof Error ? err.message : String(err));
     }
   }

@@ -8,7 +8,6 @@
  * so data is wire-compatible across desktop and mobile.
  */
 /* eslint-disable @typescript-eslint/require-await -- sync SQLite methods implementing async interfaces */
-/* eslint-disable @typescript-eslint/no-unnecessary-type-assertion -- TS needs these casts, ESLint disagrees */
 
 import * as SQLite from "expo-sqlite";
 import type { EventLogEntry, EventType, MemoryNode, MemoryEdge, MotebitIdentity, AuditRecord, SensitivityLevel, RelationType, Plan, PlanStep } from "@motebit/sdk";
@@ -299,15 +298,15 @@ export class ExpoSqliteEventStore implements EventStoreAdapter {
     sql += " ORDER BY version_clock ASC";
     if (filter.limit !== undefined) { sql += " LIMIT ?"; params.push(filter.limit); }
 
-    const rows = this.db.getAllSync(sql, params) as EventRow[];
+    const rows = this.db.getAllSync<EventRow>(sql, params);
     return rows.map(rowToEvent);
   }
 
   async getLatestClock(motebitId: string): Promise<number> {
-    const row = this.db.getFirstSync(
+    const row = this.db.getFirstSync<{ max_clock: number | null }>(
       "SELECT MAX(version_clock) as max_clock FROM events WHERE motebit_id = ?",
       [motebitId],
-    ) as { max_clock: number | null } | null;
+    );
     return row?.max_clock ?? 0;
   }
 
@@ -319,10 +318,10 @@ export class ExpoSqliteEventStore implements EventStoreAdapter {
   }
 
   async compact(motebitId: string, beforeClock: number): Promise<number> {
-    const before = this.db.getFirstSync(
+    const before = this.db.getFirstSync<{ cnt: number }>(
       "SELECT COUNT(*) as cnt FROM events WHERE motebit_id = ? AND version_clock <= ?",
       [motebitId, beforeClock],
-    ) as { cnt: number } | null;
+    );
     this.db.runSync(
       "DELETE FROM events WHERE motebit_id = ? AND version_clock <= ?",
       [motebitId, beforeClock],
@@ -331,10 +330,10 @@ export class ExpoSqliteEventStore implements EventStoreAdapter {
   }
 
   async countEvents(motebitId: string): Promise<number> {
-    const row = this.db.getFirstSync(
+    const row = this.db.getFirstSync<{ cnt: number }>(
       "SELECT COUNT(*) as cnt FROM events WHERE motebit_id = ?",
       [motebitId],
-    ) as { cnt: number } | null;
+    );
     return row?.cnt ?? 0;
   }
 }
@@ -354,12 +353,12 @@ export class ExpoSqliteMemoryStorage implements MemoryStorageAdapter {
   }
 
   async getNode(nodeId: string): Promise<MemoryNode | null> {
-    const row = this.db.getFirstSync("SELECT * FROM memory_nodes WHERE node_id = ?", [nodeId]) as NodeRow | null;
+    const row = this.db.getFirstSync<NodeRow>("SELECT * FROM memory_nodes WHERE node_id = ?", [nodeId]);
     return row ? rowToNode(row) : null;
   }
 
   async queryNodes(query: MemoryQuery): Promise<MemoryNode[]> {
-    const rows = this.db.getAllSync("SELECT * FROM memory_nodes WHERE motebit_id = ?", [query.motebit_id]) as NodeRow[];
+    const rows = this.db.getAllSync<NodeRow>("SELECT * FROM memory_nodes WHERE motebit_id = ?", [query.motebit_id]);
     let results = rows.map(rowToNode);
 
     if (query.include_tombstoned !== true) results = results.filter((n) => !n.tombstoned);
@@ -388,10 +387,10 @@ export class ExpoSqliteMemoryStorage implements MemoryStorageAdapter {
   }
 
   async getEdges(nodeId: string): Promise<MemoryEdge[]> {
-    const rows = this.db.getAllSync(
+    const rows = this.db.getAllSync<EdgeRow>(
       "SELECT * FROM memory_edges WHERE source_id = ? OR target_id = ?",
       [nodeId, nodeId],
-    ) as EdgeRow[];
+    );
     return rows.map(rowToEdge);
   }
 
@@ -404,17 +403,17 @@ export class ExpoSqliteMemoryStorage implements MemoryStorageAdapter {
   }
 
   async getAllNodes(motebitId: string): Promise<MemoryNode[]> {
-    const rows = this.db.getAllSync("SELECT * FROM memory_nodes WHERE motebit_id = ?", [motebitId]) as NodeRow[];
+    const rows = this.db.getAllSync<NodeRow>("SELECT * FROM memory_nodes WHERE motebit_id = ?", [motebitId]);
     return rows.map(rowToNode);
   }
 
   async getAllEdges(motebitId: string): Promise<MemoryEdge[]> {
-    const rows = this.db.getAllSync(
+    const rows = this.db.getAllSync<EdgeRow>(
       `SELECT DISTINCT e.* FROM memory_edges e
        INNER JOIN memory_nodes n ON (e.source_id = n.node_id OR e.target_id = n.node_id)
        WHERE n.motebit_id = ?`,
       [motebitId],
-    ) as EdgeRow[];
+    );
     return rows.map(rowToEdge);
   }
 }
@@ -433,12 +432,12 @@ export class ExpoSqliteIdentityStorage implements IdentityStorage {
   }
 
   async load(motebitId: string): Promise<MotebitIdentity | null> {
-    const row = this.db.getFirstSync("SELECT * FROM identities WHERE motebit_id = ?", [motebitId]) as IdentityRow | null;
+    const row = this.db.getFirstSync<IdentityRow>("SELECT * FROM identities WHERE motebit_id = ?", [motebitId]);
     return row ? rowToIdentity(row) : null;
   }
 
   async loadByOwner(ownerId: string): Promise<MotebitIdentity | null> {
-    const row = this.db.getFirstSync("SELECT * FROM identities WHERE owner_id = ? LIMIT 1", [ownerId]) as IdentityRow | null;
+    const row = this.db.getFirstSync<IdentityRow>("SELECT * FROM identities WHERE owner_id = ? LIMIT 1", [ownerId]);
     return row ? rowToIdentity(row) : null;
   }
 }
@@ -463,7 +462,7 @@ export class ExpoSqliteAuditLog implements AuditLogAdapter {
     if (options.after !== undefined) { conditions.push("timestamp > ?"); params.push(options.after); }
 
     const sql = `SELECT * FROM audit_log WHERE ${conditions.join(" AND ")} ORDER BY timestamp ASC`;
-    const rows = this.db.getAllSync(sql, params) as AuditRow[];
+    const rows = this.db.getAllSync<AuditRow>(sql, params);
     let results = rows.map(rowToAudit);
 
     if (options.limit !== undefined) results = results.slice(-options.limit);
@@ -484,18 +483,18 @@ export class ExpoSqliteStateSnapshot implements StateSnapshotAdapter {
   }
 
   loadState(motebitId: string): string | null {
-    const row = this.db.getFirstSync(
+    const row = this.db.getFirstSync<{ state_json: string }>(
       "SELECT state_json FROM state_snapshots WHERE motebit_id = ?",
       [motebitId],
-    ) as { state_json: string } | null;
+    );
     return row?.state_json ?? null;
   }
 
   getSnapshotClock(motebitId: string): number {
-    const row = this.db.getFirstSync(
+    const row = this.db.getFirstSync<{ version_clock: number }>(
       "SELECT version_clock FROM state_snapshots WHERE motebit_id = ?",
       [motebitId],
-    ) as { version_clock: number } | null;
+    );
     return row?.version_clock ?? 0;
   }
 }
@@ -578,7 +577,7 @@ export class ExpoSqliteConversationStore implements ConversationStoreAdapter {
       sql += " LIMIT ?";
       params.push(limit);
     }
-    const rows = this.db.getAllSync(sql, params) as ConversationMessageRow[];
+    const rows = this.db.getAllSync<ConversationMessageRow>(sql, params);
     return rows.map((r) => ({
       messageId: r.message_id,
       conversationId: r.conversation_id,
@@ -599,10 +598,10 @@ export class ExpoSqliteConversationStore implements ConversationStoreAdapter {
     summary: string | null;
   } | null {
     const cutoff = Date.now() - ACTIVE_CONVERSATION_WINDOW_MS;
-    const row = this.db.getFirstSync(
+    const row = this.db.getFirstSync<ConversationRow>(
       "SELECT * FROM conversations WHERE motebit_id = ? AND last_active_at > ? ORDER BY last_active_at DESC LIMIT 1",
       [motebitId, cutoff],
-    ) as ConversationRow | null;
+    );
     if (!row) return null;
     return {
       conversationId: row.conversation_id,
@@ -627,10 +626,10 @@ export class ExpoSqliteConversationStore implements ConversationStoreAdapter {
   }
 
   getMessageCount(conversationId: string): number {
-    const row = this.db.getFirstSync(
+    const row = this.db.getFirstSync<{ message_count: number }>(
       "SELECT message_count FROM conversations WHERE conversation_id = ?",
       [conversationId],
-    ) as { message_count: number } | null;
+    );
     return row?.message_count ?? 0;
   }
 
@@ -641,10 +640,10 @@ export class ExpoSqliteConversationStore implements ConversationStoreAdapter {
     title: string | null;
     messageCount: number;
   }> {
-    const rows = this.db.getAllSync(
+    const rows = this.db.getAllSync<ConversationRow>(
       "SELECT * FROM conversations WHERE motebit_id = ? ORDER BY last_active_at DESC LIMIT ?",
       [motebitId, limit],
-    ) as ConversationRow[];
+    );
     return rows.map((r) => ({
       conversationId: r.conversation_id,
       startedAt: r.started_at,
@@ -751,26 +750,26 @@ export class ExpoGoalStore {
   constructor(private db: SQLite.SQLiteDatabase) {}
 
   listActiveGoals(motebitId: string): Goal[] {
-    const rows = this.db.getAllSync(
+    const rows = this.db.getAllSync<GoalRow>(
       "SELECT * FROM goals WHERE motebit_id = ? AND enabled = 1 AND status = 'active' ORDER BY created_at ASC",
       [motebitId],
-    ) as GoalRow[];
+    );
     return rows.map(rowToGoal);
   }
 
   listGoals(motebitId: string): Goal[] {
-    const rows = this.db.getAllSync(
+    const rows = this.db.getAllSync<GoalRow>(
       "SELECT * FROM goals WHERE motebit_id = ? ORDER BY created_at ASC",
       [motebitId],
-    ) as GoalRow[];
+    );
     return rows.map(rowToGoal);
   }
 
   getRecentOutcomes(goalId: string, limit: number): GoalOutcome[] {
-    const rows = this.db.getAllSync(
+    const rows = this.db.getAllSync<GoalOutcomeRow>(
       "SELECT * FROM goal_outcomes WHERE goal_id = ? ORDER BY ran_at DESC LIMIT ?",
       [goalId, limit],
-    ) as GoalOutcomeRow[];
+    );
     return rows.map(rowToGoalOutcome);
   }
 
@@ -813,10 +812,10 @@ export class ExpoGoalStore {
       [goalId],
     );
     // Auto-pause if max_retries reached
-    const row = this.db.getFirstSync(
+    const row = this.db.getFirstSync<{ consecutive_failures: number; max_retries: number }>(
       "SELECT consecutive_failures, max_retries FROM goals WHERE goal_id = ?",
       [goalId],
-    ) as { consecutive_failures: number; max_retries: number } | null;
+    );
     if (row && row.consecutive_failures >= row.max_retries) {
       this.db.runSync(
         "UPDATE goals SET status = 'paused' WHERE goal_id = ?",
@@ -933,15 +932,15 @@ export class ExpoPlanStore implements PlanStoreAdapter {
   }
 
   getPlan(planId: string): Plan | null {
-    const row = this.db.getFirstSync("SELECT * FROM plans WHERE plan_id = ?", [planId]) as PlanRow | null;
+    const row = this.db.getFirstSync<PlanRow>("SELECT * FROM plans WHERE plan_id = ?", [planId]);
     return row ? rowToPlan(row) : null;
   }
 
   getPlanForGoal(goalId: string): Plan | null {
-    const row = this.db.getFirstSync(
+    const row = this.db.getFirstSync<PlanRow>(
       "SELECT * FROM plans WHERE goal_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1",
       [goalId],
-    ) as PlanRow | null;
+    );
     return row ? rowToPlan(row) : null;
   }
 
@@ -967,12 +966,12 @@ export class ExpoPlanStore implements PlanStoreAdapter {
   }
 
   getStep(stepId: string): PlanStep | null {
-    const row = this.db.getFirstSync("SELECT * FROM plan_steps WHERE step_id = ?", [stepId]) as PlanStepRow | null;
+    const row = this.db.getFirstSync<PlanStepRow>("SELECT * FROM plan_steps WHERE step_id = ?", [stepId]);
     return row ? rowToPlanStep(row) : null;
   }
 
   getStepsForPlan(planId: string): PlanStep[] {
-    const rows = this.db.getAllSync("SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY ordinal ASC", [planId]) as PlanStepRow[];
+    const rows = this.db.getAllSync<PlanStepRow>("SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY ordinal ASC", [planId]);
     return rows.map(rowToPlanStep);
   }
 
@@ -992,10 +991,10 @@ export class ExpoPlanStore implements PlanStoreAdapter {
   }
 
   getNextPendingStep(planId: string): PlanStep | null {
-    const row = this.db.getFirstSync(
+    const row = this.db.getFirstSync<PlanStepRow>(
       "SELECT * FROM plan_steps WHERE plan_id = ? AND status = ? ORDER BY ordinal ASC LIMIT 1",
       [planId, StepStatus.Pending],
-    ) as PlanStepRow | null;
+    );
     return row ? rowToPlanStep(row) : null;
   }
 }
@@ -1006,10 +1005,10 @@ export class ExpoSqliteConversationSyncStore implements ConversationSyncStoreAda
   constructor(private db: SQLite.SQLiteDatabase) {}
 
   getConversationsSince(motebitId: string, since: number): SyncConversation[] {
-    const rows = this.db.getAllSync(
+    const rows = this.db.getAllSync<ConversationRow>(
       "SELECT * FROM conversations WHERE motebit_id = ? AND last_active_at > ? ORDER BY last_active_at ASC",
       [motebitId, since],
-    ) as ConversationRow[];
+    );
     return rows.map((r) => ({
       conversation_id: r.conversation_id,
       motebit_id: r.motebit_id,
@@ -1022,10 +1021,10 @@ export class ExpoSqliteConversationSyncStore implements ConversationSyncStoreAda
   }
 
   getMessagesSince(conversationId: string, since: number): SyncConversationMessage[] {
-    const rows = this.db.getAllSync(
+    const rows = this.db.getAllSync<ConversationMessageRow>(
       "SELECT * FROM conversation_messages WHERE conversation_id = ? AND created_at > ? ORDER BY created_at ASC",
       [conversationId, since],
-    ) as ConversationMessageRow[];
+    );
     return rows.map((r) => ({
       message_id: r.message_id,
       conversation_id: r.conversation_id,
@@ -1040,10 +1039,10 @@ export class ExpoSqliteConversationSyncStore implements ConversationSyncStoreAda
   }
 
   upsertConversation(conv: SyncConversation): void {
-    const existing = this.db.getFirstSync(
+    const existing = this.db.getFirstSync<{ last_active_at: number }>(
       "SELECT last_active_at FROM conversations WHERE conversation_id = ?",
       [conv.conversation_id],
-    ) as { last_active_at: number } | null;
+    );
 
     if (!existing) {
       this.db.runSync(
@@ -1083,7 +1082,7 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
   db.execSync("PRAGMA journal_mode = WAL");
   db.execSync("PRAGMA foreign_keys = ON");
 
-  const versionRow = db.getFirstSync("PRAGMA user_version") as { user_version: number } | null;
+  const versionRow = db.getFirstSync<{ user_version: number }>("PRAGMA user_version");
   const userVersion = versionRow?.user_version ?? 0;
 
   db.execSync(SCHEMA);

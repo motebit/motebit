@@ -106,7 +106,7 @@ export function ConversationPanel({
                       style={[styles.conversationTitle, isActive && styles.conversationTitleActive]}
                       numberOfLines={1}
                     >
-                      {item.title || "Untitled"}
+                      {item.title ?? "Untitled"}
                     </Text>
                     <View style={styles.metaRow}>
                       <Text style={styles.metaText}>{formatTimeAgo(item.lastActiveAt)}</Text>

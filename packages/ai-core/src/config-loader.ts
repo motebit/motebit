@@ -23,6 +23,7 @@ export function loadConfig(configPath?: string): Required<MotebitPersonalityConf
     const parsed = JSON.parse(raw) as MotebitPersonalityConfig;
     return resolveConfig(parsed);
   } catch {
+    // eslint-disable-next-line no-console
     console.warn(`Warning: malformed config at ${filePath}, using defaults`);
     return { ...DEFAULT_CONFIG };
   }

@@ -203,7 +203,7 @@ export function buildSystemPrompt(
   }
 
   // Session awareness — continuing a persisted conversation
-  if (contextPack.sessionInfo?.continued) {
+  if (contextPack.sessionInfo?.continued === true) {
     const elapsed = Date.now() - contextPack.sessionInfo.lastActiveAt;
     const minutes = Math.floor(elapsed / 60_000);
     let timeAgo: string;

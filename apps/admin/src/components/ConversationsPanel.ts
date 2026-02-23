@@ -3,7 +3,7 @@ import type { ConversationEntry, ConversationMessageEntry } from "../api";
 import { fetchConversationMessages } from "../api";
 
 function truncate(s: string | null, maxLen: number): string {
-  if (!s) return "";
+  if (s == null || s === "") return "";
   return s.length > maxLen ? s.slice(0, maxLen) + "..." : s;
 }
 
@@ -43,7 +43,7 @@ export function ConversationsPanel({ conversations }: { conversations: Conversat
           style: { cursor: "pointer" },
         },
           React.createElement("span", { className: "conversation-title" },
-            c.title || "Untitled conversation",
+            c.title != null && c.title !== "" ? c.title : "Untitled conversation",
           ),
           React.createElement("span", { className: "conversation-count" },
             `${c.message_count} messages`,

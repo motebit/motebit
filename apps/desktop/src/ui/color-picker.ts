@@ -88,7 +88,7 @@ export function initColorPicker(ctx: DesktopContext, onColorChanged: () => void)
     ctx.app.setInteriorColorDirect(customInteriorColor);
     onColorChanged();
     const customSwatch = document.querySelector('.color-swatch.custom');
-    if (customSwatch && customInteriorColor) {
+    if (customSwatch != null && customInteriorColor != null) {
       (customSwatch as HTMLElement).style.background = swatchGradient(customInteriorColor);
     }
   }

@@ -270,11 +270,11 @@ export class MobileApp {
     const configStore: BootstrapConfigStore = {
       async read() {
         const mid = await keyring.get("motebit_id");
-        if (!mid) return null;
+        if (mid == null || mid === "") return null;
         return {
           motebit_id: mid,
-          device_id: (await keyring.get("device_id")) || "",
-          device_public_key: (await keyring.get("device_public_key")) || "",
+          device_id: (await keyring.get("device_id")) ?? "",
+          device_public_key: (await keyring.get("device_public_key")) ?? "",
         };
       },
       async write(state) {
@@ -309,7 +309,7 @@ export class MobileApp {
     if (result.isFirstLaunch) {
       try {
         const privKeyHex = await this.keyring.get("device_private_key");
-        if (privKeyHex) {
+        if (privKeyHex != null && privKeyHex !== "") {
           const privKeyBytes = new Uint8Array(privKeyHex.length / 2);
           for (let i = 0; i < privKeyHex.length; i += 2) {
             privKeyBytes[i / 2] = parseInt(privKeyHex.slice(i, i + 2), 16);
@@ -347,12 +347,12 @@ export class MobileApp {
   async initAI(config: MobileAIConfig): Promise<boolean> {
     let provider;
     if (config.provider === "ollama") {
-      const model = config.model || "llama3.2";
-      const base_url = config.ollamaEndpoint || "http://localhost:11434";
+      const model = config.model ?? "llama3.2";
+      const base_url = config.ollamaEndpoint ?? "http://localhost:11434";
       provider = new OllamaProvider({ model, base_url, max_tokens: 1024 });
     } else if (config.provider === "hybrid") {
-      if (!config.apiKey) return false;
-      const model = config.model || "claude-sonnet-4-20250514";
+      if (config.apiKey == null || config.apiKey === "") return false;
+      const model = config.model ?? "claude-sonnet-4-20250514";
       provider = new HybridProvider({
         cloud: {
           provider: "anthropic",
@@ -363,14 +363,14 @@ export class MobileApp {
         },
         ollama: {
           model: "llama3.2",
-          base_url: config.ollamaEndpoint || "http://localhost:11434",
+          base_url: config.ollamaEndpoint ?? "http://localhost:11434",
           max_tokens: 1024,
         },
         fallback_to_local: true,
       });
     } else {
-      if (!config.apiKey) return false;
-      const model = config.model || "claude-sonnet-4-20250514";
+      if (config.apiKey == null || config.apiKey === "") return false;
+      const model = config.model ?? "claude-sonnet-4-20250514";
       provider = new CloudProvider({
         provider: "anthropic",
         api_key: config.apiKey,
@@ -386,10 +386,10 @@ export class MobileApp {
     let policyConfig: Partial<PolicyConfig> | undefined;
     try {
       const identityFileContent = await AsyncStorage.getItem(IDENTITY_FILE_KEY);
-      if (identityFileContent) {
+      if (identityFileContent != null && identityFileContent !== "") {
         const parsed = parseIdentityFile(identityFileContent);
         const gov = parsed.frontmatter.governance;
-        if (gov?.max_risk_auto && gov?.require_approval_above && gov?.deny_above) {
+        if (gov?.max_risk_auto != null && gov.max_risk_auto !== "" && gov.require_approval_above != null && gov.require_approval_above !== "" && gov.deny_above != null && gov.deny_above !== "") {
           const govPolicy = governanceToPolicyConfig(gov);
           policyConfig = {
             maxRiskLevel: govPolicy.maxRiskAuto,
@@ -414,7 +414,7 @@ export class MobileApp {
     );
 
     // Create PlanEngine for multi-step goal execution
-    if (storage.planStore) {
+    if (storage.planStore != null) {
       this.planEngine = new PlanEngine(storage.planStore);
     }
 
@@ -457,7 +457,7 @@ export class MobileApp {
           motebit_id: runtime.motebitId,
           limit,
         };
-        if (eventType) {
+        if (eventType != null && eventType !== "") {
           filter.event_types = [eventType as EventType];
         }
         const events = await runtime.events.query(filter);
@@ -472,20 +472,20 @@ export class MobileApp {
     // Goal management tools (available during goal execution)
     const goalStore = this.storage?.goalStore;
     registry.register(createSubGoalDefinition, (args: Record<string, unknown>) => {
-      if (!this._currentGoalId || !goalStore) {
+      if (this._currentGoalId == null || this._currentGoalId === "" || goalStore == null) {
         return Promise.resolve({ ok: false, error: "No active goal context" });
       }
       const prompt = args.prompt as string;
       const interval = args.interval as string | undefined;
       const once = args.once as boolean | undefined;
-      const intervalMs = interval ? parseInterval(interval) : 3_600_000;
-      const mode = once ? "once" : "recurring";
+      const intervalMs = (interval != null && interval !== "") ? parseInterval(interval) : 3_600_000;
+      const mode = once === true ? "once" : "recurring";
       const subGoalId = goalStore.addGoal(this.motebitId, prompt, intervalMs, mode);
       return Promise.resolve({ ok: true, data: { goal_id: subGoalId, prompt, mode, interval_ms: intervalMs } });
     });
 
     registry.register(completeGoalDefinition, (args: Record<string, unknown>) => {
-      if (!this._currentGoalId || !goalStore) {
+      if (this._currentGoalId == null || this._currentGoalId === "" || goalStore == null) {
         return Promise.resolve({ ok: false, error: "No active goal context" });
       }
       const reason = args.reason as string;
@@ -494,7 +494,7 @@ export class MobileApp {
     });
 
     registry.register(reportProgressDefinition, (args: Record<string, unknown>) => {
-      if (!this._currentGoalId) {
+      if (this._currentGoalId == null || this._currentGoalId === "") {
         return Promise.resolve({ ok: false, error: "No active goal context" });
       }
       const note = args.note as string;
@@ -653,7 +653,7 @@ export class MobileApp {
     if (config.transport !== "http") {
       throw new Error("Mobile only supports HTTP MCP servers. Use the desktop or CLI app for stdio servers.");
     }
-    if (!config.url) {
+    if (config.url == null || config.url === "") {
       throw new Error("HTTP MCP server requires a url");
     }
 
@@ -700,7 +700,7 @@ export class MobileApp {
       const adapter = this.mcpAdapters.get(config.name);
       return {
         name: config.name,
-        url: config.url || "",
+        url: config.url ?? "",
         connected: adapter?.isConnected ?? false,
         toolCount: adapter?.getTools().length ?? 0,
         trusted: config.trusted ?? false,
@@ -737,7 +737,7 @@ export class MobileApp {
         name: mcpTool.name,
         description: `[${config.name}] ${mcpTool.description ?? mcpTool.name}`,
         inputSchema: (mcpTool.inputSchema ?? { type: "object", properties: {} }),
-        ...(config.trusted ? {} : { requiresApproval: true as const }),
+        ...(config.trusted === true ? {} : { requiresApproval: true as const }),
       };
       tempRegistry.register(def, (args: Record<string, unknown>) => adapter.executeTool(mcpTool.name, args));
     }
@@ -748,7 +748,7 @@ export class MobileApp {
 
   private async reconnectMcpServers(): Promise<void> {
     const raw = await AsyncStorage.getItem(MobileApp.MCP_SERVERS_KEY);
-    if (!raw) return;
+    if (raw == null || raw === "") return;
     try {
       const configs = JSON.parse(raw) as McpServerConfig[];
       this._mcpServers = configs;
@@ -771,6 +771,7 @@ export class MobileApp {
           changed = true;
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
+          // eslint-disable-next-line no-console
           console.warn(`Failed to reconnect MCP server "${config.name}": ${msg}`);
         }
       }
@@ -803,7 +804,7 @@ export class MobileApp {
 
   async loadSettings(): Promise<MobileSettings> {
     const raw = await AsyncStorage.getItem(SETTINGS_KEY);
-    if (!raw) return { ...DEFAULT_SETTINGS };
+    if (raw == null || raw === "") return { ...DEFAULT_SETTINGS };
     try {
       return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) as Partial<MobileSettings> };
     } catch {
@@ -843,7 +844,7 @@ export class MobileApp {
     if (this._autoTitlePending || !this.runtime || !this.storage) return;
 
     const conversationId = this.runtime.getConversationId();
-    if (!conversationId) return;
+    if (conversationId == null || conversationId === "") return;
 
     const convStore = this.storage.conversationStore as ExpoSqliteConversationStore;
     const count = convStore.getMessageCount(conversationId);
@@ -852,7 +853,7 @@ export class MobileApp {
     // Check if title already set
     const conversations = convStore.listConversations(this.motebitId, 1);
     const current = conversations.find((c) => c.conversationId === conversationId);
-    if (current?.title) return;
+    if (current?.title != null && current.title !== "") return;
 
     this._autoTitlePending = true;
 
@@ -955,7 +956,7 @@ export class MobileApp {
     // Include identity file if available
     try {
       const identityFile = await AsyncStorage.getItem(IDENTITY_FILE_KEY);
-      if (identityFile) {
+      if (identityFile != null && identityFile !== "") {
         data.identity_file = identityFile;
       }
     } catch {
@@ -986,7 +987,7 @@ export class MobileApp {
       // Include current state vector
       try {
         const state = this.runtime.getState();
-        if (state) {
+        if (state != null) {
           data.state = state;
         }
       } catch {
@@ -1009,7 +1010,7 @@ export class MobileApp {
 
   private async createSyncToken(): Promise<string> {
     const privKeyHex = await this.keyring.get("device_private_key");
-    if (!privKeyHex) throw new Error("No device private key available");
+    if (privKeyHex == null || privKeyHex === "") throw new Error("No device private key available");
 
     const privKeyBytes = new Uint8Array(privKeyHex.length / 2);
     for (let i = 0; i < privKeyHex.length; i += 2) {
@@ -1069,7 +1070,7 @@ export class MobileApp {
     this.motebitId = result.motebitId;
     this.deviceId = result.deviceId;
 
-    if (syncUrl) {
+    if (syncUrl != null && syncUrl !== "") {
       await this.setSyncUrl(syncUrl);
     }
   }
@@ -1108,8 +1109,8 @@ export class MobileApp {
   }
 
   async startSync(syncUrl?: string): Promise<void> {
-    const url = syncUrl || (await this.getSyncUrl());
-    if (!url || !this.storage) return;
+    const url = (syncUrl != null && syncUrl !== "") ? syncUrl : (await this.getSyncUrl());
+    if (url == null || url === "" || !this.storage) return;
 
     await this.setSyncUrl(url);
 
@@ -1164,7 +1165,7 @@ export class MobileApp {
     conversations_pulled: number;
   }> {
     const url = await this.getSyncUrl();
-    if (!url || !this.storage) throw new Error("No sync relay configured");
+    if (url == null || url === "" || !this.storage) throw new Error("No sync relay configured");
 
     const token = await this.createSyncToken();
 
@@ -1313,7 +1314,7 @@ export class MobileApp {
       }
 
       // Phase 2: If plan-based goal, resume remaining plan steps
-      if (planId && this.planEngine) {
+      if (planId != null && planId !== "" && this.planEngine != null) {
         const loopDeps = this.runtime.getLoopDeps();
         if (loopDeps) {
           const planResult = await this.consumePlanStream(
@@ -1360,7 +1361,7 @@ export class MobileApp {
 
       const now = Date.now();
       for (const goal of goals) {
-        const elapsed = goal.last_run_at ? now - goal.last_run_at : Infinity;
+        const elapsed = goal.last_run_at != null ? now - goal.last_run_at : Infinity;
         if (elapsed < goal.interval_ms) continue;
         if (this.runtime.isProcessing) break;
 
@@ -1483,9 +1484,9 @@ export class MobileApp {
       context += "\n\nPrevious executions (most recent first):";
       for (const o of outcomes) {
         const ago = formatTimeAgo(now - o.ran_at);
-        if (o.status === "failed" && o.error_message) {
+        if (o.status === "failed" && o.error_message != null && o.error_message !== "") {
           context += `\n- ${ago}: failed — [error: ${o.error_message}]`;
-        } else if (o.summary) {
+        } else if (o.summary != null && o.summary !== "") {
           context += `\n- ${ago}: ${o.status} — "${o.summary.slice(0, 100)}"`;
         } else {
           context += `\n- ${ago}: ${o.status}`;

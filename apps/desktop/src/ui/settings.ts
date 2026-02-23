@@ -1,9 +1,8 @@
-/* eslint-disable @typescript-eslint/no-base-to-string -- UI rendering of untyped Tauri IPC data */
 import type { DesktopAIConfig, InvokeFn, McpServerConfig, PolicyConfig } from "../index";
 import type { NameCollision } from "../mcp-discovery";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
-import { parseJsonSafe, classifyDecision } from "./audit-utils";
+import { parseJsonSafe, classifyDecision, ipcString } from "./audit-utils";
 import { addMessage } from "./chat";
 import type { ColorPickerAPI } from "./color-picker";
 import type { VoiceAPI } from "./voice";
@@ -143,7 +142,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   document.querySelectorAll(".settings-tab").forEach(tab => {
     tab.addEventListener("click", () => {
       const name = (tab as HTMLElement).dataset.tab;
-      if (name) switchTab(name);
+      if (name != null && name !== "") switchTab(name);
     });
   });
 
@@ -168,7 +167,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     }
 
     // Pre-select current model
-    if (currentModel) {
+    if (currentModel != null && currentModel !== "") {
       const hasModel = models.includes(currentModel);
       if (hasModel) {
         settingsModelSelect.value = currentModel;
@@ -231,15 +230,15 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     document.querySelectorAll(".preset-option").forEach(el => {
       const match = (el as HTMLElement).dataset.preset === preset;
       el.classList.toggle("selected", match);
-      const radio = el.querySelector("input[type=radio]") as HTMLInputElement;
-      if (radio) radio.checked = match;
+      const radio: HTMLInputElement | null = el.querySelector("input[type=radio]");
+      if (radio != null) radio.checked = match;
     });
   }
 
   document.querySelectorAll(".preset-option").forEach(el => {
     el.addEventListener("click", () => {
       const preset = (el as HTMLElement).dataset.preset;
-      if (preset) selectApprovalPreset(preset);
+      if (preset != null && preset !== "") selectApprovalPreset(preset);
     });
   });
 
@@ -273,7 +272,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   document.querySelectorAll(".copy-btn").forEach(btn => {
     btn.addEventListener("click", () => {
       const targetId = (btn as HTMLElement).dataset.copy;
-      if (!targetId) return;
+      if (targetId == null || targetId === "") return;
       const el = document.getElementById(targetId);
       if (el) {
         void navigator.clipboard.writeText(el.textContent || "").then(() => {
@@ -309,7 +308,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       const content = await ctx.app.exportIdentityFile(invoke as InvokeFn);
-      if (!content) {
+      if (content == null || content === "") {
         ctx.showToast("Export failed — keypair not available");
         return;
       }
@@ -344,7 +343,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         el.textContent = "Valid signature — identity verified";
       } else {
         el.classList.add("verify-invalid");
-        el.textContent = `Invalid — ${result.error || "signature mismatch"}`;
+        el.textContent = `Invalid — ${result.error != null && result.error !== "" ? result.error : "signature mismatch"}`;
       }
       setTimeout(() => { el.style.display = "none"; }, 8000);
     });
@@ -362,7 +361,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
     const toolName = document.createElement("span");
     toolName.className = "audit-tool-name";
-    toolName.textContent = String(entry.tool || "unknown");
+    toolName.textContent = ipcString(entry.tool, "unknown");
     header.appendChild(toolName);
 
     const badgeClass = classifyDecision(entry.decision);
@@ -373,7 +372,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
     // Injection indicator
     const injData = parseJsonSafe(entry.injection) as Record<string, unknown> | null;
-    if (injData && injData.detected) {
+    if (injData != null && injData.detected === true) {
       const injBadge = document.createElement("span");
       injBadge.className = "audit-decision-badge denied";
       injBadge.textContent = "injection";
@@ -391,7 +390,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     const detail = document.createElement("div");
     detail.className = "audit-row-detail";
 
-    const argsStr = typeof entry.args === "string" ? entry.args : JSON.stringify(entry.args || "");
+    const argsStr = typeof entry.args === "string" ? entry.args : JSON.stringify(entry.args ?? "");
     const truncArgs = argsStr.length > 200 ? argsStr.slice(0, 200) + "..." : argsStr;
     const argsDiv = document.createElement("div");
     argsDiv.className = "audit-detail-args";
@@ -401,12 +400,12 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     const resultData = parseJsonSafe(entry.result) as Record<string, unknown> | null;
     const resultDiv = document.createElement("div");
     resultDiv.className = "audit-detail-result";
-    if (resultData && typeof resultData === "object") {
-      const ok = resultData.ok !== undefined ? String(resultData.ok) : resultData.error ? "failed" : "ok";
-      const dur = resultData.durationMs ? `${String(resultData.durationMs)}ms` : "";
-      resultDiv.textContent = [ok, dur].filter(Boolean).join(" · ");
+    if (resultData != null && typeof resultData === "object") {
+      const ok = resultData.ok !== undefined ? ipcString(resultData.ok) : resultData.error != null ? "failed" : "ok";
+      const dur = resultData.durationMs != null ? `${ipcString(resultData.durationMs)}ms` : "";
+      resultDiv.textContent = [ok, dur].filter(s => s !== "").join(" · ");
     } else {
-      resultDiv.textContent = String(entry.result || "");
+      resultDiv.textContent = ipcString(entry.result);
     }
     if (resultDiv.textContent) detail.appendChild(resultDiv);
 
@@ -430,7 +429,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
   function populateGovernanceTab(): void {
     const config = ctx.getConfig();
-    if (!config?.isTauri || !config?.invoke) return;
+    if (config?.isTauri !== true || config.invoke == null) return;
     const invoke = config.invoke;
     const listEl = document.getElementById("audit-activity-list")!;
     const emptyEl = document.getElementById("audit-activity-empty")!;
@@ -442,7 +441,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       sql: `SELECT call_id, run_id, tool, args, decision, result, injection, timestamp FROM tool_audit_log ORDER BY timestamp DESC LIMIT 50`,
       params: [],
     }).then((entries: Array<Record<string, unknown>>) => {
-      if (!entries || entries.length === 0) {
+      if (entries.length === 0) {
         emptyEl.style.display = "block";
         return;
       }
@@ -452,18 +451,18 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       const runIndex = new Map<string, number>();
 
       for (const entry of entries) {
-        const rid = entry.run_id ? String(entry.run_id) : null;
-        if (rid && runIndex.has(rid)) {
+        const rid = entry.run_id != null ? ipcString(entry.run_id) : null;
+        if (rid != null && rid !== "" && runIndex.has(rid)) {
           groups[runIndex.get(rid)!]!.entries.push(entry);
         } else {
-          if (rid) runIndex.set(rid, groups.length);
+          if (rid != null && rid !== "") runIndex.set(rid, groups.length);
           groups.push({ runId: rid, entries: [entry] });
         }
       }
 
       // Separate grouped runs from legacy (no run_id)
-      const runGroups = groups.filter(g => g.runId);
-      const legacyEntries = groups.filter(g => !g.runId).flatMap(g => g.entries);
+      const runGroups = groups.filter(g => g.runId != null && g.runId !== "");
+      const legacyEntries = groups.filter(g => g.runId == null || g.runId === "").flatMap(g => g.entries);
 
       for (const group of runGroups) {
         const groupEl = document.createElement("div");
@@ -514,7 +513,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
           params: [group.runId],
         }).then((rows) => {
           const tokens = rows?.[0]?.tokens_used;
-          if (tokens && tokens > 0) {
+          if (tokens != null && tokens > 0) {
             const tokenSpan = document.createElement("span");
             tokenSpan.className = "audit-run-tokens";
             tokenSpan.textContent = `${tokens.toLocaleString()} tok`;
@@ -624,7 +623,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       transportBadge.textContent = config.transport;
       row.appendChild(transportBadge);
 
-      if (config.source) {
+      if (config.source != null && config.source !== "") {
         const discoveredBadge = document.createElement("span");
         discoveredBadge.className = "mcp-badge discovered";
         discoveredBadge.textContent = "discovered";
@@ -632,7 +631,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         row.appendChild(discoveredBadge);
       }
 
-      if (config.trusted) {
+      if (config.trusted === true) {
         const trustedBadge = document.createElement("span");
         trustedBadge.className = "mcp-badge trusted";
         trustedBadge.textContent = "trusted";
@@ -649,17 +648,17 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       }
 
       const statusDot = document.createElement("span");
-      statusDot.className = "mcp-status-dot" + (status?.connected ? " connected" : "");
+      statusDot.className = "mcp-status-dot" + (status?.connected === true ? " connected" : "");
       row.appendChild(statusDot);
 
       // Connect button for disconnected servers
-      if (!status?.connected) {
+      if (status?.connected !== true) {
         const connectBtn = document.createElement("button");
         connectBtn.className = "mcp-connect-btn";
         connectBtn.textContent = "Connect";
         connectBtn.addEventListener("click", () => {
           const appConfig = ctx.getConfig();
-          if (!appConfig?.invoke) return;
+          if (appConfig?.invoke == null) return;
           const inv = appConfig.invoke;
           config.spawnApproved = true;
           // Persist spawnApproved so we don't re-prompt after restart
@@ -669,7 +668,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
             return inv("write_config", { json: JSON.stringify(parsed) });
           }).catch(() => { /* non-fatal */ });
           void ctx.app.connectMcpServerViaTauri(config, inv).then((status) => {
-            if (status.manifestChanged) {
+            if (status.manifestChanged === true) {
               const diff = status.manifestDiff;
               const parts = [`${config.name}: tools changed — trust revoked`];
               if (diff) {
@@ -749,12 +748,12 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
   document.getElementById("settings-link-device")!.addEventListener("click", () => {
     const config = ctx.getConfig();
-    if (!config?.isTauri || !config?.invoke) {
+    if (config?.isTauri !== true || config.invoke == null) {
       addMessage("system", "Pairing requires Tauri (not available in dev mode)");
       return;
     }
     const syncUrl = config.syncUrl;
-    if (!syncUrl) {
+    if (syncUrl == null || syncUrl === "") {
       addMessage("system", "No sync relay configured — set sync_url in config");
       return;
     }
@@ -771,7 +770,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     const config = ctx.getConfig();
     if (config) {
       settingsProvider.value = config.provider;
-      const currentModel = ctx.app.currentModel || config.model || "";
+      const currentModel = (ctx.app.currentModel != null && ctx.app.currentModel !== "" ? ctx.app.currentModel : config.model) ?? "";
       populateModelSelect(config.provider, currentModel);
     } else {
       populateModelSelect("ollama");
@@ -861,15 +860,15 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
           tts_voice: voice.getTtsVoice(),
         },
       };
-      if (model) configData.default_model = model;
+      if (model != null && model !== "") configData.default_model = model;
       await invoke("write_config", { json: JSON.stringify(configData) });
 
-      if (apiKey) {
+      if (apiKey != null && apiKey !== "") {
         await invoke("keyring_set", { key: "api_key", value: apiKey });
         hasApiKeyInKeyring = true;
       }
 
-      if (whisperApiKey) {
+      if (whisperApiKey != null && whisperApiKey !== "") {
         await invoke("keyring_set", { key: "whisper_api_key", value: whisperApiKey });
         hasWhisperKeyInKeyring = true;
       }
@@ -894,7 +893,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     if (wantsOperator && !ctx.app.isOperatorMode) {
       const result = await ctx.app.setOperatorMode(true);
       if (!result.success) {
-        if (result.needsSetup) {
+        if (result.needsSetup === true) {
           showPinDialog("setup");
         } else {
           showPinDialog("verify");
@@ -919,7 +918,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     const newConfig: DesktopAIConfig = {
       provider,
       model,
-      apiKey: apiKey || currentConfig?.apiKey,
+      apiKey: apiKey != null && apiKey !== "" ? apiKey : currentConfig?.apiKey,
       isTauri,
       invoke: currentConfig?.invoke,
     };
@@ -1013,7 +1012,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
     const result = await ctx.app.setOperatorMode(true, pin);
     if (!result.success) {
-      pinError.textContent = result.error || "Failed to enable operator mode";
+      pinError.textContent = result.error != null && result.error !== "" ? result.error : "Failed to enable operator mode";
       return;
     }
 
@@ -1041,7 +1040,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       const resultP = ctx.app.setOperatorMode(true);
       void resultP.then((result) => {
         if (!result.success) {
-          showPinDialog(result.needsSetup ? "setup" : "verify");
+          showPinDialog(result.needsSetup === true ? "setup" : "verify");
         }
       });
     }

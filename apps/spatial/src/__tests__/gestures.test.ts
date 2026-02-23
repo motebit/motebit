@@ -56,9 +56,9 @@ function createMockXRData(positions: MockJointPositions) {
 
   const frame = {
     getJointPose: (jointSpace: { _name?: string }) => {
-      if (!jointSpace?._name) return null;
+      if (jointSpace?._name == null || jointSpace._name === "") return null;
       const pos = positions[jointSpace._name as keyof MockJointPositions];
-      if (!pos) return null;
+      if (pos == null) return null;
       return {
         transform: {
           position: { x: pos[0], y: pos[1], z: pos[2] },
@@ -554,7 +554,7 @@ describe("GestureRecognizer missing joints", () => {
         // Return null for middle-finger-tip
         if (jointSpace._name === "middle-finger-tip") return null;
         const pos = positions[jointSpace._name as keyof MockJointPositions];
-        if (!pos) return null;
+        if (pos == null) return null;
         return {
           transform: {
             position: { x: pos[0], y: pos[1], z: pos[2] },

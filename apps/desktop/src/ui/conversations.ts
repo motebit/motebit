@@ -58,7 +58,7 @@ function formatDateForFilename(): string {
 
 function messagesToMarkdown(messages: Array<{ role: string; content: string }>, title?: string): string {
   const lines: string[] = [];
-  if (title) {
+  if (title != null && title !== "") {
     lines.push(`# ${title}`, "");
   }
   for (const msg of messages) {
@@ -108,10 +108,10 @@ export function initConversations(ctx: DesktopContext): ConversationsAPI {
 
         const titleDiv = document.createElement("div");
         titleDiv.className = "conv-item-title";
-        titleDiv.textContent = conv.title || "Untitled conversation";
+        titleDiv.textContent = conv.title != null && conv.title !== "" ? conv.title : "Untitled conversation";
         item.appendChild(titleDiv);
 
-        if (conv.summary) {
+        if (conv.summary != null && conv.summary !== "") {
           const summaryDiv = document.createElement("div");
           summaryDiv.className = "conv-item-summary";
           summaryDiv.textContent = conv.summary.length > 120
@@ -140,7 +140,7 @@ export function initConversations(ctx: DesktopContext): ConversationsAPI {
     try {
       // Show summary at the top if one exists
       const summary = await ctx.app.getConversationSummary(conversationId);
-      if (summary) {
+      if (summary != null && summary !== "") {
         addMessage("system", `Summary: ${summary}`);
       }
 
@@ -162,7 +162,7 @@ export function initConversations(ctx: DesktopContext): ConversationsAPI {
 
   function exportCurrentJson(): void {
     const conversationId = ctx.app.currentConversationId;
-    if (!conversationId) {
+    if (conversationId == null || conversationId === "") {
       showToast("No active conversation");
       return;
     }
@@ -187,7 +187,7 @@ export function initConversations(ctx: DesktopContext): ConversationsAPI {
 
   function exportCurrentMarkdown(): void {
     const conversationId = ctx.app.currentConversationId;
-    if (!conversationId) {
+    if (conversationId == null || conversationId === "") {
       showToast("No active conversation");
       return;
     }
@@ -254,7 +254,7 @@ export function initConversations(ctx: DesktopContext): ConversationsAPI {
       const sections: string[] = [];
       for (const conv of conversations) {
         const messages = await ctx.app.loadConversationById(conv.conversationId);
-        const title = conv.title || "Untitled conversation";
+        const title = conv.title != null && conv.title !== "" ? conv.title : "Untitled conversation";
         sections.push(messagesToMarkdown(messages, title));
       }
 

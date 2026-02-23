@@ -100,11 +100,11 @@ export class GoalScheduler {
     const registry = this.runtime.getToolRegistry();
 
     const createSubGoalHandler: ToolHandler = (args) => {
-      if (!this.currentGoalId) {
+      if (this.currentGoalId == null || this.currentGoalId === "") {
         return Promise.resolve({ ok: false, error: "No active goal context — this tool can only be used during goal execution." });
       }
       const prompt = args.prompt as string;
-      if (!prompt) return Promise.resolve({ ok: false, error: "Missing required parameter: prompt" });
+      if (prompt == null || prompt === "") return Promise.resolve({ ok: false, error: "Missing required parameter: prompt" });
 
       const intervalStr = (args.interval as string) ?? "1h";
       let intervalMs: number;
@@ -137,7 +137,7 @@ export class GoalScheduler {
     };
 
     const completeGoalHandler: ToolHandler = async (args) => {
-      if (!this.currentGoalId) {
+      if (this.currentGoalId == null || this.currentGoalId === "") {
         return { ok: false, error: "No active goal context — this tool can only be used during goal execution." };
       }
       const reason = args.reason as string;
@@ -166,7 +166,7 @@ export class GoalScheduler {
     };
 
     const reportProgressHandler: ToolHandler = async (args) => {
-      if (!this.currentGoalId) {
+      if (this.currentGoalId == null || this.currentGoalId === "") {
         return { ok: false, error: "No active goal context — this tool can only be used during goal execution." };
       }
       const note = args.note as string;
@@ -209,9 +209,9 @@ export class GoalScheduler {
       lines.push("Previous executions (most recent first):");
       for (const o of outcomes) {
         const ago = formatTimeAgo(Date.now() - o.ran_at);
-        if (o.status === "failed" && o.error_message) {
+        if (o.status === "failed" && o.error_message != null && o.error_message !== "") {
           lines.push(`- ${ago}: failed — [error: ${o.error_message}]`);
-        } else if (o.summary) {
+        } else if (o.summary != null && o.summary !== "") {
           lines.push(`- ${ago}: ${o.status} — "${o.summary.slice(0, 100)}"`);
         } else {
           lines.push(`- ${ago}: ${o.status}`);
@@ -258,7 +258,7 @@ export class GoalScheduler {
       for (const goal of goals) {
         if (!goal.enabled || goal.status !== "active") continue;
 
-        const elapsed = goal.last_run_at ? now - goal.last_run_at : Infinity;
+        const elapsed = goal.last_run_at != null ? now - goal.last_run_at : Infinity;
         if (elapsed < goal.interval_ms) continue;
 
         console.log(`[goal] executing: "${goal.prompt.slice(0, 60)}"`);
@@ -384,7 +384,7 @@ export class GoalScheduler {
     let responseText = "";
 
     for await (const chunk of stream) {
-      if (signal?.aborted) {
+      if (signal?.aborted === true) {
         throw signal.reason instanceof Error ? signal.reason : new Error("Goal aborted");
       }
       switch (chunk.type) {
@@ -455,7 +455,7 @@ export class GoalScheduler {
 
         case "result": {
           const result = chunk.result;
-          if (result.memoriesFormed) {
+          if (result.memoriesFormed != null) {
             memoriesFormed += result.memoriesFormed.length;
           }
           console.log("\n  [goal turn complete]");
@@ -492,7 +492,7 @@ export class GoalScheduler {
         relevantMemories: relevantMemories.length > 0 ? relevantMemories : undefined,
       }, loopDeps);
       plan = created.plan;
-      if (created.truncatedFrom) {
+      if (created.truncatedFrom != null) {
         console.warn(`[plan] truncated from ${created.truncatedFrom} to ${plan.total_steps} steps (max ${plan.total_steps})`);
       }
       planStream = this.planEngine!.executePlan(plan.plan_id, loopDeps, undefined, runId);
@@ -511,7 +511,7 @@ export class GoalScheduler {
     let responseText = "";
 
     for await (const chunk of stream) {
-      if (signal?.aborted) {
+      if (signal?.aborted === true) {
         throw signal.reason instanceof Error ? signal.reason : new Error("Goal aborted");
       }
       switch (chunk.type) {
@@ -558,7 +558,7 @@ export class GoalScheduler {
           } else if (chunk.chunk.type === "injection_warning") {
             console.warn(`\n  [warning] suspicious content in ${chunk.chunk.tool_name}`);
           } else if (chunk.chunk.type === "result") {
-            if (chunk.chunk.result.memoriesFormed) {
+            if (chunk.chunk.result.memoriesFormed != null) {
               memoriesFormed += chunk.chunk.result.memoriesFormed.length;
             }
           }
@@ -785,7 +785,7 @@ export class GoalScheduler {
           tool: toolName,
           args_preview: JSON.stringify(args).slice(0, 200),
           deny_above: RiskLevel[this.denyAbove],
-          ...(deniedReason ? { denied_reason: deniedReason } : {}),
+          ...(deniedReason != null && deniedReason !== "" ? { denied_reason: deniedReason } : {}),
         },
         version_clock: clock + 1,
         tombstoned: false,

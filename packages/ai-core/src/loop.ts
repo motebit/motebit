@@ -52,7 +52,7 @@ export function detectUntaggedMemoryPatterns(
     let match: RegExpExecArray | null;
     while ((match = re.exec(source)) !== null) {
       const captured = match[1]?.trim();
-      if (captured && !isAlreadyCaptured(captured)) {
+      if (captured != null && captured !== "" && !isAlreadyCaptured(captured)) {
         detected.push(`${label}: "${match[0].trim()}"`);
       }
     }
@@ -355,7 +355,7 @@ export async function* runTurnStreaming(
             };
 
             // Log to audit trail
-            if (turnCtx && typeof deps.policyGate.logInjection === "function") {
+            if (turnCtx != null && typeof deps.policyGate.logInjection === "function") {
               deps.policyGate.logInjection(
                 turnCtx.turnId, toolCall.id, toolCall.name, toolCall.args,
                 injectionData, highConfidence, turnCtx.runId,
@@ -389,7 +389,7 @@ export async function* runTurnStreaming(
       }
 
       // Fallback: no policy gate — use legacy requiresApproval check
-      if (toolDef?.requiresApproval) {
+      if (toolDef?.requiresApproval === true) {
         yield {
           type: "approval_request",
           tool_call_id: toolCall.id,

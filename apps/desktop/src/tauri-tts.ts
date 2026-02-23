@@ -98,7 +98,7 @@ export class TauriTTSProvider implements TTSProvider {
   private _cleanup(): void {
     this._speaking = false;
     this._audio = null;
-    if (this._blobUrl) {
+    if (this._blobUrl != null) {
       URL.revokeObjectURL(this._blobUrl);
       this._blobUrl = null;
     }

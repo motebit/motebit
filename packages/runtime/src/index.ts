@@ -399,7 +399,7 @@ export class MotebitRuntime {
     // Restore saved state
     if (this.stateSnapshot) {
       const saved = this.stateSnapshot.loadState(this.motebitId);
-      if (saved) {
+      if (saved != null && saved !== "") {
         this.state.deserialize(saved);
       }
     }
@@ -565,12 +565,12 @@ export class MotebitRuntime {
 
     // Check if PIN is set up
     const storedHash = await this.keyring.get(OPERATOR_PIN_KEY);
-    if (!storedHash) {
+    if (storedHash == null || storedHash === "") {
       return { success: false, needsSetup: true };
     }
 
     // PIN is required
-    if (!pin) {
+    if (pin == null || pin === "") {
       return { success: false, error: "PIN required" };
     }
 
@@ -600,7 +600,7 @@ export class MotebitRuntime {
   private async getPinAttemptState(): Promise<PinAttemptState> {
     if (!this.keyring) return { count: 0, lastFailedAt: 0 };
     const raw = await this.keyring.get(OPERATOR_PIN_ATTEMPTS_KEY);
-    if (!raw) return { count: 0, lastFailedAt: 0 };
+    if (raw == null || raw === "") return { count: 0, lastFailedAt: 0 };
     try {
       return JSON.parse(raw) as PinAttemptState;
     } catch {
@@ -932,7 +932,7 @@ export class MotebitRuntime {
   async reflect(goals?: Array<{ description: string; status: string }>): Promise<ReflectionResult> {
     if (!this.provider) throw new Error("No AI provider configured");
 
-    const summary = this.conversationId && this.conversationStore
+    const summary = this.conversationId != null && this.conversationId !== "" && this.conversationStore != null
       ? this.conversationStore.getActiveConversation(this.motebitId)?.summary ?? null
       : null;
 
@@ -1110,10 +1110,10 @@ export class MotebitRuntime {
 
   /** Generate a title for the current conversation via AI, with heuristic fallback. */
   async autoTitle(): Promise<string | null> {
-    if (!this.conversationStore || !this.conversationId) return null;
+    if (this.conversationStore == null || this.conversationId == null || this.conversationId === "") return null;
     const convos = this.conversationStore.listConversations(this.motebitId, 100);
     const current = convos.find(c => c.conversationId === this.conversationId);
-    if (current?.title) return null; // already titled
+    if (current?.title != null && current.title !== "") return null; // already titled
 
     const history = this.getConversationHistory();
     if (history.length < 4) return null;
@@ -1149,7 +1149,7 @@ export class MotebitRuntime {
 
   /** Manually trigger summarization of the current conversation. */
   async summarizeCurrentConversation(): Promise<string | null> {
-    if (!this.provider || !this.conversationStore || !this.conversationId) return null;
+    if (this.provider == null || this.conversationStore == null || this.conversationId == null || this.conversationId === "") return null;
     const history = this.getConversationHistory();
     if (history.length < 2) return null;
     const existingSummary = this.conversationStore.getActiveConversation(this.motebitId)?.summary ?? null;
@@ -1345,7 +1345,7 @@ export class MotebitRuntime {
 
   /** Trim conversation history to fit within token budget. In-memory history stays complete. */
   private trimHistory(): ConversationMessage[] {
-    const summary = this.conversationId && this.conversationStore
+    const summary = this.conversationId != null && this.conversationId !== "" && this.conversationStore != null
       ? this.conversationStore.getActiveConversation(this.motebitId)?.summary ?? null
       : null;
     return trimConversation(
@@ -1365,8 +1365,8 @@ export class MotebitRuntime {
     }
 
     // Persist to conversation store
-    if (this.conversationStore) {
-      if (!this.conversationId) {
+    if (this.conversationStore != null) {
+      if (this.conversationId == null || this.conversationId === "") {
         this.conversationId = this.conversationStore.createConversation(this.motebitId);
       }
       this.conversationStore.appendMessage(this.conversationId, this.motebitId, {
@@ -1382,8 +1382,8 @@ export class MotebitRuntime {
     // Trigger background summarization at message-count intervals
     if (
       this.provider &&
-      this.conversationStore &&
-      this.conversationId &&
+      this.conversationStore != null &&
+      this.conversationId != null && this.conversationId !== "" &&
       shouldSummarize(this.conversationHistory.length, this.summarizeAfterMessages)
     ) {
       void this.runSummarization();
@@ -1391,7 +1391,7 @@ export class MotebitRuntime {
   }
 
   private async runSummarization(): Promise<void> {
-    if (!this.provider || !this.conversationStore || !this.conversationId) return;
+    if (this.provider == null || this.conversationStore == null || this.conversationId == null || this.conversationId === "") return;
     try {
       const existingSummary = this.conversationStore
         .getActiveConversation(this.motebitId)?.summary ?? null;

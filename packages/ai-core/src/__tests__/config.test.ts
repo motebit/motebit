@@ -42,14 +42,17 @@ describe("resolveConfig", () => {
 
 describe("loadConfig", () => {
   let tmpDir: string;
+  // eslint-disable-next-line no-console
   const originalWarn = console.warn;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "motebit-config-test-"));
+    // eslint-disable-next-line no-console
     console.warn = vi.fn();
   });
 
   afterEach(() => {
+    // eslint-disable-next-line no-console
     console.warn = originalWarn;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
@@ -79,6 +82,7 @@ describe("loadConfig", () => {
 
     const result = loadConfig(configPath);
     expect(result).toEqual(DEFAULT_CONFIG);
+    // eslint-disable-next-line no-console
     expect(console.warn).toHaveBeenCalledWith(
       expect.stringContaining("malformed config"),
     );

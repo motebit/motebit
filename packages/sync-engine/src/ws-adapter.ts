@@ -54,7 +54,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   connect(): void {
     if (this.ws) return;
 
-    const url = this.config.authToken
+    const url = this.config.authToken != null && this.config.authToken !== ""
       ? `${this.config.url}?token=${encodeURIComponent(this.config.authToken)}`
       : this.config.url;
 

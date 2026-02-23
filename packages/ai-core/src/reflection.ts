@@ -75,7 +75,7 @@ export function parseReflectionResponse(text: string): ReflectionResult {
     if (headerMatch) {
       currentSection = headerMatch[1]!.toUpperCase();
       sections[currentSection] = [];
-    } else if (currentSection) {
+    } else if (currentSection != null && currentSection !== "") {
       sections[currentSection]!.push(line);
     }
   }
@@ -130,7 +130,7 @@ export async function reflect(
   // Build context sections
   const sections: string[] = [REFLECTION_PROMPT];
 
-  if (conversationSummary) {
+  if (conversationSummary != null && conversationSummary !== "") {
     sections.push(`[Conversation Summary]\n${conversationSummary}`);
   }
 

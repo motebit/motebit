@@ -194,7 +194,7 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
   app.use("*", secureHeaders());
   app.use("*", cors({ origin: corsOrigin }));
 
-  if (apiToken) {
+  if (apiToken != null && apiToken !== "") {
     app.use("/identity/*", bearerAuth({ token: apiToken }));
     app.use("/identity", bearerAuth({ token: apiToken }));
     // Device registration is protected by the master token
@@ -205,13 +205,13 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
     // Device auth middleware for sync routes: validates per-device tokens or signed tokens
     app.use("/sync/*", async (c, next) => {
       const authHeader = c.req.header("authorization");
-      if (!authHeader?.startsWith("Bearer ")) {
+      if (authHeader == null || !authHeader.startsWith("Bearer ")) {
         throw new HTTPException(401, { message: "Missing device token" });
       }
       const token = authHeader.slice(7);
 
       // Master token bypass
-      if (apiToken && token === apiToken) {
+      if (apiToken != null && apiToken !== "" && token === apiToken) {
         await next();
         return;
       }
@@ -219,7 +219,7 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
       // Extract motebitId from URL path (/sync/:motebitId/...)
       const pathParts = new URL(c.req.url, "http://localhost").pathname.split("/");
       const motebitId = pathParts[2];
-      if (!motebitId) {
+      if (motebitId == null || motebitId === "") {
         throw new HTTPException(400, { message: "Missing motebitId" });
       }
 
@@ -238,7 +238,7 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
       }
       await next();
     });
-  } else if (apiToken) {
+  } else if (apiToken != null && apiToken !== "") {
     // Legacy single-token auth for sync routes
     app.use("/sync/*", bearerAuth({ token: apiToken }));
   }
@@ -248,6 +248,7 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
     if (err instanceof HTTPException) {
       return c.json({ error: err.message, status: err.status }, err.status);
     }
+    // eslint-disable-next-line no-console
     console.error(err);
     return c.json({ error: "Internal server error", status: 500 }, 500);
   });
@@ -268,9 +269,9 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
         // eslint-disable-next-line @typescript-eslint/no-misused-promises -- hono ws adapter supports async handlers
         async onOpen(_event, ws) {
           // Validate token for WebSocket connections
-          if (enableDeviceAuth && token) {
+          if (enableDeviceAuth && token != null && token !== "") {
             // Master token bypass
-            if (apiToken && token === apiToken) {
+            if (apiToken != null && apiToken !== "" && token === apiToken) {
               // OK — master token
             } else if (verifyDeviceSignature && token.includes(".")) {
               // Signed token verification — O(1) lookup by device ID from token payload
@@ -287,7 +288,7 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
                 return;
               }
             }
-          } else if (apiToken && token !== apiToken) {
+          } else if (apiToken != null && apiToken !== "" && token !== apiToken) {
             ws.close(4001, "Unauthorized");
             return;
           }
@@ -451,7 +452,7 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
   });
 
   // --- Audit: query tool audit log ---
-  if (apiToken) {
+  if (apiToken != null && apiToken !== "") {
     app.use("/api/v1/*", bearerAuth({ token: apiToken }));
   }
 
@@ -459,8 +460,8 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
     const motebitId = c.req.param("motebitId");
     const turnId = c.req.query("turn_id");
     let entries: ToolAuditEntry[] = [];
-    if (moteDb.toolAuditSink) {
-      entries = turnId
+    if (moteDb.toolAuditSink != null) {
+      entries = turnId != null && turnId !== ""
         ? moteDb.toolAuditSink.query(turnId)
         : moteDb.toolAuditSink.getAll();
     }
@@ -494,7 +495,7 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
   app.get("/api/v1/state/:motebitId", (c) => {
     const motebitId = c.req.param("motebitId");
     const json = moteDb.stateSnapshot.loadState(motebitId);
-    if (!json) {
+    if (json == null || json === "") {
       return c.json({ motebit_id: motebitId, state: null });
     }
     try {
@@ -593,11 +594,11 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
 
   // --- Pairing: helper to verify device auth and extract motebitId ---
   async function verifyPairingAuth(authHeader: string | undefined): Promise<{ motebitId: string; deviceId: string } | null> {
-    if (!authHeader?.startsWith("Bearer ")) return null;
+    if (authHeader == null || !authHeader.startsWith("Bearer ")) return null;
     const token = authHeader.slice(7);
 
     // Master token bypass
-    if (apiToken && token === apiToken) return null; // master token can't initiate pairing (no motebitId context)
+    if (apiToken != null && apiToken !== "" && token === apiToken) return null; // master token can't initiate pairing (no motebitId context)
 
     if (!token.includes(".")) return null; // must be a signed token
 
@@ -895,7 +896,7 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
     const motebitId = c.req.param("motebitId");
     const conversationId = c.req.query("conversation_id");
     const since = Number(c.req.query("since") ?? "0");
-    if (!conversationId) {
+    if (conversationId == null || conversationId === "") {
       throw new HTTPException(400, { message: "Missing 'conversation_id' query parameter" });
     }
     const rows = moteDb.db.prepare(
@@ -924,16 +925,17 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
 
 // === Standalone boot ===
 
-const app = process.env.VITEST ? new Hono() : createSyncRelay({
+const app = process.env.VITEST != null ? new Hono() : createSyncRelay({
   dbPath: process.env.MOTEBIT_DB_PATH,
   apiToken: process.env.MOTEBIT_API_TOKEN,
   corsOrigin: process.env.MOTEBIT_CORS_ORIGIN,
   enableDeviceAuth: process.env.MOTEBIT_ENABLE_DEVICE_AUTH !== "false",
 }).app;
 
-if (!process.env.VITEST) {
+if (process.env.VITEST == null) {
   const port = Number(process.env.PORT ?? 3000);
   const server = serve({ fetch: app.fetch, port }, (info) => {
+    // eslint-disable-next-line no-console
     console.log(`Motebit sync relay listening on http://localhost:${info.port}`);
   });
   // Inject WebSocket support

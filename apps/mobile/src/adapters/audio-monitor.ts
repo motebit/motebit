@@ -202,6 +202,7 @@ export class AudioMonitor {
       if (ok) {
         this.sileroVad = vad;
       } else {
+        // eslint-disable-next-line no-console
         console.warn("[AudioMonitor] Silero VAD init failed, falling back to energy-only");
         this.neuralVadEnabled = false;
         vad.dispose();
@@ -367,7 +368,7 @@ export class AudioMonitor {
       const uri = this.recording.getURI();
       this.recording = null;
 
-      if (!uri) {
+      if (uri == null || uri === "") {
         this.confirming = false;
         void this.restartRecording();
         return;
@@ -407,6 +408,7 @@ export class AudioMonitor {
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line no-console
       console.warn("[AudioMonitor] Silero confirmation failed:", msg);
       this.confirming = false;
       this.vadArmed = true;
@@ -438,6 +440,7 @@ export class AudioMonitor {
       this.recording = recording;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line no-console
       console.warn("[AudioMonitor] Failed to restart recording:", msg);
     }
   }

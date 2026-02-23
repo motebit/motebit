@@ -147,7 +147,7 @@ export class PlanEngine {
 
         // Skip already completed/skipped steps (for resume)
         if (step.status === StepStatus.Completed || step.status === StepStatus.Skipped) {
-          if (step.result_summary) {
+          if (step.result_summary != null && step.result_summary !== "") {
             completedResults.push(`[Step ${step.ordinal + 1}: ${step.description}]\n${step.result_summary}`);
           }
           continue;
@@ -246,7 +246,7 @@ export class PlanEngine {
               try {
                 const { plan: newPlan, truncatedFrom: retryTruncated } = await this.createPlan(plan.goal_id, plan.motebit_id, retryCtx, deps);
                 yield { type: "plan_retrying", failedPlan, newPlan };
-                if (retryTruncated) {
+                if (retryTruncated != null) {
                   yield { type: "plan_truncated", requestedSteps: retryTruncated, maxSteps: this.config.maxStepsPerPlan ?? 10 };
                 }
 

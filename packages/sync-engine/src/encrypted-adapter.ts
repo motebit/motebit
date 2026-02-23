@@ -83,7 +83,7 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
 
   private async decryptEntry(entry: EventLogEntry): Promise<EventLogEntry> {
     const payload = entry.payload;
-    if (!payload._encrypted) return entry;
+    if (payload._encrypted == null || payload._encrypted === false) return entry;
 
     const data = JSON.parse(payload._data as string) as { c: string; n: string; t: string };
     const encrypted: EncryptedPayload = {

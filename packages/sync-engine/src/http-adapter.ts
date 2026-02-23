@@ -68,7 +68,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter {
 
   private headers(): Record<string, string> {
     const h: Record<string, string> = { "Content-Type": "application/json" };
-    if (this.authToken) {
+    if (this.authToken != null && this.authToken !== "") {
       h["Authorization"] = `Bearer ${this.authToken}`;
     }
     return h;

@@ -125,11 +125,11 @@ async function loadWithWebCrypto(): Promise<string | null> {
 async function deriveKeyFromOrigin(): Promise<{ key: CryptoKey; salt: Uint8Array }> {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const existingSalt = localStorage.getItem(LS_SALT_KEY);
-  const useSalt = existingSalt
+  const useSalt = existingSalt != null && existingSalt !== ""
     ? Uint8Array.from(atob(existingSalt), (c) => c.charCodeAt(0))
     : salt;
 
-  if (!existingSalt) {
+  if (existingSalt == null || existingSalt === "") {
     localStorage.setItem(LS_SALT_KEY, btoa(String.fromCharCode(...useSalt)));
   }
 
@@ -153,6 +153,7 @@ async function deriveKeyFromOrigin(): Promise<{ key: CryptoKey; salt: Uint8Array
 }
 
 async function storeWithFallback(hex: string): Promise<void> {
+  // eslint-disable-next-line no-console
   console.warn(
     "[motebit] Using localStorage fallback for private key storage. " +
     "This is less secure than IndexedDB + WebCrypto. Only use in development."
@@ -170,7 +171,7 @@ async function storeWithFallback(hex: string): Promise<void> {
 async function loadWithFallback(): Promise<string | null> {
   const cipherB64 = localStorage.getItem(LS_CIPHER_KEY);
   const ivB64 = localStorage.getItem(LS_IV_KEY);
-  if (!cipherB64 || !ivB64) return null;
+  if (cipherB64 == null || cipherB64 === "" || ivB64 == null || ivB64 === "") return null;
 
   const { key } = await deriveKeyFromOrigin();
   const iv = Uint8Array.from(atob(ivB64), (c) => c.charCodeAt(0));

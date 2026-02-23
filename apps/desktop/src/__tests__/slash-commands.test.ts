@@ -140,10 +140,10 @@ describe("formatHelpText", () => {
 
   it("includes arg hints for commands that accept args", () => {
     const text = formatHelpText();
-    const cmdsWithArgs = SLASH_COMMANDS.filter(cmd => cmd.hasArgs);
+    const cmdsWithArgs = SLASH_COMMANDS.filter(cmd => cmd.hasArgs === true);
     expect(cmdsWithArgs.length).toBeGreaterThan(0);
     for (const cmd of cmdsWithArgs) {
-      if (cmd.argHint) {
+      if (cmd.argHint != null && cmd.argHint !== "") {
         expect(text).toContain(cmd.argHint);
       }
     }
