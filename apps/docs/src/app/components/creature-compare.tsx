@@ -65,6 +65,7 @@ function CreatureCanvas({ config }: { config: CreatureConfig }) {
             glow_intensity: 0.35,
             eye_dilation: 0.35,
             smile_curvature: 0.3,
+            speaking_activity: 0,
           },
           delta_time: delta,
           time,

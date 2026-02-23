@@ -105,7 +105,7 @@ describe("ThreeJSAdapter", () => {
         glow_intensity: 0.3,
         eye_dilation: 0.3,
         smile_curvature: 0,
-
+        speaking_activity: 0,
       },
       delta_time: 0.016,
       time: 1.0,
@@ -121,7 +121,7 @@ describe("ThreeJSAdapter", () => {
         glow_intensity: 0.3,
         eye_dilation: 0.3,
         smile_curvature: 0,
-
+        speaking_activity: 0,
       },
       delta_time: 0.016,
       time: 1.0,
@@ -146,7 +146,7 @@ describe("ThreeJSAdapter", () => {
         glow_intensity: 0.3,
         eye_dilation: 0.3,
         smile_curvature: 0,
-
+        speaking_activity: 0,
       },
       delta_time: 0.016,
       time: 1.0,
@@ -182,7 +182,7 @@ describe("SpatialAdapter", () => {
         glow_intensity: 0.3,
         eye_dilation: 0.3,
         smile_curvature: 0,
-
+        speaking_activity: 0,
       },
       delta_time: 0.016,
       time: 1.0,

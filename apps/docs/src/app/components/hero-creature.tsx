@@ -73,6 +73,7 @@ export function HeroCreature() {
               glow_intensity: 0.3,
               eye_dilation: 0.3,
               smile_curvature: 0.04,
+              speaking_activity: 0,
             },
             delta_time: delta,
             time,

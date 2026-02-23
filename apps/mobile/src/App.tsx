@@ -31,7 +31,7 @@ import type { ExpoWebGLRenderingContext } from "expo-gl";
 import * as SecureStore from "expo-secure-store";
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";
 import type { StreamChunk } from "@motebit/runtime";
-import { stripTags } from "@motebit/ai-core";
+import { stripTags, stripPartialActionTag } from "@motebit/ai-core";
 import type { TTSProvider, STTProvider } from "@motebit/voice";
 import { FallbackTTSProvider } from "@motebit/voice";
 import { ExpoSpeechTTSProvider } from "./adapters/expo-speech-tts";
@@ -765,7 +765,7 @@ export function App(): React.ReactElement {
           assistantContent += chunk.text;
           setMessages((prev) =>
             prev.map((m) =>
-              m.id === assistantId ? { ...m, content: stripTags(assistantContent) } : m,
+              m.id === assistantId ? { ...m, content: stripPartialActionTag(assistantContent) } : m,
             ),
           );
           break;

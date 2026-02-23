@@ -89,6 +89,7 @@ function makeTurnResult(response = "Mock response"): TurnResult {
       glow_intensity: 0.3,
       eye_dilation: 0.3,
       smile_curvature: 0,
+      speaking_activity: 0,
     },
   };
 }

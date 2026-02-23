@@ -19,6 +19,7 @@ function defaultFrame(overrides?: Partial<RenderFrame>): RenderFrame {
       glow_intensity: 0.3,
       eye_dilation: 0.3,
       smile_curvature: 0,
+      speaking_activity: 0,
     },
     delta_time: 0.016,
     time: 1.0,
@@ -359,6 +360,7 @@ describe("ThreeJSAdapter (headless)", () => {
         glow_intensity: 100,
         eye_dilation: 1,
         smile_curvature: 1,
+        speaking_activity: 0,
       },
     }));
   });
@@ -578,6 +580,7 @@ describe("WebXRThreeJSAdapter", () => {
         glow_intensity: 10,
         eye_dilation: 1,
         smile_curvature: 1,
+        speaking_activity: 0,
       },
     }));
   });

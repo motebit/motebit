@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { packContext, CloudProvider, HybridProvider } from "../index";
+import { packContext, CloudProvider, HybridProvider, stripPartialActionTag, getImpulsesForAction } from "../index";
 import type { CloudProviderConfig, HybridProviderConfig } from "../index";
 import { TrustMode, BatteryMode, SensitivityLevel, EventType } from "@motebit/sdk";
 import type { AIResponse, ContextPack, MemoryCandidate, MotebitState, EventLogEntry, MemoryNode } from "@motebit/sdk";
@@ -346,5 +346,45 @@ describe("HybridProvider", () => {
     const provider = new HybridProvider(config);
     const confidence: number = await provider.estimateConfidence();
     expect(confidence).toBe(0.8);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// stripPartialActionTag
+// ---------------------------------------------------------------------------
+
+describe("stripPartialActionTag", () => {
+  it("strips completed action tags", () => {
+    expect(stripPartialActionTag("Hello *smile* world")).toBe("Hello world");
+  });
+
+  it("strips trailing unclosed action tags during streaming", () => {
+    expect(stripPartialActionTag("Hello *smi")).toBe("Hello");
+  });
+
+  it("preserves text without tags", () => {
+    expect(stripPartialActionTag("Hello world")).toBe("Hello world");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getImpulsesForAction
+// ---------------------------------------------------------------------------
+
+describe("getImpulsesForAction", () => {
+  it("returns impulses for smile action", () => {
+    const impulses = getImpulsesForAction("smile");
+    expect(impulses.length).toBeGreaterThan(0);
+    expect(impulses.some(i => i.field === "smile_curvature")).toBe(true);
+  });
+
+  it("returns impulses for blink action", () => {
+    const impulses = getImpulsesForAction("blink");
+    expect(impulses.length).toBe(1);
+    expect(impulses[0]!.field).toBe("eye_dilation");
+  });
+
+  it("returns empty for unknown action", () => {
+    expect(getImpulsesForAction("xyzzy")).toEqual([]);
   });
 });

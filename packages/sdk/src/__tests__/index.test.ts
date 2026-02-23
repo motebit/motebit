@@ -28,7 +28,7 @@ describe("SPECIES_CONSTRAINTS", () => {
   });
 
   it("has the correct SMILE_DELTA_MAX value", () => {
-    expect(SPECIES_CONSTRAINTS.SMILE_DELTA_MAX).toBe(0.04);
+    expect(SPECIES_CONSTRAINTS.SMILE_DELTA_MAX).toBe(0.08);
   });
 
   it("has the correct GLOW_DELTA_MAX value", () => {
@@ -140,6 +140,7 @@ describe("Type construction", () => {
       glow_intensity: 0.3,
       eye_dilation: 0.3,
       smile_curvature: 0,
+      speaking_activity: 0,
     };
     expect(cues.hover_distance).toBe(0.4);
   });

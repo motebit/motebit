@@ -90,6 +90,7 @@ export class SpatialApp {
     glow_intensity: 0.3,
     eye_dilation: 0.3,
     smile_curvature: 0.5,
+    speaking_activity: 0,
   };
   private attentionLevel = 0.2;
   private unsubscribeState: (() => void) | null = null;

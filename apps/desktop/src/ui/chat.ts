@@ -1,4 +1,4 @@
-import { stripTags } from "@motebit/ai-core";
+import { stripPartialActionTag } from "@motebit/ai-core";
 import {
   isSlashCommand,
   parseSlashCommand,
@@ -285,7 +285,7 @@ async function consumeApproval(ctx: DesktopContext, approved: boolean): Promise<
     for await (const chunk of ctx.app.resumeAfterApproval(approved)) {
       if (chunk.type === "text") {
         accumulated += chunk.text;
-        bubble.textContent = stripTags(accumulated);
+        bubble.textContent = stripPartialActionTag(accumulated);
         chatLog.scrollTop = chatLog.scrollHeight;
       } else if (chunk.type === "tool_status") {
         if (chunk.status === "calling") {
@@ -374,7 +374,7 @@ async function consumeGoalApproval(ctx: DesktopContext, approved: boolean): Prom
     for await (const chunk of ctx.app.resumeGoalAfterApproval(approved)) {
       if (chunk.type === "text") {
         accumulated += chunk.text;
-        bubble.textContent = stripTags(accumulated);
+        bubble.textContent = stripPartialActionTag(accumulated);
         chatLog.scrollTop = chatLog.scrollHeight;
       } else if (chunk.type === "tool_status") {
         if (chunk.status === "calling") {
@@ -835,7 +835,7 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
       for await (const chunk of ctx.app.sendMessageStreaming(text, chatRunId)) {
         if (chunk.type === "text") {
           accumulated += chunk.text;
-          textEl.textContent = stripTags(accumulated);
+          textEl.textContent = stripPartialActionTag(accumulated);
           chatLog.scrollTop = chatLog.scrollHeight;
         } else if (chunk.type === "tool_status") {
           if (chunk.status === "calling") {
@@ -945,7 +945,7 @@ End with a question — you are curious about who they are.`;
     for await (const chunk of ctx.app.sendMessageStreaming(GREETING_PROMPT, chatRunId)) {
       if (chunk.type === "text") {
         accumulated += chunk.text;
-        textEl.textContent = stripTags(accumulated);
+        textEl.textContent = stripPartialActionTag(accumulated);
         chatLog.scrollTop = chatLog.scrollHeight;
       } else if (chunk.type === "tool_status") {
         if (chunk.status === "calling") showToolStatus(chunk.name);

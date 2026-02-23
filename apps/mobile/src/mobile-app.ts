@@ -527,7 +527,7 @@ export class MobileApp {
       this.runtime.renderFrame(deltaTime, time);
     } else {
       this.renderer.render({
-        cues: { hover_distance: 0.4, drift_amplitude: 0.02, glow_intensity: 0.3, eye_dilation: 0.3, smile_curvature: 0 },
+        cues: { hover_distance: 0.4, drift_amplitude: 0.02, glow_intensity: 0.3, eye_dilation: 0.3, smile_curvature: 0, speaking_activity: 0 },
         delta_time: deltaTime,
         time,
       });

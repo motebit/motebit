@@ -168,6 +168,7 @@ describe("runTurn", () => {
       glow_intensity: 0.7,
       eye_dilation: 0.8,
       smile_curvature: 0.1,
+      speaking_activity: 0,
     };
 
     mockFetchSuccess("I see!");

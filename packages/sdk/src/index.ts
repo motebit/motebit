@@ -95,13 +95,14 @@ export interface BehaviorCues {
   glow_intensity: number;
   eye_dilation: number;
   smile_curvature: number;
+  speaking_activity: number;
 }
 
 // === Species Constraints (type re-export only — enforcement in policy-invariants) ===
 
 export const SPECIES_CONSTRAINTS = Object.freeze({
   MAX_AROUSAL: 0.35,
-  SMILE_DELTA_MAX: 0.04,
+  SMILE_DELTA_MAX: 0.08,
   GLOW_DELTA_MAX: 0.15,
   DRIFT_VARIATION_MAX: 0.10,
 } as const);

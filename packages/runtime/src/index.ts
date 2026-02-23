@@ -20,6 +20,7 @@ import {
   extractStateTags,
   extractActions,
   actionsToStateUpdates,
+  getImpulsesForAction,
   trimConversation,
   summarizeConversation,
   shouldSummarize,
@@ -312,6 +313,7 @@ export class MotebitRuntime {
     glow_intensity: 0.3,
     eye_dilation: 0.3,
     smile_curvature: 0,
+    speaking_activity: 0,
   };
   private stateSnapshot?: StateSnapshotAdapter;
   private compactionThreshold: number;
@@ -721,6 +723,7 @@ export class MotebitRuntime {
     this._isProcessing = true;
     this._pendingApproval = null;
     this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
+    this.behavior.setSpeaking(true);
 
     try {
       const trimmed = this.trimHistory();
@@ -734,6 +737,7 @@ export class MotebitRuntime {
       this.sessionInfo = null;
       yield* this.processStream(stream, text, runId);
     } finally {
+      this.behavior.setSpeaking(false);
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
     }
@@ -752,6 +756,7 @@ export class MotebitRuntime {
     this._pendingApproval = null;
     this._isProcessing = true;
     this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
+    this.behavior.setSpeaking(true);
 
     try {
       if (approved) {
@@ -795,6 +800,7 @@ export class MotebitRuntime {
       });
       yield* this.processStream(stream, pending.userMessage, pending.runId);
     } finally {
+      this.behavior.setSpeaking(false);
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
     }
@@ -874,6 +880,13 @@ export class MotebitRuntime {
               absolute[field] = (typeof base === "number" ? base : 0) + (delta as number);
             }
             this.state.pushUpdate(absolute as Partial<MotebitState>);
+          }
+          // Inject impulses for immediate visual pop
+          for (const action of newActions) {
+            const impulses = getImpulsesForAction(action);
+            for (const imp of impulses) {
+              this.behavior.injectImpulse(imp.field, imp.magnitude, imp.halfLife);
+            }
           }
         }
       }

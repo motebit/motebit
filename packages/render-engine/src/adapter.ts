@@ -233,6 +233,7 @@ export class ThreeJSAdapter implements RenderAdapter {
     glow_intensity: 0.3,
     eye_dilation: 0.3,
     smile_curvature: 0,
+    speaking_activity: 0,
   };
   private audio: AudioReactivity | null = null;
   private trustMode: TrustMode = TrustMode.Full;
@@ -325,7 +326,8 @@ export class ThreeJSAdapter implements RenderAdapter {
       drift_amplitude: smoothDelta(this.currentCues.drift_amplitude, frame.cues.drift_amplitude, dt),
       glow_intensity: smoothDelta(this.currentCues.glow_intensity, frame.cues.glow_intensity, dt),
       eye_dilation: smoothDelta(this.currentCues.eye_dilation, frame.cues.eye_dilation, dt),
-      smile_curvature: smoothDelta(this.currentCues.smile_curvature, frame.cues.smile_curvature, dt),
+      smile_curvature: smoothDelta(this.currentCues.smile_curvature, frame.cues.smile_curvature, dt, 8.0),
+      speaking_activity: smoothDelta(this.currentCues.speaking_activity, frame.cues.speaking_activity, dt, 12.0),
     };
 
     const cues = this.currentCues;
@@ -391,24 +393,42 @@ export class ThreeJSAdapter implements RenderAdapter {
     const listeningIridescence = this.listeningActive ? Math.sin(t * Math.PI * 2) * 0.08 : 0;
     this.bodyMaterial.iridescence = 0.4 + audioShimmer + listeningIridescence;
 
-    // Eye dilation
+    // Eye-led expression — eyes are the dominant feature (Pixar principle)
     if (this.leftEye && this.rightEye) {
       // Minimal trust: narrower eyes
       const trustEyeMax = this.trustMode === TrustMode.Minimal ? 0.2 : 0.4;
-      const eyeScale = 0.8 + cues.eye_dilation * trustEyeMax;
+      const baseEyeScale = 0.8 + cues.eye_dilation * trustEyeMax;
+      // Smile squint: Duchenne effect narrows eyes during genuine smile
+      const smileSquint = Math.max(0, cues.smile_curvature) * 0.3;
+      const eyeScale = baseEyeScale - smileSquint;
       this.leftEye.scale.setScalar(eyeScale);
+      // Asymmetric curiosity: left eye slightly wider when curious
+      const curiosityAsym = Math.max(0, cues.eye_dilation - 0.5) * 0.06;
+      this.leftEye.scale.setScalar(eyeScale + curiosityAsym);
       this.rightEye.scale.setScalar(eyeScale);
       const eyeZ = 0.08 + Math.sin(t * 0.25) * 0.001;
       this.leftEye.position.z = eyeZ;
       this.rightEye.position.z = eyeZ;
+      // Thinking lift: eyes drift upward slightly during processing
+      const thinkLift = Math.max(0, cues.glow_intensity - 0.5) * 0.008;
+      this.leftEye.position.y = 0.015 + thinkLift;
+      this.rightEye.position.y = 0.015 + thinkLift;
     }
 
-    // Smile — baseline arc visible at rest, modulated by affect
-    // curvature 0 (neutral) → scale 0.6 (gentle resting smile)
-    // curvature 0.15 (happy) → scale 1.2 (full smile)
-    // curvature -0.1 (sad) → scale 0.2 (nearly flat)
+    // Smile — baseline arc visible at rest, modulated by affect + speaking oscillation
     if (this.smileMesh) {
-      this.smileMesh.scale.y = 0.6 + cues.smile_curvature * 4.0;
+      const baseSmile = 0.6 + cues.smile_curvature * 4.0;
+      const speakOsc = cues.speaking_activity > 0.01
+        ? organicNoise(t, [3.7, 4.3, 5.1]) * cues.speaking_activity * 0.25
+        : 0;
+      this.smileMesh.scale.y = baseSmile + speakOsc;
+      this.smileMesh.scale.x = 1.0 + cues.speaking_activity * organicNoise(t, [2.9, 3.8]) * 0.1;
+    }
+
+    // Curiosity tilt — subtle head tilt when eye_dilation is high
+    if (this.creature) {
+      const tiltAmount = Math.max(0, cues.eye_dilation - 0.4) * 0.06;
+      this.creature.rotation.z = organicNoise(t, [0.4, 0.67]) * tiltAmount;
     }
 
     if (this.controls) this.controls.update();
@@ -560,6 +580,7 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     glow_intensity: 0.3,
     eye_dilation: 0.3,
     smile_curvature: 0,
+    speaking_activity: 0,
   };
 
   private renderer: THREE.WebGLRenderer | null = null;
@@ -668,7 +689,8 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
       drift_amplitude: smoothDelta(this.currentCues.drift_amplitude, frame.cues.drift_amplitude, dt),
       glow_intensity: smoothDelta(this.currentCues.glow_intensity, frame.cues.glow_intensity, dt),
       eye_dilation: smoothDelta(this.currentCues.eye_dilation, frame.cues.eye_dilation, dt),
-      smile_curvature: smoothDelta(this.currentCues.smile_curvature, frame.cues.smile_curvature, dt),
+      smile_curvature: smoothDelta(this.currentCues.smile_curvature, frame.cues.smile_curvature, dt, 8.0),
+      speaking_activity: smoothDelta(this.currentCues.speaking_activity, frame.cues.speaking_activity, dt, 12.0),
     };
 
     const cues = this.currentCues;
@@ -738,24 +760,41 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     const listeningIridescence = this.listeningActive ? Math.sin(t * Math.PI * 2) * 0.08 : 0;
     this.bodyMaterial.iridescence = 0.4 + audioShimmer + listeningIridescence;
 
-    // Eye dilation
+    // Eye-led expression — eyes are the dominant feature (Pixar principle)
     if (this.leftEye && this.rightEye) {
       // Minimal trust: narrower eyes
       const trustEyeMax = this.trustMode === TrustMode.Minimal ? 0.2 : 0.4;
-      const eyeScale = 0.8 + cues.eye_dilation * trustEyeMax;
-      this.leftEye.scale.setScalar(eyeScale);
+      const baseEyeScale = 0.8 + cues.eye_dilation * trustEyeMax;
+      // Smile squint: Duchenne effect narrows eyes during genuine smile
+      const smileSquint = Math.max(0, cues.smile_curvature) * 0.3;
+      const eyeScale = baseEyeScale - smileSquint;
+      // Asymmetric curiosity: left eye slightly wider when curious
+      const curiosityAsym = Math.max(0, cues.eye_dilation - 0.5) * 0.06;
+      this.leftEye.scale.setScalar(eyeScale + curiosityAsym);
       this.rightEye.scale.setScalar(eyeScale);
       const eyeZ = 0.08 + Math.sin(t * 0.25) * 0.001;
       this.leftEye.position.z = eyeZ;
       this.rightEye.position.z = eyeZ;
+      // Thinking lift: eyes drift upward slightly during processing
+      const thinkLift = Math.max(0, cues.glow_intensity - 0.5) * 0.008;
+      this.leftEye.position.y = 0.015 + thinkLift;
+      this.rightEye.position.y = 0.015 + thinkLift;
     }
 
-    // Smile — baseline arc visible at rest, modulated by affect
-    // curvature 0 (neutral) → scale 0.6 (gentle resting smile)
-    // curvature 0.15 (happy) → scale 1.2 (full smile)
-    // curvature -0.1 (sad) → scale 0.2 (nearly flat)
+    // Smile — baseline arc visible at rest, modulated by affect + speaking oscillation
     if (this.smileMesh) {
-      this.smileMesh.scale.y = 0.6 + cues.smile_curvature * 4.0;
+      const baseSmile = 0.6 + cues.smile_curvature * 4.0;
+      const speakOsc = cues.speaking_activity > 0.01
+        ? organicNoise(t, [3.7, 4.3, 5.1]) * cues.speaking_activity * 0.25
+        : 0;
+      this.smileMesh.scale.y = baseSmile + speakOsc;
+      this.smileMesh.scale.x = 1.0 + cues.speaking_activity * organicNoise(t, [2.9, 3.8]) * 0.1;
+    }
+
+    // Curiosity tilt — subtle head tilt when eye_dilation is high
+    if (this.creature) {
+      const tiltAmount = Math.max(0, cues.eye_dilation - 0.4) * 0.06;
+      this.creature.rotation.z = organicNoise(t, [0.4, 0.67]) * tiltAmount;
     }
 
     this.renderer.render(this.scene, this.camera);

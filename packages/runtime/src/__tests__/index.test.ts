@@ -252,7 +252,7 @@ describe("NullRenderer", () => {
   it("implements RenderAdapter interface", async () => {
     const renderer = new NullRenderer();
     await renderer.init(null);
-    expect(() => renderer.render({ cues: { hover_distance: 0, drift_amplitude: 0, glow_intensity: 0, eye_dilation: 0, smile_curvature: 0 }, delta_time: 0.016, time: 1 })).not.toThrow();
+    expect(() => renderer.render({ cues: { hover_distance: 0, drift_amplitude: 0, glow_intensity: 0, eye_dilation: 0, smile_curvature: 0, speaking_activity: 0 }, delta_time: 0.016, time: 1 })).not.toThrow();
     expect(renderer.getSpec()).toBeDefined();
     expect(() => renderer.resize(800, 600)).not.toThrow();
     expect(() => renderer.dispose()).not.toThrow();

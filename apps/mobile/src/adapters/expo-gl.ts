@@ -448,7 +448,7 @@ export class ExpoGLAdapter implements RenderAdapter {
 
     // Smile
     if (this.smileMesh) {
-      this.smileMesh.scale.y = cues.smile_curvature;
+      this.smileMesh.scale.y = 0.6 + cues.smile_curvature * 4.0;
     }
 
     // --- Camera orbit interpolation ---

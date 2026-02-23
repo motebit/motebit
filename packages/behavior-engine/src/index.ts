@@ -33,8 +33,8 @@ export function computeRawCues(state: MotebitState): BehaviorCues {
   // Eye dilation: attention and curiosity
   const eye_dilation = clamp(0.3 + state.attention * 0.4 + state.curiosity * 0.3, 0, 1);
 
-  // Smile: positive valence only, very subtle
-  const smile_curvature = clamp(state.affect_valence * 0.15, -0.1, 0.15);
+  // Smile: affect maps to visible curvature
+  const smile_curvature = clamp(state.affect_valence * 0.35, -0.15, 0.30);
 
   return {
     hover_distance,
@@ -42,14 +42,27 @@ export function computeRawCues(state: MotebitState): BehaviorCues {
     glow_intensity: clamp(glow_intensity, 0, 1),
     eye_dilation,
     smile_curvature,
+    speaking_activity: 0,
   };
 }
 
 // === Behavior Engine ===
 
+// === Impulse ===
+// Short-lived additive signals from action tags — immediate visual pop that decays exponentially.
+
+interface Impulse {
+  field: keyof BehaviorCues;
+  magnitude: number;
+  halfLife: number; // seconds
+  startTime: number; // Date.now()
+}
+
 export class BehaviorEngine {
   private previousCues: BehaviorCues;
   private baselineDrift: number = SPATIAL.BASE_DRIFT;
+  private _speaking = false;
+  private impulses: Impulse[] = [];
 
   constructor() {
     this.previousCues = {
@@ -58,8 +71,18 @@ export class BehaviorEngine {
       glow_intensity: SPATIAL.BASE_GLOW,
       eye_dilation: 0.3,
       smile_curvature: 0,
-
+      speaking_activity: 0,
     };
+  }
+
+  /** Signal whether the agent is currently generating text. */
+  setSpeaking(active: boolean): void {
+    this._speaking = active;
+  }
+
+  /** Inject a short-lived impulse for immediate visual pop (e.g. from action tags). */
+  injectImpulse(field: keyof BehaviorCues, magnitude: number, halfLife: number): void {
+    this.impulses.push({ field, magnitude, halfLife, startTime: Date.now() });
   }
 
   /**
@@ -79,7 +102,29 @@ export class BehaviorEngine {
       deltaClamped.drift_amplitude,
     );
 
-    // 4. Store for next tick
+    // 4. Apply impulses additively
+    const now = Date.now();
+    const cueRecord = deltaClamped as unknown as Record<string, number>;
+    for (const imp of this.impulses) {
+      const elapsed = (now - imp.startTime) / 1000;
+      const decay = Math.pow(2, -elapsed / imp.halfLife);
+      cueRecord[imp.field] = (cueRecord[imp.field] ?? 0) + imp.magnitude * decay;
+    }
+    // Clean up expired impulses (decay < 0.01)
+    this.impulses = this.impulses.filter((imp) => {
+      const elapsed = (now - imp.startTime) / 1000;
+      return Math.pow(2, -elapsed / imp.halfLife) >= 0.01;
+    });
+
+    // 5. Speaking activity
+    deltaClamped.speaking_activity = this._speaking ? 1 : 0;
+
+    // 6. Duchenne eye squint — positive smile narrows the eyes slightly
+    if (deltaClamped.smile_curvature > 0) {
+      deltaClamped.eye_dilation -= deltaClamped.smile_curvature * 0.12;
+    }
+
+    // 7. Store for next tick
     this.previousCues = { ...deltaClamped };
 
     return deltaClamped;
@@ -96,13 +141,15 @@ export class BehaviorEngine {
    * Reset to default calm state.
    */
   reset(): void {
+    this.impulses = [];
+    this._speaking = false;
     this.previousCues = {
       hover_distance: SPATIAL.SHOULDER_DISTANCE,
       drift_amplitude: SPATIAL.BASE_DRIFT,
       glow_intensity: SPATIAL.BASE_GLOW,
       eye_dilation: 0.3,
       smile_curvature: 0,
-
+      speaking_activity: 0,
     };
   }
 }

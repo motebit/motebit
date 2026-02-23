@@ -217,12 +217,12 @@ describe("computeRawCues boundary conditions", () => {
     expect(cues.eye_dilation).toBeGreaterThanOrEqual(0);
   });
 
-  it("smile_curvature is clamped to [-0.1, 0.15]", () => {
+  it("smile_curvature is clamped to [-0.15, 0.30]", () => {
     const positive = computeRawCues(makeDefaultState({ affect_valence: 1 }));
-    expect(positive.smile_curvature).toBeLessThanOrEqual(0.15);
+    expect(positive.smile_curvature).toBeLessThanOrEqual(0.30);
 
     const negative = computeRawCues(makeDefaultState({ affect_valence: -1 }));
-    expect(negative.smile_curvature).toBeGreaterThanOrEqual(-0.1);
+    expect(negative.smile_curvature).toBeGreaterThanOrEqual(-0.15);
   });
 
   it("glow_intensity is clamped to [0, 1]", () => {
@@ -279,5 +279,54 @@ describe("computeRawCues boundary conditions", () => {
     const low = computeRawCues(makeDefaultState({ attention: 0, curiosity: 0 }));
     const high = computeRawCues(makeDefaultState({ attention: 1, curiosity: 1 }));
     expect(high.eye_dilation).toBeGreaterThan(low.eye_dilation);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BehaviorEngine — speaking & impulses
+// ---------------------------------------------------------------------------
+
+describe("BehaviorEngine speaking and impulses", () => {
+  it("setSpeaking sets speaking_activity to 1 when active", () => {
+    const engine = new BehaviorEngine();
+    engine.setSpeaking(true);
+    const cues = engine.compute(makeDefaultState());
+    expect(cues.speaking_activity).toBe(1);
+  });
+
+  it("setSpeaking sets speaking_activity to 0 when inactive", () => {
+    const engine = new BehaviorEngine();
+    engine.setSpeaking(true);
+    engine.compute(makeDefaultState());
+    engine.setSpeaking(false);
+    const cues = engine.compute(makeDefaultState());
+    expect(cues.speaking_activity).toBe(0);
+  });
+
+  it("injectImpulse adds to cue field", () => {
+    const engine = new BehaviorEngine();
+    engine.injectImpulse("smile_curvature", 0.1, 2);
+    const cues = engine.compute(makeDefaultState());
+    expect(cues.smile_curvature).toBeGreaterThan(0);
+  });
+
+  it("impulses decay over time", () => {
+    const engine = new BehaviorEngine();
+    engine.injectImpulse("smile_curvature", 0.5, 0.001); // very short half-life
+    // Wait for decay
+    const start = Date.now();
+    while (Date.now() - start < 20) { /* spin */ }
+    const cues = engine.compute(makeDefaultState());
+    // With such a short half-life, the impulse should be cleaned up
+    expect(cues.smile_curvature).toBeLessThan(0.5);
+  });
+
+  it("reset clears impulses and speaking state", () => {
+    const engine = new BehaviorEngine();
+    engine.setSpeaking(true);
+    engine.injectImpulse("smile_curvature", 0.5, 10);
+    engine.reset();
+    const cues = engine.compute(makeDefaultState());
+    expect(cues.speaking_activity).toBe(0);
   });
 });

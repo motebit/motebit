@@ -55,6 +55,7 @@ export function enforceCueDelta(prev: BehaviorCues, next: BehaviorCues): Behavio
       next.smile_curvature,
       SPECIES_CONSTRAINTS.SMILE_DELTA_MAX,
     ),
+    speaking_activity: next.speaking_activity,
   };
 }
 
@@ -113,7 +114,7 @@ export function assertSpeciesIntegrity(): void {
   if (SPECIES_CONSTRAINTS.MAX_AROUSAL !== 0.35) {
     throw new Error("MAX_AROUSAL has been tampered with");
   }
-  if (SPECIES_CONSTRAINTS.SMILE_DELTA_MAX !== 0.04) {
+  if (SPECIES_CONSTRAINTS.SMILE_DELTA_MAX !== 0.08) {
     throw new Error("SMILE_DELTA_MAX has been tampered with");
   }
   if (SPECIES_CONSTRAINTS.GLOW_DELTA_MAX !== 0.15) {

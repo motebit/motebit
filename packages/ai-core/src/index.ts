@@ -182,19 +182,19 @@ const ACTION_RULES: { pattern: RegExp; updates: Partial<MotebitState> }[] = [
   { pattern: /\b(?:glow|brighten|shimmer|sparkle|pulse)s?\b/i, updates: { processing: 0.2, affect_valence: 0.1 } },
   { pattern: /\b(?:dim|fade)s?\b/i, updates: { processing: -0.15 } },
   // Eyes
-  { pattern: /\b(?:eyes?\s+widen|wide[\s-]eyed|look(?:s|ing)?\s+closely|peer)s?\b/i, updates: { attention: 0.2, curiosity: 0.15 } },
+  { pattern: /\b(?:eyes?\s+widen|wide[\s-]eyed|look(?:s|ing)?\s+closely|peer)s?\b/i, updates: { attention: 0.35, curiosity: 0.25 } },
   { pattern: /\b(?:squint|narrow)s?\b/i, updates: { attention: -0.1 } },
   { pattern: /\b(?:blink)s?\b/i, updates: { attention: 0.05 } },
   // Expression
-  { pattern: /\b(?:smile|grin|beam)s?\b/i, updates: { affect_valence: 0.2 } },
-  { pattern: /\b(?:frown|wince|grimace)s?\b/i, updates: { affect_valence: -0.2 } },
+  { pattern: /\b(?:smile|grin|beam)s?\b/i, updates: { affect_valence: 0.35 } },
+  { pattern: /\b(?:frown|wince|grimace)s?\b/i, updates: { affect_valence: -0.35 } },
   // Energy / motion
-  { pattern: /\b(?:bounce|bob|wiggle|sway|jiggle)s?\b/i, updates: { affect_arousal: 0.1, curiosity: 0.05 } },
+  { pattern: /\b(?:bounce|bob|wiggle|sway|jiggle)s?\b/i, updates: { affect_arousal: 0.2, curiosity: 0.1 } },
   { pattern: /\b(?:still|calm|settle)s?\b/i, updates: { affect_arousal: -0.1 } },
   // Cognitive
   { pattern: /\b(?:think|ponder|consider|contemplate)s?\b/i, updates: { processing: 0.2, attention: 0.1 } },
-  { pattern: /\b(?:nod)s?\b/i, updates: { confidence: 0.1, affect_valence: 0.05 } },
-  { pattern: /\b(?:tilt)s?\b/i, updates: { curiosity: 0.15 } },
+  { pattern: /\b(?:nod)s?\b/i, updates: { confidence: 0.15, affect_valence: 0.1 } },
+  { pattern: /\b(?:tilt)s?\b/i, updates: { curiosity: 0.3 } },
   // Tool-calling: interacting with the world
   { pattern: /\b(?:reach|extend)(?:es|ing)?\s*(?:out)?\b/i, updates: { processing: 0.25, attention: 0.2, curiosity: 0.1 } },
   { pattern: /\b(?:absorb|ingest|intake)s?\b/i, updates: { processing: 0.15, attention: 0.1 } },
@@ -222,6 +222,71 @@ export function stripTags(text: string): string {
     .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
     .replace(/<state\s+[^>]*\/>/g, "")
     .replace(/\*[^*]+\*/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+// === Impulse Map ===
+// Maps action keywords to immediate visual impulses (additive, exponentially decaying).
+// Each entry: [field, magnitude, halfLife in seconds].
+
+import type { BehaviorCues } from "@motebit/sdk";
+
+const IMPULSE_MAP: { pattern: RegExp; impulses: Array<{ field: keyof BehaviorCues; magnitude: number; halfLife: number }> }[] = [
+  { pattern: /\bsmiles?\b/i, impulses: [
+    { field: "smile_curvature", magnitude: 0.08, halfLife: 2 },
+    { field: "eye_dilation", magnitude: -0.04, halfLife: 1.5 },
+  ]},
+  { pattern: /\bgrins?\b/i, impulses: [
+    { field: "smile_curvature", magnitude: 0.10, halfLife: 2 },
+    { field: "eye_dilation", magnitude: -0.05, halfLife: 1.5 },
+  ]},
+  { pattern: /\bbeams?\b/i, impulses: [
+    { field: "smile_curvature", magnitude: 0.12, halfLife: 2.5 },
+    { field: "eye_dilation", magnitude: -0.06, halfLife: 2 },
+  ]},
+  { pattern: /\bfrowns?\b/i, impulses: [
+    { field: "smile_curvature", magnitude: -0.06, halfLife: 2 },
+  ]},
+  { pattern: /\btilts?\b/i, impulses: [
+    { field: "eye_dilation", magnitude: 0.12, halfLife: 3 },
+  ]},
+  { pattern: /\b(?:eyes?\s+)?widens?\b/i, impulses: [
+    { field: "eye_dilation", magnitude: 0.15, halfLife: 2 },
+  ]},
+  { pattern: /\b(?:bounce|wiggle)s?\b/i, impulses: [
+    { field: "drift_amplitude", magnitude: 0.008, halfLife: 1.5 },
+  ]},
+  { pattern: /\bnods?\b/i, impulses: [
+    { field: "smile_curvature", magnitude: 0.04, halfLife: 1.5 },
+  ]},
+  { pattern: /\bblinks?\b/i, impulses: [
+    { field: "eye_dilation", magnitude: -0.15, halfLife: 0.3 },
+  ]},
+];
+
+/** Match action text against IMPULSE_MAP and return all matching impulse specs. */
+export function getImpulsesForAction(action: string): Array<{ field: keyof BehaviorCues; magnitude: number; halfLife: number }> {
+  const result: Array<{ field: keyof BehaviorCues; magnitude: number; halfLife: number }> = [];
+  for (const entry of IMPULSE_MAP) {
+    if (entry.pattern.test(action)) {
+      result.push(...entry.impulses);
+    }
+  }
+  return result;
+}
+
+/**
+ * Strip completed action/memory/state tags AND any trailing unclosed `*tag` during streaming.
+ * Prevents partial action tags from flashing in chat bubbles.
+ */
+export function stripPartialActionTag(text: string): string {
+  return text
+    .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
+    .replace(/<state\s+[^>]*\/>/g, "")
+    .replace(/\*[^*]+\*/g, "")
+    .replace(/\*[^*]*$/, "")
     .replace(/\n{3,}/g, "\n\n")
     .replace(/\s{2,}/g, " ")
     .trim();
