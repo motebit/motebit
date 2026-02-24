@@ -61,7 +61,7 @@ let micStream: MediaStream | null = null;
 let waveformAnimationId = 0;
 let noiseFloor = 0;
 const waveformSmoothed = new Float32Array(64);
-let waveformColor = { r: 153, g: 163, b: 230 };
+let waveformColor = { r: 203, g: 225, b: 255 };
 
 // === Voice API ===
 
