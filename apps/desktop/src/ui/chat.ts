@@ -117,11 +117,23 @@ export const GREETING_PROMPT_MARKER = "\u241Emotebit:internal:greeting:v1\u241E"
 
 // === Exported Standalone Functions ===
 
-export function addMessage(role: "user" | "assistant" | "system", text: string): void {
+export function addMessage(role: "user" | "assistant" | "system", text: string, immediate = false): void {
   const bubble = document.createElement("div");
   bubble.className = `chat-bubble ${role}`;
   bubble.textContent = text;
+
+  if (immediate) {
+    bubble.classList.add("visible");
+  }
+
   chatLog.appendChild(bubble);
+
+  if (!immediate) {
+    // Force reflow then animate
+    void bubble.offsetWidth;
+    bubble.classList.add("visible");
+  }
+
   chatLog.scrollTop = chatLog.scrollHeight;
 }
 
@@ -167,6 +179,8 @@ export function addActionMessage(text: string, actions: ActionButton[]): void {
   }
 
   chatLog.appendChild(bubble);
+  void bubble.offsetWidth;
+  bubble.classList.add("visible");
   chatLog.scrollTop = chatLog.scrollHeight;
 }
 
@@ -279,6 +293,8 @@ async function consumeApproval(ctx: DesktopContext, approved: boolean): Promise<
   bubble.className = "chat-bubble assistant";
   bubble.textContent = "";
   chatLog.appendChild(bubble);
+  void bubble.offsetWidth;
+  bubble.classList.add("visible");
 
   let accumulated = "";
   try {
@@ -368,6 +384,8 @@ async function consumeGoalApproval(ctx: DesktopContext, approved: boolean): Prom
   bubble.className = "chat-bubble assistant";
   bubble.textContent = "";
   chatLog.appendChild(bubble);
+  void bubble.offsetWidth;
+  bubble.classList.add("visible");
 
   let accumulated = "";
   try {
@@ -828,6 +846,8 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
     textEl.className = "bubble-text";
     bubble.appendChild(textEl);
     chatLog.appendChild(bubble);
+    void bubble.offsetWidth;
+    bubble.classList.add("visible");
     let accumulated = "";
     let memoriesRetrieved: Array<{ node_id: string; content: string; confidence: number; sensitivity: string }> = [];
     let memoriesFormed: Array<{ node_id: string; content: string; sensitivity: string }> = [];
@@ -937,6 +957,8 @@ End with a question — you are curious about who they are.`;
   textEl.className = "bubble-text";
   bubble.appendChild(textEl);
   chatLog.appendChild(bubble);
+  void bubble.offsetWidth;
+  bubble.classList.add("visible");
 
   let accumulated = "";
   let memoriesFormed: Array<{ node_id: string; content: string; sensitivity: string }> = [];

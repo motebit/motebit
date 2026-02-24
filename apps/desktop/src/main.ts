@@ -465,7 +465,7 @@ function onAIReady(config: DesktopAIConfig): void {
     for (const msg of previousMessages) {
       if (msg.role === "user" && msg.content.startsWith(GREETING_PROMPT_MARKER)) continue;
       if (msg.role === "user" || msg.role === "assistant") {
-        addMessage(msg.role, msg.content);
+        addMessage(msg.role, msg.content, true);
       }
     }
   }
@@ -714,8 +714,24 @@ async function bootstrap(): Promise<void> {
     }
   });
 
+  // Send button
+  const sendBtn = document.getElementById("send-btn") as HTMLButtonElement;
+  const inputBarWrapper = document.getElementById("input-bar-wrapper") as HTMLDivElement;
+  const updateSendBtn = (): void => {
+    if (chatInput.value.trim()) {
+      sendBtn.classList.add("visible");
+    } else {
+      sendBtn.classList.remove("visible");
+    }
+  };
+  chatInput.addEventListener("input", updateSendBtn);
+  sendBtn.addEventListener("click", () => {
+    void chat.handleSend();
+  });
+
   // Voice button
   micBtn.style.display = "flex";
+  inputBarWrapper.classList.add("has-mic");
   micBtn.addEventListener("click", () => voice.toggleVoice());
   voice.updateVoiceGlowColor();
 }

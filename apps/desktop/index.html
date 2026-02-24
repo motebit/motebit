@@ -150,7 +150,7 @@
     #chat-log:empty { display: none; }
     #model-indicator {
       font-size: 11px;
-      color: rgba(0, 0, 0, 0.3);
+      color: var(--text-faint);
       text-align: center;
       padding: 2px 0 4px;
       pointer-events: auto;
@@ -166,9 +166,13 @@
       font-size: 14px;
       line-height: 1.45;
       word-wrap: break-word;
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 0.25s ease, transform 0.25s ease;
+    }
+    .chat-bubble.visible {
       opacity: 1;
       transform: translateY(0);
-      transition: opacity 0.2s ease, transform 0.2s ease;
     }
     .chat-bubble.fade-out {
       opacity: 0;
@@ -421,6 +425,37 @@
       0%, 100% { box-shadow: 0 0 8px var(--voice-glow-color, rgba(99, 102, 241, 0.3)); }
       50% { box-shadow: 0 0 18px var(--voice-glow-color, rgba(99, 102, 241, 0.6)); }
     }
+
+    /* Send button — positioned left of mic button when mic is visible */
+    #send-btn {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 30px;
+      height: 30px;
+      border: none;
+      border-radius: 50%;
+      background: var(--accent-soft);
+      color: #fff;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease, background 0.15s ease, right 0.2s ease;
+      z-index: 3;
+    }
+    #send-btn.visible {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    #send-btn:hover { background: var(--accent-hover); }
+    /* When mic button is visible, shift send button left */
+    #input-bar-wrapper.has-mic #send-btn { right: 44px; }
+    #input-bar-wrapper.has-mic #chat-input { padding-right: 76px; }
 
     /* Listening state — the glass glows with the creature's color */
     #input-bar-wrapper.listening #chat-input {
@@ -3486,6 +3521,9 @@
         <canvas id="voice-waveform"></canvas>
         <input id="chat-input" type="text" placeholder="Say something..." autocomplete="off" />
         <span id="voice-transcript"></span>
+        <button id="send-btn" aria-label="Send message">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+        </button>
         <button id="mic-btn" type="button" title="Presence" aria-label="Voice input" style="display:none;">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="7" class="presence-shape"/>
