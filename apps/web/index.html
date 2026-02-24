@@ -1255,6 +1255,52 @@
     }
     .ceiling-cta-dismiss:hover { color: var(--text-secondary); }
 
+    /* Locked panel content — sovereignty ceiling for web-only features */
+    .locked-panel-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 40px 24px;
+      gap: 8px;
+    }
+    .locked-panel-icon {
+      width: 36px;
+      height: 36px;
+      color: var(--text-ghost);
+      margin-bottom: 4px;
+    }
+    .locked-panel-heading {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text-heading);
+    }
+    .locked-panel-text {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.45;
+      max-width: 220px;
+    }
+    .locked-panel-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 8px;
+      padding: 8px 16px;
+      border-radius: 8px;
+      background: var(--accent-soft);
+      color: #fff;
+      font-size: 13px;
+      font-family: inherit;
+      text-decoration: none;
+      cursor: pointer;
+      border: none;
+      transition: background 0.15s;
+    }
+    .locked-panel-btn:hover { background: var(--accent-hover); }
+
     /* Memory footer on assistant bubbles */
     .memory-footer {
       margin-top: 6px;
@@ -3388,6 +3434,70 @@
       </div>
     </div>
     <div class="conv-list" id="conv-list"></div>
+  </div>
+
+  <!-- Memory HUD button + locked panel -->
+  <button id="memory-btn" title="Memories" aria-label="Memories">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a6 6 0 0 1 6 6c0 2.5-1.5 4.5-3 6h-6c-1.5-1.5-3-3.5-3-6a6 6 0 0 1 6-6z"/><path d="M9 14h6"/><path d="M10 18h4"/><path d="M10 22h4"/></svg>
+  </button>
+  <div id="memory-backdrop"></div>
+  <div id="memory-panel" aria-label="Memory panel">
+    <div class="mem-panel-header">
+      <span class="mem-panel-title">Memories</span>
+      <button class="mem-panel-close" id="memory-close-btn">&times;</button>
+    </div>
+    <div class="locked-panel-content">
+      <svg class="locked-panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      <div class="locked-panel-heading">Persistent Memory</div>
+      <div class="locked-panel-text">Your motebit remembers conversations, learns preferences, and builds a semantic knowledge graph that compounds over time.</div>
+      <div class="locked-panel-text" style="margin-top:4px;color:var(--text-faint);">Memory requires the desktop app's local storage and cryptographic identity.</div>
+      <a class="locked-panel-btn" href="https://github.com/motebit/motebit/releases" target="_blank" rel="noopener">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download App
+      </a>
+    </div>
+  </div>
+
+  <!-- Goals HUD button + locked panel -->
+  <button id="goals-btn" title="Goals" aria-label="Goals">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+    <span class="goal-exec-ring"></span>
+  </button>
+  <div id="goals-backdrop"></div>
+  <div id="goals-panel" aria-label="Goals panel">
+    <div class="goals-panel-header">
+      <span class="goals-panel-title">Goals</span>
+      <button class="goals-panel-close" id="goals-close-btn">&times;</button>
+    </div>
+    <div class="locked-panel-content">
+      <svg class="locked-panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      <div class="locked-panel-heading">Autonomous Goals</div>
+      <div class="locked-panel-text">Schedule background tasks, set recurring goals, and let your motebit execute plans autonomously with tool approval governance.</div>
+      <div class="locked-panel-text" style="margin-top:4px;color:var(--text-faint);">Goal execution requires persistent identity and the operator console.</div>
+      <a class="locked-panel-btn" href="https://github.com/motebit/motebit/releases" target="_blank" rel="noopener">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download App
+      </a>
+    </div>
+  </div>
+
+  <!-- Sync status indicator + locked popup -->
+  <div id="sync-status" class="disconnected" title="Sync: Not connected" role="status" aria-label="Sync status">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path class="sync-cloud" d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
+      <line class="sync-slash" x1="4" y1="4" x2="20" y2="20" stroke-width="2"/>
+    </svg>
+  </div>
+  <div id="sync-popup">
+    <div class="locked-panel-content" style="padding:0;">
+      <svg class="locked-panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width:28px;height:28px;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      <div class="locked-panel-heading" style="font-size:14px;">Multi-Device Sync</div>
+      <div class="locked-panel-text">Sync conversations, memory, and state across all your devices with end-to-end encrypted relay.</div>
+      <a class="locked-panel-btn" href="https://github.com/motebit/motebit/releases" target="_blank" rel="noopener" style="font-size:12px;padding:6px 14px;">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download App
+      </a>
+    </div>
   </div>
 
   <button id="settings-btn" title="Settings" aria-label="Settings">&#9881;</button>

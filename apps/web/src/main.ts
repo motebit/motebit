@@ -8,6 +8,7 @@ import { initChat, addMessage, showToast } from "./ui/chat";
 import { initSettings } from "./ui/settings";
 import { initConversations } from "./ui/conversations";
 import { initVoice } from "./ui/voice";
+import { initGatedPanels } from "./ui/gated-panels";
 import { initTheme } from "./ui/theme";
 
 // === Core Objects ===
@@ -54,6 +55,8 @@ const conversations = initConversations(ctx, {
 
 initVoice(chatAPI);
 
+const gatedPanels = initGatedPanels();
+
 // === Theme ===
 
 // Side-effect: sets up theme toggle and data-theme attribute
@@ -63,10 +66,14 @@ void initTheme(false);
 
 const settingsModal = document.getElementById("settings-modal") as HTMLDivElement;
 const conversationsPanel = document.getElementById("conversations-panel") as HTMLDivElement;
+const memoryPanel = document.getElementById("memory-panel") as HTMLDivElement;
+const goalsPanel = document.getElementById("goals-panel") as HTMLDivElement;
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
-    if (conversationsPanel.classList.contains("open")) {
+    if (memoryPanel.classList.contains("open") || goalsPanel.classList.contains("open")) {
+      gatedPanels.closeAll();
+    } else if (conversationsPanel.classList.contains("open")) {
       conversations.close();
     } else if (settingsModal.classList.contains("open")) {
       settings.close();
