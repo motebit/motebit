@@ -150,7 +150,7 @@
     #chat-log:empty { display: none; }
     #model-indicator {
       font-size: 11px;
-      color: rgba(0, 0, 0, 0.3);
+      color: var(--text-faint);
       text-align: center;
       padding: 2px 0 4px;
       pointer-events: auto;
@@ -3447,6 +3447,7 @@
 <body>
   <canvas id="motebit-canvas"></canvas>
   <div id="toast-container"></div>
+  <div class="error-banner" id="error-banner"></div>
   
   <!-- Connect prompt overlay (shown when no provider) -->
   <div id="connect-prompt" class="connect-prompt">
@@ -3465,6 +3466,9 @@
     <div class="conv-panel-header">
       <span class="conv-panel-title">Conversations</span>
       <div style="display:flex;gap:6px;align-items:center;">
+        <button class="conv-new-btn" id="conv-export-btn" title="Export conversation">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </button>
         <button class="conv-new-btn" id="conv-new-btn">New</button>
         <button class="conv-panel-close" id="conv-close-btn">&times;</button>
       </div>
@@ -3709,9 +3713,10 @@
     <div id="chat-log" role="log" aria-live="polite" aria-label="Chat messages"></div>
     <div id="model-indicator"></div>
     <div id="chat-input-row">
+      <div class="slash-autocomplete" id="slash-autocomplete"></div>
       <div id="input-bar-wrapper">
         <canvas id="voice-waveform"></canvas>
-        <div id="voice-transcript"></div>
+        <span id="voice-transcript"></span>
         <input id="chat-input" type="text" placeholder="Say something..." autocomplete="off" />
         <button id="send-btn" aria-label="Send message">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
@@ -3722,6 +3727,19 @@
           </svg>
         </button>
       </div>
+    </div>
+  </div>
+
+  <!-- Keyboard shortcut help overlay -->
+  <div id="shortcut-backdrop">
+    <div id="shortcut-dialog">
+      <div class="shortcut-title">Keyboard Shortcuts</div>
+      <div class="shortcut-row"><span class="shortcut-label">Focus input</span><span class="shortcut-keys"><kbd class="shortcut-key">&#8984;</kbd><kbd class="shortcut-key">K</kbd></span></div>
+      <div class="shortcut-row"><span class="shortcut-label">Settings</span><span class="shortcut-keys"><kbd class="shortcut-key">&#8984;</kbd><kbd class="shortcut-key">,</kbd></span></div>
+      <div class="shortcut-row"><span class="shortcut-label">Conversations</span><span class="shortcut-keys"><kbd class="shortcut-key">&#8984;</kbd><kbd class="shortcut-key">J</kbd></span></div>
+      <div class="shortcut-row"><span class="shortcut-label">New conversation</span><span class="shortcut-keys"><kbd class="shortcut-key">&#8984;</kbd><kbd class="shortcut-key">&#8679;</kbd><kbd class="shortcut-key">N</kbd></span></div>
+      <div class="shortcut-row"><span class="shortcut-label">Show shortcuts</span><span class="shortcut-keys"><kbd class="shortcut-key">?</kbd></span></div>
+      <button class="shortcut-dismiss" id="shortcut-dismiss">Done</button>
     </div>
   </div>
 

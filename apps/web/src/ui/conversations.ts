@@ -1,5 +1,5 @@
 import type { WebContext } from "../types";
-import { loadConversationIndex, deleteConversationById } from "../storage";
+import { loadConversationIndex, deleteConversationById, loadConversationById } from "../storage";
 
 // === DOM Refs ===
 
@@ -115,6 +115,35 @@ export function initConversations(ctx: WebContext, callbacks: ConversationsCallb
     close();
     ctx.app.resetConversation();
     callbacks.onLoad();
+  });
+
+  // === Export ===
+
+  document.getElementById("conv-export-btn")!.addEventListener("click", () => {
+    const activeId = ctx.app.activeConversationId;
+    if (!activeId) return;
+    const messages = loadConversationById(activeId);
+    if (messages.length === 0) return;
+
+    // Build markdown
+    const lines: string[] = ["# Motebit Conversation", ""];
+    for (const msg of messages) {
+      if (msg.role === "system") continue;
+      const label = msg.role === "user" ? "You" : "Motebit";
+      const time = new Date(msg.timestamp).toLocaleString();
+      lines.push(`**${label}** _(${time})_`);
+      lines.push("");
+      lines.push(msg.content);
+      lines.push("");
+    }
+
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `motebit-conversation-${Date.now()}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
   });
 
   return { open, close };

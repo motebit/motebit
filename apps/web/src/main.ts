@@ -10,6 +10,8 @@ import { initConversations } from "./ui/conversations";
 import { initVoice } from "./ui/voice";
 import { initGatedPanels } from "./ui/gated-panels";
 import { initTheme } from "./ui/theme";
+import { initSlashCommands } from "./ui/slash-commands";
+import { initKeyboard, openShortcutDialog } from "./ui/keyboard";
 
 // === Core Objects ===
 
@@ -35,6 +37,8 @@ const colorPicker = initColorPicker(ctx, () => { /* no voice glow on web */ });
 
 const chatAPI = initChat(ctx, {
   openSettings: () => settings.open(),
+  openConversations: () => conversations.open(),
+  openShortcuts: () => openShortcutDialog(),
 });
 
 const settings = initSettings(ctx, { colorPicker });
@@ -54,6 +58,24 @@ const conversations = initConversations(ctx, {
 });
 
 initVoice(chatAPI);
+
+initSlashCommands(chatAPI, {
+  openSettings: () => settings.open(),
+  openConversations: () => conversations.open(),
+  openShortcuts: () => openShortcutDialog(),
+});
+
+const chatInput = document.getElementById("chat-input") as HTMLInputElement;
+initKeyboard({
+  focusInput: () => chatInput.focus(),
+  openSettings: () => settings.open(),
+  openConversations: () => conversations.open(),
+  newConversation: () => {
+    app.resetConversation();
+    const chatLog = document.getElementById("chat-log") as HTMLDivElement;
+    chatLog.innerHTML = "";
+  },
+});
 
 const gatedPanels = initGatedPanels();
 
