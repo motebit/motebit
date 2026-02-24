@@ -1,4 +1,5 @@
 import { ThreeJSAdapter } from "@motebit/render-engine";
+import type { AudioReactivity } from "@motebit/render-engine";
 import { StateVectorEngine } from "@motebit/state-vector";
 import { computeRawCues } from "@motebit/behavior-engine";
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";
@@ -32,6 +33,7 @@ export class WebApp {
   private conversationHistory: ConversationMessage[] = [];
   private _activeConversationId: string | null = null;
   private _isProcessing = false;
+  private _interiorColor: InteriorColor | null = null;
   private cuesTickInterval: ReturnType<typeof setInterval> | null = null;
   private currentCues: BehaviorCues = {
     hover_distance: 0.4,
@@ -118,11 +120,21 @@ export class WebApp {
   setInteriorColor(presetName: string): void {
     const preset = COLOR_PRESETS[presetName];
     if (!preset) return;
+    this._interiorColor = preset;
     this.renderer.setInteriorColor(preset);
   }
 
   setInteriorColorDirect(color: InteriorColor): void {
+    this._interiorColor = color;
     this.renderer.setInteriorColor(color);
+  }
+
+  getInteriorColor(): InteriorColor | null {
+    return this._interiorColor;
+  }
+
+  setAudioReactivity(energy: AudioReactivity | null): void {
+    this.renderer.setAudioReactivity(energy);
   }
 
   setLightEnvironment(): void {

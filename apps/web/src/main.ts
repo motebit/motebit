@@ -33,7 +33,7 @@ const ctx: WebContext = {
 
 // === Module Init ===
 
-const colorPicker = initColorPicker(ctx, () => { /* no voice glow on web */ });
+const colorPicker = initColorPicker(ctx, () => { voiceAPI.updateVoiceGlowColor(); });
 
 const chatAPI = initChat(ctx, {
   openSettings: () => settings.open(),
@@ -57,7 +57,7 @@ const conversations = initConversations(ctx, {
   },
 });
 
-initVoice(chatAPI);
+const voiceAPI = initVoice(ctx, chatAPI);
 
 initSlashCommands(chatAPI, {
   openSettings: () => settings.open(),
