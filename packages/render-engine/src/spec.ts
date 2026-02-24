@@ -9,7 +9,7 @@ export const CANONICAL_GEOMETRY: GeometrySpec = {
 };
 
 export const CANONICAL_MATERIAL: MaterialSpec = {
-  ior: 1.15,                              // Rendering IOR — see §V for physical vs rendered
+  ior: 1.22,                              // Rendering IOR — enough refraction to lens the environment
   subsurface: 0.05,
   roughness: 0.0,                         // Surface tension smooths to perfection at this scale
   clearcoat: 0.4,

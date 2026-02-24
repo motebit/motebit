@@ -21,7 +21,7 @@ describe("CANONICAL_SPEC", () => {
   });
 
   it("has correct material values (DROPLET.md)", () => {
-    expect(CANONICAL_MATERIAL.ior).toBe(1.15);
+    expect(CANONICAL_MATERIAL.ior).toBe(1.22);
     expect(CANONICAL_MATERIAL.subsurface).toBe(0.05);
     expect(CANONICAL_MATERIAL.roughness).toBe(0.0);
     expect(CANONICAL_MATERIAL.clearcoat).toBe(0.4);
@@ -132,7 +132,7 @@ describe("ThreeJSAdapter", () => {
     const spec = adapter.getSpec();
     expect(spec).toBe(CANONICAL_SPEC);
     expect(spec.geometry.form).toBe("droplet");
-    expect(spec.material.ior).toBe(1.15);
+    expect(spec.material.ior).toBe(1.22);
   });
 
   it("dispose cleans up", async () => {
@@ -168,7 +168,7 @@ describe("SpatialAdapter", () => {
     const spec = adapter.getSpec();
     expect(spec.geometry.form).toBe("droplet");
     expect(spec.geometry.base_radius).toBe(0.14);
-    expect(spec.material.ior).toBe(1.15);
+    expect(spec.material.ior).toBe(1.22);
     expect(spec.lighting.environment).toBe("hdri");
   });
 

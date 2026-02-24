@@ -1,0 +1,95 @@
+import React from "react";
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from "react-native";
+
+interface SlashCommand {
+  name: string;
+  description: string;
+}
+
+const SLASH_COMMANDS: SlashCommand[] = [
+  { name: "model", description: "Show or switch model" },
+  { name: "conversations", description: "Browse conversations" },
+  { name: "new", description: "New conversation" },
+  { name: "memories", description: "Browse memories" },
+  { name: "state", description: "Show state vector" },
+  { name: "forget", description: "Delete a memory" },
+  { name: "clear", description: "Clear conversation" },
+  { name: "tools", description: "List registered tools" },
+  { name: "operator", description: "Operator mode status" },
+  { name: "summarize", description: "Summarize conversation" },
+  { name: "sync", description: "Sync with relay" },
+  { name: "export", description: "Export all data" },
+  { name: "settings", description: "Open settings" },
+  { name: "help", description: "Show commands" },
+];
+
+function filterCommands(partial: string): SlashCommand[] {
+  if (!partial) return SLASH_COMMANDS;
+  const query = partial.toLowerCase();
+  return SLASH_COMMANDS.filter(c => c.name.startsWith(query));
+}
+
+interface SlashAutocompleteProps {
+  inputText: string;
+  onSelect: (command: string) => void;
+}
+
+export function SlashAutocomplete({ inputText, onSelect }: SlashAutocompleteProps): React.ReactElement | null {
+  if (!inputText.startsWith("/")) return null;
+
+  const partial = inputText.slice(1);
+  const matches = filterCommands(partial);
+
+  if (matches.length === 0) return null;
+
+  // Don't show if input exactly matches a command (already selected)
+  if (matches.length === 1 && matches[0]!.name === partial) return null;
+
+  return (
+    <View style={styles.container}>
+      <ScrollView style={styles.scroll} keyboardShouldPersistTaps="always">
+        {matches.map((cmd) => (
+          <TouchableOpacity
+            key={cmd.name}
+            style={styles.item}
+            onPress={() => onSelect(cmd.name)}
+            activeOpacity={0.6}
+          >
+            <Text style={styles.name}>/{cmd.name}</Text>
+            <Text style={styles.desc}>{cmd.description}</Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    maxHeight: 200,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "#1a2838",
+    backgroundColor: "#0a1018",
+  },
+  scroll: {
+    flexGrow: 0,
+  },
+  item: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 10,
+  },
+  name: {
+    color: "#a0b8d0",
+    fontSize: 14,
+    fontWeight: "500",
+    flexShrink: 0,
+  },
+  desc: {
+    color: "#405060",
+    fontSize: 12,
+    flex: 1,
+  },
+});

@@ -629,7 +629,7 @@ describe("RenderAdapter interface conformance", () => {
         const spec = adapter.getSpec();
         expect(spec.geometry.form).toBe("droplet");
         expect(spec.geometry.base_radius).toBe(0.14);
-        expect(spec.material.ior).toBe(1.15);
+        expect(spec.material.ior).toBe(1.22);
       });
     });
   }

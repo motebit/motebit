@@ -1,20 +1,37 @@
 import React from "react";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 
+const RISK_LABELS: Record<number, { label: string; color: string; bg: string }> = {
+  0: { label: "read", color: "#60a0c0", bg: "#102030" },
+  1: { label: "draft", color: "#80a060", bg: "#1a2810" },
+  2: { label: "write", color: "#c0a040", bg: "#2a2010" },
+  3: { label: "execute", color: "#c07040", bg: "#2a1810" },
+  4: { label: "money", color: "#d04050", bg: "#2a1518" },
+};
+
 interface ApprovalCardProps {
   toolName: string;
   args: Record<string, unknown>;
+  riskLevel?: number;
   onAllow: () => void;
   onDeny: () => void;
   disabled?: boolean;
 }
 
-export function ApprovalCard({ toolName, args, onAllow, onDeny, disabled }: ApprovalCardProps): React.ReactElement {
+export function ApprovalCard({ toolName, args, riskLevel, onAllow, onDeny, disabled }: ApprovalCardProps): React.ReactElement {
   const argsPreview = JSON.stringify(args).slice(0, 120);
+  const risk = riskLevel != null ? RISK_LABELS[riskLevel] : undefined;
 
   return (
     <View style={styles.card}>
-      <Text style={styles.label}>Tool Approval</Text>
+      <View style={styles.labelRow}>
+        <Text style={styles.label}>Tool Approval</Text>
+        {risk != null && (
+          <View style={[styles.riskBadge, { backgroundColor: risk.bg }]}>
+            <Text style={[styles.riskText, { color: risk.color }]}>{risk.label}</Text>
+          </View>
+        )}
+      </View>
       <Text style={styles.toolName}>{toolName}</Text>
       <Text style={styles.args} numberOfLines={2}>{argsPreview}</Text>
       <View style={styles.buttonRow}>
@@ -50,13 +67,29 @@ const styles = StyleSheet.create({
     maxWidth: "90%",
     alignSelf: "flex-start",
   },
+  labelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 6,
+  },
   label: {
     color: "#506070",
     fontSize: 11,
     fontWeight: "600",
     textTransform: "uppercase",
     letterSpacing: 0.5,
-    marginBottom: 6,
+  },
+  riskBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  riskText: {
+    fontSize: 10,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
   },
   toolName: {
     color: "#8098b0",

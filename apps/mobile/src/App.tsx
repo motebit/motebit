@@ -49,6 +49,9 @@ import { MemoryPanel } from "./components/MemoryPanel";
 import { ConversationPanel } from "./components/ConversationPanel";
 import { VoiceIndicator } from "./components/VoiceIndicator";
 import { GoalsPanel } from "./components/GoalsPanel";
+import { Toast } from "./components/Toast";
+import { AnimatedBubble } from "./components/AnimatedBubble";
+import { SlashAutocomplete } from "./components/SlashAutocomplete";
 
 // === Types ===
 
@@ -60,6 +63,7 @@ interface ChatMessage {
   // Approval-specific fields
   toolName?: string;
   toolArgs?: Record<string, unknown>;
+  riskLevel?: number;
   approvalResolved?: boolean;
 }
 
@@ -114,6 +118,11 @@ export function App(): React.ReactElement {
   const [pairingClaimName, setPairingClaimName] = useState("");
   const [pairingSyncUrlInput, setPairingSyncUrlInput] = useState("");
   const pairingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Toast state
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const showToast = useCallback((msg: string) => { setToastMessage(msg); }, []);
+  const dismissToast = useCallback(() => { setToastMessage(null); }, []);
 
   // Voice state — 5-state machine:
   //   off → ambient (mic listening, creature breathes, VAD armed)
@@ -624,7 +633,7 @@ export function App(): React.ReactElement {
         } else {
           try {
             a.setModel(args);
-            addSystemMessage(`Model switched to: ${args}`);
+            showToast(`Model switched to: ${args}`);
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
             addSystemMessage(`Error: ${msg}`);
@@ -637,16 +646,16 @@ export function App(): React.ReactElement {
       case "new":
         a.startNewConversation();
         setMessages([]);
-        addSystemMessage("New conversation started");
+        showToast("New conversation started");
         break;
       case "memories":
         setShowMemoryPanel(true);
         break;
       case "sync":
         void a.syncNow().then((result) => {
-          addSystemMessage(
-            `Sync: ${result.events_pushed} events pushed, ${result.events_pulled} pulled, ` +
-            `${result.conversations_pushed} convs pushed, ${result.conversations_pulled} pulled`,
+          showToast(
+            `Synced: ${result.events_pushed + result.conversations_pushed} pushed, ` +
+            `${result.events_pulled + result.conversations_pulled} pulled`,
           );
         }).catch((err: unknown) => {
           const msg = err instanceof Error ? err.message : String(err);
@@ -676,6 +685,52 @@ export function App(): React.ReactElement {
           }
         })();
         break;
+      case "state": {
+        const st = a.getState();
+        if (st) {
+          const lines = Object.entries(st)
+            .map(([k, v]) => `${k}: ${typeof v === "number" ? (v as number).toFixed(2) : String(v)}`)
+            .join("\n");
+          addSystemMessage(`State vector:\n${lines}`);
+        } else {
+          addSystemMessage("State not available (runtime not initialized)");
+        }
+        break;
+      }
+      case "forget":
+        if (!args) {
+          addSystemMessage("Usage: /forget <nodeId>");
+        } else {
+          void a.deleteMemory(args).then(() => {
+            showToast(`Memory ${args} deleted`);
+          }).catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            addSystemMessage(`Error: ${msg}`);
+          });
+        }
+        break;
+      case "clear":
+        a.startNewConversation();
+        setMessages([]);
+        break;
+      case "tools": {
+        const mcpServers = a.getMcpServers();
+        const serverCount = mcpServers.length;
+        let toolCount = 0;
+        const serverLines: string[] = [];
+        for (const srv of mcpServers) {
+          toolCount += srv.toolCount;
+          serverLines.push(`  ${srv.name}: ${srv.toolCount} tools${srv.trusted ? " (trusted)" : ""}`);
+        }
+        addSystemMessage(
+          `Tools: ${toolCount} from ${serverCount} MCP server${serverCount !== 1 ? "s" : ""}\n` +
+          (serverLines.length > 0 ? serverLines.join("\n") : "  No MCP servers connected"),
+        );
+        break;
+      }
+      case "operator":
+        showToast(a.isOperatorMode ? "Operator mode: ON" : "Operator mode: OFF");
+        break;
       case "help":
         addSystemMessage(
           "Available commands:\n" +
@@ -684,6 +739,11 @@ export function App(): React.ReactElement {
           "/conversations — browse past conversations\n" +
           "/new — start a new conversation\n" +
           "/memories — browse memories\n" +
+          "/state — show current state vector\n" +
+          "/forget <nodeId> — delete a memory\n" +
+          "/clear — clear conversation\n" +
+          "/tools — list registered tools\n" +
+          "/operator — show operator mode status\n" +
           "/summarize — summarize current conversation\n" +
           "/sync — sync with relay\n" +
           "/export — export all data\n" +
@@ -788,6 +848,7 @@ export function App(): React.ReactElement {
               timestamp: Date.now(),
               toolName: chunk.name,
               toolArgs: chunk.args,
+              riskLevel: chunk.risk_level,
               approvalResolved: false,
             },
           ]);
@@ -1291,6 +1352,7 @@ export function App(): React.ReactElement {
               <ApprovalCard
                 toolName={item.toolName ?? "unknown"}
                 args={item.toolArgs || {}}
+                riskLevel={item.riskLevel}
                 onAllow={() => void handleApproval(item.id, true)}
                 onDeny={() => void handleApproval(item.id, false)}
                 disabled={item.approvalResolved}
@@ -1299,23 +1361,32 @@ export function App(): React.ReactElement {
           }
           if (item.role === "system") {
             return (
-              <View style={styles.systemBubble}>
+              <AnimatedBubble style={styles.systemBubble}>
                 <Text style={styles.systemText}>{item.content}</Text>
-              </View>
+              </AnimatedBubble>
             );
           }
           return (
-            <View style={[styles.messageBubble, item.role === "user" ? styles.userBubble : styles.assistantBubble]}>
+            <AnimatedBubble style={[styles.messageBubble, item.role === "user" ? styles.userBubble : styles.assistantBubble]}>
               <Text style={[styles.messageText, item.role === "user" ? styles.userText : styles.assistantText]}>
                 {item.content}
               </Text>
-            </View>
+            </AnimatedBubble>
           );
         }}
       />
 
       {/* Voice amplitude indicator */}
       <VoiceIndicator micState={micState} audioLevel={audioLevel} glowColor={activeGlow} />
+
+      {/* Slash command autocomplete */}
+      <SlashAutocomplete
+        inputText={inputText}
+        onSelect={(cmd) => {
+          setInputText("");
+          handleSlashCommand(cmd, "");
+        }}
+      />
 
       {/* Input Bar */}
       <View style={styles.inputBar}>
@@ -1537,6 +1608,7 @@ export function App(): React.ReactElement {
           </View>
         </View>
       </Modal>
+      <Toast message={toastMessage} onDismiss={dismissToast} />
     </KeyboardAvoidingView>
   );
 }
