@@ -238,6 +238,7 @@ export class ThreeJSAdapter implements RenderAdapter {
   private audio: AudioReactivity | null = null;
   private trustMode: TrustMode = TrustMode.Full;
   private listeningActive = false;
+  private interiorColor: InteriorColor | null = null;
 
   private renderer: THREE.WebGLRenderer | null = null;
   private scene: THREE.Scene | null = null;
@@ -375,18 +376,26 @@ export class ThreeJSAdapter implements RenderAdapter {
     // Trust mode visual modulation — glass clarity maps to trust level
     const trustThickness = this.trustMode === TrustMode.Full ? 0.18
       : this.trustMode === TrustMode.Guarded ? 0.25 : 0.35;
-    const trustTint: [number, number, number] = this.trustMode === TrustMode.Full ? [0.95, 0.95, 1.0]
-      : this.trustMode === TrustMode.Guarded ? [0.8, 0.85, 1.0] : [0.7, 0.75, 0.9];
     this.bodyMaterial.thickness = smoothDelta(this.bodyMaterial.thickness, trustThickness, dt, 2.0);
-    this.bodyMaterial.attenuationColor.lerp(
-      new THREE.Color(trustTint[0], trustTint[1], trustTint[2]), 1 - Math.exp(-2.0 * dt));
+
+    // Attenuation color: user's soul color is the base; trust mode desaturates toward neutral
+    const baseTint = this.interiorColor?.tint ?? [0.95, 0.95, 1.0];
+    const trustDesaturation = this.trustMode === TrustMode.Full ? 0
+      : this.trustMode === TrustMode.Guarded ? 0.3 : 0.6;
+    const tintTarget = new THREE.Color(
+      baseTint[0] + (0.85 - baseTint[0]) * trustDesaturation,
+      baseTint[1] + (0.85 - baseTint[1]) * trustDesaturation,
+      baseTint[2] + (0.9 - baseTint[2]) * trustDesaturation,
+    );
+    this.bodyMaterial.attenuationColor.lerp(tintTarget, 1 - Math.exp(-2.0 * dt));
 
     // Interior luminosity — zero at rest, visible only during processing (§6.4)
     // At rest (glow ~0.3): intensity ≈ 0. At full processing (glow ~0.7): intensity ≈ 0.24.
     // The 0.3 threshold ensures glass stays clear at rest. 0.6 multiplier makes thinking visible.
     // Minimal trust: suppress interior glow entirely
     const trustGlowScale = this.trustMode === TrustMode.Minimal ? 0 : 1;
-    this.bodyMaterial.emissiveIntensity = Math.max(0, (cues.glow_intensity - 0.3) * 0.6 + audioGlow) * trustGlowScale;
+    const baseGlowIntensity = this.interiorColor?.glowIntensity ?? 0;
+    this.bodyMaterial.emissiveIntensity = Math.max(baseGlowIntensity, (cues.glow_intensity - 0.3) * 0.6 + audioGlow) * trustGlowScale;
 
     // Iridescence — high-frequency transients shimmer the glass surface
     // Active listening indicator: subtle ~1Hz oscillation (visual recording light)
@@ -472,6 +481,7 @@ export class ThreeJSAdapter implements RenderAdapter {
   }
 
   setInteriorColor(color: InteriorColor): void {
+    this.interiorColor = color;
     if (this.bodyMaterial) {
       this.bodyMaterial.attenuationColor.setRGB(color.tint[0], color.tint[1], color.tint[2]);
       this.bodyMaterial.emissive.setRGB(color.glow[0], color.glow[1], color.glow[2]);
@@ -599,6 +609,7 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
   private audio: AudioReactivity | null = null;
   private trustMode: TrustMode = TrustMode.Full;
   private listeningActive = false;
+  private interiorColor: InteriorColor | null = null;
 
   /** Check if WebXR immersive-ar is available in this browser. */
   static async isSupported(): Promise<boolean> {
@@ -744,16 +755,24 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     // Trust mode visual modulation — glass clarity maps to trust level
     const trustThickness = this.trustMode === TrustMode.Full ? 0.18
       : this.trustMode === TrustMode.Guarded ? 0.25 : 0.35;
-    const trustTint: [number, number, number] = this.trustMode === TrustMode.Full ? [0.95, 0.95, 1.0]
-      : this.trustMode === TrustMode.Guarded ? [0.8, 0.85, 1.0] : [0.7, 0.75, 0.9];
     this.bodyMaterial.thickness = smoothDelta(this.bodyMaterial.thickness, trustThickness, dt, 2.0);
-    this.bodyMaterial.attenuationColor.lerp(
-      new THREE.Color(trustTint[0], trustTint[1], trustTint[2]), 1 - Math.exp(-2.0 * dt));
+
+    // Attenuation color: user's soul color is the base; trust mode desaturates toward neutral
+    const baseTint = this.interiorColor?.tint ?? [0.95, 0.95, 1.0];
+    const trustDesaturation = this.trustMode === TrustMode.Full ? 0
+      : this.trustMode === TrustMode.Guarded ? 0.3 : 0.6;
+    const tintTarget = new THREE.Color(
+      baseTint[0] + (0.85 - baseTint[0]) * trustDesaturation,
+      baseTint[1] + (0.85 - baseTint[1]) * trustDesaturation,
+      baseTint[2] + (0.9 - baseTint[2]) * trustDesaturation,
+    );
+    this.bodyMaterial.attenuationColor.lerp(tintTarget, 1 - Math.exp(-2.0 * dt));
 
     // Interior luminosity — zero at rest, visible only during processing (§6.4)
     // Minimal trust: suppress interior glow entirely
     const trustGlowScale = this.trustMode === TrustMode.Minimal ? 0 : 1;
-    this.bodyMaterial.emissiveIntensity = Math.max(0, (cues.glow_intensity - 0.3) * 0.6 + audioGlow) * trustGlowScale;
+    const baseGlowIntensity = this.interiorColor?.glowIntensity ?? 0;
+    this.bodyMaterial.emissiveIntensity = Math.max(baseGlowIntensity, (cues.glow_intensity - 0.3) * 0.6 + audioGlow) * trustGlowScale;
 
     // Iridescence — high-frequency transients shimmer the glass surface
     // Active listening indicator: subtle ~1Hz oscillation (visual recording light)
@@ -895,6 +914,7 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
   }
 
   setInteriorColor(color: InteriorColor): void {
+    this.interiorColor = color;
     if (this.bodyMaterial) {
       this.bodyMaterial.attenuationColor.setRGB(color.tint[0], color.tint[1], color.tint[2]);
       this.bodyMaterial.emissive.setRGB(color.glow[0], color.glow[1], color.glow[2]);
