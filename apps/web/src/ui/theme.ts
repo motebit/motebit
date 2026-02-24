@@ -12,6 +12,8 @@ function getEffectiveTheme(pref: ThemePreference): "light" | "dark" {
   return pref;
 }
 
+let onChangeCallback: ((effective: "light" | "dark") => void) | null = null;
+
 function applyTheme(pref: ThemePreference): void {
   const effective = getEffectiveTheme(pref);
   if (effective === "dark") {
@@ -19,6 +21,7 @@ function applyTheme(pref: ThemePreference): void {
   } else {
     delete document.documentElement.dataset.theme;
   }
+  if (onChangeCallback) onChangeCallback(effective);
 }
 
 function updateToggleUI(): void {
@@ -54,7 +57,8 @@ export interface ThemeAPI {
   setPreference(pref: ThemePreference): void;
 }
 
-export function initTheme(isTauri: boolean, invoke?: unknown): ThemeAPI {
+export function initTheme(isTauri: boolean, invoke?: unknown, onChange?: (effective: "light" | "dark") => void): ThemeAPI {
+  onChangeCallback = onChange ?? null;
   // Load persisted preference
   try {
     const stored = localStorage.getItem(THEME_KEY);

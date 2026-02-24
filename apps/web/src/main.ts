@@ -81,8 +81,14 @@ const gatedPanels = initGatedPanels();
 
 // === Theme ===
 
-// Side-effect: sets up theme toggle and data-theme attribute
-void initTheme(false);
+// Side-effect: sets up theme toggle, data-theme attribute, and 3D environment
+void initTheme(false, undefined, (effective) => {
+  if (effective === "dark") {
+    app.setDarkEnvironment();
+  } else {
+    app.setLightEnvironment();
+  }
+});
 
 // === Escape Key Handler ===
 
