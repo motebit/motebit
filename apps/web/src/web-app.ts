@@ -6,7 +6,7 @@ import type { StreamingProvider } from "@motebit/ai-core/browser";
 import { CursorPresence } from "./cursor-presence";
 import { createProvider, WebLLMProvider } from "./providers";
 import type { ProviderConfig, ConversationMessage } from "./storage";
-import { saveConversation, loadConversation, clearConversation } from "./storage";
+import { saveConversationById, loadConversationById, ensureActiveConversation, startNewConversation as storageStartNew, setActiveConversationId } from "./storage";
 
 // Re-export for color-picker module
 export type InteriorColor = { tint: [number, number, number]; glow: [number, number, number] };
@@ -30,6 +30,7 @@ export class WebApp {
   private cursorPresence = new CursorPresence();
   private provider: StreamingProvider | null = null;
   private conversationHistory: ConversationMessage[] = [];
+  private _activeConversationId: string | null = null;
   private _isProcessing = false;
   private cuesTickInterval: ReturnType<typeof setInterval> | null = null;
   private currentCues: BehaviorCues = {
@@ -63,8 +64,9 @@ export class WebApp {
       this.currentCues = computeRawCues(state);
     }, 33);
 
-    // Restore conversation from localStorage
-    this.conversationHistory = loadConversation();
+    // Restore active conversation from localStorage
+    this._activeConversationId = ensureActiveConversation();
+    this.conversationHistory = loadConversationById(this._activeConversationId);
   }
 
   stop(): void {
@@ -133,13 +135,25 @@ export class WebApp {
 
   // === Conversation ===
 
+  get activeConversationId(): string | null {
+    return this._activeConversationId;
+  }
+
   getConversationHistory(): ConversationMessage[] {
     return [...this.conversationHistory];
   }
 
   resetConversation(): void {
     this.conversationHistory = [];
-    clearConversation();
+    const id = storageStartNew();
+    this._activeConversationId = id;
+  }
+
+  loadConversationById(id: string): ConversationMessage[] {
+    this._activeConversationId = id;
+    setActiveConversationId(id);
+    this.conversationHistory = loadConversationById(id);
+    return [...this.conversationHistory];
   }
 
   // === Streaming Chat ===
@@ -184,7 +198,7 @@ export class WebApp {
           // Use the full response text
           const responseText = chunk.response.text || accumulated;
           this.conversationHistory.push({ role: "assistant", content: responseText, timestamp: Date.now() });
-          saveConversation(this.conversationHistory);
+          saveConversationById(this._activeConversationId!, this.conversationHistory);
 
           // Apply response state updates
           if (chunk.response.state_updates) {
@@ -198,7 +212,7 @@ export class WebApp {
       // If we never got a "done" chunk, still save
       if (accumulated && !this.conversationHistory.some(m => m.role === "assistant" && m.content === accumulated)) {
         this.conversationHistory.push({ role: "assistant", content: accumulated, timestamp: Date.now() });
-        saveConversation(this.conversationHistory);
+        saveConversationById(this._activeConversationId!, this.conversationHistory);
       }
     } finally {
       this._isProcessing = false;

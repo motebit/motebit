@@ -18,6 +18,14 @@ export class CursorPresence {
   private lastMoveTime = Date.now();
   private interval: ReturnType<typeof setInterval> | null = null;
 
+  // Entrance impulse state
+  private entranceSpikeActive = false;
+  private entranceSpikeStart = 0;
+  private hasTriggeredEntrance = false;
+  private lastLeaveTime = 0;
+  private readonly idleThreshold = 3000;
+  private readonly spikeDuration = 800;
+
   // Bound handlers for cleanup
   private onMove = (e: MouseEvent): void => {
     this.prevPos = { ...this.mousePos };
@@ -47,10 +55,20 @@ export class CursorPresence {
 
   private onLeave = (): void => {
     this.inViewport = false;
+    this.lastLeaveTime = Date.now();
   };
 
   private onEnter = (): void => {
     this.inViewport = true;
+    const now = Date.now();
+    const awayDuration = now - this.lastLeaveTime;
+
+    // Fire entrance spike on first entrance or after idle threshold
+    if (!this.hasTriggeredEntrance || awayDuration > this.idleThreshold) {
+      this.entranceSpikeActive = true;
+      this.entranceSpikeStart = now;
+      this.hasTriggeredEntrance = true;
+    }
   };
 
   start(): void {
@@ -63,6 +81,19 @@ export class CursorPresence {
       const alpha = 0.15;
       const idleMs = Date.now() - this.lastMoveTime;
       const idleDecay = Math.max(0, 1 - idleMs / 5000); // Decays over 5 seconds of idle
+
+      // Compute entrance spike contribution
+      let spike = 0;
+      if (this.entranceSpikeActive) {
+        const elapsed = Date.now() - this.entranceSpikeStart;
+        if (elapsed < this.spikeDuration) {
+          // Quadratic decay: (1 - t)^2
+          const t = elapsed / this.spikeDuration;
+          spike = (1 - t) * (1 - t);
+        } else {
+          this.entranceSpikeActive = false;
+        }
+      }
 
       if (!this.inViewport) {
         // Mouse left viewport — decay toward resting state
@@ -86,9 +117,9 @@ export class CursorPresence {
 
         // EMA smoothing
         this.state = {
-          attention: lerp(this.state.attention ?? 0.1, targetAttention, alpha),
-          curiosity: lerp(this.state.curiosity ?? 0.1, targetCuriosity, alpha),
-          social_distance: lerp(this.state.social_distance ?? 0.7, targetSocialDistance, alpha),
+          attention: Math.min(1, lerp(this.state.attention ?? 0.1, targetAttention, alpha) + 0.5 * spike),
+          curiosity: Math.min(1, lerp(this.state.curiosity ?? 0.1, targetCuriosity, alpha) + 0.3 * spike),
+          social_distance: Math.max(0, lerp(this.state.social_distance ?? 0.7, targetSocialDistance, alpha) - 0.3 * spike),
         };
       }
 

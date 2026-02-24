@@ -1,11 +1,13 @@
 import { WebApp } from "./web-app";
 import type { WebContext } from "./types";
 import type { ProviderConfig } from "./storage";
-import { loadProviderConfig, loadSoulColor, loadConversation } from "./storage";
+import { loadProviderConfig, loadSoulColor } from "./storage";
 import { deriveInteriorColor } from "./ui/color-picker";
 import { initColorPicker } from "./ui/color-picker";
 import { initChat, addMessage, showToast } from "./ui/chat";
 import { initSettings } from "./ui/settings";
+import { initConversations } from "./ui/conversations";
+import { initVoice } from "./ui/voice";
 import { initTheme } from "./ui/theme";
 
 // === Core Objects ===
@@ -30,12 +32,27 @@ const ctx: WebContext = {
 
 const colorPicker = initColorPicker(ctx, () => { /* no voice glow on web */ });
 
-// Side-effect: wires up chat input and Enter key handler
-void initChat(ctx, {
+const chatAPI = initChat(ctx, {
   openSettings: () => settings.open(),
 });
 
 const settings = initSettings(ctx, { colorPicker });
+
+const conversations = initConversations(ctx, {
+  onLoad: () => {
+    // Reload chat log from the newly loaded conversation
+    const chatLog = document.getElementById("chat-log") as HTMLDivElement;
+    chatLog.innerHTML = "";
+    const history = app.getConversationHistory();
+    for (const msg of history) {
+      if (msg.role === "user" || msg.role === "assistant") {
+        addMessage(msg.role, msg.content, true);
+      }
+    }
+  },
+});
+
+initVoice(chatAPI);
 
 // === Theme ===
 
@@ -45,10 +62,13 @@ void initTheme(false);
 // === Escape Key Handler ===
 
 const settingsModal = document.getElementById("settings-modal") as HTMLDivElement;
+const conversationsPanel = document.getElementById("conversations-panel") as HTMLDivElement;
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
-    if (settingsModal.classList.contains("open")) {
+    if (conversationsPanel.classList.contains("open")) {
+      conversations.close();
+    } else if (settingsModal.classList.contains("open")) {
       settings.close();
     }
   }
@@ -111,11 +131,11 @@ async function bootstrap(): Promise<void> {
 
   settings.updateConnectPrompt();
 
-  // Restore conversation history into chat log
-  const history = loadConversation();
+  // Restore conversation history into chat log (immediate = skip entrance animation)
+  const history = app.getConversationHistory();
   for (const msg of history) {
     if (msg.role === "user" || msg.role === "assistant") {
-      addMessage(msg.role, msg.content);
+      addMessage(msg.role, msg.content, true);
     }
   }
 }

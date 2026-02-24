@@ -1,9 +1,12 @@
 import type { WebContext } from "../types";
+import { hasCeilingBeenShown, markCeilingShown } from "../storage";
 
 // === DOM Refs ===
 
 const chatLog = document.getElementById("chat-log") as HTMLDivElement;
 const chatInput = document.getElementById("chat-input") as HTMLInputElement;
+const chatInputRow = document.getElementById("chat-input-row") as HTMLDivElement;
+const sendBtn = document.getElementById("send-btn") as HTMLButtonElement;
 const toastContainer = document.getElementById("toast-container") as HTMLDivElement;
 
 // === Toast State ===
@@ -15,14 +18,42 @@ let activeToastTimer: ReturnType<typeof setTimeout> | null = null;
 
 const toolStatusElements = new Map<string, HTMLElement>();
 
+// === Ceiling CTA State ===
+
+let userMessageCount = 0;
+const CEILING_THRESHOLD = 5;
+
 // === Exported Functions ===
 
-export function addMessage(role: "user" | "assistant" | "system", text: string): void {
+export function addMessage(role: "user" | "assistant" | "system", text: string, immediate = false): void {
   const bubble = document.createElement("div");
   bubble.className = `chat-bubble ${role}`;
   bubble.textContent = text;
+
+  if (immediate) {
+    bubble.classList.add("visible");
+  }
+
   chatLog.appendChild(bubble);
+
+  if (!immediate) {
+    // Force reflow then animate
+    void bubble.offsetWidth;
+    bubble.classList.add("visible");
+  }
+
   chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+export function setProcessing(active: boolean): void {
+  if (active) {
+    chatInputRow.classList.add("processing");
+    chatInput.disabled = true;
+  } else {
+    chatInputRow.classList.remove("processing");
+    chatInput.disabled = false;
+    chatInput.focus();
+  }
 }
 
 export function showToast(text: string, duration = 3000): void {
@@ -64,6 +95,66 @@ export function completeToolStatus(name: string): void {
   }, 1000);
 }
 
+// === Thinking Indicator ===
+
+function showThinkingIndicator(): HTMLElement {
+  const el = document.createElement("div");
+  el.className = "thinking-indicator";
+  el.innerHTML = '<div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div>';
+  chatLog.appendChild(el);
+  void el.offsetWidth;
+  el.classList.add("visible");
+  chatLog.scrollTop = chatLog.scrollHeight;
+  return el;
+}
+
+function removeThinkingIndicator(el: HTMLElement): void {
+  el.remove();
+}
+
+// === Ceiling CTA ===
+
+function injectCeilingCTA(): void {
+  if (hasCeilingBeenShown()) return;
+  markCeilingShown();
+
+  const cta = document.createElement("div");
+  cta.className = "ceiling-cta";
+  cta.innerHTML = `
+    <div class="ceiling-cta-text">Your motebit is stateless — every page refresh starts fresh.</div>
+    <div class="ceiling-cta-text" style="margin-top: 4px;">Download the app for persistent memory, cryptographic identity, and tool use.</div>
+    <div class="ceiling-cta-actions">
+      <a class="ceiling-cta-btn" href="https://github.com/motebit/motebit/releases" target="_blank" rel="noopener">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download App
+      </a>
+      <button class="ceiling-cta-dismiss">Maybe later</button>
+    </div>
+  `;
+
+  chatLog.appendChild(cta);
+  void cta.offsetWidth;
+  cta.classList.add("visible");
+  chatLog.scrollTop = chatLog.scrollHeight;
+
+  const dismissBtn = cta.querySelector(".ceiling-cta-dismiss") as HTMLButtonElement;
+  dismissBtn.addEventListener("click", () => {
+    cta.style.opacity = "0";
+    cta.style.transform = "translateY(8px)";
+    setTimeout(() => cta.remove(), 250);
+  });
+}
+
+// === Send Button Visibility ===
+
+function updateSendButton(): void {
+  if (chatInput.value.trim()) {
+    sendBtn.classList.add("visible");
+  } else {
+    sendBtn.classList.remove("visible");
+  }
+}
+
 // === Chat Init ===
 
 export interface ChatCallbacks {
@@ -80,11 +171,13 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
     if (!text || ctx.app.isProcessing) return;
 
     chatInput.value = "";
+    updateSendButton();
 
     // Handle /clear command
     if (text === "/clear") {
       ctx.app.resetConversation();
       chatLog.innerHTML = "";
+      userMessageCount = 0;
       return;
     }
 
@@ -100,29 +193,53 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
     }
 
     addMessage("user", text);
+    userMessageCount++;
 
-    const bubble = document.createElement("div");
-    bubble.className = "chat-bubble assistant";
-    const textEl = document.createElement("span");
-    textEl.className = "bubble-text";
-    bubble.appendChild(textEl);
-    chatLog.appendChild(bubble);
+    // Check ceiling CTA threshold
+    if (userMessageCount === CEILING_THRESHOLD) {
+      injectCeilingCTA();
+    }
 
+    setProcessing(true);
+    const thinkingEl = showThinkingIndicator();
+
+    let bubble: HTMLDivElement | null = null;
+    let textEl: HTMLSpanElement | null = null;
     let accumulated = "";
+    let firstChunkReceived = false;
+
     try {
       for await (const chunk of ctx.app.sendMessageStreaming(text)) {
         if (chunk.type === "text") {
+          if (!firstChunkReceived) {
+            firstChunkReceived = true;
+            removeThinkingIndicator(thinkingEl);
+
+            bubble = document.createElement("div");
+            bubble.className = "chat-bubble assistant";
+            textEl = document.createElement("span");
+            textEl.className = "bubble-text";
+            bubble.appendChild(textEl);
+            chatLog.appendChild(bubble);
+            void bubble.offsetWidth;
+            bubble.classList.add("visible");
+          }
+
           accumulated += chunk.text;
-          textEl.textContent = accumulated;
+          textEl!.textContent = accumulated;
           chatLog.scrollTop = chatLog.scrollHeight;
         }
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (!textEl.textContent) {
+      if (!firstChunkReceived) {
+        removeThinkingIndicator(thinkingEl);
+      } else if (bubble && !textEl?.textContent) {
         bubble.remove();
       }
       addMessage("system", `Error: ${msg}`);
+    } finally {
+      setProcessing(false);
     }
   }
 
@@ -133,6 +250,14 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
       void handleSend();
     }
   });
+
+  // Wire up send button
+  sendBtn.addEventListener("click", () => {
+    void handleSend();
+  });
+
+  // Wire up input → send button visibility
+  chatInput.addEventListener("input", updateSendButton);
 
   return { handleSend };
 }
