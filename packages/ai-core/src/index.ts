@@ -234,35 +234,39 @@ export function stripTags(text: string): string {
 import type { BehaviorCues } from "@motebit/sdk";
 
 const IMPULSE_MAP: { pattern: RegExp; impulses: Array<{ field: keyof BehaviorCues; magnitude: number; halfLife: number }> }[] = [
+  // Eyes lead — smile squint is the dominant signal, mouth follows gently
   { pattern: /\bsmiles?\b/i, impulses: [
-    { field: "smile_curvature", magnitude: 0.08, halfLife: 2 },
-    { field: "eye_dilation", magnitude: -0.04, halfLife: 1.5 },
+    { field: "eye_dilation", magnitude: -0.12, halfLife: 2.5 },
+    { field: "smile_curvature", magnitude: 0.05, halfLife: 2 },
   ]},
   { pattern: /\bgrins?\b/i, impulses: [
-    { field: "smile_curvature", magnitude: 0.10, halfLife: 2 },
-    { field: "eye_dilation", magnitude: -0.05, halfLife: 1.5 },
+    { field: "eye_dilation", magnitude: -0.16, halfLife: 2.5 },
+    { field: "smile_curvature", magnitude: 0.06, halfLife: 2 },
   ]},
   { pattern: /\bbeams?\b/i, impulses: [
-    { field: "smile_curvature", magnitude: 0.12, halfLife: 2.5 },
-    { field: "eye_dilation", magnitude: -0.06, halfLife: 2 },
+    { field: "eye_dilation", magnitude: -0.20, halfLife: 3 },
+    { field: "smile_curvature", magnitude: 0.08, halfLife: 2.5 },
   ]},
   { pattern: /\bfrowns?\b/i, impulses: [
-    { field: "smile_curvature", magnitude: -0.06, halfLife: 2 },
+    { field: "eye_dilation", magnitude: 0.08, halfLife: 2 },
+    { field: "smile_curvature", magnitude: -0.04, halfLife: 2 },
   ]},
   { pattern: /\btilts?\b/i, impulses: [
-    { field: "eye_dilation", magnitude: 0.12, halfLife: 3 },
+    { field: "eye_dilation", magnitude: 0.18, halfLife: 3 },
   ]},
   { pattern: /\b(?:eyes?\s+)?widens?\b/i, impulses: [
-    { field: "eye_dilation", magnitude: 0.15, halfLife: 2 },
+    { field: "eye_dilation", magnitude: 0.22, halfLife: 2.5 },
   ]},
   { pattern: /\b(?:bounce|wiggle)s?\b/i, impulses: [
     { field: "drift_amplitude", magnitude: 0.008, halfLife: 1.5 },
+    { field: "eye_dilation", magnitude: 0.06, halfLife: 1 },
   ]},
   { pattern: /\bnods?\b/i, impulses: [
-    { field: "smile_curvature", magnitude: 0.04, halfLife: 1.5 },
+    { field: "eye_dilation", magnitude: -0.06, halfLife: 1.5 },
+    { field: "smile_curvature", magnitude: 0.03, halfLife: 1.5 },
   ]},
   { pattern: /\bblinks?\b/i, impulses: [
-    { field: "eye_dilation", magnitude: -0.15, halfLife: 0.3 },
+    { field: "eye_dilation", magnitude: -0.20, halfLife: 0.3 },
   ]},
 ];
 

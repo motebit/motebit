@@ -403,35 +403,52 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.bodyMaterial.iridescence = 0.4 + audioShimmer + listeningIridescence;
 
     // Eye-led expression — eyes are the dominant feature (Pixar principle)
+    // Eyes carry emotion. The mouth confirms. The body whispers.
     if (this.leftEye && this.rightEye) {
       // Minimal trust: narrower eyes
       const trustEyeMax = this.trustMode === TrustMode.Minimal ? 0.2 : 0.4;
       const baseEyeScale = 0.8 + cues.eye_dilation * trustEyeMax;
-      // Smile squint: Duchenne effect narrows eyes during genuine smile
-      const smileSquint = Math.max(0, cues.smile_curvature) * 0.5;
+      // Duchenne squint — genuine smile narrows the eyes
+      const smileSquint = Math.max(0, cues.smile_curvature) * 0.8;
       const eyeScale = baseEyeScale - smileSquint;
-      // Asymmetric curiosity: left eye slightly wider when curious
-      const curiosityAsym = Math.max(0, cues.eye_dilation - 0.4) * 0.15;
-      this.leftEye.scale.setScalar(eyeScale + curiosityAsym);
-      this.rightEye.scale.setScalar(eyeScale);
+      // Asymmetric curiosity: left eye opens wider (the "interested" eyebrow)
+      const curiosityAsym = Math.max(0, cues.eye_dilation - 0.3) * 0.25;
+      // Speaking micro-saccades — eyes search while talking, alive not dead
+      const speakGaze = cues.speaking_activity > 0.01
+        ? organicNoise(t, [1.1, 1.7, 2.3]) * cues.speaking_activity * 0.04
+        : 0;
+      // Speaking widening pulse — eyes open slightly when forming thoughts
+      const speakWiden = cues.speaking_activity > 0.01
+        ? (0.5 + 0.5 * organicNoise(t, [0.8, 1.3])) * cues.speaking_activity * 0.06
+        : 0;
+      this.leftEye.scale.setScalar(eyeScale + curiosityAsym + speakWiden);
+      this.rightEye.scale.setScalar(eyeScale + speakWiden);
+      // Subtle forward lean of eyes during attention
       const eyeZ = 0.08 + Math.sin(t * 0.25) * 0.001;
       this.leftEye.position.z = eyeZ;
       this.rightEye.position.z = eyeZ;
-      // Thinking lift: eyes drift upward during processing
-      const thinkLift = Math.max(0, cues.glow_intensity - 0.4) * 0.025;
-      this.leftEye.position.y = 0.015 + thinkLift;
-      this.rightEye.position.y = 0.015 + thinkLift;
+      // Thinking lift — eyes drift upward when processing (looking for the answer)
+      const thinkLift = Math.max(0, cues.glow_intensity - 0.4) * 0.06;
+      // Speaking gaze wander — slight vertical drift while talking
+      this.leftEye.position.y = 0.015 + thinkLift + speakGaze;
+      this.rightEye.position.y = 0.015 + thinkLift + speakGaze * 0.7;
+      // Horizontal micro-drift during speaking
+      const speakHGaze = cues.speaking_activity > 0.01
+        ? organicNoise(t, [0.9, 1.5]) * cues.speaking_activity * 0.003
+        : 0;
+      this.leftEye.position.x = -0.055 + speakHGaze;
+      this.rightEye.position.x = 0.055 + speakHGaze;
     }
 
-    // Smile — baseline arc visible at rest, modulated by affect + speaking oscillation
-    // Speaking frequencies in Hz-range (×2π to convert Hz→rad/s)
+    // Smile — supports the eyes, doesn't steal the scene
     if (this.smileMesh) {
-      const baseSmile = 0.6 + cues.smile_curvature * 4.0;
+      const baseSmile = 0.6 + cues.smile_curvature * 3.0;
+      // Soft speaking movement — a murmur, not a shout
       const speakOsc = cues.speaking_activity > 0.01
-        ? organicNoise(t, [23.2, 27.0, 32.0]) * cues.speaking_activity * 0.35
+        ? organicNoise(t, [23.2, 27.0, 32.0]) * cues.speaking_activity * 0.12
         : 0;
       this.smileMesh.scale.y = baseSmile + speakOsc;
-      this.smileMesh.scale.x = 1.0 + cues.speaking_activity * organicNoise(t, [18.2, 23.9]) * 0.15;
+      this.smileMesh.scale.x = 1.0 + cues.speaking_activity * organicNoise(t, [18.2, 23.9]) * 0.05;
     }
 
     // Curiosity tilt — gentle head tilt when eye_dilation is high
@@ -780,35 +797,52 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     this.bodyMaterial.iridescence = 0.4 + audioShimmer + listeningIridescence;
 
     // Eye-led expression — eyes are the dominant feature (Pixar principle)
+    // Eyes carry emotion. The mouth confirms. The body whispers.
     if (this.leftEye && this.rightEye) {
       // Minimal trust: narrower eyes
       const trustEyeMax = this.trustMode === TrustMode.Minimal ? 0.2 : 0.4;
       const baseEyeScale = 0.8 + cues.eye_dilation * trustEyeMax;
-      // Smile squint: Duchenne effect narrows eyes during genuine smile
-      const smileSquint = Math.max(0, cues.smile_curvature) * 0.5;
+      // Duchenne squint — genuine smile narrows the eyes
+      const smileSquint = Math.max(0, cues.smile_curvature) * 0.8;
       const eyeScale = baseEyeScale - smileSquint;
-      // Asymmetric curiosity: left eye slightly wider when curious
-      const curiosityAsym = Math.max(0, cues.eye_dilation - 0.4) * 0.15;
-      this.leftEye.scale.setScalar(eyeScale + curiosityAsym);
-      this.rightEye.scale.setScalar(eyeScale);
+      // Asymmetric curiosity: left eye opens wider (the "interested" eyebrow)
+      const curiosityAsym = Math.max(0, cues.eye_dilation - 0.3) * 0.25;
+      // Speaking micro-saccades — eyes search while talking, alive not dead
+      const speakGaze = cues.speaking_activity > 0.01
+        ? organicNoise(t, [1.1, 1.7, 2.3]) * cues.speaking_activity * 0.04
+        : 0;
+      // Speaking widening pulse — eyes open slightly when forming thoughts
+      const speakWiden = cues.speaking_activity > 0.01
+        ? (0.5 + 0.5 * organicNoise(t, [0.8, 1.3])) * cues.speaking_activity * 0.06
+        : 0;
+      this.leftEye.scale.setScalar(eyeScale + curiosityAsym + speakWiden);
+      this.rightEye.scale.setScalar(eyeScale + speakWiden);
+      // Subtle forward lean of eyes during attention
       const eyeZ = 0.08 + Math.sin(t * 0.25) * 0.001;
       this.leftEye.position.z = eyeZ;
       this.rightEye.position.z = eyeZ;
-      // Thinking lift: eyes drift upward during processing
-      const thinkLift = Math.max(0, cues.glow_intensity - 0.4) * 0.025;
-      this.leftEye.position.y = 0.015 + thinkLift;
-      this.rightEye.position.y = 0.015 + thinkLift;
+      // Thinking lift — eyes drift upward when processing (looking for the answer)
+      const thinkLift = Math.max(0, cues.glow_intensity - 0.4) * 0.06;
+      // Speaking gaze wander — slight vertical drift while talking
+      this.leftEye.position.y = 0.015 + thinkLift + speakGaze;
+      this.rightEye.position.y = 0.015 + thinkLift + speakGaze * 0.7;
+      // Horizontal micro-drift during speaking
+      const speakHGaze = cues.speaking_activity > 0.01
+        ? organicNoise(t, [0.9, 1.5]) * cues.speaking_activity * 0.003
+        : 0;
+      this.leftEye.position.x = -0.055 + speakHGaze;
+      this.rightEye.position.x = 0.055 + speakHGaze;
     }
 
-    // Smile — baseline arc visible at rest, modulated by affect + speaking oscillation
-    // Speaking frequencies in Hz-range (×2π to convert Hz→rad/s)
+    // Smile — supports the eyes, doesn't steal the scene
     if (this.smileMesh) {
-      const baseSmile = 0.6 + cues.smile_curvature * 4.0;
+      const baseSmile = 0.6 + cues.smile_curvature * 3.0;
+      // Soft speaking movement — a murmur, not a shout
       const speakOsc = cues.speaking_activity > 0.01
-        ? organicNoise(t, [23.2, 27.0, 32.0]) * cues.speaking_activity * 0.35
+        ? organicNoise(t, [23.2, 27.0, 32.0]) * cues.speaking_activity * 0.12
         : 0;
       this.smileMesh.scale.y = baseSmile + speakOsc;
-      this.smileMesh.scale.x = 1.0 + cues.speaking_activity * organicNoise(t, [18.2, 23.9]) * 0.15;
+      this.smileMesh.scale.x = 1.0 + cues.speaking_activity * organicNoise(t, [18.2, 23.9]) * 0.05;
     }
 
     // Curiosity tilt — gentle head tilt when eye_dilation is high
