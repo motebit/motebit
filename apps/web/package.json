@@ -1,0 +1,27 @@
+{
+  "name": "@motebit/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@motebit/ai-core": "workspace:*",
+    "@motebit/behavior-engine": "workspace:*",
+    "@motebit/policy-invariants": "workspace:*",
+    "@motebit/render-engine": "workspace:*",
+    "@motebit/sdk": "workspace:*",
+    "@motebit/state-vector": "workspace:*",
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.170.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  }
+}

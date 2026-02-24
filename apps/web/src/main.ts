@@ -1,0 +1,126 @@
+import { WebApp } from "./web-app";
+import type { WebContext } from "./types";
+import type { ProviderConfig } from "./storage";
+import { loadProviderConfig, loadSoulColor, loadConversation } from "./storage";
+import { deriveInteriorColor } from "./ui/color-picker";
+import { initColorPicker } from "./ui/color-picker";
+import { initChat, addMessage, showToast } from "./ui/chat";
+import { initSettings } from "./ui/settings";
+import { initTheme } from "./ui/theme";
+
+// === Core Objects ===
+
+const canvas = document.getElementById("motebit-canvas") as HTMLCanvasElement | null;
+if (canvas == null) throw new Error("Canvas element #motebit-canvas not found");
+
+const app = new WebApp();
+let currentConfig: ProviderConfig | null = null;
+
+// === Web Context ===
+
+const ctx: WebContext = {
+  app,
+  getConfig: () => currentConfig,
+  setConfig: (c) => { currentConfig = c; },
+  addMessage,
+  showToast,
+};
+
+// === Module Init ===
+
+const colorPicker = initColorPicker(ctx, () => { /* no voice glow on web */ });
+
+// Side-effect: wires up chat input and Enter key handler
+void initChat(ctx, {
+  openSettings: () => settings.open(),
+});
+
+const settings = initSettings(ctx, { colorPicker });
+
+// === Theme ===
+
+// Side-effect: sets up theme toggle and data-theme attribute
+void initTheme(false);
+
+// === Escape Key Handler ===
+
+const settingsModal = document.getElementById("settings-modal") as HTMLDivElement;
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    if (settingsModal.classList.contains("open")) {
+      settings.close();
+    }
+  }
+});
+
+// === Bootstrap ===
+
+async function bootstrap(): Promise<void> {
+  await app.init(canvas!);
+  app.start();
+
+  // Resize handler
+  const onResize = (): void => {
+    app.resize(window.innerWidth, window.innerHeight);
+  };
+  window.addEventListener("resize", onResize);
+  onResize();
+
+  // Animation loop
+  let lastTime = 0;
+  const loop = (timestamp: number): void => {
+    const time = timestamp / 1000;
+    const deltaTime = lastTime === 0 ? 1 / 60 : time - lastTime;
+    lastTime = time;
+    app.renderFrame(deltaTime, time);
+    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
+
+  // Restore soul color from localStorage
+  const soulColor = loadSoulColor();
+  if (soulColor != null) {
+    if (soulColor.preset === "custom" && soulColor.customHue != null && soulColor.customSaturation != null) {
+      colorPicker.setCustomHue(soulColor.customHue);
+      colorPicker.setCustomSaturation(soulColor.customSaturation);
+      colorPicker.setCustomInteriorColor(deriveInteriorColor(soulColor.customHue, soulColor.customSaturation));
+      colorPicker.setSelectedPreset("custom");
+      app.setInteriorColorDirect(colorPicker.getCustomInteriorColor()!);
+    } else if (soulColor.preset !== "moonlight") {
+      colorPicker.setSelectedPreset(soulColor.preset);
+      app.setInteriorColor(soulColor.preset);
+    }
+  }
+
+  // Restore provider config and auto-connect
+  const savedConfig = loadProviderConfig();
+  if (savedConfig != null) {
+    currentConfig = savedConfig;
+
+    // WebLLM needs async init — don't auto-connect (user must re-init via Settings)
+    if (savedConfig.type !== "webllm") {
+      try {
+        app.connectProvider(savedConfig);
+        settings.updateModelIndicator();
+      } catch {
+        // Provider connection failed — user can reconnect via settings
+      }
+    }
+  }
+
+  settings.updateConnectPrompt();
+
+  // Restore conversation history into chat log
+  const history = loadConversation();
+  for (const msg of history) {
+    if (msg.role === "user" || msg.role === "assistant") {
+      addMessage(msg.role, msg.content);
+    }
+  }
+}
+
+bootstrap().catch((err: unknown) => {
+  // eslint-disable-next-line no-console
+  console.error("Motebit bootstrap failed:", err);
+});

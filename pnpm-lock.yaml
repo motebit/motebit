@@ -475,6 +475,40 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1)(lightningcss@1.30.2)(terser@5.46.0)
 
+  apps/web:
+    dependencies:
+      '@motebit/ai-core':
+        specifier: workspace:*
+        version: link:../../packages/ai-core
+      '@motebit/behavior-engine':
+        specifier: workspace:*
+        version: link:../../packages/behavior-engine
+      '@motebit/policy-invariants':
+        specifier: workspace:*
+        version: link:../../packages/policy-invariants
+      '@motebit/render-engine':
+        specifier: workspace:*
+        version: link:../../packages/render-engine
+      '@motebit/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+      '@motebit/state-vector':
+        specifier: workspace:*
+        version: link:../../packages/state-vector
+      three:
+        specifier: ^0.170.0
+        version: 0.170.0
+    devDependencies:
+      '@types/three':
+        specifier: ^0.170.0
+        version: 0.170.0
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vite:
+        specifier: ^6.0.0
+        version: 6.4.1(@types/node@22.19.11)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.46.0)(tsx@4.21.0)
+
   packages/ai-core:
     dependencies:
       '@motebit/behavior-engine':

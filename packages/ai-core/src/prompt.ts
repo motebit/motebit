@@ -2,7 +2,7 @@ import type { ContextPack, MotebitState, BehaviorCues } from "@motebit/sdk";
 import { BatteryMode } from "@motebit/sdk";
 import type { MotebitPersonalityConfig } from "./config.js";
 import { DEFAULT_CONFIG } from "./config.js";
-import { packContext } from "./index.js";
+import { packContext } from "./core.js";
 
 // === Identity ===
 // Distilled from THE_SOVEREIGN_INTERIOR.md — the model needs to know what it IS.

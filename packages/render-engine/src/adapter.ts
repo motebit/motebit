@@ -390,12 +390,12 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.bodyMaterial.attenuationColor.lerp(tintTarget, 1 - Math.exp(-2.0 * dt));
 
     // Interior luminosity — zero at rest, visible only during processing (§6.4)
-    // At rest (glow ~0.3): intensity ≈ 0. At full processing (glow ~0.7): intensity ≈ 0.24.
-    // The 0.3 threshold ensures glass stays clear at rest. 0.6 multiplier makes thinking visible.
+    // computeRawCues produces glow ~0.4 at rest (0.3 base + confidence*0.2 with default confidence=0.5).
+    // The 0.4 threshold ensures glass stays perfectly clear at rest. 0.6 multiplier makes thinking visible.
     // Minimal trust: suppress interior glow entirely
     const trustGlowScale = this.trustMode === TrustMode.Minimal ? 0 : 1;
     const baseGlowIntensity = this.interiorColor?.glowIntensity ?? 0;
-    this.bodyMaterial.emissiveIntensity = Math.max(baseGlowIntensity, (cues.glow_intensity - 0.3) * 0.6 + audioGlow) * trustGlowScale;
+    this.bodyMaterial.emissiveIntensity = Math.max(baseGlowIntensity, Math.max(0, cues.glow_intensity - 0.4) * 0.6 + audioGlow) * trustGlowScale;
 
     // Iridescence — high-frequency transients shimmer the glass surface
     // Active listening indicator: subtle ~1Hz oscillation (visual recording light)
@@ -789,7 +789,7 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     // Minimal trust: suppress interior glow entirely
     const trustGlowScale = this.trustMode === TrustMode.Minimal ? 0 : 1;
     const baseGlowIntensity = this.interiorColor?.glowIntensity ?? 0;
-    this.bodyMaterial.emissiveIntensity = Math.max(baseGlowIntensity, (cues.glow_intensity - 0.3) * 0.6 + audioGlow) * trustGlowScale;
+    this.bodyMaterial.emissiveIntensity = Math.max(baseGlowIntensity, Math.max(0, cues.glow_intensity - 0.4) * 0.6 + audioGlow) * trustGlowScale;
 
     // Iridescence — high-frequency transients shimmer the glass surface
     // Active listening indicator: subtle ~1Hz oscillation (visual recording light)
