@@ -120,6 +120,7 @@ export interface MobileSettings {
   model: string;
   ollamaEndpoint: string;
   colorPreset: string;
+  theme: "light" | "dark" | "system";
   approvalPreset: string;
   persistenceThreshold: number;
   rejectSecrets: boolean;
@@ -137,6 +138,7 @@ const DEFAULT_SETTINGS: MobileSettings = {
   model: "llama3.2",
   ollamaEndpoint: "http://localhost:11434",
   colorPreset: "borosilicate",
+  theme: "dark",
   approvalPreset: "balanced",
   persistenceThreshold: 0.5,
   rejectSecrets: true,
@@ -645,6 +647,14 @@ export class MobileApp {
     const preset = COLOR_PRESETS[presetName];
     if (!preset) return;
     this.renderer.setInteriorColor(preset);
+  }
+
+  setDarkEnvironment(): void {
+    this.renderer.setDarkEnvironment();
+  }
+
+  setLightEnvironment(): void {
+    this.renderer.setLightEnvironment();
   }
 
   // === MCP ===

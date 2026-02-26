@@ -25,6 +25,7 @@ import {
   Platform,
   ActivityIndicator,
   Modal,
+  Appearance,
 } from "react-native";
 import { GLView } from "expo-gl";
 import type { ExpoWebGLRenderingContext } from "expo-gl";
@@ -52,6 +53,7 @@ import { GoalsPanel } from "./components/GoalsPanel";
 import { Toast } from "./components/Toast";
 import { AnimatedBubble } from "./components/AnimatedBubble";
 import { SlashAutocomplete } from "./components/SlashAutocomplete";
+import { Banner } from "./components/Banner";
 
 // === Types ===
 
@@ -123,6 +125,13 @@ export function App(): React.ReactElement {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const showToast = useCallback((msg: string) => { setToastMessage(msg); }, []);
   const dismissToast = useCallback(() => { setToastMessage(null); }, []);
+
+  // Banner state (persistent errors with optional action)
+  const [banner, setBanner] = useState<{ message: string; actionLabel?: string; onAction?: () => void } | null>(null);
+  const showBanner = useCallback((message: string, actionLabel?: string, onAction?: () => void) => {
+    setBanner({ message, actionLabel, onAction });
+  }, []);
+  const dismissBanner = useCallback(() => { setBanner(null); }, []);
 
   // Voice state — 5-state machine:
   //   off → ambient (mic listening, creature breathes, VAD armed)
@@ -261,6 +270,15 @@ export function App(): React.ReactElement {
     }
   }, [settings?.ttsVoice]);
 
+  const applyThemeEnvironment = useCallback((a: MobileApp, theme: "light" | "dark" | "system") => {
+    const effective = theme === "system" ? (Appearance.getColorScheme() ?? "dark") : theme;
+    if (effective === "dark") {
+      a.setDarkEnvironment();
+    } else {
+      a.setLightEnvironment();
+    }
+  }, []);
+
   const initializeAI = useCallback(async (a: MobileApp, s: MobileSettings) => {
     // Capture operator mode before re-init (initAI creates a new runtime/PolicyGate
     // that resets to default operatorMode: false)
@@ -293,9 +311,10 @@ export function App(): React.ReactElement {
       maxMemoriesPerTurn: s.maxMemoriesPerTurn,
     });
 
-    // Apply color preset
+    // Apply color preset and theme environment
     a.setInteriorColor(s.colorPreset);
-  }, []);
+    applyThemeEnvironment(a, s.theme);
+  }, [applyThemeEnvironment]);
 
   const subscribeToState = useCallback((a: MobileApp) => {
     a.subscribe((s) => {
@@ -544,7 +563,7 @@ export function App(): React.ReactElement {
   const startVoiceRecording = useCallback(() => {
     const stt = sttRef.current;
     if (!stt) {
-      addSystemMessage("Voice input requires an OpenAI API key (set in Settings > Intelligence)");
+      showBanner("Voice input requires an OpenAI API key", "Settings", () => setShowSettings(true));
       setMicState("ambient");
       return;
     }
@@ -979,7 +998,7 @@ export function App(): React.ReactElement {
     if (aiConfig) {
       const ok = await a.initAI(aiConfig);
       if (!ok) {
-        addSystemMessage("Failed to initialize AI — check API key");
+        showBanner("Failed to initialize AI — check API key", "Settings", () => setShowSettings(true));
       } else {
         a.start();
         subscribeToState(a);
@@ -1337,6 +1356,16 @@ export function App(): React.ReactElement {
           <ActivityIndicator size="small" color="#4080c0" />
           <Text style={styles.goalIndicatorText}>Running goal...</Text>
         </View>
+      )}
+
+      {/* Persistent error banner */}
+      {banner != null && (
+        <Banner
+          message={banner.message}
+          actionLabel={banner.actionLabel}
+          onAction={banner.onAction}
+          onDismiss={dismissBanner}
+        />
       )}
 
       {/* Chat Messages */}

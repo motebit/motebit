@@ -12,6 +12,7 @@ import {
   Alert,
   Clipboard,
   Linking,
+  Appearance,
 } from "react-native";
 import * as SecureStore from "expo-secure-store";
 import * as Sharing from "expo-sharing";
@@ -199,6 +200,17 @@ export function SettingsModal({
                 // Live preview
                 app.setInteriorColor(preset);
               }}
+              theme={draft.theme}
+              onThemeChange={(t) => {
+                updateDraft({ theme: t });
+                // Live preview — switch 3D environment
+                const effective = t === "system" ? (Appearance.getColorScheme() ?? "dark") : t;
+                if (effective === "dark") {
+                  app.setDarkEnvironment();
+                } else {
+                  app.setLightEnvironment();
+                }
+              }}
             />
           )}
           {tab === "intelligence" && (
@@ -289,10 +301,38 @@ export function SettingsModal({
 
 // === Appearance Tab ===
 
-function AppearanceTab({ selected, onSelect }: { selected: string; onSelect: (p: string) => void }) {
+type ThemePreference = "light" | "dark" | "system";
+const THEME_OPTIONS: { key: ThemePreference; label: string }[] = [
+  { key: "light", label: "Light" },
+  { key: "dark", label: "Dark" },
+  { key: "system", label: "System" },
+];
+
+function AppearanceTab({ selected, onSelect, theme, onThemeChange }: {
+  selected: string;
+  onSelect: (p: string) => void;
+  theme: ThemePreference;
+  onThemeChange: (t: ThemePreference) => void;
+}) {
   const presets = Object.keys(COLOR_PRESETS);
   return (
     <View>
+      <Text style={styles.sectionTitle}>Theme</Text>
+      <View style={styles.themeToggleGroup}>
+        {THEME_OPTIONS.map((opt) => (
+          <TouchableOpacity
+            key={opt.key}
+            style={[styles.themeOption, theme === opt.key && styles.themeOptionSelected]}
+            onPress={() => onThemeChange(opt.key)}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.themeOptionText, theme === opt.key && styles.themeOptionTextSelected]}>
+              {opt.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
       <Text style={styles.sectionTitle}>Color Preset</Text>
       <View style={styles.presetGrid}>
         {presets.map((name) => (
@@ -1153,6 +1193,33 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     marginTop: 20,
     marginBottom: 10,
+  },
+
+  // Theme toggle
+  themeToggleGroup: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 20,
+  },
+  themeOption: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: "#0a1018",
+    alignItems: "center",
+  },
+  themeOptionSelected: {
+    backgroundColor: "#1a2838",
+    borderWidth: 1,
+    borderColor: "#2a4060",
+  },
+  themeOptionText: {
+    color: "#506070",
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  themeOptionTextSelected: {
+    color: "#a0b8d0",
   },
 
   // Appearance

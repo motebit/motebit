@@ -286,6 +286,7 @@ describe("MobileApp.settings", () => {
       model: "claude-haiku-4-5-20251001",
       ollamaEndpoint: "http://192.168.1.100:11434",
       colorPreset: "amber",
+      theme: "dark",
       approvalPreset: "cautious",
       persistenceThreshold: 0.8,
       rejectSecrets: false,
