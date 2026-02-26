@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
+import { useTheme, type ThemeColors } from "../theme";
 
 const RISK_LABELS: Record<number, { label: string; color: string; bg: string }> = {
   0: { label: "read", color: "#60a0c0", bg: "#102030" },
@@ -19,6 +20,8 @@ interface ApprovalCardProps {
 }
 
 export function ApprovalCard({ toolName, args, riskLevel, onAllow, onDeny, disabled }: ApprovalCardProps): React.ReactElement {
+  const colors = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const argsPreview = JSON.stringify(args).slice(0, 120);
   const risk = riskLevel != null ? RISK_LABELS[riskLevel] : undefined;
 
@@ -56,80 +59,82 @@ export function ApprovalCard({ toolName, args, riskLevel, onAllow, onDeny, disab
   );
 }
 
-const styles = StyleSheet.create({
-  card: {
-    backgroundColor: "#111a24",
-    borderRadius: 14,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#2a4060",
-    padding: 14,
-    marginVertical: 4,
-    maxWidth: "90%",
-    alignSelf: "flex-start",
-  },
-  labelRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    marginBottom: 6,
-  },
-  label: {
-    color: "#506070",
-    fontSize: 11,
-    fontWeight: "600",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-  },
-  riskBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  riskText: {
-    fontSize: 10,
-    fontWeight: "700",
-    textTransform: "uppercase",
-    letterSpacing: 0.3,
-  },
-  toolName: {
-    color: "#8098b0",
-    fontSize: 15,
-    fontWeight: "600",
-    marginBottom: 4,
-  },
-  args: {
-    color: "#405060",
-    fontSize: 12,
-    fontFamily: "monospace",
-    marginBottom: 10,
-  },
-  buttonRow: {
-    flexDirection: "row",
-    gap: 10,
-  },
-  button: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 8,
-    alignItems: "center",
-  },
-  denyButton: {
-    backgroundColor: "#2a1518",
-  },
-  allowButton: {
-    backgroundColor: "#142a1a",
-  },
-  denyText: {
-    color: "#d04050",
-    fontSize: 14,
-    fontWeight: "600",
-  },
-  allowText: {
-    color: "#40b060",
-    fontSize: 14,
-    fontWeight: "600",
-  },
-  disabled: {
-    opacity: 0.4,
-  },
-});
+function createStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    card: {
+      backgroundColor: c.bgSecondary,
+      borderRadius: 14,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.accentSoft,
+      padding: 14,
+      marginVertical: 4,
+      maxWidth: "90%",
+      alignSelf: "flex-start",
+    },
+    labelRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      marginBottom: 6,
+    },
+    label: {
+      color: c.textMuted,
+      fontSize: 11,
+      fontWeight: "600",
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
+    },
+    riskBadge: {
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: 4,
+    },
+    riskText: {
+      fontSize: 10,
+      fontWeight: "700",
+      textTransform: "uppercase",
+      letterSpacing: 0.3,
+    },
+    toolName: {
+      color: c.textSecondary,
+      fontSize: 15,
+      fontWeight: "600",
+      marginBottom: 4,
+    },
+    args: {
+      color: c.textGhost,
+      fontSize: 12,
+      fontFamily: "monospace",
+      marginBottom: 10,
+    },
+    buttonRow: {
+      flexDirection: "row",
+      gap: 10,
+    },
+    button: {
+      flex: 1,
+      paddingVertical: 10,
+      borderRadius: 8,
+      alignItems: "center",
+    },
+    denyButton: {
+      backgroundColor: `${c.statusError}1a`,
+    },
+    allowButton: {
+      backgroundColor: `${c.statusSuccess}1a`,
+    },
+    denyText: {
+      color: c.statusError,
+      fontSize: 14,
+      fontWeight: "600",
+    },
+    allowText: {
+      color: c.statusSuccess,
+      fontSize: 14,
+      fontWeight: "600",
+    },
+    disabled: {
+      opacity: 0.4,
+    },
+  });
+}

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   Modal,
   View,
@@ -8,6 +8,7 @@ import {
   StyleSheet,
   ActivityIndicator,
 } from "react-native";
+import { useTheme, type ThemeColors } from "../theme";
 
 export type PinMode = "setup" | "verify" | "reset";
 
@@ -32,6 +33,8 @@ const DESCRIPTIONS: Record<PinMode, string> = {
 };
 
 export function PinDialog({ visible, mode, onSubmit, onCancel, error }: PinDialogProps): React.ReactElement {
+  const colors = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [pin, setPin] = useState("");
   const [confirm, setConfirm] = useState("");
   const [loading, setLoading] = useState(false);
@@ -82,7 +85,7 @@ export function PinDialog({ visible, mode, onSubmit, onCancel, error }: PinDialo
             value={pin}
             onChangeText={setPin}
             placeholder="PIN"
-            placeholderTextColor="#405060"
+            placeholderTextColor={colors.inputPlaceholder}
             keyboardType="number-pad"
             secureTextEntry
             maxLength={6}
@@ -95,7 +98,7 @@ export function PinDialog({ visible, mode, onSubmit, onCancel, error }: PinDialo
               value={confirm}
               onChangeText={setConfirm}
               placeholder="Confirm PIN"
-              placeholderTextColor="#405060"
+              placeholderTextColor={colors.inputPlaceholder}
               keyboardType="number-pad"
               secureTextEntry
               maxLength={6}
@@ -115,7 +118,7 @@ export function PinDialog({ visible, mode, onSubmit, onCancel, error }: PinDialo
               activeOpacity={0.7}
             >
               {loading ? (
-                <ActivityIndicator size="small" color="#c0d0e0" />
+                <ActivityIndicator size="small" color={colors.buttonPrimaryText} />
               ) : (
                 <Text style={styles.submitText}>
                   {mode === "verify" ? "Unlock" : "Set PIN"}
@@ -129,81 +132,83 @@ export function PinDialog({ visible, mode, onSubmit, onCancel, error }: PinDialo
   );
 }
 
-const styles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.85)",
-    justifyContent: "center",
-    alignItems: "center",
-    paddingHorizontal: 32,
-  },
-  card: {
-    backgroundColor: "#0f1820",
-    borderRadius: 20,
-    padding: 24,
-    width: "100%",
-    maxWidth: 320,
-  },
-  title: {
-    color: "#c0d0e0",
-    fontSize: 18,
-    fontWeight: "700",
-    textAlign: "center",
-    marginBottom: 8,
-  },
-  description: {
-    color: "#607080",
-    fontSize: 13,
-    textAlign: "center",
-    marginBottom: 18,
-  },
-  input: {
-    backgroundColor: "#0a0e14",
-    borderRadius: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    color: "#c0d0e0",
-    fontSize: 20,
-    textAlign: "center",
-    letterSpacing: 8,
-    marginBottom: 12,
-  },
-  error: {
-    color: "#d04050",
-    fontSize: 12,
-    textAlign: "center",
-    marginBottom: 8,
-  },
-  buttonRow: {
-    flexDirection: "row",
-    gap: 10,
-    marginTop: 4,
-  },
-  cancelButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 10,
-    backgroundColor: "#1a2030",
-    alignItems: "center",
-  },
-  cancelText: {
-    color: "#607080",
-    fontSize: 15,
-    fontWeight: "600",
-  },
-  submitButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 10,
-    backgroundColor: "#2a4060",
-    alignItems: "center",
-  },
-  submitText: {
-    color: "#c0d0e0",
-    fontSize: 15,
-    fontWeight: "600",
-  },
-  disabled: {
-    opacity: 0.4,
-  },
-});
+function createStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    backdrop: {
+      flex: 1,
+      backgroundColor: c.overlayBg,
+      justifyContent: "center",
+      alignItems: "center",
+      paddingHorizontal: 32,
+    },
+    card: {
+      backgroundColor: c.bgSecondary,
+      borderRadius: 20,
+      padding: 24,
+      width: "100%",
+      maxWidth: 320,
+    },
+    title: {
+      color: c.textPrimary,
+      fontSize: 18,
+      fontWeight: "700",
+      textAlign: "center",
+      marginBottom: 8,
+    },
+    description: {
+      color: c.textMuted,
+      fontSize: 13,
+      textAlign: "center",
+      marginBottom: 18,
+    },
+    input: {
+      backgroundColor: c.bgTertiary,
+      borderRadius: 10,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      color: c.textPrimary,
+      fontSize: 20,
+      textAlign: "center",
+      letterSpacing: 8,
+      marginBottom: 12,
+    },
+    error: {
+      color: c.statusError,
+      fontSize: 12,
+      textAlign: "center",
+      marginBottom: 8,
+    },
+    buttonRow: {
+      flexDirection: "row",
+      gap: 10,
+      marginTop: 4,
+    },
+    cancelButton: {
+      flex: 1,
+      paddingVertical: 12,
+      borderRadius: 10,
+      backgroundColor: c.buttonSecondaryBg,
+      alignItems: "center",
+    },
+    cancelText: {
+      color: c.buttonSecondaryText,
+      fontSize: 15,
+      fontWeight: "600",
+    },
+    submitButton: {
+      flex: 1,
+      paddingVertical: 12,
+      borderRadius: 10,
+      backgroundColor: c.buttonPrimaryBg,
+      alignItems: "center",
+    },
+    submitText: {
+      color: c.buttonPrimaryText,
+      fontSize: 15,
+      fontWeight: "600",
+    },
+    disabled: {
+      opacity: 0.4,
+    },
+  });
+}

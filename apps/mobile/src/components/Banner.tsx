@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
+import { useTheme, type ThemeColors } from "../theme";
 
 interface BannerProps {
   message: string;
@@ -9,6 +10,9 @@ interface BannerProps {
 }
 
 export function Banner({ message, actionLabel, onAction, onDismiss }: BannerProps): React.ReactElement {
+  const colors = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   return (
     <View style={styles.container}>
       <Text style={styles.message} numberOfLines={2}>{message}</Text>
@@ -26,50 +30,52 @@ export function Banner({ message, actionLabel, onAction, onDismiss }: BannerProp
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "rgba(40, 20, 20, 0.95)",
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#4a2020",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    gap: 10,
-  },
-  message: {
-    flex: 1,
-    color: "#c08080",
-    fontSize: 13,
-    fontWeight: "500",
-    lineHeight: 18,
-  },
-  actions: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  actionButton: {
-    backgroundColor: "#2a4060",
-    borderRadius: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  actionText: {
-    color: "#a0b8d0",
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  dismissButton: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: "rgba(255,255,255,0.05)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  dismissText: {
-    color: "#607080",
-    fontSize: 12,
-  },
-});
+function createStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: c.errorBannerBg,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.errorBannerBorder,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      gap: 10,
+    },
+    message: {
+      flex: 1,
+      color: c.errorBannerText,
+      fontSize: 13,
+      fontWeight: "500",
+      lineHeight: 18,
+    },
+    actions: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+    },
+    actionButton: {
+      backgroundColor: c.buttonPrimaryBg,
+      borderRadius: 6,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+    },
+    actionText: {
+      color: c.buttonPrimaryText,
+      fontSize: 12,
+      fontWeight: "600",
+    },
+    dismissButton: {
+      width: 24,
+      height: 24,
+      borderRadius: 12,
+      backgroundColor: "rgba(255,255,255,0.05)",
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    dismissText: {
+      color: c.textMuted,
+      fontSize: 12,
+    },
+  });
+}

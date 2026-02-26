@@ -1,5 +1,6 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 import { Animated, Text, StyleSheet } from "react-native";
+import { useTheme, type ThemeColors } from "../theme";
 
 interface ToastProps {
   message: string | null;
@@ -8,6 +9,8 @@ interface ToastProps {
 }
 
 export function Toast({ message, duration = 3000, onDismiss }: ToastProps): React.ReactElement | null {
+  const colors = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const opacity = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(-20)).current;
 
@@ -42,25 +45,27 @@ export function Toast({ message, duration = 3000, onDismiss }: ToastProps): Reac
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    position: "absolute",
-    top: 50,
-    left: 24,
-    right: 24,
-    backgroundColor: "rgba(20, 30, 40, 0.92)",
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    alignItems: "center",
-    zIndex: 100,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#2a4060",
-  },
-  text: {
-    color: "#a0b8d0",
-    fontSize: 13,
-    fontWeight: "500",
-    textAlign: "center",
-  },
-});
+function createStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      position: "absolute",
+      top: 50,
+      left: 24,
+      right: 24,
+      backgroundColor: c.toastBg,
+      borderRadius: 12,
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      alignItems: "center",
+      zIndex: 100,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.toastBorder,
+    },
+    text: {
+      color: c.toastText,
+      fontSize: 13,
+      fontWeight: "500",
+      textAlign: "center",
+    },
+  });
+}

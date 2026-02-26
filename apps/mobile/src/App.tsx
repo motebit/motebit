@@ -45,7 +45,7 @@ import { WelcomeOverlay } from "./components/WelcomeOverlay";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { PinDialog } from "./components/PinDialog";
 import type { PinMode } from "./components/PinDialog";
-import { SettingsModal } from "./components/SettingsModal";
+import { SettingsModal, deriveInteriorColor } from "./components/SettingsModal";
 import { MemoryPanel } from "./components/MemoryPanel";
 import { ConversationPanel } from "./components/ConversationPanel";
 import { VoiceIndicator } from "./components/VoiceIndicator";
@@ -54,6 +54,7 @@ import { Toast } from "./components/Toast";
 import { AnimatedBubble } from "./components/AnimatedBubble";
 import { SlashAutocomplete } from "./components/SlashAutocomplete";
 import { Banner } from "./components/Banner";
+import { ThemeContext, resolveTheme, type ThemeColors } from "./theme";
 
 // === Types ===
 
@@ -158,12 +159,31 @@ export function App(): React.ReactElement {
   // MCP state
   const [mcpServers, setMcpServers] = useState<Array<{ name: string; url: string; connected: boolean; toolCount: number; trusted: boolean }>>([]);
 
+  // Model indicator
+  const [currentModel, setCurrentModel] = useState<string | null>(null);
+
   // Goal scheduler state
   const [goalRunning, setGoalRunning] = useState(false);
 
+  // Derive theme colors from settings
+  const themeColors = useMemo<ThemeColors>(
+    () => resolveTheme(settings?.theme ?? "dark"),
+    [settings?.theme],
+  );
+
+  // Listen for system appearance changes to re-resolve "system" theme
+  useEffect(() => {
+    if (settings?.theme !== "system") return undefined;
+    const sub = Appearance.addChangeListener(() => {
+      // Force re-render by updating settings reference
+      setSettings((prev) => prev ? { ...prev } : prev);
+    });
+    return () => sub.remove();
+  }, [settings?.theme]);
+
   // Derive voice glow color from creature preset
   const activeGlow = useMemo((): [number, number, number] | undefined => {
-    const preset = COLOR_PRESETS[settings?.colorPreset ?? "borosilicate"];
+    const preset = COLOR_PRESETS[settings?.colorPreset ?? "moonlight"];
     return preset?.glow;
   }, [settings?.colorPreset]);
 
@@ -206,6 +226,7 @@ export function App(): React.ReactElement {
 
       // 4. Init AI with saved settings
       await initializeAI(a, loaded);
+      setCurrentModel(a.currentModel);
 
       // 5. Init voice providers
       await initVoice();
@@ -312,7 +333,11 @@ export function App(): React.ReactElement {
     });
 
     // Apply color preset and theme environment
-    a.setInteriorColor(s.colorPreset);
+    if (s.colorPreset === "custom") {
+      a.setInteriorColorDirect(deriveInteriorColor(s.customHue, s.customSaturation));
+    } else {
+      a.setInteriorColor(s.colorPreset);
+    }
     applyThemeEnvironment(a, s.theme);
   }, [applyThemeEnvironment]);
 
@@ -406,6 +431,7 @@ export function App(): React.ReactElement {
     // Identity already exists from bootstrap — just init AI and start
     const s = settings || (await a.loadSettings());
     await initializeAI(a, s);
+    setCurrentModel(a.currentModel);
     await initVoice();
     a.start();
     subscribeToState(a);
@@ -652,6 +678,7 @@ export function App(): React.ReactElement {
         } else {
           try {
             a.setModel(args);
+            setCurrentModel(args);
             showToast(`Model switched to: ${args}`);
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -1002,6 +1029,7 @@ export function App(): React.ReactElement {
       } else {
         a.start();
         subscribeToState(a);
+        setCurrentModel(a.currentModel);
       }
 
       // Re-apply governance to the new runtime (initAI resets PolicyGate to defaults).
@@ -1021,7 +1049,11 @@ export function App(): React.ReactElement {
         rejectSecrets: newSettings.rejectSecrets,
         maxMemoriesPerTurn: newSettings.maxMemoriesPerTurn,
       });
-      a.setInteriorColor(newSettings.colorPreset);
+      if (newSettings.colorPreset === "custom") {
+        a.setInteriorColorDirect(deriveInteriorColor(newSettings.customHue, newSettings.customSaturation));
+      } else {
+        a.setInteriorColor(newSettings.colorPreset);
+      }
     }
 
     // Re-init voice providers (user may have added/changed OpenAI key or TTS voice)
@@ -1263,25 +1295,31 @@ export function App(): React.ReactElement {
     }
   }, [messages.length]);
 
+  // Dynamic styles keyed on theme colors
+  const ds = useMemo(() => createDynamicStyles(themeColors), [themeColors]);
+
   // === Loading state ===
   if (!initialized && !showWelcome) {
     return (
-      <View style={styles.container}>
-        <ActivityIndicator size="large" color="#607080" />
-        <Text style={styles.loadingText}>Initializing Motebit...</Text>
-      </View>
+      <ThemeContext.Provider value={themeColors}>
+        <View style={ds.container}>
+          <ActivityIndicator size="large" color={themeColors.textMuted} />
+          <Text style={ds.loadingText}>Initializing Motebit...</Text>
+        </View>
+      </ThemeContext.Provider>
     );
   }
 
   return (
+    <ThemeContext.Provider value={themeColors}>
     <KeyboardAvoidingView
-      style={styles.container}
+      style={ds.container}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
       keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
     >
       {/* 3D Rendering — touch responder for orbit controls */}
       <View
-        style={styles.glContainer}
+        style={ds.glContainer}
         onStartShouldSetResponder={() => true}
         onMoveShouldSetResponder={() => true}
         onResponderGrant={handleGLResponderGrant}
@@ -1289,10 +1327,10 @@ export function App(): React.ReactElement {
         onResponderRelease={handleGLResponderRelease}
       >
         {/* eslint-disable-next-line @typescript-eslint/no-misused-promises */}
-        <GLView style={styles.glView} onContextCreate={onGLContextCreate} />
+        <GLView style={ds.glView} onContextCreate={onGLContextCreate} />
         {state && (
-          <View style={styles.stateOverlay}>
-            <Text style={styles.stateText}>
+          <View style={ds.stateOverlay}>
+            <Text style={ds.stateText}>
               attn {state.attention.toFixed(2)} · conf {state.confidence.toFixed(2)} · val {state.affect_valence.toFixed(2)}
               {app.current.governanceStatus.governed ? " · gov" : ""}
               {micState !== "off" ? ` · ${micState}` : ""}
@@ -1300,49 +1338,49 @@ export function App(): React.ReactElement {
           </View>
         )}
         {/* Top-left buttons: conversations + memories */}
-        <View style={styles.topLeftButtons}>
+        <View style={ds.topLeftButtons}>
           <TouchableOpacity
-            style={styles.overlayButton}
+            style={ds.overlayButton}
             onPress={() => setShowConversationPanel(true)}
             activeOpacity={0.7}
           >
-            <Text style={styles.overlayButtonText}>{"\u2630"}</Text>
+            <Text style={ds.overlayButtonText}>{"\u2630"}</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={styles.overlayButton}
+            style={ds.overlayButton}
             onPress={() => setShowMemoryPanel(true)}
             activeOpacity={0.7}
           >
-            <Text style={styles.overlayButtonText}>{"\u25CF"}</Text>
+            <Text style={ds.overlayButtonText}>{"\u25CF"}</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={styles.overlayButton}
+            style={ds.overlayButton}
             onPress={() => setShowGoalsPanel(true)}
             activeOpacity={0.7}
           >
-            <Text style={styles.overlayButtonText}>{"\u25C9"}</Text>
+            <Text style={ds.overlayButtonText}>{"\u25C9"}</Text>
           </TouchableOpacity>
         </View>
         {/* Settings gear */}
         <TouchableOpacity
-          style={styles.gearButton}
+          style={ds.gearButton}
           onPress={() => setShowSettings(true)}
           activeOpacity={0.7}
         >
-          <Text style={styles.gearText}>⚙</Text>
+          <Text style={ds.gearText}>⚙</Text>
         </TouchableOpacity>
       </View>
 
       {/* Sync status indicator */}
       {syncStatus !== "offline" && (
-        <View style={styles.syncIndicator}>
+        <View style={ds.syncIndicator}>
           <View style={[
-            styles.syncDot,
-            syncStatus === "idle" && styles.syncDotIdle,
-            syncStatus === "syncing" && styles.syncDotSyncing,
-            syncStatus === "error" && styles.syncDotError,
+            ds.syncDot,
+            syncStatus === "idle" && ds.syncDotIdle,
+            syncStatus === "syncing" && ds.syncDotSyncing,
+            syncStatus === "error" && ds.syncDotError,
           ]} />
-          <Text style={styles.syncIndicatorText}>
+          <Text style={ds.syncIndicatorText}>
             {syncStatus === "syncing" ? "Syncing..." :
              syncStatus === "error" ? "Sync error" :
              lastSyncTime > 0 ? `Synced ${formatSyncTime(lastSyncTime)}` : "Connected"}
@@ -1352,9 +1390,9 @@ export function App(): React.ReactElement {
 
       {/* Goal status indicator */}
       {goalRunning && (
-        <View style={styles.goalIndicator}>
-          <ActivityIndicator size="small" color="#4080c0" />
-          <Text style={styles.goalIndicatorText}>Running goal...</Text>
+        <View style={ds.goalIndicator}>
+          <ActivityIndicator size="small" color={themeColors.accent} />
+          <Text style={ds.goalIndicatorText}>Running goal...</Text>
         </View>
       )}
 
@@ -1373,8 +1411,8 @@ export function App(): React.ReactElement {
         ref={flatListRef}
         data={messages}
         keyExtractor={(item) => item.id}
-        style={styles.chatList}
-        contentContainerStyle={styles.chatContent}
+        style={ds.chatList}
+        contentContainerStyle={ds.chatContent}
         renderItem={({ item }: { item: ChatMessage }) => {
           if (item.role === "approval") {
             return (
@@ -1390,14 +1428,14 @@ export function App(): React.ReactElement {
           }
           if (item.role === "system") {
             return (
-              <AnimatedBubble style={styles.systemBubble}>
-                <Text style={styles.systemText}>{item.content}</Text>
+              <AnimatedBubble style={ds.systemBubble}>
+                <Text style={ds.systemText}>{item.content}</Text>
               </AnimatedBubble>
             );
           }
           return (
-            <AnimatedBubble style={[styles.messageBubble, item.role === "user" ? styles.userBubble : styles.assistantBubble]}>
-              <Text style={[styles.messageText, item.role === "user" ? styles.userText : styles.assistantText]}>
+            <AnimatedBubble style={[ds.messageBubble, item.role === "user" ? ds.userBubble : ds.assistantBubble]}>
+              <Text style={[ds.messageText, item.role === "user" ? ds.userText : ds.assistantText]}>
                 {item.content}
               </Text>
             </AnimatedBubble>
@@ -1417,14 +1455,19 @@ export function App(): React.ReactElement {
         }}
       />
 
+      {/* Model indicator */}
+      {currentModel ? (
+        <Text style={ds.modelIndicator}>{currentModel}</Text>
+      ) : null}
+
       {/* Input Bar */}
-      <View style={styles.inputBar}>
+      <View style={ds.inputBar}>
         <TextInput
-          style={styles.textInput}
+          style={ds.textInput}
           value={inputText}
           onChangeText={setInputText}
           placeholder="Talk to your motebit..."
-          placeholderTextColor="#405060"
+          placeholderTextColor={themeColors.inputPlaceholder}
           returnKeyType="send"
           onSubmitEditing={() => void handleSend()}
           editable={!isProcessing && (micState === "off" || micState === "ambient")}
@@ -1433,19 +1476,19 @@ export function App(): React.ReactElement {
         {!inputText.trim() && !isProcessing ? (
           <TouchableOpacity
             style={[
-              styles.micButton,
+              ds.micButton,
               micState !== "off" && micButtonActiveStyle,
-              micState === "voice" && styles.micButtonRecording,
-              micState === "transcribing" && styles.sendButtonDisabled,
+              micState === "voice" && ds.micButtonRecording,
+              micState === "transcribing" && ds.sendButtonDisabled,
             ]}
             onPress={() => void handleMicPress()}
             disabled={micState === "transcribing"}
             activeOpacity={0.7}
           >
             {micState === "transcribing" ? (
-              <ActivityIndicator size="small" color="#c0d0e0" />
+              <ActivityIndicator size="small" color={themeColors.textPrimary} />
             ) : (
-              <Text style={styles.micButtonText}>
+              <Text style={ds.micButtonText}>
                 {micState === "off" ? "\u{1F399}" :
                  micState === "ambient" ? "\u{1F399}" :
                  micState === "voice" ? "\u25A0" :
@@ -1458,14 +1501,14 @@ export function App(): React.ReactElement {
         {/* Send button — show when input has text or processing */}
         {inputText.trim() || isProcessing ? (
           <TouchableOpacity
-            style={[styles.sendButton, isProcessing && styles.sendButtonDisabled]}
+            style={[ds.sendButton, isProcessing && ds.sendButtonDisabled]}
             onPress={() => void handleSend()}
             disabled={isProcessing}
           >
             {isProcessing ? (
-              <ActivityIndicator size="small" color="#0a0a0a" />
+              <ActivityIndicator size="small" color={themeColors.bgPrimary} />
             ) : (
-              <Text style={styles.sendButtonText}>↑</Text>
+              <Text style={ds.sendButtonText}>↑</Text>
             )}
           </TouchableOpacity>
         ) : null}
@@ -1491,6 +1534,8 @@ export function App(): React.ReactElement {
           onToggleMcpTrust={handleToggleMcpTrust}
           onSave={(s, ai) => void handleSettingsSave(s, ai)}
           onClose={() => setShowSettings(false)}
+          customHue={settings.customHue}
+          customSaturation={settings.customSaturation}
           onRequestPin={(mode) => void handleRequestPin(mode)}
           onLinkDevice={() => void handleInitiatePairing()}
           onSyncNow={() => {
@@ -1544,20 +1589,20 @@ export function App(): React.ReactElement {
 
       {/* Pairing Modal */}
       <Modal visible={showPairing} animationType="fade" transparent statusBarTranslucent>
-        <View style={styles.pairingBackdrop}>
-          <View style={styles.pairingCard}>
-            <Text style={styles.pairingTitle}>
+        <View style={ds.pairingBackdrop}>
+          <View style={ds.pairingCard}>
+            <Text style={ds.pairingTitle}>
               {pairingMode === "initiate" ? "Link Another Device" : "Link Existing Motebit"}
             </Text>
 
             {/* Sync URL input — shown before code generation (initiate) or submission (claim) */}
             {((pairingMode === "initiate" && (pairingCode == null || pairingCode === "")) || (pairingMode === "claim" && (pairingId == null || pairingId === ""))) && (
               <TextInput
-                style={styles.pairingSyncUrlInput}
+                style={ds.pairingSyncUrlInput}
                 value={pairingSyncUrlInput}
                 onChangeText={setPairingSyncUrlInput}
                 placeholder="Sync relay URL"
-                placeholderTextColor="#405060"
+                placeholderTextColor={themeColors.inputPlaceholder}
                 autoCapitalize="none"
                 autoCorrect={false}
                 keyboardType="url"
@@ -1565,16 +1610,16 @@ export function App(): React.ReactElement {
             )}
 
             {pairingMode === "initiate" && (pairingCode != null && pairingCode !== "") ? (
-              <Text style={styles.pairingCodeDisplay}>{pairingCode}</Text>
+              <Text style={ds.pairingCodeDisplay}>{pairingCode}</Text>
             ) : null}
 
             {pairingMode === "claim" && (pairingId == null || pairingId === "") && (
               <TextInput
-                style={styles.pairingInput}
+                style={ds.pairingInput}
                 value={pairingCodeInput}
                 onChangeText={(t) => setPairingCodeInput(t.toUpperCase().slice(0, 6))}
                 placeholder="Enter code"
-                placeholderTextColor="#405060"
+                placeholderTextColor={themeColors.inputPlaceholder}
                 maxLength={6}
                 autoCapitalize="characters"
                 autoCorrect={false}
@@ -1582,56 +1627,56 @@ export function App(): React.ReactElement {
             )}
 
             {pairingClaimName ? (
-              <View style={styles.pairingClaimInfo}>
-                <Text style={styles.pairingClaimText}>"{pairingClaimName}" wants to join</Text>
+              <View style={ds.pairingClaimInfo}>
+                <Text style={ds.pairingClaimText}>"{pairingClaimName}" wants to join</Text>
               </View>
             ) : null}
 
-            <Text style={styles.pairingStatusText}>{pairingStatus}</Text>
+            <Text style={ds.pairingStatusText}>{pairingStatus}</Text>
 
-            <View style={styles.pairingActions}>
+            <View style={ds.pairingActions}>
               {pairingMode === "initiate" && !pairingCode && (
                 <TouchableOpacity
-                  style={styles.pairingSubmitBtn}
+                  style={ds.pairingSubmitBtn}
                   onPress={() => void handleInitiateConnect()}
                   activeOpacity={0.7}
                 >
-                  <Text style={styles.pairingSubmitText}>Connect</Text>
+                  <Text style={ds.pairingSubmitText}>Connect</Text>
                 </TouchableOpacity>
               )}
               {pairingMode === "claim" && (pairingId == null || pairingId === "") && (
                 <TouchableOpacity
-                  style={styles.pairingSubmitBtn}
+                  style={ds.pairingSubmitBtn}
                   onPress={() => void handlePairingClaimSubmit()}
                   activeOpacity={0.7}
                 >
-                  <Text style={styles.pairingSubmitText}>Submit</Text>
+                  <Text style={ds.pairingSubmitText}>Submit</Text>
                 </TouchableOpacity>
               )}
               {pairingMode === "initiate" && pairingClaimName ? (
                 <>
                   <TouchableOpacity
-                    style={styles.pairingDenyBtn}
+                    style={ds.pairingDenyBtn}
                     onPress={() => void handlePairingDeny()}
                     activeOpacity={0.7}
                   >
-                    <Text style={styles.pairingDenyText}>Deny</Text>
+                    <Text style={ds.pairingDenyText}>Deny</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={styles.pairingApproveBtn}
+                    style={ds.pairingApproveBtn}
                     onPress={() => void handlePairingApprove()}
                     activeOpacity={0.7}
                   >
-                    <Text style={styles.pairingApproveText}>Approve</Text>
+                    <Text style={ds.pairingApproveText}>Approve</Text>
                   </TouchableOpacity>
                 </>
               ) : null}
               <TouchableOpacity
-                style={styles.pairingCancelBtn}
+                style={ds.pairingCancelBtn}
                 onPress={closePairingDialog}
                 activeOpacity={0.7}
               >
-                <Text style={styles.pairingCancelText}>Cancel</Text>
+                <Text style={ds.pairingCancelText}>Cancel</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1639,327 +1684,340 @@ export function App(): React.ReactElement {
       </Modal>
       <Toast message={toastMessage} onDismiss={dismissToast} />
     </KeyboardAvoidingView>
+    </ThemeContext.Provider>
   );
 }
 
 // === Styles ===
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#0a0a0a",
-  },
-  loadingText: {
-    color: "#607080",
-    fontSize: 14,
-    marginTop: 16,
-    textAlign: "center",
-  },
+function createDynamicStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: c.bgPrimary,
+    },
+    loadingText: {
+      color: c.textMuted,
+      fontSize: 14,
+      marginTop: 16,
+      textAlign: "center",
+    },
 
-  // GL View
-  glContainer: {
-    height: 240,
-    position: "relative",
-  },
-  glView: {
-    flex: 1,
-  },
-  stateOverlay: {
-    position: "absolute",
-    bottom: 8,
-    left: 12,
-    right: 12,
-  },
-  stateText: {
-    color: "#405060",
-    fontSize: 10,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-  },
-  topLeftButtons: {
-    position: "absolute",
-    top: Platform.OS === "ios" ? 50 : 12,
-    left: 12,
-    flexDirection: "row",
-    gap: 8,
-  },
-  overlayButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "rgba(15, 24, 32, 0.7)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  overlayButtonText: {
-    fontSize: 16,
-    color: "#607080",
-  },
-  gearButton: {
-    position: "absolute",
-    top: Platform.OS === "ios" ? 50 : 12,
-    right: 12,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "rgba(15, 24, 32, 0.7)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  gearText: {
-    fontSize: 18,
-    color: "#607080",
-  },
+    // GL View
+    glContainer: {
+      height: 240,
+      position: "relative",
+    },
+    glView: {
+      flex: 1,
+    },
+    stateOverlay: {
+      position: "absolute",
+      bottom: 8,
+      left: 12,
+      right: 12,
+    },
+    stateText: {
+      color: c.textGhost,
+      fontSize: 10,
+      fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    },
+    topLeftButtons: {
+      position: "absolute",
+      top: Platform.OS === "ios" ? 50 : 12,
+      left: 12,
+      flexDirection: "row",
+      gap: 8,
+    },
+    overlayButton: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: c.overlayButtonBg,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    overlayButtonText: {
+      fontSize: 16,
+      color: c.textMuted,
+    },
+    gearButton: {
+      position: "absolute",
+      top: Platform.OS === "ios" ? 50 : 12,
+      right: 12,
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: c.overlayButtonBg,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    gearText: {
+      fontSize: 18,
+      color: c.textMuted,
+    },
 
-  // Sync indicator
-  syncIndicator: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 4,
-    gap: 6,
-    backgroundColor: "rgba(15, 24, 32, 0.9)",
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#1a2030",
-  },
-  syncDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  syncDotIdle: {
-    backgroundColor: "#4ade80",
-  },
-  syncDotSyncing: {
-    backgroundColor: "#4080c0",
-  },
-  syncDotError: {
-    backgroundColor: "#c04040",
-  },
-  syncIndicatorText: {
-    color: "#506070",
-    fontSize: 11,
-  },
+    // Sync indicator
+    syncIndicator: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      paddingVertical: 4,
+      gap: 6,
+      backgroundColor: c.bgGlass,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.borderPrimary,
+    },
+    syncDot: {
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+    },
+    syncDotIdle: {
+      backgroundColor: c.statusSuccess,
+    },
+    syncDotSyncing: {
+      backgroundColor: c.accent,
+    },
+    syncDotError: {
+      backgroundColor: c.statusError,
+    },
+    syncIndicatorText: {
+      color: c.textMuted,
+      fontSize: 11,
+    },
 
-  // Goal indicator
-  goalIndicator: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 6,
-    gap: 8,
-    backgroundColor: "rgba(15, 24, 32, 0.9)",
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#1a2030",
-  },
-  goalIndicatorText: {
-    color: "#4080c0",
-    fontSize: 12,
-    fontWeight: "600",
-  },
+    // Goal indicator
+    goalIndicator: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      paddingVertical: 6,
+      gap: 8,
+      backgroundColor: c.bgGlass,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.borderPrimary,
+    },
+    goalIndicatorText: {
+      color: c.accent,
+      fontSize: 12,
+      fontWeight: "600",
+    },
 
-  // Chat
-  chatList: {
-    flex: 1,
-  },
-  chatContent: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  messageBubble: {
-    maxWidth: "80%",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 16,
-    marginVertical: 3,
-  },
-  userBubble: {
-    alignSelf: "flex-end",
-    backgroundColor: "#1a2a3a",
-  },
-  assistantBubble: {
-    alignSelf: "flex-start",
-    backgroundColor: "#0f1820",
-  },
-  systemBubble: {
-    alignSelf: "center",
-    backgroundColor: "transparent",
-    paddingVertical: 4,
-    paddingHorizontal: 12,
-    marginVertical: 2,
-  },
-  messageText: {
-    fontSize: 15,
-    lineHeight: 21,
-  },
-  userText: {
-    color: "#c0d0e0",
-  },
-  assistantText: {
-    color: "#8098b0",
-  },
-  systemText: {
-    color: "#405060",
-    fontSize: 12,
-    fontStyle: "italic",
-    textAlign: "center",
-  },
+    // Chat
+    chatList: {
+      flex: 1,
+    },
+    chatContent: {
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+    },
+    messageBubble: {
+      maxWidth: "80%",
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      borderRadius: 16,
+      marginVertical: 3,
+    },
+    userBubble: {
+      alignSelf: "flex-end",
+      backgroundColor: c.userBubbleBg,
+    },
+    assistantBubble: {
+      alignSelf: "flex-start",
+      backgroundColor: c.assistantBubbleBg,
+    },
+    systemBubble: {
+      alignSelf: "center",
+      backgroundColor: "transparent",
+      paddingVertical: 4,
+      paddingHorizontal: 12,
+      marginVertical: 2,
+    },
+    messageText: {
+      fontSize: 15,
+      lineHeight: 21,
+    },
+    userText: {
+      color: c.userBubbleText,
+    },
+    assistantText: {
+      color: c.assistantBubbleText,
+    },
+    systemText: {
+      color: c.systemText,
+      fontSize: 12,
+      fontStyle: "italic",
+      textAlign: "center",
+    },
 
-  // Input
-  inputBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    paddingBottom: Platform.OS === "ios" ? 28 : 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#1a2030",
-    backgroundColor: "#0a0a0a",
-  },
-  textInput: {
-    flex: 1,
-    height: 40,
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    backgroundColor: "#0f1820",
-    color: "#c0d0e0",
-    fontSize: 15,
-  },
-  sendButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#2a4060",
-    justifyContent: "center",
-    alignItems: "center",
-    marginLeft: 8,
-  },
-  sendButtonDisabled: {
-    opacity: 0.5,
-  },
-  sendButtonText: {
-    color: "#c0d0e0",
-    fontSize: 18,
-    fontWeight: "600",
-  },
-  micButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#1a2838",
-    justifyContent: "center",
-    alignItems: "center",
-    marginLeft: 8,
-  },
-  micButtonRecording: {
-    backgroundColor: "#4a2020",
-  },
-  micButtonText: {
-    color: "#c0d0e0",
-    fontSize: 16,
-  },
+    // Model indicator
+    modelIndicator: {
+      fontSize: 10,
+      fontWeight: "500",
+      color: c.textMuted,
+      textAlign: "center",
+      letterSpacing: 0.5,
+      paddingVertical: 2,
+    },
 
-  // Pairing
-  pairingBackdrop: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.85)",
-    justifyContent: "center",
-    alignItems: "center",
-    paddingHorizontal: 32,
-  },
-  pairingCard: {
-    backgroundColor: "#0f1820",
-    borderRadius: 20,
-    padding: 24,
-    width: "100%",
-    maxWidth: 320,
-    alignItems: "center",
-    gap: 14,
-  },
-  pairingTitle: {
-    color: "#c0d0e0",
-    fontSize: 17,
-    fontWeight: "600",
-  },
-  pairingCodeDisplay: {
-    color: "#4080c0",
-    fontSize: 28,
-    fontWeight: "700",
-    letterSpacing: 6,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-    paddingVertical: 8,
-  },
-  pairingInput: {
-    width: "100%",
-    backgroundColor: "#0a1018",
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    color: "#c0d0e0",
-    fontSize: 20,
-    letterSpacing: 6,
-    textAlign: "center",
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-  },
-  pairingSyncUrlInput: {
-    width: "100%",
-    backgroundColor: "#0a1018",
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    color: "#c0d0e0",
-    fontSize: 14,
-  },
-  pairingClaimInfo: {
-    backgroundColor: "rgba(64, 128, 192, 0.1)",
-    borderRadius: 8,
-    padding: 12,
-    width: "100%",
-  },
-  pairingClaimText: {
-    color: "#8098b0",
-    fontSize: 14,
-    textAlign: "center",
-  },
-  pairingStatusText: {
-    color: "#506070",
-    fontSize: 12,
-    textAlign: "center",
-  },
-  pairingActions: {
-    flexDirection: "row",
-    gap: 8,
-    width: "100%",
-  },
-  pairingSubmitBtn: {
-    flex: 1,
-    backgroundColor: "#2a4060",
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: "center",
-  },
-  pairingSubmitText: { color: "#c0d0e0", fontSize: 15, fontWeight: "600" },
-  pairingApproveBtn: {
-    flex: 1,
-    backgroundColor: "#2a4060",
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: "center",
-  },
-  pairingApproveText: { color: "#c0d0e0", fontSize: 15, fontWeight: "600" },
-  pairingDenyBtn: {
-    flex: 1,
-    backgroundColor: "#1a2030",
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: "center",
-  },
-  pairingDenyText: { color: "#607080", fontSize: 15, fontWeight: "600" },
-  pairingCancelBtn: {
-    flex: 1,
-    backgroundColor: "#1a2030",
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: "center",
-  },
-  pairingCancelText: { color: "#607080", fontSize: 15 },
-});
+    // Input
+    inputBar: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      paddingBottom: Platform.OS === "ios" ? 28 : 8,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: c.borderPrimary,
+      backgroundColor: c.bgPrimary,
+    },
+    textInput: {
+      flex: 1,
+      height: 40,
+      borderRadius: 20,
+      paddingHorizontal: 16,
+      backgroundColor: c.inputBg,
+      color: c.inputText,
+      fontSize: 15,
+    },
+    sendButton: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: c.buttonPrimaryBg,
+      justifyContent: "center",
+      alignItems: "center",
+      marginLeft: 8,
+    },
+    sendButtonDisabled: {
+      opacity: 0.5,
+    },
+    sendButtonText: {
+      color: c.buttonPrimaryText,
+      fontSize: 18,
+      fontWeight: "600",
+    },
+    micButton: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: c.borderLight,
+      justifyContent: "center",
+      alignItems: "center",
+      marginLeft: 8,
+    },
+    micButtonRecording: {
+      backgroundColor: c.errorBannerBg,
+    },
+    micButtonText: {
+      color: c.textPrimary,
+      fontSize: 16,
+    },
+
+    // Pairing
+    pairingBackdrop: {
+      flex: 1,
+      backgroundColor: c.overlayBg,
+      justifyContent: "center",
+      alignItems: "center",
+      paddingHorizontal: 32,
+    },
+    pairingCard: {
+      backgroundColor: c.bgSecondary,
+      borderRadius: 20,
+      padding: 24,
+      width: "100%",
+      maxWidth: 320,
+      alignItems: "center",
+      gap: 14,
+    },
+    pairingTitle: {
+      color: c.textPrimary,
+      fontSize: 17,
+      fontWeight: "600",
+    },
+    pairingCodeDisplay: {
+      color: c.accent,
+      fontSize: 28,
+      fontWeight: "700",
+      letterSpacing: 6,
+      fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+      paddingVertical: 8,
+    },
+    pairingInput: {
+      width: "100%",
+      backgroundColor: c.bgTertiary,
+      borderRadius: 10,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      color: c.textPrimary,
+      fontSize: 20,
+      letterSpacing: 6,
+      textAlign: "center",
+      fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    },
+    pairingSyncUrlInput: {
+      width: "100%",
+      backgroundColor: c.bgTertiary,
+      borderRadius: 10,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      color: c.textPrimary,
+      fontSize: 14,
+    },
+    pairingClaimInfo: {
+      backgroundColor: c.accentSoft,
+      borderRadius: 8,
+      padding: 12,
+      width: "100%",
+    },
+    pairingClaimText: {
+      color: c.textSecondary,
+      fontSize: 14,
+      textAlign: "center",
+    },
+    pairingStatusText: {
+      color: c.textMuted,
+      fontSize: 12,
+      textAlign: "center",
+    },
+    pairingActions: {
+      flexDirection: "row",
+      gap: 8,
+      width: "100%",
+    },
+    pairingSubmitBtn: {
+      flex: 1,
+      backgroundColor: c.buttonPrimaryBg,
+      borderRadius: 10,
+      paddingVertical: 12,
+      alignItems: "center",
+    },
+    pairingSubmitText: { color: c.buttonPrimaryText, fontSize: 15, fontWeight: "600" },
+    pairingApproveBtn: {
+      flex: 1,
+      backgroundColor: c.buttonPrimaryBg,
+      borderRadius: 10,
+      paddingVertical: 12,
+      alignItems: "center",
+    },
+    pairingApproveText: { color: c.buttonPrimaryText, fontSize: 15, fontWeight: "600" },
+    pairingDenyBtn: {
+      flex: 1,
+      backgroundColor: c.buttonSecondaryBg,
+      borderRadius: 10,
+      paddingVertical: 12,
+      alignItems: "center",
+    },
+    pairingDenyText: { color: c.buttonSecondaryText, fontSize: 15, fontWeight: "600" },
+    pairingCancelBtn: {
+      flex: 1,
+      backgroundColor: c.buttonSecondaryBg,
+      borderRadius: 10,
+      paddingVertical: 12,
+      alignItems: "center",
+    },
+    pairingCancelText: { color: c.buttonSecondaryText, fontSize: 15 },
+  });
+}

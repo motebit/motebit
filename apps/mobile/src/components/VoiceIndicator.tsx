@@ -9,6 +9,7 @@
 
 import React, { useEffect, useRef, useMemo, useState } from "react";
 import { View, Animated, StyleSheet } from "react-native";
+import { useTheme, type ThemeColors } from "../theme";
 
 type MicState = "off" | "ambient" | "voice" | "transcribing" | "speaking";
 
@@ -32,6 +33,8 @@ const STATE_INTENSITY: Record<MicState, number> = {
 };
 
 export function VoiceIndicator({ micState, audioLevel, glowColor }: VoiceIndicatorProps): React.ReactElement | null {
+  const colors = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const barAnims = useRef<Animated.Value[]>(
     Array.from({ length: BAR_COUNT }, () => new Animated.Value(0)),
   ).current;
@@ -139,20 +142,22 @@ export function VoiceIndicator({ micState, audioLevel, glowColor }: VoiceIndicat
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    height: 28,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 2,
-    paddingHorizontal: 16,
-    backgroundColor: "#0a0a0a",
-    overflow: "hidden",
-  },
-  bar: {
-    flex: 1,
-    borderRadius: 1,
-    maxWidth: 6,
-  },
-});
+function createStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      height: 28,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 2,
+      paddingHorizontal: 16,
+      backgroundColor: c.bgPrimary,
+      overflow: "hidden",
+    },
+    bar: {
+      flex: 1,
+      borderRadius: 1,
+      maxWidth: 6,
+    },
+  });
+}

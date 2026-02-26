@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Modal,
   View,
@@ -13,6 +13,7 @@ import {
 import { SensitivityLevel } from "@motebit/sdk";
 import type { MobileApp } from "../mobile-app";
 import type { MemoryNode } from "../mobile-app";
+import { useTheme, type ThemeColors } from "../theme";
 
 function formatTimeAgo(ts: number): string {
   const diff = Date.now() - ts;
@@ -29,6 +30,8 @@ interface MemoryPanelProps {
 }
 
 export function MemoryPanel({ visible, app, onClose }: MemoryPanelProps): React.ReactElement {
+  const colors = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [memories, setMemories] = useState<MemoryNode[]>([]);
   const [search, setSearch] = useState("");
 
@@ -83,7 +86,7 @@ export function MemoryPanel({ visible, app, onClose }: MemoryPanelProps): React.
             value={search}
             onChangeText={setSearch}
             placeholder="Search memories..."
-            placeholderTextColor="#405060"
+            placeholderTextColor={colors.inputPlaceholder}
             autoCorrect={false}
           />
         </View>
@@ -136,135 +139,137 @@ export function MemoryPanel({ visible, app, onClose }: MemoryPanelProps): React.
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#0a0a0a",
-  },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: Platform.OS === "ios" ? 56 : 16,
-    paddingBottom: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#1a2030",
-  },
-  headerLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  headerTitle: {
-    color: "#c0d0e0",
-    fontSize: 17,
-    fontWeight: "600",
-  },
-  countBadge: {
-    backgroundColor: "#1a2838",
-    borderRadius: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-  },
-  countText: {
-    color: "#607080",
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  closeBtn: {
-    color: "#4080c0",
-    fontSize: 16,
-    fontWeight: "600",
-  },
+function createStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: c.bgPrimary,
+    },
+    header: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      paddingHorizontal: 16,
+      paddingTop: Platform.OS === "ios" ? 56 : 16,
+      paddingBottom: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.borderPrimary,
+    },
+    headerLeft: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+    },
+    headerTitle: {
+      color: c.textPrimary,
+      fontSize: 17,
+      fontWeight: "600",
+    },
+    countBadge: {
+      backgroundColor: c.borderLight,
+      borderRadius: 10,
+      paddingHorizontal: 8,
+      paddingVertical: 2,
+    },
+    countText: {
+      color: c.textMuted,
+      fontSize: 12,
+      fontWeight: "600",
+    },
+    closeBtn: {
+      color: c.accent,
+      fontSize: 16,
+      fontWeight: "600",
+    },
 
-  // Search
-  searchBar: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-  },
-  searchInput: {
-    backgroundColor: "#0f1820",
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    color: "#c0d0e0",
-    fontSize: 15,
-  },
+    // Search
+    searchBar: {
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+    },
+    searchInput: {
+      backgroundColor: c.inputBg,
+      borderRadius: 10,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      color: c.inputText,
+      fontSize: 15,
+    },
 
-  // List
-  list: {
-    flex: 1,
-  },
-  listContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 40,
-  },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  emptyText: {
-    color: "#506070",
-    fontSize: 14,
-    fontStyle: "italic",
-  },
+    // List
+    list: {
+      flex: 1,
+    },
+    listContent: {
+      paddingHorizontal: 16,
+      paddingBottom: 40,
+    },
+    emptyContainer: {
+      flex: 1,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    emptyText: {
+      color: c.textMuted,
+      fontSize: 14,
+      fontStyle: "italic",
+    },
 
-  // Memory item
-  memoryItem: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    backgroundColor: "#0f1820",
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: "#1a2030",
-  },
-  memoryContent: {
-    flex: 1,
-    marginRight: 10,
-  },
-  memoryText: {
-    color: "#c0d0e0",
-    fontSize: 14,
-    lineHeight: 20,
-    marginBottom: 6,
-  },
-  metaRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-    alignItems: "center",
-  },
-  sensitivityBadge: {
-    backgroundColor: "#2a1828",
-    borderRadius: 6,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-  },
-  sensitivityText: {
-    color: "#c07080",
-    fontSize: 10,
-    fontWeight: "600",
-    textTransform: "uppercase",
-  },
-  metaText: {
-    color: "#506070",
-    fontSize: 11,
-  },
-  deleteBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: "#2a1518",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  deleteText: {
-    color: "#d04050",
-    fontSize: 12,
-    fontWeight: "700",
-  },
-});
+    // Memory item
+    memoryItem: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+      backgroundColor: c.bgSecondary,
+      borderRadius: 10,
+      padding: 12,
+      marginBottom: 8,
+      borderWidth: 1,
+      borderColor: c.borderPrimary,
+    },
+    memoryContent: {
+      flex: 1,
+      marginRight: 10,
+    },
+    memoryText: {
+      color: c.textPrimary,
+      fontSize: 14,
+      lineHeight: 20,
+      marginBottom: 6,
+    },
+    metaRow: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 8,
+      alignItems: "center",
+    },
+    sensitivityBadge: {
+      backgroundColor: `${c.statusWarning}15`,
+      borderRadius: 6,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+    },
+    sensitivityText: {
+      color: c.statusWarning,
+      fontSize: 10,
+      fontWeight: "600",
+      textTransform: "uppercase",
+    },
+    metaText: {
+      color: c.textMuted,
+      fontSize: 11,
+    },
+    deleteBtn: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      backgroundColor: `${c.statusError}1a`,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    deleteText: {
+      color: c.statusError,
+      fontSize: 12,
+      fontWeight: "700",
+    },
+  });
+}

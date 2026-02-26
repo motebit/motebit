@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Modal,
   View,
@@ -18,8 +18,39 @@ import * as SecureStore from "expo-secure-store";
 import * as Sharing from "expo-sharing";
 import * as FileSystem from "expo-file-system";
 import type { MobileApp, MobileSettings, MobileAIConfig } from "../mobile-app";
+import type { InteriorColor } from "@motebit/runtime";
 import { COLOR_PRESETS, APPROVAL_PRESET_CONFIGS } from "../mobile-app";
+import { useTheme, type ThemeColors } from "../theme";
 import type { Goal, GoalMode } from "../adapters/expo-sqlite";
+
+// === Pure Color Math (copied from desktop color-picker.ts) ===
+
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  h = ((h % 360) + 360) % 360;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (h < 60)       { r = c; g = x; }
+  else if (h < 120) { r = x; g = c; }
+  else if (h < 180) { g = c; b = x; }
+  else if (h < 240) { g = x; b = c; }
+  else if (h < 300) { r = x; b = c; }
+  else              { r = c; b = x; }
+  return [r + m, g + m, b + m];
+}
+
+export function deriveInteriorColor(hue: number, saturation: number): InteriorColor {
+  const tintL = 0.92 - saturation * 0.12;
+  const tintS = saturation * 0.9;
+  const tint = hslToRgb(hue, tintS, tintL);
+
+  const glowL = 0.72 - saturation * 0.17;
+  const glowS = saturation * 0.8 + 0.2;
+  const glow = hslToRgb(hue, glowS, glowL);
+
+  return { tint, glow };
+}
 
 type Tab = "appearance" | "intelligence" | "governance" | "goals" | "sync" | "tools" | "identity";
 
@@ -54,16 +85,15 @@ function formatTimeAgo(ts: number): string {
   return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
-// Hex colors for preview circles
+// Hex colors for preview circles (same 7 as desktop, moonlight first)
 const PRESET_COLORS: Record<string, string> = {
-  borosilicate: "#e0e8ff",
+  moonlight:    "#f0f0ff",
   amber:        "#ffda99",
   rose:         "#ffd0e0",
   violet:       "#d0b8ff",
   cyan:         "#b8f0ff",
   ember:        "#ffb8a0",
   sage:         "#c0f0c8",
-  moonlight:    "#f0f0ff",
 };
 
 interface SettingsModalProps {
@@ -82,6 +112,9 @@ interface SettingsModalProps {
   onLinkDevice?: () => void;
   onSyncNow?: () => void;
   onDisconnectSync?: () => void;
+  customHue?: number;
+  customSaturation?: number;
+  onCustomColorChange?: (hue: number, saturation: number) => void;
 }
 
 export function SettingsModal({
@@ -100,7 +133,10 @@ export function SettingsModal({
   onLinkDevice,
   onSyncNow,
   onDisconnectSync,
+  onCustomColorChange,
 }: SettingsModalProps): React.ReactElement {
+  const colors = useTheme();
+  const styles = useMemo(() => createSettingsStyles(colors), [colors]);
   const [tab, setTab] = useState<Tab>("appearance");
   const [draft, setDraft] = useState<MobileSettings>(settings);
   const [apiKey, setApiKey] = useState("");
@@ -198,7 +234,12 @@ export function SettingsModal({
               onSelect={(preset) => {
                 updateDraft({ colorPreset: preset });
                 // Live preview
-                app.setInteriorColor(preset);
+                if (preset === "custom") {
+                  const color = deriveInteriorColor(draft.customHue, draft.customSaturation);
+                  app.setInteriorColorDirect(color);
+                } else {
+                  app.setInteriorColor(preset);
+                }
               }}
               theme={draft.theme}
               onThemeChange={(t) => {
@@ -210,6 +251,14 @@ export function SettingsModal({
                 } else {
                   app.setLightEnvironment();
                 }
+              }}
+              customHue={draft.customHue}
+              customSaturation={draft.customSaturation}
+              onCustomColorChange={(hue, sat) => {
+                updateDraft({ customHue: hue, customSaturation: sat });
+                const color = deriveInteriorColor(hue, sat);
+                app.setInteriorColorDirect(color);
+                onCustomColorChange?.(hue, sat);
               }}
             />
           )}
@@ -308,13 +357,42 @@ const THEME_OPTIONS: { key: ThemePreference; label: string }[] = [
   { key: "system", label: "System" },
 ];
 
-function AppearanceTab({ selected, onSelect, theme, onThemeChange }: {
+function AppearanceTab({ selected, onSelect, theme, onThemeChange, customHue, customSaturation, onCustomColorChange }: {
   selected: string;
   onSelect: (p: string) => void;
   theme: ThemePreference;
   onThemeChange: (t: ThemePreference) => void;
+  customHue: number;
+  customSaturation: number;
+  onCustomColorChange: (hue: number, saturation: number) => void;
 }) {
+  const colors = useTheme();
+  const styles = useMemo(() => createSettingsStyles(colors), [colors]);
   const presets = Object.keys(COLOR_PRESETS);
+
+  // Preview color for custom swatch and live circle
+  const customPreview = React.useMemo(() => {
+    const glow = deriveInteriorColor(customHue, customSaturation).glow;
+    const r = Math.round(glow[0] * 255);
+    const g = Math.round(glow[1] * 255);
+    const b = Math.round(glow[2] * 255);
+    return `rgb(${r},${g},${b})`;
+  }, [customHue, customSaturation]);
+
+  // Slider touch handler — tracks horizontal position on a View
+  const handleSliderTouch = React.useCallback((
+    e: { nativeEvent: { locationX: number } },
+    layoutWidth: number,
+    onUpdate: (fraction: number) => void,
+  ) => {
+    if (layoutWidth <= 0) return;
+    const fraction = Math.max(0, Math.min(1, e.nativeEvent.locationX / layoutWidth));
+    onUpdate(fraction);
+  }, []);
+
+  const [hueWidth, setHueWidth] = React.useState(0);
+  const [satWidth, setSatWidth] = React.useState(0);
+
   return (
     <View>
       <Text style={styles.sectionTitle}>Theme</Text>
@@ -349,8 +427,93 @@ function AppearanceTab({ selected, onSelect, theme, onThemeChange }: {
             {selected === name && <View style={styles.presetCheck} />}
           </TouchableOpacity>
         ))}
+        {/* Custom swatch */}
+        <TouchableOpacity
+          style={[
+            styles.presetCircle,
+            { backgroundColor: customPreview },
+            selected === "custom" && styles.presetSelected,
+          ]}
+          onPress={() => onSelect("custom")}
+          activeOpacity={0.7}
+        >
+          {selected === "custom" && <View style={styles.presetCheck} />}
+        </TouchableOpacity>
       </View>
       <Text style={styles.presetLabel}>{selected}</Text>
+
+      {/* Custom color sliders */}
+      {selected === "custom" && (
+        <View style={styles.customPickerContainer}>
+          {/* Live preview circle */}
+          <View style={[styles.customPreviewCircle, { backgroundColor: customPreview }]} />
+
+          {/* Hue slider */}
+          <Text style={styles.customSliderLabel}>Hue</Text>
+          <View
+            style={styles.customSliderTrack}
+            onLayout={(e) => setHueWidth(e.nativeEvent.layout.width)}
+            onStartShouldSetResponder={() => true}
+            onMoveShouldSetResponder={() => true}
+            onResponderGrant={(e) => handleSliderTouch(e, hueWidth, (f) => onCustomColorChange(Math.round(f * 360), customSaturation))}
+            onResponderMove={(e) => handleSliderTouch(e, hueWidth, (f) => onCustomColorChange(Math.round(f * 360), customSaturation))}
+          >
+            {/* Hue gradient background — multiple color stops */}
+            <View style={[StyleSheet.absoluteFill, {
+              borderRadius: 6,
+              flexDirection: "row",
+              overflow: "hidden",
+            }]}>
+              {[0, 60, 120, 180, 240, 300, 360].map((h, i, arr) => {
+                if (i === arr.length - 1) return null;
+                return (
+                  <View
+                    key={h}
+                    style={{
+                      flex: 1,
+                      backgroundColor: `hsl(${h + 30}, 85%, 60%)`,
+                    }}
+                  />
+                );
+              })}
+            </View>
+            {/* Thumb */}
+            <View style={[styles.customSliderThumb, {
+              left: `${(customHue / 360) * 100}%`,
+              backgroundColor: `hsl(${customHue}, 85%, 60%)`,
+            }]} />
+          </View>
+
+          {/* Saturation slider */}
+          <Text style={styles.customSliderLabel}>Saturation</Text>
+          <View
+            style={[styles.customSliderTrack, {
+              backgroundColor: `hsl(${customHue}, 0%, 90%)`,
+            }]}
+            onLayout={(e) => setSatWidth(e.nativeEvent.layout.width)}
+            onStartShouldSetResponder={() => true}
+            onMoveShouldSetResponder={() => true}
+            onResponderGrant={(e) => handleSliderTouch(e, satWidth, (f) => onCustomColorChange(customHue, f))}
+            onResponderMove={(e) => handleSliderTouch(e, satWidth, (f) => onCustomColorChange(customHue, f))}
+          >
+            {/* Saturation gradient overlay */}
+            <View style={[StyleSheet.absoluteFill, {
+              borderRadius: 6,
+              flexDirection: "row",
+              overflow: "hidden",
+            }]}>
+              <View style={{ flex: 1, backgroundColor: `hsl(${customHue}, 0%, 90%)` }} />
+              <View style={{ flex: 1, backgroundColor: `hsl(${customHue}, 50%, 75%)` }} />
+              <View style={{ flex: 1, backgroundColor: `hsl(${customHue}, 100%, 60%)` }} />
+            </View>
+            {/* Thumb */}
+            <View style={[styles.customSliderThumb, {
+              left: `${customSaturation * 100}%`,
+              backgroundColor: `hsl(${customHue}, ${Math.round(customSaturation * 100)}%, 70%)`,
+            }]} />
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -409,6 +572,8 @@ function IntelligenceTab({
   onChangeOpenaiKey: (k: string) => void;
   onChangeNeuralVadEnabled: (v: boolean) => void;
 }) {
+  const colors = useTheme();
+  const styles = useMemo(() => createSettingsStyles(colors), [colors]);
   return (
     <View>
       <Text style={styles.sectionTitle}>Provider</Text>
@@ -442,7 +607,7 @@ function IntelligenceTab({
         value={model}
         onChangeText={onChangeModel}
         placeholder="Model name"
-        placeholderTextColor="#405060"
+        placeholderTextColor={colors.inputPlaceholder}
       />
 
       {(provider === "ollama" || provider === "hybrid") && (
@@ -453,7 +618,7 @@ function IntelligenceTab({
             value={ollamaEndpoint}
             onChangeText={onChangeOllamaEndpoint}
             placeholder="http://localhost:11434"
-            placeholderTextColor="#405060"
+            placeholderTextColor={colors.inputPlaceholder}
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="url"
@@ -469,7 +634,7 @@ function IntelligenceTab({
             value={apiKey}
             onChangeText={onChangeApiKey}
             placeholder="sk-ant-..."
-            placeholderTextColor="#405060"
+            placeholderTextColor={colors.inputPlaceholder}
             secureTextEntry
             autoCapitalize="none"
             autoCorrect={false}
@@ -483,8 +648,8 @@ function IntelligenceTab({
         <Switch
           value={voiceEnabled}
           onValueChange={onChangeVoiceEnabled}
-          trackColor={{ false: "#1a2030", true: "#2a4060" }}
-          thumbColor={voiceEnabled ? "#c0d0e0" : "#607080"}
+          trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
+          thumbColor={voiceEnabled ? colors.textPrimary : colors.textMuted}
         />
       </View>
       <Text style={styles.voiceHint}>Enable mic button for voice input and spoken responses</Text>
@@ -496,8 +661,8 @@ function IntelligenceTab({
             <Switch
               value={voiceResponseEnabled}
               onValueChange={onChangeVoiceResponseEnabled}
-              trackColor={{ false: "#1a2030", true: "#2a4060" }}
-              thumbColor={voiceResponseEnabled ? "#c0d0e0" : "#607080"}
+              trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
+              thumbColor={voiceResponseEnabled ? colors.textPrimary : colors.textMuted}
             />
           </View>
           <Text style={styles.voiceHint}>Read assistant replies aloud via TTS</Text>
@@ -507,8 +672,8 @@ function IntelligenceTab({
             <Switch
               value={voiceAutoSend}
               onValueChange={onChangeVoiceAutoSend}
-              trackColor={{ false: "#1a2030", true: "#2a4060" }}
-              thumbColor={voiceAutoSend ? "#c0d0e0" : "#607080"}
+              trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
+              thumbColor={voiceAutoSend ? colors.textPrimary : colors.textMuted}
             />
           </View>
           <Text style={styles.voiceHint}>Send voice transcript immediately, or drop into input for review</Text>
@@ -520,8 +685,8 @@ function IntelligenceTab({
                 <Switch
                   value={neuralVadEnabled}
                   onValueChange={onChangeNeuralVadEnabled}
-                  trackColor={{ false: "#1a2030", true: "#2a4060" }}
-                  thumbColor={neuralVadEnabled ? "#c0d0e0" : "#607080"}
+                  trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
+                  thumbColor={neuralVadEnabled ? colors.textPrimary : colors.textMuted}
                 />
               </View>
               <Text style={styles.voiceHint}>
@@ -555,7 +720,7 @@ function IntelligenceTab({
         value={openaiKey}
         onChangeText={onChangeOpenaiKey}
         placeholder="sk-..."
-        placeholderTextColor="#405060"
+        placeholderTextColor={colors.inputPlaceholder}
         secureTextEntry
         autoCapitalize="none"
         autoCorrect={false}
@@ -578,6 +743,8 @@ function GovernanceTab({
   onUpdate: (patch: Partial<MobileSettings>) => void;
   onRequestPin: (mode: "setup" | "verify" | "reset") => void;
 }) {
+  const colors = useTheme();
+  const styles = useMemo(() => createSettingsStyles(colors), [colors]);
   return (
     <View>
       <Text style={styles.sectionTitle}>Operator Mode</Text>
@@ -620,7 +787,7 @@ function GovernanceTab({
             if (!isNaN(n) && n >= 0 && n <= 1) onUpdate({ persistenceThreshold: n });
           }}
           keyboardType="decimal-pad"
-          placeholderTextColor="#405060"
+          placeholderTextColor={colors.inputPlaceholder}
         />
       </View>
 
@@ -629,8 +796,8 @@ function GovernanceTab({
         <Switch
           value={draft.rejectSecrets}
           onValueChange={(v) => onUpdate({ rejectSecrets: v })}
-          trackColor={{ false: "#1a2030", true: "#2a4060" }}
-          thumbColor={draft.rejectSecrets ? "#c0d0e0" : "#607080"}
+          trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
+          thumbColor={draft.rejectSecrets ? colors.textPrimary : colors.textMuted}
         />
       </View>
 
@@ -644,7 +811,7 @@ function GovernanceTab({
             if (!isNaN(n) && n > 0) onUpdate({ budgetMaxCalls: n });
           }}
           keyboardType="number-pad"
-          placeholderTextColor="#405060"
+          placeholderTextColor={colors.inputPlaceholder}
         />
       </View>
     </View>
@@ -666,6 +833,8 @@ function SyncTab({
   onSyncNow?: () => void;
   onDisconnect?: () => void;
 }) {
+  const colors = useTheme();
+  const styles = useMemo(() => createSettingsStyles(colors), [colors]);
   const [syncUrl, setSyncUrl] = useState<string | null>(null);
 
   useEffect(() => {
@@ -677,10 +846,10 @@ function SyncTab({
     : syncStatus === "error" ? "Error"
     : "Not connected";
 
-  const statusColor = syncStatus === "idle" ? "#4ade80"
-    : syncStatus === "syncing" ? "#4080c0"
-    : syncStatus === "error" ? "#c04040"
-    : "#506070";
+  const statusColor = syncStatus === "idle" ? colors.statusSuccess
+    : syncStatus === "syncing" ? colors.accent
+    : syncStatus === "error" ? colors.statusError
+    : colors.textMuted;
 
   return (
     <View>
@@ -755,6 +924,8 @@ function IdentityTab({
   onExport: () => void;
   onLinkDevice?: () => void;
 }) {
+  const colors = useTheme();
+  const styles = useMemo(() => createSettingsStyles(colors), [colors]);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
   const copyToClipboard = (field: string, value: string) => {
@@ -815,6 +986,8 @@ function IdentityTab({
 // === Goals Tab ===
 
 function GoalsTab({ app }: { app: MobileApp }) {
+  const colors = useTheme();
+  const styles = useMemo(() => createSettingsStyles(colors), [colors]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [newPrompt, setNewPrompt] = useState("");
   const [newIntervalIdx, setNewIntervalIdx] = useState(0);
@@ -906,8 +1079,8 @@ function GoalsTab({ app }: { app: MobileApp }) {
               <Switch
                 value={goal.enabled}
                 onValueChange={(v) => handleToggle(goal.goal_id, v)}
-                trackColor={{ false: "#1a2030", true: "#2a4060" }}
-                thumbColor={goal.enabled ? "#c0d0e0" : "#607080"}
+                trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
+                thumbColor={goal.enabled ? colors.textPrimary : colors.textMuted}
               />
               <TouchableOpacity
                 onPress={() => handleRemove(goal.goal_id)}
@@ -927,7 +1100,7 @@ function GoalsTab({ app }: { app: MobileApp }) {
         value={newPrompt}
         onChangeText={setNewPrompt}
         placeholder="What should the goal do?"
-        placeholderTextColor="#405060"
+        placeholderTextColor={colors.inputPlaceholder}
         multiline
         numberOfLines={3}
       />
@@ -993,6 +1166,8 @@ function ToolsTab({
   onRemove?: (name: string) => Promise<void>;
   onToggleTrust?: (name: string, trusted: boolean) => Promise<void>;
 }) {
+  const colors = useTheme();
+  const styles = useMemo(() => createSettingsStyles(colors), [colors]);
   const [newName, setNewName] = useState("");
   const [newUrl, setNewUrl] = useState("");
   const [newTrusted, setNewTrusted] = useState(false);
@@ -1053,7 +1228,7 @@ function ToolsTab({
               <View style={styles.toolsServerHeader}>
                 <View style={[
                   styles.toolsStatusDot,
-                  { backgroundColor: server.connected ? "#4ade80" : "#c04040" },
+                  { backgroundColor: server.connected ? colors.statusSuccess : colors.statusError },
                 ]} />
                 <Text style={styles.toolsServerName}>{server.name}</Text>
                 {server.toolCount > 0 && (
@@ -1073,8 +1248,8 @@ function ToolsTab({
                 <Switch
                   value={server.trusted}
                   onValueChange={(v) => void onToggleTrust?.(server.name, v)}
-                  trackColor={{ false: "#1a2030", true: "#2a4060" }}
-                  thumbColor={server.trusted ? "#c0d0e0" : "#607080"}
+                  trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
+                  thumbColor={server.trusted ? colors.textPrimary : colors.textMuted}
                 />
               </View>
             </View>
@@ -1095,7 +1270,7 @@ function ToolsTab({
         value={newName}
         onChangeText={setNewName}
         placeholder="Server name"
-        placeholderTextColor="#405060"
+        placeholderTextColor={colors.inputPlaceholder}
         autoCapitalize="none"
         autoCorrect={false}
       />
@@ -1105,7 +1280,7 @@ function ToolsTab({
         value={newUrl}
         onChangeText={setNewUrl}
         placeholder="https://example.com/mcp"
-        placeholderTextColor="#405060"
+        placeholderTextColor={colors.inputPlaceholder}
         autoCapitalize="none"
         autoCorrect={false}
         keyboardType="url"
@@ -1115,8 +1290,8 @@ function ToolsTab({
         <Switch
           value={newTrusted}
           onValueChange={setNewTrusted}
-          trackColor={{ false: "#1a2030", true: "#2a4060" }}
-          thumbColor={newTrusted ? "#c0d0e0" : "#607080"}
+          trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
+          thumbColor={newTrusted ? colors.textPrimary : colors.textMuted}
         />
       </View>
 
@@ -1139,514 +1314,200 @@ function ToolsTab({
 
 // === Styles ===
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#0a0a0a",
-  },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: Platform.OS === "ios" ? 56 : 16,
-    paddingBottom: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#1a2030",
-  },
-  cancelBtn: { color: "#607080", fontSize: 16 },
-  headerTitle: { color: "#c0d0e0", fontSize: 17, fontWeight: "600" },
-  saveBtn: { color: "#4080c0", fontSize: 16, fontWeight: "600" },
+function createSettingsStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: c.bgPrimary },
+    header: {
+      flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+      paddingHorizontal: 16, paddingTop: Platform.OS === "ios" ? 56 : 16,
+      paddingBottom: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.borderPrimary,
+    },
+    cancelBtn: { color: c.textMuted, fontSize: 16 },
+    headerTitle: { color: c.textPrimary, fontSize: 17, fontWeight: "600" },
+    saveBtn: { color: c.accent, fontSize: 16, fontWeight: "600" },
 
-  tabBar: {
-    flexDirection: "row",
-    paddingHorizontal: 12,
-    paddingTop: 12,
-    gap: 4,
-  },
-  tab: {
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: 8,
-    alignItems: "center",
-  },
-  tabActive: {
-    backgroundColor: "#1a2030",
-  },
-  tabText: {
-    color: "#506070",
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  tabTextActive: {
-    color: "#c0d0e0",
-  },
+    tabBar: { flexDirection: "row", paddingHorizontal: 12, paddingTop: 12, gap: 4 },
+    tab: { flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: "center" },
+    tabActive: { backgroundColor: c.buttonSecondaryBg },
+    tabText: { color: c.textMuted, fontSize: 12, fontWeight: "600" },
+    tabTextActive: { color: c.textPrimary },
 
-  body: { flex: 1 },
-  bodyContent: { padding: 20 },
+    body: { flex: 1 },
+    bodyContent: { padding: 20 },
 
-  sectionTitle: {
-    color: "#607080",
-    fontSize: 12,
-    fontWeight: "600",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginTop: 20,
-    marginBottom: 10,
-  },
+    sectionTitle: {
+      color: c.textMuted, fontSize: 12, fontWeight: "600", textTransform: "uppercase",
+      letterSpacing: 0.5, marginTop: 20, marginBottom: 10,
+    },
 
-  // Theme toggle
-  themeToggleGroup: {
-    flexDirection: "row",
-    gap: 8,
-    marginBottom: 20,
-  },
-  themeOption: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 8,
-    backgroundColor: "#0a1018",
-    alignItems: "center",
-  },
-  themeOptionSelected: {
-    backgroundColor: "#1a2838",
-    borderWidth: 1,
-    borderColor: "#2a4060",
-  },
-  themeOptionText: {
-    color: "#506070",
-    fontSize: 13,
-    fontWeight: "500",
-  },
-  themeOptionTextSelected: {
-    color: "#a0b8d0",
-  },
+    // Theme toggle
+    themeToggleGroup: { flexDirection: "row", gap: 8, marginBottom: 20 },
+    themeOption: {
+      flex: 1, paddingVertical: 10, borderRadius: 8, backgroundColor: c.bgTertiary, alignItems: "center",
+    },
+    themeOptionSelected: { backgroundColor: c.borderLight, borderWidth: 1, borderColor: c.accentSoft },
+    themeOptionText: { color: c.textMuted, fontSize: 13, fontWeight: "500" },
+    themeOptionTextSelected: { color: c.textSecondary },
 
-  // Appearance
-  presetGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 14,
-    justifyContent: "center",
-  },
-  presetCircle: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    borderWidth: 2,
-    borderColor: "transparent",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  presetSelected: {
-    borderColor: "#4080c0",
-  },
-  presetCheck: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: "#4080c0",
-  },
-  presetLabel: {
-    color: "#607080",
-    fontSize: 14,
-    textAlign: "center",
-    marginTop: 12,
-    textTransform: "capitalize",
-  },
+    // Appearance
+    presetGrid: { flexDirection: "row", flexWrap: "wrap", gap: 14, justifyContent: "center" },
+    presetCircle: {
+      width: 52, height: 52, borderRadius: 26, borderWidth: 2,
+      borderColor: "transparent", justifyContent: "center", alignItems: "center",
+    },
+    presetSelected: { borderColor: c.accent },
+    presetCheck: { width: 14, height: 14, borderRadius: 7, backgroundColor: c.accent },
+    presetLabel: { color: c.textMuted, fontSize: 14, textAlign: "center", marginTop: 12, textTransform: "capitalize" },
 
-  // Radio
-  radioGroup: { gap: 8 },
-  radioItem: {
-    backgroundColor: "#0f1820",
-    borderRadius: 10,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: "#1a2030",
-  },
-  radioActive: {
-    borderColor: "#4080c0",
-    backgroundColor: "#0f1a28",
-  },
-  radioText: { color: "#8098b0", fontSize: 15, fontWeight: "600" },
-  radioTextActive: { color: "#c0d0e0" },
-  radioDesc: { color: "#506070", fontSize: 12, marginTop: 2 },
-  voiceHint: { color: "#405060", fontSize: 11, marginTop: 4, marginBottom: 4 },
-  voiceGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-  },
-  voiceChip: {
-    backgroundColor: "#0f1820",
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: "#1a2030",
-  },
-  voiceChipActive: {
-    borderColor: "#4080c0",
-    backgroundColor: "#0f1a28",
-  },
-  voiceChipText: {
-    color: "#607080",
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  voiceChipTextActive: {
-    color: "#c0d0e0",
-  },
+    // Custom color picker
+    customPickerContainer: { marginTop: 16, alignItems: "center", gap: 12 },
+    customPreviewCircle: { width: 48, height: 48, borderRadius: 24, borderWidth: 2, borderColor: c.accent, marginBottom: 4 },
+    customSliderLabel: {
+      color: c.textMuted, fontSize: 11, fontWeight: "600", textTransform: "uppercase",
+      letterSpacing: 0.5, alignSelf: "flex-start",
+    },
+    customSliderTrack: {
+      width: "100%", height: 28, borderRadius: 6, backgroundColor: c.borderPrimary,
+      justifyContent: "center", position: "relative",
+    },
+    customSliderThumb: {
+      position: "absolute", width: 20, height: 20, borderRadius: 10, borderWidth: 2,
+      borderColor: "#fff", top: 4, marginLeft: -10,
+    },
 
-  // Fields
-  textField: {
-    backgroundColor: "#0f1820",
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    color: "#c0d0e0",
-    fontSize: 15,
-  },
-  fieldRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginVertical: 6,
-  },
-  fieldLabel: { color: "#8098b0", fontSize: 14 },
-  numberField: {
-    backgroundColor: "#0f1820",
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    color: "#c0d0e0",
-    fontSize: 15,
-    width: 70,
-    textAlign: "center",
-  },
+    // Radio
+    radioGroup: { gap: 8 },
+    radioItem: {
+      backgroundColor: c.bgSecondary, borderRadius: 10, padding: 14, borderWidth: 1, borderColor: c.borderPrimary,
+    },
+    radioActive: { borderColor: c.accent, backgroundColor: c.accentSoft },
+    radioText: { color: c.textSecondary, fontSize: 15, fontWeight: "600" },
+    radioTextActive: { color: c.textPrimary },
+    radioDesc: { color: c.textMuted, fontSize: 12, marginTop: 2 },
+    voiceHint: { color: c.textGhost, fontSize: 11, marginTop: 4, marginBottom: 4 },
+    voiceGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+    voiceChip: {
+      backgroundColor: c.bgSecondary, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8,
+      borderWidth: 1, borderColor: c.borderPrimary,
+    },
+    voiceChipActive: { borderColor: c.accent, backgroundColor: c.accentSoft },
+    voiceChipText: { color: c.textMuted, fontSize: 13, fontWeight: "600" },
+    voiceChipTextActive: { color: c.textPrimary },
 
-  // Switch
-  switchRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginVertical: 8,
-  },
-  switchLabel: { color: "#8098b0", fontSize: 14 },
+    // Fields
+    textField: {
+      backgroundColor: c.inputBg, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12,
+      color: c.inputText, fontSize: 15,
+    },
+    fieldRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginVertical: 6 },
+    fieldLabel: { color: c.textSecondary, fontSize: 14 },
+    numberField: {
+      backgroundColor: c.inputBg, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8,
+      color: c.inputText, fontSize: 15, width: 70, textAlign: "center",
+    },
 
-  // Pin
-  pinButton: {
-    backgroundColor: "#1a2030",
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  pinButtonText: { color: "#4080c0", fontSize: 14, fontWeight: "600" },
+    // Switch
+    switchRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginVertical: 8 },
+    switchLabel: { color: c.textSecondary, fontSize: 14 },
 
-  // Identity
-  monoValue: {
-    color: "#8098b0",
-    fontSize: 13,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-    backgroundColor: "#0f1820",
-    borderRadius: 8,
-    padding: 12,
-    overflow: "hidden",
-  },
-  hint: {
-    color: "#405060",
-    fontSize: 11,
-    textAlign: "center",
-    marginTop: 8,
-  },
-  linkDeviceButton: {
-    backgroundColor: "#1a2838",
-    borderRadius: 10,
-    paddingVertical: 14,
-    marginTop: 20,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#2a4060",
-  },
-  linkDeviceText: { color: "#4080c0", fontSize: 15, fontWeight: "600" },
-  identityFieldRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  identityFieldValue: {
-    flex: 1,
-  },
-  identityCopyLabel: {
-    color: "#506070",
-    fontSize: 12,
-    fontWeight: "600",
-    minWidth: 46,
-    textAlign: "center",
-  },
-  identityCopiedLabel: {
-    color: "#4ade80",
-  },
-  docsButton: {
-    backgroundColor: "#1a2838",
-    borderRadius: 10,
-    paddingVertical: 14,
-    marginTop: 12,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#2a4060",
-  },
-  docsText: { color: "#607080", fontSize: 15, fontWeight: "600" },
-  exportButton: {
-    backgroundColor: "#1a2030",
-    borderRadius: 10,
-    paddingVertical: 14,
-    marginTop: 12,
-    alignItems: "center",
-  },
-  exportText: { color: "#4080c0", fontSize: 15, fontWeight: "600" },
+    // Pin
+    pinButton: { backgroundColor: c.buttonSecondaryBg, borderRadius: 8, paddingHorizontal: 16, paddingVertical: 8 },
+    pinButtonText: { color: c.accent, fontSize: 14, fontWeight: "600" },
 
-  // Sync
-  syncStatusRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    marginBottom: 8,
-  },
-  syncStatusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  syncStatusLabel: {
-    fontSize: 15,
-    fontWeight: "600",
-  },
-  syncLastTime: {
-    color: "#506070",
-    fontSize: 12,
-    marginBottom: 8,
-  },
-  syncActionButton: {
-    backgroundColor: "#2a4060",
-    borderRadius: 10,
-    paddingVertical: 14,
-    marginTop: 16,
-    alignItems: "center",
-  },
-  syncActionDisabled: {
-    opacity: 0.5,
-  },
-  syncActionText: {
-    color: "#c0d0e0",
-    fontSize: 15,
-    fontWeight: "600",
-  },
-  syncDisconnectButton: {
-    backgroundColor: "#1a2030",
-    borderRadius: 10,
-    paddingVertical: 14,
-    marginTop: 12,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#2a1518",
-  },
-  syncDisconnectText: {
-    color: "#c07040",
-    fontSize: 15,
-    fontWeight: "600",
-  },
-  syncHint: {
-    color: "#405060",
-    fontSize: 13,
-    fontStyle: "italic",
-    textAlign: "center",
-    marginTop: 20,
-  },
+    // Identity
+    monoValue: {
+      color: c.textSecondary, fontSize: 13, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+      backgroundColor: c.bgSecondary, borderRadius: 8, padding: 12, overflow: "hidden",
+    },
+    hint: { color: c.textGhost, fontSize: 11, textAlign: "center", marginTop: 8 },
+    linkDeviceButton: {
+      backgroundColor: c.borderLight, borderRadius: 10, paddingVertical: 14, marginTop: 20,
+      alignItems: "center", borderWidth: 1, borderColor: c.accentSoft,
+    },
+    linkDeviceText: { color: c.accent, fontSize: 15, fontWeight: "600" },
+    identityFieldRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+    identityFieldValue: { flex: 1 },
+    identityCopyLabel: { color: c.textMuted, fontSize: 12, fontWeight: "600", minWidth: 46, textAlign: "center" },
+    identityCopiedLabel: { color: c.statusSuccess },
+    docsButton: {
+      backgroundColor: c.borderLight, borderRadius: 10, paddingVertical: 14, marginTop: 12,
+      alignItems: "center", borderWidth: 1, borderColor: c.accentSoft,
+    },
+    docsText: { color: c.textMuted, fontSize: 15, fontWeight: "600" },
+    exportButton: {
+      backgroundColor: c.buttonSecondaryBg, borderRadius: 10, paddingVertical: 14, marginTop: 12, alignItems: "center",
+    },
+    exportText: { color: c.accent, fontSize: 15, fontWeight: "600" },
 
-  // Goals
-  goalEmptyText: {
-    color: "#506070",
-    fontSize: 13,
-    fontStyle: "italic",
-    textAlign: "center",
-    marginVertical: 12,
-  },
-  goalRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#0f1820",
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: "#1a2030",
-  },
-  goalInfo: {
-    flex: 1,
-    marginRight: 10,
-  },
-  goalPrompt: {
-    color: "#c0d0e0",
-    fontSize: 14,
-    marginBottom: 4,
-  },
-  goalMeta: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 6,
-  },
-  goalMetaText: {
-    color: "#506070",
-    fontSize: 11,
-  },
-  goalMetaWarning: {
-    color: "#c07040",
-    fontSize: 11,
-    fontWeight: "600",
-  },
-  goalActions: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  goalDeleteBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: "#2a1518",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  goalDeleteText: {
-    color: "#d04050",
-    fontSize: 12,
-    fontWeight: "700",
-  },
-  goalAddBtn: {
-    backgroundColor: "#2a4060",
-    borderRadius: 10,
-    paddingVertical: 14,
-    marginTop: 16,
-    alignItems: "center",
-  },
-  goalAddBtnDisabled: {
-    opacity: 0.4,
-  },
-  goalAddBtnText: {
-    color: "#c0d0e0",
-    fontSize: 15,
-    fontWeight: "600",
-  },
+    // Sync
+    syncStatusRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 },
+    syncStatusDot: { width: 8, height: 8, borderRadius: 4 },
+    syncStatusLabel: { fontSize: 15, fontWeight: "600" },
+    syncLastTime: { color: c.textMuted, fontSize: 12, marginBottom: 8 },
+    syncActionButton: {
+      backgroundColor: c.buttonPrimaryBg, borderRadius: 10, paddingVertical: 14, marginTop: 16, alignItems: "center",
+    },
+    syncActionDisabled: { opacity: 0.5 },
+    syncActionText: { color: c.buttonPrimaryText, fontSize: 15, fontWeight: "600" },
+    syncDisconnectButton: {
+      backgroundColor: c.buttonSecondaryBg, borderRadius: 10, paddingVertical: 14, marginTop: 12,
+      alignItems: "center", borderWidth: 1, borderColor: `${c.statusError}40`,
+    },
+    syncDisconnectText: { color: c.statusWarning, fontSize: 15, fontWeight: "600" },
+    syncHint: { color: c.textGhost, fontSize: 13, fontStyle: "italic", textAlign: "center", marginTop: 20 },
 
-  // Tools
-  toolsEmptyText: {
-    color: "#506070",
-    fontSize: 13,
-    fontStyle: "italic",
-    textAlign: "center",
-    marginVertical: 12,
-  },
-  toolsServerRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#0f1820",
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: "#1a2030",
-  },
-  toolsServerInfo: {
-    flex: 1,
-    marginRight: 10,
-  },
-  toolsServerHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    marginBottom: 4,
-  },
-  toolsStatusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  toolsServerName: {
-    color: "#c0d0e0",
-    fontSize: 14,
-    fontWeight: "600",
-  },
-  toolsCountBadge: {
-    backgroundColor: "#1a2838",
-    borderRadius: 10,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-  },
-  toolsCountText: {
-    color: "#607080",
-    fontSize: 11,
-    fontWeight: "600",
-  },
-  toolsServerUrl: {
-    color: "#506070",
-    fontSize: 12,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-  },
-  toolsRemoveBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: "#2a1518",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  toolsRemoveText: {
-    color: "#d04050",
-    fontSize: 12,
-    fontWeight: "700",
-  },
-  toolsConnectBtn: {
-    backgroundColor: "#2a4060",
-    borderRadius: 10,
-    paddingVertical: 14,
-    marginTop: 12,
-    alignItems: "center",
-  },
-  toolsConnectBtnDisabled: {
-    opacity: 0.4,
-  },
-  toolsConnectText: {
-    color: "#c0d0e0",
-    fontSize: 15,
-    fontWeight: "600",
-  },
-  toolsTrustBadge: {
-    backgroundColor: "#1a2838",
-    borderRadius: 10,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-  },
-  toolsTrustText: {
-    color: "#4ade80",
-    fontSize: 10,
-    fontWeight: "600",
-  },
-  toolsTrustRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginTop: 8,
-  },
-  toolsTrustLabel: {
-    color: "#607080",
-    fontSize: 12,
-  },
-  toolsNote: {
-    color: "#405060",
-    fontSize: 11,
-    fontStyle: "italic",
-    textAlign: "center",
-    marginTop: 16,
-  },
-});
+    // Goals
+    goalEmptyText: { color: c.textMuted, fontSize: 13, fontStyle: "italic", textAlign: "center", marginVertical: 12 },
+    goalRow: {
+      flexDirection: "row", alignItems: "center", backgroundColor: c.bgSecondary, borderRadius: 10,
+      padding: 12, marginBottom: 8, borderWidth: 1, borderColor: c.borderPrimary,
+    },
+    goalInfo: { flex: 1, marginRight: 10 },
+    goalPrompt: { color: c.textPrimary, fontSize: 14, marginBottom: 4 },
+    goalMeta: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+    goalMetaText: { color: c.textMuted, fontSize: 11 },
+    goalMetaWarning: { color: c.statusWarning, fontSize: 11, fontWeight: "600" },
+    goalActions: { flexDirection: "row", alignItems: "center", gap: 8 },
+    goalDeleteBtn: {
+      width: 28, height: 28, borderRadius: 14, backgroundColor: `${c.statusError}1a`,
+      justifyContent: "center", alignItems: "center",
+    },
+    goalDeleteText: { color: c.statusError, fontSize: 12, fontWeight: "700" },
+    goalAddBtn: {
+      backgroundColor: c.buttonPrimaryBg, borderRadius: 10, paddingVertical: 14, marginTop: 16, alignItems: "center",
+    },
+    goalAddBtnDisabled: { opacity: 0.4 },
+    goalAddBtnText: { color: c.buttonPrimaryText, fontSize: 15, fontWeight: "600" },
+
+    // Tools
+    toolsEmptyText: { color: c.textMuted, fontSize: 13, fontStyle: "italic", textAlign: "center", marginVertical: 12 },
+    toolsServerRow: {
+      flexDirection: "row", alignItems: "center", backgroundColor: c.bgSecondary, borderRadius: 10,
+      padding: 12, marginBottom: 8, borderWidth: 1, borderColor: c.borderPrimary,
+    },
+    toolsServerInfo: { flex: 1, marginRight: 10 },
+    toolsServerHeader: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 },
+    toolsStatusDot: { width: 8, height: 8, borderRadius: 4 },
+    toolsServerName: { color: c.textPrimary, fontSize: 14, fontWeight: "600" },
+    toolsCountBadge: { backgroundColor: c.borderLight, borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2 },
+    toolsCountText: { color: c.textMuted, fontSize: 11, fontWeight: "600" },
+    toolsServerUrl: {
+      color: c.textMuted, fontSize: 12, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    },
+    toolsRemoveBtn: {
+      width: 28, height: 28, borderRadius: 14, backgroundColor: `${c.statusError}1a`,
+      justifyContent: "center", alignItems: "center",
+    },
+    toolsRemoveText: { color: c.statusError, fontSize: 12, fontWeight: "700" },
+    toolsConnectBtn: {
+      backgroundColor: c.buttonPrimaryBg, borderRadius: 10, paddingVertical: 14, marginTop: 12, alignItems: "center",
+    },
+    toolsConnectBtnDisabled: { opacity: 0.4 },
+    toolsConnectText: { color: c.buttonPrimaryText, fontSize: 15, fontWeight: "600" },
+    toolsTrustBadge: { backgroundColor: c.borderLight, borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2 },
+    toolsTrustText: { color: c.statusSuccess, fontSize: 10, fontWeight: "600" },
+    toolsTrustRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 8 },
+    toolsTrustLabel: { color: c.textMuted, fontSize: 12 },
+    toolsNote: { color: c.textGhost, fontSize: 11, fontStyle: "italic", textAlign: "center", marginTop: 16 },
+  });
+}

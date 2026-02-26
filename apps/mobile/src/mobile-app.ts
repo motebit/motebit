@@ -70,17 +70,16 @@ import type { ExpoStorageResult } from "./adapters/expo-sqlite";
 import { ExpoGLAdapter } from "./adapters/expo-gl";
 import { SecureStoreAdapter } from "./adapters/secure-store";
 
-// === Color Presets (same 8 as desktop) ===
+// === Color Presets (same 7 as desktop) ===
 
 export const COLOR_PRESETS: Record<string, InteriorColor> = {
-  borosilicate: { tint: [0.9, 0.92, 1.0], glow: [0.6, 0.7, 0.9] },
+  moonlight:    { tint: [0.95, 0.95, 1.0], glow: [0.8, 0.85, 1.0] },
   amber:        { tint: [1.0, 0.85, 0.6], glow: [0.9, 0.7, 0.3] },
   rose:         { tint: [1.0, 0.82, 0.88], glow: [0.9, 0.5, 0.6] },
   violet:       { tint: [0.88, 0.8, 1.0], glow: [0.6, 0.4, 0.9] },
   cyan:         { tint: [0.8, 0.95, 1.0], glow: [0.3, 0.8, 0.9] },
   ember:        { tint: [1.0, 0.75, 0.65], glow: [0.9, 0.35, 0.2] },
   sage:         { tint: [0.82, 0.95, 0.85], glow: [0.4, 0.75, 0.5] },
-  moonlight:    { tint: [0.95, 0.95, 1.0], glow: [0.8, 0.85, 1.0] },
 };
 
 // === Approval Presets ===
@@ -120,6 +119,8 @@ export interface MobileSettings {
   model: string;
   ollamaEndpoint: string;
   colorPreset: string;
+  customHue: number;
+  customSaturation: number;
   theme: "light" | "dark" | "system";
   approvalPreset: string;
   persistenceThreshold: number;
@@ -137,7 +138,9 @@ const DEFAULT_SETTINGS: MobileSettings = {
   provider: "ollama",
   model: "llama3.2",
   ollamaEndpoint: "http://localhost:11434",
-  colorPreset: "borosilicate",
+  colorPreset: "moonlight",
+  customHue: 220,
+  customSaturation: 0.7,
   theme: "dark",
   approvalPreset: "balanced",
   persistenceThreshold: 0.5,
@@ -649,6 +652,10 @@ export class MobileApp {
     this.renderer.setInteriorColor(preset);
   }
 
+  setInteriorColorDirect(color: InteriorColor): void {
+    this.renderer.setInteriorColor(color);
+  }
+
   setDarkEnvironment(): void {
     this.renderer.setDarkEnvironment();
   }
@@ -816,7 +823,10 @@ export class MobileApp {
     const raw = await AsyncStorage.getItem(SETTINGS_KEY);
     if (raw == null || raw === "") return { ...DEFAULT_SETTINGS };
     try {
-      return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) as Partial<MobileSettings> };
+      const loaded = { ...DEFAULT_SETTINGS, ...JSON.parse(raw) as Partial<MobileSettings> };
+      // Migration: borosilicate was removed — remap to moonlight
+      if (loaded.colorPreset === "borosilicate") loaded.colorPreset = "moonlight";
+      return loaded;
     } catch {
       return { ...DEFAULT_SETTINGS };
     }

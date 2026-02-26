@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Modal,
   View,
@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import type { MobileApp } from "../mobile-app";
 import type { Goal, GoalMode } from "../adapters/expo-sqlite";
+import { useTheme, type ThemeColors } from "../theme";
 
 const INTERVAL_OPTIONS: { label: string; ms: number }[] = [
   { label: "Hourly", ms: 3_600_000 },
@@ -42,6 +43,8 @@ interface GoalsPanelProps {
 }
 
 export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.ReactElement {
+  const colors = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [newPrompt, setNewPrompt] = useState("");
   const [newIntervalIdx, setNewIntervalIdx] = useState(0);
@@ -117,8 +120,8 @@ export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.Re
         <Switch
           value={goal.enabled}
           onValueChange={(v) => handleToggle(goal.goal_id, v)}
-          trackColor={{ false: "#1a2030", true: "#2a4060" }}
-          thumbColor={goal.enabled ? "#c0d0e0" : "#607080"}
+          trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
+          thumbColor={goal.enabled ? colors.textPrimary : colors.textMuted}
         />
         <TouchableOpacity
           onPress={() => handleRemove(goal.goal_id)}
@@ -129,7 +132,7 @@ export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.Re
         </TouchableOpacity>
       </View>
     </View>
-  ), [handleToggle, handleRemove]);
+  ), [colors, styles, handleToggle, handleRemove]);
 
   return (
     <Modal visible={visible} animationType="slide" transparent statusBarTranslucent>
@@ -169,7 +172,7 @@ export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.Re
                 value={newPrompt}
                 onChangeText={setNewPrompt}
                 placeholder="What should the goal do?"
-                placeholderTextColor="#405060"
+                placeholderTextColor={colors.inputPlaceholder}
                 multiline
                 numberOfLines={2}
               />
@@ -212,170 +215,172 @@ export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.Re
   );
 }
 
-const styles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.85)",
-    justifyContent: "flex-end",
-  },
-  panel: {
-    backgroundColor: "#0a0a0a",
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    maxHeight: "80%",
-    paddingBottom: Platform.OS === "ios" ? 34 : 16,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#1a2030",
-  },
-  title: {
-    color: "#c0d0e0",
-    fontSize: 18,
-    fontWeight: "600",
-  },
-  headerRight: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-  },
-  countBadge: {
-    color: "#506070",
-    fontSize: 13,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-  },
-  closeButton: {
-    color: "#4080c0",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  emptyText: {
-    color: "#506070",
-    fontSize: 13,
-    fontStyle: "italic",
-    textAlign: "center",
-    marginVertical: 24,
-  },
-  list: {
-    flexGrow: 0,
-  },
-  listContent: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  goalRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#0f1820",
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: "#1a2030",
-  },
-  goalInfo: {
-    flex: 1,
-    marginRight: 10,
-  },
-  goalPrompt: {
-    color: "#c0d0e0",
-    fontSize: 14,
-    marginBottom: 4,
-  },
-  goalMeta: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 6,
-  },
-  goalMetaText: {
-    color: "#506070",
-    fontSize: 11,
-  },
-  goalMetaWarning: {
-    color: "#c07040",
-    fontSize: 11,
-    fontWeight: "600",
-  },
-  goalActions: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  goalDeleteBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: "#2a1518",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  goalDeleteText: {
-    color: "#d04050",
-    fontSize: 12,
-    fontWeight: "700",
-  },
-  addForm: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#1a2030",
-  },
-  promptInput: {
-    backgroundColor: "#0f1820",
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    color: "#c0d0e0",
-    fontSize: 14,
-    borderWidth: 1,
-    borderColor: "#1a2030",
-    minHeight: 48,
-  },
-  optionsRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-    marginTop: 10,
-  },
-  chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-    backgroundColor: "#0f1820",
-    borderWidth: 1,
-    borderColor: "#1a2030",
-  },
-  chipActive: {
-    borderColor: "#4080c0",
-    backgroundColor: "#0f1a28",
-  },
-  chipText: {
-    color: "#8098b0",
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  chipTextActive: {
-    color: "#c0d0e0",
-  },
-  addButton: {
-    backgroundColor: "#2a4060",
-    borderRadius: 10,
-    paddingVertical: 14,
-    marginTop: 12,
-    alignItems: "center",
-  },
-  addButtonDisabled: {
-    opacity: 0.4,
-  },
-  addButtonText: {
-    color: "#c0d0e0",
-    fontSize: 15,
-    fontWeight: "600",
-  },
-});
+function createStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    backdrop: {
+      flex: 1,
+      backgroundColor: c.overlayBg,
+      justifyContent: "flex-end",
+    },
+    panel: {
+      backgroundColor: c.bgPrimary,
+      borderTopLeftRadius: 20,
+      borderTopRightRadius: 20,
+      maxHeight: "80%",
+      paddingBottom: Platform.OS === "ios" ? 34 : 16,
+    },
+    header: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingHorizontal: 20,
+      paddingTop: 16,
+      paddingBottom: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.borderPrimary,
+    },
+    title: {
+      color: c.textPrimary,
+      fontSize: 18,
+      fontWeight: "600",
+    },
+    headerRight: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+    },
+    countBadge: {
+      color: c.textMuted,
+      fontSize: 13,
+      fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    },
+    closeButton: {
+      color: c.accent,
+      fontSize: 16,
+      fontWeight: "600",
+    },
+    emptyText: {
+      color: c.textMuted,
+      fontSize: 13,
+      fontStyle: "italic",
+      textAlign: "center",
+      marginVertical: 24,
+    },
+    list: {
+      flexGrow: 0,
+    },
+    listContent: {
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+    },
+    goalRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: c.bgSecondary,
+      borderRadius: 10,
+      padding: 12,
+      marginBottom: 8,
+      borderWidth: 1,
+      borderColor: c.borderPrimary,
+    },
+    goalInfo: {
+      flex: 1,
+      marginRight: 10,
+    },
+    goalPrompt: {
+      color: c.textPrimary,
+      fontSize: 14,
+      marginBottom: 4,
+    },
+    goalMeta: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 6,
+    },
+    goalMetaText: {
+      color: c.textMuted,
+      fontSize: 11,
+    },
+    goalMetaWarning: {
+      color: c.statusWarning,
+      fontSize: 11,
+      fontWeight: "600",
+    },
+    goalActions: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+    },
+    goalDeleteBtn: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      backgroundColor: `${c.statusError}1a`,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    goalDeleteText: {
+      color: c.statusError,
+      fontSize: 12,
+      fontWeight: "700",
+    },
+    addForm: {
+      paddingHorizontal: 16,
+      paddingTop: 12,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: c.borderPrimary,
+    },
+    promptInput: {
+      backgroundColor: c.inputBg,
+      borderRadius: 10,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      color: c.inputText,
+      fontSize: 14,
+      borderWidth: 1,
+      borderColor: c.borderInput,
+      minHeight: 48,
+    },
+    optionsRow: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 8,
+      marginTop: 10,
+    },
+    chip: {
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: 8,
+      backgroundColor: c.bgSecondary,
+      borderWidth: 1,
+      borderColor: c.borderPrimary,
+    },
+    chipActive: {
+      borderColor: c.accent,
+      backgroundColor: c.accentSoft,
+    },
+    chipText: {
+      color: c.textSecondary,
+      fontSize: 13,
+      fontWeight: "600",
+    },
+    chipTextActive: {
+      color: c.textPrimary,
+    },
+    addButton: {
+      backgroundColor: c.buttonPrimaryBg,
+      borderRadius: 10,
+      paddingVertical: 14,
+      marginTop: 12,
+      alignItems: "center",
+    },
+    addButtonDisabled: {
+      opacity: 0.4,
+    },
+    addButtonText: {
+      color: c.buttonPrimaryText,
+      fontSize: 15,
+      fontWeight: "600",
+    },
+  });
+}

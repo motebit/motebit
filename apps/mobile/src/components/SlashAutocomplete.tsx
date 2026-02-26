@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from "react-native";
+import { useTheme, type ThemeColors } from "../theme";
 
 interface SlashCommand {
   name: string;
@@ -35,6 +36,9 @@ interface SlashAutocompleteProps {
 }
 
 export function SlashAutocomplete({ inputText, onSelect }: SlashAutocompleteProps): React.ReactElement | null {
+  const colors = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   if (!inputText.startsWith("/")) return null;
 
   const partial = inputText.slice(1);
@@ -64,32 +68,34 @@ export function SlashAutocomplete({ inputText, onSelect }: SlashAutocompleteProp
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    maxHeight: 200,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#1a2838",
-    backgroundColor: "#0a1018",
-  },
-  scroll: {
-    flexGrow: 0,
-  },
-  item: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    gap: 10,
-  },
-  name: {
-    color: "#a0b8d0",
-    fontSize: 14,
-    fontWeight: "500",
-    flexShrink: 0,
-  },
-  desc: {
-    color: "#405060",
-    fontSize: 12,
-    flex: 1,
-  },
-});
+function createStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      maxHeight: 200,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: c.borderLight,
+      backgroundColor: c.bgTertiary,
+    },
+    scroll: {
+      flexGrow: 0,
+    },
+    item: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      gap: 10,
+    },
+    name: {
+      color: c.textSecondary,
+      fontSize: 14,
+      fontWeight: "500",
+      flexShrink: 0,
+    },
+    desc: {
+      color: c.textGhost,
+      fontSize: 12,
+      flex: 1,
+    },
+  });
+}

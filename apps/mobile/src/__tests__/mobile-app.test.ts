@@ -276,7 +276,7 @@ describe("MobileApp.settings", () => {
     const settings = await app.loadSettings();
     expect(settings.provider).toBe("ollama");
     expect(settings.model).toBe("llama3.2");
-    expect(settings.colorPreset).toBe("borosilicate");
+    expect(settings.colorPreset).toBe("moonlight");
     expect(settings.approvalPreset).toBe("balanced");
   });
 
@@ -297,6 +297,8 @@ describe("MobileApp.settings", () => {
       voiceAutoSend: false,
       voiceResponseEnabled: true,
       neuralVadEnabled: true,
+      customHue: 220,
+      customSaturation: 0.7,
     };
     await app.saveSettings(custom);
     const loaded = await app.loadSettings();

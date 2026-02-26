@@ -821,6 +821,38 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
     }
   }
 
+  // === Processing State ===
+
+  function setProcessing(active: boolean): void {
+    if (active) {
+      inputRow.classList.add("processing");
+      chatInput.disabled = true;
+    } else {
+      inputRow.classList.remove("processing");
+      chatInput.disabled = false;
+      chatInput.focus();
+    }
+  }
+
+  // === Thinking Indicator ===
+
+  function showThinkingIndicator(): HTMLElement {
+    const indicator = document.createElement("div");
+    indicator.className = "thinking-indicator";
+    for (let i = 0; i < 3; i++) {
+      const dot = document.createElement("div");
+      dot.className = "thinking-dot";
+      indicator.appendChild(dot);
+    }
+    chatLog.appendChild(indicator);
+    chatLog.scrollTop = chatLog.scrollHeight;
+    return indicator;
+  }
+
+  function removeThinkingIndicator(indicator: HTMLElement | null): void {
+    if (indicator?.parentNode) indicator.remove();
+  }
+
   // === Send Handler ===
 
   async function handleSend(): Promise<void> {
@@ -837,33 +869,47 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
     }
 
     addMessage("user", text);
+    setProcessing(true);
 
     const chatRunId = crypto.randomUUID();
-    const bubble = document.createElement("div");
-    bubble.className = "chat-bubble assistant";
-    bubble.dataset.runId = chatRunId;
-    const textEl = document.createElement("span");
-    textEl.className = "bubble-text";
-    bubble.appendChild(textEl);
-    chatLog.appendChild(bubble);
-    void bubble.offsetWidth;
-    bubble.classList.add("visible");
+    let bubble: HTMLDivElement | null = null;
+    let textEl: HTMLSpanElement | null = null;
+    const thinkingEl = showThinkingIndicator();
     let accumulated = "";
     let memoriesRetrieved: Array<{ node_id: string; content: string; confidence: number; sensitivity: string }> = [];
     let memoriesFormed: Array<{ node_id: string; content: string; sensitivity: string }> = [];
+
+    function ensureBubble(): { bubble: HTMLDivElement; textEl: HTMLSpanElement } {
+      if (bubble) return { bubble, textEl: textEl! };
+      removeThinkingIndicator(thinkingEl);
+      bubble = document.createElement("div");
+      bubble.className = "chat-bubble assistant";
+      bubble.dataset.runId = chatRunId;
+      textEl = document.createElement("span");
+      textEl.className = "bubble-text";
+      bubble.appendChild(textEl);
+      chatLog.appendChild(bubble);
+      void bubble.offsetWidth;
+      bubble.classList.add("visible");
+      return { bubble, textEl };
+    }
+
     try {
       for await (const chunk of ctx.app.sendMessageStreaming(text, chatRunId)) {
         if (chunk.type === "text") {
+          const { textEl: te } = ensureBubble();
           accumulated += chunk.text;
-          textEl.textContent = stripPartialActionTag(accumulated);
+          te.textContent = stripPartialActionTag(accumulated);
           chatLog.scrollTop = chatLog.scrollHeight;
         } else if (chunk.type === "tool_status") {
           if (chunk.status === "calling") {
+            removeThinkingIndicator(thinkingEl);
             showToolStatus(chunk.name);
           } else if (chunk.status === "done") {
             completeToolStatus(chunk.name);
           }
         } else if (chunk.type === "approval_request") {
+          removeThinkingIndicator(thinkingEl);
           showApprovalCard(ctx, chunk.name, chunk.args, chunk.risk_level);
         } else if (chunk.type === "injection_warning") {
           addMessage("system", `Warning: suspicious content detected in ${chunk.tool_name} results`);
@@ -886,13 +932,17 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
         }
       }
 
-      if (memoriesRetrieved.length > 0 || memoriesFormed.length > 0) {
+      removeThinkingIndicator(thinkingEl);
+
+      // TypeScript can't track closure mutations from ensureBubble() — capture post-loop
+      const finalBubble = bubble as HTMLDivElement | null;
+      if (finalBubble && (memoriesRetrieved.length > 0 || memoriesFormed.length > 0)) {
         const footer = createMemoryFooter(
           memoriesRetrieved,
           memoriesFormed,
           (nodeId) => callbacks.openMemoryPanel(nodeId),
         );
-        bubble.appendChild(footer);
+        finalBubble.appendChild(footer);
       }
 
       void ctx.app.generateTitleInBackground();
@@ -902,11 +952,16 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
         callbacks.speakResponse(accumulated);
       }
     } catch (err: unknown) {
+      removeThinkingIndicator(thinkingEl);
       const msg = err instanceof Error ? err.message : String(err);
-      if (!textEl.textContent) {
-        bubble.remove();
+      const catchTextEl = textEl as HTMLSpanElement | null;
+      const catchBubble = bubble as HTMLDivElement | null;
+      if (catchTextEl && !catchTextEl.textContent && catchBubble) {
+        catchBubble.remove();
       }
       addMessage("system", `Error: ${msg}`);
+    } finally {
+      setProcessing(false);
     }
   }
 

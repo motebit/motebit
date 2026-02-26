@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { Modal, View, Text, TouchableOpacity, StyleSheet } from "react-native";
+import { useTheme, type ThemeColors } from "../theme";
 
 interface WelcomeOverlayProps {
   visible: boolean;
@@ -8,6 +9,9 @@ interface WelcomeOverlayProps {
 }
 
 export function WelcomeOverlay({ visible, onAccept, onLinkExisting }: WelcomeOverlayProps): React.ReactElement {
+  const colors = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   return (
     <Modal visible={visible} animationType="fade" transparent statusBarTranslucent>
       <View style={styles.backdrop}>
@@ -36,54 +40,56 @@ export function WelcomeOverlay({ visible, onAccept, onLinkExisting }: WelcomeOve
   );
 }
 
-const styles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.85)",
-    justifyContent: "center",
-    alignItems: "center",
-    paddingHorizontal: 32,
-  },
-  card: {
-    backgroundColor: "#0f1820",
-    borderRadius: 20,
-    padding: 28,
-    width: "100%",
-    maxWidth: 340,
-  },
-  title: {
-    color: "#c0d0e0",
-    fontSize: 22,
-    fontWeight: "700",
-    textAlign: "center",
-    marginBottom: 16,
-  },
-  body: {
-    color: "#607080",
-    fontSize: 14,
-    lineHeight: 21,
-    textAlign: "center",
-    marginBottom: 12,
-  },
-  button: {
-    backgroundColor: "#2a4060",
-    borderRadius: 12,
-    paddingVertical: 14,
-    marginTop: 8,
-    alignItems: "center",
-  },
-  buttonText: {
-    color: "#c0d0e0",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  linkButton: {
-    paddingVertical: 10,
-    alignItems: "center",
-  },
-  linkText: {
-    color: "#506070",
-    fontSize: 13,
-    textDecorationLine: "underline",
-  },
-});
+function createStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    backdrop: {
+      flex: 1,
+      backgroundColor: c.overlayBg,
+      justifyContent: "center",
+      alignItems: "center",
+      paddingHorizontal: 32,
+    },
+    card: {
+      backgroundColor: c.bgSecondary,
+      borderRadius: 20,
+      padding: 28,
+      width: "100%",
+      maxWidth: 340,
+    },
+    title: {
+      color: c.textPrimary,
+      fontSize: 22,
+      fontWeight: "700",
+      textAlign: "center",
+      marginBottom: 16,
+    },
+    body: {
+      color: c.textMuted,
+      fontSize: 14,
+      lineHeight: 21,
+      textAlign: "center",
+      marginBottom: 12,
+    },
+    button: {
+      backgroundColor: c.buttonPrimaryBg,
+      borderRadius: 12,
+      paddingVertical: 14,
+      marginTop: 8,
+      alignItems: "center",
+    },
+    buttonText: {
+      color: c.buttonPrimaryText,
+      fontSize: 16,
+      fontWeight: "600",
+    },
+    linkButton: {
+      paddingVertical: 10,
+      alignItems: "center",
+    },
+    linkText: {
+      color: c.textMuted,
+      fontSize: 13,
+      textDecorationLine: "underline",
+    },
+  });
+}
