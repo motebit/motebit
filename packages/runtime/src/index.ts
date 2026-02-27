@@ -25,6 +25,8 @@ import {
   summarizeConversation,
   shouldSummarize,
   reflect as aiReflect,
+  TaskRouter,
+  withTaskConfig,
 } from "@motebit/ai-core";
 import type {
   StreamingProvider,
@@ -33,6 +35,8 @@ import type {
   AgenticChunk,
   ContextBudget,
   ReflectionResult,
+  TaskRouterConfig,
+  TaskType,
 } from "@motebit/ai-core";
 // Node-only packages (@motebit/tools, @motebit/mcp-client) are imported dynamically
 // to avoid bundling node:child_process / stdio into browser builds (desktop app).
@@ -46,6 +50,7 @@ import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebi
 // Re-export key types for consumers
 export type { TurnResult, AgenticChunk, ReflectionResult, MotebitLoopDependencies } from "@motebit/ai-core";
 export type { StreamingProvider } from "@motebit/ai-core";
+export type { TaskRouterConfig, TaskType, ResolvedTaskConfig } from "@motebit/ai-core";
 export type { MotebitState, BehaviorCues, ToolRegistry, ConversationMessage } from "@motebit/sdk";
 export type { EventStoreAdapter } from "@motebit/event-log";
 export type { MemoryStorageAdapter } from "@motebit/memory-graph";
@@ -228,6 +233,8 @@ export interface RuntimeConfig {
   summarizeAfterMessages?: number;
   /** Auto-deny pending tool approvals after this many ms (0 = disabled, default 600000 = 10 min). */
   approvalTimeoutMs?: number;
+  /** Task router config for routing housekeeping tasks to cheaper/faster models. */
+  taskRouter?: TaskRouterConfig;
 }
 
 // === Stream Chunk ===
@@ -338,6 +345,7 @@ export class MotebitRuntime {
     runId?: string;
   } | null = null;
   private approvalTimeoutMs: number;
+  private taskRouter: TaskRouter | null;
   private approvalTimer: ReturnType<typeof setTimeout> | null = null;
   private approvalExpiredCallback: (() => void) | null = null;
   private sessionInfo: { continued: boolean; lastActiveAt: number } | null = null;
@@ -349,6 +357,7 @@ export class MotebitRuntime {
     this.mcpConfigs = config.mcpServers ?? [];
     this.summarizeAfterMessages = config.summarizeAfterMessages ?? 20;
     this.approvalTimeoutMs = config.approvalTimeoutMs ?? 600_000; // 10 min default
+    this.taskRouter = config.taskRouter ? new TaskRouter(config.taskRouter) : null;
     this.renderer = adapters.renderer;
     this.provider = adapters.ai ?? null;
     this.stateSnapshot = adapters.storage.stateSnapshot;
@@ -960,6 +969,7 @@ export class MotebitRuntime {
       goals ?? [],
       memories,
       this.provider,
+      this.taskRouter ?? undefined,
     );
 
     // Store insights and plan adjustments as memories
@@ -1047,7 +1057,7 @@ export class MotebitRuntime {
    * history or state. Useful for housekeeping tasks (title generation,
    * classification, summarization) that should not appear in the chat.
    */
-  async generateCompletion(prompt: string): Promise<string> {
+  async generateCompletion(prompt: string, taskType?: TaskType): Promise<string> {
     if (!this.provider) throw new Error("No AI provider configured");
 
     const contextPack = {
@@ -1057,12 +1067,19 @@ export class MotebitRuntime {
       user_message: prompt,
     };
 
-    const response = await this.provider.generate(contextPack);
+    const doGenerate = async (p: import("@motebit/sdk").IntelligenceProvider) => (await p.generate(contextPack)).text;
+
+    let result: string;
+    if (taskType && this.taskRouter) {
+      result = await withTaskConfig(this.provider, this.taskRouter.resolve(taskType), doGenerate);
+    } else {
+      result = await doGenerate(this.provider);
+    }
 
     // Audit: log housekeeping run without affecting user-facing state
-    void this.logHousekeepingRun(prompt, response.text);
+    void this.logHousekeepingRun(prompt, result);
 
-    return response.text;
+    return result;
   }
 
   private async logHousekeepingRun(prompt: string, result: string): Promise<void> {
@@ -1135,7 +1152,7 @@ export class MotebitRuntime {
       try {
         const snippet = history.slice(0, 6).map(m => `${m.role}: ${m.content.slice(0, 200)}`).join("\n");
         const prompt = `Generate a very short title (5-7 words max) for this conversation. Return ONLY the title, no quotes, no explanation.\n\n${snippet}`;
-        const raw = await this.generateCompletion(prompt);
+        const raw = await this.generateCompletion(prompt, "title_generation");
         const title = raw.trim().replace(/^["']|["']$/g, "").slice(0, 100);
         if (title.length > 0 && title.length < 100) {
           this.conversationStore.updateTitle(this.conversationId, title);
@@ -1166,7 +1183,7 @@ export class MotebitRuntime {
     const history = this.getConversationHistory();
     if (history.length < 2) return null;
     const existingSummary = this.conversationStore.getActiveConversation(this.motebitId)?.summary ?? null;
-    const summary = await summarizeConversation(history, existingSummary, this.provider);
+    const summary = await summarizeConversation(history, existingSummary, this.provider, this.taskRouter ?? undefined);
     if (summary && this.conversationId) {
       this.conversationStore.updateSummary(this.conversationId, summary);
     }
@@ -1412,6 +1429,7 @@ export class MotebitRuntime {
         this.conversationHistory,
         existingSummary,
         this.provider,
+        this.taskRouter ?? undefined,
       );
       if (summary && this.conversationId) {
         this.conversationStore.updateSummary(this.conversationId, summary);

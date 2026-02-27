@@ -131,6 +131,8 @@ export interface CliConfig {
   identity: string | undefined;
   every: string | undefined;
   once: boolean;
+  wallClock: string | undefined;
+  project: string | undefined;
   reason: string | undefined;
   serveTransport: string | undefined;
   servePort: string | undefined;
@@ -156,6 +158,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       identity: { type: "string" },
       every: { type: "string" },
       once: { type: "boolean", default: false },
+      "wall-clock": { type: "string" },
+      project: { type: "string" },
       reason: { type: "string" },
       "serve-transport": { type: "string" },
       "serve-port": { type: "string" },
@@ -189,6 +193,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     identity: values.identity,
     every: values.every,
     once: values.once,
+    wallClock: values["wall-clock"],
+    project: values.project,
     reason: values.reason,
     serveTransport: values["serve-transport"],
     servePort: values["serve-port"],
@@ -212,7 +218,8 @@ Commands:
   serve [--identity <path>] Start as MCP server (stdio by default)
     --serve-transport <mode>  Transport: "stdio" (default) or "http"
     --serve-port <port>       HTTP port (default: 3100)
-  goal add "<prompt>" --every <interval> [--once]  Add a scheduled goal
+  goal add "<prompt>" --every <interval> [--once] [--wall-clock <duration>] [--project <id>]
+                            Add a scheduled goal
   goal list                 List all scheduled goals with status
   goal outcomes <goal_id>   Show execution history for a goal
   goal remove <goal_id>     Remove a scheduled goal
@@ -231,6 +238,8 @@ Options:
   --sync-url <url>        Remote sync server URL (or set MOTEBIT_SYNC_URL)
   --sync-token <tok>      Auth token for sync server (or set MOTEBIT_SYNC_TOKEN)
   --once                  Create a one-shot goal (runs once then completes)
+  --wall-clock <duration> Max wall-clock time per goal run (e.g. '30m', '1h'). Default: 10m
+  --project <id>          Project ID for grouping related goals (shared context)
   --operator              Enable operator mode (write/exec tools)
   --allowed-paths <paths> Comma-separated allowed file paths (default: cwd)
   -v, --version           Print version and exit
@@ -1009,6 +1018,19 @@ Available commands:
           break;
         }
         const once = rest.includes("--once");
+        let wallClockMs: number | null = null;
+        const wallClockMatch = rest.match(/--wall-clock\s+(\S+)/);
+        if (wallClockMatch) {
+          try {
+            wallClockMs = parseInterval(wallClockMatch[1]!);
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.log(`Error parsing --wall-clock: ${msg}`);
+            break;
+          }
+        }
+        const projectMatch = rest.match(/--project\s+(\S+)/);
+        const projectId = projectMatch ? projectMatch[1]! : null;
         const goalId = crypto.randomUUID();
         repl.moteDb.goalStore.add({
           goal_id: goalId,
@@ -1023,9 +1045,13 @@ Available commands:
           parent_goal_id: null,
           max_retries: 3,
           consecutive_failures: 0,
+          wall_clock_ms: wallClockMs,
+          project_id: projectId,
         });
         const modeLabel = once ? " (one-shot)" : "";
-        console.log(`Goal added: ${goalId.slice(0, 8)} — "${prompt}" every ${everyMatch[1]}${modeLabel}`);
+        const wallClockLabel = wallClockMs != null ? ` (wall-clock: ${wallClockMatch![1]})` : "";
+        const projectLabel = projectId != null ? ` [project: ${projectId}]` : "";
+        console.log(`Goal added: ${goalId.slice(0, 8)} — "${prompt}" every ${everyMatch[1]}${modeLabel}${wallClockLabel}${projectLabel}`);
       } else if (goalSub === "remove") {
         if (!goalArgs) { console.log("Usage: /goal remove <goal_id>"); break; }
         const goals = repl.moteDb.goalStore.list(repl.motebitId);
@@ -1704,6 +1730,19 @@ async function handleGoalAdd(config: CliConfig): Promise<void> {
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
 
+  let wallClockMs: number | null = null;
+  if (config.wallClock != null && config.wallClock !== "") {
+    try {
+      wallClockMs = parseInterval(config.wallClock);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`Error parsing --wall-clock: ${msg}`);
+      process.exit(1);
+    }
+  }
+
+  const projectId = config.project != null && config.project !== "" ? config.project : null;
+
   const mode = config.once ? "once" : "recurring";
   const goalId = crypto.randomUUID();
   moteDb.goalStore.add({
@@ -1719,6 +1758,8 @@ async function handleGoalAdd(config: CliConfig): Promise<void> {
     parent_goal_id: null,
     max_retries: 3,
     consecutive_failures: 0,
+    wall_clock_ms: wallClockMs,
+    project_id: projectId,
   });
 
   // Log event
@@ -1728,14 +1769,16 @@ async function handleGoalAdd(config: CliConfig): Promise<void> {
     motebit_id: motebitId,
     timestamp: Date.now(),
     event_type: EventType.GoalCreated,
-    payload: { goal_id: goalId, prompt, interval_ms: intervalMs, mode },
+    payload: { goal_id: goalId, prompt, interval_ms: intervalMs, mode, wall_clock_ms: wallClockMs, project_id: projectId },
     version_clock: await moteDb.eventStore.getLatestClock(motebitId) + 1,
     tombstoned: false,
   });
 
   moteDb.close();
   const modeLabel = mode === "once" ? " (one-shot)" : "";
-  console.log(`Goal added: ${goalId.slice(0, 8)} — "${prompt}" every ${config.every}${modeLabel}`);
+  const wallClockLabel = wallClockMs != null ? ` (wall-clock: ${config.wallClock})` : "";
+  const projectLabel = projectId != null ? ` [project: ${projectId}]` : "";
+  console.log(`Goal added: ${goalId.slice(0, 8)} — "${prompt}" every ${config.every}${modeLabel}${wallClockLabel}${projectLabel}`);
 }
 
 async function handleGoalList(config: CliConfig): Promise<void> {

@@ -132,10 +132,13 @@ CREATE TABLE IF NOT EXISTS goals (
   interval_ms INTEGER NOT NULL,
   last_run_at INTEGER,
   enabled INTEGER NOT NULL DEFAULT 1,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  wall_clock_ms INTEGER,
+  project_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_goals_motebit ON goals (motebit_id);
+CREATE INDEX IF NOT EXISTS idx_goals_project ON goals (project_id);
 
 CREATE TABLE IF NOT EXISTS goal_outcomes (
   outcome_id TEXT PRIMARY KEY,
@@ -878,6 +881,10 @@ export interface Goal {
   parent_goal_id: string | null;
   max_retries: number;
   consecutive_failures: number;
+  /** Max wall-clock time per run in ms. null = use scheduler default. */
+  wall_clock_ms: number | null;
+  /** Project ID for grouping related goals. Goals with same project_id share context. */
+  project_id: string | null;
 }
 
 interface GoalRow {
@@ -893,6 +900,8 @@ interface GoalRow {
   parent_goal_id: string | null;
   max_retries: number;
   consecutive_failures: number;
+  wall_clock_ms: number | null;
+  project_id: string | null;
 }
 
 function rowToGoal(row: GoalRow): Goal {
@@ -909,6 +918,8 @@ function rowToGoal(row: GoalRow): Goal {
     parent_goal_id: row.parent_goal_id,
     max_retries: row.max_retries ?? 3,
     consecutive_failures: row.consecutive_failures ?? 0,
+    wall_clock_ms: row.wall_clock_ms ?? null,
+    project_id: row.project_id ?? null,
   };
 }
 
@@ -923,11 +934,12 @@ export class SqliteGoalStore {
   private stmtIncrementFailures: PreparedStatement;
   private stmtResetFailures: PreparedStatement;
   private stmtListChildren: PreparedStatement;
+  private stmtListByProject: PreparedStatement;
 
   constructor(db: DatabaseDriver) {
     this.stmtAdd = db.prepare(
-      `INSERT OR REPLACE INTO goals (goal_id, motebit_id, prompt, interval_ms, last_run_at, enabled, created_at, mode, status, parent_goal_id, max_retries, consecutive_failures)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO goals (goal_id, motebit_id, prompt, interval_ms, last_run_at, enabled, created_at, mode, status, parent_goal_id, max_retries, consecutive_failures, wall_clock_ms, project_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtRemove = db.prepare(`DELETE FROM goals WHERE goal_id = ?`);
     this.stmtList = db.prepare(`SELECT * FROM goals WHERE motebit_id = ? ORDER BY created_at ASC`);
@@ -943,6 +955,9 @@ export class SqliteGoalStore {
     );
     this.stmtListChildren = db.prepare(
       `SELECT * FROM goals WHERE parent_goal_id = ? ORDER BY created_at ASC`,
+    );
+    this.stmtListByProject = db.prepare(
+      `SELECT * FROM goals WHERE project_id = ? AND motebit_id = ? ORDER BY created_at ASC`,
     );
   }
 
@@ -960,6 +975,8 @@ export class SqliteGoalStore {
       goal.parent_goal_id ?? null,
       goal.max_retries ?? 3,
       goal.consecutive_failures ?? 0,
+      goal.wall_clock_ms ?? null,
+      goal.project_id ?? null,
     );
   }
 
@@ -980,6 +997,11 @@ export class SqliteGoalStore {
 
   listChildren(parentGoalId: string): Goal[] {
     const rows = this.stmtListChildren.all(parentGoalId) as GoalRow[];
+    return rows.map(rowToGoal);
+  }
+
+  listByProject(projectId: string, motebitId: string): Goal[] {
+    const rows = this.stmtListByProject.all(projectId, motebitId) as GoalRow[];
     return rows.map(rowToGoal);
   }
 
@@ -1770,6 +1792,17 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
       driver.exec("ALTER TABLE goal_outcomes ADD COLUMN tokens_used INTEGER");
     } catch (_) { /* already exists on new DBs */ }
     driver.pragma("user_version = 11");
+  }
+
+  if (userVersion < 12) {
+    try { driver.exec("ALTER TABLE goals ADD COLUMN wall_clock_ms INTEGER"); } catch (_) { /* already exists */ }
+    driver.pragma("user_version = 12");
+  }
+
+  if (userVersion < 13) {
+    try { driver.exec("ALTER TABLE goals ADD COLUMN project_id TEXT"); } catch (_) { /* already exists */ }
+    driver.exec("CREATE INDEX IF NOT EXISTS idx_goals_project ON goals (project_id)");
+    driver.pragma("user_version = 13");
   }
 
   const eventStore = new SqliteEventStore(driver);

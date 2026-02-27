@@ -126,6 +126,8 @@ function makeGoal(overrides: Partial<Goal> = {}): Goal {
     parent_goal_id: null,
     max_retries: 3,
     consecutive_failures: 0,
+      wall_clock_ms: null,
+      project_id: null,
     ...overrides,
   };
 }

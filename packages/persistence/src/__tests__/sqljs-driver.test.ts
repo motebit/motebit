@@ -151,6 +151,8 @@ describe("sql.js driver (in-memory)", () => {
       parent_goal_id: null,
       max_retries: 3,
       consecutive_failures: 0,
+      wall_clock_ms: null,
+      project_id: null,
     });
     const goals = mdb.goalStore.list("motebit-1");
     expect(goals).toHaveLength(1);
@@ -183,9 +185,9 @@ describe("sql.js driver (in-memory)", () => {
   // === Pragma handling ===
 
   it("user_version get/set works", async () => {
-    // After createMotebitDatabaseFromDriver, user_version should be 11
+    // After createMotebitDatabaseFromDriver, user_version should be 13
     const result = mdb.db.pragma("user_version") as { user_version: number }[];
-    expect(result[0]!.user_version).toBe(11);
+    expect(result[0]!.user_version).toBe(13);
 
     mdb.db.pragma("user_version = 99");
     const result2 = mdb.db.pragma("user_version") as { user_version: number }[];

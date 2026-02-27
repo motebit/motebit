@@ -46,6 +46,7 @@ export class GoalScheduler {
     private motebitId: string,
     private denyAbove: RiskLevel,
     private defaultTtlMs = 3_600_000, // 1 hour
+    private goalWallClockMs = 10 * 60 * 1000, // configurable default wall-clock per goal run
   ) {}
 
   /** Attach a PlanEngine for multi-step goal execution. */
@@ -117,6 +118,9 @@ export class GoalScheduler {
       const once = (args.once as boolean) ?? false;
       const goalId = crypto.randomUUID();
 
+      const wallClockMs = typeof args.wall_clock_ms === "number" ? args.wall_clock_ms : null;
+      const projectId = typeof args.project_id === "string" && args.project_id !== "" ? args.project_id : null;
+
       this.goalStore.add({
         goal_id: goalId,
         motebit_id: this.motebitId,
@@ -130,6 +134,8 @@ export class GoalScheduler {
         parent_goal_id: this.currentGoalId,
         max_retries: 3,
         consecutive_failures: 0,
+        wall_clock_ms: wallClockMs,
+        project_id: projectId,
       });
 
       console.log(`[goal] sub-goal created: ${goalId.slice(0, 8)} — "${prompt.slice(0, 40)}"`);
@@ -228,6 +234,65 @@ export class GoalScheduler {
       }
     }
 
+    // Parent context: if this goal has a parent, show the parent's prompt and recent outcomes
+    if (goal.parent_goal_id) {
+      const parent = this.goalStore.get(goal.parent_goal_id);
+      if (parent) {
+        lines.push("");
+        lines.push(`Parent goal: "${parent.prompt.slice(0, 100)}"`);
+        const parentOutcomes = this.goalOutcomeStore.listForGoal(parent.goal_id, 2);
+        if (parentOutcomes.length > 0) {
+          lines.push("Parent's recent results:");
+          for (const po of parentOutcomes) {
+            const ago = formatTimeAgo(Date.now() - po.ran_at);
+            if (po.summary != null && po.summary !== "") {
+              lines.push(`  - ${ago}: ${po.summary.slice(0, 100)}`);
+            } else {
+              lines.push(`  - ${ago}: ${po.status}`);
+            }
+          }
+        }
+
+        // Sibling context: other active children of the same parent
+        const siblings = this.goalStore.listChildren(goal.parent_goal_id)
+          .filter(sg => sg.goal_id !== goal.goal_id && sg.status === "active")
+          .slice(0, 5);
+        if (siblings.length > 0) {
+          lines.push("");
+          lines.push("Sibling goals (related work under same parent):");
+          for (const sib of siblings) {
+            const sibOutcomes = this.goalOutcomeStore.listForGoal(sib.goal_id, 1);
+            const lastResult = sibOutcomes[0];
+            if (lastResult?.summary != null && lastResult.summary !== "") {
+              lines.push(`  - "${sib.prompt.slice(0, 60)}": ${lastResult.summary.slice(0, 80)}`);
+            } else {
+              lines.push(`  - "${sib.prompt.slice(0, 60)}": no results yet`);
+            }
+          }
+        }
+      }
+    }
+
+    // Project context: other active goals with the same project_id
+    if (goal.project_id) {
+      const projectGoals = this.goalStore.listByProject(goal.project_id, this.motebitId)
+        .filter(pg => pg.goal_id !== goal.goal_id && pg.status === "active")
+        .slice(0, 5);
+      if (projectGoals.length > 0) {
+        lines.push("");
+        lines.push(`Project "${goal.project_id}" — related goals:`);
+        for (const pg of projectGoals) {
+          const pgOutcomes = this.goalOutcomeStore.listForGoal(pg.goal_id, 1);
+          const lastResult = pgOutcomes[0];
+          if (lastResult?.summary != null && lastResult.summary !== "") {
+            lines.push(`  - "${pg.prompt.slice(0, 60)}": ${lastResult.summary.slice(0, 80)}`);
+          } else {
+            lines.push(`  - "${pg.prompt.slice(0, 60)}": no results yet`);
+          }
+        }
+      }
+    }
+
     if (goal.mode === "once") {
       lines.push("");
       lines.push("This is a one-time goal. Use complete_goal when done.");
@@ -276,10 +341,13 @@ export class GoalScheduler {
         try {
           let result: GoalStreamResult;
 
-          // Wall-clock limit: 10 minutes per goal run
-          const GOAL_WALL_CLOCK_MS = 10 * 60 * 1000;
+          // Wall-clock limit: per-goal override → scheduler default
+          const wallClock = goal.wall_clock_ms ?? this.goalWallClockMs;
           const abortController = new AbortController();
-          const deadlineTimer = setTimeout(() => abortController.abort(new Error("Goal exceeded 10-minute wall-clock limit")), GOAL_WALL_CLOCK_MS);
+          const deadlineTimer = setTimeout(
+            () => abortController.abort(new Error(`Goal exceeded ${Math.round(wallClock / 60_000)}-minute wall-clock limit`)),
+            wallClock,
+          );
 
           try {
             if (this.planEngine && this.planStore) {
