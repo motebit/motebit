@@ -1411,6 +1411,74 @@
     }
     .locked-panel-btn:hover { background: var(--accent-hover); }
 
+    /* Identity value display */
+    .identity-value {
+      font-size: 12px;
+      color: var(--text-secondary);
+      padding: 6px 10px;
+      border-radius: 8px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-light);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      cursor: pointer;
+      transition: background 0.15s;
+      user-select: all;
+    }
+    .identity-value:hover { background: var(--bg-btn-hover); }
+    .identity-value.monospace { font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace; font-size: 11px; }
+    .identity-value.copied {
+      background: var(--accent-bg);
+      border-color: var(--accent-border);
+    }
+    .identity-note {
+      font-size: 11px;
+      color: var(--text-faint);
+      line-height: 1.4;
+      margin-top: 8px;
+    }
+
+    /* Sync popup functional content */
+    .sync-popup-header {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-heading);
+      margin-bottom: 4px;
+    }
+    .sync-popup-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .sync-btn {
+      flex: 1;
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-family: inherit;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      transition: background 0.15s, opacity 0.15s;
+    }
+    .sync-btn.connect {
+      background: var(--accent-soft);
+      color: #fff;
+    }
+    .sync-btn.connect:hover { background: var(--accent-hover); }
+    .sync-btn.disconnect {
+      background: var(--bg-btn);
+      color: var(--text-secondary);
+    }
+    .sync-btn.disconnect:hover { background: var(--bg-btn-hover); }
+    .sync-status-text {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 6px;
+      min-height: 16px;
+    }
+
     /* Locked card overlay — inline locked sections within functional panes */
     .locked-card-overlay {
       display: flex;
@@ -2963,28 +3031,33 @@
       height: 16px;
       transition: stroke 0.3s ease, opacity 0.3s ease;
     }
-    /* Disconnected: gray, slash line */
+    /* Disconnected: gray, slash line visible */
     #sync-status.disconnected svg { stroke: var(--text-ghost); }
-    /* Connecting: gray, pulsing */
+    #sync-status.disconnected .sync-slash { display: inline; }
+    /* Connecting: gray, pulsing, no slash */
     #sync-status.connecting svg { stroke: var(--text-faint); }
+    #sync-status.connecting .sync-slash { display: none; }
     #sync-status.connecting {
       animation: sync-pulse 1.8s ease-in-out infinite;
     }
-    /* Connected/idle: subtle green */
+    /* Connected/idle: subtle green, no slash */
     #sync-status.connected svg { stroke: #4ade80; }
-    /* Syncing: blue, gentle rotation on arrows */
+    #sync-status.connected .sync-slash { display: none; }
+    /* Syncing: blue, gentle rotation on arrows, no slash */
     #sync-status.syncing svg { stroke: #6366f1; }
-    #sync-status.syncing .sync-arrows {
-      animation: sync-spin 1.2s linear infinite;
-      transform-origin: center;
+    #sync-status.syncing .sync-slash { display: none; }
+    #sync-status.syncing .sync-cloud {
+      animation: sync-pulse 1.2s ease-in-out infinite;
     }
     /* Conflict: orange */
     #sync-status.conflict svg { stroke: #f59e0b; }
+    #sync-status.conflict .sync-slash { display: none; }
     #sync-status.conflict {
       background: rgba(245, 158, 11, 0.08);
     }
-    /* Error: red */
+    /* Error: red, no slash */
     #sync-status.error svg { stroke: #f87171; }
+    #sync-status.error .sync-slash { display: none; }
     #sync-status.error {
       background: rgba(248, 113, 113, 0.08);
     }
@@ -3615,7 +3688,7 @@
       <svg class="locked-panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
       <div class="locked-panel-heading">Autonomous Goals</div>
       <div class="locked-panel-text">Schedule background tasks, set recurring goals, and let your motebit execute plans autonomously with tool approval governance.</div>
-      <div class="locked-panel-text" style="margin-top:4px;color:var(--text-faint);">Goal execution requires persistent identity and the operator console.</div>
+      <div class="locked-panel-text" style="margin-top:4px;color:var(--text-faint);">Goal execution requires the operator console (CLI or desktop app).</div>
       <a class="locked-panel-btn" href="https://github.com/motebit/motebit/releases" target="_blank" rel="noopener">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         Download App
@@ -3631,15 +3704,16 @@
     </svg>
   </div>
   <div id="sync-popup">
-    <div class="locked-panel-content" style="padding:0;">
-      <svg class="locked-panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width:28px;height:28px;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-      <div class="locked-panel-heading" style="font-size:14px;">Multi-Device Sync</div>
-      <div class="locked-panel-text">Sync conversations, memory, and state across all your devices with end-to-end encrypted relay.</div>
-      <a class="locked-panel-btn" href="https://github.com/motebit/motebit/releases" target="_blank" rel="noopener" style="font-size:12px;padding:6px 14px;">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        Download App
-      </a>
+    <div class="sync-popup-header">Multi-Device Sync</div>
+    <div class="settings-field" style="margin:8px 0;">
+      <label for="sync-relay-url" style="font-size:11px;color:var(--text-muted);">Relay URL</label>
+      <input id="sync-relay-url" type="url" placeholder="https://relay.motebit.com" autocomplete="off" style="font-size:12px;padding:6px 10px;width:100%;border-radius:8px;border:1px solid var(--border-input);background:var(--bg-input);color:var(--text-input);outline:none;" />
     </div>
+    <div class="sync-popup-actions">
+      <button id="sync-connect-btn" class="sync-btn connect">Connect</button>
+      <button id="sync-disconnect-btn" class="sync-btn disconnect" style="display:none;">Disconnect</button>
+    </div>
+    <div id="sync-status-text" class="sync-status-text"></div>
   </div>
 
   <button id="settings-btn" title="Settings" aria-label="Settings">&#9881;</button>
@@ -3784,24 +3858,33 @@
           <svg class="locked-panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
           <div class="locked-panel-heading">Policy &amp; Governance</div>
           <div class="locked-panel-text">Tool approval policies, budget limits, sensitivity-aware privacy rules, and a complete audit trail of every action your motebit takes.</div>
-          <div class="locked-panel-text" style="margin-top:4px;color:var(--text-faint);">Governance requires the operator console and cryptographic identity.</div>
+          <div class="locked-panel-text" style="margin-top:4px;color:var(--text-faint);">Governance requires the operator console (CLI or desktop app).</div>
           <a class="locked-panel-btn" href="https://github.com/motebit/motebit/releases" target="_blank" rel="noopener">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             Download App
           </a>
         </div>
       </div>
-      <!-- Identity pane (locked) -->
+      <!-- Identity pane (functional) -->
       <div class="settings-pane" id="pane-identity" role="tabpanel" aria-labelledby="tab-identity">
-        <div class="locked-panel-content" style="padding:24px 16px;min-height:260px;">
-          <svg class="locked-panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-          <div class="locked-panel-heading">Cryptographic Identity</div>
-          <div class="locked-panel-text">Ed25519 keypair, device registration, signed tokens, and a verifiable identity that persists across sessions and devices.</div>
-          <div class="locked-panel-text" style="margin-top:4px;color:var(--text-faint);">For hardware-secured identity, download the app.</div>
-          <a class="locked-panel-btn" href="https://github.com/motebit/motebit/releases" target="_blank" rel="noopener">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            Download App
-          </a>
+        <div class="settings-card">
+          <div class="card-title">Cryptographic Identity</div>
+          <div class="settings-field">
+            <label>Motebit ID</label>
+            <div class="identity-value" id="identity-motebit-id" title="Click to copy">—</div>
+          </div>
+          <div class="settings-field">
+            <label>Device ID</label>
+            <div class="identity-value" id="identity-device-id" title="Click to copy">—</div>
+          </div>
+          <div class="settings-field">
+            <label>Public Key</label>
+            <div class="identity-value monospace" id="identity-public-key" title="Click to copy">—</div>
+          </div>
+          <div class="identity-note">Ed25519 keypair stored in encrypted IndexedDB. Private key never leaves this browser.</div>
+        </div>
+        <div class="settings-card">
+          <div class="identity-note" style="color:var(--text-muted);">For hardware-secured identity (OS keyring), download the desktop app.</div>
         </div>
       </div>
     </div>

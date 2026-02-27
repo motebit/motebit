@@ -6,6 +6,15 @@ import type { AudioReactivity } from "@motebit/render-engine";
 import type { StreamingProvider } from "@motebit/ai-core/browser";
 import { createBrowserStorage, IdbConversationStore } from "@motebit/browser-persistence";
 import {
+  bootstrapIdentity,
+  type BootstrapConfigStore,
+} from "@motebit/core-identity";
+import { createSignedToken } from "@motebit/crypto";
+import {
+  HttpEventStoreAdapter,
+  type SyncStatus,
+} from "@motebit/sync-engine";
+import {
   webSearchDefinition,
   createWebSearchHandler,
   readUrlDefinition,
@@ -21,6 +30,7 @@ import { createProvider, WebLLMProvider } from "./providers";
 import type { ProviderConfig } from "./storage";
 import { needsMigration, loadLegacyConversations, markMigrationDone } from "./storage";
 import { LocalStorageKeyringAdapter } from "./browser-keyring";
+import { EncryptedKeyStore } from "./encrypted-keystore";
 
 // Re-export for color-picker module
 export type InteriorColor = { tint: [number, number, number]; glow: [number, number, number] };
@@ -56,25 +66,24 @@ function hashEmbed(text: string): number[] {
   return vec;
 }
 
-// Motebit ID stored in localStorage for persistence across sessions
-const MOTEBIT_ID_KEY = "motebit-web-id";
+// Legacy Tier 1 localStorage key — will be migrated to cryptographic identity
+const LEGACY_MOTEBIT_ID_KEY = "motebit-web-id";
 
-function getOrCreateMotebitId(): string {
-  let id = localStorage.getItem(MOTEBIT_ID_KEY);
-  if (!id) {
-    id = crypto.randomUUID();
-    localStorage.setItem(MOTEBIT_ID_KEY, id);
-  }
-  return id;
-}
+export type WebSyncStatus = "offline" | "connecting" | "connected" | "syncing" | "error" | "disconnected";
 
 export class WebApp {
   private renderer = new ThreeJSAdapter();
   private cursorPresence = new CursorPresence();
   private runtime: MotebitRuntime | null = null;
   private _motebitId = "";
+  private _deviceId = "";
+  private _publicKeyHex = "";
   private _isProcessing = false;
   private _interiorColor: InteriorColor | null = null;
+  private _syncStatus: WebSyncStatus = "offline";
+  private _syncStatusListeners = new Set<(status: WebSyncStatus) => void>();
+  private _syncUnsubscribe: (() => void) | null = null;
+  private keyStore = new EncryptedKeyStore();
   private cuesTickInterval: ReturnType<typeof setInterval> | null = null;
   private idleCues: BehaviorCues = {
     hover_distance: 0.4,
@@ -92,10 +101,42 @@ export class WebApp {
   }
 
   async bootstrap(): Promise<void> {
-    this._motebitId = getOrCreateMotebitId();
-
     // Open IndexedDB storage
     const storage = await createBrowserStorage();
+
+    // Bootstrap cryptographic identity
+    const configStore: BootstrapConfigStore = {
+      read() {
+        const mid = localStorage.getItem("motebit:motebit_id");
+        if (mid == null) return Promise.resolve(null);
+        return Promise.resolve({
+          motebit_id: mid,
+          device_id: localStorage.getItem("motebit:device_id") ?? "",
+          device_public_key: localStorage.getItem("motebit:device_public_key") ?? "",
+        });
+      },
+      write(state): Promise<void> {
+        localStorage.setItem("motebit:motebit_id", state.motebit_id);
+        localStorage.setItem("motebit:device_id", state.device_id);
+        localStorage.setItem("motebit:device_public_key", state.device_public_key);
+        return Promise.resolve();
+      },
+    };
+
+    const result = await bootstrapIdentity({
+      surfaceName: "Web",
+      identityStorage: storage.identityStorage,
+      eventStoreAdapter: storage.eventStore,
+      configStore,
+      keyStore: this.keyStore,
+    });
+
+    this._motebitId = result.motebitId;
+    this._deviceId = result.deviceId;
+    this._publicKeyHex = result.publicKeyHex;
+
+    // Tier 1 → Tier 2 migration: re-associate existing IDB conversations
+    await this.migrateTier1Identity(storage);
 
     // Migrate legacy localStorage conversations to IDB
     if (needsMigration()) {
@@ -127,6 +168,53 @@ export class WebApp {
         this.runtime.pushStateUpdate(cursorUpdates);
       }
     }, 33);
+  }
+
+  /**
+   * Tier 1 → Tier 2 migration.
+   * Existing web users have a `motebit-web-id` localStorage key with a random UUID.
+   * After bootstrapIdentity() creates a new cryptographic identity, we re-associate
+   * existing IDB conversations with the new motebitId and clean up the old key.
+   */
+  private async migrateTier1Identity(storage: StorageAdapters): Promise<void> {
+    const legacyId = localStorage.getItem(LEGACY_MOTEBIT_ID_KEY);
+    if (legacyId == null || legacyId === "") return;
+
+    // Only migrate if this is actually a new identity (different from legacy)
+    if (legacyId === this._motebitId) {
+      localStorage.removeItem(LEGACY_MOTEBIT_ID_KEY);
+      return;
+    }
+
+    const convStore = storage.conversationStore as IdbConversationStore | undefined;
+    if (convStore) {
+      // Preload under the old ID so we can see what needs migrating
+      await convStore.preload(legacyId);
+      const oldConversations = convStore.listConversations(legacyId);
+
+      if (oldConversations.length > 0) {
+        // Re-preload under new ID, then re-associate conversations
+        // The IDB store uses motebitId as an index — we need to update the records.
+        // Since IdbConversationStore doesn't expose a migration method, we'll
+        // re-create conversations under the new identity.
+        for (const oldConv of oldConversations) {
+          const newConvId = convStore.createConversation(this._motebitId);
+          const messages = convStore.loadMessages(oldConv.conversationId);
+          for (const msg of messages) {
+            convStore.appendMessage(newConvId, this._motebitId, {
+              role: msg.role,
+              content: msg.content,
+            });
+          }
+          if (oldConv.title) {
+            convStore.updateTitle(newConvId, oldConv.title);
+          }
+        }
+      }
+    }
+
+    // Remove legacy key — migration complete
+    localStorage.removeItem(LEGACY_MOTEBIT_ID_KEY);
   }
 
   private async migrateLegacyConversations(storage: StorageAdapters): Promise<void> {
@@ -359,5 +447,95 @@ export class WebApp {
 
   get motebitId(): string {
     return this._motebitId;
+  }
+
+  get deviceId(): string {
+    return this._deviceId;
+  }
+
+  get publicKeyHex(): string {
+    return this._publicKeyHex;
+  }
+
+  // === Sync ===
+
+  get syncStatus(): WebSyncStatus {
+    return this._syncStatus;
+  }
+
+  onSyncStatusChange(cb: (status: WebSyncStatus) => void): () => void {
+    this._syncStatusListeners.add(cb);
+    return () => { this._syncStatusListeners.delete(cb); };
+  }
+
+  private setSyncStatus(status: WebSyncStatus): void {
+    this._syncStatus = status;
+    for (const cb of this._syncStatusListeners) cb(status);
+  }
+
+  async createSyncToken(): Promise<string | null> {
+    const privateKeyHex = await this.keyStore.loadPrivateKey();
+    if (privateKeyHex == null || privateKeyHex === "") return null;
+
+    const privKeyBytes = new Uint8Array(privateKeyHex.length / 2);
+    for (let i = 0; i < privateKeyHex.length; i += 2) {
+      privKeyBytes[i / 2] = parseInt(privateKeyHex.slice(i, i + 2), 16);
+    }
+
+    return createSignedToken(
+      {
+        mid: this._motebitId,
+        did: this._deviceId,
+        iat: Date.now(),
+        exp: Date.now() + 5 * 60 * 1000,
+      },
+      privKeyBytes,
+    );
+  }
+
+  async startSync(relayUrl: string): Promise<void> {
+    if (!this.runtime) throw new Error("Runtime not initialized");
+
+    this.setSyncStatus("connecting");
+
+    const token = await this.createSyncToken();
+    if (token == null) {
+      this.setSyncStatus("error");
+      throw new Error("No device keypair available for sync authentication");
+    }
+
+    // Connect remote event store adapter
+    const remoteStore = new HttpEventStoreAdapter({
+      baseUrl: relayUrl,
+      motebitId: this._motebitId,
+      authToken: token,
+    });
+    this.runtime.connectSync(remoteStore);
+
+    // Subscribe to SyncEngine status changes
+    if (this._syncUnsubscribe) this._syncUnsubscribe();
+    this._syncUnsubscribe = this.runtime.sync.onStatusChange((engineStatus: SyncStatus) => {
+      if (engineStatus === "syncing") {
+        this.setSyncStatus("syncing");
+      } else if (engineStatus === "idle") {
+        this.setSyncStatus("connected");
+      } else if (engineStatus === "error") {
+        this.setSyncStatus("error");
+      } else if (engineStatus === "offline") {
+        this.setSyncStatus("disconnected");
+      }
+    });
+
+    this.runtime.startSync();
+    this.setSyncStatus("connected");
+  }
+
+  stopSync(): void {
+    if (this._syncUnsubscribe) {
+      this._syncUnsubscribe();
+      this._syncUnsubscribe = null;
+    }
+    this.runtime?.sync.stop();
+    this.setSyncStatus("disconnected");
   }
 }

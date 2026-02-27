@@ -489,6 +489,9 @@ importers:
       '@motebit/core-identity':
         specifier: workspace:*
         version: link:../../packages/core-identity
+      '@motebit/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@motebit/policy-invariants':
         specifier: workspace:*
         version: link:../../packages/policy-invariants
@@ -504,6 +507,9 @@ importers:
       '@motebit/state-vector':
         specifier: workspace:*
         version: link:../../packages/state-vector
+      '@motebit/sync-engine':
+        specifier: workspace:*
+        version: link:../../packages/sync-engine
       '@motebit/tools':
         specifier: workspace:*
         version: link:../../packages/tools

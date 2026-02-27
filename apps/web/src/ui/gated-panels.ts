@@ -1,8 +1,11 @@
 // === Gated HUD Panels ===
-// Memory panel is now functional (IDB-backed via runtime).
-// Goals and Sync remain locked — accurate messaging for web surface.
+// Memory panel is functional (IDB-backed via runtime).
+// Sync popup is functional (connects to relay via signed tokens).
+// Goals remains locked — requires operator console.
 
 import type { WebContext } from "../types";
+import type { WebSyncStatus } from "../web-app";
+import { saveSyncUrl, loadSyncUrl, clearSyncUrl } from "../storage";
 
 export interface GatedPanelsAPI {
   openMemory(): void;
@@ -19,6 +22,15 @@ function formatTimeAgo(timestamp: number): string {
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
 }
+
+const SYNC_STATUS_LABELS: Record<WebSyncStatus, string> = {
+  offline: "",
+  connecting: "Connecting...",
+  connected: "Connected",
+  syncing: "Syncing...",
+  error: "Connection failed",
+  disconnected: "Disconnected",
+};
 
 export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   // === Memory Panel (functional) ===
@@ -112,9 +124,62 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   document.getElementById("goals-close-btn")!.addEventListener("click", closeGoals);
   goalsBackdrop.addEventListener("click", closeGoals);
 
-  // === Sync Popup (locked) ===
-  const syncStatus = document.getElementById("sync-status") as HTMLDivElement;
+  // === Sync Popup (functional) ===
+  const syncStatusEl = document.getElementById("sync-status") as HTMLDivElement;
   const syncPopup = document.getElementById("sync-popup") as HTMLDivElement;
+  const syncRelayUrl = document.getElementById("sync-relay-url") as HTMLInputElement;
+  const syncConnectBtn = document.getElementById("sync-connect-btn") as HTMLButtonElement;
+  const syncDisconnectBtn = document.getElementById("sync-disconnect-btn") as HTMLButtonElement;
+  const syncStatusText = document.getElementById("sync-status-text") as HTMLDivElement;
+
+  function updateSyncUI(status: WebSyncStatus): void {
+    // Update the HUD indicator class
+    syncStatusEl.className = status === "offline" ? "disconnected" : status;
+
+    // Update tooltip
+    const label = SYNC_STATUS_LABELS[status] || status;
+    syncStatusEl.title = label ? `Sync: ${label}` : "Sync: Not connected";
+
+    // Update popup text
+    syncStatusText.textContent = label;
+
+    // Toggle connect/disconnect buttons
+    const isActive = status === "connected" || status === "syncing" || status === "connecting";
+    syncConnectBtn.style.display = isActive ? "none" : "";
+    syncDisconnectBtn.style.display = isActive ? "" : "none";
+  }
+
+  // Restore saved relay URL
+  const savedUrl = loadSyncUrl();
+  if (savedUrl) {
+    syncRelayUrl.value = savedUrl;
+  }
+
+  // Subscribe to sync status changes
+  ctx.app.onSyncStatusChange(updateSyncUI);
+
+  // Connect button
+  syncConnectBtn.addEventListener("click", () => {
+    const url = syncRelayUrl.value.trim();
+    if (!url) {
+      syncStatusText.textContent = "Enter a relay URL";
+      return;
+    }
+    saveSyncUrl(url);
+    syncStatusText.textContent = "Connecting...";
+    ctx.app.startSync(url).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      syncStatusText.textContent = `Failed: ${msg}`;
+      ctx.showToast(`Sync failed: ${msg}`);
+    });
+  });
+
+  // Disconnect button
+  syncDisconnectBtn.addEventListener("click", () => {
+    ctx.app.stopSync();
+    clearSyncUrl();
+    syncStatusText.textContent = "";
+  });
 
   function toggleSync(): void {
     if (syncPopup.classList.contains("open")) {
@@ -122,7 +187,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     } else {
       closeAll();
       // Position popup below the sync status indicator
-      const rect = syncStatus.getBoundingClientRect();
+      const rect = syncStatusEl.getBoundingClientRect();
       syncPopup.style.top = `${rect.bottom + 8}px`;
       syncPopup.style.left = `${rect.left + rect.width / 2}px`;
       syncPopup.style.transform = "translateX(-50%)";
@@ -130,13 +195,13 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     }
   }
 
-  syncStatus.addEventListener("click", toggleSync);
+  syncStatusEl.addEventListener("click", toggleSync);
 
   // Close sync popup on outside click
   document.addEventListener("click", (e) => {
     if (syncPopup.classList.contains("open") &&
         !syncPopup.contains(e.target as Node) &&
-        !syncStatus.contains(e.target as Node)) {
+        !syncStatusEl.contains(e.target as Node)) {
       syncPopup.classList.remove("open");
     }
   });

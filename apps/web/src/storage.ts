@@ -71,6 +71,34 @@ export function loadSoulColor(): SoulColorConfig | null {
   return null;
 }
 
+// === Sync Relay URL ===
+
+const SYNC_URL_KEY = "motebit-sync-url";
+
+export function saveSyncUrl(url: string): void {
+  try {
+    localStorage.setItem(SYNC_URL_KEY, url);
+  } catch {
+    // localStorage unavailable
+  }
+}
+
+export function loadSyncUrl(): string | null {
+  try {
+    return localStorage.getItem(SYNC_URL_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function clearSyncUrl(): void {
+  try {
+    localStorage.removeItem(SYNC_URL_KEY);
+  } catch {
+    // localStorage unavailable
+  }
+}
+
 // === Sovereignty Ceiling CTA ===
 
 const CEILING_KEY = "motebit-ceiling-shown";

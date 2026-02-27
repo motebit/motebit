@@ -233,8 +233,8 @@ function injectCeilingCTA(): void {
   const cta = document.createElement("div");
   cta.className = "ceiling-cta";
   cta.innerHTML = `
-    <div class="ceiling-cta-text">Your motebit has persistent memory in this browser.</div>
-    <div class="ceiling-cta-text" style="margin-top: 4px;">For hardware-secured identity and multi-device sync, download the app.</div>
+    <div class="ceiling-cta-text">Your motebit has a cryptographic identity in this browser.</div>
+    <div class="ceiling-cta-text" style="margin-top: 4px;">For hardware-secured identity (OS keyring), download the app.</div>
     <div class="ceiling-cta-actions">
       <a class="ceiling-cta-btn" href="https://github.com/motebit/motebit/releases" target="_blank" rel="noopener">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>

@@ -11,6 +11,11 @@ const settingsModal = document.getElementById("settings-modal") as HTMLDivElemen
 const connectPrompt = document.getElementById("connect-prompt") as HTMLDivElement;
 const modelIndicator = document.getElementById("model-indicator") as HTMLDivElement;
 
+// Identity fields
+const identityMotebitId = document.getElementById("identity-motebit-id") as HTMLDivElement;
+const identityDeviceId = document.getElementById("identity-device-id") as HTMLDivElement;
+const identityPublicKey = document.getElementById("identity-public-key") as HTMLDivElement;
+
 // === Provider Tab DOM ===
 const providerTabs = document.querySelectorAll<HTMLButtonElement>("#provider-tabs .provider-tab");
 const providerConfigs = {
@@ -66,7 +71,33 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     document.querySelectorAll(".settings-pane").forEach(pane => {
       pane.classList.toggle("active", pane.id === `pane-${tabName}`);
     });
+
+    // Populate identity fields when switching to identity tab
+    if (tabName === "identity") {
+      populateIdentityFields();
+    }
   }
+
+  function populateIdentityFields(): void {
+    identityMotebitId.textContent = ctx.app.motebitId || "—";
+    identityDeviceId.textContent = ctx.app.deviceId || "—";
+    identityPublicKey.textContent = ctx.app.publicKeyHex || "—";
+  }
+
+  function setupIdentityCopyHandlers(): void {
+    for (const el of [identityMotebitId, identityDeviceId, identityPublicKey]) {
+      el.addEventListener("click", () => {
+        const text = el.textContent;
+        if (text == null || text === "" || text === "—") return;
+        void navigator.clipboard.writeText(text).then(() => {
+          el.classList.add("copied");
+          setTimeout(() => el.classList.remove("copied"), 1000);
+        });
+      });
+    }
+  }
+
+  setupIdentityCopyHandlers();
 
   document.querySelectorAll(".settings-tab").forEach(tab => {
     tab.addEventListener("click", () => {

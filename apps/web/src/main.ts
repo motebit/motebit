@@ -1,7 +1,7 @@
 import { WebApp } from "./web-app";
 import type { WebContext } from "./types";
 import type { ProviderConfig } from "./storage";
-import { loadProviderConfig, loadSoulColor } from "./storage";
+import { loadProviderConfig, loadSoulColor, loadSyncUrl } from "./storage";
 import { deriveInteriorColor } from "./ui/color-picker";
 import { initColorPicker } from "./ui/color-picker";
 import { initChat, addMessage, showToast } from "./ui/chat";
@@ -168,6 +168,15 @@ async function bootstrap(): Promise<void> {
   }
 
   settings.updateConnectPrompt();
+
+  // Auto-connect sync if a relay URL was previously saved
+  const syncUrl = loadSyncUrl();
+  if (syncUrl) {
+    app.startSync(syncUrl).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(`Sync failed: ${msg}`);
+    });
+  }
 
   // Restore conversation history into chat log (immediate = skip entrance animation)
   const history = app.getConversationHistory();
