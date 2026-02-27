@@ -260,9 +260,8 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
         webllmProgressFill.style.width = `${Math.round(progress.progress * 100)}%`;
         webllmProgressText.textContent = progress.text;
       });
-      ctx.app.connectProvider(config);
-      // Override with the initialized WebLLM provider instance
-      (ctx.app as any).provider = provider; // eslint-disable-line @typescript-eslint/no-explicit-any
+      // Set the initialized WebLLM provider directly on the runtime
+      ctx.app.setProviderDirect(provider);
       webllmProgressText.textContent = "Ready";
       updateModelIndicator();
       updateConnectPrompt();

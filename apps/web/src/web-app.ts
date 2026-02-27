@@ -1,13 +1,26 @@
+import { MotebitRuntime } from "@motebit/runtime";
+import type { StreamChunk, StorageAdapters } from "@motebit/runtime";
+import type { ConversationMessage, BehaviorCues, EventType } from "@motebit/sdk";
 import { ThreeJSAdapter } from "@motebit/render-engine";
 import type { AudioReactivity } from "@motebit/render-engine";
-import { StateVectorEngine } from "@motebit/state-vector";
-import { computeRawCues } from "@motebit/behavior-engine";
-import type { MotebitState, BehaviorCues } from "@motebit/sdk";
 import type { StreamingProvider } from "@motebit/ai-core/browser";
+import { createBrowserStorage, IdbConversationStore } from "@motebit/browser-persistence";
+import {
+  webSearchDefinition,
+  createWebSearchHandler,
+  readUrlDefinition,
+  createReadUrlHandler,
+  recallMemoriesDefinition,
+  createRecallMemoriesHandler,
+  listEventsDefinition,
+  createListEventsHandler,
+  DuckDuckGoSearchProvider,
+} from "@motebit/tools/web-safe";
 import { CursorPresence } from "./cursor-presence";
 import { createProvider, WebLLMProvider } from "./providers";
-import type { ProviderConfig, ConversationMessage } from "./storage";
-import { saveConversationById, loadConversationById, ensureActiveConversation, startNewConversation as storageStartNew, setActiveConversationId } from "./storage";
+import type { ProviderConfig } from "./storage";
+import { needsMigration, loadLegacyConversations, markMigrationDone } from "./storage";
+import { LocalStorageKeyringAdapter } from "./browser-keyring";
 
 // Re-export for color-picker module
 export type InteriorColor = { tint: [number, number, number]; glow: [number, number, number] };
@@ -25,17 +38,45 @@ export const COLOR_PRESETS: Record<string, InteriorColor> = {
 // Re-export provider utilities
 export { createProvider, WebLLMProvider };
 
+// Simple hash-based text embedding for memory retrieval (no ONNX model needed)
+const HASH_DIM = 64;
+function hashEmbed(text: string): number[] {
+  const vec = new Array<number>(HASH_DIM).fill(0);
+  const words = text.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+  for (const w of words) {
+    let h = 0;
+    for (let i = 0; i < w.length; i++) h = ((h << 5) - h + w.charCodeAt(i)) | 0;
+    const idx = ((h % HASH_DIM) + HASH_DIM) % HASH_DIM;
+    vec[idx] = (vec[idx] ?? 0) + 1;
+  }
+  let norm = 0;
+  for (let i = 0; i < HASH_DIM; i++) norm += vec[i]! * vec[i]!;
+  norm = Math.sqrt(norm);
+  if (norm > 0) for (let i = 0; i < HASH_DIM; i++) vec[i] = vec[i]! / norm;
+  return vec;
+}
+
+// Motebit ID stored in localStorage for persistence across sessions
+const MOTEBIT_ID_KEY = "motebit-web-id";
+
+function getOrCreateMotebitId(): string {
+  let id = localStorage.getItem(MOTEBIT_ID_KEY);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(MOTEBIT_ID_KEY, id);
+  }
+  return id;
+}
+
 export class WebApp {
   private renderer = new ThreeJSAdapter();
-  private stateEngine: StateVectorEngine;
   private cursorPresence = new CursorPresence();
-  private provider: StreamingProvider | null = null;
-  private conversationHistory: ConversationMessage[] = [];
-  private _activeConversationId: string | null = null;
+  private runtime: MotebitRuntime | null = null;
+  private _motebitId = "";
   private _isProcessing = false;
   private _interiorColor: InteriorColor | null = null;
   private cuesTickInterval: ReturnType<typeof setInterval> | null = null;
-  private currentCues: BehaviorCues = {
+  private idleCues: BehaviorCues = {
     hover_distance: 0.4,
     drift_amplitude: 0.02,
     glow_intensity: 0.3,
@@ -44,40 +85,119 @@ export class WebApp {
     speaking_activity: 0,
   };
 
-  constructor() {
-    this.stateEngine = new StateVectorEngine({ tick_rate_hz: 2, ema_alpha: 0.3, hysteresis_threshold: 0.05, hysteresis_sustain_ms: 500 });
-  }
-
   async init(canvas: HTMLCanvasElement): Promise<void> {
     await this.renderer.init(canvas);
     this.renderer.setLightEnvironment();
     this.renderer.enableOrbitControls();
   }
 
-  start(): void {
-    this.stateEngine.start();
+  async bootstrap(): Promise<void> {
+    this._motebitId = getOrCreateMotebitId();
+
+    // Open IndexedDB storage
+    const storage = await createBrowserStorage();
+
+    // Migrate legacy localStorage conversations to IDB
+    if (needsMigration()) {
+      await this.migrateLegacyConversations(storage);
+    }
+
+    // Preload conversation cache for sync access
+    const convStore = storage.conversationStore as IdbConversationStore;
+    await convStore.preload(this._motebitId);
+
+    // Create runtime — no AI provider yet, will be set via connectProvider()
+    const keyring = new LocalStorageKeyringAdapter();
+    this.runtime = new MotebitRuntime(
+      { motebitId: this._motebitId, tickRateHz: 2 },
+      { storage, renderer: this.renderer, ai: undefined, keyring },
+    );
+
+    // Register web-safe tools
+    this.registerWebTools();
+
+    // Start ticking
+    this.runtime.start();
     this.cursorPresence.start();
 
-    // 30fps cues tick: merge cursor presence into state, compute cues
+    // 30fps cursor tick: merge cursor presence into runtime state
     this.cuesTickInterval = setInterval(() => {
       const cursorUpdates = this.cursorPresence.getUpdates();
-      this.stateEngine.pushUpdate(cursorUpdates);
-      const state = this.stateEngine.getState();
-      this.currentCues = computeRawCues(state);
+      if (this.runtime) {
+        this.runtime.pushStateUpdate(cursorUpdates);
+      }
     }, 33);
+  }
 
-    // Restore active conversation from localStorage
-    this._activeConversationId = ensureActiveConversation();
-    this.conversationHistory = loadConversationById(this._activeConversationId);
+  private async migrateLegacyConversations(storage: StorageAdapters): Promise<void> {
+    const convStore = storage.conversationStore;
+    if (!convStore) {
+      markMigrationDone();
+      return;
+    }
+
+    const legacy = loadLegacyConversations();
+    for (const conv of legacy) {
+      const convId = convStore.createConversation(this._motebitId);
+      for (const msg of conv.messages) {
+        if (msg.role === "user" || msg.role === "assistant") {
+          convStore.appendMessage(convId, this._motebitId, {
+            role: msg.role,
+            content: msg.content,
+          });
+        }
+      }
+      if (conv.title) {
+        convStore.updateTitle(convId, conv.title);
+      }
+    }
+
+    markMigrationDone();
+  }
+
+  private registerWebTools(): void {
+    if (!this.runtime) return;
+    const registry = this.runtime.getToolRegistry();
+
+    registry.register(
+      webSearchDefinition,
+      createWebSearchHandler(new DuckDuckGoSearchProvider()),
+    );
+    registry.register(readUrlDefinition, createReadUrlHandler());
+    registry.register(
+      recallMemoriesDefinition,
+      createRecallMemoriesHandler(async (query, limit) => {
+        if (!this.runtime) return [];
+        const embedding = hashEmbed(query);
+        const nodes = await this.runtime.memory.retrieve(embedding, { limit });
+        return nodes.map(n => ({ content: n.content, confidence: n.confidence }));
+      }),
+    );
+    registry.register(
+      listEventsDefinition,
+      createListEventsHandler(async (limit, eventType) => {
+        if (!this.runtime) return [];
+        const events = await this.runtime.events.query({
+          motebit_id: this.runtime.motebitId,
+          limit,
+          event_types: eventType ? [eventType as EventType] : undefined,
+        });
+        return events.map(e => ({
+          event_type: e.event_type,
+          timestamp: e.timestamp,
+          payload: e.payload,
+        }));
+      }),
+    );
   }
 
   stop(): void {
-    this.stateEngine.stop();
     this.cursorPresence.stop();
     if (this.cuesTickInterval) {
       clearInterval(this.cuesTickInterval);
       this.cuesTickInterval = null;
     }
+    this.runtime?.stop();
     this.renderer.dispose();
   }
 
@@ -86,17 +206,22 @@ export class WebApp {
   }
 
   renderFrame(deltaTime: number, time: number): void {
-    this.renderer.render({
-      cues: this.currentCues,
-      delta_time: deltaTime,
-      time,
-    });
+    if (this.runtime) {
+      this.runtime.renderFrame(deltaTime, time);
+    } else {
+      // Pre-bootstrap: render with idle cues
+      this.renderer.render({
+        cues: this.idleCues,
+        delta_time: deltaTime,
+        time,
+      });
+    }
   }
 
   // === Provider Management ===
 
   get isProviderConnected(): boolean {
-    return this.provider != null;
+    return this.runtime?.isAIReady ?? false;
   }
 
   get isProcessing(): boolean {
@@ -104,15 +229,24 @@ export class WebApp {
   }
 
   get currentModel(): string | null {
-    return this.provider?.model ?? null;
+    return this.runtime?.currentModel ?? null;
   }
 
   connectProvider(config: ProviderConfig): void {
-    this.provider = createProvider(config) as StreamingProvider;
+    const provider = createProvider(config) as StreamingProvider;
+    if (this.runtime) {
+      this.runtime.setProvider(provider);
+    }
+  }
+
+  setProviderDirect(provider: StreamingProvider): void {
+    if (this.runtime) {
+      this.runtime.setProvider(provider);
+    }
   }
 
   disconnectProvider(): void {
-    this.provider = null;
+    // No direct "unset provider" on runtime — reconnect with a different one
   }
 
   // === Appearance ===
@@ -148,87 +282,82 @@ export class WebApp {
   // === Conversation ===
 
   get activeConversationId(): string | null {
-    return this._activeConversationId;
+    return this.runtime?.getConversationId() ?? null;
   }
 
   getConversationHistory(): ConversationMessage[] {
-    return [...this.conversationHistory];
+    return this.runtime?.getConversationHistory() ?? [];
   }
 
   resetConversation(): void {
-    this.conversationHistory = [];
-    const id = storageStartNew();
-    this._activeConversationId = id;
+    this.runtime?.resetConversation();
   }
 
   loadConversationById(id: string): ConversationMessage[] {
-    this._activeConversationId = id;
-    setActiveConversationId(id);
-    this.conversationHistory = loadConversationById(id);
-    return [...this.conversationHistory];
+    if (!this.runtime) return [];
+    this.runtime.loadConversation(id);
+    return this.runtime.getConversationHistory();
+  }
+
+  listConversations(): Array<{
+    conversationId: string;
+    startedAt: number;
+    lastActiveAt: number;
+    title: string | null;
+    messageCount: number;
+  }> {
+    return this.runtime?.listConversations() ?? [];
   }
 
   // === Streaming Chat ===
 
-  async *sendMessageStreaming(text: string): AsyncGenerator<
-    | { type: "text"; text: string }
-    | { type: "done"; response: { text: string } }
-  > {
-    if (!this.provider) throw new Error("No provider connected");
+  async *sendMessageStreaming(text: string): AsyncGenerator<StreamChunk> {
+    if (!this.runtime) throw new Error("Runtime not initialized");
+    if (!this.runtime.isAIReady) throw new Error("No provider connected");
     if (this._isProcessing) throw new Error("Already processing");
 
     this._isProcessing = true;
-
-    // Add user message to history
-    this.conversationHistory.push({ role: "user", content: text, timestamp: Date.now() });
-
     try {
-      // Build a minimal context pack — web app has no event log or memory graph
-      const recentHistory = this.conversationHistory.slice(-20).map(
-        (m) => ({ role: m.role, content: m.content }) as { role: "user"; content: string } | { role: "assistant"; content: string },
-      );
-
-      const contextPack = {
-        user_message: text,
-        current_state: this.stateEngine.getState(),
-        conversation_history: recentHistory,
-        recent_events: [],
-        relevant_memories: [],
-        personality: { name: "Motebit", species: "Sapientia Unda", body_awareness: "" },
-        tools: [],
-      };
-
-      // Inject processing state
-      this.stateEngine.pushUpdate({ processing: 0.7, attention: 0.8 });
-
-      let accumulated = "";
-      for await (const chunk of this.provider.generateStream(contextPack)) {
-        if (chunk.type === "text") {
-          accumulated += chunk.text;
-          yield { type: "text", text: chunk.text };
-        } else if (chunk.type === "done") {
-          // Use the full response text
-          const responseText = chunk.response.text || accumulated;
-          this.conversationHistory.push({ role: "assistant", content: responseText, timestamp: Date.now() });
-          saveConversationById(this._activeConversationId!, this.conversationHistory);
-
-          // Apply response state updates
-          if (chunk.response.state_updates) {
-            this.stateEngine.pushUpdate(chunk.response.state_updates as Partial<MotebitState>);
-          }
-
-          yield { type: "done", response: { text: responseText } };
-        }
-      }
-
-      // If we never got a "done" chunk, still save
-      if (accumulated && !this.conversationHistory.some(m => m.role === "assistant" && m.content === accumulated)) {
-        this.conversationHistory.push({ role: "assistant", content: accumulated, timestamp: Date.now() });
-        saveConversationById(this._activeConversationId!, this.conversationHistory);
-      }
+      yield* this.runtime.sendMessageStreaming(text);
     } finally {
       this._isProcessing = false;
-      this.stateEngine.pushUpdate({ processing: 0 });
     }
+  }
+
+  // === Approval Flow ===
+
+  get hasPendingApproval(): boolean {
+    return this.runtime?.hasPendingApproval ?? false;
+  }
+
+  get pendingApprovalInfo(): { toolName: string; args: Record<string, unknown> } | null {
+    return this.runtime?.pendingApprovalInfo ?? null;
+  }
+
+  async *resumeAfterApproval(approved: boolean): AsyncGenerator<StreamChunk> {
+    if (!this.runtime) return;
+    yield* this.runtime.resumeAfterApproval(approved);
+  }
+
+  // === Sovereign Features ===
+
+  async autoTitle(): Promise<string | null> {
+    return this.runtime?.autoTitle() ?? null;
+  }
+
+  async summarize(): Promise<string | null> {
+    return this.runtime?.summarizeCurrentConversation() ?? null;
+  }
+
+  async housekeeping(): Promise<void> {
+    await this.runtime?.housekeeping();
+  }
+
+  getRuntime(): MotebitRuntime | null {
+    return this.runtime;
+  }
+
+  get motebitId(): string {
+    return this._motebitId;
   }
 }

@@ -2,6 +2,8 @@
 // Web-specific subset of commands. Desktop-only commands are omitted.
 
 import type { ChatAPI } from "./chat";
+import { addMessage } from "./chat";
+import type { WebContext } from "../types";
 
 interface SlashCommandDef {
   name: string;
@@ -12,6 +14,11 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "clear", description: "Clear conversation" },
   { name: "settings", description: "Open settings" },
   { name: "conversations", description: "Browse conversations" },
+  { name: "memories", description: "Browse memories" },
+  { name: "state", description: "Show state vector" },
+  { name: "tools", description: "List registered tools" },
+  { name: "summarize", description: "Summarize conversation" },
+  { name: "model", description: "Show current model" },
   { name: "help", description: "Show keyboard shortcuts" },
 ];
 
@@ -29,9 +36,10 @@ export interface SlashCommandsCallbacks {
   openSettings(): void;
   openConversations(): void;
   openShortcuts(): void;
+  openMemory(): void;
 }
 
-export function initSlashCommands(chatAPI: ChatAPI, callbacks: SlashCommandsCallbacks): void {
+export function initSlashCommands(chatAPI: ChatAPI, ctx: WebContext, callbacks: SlashCommandsCallbacks): void {
   let selectedIndex = 0;
   let visible = false;
   let matches: SlashCommandDef[] = [];
@@ -93,18 +101,74 @@ export function initSlashCommands(chatAPI: ChatAPI, callbacks: SlashCommandsCall
     chatInput.value = "/" + cmd.name;
     hide();
 
-    // Execute the command directly
-    if (cmd.name === "clear") {
-      void chatAPI.handleSend();
-    } else if (cmd.name === "settings") {
-      chatInput.value = "";
-      callbacks.openSettings();
-    } else if (cmd.name === "conversations") {
-      chatInput.value = "";
-      callbacks.openConversations();
-    } else if (cmd.name === "help") {
-      chatInput.value = "";
-      callbacks.openShortcuts();
+    switch (cmd.name) {
+      case "clear":
+        void chatAPI.handleSend();
+        break;
+      case "settings":
+        chatInput.value = "";
+        callbacks.openSettings();
+        break;
+      case "conversations":
+        chatInput.value = "";
+        callbacks.openConversations();
+        break;
+      case "help":
+        chatInput.value = "";
+        callbacks.openShortcuts();
+        break;
+      case "memories":
+        chatInput.value = "";
+        callbacks.openMemory();
+        break;
+      case "state": {
+        chatInput.value = "";
+        const runtime = ctx.app.getRuntime();
+        if (runtime) {
+          const state = runtime.getState();
+          const lines = Object.entries(state).map(([k, v]) =>
+            `${k}: ${typeof v === "number" ? v.toFixed(3) : String(v)}`
+          );
+          addMessage("system", lines.join("\n"));
+        } else {
+          addMessage("system", "Runtime not initialized.");
+        }
+        break;
+      }
+      case "tools": {
+        chatInput.value = "";
+        const runtime = ctx.app.getRuntime();
+        if (runtime) {
+          const tools = runtime.getToolRegistry().list();
+          if (tools.length === 0) {
+            addMessage("system", "No tools registered.");
+          } else {
+            const names = tools.map(t => t.name).join(", ");
+            addMessage("system", `Registered tools: ${names}`);
+          }
+        } else {
+          addMessage("system", "Runtime not initialized.");
+        }
+        break;
+      }
+      case "summarize": {
+        chatInput.value = "";
+        void (async () => {
+          const result = await ctx.app.summarize();
+          if (result) {
+            addMessage("system", `Summary: ${result}`);
+          } else {
+            addMessage("system", "Nothing to summarize.");
+          }
+        })();
+        break;
+      }
+      case "model": {
+        chatInput.value = "";
+        const model = ctx.app.currentModel;
+        addMessage("system", model ? `Current model: ${model}` : "No model connected.");
+        break;
+      }
     }
   }
 

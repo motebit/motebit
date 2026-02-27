@@ -59,10 +59,11 @@ const conversations = initConversations(ctx, {
 
 const voiceAPI = initVoice(ctx, chatAPI);
 
-initSlashCommands(chatAPI, {
+initSlashCommands(chatAPI, ctx, {
   openSettings: () => settings.open(),
   openConversations: () => conversations.open(),
   openShortcuts: () => openShortcutDialog(),
+  openMemory: () => gatedPanels.openMemory(),
 });
 
 const chatInput = document.getElementById("chat-input") as HTMLInputElement;
@@ -77,7 +78,7 @@ initKeyboard({
   },
 });
 
-const gatedPanels = initGatedPanels();
+const gatedPanels = initGatedPanels(ctx);
 
 // === Theme ===
 
@@ -113,7 +114,9 @@ document.addEventListener("keydown", (e) => {
 
 async function bootstrap(): Promise<void> {
   await app.init(canvas!);
-  app.start();
+
+  // Initialize IDB storage, migration, and runtime
+  await app.bootstrap();
 
   // Resize handler
   const onResize = (): void => {

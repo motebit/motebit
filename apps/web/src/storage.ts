@@ -71,150 +71,6 @@ export function loadSoulColor(): SoulColorConfig | null {
   return null;
 }
 
-// === Conversation ===
-
-export interface ConversationMessage {
-  role: "user" | "assistant" | "system";
-  content: string;
-  timestamp: number;
-}
-
-const CONVERSATION_KEY = "motebit-conversation";
-
-export function saveConversation(messages: ConversationMessage[]): void {
-  try {
-    localStorage.setItem(CONVERSATION_KEY, JSON.stringify(messages));
-  } catch {
-    // localStorage unavailable
-  }
-}
-
-export function loadConversation(): ConversationMessage[] {
-  try {
-    const raw = localStorage.getItem(CONVERSATION_KEY);
-    if (raw) {
-      return JSON.parse(raw) as ConversationMessage[];
-    }
-  } catch {
-    // localStorage unavailable or corrupt
-  }
-  return [];
-}
-
-export function clearConversation(): void {
-  try {
-    localStorage.removeItem(CONVERSATION_KEY);
-  } catch {
-    // localStorage unavailable
-  }
-}
-
-// === Multi-Conversation ===
-
-export interface ConversationEntry {
-  id: string;
-  title: string;
-  lastActiveAt: number;
-  messageCount: number;
-}
-
-const CONV_INDEX_KEY = "motebit-conv-index";
-const CONV_ACTIVE_KEY = "motebit-conv-active";
-const CONV_PREFIX = "motebit-conv-";
-
-function generateId(): string {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-}
-
-export function loadConversationIndex(): ConversationEntry[] {
-  try {
-    const raw = localStorage.getItem(CONV_INDEX_KEY);
-    if (raw) return JSON.parse(raw) as ConversationEntry[];
-  } catch { /* ignore */ }
-  return [];
-}
-
-function saveConversationIndex(index: ConversationEntry[]): void {
-  try {
-    localStorage.setItem(CONV_INDEX_KEY, JSON.stringify(index));
-  } catch { /* ignore */ }
-}
-
-export function getActiveConversationId(): string | null {
-  try {
-    return localStorage.getItem(CONV_ACTIVE_KEY);
-  } catch { /* ignore */ }
-  return null;
-}
-
-export function setActiveConversationId(id: string | null): void {
-  try {
-    if (id) {
-      localStorage.setItem(CONV_ACTIVE_KEY, id);
-    } else {
-      localStorage.removeItem(CONV_ACTIVE_KEY);
-    }
-  } catch { /* ignore */ }
-}
-
-export function loadConversationById(id: string): ConversationMessage[] {
-  try {
-    const raw = localStorage.getItem(CONV_PREFIX + id);
-    if (raw) return JSON.parse(raw) as ConversationMessage[];
-  } catch { /* ignore */ }
-  return [];
-}
-
-export function saveConversationById(id: string, messages: ConversationMessage[]): void {
-  try {
-    localStorage.setItem(CONV_PREFIX + id, JSON.stringify(messages));
-  } catch { /* ignore */ }
-
-  // Update index entry
-  const index = loadConversationIndex();
-  const entry = index.find(e => e.id === id);
-  const title = deriveTitle(messages);
-  if (entry) {
-    entry.lastActiveAt = Date.now();
-    entry.messageCount = messages.filter(m => m.role !== "system").length;
-    entry.title = title;
-  } else {
-    index.unshift({ id, title, lastActiveAt: Date.now(), messageCount: messages.filter(m => m.role !== "system").length });
-  }
-  // Sort by most recent
-  index.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
-  saveConversationIndex(index);
-}
-
-export function deleteConversationById(id: string): void {
-  try {
-    localStorage.removeItem(CONV_PREFIX + id);
-  } catch { /* ignore */ }
-  const index = loadConversationIndex().filter(e => e.id !== id);
-  saveConversationIndex(index);
-}
-
-export function ensureActiveConversation(): string {
-  let activeId = getActiveConversationId();
-  if (!activeId) {
-    activeId = generateId();
-    setActiveConversationId(activeId);
-  }
-  return activeId;
-}
-
-export function startNewConversation(): string {
-  const id = generateId();
-  setActiveConversationId(id);
-  return id;
-}
-
-function deriveTitle(messages: ConversationMessage[]): string {
-  const first = messages.find(m => m.role === "user");
-  if (!first) return "New conversation";
-  return first.content.length > 50 ? first.content.slice(0, 50) + "..." : first.content;
-}
-
 // === Sovereignty Ceiling CTA ===
 
 const CEILING_KEY = "motebit-ceiling-shown";
@@ -232,5 +88,79 @@ export function markCeilingShown(): void {
     sessionStorage.setItem(CEILING_KEY, "1");
   } catch {
     // sessionStorage unavailable
+  }
+}
+
+// === Legacy Conversation Migration ===
+// One-time migration from localStorage conversations to IDB.
+
+interface LegacyConversationMessage {
+  role: "user" | "assistant" | "system";
+  content: string;
+  timestamp: number;
+}
+
+interface LegacyConversationEntry {
+  id: string;
+  title: string;
+  lastActiveAt: number;
+  messageCount: number;
+}
+
+const CONV_INDEX_KEY = "motebit-conv-index";
+const CONV_PREFIX = "motebit-conv-";
+const MIGRATION_DONE_KEY = "motebit-idb-migrated";
+
+export function needsMigration(): boolean {
+  try {
+    if (localStorage.getItem(MIGRATION_DONE_KEY) === "1") return false;
+    return localStorage.getItem(CONV_INDEX_KEY) != null;
+  } catch {
+    return false;
+  }
+}
+
+export function loadLegacyConversations(): Array<{
+  id: string;
+  title: string;
+  lastActiveAt: number;
+  messages: LegacyConversationMessage[];
+}> {
+  const results: Array<{
+    id: string;
+    title: string;
+    lastActiveAt: number;
+    messages: LegacyConversationMessage[];
+  }> = [];
+
+  try {
+    const raw = localStorage.getItem(CONV_INDEX_KEY);
+    if (!raw) return results;
+
+    const index = JSON.parse(raw) as LegacyConversationEntry[];
+    for (const entry of index) {
+      const msgRaw = localStorage.getItem(CONV_PREFIX + entry.id);
+      if (msgRaw) {
+        const messages = JSON.parse(msgRaw) as LegacyConversationMessage[];
+        results.push({
+          id: entry.id,
+          title: entry.title,
+          lastActiveAt: entry.lastActiveAt,
+          messages,
+        });
+      }
+    }
+  } catch {
+    // Corrupt data — skip migration
+  }
+
+  return results;
+}
+
+export function markMigrationDone(): void {
+  try {
+    localStorage.setItem(MIGRATION_DONE_KEY, "1");
+  } catch {
+    // ignore
   }
 }

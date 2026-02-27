@@ -1,5 +1,4 @@
 import type { WebContext } from "../types";
-import { loadConversationIndex, deleteConversationById, loadConversationById } from "../storage";
 
 // === DOM Refs ===
 
@@ -45,9 +44,9 @@ export function initConversations(ctx: WebContext, callbacks: ConversationsCallb
 
   function populateList(): void {
     convList.innerHTML = "";
-    const index = loadConversationIndex();
+    const conversations = ctx.app.listConversations();
 
-    if (index.length === 0) {
+    if (conversations.length === 0) {
       const empty = document.createElement("div");
       empty.style.cssText = "font-size:12px;color:var(--text-ghost);padding:16px;text-align:center;";
       empty.textContent = "No conversations yet";
@@ -57,9 +56,9 @@ export function initConversations(ctx: WebContext, callbacks: ConversationsCallb
 
     const activeId = ctx.app.activeConversationId;
 
-    for (const entry of index) {
+    for (const entry of conversations) {
       const item = document.createElement("div");
-      item.className = "conv-item" + (entry.id === activeId ? " active" : "");
+      item.className = "conv-item" + (entry.conversationId === activeId ? " active" : "");
 
       const titleDiv = document.createElement("div");
       titleDiv.className = "conv-item-title";
@@ -77,26 +76,10 @@ export function initConversations(ctx: WebContext, callbacks: ConversationsCallb
       countSpan.textContent = `${entry.messageCount} msgs`;
       metaDiv.appendChild(countSpan);
 
-      const deleteBtn = document.createElement("button");
-      deleteBtn.className = "conv-delete-btn";
-      deleteBtn.textContent = "\u00d7";
-      deleteBtn.title = "Delete conversation";
-      deleteBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        deleteConversationById(entry.id);
-        // If deleting the active conversation, start fresh
-        if (entry.id === ctx.app.activeConversationId) {
-          ctx.app.resetConversation();
-          callbacks.onLoad();
-        }
-        populateList();
-      });
-      metaDiv.appendChild(deleteBtn);
-
       item.appendChild(metaDiv);
 
       item.addEventListener("click", () => {
-        ctx.app.loadConversationById(entry.id);
+        ctx.app.loadConversationById(entry.conversationId);
         close();
         callbacks.onLoad();
       });
@@ -120,18 +103,15 @@ export function initConversations(ctx: WebContext, callbacks: ConversationsCallb
   // === Export ===
 
   document.getElementById("conv-export-btn")!.addEventListener("click", () => {
-    const activeId = ctx.app.activeConversationId;
-    if (!activeId) return;
-    const messages = loadConversationById(activeId);
-    if (messages.length === 0) return;
+    const history = ctx.app.getConversationHistory();
+    if (history.length === 0) return;
 
     // Build markdown
     const lines: string[] = ["# Motebit Conversation", ""];
-    for (const msg of messages) {
-      if (msg.role === "system") continue;
+    for (const msg of history) {
+      if (msg.role === "tool") continue;
       const label = msg.role === "user" ? "You" : "Motebit";
-      const time = new Date(msg.timestamp).toLocaleString();
-      lines.push(`**${label}** _(${time})_`);
+      lines.push(`**${label}**`);
       lines.push("");
       lines.push(msg.content);
       lines.push("");

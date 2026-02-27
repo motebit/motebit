@@ -483,18 +483,30 @@ importers:
       '@motebit/behavior-engine':
         specifier: workspace:*
         version: link:../../packages/behavior-engine
+      '@motebit/browser-persistence':
+        specifier: workspace:*
+        version: link:../../packages/browser-persistence
+      '@motebit/core-identity':
+        specifier: workspace:*
+        version: link:../../packages/core-identity
       '@motebit/policy-invariants':
         specifier: workspace:*
         version: link:../../packages/policy-invariants
       '@motebit/render-engine':
         specifier: workspace:*
         version: link:../../packages/render-engine
+      '@motebit/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
       '@motebit/state-vector':
         specifier: workspace:*
         version: link:../../packages/state-vector
+      '@motebit/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
       three:
         specifier: ^0.170.0
         version: 0.170.0

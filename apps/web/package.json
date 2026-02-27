@@ -13,10 +13,14 @@
   "dependencies": {
     "@motebit/ai-core": "workspace:*",
     "@motebit/behavior-engine": "workspace:*",
+    "@motebit/browser-persistence": "workspace:*",
+    "@motebit/core-identity": "workspace:*",
     "@motebit/policy-invariants": "workspace:*",
     "@motebit/render-engine": "workspace:*",
+    "@motebit/runtime": "workspace:*",
     "@motebit/sdk": "workspace:*",
     "@motebit/state-vector": "workspace:*",
+    "@motebit/tools": "workspace:*",
     "three": "^0.170.0"
   },
   "devDependencies": {

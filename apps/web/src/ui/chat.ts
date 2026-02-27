@@ -160,6 +160,70 @@ function removeThinkingIndicator(el: HTMLElement): void {
   el.remove();
 }
 
+// === Approval Card ===
+
+function showApprovalCard(
+  name: string,
+  args: Record<string, unknown>,
+  riskLevel: number | undefined,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const card = document.createElement("div");
+    card.className = "approval-card";
+
+    const title = document.createElement("div");
+    title.className = "approval-card-title";
+    title.textContent = `Tool: ${name}`;
+    card.appendChild(title);
+
+    if (riskLevel != null) {
+      const badge = document.createElement("span");
+      badge.className = `approval-risk-badge risk-${Math.min(riskLevel, 3)}`;
+      badge.textContent = `Risk ${riskLevel}`;
+      title.appendChild(badge);
+    }
+
+    if (Object.keys(args).length > 0) {
+      const argsEl = document.createElement("pre");
+      argsEl.className = "approval-card-args";
+      argsEl.textContent = JSON.stringify(args, null, 2);
+      card.appendChild(argsEl);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "approval-card-actions";
+
+    const allowBtn = document.createElement("button");
+    allowBtn.className = "approval-btn approve";
+    allowBtn.textContent = "Allow";
+    allowBtn.addEventListener("click", () => {
+      card.classList.add("decided");
+      title.textContent = `${name} — allowed`;
+      actions.remove();
+      resolve(true);
+    });
+
+    const denyBtn = document.createElement("button");
+    denyBtn.className = "approval-btn deny";
+    denyBtn.textContent = "Deny";
+    denyBtn.addEventListener("click", () => {
+      card.classList.add("decided");
+      title.textContent = `${name} — denied`;
+      actions.remove();
+      resolve(false);
+    });
+
+    actions.appendChild(allowBtn);
+    actions.appendChild(denyBtn);
+    card.appendChild(actions);
+
+    chatLog.appendChild(card);
+    void card.offsetWidth;
+    card.classList.add("visible");
+    chatLog.scrollTop = chatLog.scrollHeight;
+  });
+}
+
 // === Ceiling CTA ===
 
 function injectCeilingCTA(): void {
@@ -169,8 +233,8 @@ function injectCeilingCTA(): void {
   const cta = document.createElement("div");
   cta.className = "ceiling-cta";
   cta.innerHTML = `
-    <div class="ceiling-cta-text">Your motebit is stateless — every page refresh starts fresh.</div>
-    <div class="ceiling-cta-text" style="margin-top: 4px;">Download the app for persistent memory, cryptographic identity, and tool use.</div>
+    <div class="ceiling-cta-text">Your motebit has persistent memory in this browser.</div>
+    <div class="ceiling-cta-text" style="margin-top: 4px;">For hardware-secured identity and multi-device sync, download the app.</div>
     <div class="ceiling-cta-actions">
       <a class="ceiling-cta-btn" href="https://github.com/motebit/motebit/releases" target="_blank" rel="noopener">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -272,24 +336,88 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
 
     try {
       for await (const chunk of ctx.app.sendMessageStreaming(text)) {
-        if (chunk.type === "text") {
-          if (!firstChunkReceived) {
-            firstChunkReceived = true;
-            removeThinkingIndicator(thinkingEl);
+        switch (chunk.type) {
+          case "text": {
+            if (!firstChunkReceived) {
+              firstChunkReceived = true;
+              removeThinkingIndicator(thinkingEl);
 
-            bubble = document.createElement("div");
-            bubble.className = "chat-bubble assistant";
-            textEl = document.createElement("span");
-            textEl.className = "bubble-text";
-            bubble.appendChild(textEl);
-            chatLog.appendChild(bubble);
-            void bubble.offsetWidth;
-            bubble.classList.add("visible");
+              bubble = document.createElement("div");
+              bubble.className = "chat-bubble assistant";
+              textEl = document.createElement("span");
+              textEl.className = "bubble-text";
+              bubble.appendChild(textEl);
+              chatLog.appendChild(bubble);
+              void bubble.offsetWidth;
+              bubble.classList.add("visible");
+            }
+
+            accumulated += chunk.text;
+            textEl!.textContent = accumulated;
+            chatLog.scrollTop = chatLog.scrollHeight;
+            break;
           }
 
-          accumulated += chunk.text;
-          textEl!.textContent = accumulated;
-          chatLog.scrollTop = chatLog.scrollHeight;
+          case "tool_status": {
+            if (chunk.status === "calling") {
+              showToolStatus(chunk.name);
+            } else if (chunk.status === "done") {
+              completeToolStatus(chunk.name);
+            }
+            break;
+          }
+
+          case "approval_request": {
+            if (!firstChunkReceived) {
+              firstChunkReceived = true;
+              removeThinkingIndicator(thinkingEl);
+            }
+            const approved = await showApprovalCard(
+              chunk.name,
+              chunk.args,
+              chunk.risk_level,
+            );
+            // Resume the stream after approval decision
+            for await (const resumeChunk of ctx.app.resumeAfterApproval(approved)) {
+              if (resumeChunk.type === "text") {
+                if (!bubble) {
+                  bubble = document.createElement("div");
+                  bubble.className = "chat-bubble assistant";
+                  textEl = document.createElement("span");
+                  textEl.className = "bubble-text";
+                  bubble.appendChild(textEl);
+                  chatLog.appendChild(bubble);
+                  void bubble.offsetWidth;
+                  bubble.classList.add("visible");
+                }
+                accumulated += resumeChunk.text;
+                textEl!.textContent = accumulated;
+                chatLog.scrollTop = chatLog.scrollHeight;
+              } else if (resumeChunk.type === "tool_status") {
+                if (resumeChunk.status === "calling") showToolStatus(resumeChunk.name);
+                else if (resumeChunk.status === "done") completeToolStatus(resumeChunk.name);
+              } else if (resumeChunk.type === "result") {
+                void ctx.app.autoTitle();
+              }
+            }
+            break;
+          }
+
+          case "injection_warning": {
+            addMessage("system", `Injection warning from tool "${chunk.tool_name}": ${chunk.patterns.join(", ")}`);
+            break;
+          }
+
+          case "approval_expired": {
+            addMessage("system", `Tool "${chunk.tool_name}" approval expired — auto-denied.`);
+            break;
+          }
+
+          case "result": {
+            // Trigger auto-titling in background
+            void ctx.app.autoTitle();
+            break;
+          }
         }
       }
     } catch (err: unknown) {
