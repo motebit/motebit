@@ -20,7 +20,7 @@ import type {
   MemoryGovernanceConfig,
 } from "@motebit/runtime";
 import { CloudProvider, OllamaProvider, HybridProvider } from "@motebit/ai-core";
-import { createSignedToken } from "@motebit/crypto";
+import { createSignedToken, deriveSyncEncryptionKey } from "@motebit/crypto";
 import {
   bootstrapIdentity as sharedBootstrapIdentity,
   type BootstrapConfigStore,
@@ -30,6 +30,9 @@ import {
   PairingClient,
   SyncEngine,
   HttpEventStoreAdapter,
+  WebSocketEventStoreAdapter,
+  EncryptedEventStoreAdapter,
+  decryptEventPayload,
   ConversationSyncEngine,
   HttpConversationSyncAdapter,
 } from "@motebit/sync-engine";
@@ -58,7 +61,7 @@ import {
   completeGoalDefinition,
   reportProgressDefinition,
 } from "@motebit/tools/web-safe";
-import type { EventFilter } from "@motebit/event-log";
+import type { EventFilter, EventStoreAdapter } from "@motebit/event-log";
 import type { EventType } from "@motebit/sdk";
 import {
   generate as generateIdentityFile,
@@ -233,6 +236,10 @@ export class MobileApp {
   private _syncStatus: SyncStatus = "offline";
   private _syncStatusCallback: ((status: SyncStatus, lastSync: number) => void) | null = null;
   private _lastSyncTime = 0;
+  private _wsAdapter: WebSocketEventStoreAdapter | null = null;
+  private _wsUnsubOnEvent: (() => void) | null = null;
+  private _syncEncKey: Uint8Array | null = null;
+  private _localEventStore: EventStoreAdapter | null = null;
 
   // MCP state
   private mcpAdapters: Map<string, McpClientAdapter> = new Map();
@@ -297,6 +304,7 @@ export class MobileApp {
 
     const storage = createExpoStorage("motebit.db");
     this.storage = storage;
+    this._localEventStore = storage.eventStore;
 
     const result = await sharedBootstrapIdentity({
       surfaceName: "Mobile",
@@ -1028,14 +1036,18 @@ export class MobileApp {
 
   // === Pairing: Device A (existing device) ===
 
-  private async createSyncToken(): Promise<string> {
+  private async _getPrivKeyBytes(): Promise<Uint8Array> {
     const privKeyHex = await this.keyring.get("device_private_key");
     if (privKeyHex == null || privKeyHex === "") throw new Error("No device private key available");
-
-    const privKeyBytes = new Uint8Array(privKeyHex.length / 2);
+    const bytes = new Uint8Array(privKeyHex.length / 2);
     for (let i = 0; i < privKeyHex.length; i += 2) {
-      privKeyBytes[i / 2] = parseInt(privKeyHex.slice(i, i + 2), 16);
+      bytes[i / 2] = parseInt(privKeyHex.slice(i, i + 2), 16);
     }
+    return bytes;
+  }
+
+  private async createSyncToken(): Promise<string> {
+    const privKeyBytes = await this._getPrivKeyBytes();
 
     return createSignedToken(
       { mid: this.motebitId, did: this.deviceId, iat: Date.now(), exp: Date.now() + 5 * 60 * 1000 },
@@ -1134,6 +1146,10 @@ export class MobileApp {
 
     await this.setSyncUrl(url);
 
+    // Derive encryption key once for the sync session
+    const privKeyBytes = await this._getPrivKeyBytes();
+    this._syncEncKey = await deriveSyncEncryptionKey(privKeyBytes);
+
     // Create engines (they don't start their own timers — we manage the interval
     // ourselves so we can refresh the auth token each cycle)
     this.syncEngine = new SyncEngine(
@@ -1165,10 +1181,19 @@ export class MobileApp {
       clearInterval(this.syncTimer);
       this.syncTimer = null;
     }
+    if (this._wsUnsubOnEvent) {
+      this._wsUnsubOnEvent();
+      this._wsUnsubOnEvent = null;
+    }
+    if (this._wsAdapter) {
+      this._wsAdapter.disconnect();
+      this._wsAdapter = null;
+    }
     this.syncEngine?.stop();
     this.conversationSyncEngine?.stop();
     this.syncEngine = null;
     this.conversationSyncEngine = null;
+    this._syncEncKey = null;
     this._syncStatus = "offline";
     this._syncStatusCallback?.("offline", this._lastSyncTime);
   }
@@ -1231,15 +1256,58 @@ export class MobileApp {
 
     try {
       const token = await this.createSyncToken();
+      const encKey = this._syncEncKey;
 
-      this.syncEngine.connectRemote(
-        new HttpEventStoreAdapter({
-          baseUrl: syncUrl,
+      // Tear down previous WS connection (token expired)
+      if (this._wsUnsubOnEvent) {
+        this._wsUnsubOnEvent();
+        this._wsUnsubOnEvent = null;
+      }
+      if (this._wsAdapter) {
+        this._wsAdapter.disconnect();
+        this._wsAdapter = null;
+      }
+
+      // Build adapter stack with encryption
+      const httpAdapter = new HttpEventStoreAdapter({
+        baseUrl: syncUrl,
+        motebitId: this.motebitId,
+        authToken: token,
+      });
+
+      if (encKey) {
+        const encryptedHttp = new EncryptedEventStoreAdapter({ inner: httpAdapter, key: encKey });
+        const wsUrl = syncUrl.replace(/^https?/, (m) => m === "https" ? "wss" : "ws") + "/ws/sync/" + this.motebitId;
+
+        const localEventStore = this._localEventStore;
+        const wsAdapter = new WebSocketEventStoreAdapter({
+          url: wsUrl,
           motebitId: this.motebitId,
           authToken: token,
-        }),
-      );
+          httpFallback: encryptedHttp,
+          localStore: localEventStore ?? undefined,
+        });
+        this._wsAdapter = wsAdapter;
 
+        const encryptedWs = new EncryptedEventStoreAdapter({ inner: wsAdapter, key: encKey });
+
+        // Inbound real-time events
+        this._wsUnsubOnEvent = wsAdapter.onEvent((raw) => {
+          void (async () => {
+            if (!localEventStore) return;
+            const dec = await decryptEventPayload(raw, encKey);
+            await localEventStore.append(dec);
+          })();
+        });
+
+        this.syncEngine.connectRemote(encryptedWs);
+        wsAdapter.connect();
+      } else {
+        // Fallback: no encryption key available
+        this.syncEngine.connectRemote(httpAdapter);
+      }
+
+      // Conversation sync stays HTTP
       this.conversationSyncEngine.connectRemote(
         new HttpConversationSyncAdapter({
           baseUrl: syncUrl,

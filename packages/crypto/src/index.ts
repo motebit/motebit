@@ -129,6 +129,19 @@ export async function deriveKey(
 }
 
 /**
+ * Derive a deterministic AES-256 encryption key from an Ed25519 private key using HKDF-SHA256.
+ * Used for sync encryption: all devices sharing the same identity derive the same key.
+ */
+export async function deriveSyncEncryptionKey(privateKey: Uint8Array): Promise<Uint8Array> {
+  const keyMaterial = await crypto.subtle.importKey("raw", privateKey as BufferSource, "HKDF", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(0), info: new TextEncoder().encode("motebit-sync-encryption-v1") },
+    keyMaterial, 256,
+  );
+  return new Uint8Array(bits);
+}
+
+/**
  * Create a SHA-256 hash of the input.
  */
 export async function hash(data: Uint8Array): Promise<string> {

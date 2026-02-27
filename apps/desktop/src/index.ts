@@ -16,7 +16,7 @@ import {
 } from "@motebit/ai-core";
 import type { ToolAuditEntry, MemoryNode, MemoryEdge } from "@motebit/sdk";
 import { EventType, SensitivityLevel } from "@motebit/sdk";
-import { InMemoryEventStore } from "@motebit/event-log";
+import { InMemoryEventStore, type EventStoreAdapter } from "@motebit/event-log";
 import { InMemoryMemoryStorage, computeDecayedConfidence, embedText } from "@motebit/memory-graph";
 import {
   InMemoryIdentityStorage,
@@ -25,9 +25,9 @@ import {
   type BootstrapKeyStore,
 } from "@motebit/core-identity";
 import { InMemoryAuditLog } from "@motebit/privacy-layer";
-import { createSignedToken } from "@motebit/crypto";
+import { createSignedToken, deriveSyncEncryptionKey } from "@motebit/crypto";
 import { generate as generateIdentityFile, parse as parseIdentityFile, verify as verifyIdentity, governanceToPolicyConfig } from "@motebit/identity-file";
-import { PairingClient, ConversationSyncEngine, HttpConversationSyncAdapter, HttpEventStoreAdapter } from "@motebit/sync-engine";
+import { PairingClient, ConversationSyncEngine, HttpConversationSyncAdapter, HttpEventStoreAdapter, WebSocketEventStoreAdapter, EncryptedEventStoreAdapter, decryptEventPayload } from "@motebit/sync-engine";
 import type { PairingSession, PairingStatus, ConversationSyncStoreAdapter, SyncStatus } from "@motebit/sync-engine";
 import type { SyncConversation, SyncConversationMessage } from "@motebit/sdk";
 import { PlanEngine, InMemoryPlanStore } from "@motebit/planner";
@@ -280,6 +280,10 @@ export class DesktopApp {
     error: null,
   };
   private _syncUnsubscribe: (() => void) | null = null;
+  private _wsAdapter: WebSocketEventStoreAdapter | null = null;
+  private _wsTokenRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  private _wsUnsubOnEvent: (() => void) | null = null;
+  private _localEventStore: EventStoreAdapter | null = null;
 
   constructor() {
     this.renderer = new ThreeJSAdapter();
@@ -542,6 +546,7 @@ export class DesktopApp {
     this.conversationStoreRef = conversationStore ?? null;
 
     const storage = createDesktopStorage(config, stateSnapshot, conversationStore);
+    this._localEventStore = storage.eventStore;
     const keyring = config.isTauri && config.invoke ? new TauriKeyringAdapter(config.invoke) : undefined;
 
     // Read governance from motebit.md identity file.
@@ -2231,24 +2236,69 @@ export class DesktopApp {
 
     this.emitSyncStatus({ status: "connecting", error: null });
 
+    // Get keypair for token creation + encryption key derivation
+    const keypair = await this.getDeviceKeypair(invoke);
+    if (!keypair) {
+      this.emitSyncStatus({ status: "error", error: "No device keypair available" });
+      return;
+    }
+
+    // Derive private key bytes (hex → Uint8Array)
+    const privKeyBytes = new Uint8Array(keypair.privateKey.length / 2);
+    for (let i = 0; i < keypair.privateKey.length; i += 2) {
+      privKeyBytes[i / 2] = parseInt(keypair.privateKey.slice(i, i + 2), 16);
+    }
+
+    // Derive deterministic encryption key from private key
+    const encKey = await deriveSyncEncryptionKey(privKeyBytes);
+
     // Get or create a signed auth token
     let token = authToken;
     if (token == null || token === "") {
-      const keypair = await this.getDeviceKeypair(invoke);
-      if (!keypair) {
-        this.emitSyncStatus({ status: "error", error: "No device keypair available" });
-        return;
-      }
       token = await this.createSyncToken(keypair.privateKey);
     }
 
-    // Event-level sync: connect remote adapter and start background polling
-    const remoteStore = new HttpEventStoreAdapter({
+    // Build adapter stack: HTTP (fallback) → Encrypted HTTP → WS → Encrypted WS
+    const httpAdapter = new HttpEventStoreAdapter({
       baseUrl: syncUrl,
       motebitId: this.motebitId,
       authToken: token,
     });
-    this.runtime.connectSync(remoteStore);
+    const encryptedHttp = new EncryptedEventStoreAdapter({ inner: httpAdapter, key: encKey });
+
+    // WebSocket URL: http(s) → ws(s)
+    const wsUrl = syncUrl.replace(/^https?/, (m) => m === "https" ? "wss" : "ws") + "/ws/sync/" + this.motebitId;
+
+    const localEventStore = this._localEventStore;
+    const wsAdapter = new WebSocketEventStoreAdapter({
+      url: wsUrl,
+      motebitId: this.motebitId,
+      authToken: token,
+      httpFallback: encryptedHttp,
+      localStore: localEventStore ?? undefined,
+      onCatchUp: (pulled) => {
+        if (pulled > 0) {
+          this.emitSyncStatus({ lastSyncAt: Date.now(), eventsPulled: this._lastSyncStatus.eventsPulled + pulled });
+        }
+      },
+    });
+    this._wsAdapter = wsAdapter;
+
+    // Encrypted wrapper around WS adapter for outbound events
+    const encryptedWs = new EncryptedEventStoreAdapter({ inner: wsAdapter, key: encKey });
+
+    // Inbound real-time events: decrypt and write to local store
+    this._wsUnsubOnEvent = wsAdapter.onEvent((raw) => {
+      void (async () => {
+        if (!localEventStore) return;
+        const dec = await decryptEventPayload(raw, encKey);
+        await localEventStore.append(dec);
+      })();
+    });
+
+    // Wire the encrypted WS adapter as the sync remote and start
+    this.runtime.connectSync(encryptedWs);
+    wsAdapter.connect();
 
     // Subscribe to SyncEngine status changes
     if (this._syncUnsubscribe) this._syncUnsubscribe();
@@ -2272,7 +2322,41 @@ export class DesktopApp {
     this.runtime.startSync();
     this.emitSyncStatus({ status: "connected" });
 
-    // One-shot conversation sync
+    // Token refresh: rebuild WS connection every 4.5 min (tokens expire at 5 min)
+    this._wsTokenRefreshTimer = setInterval(() => {
+      void (async () => {
+        try {
+          wsAdapter.disconnect();
+          const freshToken = await this.createSyncToken(keypair.privateKey);
+          const freshWs = new WebSocketEventStoreAdapter({
+            url: wsUrl,
+            motebitId: this.motebitId,
+            authToken: freshToken,
+            httpFallback: encryptedHttp,
+            localStore: localEventStore ?? undefined,
+          });
+
+          // Swap onEvent listener
+          if (this._wsUnsubOnEvent) this._wsUnsubOnEvent();
+          this._wsUnsubOnEvent = freshWs.onEvent((raw) => {
+            void (async () => {
+              if (!localEventStore) return;
+              const dec = await decryptEventPayload(raw, encKey);
+              await localEventStore.append(dec);
+            })();
+          });
+
+          const freshEncrypted = new EncryptedEventStoreAdapter({ inner: freshWs, key: encKey });
+          this.runtime?.connectSync(freshEncrypted);
+          freshWs.connect();
+          this._wsAdapter = freshWs;
+        } catch {
+          // Token refresh failed — WS will reconnect on its own
+        }
+      })();
+    }, 4.5 * 60_000);
+
+    // One-shot conversation sync (stays HTTP — no WS needed for conversations)
     void this.syncConversations(syncUrl, token).then((result) => {
       this.emitSyncStatus({
         lastSyncAt: Date.now(),
@@ -2286,6 +2370,18 @@ export class DesktopApp {
    * Stop background event sync.
    */
   stopSync(): void {
+    if (this._wsTokenRefreshTimer) {
+      clearInterval(this._wsTokenRefreshTimer);
+      this._wsTokenRefreshTimer = null;
+    }
+    if (this._wsUnsubOnEvent) {
+      this._wsUnsubOnEvent();
+      this._wsUnsubOnEvent = null;
+    }
+    if (this._wsAdapter) {
+      this._wsAdapter.disconnect();
+      this._wsAdapter = null;
+    }
     if (this._syncUnsubscribe) {
       this._syncUnsubscribe();
       this._syncUnsubscribe = null;

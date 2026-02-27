@@ -12,6 +12,7 @@ import { DEFAULT_CONFIG } from "@motebit/ai-core";
 import { openMotebitDatabase, type MotebitDatabase } from "@motebit/persistence";
 import {
   HttpEventStoreAdapter,
+  EncryptedEventStoreAdapter,
   ConversationSyncEngine,
   HttpConversationSyncAdapter,
 } from "@motebit/sync-engine";
@@ -41,7 +42,7 @@ import {
 } from "@motebit/tools";
 import type { SearchProvider } from "@motebit/tools";
 import { connectMcpServers, type McpServerConfig } from "@motebit/mcp-client";
-import { deriveKey, encrypt, decrypt, generateSalt } from "@motebit/crypto";
+import { deriveKey, encrypt, decrypt, generateSalt, deriveSyncEncryptionKey } from "@motebit/crypto";
 import type { EncryptedPayload } from "@motebit/crypto";
 import {
   bootstrapIdentity as sharedBootstrapIdentity,
@@ -619,6 +620,7 @@ async function createRuntime(
   toolRegistry: InMemoryToolRegistry,
   mcpServers: McpServerConfig[],
   personalityConfig?: MotebitPersonalityConfig,
+  encKey?: Uint8Array,
 ): Promise<{ runtime: MotebitRuntime; moteDb: MotebitDatabase }> {
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
@@ -662,13 +664,17 @@ async function createRuntime(
   const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
 
   if (syncUrl != null && syncUrl !== "") {
-    const remoteStore = new HttpEventStoreAdapter({
+    const httpAdapter = new HttpEventStoreAdapter({
       baseUrl: syncUrl,
       motebitId,
       authToken: syncToken,
     });
+    // Wrap with encryption if key available (zero-knowledge relay)
+    const remoteStore = encKey
+      ? new EncryptedEventStoreAdapter({ inner: httpAdapter, key: encKey })
+      : httpAdapter;
     runtime.connectSync(remoteStore);
-    console.log(`Sync: ${syncUrl}`);
+    console.log(`Sync: ${syncUrl}${encKey ? " (encrypted)" : ""}`);
   } else {
     console.log("Sync: disabled (set MOTEBIT_SYNC_URL to enable)");
   }
@@ -2292,6 +2298,14 @@ async function main(): Promise<void> {
     console.log("Identity and encrypted keypair stored in ~/.motebit/config.json\n");
   }
 
+  // Derive sync encryption key from private key (for zero-knowledge relay)
+  const reloadedConfig = loadFullConfig();
+  let syncEncKey: Uint8Array | undefined;
+  if (reloadedConfig.cli_encrypted_key) {
+    const pkHex = await decryptPrivateKey(reloadedConfig.cli_encrypted_key, passphrase);
+    syncEncKey = await deriveSyncEncryptionKey(fromHex(pkHex));
+  }
+
   // Build tool registry with deferred runtime ref
   const runtimeRef: { current: MotebitRuntime | null } = { current: null };
   const toolRegistry = buildToolRegistry(config, runtimeRef, motebitId);
@@ -2304,7 +2318,7 @@ async function main(): Promise<void> {
   }));
 
   // Create runtime with tools, policy, MCP config
-  const { runtime, moteDb } = await createRuntime(config, motebitId, toolRegistry, mcpServers, personalityConfig);
+  const { runtime, moteDb } = await createRuntime(config, motebitId, toolRegistry, mcpServers, personalityConfig, syncEncKey);
   runtimeRef.current = runtime;
 
   // Connect MCP servers

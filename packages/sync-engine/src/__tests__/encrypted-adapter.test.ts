@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { EncryptedEventStoreAdapter } from "../encrypted-adapter.js";
+import { EncryptedEventStoreAdapter, decryptEventPayload } from "../encrypted-adapter.js";
 import { InMemoryEventStore } from "@motebit/event-log";
 import { generateKey } from "@motebit/crypto";
 import { EventType } from "@motebit/sdk";
@@ -166,5 +166,50 @@ describe("EncryptedEventStoreAdapter", () => {
     const raw = await store.query({ motebit_id: MOTEBIT_ID });
     // The encrypted blobs should differ (different nonces)
     expect(raw[0]!.payload._data).not.toBe(raw[1]!.payload._data);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// decryptEventPayload() — standalone decrypt for WS onEvent callback
+// ---------------------------------------------------------------------------
+
+describe("decryptEventPayload", () => {
+  it("round-trips: encrypt via adapter → decrypt standalone", async () => {
+    const store = new InMemoryEventStore();
+    const key = generateKey();
+    const adapter = new EncryptedEventStoreAdapter({ inner: store, key });
+
+    const original = makeEvent(1, { secret: "value", nested: { x: 42 } });
+    await adapter.append(original);
+
+    // Read the raw encrypted event from the inner store
+    const rawEvents = await store.query({ motebit_id: MOTEBIT_ID });
+    expect(rawEvents).toHaveLength(1);
+    expect(rawEvents[0]!.payload._encrypted).toBe(true);
+
+    // Decrypt using the standalone function
+    const decrypted = await decryptEventPayload(rawEvents[0]!, key);
+    expect(decrypted.payload).toEqual({ secret: "value", nested: { x: 42 } });
+    expect(decrypted.event_id).toBe("event-1");
+  });
+
+  it("passes through unencrypted events", async () => {
+    const key = generateKey();
+    const event = makeEvent(1, { plain: true });
+
+    const result = await decryptEventPayload(event, key);
+    expect(result).toEqual(event);
+  });
+
+  it("fails with wrong key", async () => {
+    const store = new InMemoryEventStore();
+    const key1 = generateKey();
+    const key2 = generateKey();
+    const adapter = new EncryptedEventStoreAdapter({ inner: store, key: key1 });
+
+    await adapter.append(makeEvent(1, { data: "test" }));
+    const raw = await store.query({ motebit_id: MOTEBIT_ID });
+
+    await expect(decryptEventPayload(raw[0]!, key2)).rejects.toThrow();
   });
 });

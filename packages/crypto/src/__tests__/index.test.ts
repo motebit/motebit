@@ -6,6 +6,7 @@ import {
   encrypt,
   decrypt,
   deriveKey,
+  deriveSyncEncryptionKey,
   hash,
   createDeletionCertificate,
   secureErase,
@@ -153,6 +154,43 @@ describe("deriveKey", () => {
     const a = await deriveKey("same-password", saltA, 1000);
     const b = await deriveKey("same-password", saltB, 1000);
     expect(a).not.toEqual(b);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// deriveSyncEncryptionKey()
+// ---------------------------------------------------------------------------
+
+describe("deriveSyncEncryptionKey", () => {
+  it("produces a 32-byte key", async () => {
+    const kp = await generateKeypair();
+    const derived = await deriveSyncEncryptionKey(kp.privateKey);
+    expect(derived).toBeInstanceOf(Uint8Array);
+    expect(derived.length).toBe(32);
+  });
+
+  it("is deterministic — same private key produces same output", async () => {
+    const kp = await generateKeypair();
+    const a = await deriveSyncEncryptionKey(kp.privateKey);
+    const b = await deriveSyncEncryptionKey(kp.privateKey);
+    expect(a).toEqual(b);
+  });
+
+  it("different private keys produce different output", async () => {
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    const a = await deriveSyncEncryptionKey(kpA.privateKey);
+    const b = await deriveSyncEncryptionKey(kpB.privateKey);
+    expect(a).not.toEqual(b);
+  });
+
+  it("round-trips through encrypt/decrypt", async () => {
+    const kp = await generateKeypair();
+    const key = await deriveSyncEncryptionKey(kp.privateKey);
+    const plaintext = new TextEncoder().encode("sync payload");
+    const encrypted = await encrypt(plaintext, key);
+    const decrypted = await decrypt(encrypted, key);
+    expect(new TextDecoder().decode(decrypted)).toBe("sync payload");
   });
 });
 

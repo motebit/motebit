@@ -1,7 +1,6 @@
 import type { EventLogEntry } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
-import { encrypt, decrypt } from "@motebit/crypto";
-import type { EncryptedPayload } from "@motebit/crypto";
+import { encrypt, decrypt, type EncryptedPayload } from "@motebit/crypto";
 
 export interface EncryptedAdapterConfig {
   /** The underlying adapter to wrap */
@@ -95,4 +94,22 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
     const decrypted = JSON.parse(new TextDecoder().decode(plaintext)) as Record<string, unknown>;
     return { ...entry, payload: decrypted };
   }
+}
+
+/**
+ * Standalone decryption for individual events received via WebSocket onEvent callback.
+ * Decrypts the payload in-place if it was encrypted; passes through unencrypted events.
+ */
+export async function decryptEventPayload(event: EventLogEntry, key: Uint8Array): Promise<EventLogEntry> {
+  const payload = event.payload;
+  if (payload._encrypted == null || payload._encrypted === false) return event;
+
+  const data = JSON.parse(payload._data as string) as { c: string; n: string; t: string };
+  const encrypted: EncryptedPayload = {
+    ciphertext: fromBase64(data.c),
+    nonce: fromBase64(data.n),
+    tag: fromBase64(data.t),
+  };
+  const plaintext = await decrypt(encrypted, key);
+  return { ...event, payload: JSON.parse(new TextDecoder().decode(plaintext)) as Record<string, unknown> };
 }
