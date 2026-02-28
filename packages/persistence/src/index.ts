@@ -237,6 +237,23 @@ CREATE TABLE IF NOT EXISTS plan_steps (
 );
 
 CREATE INDEX IF NOT EXISTS idx_plan_steps_plan ON plan_steps (plan_id, ordinal ASC);
+
+CREATE TABLE IF NOT EXISTS gradient_snapshots (
+  snapshot_id TEXT PRIMARY KEY,
+  motebit_id TEXT NOT NULL,
+  timestamp INTEGER NOT NULL,
+  gradient REAL NOT NULL,
+  delta REAL NOT NULL,
+  knowledge_density REAL NOT NULL,
+  knowledge_density_raw REAL NOT NULL,
+  knowledge_quality REAL NOT NULL,
+  graph_connectivity REAL NOT NULL,
+  graph_connectivity_raw REAL NOT NULL,
+  temporal_stability REAL NOT NULL,
+  stats TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_gradient_motebit_ts ON gradient_snapshots (motebit_id, timestamp DESC);
 `;
 
 function initSchema(db: DatabaseDriver): void {
@@ -1696,6 +1713,102 @@ export class SqlitePlanStore {
   }
 }
 
+// === Gradient Store ===
+
+export interface GradientSnapshotRow {
+  snapshot_id: string;
+  motebit_id: string;
+  timestamp: number;
+  gradient: number;
+  delta: number;
+  knowledge_density: number;
+  knowledge_density_raw: number;
+  knowledge_quality: number;
+  graph_connectivity: number;
+  graph_connectivity_raw: number;
+  temporal_stability: number;
+  stats: string;
+}
+
+export interface GradientSnapshotData {
+  motebit_id: string;
+  timestamp: number;
+  gradient: number;
+  delta: number;
+  knowledge_density: number;
+  knowledge_density_raw: number;
+  knowledge_quality: number;
+  graph_connectivity: number;
+  graph_connectivity_raw: number;
+  temporal_stability: number;
+  stats: Record<string, unknown>;
+}
+
+function rowToGradientSnapshot(row: GradientSnapshotRow): GradientSnapshotData {
+  return {
+    motebit_id: row.motebit_id,
+    timestamp: row.timestamp,
+    gradient: row.gradient,
+    delta: row.delta,
+    knowledge_density: row.knowledge_density,
+    knowledge_density_raw: row.knowledge_density_raw,
+    knowledge_quality: row.knowledge_quality,
+    graph_connectivity: row.graph_connectivity,
+    graph_connectivity_raw: row.graph_connectivity_raw,
+    temporal_stability: row.temporal_stability,
+    stats: JSON.parse(row.stats) as Record<string, unknown>,
+  };
+}
+
+export class SqliteGradientStore {
+  private stmtSave: PreparedStatement;
+  private stmtLatest: PreparedStatement;
+  private stmtList: PreparedStatement;
+
+  constructor(db: DatabaseDriver) {
+    this.stmtSave = db.prepare(
+      `INSERT OR REPLACE INTO gradient_snapshots
+       (snapshot_id, motebit_id, timestamp, gradient, delta, knowledge_density, knowledge_density_raw, knowledge_quality, graph_connectivity, graph_connectivity_raw, temporal_stability, stats)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmtLatest = db.prepare(
+      `SELECT * FROM gradient_snapshots WHERE motebit_id = ? ORDER BY timestamp DESC LIMIT 1`,
+    );
+    this.stmtList = db.prepare(
+      `SELECT * FROM gradient_snapshots WHERE motebit_id = ? ORDER BY timestamp DESC LIMIT ?`,
+    );
+  }
+
+  save(snapshot: GradientSnapshotData): void {
+    const snapshotId = crypto.randomUUID();
+    this.stmtSave.run(
+      snapshotId,
+      snapshot.motebit_id,
+      snapshot.timestamp,
+      snapshot.gradient,
+      snapshot.delta,
+      snapshot.knowledge_density,
+      snapshot.knowledge_density_raw,
+      snapshot.knowledge_quality,
+      snapshot.graph_connectivity,
+      snapshot.graph_connectivity_raw,
+      snapshot.temporal_stability,
+      JSON.stringify(snapshot.stats),
+    );
+  }
+
+  latest(motebitId: string): GradientSnapshotData | null {
+    const row = this.stmtLatest.get(motebitId) as GradientSnapshotRow | undefined;
+    if (row === undefined) return null;
+    return rowToGradientSnapshot(row);
+  }
+
+  list(motebitId: string, limit = 100): GradientSnapshotData[] {
+    const rows = this.stmtList.all(motebitId, limit) as GradientSnapshotRow[];
+    return rows.map(rowToGradientSnapshot);
+  }
+}
+
 // === Factory ===
 
 export interface MotebitDatabase {
@@ -1711,6 +1824,7 @@ export interface MotebitDatabase {
   approvalStore: SqliteApprovalStore;
   conversationStore: SqliteConversationStore;
   planStore: SqlitePlanStore;
+  gradientStore: SqliteGradientStore;
   close(): void;
 }
 
@@ -1824,6 +1938,11 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     driver.pragma("user_version = 14");
   }
 
+  if (userVersion < 15) {
+    // gradient_snapshots table is in SCHEMA for new DBs; this handles upgrades from v14
+    driver.pragma("user_version = 15");
+  }
+
   const eventStore = new SqliteEventStore(driver);
   const memoryStorage = new SqliteMemoryStorage(driver);
   const identityStorage = new SqliteIdentityStorage(driver);
@@ -1835,6 +1954,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   const approvalStore = new SqliteApprovalStore(driver);
   const conversationStore = new SqliteConversationStore(driver);
   const planStore = new SqlitePlanStore(driver);
+  const gradientStore = new SqliteGradientStore(driver);
 
   return {
     db: driver,
@@ -1849,6 +1969,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     approvalStore,
     conversationStore,
     planStore,
+    gradientStore,
     close() {
       driver.close();
     },

@@ -47,6 +47,8 @@ import type { PlanChunk } from "@motebit/planner";
 import type { PlanStoreAdapter } from "@motebit/planner";
 import { PolicyGate, MemoryGovernor } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
+import { computeGradient, InMemoryGradientStore } from "./gradient.js";
+import type { GradientSnapshot, GradientStoreAdapter } from "./gradient.js";
 
 // Re-export key types for consumers
 export type { TurnResult, AgenticChunk, ReflectionResult, MotebitLoopDependencies } from "@motebit/ai-core";
@@ -64,6 +66,8 @@ export { PolicyGate } from "@motebit/policy";
 export type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 export type { PlanChunk } from "@motebit/planner";
 export type { PlanStoreAdapter } from "@motebit/planner";
+export type { GradientSnapshot, GradientStoreAdapter, GradientConfig } from "./gradient.js";
+export { computeGradient, InMemoryGradientStore } from "./gradient.js";
 
 // === McpServerConfig (inlined to avoid importing Node-only @motebit/mcp-client) ===
 
@@ -189,6 +193,7 @@ export interface StorageAdapters {
   toolAuditSink?: AuditLogSink;
   conversationStore?: ConversationStoreAdapter;
   planStore?: PlanStoreAdapter;
+  gradientStore?: GradientStoreAdapter;
 }
 
 export interface PlatformAdapters {
@@ -354,6 +359,7 @@ export class MotebitRuntime {
   private approvalExpiredCallback: (() => void) | null = null;
   private sessionInfo: { continued: boolean; lastActiveAt: number } | null = null;
   private episodicConsolidation: boolean;
+  private gradientStore: GradientStoreAdapter;
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
     this.motebitId = config.motebitId;
@@ -446,6 +452,9 @@ export class MotebitRuntime {
     // Plan-execute engine
     this.planStore = adapters.storage.planStore ?? new InMemoryPlanStore();
     this.planEngine = new PlanEngine(this.planStore);
+
+    // Intelligence gradient
+    this.gradientStore = adapters.storage.gradientStore ?? new InMemoryGradientStore();
 
     this.wireLoopDeps();
   }
@@ -1472,6 +1481,9 @@ export class MotebitRuntime {
       if (this.episodicConsolidation && this.provider) {
         await this.consolidateEpisodicMemories(nodes, now);
       }
+
+      // Compute intelligence gradient — data already loaded
+      await this.computeAndStoreGradient(nodes);
     } catch {
       // Housekeeping is best-effort — don't crash the runtime
     }
@@ -1541,6 +1553,52 @@ export class MotebitRuntime {
         // Consolidation is best-effort per cluster
       }
     }
+  }
+
+  // === Intelligence Gradient ===
+
+  /** Get the latest gradient snapshot, or null if none computed yet. */
+  getGradient(): GradientSnapshot | null {
+    return this.gradientStore.latest(this.motebitId);
+  }
+
+  /** Get gradient history (most recent first). */
+  getGradientHistory(limit?: number): GradientSnapshot[] {
+    return this.gradientStore.list(this.motebitId, limit);
+  }
+
+  /** Force a gradient computation right now (useful for CLI/debug). */
+  async computeGradientNow(): Promise<GradientSnapshot> {
+    const { nodes } = await this.memory.exportAll();
+    return this.computeAndStoreGradient(nodes);
+  }
+
+  private async computeAndStoreGradient(allNodes: import("@motebit/sdk").MemoryNode[]): Promise<GradientSnapshot> {
+    // Fetch edges and recent consolidation events
+    const exported = await this.memory.exportAll();
+    const edges = exported.edges;
+
+    // Query consolidation events from last 7 days
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const consolidationEvents = await this.events.query({
+      motebit_id: this.motebitId,
+      event_types: [EventType.MemoryConsolidated],
+      after_timestamp: sevenDaysAgo,
+    });
+
+    const previous = this.gradientStore.latest(this.motebitId);
+    const previousGradient = previous ? previous.gradient : null;
+
+    const snapshot = computeGradient(
+      this.motebitId,
+      allNodes,
+      edges,
+      consolidationEvents,
+      previousGradient,
+    );
+
+    this.gradientStore.save(snapshot);
+    return snapshot;
   }
 
   private wireLoopDeps(): void {

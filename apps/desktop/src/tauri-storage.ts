@@ -6,7 +6,7 @@ import type { MemoryStorageAdapter, MemoryQuery } from "@motebit/memory-graph";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 import type { IdentityStorage, DeviceRegistration } from "@motebit/core-identity";
 import type { AuditLogAdapter } from "@motebit/privacy-layer";
-import type { StateSnapshotAdapter, ConversationStoreAdapter } from "@motebit/runtime";
+import type { StateSnapshotAdapter, ConversationStoreAdapter, GradientStoreAdapter, GradientSnapshot } from "@motebit/runtime";
 
 // === IPC Helpers ===
 
@@ -1079,5 +1079,88 @@ export class TauriPlanStore implements PlanStoreAdapter {
   getNextPendingStep(planId: string): PlanStep | null {
     const steps = this.getStepsForPlan(planId);
     return steps.find((s) => s.status === StepStatus.Pending) ?? null;
+  }
+}
+
+// === TauriGradientStore ===
+// GradientStoreAdapter is sync, but Tauri IPC is async.
+// Maintain an in-memory cache for sync reads; fire-and-forget async writes to DB.
+
+interface GradientRow {
+  snapshot_id: string;
+  motebit_id: string;
+  timestamp: number;
+  gradient: number;
+  delta: number;
+  knowledge_density: number;
+  knowledge_density_raw: number;
+  knowledge_quality: number;
+  graph_connectivity: number;
+  graph_connectivity_raw: number;
+  temporal_stability: number;
+  stats: string;
+}
+
+function rowToGradientSnapshot(row: GradientRow): GradientSnapshot {
+  return {
+    motebit_id: row.motebit_id,
+    timestamp: row.timestamp,
+    gradient: row.gradient,
+    delta: row.delta,
+    knowledge_density: row.knowledge_density,
+    knowledge_density_raw: row.knowledge_density_raw,
+    knowledge_quality: row.knowledge_quality,
+    graph_connectivity: row.graph_connectivity,
+    graph_connectivity_raw: row.graph_connectivity_raw,
+    temporal_stability: row.temporal_stability,
+    stats: JSON.parse(row.stats) as GradientSnapshot["stats"],
+  };
+}
+
+export class TauriGradientStore implements GradientStoreAdapter {
+  private snapshots: GradientSnapshot[] = [];
+
+  constructor(private invoke: InvokeFn) {}
+
+  /** Pre-load gradient history from DB. */
+  async preload(motebitId: string): Promise<void> {
+    try {
+      const rows = await dbQuery<GradientRow>(
+        this.invoke,
+        "SELECT * FROM gradient_snapshots WHERE motebit_id = ? ORDER BY timestamp DESC LIMIT 100",
+        [motebitId],
+      );
+      this.snapshots = rows.map(rowToGradientSnapshot);
+    } catch {
+      // Pre-migration database — table may not exist yet.
+    }
+  }
+
+  save(snapshot: GradientSnapshot): void {
+    // Update cache — insert at front (newest first)
+    this.snapshots.unshift(snapshot);
+    // Trim cache to 100
+    if (this.snapshots.length > 100) {
+      this.snapshots = this.snapshots.slice(0, 100);
+    }
+
+    const snapshotId = crypto.randomUUID();
+    void dbExecute(
+      this.invoke,
+      `INSERT OR REPLACE INTO gradient_snapshots (snapshot_id, motebit_id, timestamp, gradient, delta, knowledge_density, knowledge_density_raw, knowledge_quality, graph_connectivity, graph_connectivity_raw, temporal_stability, stats)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [snapshotId, snapshot.motebit_id, snapshot.timestamp, snapshot.gradient, snapshot.delta, snapshot.knowledge_density, snapshot.knowledge_density_raw, snapshot.knowledge_quality, snapshot.graph_connectivity, snapshot.graph_connectivity_raw, snapshot.temporal_stability, JSON.stringify(snapshot.stats)],
+    );
+  }
+
+  latest(motebitId: string): GradientSnapshot | null {
+    const found = this.snapshots.find((s) => s.motebit_id === motebitId);
+    return found ?? null;
+  }
+
+  list(motebitId: string, limit = 100): GradientSnapshot[] {
+    return this.snapshots
+      .filter((s) => s.motebit_id === motebitId)
+      .slice(0, limit);
   }
 }

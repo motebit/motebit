@@ -4,9 +4,9 @@ import { TrustMode, BatteryMode } from "@motebit/sdk";
 import { computeRawCues } from "@motebit/behavior-engine";
 import {
   fetchState, fetchMemory, fetchEvents, fetchAudit, deleteMemoryNode,
-  fetchGoals, fetchConversations, fetchDevices, fetchPlans,
+  fetchGoals, fetchConversations, fetchDevices, fetchPlans, fetchGradient,
 } from "./api";
-import type { GoalEntry, ConversationEntry, DeviceEntry, PlanEntry } from "./api";
+import type { GoalEntry, ConversationEntry, DeviceEntry, PlanEntry, GradientSnapshotEntry } from "./api";
 import { useStateHistory } from "./hooks/useStateHistory";
 import { ConnectionStatus } from "./components/ConnectionStatus";
 import { StateVectorPanel } from "./components/StateVectorPanel";
@@ -18,6 +18,7 @@ import { GoalsPanel } from "./components/GoalsPanel";
 import { ConversationsPanel } from "./components/ConversationsPanel";
 import { DevicesPanel } from "./components/DevicesPanel";
 import { PlansPanel } from "./components/PlansPanel";
+import { GradientPanel } from "./components/GradientPanel";
 
 const DEFAULT_STATE: MotebitState = {
   attention: 0,
@@ -41,6 +42,8 @@ export function AdminApp(): React.ReactElement {
   const [conversations, setConversations] = useState<ConversationEntry[]>([]);
   const [devices, setDevices] = useState<DeviceEntry[]>([]);
   const [plans, setPlans] = useState<PlanEntry[]>([]);
+  const [gradientCurrent, setGradientCurrent] = useState<GradientSnapshotEntry | null>(null);
+  const [gradientHistory, setGradientHistory] = useState<GradientSnapshotEntry[]>([]);
   const [connected, setConnected] = useState(false);
   const [activePanel, setActivePanel] = useState<string>("state");
   const maxClockRef = useRef(0);
@@ -50,7 +53,7 @@ export function AdminApp(): React.ReactElement {
 
   const refresh = useCallback(async (signal: AbortSignal) => {
     try {
-      const [stateRes, memoryRes, eventsRes, auditRes, goalsRes, convRes, devicesRes, plansRes] = await Promise.all([
+      const [stateRes, memoryRes, eventsRes, auditRes, goalsRes, convRes, devicesRes, plansRes, gradientRes] = await Promise.all([
         fetchState(signal),
         fetchMemory(signal),
         fetchEvents(maxClockRef.current, signal),
@@ -59,6 +62,7 @@ export function AdminApp(): React.ReactElement {
         fetchConversations(signal),
         fetchDevices(signal),
         fetchPlans(signal),
+        fetchGradient(signal),
       ]);
 
       setState(stateRes.state);
@@ -70,6 +74,8 @@ export function AdminApp(): React.ReactElement {
       setConversations(convRes.conversations);
       setDevices(devicesRes.devices);
       setPlans(plansRes.plans);
+      setGradientCurrent(gradientRes.current);
+      setGradientHistory(gradientRes.history);
 
       if (eventsRes.events.length > 0) {
         setEvents((prev) => {
@@ -111,7 +117,7 @@ export function AdminApp(): React.ReactElement {
   }, []);
 
   const nav = React.createElement("nav", { className: "admin-nav" },
-    ["state", "memory", "behavior", "events", "audit", "goals", "plans", "conversations", "devices"].map((panel) =>
+    ["state", "memory", "behavior", "events", "audit", "goals", "plans", "conversations", "devices", "gradient"].map((panel) =>
       React.createElement("button", {
         key: panel,
         className: panel === activePanel ? "active" : "",
@@ -148,6 +154,9 @@ export function AdminApp(): React.ReactElement {
       break;
     case "devices":
       content = React.createElement(DevicesPanel, { devices });
+      break;
+    case "gradient":
+      content = React.createElement(GradientPanel, { current: gradientCurrent, history: gradientHistory });
       break;
     default:
       content = React.createElement("div", { className: "panel" },

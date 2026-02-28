@@ -251,3 +251,42 @@ export interface DevicesResponse {
 export function fetchDevices(signal?: AbortSignal): Promise<DevicesResponse> {
   return apiFetch<DevicesResponse>(`/api/v1/devices/${config.motebitId}`, { signal });
 }
+
+// === Gradient ===
+
+export interface GradientSnapshotEntry {
+  motebit_id: string;
+  timestamp: number;
+  gradient: number;
+  delta: number;
+  knowledge_density: number;
+  knowledge_density_raw: number;
+  knowledge_quality: number;
+  graph_connectivity: number;
+  graph_connectivity_raw: number;
+  temporal_stability: number;
+  stats: {
+    live_nodes: number;
+    live_edges: number;
+    semantic_count: number;
+    episodic_count: number;
+    pinned_count: number;
+    avg_confidence: number;
+    avg_half_life: number;
+    consolidation_add: number;
+    consolidation_update: number;
+    consolidation_reinforce: number;
+    consolidation_noop: number;
+    total_confidence_mass: number;
+  };
+}
+
+export interface GradientResponse {
+  motebit_id: string;
+  current: GradientSnapshotEntry | null;
+  history: GradientSnapshotEntry[];
+}
+
+export function fetchGradient(signal?: AbortSignal): Promise<GradientResponse> {
+  return apiFetch<GradientResponse>(`/api/v1/gradient/${config.motebitId}`, { signal });
+}

@@ -26,6 +26,7 @@
  *   GET  /api/v1/audit/:motebitId                      — tool audit log
  *   GET  /api/v1/plans/:motebitId                      — list plans with steps
  *   GET  /api/v1/plans/:motebitId/:planId              — single plan with steps
+ *   GET  /api/v1/gradient/:motebitId?limit=100         — intelligence gradient snapshots
  *   GET  /api/v1/sync/:motebitId/pull                  — pull events (aliased for admin)
  *
  * WebSocket protocol:
@@ -520,6 +521,36 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
     }
     const steps = moteDb.planStore.getStepsForPlan(planId);
     return c.json({ motebit_id: motebitId, plan: { ...plan, steps } });
+  });
+
+  // --- Gradient: intelligence gradient snapshots ---
+  app.get("/api/v1/gradient/:motebitId", (c) => {
+    const motebitId = c.req.param("motebitId");
+    const limit = Number(c.req.query("limit") ?? "100");
+    const rows = moteDb.db.prepare(
+      `SELECT * FROM gradient_snapshots WHERE motebit_id = ? ORDER BY timestamp DESC LIMIT ?`,
+    ).all(motebitId, limit) as Array<{
+      motebit_id: string;
+      timestamp: number;
+      gradient: number;
+      delta: number;
+      knowledge_density: number;
+      knowledge_density_raw: number;
+      knowledge_quality: number;
+      graph_connectivity: number;
+      graph_connectivity_raw: number;
+      temporal_stability: number;
+      stats: string;
+    }>;
+    const snapshots = rows.map((r) => ({
+      ...r,
+      stats: JSON.parse(r.stats) as Record<string, unknown>,
+    }));
+    return c.json({
+      motebit_id: motebitId,
+      current: snapshots[0] ?? null,
+      history: snapshots,
+    });
   });
 
   // --- State: current state vector ---

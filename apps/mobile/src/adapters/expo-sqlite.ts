@@ -17,7 +17,7 @@ import type { MemoryStorageAdapter, MemoryQuery } from "@motebit/memory-graph";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 import type { IdentityStorage } from "@motebit/core-identity";
 import type { AuditLogAdapter } from "@motebit/privacy-layer";
-import type { StateSnapshotAdapter, ConversationStoreAdapter, StorageAdapters } from "@motebit/runtime";
+import type { StateSnapshotAdapter, ConversationStoreAdapter, StorageAdapters, GradientStoreAdapter, GradientSnapshot } from "@motebit/runtime";
 import type { SyncConversation, SyncConversationMessage } from "@motebit/sdk";
 import type { ConversationSyncStoreAdapter } from "@motebit/sync-engine";
 import type { PlanStoreAdapter } from "@motebit/planner";
@@ -149,6 +149,22 @@ CREATE TABLE IF NOT EXISTS plan_steps (
   FOREIGN KEY (plan_id) REFERENCES plans(plan_id)
 );
 CREATE INDEX IF NOT EXISTS idx_plan_steps_plan ON plan_steps (plan_id, ordinal ASC);
+
+CREATE TABLE IF NOT EXISTS gradient_snapshots (
+  snapshot_id TEXT PRIMARY KEY,
+  motebit_id TEXT NOT NULL,
+  timestamp INTEGER NOT NULL,
+  gradient REAL NOT NULL,
+  delta REAL NOT NULL,
+  knowledge_density REAL NOT NULL,
+  knowledge_density_raw REAL NOT NULL,
+  knowledge_quality REAL NOT NULL,
+  graph_connectivity REAL NOT NULL,
+  graph_connectivity_raw REAL NOT NULL,
+  temporal_stability REAL NOT NULL,
+  stats TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gradient_motebit_ts ON gradient_snapshots (motebit_id, timestamp DESC);
 `;
 
 // === Row Types ===
@@ -1078,11 +1094,74 @@ export class ExpoSqliteConversationSyncStore implements ConversationSyncStoreAda
   }
 }
 
+// === GradientStore Adapter ===
+
+interface GradientRow {
+  snapshot_id: string;
+  motebit_id: string;
+  timestamp: number;
+  gradient: number;
+  delta: number;
+  knowledge_density: number;
+  knowledge_density_raw: number;
+  knowledge_quality: number;
+  graph_connectivity: number;
+  graph_connectivity_raw: number;
+  temporal_stability: number;
+  stats: string;
+}
+
+function rowToGradientSnapshot(row: GradientRow): GradientSnapshot {
+  return {
+    motebit_id: row.motebit_id,
+    timestamp: row.timestamp,
+    gradient: row.gradient,
+    delta: row.delta,
+    knowledge_density: row.knowledge_density,
+    knowledge_density_raw: row.knowledge_density_raw,
+    knowledge_quality: row.knowledge_quality,
+    graph_connectivity: row.graph_connectivity,
+    graph_connectivity_raw: row.graph_connectivity_raw,
+    temporal_stability: row.temporal_stability,
+    stats: JSON.parse(row.stats) as GradientSnapshot["stats"],
+  };
+}
+
+export class ExpoGradientStore implements GradientStoreAdapter {
+  constructor(private db: SQLite.SQLiteDatabase) {}
+
+  save(snapshot: GradientSnapshot): void {
+    const snapshotId = `gs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    this.db.runSync(
+      `INSERT OR REPLACE INTO gradient_snapshots (snapshot_id, motebit_id, timestamp, gradient, delta, knowledge_density, knowledge_density_raw, knowledge_quality, graph_connectivity, graph_connectivity_raw, temporal_stability, stats)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [snapshotId, snapshot.motebit_id, snapshot.timestamp, snapshot.gradient, snapshot.delta, snapshot.knowledge_density, snapshot.knowledge_density_raw, snapshot.knowledge_quality, snapshot.graph_connectivity, snapshot.graph_connectivity_raw, snapshot.temporal_stability, JSON.stringify(snapshot.stats)],
+    );
+  }
+
+  latest(motebitId: string): GradientSnapshot | null {
+    const row = this.db.getFirstSync<GradientRow>(
+      "SELECT * FROM gradient_snapshots WHERE motebit_id = ? ORDER BY timestamp DESC LIMIT 1",
+      [motebitId],
+    );
+    return row ? rowToGradientSnapshot(row) : null;
+  }
+
+  list(motebitId: string, limit = 100): GradientSnapshot[] {
+    const rows = this.db.getAllSync<GradientRow>(
+      "SELECT * FROM gradient_snapshots WHERE motebit_id = ? ORDER BY timestamp DESC LIMIT ?",
+      [motebitId, limit],
+    );
+    return rows.map(rowToGradientSnapshot);
+  }
+}
+
 // === Factory ===
 
 export interface ExpoStorageResult extends StorageAdapters {
   goalStore: ExpoGoalStore;
   planStore: ExpoPlanStore;
+  gradientStore: ExpoGradientStore;
   conversationSyncStore: ExpoSqliteConversationSyncStore;
 }
 
@@ -1248,6 +1327,32 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
     db.execSync("PRAGMA user_version = 7");
   }
 
+  // Migration 8: gradient_snapshots table
+  if (userVersion < 8) {
+    try {
+      db.execSync(`
+        CREATE TABLE IF NOT EXISTS gradient_snapshots (
+          snapshot_id TEXT PRIMARY KEY,
+          motebit_id TEXT NOT NULL,
+          timestamp INTEGER NOT NULL,
+          gradient REAL NOT NULL,
+          delta REAL NOT NULL,
+          knowledge_density REAL NOT NULL,
+          knowledge_density_raw REAL NOT NULL,
+          knowledge_quality REAL NOT NULL,
+          graph_connectivity REAL NOT NULL,
+          graph_connectivity_raw REAL NOT NULL,
+          temporal_stability REAL NOT NULL,
+          stats TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_gradient_motebit_ts ON gradient_snapshots (motebit_id, timestamp DESC);
+      `);
+    } catch {
+      // Table may already exist on new DBs
+    }
+    db.execSync("PRAGMA user_version = 8");
+  }
+
   return {
     eventStore: new ExpoSqliteEventStore(db),
     memoryStorage: new ExpoSqliteMemoryStorage(db),
@@ -1257,6 +1362,7 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
     conversationStore: new ExpoSqliteConversationStore(db),
     goalStore: new ExpoGoalStore(db),
     planStore: new ExpoPlanStore(db),
+    gradientStore: new ExpoGradientStore(db),
     conversationSyncStore: new ExpoSqliteConversationSyncStore(db),
   };
 }
