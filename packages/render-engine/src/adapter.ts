@@ -70,16 +70,24 @@ function createEye(): THREE.Group {
   });
   group.add(new THREE.Mesh(eyeGeo, eyeMat));
 
-  const catchMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const catchMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+  });
 
-  const bigCatchGeo = new THREE.SphereGeometry(EYE_R * 0.22, 16, 16);
+  const bigCatchGeo = new THREE.SphereGeometry(EYE_R * 0.18, 16, 16);
   const bigCatch = new THREE.Mesh(bigCatchGeo, catchMat);
-  bigCatch.position.set(EYE_R * 0.25, EYE_R * 0.3, EYE_R * 0.82);
+  bigCatch.position.set(EYE_R * 0.25, EYE_R * 0.3, EYE_R * 0.95);
+  bigCatch.renderOrder = 3;
   group.add(bigCatch);
 
-  const smallCatchGeo = new THREE.SphereGeometry(EYE_R * 0.12, 16, 16);
+  const smallCatchGeo = new THREE.SphereGeometry(EYE_R * 0.10, 16, 16);
   const smallCatch = new THREE.Mesh(smallCatchGeo, catchMat);
-  smallCatch.position.set(-EYE_R * 0.2, -EYE_R * 0.15, EYE_R * 0.85);
+  smallCatch.position.set(-EYE_R * 0.2, -EYE_R * 0.15, EYE_R * 0.95);
+  smallCatch.renderOrder = 3;
   group.add(smallCatch);
 
   return group;
@@ -222,6 +230,86 @@ function createEnvironmentMap(renderer: THREE.WebGLRenderer, preset: Environment
   return envMap;
 }
 
+// === Blink ===
+// Natural blinking: fast close, slow open, random intervals, occasional doubles.
+// No new geometry — the eye group squashes on Y. The glass magnification
+// makes the blink dramatic from the front, subtle from the side.
+
+interface BlinkState {
+  nextBlinkAt: number;        // render time (s) for next blink
+  blinkStart: number;         // render time when current blink started, -1 if idle
+  doubleBlink: boolean;       // will this be a double-blink
+  secondBlinkPending: boolean;
+}
+
+const BLINK_CLOSE = 0.080;   // seconds — snap shut
+const BLINK_HOLD = 0.040;    // held closed
+const BLINK_OPEN = 0.130;    // float back open
+const BLINK_TOTAL = BLINK_CLOSE + BLINK_HOLD + BLINK_OPEN;
+const BLINK_MIN = 2.5;       // min seconds between blinks
+const BLINK_MAX = 6.0;       // max seconds between blinks
+const DOUBLE_CHANCE = 0.15;  // 15% chance of double-blink
+const DOUBLE_GAP = 0.180;    // seconds between double-blink pair
+
+function createBlinkState(): BlinkState {
+  return {
+    nextBlinkAt: 1.0 + Math.random() * 3.0,
+    blinkStart: -1,
+    doubleBlink: false,
+    secondBlinkPending: false,
+  };
+}
+
+function computeBlinkFactor(state: BlinkState, time: number, glow: number, speaking: number): number {
+  // Check if it's time to start a blink
+  if (state.blinkStart < 0) {
+    if (time >= state.nextBlinkAt) {
+      state.blinkStart = time;
+    } else {
+      return 1.0;
+    }
+  }
+
+  const elapsed = time - state.blinkStart;
+
+  if (elapsed < BLINK_CLOSE) {
+    // Closing — quadratic ease-out (fast snap shut)
+    const t = elapsed / BLINK_CLOSE;
+    return 1.0 - (1 - (1 - t) * (1 - t)) * 0.95;
+  }
+
+  if (elapsed < BLINK_CLOSE + BLINK_HOLD) {
+    return 0.05; // held shut
+  }
+
+  if (elapsed < BLINK_TOTAL) {
+    // Opening — quadratic ease-in (slow float open)
+    const t = (elapsed - BLINK_CLOSE - BLINK_HOLD) / BLINK_OPEN;
+    return 0.05 + t * t * 0.95;
+  }
+
+  // Blink complete
+  state.blinkStart = -1;
+
+  if (state.doubleBlink && !state.secondBlinkPending) {
+    // Queue the second blink quickly
+    state.secondBlinkPending = true;
+    state.nextBlinkAt = time + DOUBLE_GAP;
+    state.doubleBlink = false;
+    return 1.0;
+  }
+
+  // Schedule next natural blink
+  // Thinking suppresses blinks (concentration). Speaking increases rate.
+  const thinkStretch = glow > 0.4 ? 1.5 : 1.0;
+  const speakShrink = speaking > 0.01 ? 0.7 : 1.0;
+  const interval = (BLINK_MIN + Math.random() * (BLINK_MAX - BLINK_MIN)) * thinkStretch * speakShrink;
+  state.nextBlinkAt = time + interval;
+  state.doubleBlink = Math.random() < DOUBLE_CHANCE;
+  state.secondBlinkPending = false;
+  return 1.0;
+}
+
 // === Three.js Adapter ===
 
 export class ThreeJSAdapter implements RenderAdapter {
@@ -252,6 +340,7 @@ export class ThreeJSAdapter implements RenderAdapter {
   private leftEye: THREE.Group | null = null;
   private rightEye: THREE.Group | null = null;
   private smileMesh: THREE.Mesh | null = null;
+  private blinkState: BlinkState = createBlinkState();
 
   init(target: unknown): Promise<void> {
     if (typeof HTMLCanvasElement === "undefined" || !(target instanceof HTMLCanvasElement)) {
@@ -421,8 +510,12 @@ export class ThreeJSAdapter implements RenderAdapter {
       const speakWiden = cues.speaking_activity > 0.01
         ? (0.5 + 0.5 * organicNoise(t, [0.8, 1.3])) * cues.speaking_activity * 0.06
         : 0;
-      this.leftEye.scale.setScalar(eyeScale + curiosityAsym + speakWiden);
-      this.rightEye.scale.setScalar(eyeScale + speakWiden);
+      // Blink — the breath of the face
+      const blink = computeBlinkFactor(this.blinkState, t, cues.glow_intensity, cues.speaking_activity);
+      const leftScale = eyeScale + curiosityAsym + speakWiden;
+      const rightScale = eyeScale + speakWiden;
+      this.leftEye.scale.set(leftScale, leftScale * blink, leftScale);
+      this.rightEye.scale.set(rightScale, rightScale * blink, rightScale);
       // Subtle forward lean of eyes during attention
       const eyeZ = 0.08 + Math.sin(t * 0.25) * 0.001;
       this.leftEye.position.z = eyeZ;
@@ -627,6 +720,7 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
   private trustMode: TrustMode = TrustMode.Full;
   private listeningActive = false;
   private interiorColor: InteriorColor | null = null;
+  private blinkState: BlinkState = createBlinkState();
 
   /** Check if WebXR immersive-ar is available in this browser. */
   static async isSupported(): Promise<boolean> {
@@ -815,8 +909,12 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
       const speakWiden = cues.speaking_activity > 0.01
         ? (0.5 + 0.5 * organicNoise(t, [0.8, 1.3])) * cues.speaking_activity * 0.06
         : 0;
-      this.leftEye.scale.setScalar(eyeScale + curiosityAsym + speakWiden);
-      this.rightEye.scale.setScalar(eyeScale + speakWiden);
+      // Blink — the breath of the face
+      const blink = computeBlinkFactor(this.blinkState, t, cues.glow_intensity, cues.speaking_activity);
+      const leftScale = eyeScale + curiosityAsym + speakWiden;
+      const rightScale = eyeScale + speakWiden;
+      this.leftEye.scale.set(leftScale, leftScale * blink, leftScale);
+      this.rightEye.scale.set(rightScale, rightScale * blink, rightScale);
       // Subtle forward lean of eyes during attention
       const eyeZ = 0.08 + Math.sin(t * 0.25) * 0.001;
       this.leftEye.position.z = eyeZ;
