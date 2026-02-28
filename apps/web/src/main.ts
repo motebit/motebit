@@ -82,14 +82,10 @@ const gatedPanels = initGatedPanels(ctx);
 
 // === Theme ===
 
-// Side-effect: sets up theme toggle, data-theme attribute, and 3D environment
-void initTheme(false, undefined, (effective) => {
-  if (effective === "dark") {
-    app.setDarkEnvironment();
-  } else {
-    app.setLightEnvironment();
-  }
-});
+// Side-effect: sets up theme toggle + data-theme attribute.
+// Liquescentia (3D environment) is always ENV_LIGHT — glass needs
+// chromatic variation to refract. Dark mode only changes UI chrome.
+void initTheme(false);
 
 // === Escape Key Handler ===
 
