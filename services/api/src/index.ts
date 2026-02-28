@@ -51,9 +51,11 @@ import { EventStore } from "@motebit/event-log";
 import { IdentityManager } from "@motebit/core-identity";
 import { createMotebitDatabase } from "@motebit/persistence";
 import type { MotebitDatabase } from "@motebit/persistence";
-import type { EventLogEntry, ToolAuditEntry, SyncConversation, SyncConversationMessage } from "@motebit/sdk";
+import type { EventLogEntry, ToolAuditEntry, SyncConversation, SyncConversationMessage, ExecutionReceipt } from "@motebit/sdk";
+import { AgentTaskStatus } from "@motebit/sdk";
+import type { AgentTask } from "@motebit/sdk";
 import type { WSContext } from "hono/ws";
-import { verifySignedToken } from "@motebit/crypto";
+import { verifySignedToken, verifyExecutionReceipt } from "@motebit/crypto";
 
 function hexToBytes(hex: string): Uint8Array {
   const bytes = new Uint8Array(hex.length / 2);
@@ -186,6 +188,20 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
   // Track connected WebSocket clients per motebitId with device identity
   const connections = new Map<string, ConnectedDevice[]>();
 
+  // In-memory agent task queue: task_id → { task, receipt?, expiresAt }
+  const TASK_TTL_MS = 10 * 60 * 1000; // 10 minutes
+  const taskQueue = new Map<string, { task: AgentTask; receipt?: ExecutionReceipt; expiresAt: number }>();
+
+  // Periodic cleanup of expired tasks
+  const taskCleanupInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [id, entry] of taskQueue) {
+      if (entry.expiresAt < now) {
+        taskQueue.delete(id);
+      }
+    }
+  }, 60_000);
+
   const app = new Hono();
   // eslint-disable-next-line @typescript-eslint/unbound-method -- hono utility functions, not bound methods
   const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
@@ -308,7 +324,22 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
               events?: EventLogEntry[];
               conversations?: SyncConversation[];
               messages?: SyncConversationMessage[];
+              task_id?: string;
             };
+
+            // Agent protocol: task_claim
+            if (msg.type === "task_claim" && msg.task_id) {
+              const entry = taskQueue.get(msg.task_id);
+              if (!entry || entry.task.motebit_id !== motebitId) {
+                ws.send(JSON.stringify({ type: "task_claim_rejected", task_id: msg.task_id, reason: "Task not found" }));
+              } else if (entry.task.status !== AgentTaskStatus.Pending) {
+                ws.send(JSON.stringify({ type: "task_claim_rejected", task_id: msg.task_id, reason: "Task already claimed" }));
+              } else {
+                entry.task.status = AgentTaskStatus.Claimed;
+                entry.task.claimed_by = deviceId;
+                ws.send(JSON.stringify({ type: "task_claimed", task_id: msg.task_id }));
+              }
+            }
 
             if (msg.type === "push" && Array.isArray(msg.events)) {
               for (const entry of msg.events) {
@@ -905,6 +936,168 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
     return c.json({ motebit_id: motebitId, conversation_id: conversationId, messages: rows, since });
   });
 
+  // === Agent Protocol Endpoints ===
+
+  // POST /agent/:motebitId/task — submit a task (master token auth)
+  if (apiToken != null && apiToken !== "") {
+    app.use("/agent/*/task", async (c, next) => {
+      // Only apply master token auth to POST (submit) requests
+      if (c.req.method === "POST" && !c.req.url.includes("/result")) {
+        const authHeader = c.req.header("authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ") || authHeader.slice(7) !== apiToken) {
+          throw new HTTPException(401, { message: "Master token required" });
+        }
+      }
+      await next();
+    });
+  }
+
+  app.post("/agent/:motebitId/task", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const body = await c.req.json<{ prompt: string; submitted_by?: string; wall_clock_ms?: number }>();
+
+    if (!body.prompt || typeof body.prompt !== "string" || body.prompt.trim() === "") {
+      throw new HTTPException(400, { message: "Missing or empty 'prompt' field" });
+    }
+
+    const taskId = crypto.randomUUID();
+    const now = Date.now();
+    const task: AgentTask = {
+      task_id: taskId,
+      motebit_id: motebitId,
+      prompt: body.prompt,
+      submitted_at: now,
+      submitted_by: body.submitted_by,
+      wall_clock_ms: body.wall_clock_ms,
+      status: AgentTaskStatus.Pending,
+    };
+
+    taskQueue.set(taskId, { task, expiresAt: now + TASK_TTL_MS });
+
+    // Push task_request to connected devices
+    const peers = connections.get(motebitId);
+    if (peers) {
+      const payload = JSON.stringify({ type: "task_request", task });
+      for (const peer of peers) {
+        peer.ws.send(payload);
+      }
+    }
+
+    return c.json({ task_id: taskId, status: task.status }, 201);
+  });
+
+  // GET /agent/:motebitId/task/:taskId — poll task status
+  app.get("/agent/:motebitId/task/:taskId", (c) => {
+    const motebitId = c.req.param("motebitId");
+    const taskId = c.req.param("taskId");
+    const entry = taskQueue.get(taskId);
+
+    if (!entry || entry.task.motebit_id !== motebitId) {
+      throw new HTTPException(404, { message: "Task not found" });
+    }
+
+    return c.json({ task: entry.task, receipt: entry.receipt ?? null });
+  });
+
+  // POST /agent/:motebitId/task/:taskId/result — device posts signed receipt
+  app.post("/agent/:motebitId/task/:taskId/result", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const taskId = c.req.param("taskId");
+
+    // Device auth: require signed token or master token
+    const authHeader = c.req.header("authorization");
+    if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+      throw new HTTPException(401, { message: "Authorization required" });
+    }
+    const token = authHeader.slice(7);
+    if (apiToken == null || token !== apiToken) {
+      // Verify as device signed token
+      if (enableDeviceAuth && token.includes(".")) {
+        const verified = await verifySignedTokenForDevice(token, motebitId, identityManager);
+        if (!verified) {
+          throw new HTTPException(403, { message: "Device not authorized" });
+        }
+      } else {
+        throw new HTTPException(403, { message: "Invalid authorization" });
+      }
+    }
+
+    const entry = taskQueue.get(taskId);
+    if (!entry || entry.task.motebit_id !== motebitId) {
+      throw new HTTPException(404, { message: "Task not found" });
+    }
+
+    const receipt = await c.req.json<ExecutionReceipt>();
+    entry.receipt = receipt;
+    entry.task.status = receipt.status === "completed"
+      ? AgentTaskStatus.Completed
+      : receipt.status === "denied"
+        ? AgentTaskStatus.Denied
+        : AgentTaskStatus.Failed;
+
+    // Fan out task_result to all connected devices
+    const peers = connections.get(motebitId);
+    if (peers) {
+      const payload = JSON.stringify({ type: "task_result", task_id: taskId, receipt });
+      for (const peer of peers) {
+        peer.ws.send(payload);
+      }
+    }
+
+    return c.json({ status: entry.task.status });
+  });
+
+  // GET /agent/:motebitId/capabilities — public (no auth)
+  app.get("/agent/:motebitId/capabilities", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const identity = await identityManager.load(motebitId);
+    if (!identity) {
+      throw new HTTPException(404, { message: "Identity not found" });
+    }
+
+    const devices = await identityManager.listDevices(motebitId);
+    const onlinePeers = connections.get(motebitId);
+    const onlineCount = onlinePeers ? onlinePeers.length : 0;
+
+    // Find the first device with a public key for capabilities
+    const deviceWithKey = devices.find((d) => d.public_key);
+    const publicKey = deviceWithKey ? deviceWithKey.public_key : "";
+
+    return c.json({
+      motebit_id: motebitId,
+      public_key: publicKey,
+      tools: [],
+      governance: {
+        trust_mode: "guarded",
+        max_risk_auto: 1,
+        require_approval_above: 2,
+        deny_above: 4,
+      },
+      online_devices: onlineCount,
+    });
+  });
+
+  // POST /agent/:motebitId/verify-receipt — public receipt verification
+  app.post("/agent/:motebitId/verify-receipt", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const receipt = await c.req.json<ExecutionReceipt>();
+
+    if (receipt.motebit_id !== motebitId) {
+      return c.json({ valid: false, reason: "motebit_id mismatch" });
+    }
+
+    // Find the device's public key
+    const devices = await identityManager.listDevices(motebitId);
+    const device = devices.find((d) => d.device_id === receipt.device_id);
+    if (!device || !device.public_key) {
+      return c.json({ valid: false, reason: "Device or public key not found" });
+    }
+
+    const pubKeyBytes = hexToBytes(device.public_key);
+    const valid = await verifyExecutionReceipt(receipt, pubKeyBytes);
+    return c.json({ valid });
+  });
+
   function close(): void {
     // Close all WebSocket connections
     for (const peers of connections.values()) {
@@ -913,6 +1106,7 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
       }
     }
     connections.clear();
+    clearInterval(taskCleanupInterval);
     moteDb.close();
   }
 

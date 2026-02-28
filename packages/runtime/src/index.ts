@@ -1,4 +1,4 @@
-import type { MotebitState, BehaviorCues, ConversationMessage, ToolRegistry } from "@motebit/sdk";
+import type { MotebitState, BehaviorCues, ConversationMessage, ToolRegistry, AgentTask, ExecutionReceipt } from "@motebit/sdk";
 import { EventType, SensitivityLevel } from "@motebit/sdk";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 import type { EventStoreAdapter } from "@motebit/event-log";
@@ -245,7 +245,8 @@ export type StreamChunk =
   | { type: "approval_request"; tool_call_id: string; name: string; args: Record<string, unknown>; risk_level?: number }
   | { type: "injection_warning"; tool_name: string; patterns: string[] }
   | { type: "approval_expired"; tool_name: string }
-  | { type: "result"; result: TurnResult };
+  | { type: "result"; result: TurnResult }
+  | { type: "task_result"; receipt: ExecutionReceipt };
 
 // === Operator Mode Result ===
 
@@ -750,6 +751,121 @@ export class MotebitRuntime {
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
     }
+  }
+
+  /**
+   * Handle an externally submitted agent task. Runs in an isolated conversation
+   * context, signs the result as an ExecutionReceipt, and yields the receipt.
+   */
+  async *handleAgentTask(
+    task: AgentTask,
+    privateKey: Uint8Array,
+    deviceId: string,
+  ): AsyncGenerator<StreamChunk> {
+    if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
+
+    // Save current conversation context
+    const savedHistory = [...this.conversationHistory];
+    const savedConversationId = this.conversationId;
+    this.conversationHistory = [];
+    this.conversationId = null;
+
+    const wallClockMs = task.wall_clock_ms ?? 60_000;
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), wallClockMs);
+
+    let responseText = "";
+    const toolsUsed: string[] = [];
+    let memoriesFormed = 0;
+    let status: "completed" | "failed" | "denied" = "completed";
+
+    try {
+      const stream = this.sendMessageStreaming(task.prompt);
+
+      for await (const chunk of stream) {
+        if (abortController.signal.aborted) {
+          status = "failed";
+          responseText = responseText || "Task timed out";
+          break;
+        }
+
+        if (chunk.type === "text") {
+          responseText += chunk.text;
+        } else if (chunk.type === "tool_status" && chunk.status === "done") {
+          if (!toolsUsed.includes(chunk.name)) {
+            toolsUsed.push(chunk.name);
+          }
+        } else if (chunk.type === "result") {
+          responseText = chunk.result.response;
+          memoriesFormed = chunk.result.memoriesFormed.length;
+        }
+
+        yield chunk;
+      }
+    } catch (err: unknown) {
+      status = "failed";
+      responseText = responseText || (err instanceof Error ? err.message : String(err));
+    } finally {
+      clearTimeout(timeout);
+
+      // Restore user conversation context
+      this.conversationHistory = savedHistory;
+      this.conversationId = savedConversationId;
+    }
+
+    // Hash prompt and result
+    const { hash, signExecutionReceipt } = await import("@motebit/crypto");
+    const promptHash = await hash(new TextEncoder().encode(task.prompt));
+    const resultHash = await hash(new TextEncoder().encode(responseText));
+
+    // Build and sign receipt
+    const receipt = await signExecutionReceipt(
+      {
+        task_id: task.task_id,
+        motebit_id: task.motebit_id,
+        device_id: deviceId,
+        submitted_at: task.submitted_at,
+        completed_at: Date.now(),
+        status,
+        result: responseText,
+        tools_used: toolsUsed,
+        memories_formed: memoriesFormed,
+        prompt_hash: promptHash,
+        result_hash: resultHash,
+      },
+      privateKey,
+    );
+
+    // Log event
+    const eventTypeMap: Record<string, EventType> = {
+      completed: EventType.AgentTaskCompleted,
+      denied: EventType.AgentTaskDenied,
+      failed: EventType.AgentTaskFailed,
+    };
+    const eventType = eventTypeMap[status] ?? EventType.AgentTaskFailed;
+
+    try {
+      const clock = await this.events.getLatestClock(this.motebitId);
+      await this.events.append({
+        event_id: crypto.randomUUID(),
+        motebit_id: this.motebitId,
+        device_id: deviceId,
+        timestamp: Date.now(),
+        event_type: eventType,
+        payload: {
+          task_id: task.task_id,
+          status,
+          tools_used: toolsUsed,
+          memories_formed: memoriesFormed,
+        },
+        version_clock: clock + 1,
+        tombstoned: false,
+      });
+    } catch {
+      // Event logging is best-effort
+    }
+
+    yield { type: "task_result", receipt };
   }
 
   /**

@@ -19,6 +19,7 @@ export interface WebSocketAdapterConfig {
 }
 
 export type EventReceivedCallback = (event: EventLogEntry) => void;
+export type CustomMessageCallback = (msg: { type: string; [key: string]: unknown }) => void;
 
 /**
  * WebSocket-based EventStoreAdapter for real-time sync.
@@ -36,6 +37,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   private ws: WebSocket | null = null;
   private config: Required<Omit<WebSocketAdapterConfig, "authToken" | "httpFallback" | "localStore" | "onCatchUp">> & Pick<WebSocketAdapterConfig, "authToken" | "httpFallback" | "localStore" | "onCatchUp">;
   private onEventCallbacks: Set<EventReceivedCallback> = new Set();
+  private onCustomMessageCallbacks: Set<CustomMessageCallback> = new Set();
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private connected = false;
@@ -76,13 +78,16 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
 
     this.ws.onmessage = (event: MessageEvent) => {
       try {
-        const msg = JSON.parse(String(event.data)) as
-          | { type: "event"; event: EventLogEntry }
-          | { type: "ack"; accepted: number };
+        const msg = JSON.parse(String(event.data)) as { type: string; [key: string]: unknown };
 
         if (msg.type === "event") {
           for (const cb of this.onEventCallbacks) {
-            cb(msg.event);
+            cb(msg.event as EventLogEntry);
+          }
+        } else if (msg.type !== "ack") {
+          // Dispatch unrecognized message types to custom handlers
+          for (const cb of this.onCustomMessageCallbacks) {
+            cb(msg);
           }
         }
       } catch {
@@ -123,6 +128,24 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   onEvent(callback: EventReceivedCallback): () => void {
     this.onEventCallbacks.add(callback);
     return () => { this.onEventCallbacks.delete(callback); };
+  }
+
+  /**
+   * Register a handler for non-event/non-ack WebSocket messages.
+   * Used by agent protocol for task_request, task_claimed, etc.
+   */
+  onCustomMessage(callback: CustomMessageCallback): () => void {
+    this.onCustomMessageCallbacks.add(callback);
+    return () => { this.onCustomMessageCallbacks.delete(callback); };
+  }
+
+  /**
+   * Send an arbitrary JSON message over the WebSocket.
+   * Used by agent protocol for task_claim messages.
+   */
+  sendRaw(data: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(data);
   }
 
   // === EventStoreAdapter ===

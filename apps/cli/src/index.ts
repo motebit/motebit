@@ -12,12 +12,13 @@ import { DEFAULT_CONFIG } from "@motebit/ai-core";
 import { openMotebitDatabase, type MotebitDatabase } from "@motebit/persistence";
 import {
   HttpEventStoreAdapter,
+  WebSocketEventStoreAdapter,
   EncryptedEventStoreAdapter,
   ConversationSyncEngine,
   HttpConversationSyncAdapter,
 } from "@motebit/sync-engine";
 import type { ConversationSyncStoreAdapter } from "@motebit/sync-engine";
-import type { SyncConversation, SyncConversationMessage } from "@motebit/sdk";
+import type { SyncConversation, SyncConversationMessage, AgentTask } from "@motebit/sdk";
 import { EventStore } from "@motebit/event-log";
 import { EventType, RiskLevel } from "@motebit/sdk";
 import {
@@ -42,7 +43,7 @@ import {
 } from "@motebit/tools";
 import type { SearchProvider } from "@motebit/tools";
 import { connectMcpServers, type McpServerConfig } from "@motebit/mcp-client";
-import { deriveKey, encrypt, decrypt, generateSalt, deriveSyncEncryptionKey } from "@motebit/crypto";
+import { deriveKey, encrypt, decrypt, generateSalt, deriveSyncEncryptionKey, createSignedToken } from "@motebit/crypto";
 import type { EncryptedPayload } from "@motebit/crypto";
 import {
   bootstrapIdentity as sharedBootstrapIdentity,
@@ -1477,10 +1478,121 @@ async function handleRun(config: CliConfig): Promise<void> {
 
   console.log(`Daemon running. motebit_id: ${motebitId.slice(0, 8)}... Goals: ${goals.length}. Policy: max_risk_auto=${RiskLevel[maxRiskAuto]}, deny_above=${RiskLevel[denyAbove]}`);
 
+  // Wire agent task handler via WebSocket (if sync URL configured)
+  const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
+  const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
+  let wsAdapter: WebSocketEventStoreAdapter | null = null;
+
+  if (syncUrl != null && syncUrl !== "") {
+    // Derive private key for signing execution receipts
+    let privKeyBytes: Uint8Array | undefined;
+    const deviceId = fullConfig.device_id ?? "unknown";
+
+    if (fullConfig.cli_encrypted_key) {
+      try {
+        // Prompt for passphrase to decrypt private key
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        const passphrase = await new Promise<string>((resolve) => {
+          rl.question("Passphrase (for agent signing): ", (answer) => {
+            rl.close();
+            resolve(answer);
+          });
+        });
+        const pkHex = await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
+        privKeyBytes = fromHex(pkHex);
+      } catch {
+        console.log("Warning: could not decrypt private key — agent tasks disabled");
+      }
+    }
+
+    // Set up WebSocket adapter for real-time task dispatch
+    const wsUrl = syncUrl.replace(/^http/, "ws") + `/ws/sync/${motebitId}`;
+
+    // Create a signed auth token for the WS connection
+    let authToken = syncToken;
+    if (privKeyBytes && fullConfig.device_id) {
+      try {
+        authToken = await createSignedToken(
+          { mid: motebitId, did: fullConfig.device_id, iat: Date.now(), exp: Date.now() + 5 * 60 * 1000 },
+          privKeyBytes,
+        );
+      } catch {
+        // Fall back to sync token
+      }
+    }
+
+    const httpAdapter = new HttpEventStoreAdapter({
+      baseUrl: syncUrl,
+      motebitId,
+      authToken: syncToken,
+    });
+
+    wsAdapter = new WebSocketEventStoreAdapter({
+      url: wsUrl,
+      motebitId,
+      authToken,
+      httpFallback: httpAdapter,
+      localStore: moteDb.eventStore,
+    });
+
+    // Handle agent task requests
+    if (privKeyBytes) {
+      const privateKey = privKeyBytes;
+      wsAdapter.onCustomMessage((msg) => {
+        if (msg.type === "task_request" && msg.task) {
+          const task = msg.task as AgentTask;
+          console.log(`\nAgent task received: ${task.task_id.slice(0, 8)}... prompt: "${task.prompt.slice(0, 80)}"`);
+
+          // Claim the task
+          wsAdapter!.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
+
+          // Execute and post receipt
+          void (async () => {
+            try {
+              let receipt: import("@motebit/sdk").ExecutionReceipt | undefined;
+              for await (const chunk of runtime.handleAgentTask(task, privateKey, deviceId)) {
+                if (chunk.type === "task_result") {
+                  receipt = chunk.receipt;
+                }
+              }
+
+              if (receipt) {
+                // POST receipt to relay
+                const resultUrl = `${syncUrl}/agent/${motebitId}/task/${task.task_id}/result`;
+                await fetch(resultUrl, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${syncToken ?? ""}`,
+                  },
+                  body: JSON.stringify(receipt),
+                });
+                console.log(`Agent task ${task.task_id.slice(0, 8)}... ${receipt.status}. Tools: [${receipt.tools_used.join(", ")}]`);
+              }
+            } catch (err: unknown) {
+              const errMsg = err instanceof Error ? err.message : String(err);
+              console.error(`Agent task ${task.task_id.slice(0, 8)}... error: ${errMsg}`);
+            }
+          })();
+        }
+      });
+
+      console.log(`Agent surface: active (WS → ${wsUrl.replace(/token=.*/, "token=***")})`);
+    } else {
+      console.log("Agent surface: disabled (no private key)");
+    }
+
+    wsAdapter.connect();
+
+    // Also wire sync via the HTTP adapter
+    runtime.connectSync(httpAdapter);
+  }
+
   // Graceful shutdown on SIGINT/SIGTERM
   const shutdown = (): void => {
     console.log("\nShutting down...");
     scheduler.stop();
+    wsAdapter?.disconnect();
     runtime.stop();
     moteDb.close();
     process.exit(0);

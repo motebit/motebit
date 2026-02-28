@@ -4,7 +4,7 @@ import type { EventStoreAdapter } from "@motebit/event-log";
 export { HttpEventStoreAdapter } from "./http-adapter.js";
 export type { HttpAdapterConfig } from "./http-adapter.js";
 export { WebSocketEventStoreAdapter } from "./ws-adapter.js";
-export type { WebSocketAdapterConfig, EventReceivedCallback } from "./ws-adapter.js";
+export type { WebSocketAdapterConfig, EventReceivedCallback, CustomMessageCallback } from "./ws-adapter.js";
 export { EncryptedEventStoreAdapter, decryptEventPayload } from "./encrypted-adapter.js";
 export type { EncryptedAdapterConfig } from "./encrypted-adapter.js";
 export { PairingClient } from "./pairing-client.js";

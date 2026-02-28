@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 import { EventType } from "@motebit/sdk";
-import type { EventLogEntry } from "@motebit/sdk";
+import type { EventLogEntry, AgentTask } from "@motebit/sdk";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
 import { generateKeypair, createSignedToken } from "@motebit/crypto";
 
@@ -742,5 +742,106 @@ describe("Sync Relay — admin API endpoints", () => {
     const body = (await res.json()) as { motebit_id: string; plans: unknown[] };
     expect(body.motebit_id).toBe(MOTEBIT_ID);
     expect(body.plans).toEqual([]);
+  });
+});
+
+// === Agent Protocol Tests ===
+
+describe("Sync Relay — agent protocol", () => {
+  let relay: SyncRelay;
+
+  beforeEach(() => {
+    relay = createTestRelay({ enableDeviceAuth: false });
+  });
+
+  afterEach(() => {
+    relay.close();
+  });
+
+  it("POST /agent/:id/task submits a task and returns 201", async () => {
+    const res = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ prompt: "What is 2+2?" }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { task_id: string; status: string };
+    expect(body.task_id).toBeTypeOf("string");
+    expect(body.status).toBe("pending");
+  });
+
+  it("POST /agent/:id/task returns 400 for empty prompt", async () => {
+    const res = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ prompt: "" }),
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("GET /agent/:id/task/:taskId returns pending task", async () => {
+    // Submit task
+    const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ prompt: "Test task" }),
+    });
+    const { task_id } = (await submitRes.json()) as { task_id: string };
+
+    // Poll
+    const res = await relay.app.request(`/agent/${MOTEBIT_ID}/task/${task_id}`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { task: AgentTask; receipt: unknown };
+    expect(body.task.status).toBe("pending");
+    expect(body.task.prompt).toBe("Test task");
+    expect(body.receipt).toBeNull();
+  });
+
+  it("GET /agent/:id/task/:taskId returns 404 for missing task", async () => {
+    const res = await relay.app.request(`/agent/${MOTEBIT_ID}/task/nonexistent`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  it("GET /agent/:id/capabilities returns identity info", async () => {
+    // Create identity first
+    await relay.app.request("/identity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ owner_id: "owner-caps" }),
+    });
+    const identityRes = await relay.app.request("/identity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ owner_id: "owner-caps-2" }),
+    });
+    const identity = (await identityRes.json()) as { motebit_id: string };
+
+    const res = await relay.app.request(`/agent/${identity.motebit_id}/capabilities`, {
+      method: "GET",
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { motebit_id: string; online_devices: number; governance: Record<string, unknown> };
+    expect(body.motebit_id).toBe(identity.motebit_id);
+    expect(body.online_devices).toBe(0);
+    expect(body.governance).toBeDefined();
+  });
+
+  it("GET /agent/:id/capabilities returns 404 for unknown identity", async () => {
+    const res = await relay.app.request("/agent/nonexistent/capabilities", {
+      method: "GET",
+    });
+
+    expect(res.status).toBe(404);
   });
 });

@@ -280,3 +280,76 @@ export async function verifySignedToken(
 
   return payload;
 }
+
+// === Execution Receipt Signing ===
+
+/**
+ * Shape of an execution receipt for signing/verification.
+ * Structurally compatible with @motebit/sdk ExecutionReceipt.
+ */
+export interface SignableReceipt {
+  task_id: string;
+  motebit_id: string;
+  device_id: string;
+  submitted_at: number;
+  completed_at: number;
+  status: string;
+  result: string;
+  tools_used: string[];
+  memories_formed: number;
+  prompt_hash: string;
+  result_hash: string;
+  signature: string;
+}
+
+/**
+ * Deterministic JSON serialization with sorted keys (recursive).
+ * Produces identical output regardless of insertion order.
+ */
+function canonicalJson(obj: unknown): string {
+  if (obj === null || obj === undefined) return JSON.stringify(obj);
+  if (typeof obj !== "object") return JSON.stringify(obj);
+  if (Array.isArray(obj)) {
+    return "[" + obj.map((item) => canonicalJson(item)).join(",") + "]";
+  }
+  const sorted = Object.keys(obj as Record<string, unknown>).sort();
+  const entries = sorted.map(
+    (key) => JSON.stringify(key) + ":" + canonicalJson((obj as Record<string, unknown>)[key]),
+  );
+  return "{" + entries.join(",") + "}";
+}
+
+/**
+ * Sign an execution receipt. Produces a canonical JSON representation
+ * of all fields except `signature`, signs it with Ed25519, and sets
+ * the `signature` field to the base64url-encoded result.
+ */
+export async function signExecutionReceipt<T extends Omit<SignableReceipt, "signature">>(
+  receipt: T,
+  privateKey: Uint8Array,
+): Promise<T & { signature: string }> {
+  const canonical = canonicalJson(receipt);
+  const message = new TextEncoder().encode(canonical);
+  const sig = await sign(message, privateKey);
+  return { ...receipt, signature: toBase64Url(sig) };
+}
+
+/**
+ * Verify an execution receipt's Ed25519 signature.
+ * Reconstructs the canonical JSON from all fields except `signature`
+ * and verifies against the provided public key.
+ */
+export async function verifyExecutionReceipt(
+  receipt: SignableReceipt,
+  publicKey: Uint8Array,
+): Promise<boolean> {
+  const { signature, ...body } = receipt;
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  try {
+    const sig = fromBase64Url(signature);
+    return await verify(sig, message, publicKey);
+  } catch {
+    return false;
+  }
+}

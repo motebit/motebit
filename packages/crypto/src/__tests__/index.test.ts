@@ -15,7 +15,10 @@ import {
   verify,
   createSignedToken,
   verifySignedToken,
+  signExecutionReceipt,
+  verifyExecutionReceipt,
   type SignedTokenPayload,
+  type SignableReceipt,
 } from "../index";
 
 // ---------------------------------------------------------------------------
@@ -385,5 +388,68 @@ describe("createSignedToken / verifySignedToken", () => {
     const kp = await generateKeypair();
     const result = await verifySignedToken("nodothere", kp.publicKey);
     expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Execution Receipt Signing
+// ---------------------------------------------------------------------------
+
+describe("signExecutionReceipt / verifyExecutionReceipt", () => {
+  function makeReceipt(): Omit<SignableReceipt, "signature"> {
+    return {
+      task_id: "task-001",
+      motebit_id: "mote-123",
+      device_id: "device-456",
+      submitted_at: 1700000000000,
+      completed_at: 1700000060000,
+      status: "completed",
+      result: "Task completed successfully",
+      tools_used: ["search", "calculate"],
+      memories_formed: 2,
+      prompt_hash: "a".repeat(64),
+      result_hash: "b".repeat(64),
+    };
+  }
+
+  it("round-trips correctly (sign → verify = true)", async () => {
+    const kp = await generateKeypair();
+    const receipt = makeReceipt();
+    const signed = await signExecutionReceipt(receipt, kp.privateKey);
+
+    expect(signed.signature).toBeTruthy();
+    expect(signed.task_id).toBe("task-001");
+
+    const valid = await verifyExecutionReceipt(signed, kp.publicKey);
+    expect(valid).toBe(true);
+  });
+
+  it("detects tampering (modify result → verify = false)", async () => {
+    const kp = await generateKeypair();
+    const receipt = makeReceipt();
+    const signed = await signExecutionReceipt(receipt, kp.privateKey);
+
+    const tampered: SignableReceipt = { ...signed, result: "TAMPERED" };
+    const valid = await verifyExecutionReceipt(tampered, kp.publicKey);
+    expect(valid).toBe(false);
+  });
+
+  it("rejects wrong key", async () => {
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    const receipt = makeReceipt();
+    const signed = await signExecutionReceipt(receipt, kpA.privateKey);
+
+    const valid = await verifyExecutionReceipt(signed, kpB.publicKey);
+    expect(valid).toBe(false);
+  });
+
+  it("is deterministic (same receipt → same signature)", async () => {
+    const kp = await generateKeypair();
+    const receipt = makeReceipt();
+    const signed1 = await signExecutionReceipt(receipt, kp.privateKey);
+    const signed2 = await signExecutionReceipt(receipt, kp.privateKey);
+
+    expect(signed1.signature).toBe(signed2.signature);
   });
 });

@@ -53,6 +53,9 @@ export enum EventType {
   PlanFailed = "plan_failed",
   HousekeepingRun = "housekeeping_run",
   ReflectionCompleted = "reflection_completed",
+  AgentTaskCompleted = "agent_task_completed",
+  AgentTaskFailed = "agent_task_failed",
+  AgentTaskDenied = "agent_task_denied",
 }
 
 export enum RelationType {
@@ -434,4 +437,55 @@ export interface Plan {
   updated_at: number;
   current_step_index: number;
   total_steps: number;
+}
+
+// === Agent Protocol ===
+
+export enum AgentTaskStatus {
+  Pending = "pending",
+  Claimed = "claimed",
+  Running = "running",
+  Completed = "completed",
+  Failed = "failed",
+  Denied = "denied",
+  Expired = "expired",
+}
+
+export interface AgentTask {
+  task_id: string;
+  motebit_id: string;
+  prompt: string;
+  submitted_at: number;
+  submitted_by?: string;
+  wall_clock_ms?: number;
+  status: AgentTaskStatus;
+  claimed_by?: string;
+}
+
+export interface ExecutionReceipt {
+  task_id: string;
+  motebit_id: string;
+  device_id: string;
+  submitted_at: number;
+  completed_at: number;
+  status: "completed" | "failed" | "denied";
+  result: string;
+  tools_used: string[];
+  memories_formed: number;
+  prompt_hash: string;
+  result_hash: string;
+  signature: string;
+}
+
+export interface AgentCapabilities {
+  motebit_id: string;
+  public_key: string;
+  tools: string[];
+  governance: {
+    trust_mode: string;
+    max_risk_auto: number;
+    require_approval_above: number;
+    deny_above: number;
+  };
+  online_devices: number;
 }
