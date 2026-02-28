@@ -130,7 +130,7 @@ describe("packContext", () => {
         relevant_memories: [makeMemory({ content: "User likes jazz" })],
       }),
     );
-    expect(result).toContain("[Relevant Memories]");
+    expect(result).toContain("[What I Know]");
     expect(result).toContain("User likes jazz");
     expect(result).toContain("confidence=0.85");
   });
@@ -142,7 +142,7 @@ describe("packContext", () => {
 
   it("omits memories section when empty", () => {
     const result = packContext(makeContextPack({ relevant_memories: [] }));
-    expect(result).not.toContain("[Relevant Memories]");
+    expect(result).not.toContain("[What I Know]");
   });
 
   it("limits to last 10 events", () => {

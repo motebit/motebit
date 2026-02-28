@@ -11,7 +11,7 @@ import type {
   MotebitState,
   ToolCall,
 } from "@motebit/sdk";
-import { SensitivityLevel } from "@motebit/sdk";
+import { SensitivityLevel, MemoryType } from "@motebit/sdk";
 import { buildSystemPrompt as buildPrompt } from "./prompt.js";
 
 export { inferStateFromText } from "./infer-state.js";
@@ -71,12 +71,25 @@ export function packContext(contextPack: ContextPack): string {
     }
   }
 
-  // Relevant memories
+  // Relevant memories — grouped by type
   if (contextPack.relevant_memories.length > 0) {
-    parts.push("[Relevant Memories]");
-    for (const mem of contextPack.relevant_memories) {
-      const prefix = mem.pinned ? "[pinned] " : "";
-      parts.push(`  ${prefix}[confidence=${mem.confidence.toFixed(2)}] ${mem.content}`);
+    const semantic = contextPack.relevant_memories.filter(m => m.memory_type !== MemoryType.Episodic);
+    const episodic = contextPack.relevant_memories.filter(m => m.memory_type === MemoryType.Episodic);
+
+    if (semantic.length > 0) {
+      parts.push("[What I Know]");
+      for (const mem of semantic) {
+        const prefix = mem.pinned ? "[pinned] " : "";
+        parts.push(`  ${prefix}[confidence=${mem.confidence.toFixed(2)}] ${mem.content}`);
+      }
+    }
+
+    if (episodic.length > 0) {
+      parts.push("[What Happened Recently]");
+      for (const mem of episodic) {
+        const prefix = mem.pinned ? "[pinned] " : "";
+        parts.push(`  ${prefix}[confidence=${mem.confidence.toFixed(2)}] ${mem.content}`);
+      }
     }
   }
 
@@ -133,15 +146,17 @@ export function extractMemoryTags(
   text: string,
 ): MemoryCandidate[] {
   const regex =
-    /<memory\s+confidence="([^"]+)"\s+sensitivity="([^"]+)">([\s\S]*?)<\/memory>/g;
+    /<memory\s+confidence="([^"]+)"\s+sensitivity="([^"]+)"(?:\s+type="([^"]+)")?\s*>([\s\S]*?)<\/memory>/g;
   const candidates: MemoryCandidate[] = [];
   let match;
   while ((match = regex.exec(text)) !== null) {
     const confidence = parseFloat(match[1]!);
     const sensitivityRaw = match[2]!;
-    const content = match[3]!.trim();
+    const typeRaw = match[3]; // optional
+    const content = match[4]!.trim();
     const sensitivity = parseSensitivity(sensitivityRaw);
-    candidates.push({ content, confidence, sensitivity });
+    const memory_type = typeRaw === "episodic" ? MemoryType.Episodic : MemoryType.Semantic;
+    candidates.push({ content, confidence, sensitivity, memory_type });
   }
   return candidates;
 }

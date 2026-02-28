@@ -185,9 +185,9 @@ describe("sql.js driver (in-memory)", () => {
   // === Pragma handling ===
 
   it("user_version get/set works", async () => {
-    // After createMotebitDatabaseFromDriver, user_version should be 13
+    // After createMotebitDatabaseFromDriver, user_version should be 14
     const result = mdb.db.pragma("user_version") as { user_version: number }[];
-    expect(result[0]!.user_version).toBe(13);
+    expect(result[0]!.user_version).toBe(14);
 
     mdb.db.pragma("user_version = 99");
     const result2 = mdb.db.pragma("user_version") as { user_version: number }[];

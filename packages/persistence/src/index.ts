@@ -53,7 +53,10 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
   last_accessed INTEGER NOT NULL,
   half_life REAL NOT NULL,
   tombstoned INTEGER NOT NULL DEFAULT 0,
-  pinned INTEGER NOT NULL DEFAULT 0
+  pinned INTEGER NOT NULL DEFAULT 0,
+  memory_type TEXT DEFAULT 'semantic',
+  valid_from INTEGER,
+  valid_until INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote ON memory_nodes (motebit_id);
@@ -378,8 +381,8 @@ export class SqliteMemoryStorage implements MemoryStorageAdapter {
   constructor(private db: DatabaseDriver) {
     this.stmtSaveNode = db.prepare(
       `INSERT OR REPLACE INTO memory_nodes
-       (node_id, motebit_id, content, embedding, confidence, sensitivity, created_at, last_accessed, half_life, tombstoned, pinned)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (node_id, motebit_id, content, embedding, confidence, sensitivity, created_at, last_accessed, half_life, tombstoned, pinned, memory_type, valid_from, valid_until)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtGetNode = db.prepare(
       `SELECT * FROM memory_nodes WHERE node_id = ?`,
@@ -416,6 +419,9 @@ export class SqliteMemoryStorage implements MemoryStorageAdapter {
       node.half_life,
       node.tombstoned ? 1 : 0,
       node.pinned ? 1 : 0,
+      node.memory_type ?? "semantic",
+      node.valid_from ?? null,
+      node.valid_until ?? null,
     );
   }
 
@@ -515,6 +521,9 @@ interface NodeRow {
   half_life: number;
   tombstoned: number;
   pinned: number;
+  memory_type: string | null;
+  valid_from: number | null;
+  valid_until: number | null;
 }
 
 function rowToNode(row: NodeRow): MemoryNode {
@@ -530,6 +539,9 @@ function rowToNode(row: NodeRow): MemoryNode {
     half_life: row.half_life,
     tombstoned: row.tombstoned === 1,
     pinned: row.pinned === 1,
+    memory_type: (row.memory_type as MemoryNode["memory_type"]) ?? undefined,
+    valid_from: row.valid_from ?? undefined,
+    valid_until: row.valid_until,
   };
 }
 
@@ -1803,6 +1815,13 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     try { driver.exec("ALTER TABLE goals ADD COLUMN project_id TEXT"); } catch (_) { /* already exists */ }
     driver.exec("CREATE INDEX IF NOT EXISTS idx_goals_project ON goals (project_id)");
     driver.pragma("user_version = 13");
+  }
+
+  if (userVersion < 14) {
+    try { driver.exec("ALTER TABLE memory_nodes ADD COLUMN memory_type TEXT DEFAULT 'semantic'"); } catch (_) { /* already exists */ }
+    try { driver.exec("ALTER TABLE memory_nodes ADD COLUMN valid_from INTEGER"); } catch (_) { /* already exists */ }
+    try { driver.exec("ALTER TABLE memory_nodes ADD COLUMN valid_until INTEGER"); } catch (_) { /* already exists */ }
+    driver.pragma("user_version = 14");
   }
 
   const eventStore = new SqliteEventStore(driver);

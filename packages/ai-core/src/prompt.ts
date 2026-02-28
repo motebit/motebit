@@ -47,9 +47,11 @@ const TAG_INSTRUCTIONS = `You can emit structured tags (parsed and hidden from d
   <memory confidence="0.9" sensitivity="personal">User prefers tea over coffee</memory>
   <memory confidence="0.7" sensitivity="none">User is building a home automation project</memory>
   <memory confidence="0.85" sensitivity="financial">User is saving for a house down payment</memory>
-  <memory confidence="0.6" sensitivity="medical">User mentioned recurring headaches</memory>
+  <memory confidence="0.6" sensitivity="medical" type="episodic">User mentioned recurring headaches during today's conversation</memory>
 
 Tag a memory whenever you detect: preferences (likes, dislikes, habits), personal facts (name, location, job, family), past experiences shared, goals or plans, corrections to something you said, or emotional patterns. Set confidence by how explicit the statement is (direct statement 0.8-1.0, implied 0.5-0.7). Set sensitivity to the appropriate level (none, personal, medical, financial, secret).
+
+Use type="episodic" for time-specific events — things that happened at a particular time (meetings, conversations, incidents, "today I...", "yesterday we..."). Omit the type attribute (defaults to semantic) for enduring facts, preferences, and knowledge that persist over time.
 
 CRITICAL: You have no persistent memory except what you tag. Every untagged detail is permanently lost after this session. When in doubt, tag it — a low-confidence memory is infinitely better than no memory.
 

@@ -53,6 +53,7 @@ export enum EventType {
   PlanFailed = "plan_failed",
   HousekeepingRun = "housekeeping_run",
   ReflectionCompleted = "reflection_completed",
+  MemoryConsolidated = "memory_consolidated",
   AgentTaskCompleted = "agent_task_completed",
   AgentTaskFailed = "agent_task_failed",
   AgentTaskDenied = "agent_task_denied",
@@ -65,6 +66,12 @@ export enum RelationType {
   ConflictsWith = "conflicts_with",
   Reinforces = "reinforces",
   PartOf = "part_of",
+  Supersedes = "supersedes",
+}
+
+export enum MemoryType {
+  Episodic = "episodic",
+  Semantic = "semantic",
 }
 
 // === Core Identity ===
@@ -126,6 +133,9 @@ export interface MemoryNode {
   half_life: number;
   tombstoned: boolean;
   pinned: boolean;
+  memory_type?: MemoryType;
+  valid_from?: number;
+  valid_until?: number | null;
 }
 
 export interface MemoryEdge {
@@ -141,6 +151,7 @@ export interface MemoryCandidate {
   content: string;
   confidence: number;
   sensitivity: SensitivityLevel;
+  memory_type?: MemoryType;
 }
 
 // === Event Log ===

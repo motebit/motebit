@@ -2,7 +2,8 @@ import type { MotebitState, BehaviorCues, ConversationMessage, ToolRegistry, Age
 import { EventType, SensitivityLevel } from "@motebit/sdk";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 import type { EventStoreAdapter } from "@motebit/event-log";
-import { MemoryGraph, InMemoryMemoryStorage, embedText, computeDecayedConfidence } from "@motebit/memory-graph";
+import { MemoryGraph, InMemoryMemoryStorage, embedText, computeDecayedConfidence, buildConsolidationPrompt, parseConsolidationResponse, clusterBySimilarity } from "@motebit/memory-graph";
+import type { ConsolidationProvider } from "@motebit/memory-graph";
 import type { MemoryStorageAdapter } from "@motebit/memory-graph";
 import { StateVectorEngine } from "@motebit/state-vector";
 import { BehaviorEngine } from "@motebit/behavior-engine";
@@ -235,6 +236,8 @@ export interface RuntimeConfig {
   approvalTimeoutMs?: number;
   /** Task router config for routing housekeeping tasks to cheaper/faster models. */
   taskRouter?: TaskRouterConfig;
+  /** Enable episodic memory consolidation during housekeeping. Default false. */
+  episodicConsolidation?: boolean;
 }
 
 // === Stream Chunk ===
@@ -350,6 +353,7 @@ export class MotebitRuntime {
   private approvalTimer: ReturnType<typeof setTimeout> | null = null;
   private approvalExpiredCallback: (() => void) | null = null;
   private sessionInfo: { continued: boolean; lastActiveAt: number } | null = null;
+  private episodicConsolidation: boolean;
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
     this.motebitId = config.motebitId;
@@ -359,6 +363,7 @@ export class MotebitRuntime {
     this.summarizeAfterMessages = config.summarizeAfterMessages ?? 20;
     this.approvalTimeoutMs = config.approvalTimeoutMs ?? 600_000; // 10 min default
     this.taskRouter = config.taskRouter ? new TaskRouter(config.taskRouter) : null;
+    this.episodicConsolidation = config.episodicConsolidation ?? false;
     this.renderer = adapters.renderer;
     this.provider = adapters.ai ?? null;
     this.stateSnapshot = adapters.storage.stateSnapshot;
@@ -1462,13 +1467,100 @@ export class MotebitRuntime {
         version_clock: clock + 1,
         tombstoned: false,
       });
+
+      // Episodic consolidation (guarded by config flag)
+      if (this.episodicConsolidation && this.provider) {
+        await this.consolidateEpisodicMemories(nodes, now);
+      }
     } catch {
       // Housekeeping is best-effort — don't crash the runtime
     }
   }
 
+  /**
+   * Consolidate aging episodic memories into semantic summaries.
+   * Groups similar episodic memories by embedding, asks LLM to summarize each cluster,
+   * and forms a new semantic memory from the summary.
+   */
+  private async consolidateEpisodicMemories(allNodes: import("@motebit/sdk").MemoryNode[], now: number): Promise<void> {
+    const { MemoryType: MT } = await import("@motebit/sdk");
+
+    // Find episodic memories past 50% of their half-life, not tombstoned, not pinned
+    const candidates = allNodes.filter(n => {
+      if (n.tombstoned || n.pinned) return false;
+      if (n.memory_type !== MT.Episodic) return false;
+      const elapsed = now - n.created_at;
+      return elapsed > n.half_life * 0.5;
+    });
+
+    if (candidates.length < 3) return; // Not enough to consolidate
+
+    // Cluster by cosine similarity
+    const clusters = clusterBySimilarity(candidates, 0.6);
+
+    for (const cluster of clusters) {
+      if (cluster.length < 2) continue;
+
+      // Summarize cluster via LLM
+      const contents = cluster.map(n => `- ${n.content}`).join("\n");
+      const prompt = `Summarize the following episodic observations into a single factual statement:\n${contents}\n\nRespond with ONLY the summary sentence.`;
+
+      try {
+        const result = await this.provider!.generate({
+          recent_events: [],
+          relevant_memories: [],
+          current_state: this.state.getState(),
+          user_message: prompt,
+        });
+
+        const summary = result.text.trim();
+        if (summary.length < 5) continue;
+
+        // Compute average confidence + boost
+        const avgConf = cluster.reduce((sum, n) => sum + n.confidence, 0) / cluster.length;
+        const newConf = Math.min(1.0, avgConf + 0.1);
+
+        // Form new semantic memory
+        const embedding = await embedText(summary);
+        await this.memory.formMemory(
+          {
+            content: summary,
+            confidence: newConf,
+            sensitivity: cluster[0]!.sensitivity,
+            memory_type: MT.Semantic,
+          },
+          embedding,
+          MemoryGraph.HALF_LIFE_SEMANTIC,
+        );
+
+        // Tombstone the episodic cluster members
+        for (const node of cluster) {
+          await this.memory.deleteMemory(node.node_id);
+        }
+      } catch {
+        // Consolidation is best-effort per cluster
+      }
+    }
+  }
+
   private wireLoopDeps(): void {
     if (this.provider) {
+      const provider = this.provider;
+      const stateEngine = this.state;
+
+      const consolidationProvider: ConsolidationProvider = {
+        async classify(newContent, existing) {
+          const prompt = buildConsolidationPrompt(newContent, existing);
+          const result = await provider.generate({
+            recent_events: [],
+            relevant_memories: [],
+            current_state: stateEngine.getState(),
+            user_message: prompt,
+          });
+          return parseConsolidationResponse(result.text, existing.map(e => e.node_id));
+        },
+      };
+
       this.loopDeps = {
         motebitId: this.motebitId,
         eventStore: this.events,
@@ -1479,6 +1571,7 @@ export class MotebitRuntime {
         tools: this.toolRegistry.size > 0 ? this.toolRegistry : undefined,
         policyGate: this.policy,
         memoryGovernor: this.memoryGovernor,
+        consolidationProvider,
       };
     }
   }

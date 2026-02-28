@@ -1,7 +1,7 @@
 import type { BehaviorCues, MotebitState, MemoryNode, MemoryCandidate, ToolRegistry, ToolDefinition, ToolResult, ToolRiskProfile, PolicyDecision, TurnContext, ConversationMessage } from "@motebit/sdk";
 import { EventType, RelationType } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
-import type { MemoryGraph } from "@motebit/memory-graph";
+import type { MemoryGraph, ConsolidationProvider } from "@motebit/memory-graph";
 import { embedText, cosineSimilarity } from "@motebit/memory-graph";
 import type { StateVectorEngine } from "@motebit/state-vector";
 import type { BehaviorEngine } from "@motebit/behavior-engine";
@@ -125,6 +125,7 @@ export interface MotebitLoopDependencies {
   tools?: ToolRegistry;
   policyGate?: LoopPolicyGate;
   memoryGovernor?: LoopMemoryGovernor;
+  consolidationProvider?: ConsolidationProvider;
 }
 
 export interface TurnResult {
@@ -441,8 +442,15 @@ export async function* runTurnStreaming(
 
   for (const candidate of candidates) {
     const embedding = await embedText(candidate.content);
-    const node = await memoryGraph.formMemory(candidate, embedding);
-    memoriesFormed.push(node);
+    if (deps.consolidationProvider) {
+      const { node } = await memoryGraph.consolidateAndForm(
+        candidate, embedding, deps.consolidationProvider,
+      );
+      if (node) memoriesFormed.push(node);
+    } else {
+      const node = await memoryGraph.formMemory(candidate, embedding);
+      memoriesFormed.push(node);
+    }
   }
 
   // 4a. Link related memories — connect new nodes to retrieved context and to each other

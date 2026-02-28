@@ -48,7 +48,10 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
   last_accessed INTEGER NOT NULL,
   half_life REAL NOT NULL,
   tombstoned INTEGER NOT NULL DEFAULT 0,
-  pinned INTEGER NOT NULL DEFAULT 0
+  pinned INTEGER NOT NULL DEFAULT 0,
+  memory_type TEXT DEFAULT 'semantic',
+  valid_from INTEGER,
+  valid_until INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote ON memory_nodes (motebit_id);
 
@@ -173,6 +176,9 @@ interface NodeRow {
   half_life: number;
   tombstoned: number;
   pinned: number;
+  memory_type: string | null;
+  valid_from: number | null;
+  valid_until: number | null;
 }
 
 interface EdgeRow {
@@ -232,6 +238,9 @@ function rowToNode(row: NodeRow): MemoryNode {
     half_life: row.half_life,
     tombstoned: row.tombstoned === 1,
     pinned: row.pinned === 1,
+    memory_type: (row.memory_type as MemoryNode["memory_type"]) ?? undefined,
+    valid_from: row.valid_from ?? undefined,
+    valid_until: row.valid_until,
   };
 }
 
@@ -346,9 +355,9 @@ export class ExpoSqliteMemoryStorage implements MemoryStorageAdapter {
   async saveNode(node: MemoryNode): Promise<void> {
     this.db.runSync(
       `INSERT OR REPLACE INTO memory_nodes
-       (node_id, motebit_id, content, embedding, confidence, sensitivity, created_at, last_accessed, half_life, tombstoned, pinned)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [node.node_id, node.motebit_id, node.content, JSON.stringify(node.embedding), node.confidence, node.sensitivity, node.created_at, node.last_accessed, node.half_life, node.tombstoned ? 1 : 0, node.pinned ? 1 : 0],
+       (node_id, motebit_id, content, embedding, confidence, sensitivity, created_at, last_accessed, half_life, tombstoned, pinned, memory_type, valid_from, valid_until)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [node.node_id, node.motebit_id, node.content, JSON.stringify(node.embedding), node.confidence, node.sensitivity, node.created_at, node.last_accessed, node.half_life, node.tombstoned ? 1 : 0, node.pinned ? 1 : 0, node.memory_type ?? "semantic", node.valid_from ?? null, node.valid_until ?? null],
     );
   }
 
@@ -1229,6 +1238,14 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
       // Tables may already exist on new DBs
     }
     db.execSync("PRAGMA user_version = 6");
+  }
+
+  // Migration 7: memory consolidation columns
+  if (userVersion < 7) {
+    try { db.execSync("ALTER TABLE memory_nodes ADD COLUMN memory_type TEXT DEFAULT 'semantic'"); } catch { /* already exists */ }
+    try { db.execSync("ALTER TABLE memory_nodes ADD COLUMN valid_from INTEGER"); } catch { /* already exists */ }
+    try { db.execSync("ALTER TABLE memory_nodes ADD COLUMN valid_until INTEGER"); } catch { /* already exists */ }
+    db.execSync("PRAGMA user_version = 7");
   }
 
   return {

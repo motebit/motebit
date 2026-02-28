@@ -5,10 +5,14 @@ import type {
   SensitivityLevel,
   RelationType,
 } from "@motebit/sdk";
-import { EventType } from "@motebit/sdk";
+import { EventType, MemoryType, RelationType as RT } from "@motebit/sdk";
+import { ConsolidationAction } from "./consolidation.js";
+import type { ConsolidationProvider, ConsolidationDecision } from "./consolidation.js";
 import type { EventStore } from "@motebit/event-log";
 
 export { embedText, embedTextHash, EMBEDDING_DIMENSIONS, resetPipeline } from "./embeddings.js";
+export { ConsolidationAction, buildConsolidationPrompt, parseConsolidationResponse, clusterBySimilarity } from "./consolidation.js";
+export type { ConsolidationProvider, ConsolidationDecision } from "./consolidation.js";
 
 // === Scoring Configuration ===
 
@@ -210,16 +214,23 @@ export class MemoryGraph {
     this.scoringConfig = { ...DEFAULT_SCORING_CONFIG, ...scoringConfig };
   }
 
+  /** Default half-lives by memory type. */
+  static readonly HALF_LIFE_SEMANTIC = 30 * 24 * 60 * 60 * 1000; // 30 days
+  static readonly HALF_LIFE_EPISODIC = 3 * 24 * 60 * 60 * 1000;  // 3 days
+
   /**
    * Form a new memory from a candidate.
    */
   async formMemory(
     candidate: MemoryCandidate,
     embedding: number[],
-    halfLife: number = 7 * 24 * 60 * 60 * 1000, // 7 days default
+    halfLife?: number,
   ): Promise<MemoryNode> {
     const nodeId = crypto.randomUUID();
     const now = Date.now();
+    const memoryType = candidate.memory_type ?? MemoryType.Semantic;
+    const resolvedHalfLife = halfLife ??
+      (memoryType === MemoryType.Episodic ? MemoryGraph.HALF_LIFE_EPISODIC : MemoryGraph.HALF_LIFE_SEMANTIC);
 
     const node: MemoryNode = {
       node_id: nodeId,
@@ -230,9 +241,11 @@ export class MemoryGraph {
       sensitivity: candidate.sensitivity,
       created_at: now,
       last_accessed: now,
-      half_life: halfLife,
+      half_life: resolvedHalfLife,
       tombstoned: false,
       pinned: false,
+      memory_type: memoryType,
+      valid_from: now,
     };
 
     await this.storage.saveNode(node);
@@ -275,6 +288,127 @@ export class MemoryGraph {
   }
 
   /**
+   * Consolidate-aware memory formation.
+   * Checks new candidate against existing similar memories and decides:
+   * ADD (new fact), UPDATE (supersedes), REINFORCE (confirms), or NOOP (skip).
+   */
+  async consolidateAndForm(
+    candidate: MemoryCandidate,
+    embedding: number[],
+    provider: ConsolidationProvider,
+    halfLife?: number,
+  ): Promise<{ node: MemoryNode | null; decision: ConsolidationDecision }> {
+    // Retrieve top-5 similar existing memories
+    const similar = await this.retrieve(embedding, { limit: 5 });
+
+    // No similar memories — skip LLM call, fall through to ADD
+    if (similar.length === 0) {
+      const node = await this.formMemory(candidate, embedding, halfLife);
+      return {
+        node,
+        decision: { action: ConsolidationAction.ADD, reason: "No similar memories found" },
+      };
+    }
+
+    // Ask provider to classify
+    const existing = similar.map(n => ({
+      node_id: n.node_id,
+      content: n.content,
+      confidence: n.confidence,
+    }));
+    const decision = await provider.classify(candidate.content, existing);
+    const now = Date.now();
+
+    switch (decision.action) {
+      case "update": {
+        // Set valid_until on old node (preserve history, don't tombstone)
+        const oldNode = decision.existingNodeId
+          ? await this.storage.getNode(decision.existingNodeId)
+          : null;
+        if (oldNode) {
+          oldNode.valid_until = now;
+          await this.storage.saveNode(oldNode);
+        }
+        // Form new node with valid_from = now
+        const newNode = await this.formMemory(candidate, embedding, halfLife);
+        // Create Supersedes edge
+        if (decision.existingNodeId) {
+          await this.link(newNode.node_id, decision.existingNodeId, RT.Supersedes);
+        }
+        // Log consolidation event
+        await this.logConsolidation(decision, newNode.node_id);
+        return { node: newNode, decision };
+      }
+
+      case "reinforce": {
+        // Boost existing node's confidence
+        const existingNode = decision.existingNodeId
+          ? await this.storage.getNode(decision.existingNodeId)
+          : null;
+        if (existingNode) {
+          existingNode.confidence = Math.min(1.0, existingNode.confidence + 0.1);
+          existingNode.last_accessed = now;
+          await this.storage.saveNode(existingNode);
+        }
+        // Form new node with shorter half-life as supporting context
+        const supportNode = await this.formMemory(
+          candidate,
+          embedding,
+          3 * 24 * 60 * 60 * 1000, // 3 days
+        );
+        // Create Reinforces edge
+        if (decision.existingNodeId) {
+          await this.link(supportNode.node_id, decision.existingNodeId, RT.Reinforces);
+        }
+        await this.logConsolidation(decision, supportNode.node_id);
+        return { node: supportNode, decision };
+      }
+
+      case "noop": {
+        // Update existing node's last_accessed
+        const existingNode = decision.existingNodeId
+          ? await this.storage.getNode(decision.existingNodeId)
+          : null;
+        if (existingNode) {
+          existingNode.last_accessed = now;
+          await this.storage.saveNode(existingNode);
+        }
+        await this.logConsolidation(decision);
+        return { node: null, decision };
+      }
+
+      case "add":
+      default: {
+        const node = await this.formMemory(candidate, embedding, halfLife);
+        await this.logConsolidation(decision, node.node_id);
+        return { node, decision };
+      }
+    }
+  }
+
+  private async logConsolidation(decision: ConsolidationDecision, newNodeId?: string): Promise<void> {
+    try {
+      const clock = await this.eventStore.getLatestClock(this.motebitId);
+      await this.eventStore.append({
+        event_id: crypto.randomUUID(),
+        motebit_id: this.motebitId,
+        timestamp: Date.now(),
+        event_type: EventType.MemoryConsolidated,
+        payload: {
+          action: decision.action,
+          existing_node_id: decision.existingNodeId ?? null,
+          new_node_id: newNodeId ?? null,
+          reason: decision.reason,
+        },
+        version_clock: clock + 1,
+        tombstoned: false,
+      });
+    } catch {
+      // Event logging is best-effort
+    }
+  }
+
+  /**
    * Two-pass retrieval:
    * 1. Weighted filter by confidence, recency, sensitivity
    * 2. Semantic rerank by cosine similarity on embeddings
@@ -289,9 +423,23 @@ export class MemoryGraph {
       sensitivityFilter?: SensitivityLevel[];
       limit?: number;
       scoringConfig?: Partial<ScoringConfig>;
+      /** Expand results via graph edges (1-hop neighbors). Default true. */
+      expandEdges?: boolean;
+      /** Score discount factor for edge-expanded neighbors. Default 0.7. */
+      edgeDiscountFactor?: number;
+      /** Include temporally expired memories (valid_until in the past). Default false. */
+      includeExpired?: boolean;
     } = {},
   ): Promise<MemoryNode[]> {
-    const { minConfidence = 0.1, sensitivityFilter, limit = 10, scoringConfig: perCallConfig } = options;
+    const {
+      minConfidence = 0.1,
+      sensitivityFilter,
+      limit = 10,
+      scoringConfig: perCallConfig,
+      expandEdges = true,
+      edgeDiscountFactor = 0.7,
+      includeExpired = false,
+    } = options;
 
     // Merge per-call overrides with instance config
     const config = perCallConfig ? { ...this.scoringConfig, ...perCallConfig } : this.scoringConfig;
@@ -307,7 +455,15 @@ export class MemoryGraph {
 
     // Pass 2: semantic rerank
     const now = Date.now();
-    const scored = candidates.map((node) => {
+
+    // Temporal filter: exclude expired memories unless requested
+    const filtered = includeExpired
+      ? candidates
+      : candidates.filter(node =>
+          node.valid_until == null || node.valid_until > now,
+        );
+
+    const scored = filtered.map((node) => {
       const similarity = cosineSimilarity(queryEmbedding, node.embedding);
       const decayedConfidence = computeDecayedConfidence(
         node.confidence,
@@ -322,7 +478,36 @@ export class MemoryGraph {
     });
 
     scored.sort((a, b) => b.score - a.score);
-    return scored.slice(0, limit).map((s) => s.node);
+    let topResults = scored.slice(0, limit);
+
+    // Pass 3: Graph expansion — 1-hop neighbors via edges
+    if (expandEdges && topResults.length > 0) {
+      const resultIds = new Set(topResults.map(r => r.node.node_id));
+
+      for (const { node: parent, score: parentScore } of [...topResults]) {
+        const edges = await this.storage.getEdges(parent.node_id);
+        for (const edge of edges) {
+          const neighborId = edge.source_id === parent.node_id ? edge.target_id : edge.source_id;
+          if (resultIds.has(neighborId)) continue;
+
+          const neighbor = await this.storage.getNode(neighborId);
+          if (!neighbor || neighbor.tombstoned) continue;
+
+          // Temporal filter for neighbor
+          if (!includeExpired && neighbor.valid_until != null && neighbor.valid_until <= now) continue;
+
+          const neighborScore = parentScore * edgeDiscountFactor * edge.weight * edge.confidence;
+          topResults.push({ node: neighbor, score: neighborScore });
+          resultIds.add(neighborId);
+        }
+      }
+
+      // Re-sort and trim after expansion
+      topResults.sort((a, b) => b.score - a.score);
+      topResults = topResults.slice(0, limit);
+    }
+
+    return topResults.map((s) => s.node);
   }
 
   /**

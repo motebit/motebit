@@ -159,6 +159,9 @@ interface NodeRow {
   half_life: number;
   tombstoned: number;
   pinned: number;
+  memory_type: string | null;
+  valid_from: number | null;
+  valid_until: number | null;
 }
 
 function rowToNode(row: NodeRow): MemoryNode {
@@ -174,6 +177,9 @@ function rowToNode(row: NodeRow): MemoryNode {
     half_life: row.half_life,
     tombstoned: row.tombstoned === 1,
     pinned: row.pinned === 1,
+    memory_type: (row.memory_type as MemoryNode["memory_type"]) ?? undefined,
+    valid_from: row.valid_from ?? undefined,
+    valid_until: row.valid_until,
   };
 }
 
@@ -204,8 +210,8 @@ export class TauriMemoryStorage implements MemoryStorageAdapter {
     await dbExecute(
       this.invoke,
       `INSERT OR REPLACE INTO memory_nodes
-       (node_id, motebit_id, content, embedding, confidence, sensitivity, created_at, last_accessed, half_life, tombstoned, pinned)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (node_id, motebit_id, content, embedding, confidence, sensitivity, created_at, last_accessed, half_life, tombstoned, pinned, memory_type, valid_from, valid_until)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         node.node_id,
         node.motebit_id,
@@ -218,6 +224,9 @@ export class TauriMemoryStorage implements MemoryStorageAdapter {
         node.half_life,
         node.tombstoned ? 1 : 0,
         node.pinned ? 1 : 0,
+        node.memory_type ?? "semantic",
+        node.valid_from ?? null,
+        node.valid_until ?? null,
       ],
     );
   }
