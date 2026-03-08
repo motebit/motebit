@@ -1,0 +1,140 @@
+---
+title: MCP Server Mode
+description: Expose your motebit as a callable agent — synthetic tools, signed receipts, and bearer auth.
+---
+
+MCP server mode turns the motebit inside-out. Instead of the motebit calling external tools via MCP, _other agents_ connect to the motebit as an MCP server, discover its capabilities, and submit requests. The motebit responds with identity-tagged, policy-gated results — and for autonomous tasks, cryptographically signed execution receipts.
+
+This is the sovereign agentic surface. A dumb tool proxy can expose functions. Only a motebit can prove who executed the task, remember across sessions, and enforce governance at the boundary.
+
+## Starting the server
+
+### Stdio transport (for MCP host integration)
+
+```bash
+motebit --serve
+```
+
+### HTTP transport (for remote agents)
+
+```bash
+motebit --serve --serve-transport http --serve-port 3100
+```
+
+With an identity file and bearer auth:
+
+```bash
+motebit --serve \
+  --serve-transport http \
+  --identity motebit.md \
+  --serve-auth-token my-secret-token
+```
+
+## Synthetic tools
+
+Six tools are registered automatically when the server starts. Four are conditional — they only appear when the runtime provides their backend (which the CLI always does).
+
+| Tool | Input | Description |
+|---|---|---|
+| `motebit_query` | `{ message }` | Ask the agent a question — full AI response with memory context |
+| `motebit_remember` | `{ content, sensitivity? }` | Store a memory (sensitivity capped for external callers) |
+| `motebit_recall` | `{ query, limit? }` | Semantic memory search, privacy-filtered |
+| `motebit_task` | `{ prompt }` | Submit an autonomous task — returns a signed `ExecutionReceipt` |
+| `motebit_identity` | none | Return the motebit's identity (motebit.md content or JSON summary) |
+| `motebit_tools` | none | List all available tools with risk levels |
+
+### motebit_query
+
+Sends a message through the full AI turn loop — memory retrieval, context packing, tool use, memory formation. The response includes how many memories were formed during the turn.
+
+```json
+{ "message": "What do you know about the deployment pipeline?" }
+```
+
+### motebit_remember
+
+Stores a memory in the motebit's semantic graph. External callers are capped at `"personal"` sensitivity — attempts to store `"medical"`, `"financial"`, or `"secret"` memories are denied (fail-closed).
+
+```json
+{ "content": "The deploy key rotates every 90 days", "sensitivity": "personal" }
+```
+
+### motebit_recall
+
+Searches the motebit's memory graph by semantic similarity. Results are privacy-filtered — high-sensitivity memories are excluded from external responses.
+
+```json
+{ "query": "deployment credentials", "limit": 5 }
+```
+
+### motebit_task
+
+The differentiator. Submits a prompt for autonomous execution. The motebit runs the full agentic loop (potentially multiple tool calls), then signs the result as an `ExecutionReceipt` with its Ed25519 private key. The receipt includes:
+
+- Task ID, timestamps, status
+- SHA-256 hashes of the prompt and result
+- Tools used, memories formed
+- Ed25519 signature
+
+Any agent receiving the receipt can verify it was executed by this specific motebit using [`@motebit/verify`](/docs/guides/identity-standard).
+
+```json
+{ "prompt": "Check the API health endpoint and summarize the response" }
+```
+
+### motebit_identity
+
+Returns the motebit's identity. If the server was started with `--identity motebit.md`, returns the full signed identity file. Otherwise returns a JSON summary with the motebit ID and public key.
+
+### motebit_tools
+
+Lists all tools available to the motebit (built-in + MCP), including their risk levels. Useful for capability discovery before submitting tasks.
+
+## Proxied tools
+
+In addition to the six synthetic tools, the server exposes all tools from the motebit's [tool registry](/docs/guides/tools) — built-in tools and connected MCP server tools. Every proxied tool call passes through the [policy gate](/docs/concepts/governance):
+
+- **Allowed** — executes and returns the result with an identity tag
+- **Denied** — returns a policy denial message
+- **Requires approval** — returns a governance message (the motebit owner must approve)
+
+## Resources and prompts
+
+The server also exposes MCP resources and prompts:
+
+| Resource | URI | Description |
+|---|---|---|
+| `identity` | `motebit://identity` | Motebit ID and public key |
+| `state` | `motebit://state` | Current state vector (attention, processing, etc.) |
+| `memories` | `motebit://memories` | Privacy-filtered memory snapshot |
+
+| Prompt | Description |
+|---|---|
+| `chat` | Send a message (wraps into user message format) |
+| `recall` | Search semantic memory by query |
+| `reflect` | Trigger agent reflection on recent interactions |
+
+## HTTP bearer auth
+
+When `authToken` is configured, all HTTP endpoints except `/health` require a bearer token:
+
+```
+Authorization: Bearer my-secret-token
+```
+
+- `/health` — always public (returns `{ status: "ok", motebit_id: "..." }`)
+- `/sse` — requires auth (SSE connection for MCP transport)
+- `/messages` — requires auth (JSON-RPC messages)
+
+Requests with a missing or incorrect token receive a `401 Unauthorized` response. If no `authToken` is configured, all endpoints are open.
+
+## Identity tagging
+
+Every result — from synthetic tools and proxied tools alike — is tagged with the motebit's identity:
+
+```
+[result content]
+[motebit:a1b2c3d4 key:0123456789abcdef]
+```
+
+This allows any consumer to trace which motebit produced which result, even without full receipt verification.

@@ -48,6 +48,7 @@ packages/
   persistence/     SQLite schema (WAL mode), adapters for events/memories/identities/audit/state/devices
   tools/           InMemoryToolRegistry, builtin tools, MCP tool merge
   mcp-client/      MCP stdio client, tool discovery, external data boundary marking
+  mcp-server/      MCP server adapter — exposes motebit as callable agent, synthetic tools, HTTP bearer auth
   identity-file/   Generate, parse, verify motebit.md — cryptographically signed agent identity files (internal)
   verify/          Standalone public verifier for motebit.md — zero monorepo deps, MIT licensed
   create-motebit/  Public CLI: `npm create motebit` — generates + verifies signed identity files
@@ -106,6 +107,8 @@ Tauri app. Two key files for the UI layer:
 **Daemon mode:** Reads governance thresholds from `motebit.md`, runs goal scheduler (60s tick), suspends on approval requests, fail-closed on invalid governance.
 
 **Dependencies:** 13 workspace packages (runtime, ai-core, persistence, crypto, etc.). Direct better-sqlite3 persistence.
+
+**MCP server mode:** `motebit --serve` exposes the motebit as an MCP server. Supports stdio and HTTP (SSE) transport. Six synthetic tools: `motebit_query` (AI response with memory), `motebit_remember` (store memory, sensitivity-capped at "personal" for external callers), `motebit_recall` (semantic search, privacy-filtered), `motebit_task` (autonomous execution with signed `ExecutionReceipt`), `motebit_identity` (identity file or JSON), `motebit_tools` (capability discovery). All proxied tools pass through PolicyGate. Optional HTTP bearer auth (`authToken` config). All results identity-tagged via `formatResult()`. Deps are optional — synthetic tools only registered when their backend callback is provided.
 
 ## Mobile App
 

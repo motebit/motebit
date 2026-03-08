@@ -11,6 +11,7 @@
     "daemon-approvals",
     "configuration",
     "tools",
+    "mcp-server",
     "sync"
   ]
 }
