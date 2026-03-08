@@ -206,6 +206,67 @@ export async function discoverByWellKnown(domain: string): Promise<DnsDiscoveryR
   }
 }
 
+// ---------------------------------------------------------------------------
+// Relay-based discovery
+// ---------------------------------------------------------------------------
+
+export interface RelayDiscoveryResult {
+  motebit_id: string;
+  endpoint_url: string;
+  capabilities: string[];
+  public_key: string;
+}
+
+export interface RelayDiscoveryOptions {
+  relayUrl: string;
+  capability?: string;
+  authToken?: string;
+  limit?: number;
+}
+
+/**
+ * Discover motebits via the API relay's agent registry.
+ * Queries GET /api/v1/agents/discover with optional capability and limit filters.
+ *
+ * Never throws — returns an empty array on failure.
+ */
+export async function discoverViaRelay(
+  opts: RelayDiscoveryOptions,
+): Promise<RelayDiscoveryResult[]> {
+  try {
+    const url = new URL("/api/v1/agents/discover", opts.relayUrl);
+    if (opts.capability) url.searchParams.set("capability", opts.capability);
+    if (opts.limit != null) url.searchParams.set("limit", String(opts.limit));
+
+    const headers: Record<string, string> = {};
+    if (opts.authToken) {
+      headers["Authorization"] = `Bearer ${opts.authToken}`;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    let resp: Response;
+    try {
+      resp = await fetch(url.toString(), { headers, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!resp.ok) {
+      return [];
+    }
+
+    const body = (await resp.json()) as { agents?: RelayDiscoveryResult[] };
+    if (!Array.isArray(body.agents)) {
+      return [];
+    }
+
+    return body.agents;
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Try DNS first, fall back to .well-known.
  */

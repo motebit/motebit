@@ -2,8 +2,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { ToolDefinition, ToolResult, ExecutionReceipt } from "@motebit/sdk";
 import { InMemoryToolRegistry } from "@motebit/tools";
 
-export { discoverByDns, discoverByWellKnown, discoverMotebit } from "./discovery.js";
-export type { DnsDiscoveryResult, ResolveTxtFn } from "./discovery.js";
+export { discoverByDns, discoverByWellKnown, discoverMotebit, discoverViaRelay } from "./discovery.js";
+export type { DnsDiscoveryResult, ResolveTxtFn, RelayDiscoveryResult, RelayDiscoveryOptions } from "./discovery.js";
 
 export interface McpServerConfig {
   name: string;

@@ -252,18 +252,27 @@ export class McpServerAdapter {
   constructor(config: McpServerConfig, deps: MotebitServerDeps) {
     this.config = config;
     this.deps = deps;
-    this.server = new McpServer({
-      name: config.name ?? "motebit",
-      version: config.version ?? "0.1.0",
+    this.server = this.createServer();
+  }
+
+  /**
+   * Create a new McpServer instance with all tools, resources, and prompts
+   * registered. For StreamableHTTP, each session needs its own server instance
+   * (the SDK only allows one transport per server).
+   */
+  private createServer(): McpServer {
+    const server = new McpServer({
+      name: this.config.name ?? "motebit",
+      version: this.config.version ?? "0.1.0",
     });
+    this.registerToolsOn(server);
+    this.registerSyntheticToolsOn(server);
+    this.registerResourcesOn(server);
+    this.registerPromptsOn(server);
+    return server;
   }
 
   async start(): Promise<void> {
-    this.registerTools();
-    this.registerSyntheticTools();
-    this.registerResources();
-    this.registerPrompts();
-
     if (this.config.transport === "stdio") {
       const transport = new StdioServerTransport();
       await this.server.connect(transport);
@@ -284,7 +293,7 @@ export class McpServerAdapter {
 
   // --- Tool Registration ---
 
-  private registerTools(): void {
+  private registerToolsOn(server: McpServer): void {
     const allTools = this.deps.listTools();
     const visibleTools = this.deps.filterTools(allTools);
 
@@ -297,7 +306,7 @@ export class McpServerAdapter {
       const hasAnnotations = Object.keys(annotations).length > 0;
 
       if (hasArgs && hasAnnotations) {
-        this.server.tool(
+        server.tool(
           tool.name,
           tool.description,
           zodShape,
@@ -307,7 +316,7 @@ export class McpServerAdapter {
           },
         );
       } else if (hasArgs) {
-        this.server.tool(
+        server.tool(
           tool.name,
           tool.description,
           zodShape,
@@ -316,7 +325,7 @@ export class McpServerAdapter {
           },
         );
       } else if (hasAnnotations) {
-        this.server.tool(
+        server.tool(
           tool.name,
           tool.description,
           annotations,
@@ -325,7 +334,7 @@ export class McpServerAdapter {
           },
         );
       } else {
-        this.server.tool(
+        server.tool(
           tool.name,
           tool.description,
           async () => {
@@ -391,7 +400,7 @@ export class McpServerAdapter {
 
   // --- Synthetic Tool Registration ---
 
-  private registerSyntheticTools(): void {
+  private registerSyntheticToolsOn(server: McpServer): void {
     const fmt = (data: unknown): { content: Array<{ type: "text"; text: string }> } => {
       const text = typeof data === "string" ? data : JSON.stringify(data);
       const result: ToolResult = { ok: true, data: text };
@@ -405,7 +414,7 @@ export class McpServerAdapter {
 
     if (this.deps.sendMessage) {
       const sendMessage = this.deps.sendMessage;
-      this.server.tool(
+      server.tool(
         "motebit_query",
         "Ask this motebit a question — AI response with memory context",
         { message: z.string().describe("The question or message to send") },
@@ -419,7 +428,7 @@ export class McpServerAdapter {
 
     if (this.deps.storeMemory) {
       const storeMemory = this.deps.storeMemory;
-      this.server.tool(
+      server.tool(
         "motebit_remember",
         "Store a memory in this motebit",
         {
@@ -446,7 +455,7 @@ export class McpServerAdapter {
 
     if (this.deps.queryMemories) {
       const queryMemories = this.deps.queryMemories;
-      this.server.tool(
+      server.tool(
         "motebit_recall",
         "Search this motebit's semantic memory",
         {
@@ -463,7 +472,7 @@ export class McpServerAdapter {
 
     if (this.deps.handleAgentTask) {
       const handleAgentTask = this.deps.handleAgentTask;
-      this.server.tool(
+      server.tool(
         "motebit_task",
         "Submit an autonomous task — returns a signed ExecutionReceipt",
         { prompt: z.string().describe("The task prompt for the agent to execute") },
@@ -491,7 +500,7 @@ export class McpServerAdapter {
     }
 
     // motebit_identity — always registered (no dep required)
-    this.server.tool(
+    server.tool(
       "motebit_identity",
       "Return this motebit's identity information",
       async () => {
@@ -510,7 +519,7 @@ export class McpServerAdapter {
     );
 
     // motebit_tools — always registered
-    this.server.tool(
+    server.tool(
       "motebit_tools",
       "List available tools with risk levels",
       async () => {
@@ -527,9 +536,9 @@ export class McpServerAdapter {
 
   // --- Resource Registration ---
 
-  private registerResources(): void {
+  private registerResourcesOn(server: McpServer): void {
     // Identity resource — always exposed
-    this.server.resource(
+    server.resource(
       "identity",
       "motebit://identity",
       async () => ({
@@ -548,7 +557,7 @@ export class McpServerAdapter {
 
     // State resource
     if (this.config.exposeState !== false) {
-      this.server.resource(
+      server.resource(
         "state",
         "motebit://state",
         async () => ({
@@ -565,7 +574,7 @@ export class McpServerAdapter {
 
     // Memories resource (privacy-filtered)
     if (this.config.exposeMemories !== false) {
-      this.server.resource(
+      server.resource(
         "memories",
         "motebit://memories",
         async () => {
@@ -587,8 +596,8 @@ export class McpServerAdapter {
 
   // --- Prompt Registration ---
 
-  private registerPrompts(): void {
-    this.server.prompt(
+  private registerPromptsOn(server: McpServer): void {
+    server.prompt(
       "chat",
       "Send a message to this motebit",
       { message: z.string() },
@@ -605,7 +614,7 @@ export class McpServerAdapter {
       }),
     );
 
-    this.server.prompt(
+    server.prompt(
       "recall",
       "Search semantic memory",
       { query: z.string(), limit: z.string().optional() },
@@ -622,7 +631,7 @@ export class McpServerAdapter {
       }),
     );
 
-    this.server.prompt("reflect", "Trigger reflection", () => ({
+    server.prompt("reflect", "Trigger reflection", () => ({
       messages: [
         {
           role: "user" as const,
@@ -805,8 +814,10 @@ export class McpServerAdapter {
               if (sid) transports.delete(sid);
             };
 
-            // Connect to the McpServer before handling the request
-            await this.server.connect(transport);
+            // Each session gets its own McpServer instance (required by the SDK —
+            // a single McpServer can only be connected to one transport at a time).
+            const sessionServer = this.createServer();
+            await sessionServer.connect(transport);
           } else {
             // Invalid: no session ID and not an init request
             res.writeHead(400, { "Content-Type": "application/json" });

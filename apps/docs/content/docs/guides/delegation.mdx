@@ -120,9 +120,12 @@ The signature covers the canonical JSON serialization of all fields except `sign
 ### Single receipt
 
 ```typescript
-import { verifyExecutionReceipt, fromBase64Url } from "@motebit/crypto";
+import { verifyExecutionReceipt } from "@motebit/crypto";
 
-const publicKey = fromBase64Url(pinnedPublicKeyBase64);
+// Public keys are stored as hex strings — convert to Uint8Array
+const publicKey = new Uint8Array(
+  (pinnedPublicKeyHex.match(/.{2}/g) ?? []).map((h) => parseInt(h, 16)),
+);
 const valid = await verifyExecutionReceipt(receipt, publicKey);
 ```
 
@@ -145,6 +148,84 @@ const result = await verifyReceiptChain(receipt, knownKeys);
 ```
 
 Each node in the verification tree contains `task_id`, `motebit_id`, `verified`, and an optional `error`. An unknown `motebit_id` (not in `knownKeys`) produces `verified: false` with `error: "unknown motebit_id"`.
+
+### Flat receipt sequences
+
+For ordered sequences of receipts — e.g., service A executed, then service B executed, then service C executed — use `verifyReceiptSequence`. Unlike `verifyReceiptChain` (which handles tree-structured nested delegations), this verifies a flat list with temporal ordering constraints.
+
+```typescript
+import { verifyReceiptSequence } from "@motebit/crypto";
+
+const result = await verifyReceiptSequence([
+  { receipt: receiptA, signer_public_key: keyA },
+  { receipt: receiptB, signer_public_key: keyB },
+  { receipt: receiptC, signer_public_key: keyC },
+]);
+// result.valid  — true if all signatures and ordering checks pass
+// result.error  — human-readable description of the first failure
+// result.index  — which entry failed (0-indexed)
+```
+
+Each entry pairs a `SignableReceipt` with the signer's public key (`Uint8Array`). Verification checks two things:
+
+1. **Signature validity** — each receipt's Ed25519 signature is verified against its `signer_public_key`.
+2. **Temporal ordering** — `completed_at` of receipt `i` must be less than or equal to `submitted_at` of receipt `i+1`. This enforces that the sequence represents a causal chain of execution.
+
+An empty sequence is considered valid.
+
+## Delegation tokens
+
+A `DelegationToken` is a signed authorization from one agent (the delegator) to another (the delegate), granting permission to act within a defined scope. Unlike execution receipts (which prove work was done), delegation tokens prove permission was granted.
+
+### Signing a delegation
+
+```typescript
+import { signDelegation, toBase64Url } from "@motebit/crypto";
+
+const token = await signDelegation(
+  {
+    delegator_id: "motebit-abc",
+    delegator_public_key: toBase64Url(delegatorKeypair.publicKey),
+    delegate_id: "motebit-xyz",
+    delegate_public_key: toBase64Url(delegateKeypair.publicKey),
+    scope: "web_search",
+    issued_at: Date.now(),
+    expires_at: Date.now() + 3600_000, // 1 hour
+  },
+  delegatorKeypair.privateKey,
+);
+```
+
+The signature covers all fields except `signature` itself, using the same canonical JSON serialization as execution receipts.
+
+### Verifying a single token
+
+```typescript
+import { verifyDelegation } from "@motebit/crypto";
+
+const valid = await verifyDelegation(token);
+```
+
+Verifies the Ed25519 signature using the `delegator_public_key` embedded in the token. Does not check expiration — the caller should compare `expires_at` against the current time.
+
+### Verifying a delegation chain
+
+When delegation flows through multiple agents (A delegates to B, B delegates to C), `verifyDelegationChain` verifies the entire chain:
+
+```typescript
+import { verifyDelegationChain } from "@motebit/crypto";
+
+const result = await verifyDelegationChain([tokenAtoB, tokenBtoC]);
+// result.valid — true if all signatures and linkages pass
+// result.error — description of the first failure
+```
+
+Chain verification checks:
+
+1. **Signature validity** — each token's signature is verified against its delegator's public key.
+2. **Linkage** — the `delegate_id` and `delegate_public_key` of token `i` must match the `delegator_id` and `delegator_public_key` of token `i+1`. This proves B was actually authorized by A before B delegated to C.
+
+An empty chain is considered valid.
 
 ## Building a service
 
