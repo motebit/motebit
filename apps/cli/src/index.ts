@@ -20,7 +20,7 @@ import {
 import type { ConversationSyncStoreAdapter } from "@motebit/sync-engine";
 import type { SyncConversation, SyncConversationMessage, AgentTask } from "@motebit/sdk";
 import { EventStore } from "@motebit/event-log";
-import { EventType, RiskLevel } from "@motebit/sdk";
+import { EventType, RiskLevel, SensitivityLevel, AgentTaskStatus } from "@motebit/sdk";
 import {
   InMemoryToolRegistry,
   readFileDefinition,
@@ -1781,7 +1781,84 @@ async function handleServe(config: CliConfig): Promise<void> {
       };
       void runtime.events.append(entry).catch(() => {});
     },
+
+    // Synthetic tool backends
+    sendMessage: async (text: string) => {
+      const result = await runtime.sendMessage(text);
+      return { response: result.response, memoriesFormed: result.memoriesFormed.length };
+    },
+
+    queryMemories: async (query: string, limit?: number) => {
+      const embedding = await embedText(query);
+      const nodes = await runtime.memory.retrieve(embedding, {
+        limit: limit ?? 10,
+        sensitivityFilter: [SensitivityLevel.None, SensitivityLevel.Personal],
+      });
+      return nodes.map((n) => ({
+        content: n.content,
+        confidence: n.confidence,
+        similarity: 0,
+      }));
+    },
+
+    storeMemory: async (content: string, sensitivity?: string) => {
+      const embedding = await embedText(content);
+      const node = await runtime.memory.formMemory(
+        {
+          content,
+          confidence: 0.7,
+          sensitivity: (sensitivity as SensitivityLevel) ?? SensitivityLevel.None,
+        },
+        embedding,
+      );
+      return { node_id: node.node_id };
+    },
   };
+
+  // Wire handleAgentTask if private key is available
+  const fullConfigForServe = loadFullConfig();
+  const deviceId = fullConfigForServe.device_id ?? "unknown";
+
+  if (fullConfigForServe.cli_encrypted_key) {
+    try {
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const passphrase = await new Promise<string>((resolve) => {
+        rl.question("Passphrase (for agent signing): ", (answer) => {
+          rl.close();
+          resolve(answer);
+        });
+      });
+      const pkHex = await decryptPrivateKey(fullConfigForServe.cli_encrypted_key, passphrase);
+      const privateKey = fromHex(pkHex);
+
+      deps.handleAgentTask = async function* (prompt: string) {
+        const task: AgentTask = {
+          task_id: crypto.randomUUID(),
+          motebit_id: motebitId,
+          prompt,
+          submitted_at: Date.now(),
+          submitted_by: "mcp_client",
+          status: AgentTaskStatus.Running,
+        };
+
+        for await (const chunk of runtime.handleAgentTask(task, privateKey, deviceId)) {
+          yield chunk;
+        }
+      };
+      log("Agent task handler enabled (private key loaded).");
+    } catch {
+      log("Warning: could not decrypt private key — motebit_task tool disabled");
+    }
+  }
+
+  // Wire identity file content if --identity was used
+  if (config.identity != null && config.identity !== "") {
+    try {
+      deps.identityFileContent = fs.readFileSync(path.resolve(config.identity), "utf-8");
+    } catch {
+      // Identity content unavailable — fallback to JSON identity
+    }
+  }
 
   // Create and start MCP server
   const serverConfig: McpServerAdapterConfig = {

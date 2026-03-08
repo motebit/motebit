@@ -48,6 +48,25 @@ interface MotebitServerDeps {
     args: Record<string, unknown>,
     result: ToolResult,
   ): void;
+
+  // Synthetic tool backends (all optional — tool only registered when dep is provided)
+  sendMessage?(text: string): Promise<{ response: string; memoriesFormed: number }>;
+  queryMemories?(
+    query: string,
+    limit?: number,
+  ): Promise<Array<{ content: string; confidence: number; similarity: number }>>;
+  storeMemory?(
+    content: string,
+    sensitivity?: string,
+  ): Promise<{ node_id: string }>;
+  handleAgentTask?(
+    prompt: string,
+  ): AsyncGenerator<
+    | { type: "text"; text: string }
+    | { type: "task_result"; receipt: Record<string, unknown> }
+    | { type: string; [key: string]: unknown }
+  >;
+  identityFileContent?: string;
 }
 
 // === Config ===
@@ -59,6 +78,7 @@ interface McpServerConfig {
   port?: number;
   exposeState?: boolean;
   exposeMemories?: boolean;
+  authToken?: string;
 }
 
 // === Risk → MCP annotation mapping ===
@@ -203,6 +223,7 @@ export class McpServerAdapter {
 
   async start(): Promise<void> {
     this.registerTools();
+    this.registerSyntheticTools();
     this.registerResources();
     this.registerPrompts();
 
@@ -309,6 +330,138 @@ export class McpServerAdapter {
       content: [{ type: "text" as const, text: formatted }],
       isError: !result.ok,
     };
+  }
+
+  // --- Synthetic Tool Registration ---
+
+  private registerSyntheticTools(): void {
+    const fmt = (data: unknown): { content: Array<{ type: "text"; text: string }> } => {
+      const text = typeof data === "string" ? data : JSON.stringify(data);
+      const result: ToolResult = { ok: true, data: text };
+      return {
+        content: [{
+          type: "text" as const,
+          text: formatResult(result, this.deps.motebitId, this.deps.publicKeyHex),
+        }],
+      };
+    };
+
+    if (this.deps.sendMessage) {
+      const sendMessage = this.deps.sendMessage;
+      this.server.tool(
+        "motebit_query",
+        "Ask this motebit a question — AI response with memory context",
+        { message: z.string().describe("The question or message to send") },
+        async (args: { message: string }) => {
+          const result = await sendMessage(args.message);
+          this.deps.logToolCall("motebit_query", args, { ok: true, data: result.response });
+          return fmt({ response: result.response, memories_formed: result.memoriesFormed });
+        },
+      );
+    }
+
+    if (this.deps.storeMemory) {
+      const storeMemory = this.deps.storeMemory;
+      this.server.tool(
+        "motebit_remember",
+        "Store a memory in this motebit",
+        {
+          content: z.string().describe("The content to remember"),
+          sensitivity: z.string().optional().describe("Sensitivity level (none, personal)"),
+        },
+        async (args: { content: string; sensitivity?: string }) => {
+          // Fail-closed: external callers cannot store high-sensitivity memories
+          if (args.sensitivity && EXCLUDED_SENSITIVITIES.has(args.sensitivity)) {
+            return {
+              content: [{
+                type: "text" as const,
+                text: `Denied: external callers cannot store memories with sensitivity "${args.sensitivity}"`,
+              }],
+              isError: true,
+            };
+          }
+          const result = await storeMemory(args.content, args.sensitivity);
+          this.deps.logToolCall("motebit_remember", args, { ok: true, data: result.node_id });
+          return fmt({ node_id: result.node_id });
+        },
+      );
+    }
+
+    if (this.deps.queryMemories) {
+      const queryMemories = this.deps.queryMemories;
+      this.server.tool(
+        "motebit_recall",
+        "Search this motebit's semantic memory",
+        {
+          query: z.string().describe("Semantic search query"),
+          limit: z.number().optional().describe("Max results to return"),
+        },
+        async (args: { query: string; limit?: number }) => {
+          const results = await queryMemories(args.query, args.limit);
+          this.deps.logToolCall("motebit_recall", args, { ok: true, data: results });
+          return fmt(results);
+        },
+      );
+    }
+
+    if (this.deps.handleAgentTask) {
+      const handleAgentTask = this.deps.handleAgentTask;
+      this.server.tool(
+        "motebit_task",
+        "Submit an autonomous task — returns a signed ExecutionReceipt",
+        { prompt: z.string().describe("The task prompt for the agent to execute") },
+        async (args: { prompt: string }) => {
+          let receipt: Record<string, unknown> | undefined;
+          let responseText = "";
+
+          for await (const chunk of handleAgentTask(args.prompt)) {
+            if (chunk.type === "text") {
+              responseText += (chunk as { type: "text"; text: string }).text;
+            } else if (chunk.type === "task_result") {
+              receipt = (chunk as { type: "task_result"; receipt: Record<string, unknown> }).receipt;
+            }
+          }
+
+          if (receipt) {
+            this.deps.logToolCall("motebit_task", args, { ok: true, data: receipt });
+            return fmt(receipt);
+          }
+
+          this.deps.logToolCall("motebit_task", args, { ok: false, error: "no receipt" });
+          return fmt({ status: "completed", response: responseText });
+        },
+      );
+    }
+
+    // motebit_identity — always registered (no dep required)
+    this.server.tool(
+      "motebit_identity",
+      "Return this motebit's identity information",
+      async () => {
+        if (this.deps.identityFileContent) {
+          return fmt(this.deps.identityFileContent);
+        }
+        return fmt({
+          motebit_id: this.deps.motebitId,
+          public_key: this.deps.publicKeyHex ?? null,
+        });
+      },
+    );
+
+    // motebit_tools — always registered
+    this.server.tool(
+      "motebit_tools",
+      "List available tools with risk levels",
+      async () => {
+        const tools = this.deps.listTools().map((t) => ({
+          name: t.name,
+          description: t.description,
+          risk: t.riskHint?.risk ?? null,
+        }));
+        this.deps.logToolCall("motebit_tools", {}, { ok: true, data: tools });
+        return fmt(tools);
+      },
+    );
   }
 
   // --- Resource Registration ---
@@ -431,6 +584,16 @@ export class McpServerAdapter {
 
     this.httpServer = http.createServer(async (req, res) => {
       const url = new URL(req.url ?? "/", `http://localhost:${port}`);
+
+      // Bearer token auth (skip /health)
+      if (this.config.authToken && url.pathname !== "/health") {
+        const authHeader = req.headers["authorization"];
+        if (authHeader !== `Bearer ${this.config.authToken}`) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "unauthorized" }));
+          return;
+        }
+      }
 
       if (url.pathname === "/sse" && req.method === "GET") {
         const transport = new SSEServerTransport("/messages", res);

@@ -901,3 +901,401 @@ describe("McpServerAdapter — integration", () => {
     expect(registrations.resources.has("identity")).toBe(true);
   });
 });
+
+// ============================================================
+// McpServerAdapter — synthetic tool registration
+// ============================================================
+
+describe("McpServerAdapter — synthetic tools", () => {
+  it("always registers motebit_identity and motebit_tools", async () => {
+    const adapter = new McpServerAdapter(makeConfig(), makeDeps());
+    await adapter.start();
+
+    expect(registrations.tools.has("motebit_identity")).toBe(true);
+    expect(registrations.tools.has("motebit_tools")).toBe(true);
+  });
+
+  it("does NOT register motebit_query when sendMessage is absent", async () => {
+    const adapter = new McpServerAdapter(makeConfig(), makeDeps());
+    await adapter.start();
+
+    expect(registrations.tools.has("motebit_query")).toBe(false);
+  });
+
+  it("registers motebit_query when sendMessage is provided", async () => {
+    const deps = makeDeps({
+      sendMessage: async () => ({ response: "hello", memoriesFormed: 0 }),
+    });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    expect(registrations.tools.has("motebit_query")).toBe(true);
+  });
+
+  it("does NOT register motebit_remember when storeMemory is absent", async () => {
+    const adapter = new McpServerAdapter(makeConfig(), makeDeps());
+    await adapter.start();
+
+    expect(registrations.tools.has("motebit_remember")).toBe(false);
+  });
+
+  it("registers motebit_remember when storeMemory is provided", async () => {
+    const deps = makeDeps({
+      storeMemory: async () => ({ node_id: "n1" }),
+    });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    expect(registrations.tools.has("motebit_remember")).toBe(true);
+  });
+
+  it("does NOT register motebit_recall when queryMemories is absent", async () => {
+    const adapter = new McpServerAdapter(makeConfig(), makeDeps());
+    await adapter.start();
+
+    expect(registrations.tools.has("motebit_recall")).toBe(false);
+  });
+
+  it("registers motebit_recall when queryMemories is provided", async () => {
+    const deps = makeDeps({
+      queryMemories: async () => [],
+    });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    expect(registrations.tools.has("motebit_recall")).toBe(true);
+  });
+
+  it("does NOT register motebit_task when handleAgentTask is absent", async () => {
+    const adapter = new McpServerAdapter(makeConfig(), makeDeps());
+    await adapter.start();
+
+    expect(registrations.tools.has("motebit_task")).toBe(false);
+  });
+
+  it("registers motebit_task when handleAgentTask is provided", async () => {
+    const deps = makeDeps({
+      handleAgentTask: async function* () { /* empty */ },
+    });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    expect(registrations.tools.has("motebit_task")).toBe(true);
+  });
+});
+
+// ============================================================
+// McpServerAdapter — synthetic tool execution
+// ============================================================
+
+describe("McpServerAdapter — synthetic tool execution", () => {
+  it("motebit_query calls sendMessage and returns response", async () => {
+    const sendMessage = vi.fn(async () => ({ response: "42 is the answer", memoriesFormed: 1 }));
+    const deps = makeDeps({ sendMessage });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const handler = registrations.tools.get("motebit_query")!.handler;
+    const result = (await handler({ message: "what is 42?" })) as {
+      content: Array<{ text: string }>;
+    };
+
+    expect(sendMessage).toHaveBeenCalledWith("what is 42?");
+    expect(result.content[0]!.text).toContain("42 is the answer");
+    expect(result.content[0]!.text).toContain("memories_formed");
+    expect(result.content[0]!.text).toContain("[motebit:");
+  });
+
+  it("motebit_remember stores memory and returns node_id", async () => {
+    const storeMemory = vi.fn(async () => ({ node_id: "mem-123" }));
+    const deps = makeDeps({ storeMemory });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const handler = registrations.tools.get("motebit_remember")!.handler;
+    const result = (await handler({ content: "remember this" })) as {
+      content: Array<{ text: string }>;
+    };
+
+    expect(storeMemory).toHaveBeenCalledWith("remember this", undefined);
+    expect(result.content[0]!.text).toContain("mem-123");
+  });
+
+  it("motebit_remember rejects medical sensitivity", async () => {
+    const storeMemory = vi.fn(async () => ({ node_id: "x" }));
+    const deps = makeDeps({ storeMemory });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const handler = registrations.tools.get("motebit_remember")!.handler;
+    const result = (await handler({ content: "test", sensitivity: "medical" })) as {
+      content: Array<{ text: string }>;
+      isError?: boolean;
+    };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("Denied");
+    expect(storeMemory).not.toHaveBeenCalled();
+  });
+
+  it("motebit_remember rejects financial sensitivity", async () => {
+    const storeMemory = vi.fn(async () => ({ node_id: "x" }));
+    const deps = makeDeps({ storeMemory });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const handler = registrations.tools.get("motebit_remember")!.handler;
+    const result = (await handler({ content: "test", sensitivity: "financial" })) as {
+      content: Array<{ text: string }>;
+      isError?: boolean;
+    };
+
+    expect(result.isError).toBe(true);
+    expect(storeMemory).not.toHaveBeenCalled();
+  });
+
+  it("motebit_remember rejects secret sensitivity", async () => {
+    const storeMemory = vi.fn(async () => ({ node_id: "x" }));
+    const deps = makeDeps({ storeMemory });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const handler = registrations.tools.get("motebit_remember")!.handler;
+    const result = (await handler({ content: "test", sensitivity: "secret" })) as {
+      isError?: boolean;
+    };
+
+    expect(result.isError).toBe(true);
+    expect(storeMemory).not.toHaveBeenCalled();
+  });
+
+  it("motebit_remember allows personal sensitivity", async () => {
+    const storeMemory = vi.fn(async () => ({ node_id: "ok-1" }));
+    const deps = makeDeps({ storeMemory });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const handler = registrations.tools.get("motebit_remember")!.handler;
+    const result = (await handler({ content: "test", sensitivity: "personal" })) as {
+      content: Array<{ text: string }>;
+      isError?: boolean;
+    };
+
+    expect(result.isError).toBeUndefined();
+    expect(storeMemory).toHaveBeenCalledWith("test", "personal");
+    expect(result.content[0]!.text).toContain("ok-1");
+  });
+
+  it("motebit_recall returns query results", async () => {
+    const queryMemories = vi.fn(async () => [
+      { content: "memory 1", confidence: 0.9, similarity: 0.85 },
+      { content: "memory 2", confidence: 0.7, similarity: 0.6 },
+    ]);
+    const deps = makeDeps({ queryMemories });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const handler = registrations.tools.get("motebit_recall")!.handler;
+    const result = (await handler({ query: "what happened?" })) as {
+      content: Array<{ text: string }>;
+    };
+
+    expect(queryMemories).toHaveBeenCalledWith("what happened?", undefined);
+    expect(result.content[0]!.text).toContain("memory 1");
+    expect(result.content[0]!.text).toContain("memory 2");
+  });
+
+  it("motebit_recall passes limit", async () => {
+    const queryMemories = vi.fn(async () => []);
+    const deps = makeDeps({ queryMemories });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const handler = registrations.tools.get("motebit_recall")!.handler;
+    await handler({ query: "test", limit: 5 });
+
+    expect(queryMemories).toHaveBeenCalledWith("test", 5);
+  });
+
+  it("motebit_task iterates generator and returns receipt", async () => {
+    const mockReceipt = { task_id: "t1", status: "completed", result: "done" };
+    const handleAgentTask = async function* () {
+      yield { type: "text" as const, text: "working..." };
+      yield { type: "task_result" as const, receipt: mockReceipt };
+    };
+    const deps = makeDeps({ handleAgentTask });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const handler = registrations.tools.get("motebit_task")!.handler;
+    const result = (await handler({ prompt: "do something" })) as {
+      content: Array<{ text: string }>;
+    };
+
+    expect(result.content[0]!.text).toContain("t1");
+    expect(result.content[0]!.text).toContain("completed");
+  });
+
+  it("motebit_task returns fallback when no receipt emitted", async () => {
+    const handleAgentTask = async function* () {
+      yield { type: "text" as const, text: "just text" };
+    };
+    const deps = makeDeps({ handleAgentTask });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const handler = registrations.tools.get("motebit_task")!.handler;
+    const result = (await handler({ prompt: "do it" })) as {
+      content: Array<{ text: string }>;
+    };
+
+    expect(result.content[0]!.text).toContain("just text");
+    expect(result.content[0]!.text).toContain("completed");
+  });
+
+  it("motebit_identity returns identityFileContent when provided", async () => {
+    const deps = makeDeps({ identityFileContent: "# motebit.md\n---\nidentity..." });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const handler = registrations.tools.get("motebit_identity")!.handler;
+    const result = (await handler()) as { content: Array<{ text: string }> };
+
+    expect(result.content[0]!.text).toContain("# motebit.md");
+  });
+
+  it("motebit_identity returns JSON fallback when no file content", async () => {
+    const deps = makeDeps({
+      motebitId: "test-id-abc",
+      publicKeyHex: "deadbeef1234",
+    });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const handler = registrations.tools.get("motebit_identity")!.handler;
+    const result = (await handler()) as { content: Array<{ text: string }> };
+
+    expect(result.content[0]!.text).toContain("test-id-abc");
+    expect(result.content[0]!.text).toContain("deadbeef1234");
+  });
+
+  it("motebit_tools returns tool list", async () => {
+    const tools: ToolDefinition[] = [
+      toolDef("search", { riskHint: { risk: RiskLevel.R0_READ } }),
+      toolDef("execute", { riskHint: { risk: RiskLevel.R3_EXECUTE } }),
+    ];
+    const deps = makeDeps({ listTools: () => tools });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const handler = registrations.tools.get("motebit_tools")!.handler;
+    const result = (await handler()) as { content: Array<{ text: string }> };
+
+    const text = result.content[0]!.text;
+    expect(text).toContain("search");
+    expect(text).toContain("execute");
+  });
+
+  it("synthetic tools log via logToolCall", async () => {
+    const logToolCall = vi.fn();
+    const deps = makeDeps({
+      logToolCall,
+      sendMessage: async () => ({ response: "ok", memoriesFormed: 0 }),
+    });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const handler = registrations.tools.get("motebit_query")!.handler;
+    await handler({ message: "test" });
+
+    expect(logToolCall).toHaveBeenCalledWith(
+      "motebit_query",
+      { message: "test" },
+      { ok: true, data: "ok" },
+    );
+  });
+});
+
+// ============================================================
+// McpServerAdapter — HTTP auth
+// ============================================================
+
+describe("McpServerAdapter — HTTP auth", () => {
+  it("rejects requests with wrong token", async () => {
+    const adapter = new McpServerAdapter(
+      makeConfig({ transport: "http", port: 0, authToken: "secret-token" }),
+      makeDeps(),
+    );
+    await adapter.start();
+
+    // The HTTP server is created internally. We test by making a real request.
+    // Since port 0 picks a random port, we need to extract the actual port.
+    const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
+    const addr = server.address() as import("node:net").AddressInfo;
+
+    const res = await fetch(`http://localhost:${addr.port}/sse`, {
+      headers: { Authorization: "Bearer wrong-token" },
+    });
+    expect(res.status).toBe(401);
+
+    await adapter.stop();
+  });
+
+  it("allows /health without auth", async () => {
+    const adapter = new McpServerAdapter(
+      makeConfig({ transport: "http", port: 0, authToken: "secret-token" }),
+      makeDeps(),
+    );
+    await adapter.start();
+
+    const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
+    const addr = server.address() as import("node:net").AddressInfo;
+
+    const res = await fetch(`http://localhost:${addr.port}/health`);
+    expect(res.status).toBe(200);
+
+    await adapter.stop();
+  });
+
+  it("allows requests with correct token", async () => {
+    const adapter = new McpServerAdapter(
+      makeConfig({ transport: "http", port: 0, authToken: "correct-token" }),
+      makeDeps(),
+    );
+    await adapter.start();
+
+    const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
+    const addr = server.address() as import("node:net").AddressInfo;
+
+    const res = await fetch(`http://localhost:${addr.port}/health`);
+    expect(res.status).toBe(200);
+
+    // /messages without session returns 400, not 401 (auth passed)
+    const msgRes = await fetch(`http://localhost:${addr.port}/messages`, {
+      method: "POST",
+      headers: { Authorization: "Bearer correct-token" },
+    });
+    expect(msgRes.status).toBe(400); // invalid session, but NOT 401
+
+    await adapter.stop();
+  });
+
+  it("skips auth when authToken is not configured", async () => {
+    const adapter = new McpServerAdapter(
+      makeConfig({ transport: "http", port: 0 }),
+      makeDeps(),
+    );
+    await adapter.start();
+
+    const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
+    const addr = server.address() as import("node:net").AddressInfo;
+
+    // No Authorization header, should still get through
+    const res = await fetch(`http://localhost:${addr.port}/messages`, {
+      method: "POST",
+    });
+    expect(res.status).toBe(400); // invalid session, not 401
+
+    await adapter.stop();
+  });
+});
