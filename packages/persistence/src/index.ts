@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote ON memory_nodes (motebit_id);
+CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote_tomb_pin ON memory_nodes (motebit_id, tombstoned, pinned);
 
 CREATE TABLE IF NOT EXISTS memory_edges (
   edge_id TEXT PRIMARY KEY,
@@ -423,6 +424,11 @@ export class SqliteMemoryStorage implements MemoryStorageAdapter {
     );
   }
 
+  /** Whether app-level filters (min_confidence, sensitivity_filter) are needed */
+  private needsAppFilter(query: MemoryQuery): boolean {
+    return query.min_confidence !== undefined || query.sensitivity_filter !== undefined;
+  }
+
   async saveNode(node: MemoryNode): Promise<void> {
     this.stmtSaveNode.run(
       node.node_id,
@@ -449,15 +455,31 @@ export class SqliteMemoryStorage implements MemoryStorageAdapter {
   }
 
   async queryNodes(query: MemoryQuery): Promise<MemoryNode[]> {
-    // Fetch all nodes for motebit, then apply app-level filtering
-    // (matches InMemoryMemoryStorage behavior for decay + sensitivity)
-    const rows = this.stmtGetAllNodes.all(query.motebit_id) as NodeRow[];
-    let results = rows.map(rowToNode);
+    // Build SQL with conditions that can be pushed into the query
+    const conditions: string[] = ["motebit_id = ?"];
+    const params: unknown[] = [query.motebit_id];
 
     if (query.include_tombstoned !== true) {
-      results = results.filter((n) => !n.tombstoned);
+      conditions.push("tombstoned = 0");
     }
 
+    if (query.pinned !== undefined) {
+      conditions.push("pinned = ?");
+      params.push(query.pinned ? 1 : 0);
+    }
+
+    let sql = `SELECT * FROM memory_nodes WHERE ${conditions.join(" AND ")}`;
+
+    // Only apply SQL LIMIT when no app-level filters remain (they may reduce the result set)
+    if (query.limit !== undefined && !this.needsAppFilter(query)) {
+      sql += " LIMIT ?";
+      params.push(query.limit);
+    }
+
+    const rows = this.db.prepare(sql).all(...params) as NodeRow[];
+    let results = rows.map(rowToNode);
+
+    // App-level filters: decay computation and sensitivity array
     if (query.min_confidence !== undefined) {
       const now = Date.now();
       const minConf = query.min_confidence;
@@ -478,7 +500,7 @@ export class SqliteMemoryStorage implements MemoryStorageAdapter {
       );
     }
 
-    if (query.limit !== undefined) {
+    if (query.limit !== undefined && this.needsAppFilter(query)) {
       results = results.slice(0, query.limit);
     }
 
@@ -1941,6 +1963,11 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   if (userVersion < 15) {
     // gradient_snapshots table is in SCHEMA for new DBs; this handles upgrades from v14
     driver.pragma("user_version = 15");
+  }
+
+  if (userVersion < 16) {
+    driver.exec("CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote_tomb_pin ON memory_nodes (motebit_id, tombstoned, pinned)");
+    driver.pragma("user_version = 16");
   }
 
   const eventStore = new SqliteEventStore(driver);

@@ -292,6 +292,21 @@ describe("SqliteMemoryStorage", () => {
     expect(results).toHaveLength(3);
   });
 
+  it("queryNodes filters by pinned in SQL", async () => {
+    await mdb.memoryStorage.saveNode(makeNode({ pinned: true }));
+    await mdb.memoryStorage.saveNode(makeNode({ pinned: false }));
+    await mdb.memoryStorage.saveNode(makeNode({ pinned: true, tombstoned: true }));
+
+    const pinned = await mdb.memoryStorage.queryNodes({ motebit_id: "motebit-1", pinned: true });
+    expect(pinned).toHaveLength(1); // excludes tombstoned
+
+    const unpinned = await mdb.memoryStorage.queryNodes({ motebit_id: "motebit-1", pinned: false });
+    expect(unpinned).toHaveLength(1);
+
+    const pinnedIncTomb = await mdb.memoryStorage.queryNodes({ motebit_id: "motebit-1", pinned: true, include_tombstoned: true });
+    expect(pinnedIncTomb).toHaveLength(2);
+  });
+
   it("saveEdge/getEdges round-trip", async () => {
     const nodeA = makeNode();
     const nodeB = makeNode();

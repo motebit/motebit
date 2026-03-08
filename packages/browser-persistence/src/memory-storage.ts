@@ -29,6 +29,11 @@ export class IdbMemoryStorage implements MemoryStorageAdapter {
       results = results.filter((n) => !n.tombstoned);
     }
 
+    // Filter by pinned
+    if (query.pinned !== undefined) {
+      results = results.filter((n) => n.pinned === query.pinned);
+    }
+
     // Filter by decayed confidence
     if (query.min_confidence !== undefined) {
       const now = Date.now();

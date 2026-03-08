@@ -27,9 +27,13 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
   last_accessed INTEGER NOT NULL,
   half_life REAL NOT NULL,
   tombstoned INTEGER NOT NULL DEFAULT 0,
-  pinned INTEGER NOT NULL DEFAULT 0
+  pinned INTEGER NOT NULL DEFAULT 0,
+  memory_type TEXT DEFAULT 'semantic',
+  valid_from INTEGER,
+  valid_until INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote ON memory_nodes (motebit_id);
+CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote_tomb_pin ON memory_nodes (motebit_id, tombstoned, pinned);
 
 CREATE TABLE IF NOT EXISTS memory_edges (
   edge_id TEXT PRIMARY KEY,
@@ -376,6 +380,20 @@ describe("TauriMemoryStorage", () => {
     const edges = await storage.getAllEdges("m1");
     expect(edges).toHaveLength(1);
     expect(edges[0]!.edge_id).toBe("edge1");
+  });
+
+  it("queryNodes filters by pinned in SQL", async () => {
+    await storage.saveNode(makeNode({ node_id: "n1", pinned: true }));
+    await storage.saveNode(makeNode({ node_id: "n2", pinned: false }));
+    await storage.saveNode(makeNode({ node_id: "n3", pinned: true, tombstoned: true }));
+
+    const pinned = await storage.queryNodes({ motebit_id: "m1", pinned: true });
+    expect(pinned).toHaveLength(1); // excludes tombstoned
+    expect(pinned[0]!.node_id).toBe("n1");
+
+    const unpinned = await storage.queryNodes({ motebit_id: "m1", pinned: false });
+    expect(unpinned).toHaveLength(1);
+    expect(unpinned[0]!.node_id).toBe("n2");
   });
 
   it("queryNodes respects limit", async () => {

@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
   valid_until INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote ON memory_nodes (motebit_id);
+CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote_tomb_pin ON memory_nodes (motebit_id, tombstoned, pinned);
 
 CREATE TABLE IF NOT EXISTS memory_edges (
   edge_id TEXT PRIMARY KEY,
@@ -383,10 +384,29 @@ export class ExpoSqliteMemoryStorage implements MemoryStorageAdapter {
   }
 
   async queryNodes(query: MemoryQuery): Promise<MemoryNode[]> {
-    const rows = this.db.getAllSync<NodeRow>("SELECT * FROM memory_nodes WHERE motebit_id = ?", [query.motebit_id]);
-    let results = rows.map(rowToNode);
+    // Push tombstoned + pinned into SQL to avoid full-table scan + JSON.parse of embeddings
+    const conditions: string[] = ["motebit_id = ?"];
+    const params: (string | number)[] = [query.motebit_id];
 
-    if (query.include_tombstoned !== true) results = results.filter((n) => !n.tombstoned);
+    if (query.include_tombstoned !== true) {
+      conditions.push("tombstoned = 0");
+    }
+
+    if (query.pinned !== undefined) {
+      conditions.push("pinned = ?");
+      params.push(query.pinned ? 1 : 0);
+    }
+
+    const needsAppFilter = query.min_confidence !== undefined || query.sensitivity_filter !== undefined;
+    let sql = `SELECT * FROM memory_nodes WHERE ${conditions.join(" AND ")}`;
+
+    if (query.limit !== undefined && !needsAppFilter) {
+      sql += " LIMIT ?";
+      params.push(query.limit);
+    }
+
+    const rows = this.db.getAllSync<NodeRow>(sql, params);
+    let results = rows.map(rowToNode);
 
     if (query.min_confidence !== undefined) {
       const now = Date.now();
@@ -399,7 +419,7 @@ export class ExpoSqliteMemoryStorage implements MemoryStorageAdapter {
       results = results.filter((n) => allowed.includes(n.sensitivity));
     }
 
-    if (query.limit !== undefined) results = results.slice(0, query.limit);
+    if (query.limit !== undefined && needsAppFilter) results = results.slice(0, query.limit);
     return results;
   }
 
@@ -1351,6 +1371,16 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
       // Table may already exist on new DBs
     }
     db.execSync("PRAGMA user_version = 8");
+  }
+
+  // Migration 9: composite index for memory query optimization
+  if (userVersion < 9) {
+    try {
+      db.execSync("CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote_tomb_pin ON memory_nodes (motebit_id, tombstoned, pinned)");
+    } catch {
+      // Index may already exist on new DBs
+    }
+    db.execSync("PRAGMA user_version = 9");
   }
 
   return {

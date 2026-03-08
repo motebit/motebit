@@ -32,10 +32,15 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
   created_at INTEGER NOT NULL,
   last_accessed INTEGER NOT NULL,
   half_life REAL NOT NULL,
-  tombstoned INTEGER NOT NULL DEFAULT 0
+  tombstoned INTEGER NOT NULL DEFAULT 0,
+  pinned INTEGER NOT NULL DEFAULT 0,
+  memory_type TEXT DEFAULT 'semantic',
+  valid_from INTEGER,
+  valid_until INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote ON memory_nodes (motebit_id);
+CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote_tomb_pin ON memory_nodes (motebit_id, tombstoned, pinned);
 
 CREATE TABLE IF NOT EXISTS memory_edges (
   edge_id TEXT PRIMARY KEY,

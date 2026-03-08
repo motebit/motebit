@@ -55,11 +55,11 @@ function normalizeWeights(similarity: number, confidence: number, recency: numbe
 
 export interface MemoryQuery {
   motebit_id: string;
-  query_embedding?: number[];
   min_confidence?: number;
   sensitivity_filter?: SensitivityLevel[];
   limit?: number;
   include_tombstoned?: boolean;
+  pinned?: boolean;
 }
 
 export interface MemoryStorageAdapter {
@@ -124,6 +124,10 @@ export class InMemoryMemoryStorage implements MemoryStorageAdapter {
 
     if (query.include_tombstoned !== true) {
       results = results.filter((n) => !n.tombstoned);
+    }
+
+    if (query.pinned !== undefined) {
+      results = results.filter((n) => n.pinned === query.pinned);
     }
 
     if (query.min_confidence !== undefined) {
@@ -553,8 +557,7 @@ export class MemoryGraph {
    * Get all pinned, non-tombstoned memories.
    */
   async getPinnedMemories(): Promise<MemoryNode[]> {
-    const all = await this.storage.queryNodes({ motebit_id: this.motebitId });
-    return all.filter(n => n.pinned && !n.tombstoned);
+    return this.storage.queryNodes({ motebit_id: this.motebitId, pinned: true });
   }
 
   /**

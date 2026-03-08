@@ -180,6 +180,42 @@ describe("InMemoryMemoryStorage", () => {
     expect(results).toHaveLength(1);
   });
 
+  it("queryNodes filters by pinned", async () => {
+    await storage.saveNode({
+      node_id: "n1",
+      motebit_id: "m1",
+      content: "pinned",
+      embedding: [],
+      confidence: 1,
+      sensitivity: SensitivityLevel.None,
+      created_at: Date.now(),
+      last_accessed: Date.now(),
+      half_life: 999999999,
+      tombstoned: false,
+      pinned: true,
+    });
+    await storage.saveNode({
+      node_id: "n2",
+      motebit_id: "m1",
+      content: "not pinned",
+      embedding: [],
+      confidence: 1,
+      sensitivity: SensitivityLevel.None,
+      created_at: Date.now(),
+      last_accessed: Date.now(),
+      half_life: 999999999,
+      tombstoned: false,
+      pinned: false,
+    });
+    const pinned = await storage.queryNodes({ motebit_id: "m1", pinned: true });
+    expect(pinned).toHaveLength(1);
+    expect(pinned[0]!.node_id).toBe("n1");
+
+    const unpinned = await storage.queryNodes({ motebit_id: "m1", pinned: false });
+    expect(unpinned).toHaveLength(1);
+    expect(unpinned[0]!.node_id).toBe("n2");
+  });
+
   it("saveEdge and getEdges roundtrip", async () => {
     const edge = {
       edge_id: "e1",

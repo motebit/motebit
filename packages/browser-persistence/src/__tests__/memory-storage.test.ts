@@ -131,6 +131,19 @@ describe("IdbMemoryStorage", () => {
     expect(results).toHaveLength(2);
   });
 
+  it("queryNodes filters by pinned", async () => {
+    await storage.saveNode(makeNode({ pinned: true }));
+    await storage.saveNode(makeNode({ pinned: false }));
+
+    const pinned = await storage.queryNodes({ motebit_id: "mote-1", pinned: true });
+    expect(pinned).toHaveLength(1);
+    expect(pinned[0]!.pinned).toBe(true);
+
+    const unpinned = await storage.queryNodes({ motebit_id: "mote-1", pinned: false });
+    expect(unpinned).toHaveLength(1);
+    expect(unpinned[0]!.pinned).toBe(false);
+  });
+
   it("saves and gets edges", async () => {
     const edge = makeEdge();
     await storage.saveEdge(edge);
