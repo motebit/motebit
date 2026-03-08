@@ -693,6 +693,14 @@ export class MobileApp {
     config.toolManifestHash = manifestResult.hash;
     config.pinnedToolNames = manifestResult.toolNames;
 
+    // Persist motebit public key if newly pinned during connect
+    if (adapter.isMotebit && adapter.verifiedIdentity?.verified) {
+      const pinnedKey = adapter.serverConfig.motebitPublicKey;
+      if (pinnedKey && !config.motebitPublicKey) {
+        config.motebitPublicKey = pinnedKey;
+      }
+    }
+
     // Register tools with trust-aware approval flags
     this.registerMcpTools(adapter, config);
 
@@ -720,7 +728,7 @@ export class MobileApp {
     this._toolsChangedCallback?.();
   }
 
-  getMcpServers(): Array<{ name: string; url: string; connected: boolean; toolCount: number; trusted: boolean }> {
+  getMcpServers(): Array<{ name: string; url: string; connected: boolean; toolCount: number; trusted: boolean; motebit: boolean; motebitPublicKey?: string }> {
     return this._mcpServers.map((config) => {
       const adapter = this.mcpAdapters.get(config.name);
       return {
@@ -729,6 +737,8 @@ export class MobileApp {
         connected: adapter?.isConnected ?? false,
         toolCount: adapter?.getTools().length ?? 0,
         trusted: config.trusted ?? false,
+        motebit: config.motebit ?? false,
+        motebitPublicKey: config.motebitPublicKey,
       };
     });
   }
@@ -790,6 +800,14 @@ export class MobileApp {
           }
           config.toolManifestHash = manifestResult.hash;
           config.pinnedToolNames = manifestResult.toolNames;
+
+          // Persist motebit public key if newly pinned during connect
+          if (adapter.isMotebit && adapter.verifiedIdentity?.verified) {
+            const pinnedKey = adapter.serverConfig.motebitPublicKey;
+            if (pinnedKey && !config.motebitPublicKey) {
+              config.motebitPublicKey = pinnedKey;
+            }
+          }
 
           this.registerMcpTools(adapter, config);
           this.mcpAdapters.set(config.name, adapter);

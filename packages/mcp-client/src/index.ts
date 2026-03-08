@@ -1,5 +1,5 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { ToolDefinition, ToolResult } from "@motebit/sdk";
+import type { ToolDefinition, ToolResult, ExecutionReceipt } from "@motebit/sdk";
 import { InMemoryToolRegistry } from "@motebit/tools";
 
 export interface McpServerConfig {
@@ -15,6 +15,23 @@ export interface McpServerConfig {
   toolManifestHash?: string;
   /** Tool names from the last pinned manifest, used for diffing on change. */
   pinnedToolNames?: string[];
+  /** This server is a motebit — verify identity on connect. */
+  motebit?: boolean;
+  /** Pinned public key hex (set on first verified connect). */
+  motebitPublicKey?: string;
+  /** Caller's motebit ID — used to create signed auth tokens for motebit servers. */
+  callerMotebitId?: string;
+  /** Caller's device ID — used in signed auth tokens. */
+  callerDeviceId?: string;
+  /** Caller's Ed25519 private key — used to sign auth tokens. NOT persisted. */
+  callerPrivateKey?: Uint8Array;
+}
+
+export interface MotebitIdentityResult {
+  verified: boolean;
+  motebit_id?: string;
+  public_key?: string;
+  error?: string;
 }
 
 export interface ManifestDiff {
@@ -71,11 +88,18 @@ function computeManifestDiff(previous: string[], current: string[]): ManifestDif
   return { added, removed };
 }
 
+/** Strip the `[motebit:...]` identity tag line from formatResult() output. */
+function stripIdentityTag(text: string): string {
+  return text.replace(/\n?\[motebit:[^\]]*\]\s*$/, "");
+}
+
 export class McpClientAdapter {
   private client: Client;
   private config: McpServerConfig;
   private connected = false;
   private discoveredTools: ToolDefinition[] = [];
+  private _delegationReceipts: ExecutionReceipt[] = [];
+  private _verifiedIdentity: MotebitIdentityResult | null = null;
 
   constructor(config: McpServerConfig) {
     this.config = config;
@@ -108,12 +132,28 @@ export class McpClientAdapter {
         );
       }
       const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
-      const transport = new StreamableHTTPClientTransport(new URL(this.config.url));
+
+      // Build request options with optional motebit auth
+      const requestInit: Record<string, unknown> = {};
+      if (this.config.motebit && this.config.callerMotebitId && this.config.callerPrivateKey) {
+        const token = await this.createCallerToken();
+        if (token) {
+          requestInit.headers = { "Authorization": `Bearer motebit:${token}` };
+        }
+      }
+
+      const transportOpts = Object.keys(requestInit).length > 0 ? { requestInit } : undefined;
+      const transport = new StreamableHTTPClientTransport(new URL(this.config.url), transportOpts);
       await this.client.connect(transport);
     }
 
     this.connected = true;
     await this.discoverTools();
+
+    // Verify motebit identity if configured
+    if (this.config.motebit) {
+      await this.verifyMotebitIdentity();
+    }
   }
 
   async disconnect(): Promise<void> {
@@ -134,6 +174,105 @@ export class McpClientAdapter {
       }) as Record<string, unknown>,
       ...(this.config.trusted ? {} : { requiresApproval: true }),
     }));
+  }
+
+  /** Verify the remote motebit's identity via motebit_identity tool call. Fail-closed. */
+  private async verifyMotebitIdentity(): Promise<void> {
+    try {
+      const result = await this.client.callTool({
+        name: "motebit_identity",
+        arguments: {},
+      });
+      const textContent = (
+        result.content as Array<{ type: string; text?: string }>
+      )
+        .filter((c) => c.type === "text")
+        .map((c) => c.text ?? "")
+        .join("\n");
+
+      const parsed = this.parseMotebitIdentityResponse(textContent);
+      if (!parsed.motebit_id || !parsed.public_key) {
+        // Fail-closed: disconnect on unparseable identity
+        await this.disconnect();
+        throw new Error(
+          `MCP server "${this.config.name}": motebit identity response missing motebit_id or public_key`,
+        );
+      }
+
+      // Key pinning: verify or pin
+      if (this.config.motebitPublicKey) {
+        if (this.config.motebitPublicKey !== parsed.public_key) {
+          await this.disconnect();
+          throw new Error(
+            `MCP server "${this.config.name}": motebit public key mismatch (expected ${this.config.motebitPublicKey.slice(0, 16)}..., got ${parsed.public_key.slice(0, 16)}...)`,
+          );
+        }
+      } else {
+        // Pin on first connect
+        this.config.motebitPublicKey = parsed.public_key;
+      }
+
+      this._verifiedIdentity = {
+        verified: true,
+        motebit_id: parsed.motebit_id,
+        public_key: parsed.public_key,
+      };
+    } catch (err: unknown) {
+      // If already handled (disconnect + rethrow), propagate
+      if (!this.connected) throw err;
+      // Fail-closed: disconnect on any error
+      await this.disconnect();
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `MCP server "${this.config.name}": motebit identity verification failed: ${message}`,
+      );
+    }
+  }
+
+  /** Create a signed token identifying this motebit as the caller. */
+  private async createCallerToken(): Promise<string | null> {
+    if (!this.config.callerMotebitId || !this.config.callerDeviceId || !this.config.callerPrivateKey) {
+      return null;
+    }
+    try {
+      const { createSignedToken } = await import("@motebit/crypto");
+      return await createSignedToken(
+        {
+          mid: this.config.callerMotebitId,
+          did: this.config.callerDeviceId,
+          iat: Date.now(),
+          exp: Date.now() + 5 * 60 * 1000, // 5 minute expiry
+        },
+        this.config.callerPrivateKey,
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /** Parse motebit_identity response — handles JSON and identity file YAML formats. */
+  private parseMotebitIdentityResponse(text: string): { motebit_id?: string; public_key?: string } {
+    // Strip identity tag line from formatResult() output
+    const cleaned = stripIdentityTag(text);
+
+    // Try JSON first
+    try {
+      const json = JSON.parse(cleaned) as Record<string, unknown>;
+      if (typeof json.motebit_id === "string" && typeof json.public_key === "string") {
+        return { motebit_id: json.motebit_id, public_key: json.public_key };
+      }
+    } catch {
+      // Not JSON — try YAML-style identity file
+    }
+
+    // Parse identity file format: look for motebit_id and public_key in YAML-like structure
+    const idMatch = /motebit_id:\s*"?([^"\n]+)"?/.exec(cleaned);
+    const keyMatch = /public_key:\s*"?([0-9a-fA-F]+)"?/.exec(cleaned);
+    if (idMatch?.[1] && keyMatch?.[1]) {
+      return { motebit_id: idMatch[1], public_key: keyMatch[1] };
+    }
+
+    return {};
   }
 
   getTools(): ToolDefinition[] {
@@ -190,6 +329,11 @@ export class McpClientAdapter {
         .map((c) => c.text ?? "")
         .join("\n");
 
+      // Capture delegation receipts from motebit_task calls
+      if (mcpToolName === "motebit_task" && this._verifiedIdentity?.verified && textContent) {
+        this.tryCaptureDelegationReceipt(textContent);
+      }
+
       const wrapped = textContent
         ? wrapMcpResult(textContent, this.config.name, mcpToolName)
         : undefined;
@@ -203,6 +347,31 @@ export class McpClientAdapter {
       const message = err instanceof Error ? err.message : String(err);
       return { ok: false, error: message };
     }
+  }
+
+  /** Try to parse an ExecutionReceipt from a motebit_task result and accumulate it. */
+  private tryCaptureDelegationReceipt(text: string): void {
+    try {
+      const cleaned = stripIdentityTag(text);
+      const parsed = JSON.parse(cleaned) as Record<string, unknown>;
+      // Verify it has the shape of an ExecutionReceipt
+      if (
+        typeof parsed.task_id === "string" &&
+        typeof parsed.signature === "string" &&
+        typeof parsed.motebit_id === "string"
+      ) {
+        this._delegationReceipts.push(parsed as unknown as ExecutionReceipt);
+      }
+    } catch {
+      // Silent on parse failure — not all motebit_task results are JSON receipts
+    }
+  }
+
+  /** Drain accumulated delegation receipts (same pattern as MemoryGraph.getAndResetRetrievalStats). */
+  getAndResetDelegationReceipts(): ExecutionReceipt[] {
+    const receipts = this._delegationReceipts;
+    this._delegationReceipts = [];
+    return receipts;
   }
 
   /** Register all discovered tools into a ToolRegistry. */
@@ -220,6 +389,21 @@ export class McpClientAdapter {
 
   get serverName(): string {
     return this.config.name;
+  }
+
+  /** Identity verification result, if this is a motebit server. */
+  get verifiedIdentity(): MotebitIdentityResult | null {
+    return this._verifiedIdentity;
+  }
+
+  /** Whether this adapter is configured as a motebit server. */
+  get isMotebit(): boolean {
+    return this.config.motebit === true;
+  }
+
+  /** Access to the server config (for reading pinned keys after connect). */
+  get serverConfig(): McpServerConfig {
+    return this.config;
   }
 }
 

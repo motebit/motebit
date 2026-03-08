@@ -41,7 +41,10 @@ import type {
 } from "@motebit/ai-core";
 // Node-only packages (@motebit/tools, @motebit/mcp-client) are imported dynamically
 // to avoid bundling node:child_process / stdio into browser builds (desktop app).
-type McpClientAdapter = { disconnect(): Promise<void> };
+type McpClientAdapter = {
+  disconnect(): Promise<void>;
+  getAndResetDelegationReceipts?(): import("@motebit/sdk").ExecutionReceipt[];
+};
 import { PlanEngine, InMemoryPlanStore } from "@motebit/planner";
 import type { PlanChunk } from "@motebit/planner";
 import type { PlanStoreAdapter } from "@motebit/planner";
@@ -88,6 +91,10 @@ export interface McpServerConfig {
   toolManifestHash?: string;
   /** Tool names from the last pinned manifest, used for diffing on change. */
   pinnedToolNames?: string[];
+  /** This server is a motebit — verify identity on connect. */
+  motebit?: boolean;
+  /** Pinned public key hex (set on first verified connect). */
+  motebitPublicKey?: string;
 }
 
 // === Browser-safe Tool Registry ===
@@ -827,26 +834,39 @@ export class MotebitRuntime {
       this.conversationId = savedConversationId;
     }
 
+    // Drain delegation receipts from motebit MCP adapters
+    const delegationReceipts: ExecutionReceipt[] = [];
+    for (const adapter of this.mcpAdapters) {
+      if (adapter.getAndResetDelegationReceipts) {
+        delegationReceipts.push(...adapter.getAndResetDelegationReceipts());
+      }
+    }
+
     // Hash prompt and result
     const { hash, signExecutionReceipt } = await import("@motebit/crypto");
     const promptHash = await hash(new TextEncoder().encode(task.prompt));
     const resultHash = await hash(new TextEncoder().encode(responseText));
 
     // Build and sign receipt
+    const receiptBody: Record<string, unknown> = {
+      task_id: task.task_id,
+      motebit_id: task.motebit_id,
+      device_id: deviceId,
+      submitted_at: task.submitted_at,
+      completed_at: Date.now(),
+      status,
+      result: responseText,
+      tools_used: toolsUsed,
+      memories_formed: memoriesFormed,
+      prompt_hash: promptHash,
+      result_hash: resultHash,
+    };
+    if (delegationReceipts.length > 0) {
+      receiptBody.delegation_receipts = delegationReceipts;
+    }
+
     const receipt = await signExecutionReceipt(
-      {
-        task_id: task.task_id,
-        motebit_id: task.motebit_id,
-        device_id: deviceId,
-        submitted_at: task.submitted_at,
-        completed_at: Date.now(),
-        status,
-        result: responseText,
-        tools_used: toolsUsed,
-        memories_formed: memoriesFormed,
-        prompt_hash: promptHash,
-        result_hash: resultHash,
-      },
+      receiptBody as Omit<ExecutionReceipt, "signature">,
       privateKey,
     );
 
@@ -871,6 +891,25 @@ export class MotebitRuntime {
           status,
           tools_used: toolsUsed,
           memories_formed: memoriesFormed,
+          receipt: {
+            motebit_id: receipt.motebit_id,
+            device_id: receipt.device_id,
+            completed_at: receipt.completed_at,
+            signature: receipt.signature.slice(0, 16),
+            delegation_receipts: receipt.delegation_receipts?.map(function summarize(dr: ExecutionReceipt): Record<string, unknown> {
+              return {
+                task_id: dr.task_id,
+                motebit_id: dr.motebit_id,
+                device_id: dr.device_id,
+                status: dr.status,
+                completed_at: dr.completed_at,
+                tools_used: dr.tools_used,
+                memories_formed: dr.memories_formed,
+                signature: dr.signature.slice(0, 16),
+                delegation_receipts: dr.delegation_receipts?.map(summarize),
+              };
+            }),
+          },
         },
         version_clock: clock + 1,
         tombstoned: false,

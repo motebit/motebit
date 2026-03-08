@@ -102,8 +102,8 @@ interface SettingsModalProps {
   settings: MobileSettings;
   syncStatus?: "idle" | "syncing" | "error" | "offline";
   lastSyncTime?: number;
-  mcpServers?: Array<{ name: string; url: string; connected: boolean; toolCount: number; trusted: boolean }>;
-  onAddMcpServer?: (url: string, name: string, trusted?: boolean) => Promise<void>;
+  mcpServers?: Array<{ name: string; url: string; connected: boolean; toolCount: number; trusted: boolean; motebit: boolean; motebitPublicKey?: string }>;
+  onAddMcpServer?: (url: string, name: string, trusted?: boolean, motebit?: boolean) => Promise<void>;
   onRemoveMcpServer?: (name: string) => Promise<void>;
   onToggleMcpTrust?: (name: string, trusted: boolean) => Promise<void>;
   onSave: (settings: MobileSettings, aiConfig?: MobileAIConfig) => void;
@@ -1161,8 +1161,8 @@ function ToolsTab({
   onRemove,
   onToggleTrust,
 }: {
-  servers: Array<{ name: string; url: string; connected: boolean; toolCount: number; trusted: boolean }>;
-  onAdd?: (url: string, name: string, trusted?: boolean) => Promise<void>;
+  servers: Array<{ name: string; url: string; connected: boolean; toolCount: number; trusted: boolean; motebit: boolean; motebitPublicKey?: string }>;
+  onAdd?: (url: string, name: string, trusted?: boolean, motebit?: boolean) => Promise<void>;
   onRemove?: (name: string) => Promise<void>;
   onToggleTrust?: (name: string, trusted: boolean) => Promise<void>;
 }) {
@@ -1171,6 +1171,7 @@ function ToolsTab({
   const [newName, setNewName] = useState("");
   const [newUrl, setNewUrl] = useState("");
   const [newTrusted, setNewTrusted] = useState(false);
+  const [newMotebit, setNewMotebit] = useState(false);
   const [adding, setAdding] = useState(false);
 
   const handleConnect = useCallback(async () => {
@@ -1187,10 +1188,11 @@ function ToolsTab({
 
     setAdding(true);
     try {
-      await onAdd(url, name, newTrusted);
+      await onAdd(url, name, newTrusted, newMotebit);
       setNewName("");
       setNewUrl("");
       setNewTrusted(false);
+      setNewMotebit(false);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       Alert.alert("Connection Failed", msg);
@@ -1252,6 +1254,20 @@ function ToolsTab({
                   thumbColor={server.trusted ? colors.textPrimary : colors.textMuted}
                 />
               </View>
+              {server.motebit && (
+                <View style={styles.toolsTrustRow}>
+                  <Text style={styles.toolsTrustLabel}>Motebit</Text>
+                  <Text style={[styles.toolsTrustLabel, { opacity: 0.7 }]}>Yes</Text>
+                </View>
+              )}
+              {server.motebit && server.motebitPublicKey ? (
+                <View style={styles.toolsTrustRow}>
+                  <Text style={styles.toolsTrustLabel}>Pinned Public Key</Text>
+                  <Text style={[styles.toolsTrustLabel, { opacity: 0.7 }]} numberOfLines={1}>
+                    {server.motebitPublicKey.slice(0, 16)}...
+                  </Text>
+                </View>
+              ) : null}
             </View>
             <TouchableOpacity
               onPress={() => handleRemove(server.name)}
@@ -1292,6 +1308,15 @@ function ToolsTab({
           onValueChange={setNewTrusted}
           trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
           thumbColor={newTrusted ? colors.textPrimary : colors.textMuted}
+        />
+      </View>
+      <View style={styles.toolsTrustRow}>
+        <Text style={styles.toolsTrustLabel}>Motebit</Text>
+        <Switch
+          value={newMotebit}
+          onValueChange={setNewMotebit}
+          trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
+          thumbColor={newMotebit ? colors.textPrimary : colors.textMuted}
         />
       </View>
 

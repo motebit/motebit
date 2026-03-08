@@ -281,6 +281,10 @@ async function tryConnectMcpServer(
       }
       showToast(parts.join(", "));
     }
+    // Persist config if motebit public key was newly pinned
+    if (mcpConfig.motebit === true && mcpConfig.motebitPublicKey) {
+      void persistMcpConfig(invoke, settings.getMcpServersConfig());
+    }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     addActionMessage(

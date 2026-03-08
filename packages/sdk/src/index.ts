@@ -12,6 +12,14 @@ export enum BatteryMode {
   Critical = "critical",
 }
 
+export enum AgentTrustLevel {
+  Unknown = "unknown",
+  FirstContact = "first_contact",
+  Verified = "verified",
+  Trusted = "trusted",
+  Blocked = "blocked",
+}
+
 export enum SensitivityLevel {
   None = "none",
   Personal = "personal",
@@ -210,6 +218,10 @@ export interface TurnContext {
   toolCallCount: number;
   turnStartMs: number;
   costAccumulated: number;
+  /** Caller motebit ID — set in MCP server mode when caller presents a signed token. */
+  callerMotebitId?: string;
+  /** Caller trust level — set in MCP server mode for identity-aware policy decisions. */
+  callerTrustLevel?: AgentTrustLevel;
 }
 
 export interface InjectionWarning {
@@ -485,6 +497,7 @@ export interface ExecutionReceipt {
   memories_formed: number;
   prompt_hash: string;
   result_hash: string;
+  delegation_receipts?: ExecutionReceipt[];
   signature: string;
 }
 

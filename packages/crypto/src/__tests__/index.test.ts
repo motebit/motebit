@@ -17,8 +17,10 @@ import {
   verifySignedToken,
   signExecutionReceipt,
   verifyExecutionReceipt,
+  verifyReceiptChain,
   type SignedTokenPayload,
   type SignableReceipt,
+  type KnownKeys,
 } from "../index";
 
 // ---------------------------------------------------------------------------
@@ -451,5 +453,170 @@ describe("signExecutionReceipt / verifyExecutionReceipt", () => {
     const signed2 = await signExecutionReceipt(receipt, kp.privateKey);
 
     expect(signed1.signature).toBe(signed2.signature);
+  });
+
+  it("round-trips with delegation_receipts present", async () => {
+    const kp = await generateKeypair();
+    const delegationReceipt: SignableReceipt = {
+      ...makeReceipt(),
+      task_id: "delegated-001",
+      signature: "delegate-sig",
+    };
+    const receipt = {
+      ...makeReceipt(),
+      delegation_receipts: [delegationReceipt],
+    };
+    const signed = await signExecutionReceipt(receipt, kp.privateKey);
+
+    expect(signed.delegation_receipts).toHaveLength(1);
+    expect(signed.delegation_receipts![0]!.task_id).toBe("delegated-001");
+
+    const valid = await verifyExecutionReceipt(signed, kp.publicKey);
+    expect(valid).toBe(true);
+  });
+
+  it("backward compat: receipt without delegation_receipts still verifies", async () => {
+    const kp = await generateKeypair();
+    const receipt = makeReceipt(); // no delegation_receipts field
+    const signed = await signExecutionReceipt(receipt, kp.privateKey);
+
+    expect(signed.delegation_receipts).toBeUndefined();
+    const valid = await verifyExecutionReceipt(signed, kp.publicKey);
+    expect(valid).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verifyReceiptChain()
+// ---------------------------------------------------------------------------
+
+describe("verifyReceiptChain", () => {
+  function makeReceipt(overrides?: Partial<Omit<SignableReceipt, "signature">>): Omit<SignableReceipt, "signature"> {
+    return {
+      task_id: "task-001",
+      motebit_id: "mote-123",
+      device_id: "device-456",
+      submitted_at: 1700000000000,
+      completed_at: 1700000060000,
+      status: "completed",
+      result: "Task completed successfully",
+      tools_used: ["search", "calculate"],
+      memories_formed: 2,
+      prompt_hash: "a".repeat(64),
+      result_hash: "b".repeat(64),
+      ...overrides,
+    };
+  }
+
+  it("single receipt verifies", async () => {
+    const kp = await generateKeypair();
+    const signed = await signExecutionReceipt(makeReceipt(), kp.privateKey);
+
+    const knownKeys: KnownKeys = new Map([["mote-123", kp.publicKey]]);
+    const result = await verifyReceiptChain(signed, knownKeys);
+
+    expect(result.task_id).toBe("task-001");
+    expect(result.motebit_id).toBe("mote-123");
+    expect(result.verified).toBe(true);
+    expect(result.error).toBeUndefined();
+    expect(result.delegations).toEqual([]);
+  });
+
+  it("single receipt fails with wrong key", async () => {
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    const signed = await signExecutionReceipt(makeReceipt(), kpA.privateKey);
+
+    const knownKeys: KnownKeys = new Map([["mote-123", kpB.publicKey]]);
+    const result = await verifyReceiptChain(signed, knownKeys);
+
+    expect(result.verified).toBe(false);
+    expect(result.error).toBeUndefined();
+    expect(result.delegations).toEqual([]);
+  });
+
+  it("unknown motebit_id", async () => {
+    const kp = await generateKeypair();
+    const signed = await signExecutionReceipt(makeReceipt(), kp.privateKey);
+
+    const knownKeys: KnownKeys = new Map(); // empty — no known keys
+    const result = await verifyReceiptChain(signed, knownKeys);
+
+    expect(result.verified).toBe(false);
+    expect(result.error).toBe("unknown motebit_id");
+    expect(result.delegations).toEqual([]);
+  });
+
+  it("two-level chain — both verify", async () => {
+    const parentKp = await generateKeypair();
+    const childKp = await generateKeypair();
+
+    // Sign the child (delegation) receipt first
+    const childSigned = await signExecutionReceipt(
+      makeReceipt({ task_id: "delegated-001", motebit_id: "mote-child" }),
+      childKp.privateKey,
+    );
+
+    // Sign the parent receipt with the delegation included
+    const parentSigned = await signExecutionReceipt(
+      { ...makeReceipt({ task_id: "parent-001", motebit_id: "mote-parent" }), delegation_receipts: [childSigned] },
+      parentKp.privateKey,
+    );
+
+    const knownKeys: KnownKeys = new Map([
+      ["mote-parent", parentKp.publicKey],
+      ["mote-child", childKp.publicKey],
+    ]);
+    const result = await verifyReceiptChain(parentSigned, knownKeys);
+
+    expect(result.task_id).toBe("parent-001");
+    expect(result.verified).toBe(true);
+    expect(result.delegations).toHaveLength(1);
+    expect(result.delegations[0]!.task_id).toBe("delegated-001");
+    expect(result.delegations[0]!.motebit_id).toBe("mote-child");
+    expect(result.delegations[0]!.verified).toBe(true);
+    expect(result.delegations[0]!.delegations).toEqual([]);
+  });
+
+  it("chain where parent verifies but delegation fails", async () => {
+    const parentKp = await generateKeypair();
+    const childKp = await generateKeypair();
+
+    // Sign child receipt
+    const childSigned = await signExecutionReceipt(
+      makeReceipt({ task_id: "delegated-002", motebit_id: "mote-unknown-child" }),
+      childKp.privateKey,
+    );
+
+    // Sign parent receipt with delegation
+    const parentSigned = await signExecutionReceipt(
+      { ...makeReceipt({ task_id: "parent-002", motebit_id: "mote-parent" }), delegation_receipts: [childSigned] },
+      parentKp.privateKey,
+    );
+
+    // Only parent key is known — child's motebit_id is missing from knownKeys
+    const knownKeys: KnownKeys = new Map([
+      ["mote-parent", parentKp.publicKey],
+    ]);
+    const result = await verifyReceiptChain(parentSigned, knownKeys);
+
+    expect(result.verified).toBe(true);
+    expect(result.delegations).toHaveLength(1);
+    expect(result.delegations[0]!.verified).toBe(false);
+    expect(result.delegations[0]!.error).toBe("unknown motebit_id");
+  });
+
+  it("empty delegation_receipts still verifies with empty delegations array", async () => {
+    const kp = await generateKeypair();
+    const signed = await signExecutionReceipt(
+      { ...makeReceipt(), delegation_receipts: [] },
+      kp.privateKey,
+    );
+
+    const knownKeys: KnownKeys = new Map([["mote-123", kp.publicKey]]);
+    const result = await verifyReceiptChain(signed, knownKeys);
+
+    expect(result.verified).toBe(true);
+    expect(result.delegations).toEqual([]);
   });
 });

@@ -614,7 +614,7 @@ describe("McpServerAdapter — tool execution", () => {
     const handler = await startWithTool(tool, { executeTool, validateTool });
     await handler({ city: "Paris" });
 
-    expect(validateTool).toHaveBeenCalledWith(tool, { city: "Paris" });
+    expect(validateTool).toHaveBeenCalledWith(tool, { city: "Paris" }, undefined);
     expect(executeTool).toHaveBeenCalledWith("with-args", { city: "Paris" });
   });
 });
@@ -861,8 +861,8 @@ describe("McpServerAdapter — integration", () => {
       isError?: boolean;
     };
 
-    // 1. Policy was checked
-    expect(validateTool).toHaveBeenCalledWith(tool, { expression: "6*7" });
+    // 1. Policy was checked (caller is undefined when no motebit auth)
+    expect(validateTool).toHaveBeenCalledWith(tool, { expression: "6*7" }, undefined);
 
     // 2. Tool was executed
     expect(executeTool).toHaveBeenCalledWith("calculator", { expression: "6*7" });
@@ -1297,5 +1297,266 @@ describe("McpServerAdapter — HTTP auth", () => {
     expect(res.status).toBe(400); // invalid session, not 401
 
     await adapter.stop();
+  });
+});
+
+// ============================================================
+// McpServerAdapter — mutual authentication (motebit tokens)
+// ============================================================
+
+describe("McpServerAdapter — mutual authentication", () => {
+  // Helper: create a fake base64url-encoded claims payload
+  function fakeClaimsB64(claims: Record<string, unknown>): string {
+    const json = JSON.stringify(claims);
+    // btoa then make URL-safe
+    return btoa(json).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+
+  it("rejects motebit: token when caller is not in knownCallers and no resolveCallerKey", async () => {
+    const claims = { mid: "unknown-caller-id", did: "d1", iat: Date.now(), exp: Date.now() + 60000 };
+    const token = `${fakeClaimsB64(claims)}.fakesig`;
+
+    const adapter = new McpServerAdapter(
+      makeConfig({
+        transport: "http",
+        port: 0,
+        knownCallers: new Map(), // empty — no known callers
+      }),
+      makeDeps({
+        verifySignedToken: vi.fn(async () => null),
+      }),
+    );
+    await adapter.start();
+
+    const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
+    const addr = server.address() as import("node:net").AddressInfo;
+
+    const res = await fetch(`http://localhost:${addr.port}/messages`, {
+      method: "POST",
+      headers: { Authorization: `Bearer motebit:${token}` },
+    });
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("invalid motebit token");
+
+    await adapter.stop();
+  });
+
+  it("rejects motebit: token when caller is blocked in knownCallers", async () => {
+    const callerId = "blocked-caller-id";
+    const claims = { mid: callerId, did: "d1", iat: Date.now(), exp: Date.now() + 60000 };
+    const token = `${fakeClaimsB64(claims)}.fakesig`;
+
+    const knownCallers = new Map<string, { publicKey: string; trustLevel: import("../index.js").AgentTrustLevel }>();
+    const { AgentTrustLevel: ATL } = await import("../index.js");
+    knownCallers.set(callerId, {
+      publicKey: "aabbccdd".repeat(8),
+      trustLevel: ATL.Blocked,
+    });
+
+    const adapter = new McpServerAdapter(
+      makeConfig({ transport: "http", port: 0, knownCallers }),
+      makeDeps({
+        verifySignedToken: vi.fn(async () => null), // won't be reached (blocked before verification)
+      }),
+    );
+    await adapter.start();
+
+    const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
+    const addr = server.address() as import("node:net").AddressInfo;
+
+    const res = await fetch(`http://localhost:${addr.port}/messages`, {
+      method: "POST",
+      headers: { Authorization: `Bearer motebit:${token}` },
+    });
+    expect(res.status).toBe(401);
+
+    await adapter.stop();
+  });
+
+  it("rejects motebit: token with malformed payload (no dot)", async () => {
+    const adapter = new McpServerAdapter(
+      makeConfig({ transport: "http", port: 0 }),
+      makeDeps(),
+    );
+    await adapter.start();
+
+    const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
+    const addr = server.address() as import("node:net").AddressInfo;
+
+    const res = await fetch(`http://localhost:${addr.port}/messages`, {
+      method: "POST",
+      headers: { Authorization: "Bearer motebit:nodothere" },
+    });
+    expect(res.status).toBe(401);
+
+    await adapter.stop();
+  });
+
+  it("rejects motebit: token with invalid base64 in claims", async () => {
+    const adapter = new McpServerAdapter(
+      makeConfig({ transport: "http", port: 0 }),
+      makeDeps(),
+    );
+    await adapter.start();
+
+    const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
+    const addr = server.address() as import("node:net").AddressInfo;
+
+    const res = await fetch(`http://localhost:${addr.port}/messages`, {
+      method: "POST",
+      headers: { Authorization: "Bearer motebit:!!!invalid!!!.sig" },
+    });
+    expect(res.status).toBe(401);
+
+    await adapter.stop();
+  });
+
+  it("rejects motebit: token when resolveCallerKey returns blocked", async () => {
+    const { AgentTrustLevel: ATL } = await import("../index.js");
+    const callerId = "resolve-blocked-id";
+    const claims = { mid: callerId, did: "d1", iat: Date.now(), exp: Date.now() + 60000 };
+    const token = `${fakeClaimsB64(claims)}.fakesig`;
+
+    const resolveCallerKey = vi.fn(async () => ({
+      publicKey: "aabbccdd".repeat(8),
+      trustLevel: ATL.Blocked,
+    }));
+
+    const adapter = new McpServerAdapter(
+      makeConfig({ transport: "http", port: 0 }),
+      makeDeps({
+        resolveCallerKey,
+        verifySignedToken: vi.fn(async () => null), // won't be reached (blocked before verification)
+      }),
+    );
+    await adapter.start();
+
+    const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
+    const addr = server.address() as import("node:net").AddressInfo;
+
+    const res = await fetch(`http://localhost:${addr.port}/messages`, {
+      method: "POST",
+      headers: { Authorization: `Bearer motebit:${token}` },
+    });
+    expect(res.status).toBe(401);
+    expect(resolveCallerKey).toHaveBeenCalledWith(callerId);
+
+    await adapter.stop();
+  });
+
+  it("static auth still works (backward compat)", async () => {
+    const adapter = new McpServerAdapter(
+      makeConfig({ transport: "http", port: 0, authToken: "my-secret" }),
+      makeDeps(),
+    );
+    await adapter.start();
+
+    const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
+    const addr = server.address() as import("node:net").AddressInfo;
+
+    // Wrong token
+    const res1 = await fetch(`http://localhost:${addr.port}/messages`, {
+      method: "POST",
+      headers: { Authorization: "Bearer wrong" },
+    });
+    expect(res1.status).toBe(401);
+
+    // Correct token (400 = auth passed, invalid session)
+    const res2 = await fetch(`http://localhost:${addr.port}/messages`, {
+      method: "POST",
+      headers: { Authorization: "Bearer my-secret" },
+    });
+    expect(res2.status).toBe(400);
+
+    await adapter.stop();
+  });
+
+  it("open access when no authToken and no motebit: prefix", async () => {
+    const adapter = new McpServerAdapter(
+      makeConfig({ transport: "http", port: 0 }),
+      makeDeps(),
+    );
+    await adapter.start();
+
+    const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
+    const addr = server.address() as import("node:net").AddressInfo;
+
+    // No auth header at all
+    const res = await fetch(`http://localhost:${addr.port}/messages`, {
+      method: "POST",
+    });
+    expect(res.status).toBe(400); // invalid session, not 401
+
+    await adapter.stop();
+  });
+
+  it("caller identity is passed to validateTool when verified", async () => {
+    // This tests the integration: once a motebit caller is verified,
+    // subsequent tool calls receive the caller context.
+    // We test indirectly via the handleToolCall path using a registered tool.
+    const { AgentTrustLevel: ATL } = await import("../index.js");
+
+    const validateTool = vi.fn(() => ({ allowed: true, requiresApproval: false }));
+    const tool = toolDef("test_tool", {
+      inputSchema: {
+        type: "object",
+        properties: { x: { type: "string" } },
+        required: ["x"],
+      },
+    });
+
+    const deps = makeDeps({
+      listTools: () => [tool],
+      filterTools: (t) => t,
+      validateTool,
+    });
+
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    // Simulate setting lastVerifiedCaller (as would happen during HTTP auth)
+    const adapterAny = adapter as unknown as { lastVerifiedCaller: { motebitId: string; trustLevel: string } | null };
+    adapterAny.lastVerifiedCaller = {
+      motebitId: "caller-mote-id",
+      trustLevel: ATL.Verified,
+    };
+
+    // Invoke the tool handler
+    const handler = registrations.tools.get("test_tool")!.handler;
+    await handler({ x: "hello" });
+
+    // validateTool should receive the caller identity
+    expect(validateTool).toHaveBeenCalledWith(
+      tool,
+      { x: "hello" },
+      { motebitId: "caller-mote-id", trustLevel: ATL.Verified },
+    );
+  });
+
+  it("validateTool receives undefined caller when no motebit auth", async () => {
+    const validateTool = vi.fn(() => ({ allowed: true, requiresApproval: false }));
+    const tool = toolDef("plain_tool", {
+      inputSchema: {
+        type: "object",
+        properties: { y: { type: "number" } },
+        required: ["y"],
+      },
+    });
+
+    const deps = makeDeps({
+      listTools: () => [tool],
+      filterTools: (t) => t,
+      validateTool,
+    });
+
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const handler = registrations.tools.get("plain_tool")!.handler;
+    await handler({ y: 42 });
+
+    // No motebit auth, so caller is undefined
+    expect(validateTool).toHaveBeenCalledWith(tool, { y: 42 }, undefined);
   });
 });

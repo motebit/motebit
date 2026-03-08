@@ -845,3 +845,256 @@ describe("Sync Relay — agent protocol", () => {
     expect(res.status).toBe(404);
   });
 });
+
+// === Agent Discovery Registry Tests ===
+
+describe("Sync Relay — agent discovery registry", () => {
+  let relay: SyncRelay;
+
+  beforeEach(async () => {
+    relay = createTestRelay({ enableDeviceAuth: true, verifyDeviceSignature: true });
+  });
+
+  afterEach(() => {
+    relay.close();
+  });
+
+  async function setupIdentityAndToken(): Promise<{ motebitId: string; token: string; pubKeyHex: string }> {
+    const keypair = await generateKeypair();
+    const pubKeyHex = bytesToHex(keypair.publicKey);
+
+    // Create identity
+    const identityRes = await relay.app.request("/identity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ owner_id: `owner-${crypto.randomUUID()}` }),
+    });
+    const identity = (await identityRes.json()) as { motebit_id: string };
+
+    // Register device with public key
+    const deviceRes = await relay.app.request("/device/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ motebit_id: identity.motebit_id, device_name: "Test", public_key: pubKeyHex }),
+    });
+    const device = (await deviceRes.json()) as { device_id: string };
+
+    // Create signed token
+    const token = await createSignedToken(
+      { mid: identity.motebit_id, did: device.device_id, iat: Date.now(), exp: Date.now() + 5 * 60 * 1000 },
+      keypair.privateKey,
+    );
+
+    return { motebitId: identity.motebit_id, token, pubKeyHex };
+  }
+
+  it("returns 401 when no auth token provided", async () => {
+    const res = await relay.app.request("/api/v1/agents/discover", { method: "GET" });
+    expect(res.status).toBe(401);
+  });
+
+  it("register → discover finds the agent", async () => {
+    const { motebitId, token, pubKeyHex } = await setupIdentityAndToken();
+
+    // Register
+    const regRes = await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        endpoint_url: "https://example.com/mcp",
+        capabilities: ["query", "remember"],
+        metadata: { name: "Test Agent", description: "A test agent" },
+      }),
+    });
+    expect(regRes.status).toBe(200);
+    const regBody = (await regRes.json()) as { registered: boolean; motebit_id: string; expires_at: number };
+    expect(regBody.registered).toBe(true);
+    expect(regBody.motebit_id).toBe(motebitId);
+    expect(regBody.expires_at).toBeTypeOf("number");
+
+    // Discover
+    const discoverRes = await relay.app.request("/api/v1/agents/discover", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(discoverRes.status).toBe(200);
+    const discoverBody = (await discoverRes.json()) as { agents: Array<{ motebit_id: string; public_key: string; endpoint_url: string; capabilities: string[]; metadata: { name: string; description: string } }> };
+    expect(discoverBody.agents).toHaveLength(1);
+    expect(discoverBody.agents[0]!.motebit_id).toBe(motebitId);
+    expect(discoverBody.agents[0]!.public_key).toBe(pubKeyHex);
+    expect(discoverBody.agents[0]!.endpoint_url).toBe("https://example.com/mcp");
+    expect(discoverBody.agents[0]!.capabilities).toEqual(["query", "remember"]);
+    expect(discoverBody.agents[0]!.metadata).toEqual({ name: "Test Agent", description: "A test agent" });
+  });
+
+  it("heartbeat refreshes TTL", async () => {
+    const { motebitId, token } = await setupIdentityAndToken();
+
+    // Register first
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ endpoint_url: "https://example.com/mcp", capabilities: ["query"] }),
+    });
+
+    // Heartbeat
+    const hbRes = await relay.app.request("/api/v1/agents/heartbeat", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(hbRes.status).toBe(200);
+    const hbBody = (await hbRes.json()) as { ok: boolean };
+    expect(hbBody.ok).toBe(true);
+
+    // Still discoverable
+    const discoverRes = await relay.app.request(`/api/v1/agents/${motebitId}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(discoverRes.status).toBe(200);
+  });
+
+  it("heartbeat returns 404 when not registered", async () => {
+    const { token } = await setupIdentityAndToken();
+
+    const hbRes = await relay.app.request("/api/v1/agents/heartbeat", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(hbRes.status).toBe(404);
+  });
+
+  it("deregister → discover returns empty", async () => {
+    const { token } = await setupIdentityAndToken();
+
+    // Register
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ endpoint_url: "https://example.com/mcp", capabilities: ["query"] }),
+    });
+
+    // Deregister
+    const deregRes = await relay.app.request("/api/v1/agents/deregister", {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(deregRes.status).toBe(200);
+    const deregBody = (await deregRes.json()) as { ok: boolean };
+    expect(deregBody.ok).toBe(true);
+
+    // Discover should return empty
+    const discoverRes = await relay.app.request("/api/v1/agents/discover", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(discoverRes.status).toBe(200);
+    const discoverBody = (await discoverRes.json()) as { agents: unknown[] };
+    expect(discoverBody.agents).toHaveLength(0);
+  });
+
+  it("discover with capability filter", async () => {
+    const agentA = await setupIdentityAndToken();
+    const agentB = await setupIdentityAndToken();
+
+    // Register agent A with "query" + "remember"
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${agentA.token}` },
+      body: JSON.stringify({ endpoint_url: "https://a.example.com/mcp", capabilities: ["query", "remember"] }),
+    });
+
+    // Register agent B with "search" only
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${agentB.token}` },
+      body: JSON.stringify({ endpoint_url: "https://b.example.com/mcp", capabilities: ["search"] }),
+    });
+
+    // Discover with capability=query → only agent A
+    const queryRes = await relay.app.request("/api/v1/agents/discover?capability=query", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${agentA.token}` },
+    });
+    expect(queryRes.status).toBe(200);
+    const queryBody = (await queryRes.json()) as { agents: Array<{ motebit_id: string }> };
+    expect(queryBody.agents).toHaveLength(1);
+    expect(queryBody.agents[0]!.motebit_id).toBe(agentA.motebitId);
+
+    // Discover with capability=search → only agent B
+    const searchRes = await relay.app.request("/api/v1/agents/discover?capability=search", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${agentA.token}` },
+    });
+    expect(searchRes.status).toBe(200);
+    const searchBody = (await searchRes.json()) as { agents: Array<{ motebit_id: string }> };
+    expect(searchBody.agents).toHaveLength(1);
+    expect(searchBody.agents[0]!.motebit_id).toBe(agentB.motebitId);
+
+    // Discover all → both agents
+    const allRes = await relay.app.request("/api/v1/agents/discover", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${agentA.token}` },
+    });
+    expect(allRes.status).toBe(200);
+    const allBody = (await allRes.json()) as { agents: unknown[] };
+    expect(allBody.agents).toHaveLength(2);
+  });
+
+  it("GET /api/v1/agents/:motebitId returns 404 for unknown agent", async () => {
+    const { token } = await setupIdentityAndToken();
+
+    const res = await relay.app.request("/api/v1/agents/nonexistent-id", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("GET /api/v1/agents/:motebitId returns registered agent", async () => {
+    const { motebitId, token } = await setupIdentityAndToken();
+
+    // Register
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ endpoint_url: "https://example.com/mcp", capabilities: ["query"] }),
+    });
+
+    const res = await relay.app.request(`/api/v1/agents/${motebitId}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { motebit_id: string; endpoint_url: string };
+    expect(body.motebit_id).toBe(motebitId);
+    expect(body.endpoint_url).toBe("https://example.com/mcp");
+  });
+
+  it("master token can register with explicit motebit_id", async () => {
+    // Create identity + device for public key lookup
+    const { motebitId } = await setupIdentityAndToken();
+
+    // Register using master token with explicit motebit_id
+    const regRes = await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: motebitId,
+        endpoint_url: "https://admin.example.com/mcp",
+        capabilities: ["admin"],
+      }),
+    });
+    expect(regRes.status).toBe(200);
+
+    // Discover via master token
+    const discoverRes = await relay.app.request("/api/v1/agents/discover", {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(discoverRes.status).toBe(200);
+    const body = (await discoverRes.json()) as { agents: Array<{ motebit_id: string }> };
+    expect(body.agents).toHaveLength(1);
+    expect(body.agents[0]!.motebit_id).toBe(motebitId);
+  });
+});

@@ -299,6 +299,7 @@ export interface SignableReceipt {
   memories_formed: number;
   prompt_hash: string;
   result_hash: string;
+  delegation_receipts?: SignableReceipt[];
   signature: string;
 }
 
@@ -352,4 +353,74 @@ export async function verifyExecutionReceipt(
   } catch {
     return false;
   }
+}
+
+// === Receipt Chain Verification ===
+
+/**
+ * Result of verifying a single receipt in a chain.
+ */
+export interface ReceiptVerification {
+  task_id: string;
+  motebit_id: string;
+  verified: boolean;
+  error?: string;
+  delegations: ReceiptVerification[];
+}
+
+/**
+ * Known public keys map: motebit_id → Uint8Array public key.
+ * Used to look up the correct key for each receipt in the chain.
+ */
+export type KnownKeys = Map<string, Uint8Array>;
+
+/**
+ * Recursively verify an execution receipt and all its delegation receipts.
+ * Each receipt is verified against the public key found in `knownKeys` for its `motebit_id`.
+ * Returns a tree of verification results mirroring the delegation structure.
+ */
+export async function verifyReceiptChain(
+  receipt: SignableReceipt,
+  knownKeys: KnownKeys,
+): Promise<ReceiptVerification> {
+  const { task_id, motebit_id } = receipt;
+
+  // Look up public key for this receipt's motebit_id
+  const publicKey = knownKeys.get(motebit_id);
+  if (!publicKey) {
+    // Recurse into delegations even if this receipt can't be verified
+    const delegations = await verifyDelegations(receipt, knownKeys);
+    return { task_id, motebit_id, verified: false, error: "unknown motebit_id", delegations };
+  }
+
+  // Verify the receipt's signature
+  let verified: boolean;
+  let error: string | undefined;
+  try {
+    verified = await verifyExecutionReceipt(receipt, publicKey);
+  } catch (err: unknown) {
+    verified = false;
+    error = err instanceof Error ? err.message : String(err);
+  }
+
+  // Recursively verify delegation receipts
+  const delegations = await verifyDelegations(receipt, knownKeys);
+
+  const result: ReceiptVerification = { task_id, motebit_id, verified, delegations };
+  if (error) {
+    result.error = error;
+  }
+  return result;
+}
+
+async function verifyDelegations(
+  receipt: SignableReceipt,
+  knownKeys: KnownKeys,
+): Promise<ReceiptVerification[]> {
+  if (!receipt.delegation_receipts || receipt.delegation_receipts.length === 0) {
+    return [];
+  }
+  return Promise.all(
+    receipt.delegation_receipts.map((dr) => verifyReceiptChain(dr, knownKeys)),
+  );
 }

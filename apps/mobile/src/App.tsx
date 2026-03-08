@@ -157,7 +157,7 @@ export function App(): React.ReactElement {
   const pairingSyncUrlRef = useRef("");
 
   // MCP state
-  const [mcpServers, setMcpServers] = useState<Array<{ name: string; url: string; connected: boolean; toolCount: number; trusted: boolean }>>([]);
+  const [mcpServers, setMcpServers] = useState<Array<{ name: string; url: string; connected: boolean; toolCount: number; trusted: boolean; motebit: boolean; motebitPublicKey?: string }>>([]);
 
   // Model indicator
   const [currentModel, setCurrentModel] = useState<string | null>(null);
@@ -463,9 +463,9 @@ export function App(): React.ReactElement {
     setMcpServers(app.current.getMcpServers());
   }, []);
 
-  const handleAddMcpServer = useCallback(async (url: string, name: string, trusted?: boolean) => {
+  const handleAddMcpServer = useCallback(async (url: string, name: string, trusted?: boolean, motebit?: boolean) => {
     try {
-      await app.current.addMcpServer({ name, transport: "http", url, trusted: trusted ?? false });
+      await app.current.addMcpServer({ name, transport: "http", url, trusted: trusted ?? false, motebit: motebit ?? false });
       refreshMcpServers();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);

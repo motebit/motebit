@@ -43,7 +43,7 @@ import {
 } from "@motebit/tools";
 import type { SearchProvider } from "@motebit/tools";
 import { connectMcpServers, type McpServerConfig } from "@motebit/mcp-client";
-import { deriveKey, encrypt, decrypt, generateSalt, deriveSyncEncryptionKey, createSignedToken } from "@motebit/crypto";
+import { deriveKey, encrypt, decrypt, generateSalt, deriveSyncEncryptionKey, createSignedToken, verifySignedToken } from "@motebit/crypto";
 import type { EncryptedPayload } from "@motebit/crypto";
 import {
   bootstrapIdentity as sharedBootstrapIdentity,
@@ -106,6 +106,29 @@ function loadFullConfig(): FullConfig {
 function saveFullConfig(config: FullConfig): void {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
+}
+
+/** Persist newly pinned motebit public keys from connected adapters back to config. */
+function persistMotebitPublicKeys(
+  adapters: Awaited<ReturnType<typeof connectMcpServers>>,
+  fullConfig: FullConfig,
+): void {
+  let dirty = false;
+  const servers = fullConfig.mcp_servers ?? [];
+  for (const adapter of adapters) {
+    if (!adapter.isMotebit || !adapter.verifiedIdentity?.verified) continue;
+    const pinnedKey = adapter.serverConfig.motebitPublicKey;
+    if (!pinnedKey) continue;
+    // Find matching server config entry
+    const serverCfg = servers.find((s) => s.name === adapter.serverName);
+    if (serverCfg && !serverCfg.motebitPublicKey) {
+      serverCfg.motebitPublicKey = pinnedKey;
+      dirty = true;
+    }
+  }
+  if (dirty) {
+    saveFullConfig(fullConfig);
+  }
 }
 
 function extractPersonality(full: FullConfig): MotebitPersonalityConfig {
@@ -794,6 +817,7 @@ Available commands:
   /mcp list          List MCP servers and trust status
   /mcp trust <name>  Trust an MCP server
   /mcp untrust <name> Untrust an MCP server
+  /discover [cap]    Discover agents on the relay (optional capability filter)
   /operator          Show operator mode status
   quit, exit         Exit
 `.trim());
@@ -1198,6 +1222,40 @@ Available commands:
         console.log(`Marked "${serverName}" as untrusted. Restart to apply.`);
       } else {
         console.log("Usage: /mcp [list|trust <name>|untrust <name>]");
+      }
+      break;
+    }
+
+    case "discover": {
+      const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
+      if (!syncUrl) {
+        console.log("No sync URL configured. Set --sync-url or MOTEBIT_SYNC_URL.");
+        break;
+      }
+      try {
+        const capParam = args.trim() || undefined;
+        const queryStr = capParam ? `?capability=${encodeURIComponent(capParam)}` : "";
+        const token = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+        const headers: Record<string, string> = {};
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        const resp = await fetch(`${syncUrl}/api/v1/agents/discover${queryStr}`, { headers });
+        if (!resp.ok) {
+          console.log(`Discovery failed: ${resp.status} ${resp.statusText}`);
+          break;
+        }
+        const data = await resp.json() as { agents: Array<{ motebit_id: string; endpoint_url: string; capabilities: string[]; public_key: string }> };
+        if (data.agents.length === 0) {
+          console.log(capParam ? `No agents found with capability "${capParam}".` : "No agents registered.");
+        } else {
+          console.log(`\nDiscovered agents (${data.agents.length}):\n`);
+          for (const agent of data.agents) {
+            const caps = agent.capabilities.length > 0 ? agent.capabilities.slice(0, 5).join(", ") : "none";
+            console.log(`  ${agent.motebit_id.slice(0, 12).padEnd(14)} ${agent.endpoint_url.padEnd(30)} [${caps}]`);
+          }
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.log(`Discovery error: ${message}`);
       }
       break;
     }
@@ -1813,6 +1871,11 @@ async function handleServe(config: CliConfig): Promise<void> {
       );
       return { node_id: node.node_id };
     },
+
+    // Mutual auth: inject verifySignedToken for motebit caller verification
+    verifySignedToken: async (token: string, publicKey: Uint8Array) => {
+      return verifySignedToken(token, publicKey);
+    },
   };
 
   // Wire handleAgentTask if private key is available
@@ -1879,9 +1942,65 @@ async function handleServe(config: CliConfig): Promise<void> {
     log(`Policy: ${config.operator ? "operator" : "ambient"} mode.`);
   }
 
+  // Register with discovery relay (HTTP transport only)
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
+  if (transport === "http" && syncUrl) {
+    try {
+      const toolNames = runtime.getToolRegistry().list().map((t) => t.name);
+
+      const regHeaders: Record<string, string> = { "Content-Type": "application/json" };
+      const masterToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+      if (masterToken) regHeaders["Authorization"] = `Bearer ${masterToken}`;
+
+      const endpointUrl = `http://localhost:${port}`;
+      const regResp = await fetch(`${syncUrl}/api/v1/agents/register`, {
+        method: "POST",
+        headers: regHeaders,
+        body: JSON.stringify({
+          motebit_id: motebitId,
+          endpoint_url: endpointUrl,
+          capabilities: toolNames,
+          metadata: { name: serverConfig.name },
+        }),
+      });
+      if (regResp.ok) {
+        log(`Registered with relay: ${syncUrl}`);
+        // Heartbeat every 5 minutes
+        heartbeatTimer = setInterval(async () => {
+          try {
+            await fetch(`${syncUrl}/api/v1/agents/heartbeat`, {
+              method: "POST",
+              headers: regHeaders,
+            });
+          } catch {
+            // Best-effort heartbeat
+          }
+        }, 5 * 60 * 1000);
+      } else {
+        log(`Registry registration failed: ${regResp.status}`);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log(`Registry registration error: ${msg}`);
+    }
+  }
+
   // Graceful shutdown
   const shutdown = async (): Promise<void> => {
     log("\nShutting down MCP server...");
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    // Deregister from relay
+    if (syncUrl) {
+      try {
+        const masterToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+        const headers: Record<string, string> = {};
+        if (masterToken) headers["Authorization"] = `Bearer ${masterToken}`;
+        await fetch(`${syncUrl}/api/v1/agents/deregister`, { method: "DELETE", headers });
+      } catch {
+        // Best-effort deregistration
+      }
+    }
     await mcpServer.stop();
     runtime.stop();
     moteDb.close();
@@ -2490,20 +2609,29 @@ async function main(): Promise<void> {
   // Derive sync encryption key from private key (for zero-knowledge relay)
   const reloadedConfig = loadFullConfig();
   let syncEncKey: Uint8Array | undefined;
+  let privateKeyBytes: Uint8Array | undefined;
   if (reloadedConfig.cli_encrypted_key) {
     const pkHex = await decryptPrivateKey(reloadedConfig.cli_encrypted_key, passphrase);
-    syncEncKey = await deriveSyncEncryptionKey(fromHex(pkHex));
+    privateKeyBytes = fromHex(pkHex);
+    syncEncKey = await deriveSyncEncryptionKey(privateKeyBytes);
   }
+  const deviceId = reloadedConfig.device_id;
 
   // Build tool registry with deferred runtime ref
   const runtimeRef: { current: MotebitRuntime | null } = { current: null };
   const toolRegistry = buildToolRegistry(config, runtimeRef, motebitId);
 
-  // MCP servers from config — overlay trust from trusted list
+  // MCP servers from config — overlay trust from trusted list, inject caller identity for motebit servers
   const trustedServers = fullConfig.mcp_trusted_servers ?? [];
   const mcpServers = (fullConfig.mcp_servers ?? []).map((s) => ({
     ...s,
     trusted: trustedServers.includes(s.name),
+    // Inject caller identity for motebit-to-motebit connections
+    ...(s.motebit && privateKeyBytes && deviceId ? {
+      callerMotebitId: motebitId,
+      callerDeviceId: deviceId,
+      callerPrivateKey: privateKeyBytes,
+    } : {}),
   }));
 
   // Create runtime with tools, policy, MCP config
@@ -2518,6 +2646,9 @@ async function main(): Promise<void> {
       // Re-wire loop deps since registry grew
       runtime.getToolRegistry().merge(toolRegistry);
       console.log(`MCP: connected to ${mcpAdapters.length} server(s)`);
+
+      // Persist newly pinned motebit public keys
+      persistMotebitPublicKeys(mcpAdapters, fullConfig);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       console.warn(`MCP connection failed: ${message}`);

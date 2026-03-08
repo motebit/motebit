@@ -217,6 +217,101 @@ body {
   flex-shrink: 0;
 }
 
+/* Task events with delegation chains */
+
+.event-entry.task-event {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.event-entry-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.event-task-id {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+/* === Delegation Chain === */
+
+.delegation-badge.none {
+  color: var(--text-dim);
+  font-size: 10px;
+  font-style: italic;
+}
+
+.delegation-chain {
+  width: 100%;
+  padding-left: 16px;
+}
+
+.delegation-toggle {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--accent);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 1px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.delegation-toggle:hover {
+  background: var(--surface);
+}
+
+.delegation-tree {
+  margin-top: 4px;
+  padding: 4px 0;
+  border-left: 1px solid var(--border);
+  margin-left: 4px;
+}
+
+.delegation-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: 11px;
+}
+
+.delegation-connector {
+  color: var(--text-dim);
+  font-family: monospace;
+  flex-shrink: 0;
+}
+
+.delegation-status {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.delegation-id {
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+.delegation-motebit {
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.delegation-tools {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.delegation-sig {
+  color: var(--text-dim);
+  font-size: 10px;
+  opacity: 0.6;
+}
+
 /* === State Chart === */
 
 .state-chart-container {

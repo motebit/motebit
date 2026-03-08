@@ -702,6 +702,9 @@ importers:
         specifier: workspace:*
         version: link:../tools
     devDependencies:
+      '@motebit/crypto':
+        specifier: workspace:*
+        version: link:../crypto
       typescript:
         specifier: ^5.6.0
         version: 5.9.3

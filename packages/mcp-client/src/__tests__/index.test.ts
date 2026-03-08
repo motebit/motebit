@@ -27,6 +27,10 @@ vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
   StreamableHTTPClientTransport: mockHttpTransport,
 }));
 
+vi.mock("@motebit/crypto", () => ({
+  createSignedToken: vi.fn().mockResolvedValue("mock-signed-token"),
+}));
+
 // Import after mocks are set up
 import { McpClientAdapter, connectMcpServers } from "../index.js";
 import { InMemoryToolRegistry } from "@motebit/tools";
@@ -837,5 +841,388 @@ describe("McpClientAdapter — checkManifest", () => {
     const result = await adapter.checkManifest("stale_hash");
     expect(result.ok).toBe(false);
     expect(result.diff).toBeUndefined();
+  });
+});
+
+// ============================================================
+// Delegation receipt accumulation
+// ============================================================
+
+describe("McpClientAdapter — delegation receipts", () => {
+  it("getAndResetDelegationReceipts returns empty by default", () => {
+    const adapter = new McpClientAdapter(stdioConfig());
+    expect(adapter.getAndResetDelegationReceipts()).toEqual([]);
+  });
+
+  it("accumulates receipts from motebit_task calls on verified identity", async () => {
+    const receipt = {
+      task_id: "sub-task-1",
+      motebit_id: "remote-mote",
+      device_id: "dev-1",
+      submitted_at: 1700000000000,
+      completed_at: 1700000060000,
+      status: "completed",
+      result: "done",
+      tools_used: ["search"],
+      memories_formed: 1,
+      prompt_hash: "a".repeat(64),
+      result_hash: "b".repeat(64),
+      signature: "sig123",
+    };
+
+    // Setup: discover tools including motebit_identity and motebit_task
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
+      { name: "motebit_identity", description: "Identity" },
+      { name: "motebit_task", description: "Task" },
+    ]));
+    // Identity verification call
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: "text", text: JSON.stringify({ motebit_id: "remote-mote", public_key: "ab".repeat(32) }) }],
+      isError: false,
+    });
+
+    const adapter = new McpClientAdapter(httpConfig({
+      name: "mote-srv",
+      motebit: true,
+    }));
+    await adapter.connect();
+    expect(adapter.verifiedIdentity?.verified).toBe(true);
+
+    // Execute motebit_task — returns receipt JSON
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: "text", text: JSON.stringify(receipt) }],
+      isError: false,
+    });
+    await adapter.executeTool("mote-srv__motebit_task", { prompt: "do it" });
+
+    const receipts = adapter.getAndResetDelegationReceipts();
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]!.task_id).toBe("sub-task-1");
+
+    // Second call returns empty
+    expect(adapter.getAndResetDelegationReceipts()).toEqual([]);
+  });
+
+  it("strips identity tag before parsing receipt", async () => {
+    const receipt = {
+      task_id: "sub-task-2",
+      motebit_id: "remote-mote",
+      device_id: "dev-1",
+      submitted_at: 1700000000000,
+      completed_at: 1700000060000,
+      status: "completed",
+      result: "done",
+      tools_used: [],
+      memories_formed: 0,
+      prompt_hash: "a".repeat(64),
+      result_hash: "b".repeat(64),
+      signature: "sig456",
+    };
+
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
+      { name: "motebit_identity", description: "Identity" },
+      { name: "motebit_task", description: "Task" },
+    ]));
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: "text", text: JSON.stringify({ motebit_id: "remote-mote", public_key: "cd".repeat(32) }) }],
+      isError: false,
+    });
+
+    const adapter = new McpClientAdapter(httpConfig({
+      name: "mote-srv",
+      motebit: true,
+    }));
+    await adapter.connect();
+
+    // Receipt with identity tag suffix
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: "text", text: JSON.stringify(receipt) + "\n[motebit:remote-mote]" }],
+      isError: false,
+    });
+    await adapter.executeTool("mote-srv__motebit_task", { prompt: "test" });
+
+    const receipts = adapter.getAndResetDelegationReceipts();
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]!.task_id).toBe("sub-task-2");
+  });
+
+  it("does not capture receipts for non-motebit_task tools", async () => {
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
+      { name: "motebit_identity", description: "Identity" },
+      { name: "motebit_query", description: "Query" },
+    ]));
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: "text", text: JSON.stringify({ motebit_id: "remote-mote", public_key: "ef".repeat(32) }) }],
+      isError: false,
+    });
+
+    const adapter = new McpClientAdapter(httpConfig({
+      name: "mote-srv",
+      motebit: true,
+    }));
+    await adapter.connect();
+
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: "text", text: '{"task_id":"x","signature":"y","motebit_id":"z"}' }],
+      isError: false,
+    });
+    await adapter.executeTool("mote-srv__motebit_query", {});
+
+    expect(adapter.getAndResetDelegationReceipts()).toEqual([]);
+  });
+
+  it("silently skips non-JSON motebit_task results", async () => {
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
+      { name: "motebit_identity", description: "Identity" },
+      { name: "motebit_task", description: "Task" },
+    ]));
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: "text", text: JSON.stringify({ motebit_id: "remote-mote", public_key: "11".repeat(32) }) }],
+      isError: false,
+    });
+
+    const adapter = new McpClientAdapter(httpConfig({
+      name: "mote-srv",
+      motebit: true,
+    }));
+    await adapter.connect();
+
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: "text", text: "Not JSON at all" }],
+      isError: false,
+    });
+    await adapter.executeTool("mote-srv__motebit_task", { prompt: "test" });
+
+    expect(adapter.getAndResetDelegationReceipts()).toEqual([]);
+  });
+});
+
+// ============================================================
+// Motebit identity verification
+// ============================================================
+
+describe("McpClientAdapter — motebit identity verification", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListTools.mockResolvedValue(mcpToolsResponse([]));
+    mockConnect.mockResolvedValue(undefined);
+  });
+
+  it("does not verify identity when motebit is not set", async () => {
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
+      { name: "motebit_identity", description: "Identity" },
+    ]));
+
+    const adapter = new McpClientAdapter(httpConfig({ name: "normal-srv" }));
+    await adapter.connect();
+
+    expect(adapter.verifiedIdentity).toBeNull();
+    expect(adapter.isMotebit).toBe(false);
+    // motebit_identity should NOT have been called
+    expect(mockCallTool).not.toHaveBeenCalled();
+  });
+
+  it("verifies identity and pins key on first connect", async () => {
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
+      { name: "motebit_identity", description: "Identity" },
+    ]));
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: "text", text: JSON.stringify({ motebit_id: "mote-123", public_key: "aa".repeat(32) }) }],
+      isError: false,
+    });
+
+    const config = httpConfig({ name: "mote-srv", motebit: true } as Partial<McpServerConfig>);
+    const adapter = new McpClientAdapter(config);
+    await adapter.connect();
+
+    expect(adapter.isMotebit).toBe(true);
+    expect(adapter.verifiedIdentity).toEqual({
+      verified: true,
+      motebit_id: "mote-123",
+      public_key: "aa".repeat(32),
+    });
+    // Key should be pinned on config
+    expect(adapter.serverConfig.motebitPublicKey).toBe("aa".repeat(32));
+  });
+
+  it("accepts matching pinned key", async () => {
+    const pubKey = "bb".repeat(32);
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
+      { name: "motebit_identity", description: "Identity" },
+    ]));
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: "text", text: JSON.stringify({ motebit_id: "mote-456", public_key: pubKey }) }],
+      isError: false,
+    });
+
+    const adapter = new McpClientAdapter(httpConfig({
+      name: "mote-srv",
+      motebit: true,
+      motebitPublicKey: pubKey,
+    } as Partial<McpServerConfig>));
+    await adapter.connect();
+
+    expect(adapter.verifiedIdentity?.verified).toBe(true);
+    expect(adapter.isConnected).toBe(true);
+  });
+
+  it("disconnects and throws on key mismatch", async () => {
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
+      { name: "motebit_identity", description: "Identity" },
+    ]));
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: "text", text: JSON.stringify({ motebit_id: "mote-789", public_key: "cc".repeat(32) }) }],
+      isError: false,
+    });
+
+    const adapter = new McpClientAdapter(httpConfig({
+      name: "mote-srv",
+      motebit: true,
+      motebitPublicKey: "dd".repeat(32), // different key
+    } as Partial<McpServerConfig>));
+
+    await expect(adapter.connect()).rejects.toThrow("public key mismatch");
+    expect(mockClose).toHaveBeenCalled();
+  });
+
+  it("disconnects and throws when identity call fails", async () => {
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
+      { name: "motebit_identity", description: "Identity" },
+    ]));
+    mockCallTool.mockRejectedValueOnce(new Error("Tool not found"));
+
+    const adapter = new McpClientAdapter(httpConfig({
+      name: "mote-srv",
+      motebit: true,
+    } as Partial<McpServerConfig>));
+
+    await expect(adapter.connect()).rejects.toThrow("identity verification failed");
+    expect(mockClose).toHaveBeenCalled();
+  });
+
+  it("disconnects and throws when identity response is missing fields", async () => {
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
+      { name: "motebit_identity", description: "Identity" },
+    ]));
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: "text", text: JSON.stringify({ motebit_id: "mote-x" }) }], // missing public_key
+      isError: false,
+    });
+
+    const adapter = new McpClientAdapter(httpConfig({
+      name: "mote-srv",
+      motebit: true,
+    } as Partial<McpServerConfig>));
+
+    await expect(adapter.connect()).rejects.toThrow("missing motebit_id or public_key");
+    expect(mockClose).toHaveBeenCalled();
+  });
+
+  it("parses YAML-style identity file response", async () => {
+    const yamlResponse = `---
+motebit_id: "mote-yaml-123"
+identity:
+  public_key: "${"ee".repeat(32)}"
+---`;
+
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
+      { name: "motebit_identity", description: "Identity" },
+    ]));
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: "text", text: yamlResponse }],
+      isError: false,
+    });
+
+    const adapter = new McpClientAdapter(httpConfig({
+      name: "mote-srv",
+      motebit: true,
+    } as Partial<McpServerConfig>));
+    await adapter.connect();
+
+    expect(adapter.verifiedIdentity?.verified).toBe(true);
+    expect(adapter.verifiedIdentity?.motebit_id).toBe("mote-yaml-123");
+    expect(adapter.verifiedIdentity?.public_key).toBe("ee".repeat(32));
+  });
+
+  it("strips identity tag from identity response", async () => {
+    const taggedResponse = JSON.stringify({
+      motebit_id: "mote-tagged",
+      public_key: "ff".repeat(32),
+    }) + "\n[motebit:mote-tagged]";
+
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
+      { name: "motebit_identity", description: "Identity" },
+    ]));
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: "text", text: taggedResponse }],
+      isError: false,
+    });
+
+    const adapter = new McpClientAdapter(httpConfig({
+      name: "mote-srv",
+      motebit: true,
+    } as Partial<McpServerConfig>));
+    await adapter.connect();
+
+    expect(adapter.verifiedIdentity?.verified).toBe(true);
+    expect(adapter.verifiedIdentity?.motebit_id).toBe("mote-tagged");
+  });
+});
+
+// ============================================================
+// Motebit caller identity (signed auth tokens)
+// ============================================================
+
+describe("McpClientAdapter — motebit caller identity", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListTools.mockResolvedValue(mcpToolsResponse([]));
+    mockConnect.mockResolvedValue(undefined);
+  });
+
+  it("does not attach auth header when caller fields are missing", async () => {
+    // motebit: true but no callerMotebitId/callerPrivateKey
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
+      { name: "motebit_identity", description: "Identity" },
+    ]));
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: "text", text: JSON.stringify({ motebit_id: "remote-1", public_key: "aa".repeat(32) }) }],
+      isError: false,
+    });
+
+    const adapter = new McpClientAdapter(httpConfig({
+      name: "mote-srv",
+      motebit: true,
+    } as Partial<McpServerConfig>));
+    await adapter.connect();
+
+    // Transport should have been created with the URL and no transport opts
+    expect(mockHttpTransport).toHaveBeenCalledTimes(1);
+    expect(mockHttpTransport.mock.calls[0]![1]).toBeUndefined();
+  });
+
+  it("attaches signed bearer token when caller identity fields are present", async () => {
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
+      { name: "motebit_identity", description: "Identity" },
+    ]));
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: "text", text: JSON.stringify({ motebit_id: "remote-2", public_key: "bb".repeat(32) }) }],
+      isError: false,
+    });
+
+    const adapter = new McpClientAdapter(httpConfig({
+      name: "mote-srv",
+      motebit: true,
+      callerMotebitId: "my-mote-id",
+      callerDeviceId: "my-device-id",
+      callerPrivateKey: new Uint8Array(64),
+    } as Partial<McpServerConfig>));
+    await adapter.connect();
+
+    // Transport should have been created with URL + transport opts containing auth header
+    expect(mockHttpTransport).toHaveBeenCalledTimes(1);
+    expect(mockHttpTransport.mock.calls[0]!.length).toBe(2);
+    const transportOpts = mockHttpTransport.mock.calls[0]![1] as { requestInit: { headers: Record<string, string> } };
+    expect(transportOpts.requestInit.headers["Authorization"]).toBe("Bearer motebit:mock-signed-token");
   });
 });

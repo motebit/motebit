@@ -49,6 +49,9 @@ const mcpAddForm = document.getElementById("mcp-add-form") as HTMLDivElement;
 const mcpTransport = document.getElementById("mcp-transport") as HTMLSelectElement;
 const mcpCommandField = document.getElementById("mcp-command-field") as HTMLDivElement;
 const mcpUrlField = document.getElementById("mcp-url-field") as HTMLDivElement;
+const mcpMotebitCheckbox = document.getElementById("mcp-motebit") as HTMLInputElement;
+const mcpPublicKeyField = document.getElementById("mcp-publickey-field") as HTMLDivElement;
+const mcpPublicKeyInput = document.getElementById("mcp-publickey") as HTMLInputElement;
 
 // === Settings State ===
 
@@ -638,6 +641,16 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         row.appendChild(trustedBadge);
       }
 
+      if (config.motebit === true) {
+        const motebitBadge = document.createElement("span");
+        motebitBadge.className = "mcp-badge motebit";
+        motebitBadge.textContent = "motebit";
+        if (config.motebitPublicKey) {
+          motebitBadge.title = `Key: ${config.motebitPublicKey}`;
+        }
+        row.appendChild(motebitBadge);
+      }
+
       const collision = discoveryCollisions.find(c => c.name === config.name);
       if (collision) {
         const warnBadge = document.createElement("span");
@@ -714,6 +727,10 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     mcpUrlField.style.display = mcpTransport.value === "http" ? "flex" : "none";
   });
 
+  mcpMotebitCheckbox.addEventListener("change", () => {
+    mcpPublicKeyField.style.display = mcpMotebitCheckbox.checked && mcpPublicKeyInput.value ? "flex" : "none";
+  });
+
   document.getElementById("mcp-add-cancel")!.addEventListener("click", () => {
     mcpAddForm.style.display = "none";
   });
@@ -725,8 +742,10 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     const command = (document.getElementById("mcp-command") as HTMLInputElement).value.trim();
     const url = (document.getElementById("mcp-url") as HTMLInputElement).value.trim();
     const trusted = (document.getElementById("mcp-trusted") as HTMLInputElement).checked;
+    const motebit = mcpMotebitCheckbox.checked;
 
     const config: McpServerConfig = { name, transport, trusted };
+    if (motebit) config.motebit = true;
     if (transport === "stdio" && command) {
       const parts = command.split(/\s+/);
       config.command = parts[0];
@@ -742,6 +761,9 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     (document.getElementById("mcp-command") as HTMLInputElement).value = "";
     (document.getElementById("mcp-url") as HTMLInputElement).value = "";
     (document.getElementById("mcp-trusted") as HTMLInputElement).checked = false;
+    mcpMotebitCheckbox.checked = false;
+    mcpPublicKeyField.style.display = "none";
+    mcpPublicKeyInput.value = "";
   });
 
   // === Link Device (Device A) ===

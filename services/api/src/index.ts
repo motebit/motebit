@@ -28,6 +28,11 @@
  *   GET  /api/v1/plans/:motebitId/:planId              — single plan with steps
  *   GET  /api/v1/gradient/:motebitId?limit=100         — intelligence gradient snapshots
  *   GET  /api/v1/sync/:motebitId/pull                  — pull events (aliased for admin)
+ *   POST /api/v1/agents/register                       — register/refresh agent MCP endpoint
+ *   POST /api/v1/agents/heartbeat                      — refresh agent TTL
+ *   GET  /api/v1/agents/discover?capability=&motebit_id=&limit= — discover agents
+ *   GET  /api/v1/agents/:motebitId                     — get specific agent
+ *   DELETE /api/v1/agents/deregister                   — remove agent registration
  *
  * WebSocket protocol:
  *   Client → Server:  { type: "push", events: EventLogEntry[] }
@@ -186,6 +191,20 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
         ON sync_conversation_messages (conversation_id, created_at ASC);
   `);
 
+  // Create agent discovery registry table
+  moteDb.db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_registry (
+        motebit_id    TEXT PRIMARY KEY,
+        public_key    TEXT NOT NULL,
+        endpoint_url  TEXT NOT NULL,
+        capabilities  TEXT NOT NULL DEFAULT '[]',
+        metadata      TEXT,
+        registered_at INTEGER NOT NULL,
+        last_heartbeat INTEGER NOT NULL,
+        expires_at    INTEGER NOT NULL
+      );
+  `);
+
   // Track connected WebSocket clients per motebitId with device identity
   const connections = new Map<string, ConnectedDevice[]>();
 
@@ -193,7 +212,7 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
   const TASK_TTL_MS = 10 * 60 * 1000; // 10 minutes
   const taskQueue = new Map<string, { task: AgentTask; receipt?: ExecutionReceipt; expiresAt: number }>();
 
-  // Periodic cleanup of expired tasks
+  // Periodic cleanup of expired tasks and agent registrations
   const taskCleanupInterval = setInterval(() => {
     const now = Date.now();
     for (const [id, entry] of taskQueue) {
@@ -201,6 +220,9 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
         taskQueue.delete(id);
       }
     }
+    // Clean expired agent registrations
+    const stmtClean = moteDb.db.prepare("DELETE FROM agent_registry WHERE expires_at < ?");
+    stmtClean.run(now);
   }, 60_000);
 
   const app = new Hono();
@@ -485,7 +507,15 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
 
   // --- Audit: query tool audit log ---
   if (apiToken != null && apiToken !== "") {
-    app.use("/api/v1/*", bearerAuth({ token: apiToken }));
+    // Agent registry routes use their own auth middleware (supports device tokens)
+    app.use("/api/v1/*", async (c, next) => {
+      if (c.req.path.startsWith("/api/v1/agents")) {
+        await next();
+        return;
+      }
+      const mw = bearerAuth({ token: apiToken });
+      return mw(c, next);
+    });
   }
 
   app.get("/api/v1/audit/:motebitId", (c) => {
@@ -1128,6 +1158,186 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
     const pubKeyBytes = hexToBytes(device.public_key);
     const valid = await verifyExecutionReceipt(receipt, pubKeyBytes);
     return c.json({ valid });
+  });
+
+  // === Agent Discovery Registry ===
+
+  // Auth middleware for agent registry routes
+  app.use("/api/v1/agents/*", async (c, next) => {
+    const authHeader = c.req.header("authorization");
+    if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+      throw new HTTPException(401, { message: "Missing auth token" });
+    }
+    const token = authHeader.slice(7);
+
+    // Master token bypass
+    if (apiToken != null && apiToken !== "" && token === apiToken) {
+      await next();
+      return;
+    }
+
+    // Parse token to get motebitId, then verify
+    const claims = parseTokenPayloadUnsafe(token);
+    if (!claims?.mid) {
+      throw new HTTPException(401, { message: "Invalid token" });
+    }
+    const valid = await verifySignedTokenForDevice(token, claims.mid, identityManager);
+    if (!valid) {
+      throw new HTTPException(401, { message: "Token verification failed" });
+    }
+
+    // Store caller identity for route handlers
+    c.set("callerMotebitId" as never, claims.mid as never);
+    await next();
+  });
+
+  // POST /api/v1/agents/register — register/refresh an agent's MCP endpoint
+  app.post("/api/v1/agents/register", async (c) => {
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+
+    // For master token, require motebit_id in body
+    const body = await c.req.json<{ motebit_id?: string; endpoint_url: string; capabilities: string[]; metadata?: { name?: string; description?: string } }>();
+    const motebitId = callerMotebitId ?? body.motebit_id;
+    if (!motebitId || typeof motebitId !== "string") {
+      throw new HTTPException(400, { message: "Missing motebit_id" });
+    }
+
+    if (!body.endpoint_url || typeof body.endpoint_url !== "string") {
+      throw new HTTPException(400, { message: "Missing or invalid 'endpoint_url'" });
+    }
+    if (!Array.isArray(body.capabilities)) {
+      throw new HTTPException(400, { message: "Missing or invalid 'capabilities' (must be array)" });
+    }
+
+    // Look up public key from devices
+    const devices = await identityManager.listDevices(motebitId);
+    const deviceWithKey = devices.find((d) => d.public_key);
+    const publicKey = deviceWithKey ? deviceWithKey.public_key : "";
+
+    const now = Date.now();
+    const expiresAt = now + 15 * 60 * 1000; // 15 minutes
+
+    moteDb.db.prepare(`
+      INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, capabilities, metadata, registered_at, last_heartbeat, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(motebit_id) DO UPDATE SET
+        public_key = excluded.public_key,
+        endpoint_url = excluded.endpoint_url,
+        capabilities = excluded.capabilities,
+        metadata = excluded.metadata,
+        last_heartbeat = excluded.last_heartbeat,
+        expires_at = excluded.expires_at
+    `).run(
+      motebitId,
+      publicKey,
+      body.endpoint_url,
+      JSON.stringify(body.capabilities),
+      body.metadata ? JSON.stringify(body.metadata) : null,
+      now,
+      now,
+      expiresAt,
+    );
+
+    return c.json({ registered: true, motebit_id: motebitId, expires_at: expiresAt });
+  });
+
+  // POST /api/v1/agents/heartbeat — refresh TTL
+  app.post("/api/v1/agents/heartbeat", (c) => {
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    if (!callerMotebitId) {
+      throw new HTTPException(400, { message: "Cannot determine motebit_id from token" });
+    }
+
+    const now = Date.now();
+    const expiresAt = now + 15 * 60 * 1000;
+
+    const result = moteDb.db.prepare(`
+      UPDATE agent_registry SET last_heartbeat = ?, expires_at = ? WHERE motebit_id = ?
+    `).run(now, expiresAt, callerMotebitId);
+
+    if (result.changes === 0) {
+      throw new HTTPException(404, { message: "Agent not registered" });
+    }
+
+    return c.json({ ok: true });
+  });
+
+  // GET /api/v1/agents/discover — find agents
+  app.get("/api/v1/agents/discover", (c) => {
+    const capability = c.req.query("capability");
+    const motebitId = c.req.query("motebit_id");
+    const limitParam = Number(c.req.query("limit") ?? "20");
+    const limit = Math.min(Math.max(1, limitParam), 100);
+    const now = Date.now();
+
+    let rows: Array<Record<string, unknown>>;
+
+    if (capability && motebitId) {
+      rows = moteDb.db.prepare(`
+        SELECT * FROM agent_registry
+        WHERE expires_at > ? AND motebit_id = ?
+          AND EXISTS (SELECT 1 FROM json_each(capabilities) WHERE value = ?)
+        LIMIT ?
+      `).all(now, motebitId, capability, limit) as Array<Record<string, unknown>>;
+    } else if (capability) {
+      rows = moteDb.db.prepare(`
+        SELECT * FROM agent_registry
+        WHERE expires_at > ?
+          AND EXISTS (SELECT 1 FROM json_each(capabilities) WHERE value = ?)
+        LIMIT ?
+      `).all(now, capability, limit) as Array<Record<string, unknown>>;
+    } else if (motebitId) {
+      rows = moteDb.db.prepare(`
+        SELECT * FROM agent_registry WHERE expires_at > ? AND motebit_id = ? LIMIT ?
+      `).all(now, motebitId, limit) as Array<Record<string, unknown>>;
+    } else {
+      rows = moteDb.db.prepare(`
+        SELECT * FROM agent_registry WHERE expires_at > ? LIMIT ?
+      `).all(now, limit) as Array<Record<string, unknown>>;
+    }
+
+    const agents = rows.map((r) => ({
+      motebit_id: r.motebit_id,
+      public_key: r.public_key,
+      endpoint_url: r.endpoint_url,
+      capabilities: JSON.parse(r.capabilities as string) as string[],
+      metadata: r.metadata ? JSON.parse(r.metadata as string) as Record<string, unknown> : null,
+    }));
+
+    return c.json({ agents });
+  });
+
+  // GET /api/v1/agents/:motebitId — get specific agent
+  app.get("/api/v1/agents/:motebitId", (c) => {
+    const motebitId = c.req.param("motebitId");
+    const now = Date.now();
+
+    const row = moteDb.db.prepare(`
+      SELECT * FROM agent_registry WHERE motebit_id = ? AND expires_at > ?
+    `).get(motebitId, now) as Record<string, unknown> | undefined;
+
+    if (!row) {
+      throw new HTTPException(404, { message: "Agent not found" });
+    }
+
+    return c.json({
+      motebit_id: row.motebit_id,
+      public_key: row.public_key,
+      endpoint_url: row.endpoint_url,
+      capabilities: JSON.parse(row.capabilities as string) as string[],
+      metadata: row.metadata ? JSON.parse(row.metadata as string) as Record<string, unknown> : null,
+    });
+  });
+
+  // DELETE /api/v1/agents/deregister — remove registration
+  app.delete("/api/v1/agents/deregister", (c) => {
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    if (!callerMotebitId) {
+      throw new HTTPException(400, { message: "Cannot determine motebit_id from token" });
+    }
+
+    moteDb.db.prepare(`DELETE FROM agent_registry WHERE motebit_id = ?`).run(callerMotebitId);
+    return c.json({ ok: true });
   });
 
   function close(): void {

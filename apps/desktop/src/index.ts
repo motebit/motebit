@@ -803,6 +803,9 @@ export class DesktopApp {
           ok: boolean; hash: string; previousHash?: string; toolCount: number;
           toolNames: string[]; diff?: { added: string[]; removed: string[] };
         }>;
+        readonly isMotebit: boolean;
+        readonly verifiedIdentity: { verified: boolean; motebit_id?: string; public_key?: string } | null;
+        readonly serverConfig: McpServerConfig;
       };
     }>);
     const adapter = new mcpModule.McpClientAdapter(config);
@@ -821,6 +824,14 @@ export class DesktopApp {
     // Pin the current manifest hash and tool names
     config.toolManifestHash = manifestCheck.hash;
     config.pinnedToolNames = manifestCheck.toolNames;
+
+    // Pin motebit public key on first verified connect
+    if (adapter.isMotebit && adapter.verifiedIdentity?.verified === true) {
+      const verifiedKey = adapter.verifiedIdentity.public_key;
+      if (verifiedKey && !config.motebitPublicKey) {
+        config.motebitPublicKey = verifiedKey;
+      }
+    }
 
     // Register tools into a temporary registry, then merge into runtime
     const tempRegistry = new SimpleToolRegistry();
