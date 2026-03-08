@@ -298,6 +298,21 @@ export class PolicyGate {
       needsApproval = profile.requiresApproval;
     }
 
+    // 7. Motebit type differentiation — adjust approval based on remote agent type
+    if (ctx.remoteMotebitType === "service") {
+      // Service motebits are expected to call tools — lower threshold by one risk level.
+      // R1 tools auto-approve (no approval needed) for service callers.
+      if (needsApproval && profile.risk <= RiskLevel.R1_DRAFT) {
+        needsApproval = false;
+      }
+    } else if (ctx.remoteMotebitType === "personal") {
+      // Personal motebits inbound: stricter — require approval for anything above R0.
+      if (profile.risk > RiskLevel.R0_READ) {
+        needsApproval = true;
+      }
+    }
+    // collaborative: use standard policy (no adjustment), logged via normal audit
+
     const decision: PolicyDecision = {
       allowed: true,
       requiresApproval: needsApproval,

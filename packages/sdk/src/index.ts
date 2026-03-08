@@ -20,6 +20,12 @@ export enum AgentTrustLevel {
   Blocked = "blocked",
 }
 
+export enum MotebitType {
+  Personal = "personal",
+  Service = "service",
+  Collaborative = "collaborative",
+}
+
 export interface AgentTrustRecord {
   motebit_id: string;
   remote_motebit_id: string;
@@ -233,6 +239,8 @@ export interface TurnContext {
   callerMotebitId?: string;
   /** Caller trust level — set in MCP server mode for identity-aware policy decisions. */
   callerTrustLevel?: AgentTrustLevel;
+  /** Type of the remote motebit making the call (personal/service/collaborative). */
+  remoteMotebitType?: string;
 }
 
 export interface InjectionWarning {

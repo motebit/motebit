@@ -45,6 +45,7 @@ type McpClientAdapter = {
   disconnect(): Promise<void>;
   getAndResetDelegationReceipts?(): import("@motebit/sdk").ExecutionReceipt[];
   isMotebit?: boolean;
+  motebitType?: "personal" | "service" | "collaborative";
   serverName?: string;
   getTools?(): import("@motebit/sdk").ToolDefinition[];
 };
@@ -97,6 +98,8 @@ export interface McpServerConfig {
   pinnedToolNames?: string[];
   /** This server is a motebit — verify identity on connect. */
   motebit?: boolean;
+  /** Type of the remote motebit — determines default trust and policy behavior. */
+  motebitType?: "personal" | "service" | "collaborative";
   /** Pinned public key hex (set on first verified connect). */
   motebitPublicKey?: string;
 }
@@ -1827,7 +1830,7 @@ export class MotebitRuntime {
    * If no record exists, creates one at FirstContact level.
    * If one exists, bumps interaction_count and last_seen_at.
    */
-  async recordAgentInteraction(remoteMotebitId: string, publicKey?: string): Promise<AgentTrustRecord | null> {
+  async recordAgentInteraction(remoteMotebitId: string, publicKey?: string, motebitType?: string): Promise<AgentTrustRecord | null> {
     if (this.agentTrustStore == null) return null;
     const now = Date.now();
     const existing = await this.agentTrustStore.getAgentTrust(this.motebitId, remoteMotebitId);
@@ -1837,6 +1840,7 @@ export class MotebitRuntime {
         last_seen_at: now,
         interaction_count: existing.interaction_count + 1,
         public_key: publicKey ?? existing.public_key,
+        notes: motebitType ? `type:${motebitType}` : existing.notes,
       };
       await this.agentTrustStore.setAgentTrust(updated);
       return updated;
@@ -1849,6 +1853,7 @@ export class MotebitRuntime {
       first_seen_at: now,
       last_seen_at: now,
       interaction_count: 1,
+      notes: motebitType ? `type:${motebitType}` : undefined,
     };
     await this.agentTrustStore.setAgentTrust(record);
     return record;

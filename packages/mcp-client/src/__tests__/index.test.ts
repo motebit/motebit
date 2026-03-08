@@ -1226,3 +1226,79 @@ describe("McpClientAdapter — motebit caller identity", () => {
     expect(transportOpts.requestInit.headers["Authorization"]).toBe("Bearer motebit:mock-signed-token");
   });
 });
+
+// ============================================================
+// motebitType getter — taxonomy support
+// ============================================================
+
+describe("McpClientAdapter — motebitType", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListTools.mockResolvedValue(mcpToolsResponse([]));
+    mockConnect.mockResolvedValue(undefined);
+  });
+
+  it("returns undefined when neither motebit nor motebitType is set", () => {
+    const adapter = new McpClientAdapter(stdioConfig());
+    expect(adapter.motebitType).toBeUndefined();
+    expect(adapter.isMotebit).toBe(false);
+  });
+
+  it("defaults to 'service' when motebit:true is set without motebitType", () => {
+    const adapter = new McpClientAdapter(stdioConfig({ motebit: true } as Partial<McpServerConfig>));
+    expect(adapter.motebitType).toBe("service");
+    expect(adapter.isMotebit).toBe(true);
+  });
+
+  it("returns 'personal' when motebitType is set to personal", () => {
+    const adapter = new McpClientAdapter(stdioConfig({ motebitType: "personal" } as Partial<McpServerConfig>));
+    expect(adapter.motebitType).toBe("personal");
+    expect(adapter.isMotebit).toBe(true);
+  });
+
+  it("returns 'service' when motebitType is set to service", () => {
+    const adapter = new McpClientAdapter(stdioConfig({ motebitType: "service" } as Partial<McpServerConfig>));
+    expect(adapter.motebitType).toBe("service");
+    expect(adapter.isMotebit).toBe(true);
+  });
+
+  it("returns 'collaborative' when motebitType is set to collaborative", () => {
+    const adapter = new McpClientAdapter(stdioConfig({ motebitType: "collaborative" } as Partial<McpServerConfig>));
+    expect(adapter.motebitType).toBe("collaborative");
+    expect(adapter.isMotebit).toBe(true);
+  });
+
+  it("motebitType overrides motebit:true default", () => {
+    const adapter = new McpClientAdapter(stdioConfig({
+      motebit: true,
+      motebitType: "collaborative",
+    } as Partial<McpServerConfig>));
+    expect(adapter.motebitType).toBe("collaborative");
+  });
+
+  it("isMotebit returns true when only motebitType is set (no motebit flag)", () => {
+    const adapter = new McpClientAdapter(stdioConfig({ motebitType: "personal" } as Partial<McpServerConfig>));
+    expect(adapter.isMotebit).toBe(true);
+    // motebit flag is not set
+    expect(adapter.serverConfig.motebit).toBeUndefined();
+  });
+
+  it("verifies identity when motebitType is set without motebit flag", async () => {
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
+      { name: "motebit_identity", description: "Identity" },
+    ]));
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: "text", text: JSON.stringify({ motebit_id: "mote-typed", public_key: "ab".repeat(32) }) }],
+      isError: false,
+    });
+
+    const adapter = new McpClientAdapter(httpConfig({
+      name: "typed-srv",
+      motebitType: "service",
+    } as Partial<McpServerConfig>));
+    await adapter.connect();
+
+    expect(adapter.verifiedIdentity?.verified).toBe(true);
+    expect(adapter.verifiedIdentity?.motebit_id).toBe("mote-typed");
+  });
+});

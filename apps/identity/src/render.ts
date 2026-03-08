@@ -64,6 +64,61 @@ function escapeHtml(str: string): string {
 // Render
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Service card section — only rendered for type === "service"
+// ---------------------------------------------------------------------------
+
+function renderServiceSection(identity: MotebitIdentityFile): string {
+  if (identity.type !== "service") return "";
+
+  const nameHtml = identity.service_name
+    ? `<h3 class="service-name">${escapeHtml(identity.service_name)}</h3>`
+    : "";
+
+  const descHtml = identity.service_description
+    ? `<p class="service-description">${escapeHtml(identity.service_description)}</p>`
+    : "";
+
+  const capabilitiesHtml = identity.capabilities && identity.capabilities.length > 0
+    ? `<div class="capabilities-tags">
+        ${identity.capabilities.map(c => `<span class="capability-tag">${escapeHtml(c)}</span>`).join("")}
+      </div>`
+    : "";
+
+  const urlHtml = identity.service_url
+    ? `<div class="meta-row">
+        <span class="meta-label">Service URL</span>
+        <a class="meta-value service-link" href="${escapeHtml(identity.service_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(identity.service_url)}</a>
+      </div>`
+    : "";
+
+  const termsHtml = identity.terms_url
+    ? `<div class="meta-row">
+        <span class="meta-label">Terms</span>
+        <a class="meta-value service-link" href="${escapeHtml(identity.terms_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(identity.terms_url)}</a>
+      </div>`
+    : "";
+
+  return `
+    <div class="card-section service-section">
+      ${nameHtml}
+      ${descHtml}
+      ${capabilitiesHtml}
+      ${urlHtml}
+      ${termsHtml}
+    </div>
+  `;
+}
+
+// ---------------------------------------------------------------------------
+// Type badge
+// ---------------------------------------------------------------------------
+
+function typeBadge(identity: MotebitIdentityFile): string {
+  const t = identity.type ?? "personal";
+  return `<div class="type-badge type-${escapeHtml(t)}">${escapeHtml(t)}</div>`;
+}
+
 export function renderProfileCard(
   container: HTMLElement,
   identity: MotebitIdentityFile,
@@ -99,11 +154,14 @@ export function renderProfileCard(
       </div>
     `).join("");
 
+  const serviceSection = renderServiceSection(identity);
+
   container.innerHTML = `
     <div class="profile-card">
       <div class="card-header">
         <div class="card-header-top">
           <div class="spec-badge">${escapeHtml(identity.spec)}</div>
+          ${typeBadge(identity)}
           <div class="verification-badge ${statusClass}">
             <span class="status-icon">${statusIcon}</span>
             <span>${statusText}</span>
@@ -137,6 +195,8 @@ export function renderProfileCard(
           <span class="meta-value mono">${escapeHtml(truncateId(identity.owner_id))}</span>
         </div>
       </div>
+
+      ${serviceSection}
 
       <div class="card-section">
         <h3>Governance</h3>

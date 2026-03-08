@@ -99,6 +99,8 @@ interface McpServerConfig {
   authToken?: string;
   /** Known callers: motebit_id -> { publicKey hex, trustLevel } */
   knownCallers?: Map<string, { publicKey: string; trustLevel: AgentTrustLevel }>;
+  /** What type of motebit this server represents. Affects default inbound policy. */
+  motebitType?: "personal" | "service" | "collaborative";
 }
 
 // === Risk → MCP annotation mapping ===
@@ -462,10 +464,14 @@ export class McpServerAdapter {
         if (this.deps.identityFileContent) {
           return fmt(this.deps.identityFileContent);
         }
-        return fmt({
+        const identity: Record<string, unknown> = {
           motebit_id: this.deps.motebitId,
           public_key: this.deps.publicKeyHex ?? null,
-        });
+        };
+        if (this.config.motebitType) {
+          identity.motebit_type = this.config.motebitType;
+        }
+        return fmt(identity);
       },
     );
 

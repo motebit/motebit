@@ -264,6 +264,126 @@ describe("update", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Service identity
+// ---------------------------------------------------------------------------
+
+describe("service identity", () => {
+  it("generates and verifies a service identity file", async () => {
+    const kp = await makeKeypairHex();
+
+    const content = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        createdAt: DEFAULTS.createdAt,
+        publicKeyHex: kp.publicKeyHex,
+        service: {
+          type: "service",
+          service_name: "Flight Search",
+          service_description: "Search and book flights across major airlines",
+          service_url: "https://flights.example.com",
+          capabilities: ["flight_search", "flight_booking", "price_alerts"],
+          terms_url: "https://flights.example.com/terms",
+        },
+      },
+      kp.privateKey,
+    );
+
+    // Should contain service fields in YAML
+    expect(content).toContain("service");
+    expect(content).toContain("Flight Search");
+    expect(content).toContain("flight_search");
+
+    // Parse
+    const parsed = parse(content);
+    expect(parsed.frontmatter.type).toBe("service");
+    expect(parsed.frontmatter.service_name).toBe("Flight Search");
+    expect(parsed.frontmatter.service_description).toBe("Search and book flights across major airlines");
+    expect(parsed.frontmatter.service_url).toBe("https://flights.example.com");
+    expect(parsed.frontmatter.capabilities).toEqual(["flight_search", "flight_booking", "price_alerts"]);
+    expect(parsed.frontmatter.terms_url).toBe("https://flights.example.com/terms");
+
+    // Verify
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+    expect(result.identity).not.toBeNull();
+    expect(result.identity!.type).toBe("service");
+    expect(result.identity!.service_name).toBe("Flight Search");
+    expect(result.identity!.capabilities).toEqual(["flight_search", "flight_booking", "price_alerts"]);
+  });
+
+  it("service fields are tamper-proof", async () => {
+    const kp = await makeKeypairHex();
+
+    const content = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        publicKeyHex: kp.publicKeyHex,
+        service: {
+          type: "service",
+          service_name: "Flight Search",
+          service_description: "Search flights",
+          capabilities: ["flight_search"],
+        },
+      },
+      kp.privateKey,
+    );
+
+    // Tamper: change service_name
+    const tampered = content.replace("Flight Search", "Malicious Service");
+    const result = await verify(tampered);
+    expect(result.valid).toBe(false);
+  });
+
+  it("personal identity without service fields still works", async () => {
+    const kp = await makeKeypairHex();
+
+    const content = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        publicKeyHex: kp.publicKeyHex,
+      },
+      kp.privateKey,
+    );
+
+    const parsed = parse(content);
+    expect(parsed.frontmatter.type).toBeUndefined();
+    expect(parsed.frontmatter.service_name).toBeUndefined();
+    expect(parsed.frontmatter.capabilities).toBeUndefined();
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+  });
+
+  it("service identity with standalone verify", async () => {
+    const kp = await makeKeypairHex();
+
+    const content = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        publicKeyHex: kp.publicKeyHex,
+        service: {
+          type: "service",
+          service_name: "Test Service",
+          service_description: "A test service",
+          capabilities: ["cap_a", "cap_b"],
+        },
+      },
+      kp.privateKey,
+    );
+
+    const result = await standaloneVerify(content);
+    expect(result.valid).toBe(true);
+    expect(result.identity!.type).toBe("service");
+    expect(result.identity!.service_name).toBe("Test Service");
+    expect(result.identity!.capabilities).toEqual(["cap_a", "cap_b"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Cross-compatibility: identity-file generate → @motebit/verify verify
 // ---------------------------------------------------------------------------
 // This locks the contract between the two packages. identity-file generates

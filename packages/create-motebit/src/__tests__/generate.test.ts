@@ -156,6 +156,61 @@ describe("generateIdentity", () => {
   });
 });
 
+describe("service identity generation", () => {
+  it("produces a service motebit.md that passes verification", async () => {
+    const result = await generateIdentity({
+      name: "flight-search",
+      trustMode: "guarded",
+      passphrase: "test-passphrase",
+      service: {
+        type: "service",
+        service_name: "Flight Search",
+        service_description: "Search and book flights across major airlines",
+        capabilities: ["flight_search", "flight_booking"],
+        service_url: "https://flights.example.com",
+      },
+    });
+
+    const verification = await verify(result.identityFileContent);
+    expect(verification.valid).toBe(true);
+    expect(verification.identity!.type).toBe("service");
+    expect(verification.identity!.service_name).toBe("Flight Search");
+    expect(verification.identity!.service_description).toBe("Search and book flights across major airlines");
+    expect(verification.identity!.capabilities).toEqual(["flight_search", "flight_booking"]);
+    expect(verification.identity!.service_url).toBe("https://flights.example.com");
+  });
+
+  it("uses service governance presets with higher max_risk_auto", async () => {
+    const result = await generateIdentity({
+      name: "test-service",
+      trustMode: "guarded",
+      passphrase: "pw",
+      service: {
+        type: "service",
+        service_name: "Test Service",
+        service_description: "A test service",
+      },
+    });
+
+    const verification = await verify(result.identityFileContent);
+    expect(verification.identity!.governance.max_risk_auto).toBe("R2_WRITE");
+    expect(verification.identity!.governance.require_approval_above).toBe("R2_WRITE");
+  });
+
+  it("personal identity is unchanged when service is not provided", async () => {
+    const result = await generateIdentity({
+      name: "personal-agent",
+      trustMode: "guarded",
+      passphrase: "pw",
+    });
+
+    const verification = await verify(result.identityFileContent);
+    expect(verification.identity!.type).toBeUndefined();
+    expect(verification.identity!.service_name).toBeUndefined();
+    expect(verification.identity!.governance.max_risk_auto).toBe("R1_DRAFT");
+  });
+});
+
 describe("toHex / fromHex round-trip", () => {
   it("round-trips correctly", () => {
     const original = new Uint8Array([0, 1, 127, 128, 255]);

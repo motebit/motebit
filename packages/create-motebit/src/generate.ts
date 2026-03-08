@@ -151,11 +151,26 @@ export async function decrypt(
 // YAML serialization (inlined from @motebit/identity-file)
 // ---------------------------------------------------------------------------
 
+export interface ServiceIdentityOptions {
+  type?: "personal" | "service" | "collaborative";
+  service_name?: string;
+  service_description?: string;
+  service_url?: string;
+  capabilities?: string[];
+  terms_url?: string;
+}
+
 interface IdentityFileData {
   spec: string;
   motebit_id: string;
   created_at: string;
   owner_id: string;
+  type?: string;
+  service_name?: string;
+  service_description?: string;
+  service_url?: string;
+  capabilities?: string[];
+  terms_url?: string;
   identity: { algorithm: string; public_key: string };
   governance: {
     trust_mode: string;
@@ -277,6 +292,28 @@ const GOVERNANCE_PRESETS: Record<
   },
 };
 
+/** Service-appropriate governance: higher max_risk_auto since services execute tools */
+const SERVICE_GOVERNANCE: Record<
+  TrustMode,
+  { max_risk_auto: string; require_approval_above: string; deny_above: string }
+> = {
+  minimal: {
+    max_risk_auto: "R1_DRAFT",
+    require_approval_above: "R1_DRAFT",
+    deny_above: "R3_EXECUTE",
+  },
+  guarded: {
+    max_risk_auto: "R2_WRITE",
+    require_approval_above: "R2_WRITE",
+    deny_above: "R4_MONEY",
+  },
+  full: {
+    max_risk_auto: "R3_EXECUTE",
+    require_approval_above: "R3_EXECUTE",
+    deny_above: "R4_MONEY",
+  },
+};
+
 // ---------------------------------------------------------------------------
 // Signature
 // ---------------------------------------------------------------------------
@@ -307,12 +344,13 @@ async function encryptPrivateKey(
 // Public API
 // ---------------------------------------------------------------------------
 
-export { GOVERNANCE_PRESETS };
+export { GOVERNANCE_PRESETS, SERVICE_GOVERNANCE };
 
 export async function generateIdentity(opts: {
   name: string;
   trustMode: TrustMode;
   passphrase: string;
+  service?: ServiceIdentityOptions;
 }): Promise<GenerateIdentityResult> {
   // Generate Ed25519 keypair
   const { secretKey, publicKey } = await ed.keygenAsync();
@@ -323,13 +361,27 @@ export async function generateIdentity(opts: {
   const motebitId = crypto.randomUUID();
   const deviceId = crypto.randomUUID();
 
-  // Build identity file data
-  const gov = GOVERNANCE_PRESETS[opts.trustMode];
+  // Build identity file data — use service governance presets for service motebits
+  const isService = opts.service?.type === "service";
+  const gov = isService ? SERVICE_GOVERNANCE[opts.trustMode] : GOVERNANCE_PRESETS[opts.trustMode];
+
+  // Build service fields conditionally
+  const serviceFields: Partial<Pick<IdentityFileData, "type" | "service_name" | "service_description" | "service_url" | "capabilities" | "terms_url">> = {};
+  if (opts.service) {
+    if (opts.service.type) serviceFields.type = opts.service.type;
+    if (opts.service.service_name) serviceFields.service_name = opts.service.service_name;
+    if (opts.service.service_description) serviceFields.service_description = opts.service.service_description;
+    if (opts.service.service_url) serviceFields.service_url = opts.service.service_url;
+    if (opts.service.capabilities && opts.service.capabilities.length > 0) serviceFields.capabilities = opts.service.capabilities;
+    if (opts.service.terms_url) serviceFields.terms_url = opts.service.terms_url;
+  }
+
   const data: IdentityFileData = {
     spec: "motebit/identity@1.0",
     motebit_id: motebitId,
     created_at: new Date().toISOString(),
     owner_id: motebitId,
+    ...serviceFields,
     identity: {
       algorithm: "Ed25519",
       public_key: publicKeyHex,

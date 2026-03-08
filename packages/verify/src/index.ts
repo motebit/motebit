@@ -28,6 +28,14 @@ export interface MotebitIdentityFile {
   created_at: string;
   owner_id: string;
 
+  // Service identity fields (optional, spec §3.6)
+  type?: "personal" | "service" | "collaborative";
+  service_name?: string;
+  service_description?: string;
+  service_url?: string;
+  capabilities?: string[];
+  terms_url?: string;
+
   identity: {
     algorithm: "Ed25519";
     public_key: string;

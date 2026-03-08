@@ -1,8 +1,18 @@
+export type MotebitIdentityType = "personal" | "service" | "collaborative";
+
 export interface MotebitIdentityFile {
   spec: string;                    // "motebit/identity@1.0"
   motebit_id: string;             // UUID v7
   created_at: string;             // ISO 8601
   owner_id: string;
+
+  // Service identity fields (optional, spec §3.6)
+  type?: MotebitIdentityType;
+  service_name?: string;
+  service_description?: string;
+  service_url?: string;
+  capabilities?: string[];
+  terms_url?: string;
 
   identity: {
     algorithm: "Ed25519";

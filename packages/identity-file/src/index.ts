@@ -13,12 +13,12 @@
 import { sign as ed25519Sign, toBase64Url } from "@motebit/crypto";
 import { RiskLevel } from "@motebit/sdk";
 import { parse, verify } from "@motebit/verify";
-import type { MotebitIdentityFile } from "./schema.js";
+import type { MotebitIdentityFile, MotebitIdentityType } from "./schema.js";
 
 // Re-export parse/verify from @motebit/verify
 export { parse, verify };
 export type { VerifyResult } from "@motebit/verify";
-export type { MotebitIdentityFile } from "./schema.js";
+export type { MotebitIdentityFile, MotebitIdentityType } from "./schema.js";
 
 // --- YAML Serialization (hand-rolled for the flat/predictable schema) ---
 
@@ -99,6 +99,15 @@ const SIG_SUFFIX = " -->";
 
 // --- Public API ---
 
+export interface ServiceIdentityOptions {
+  type?: MotebitIdentityType;
+  service_name?: string;
+  service_description?: string;
+  service_url?: string;
+  capabilities?: string[];
+  terms_url?: string;
+}
+
 export interface GenerateOptions {
   motebitId: string;
   createdAt?: string;
@@ -108,17 +117,30 @@ export interface GenerateOptions {
   privacy?: Partial<MotebitIdentityFile["privacy"]>;
   memory?: Partial<MotebitIdentityFile["memory"]>;
   devices?: MotebitIdentityFile["devices"];
+  service?: ServiceIdentityOptions;
 }
 
 export async function generate(
   opts: GenerateOptions,
   privateKey: Uint8Array,
 ): Promise<string> {
+  // Build service fields conditionally
+  const serviceFields: Partial<Pick<MotebitIdentityFile, "type" | "service_name" | "service_description" | "service_url" | "capabilities" | "terms_url">> = {};
+  if (opts.service) {
+    if (opts.service.type) serviceFields.type = opts.service.type;
+    if (opts.service.service_name) serviceFields.service_name = opts.service.service_name;
+    if (opts.service.service_description) serviceFields.service_description = opts.service.service_description;
+    if (opts.service.service_url) serviceFields.service_url = opts.service.service_url;
+    if (opts.service.capabilities && opts.service.capabilities.length > 0) serviceFields.capabilities = opts.service.capabilities;
+    if (opts.service.terms_url) serviceFields.terms_url = opts.service.terms_url;
+  }
+
   const data: MotebitIdentityFile = {
     spec: "motebit/identity@1.0",
     motebit_id: opts.motebitId,
     created_at: opts.createdAt ?? new Date().toISOString(),
     owner_id: opts.ownerId,
+    ...serviceFields,
     identity: {
       algorithm: "Ed25519",
       public_key: opts.publicKeyHex,

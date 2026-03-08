@@ -337,6 +337,115 @@ describe("verify — files with devices", () => {
 });
 
 // ---------------------------------------------------------------------------
+// verify() — service identity files
+// ---------------------------------------------------------------------------
+
+describe("verify — service identity", () => {
+  it("verifies a service identity file with all service fields", async () => {
+    const kp = await makeKeypair();
+
+    const yaml = [
+      `spec: "motebit/identity@1.0"`,
+      `motebit_id: "test-service"`,
+      `created_at: "2026-01-15T00:00:00.000Z"`,
+      `owner_id: "owner-test"`,
+      `type: "service"`,
+      `service_name: "Flight Search"`,
+      `service_description: "Search and book flights"`,
+      `service_url: "https://flights.example.com"`,
+      `capabilities:`,
+      `  - flight_search`,
+      `  - flight_booking`,
+      `  - price_alerts`,
+      `terms_url: "https://flights.example.com/terms"`,
+      `identity:`,
+      `  algorithm: "Ed25519"`,
+      `  public_key: "${kp.publicKeyHex}"`,
+      `governance:`,
+      `  trust_mode: "guarded"`,
+      `  max_risk_auto: "R2_WRITE"`,
+      `  require_approval_above: "R2_WRITE"`,
+      `  deny_above: "R4_MONEY"`,
+      `  operator_mode: false`,
+      `privacy:`,
+      `  default_sensitivity: "personal"`,
+      `  retention_days:`,
+      `    none: 365`,
+      `    personal: 90`,
+      `  fail_closed: true`,
+      `memory:`,
+      `  half_life_days: 7`,
+      `  confidence_threshold: 0.3`,
+      `  per_turn_limit: 5`,
+      `devices: []`,
+    ].join("\n");
+
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+    expect(result.identity!.type).toBe("service");
+    expect(result.identity!.service_name).toBe("Flight Search");
+    expect(result.identity!.service_description).toBe("Search and book flights");
+    expect(result.identity!.service_url).toBe("https://flights.example.com");
+    expect(result.identity!.capabilities).toEqual(["flight_search", "flight_booking", "price_alerts"]);
+    expect(result.identity!.terms_url).toBe("https://flights.example.com/terms");
+  });
+
+  it("verifies a personal identity file without service fields", async () => {
+    const { content } = await generateValidFile();
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+    expect(result.identity!.type).toBeUndefined();
+    expect(result.identity!.service_name).toBeUndefined();
+    expect(result.identity!.capabilities).toBeUndefined();
+  });
+
+  it("detects tampering of service fields", async () => {
+    const kp = await makeKeypair();
+
+    const yaml = [
+      `spec: "motebit/identity@1.0"`,
+      `motebit_id: "test-service"`,
+      `created_at: "2026-01-15T00:00:00.000Z"`,
+      `owner_id: "owner-test"`,
+      `type: "service"`,
+      `service_name: "Flight Search"`,
+      `identity:`,
+      `  algorithm: "Ed25519"`,
+      `  public_key: "${kp.publicKeyHex}"`,
+      `governance:`,
+      `  trust_mode: "guarded"`,
+      `  max_risk_auto: "R1_DRAFT"`,
+      `  require_approval_above: "R1_DRAFT"`,
+      `  deny_above: "R4_MONEY"`,
+      `  operator_mode: false`,
+      `privacy:`,
+      `  default_sensitivity: "personal"`,
+      `  retention_days:`,
+      `    none: 365`,
+      `  fail_closed: true`,
+      `memory:`,
+      `  half_life_days: 7`,
+      `  confidence_threshold: 0.3`,
+      `  per_turn_limit: 5`,
+      `devices: []`,
+    ].join("\n");
+
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    // Tamper: change service_name
+    const tampered = content.replace("Flight Search", "Evil Service");
+    const result = await verify(tampered);
+    expect(result.valid).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Cross-compatibility with @motebit/identity-file
 // ---------------------------------------------------------------------------
 // NOTE: Cross-compat is now tested in @motebit/identity-file's test suite,

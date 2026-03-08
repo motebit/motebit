@@ -1525,3 +1525,120 @@ describe("MemoryGovernor", () => {
     expect(decisions[0]!.memoryClass).toBe(MemoryClass.PERSISTENT);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 8. PolicyGate — motebit type differentiation
+// ---------------------------------------------------------------------------
+describe("PolicyGate — motebit type differentiation", () => {
+  function freshCtx(overrides?: Partial<{
+    toolCallCount: number;
+    turnStartMs: number;
+    costAccumulated: number;
+    remoteMotebitType: string;
+  }>): {
+    turnId: string;
+    toolCallCount: number;
+    turnStartMs: number;
+    costAccumulated: number;
+    remoteMotebitType?: string;
+  } {
+    return {
+      turnId: "turn-type-test",
+      toolCallCount: 0,
+      turnStartMs: Date.now(),
+      costAccumulated: 0,
+      ...overrides,
+    };
+  }
+
+  describe("service motebit — lower approval threshold", () => {
+    it("auto-approves R1 tools for service motebits", () => {
+      const gate = new PolicyGate({ operatorMode: true });
+      const tool = makeTool("draft_email", "Draft an email");
+      const ctx = freshCtx({ remoteMotebitType: "service" });
+      const decision = gate.validate(tool, {}, ctx);
+      expect(decision.allowed).toBe(true);
+      expect(decision.requiresApproval).toBe(false);
+    });
+
+    it("still requires approval for R2+ tools from service motebits", () => {
+      const gate = new PolicyGate({ operatorMode: true });
+      const tool = makeTool("write_file", "Write a file");
+      const ctx = freshCtx({ remoteMotebitType: "service" });
+      const decision = gate.validate(tool, {}, ctx);
+      expect(decision.allowed).toBe(true);
+      expect(decision.requiresApproval).toBe(true);
+    });
+
+    it("auto-approves R0 tools for service motebits", () => {
+      const gate = new PolicyGate({ operatorMode: true });
+      const tool = makeTool("web_search", "Search the web");
+      const ctx = freshCtx({ remoteMotebitType: "service" });
+      const decision = gate.validate(tool, {}, ctx);
+      expect(decision.allowed).toBe(true);
+      expect(decision.requiresApproval).toBe(false);
+    });
+  });
+
+  describe("personal motebit — stricter inbound policy", () => {
+    it("requires approval for R1 tools from personal motebits", () => {
+      const gate = new PolicyGate({ operatorMode: true });
+      const tool = makeTool("draft_email", "Draft an email");
+      const ctx = freshCtx({ remoteMotebitType: "personal" });
+      const decision = gate.validate(tool, {}, ctx);
+      expect(decision.allowed).toBe(true);
+      expect(decision.requiresApproval).toBe(true);
+    });
+
+    it("allows R0 tools without approval from personal motebits", () => {
+      const gate = new PolicyGate({ operatorMode: true });
+      const tool = makeTool("web_search", "Search the web");
+      const ctx = freshCtx({ remoteMotebitType: "personal" });
+      const decision = gate.validate(tool, {}, ctx);
+      expect(decision.allowed).toBe(true);
+      expect(decision.requiresApproval).toBe(false);
+    });
+
+    it("requires approval for R2 tools from personal motebits", () => {
+      const gate = new PolicyGate({ operatorMode: true });
+      const tool = makeTool("write_file", "Write a file");
+      const ctx = freshCtx({ remoteMotebitType: "personal" });
+      const decision = gate.validate(tool, {}, ctx);
+      expect(decision.allowed).toBe(true);
+      expect(decision.requiresApproval).toBe(true);
+    });
+  });
+
+  describe("collaborative motebit — standard policy", () => {
+    it("uses standard approval logic for collaborative motebits", () => {
+      const gate = new PolicyGate({ operatorMode: true });
+      const tool = makeTool("web_search", "Search the web");
+      const ctx = freshCtx({ remoteMotebitType: "collaborative" });
+      const decision = gate.validate(tool, {}, ctx);
+      expect(decision.allowed).toBe(true);
+      // R0 does not require approval under standard policy
+      expect(decision.requiresApproval).toBe(false);
+    });
+
+    it("requires approval for R2+ under standard policy", () => {
+      const gate = new PolicyGate({ operatorMode: true });
+      const tool = makeTool("write_file", "Write a file");
+      const ctx = freshCtx({ remoteMotebitType: "collaborative" });
+      const decision = gate.validate(tool, {}, ctx);
+      expect(decision.allowed).toBe(true);
+      expect(decision.requiresApproval).toBe(true);
+    });
+  });
+
+  describe("no motebit type — standard behavior", () => {
+    it("behaves as before when remoteMotebitType is not set", () => {
+      const gate = new PolicyGate({ operatorMode: true });
+      const tool = makeTool("draft_email", "Draft an email");
+      const ctx = freshCtx();
+      const decision = gate.validate(tool, {}, ctx);
+      expect(decision.allowed).toBe(true);
+      // R1 does not require approval in standard legacy mode
+      expect(decision.requiresApproval).toBe(false);
+    });
+  });
+});

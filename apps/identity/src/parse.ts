@@ -13,6 +13,14 @@ export interface MotebitIdentityFile {
   created_at: string;
   owner_id: string;
 
+  // Service identity fields (optional)
+  type?: "personal" | "service" | "collaborative";
+  service_name?: string;
+  service_description?: string;
+  service_url?: string;
+  capabilities?: string[];
+  terms_url?: string;
+
   identity: {
     algorithm: string;
     public_key: string;

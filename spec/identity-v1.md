@@ -127,7 +127,53 @@ Declares the agent's memory behavior.
 | `confidence_threshold` | number | yes | Minimum confidence for a memory to be retained. Range: 0.0 to 1.0. |
 | `per_turn_limit` | number | yes | Maximum number of new memories the agent may create per interaction turn. Positive integer. |
 
-### 3.6 — `devices`
+### 3.6 — Service Identity (optional)
+
+Service identity fields allow a `motebit.md` to describe an AI service — a motebit that accepts inbound calls rather than initiating outbound interactions. All fields in this section are optional. When absent, the identity defaults to `type: "personal"`.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | string | no | Identity type. One of: `"personal"`, `"service"`, `"collaborative"`. Defaults to `"personal"` when absent. |
+| `service_name` | string | no | Human-readable service name. SHOULD be present when `type` is `"service"`. |
+| `service_description` | string | no | Brief description of what the service does. |
+| `service_url` | string | no | URL where the service is reachable. SHOULD be HTTPS. |
+| `capabilities` | string[] | no | Declared capability list. Each entry is a short identifier (e.g., `"flight_search"`, `"price_alerts"`). |
+| `terms_url` | string | no | URL to terms of service or usage policy. |
+
+#### 3.6.1 — Identity Types
+
+| Type | Semantics |
+|------|-----------|
+| `personal` | A personal agent acting on behalf of a user. The default. |
+| `service` | An AI service that accepts inbound requests. Declares capabilities and may expose a service URL. |
+| `collaborative` | A multi-party agent with shared governance. Reserved for future use. |
+
+#### 3.6.2 — Capabilities
+
+The `capabilities` list is a YAML sequence of short string identifiers. There is no registry — capability names are application-defined. The list is informational: it declares what the service can do, but verification of actual capability is outside the scope of this specification.
+
+```yaml
+capabilities:
+  - flight_search
+  - flight_booking
+  - price_alerts
+```
+
+#### 3.6.3 — Service Governance Defaults
+
+Service motebits are expected to execute tools on behalf of callers. When generating a service identity, implementations SHOULD use governance defaults appropriate for autonomous operation:
+
+- `trust_mode: "guarded"` — services should still respect trust boundaries
+- `max_risk_auto: "R2_WRITE"` — services typically need write access to fulfill requests
+- Higher risk levels still require approval or are denied per the governance thresholds
+
+#### 3.6.4 — Backward Compatibility
+
+All service identity fields are optional. An identity file without these fields is a valid personal identity. Parsers MUST NOT reject files that lack service fields. The `type` field defaults to `"personal"` when absent.
+
+The signature covers all frontmatter fields including service fields, so they are tamper-proof when present.
+
+### 3.7 — `devices`
 
 Array of registered devices. MAY be empty. Each device entry:
 
@@ -255,6 +301,54 @@ devices:
 ```
 
 Note: The signature above is illustrative. A real file would contain a valid Ed25519 signature that passes verification against the declared public key.
+
+### 5.2 — Service Identity Example
+
+A `motebit.md` file for a service motebit:
+
+```markdown
+---
+spec: "motebit/identity@1.0"
+motebit_id: "019474a3-7e8b-7f1c-9d2e-4b8a1c3d5e6f"
+created_at: "2026-02-18T00:00:00.000Z"
+owner_id: "user_01HQXK9V3M"
+type: "service"
+service_name: "Flight Search"
+service_description: "Search and book flights across major airlines"
+service_url: "https://flights.example.com"
+capabilities:
+  - flight_search
+  - flight_booking
+  - price_alerts
+terms_url: "https://flights.example.com/terms"
+identity:
+  algorithm: "Ed25519"
+  public_key: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+governance:
+  trust_mode: "guarded"
+  max_risk_auto: "R2_WRITE"
+  require_approval_above: "R2_WRITE"
+  deny_above: "R4_MONEY"
+  operator_mode: false
+privacy:
+  default_sensitivity: "personal"
+  retention_days:
+    none: 365
+    personal: 90
+    medical: 30
+    financial: 30
+    secret: 7
+  fail_closed: true
+memory:
+  half_life_days: 7
+  confidence_threshold: 0.3
+  per_turn_limit: 5
+devices: []
+---
+<!-- motebit:sig:Ed25519:dGhpcyBpcyBhIHBsYWNlaG9sZGVyIHNpZ25hdHVyZQ -->
+```
+
+Note: When `type` is absent, the identity is treated as `"personal"`. The service fields (`service_name`, `service_description`, `service_url`, `capabilities`, `terms_url`) are only meaningful when `type` is `"service"`.
 
 ---
 

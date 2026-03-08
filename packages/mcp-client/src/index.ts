@@ -2,6 +2,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { ToolDefinition, ToolResult, ExecutionReceipt } from "@motebit/sdk";
 import { InMemoryToolRegistry } from "@motebit/tools";
 
+export { discoverByDns, discoverByWellKnown, discoverMotebit } from "./discovery.js";
+export type { DnsDiscoveryResult, ResolveTxtFn } from "./discovery.js";
+
 export interface McpServerConfig {
   name: string;
   transport: "stdio" | "http";
@@ -17,6 +20,8 @@ export interface McpServerConfig {
   pinnedToolNames?: string[];
   /** This server is a motebit — verify identity on connect. */
   motebit?: boolean;
+  /** Type of the remote motebit — determines default trust and policy behavior. */
+  motebitType?: "personal" | "service" | "collaborative";
   /** Pinned public key hex (set on first verified connect). */
   motebitPublicKey?: string;
   /** Caller's motebit ID — used to create signed auth tokens for motebit servers. */
@@ -135,7 +140,7 @@ export class McpClientAdapter {
 
       // Build request options with optional motebit auth
       const requestInit: Record<string, unknown> = {};
-      if (this.config.motebit && this.config.callerMotebitId && this.config.callerPrivateKey) {
+      if ((this.config.motebit || this.config.motebitType) && this.config.callerMotebitId && this.config.callerPrivateKey) {
         const token = await this.createCallerToken();
         if (token) {
           requestInit.headers = { "Authorization": `Bearer motebit:${token}` };
@@ -151,7 +156,7 @@ export class McpClientAdapter {
     await this.discoverTools();
 
     // Verify motebit identity if configured
-    if (this.config.motebit) {
+    if (this.config.motebit || this.config.motebitType) {
       await this.verifyMotebitIdentity();
     }
   }
@@ -398,7 +403,12 @@ export class McpClientAdapter {
 
   /** Whether this adapter is configured as a motebit server. */
   get isMotebit(): boolean {
-    return this.config.motebit === true;
+    return this.config.motebit === true || this.config.motebitType !== undefined;
+  }
+
+  /** Type of the remote motebit. Defaults to "service" when only motebit:true is set (backward compat). */
+  get motebitType(): "personal" | "service" | "collaborative" | undefined {
+    return this.config.motebitType ?? (this.config.motebit ? "service" : undefined);
   }
 
   /** Access to the server config (for reading pinned keys after connect). */

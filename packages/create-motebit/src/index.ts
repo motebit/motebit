@@ -14,7 +14,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
 import { homedir } from "node:os";
 import { generateIdentity } from "./generate.js";
-import type { TrustMode, EncryptedKey } from "./generate.js";
+import type { TrustMode, EncryptedKey, ServiceIdentityOptions } from "./generate.js";
 import { createRL, input, password, select } from "./prompts.js";
 
 // ---------------------------------------------------------------------------
@@ -125,7 +125,7 @@ const GITIGNORE = `node_modules/
 // guidedScaffold — interactive identity + project creation
 // ---------------------------------------------------------------------------
 
-async function guidedScaffold(targetDir: string, nonInteractive: boolean): Promise<void> {
+async function guidedScaffold(targetDir: string, nonInteractive: boolean, serviceMode: boolean): Promise<void> {
   console.log();
   console.log(`  ${bold("create-motebit")} ${dim(`v${VERSION}`)}`);
   console.log();
@@ -225,12 +225,75 @@ async function guidedScaffold(targetDir: string, nonInteractive: boolean): Promi
     rl.close();
   }
 
+  // Gather service fields if --service
+  let serviceOpts: ServiceIdentityOptions | undefined;
+  if (serviceMode && !nonInteractive) {
+    const rl2 = createRL();
+    console.log(`  ${bold("Service identity")}`);
+    console.log();
+
+    const serviceName = await input(rl2, "? Service name");
+    if (!serviceName) {
+      rl2.close();
+      console.log(`  ${red("!")} Service name is required with --service.`);
+      console.log();
+      process.exit(1);
+    }
+
+    const serviceDescription = await input(rl2, "? Service description");
+    if (!serviceDescription) {
+      rl2.close();
+      console.log(`  ${red("!")} Service description is required with --service.`);
+      console.log();
+      process.exit(1);
+    }
+
+    const capabilitiesRaw = await input(rl2, "? Capabilities (comma-separated)");
+    const capabilities = capabilitiesRaw
+      ? capabilitiesRaw.split(",").map(s => s.trim()).filter(Boolean)
+      : [];
+
+    const serviceUrl = await input(rl2, "? Service URL (optional)");
+
+    rl2.close();
+    console.log();
+
+    serviceOpts = {
+      type: "service",
+      service_name: serviceName,
+      service_description: serviceDescription,
+      capabilities: capabilities.length > 0 ? capabilities : undefined,
+      service_url: serviceUrl || undefined,
+    };
+  } else if (serviceMode && nonInteractive) {
+    // Non-interactive service mode: use env vars or defaults
+    const serviceName = process.env["MOTEBIT_SERVICE_NAME"];
+    const serviceDescription = process.env["MOTEBIT_SERVICE_DESCRIPTION"];
+    if (!serviceName || !serviceDescription) {
+      console.log(`  ${red("!")} --service with --yes requires MOTEBIT_SERVICE_NAME and MOTEBIT_SERVICE_DESCRIPTION env vars.`);
+      console.log();
+      process.exit(1);
+    }
+    const capabilitiesRaw = process.env["MOTEBIT_SERVICE_CAPABILITIES"];
+    const capabilities = capabilitiesRaw
+      ? capabilitiesRaw.split(",").map(s => s.trim()).filter(Boolean)
+      : [];
+    serviceOpts = {
+      type: "service",
+      service_name: serviceName,
+      service_description: serviceDescription,
+      capabilities: capabilities.length > 0 ? capabilities : undefined,
+      service_url: process.env["MOTEBIT_SERVICE_URL"] || undefined,
+    };
+  }
+
   // Generate identity
   console.log(`  Generating Ed25519 keypair...`);
   const result = await generateIdentity({
     name: dirName,
     trustMode,
     passphrase,
+    service: serviceOpts,
   });
   console.log(`  Signing identity file...`);
 
@@ -305,6 +368,16 @@ async function verifyCmd(filePath: string): Promise<void> {
     console.log(`    trust_mode   ${id.governance.trust_mode}`);
     console.log(`    created      ${dim(id.created_at)}`);
 
+    if (id.type) {
+      console.log(`    type         ${id.type}`);
+    }
+    if (id.service_name) {
+      console.log(`    service      ${id.service_name}`);
+    }
+    if (id.capabilities && id.capabilities.length > 0) {
+      console.log(`    capabilities ${id.capabilities.join(", ")}`);
+    }
+
     if (id.devices.length > 0) {
       console.log(`    devices      ${id.devices.length}`);
     }
@@ -340,6 +413,7 @@ function printHelp(): void {
   ${bold("Options:")}
 
     -y, --yes             Non-interactive mode (requires MOTEBIT_PASSPHRASE env var)
+    --service             Create a service motebit identity (prompts for service fields)
     -v, --version         Print version
     -h, --help            Print this help
 
@@ -389,8 +463,9 @@ async function main(): Promise<void> {
 
   // Default: guided scaffold
   const nonInteractive = args.includes("-y") || args.includes("--yes");
+  const serviceMode = args.includes("--service");
   const targetDir = command ?? ".";
-  await guidedScaffold(targetDir, nonInteractive);
+  await guidedScaffold(targetDir, nonInteractive, serviceMode);
 }
 
 main().catch((err: unknown) => {

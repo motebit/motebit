@@ -818,6 +818,7 @@ Available commands:
   /mcp trust <name>  Trust an MCP server
   /mcp untrust <name> Untrust an MCP server
   /discover [cap]    Discover agents on the relay (optional capability filter)
+  /discover dom.com  Discover motebit at domain via DNS/well-known
   /operator          Show operator mode status
   quit, exit         Exit
 `.trim());
@@ -1227,13 +1228,39 @@ Available commands:
     }
 
     case "discover": {
+      const discoverArg = args.trim();
+
+      // Domain-based discovery: argument contains a dot → DNS/well-known lookup
+      if (discoverArg && discoverArg.includes(".")) {
+        try {
+          const { discoverMotebit } = await import("@motebit/mcp-client");
+          const result = await discoverMotebit(discoverArg);
+          if (result.identityVerified) {
+            console.log(`\nFound motebit at ${result.domain}:`);
+            if (result.motebitId) console.log(`  ID: ${result.motebitId}`);
+            if (result.motebitType) console.log(`  Type: ${result.motebitType}`);
+            if (result.serviceName) console.log(`  Name: ${result.serviceName}`);
+            if (result.endpointUrl) console.log(`  Endpoint: ${result.endpointUrl}`);
+            console.log(`  Identity: verified \u2713`);
+            console.log(`\nUse /mcp add ${result.domain} to connect.`);
+          } else {
+            console.log(`No motebit found at ${discoverArg}: ${result.error ?? "unknown error"}`);
+          }
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.log(`Discovery error: ${message}`);
+        }
+        break;
+      }
+
+      // Relay-based discovery: no argument or capability filter
       const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
       if (!syncUrl) {
         console.log("No sync URL configured. Set --sync-url or MOTEBIT_SYNC_URL.");
         break;
       }
       try {
-        const capParam = args.trim() || undefined;
+        const capParam = discoverArg || undefined;
         const queryStr = capParam ? `?capability=${encodeURIComponent(capParam)}` : "";
         const token = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
         const headers: Record<string, string> = {};
