@@ -258,9 +258,15 @@ export class TauriMemoryStorage implements MemoryStorageAdapter {
     const needsAppFilter = query.min_confidence !== undefined || query.sensitivity_filter !== undefined;
     let sql = `SELECT * FROM memory_nodes WHERE ${conditions.join(" AND ")}`;
 
-    if (query.limit !== undefined && !needsAppFilter) {
-      sql += " LIMIT ?";
-      params.push(query.limit);
+    if (query.limit !== undefined) {
+      sql += " ORDER BY last_accessed DESC";
+      if (needsAppFilter) {
+        sql += " LIMIT ?";
+        params.push(Math.max(query.limit * 8, 200));
+      } else {
+        sql += " LIMIT ?";
+        params.push(query.limit);
+      }
     }
 
     const rows = await dbQuery<NodeRow>(this.invoke, sql, params);
@@ -284,7 +290,7 @@ export class TauriMemoryStorage implements MemoryStorageAdapter {
       results = results.filter((n) => allowed.includes(n.sensitivity));
     }
 
-    if (query.limit !== undefined && needsAppFilter) {
+    if (query.limit !== undefined) {
       results = results.slice(0, query.limit);
     }
 

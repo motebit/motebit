@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
 
 CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote ON memory_nodes (motebit_id);
 CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote_tomb_pin ON memory_nodes (motebit_id, tombstoned, pinned);
+CREATE INDEX IF NOT EXISTS idx_memory_nodes_retrieve ON memory_nodes (motebit_id, tombstoned, last_accessed DESC);
 
 CREATE TABLE IF NOT EXISTS memory_edges (
   edge_id TEXT PRIMARY KEY,
@@ -470,10 +471,18 @@ export class SqliteMemoryStorage implements MemoryStorageAdapter {
 
     let sql = `SELECT * FROM memory_nodes WHERE ${conditions.join(" AND ")}`;
 
-    // Only apply SQL LIMIT when no app-level filters remain (they may reduce the result set)
-    if (query.limit !== undefined && !this.needsAppFilter(query)) {
-      sql += " LIMIT ?";
-      params.push(query.limit);
+    // When limit is set, always ORDER BY last_accessed DESC and push a bounded LIMIT to SQL.
+    // When app-level filters are needed, over-fetch with a generous cap so the filter
+    // still has enough candidates after culling.
+    if (query.limit !== undefined) {
+      sql += " ORDER BY last_accessed DESC";
+      if (this.needsAppFilter(query)) {
+        sql += " LIMIT ?";
+        params.push(Math.max(query.limit * 8, 200));
+      } else {
+        sql += " LIMIT ?";
+        params.push(query.limit);
+      }
     }
 
     const rows = this.db.prepare(sql).all(...params) as NodeRow[];
@@ -500,7 +509,7 @@ export class SqliteMemoryStorage implements MemoryStorageAdapter {
       );
     }
 
-    if (query.limit !== undefined && this.needsAppFilter(query)) {
+    if (query.limit !== undefined) {
       results = results.slice(0, query.limit);
     }
 
@@ -1968,6 +1977,11 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   if (userVersion < 16) {
     driver.exec("CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote_tomb_pin ON memory_nodes (motebit_id, tombstoned, pinned)");
     driver.pragma("user_version = 16");
+  }
+
+  if (userVersion < 17) {
+    driver.exec("CREATE INDEX IF NOT EXISTS idx_memory_nodes_retrieve ON memory_nodes (motebit_id, tombstoned, last_accessed DESC)");
+    driver.pragma("user_version = 17");
   }
 
   const eventStore = new SqliteEventStore(driver);

@@ -54,8 +54,9 @@ export class IdbMemoryStorage implements MemoryStorageAdapter {
       );
     }
 
-    // Apply limit
+    // Sort by recency and apply limit
     if (query.limit !== undefined) {
+      results.sort((a, b) => b.last_accessed - a.last_accessed);
       results = results.slice(0, query.limit);
     }
 

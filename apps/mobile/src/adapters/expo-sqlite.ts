@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
 );
 CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote ON memory_nodes (motebit_id);
 CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote_tomb_pin ON memory_nodes (motebit_id, tombstoned, pinned);
+CREATE INDEX IF NOT EXISTS idx_memory_nodes_retrieve ON memory_nodes (motebit_id, tombstoned, last_accessed DESC);
 
 CREATE TABLE IF NOT EXISTS memory_edges (
   edge_id TEXT PRIMARY KEY,
@@ -400,9 +401,15 @@ export class ExpoSqliteMemoryStorage implements MemoryStorageAdapter {
     const needsAppFilter = query.min_confidence !== undefined || query.sensitivity_filter !== undefined;
     let sql = `SELECT * FROM memory_nodes WHERE ${conditions.join(" AND ")}`;
 
-    if (query.limit !== undefined && !needsAppFilter) {
-      sql += " LIMIT ?";
-      params.push(query.limit);
+    if (query.limit !== undefined) {
+      sql += " ORDER BY last_accessed DESC";
+      if (needsAppFilter) {
+        sql += " LIMIT ?";
+        params.push(Math.max(query.limit * 8, 200));
+      } else {
+        sql += " LIMIT ?";
+        params.push(query.limit);
+      }
     }
 
     const rows = this.db.getAllSync<NodeRow>(sql, params);
@@ -419,7 +426,7 @@ export class ExpoSqliteMemoryStorage implements MemoryStorageAdapter {
       results = results.filter((n) => allowed.includes(n.sensitivity));
     }
 
-    if (query.limit !== undefined && needsAppFilter) results = results.slice(0, query.limit);
+    if (query.limit !== undefined) results = results.slice(0, query.limit);
     return results;
   }
 
@@ -1381,6 +1388,16 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
       // Index may already exist on new DBs
     }
     db.execSync("PRAGMA user_version = 9");
+  }
+
+  // Migration 10: retrieval index for ORDER BY last_accessed DESC + LIMIT
+  if (userVersion < 10) {
+    try {
+      db.execSync("CREATE INDEX IF NOT EXISTS idx_memory_nodes_retrieve ON memory_nodes (motebit_id, tombstoned, last_accessed DESC)");
+    } catch {
+      // Index may already exist on new DBs
+    }
+    db.execSync("PRAGMA user_version = 10");
   }
 
   return {

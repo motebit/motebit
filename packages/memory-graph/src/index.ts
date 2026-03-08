@@ -102,6 +102,20 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   return dot / denom;
 }
 
+/**
+ * Dot product for L2-normalized unit vectors.
+ * Equivalent to cosine similarity when both vectors have unit norm,
+ * but skips 2 norm accumulations and 2 sqrt calls.
+ */
+function dotProduct(a: number[], b: number[]): number {
+  if (a.length !== b.length || a.length === 0) return 0;
+  let sum = 0;
+  for (let i = 0; i < a.length; i++) {
+    sum += a[i]! * b[i]!;
+  }
+  return sum;
+}
+
 // === In-Memory Adapter ===
 
 export class InMemoryMemoryStorage implements MemoryStorageAdapter {
@@ -149,6 +163,7 @@ export class InMemoryMemoryStorage implements MemoryStorageAdapter {
     }
 
     if (query.limit !== undefined) {
+      results.sort((a, b) => b.last_accessed - a.last_accessed);
       results = results.slice(0, query.limit);
     }
 
@@ -468,7 +483,7 @@ export class MemoryGraph {
         );
 
     const scored = filtered.map((node) => {
-      const similarity = cosineSimilarity(queryEmbedding, node.embedding);
+      const similarity = dotProduct(queryEmbedding, node.embedding);
       const decayedConfidence = computeDecayedConfidence(
         node.confidence,
         node.half_life,
