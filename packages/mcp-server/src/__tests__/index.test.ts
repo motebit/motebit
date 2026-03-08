@@ -1236,7 +1236,7 @@ describe("McpServerAdapter — HTTP auth", () => {
     const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
     const addr = server.address() as import("node:net").AddressInfo;
 
-    const res = await fetch(`http://localhost:${addr.port}/sse`, {
+    const res = await fetch(`http://localhost:${addr.port}/mcp`, {
       headers: { Authorization: "Bearer wrong-token" },
     });
     expect(res.status).toBe(401);
@@ -1273,12 +1273,12 @@ describe("McpServerAdapter — HTTP auth", () => {
     const res = await fetch(`http://localhost:${addr.port}/health`);
     expect(res.status).toBe(200);
 
-    // /messages without session returns 400, not 401 (auth passed)
-    const msgRes = await fetch(`http://localhost:${addr.port}/messages`, {
+    // /mcp POST without body returns 400 (parse error), not 401 (auth passed)
+    const msgRes = await fetch(`http://localhost:${addr.port}/mcp`, {
       method: "POST",
       headers: { Authorization: "Bearer correct-token" },
     });
-    expect(msgRes.status).toBe(400); // invalid session, but NOT 401
+    expect(msgRes.status).toBe(400);
 
     await adapter.stop();
   });
@@ -1294,7 +1294,7 @@ describe("McpServerAdapter — HTTP auth", () => {
     const addr = server.address() as import("node:net").AddressInfo;
 
     // No Authorization header, should still get through
-    const res = await fetch(`http://localhost:${addr.port}/messages`, {
+    const res = await fetch(`http://localhost:${addr.port}/mcp`, {
       method: "POST",
     });
     expect(res.status).toBe(400); // invalid session, not 401
@@ -1334,7 +1334,7 @@ describe("McpServerAdapter — mutual authentication", () => {
     const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
     const addr = server.address() as import("node:net").AddressInfo;
 
-    const res = await fetch(`http://localhost:${addr.port}/messages`, {
+    const res = await fetch(`http://localhost:${addr.port}/mcp`, {
       method: "POST",
       headers: { Authorization: `Bearer motebit:${token}` },
     });
@@ -1368,7 +1368,7 @@ describe("McpServerAdapter — mutual authentication", () => {
     const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
     const addr = server.address() as import("node:net").AddressInfo;
 
-    const res = await fetch(`http://localhost:${addr.port}/messages`, {
+    const res = await fetch(`http://localhost:${addr.port}/mcp`, {
       method: "POST",
       headers: { Authorization: `Bearer motebit:${token}` },
     });
@@ -1387,7 +1387,7 @@ describe("McpServerAdapter — mutual authentication", () => {
     const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
     const addr = server.address() as import("node:net").AddressInfo;
 
-    const res = await fetch(`http://localhost:${addr.port}/messages`, {
+    const res = await fetch(`http://localhost:${addr.port}/mcp`, {
       method: "POST",
       headers: { Authorization: "Bearer motebit:nodothere" },
     });
@@ -1406,7 +1406,7 @@ describe("McpServerAdapter — mutual authentication", () => {
     const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
     const addr = server.address() as import("node:net").AddressInfo;
 
-    const res = await fetch(`http://localhost:${addr.port}/messages`, {
+    const res = await fetch(`http://localhost:${addr.port}/mcp`, {
       method: "POST",
       headers: { Authorization: "Bearer motebit:!!!invalid!!!.sig" },
     });
@@ -1438,7 +1438,7 @@ describe("McpServerAdapter — mutual authentication", () => {
     const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
     const addr = server.address() as import("node:net").AddressInfo;
 
-    const res = await fetch(`http://localhost:${addr.port}/messages`, {
+    const res = await fetch(`http://localhost:${addr.port}/mcp`, {
       method: "POST",
       headers: { Authorization: `Bearer motebit:${token}` },
     });
@@ -1459,14 +1459,14 @@ describe("McpServerAdapter — mutual authentication", () => {
     const addr = server.address() as import("node:net").AddressInfo;
 
     // Wrong token
-    const res1 = await fetch(`http://localhost:${addr.port}/messages`, {
+    const res1 = await fetch(`http://localhost:${addr.port}/mcp`, {
       method: "POST",
       headers: { Authorization: "Bearer wrong" },
     });
     expect(res1.status).toBe(401);
 
     // Correct token (400 = auth passed, invalid session)
-    const res2 = await fetch(`http://localhost:${addr.port}/messages`, {
+    const res2 = await fetch(`http://localhost:${addr.port}/mcp`, {
       method: "POST",
       headers: { Authorization: "Bearer my-secret" },
     });
@@ -1486,7 +1486,7 @@ describe("McpServerAdapter — mutual authentication", () => {
     const addr = server.address() as import("node:net").AddressInfo;
 
     // No auth header at all
-    const res = await fetch(`http://localhost:${addr.port}/messages`, {
+    const res = await fetch(`http://localhost:${addr.port}/mcp`, {
       method: "POST",
     });
     expect(res.status).toBe(400); // invalid session, not 401

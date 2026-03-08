@@ -768,12 +768,23 @@ export class McpServerAdapter {
         const sessionId = req.headers["mcp-session-id"] as string | undefined;
 
         if (req.method === "POST") {
-          // Read the request body
-          const bodyChunks: Buffer[] = [];
-          for await (const chunk of req) {
-            bodyChunks.push(chunk as Buffer);
+          // Read and parse the request body
+          let body: unknown;
+          try {
+            const bodyChunks: Buffer[] = [];
+            for await (const chunk of req) {
+              bodyChunks.push(chunk as Buffer);
+            }
+            body = JSON.parse(Buffer.concat(bodyChunks).toString());
+          } catch {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({
+              jsonrpc: "2.0",
+              error: { code: -32700, message: "Parse error: invalid JSON" },
+              id: null,
+            }));
+            return;
           }
-          const body: unknown = JSON.parse(Buffer.concat(bodyChunks).toString());
 
           let transport: StreamableHTTPServerTransport;
 

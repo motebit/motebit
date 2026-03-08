@@ -1254,12 +1254,19 @@ Available commands:
           console.log(`Failed to connect to "${addName}": ${message}`);
           break;
         }
-        // Pin manifest hash
-        const manifest = await adapter.checkManifest();
-        // Register tools into runtime
-        const tmpRegistry = new InMemoryToolRegistry();
-        adapter.registerInto(tmpRegistry);
-        runtime.registerExternalTools(`mcp:${addName}`, tmpRegistry);
+        // Pin manifest hash, register tools — cleanup adapter on failure
+        let manifest: Awaited<ReturnType<typeof adapter.checkManifest>>;
+        try {
+          manifest = await adapter.checkManifest();
+          const tmpRegistry = new InMemoryToolRegistry();
+          adapter.registerInto(tmpRegistry);
+          runtime.registerExternalTools(`mcp:${addName}`, tmpRegistry);
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          try { await adapter.disconnect(); } catch { /* best effort */ }
+          console.log(`Failed to register tools from "${addName}": ${message}`);
+          break;
+        }
         // Track adapter
         repl.mcpAdapters.push(adapter);
         // Persist to config (without transient fields like callerPrivateKey)
