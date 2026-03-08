@@ -1,10 +1,13 @@
 /**
- * Motebit Web Search Service
+ * Motebit Summarize Service
  *
- * A pure tool server — no LLM reasoning. Exposes web_search and read_url
- * via MCP, with signed execution receipts proving provenance.
+ * A delegating service that connects as MCP client to web-search and
+ * delegates search tasks. Proves multi-hop delegation with nested receipts.
  *
- * Protocol loop: discover → verify identity → delegate tool call → signed receipt
+ * Pure tool server (no LLM). Exposes summarize_search via MCP.
+ *
+ * Flow: caller → motebit_task(summarize) → summarize_search → motebit_task(web-search)
+ *       → web_search tool → receipt(web-search) nested in receipt(summarize)
  */
 
 import * as fs from "node:fs";
@@ -12,21 +15,14 @@ import * as path from "node:path";
 import { MotebitRuntime, NullRenderer } from "@motebit/runtime";
 import type { StorageAdapters } from "@motebit/runtime";
 import { openMotebitDatabase } from "@motebit/persistence";
-import {
-  InMemoryToolRegistry,
-  webSearchDefinition,
-  createWebSearchHandler,
-  readUrlDefinition,
-  createReadUrlHandler,
-  FallbackSearchProvider,
-  BraveSearchProvider,
-  DuckDuckGoSearchProvider,
-} from "@motebit/tools";
-import type { SearchProvider } from "@motebit/tools";
+import { InMemoryToolRegistry } from "@motebit/tools";
+import type { ToolResult, ExecutionReceipt } from "@motebit/sdk";
 import { wireServerDeps, startServiceServer } from "@motebit/mcp-server";
+import { McpClientAdapter } from "@motebit/mcp-client";
 import { verify as verifyIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
 import { verifySignedToken, signExecutionReceipt, hash as sha256 } from "@motebit/crypto";
 import { embedText } from "@motebit/memory-graph";
+import { summarizeSearchDefinition, createSummarizeSearchHandler } from "./tool.js";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -34,14 +30,14 @@ import { embedText } from "@motebit/memory-graph";
 
 function loadConfig() {
   return {
-    port: parseInt(process.env["MOTEBIT_PORT"] ?? "3200", 10),
-    dbPath: process.env["MOTEBIT_DB_PATH"] ?? "./data/web-search.db",
+    port: parseInt(process.env["MOTEBIT_PORT"] ?? "3201", 10),
+    dbPath: process.env["MOTEBIT_DB_PATH"] ?? "./data/summarize.db",
     identityPath: process.env["MOTEBIT_IDENTITY_PATH"] ?? "./motebit.md",
     privateKeyHex: process.env["MOTEBIT_PRIVATE_KEY_HEX"],
     authToken: process.env["MOTEBIT_AUTH_TOKEN"],
     syncUrl: process.env["MOTEBIT_SYNC_URL"],
     apiToken: process.env["MOTEBIT_API_TOKEN"],
-    braveApiKey: process.env["BRAVE_SEARCH_API_KEY"],
+    webSearchUrl: process.env["WEB_SEARCH_URL"] ?? "http://localhost:3200",
   };
 }
 
@@ -62,37 +58,8 @@ function fromHex(hex: string): Uint8Array {
   return bytes;
 }
 
-/**
- * Canonicalize search results for deterministic receipt hashing.
- * Strips tracking params, normalizes URLs, sorts by URL, takes top N.
- */
-function canonicalizeResults(raw: string, maxResults = 5): string {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return raw;
-
-    const normalized = parsed
-      .slice(0, maxResults)
-      .map((r: Record<string, unknown>) => {
-        let url = String(r["url"] ?? r["link"] ?? "");
-        try {
-          const u = new URL(url);
-          for (const p of ["utm_source", "utm_medium", "utm_campaign", "utm_content", "ref", "fbclid", "gclid"]) {
-            u.searchParams.delete(p);
-          }
-          url = u.toString();
-        } catch {
-          // Not a valid URL — keep as-is
-        }
-        return { title: String(r["title"] ?? ""), url, snippet: String(r["snippet"] ?? r["description"] ?? "") };
-      })
-      .sort((a, b) => a.url.localeCompare(b.url));
-
-    return JSON.stringify(normalized);
-  } catch {
-    return raw;
-  }
-}
+// Re-export for external consumers
+export { summarizeSearchDefinition, createSummarizeSearchHandler } from "./tool.js";
 
 // ---------------------------------------------------------------------------
 // Bootstrap
@@ -118,19 +85,7 @@ async function main(): Promise<void> {
   const publicKeyHex = identity.identity.public_key;
   log(`Identity verified: ${motebitId}`);
 
-  // 2. Build tool registry — two tools only (read-only, R0)
-  const registry = new InMemoryToolRegistry();
-  let searchProvider: SearchProvider | undefined;
-  if (config.braveApiKey) {
-    searchProvider = new FallbackSearchProvider([
-      new BraveSearchProvider(config.braveApiKey),
-      new DuckDuckGoSearchProvider(),
-    ]);
-  }
-  registry.register(webSearchDefinition, createWebSearchHandler(searchProvider));
-  registry.register(readUrlDefinition, createReadUrlHandler());
-
-  // 3. Open database + create runtime (no AI provider — pure tool server)
+  // 2. Open database + create runtime
   const dbDir = path.dirname(path.resolve(config.dbPath));
   if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
   const moteDb = await openMotebitDatabase(path.resolve(config.dbPath));
@@ -150,14 +105,32 @@ async function main(): Promise<void> {
     ? governanceToPolicyConfig(identity.governance)
     : {};
 
+  // 3. Build tool registry with summarize_search
+  const registry = new InMemoryToolRegistry();
+
+  // 4. Connect to web-search as MCP client
+  const webSearchAdapter = new McpClientAdapter({
+    name: "web-search",
+    transport: "http",
+    url: `${config.webSearchUrl}/mcp`,
+  });
+  await webSearchAdapter.connect();
+  log(`Connected to web-search at ${config.webSearchUrl}`);
+
+  // Register our tool now that we have the adapter
+  registry.register(
+    summarizeSearchDefinition,
+    createSummarizeSearchHandler(webSearchAdapter),
+  );
+
   const runtime = new MotebitRuntime(
     { motebitId, policy: { ...policyOverrides } },
     { storage, renderer: new NullRenderer(), tools: registry },
   );
   await runtime.init();
-  log("Runtime initialized (tool server mode — no LLM)");
+  log("Runtime initialized (delegating tool server — no LLM)");
 
-  // 4. Wire handleAgentTask — direct tool execution with signed receipts
+  // 5. Wire handleAgentTask — execute summarize_search, nest delegation receipts
   let handleAgentTask: ((prompt: string) => AsyncGenerator<
     | { type: "text"; text: string }
     | { type: "task_result"; receipt: Record<string, unknown> }
@@ -170,46 +143,57 @@ async function main(): Promise<void> {
       const taskId = crypto.randomUUID();
       const submittedAt = Date.now();
 
-      let result: { ok: boolean; data?: unknown; error?: string };
+      let result: ToolResult;
       try {
-        result = await runtime.getToolRegistry().execute("web_search", { query: prompt });
+        result = await runtime.getToolRegistry().execute("summarize_search", { query: prompt });
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         result = { ok: false, error: msg };
       }
       const completedAt = Date.now();
 
-      // Use data on success, error message on failure — never undefined
+      // Drain delegation receipts from web-search adapter
+      const delegationReceipts: ExecutionReceipt[] = [];
+      if (webSearchAdapter.getAndResetDelegationReceipts) {
+        delegationReceipts.push(...webSearchAdapter.getAndResetDelegationReceipts());
+      }
+
       const resultStr = result.ok
         ? (typeof result.data === "string" ? result.data : JSON.stringify(result.data ?? null))
         : (result.error ?? "error");
-      const canonical = canonicalizeResults(resultStr);
+
       const enc = new TextEncoder();
       const promptHash = await sha256(enc.encode(prompt));
-      const resultHash = await sha256(enc.encode(canonical));
+      const resultHash = await sha256(enc.encode(resultStr));
 
-      const receipt = {
+      const receiptBody: Record<string, unknown> = {
         task_id: taskId,
         motebit_id: motebitId,
-        device_id: "web-search-service",
+        device_id: "summarize-service",
         submitted_at: submittedAt,
         completed_at: completedAt,
-        status: result.ok ? ("completed" as const) : ("failed" as const),
-        result: canonical,
-        tools_used: ["web_search"],
+        status: result.ok ? "completed" : "failed",
+        result: resultStr,
+        tools_used: ["summarize_search"],
         memories_formed: 0,
         prompt_hash: promptHash,
         result_hash: resultHash,
       };
+      if (delegationReceipts.length > 0) {
+        receiptBody["delegation_receipts"] = delegationReceipts;
+      }
 
-      const signed = await signExecutionReceipt(receipt, privateKey);
+      const signed = await signExecutionReceipt(
+        receiptBody as Omit<ExecutionReceipt, "signature">,
+        privateKey,
+      );
       log(`receipt=${signed.signature.slice(0, 12)}… query="${prompt.slice(0, 60)}"`);
       yield { type: "task_result" as const, receipt: signed as unknown as Record<string, unknown> };
     };
-    log("Agent task handler enabled (receipts will be signed)");
+    log("Agent task handler enabled (receipts will be signed, delegation receipts nested)");
   }
 
-  // 5. Wire deps + start server (scaffold handles MCP, relay, shutdown)
+  // 6. Wire deps + start server
   const deps = wireServerDeps(runtime, {
     motebitId,
     publicKeyHex,
@@ -220,18 +204,18 @@ async function main(): Promise<void> {
   });
 
   await startServiceServer(deps, {
-    name: `motebit-web-search-${motebitId.slice(0, 8)}`,
+    name: `motebit-summarize-${motebitId.slice(0, 8)}`,
     port: config.port,
     authToken: config.authToken,
     motebitType: "service",
     syncUrl: config.syncUrl,
     apiToken: config.apiToken,
     onStart: (port, toolCount) => {
-      log(`MCP server running on http://localhost:${port} (SSE). ${toolCount} tools exposed.`);
-      log(`Health endpoint: http://localhost:${port}/health`);
+      log(`MCP server running on http://localhost:${port}. ${toolCount} tools exposed.`);
     },
     onStop: () => {
       log("Shutting down...");
+      void webSearchAdapter.disconnect().catch(() => {});
       runtime.stop();
       moteDb.close();
     },

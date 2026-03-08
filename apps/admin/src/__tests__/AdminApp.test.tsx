@@ -1,5 +1,5 @@
 import React from "react";
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { AdminApp } from "../AdminApp";
 import { TrustMode, BatteryMode } from "@motebit/sdk";
@@ -237,6 +237,13 @@ function setupFetchMock() {
         text: () => Promise.resolve(JSON.stringify(mockDevices)),
       });
     }
+    if (url.includes("/api/v1/gradient/")) {
+      return Promise.resolve({
+        ok: true, status: 200, statusText: "OK",
+        json: () => Promise.resolve({ motebit_id: "default-motebit", current: null, history: [] }),
+        text: () => Promise.resolve(JSON.stringify({ motebit_id: "default-motebit", current: null, history: [] })),
+      });
+    }
     return Promise.reject(new Error(`Unexpected URL: ${url}`));
   });
 }
@@ -245,13 +252,8 @@ function setupFailingFetch() {
   globalThis.fetch = vi.fn().mockRejectedValue(new Error("Network error"));
 }
 
-beforeEach(() => {
-  vi.useFakeTimers({ shouldAdvanceTime: true });
-});
-
 afterEach(() => {
   cleanup();
-  vi.useRealTimers();
   globalThis.fetch = originalFetch;
 });
 

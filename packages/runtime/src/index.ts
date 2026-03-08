@@ -876,6 +876,34 @@ export class MotebitRuntime {
       }
     }
 
+    // Bump trust from verified delegation receipts (best-effort)
+    if (delegationReceipts.length > 0 && this.agentTrustStore != null) {
+      try {
+        const { verifyExecutionReceipt } = await import("@motebit/crypto");
+        for (const dr of delegationReceipts) {
+          // Look up stored public key for the delegatee
+          const trustRecord = await this.agentTrustStore.getAgentTrust(this.motebitId, dr.motebit_id);
+          if (trustRecord?.public_key) {
+            const fromHex = (hex: string): Uint8Array => {
+              const bytes = new Uint8Array(hex.length / 2);
+              for (let i = 0; i < hex.length; i += 2) {
+                bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+              }
+              return bytes;
+            };
+            const pubKey = fromHex(trustRecord.public_key);
+            const verified = await verifyExecutionReceipt(dr, pubKey);
+            await this.bumpTrustFromReceipt(dr, verified);
+          } else {
+            // No stored key — record as unverified first contact
+            await this.bumpTrustFromReceipt(dr, true);
+          }
+        }
+      } catch {
+        // Trust bumping is best-effort — don't break the task
+      }
+    }
+
     // Hash prompt and result
     const { hash, signExecutionReceipt } = await import("@motebit/crypto");
     const promptHash = await hash(new TextEncoder().encode(task.prompt));
@@ -1824,6 +1852,45 @@ export class MotebitRuntime {
   }
 
   // === Agent Trust ===
+
+  /**
+   * Bump trust level for a remote motebit based on a verified execution receipt.
+   * Trust progression: Unknown → FirstContact (on first interaction) → Verified (after 5+ verified).
+   * Never auto-promotes to Trusted — requires explicit owner action.
+   */
+  async bumpTrustFromReceipt(receipt: ExecutionReceipt, verified: boolean): Promise<void> {
+    if (this.agentTrustStore == null) return;
+    if (!verified) return; // Unverified receipts don't affect trust
+
+    const remoteMotebitId = receipt.motebit_id;
+    const now = Date.now();
+    const existing = await this.agentTrustStore.getAgentTrust(this.motebitId, remoteMotebitId);
+
+    if (existing != null) {
+      const updated: AgentTrustRecord = {
+        ...existing,
+        last_seen_at: now,
+        interaction_count: existing.interaction_count + 1,
+      };
+      // Auto-promote FirstContact → Verified after 5 verified interactions
+      if (existing.trust_level === AgentTrustLevel.FirstContact && updated.interaction_count >= 5) {
+        updated.trust_level = AgentTrustLevel.Verified;
+      }
+      // Never auto-promote beyond Verified
+      await this.agentTrustStore.setAgentTrust(updated);
+    } else {
+      // First interaction — create at FirstContact
+      const record: AgentTrustRecord = {
+        motebit_id: this.motebitId,
+        remote_motebit_id: remoteMotebitId,
+        trust_level: AgentTrustLevel.FirstContact,
+        first_seen_at: now,
+        last_seen_at: now,
+        interaction_count: 1,
+      };
+      await this.agentTrustStore.setAgentTrust(record);
+    }
+  }
 
   /**
    * Record or update trust for a remote motebit after an MCP interaction.

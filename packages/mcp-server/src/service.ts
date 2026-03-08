@@ -13,8 +13,8 @@
 
 import { McpServerAdapter } from "./index.js";
 import type { MotebitServerDeps } from "./index.js";
-import type { ToolDefinition, ToolResult, PolicyDecision, EventLogEntry } from "@motebit/sdk";
-import { EventType, SensitivityLevel } from "@motebit/sdk";
+import type { ToolDefinition, ToolResult, PolicyDecision, EventLogEntry, TurnContext } from "@motebit/sdk";
+import { EventType, SensitivityLevel, AgentTrustLevel } from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
 // Duck-typed interfaces — match what MotebitRuntime provides
@@ -74,6 +74,11 @@ export interface ServiceRuntime {
   getState(): unknown;
   memory: ServiceMemoryGraph;
   events: ServiceEventStore;
+
+  /** Optional: look up trust record for a remote motebit. */
+  getAgentTrust?(remoteMotebitId: string): Promise<{ trust_level: string; public_key?: string } | null>;
+  /** Optional: record an interaction with a remote motebit. */
+  recordAgentInteraction?(remoteMotebitId: string, publicKey?: string): Promise<unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -124,8 +129,14 @@ export function wireServerDeps(
 
     listTools: () => runtime.getToolRegistry().list(),
     filterTools: (tools) => runtime.policy.filterTools(tools),
-    validateTool: (tool, args) =>
-      runtime.policy.validate(tool, args, runtime.policy.createTurnContext()),
+    validateTool: (tool, args, caller?) => {
+      const ctx = runtime.policy.createTurnContext() as TurnContext;
+      if (caller) {
+        ctx.callerMotebitId = caller.motebitId;
+        ctx.callerTrustLevel = caller.trustLevel;
+      }
+      return runtime.policy.validate(tool as ToolDefinition, args, ctx);
+    },
     executeTool: (name, args) => runtime.getToolRegistry().execute(name, args),
 
     getState: () => runtime.getState() as Record<string, unknown>,
@@ -197,6 +208,34 @@ export function wireServerDeps(
   // Optional: signed token verification
   if (opts.verifySignedToken) {
     deps.verifySignedToken = opts.verifySignedToken;
+  }
+
+  // Optional: caller key resolution (from agent trust store)
+  if (runtime.getAgentTrust) {
+    const getAgentTrust = runtime.getAgentTrust.bind(runtime);
+    deps.resolveCallerKey = async (callerMotebitId: string) => {
+      const record = await getAgentTrust(callerMotebitId);
+      if (!record || !record.public_key) return null;
+      const trustMap: Record<string, AgentTrustLevel> = {
+        [AgentTrustLevel.Unknown]: AgentTrustLevel.Unknown,
+        [AgentTrustLevel.FirstContact]: AgentTrustLevel.FirstContact,
+        [AgentTrustLevel.Verified]: AgentTrustLevel.Verified,
+        [AgentTrustLevel.Trusted]: AgentTrustLevel.Trusted,
+        [AgentTrustLevel.Blocked]: AgentTrustLevel.Blocked,
+      };
+      return {
+        publicKey: record.public_key,
+        trustLevel: trustMap[record.trust_level] ?? AgentTrustLevel.Unknown,
+      };
+    };
+  }
+
+  // Optional: callback on caller verification
+  if (runtime.recordAgentInteraction) {
+    const recordInteraction = runtime.recordAgentInteraction.bind(runtime);
+    deps.onCallerVerified = (callerMotebitId: string, publicKey: string, _trustLevel: AgentTrustLevel) => {
+      void recordInteraction(callerMotebitId, publicKey);
+    };
   }
 
   // Optional: agent task handler (motebit_task)

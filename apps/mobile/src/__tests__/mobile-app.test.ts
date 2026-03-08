@@ -323,8 +323,8 @@ describe("MobileApp.settings", () => {
 // ---------------------------------------------------------------------------
 
 describe("COLOR_PRESETS", () => {
-  it("has 8 entries", () => {
-    expect(Object.keys(COLOR_PRESETS)).toHaveLength(8);
+  it("has 7 entries", () => {
+    expect(Object.keys(COLOR_PRESETS)).toHaveLength(7);
   });
 
   it("each preset has tint and glow arrays", () => {

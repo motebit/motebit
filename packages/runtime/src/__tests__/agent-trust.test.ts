@@ -137,3 +137,85 @@ describe("MotebitRuntime Agent Trust", () => {
     expect(list).toHaveLength(0);
   });
 });
+
+describe("MotebitRuntime bumpTrustFromReceipt", () => {
+  const fakeReceipt = (motebitId: string) => ({
+    task_id: "task-1",
+    motebit_id: motebitId,
+    device_id: "dev-1",
+    submitted_at: Date.now() - 1000,
+    completed_at: Date.now(),
+    status: "completed" as const,
+    result: "ok",
+    tools_used: ["web_search"],
+    memories_formed: 0,
+    prompt_hash: "abc",
+    result_hash: "def",
+    signature: "sig123",
+  });
+
+  let runtime: MotebitRuntime;
+  let trustStore: InMemoryAgentTrustStore;
+
+  beforeEach(() => {
+    const result = createAdaptersWithTrust();
+    trustStore = result.trustStore;
+    runtime = new MotebitRuntime(
+      { motebitId: "test-mote", tickRateHz: 0 },
+      result.adapters,
+    );
+  });
+
+  it("creates FirstContact for unknown motebit on verified receipt", async () => {
+    await runtime.bumpTrustFromReceipt(fakeReceipt("remote-new"), true);
+    const record = await trustStore.getAgentTrust("test-mote", "remote-new");
+    expect(record).not.toBeNull();
+    expect(record!.trust_level).toBe(AgentTrustLevel.FirstContact);
+    expect(record!.interaction_count).toBe(1);
+  });
+
+  it("increments interaction_count on repeated verified receipts", async () => {
+    await runtime.bumpTrustFromReceipt(fakeReceipt("remote-1"), true);
+    await runtime.bumpTrustFromReceipt(fakeReceipt("remote-1"), true);
+    await runtime.bumpTrustFromReceipt(fakeReceipt("remote-1"), true);
+    const record = await trustStore.getAgentTrust("test-mote", "remote-1");
+    expect(record!.interaction_count).toBe(3);
+  });
+
+  it("promotes FirstContact → Verified after 5 verified interactions", async () => {
+    for (let i = 0; i < 5; i++) {
+      await runtime.bumpTrustFromReceipt(fakeReceipt("remote-1"), true);
+    }
+    const record = await trustStore.getAgentTrust("test-mote", "remote-1");
+    expect(record!.trust_level).toBe(AgentTrustLevel.Verified);
+    expect(record!.interaction_count).toBe(5);
+  });
+
+  it("does NOT promote Verified → Trusted", async () => {
+    // Create at FirstContact, promote to Verified
+    for (let i = 0; i < 5; i++) {
+      await runtime.bumpTrustFromReceipt(fakeReceipt("remote-1"), true);
+    }
+    // More interactions should not promote beyond Verified
+    for (let i = 0; i < 10; i++) {
+      await runtime.bumpTrustFromReceipt(fakeReceipt("remote-1"), true);
+    }
+    const record = await trustStore.getAgentTrust("test-mote", "remote-1");
+    expect(record!.trust_level).toBe(AgentTrustLevel.Verified);
+  });
+
+  it("ignores unverified receipts", async () => {
+    await runtime.bumpTrustFromReceipt(fakeReceipt("remote-1"), false);
+    const record = await trustStore.getAgentTrust("test-mote", "remote-1");
+    expect(record).toBeNull();
+  });
+
+  it("does nothing without trust store", async () => {
+    const noTrustRuntime = new MotebitRuntime(
+      { motebitId: "test-mote", tickRateHz: 0 },
+      { storage: createInMemoryStorage(), renderer: new NullRenderer() },
+    );
+    // Should not throw
+    await noTrustRuntime.bumpTrustFromReceipt(fakeReceipt("remote-1"), true);
+  });
+});

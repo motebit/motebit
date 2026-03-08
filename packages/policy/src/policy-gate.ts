@@ -1,4 +1,4 @@
-import { RiskLevel } from "@motebit/sdk";
+import { RiskLevel, AgentTrustLevel } from "@motebit/sdk";
 import type {
   ToolDefinition,
   ToolResult,
@@ -298,7 +298,34 @@ export class PolicyGate {
       needsApproval = profile.requiresApproval;
     }
 
-    // 7. Motebit type differentiation — adjust approval based on remote agent type
+    // 7. Caller trust level — adjust approval based on verified caller identity
+    if (ctx.callerTrustLevel != null) {
+      switch (ctx.callerTrustLevel) {
+        case AgentTrustLevel.Blocked: {
+          const decision: PolicyDecision = {
+            allowed: false,
+            requiresApproval: false,
+            reason: `Caller "${ctx.callerMotebitId ?? "unknown"}" is blocked`,
+          };
+          this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision, ctx.runId);
+          return decision;
+        }
+        case AgentTrustLevel.Trusted:
+          // Trusted callers get same privileges as local user
+          needsApproval = false;
+          break;
+        case AgentTrustLevel.FirstContact:
+        case AgentTrustLevel.Unknown:
+          // Unknown/first-contact callers: all tools require approval
+          needsApproval = true;
+          break;
+        case AgentTrustLevel.Verified:
+          // Verified callers: standard policy applies, no change
+          break;
+      }
+    }
+
+    // 8. Motebit type differentiation — adjust approval based on remote agent type
     if (ctx.remoteMotebitType === "service") {
       // Service motebits are expected to call tools — lower threshold by one risk level.
       // R1 tools auto-approve (no approval needed) for service callers.

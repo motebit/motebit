@@ -12,8 +12,8 @@ import {
   classifyTool,
   isToolAllowed,
 } from "../index.js";
-import { RiskLevel, DataClass, SideEffect, SensitivityLevel } from "@motebit/sdk";
-import type { ToolDefinition, MemoryCandidate } from "@motebit/sdk";
+import { RiskLevel, DataClass, SideEffect, SensitivityLevel, AgentTrustLevel } from "@motebit/sdk";
+import type { ToolDefinition, MemoryCandidate, TurnContext } from "@motebit/sdk";
 
 function makeTool(
   name: string,
@@ -1640,5 +1640,87 @@ describe("PolicyGate — motebit type differentiation", () => {
       // R1 does not require approval in standard legacy mode
       expect(decision.requiresApproval).toBe(false);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CallerTrustLevel-driven policy
+// ---------------------------------------------------------------------------
+
+describe("PolicyGate — caller trust level", () => {
+  function trustCtx(trustLevel?: AgentTrustLevel, motebitId?: string): TurnContext {
+    return {
+      turnId: "turn-trust-test",
+      toolCallCount: 0,
+      turnStartMs: Date.now(),
+      costAccumulated: 0,
+      callerTrustLevel: trustLevel,
+      callerMotebitId: motebitId,
+    };
+  }
+
+  it("Trusted caller: needsApproval=false for R2 tools", () => {
+    const gate = new PolicyGate({ operatorMode: true });
+    const tool = makeTool("write_file", "Write a file");
+    const ctx = trustCtx(AgentTrustLevel.Trusted, "trusted-mote");
+    const decision = gate.validate(tool, {}, ctx);
+    expect(decision.allowed).toBe(true);
+    expect(decision.requiresApproval).toBe(false);
+  });
+
+  it("Unknown caller: all tools require approval", () => {
+    const gate = new PolicyGate({ operatorMode: true });
+    const tool = makeTool("web_search", "Search the web");
+    const ctx = trustCtx(AgentTrustLevel.Unknown, "unknown-mote");
+    const decision = gate.validate(tool, {}, ctx);
+    expect(decision.allowed).toBe(true);
+    expect(decision.requiresApproval).toBe(true);
+  });
+
+  it("FirstContact caller: all tools require approval", () => {
+    const gate = new PolicyGate({ operatorMode: true });
+    const tool = makeTool("draft_email", "Draft an email");
+    const ctx = trustCtx(AgentTrustLevel.FirstContact, "new-mote");
+    const decision = gate.validate(tool, {}, ctx);
+    expect(decision.allowed).toBe(true);
+    expect(decision.requiresApproval).toBe(true);
+  });
+
+  it("Verified caller: standard policy unchanged", () => {
+    const gate = new PolicyGate({ operatorMode: true });
+    // R0 tool — standard policy does NOT require approval
+    const tool = makeTool("web_search", "Search the web");
+    const ctx = trustCtx(AgentTrustLevel.Verified, "verified-mote");
+    const decision = gate.validate(tool, {}, ctx);
+    expect(decision.allowed).toBe(true);
+    expect(decision.requiresApproval).toBe(false);
+  });
+
+  it("Verified caller: R2 tool still requires approval (standard policy)", () => {
+    const gate = new PolicyGate({ operatorMode: true });
+    const tool = makeTool("write_file", "Write a file");
+    const ctx = trustCtx(AgentTrustLevel.Verified, "verified-mote");
+    const decision = gate.validate(tool, {}, ctx);
+    expect(decision.allowed).toBe(true);
+    expect(decision.requiresApproval).toBe(true);
+  });
+
+  it("Blocked caller: hard deny", () => {
+    const gate = new PolicyGate({ operatorMode: true });
+    const tool = makeTool("web_search", "Search the web");
+    const ctx = trustCtx(AgentTrustLevel.Blocked, "blocked-mote");
+    const decision = gate.validate(tool, {}, ctx);
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("blocked");
+  });
+
+  it("No callerTrustLevel: legacy behavior unchanged", () => {
+    const gate = new PolicyGate({ operatorMode: true });
+    const tool = makeTool("draft_email", "Draft an email");
+    const ctx = trustCtx(); // no trust level
+    const decision = gate.validate(tool, {}, ctx);
+    expect(decision.allowed).toBe(true);
+    // R1 does not require approval in standard legacy mode
+    expect(decision.requiresApproval).toBe(false);
   });
 });

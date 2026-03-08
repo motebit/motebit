@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { wireServerDeps } from "../service.js";
 import type { ServiceRuntime } from "../service.js";
+import { AgentTrustLevel } from "@motebit/sdk";
 
 // === Mock runtime ===
 
@@ -130,5 +131,90 @@ describe("wireServerDeps", () => {
       sendMessage: mockSend,
     });
     expect(deps.sendMessage).toBe(mockSend);
+  });
+
+  it("forwards CallerIdentity to policy context in validateTool", () => {
+    const validateSpy = vi.fn().mockReturnValue({ allowed: true, requiresApproval: false });
+    const runtime = makeRuntime({
+      policy: {
+        filterTools: (tools) => tools,
+        validate: validateSpy,
+        createTurnContext: () => ({ turnId: "t1", toolCallCount: 0, turnStartMs: Date.now(), costAccumulated: 0 }),
+      },
+    });
+    const deps = wireServerDeps(runtime, { motebitId: "test-id" });
+
+    const tool = { name: "test_tool", description: "test", inputSchema: {} };
+    const caller = { motebitId: "remote-mote", trustLevel: AgentTrustLevel.Verified };
+    deps.validateTool(tool, { arg: "val" }, caller);
+
+    expect(validateSpy).toHaveBeenCalledTimes(1);
+    const ctx = validateSpy.mock.calls[0]![2];
+    expect(ctx.callerMotebitId).toBe("remote-mote");
+    expect(ctx.callerTrustLevel).toBe(AgentTrustLevel.Verified);
+  });
+
+  it("validateTool works without caller (backward compat)", () => {
+    const validateSpy = vi.fn().mockReturnValue({ allowed: true, requiresApproval: false });
+    const runtime = makeRuntime({
+      policy: {
+        filterTools: (tools) => tools,
+        validate: validateSpy,
+        createTurnContext: () => ({ turnId: "t1", toolCallCount: 0, turnStartMs: Date.now(), costAccumulated: 0 }),
+      },
+    });
+    const deps = wireServerDeps(runtime, { motebitId: "test-id" });
+
+    const tool = { name: "test_tool", description: "test", inputSchema: {} };
+    deps.validateTool(tool, { arg: "val" });
+
+    const ctx = validateSpy.mock.calls[0]![2];
+    expect(ctx.callerMotebitId).toBeUndefined();
+    expect(ctx.callerTrustLevel).toBeUndefined();
+  });
+
+  it("wires resolveCallerKey when getAgentTrust exists", async () => {
+    const runtime = makeRuntime({
+      getAgentTrust: vi.fn().mockResolvedValue({
+        trust_level: AgentTrustLevel.Verified,
+        public_key: "ed25519:abc123",
+      }),
+    });
+    const deps = wireServerDeps(runtime, { motebitId: "test-id" });
+
+    expect(deps.resolveCallerKey).toBeDefined();
+    const result = await deps.resolveCallerKey!("remote-mote");
+    expect(result).toEqual({
+      publicKey: "ed25519:abc123",
+      trustLevel: AgentTrustLevel.Verified,
+    });
+  });
+
+  it("resolveCallerKey returns null for unknown caller", async () => {
+    const runtime = makeRuntime({
+      getAgentTrust: vi.fn().mockResolvedValue(null),
+    });
+    const deps = wireServerDeps(runtime, { motebitId: "test-id" });
+
+    const result = await deps.resolveCallerKey!("unknown-mote");
+    expect(result).toBeNull();
+  });
+
+  it("wires onCallerVerified when recordAgentInteraction exists", () => {
+    const recordSpy = vi.fn().mockResolvedValue({});
+    const runtime = makeRuntime({
+      recordAgentInteraction: recordSpy,
+    });
+    const deps = wireServerDeps(runtime, { motebitId: "test-id" });
+
+    expect(deps.onCallerVerified).toBeDefined();
+    deps.onCallerVerified!("remote-mote", "ed25519:key", AgentTrustLevel.FirstContact);
+    expect(recordSpy).toHaveBeenCalledWith("remote-mote", "ed25519:key");
+  });
+
+  it("does NOT wire resolveCallerKey without getAgentTrust", () => {
+    const runtime = makeRuntime();
+    const deps = wireServerDeps(runtime, { motebitId: "test-id" });
+    expect(deps.resolveCallerKey).toBeUndefined();
   });
 });

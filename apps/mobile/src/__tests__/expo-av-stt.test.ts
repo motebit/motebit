@@ -56,7 +56,7 @@ function setupSuccessfulRecording(uri = "file:///mock/audio.m4a") {
     stopAndUnloadAsync: vi.fn(async () => {}),
     getURI: vi.fn(() => uri),
   };
-  mockRequestPermissions.mockResolvedValue({ status: "granted" });
+  mockRequestPermissions.mockResolvedValue({ granted: true, status: "granted" });
   mockSetAudioMode.mockResolvedValue(undefined);
   mockCreateRecording.mockResolvedValue({ recording: mockRecording });
 }
@@ -112,7 +112,7 @@ describe("ExpoAVSTTProvider", () => {
     });
 
     it("fires onError when permission denied", async () => {
-      mockRequestPermissions.mockResolvedValue({ status: "denied" });
+      mockRequestPermissions.mockResolvedValue({ granted: false, status: "denied" });
       const provider = makeProvider();
       const onError = vi.fn();
       provider.onError = onError;
@@ -127,7 +127,7 @@ describe("ExpoAVSTTProvider", () => {
     });
 
     it("fires onError when recording creation fails", async () => {
-      mockRequestPermissions.mockResolvedValue({ status: "granted" });
+      mockRequestPermissions.mockResolvedValue({ granted: true, status: "granted" });
       mockSetAudioMode.mockResolvedValue(undefined);
       mockCreateRecording.mockRejectedValue(new Error("Audio hardware busy"));
 
