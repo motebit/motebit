@@ -20,6 +20,17 @@ export enum AgentTrustLevel {
   Blocked = "blocked",
 }
 
+export interface AgentTrustRecord {
+  motebit_id: string;
+  remote_motebit_id: string;
+  trust_level: AgentTrustLevel;
+  public_key?: string;
+  first_seen_at: number;
+  last_seen_at: number;
+  interaction_count: number;
+  notes?: string;
+}
+
 export enum SensitivityLevel {
   None = "none",
   Personal = "personal",

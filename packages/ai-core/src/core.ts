@@ -1019,3 +1019,57 @@ export class OllamaProvider implements StreamingProvider {
     };
   }
 }
+
+// === Ollama Auto-Detection ===
+
+/** Preferred model order for auto-detection. */
+const PREFERRED_OLLAMA_MODELS = ["llama3.1", "llama3", "mistral", "gemma2"];
+
+export interface OllamaDetectionResult {
+  available: boolean;
+  models: string[];
+  url: string;
+  /** Best available model based on preference order, or empty string. */
+  bestModel: string;
+}
+
+/**
+ * Probe a local Ollama instance and return available models.
+ * Never throws — returns `{ available: false }` on any error.
+ * Times out after 2 seconds to avoid blocking startup.
+ */
+export async function detectOllama(baseUrl = "http://localhost:11434"): Promise<OllamaDetectionResult> {
+  const empty: OllamaDetectionResult = { available: false, models: [], url: "", bestModel: "" };
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2000);
+
+    const res = await fetch(`${baseUrl}/api/tags`, {
+      method: "GET",
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (!res.ok) return empty;
+
+    const data = (await res.json()) as { models?: Array<{ name: string }> };
+    const models = (data.models ?? []).map(m => m.name);
+    if (models.length === 0) return { ...empty, available: true, url: baseUrl };
+
+    // Pick best model: try preferred list first (match base name ignoring :tag)
+    let bestModel = "";
+    for (const preferred of PREFERRED_OLLAMA_MODELS) {
+      const match = models.find(m => m === preferred || m.startsWith(`${preferred}:`));
+      if (match != null) {
+        bestModel = match;
+        break;
+      }
+    }
+    // Fall back to first available model
+    if (bestModel === "") bestModel = models[0]!;
+
+    return { available: true, models, url: baseUrl, bestModel };
+  } catch {
+    return empty;
+  }
+}

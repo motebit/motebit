@@ -1,5 +1,5 @@
-import type { MotebitState, BehaviorCues, ConversationMessage, ToolRegistry, AgentTask, ExecutionReceipt } from "@motebit/sdk";
-import { EventType, SensitivityLevel } from "@motebit/sdk";
+import type { MotebitState, BehaviorCues, ConversationMessage, ToolRegistry, AgentTask, ExecutionReceipt, AgentTrustRecord } from "@motebit/sdk";
+import { EventType, SensitivityLevel, AgentTrustLevel } from "@motebit/sdk";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 import type { EventStoreAdapter } from "@motebit/event-log";
 import { MemoryGraph, InMemoryMemoryStorage, embedText, computeDecayedConfidence, buildConsolidationPrompt, parseConsolidationResponse, clusterBySimilarity } from "@motebit/memory-graph";
@@ -44,6 +44,9 @@ import type {
 type McpClientAdapter = {
   disconnect(): Promise<void>;
   getAndResetDelegationReceipts?(): import("@motebit/sdk").ExecutionReceipt[];
+  isMotebit?: boolean;
+  serverName?: string;
+  getTools?(): import("@motebit/sdk").ToolDefinition[];
 };
 import { PlanEngine, InMemoryPlanStore } from "@motebit/planner";
 import type { PlanChunk } from "@motebit/planner";
@@ -57,7 +60,8 @@ import type { GradientSnapshot, GradientStoreAdapter } from "./gradient.js";
 export type { TurnResult, AgenticChunk, ReflectionResult, MotebitLoopDependencies } from "@motebit/ai-core";
 export type { StreamingProvider } from "@motebit/ai-core";
 export type { TaskRouterConfig, TaskType, ResolvedTaskConfig } from "@motebit/ai-core";
-export type { MotebitState, BehaviorCues, ToolRegistry, ConversationMessage } from "@motebit/sdk";
+export type { MotebitState, BehaviorCues, ToolRegistry, ConversationMessage, AgentTrustRecord } from "@motebit/sdk";
+export { AgentTrustLevel } from "@motebit/sdk";
 export type { EventStoreAdapter } from "@motebit/event-log";
 export type { MemoryStorageAdapter } from "@motebit/memory-graph";
 export type { IdentityStorage } from "@motebit/core-identity";
@@ -191,6 +195,13 @@ export interface KeyringAdapter {
   delete(key: string): Promise<void>;
 }
 
+export interface AgentTrustStoreAdapter {
+  getAgentTrust(motebitId: string, remoteMotebitId: string): Promise<AgentTrustRecord | null>;
+  setAgentTrust(record: AgentTrustRecord): Promise<void>;
+  listAgentTrust(motebitId: string): Promise<AgentTrustRecord[]>;
+  updateTrustLevel(motebitId: string, remoteMotebitId: string, level: AgentTrustLevel): Promise<void>;
+}
+
 export interface StorageAdapters {
   eventStore: EventStoreAdapter;
   memoryStorage: MemoryStorageAdapter;
@@ -201,6 +212,7 @@ export interface StorageAdapters {
   conversationStore?: ConversationStoreAdapter;
   planStore?: PlanStoreAdapter;
   gradientStore?: GradientStoreAdapter;
+  agentTrustStore?: AgentTrustStoreAdapter;
 }
 
 export interface PlatformAdapters {
@@ -261,7 +273,9 @@ export type StreamChunk =
   | { type: "injection_warning"; tool_name: string; patterns: string[] }
   | { type: "approval_expired"; tool_name: string }
   | { type: "result"; result: TurnResult }
-  | { type: "task_result"; receipt: ExecutionReceipt };
+  | { type: "task_result"; receipt: ExecutionReceipt }
+  | { type: "delegation_start"; server: string; tool: string; motebit_id?: string }
+  | { type: "delegation_complete"; server: string; tool: string; receipt?: { task_id: string; status: string; tools_used: string[] } };
 
 // === Operator Mode Result ===
 
@@ -345,6 +359,8 @@ export class MotebitRuntime {
   private toolRegistry: SimpleToolRegistry;
   private mcpAdapters: McpClientAdapter[] = [];
   private mcpConfigs: McpServerConfig[];
+  /** Maps tool names to motebit server names (only for motebit MCP adapters). */
+  private motebitToolServers = new Map<string, string>();
   private keyring: KeyringAdapter | null;
   private toolAuditSink?: AuditLogSink;
   private conversationStore: ConversationStoreAdapter | null;
@@ -367,6 +383,7 @@ export class MotebitRuntime {
   private sessionInfo: { continued: boolean; lastActiveAt: number } | null = null;
   private episodicConsolidation: boolean;
   private gradientStore: GradientStoreAdapter;
+  private agentTrustStore: AgentTrustStoreAdapter | null;
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
     this.motebitId = config.motebitId;
@@ -463,6 +480,9 @@ export class MotebitRuntime {
     // Intelligence gradient
     this.gradientStore = adapters.storage.gradientStore ?? new InMemoryGradientStore();
 
+    // Agent trust
+    this.agentTrustStore = adapters.storage.agentTrustStore ?? null;
+
     this.wireLoopDeps();
   }
 
@@ -475,6 +495,17 @@ export class MotebitRuntime {
     if (this.mcpConfigs.length > 0) {
       const { connectMcpServers } = await import("@motebit/mcp-client");
       this.mcpAdapters = await connectMcpServers(this.mcpConfigs, this.toolRegistry as never);
+
+      // Build motebit tool-to-server mapping for delegation visibility
+      for (const adapter of this.mcpAdapters) {
+        if (adapter.isMotebit && adapter.serverName && adapter.getTools) {
+          const serverName = adapter.serverName;
+          for (const tool of adapter.getTools()) {
+            this.motebitToolServers.set(tool.name, serverName);
+          }
+        }
+      }
+
       this.wireLoopDeps(); // re-wire with updated registry
     }
   }
@@ -1071,11 +1102,34 @@ export class MotebitRuntime {
 
       // Creature reacts to tool activity
       if (chunk.type === "tool_status") {
+        const motebitServer = this.motebitToolServers.get(chunk.name);
         if (chunk.status === "calling") {
           this.state.pushUpdate({ processing: 0.95, attention: 0.9, curiosity: 0.7 });
+          // Emit delegation_start for motebit MCP tools
+          if (motebitServer) {
+            this.behavior.setDelegating(true);
+            yield { type: "delegation_start", server: motebitServer, tool: chunk.name };
+          }
         } else if (chunk.status === "done") {
           this.state.pushUpdate({ processing: 0.6, confidence: 0.7 });
           void this.logToolUsed(chunk.name, chunk.result);
+          // Emit delegation_complete for motebit MCP tools
+          if (motebitServer) {
+            // Extract receipt summary if this was a motebit_task call with a receipt result
+            let receiptSummary: { task_id: string; status: string; tools_used: string[] } | undefined;
+            if (chunk.result != null && typeof chunk.result === "object") {
+              const r = chunk.result as Record<string, unknown>;
+              if (typeof r.task_id === "string" && typeof r.status === "string" && Array.isArray(r.tools_used)) {
+                receiptSummary = {
+                  task_id: r.task_id as string,
+                  status: r.status as string,
+                  tools_used: r.tools_used as string[],
+                };
+              }
+            }
+            this.behavior.setDelegating(false);
+            yield { type: "delegation_complete", server: motebitServer, tool: chunk.name, receipt: receiptSummary };
+          }
         }
       }
 
@@ -1764,5 +1818,57 @@ export class MotebitRuntime {
     } catch {
       // Tool event logging is best-effort
     }
+  }
+
+  // === Agent Trust ===
+
+  /**
+   * Record or update trust for a remote motebit after an MCP interaction.
+   * If no record exists, creates one at FirstContact level.
+   * If one exists, bumps interaction_count and last_seen_at.
+   */
+  async recordAgentInteraction(remoteMotebitId: string, publicKey?: string): Promise<AgentTrustRecord | null> {
+    if (this.agentTrustStore == null) return null;
+    const now = Date.now();
+    const existing = await this.agentTrustStore.getAgentTrust(this.motebitId, remoteMotebitId);
+    if (existing != null) {
+      const updated: AgentTrustRecord = {
+        ...existing,
+        last_seen_at: now,
+        interaction_count: existing.interaction_count + 1,
+        public_key: publicKey ?? existing.public_key,
+      };
+      await this.agentTrustStore.setAgentTrust(updated);
+      return updated;
+    }
+    const record: AgentTrustRecord = {
+      motebit_id: this.motebitId,
+      remote_motebit_id: remoteMotebitId,
+      trust_level: AgentTrustLevel.FirstContact,
+      public_key: publicKey,
+      first_seen_at: now,
+      last_seen_at: now,
+      interaction_count: 1,
+    };
+    await this.agentTrustStore.setAgentTrust(record);
+    return record;
+  }
+
+  /** Get trust record for a specific remote motebit. */
+  async getAgentTrust(remoteMotebitId: string): Promise<AgentTrustRecord | null> {
+    if (this.agentTrustStore == null) return null;
+    return this.agentTrustStore.getAgentTrust(this.motebitId, remoteMotebitId);
+  }
+
+  /** List all known agent trust records for this motebit. */
+  async listTrustedAgents(): Promise<AgentTrustRecord[]> {
+    if (this.agentTrustStore == null) return [];
+    return this.agentTrustStore.listAgentTrust(this.motebitId);
+  }
+
+  /** Update trust level for a remote motebit. */
+  async setAgentTrustLevel(remoteMotebitId: string, level: AgentTrustLevel): Promise<void> {
+    if (this.agentTrustStore == null) return;
+    await this.agentTrustStore.updateTrustLevel(this.motebitId, remoteMotebitId, level);
   }
 }

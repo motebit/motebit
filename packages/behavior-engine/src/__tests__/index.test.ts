@@ -330,3 +330,56 @@ describe("BehaviorEngine speaking and impulses", () => {
     expect(cues.speaking_activity).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// BehaviorEngine — delegation glow boost
+// ---------------------------------------------------------------------------
+
+describe("BehaviorEngine delegation glow", () => {
+  it("setDelegating boosts glow_intensity by 0.08", () => {
+    const engine = new BehaviorEngine();
+    const baseline = engine.compute(makeDefaultState());
+    const baseGlow = baseline.glow_intensity;
+
+    engine.setDelegating(true);
+    const delegating = engine.compute(makeDefaultState());
+    expect(delegating.glow_intensity).toBeCloseTo(baseGlow + 0.08, 2);
+  });
+
+  it("setDelegating(false) removes the glow boost", () => {
+    const engine = new BehaviorEngine();
+
+    engine.setDelegating(true);
+    engine.compute(makeDefaultState());
+
+    engine.setDelegating(false);
+    const cues = engine.compute(makeDefaultState());
+
+    // Without delegation, glow should be at baseline level
+    const baselineEngine = new BehaviorEngine();
+    // Advance baseline engine to the same tick count for delta clamping parity
+    baselineEngine.compute(makeDefaultState());
+    const baseline = baselineEngine.compute(makeDefaultState());
+    expect(cues.glow_intensity).toBeCloseTo(baseline.glow_intensity, 2);
+  });
+
+  it("delegation glow is clamped to 1.0", () => {
+    const engine = new BehaviorEngine();
+    // High processing + confidence already produces high glow
+    const state = makeDefaultState({ processing: 1, confidence: 1 });
+    engine.setDelegating(true);
+    const cues = engine.compute(state);
+    expect(cues.glow_intensity).toBeLessThanOrEqual(1.0);
+  });
+
+  it("reset clears delegation state", () => {
+    const engine = new BehaviorEngine();
+    engine.setDelegating(true);
+    engine.reset();
+    // After reset, compute should produce baseline glow (no delegation boost)
+    const cues = engine.compute(makeDefaultState());
+    const baselineEngine = new BehaviorEngine();
+    const baseline = baselineEngine.compute(makeDefaultState());
+    expect(cues.glow_intensity).toBeCloseTo(baseline.glow_intensity, 2);
+  });
+});

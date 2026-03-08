@@ -902,6 +902,17 @@ export function App(): React.ReactElement {
           return;
         }
 
+        case "delegation_start":
+          addSystemMessage(`Delegating to ${chunk.server}...`);
+          break;
+
+        case "delegation_complete": {
+          const status = chunk.receipt != null && chunk.receipt.status === "failed" ? "\u2717" : "\u2713";
+          const toolInfo = chunk.receipt != null ? ` (${chunk.receipt.tools_used.length} tool${chunk.receipt.tools_used.length !== 1 ? "s" : ""})` : "";
+          addSystemMessage(`Delegated to ${chunk.server} ${status}${toolInfo}`);
+          break;
+        }
+
         case "injection_warning":
           addSystemMessage(`Warning: injection patterns detected in ${chunk.tool_name}`);
           break;

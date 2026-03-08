@@ -11,9 +11,11 @@ import { ThreeJSAdapter } from "@motebit/render-engine";
 import {
   CloudProvider,
   OllamaProvider,
+  detectOllama,
   resolveConfig,
   type MotebitPersonalityConfig,
 } from "@motebit/ai-core";
+export type { OllamaDetectionResult } from "@motebit/ai-core";
 import type { ToolAuditEntry, MemoryNode, MemoryEdge } from "@motebit/sdk";
 import { EventType, SensitivityLevel } from "@motebit/sdk";
 import { InMemoryEventStore, type EventStoreAdapter } from "@motebit/event-log";
@@ -495,6 +497,21 @@ export class DesktopApp {
     return this.runtime?.currentModel ?? null;
   }
 
+  /** The active provider type: "anthropic", "ollama", or null if not initialized. */
+  private _activeProvider: "anthropic" | "ollama" | null = null;
+
+  get currentProvider(): "anthropic" | "ollama" | null {
+    return this._activeProvider;
+  }
+
+  /**
+   * Detect a local Ollama instance. Never throws.
+   * Times out after 2 seconds.
+   */
+  detectOllama(): ReturnType<typeof detectOllama> {
+    return detectOllama();
+  }
+
   setModel(model: string): void {
     if (!this.runtime) throw new Error("AI not initialized — call initAI() first");
     this.runtime.setModel(model);
@@ -516,6 +533,7 @@ export class DesktopApp {
       const model = config.model != null && config.model !== "" ? config.model : "llama3.2";
       const base_url = config.isTauri ? "http://localhost:11434" : "/api/ollama";
       provider = new OllamaProvider({ model, base_url, max_tokens: 1024, temperature });
+      this._activeProvider = "ollama";
     } else {
       if (config.apiKey == null || config.apiKey === "") return false;
       const model = config.model != null && config.model !== "" ? config.model : "claude-sonnet-4-20250514";
@@ -528,6 +546,7 @@ export class DesktopApp {
         max_tokens: 1024,
         temperature,
       });
+      this._activeProvider = "anthropic";
     }
 
     // State snapshot + conversation persistence — preload before runtime construction

@@ -1145,3 +1145,140 @@ describe("Approval timeout", () => {
     expect(runtime.hasPendingApproval).toBe(true);
   });
 });
+
+// === Delegation Streaming Events ===
+
+describe("Delegation streaming events", () => {
+  let runtime: MotebitRuntime;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runtime = new MotebitRuntime(
+      { motebitId: "delegation-test", tickRateHz: 0 },
+      createAdapters(createMockProvider()),
+    );
+  });
+
+  function setMotebitToolServer(rt: MotebitRuntime, toolName: string, serverName: string): void {
+    const map = (rt as unknown as { motebitToolServers: Map<string, string> }).motebitToolServers;
+    map.set(toolName, serverName);
+  }
+
+  it("emits delegation_start and delegation_complete for motebit tools", async () => {
+    setMotebitToolServer(runtime, "motebit_query", "agent-alpha");
+
+    const result = makeTurnResult();
+    mockRunTurnStreaming.mockReturnValue(yieldChunks(
+      { type: "tool_status", name: "motebit_query", status: "calling" },
+      { type: "tool_status", name: "motebit_query", status: "done", result: "response" },
+      { type: "text", text: "Got it." },
+      { type: "result", result },
+    ));
+
+    const chunks = await collectChunks(runtime.sendMessageStreaming("ask agent"));
+
+    const delegationStart = chunks.find(c => c.type === "delegation_start");
+    const delegationComplete = chunks.find(c => c.type === "delegation_complete");
+
+    expect(delegationStart).toEqual({
+      type: "delegation_start",
+      server: "agent-alpha",
+      tool: "motebit_query",
+    });
+    expect(delegationComplete).toMatchObject({
+      type: "delegation_complete",
+      server: "agent-alpha",
+      tool: "motebit_query",
+    });
+  });
+
+  it("does not emit delegation events for non-motebit tools", async () => {
+    const result = makeTurnResult();
+    mockRunTurnStreaming.mockReturnValue(yieldChunks(
+      { type: "tool_status", name: "read_file", status: "calling" },
+      { type: "tool_status", name: "read_file", status: "done", result: "content" },
+      { type: "result", result },
+    ));
+
+    const chunks = await collectChunks(runtime.sendMessageStreaming("read file"));
+
+    const delegationChunks = chunks.filter(c =>
+      c.type === "delegation_start" || c.type === "delegation_complete",
+    );
+    expect(delegationChunks).toHaveLength(0);
+  });
+
+  it("extracts receipt summary from motebit_task results", async () => {
+    setMotebitToolServer(runtime, "motebit_task", "agent-beta");
+
+    const taskReceipt = {
+      task_id: "task-123",
+      status: "completed",
+      tools_used: ["web_search", "summarize"],
+      result: "Task done",
+    };
+
+    const result = makeTurnResult();
+    mockRunTurnStreaming.mockReturnValue(yieldChunks(
+      { type: "tool_status", name: "motebit_task", status: "calling" },
+      { type: "tool_status", name: "motebit_task", status: "done", result: taskReceipt },
+      { type: "result", result },
+    ));
+
+    const chunks = await collectChunks(runtime.sendMessageStreaming("run task"));
+
+    const delegationComplete = chunks.find(c => c.type === "delegation_complete") as
+      Extract<StreamChunk, { type: "delegation_complete" }>;
+
+    expect(delegationComplete).toBeDefined();
+    expect(delegationComplete.receipt).toEqual({
+      task_id: "task-123",
+      status: "completed",
+      tools_used: ["web_search", "summarize"],
+    });
+  });
+
+  it("delegation_complete has no receipt for non-task tools", async () => {
+    setMotebitToolServer(runtime, "motebit_recall", "agent-gamma");
+
+    const result = makeTurnResult();
+    mockRunTurnStreaming.mockReturnValue(yieldChunks(
+      { type: "tool_status", name: "motebit_recall", status: "calling" },
+      { type: "tool_status", name: "motebit_recall", status: "done", result: "memories" },
+      { type: "result", result },
+    ));
+
+    const chunks = await collectChunks(runtime.sendMessageStreaming("recall"));
+
+    const delegationComplete = chunks.find(c => c.type === "delegation_complete") as
+      Extract<StreamChunk, { type: "delegation_complete" }>;
+
+    expect(delegationComplete).toBeDefined();
+    expect(delegationComplete.receipt).toBeUndefined();
+  });
+
+  it("delegation events are interleaved correctly with tool_status", async () => {
+    setMotebitToolServer(runtime, "motebit_query", "agent-alpha");
+
+    const result = makeTurnResult();
+    mockRunTurnStreaming.mockReturnValue(yieldChunks(
+      { type: "tool_status", name: "motebit_query", status: "calling" },
+      { type: "tool_status", name: "motebit_query", status: "done", result: "ok" },
+      { type: "result", result },
+    ));
+
+    const chunks = await collectChunks(runtime.sendMessageStreaming("ask"));
+
+    // Delegation events are emitted before the corresponding tool_status chunk
+    // Order: delegation_start, tool_status calling, delegation_complete, tool_status done, result
+    const types = chunks.map(c => c.type);
+    expect(types).toContain("delegation_start");
+    expect(types).toContain("delegation_complete");
+
+    const startIdx = types.indexOf("delegation_start");
+    const completeIdx = types.indexOf("delegation_complete");
+
+    // delegation_start comes before delegation_complete
+    expect(startIdx).toBeLessThan(completeIdx);
+  });
+});

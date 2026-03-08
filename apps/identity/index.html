@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Motebit Identity</title>
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg: #0a0a0c;
+      --surface: #131318;
+      --surface-hover: #1a1a22;
+      --border: #25252e;
+      --border-subtle: #1e1e26;
+      --text: #e4e4e8;
+      --text-dim: #8888a0;
+      --text-muted: #5c5c70;
+      --accent: #7c8aff;
+      --accent-dim: rgba(124, 138, 255, 0.12);
+      --green: #4ade80;
+      --green-dim: rgba(74, 222, 128, 0.12);
+      --red: #f87171;
+      --red-dim: rgba(248, 113, 113, 0.12);
+      --amber: #fbbf24;
+      --radius: 10px;
+      --radius-sm: 6px;
+      --font-mono: "SF Mono", "Fira Code", "JetBrains Mono", monospace;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ---- Header ---- */
+    .page-header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+
+    .page-header h1 {
+      font-size: 20px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      color: var(--text);
+    }
+
+    .page-header p {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 6px;
+    }
+
+    /* ---- Drop zone ---- */
+    #drop-zone {
+      width: 100%;
+      max-width: 480px;
+      border: 1.5px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 48px 32px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      background: var(--surface);
+    }
+
+    #drop-zone.hidden {
+      display: none;
+    }
+
+    #drop-zone.dragover {
+      border-color: var(--accent);
+      background: var(--accent-dim);
+    }
+
+    #drop-zone:hover {
+      border-color: var(--text-muted);
+    }
+
+    .drop-icon {
+      width: 40px;
+      height: 40px;
+      margin: 0 auto 16px;
+      color: var(--text-muted);
+    }
+
+    .drop-text {
+      font-size: 14px;
+      color: var(--text-dim);
+      margin-bottom: 16px;
+    }
+
+    .drop-text strong {
+      color: var(--text);
+    }
+
+    #browse-btn {
+      display: inline-block;
+      padding: 8px 20px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text);
+      background: var(--surface-hover);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    #browse-btn:hover {
+      background: var(--border);
+      border-color: var(--text-muted);
+    }
+
+    #file-input {
+      display: none;
+    }
+
+    /* ---- Error ---- */
+    #error-container {
+      max-width: 480px;
+      width: 100%;
+      font-size: 13px;
+      color: var(--red);
+      background: var(--red-dim);
+      border: 1px solid rgba(248, 113, 113, 0.2);
+      border-radius: var(--radius-sm);
+      padding: 12px 16px;
+      margin-top: 12px;
+      display: none;
+    }
+
+    #error-container.visible {
+      display: block;
+    }
+
+    /* ---- Reset button ---- */
+    #reset-btn {
+      display: none;
+      margin-bottom: 20px;
+      padding: 6px 16px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-dim);
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s;
+    }
+
+    #reset-btn.visible {
+      display: inline-block;
+    }
+
+    #reset-btn:hover {
+      color: var(--text);
+      border-color: var(--text-muted);
+    }
+
+    /* ---- Profile card ---- */
+    .profile-card {
+      width: 100%;
+      max-width: 480px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .card-header {
+      padding: 24px 24px 20px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .card-header-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .spec-badge {
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+      background: var(--bg);
+      padding: 3px 8px;
+      border-radius: 4px;
+      border: 1px solid var(--border-subtle);
+    }
+
+    .verification-badge {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 4px 10px;
+      border-radius: 100px;
+    }
+
+    .verification-badge.status-valid {
+      color: var(--green);
+      background: var(--green-dim);
+    }
+
+    .verification-badge.status-invalid {
+      color: var(--red);
+      background: var(--red-dim);
+    }
+
+    .status-icon {
+      font-size: 14px;
+      line-height: 1;
+    }
+
+    .motebit-id-display {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .id-text {
+      font-size: 18px;
+      font-weight: 600;
+      font-family: var(--font-mono);
+      letter-spacing: -0.02em;
+      color: var(--text);
+    }
+
+    .copy-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      color: var(--text-muted);
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s, background 0.15s;
+      flex-shrink: 0;
+    }
+
+    .copy-btn:hover {
+      color: var(--text);
+      border-color: var(--text-muted);
+      background: var(--surface-hover);
+    }
+
+    .copy-btn.copied {
+      color: var(--green);
+      border-color: var(--green);
+    }
+
+    .copy-btn-small {
+      width: 22px;
+      height: 22px;
+    }
+
+    .meta-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      margin-bottom: 6px;
+    }
+
+    .meta-label {
+      color: var(--text-muted);
+      min-width: 100px;
+      flex-shrink: 0;
+    }
+
+    .meta-value {
+      color: var(--text-dim);
+    }
+
+    .meta-value.mono {
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+
+    /* ---- Card sections ---- */
+    .card-section {
+      padding: 18px 24px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .card-section:last-child {
+      border-bottom: none;
+    }
+
+    .card-section h3 {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+
+    /* ---- Governance ---- */
+    .governance-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .gov-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 13px;
+    }
+
+    .gov-label {
+      color: var(--text-dim);
+    }
+
+    .gov-value {
+      color: var(--text);
+      font-weight: 500;
+      font-size: 12px;
+    }
+
+    .trust-mode-minimal {
+      color: var(--amber);
+    }
+
+    .trust-mode-guarded {
+      color: var(--accent);
+    }
+
+    .trust-mode-full {
+      color: var(--green);
+    }
+
+    /* ---- Privacy / Retention ---- */
+    .privacy-info {
+      margin-bottom: 12px;
+    }
+
+    .retention-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+      gap: 6px;
+    }
+
+    .retention-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      padding: 5px 10px;
+      background: var(--bg);
+      border-radius: 4px;
+      border: 1px solid var(--border-subtle);
+    }
+
+    .retention-level {
+      color: var(--text-dim);
+    }
+
+    .retention-days {
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-weight: 500;
+    }
+
+    /* ---- Memory ---- */
+    .memory-grid {
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ---- Devices ---- */
+    .devices-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .device-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 13px;
+      padding: 6px 10px;
+      background: var(--bg);
+      border-radius: 4px;
+      border: 1px solid var(--border-subtle);
+    }
+
+    .device-name {
+      color: var(--text);
+      font-weight: 500;
+    }
+
+    .device-id {
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+
+    /* ---- Footer ---- */
+    .page-footer {
+      margin-top: 32px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .page-footer a {
+      color: var(--text-dim);
+      text-decoration: none;
+    }
+
+    .page-footer a:hover {
+      color: var(--text);
+    }
+
+    /* ---- Responsive ---- */
+    @media (max-width: 520px) {
+      body {
+        padding: 16px;
+      }
+
+      #drop-zone {
+        padding: 32px 20px;
+      }
+
+      .card-header,
+      .card-section {
+        padding-left: 16px;
+        padding-right: 16px;
+      }
+
+      .meta-label {
+        min-width: 80px;
+      }
+
+      .retention-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page-header">
+    <h1>Motebit Identity</h1>
+    <p>Verify a cryptographically signed agent identity file</p>
+  </div>
+
+  <button id="reset-btn">Load another file</button>
+
+  <div id="drop-zone">
+    <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+      <polyline points="14 2 14 8 20 8"></polyline>
+      <line x1="12" y1="18" x2="12" y2="12"></line>
+      <line x1="9" y1="15" x2="12" y2="12"></line>
+      <line x1="15" y1="15" x2="12" y2="12"></line>
+    </svg>
+    <p class="drop-text">Drop a <strong>motebit.md</strong> file here</p>
+    <button id="browse-btn">Browse files</button>
+    <input type="file" id="file-input" accept=".md,text/markdown" />
+  </div>
+
+  <div id="error-container"></div>
+
+  <div id="card-container"></div>
+
+  <div class="page-footer">
+    <a href="https://github.com/motebit/motebit">motebit/identity@1.0</a>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

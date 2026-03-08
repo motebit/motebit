@@ -109,6 +109,41 @@ let activeToastTimer: ReturnType<typeof setTimeout> | null = null;
 
 const toolStatusElements = new Map<string, HTMLElement>();
 
+// === Delegation Indicator Tracking ===
+
+const delegationElements = new Map<string, HTMLElement>();
+
+function showDelegationIndicator(server: string, tool: string): void {
+  const key = `${server}:${tool}`;
+  const el = document.createElement("div");
+  el.className = "delegation-indicator active";
+  el.textContent = `Delegating to ${server}...`;
+  chatLog.appendChild(el);
+  chatLog.scrollTop = chatLog.scrollHeight;
+  delegationElements.set(key, el);
+}
+
+function completeDelegationIndicator(server: string, tool: string, receipt?: { task_id: string; status: string; tools_used: string[] }): void {
+  const key = `${server}:${tool}`;
+  const el = delegationElements.get(key);
+  if (!el) return;
+  el.classList.remove("active");
+  const failed = receipt != null && receipt.status === "failed";
+  el.classList.add(failed ? "failed" : "complete");
+  if (receipt != null) {
+    const toolCount = receipt.tools_used.length;
+    el.textContent = failed
+      ? `Delegated to ${server} \u2717`
+      : `Delegated to ${server} \u2713 (${toolCount} tool${toolCount !== 1 ? "s" : ""})`;
+  } else {
+    el.textContent = `Delegated to ${server} \u2713`;
+  }
+  setTimeout(() => {
+    el.classList.add("fade-out");
+    setTimeout(() => { el.remove(); delegationElements.delete(key); }, 500);
+  }, 2000);
+}
+
 // === Greeting Prompt Marker ===
 
 /** Prefix used to identify the internal greeting prompt in conversation history.
@@ -309,6 +344,10 @@ async function consumeApproval(ctx: DesktopContext, approved: boolean): Promise<
         } else if (chunk.status === "done") {
           completeToolStatus(chunk.name);
         }
+      } else if (chunk.type === "delegation_start") {
+        showDelegationIndicator(chunk.server, chunk.tool);
+      } else if (chunk.type === "delegation_complete") {
+        completeDelegationIndicator(chunk.server, chunk.tool, chunk.receipt);
       } else if (chunk.type === "approval_request") {
         showApprovalCard(ctx, chunk.name, chunk.args, chunk.risk_level);
       } else if (chunk.type === "injection_warning") {
@@ -908,6 +947,11 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
           } else if (chunk.status === "done") {
             completeToolStatus(chunk.name);
           }
+        } else if (chunk.type === "delegation_start") {
+          removeThinkingIndicator(thinkingEl);
+          showDelegationIndicator(chunk.server, chunk.tool);
+        } else if (chunk.type === "delegation_complete") {
+          completeDelegationIndicator(chunk.server, chunk.tool, chunk.receipt);
         } else if (chunk.type === "approval_request") {
           removeThinkingIndicator(thinkingEl);
           showApprovalCard(ctx, chunk.name, chunk.args, chunk.risk_level);

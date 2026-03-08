@@ -174,9 +174,27 @@ async function tryBootstrapIdentity(invoke: import("./tauri-storage.js").InvokeF
 
 /**
  * Attempt AI initialization with error recovery UI.
- * On failure, shows an actionable message with Retry and Settings options.
+ * If the configured provider is Anthropic but no API key is set,
+ * auto-detect a local Ollama instance and fall back to it.
  */
 async function tryInitAI(config: DesktopAIConfig): Promise<boolean> {
+  // If Anthropic is selected but no key is present, try Ollama auto-detection
+  if (config.provider === "anthropic" && (config.apiKey == null || config.apiKey === "")) {
+    const detection = await app.detectOllama();
+    if (detection.available && detection.bestModel !== "") {
+      // Switch to Ollama transparently
+      config.provider = "ollama";
+      config.model = detection.bestModel;
+      currentConfig = config;
+      const success = await app.initAI(config);
+      if (success) {
+        dismissBanner("ai-disconnected");
+        addMessage("system", `Connected to local Ollama (${detection.bestModel}). No API key needed.`);
+        return true;
+      }
+    }
+  }
+
   const success = await app.initAI(config);
   if (success) {
     dismissBanner("ai-disconnected");
@@ -185,7 +203,7 @@ async function tryInitAI(config: DesktopAIConfig): Promise<boolean> {
 
   if (config.provider === "anthropic") {
     addActionMessage(
-      "AI connection failed: no API key configured",
+      "To get started, either install Ollama for local AI or add an Anthropic API key.",
       [
         {
           label: "Retry",

@@ -640,6 +640,28 @@
       color: var(--text-muted);
     }
 
+    /* Provider status indicator */
+    .provider-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-bottom: 10px;
+      padding: 6px 10px;
+      border-radius: 6px;
+      background: rgba(255,255,255,0.03);
+    }
+    .provider-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .provider-dot.green { background: #22c55e; box-shadow: 0 0 4px rgba(34,197,94,0.4); }
+    .provider-dot.blue { background: #6366f1; box-shadow: 0 0 4px rgba(99,102,241,0.4); }
+    .provider-dot.yellow { background: #eab308; box-shadow: 0 0 4px rgba(234,179,8,0.4); }
+
     /* Form fields */
     .settings-field { display: flex; flex-direction: column; gap: 4px; }
     .settings-field + .settings-field { margin-top: 10px; }
@@ -1188,6 +1210,40 @@
     @keyframes pulse {
       0%, 100% { opacity: 0.4; }
       50% { opacity: 0.8; }
+    }
+
+    /* Delegation indicators */
+    .delegation-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      background: rgba(100, 140, 255, 0.1);
+      border: 1px solid rgba(100, 140, 255, 0.2);
+      margin: 4px 0;
+      align-self: center;
+    }
+    .delegation-indicator.active {
+      animation: delegation-pulse 1.5s ease-in-out infinite;
+    }
+    .delegation-indicator.complete {
+      background: rgba(80, 180, 120, 0.1);
+      border-color: rgba(80, 180, 120, 0.2);
+    }
+    .delegation-indicator.failed {
+      background: rgba(220, 100, 100, 0.1);
+      border-color: rgba(220, 100, 100, 0.2);
+    }
+    .delegation-indicator.fade-out {
+      opacity: 0;
+      transition: opacity 0.5s ease;
+    }
+    @keyframes delegation-pulse {
+      0%, 100% { opacity: 0.7; }
+      50% { opacity: 1; }
     }
 
     /* Memory footer on assistant bubbles */
@@ -3276,6 +3332,10 @@
       <div class="settings-pane" id="pane-intelligence" role="tabpanel" aria-labelledby="tab-intelligence">
         <div class="settings-card">
           <div class="card-title">AI Provider</div>
+          <div id="provider-status" class="provider-status" style="display:none;">
+            <span id="provider-status-dot" class="provider-dot"></span>
+            <span id="provider-status-text"></span>
+          </div>
           <div class="settings-field">
             <label for="settings-provider">Provider</label>
             <select id="settings-provider">
@@ -3559,8 +3619,8 @@
       <div id="welcome-text">
         This is your motebit — a sovereign agent that belongs to you.
         It creates a local cryptographic identity, stored in your system
-        keyring. Models are interchangeable; what compounds is the memory,
-        trust, and governance inside.
+        keyring. Your motebit runs locally — connect to Ollama for free
+        local AI, or add an Anthropic API key for cloud intelligence.
       </div>
       <button id="welcome-start">Get started</button>
       <button id="welcome-link-existing" class="settings-link-btn" style="margin-top:8px;">I have an existing motebit</button>

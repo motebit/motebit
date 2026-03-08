@@ -217,13 +217,33 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     populateModelSelect(settingsProvider.value);
   });
 
-  // === Model Indicator ===
+  // === Model Indicator + Provider Status ===
 
   const modelIndicator = document.getElementById("model-indicator") as HTMLDivElement;
+  const providerStatusEl = document.getElementById("provider-status") as HTMLDivElement;
+  const providerDot = document.getElementById("provider-status-dot") as HTMLSpanElement;
+  const providerText = document.getElementById("provider-status-text") as HTMLSpanElement;
 
   function updateModelIndicator(): void {
     const model = ctx.app.currentModel;
+    const provider = ctx.app.currentProvider;
     modelIndicator.textContent = model ?? "";
+
+    // Update provider status in settings panel
+    providerDot.className = "provider-dot";
+    if (provider === "ollama" && model) {
+      providerStatusEl.style.display = "flex";
+      providerDot.classList.add("green");
+      providerText.textContent = `Local (Ollama: ${model})`;
+    } else if (provider === "anthropic" && model) {
+      providerStatusEl.style.display = "flex";
+      providerDot.classList.add("blue");
+      providerText.textContent = `Cloud (Anthropic: ${model})`;
+    } else {
+      providerStatusEl.style.display = "flex";
+      providerDot.classList.add("yellow");
+      providerText.textContent = "No provider configured";
+    }
   }
 
   // === Approval Presets ===

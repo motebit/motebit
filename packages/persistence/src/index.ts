@@ -13,8 +13,9 @@ import type {
   RelationType,
   Plan,
   PlanStep,
+  AgentTrustRecord,
 } from "@motebit/sdk";
-import { PlanStatus, StepStatus } from "@motebit/sdk";
+import { PlanStatus, StepStatus, AgentTrustLevel } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import type {
   MemoryStorageAdapter,
@@ -257,6 +258,20 @@ CREATE TABLE IF NOT EXISTS gradient_snapshots (
 );
 
 CREATE INDEX IF NOT EXISTS idx_gradient_motebit_ts ON gradient_snapshots (motebit_id, timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS agent_trust (
+  motebit_id TEXT NOT NULL,
+  remote_motebit_id TEXT NOT NULL,
+  trust_level TEXT NOT NULL DEFAULT 'unknown',
+  public_key TEXT,
+  first_seen_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  interaction_count INTEGER NOT NULL DEFAULT 0,
+  notes TEXT,
+  PRIMARY KEY (motebit_id, remote_motebit_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_trust_motebit ON agent_trust (motebit_id);
 `;
 
 function initSchema(db: DatabaseDriver): void {
@@ -1845,6 +1860,84 @@ export class SqliteGradientStore {
   }
 }
 
+// === SqliteAgentTrustStore ===
+
+interface AgentTrustRow {
+  motebit_id: string;
+  remote_motebit_id: string;
+  trust_level: string;
+  public_key: string | null;
+  first_seen_at: number;
+  last_seen_at: number;
+  interaction_count: number;
+  notes: string | null;
+}
+
+function rowToAgentTrust(row: AgentTrustRow): AgentTrustRecord {
+  return {
+    motebit_id: row.motebit_id,
+    remote_motebit_id: row.remote_motebit_id,
+    trust_level: row.trust_level as AgentTrustLevel,
+    public_key: row.public_key ?? undefined,
+    first_seen_at: row.first_seen_at,
+    last_seen_at: row.last_seen_at,
+    interaction_count: row.interaction_count,
+    notes: row.notes ?? undefined,
+  };
+}
+
+export class SqliteAgentTrustStore {
+  private stmtGet: PreparedStatement;
+  private stmtSet: PreparedStatement;
+  private stmtList: PreparedStatement;
+  private stmtUpdateLevel: PreparedStatement;
+
+  constructor(db: DatabaseDriver) {
+    this.stmtGet = db.prepare(
+      `SELECT * FROM agent_trust WHERE motebit_id = ? AND remote_motebit_id = ?`,
+    );
+    this.stmtSet = db.prepare(
+      `INSERT OR REPLACE INTO agent_trust
+       (motebit_id, remote_motebit_id, trust_level, public_key, first_seen_at, last_seen_at, interaction_count, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmtList = db.prepare(
+      `SELECT * FROM agent_trust WHERE motebit_id = ? ORDER BY last_seen_at DESC`,
+    );
+    this.stmtUpdateLevel = db.prepare(
+      `UPDATE agent_trust SET trust_level = ?, last_seen_at = ? WHERE motebit_id = ? AND remote_motebit_id = ?`,
+    );
+  }
+
+  async getAgentTrust(motebitId: string, remoteMotebitId: string): Promise<AgentTrustRecord | null> {
+    const row = this.stmtGet.get(motebitId, remoteMotebitId) as AgentTrustRow | undefined;
+    if (row === undefined) return null;
+    return rowToAgentTrust(row);
+  }
+
+  async setAgentTrust(record: AgentTrustRecord): Promise<void> {
+    this.stmtSet.run(
+      record.motebit_id,
+      record.remote_motebit_id,
+      record.trust_level,
+      record.public_key ?? null,
+      record.first_seen_at,
+      record.last_seen_at,
+      record.interaction_count,
+      record.notes ?? null,
+    );
+  }
+
+  async listAgentTrust(motebitId: string): Promise<AgentTrustRecord[]> {
+    const rows = this.stmtList.all(motebitId) as AgentTrustRow[];
+    return rows.map(rowToAgentTrust);
+  }
+
+  async updateTrustLevel(motebitId: string, remoteMotebitId: string, level: AgentTrustLevel): Promise<void> {
+    this.stmtUpdateLevel.run(level, Date.now(), motebitId, remoteMotebitId);
+  }
+}
+
 // === Factory ===
 
 export interface MotebitDatabase {
@@ -1861,6 +1954,7 @@ export interface MotebitDatabase {
   conversationStore: SqliteConversationStore;
   planStore: SqlitePlanStore;
   gradientStore: SqliteGradientStore;
+  agentTrustStore: SqliteAgentTrustStore;
   close(): void;
 }
 
@@ -1994,6 +2088,11 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     driver.pragma("user_version = 18");
   }
 
+  if (userVersion < 19) {
+    // agent_trust table is in SCHEMA for new DBs; this handles upgrades from v18
+    driver.pragma("user_version = 19");
+  }
+
   const eventStore = new SqliteEventStore(driver);
   const memoryStorage = new SqliteMemoryStorage(driver);
   const identityStorage = new SqliteIdentityStorage(driver);
@@ -2006,6 +2105,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   const conversationStore = new SqliteConversationStore(driver);
   const planStore = new SqlitePlanStore(driver);
   const gradientStore = new SqliteGradientStore(driver);
+  const agentTrustStore = new SqliteAgentTrustStore(driver);
 
   return {
     db: driver,
@@ -2021,6 +2121,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     conversationStore,
     planStore,
     gradientStore,
+    agentTrustStore,
     close() {
       driver.close();
     },

@@ -58,10 +58,20 @@ interface Impulse {
   startTime: number; // Date.now()
 }
 
+/** Trust context for ambient behavior modulation. */
+export interface TrustContext {
+  /** Average trust level across known agents (0=unknown, 1=first_contact, 2=verified, 3=trusted). Blocked agents excluded. */
+  avgTrustLevel: number;
+  /** Number of agents at Trusted level. */
+  trustedCount: number;
+}
+
 export class BehaviorEngine {
   private previousCues: BehaviorCues;
   private baselineDrift: number = SPATIAL.BASE_DRIFT;
   private _speaking = false;
+  private _delegating = false;
+  private _trustContext: TrustContext | null = null;
   private impulses: Impulse[] = [];
 
   constructor() {
@@ -78,6 +88,16 @@ export class BehaviorEngine {
   /** Signal whether the agent is currently generating text. */
   setSpeaking(active: boolean): void {
     this._speaking = active;
+  }
+
+  /** Signal whether the agent is currently delegating to another motebit. */
+  setDelegating(active: boolean): void {
+    this._delegating = active;
+  }
+
+  /** Update ambient trust context — affects glow and social distance subtly. */
+  setTrustContext(ctx: TrustContext | null): void {
+    this._trustContext = ctx;
   }
 
   /** Inject a short-lived impulse for immediate visual pop (e.g. from action tags). */
@@ -116,15 +136,28 @@ export class BehaviorEngine {
       return Math.pow(2, -elapsed / imp.halfLife) >= 0.01;
     });
 
-    // 5. Speaking activity
+    // 5. Delegation glow boost — subtle brightness increase when delegating to another motebit
+    if (this._delegating) {
+      deltaClamped.glow_intensity = clamp(deltaClamped.glow_intensity + 0.08, 0, 1);
+    }
+
+    // 6. Trust network ambient effect — more trusted agents → slightly warmer glow, slightly closer social distance
+    if (this._trustContext != null && this._trustContext.trustedCount > 0) {
+      // avgTrustLevel ranges 0-3; normalize to 0-1 for modulation
+      const trustFactor = clamp(this._trustContext.avgTrustLevel / 3, 0, 1);
+      deltaClamped.glow_intensity = clamp(deltaClamped.glow_intensity + trustFactor * 0.05, 0, 1);
+      deltaClamped.hover_distance = Math.max(0, deltaClamped.hover_distance - trustFactor * 0.03);
+    }
+
+    // 7. Speaking activity
     deltaClamped.speaking_activity = this._speaking ? 1 : 0;
 
-    // 6. Duchenne eye squint — positive smile narrows the eyes slightly
+    // 8. Duchenne eye squint — positive smile narrows the eyes slightly
     if (deltaClamped.smile_curvature > 0) {
       deltaClamped.eye_dilation -= deltaClamped.smile_curvature * 0.12;
     }
 
-    // 7. Store for next tick
+    // 9. Store for next tick
     this.previousCues = { ...deltaClamped };
 
     return deltaClamped;
@@ -143,6 +176,8 @@ export class BehaviorEngine {
   reset(): void {
     this.impulses = [];
     this._speaking = false;
+    this._trustContext = null;
+    this._delegating = false;
     this.previousCues = {
       hover_distance: SPATIAL.SHOULDER_DISTANCE,
       drift_amplitude: SPATIAL.BASE_DRIFT,
