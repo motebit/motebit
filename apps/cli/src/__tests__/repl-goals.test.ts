@@ -4,7 +4,7 @@ import { createMotebitDatabase, type MotebitDatabase, type Goal } from "@motebit
 import type { MotebitRuntime } from "@motebit/runtime";
 
 function makeRepl(moteDb: MotebitDatabase, motebitId = "mote-test"): ReplContext {
-  return { moteDb, motebitId };
+  return { moteDb, motebitId, mcpAdapters: [] };
 }
 
 function makeGoal(overrides: Partial<Goal> = {}): Goal {

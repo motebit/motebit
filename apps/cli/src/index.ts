@@ -42,7 +42,7 @@ import {
   FallbackSearchProvider,
 } from "@motebit/tools";
 import type { SearchProvider } from "@motebit/tools";
-import { connectMcpServers, type McpServerConfig } from "@motebit/mcp-client";
+import { connectMcpServers, McpClientAdapter, type McpServerConfig } from "@motebit/mcp-client";
 import { deriveKey, encrypt, decrypt, generateSalt, deriveSyncEncryptionKey, createSignedToken, verifySignedToken } from "@motebit/crypto";
 import type { EncryptedPayload } from "@motebit/crypto";
 import {
@@ -780,6 +780,9 @@ async function consumeStream(
 export interface ReplContext {
   moteDb: MotebitDatabase;
   motebitId: string;
+  mcpAdapters: McpClientAdapter[];
+  privateKeyBytes?: Uint8Array;
+  deviceId?: string;
 }
 
 export async function handleSlashCommand(
@@ -815,6 +818,8 @@ Available commands:
   /approvals         Show pending approval queue
   /reflect           Trigger reflection — see what the agent learned
   /mcp list          List MCP servers and trust status
+  /mcp add <name> <url> [--motebit]  Add an HTTP MCP server
+  /mcp remove <name> Remove an MCP server
   /mcp trust <name>  Trust an MCP server
   /mcp untrust <name> Untrust an MCP server
   /discover [cap]    Discover agents on the relay (optional capability filter)
@@ -1204,9 +1209,96 @@ Available commands:
           console.log(`\nMCP servers (${servers.length}):\n`);
           for (const s of servers) {
             const isTrusted = trusted.includes(s.name);
-            console.log(`  ${s.name.padEnd(24)} ${isTrusted ? "trusted" : "untrusted"}`);
+            const transport = s.transport ?? "stdio";
+            const adapter = repl?.mcpAdapters.find((a) => a.serverName === s.name);
+            const connected = adapter?.isConnected ? "connected" : "disconnected";
+            const motebitStatus = adapter?.isMotebit
+              ? adapter.verifiedIdentity?.verified ? " motebit:verified" : " motebit:unverified"
+              : "";
+            console.log(`  ${s.name.padEnd(20)} ${transport.padEnd(6)} ${(isTrusted ? "trusted" : "untrusted").padEnd(10)} ${connected}${motebitStatus}`);
           }
         }
+      } else if (subCmd === "add") {
+        if (!repl) { console.log("REPL context not available."); break; }
+        // Parse: /mcp add <name> <url> [--motebit]
+        const addArgs = subArgs;
+        const motebitFlag = addArgs.includes("--motebit");
+        const filtered = addArgs.filter((a) => a !== "--motebit");
+        const addName = filtered[0];
+        const addUrl = filtered[1];
+        if (!addName || !addUrl) {
+          console.log("Usage: /mcp add <name> <url> [--motebit]");
+          break;
+        }
+        const existing = (fullConfig.mcp_servers ?? []).find((s) => s.name === addName);
+        if (existing) {
+          console.log(`Server "${addName}" already configured. Use /mcp remove first.`);
+          break;
+        }
+        const serverCfg: McpServerConfig = {
+          name: addName,
+          transport: "http",
+          url: addUrl,
+          ...(motebitFlag ? { motebit: true } : {}),
+          ...(motebitFlag && repl.privateKeyBytes && repl.deviceId ? {
+            callerMotebitId: repl.motebitId,
+            callerDeviceId: repl.deviceId,
+            callerPrivateKey: repl.privateKeyBytes,
+          } : {}),
+        };
+        const adapter = new McpClientAdapter(serverCfg);
+        try {
+          await adapter.connect();
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.log(`Failed to connect to "${addName}": ${message}`);
+          break;
+        }
+        // Pin manifest hash
+        const manifest = await adapter.checkManifest();
+        // Register tools into runtime
+        const tmpRegistry = new InMemoryToolRegistry();
+        adapter.registerInto(tmpRegistry);
+        runtime.registerExternalTools(`mcp:${addName}`, tmpRegistry);
+        // Track adapter
+        repl.mcpAdapters.push(adapter);
+        // Persist to config (without transient fields like callerPrivateKey)
+        const persistCfg: McpServerConfig = {
+          name: addName,
+          transport: "http",
+          url: addUrl,
+          ...(motebitFlag ? { motebit: true } : {}),
+        };
+        if (adapter.verifiedIdentity?.verified && adapter.serverConfig.motebitPublicKey) {
+          persistCfg.motebitPublicKey = adapter.serverConfig.motebitPublicKey;
+        }
+        fullConfig.mcp_servers = [...(fullConfig.mcp_servers ?? []), persistCfg];
+        saveFullConfig(fullConfig);
+        // Output
+        const verifiedStr = adapter.verifiedIdentity?.verified
+          ? ` (motebit: ${adapter.verifiedIdentity.motebit_id?.slice(0, 12)}... verified)`
+          : "";
+        console.log(`Added "${addName}" — ${manifest.toolCount} tool(s)${verifiedStr}`);
+      } else if (subCmd === "remove") {
+        if (!repl) { console.log("REPL context not available."); break; }
+        const removeName = subArgs[0];
+        if (!removeName) { console.log("Usage: /mcp remove <name>"); break; }
+        // Disconnect adapter if connected
+        const adapterIdx = repl.mcpAdapters.findIndex((a) => a.serverName === removeName);
+        if (adapterIdx >= 0) {
+          const removedAdapter = repl.mcpAdapters[adapterIdx];
+          if (removedAdapter) {
+            try { await removedAdapter.disconnect(); } catch { /* best effort */ }
+          }
+          repl.mcpAdapters.splice(adapterIdx, 1);
+        }
+        // Unregister tools from runtime
+        runtime.unregisterExternalTools(`mcp:${removeName}`);
+        // Remove from config
+        fullConfig.mcp_servers = (fullConfig.mcp_servers ?? []).filter((s) => s.name !== removeName);
+        fullConfig.mcp_trusted_servers = (fullConfig.mcp_trusted_servers ?? []).filter((n) => n !== removeName);
+        saveFullConfig(fullConfig);
+        console.log(`Removed "${removeName}".`);
       } else if (subCmd === "trust") {
         if (!serverName) { console.log("Usage: /mcp trust <server-name>"); break; }
         const trusted = fullConfig.mcp_trusted_servers ?? [];
@@ -1222,7 +1314,7 @@ Available commands:
         saveFullConfig(fullConfig);
         console.log(`Marked "${serverName}" as untrusted. Restart to apply.`);
       } else {
-        console.log("Usage: /mcp [list|trust <name>|untrust <name>]");
+        console.log("Usage: /mcp [list|add <name> <url>|remove <name>|trust <name>|untrust <name>]");
       }
       break;
     }
@@ -2747,7 +2839,7 @@ async function main(): Promise<void> {
 
     if (isSlashCommand(trimmed)) {
       const { command, args } = parseSlashCommand(trimmed);
-      await handleSlashCommand(command, args, runtime, config, fullConfig, { moteDb, motebitId });
+      await handleSlashCommand(command, args, runtime, config, fullConfig, { moteDb, motebitId, mcpAdapters, privateKeyBytes, deviceId });
       console.log();
       prompt();
       return;
