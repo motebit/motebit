@@ -65,8 +65,12 @@ vi.mock("@modelcontextprotocol/sdk/server/stdio.js", () => ({
   StdioServerTransport: vi.fn(),
 }));
 
-vi.mock("@modelcontextprotocol/sdk/server/sse.js", () => ({
-  SSEServerTransport: vi.fn(),
+vi.mock("@modelcontextprotocol/sdk/server/streamableHttp.js", () => ({
+  StreamableHTTPServerTransport: vi.fn(),
+}));
+
+vi.mock("@modelcontextprotocol/sdk/types.js", () => ({
+  isInitializeRequest: vi.fn(() => false),
 }));
 
 // --- Helpers ---
@@ -428,9 +432,9 @@ describe("McpServerAdapter — tool registration", () => {
     const adapter = new McpServerAdapter(makeConfig(), deps);
     await adapter.start();
 
-    // Tool with args is registered with 4 extra args before handler: description, zodShape, annotations
+    // Tool with args: description + zodShape (annotations omitted when empty)
     const entry = registrations.tools.get("with-args")!;
-    expect(entry.args.length).toBeGreaterThanOrEqual(3);
+    expect(entry.args.length).toBeGreaterThanOrEqual(2);
   });
 
   it("registers tools without args (no zodShape)", async () => {
@@ -442,10 +446,9 @@ describe("McpServerAdapter — tool registration", () => {
     const adapter = new McpServerAdapter(makeConfig(), deps);
     await adapter.start();
 
-    // Tool without args skips zodShape — registered with fewer args
+    // Tool without args skips zodShape and empty annotations — just description + handler
     const entry = registrations.tools.get("no-args")!;
-    // description + annotations (no zodShape)
-    expect(entry.args.length).toBe(2);
+    expect(entry.args.length).toBe(1);
   });
 });
 

@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import {
   AgentTrustLevel,
@@ -14,6 +15,19 @@ import type {
 // Re-export for consumers
 export type { MotebitServerDeps, McpServerConfig };
 export { AgentTrustLevel } from "@motebit/sdk";
+
+// Service scaffold — eliminates boilerplate for service motebits
+export { wireServerDeps, startServiceServer } from "./service.js";
+export type {
+  ServiceRuntime,
+  ServiceToolRegistry,
+  ServicePolicyGate,
+  ServiceMemoryGraph,
+  ServiceEventStore,
+  WireServerDepsOptions,
+  ServiceServerConfig,
+  ServiceHandle,
+} from "./service.js";
 
 // === Dependency interface (injected, not imported — keeps the package light) ===
 
@@ -278,8 +292,11 @@ export class McpServerAdapter {
       const annotations = riskToAnnotations(tool.riskHint);
       const zodShape = jsonSchemaToZodShape(tool.inputSchema);
       const hasArgs = Object.keys(zodShape).length > 0;
+      // MCP SDK treats empty objects as Zod raw shapes (empty input schema),
+      // which breaks overload resolution. Only pass annotations when non-empty.
+      const hasAnnotations = Object.keys(annotations).length > 0;
 
-      if (hasArgs) {
+      if (hasArgs && hasAnnotations) {
         this.server.tool(
           tool.name,
           tool.description,
@@ -289,11 +306,28 @@ export class McpServerAdapter {
             return this.handleToolCall(tool, args);
           },
         );
-      } else {
+      } else if (hasArgs) {
+        this.server.tool(
+          tool.name,
+          tool.description,
+          zodShape,
+          async (args: Record<string, unknown>) => {
+            return this.handleToolCall(tool, args);
+          },
+        );
+      } else if (hasAnnotations) {
         this.server.tool(
           tool.name,
           tool.description,
           annotations,
+          async () => {
+            return this.handleToolCall(tool, {});
+          },
+        );
+      } else {
+        this.server.tool(
+          tool.name,
+          tool.description,
           async () => {
             return this.handleToolCall(tool, {});
           },
@@ -670,60 +704,32 @@ export class McpServerAdapter {
     return { motebitId: claims.mid, trustLevel };
   }
 
-  // --- HTTP Transport ---
+  // --- HTTP Transport (Streamable HTTP) ---
 
   private async startHttp(): Promise<void> {
     const http = await import("node:http");
     const port = this.config.port ?? 3100;
 
-    const transports = new Map<string, SSEServerTransport>();
+    // Session ID → transport mapping for stateful connections
+    const transports = new Map<string, StreamableHTTPServerTransport>();
 
     this.httpServer = http.createServer(async (req, res) => {
       const url = new URL(req.url ?? "/", `http://localhost:${port}`);
 
-      // Bearer token auth (skip /health)
-      if (url.pathname !== "/health") {
-        const authHeader = req.headers["authorization"];
-        const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
+      // CORS headers
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id");
+      res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
 
-        if (bearerToken?.startsWith("motebit:")) {
-          // Motebit signed token — verify caller identity
-          const callerInfo = await this.verifyCallerToken(bearerToken.slice(8));
-          if (!callerInfo) {
-            res.writeHead(401, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "invalid motebit token" }));
-            return;
-          }
-          this.lastVerifiedCaller = callerInfo;
-        } else if (this.config.authToken) {
-          // Static token auth
-          if (bearerToken !== this.config.authToken) {
-            res.writeHead(401, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "unauthorized" }));
-            return;
-          }
-        }
-        // If no authToken configured and no motebit token, allow (open access)
+      if (req.method === "OPTIONS") {
+        res.writeHead(204);
+        res.end();
+        return;
       }
 
-      if (url.pathname === "/sse" && req.method === "GET") {
-        const transport = new SSEServerTransport("/messages", res);
-        transports.set(transport.sessionId, transport);
-        await this.server.connect(transport);
-
-        res.on("close", () => {
-          transports.delete(transport.sessionId);
-        });
-      } else if (url.pathname === "/messages" && req.method === "POST") {
-        const sessionId = url.searchParams.get("sessionId");
-        if (!sessionId || !transports.has(sessionId)) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "invalid session" }));
-          return;
-        }
-        const transport = transports.get(sessionId)!;
-        await transport.handlePostMessage(req, res);
-      } else if (url.pathname === "/health" && req.method === "GET") {
+      // Health endpoint (no auth required)
+      if (url.pathname === "/health" && req.method === "GET") {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({
@@ -731,10 +737,107 @@ export class McpServerAdapter {
             motebit_id: this.deps.motebitId,
           }),
         );
-      } else {
-        res.writeHead(404);
-        res.end("not found");
+        return;
       }
+
+      // Bearer token auth (skip /health, already handled above)
+      const authHeader = req.headers["authorization"];
+      const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
+
+      if (bearerToken?.startsWith("motebit:")) {
+        // Motebit signed token — verify caller identity
+        const callerInfo = await this.verifyCallerToken(bearerToken.slice(8));
+        if (!callerInfo) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "invalid motebit token" }));
+          return;
+        }
+        this.lastVerifiedCaller = callerInfo;
+      } else if (this.config.authToken) {
+        // Static token auth
+        if (bearerToken !== this.config.authToken) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "unauthorized" }));
+          return;
+        }
+      }
+      // If no authToken configured and no motebit token, allow (open access)
+
+      // MCP endpoint — Streamable HTTP transport
+      if (url.pathname === "/mcp") {
+        const sessionId = req.headers["mcp-session-id"] as string | undefined;
+
+        if (req.method === "POST") {
+          // Read the request body
+          const bodyChunks: Buffer[] = [];
+          for await (const chunk of req) {
+            bodyChunks.push(chunk as Buffer);
+          }
+          const body: unknown = JSON.parse(Buffer.concat(bodyChunks).toString());
+
+          let transport: StreamableHTTPServerTransport;
+
+          if (sessionId && transports.has(sessionId)) {
+            // Reuse existing transport for this session
+            transport = transports.get(sessionId)!;
+          } else if (!sessionId && isInitializeRequest(body)) {
+            // New initialization request — create a new transport
+            transport = new StreamableHTTPServerTransport({
+              sessionIdGenerator: () => crypto.randomUUID(),
+              onsessioninitialized: (sid) => {
+                transports.set(sid, transport);
+              },
+            });
+
+            transport.onclose = () => {
+              const sid = transport.sessionId;
+              if (sid) transports.delete(sid);
+            };
+
+            // Connect to the McpServer before handling the request
+            await this.server.connect(transport);
+          } else {
+            // Invalid: no session ID and not an init request
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({
+              jsonrpc: "2.0",
+              error: { code: -32000, message: "Bad Request: No valid session ID provided" },
+              id: null,
+            }));
+            return;
+          }
+
+          await transport.handleRequest(req, res, body);
+          return;
+        }
+
+        if (req.method === "GET") {
+          // SSE stream for server-initiated messages
+          if (!sessionId || !transports.has(sessionId)) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Invalid or missing session ID" }));
+            return;
+          }
+          const transport = transports.get(sessionId)!;
+          await transport.handleRequest(req, res);
+          return;
+        }
+
+        if (req.method === "DELETE") {
+          // Session termination
+          if (!sessionId || !transports.has(sessionId)) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Invalid or missing session ID" }));
+            return;
+          }
+          const transport = transports.get(sessionId)!;
+          await transport.handleRequest(req, res);
+          return;
+        }
+      }
+
+      res.writeHead(404);
+      res.end("not found");
     });
 
     await new Promise<void>((resolve) => {

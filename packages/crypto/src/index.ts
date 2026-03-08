@@ -424,3 +424,145 @@ async function verifyDelegations(
     receipt.delegation_receipts.map((dr) => verifyReceiptChain(dr, knownKeys)),
   );
 }
+
+// === Delegation Tokens ===
+
+/**
+ * A signed delegation token authorizing one entity to act on behalf of another.
+ * The delegator signs (delegator_id, delegate_id, scope, issued_at, expires_at)
+ * with their private key, proving they authorized the delegate.
+ */
+export interface DelegationToken {
+  delegator_id: string;
+  delegator_public_key: string; // base64url-encoded Ed25519 public key
+  delegate_id: string;
+  delegate_public_key: string;  // base64url-encoded Ed25519 public key
+  scope: string;                // what the delegate is authorized to do
+  issued_at: number;
+  expires_at: number;
+  signature: string;            // base64url-encoded Ed25519 signature
+}
+
+/**
+ * Sign a delegation token. The delegator authorizes the delegate to act
+ * within the given scope. The signature covers all fields except `signature`.
+ */
+export async function signDelegation(
+  delegation: Omit<DelegationToken, "signature">,
+  delegatorPrivateKey: Uint8Array,
+): Promise<DelegationToken> {
+  const canonical = canonicalJson(delegation);
+  const message = new TextEncoder().encode(canonical);
+  const sig = await sign(message, delegatorPrivateKey);
+  return { ...delegation, signature: toBase64Url(sig) };
+}
+
+/**
+ * Verify a delegation token's signature using the delegator's public key.
+ * Does NOT check expiration — caller should check `expires_at` separately.
+ */
+export async function verifyDelegation(
+  delegation: DelegationToken,
+): Promise<boolean> {
+  const { signature, ...body } = delegation;
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  try {
+    const pubKey = fromBase64Url(delegation.delegator_public_key);
+    const sig = fromBase64Url(signature);
+    return await verify(sig, message, pubKey);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Verify a chain of delegation tokens.
+ *
+ * A valid chain means:
+ * 1. Each delegation's signature is valid (signed by the delegator's key).
+ * 2. Adjacent delegations are linked: delegation[i].delegate_id === delegation[i+1].delegator_id
+ *    and delegation[i].delegate_public_key === delegation[i+1].delegator_public_key.
+ *
+ * An empty chain is considered valid (no delegations to verify).
+ */
+export async function verifyDelegationChain(
+  chain: DelegationToken[],
+): Promise<{ valid: boolean; error?: string }> {
+  if (chain.length === 0) return { valid: true };
+
+  for (let i = 0; i < chain.length; i++) {
+    const delegation = chain[i]!;
+    const sigValid = await verifyDelegation(delegation);
+    if (!sigValid) {
+      return { valid: false, error: `Delegation ${i} has invalid signature` };
+    }
+
+    if (i > 0) {
+      const prev = chain[i - 1]!;
+      if (prev.delegate_id !== delegation.delegator_id) {
+        return {
+          valid: false,
+          error: `Chain break at ${i}: delegate_id "${prev.delegate_id}" !== delegator_id "${delegation.delegator_id}"`,
+        };
+      }
+      if (prev.delegate_public_key !== delegation.delegator_public_key) {
+        return {
+          valid: false,
+          error: `Chain break at ${i}: delegate_public_key mismatch`,
+        };
+      }
+    }
+  }
+
+  return { valid: true };
+}
+
+// === Receipt Sequence Verification ===
+
+/**
+ * A receipt chain entry pairs a signed execution receipt with the
+ * public key of the signer (the service that produced the receipt).
+ */
+export interface ReceiptChainEntry {
+  receipt: SignableReceipt;
+  signer_public_key: Uint8Array;
+}
+
+/**
+ * Verify a flat sequence of execution receipts.
+ *
+ * A valid sequence means:
+ * 1. Each receipt's signature is valid against its signer's public key.
+ * 2. Adjacent receipts are temporally ordered: receipt[i].completed_at <= receipt[i+1].submitted_at.
+ *
+ * An empty sequence is considered valid.
+ * Use `verifyReceiptChain` for nested/tree-structured delegation receipts.
+ */
+export async function verifyReceiptSequence(
+  chain: ReceiptChainEntry[],
+): Promise<{ valid: boolean; error?: string; index?: number }> {
+  if (chain.length === 0) return { valid: true };
+
+  for (let i = 0; i < chain.length; i++) {
+    const entry = chain[i]!;
+    const sigValid = await verifyExecutionReceipt(entry.receipt, entry.signer_public_key);
+    if (!sigValid) {
+      return { valid: false, error: `Receipt ${i} has invalid signature`, index: i };
+    }
+  }
+
+  for (let i = 1; i < chain.length; i++) {
+    const prev = chain[i - 1]!;
+    const curr = chain[i]!;
+    if (prev.receipt.completed_at > curr.receipt.submitted_at) {
+      return {
+        valid: false,
+        error: `Receipt ${i} submitted_at (${curr.receipt.submitted_at}) is before receipt ${i - 1} completed_at (${prev.receipt.completed_at})`,
+        index: i,
+      };
+    }
+  }
+
+  return { valid: true };
+}

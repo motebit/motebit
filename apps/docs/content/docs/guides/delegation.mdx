@@ -1,0 +1,232 @@
+---
+title: Agent-to-Agent Delegation
+description: Discover, verify, delegate, and prove — the cryptographic protocol for agent collaboration.
+---
+
+MCP defines what tools an agent can reach. It says nothing about who the agent is, whether the work was actually done, or who did it. Delegation adds the missing layer: cryptographic identity verification and signed execution receipts that prove provenance across agent boundaries.
+
+The protocol has four steps: **discover**, **verify**, **delegate**, **receipt**. Every step is fail-closed — if verification fails at any point, the connection is severed, not degraded.
+
+## The flow
+
+1. **Discover** — Find a service motebit by domain (DNS TXT / `.well-known`) or by capability on the sync relay.
+2. **Verify** — Connect via MCP and call `motebit_identity`. Pin the public key on first contact. On subsequent connections, reject if the key changes.
+3. **Delegate** — Call `motebit_task` with a prompt. The service executes the task using its own tools and intelligence.
+4. **Receipt** — The service returns a signed `ExecutionReceipt` — an Ed25519 signature over the task ID, result hash, tools used, and timestamps. The caller verifies the signature against the pinned public key.
+
+The result is a cryptographic proof chain: you can prove which agent did the work, what tools it used, what it produced, and when — without trusting the service's word for it.
+
+## Discovery
+
+Three discovery mechanisms, tried in order:
+
+### DNS TXT records
+
+A domain publishes a TXT record at `_motebit.{domain}`:
+
+```
+_motebit.search.example.com TXT "v=motebit1 url=https://search.example.com/.well-known/motebit.md endpoint=https://search.example.com:3200"
+```
+
+Fields:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `v=motebit1` | Yes | Protocol version identifier |
+| `url=` | Yes | URL to the signed `motebit.md` identity file |
+| `endpoint=` | No | MCP server endpoint URL |
+
+### Well-known fallback
+
+If DNS fails, the system fetches `https://{domain}/.well-known/motebit.md` directly. The identity file must contain `motebit_id` and `public_key` in its YAML frontmatter.
+
+### Relay-based discovery
+
+Services register with the sync relay on startup. Other agents query the relay's discovery endpoint, optionally filtering by capability:
+
+```
+GET /api/v1/agents/discover?capability=web_search
+```
+
+Returns a list of registered agents with their endpoint URLs, capabilities, and public keys.
+
+### CLI usage
+
+```bash
+# Domain-based discovery (DNS + well-known)
+/discover search.example.com
+
+# Relay-based discovery (all agents)
+/discover
+
+# Filter by capability
+/discover web_search
+```
+
+## Identity verification
+
+When `McpClientAdapter` connects to a motebit server (flagged with `--motebit` or detected via discovery), it runs a verification handshake:
+
+1. **Tool discovery** — Standard MCP `listTools` to enumerate available tools.
+2. **Identity call** — Calls the `motebit_identity` synthetic tool. The server returns its `motebit_id` and `public_key` (either as JSON or a full `motebit.md` identity file).
+3. **Key pinning** — On first contact, the public key is stored in the client config. On subsequent connections, the key must match. A mismatch severs the connection immediately.
+4. **Fail-closed** — If the identity call fails, returns unparseable data, or is missing required fields, the client disconnects. There is no "unverified but connected" state.
+
+```bash
+# Connect to a motebit service with identity verification
+/mcp add websearch https://search.example.com:3200 --motebit
+
+# Output: Added "websearch" — 8 tool(s) (motebit: 486d9bf5-88d... verified)
+```
+
+The `--motebit` flag tells the client to verify identity and, if the caller has a keypair, to authenticate with a signed token in the `Authorization` header.
+
+## Delegation via motebit_task
+
+The `motebit_task` synthetic tool is the delegation entry point. It accepts a prompt and returns a signed `ExecutionReceipt`.
+
+### What the service does
+
+1. Receives the prompt via MCP tool call.
+2. Executes the task using its own tools (e.g., `web_search`, `read_url`). The service may use AI reasoning or execute tools directly — the protocol does not prescribe how the work is done.
+3. Hashes the prompt and the canonicalized result with SHA-256.
+4. Constructs an `ExecutionReceipt` with task metadata.
+5. Signs the receipt with its Ed25519 private key.
+6. Returns the signed receipt to the caller.
+
+### ExecutionReceipt structure
+
+```typescript
+{
+  task_id: string;        // UUID for this task
+  motebit_id: string;     // Service's identity
+  device_id: string;      // Device that executed the task
+  submitted_at: number;   // Timestamp (ms since epoch)
+  completed_at: number;   // Timestamp (ms since epoch)
+  status: "completed" | "failed";
+  result: string;         // Canonicalized result data
+  tools_used: string[];   // Which tools were invoked
+  memories_formed: number; // How many memories the service formed
+  prompt_hash: string;    // SHA-256 of the original prompt
+  result_hash: string;    // SHA-256 of the canonicalized result
+  signature: string;      // Ed25519 signature (base64url)
+}
+```
+
+The signature covers the canonical JSON serialization of all fields except `signature` itself. Keys are sorted recursively to ensure deterministic output regardless of insertion order.
+
+## Receipt verification
+
+### Single receipt
+
+```typescript
+import { verifyExecutionReceipt, fromBase64Url } from "@motebit/crypto";
+
+const publicKey = fromBase64Url(pinnedPublicKeyBase64);
+const valid = await verifyExecutionReceipt(receipt, publicKey);
+```
+
+The function reconstructs the canonical JSON from all fields except `signature`, then verifies the Ed25519 signature against the provided public key. Returns `true` if the receipt is authentic and untampered.
+
+### Receipt chains
+
+When a service delegates to other services, each sub-delegation produces its own receipt. These are nested in the `delegation_receipts` array. `verifyReceiptChain` recursively verifies the entire tree:
+
+```typescript
+import { verifyReceiptChain } from "@motebit/crypto";
+
+const knownKeys = new Map<string, Uint8Array>();
+knownKeys.set(serviceA_motebitId, serviceA_publicKey);
+knownKeys.set(serviceB_motebitId, serviceB_publicKey);
+
+const result = await verifyReceiptChain(receipt, knownKeys);
+// result.verified — whether this receipt's signature is valid
+// result.delegations — array of ReceiptVerification for sub-delegations
+```
+
+Each node in the verification tree contains `task_id`, `motebit_id`, `verified`, and an optional `error`. An unknown `motebit_id` (not in `knownKeys`) produces `verified: false` with `error: "unknown motebit_id"`.
+
+## Building a service
+
+The `@motebit/mcp-server` package provides a scaffold that eliminates most boilerplate. Two functions:
+
+- **`wireServerDeps(runtime, opts)`** — Wires a `MotebitRuntime` into the `MotebitServerDeps` interface that the MCP server adapter expects. Handles tool listing, policy validation, memory queries, event logging, and optional agent task handling.
+- **`startServiceServer(deps, config)`** — Starts the MCP server on HTTP, registers with the sync relay, sets up heartbeat, and wires graceful shutdown on SIGINT/SIGTERM.
+
+### Minimal service
+
+```typescript
+import { wireServerDeps, startServiceServer } from "@motebit/mcp-server";
+import { verifySignedToken, signExecutionReceipt } from "@motebit/crypto";
+
+// 1. Create a runtime with your tools registered
+// 2. Wire dependencies
+const deps = wireServerDeps(runtime, {
+  motebitId,
+  publicKeyHex,
+  identityFileContent,
+  embedText,
+  verifySignedToken,
+  handleAgentTask,  // Your async generator that yields receipts
+});
+
+// 3. Start the server
+const handle = await startServiceServer(deps, {
+  port: 3200,
+  authToken: process.env["MOTEBIT_AUTH_TOKEN"],
+  motebitType: "service",
+  syncUrl: process.env["MOTEBIT_SYNC_URL"],
+  onStart: (port, toolCount) => {
+    console.log(`Running on :${port} with ${toolCount} tools`);
+  },
+});
+
+// handle.shutdown() to stop gracefully
+```
+
+The `handleAgentTask` function is an async generator that yields `{ type: "task_result", receipt }` after executing the task and signing the receipt. See `services/web-search/src/index.ts` for the reference implementation — a pure tool server (no LLM) that exposes `web_search` and `read_url` with signed execution receipts.
+
+## Managing connections
+
+```bash
+# Add a motebit service (with identity verification + signed auth)
+/mcp add websearch https://search.example.com:3200 --motebit
+
+# List connected servers and trust status
+/mcp list
+
+# Trust a server (tools execute without per-call approval)
+/mcp trust websearch
+
+# Remove trust
+/mcp untrust websearch
+
+# Disconnect and remove a server
+/mcp remove websearch
+```
+
+## Security model
+
+### Fail-closed verification
+
+Every verification step is fail-closed. If identity verification fails, the connection is dropped — there is no fallback to an unverified connection. If a signed token is expired or invalid, the request is rejected with 401.
+
+### Key pinning
+
+On first connection to a motebit service, the client pins the server's public key. On every subsequent connection, the key must match. A key change (even a legitimate rotation) requires the user to remove and re-add the server. This prevents MITM attacks where a compromised endpoint serves a different identity.
+
+### Manifest pinning
+
+Independent of identity verification, the client computes a SHA-256 hash of the tool manifest (tool names, descriptions, and input schemas) on first connection. If the manifest changes on reconnection, trust is revoked and the user is notified with a diff of added/removed tools.
+
+### Sensitivity caps for external callers
+
+External callers cannot store high-sensitivity memories. The `motebit_remember` tool rejects any request with sensitivity level `medical`, `financial`, or `secret`. Memory queries via `motebit_recall` filter out these sensitivity levels before returning results.
+
+### Signed token authentication
+
+When connecting with `--motebit`, the client creates a short-lived signed token (5-minute expiry) containing its own `motebit_id` and `device_id`, signed with its Ed25519 private key. The server verifies this token against known caller public keys. The `Authorization` header format is `Bearer motebit:{token}`.
+
+### Receipt integrity
+
+Execution receipts use canonical JSON serialization (sorted keys, recursive) before signing. This ensures the same receipt always produces the same signature regardless of JSON key ordering. The `prompt_hash` and `result_hash` fields allow independent verification that the prompt wasn't modified and the result matches what was signed.

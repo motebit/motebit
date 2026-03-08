@@ -39,16 +39,9 @@ export interface CloudProviderConfig {
   personalityConfig?: import("./config.js").MotebitPersonalityConfig;
 }
 
-export interface LocalProviderConfig {
-  model_path: string;
-  context_length?: number;
-  threads?: number;
-}
-
 export interface HybridProviderConfig {
   cloud: CloudProviderConfig;
-  local?: LocalProviderConfig;
-  /** Ollama config for streaming-capable local fallback. Preferred over `local`. */
+  /** Ollama config for streaming-capable local fallback. */
   ollama?: OllamaProviderConfig;
   fallback_to_local: boolean;
 }
@@ -630,35 +623,6 @@ export class CloudProvider implements StreamingProvider {
       default:
         return this.config.base_url ?? "";
     }
-  }
-}
-
-// === Local Provider ===
-
-export class LocalProvider implements IntelligenceProvider {
-  private readonly modelPath: string;
-  constructor(config: LocalProviderConfig) {
-    this.modelPath = config.model_path;
-  }
-
-  generate(contextPack: ContextPack): Promise<AIResponse> {
-    void packContext(contextPack);
-
-    // In production: call local ONNX Runtime or llama.cpp
-    return Promise.resolve({
-      text: `[LocalProvider:${this.modelPath}] Response to: ${contextPack.user_message}`,
-      confidence: 0.6,
-      memory_candidates: [],
-      state_updates: {},
-    });
-  }
-
-  estimateConfidence(): Promise<number> {
-    return Promise.resolve(0.6);
-  }
-
-  extractMemoryCandidates(response: AIResponse): Promise<MemoryCandidate[]> {
-    return Promise.resolve(response.memory_candidates);
   }
 }
 
