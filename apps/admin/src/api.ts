@@ -265,6 +265,7 @@ export interface GradientSnapshotEntry {
   graph_connectivity: number;
   graph_connectivity_raw: number;
   temporal_stability: number;
+  retrieval_quality: number;
   stats: {
     live_nodes: number;
     live_edges: number;
@@ -278,6 +279,8 @@ export interface GradientSnapshotEntry {
     consolidation_reinforce: number;
     consolidation_noop: number;
     total_confidence_mass: number;
+    avg_retrieval_score: number;
+    retrieval_count: number;
   };
 }
 

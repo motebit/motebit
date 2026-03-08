@@ -9,8 +9,9 @@
  *   kq  Knowledge Quality    — (reinforce + update) / total consolidation events in 7-day window
  *   gc  Graph Connectivity   — edges/nodes ratio, normalized via x/(x+2)
  *   ts  Temporal Stability   — weighted mix of semantic ratio, pinned ratio, avg half-life
+ *   rq  Retrieval Quality    — avg cosine similarity of memory retrievals since last housekeeping
  *
- * Composite: gradient = kd*0.25 + kq*0.30 + gc*0.20 + ts*0.25
+ * Composite: gradient = kd*0.20 + kq*0.25 + gc*0.15 + ts*0.20 + rq*0.20
  */
 
 import type { MemoryNode, MemoryEdge, EventLogEntry } from "@motebit/sdk";
@@ -29,6 +30,7 @@ export interface GradientSnapshot {
   graph_connectivity: number;
   graph_connectivity_raw: number;
   temporal_stability: number;
+  retrieval_quality: number;
   stats: {
     live_nodes: number;
     live_edges: number;
@@ -42,6 +44,8 @@ export interface GradientSnapshot {
     consolidation_reinforce: number;
     consolidation_noop: number;
     total_confidence_mass: number;
+    avg_retrieval_score: number;
+    retrieval_count: number;
   };
 }
 
@@ -52,14 +56,16 @@ export interface GradientStoreAdapter {
 }
 
 export interface GradientConfig {
-  /** Weight for knowledge density (default 0.25) */
+  /** Weight for knowledge density (default 0.20) */
   weight_kd: number;
-  /** Weight for knowledge quality (default 0.30) */
+  /** Weight for knowledge quality (default 0.25) */
   weight_kq: number;
-  /** Weight for graph connectivity (default 0.20) */
+  /** Weight for graph connectivity (default 0.15) */
   weight_gc: number;
-  /** Weight for temporal stability (default 0.25) */
+  /** Weight for temporal stability (default 0.20) */
   weight_ts: number;
+  /** Weight for retrieval quality (default 0.20) */
+  weight_rq: number;
   /** Normalization constant for knowledge density: x/(x+K) (default 50) */
   kd_norm_k: number;
   /** Normalization constant for graph connectivity: x/(x+K) (default 2) */
@@ -67,10 +73,11 @@ export interface GradientConfig {
 }
 
 const DEFAULT_CONFIG: GradientConfig = {
-  weight_kd: 0.25,
-  weight_kq: 0.30,
-  weight_gc: 0.20,
-  weight_ts: 0.25,
+  weight_kd: 0.20,
+  weight_kq: 0.25,
+  weight_gc: 0.15,
+  weight_ts: 0.20,
+  weight_rq: 0.20,
   kd_norm_k: 50,
   gc_norm_k: 2,
 };
@@ -107,6 +114,7 @@ export function computeGradient(
   consolidationEvents: EventLogEntry[],
   previousGradient: number | null,
   config?: Partial<GradientConfig>,
+  retrievalStats?: { avgScore: number; count: number },
 ): GradientSnapshot {
   const cfg = { ...DEFAULT_CONFIG, ...config };
   const now = Date.now();
@@ -175,8 +183,11 @@ export function computeGradient(
 
   const ts = 0.6 * semanticRatio + 0.2 * pinnedRatio + 0.2 * halfLifeScore;
 
+  // === Retrieval Quality (rq) ===
+  const rq = retrievalStats?.avgScore ?? 0;
+
   // === Composite ===
-  const gradient = cfg.weight_kd * kd + cfg.weight_kq * kq + cfg.weight_gc * gc + cfg.weight_ts * ts;
+  const gradient = cfg.weight_kd * kd + cfg.weight_kq * kq + cfg.weight_gc * gc + cfg.weight_ts * ts + cfg.weight_rq * rq;
   const delta = previousGradient !== null ? gradient - previousGradient : 0;
 
   const avgConfidence = nodeCount > 0 ? totalConfidence / nodeCount : 0;
@@ -193,6 +204,7 @@ export function computeGradient(
     graph_connectivity: gc,
     graph_connectivity_raw: gcRaw,
     temporal_stability: ts,
+    retrieval_quality: rq,
     stats: {
       live_nodes: nodeCount,
       live_edges: edgeCount,
@@ -206,6 +218,8 @@ export function computeGradient(
       consolidation_reinforce: reinforceCount,
       consolidation_noop: noopCount,
       total_confidence_mass: totalConfidenceMass,
+      avg_retrieval_score: retrievalStats?.avgScore ?? 0,
+      retrieval_count: retrievalStats?.count ?? 0,
     },
   };
 }

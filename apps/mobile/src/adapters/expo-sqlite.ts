@@ -164,6 +164,7 @@ CREATE TABLE IF NOT EXISTS gradient_snapshots (
   graph_connectivity REAL NOT NULL,
   graph_connectivity_raw REAL NOT NULL,
   temporal_stability REAL NOT NULL,
+  retrieval_quality REAL NOT NULL DEFAULT 0,
   stats TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_gradient_motebit_ts ON gradient_snapshots (motebit_id, timestamp DESC);
@@ -1135,6 +1136,7 @@ interface GradientRow {
   graph_connectivity: number;
   graph_connectivity_raw: number;
   temporal_stability: number;
+  retrieval_quality: number;
   stats: string;
 }
 
@@ -1150,6 +1152,7 @@ function rowToGradientSnapshot(row: GradientRow): GradientSnapshot {
     graph_connectivity: row.graph_connectivity,
     graph_connectivity_raw: row.graph_connectivity_raw,
     temporal_stability: row.temporal_stability,
+    retrieval_quality: row.retrieval_quality,
     stats: JSON.parse(row.stats) as GradientSnapshot["stats"],
   };
 }
@@ -1160,9 +1163,9 @@ export class ExpoGradientStore implements GradientStoreAdapter {
   save(snapshot: GradientSnapshot): void {
     const snapshotId = `gs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     this.db.runSync(
-      `INSERT OR REPLACE INTO gradient_snapshots (snapshot_id, motebit_id, timestamp, gradient, delta, knowledge_density, knowledge_density_raw, knowledge_quality, graph_connectivity, graph_connectivity_raw, temporal_stability, stats)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [snapshotId, snapshot.motebit_id, snapshot.timestamp, snapshot.gradient, snapshot.delta, snapshot.knowledge_density, snapshot.knowledge_density_raw, snapshot.knowledge_quality, snapshot.graph_connectivity, snapshot.graph_connectivity_raw, snapshot.temporal_stability, JSON.stringify(snapshot.stats)],
+      `INSERT OR REPLACE INTO gradient_snapshots (snapshot_id, motebit_id, timestamp, gradient, delta, knowledge_density, knowledge_density_raw, knowledge_quality, graph_connectivity, graph_connectivity_raw, temporal_stability, retrieval_quality, stats)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [snapshotId, snapshot.motebit_id, snapshot.timestamp, snapshot.gradient, snapshot.delta, snapshot.knowledge_density, snapshot.knowledge_density_raw, snapshot.knowledge_quality, snapshot.graph_connectivity, snapshot.graph_connectivity_raw, snapshot.temporal_stability, snapshot.retrieval_quality, JSON.stringify(snapshot.stats)],
     );
   }
 
@@ -1398,6 +1401,16 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
       // Index may already exist on new DBs
     }
     db.execSync("PRAGMA user_version = 10");
+  }
+
+  // Migration 11: add retrieval_quality column to gradient_snapshots
+  if (userVersion < 11) {
+    try {
+      db.execSync("ALTER TABLE gradient_snapshots ADD COLUMN retrieval_quality REAL NOT NULL DEFAULT 0");
+    } catch {
+      // Column may already exist on new DBs
+    }
+    db.execSync("PRAGMA user_version = 11");
   }
 
   return {

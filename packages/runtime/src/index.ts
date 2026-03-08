@@ -1589,12 +1589,16 @@ export class MotebitRuntime {
     const previous = this.gradientStore.latest(this.motebitId);
     const previousGradient = previous ? previous.gradient : null;
 
+    const retrievalStats = this.memory.getAndResetRetrievalStats();
+
     const snapshot = computeGradient(
       this.motebitId,
       allNodes,
       edges,
       consolidationEvents,
       previousGradient,
+      undefined,
+      retrievalStats,
     );
 
     this.gradientStore.save(snapshot);

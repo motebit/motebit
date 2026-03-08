@@ -223,6 +223,7 @@ export class InMemoryMemoryStorage implements MemoryStorageAdapter {
 
 export class MemoryGraph {
   private scoringConfig: ScoringConfig;
+  private _retrievalScores: number[] = [];
 
   constructor(
     private storage: MemoryStorageAdapter,
@@ -231,6 +232,18 @@ export class MemoryGraph {
     scoringConfig?: Partial<ScoringConfig>,
   ) {
     this.scoringConfig = { ...DEFAULT_SCORING_CONFIG, ...scoringConfig };
+  }
+
+  /**
+   * Get average retrieval similarity score and count since last read, then reset.
+   * Used by housekeeping to feed the intelligence gradient.
+   */
+  getAndResetRetrievalStats(): { avgScore: number; count: number } {
+    if (this._retrievalScores.length === 0) return { avgScore: 0, count: 0 };
+    const sum = this._retrievalScores.reduce((a, b) => a + b, 0);
+    const result = { avgScore: sum / this._retrievalScores.length, count: this._retrievalScores.length };
+    this._retrievalScores = [];
+    return result;
   }
 
   /** Default half-lives by memory type. */
@@ -498,6 +511,12 @@ export class MemoryGraph {
 
     scored.sort((a, b) => b.score - a.score);
     let topResults = scored.slice(0, limit);
+
+    // Accumulate similarity scores for intelligence gradient
+    for (const { node } of topResults) {
+      const sim = dotProduct(queryEmbedding, node.embedding);
+      this._retrievalScores.push(sim);
+    }
 
     // Pass 3: Graph expansion — 1-hop neighbors via edges
     if (expandEdges && topResults.length > 0) {

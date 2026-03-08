@@ -188,6 +188,23 @@ CREATE TABLE IF NOT EXISTS plan_steps (
   FOREIGN KEY (plan_id) REFERENCES plans(plan_id)
 );
 CREATE INDEX IF NOT EXISTS idx_plan_steps_plan ON plan_steps (plan_id, ordinal ASC);
+
+CREATE TABLE IF NOT EXISTS gradient_snapshots (
+  snapshot_id TEXT PRIMARY KEY,
+  motebit_id TEXT NOT NULL,
+  timestamp INTEGER NOT NULL,
+  gradient REAL NOT NULL,
+  delta REAL NOT NULL,
+  knowledge_density REAL NOT NULL,
+  knowledge_density_raw REAL NOT NULL,
+  knowledge_quality REAL NOT NULL,
+  graph_connectivity REAL NOT NULL,
+  graph_connectivity_raw REAL NOT NULL,
+  temporal_stability REAL NOT NULL,
+  retrieval_quality REAL NOT NULL DEFAULT 0,
+  stats TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gradient_motebit_ts ON gradient_snapshots (motebit_id, timestamp DESC);
 ";
 
 fn json_to_sql_value(v: &JsonValue) -> SqlValue {

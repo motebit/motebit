@@ -193,10 +193,11 @@ describe("computeGradient", () => {
     const result = computeGradient("test-motebit", [node], [edge], events, null);
 
     const expected =
-      0.25 * result.knowledge_density +
-      0.30 * result.knowledge_quality +
-      0.20 * result.graph_connectivity +
-      0.25 * result.temporal_stability;
+      0.20 * result.knowledge_density +
+      0.25 * result.knowledge_quality +
+      0.15 * result.graph_connectivity +
+      0.20 * result.temporal_stability +
+      0.20 * result.retrieval_quality;
 
     expect(result.gradient).toBeCloseTo(expected, 10);
   });
@@ -269,6 +270,7 @@ describe("computeGradient", () => {
       weight_kq: 0,
       weight_gc: 0,
       weight_ts: 0,
+      weight_rq: 0,
     });
 
     // With all weight on kd, gradient should equal kd
@@ -288,6 +290,28 @@ describe("computeGradient", () => {
 
     const result = computeGradient("test-motebit", [], [], [event], null);
     expect(result.stats.consolidation_reinforce).toBe(1);
+  });
+
+  it("retrieval quality is 0 when no retrieval stats provided", () => {
+    const node = makeNode();
+    const result = computeGradient("test-motebit", [node], [], [], null);
+    expect(result.retrieval_quality).toBe(0);
+    expect(result.stats.avg_retrieval_score).toBe(0);
+    expect(result.stats.retrieval_count).toBe(0);
+  });
+
+  it("retrieval quality equals avgScore when retrieval stats provided", () => {
+    const node = makeNode();
+    const result = computeGradient("test-motebit", [node], [], [], null, undefined, { avgScore: 0.75, count: 10 });
+    expect(result.retrieval_quality).toBe(0.75);
+    expect(result.stats.avg_retrieval_score).toBe(0.75);
+    expect(result.stats.retrieval_count).toBe(10);
+  });
+
+  it("retrieval quality contributes to composite with default weight 0.20", () => {
+    const result = computeGradient("test-motebit", [], [], [], null, undefined, { avgScore: 1.0, count: 5 });
+    // All other sub-metrics are 0, so gradient = 0.20 * 1.0
+    expect(result.gradient).toBeCloseTo(0.20, 10);
   });
 
   it("stats are correctly populated", () => {
@@ -329,6 +353,7 @@ describe("InMemoryGradientStore", () => {
       graph_connectivity: 0.2,
       graph_connectivity_raw: 0.5,
       temporal_stability: 0.6,
+      retrieval_quality: 0.65,
       stats: {
         live_nodes: 10,
         live_edges: 5,
@@ -342,6 +367,8 @@ describe("InMemoryGradientStore", () => {
         consolidation_reinforce: 4,
         consolidation_noop: 1,
         total_confidence_mass: 15,
+        avg_retrieval_score: 0.65,
+        retrieval_count: 20,
       },
     };
 
@@ -371,12 +398,13 @@ describe("InMemoryGradientStore", () => {
       graph_connectivity: 0,
       graph_connectivity_raw: 0,
       temporal_stability: 0,
+      retrieval_quality: 0,
       stats: {
         live_nodes: 0, live_edges: 0, semantic_count: 0, episodic_count: 0,
         pinned_count: 0, avg_confidence: 0, avg_half_life: 0,
         consolidation_add: 0, consolidation_update: 0,
         consolidation_reinforce: 0, consolidation_noop: 0,
-        total_confidence_mass: 0,
+        total_confidence_mass: 0, avg_retrieval_score: 0, retrieval_count: 0,
       },
     };
 
@@ -404,12 +432,13 @@ describe("InMemoryGradientStore", () => {
       graph_connectivity: 0,
       graph_connectivity_raw: 0,
       temporal_stability: 0,
+      retrieval_quality: 0,
       stats: {
         live_nodes: 0, live_edges: 0, semantic_count: 0, episodic_count: 0,
         pinned_count: 0, avg_confidence: 0, avg_half_life: 0,
         consolidation_add: 0, consolidation_update: 0,
         consolidation_reinforce: 0, consolidation_noop: 0,
-        total_confidence_mass: 0,
+        total_confidence_mass: 0, avg_retrieval_score: 0, retrieval_count: 0,
       },
     };
 
@@ -434,12 +463,13 @@ describe("InMemoryGradientStore", () => {
       graph_connectivity: 0,
       graph_connectivity_raw: 0,
       temporal_stability: 0,
+      retrieval_quality: 0,
       stats: {
         live_nodes: 0, live_edges: 0, semantic_count: 0, episodic_count: 0,
         pinned_count: 0, avg_confidence: 0, avg_half_life: 0,
         consolidation_add: 0, consolidation_update: 0,
         consolidation_reinforce: 0, consolidation_noop: 0,
-        total_confidence_mass: 0,
+        total_confidence_mass: 0, avg_retrieval_score: 0, retrieval_count: 0,
       },
     };
 

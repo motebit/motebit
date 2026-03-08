@@ -59,6 +59,7 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
     kq: snap.knowledge_quality,
     gc: snap.graph_connectivity,
     ts: snap.temporal_stability,
+    rq: snap.retrieval_quality,
   }));
 
   const chart = h("div", { className: "gradient-chart-container" },
@@ -97,6 +98,9 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
         h(Line as React.ComponentType<Record<string, unknown>>, {
           type: "monotone", dataKey: "ts", stroke: "#1abc9c", strokeWidth: 1, dot: false, name: "Temporal Stability",
         }),
+        h(Line as React.ComponentType<Record<string, unknown>>, {
+          type: "monotone", dataKey: "rq", stroke: "#e74c3c", strokeWidth: 1, dot: false, name: "Retrieval Quality",
+        }),
       ),
     ),
   );
@@ -121,6 +125,7 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
       h(MetricBar, { label: "Knowledge Quality", value: current.knowledge_quality }),
       h(MetricBar, { label: "Graph Connectivity", value: current.graph_connectivity }),
       h(MetricBar, { label: "Temporal Stability", value: current.temporal_stability }),
+      h(MetricBar, { label: "Retrieval Quality", value: current.retrieval_quality }),
     ),
 
     // Trend chart
@@ -142,6 +147,8 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
         h("span", null, `UPDATE: ${stats.consolidation_update}`),
         h("span", null, `REINFORCE: ${stats.consolidation_reinforce}`),
         h("span", null, `NOOP: ${stats.consolidation_noop}`),
+        h("span", null, `Avg retrieval: ${(stats.avg_retrieval_score ?? 0).toFixed(3)}`),
+        h("span", null, `Retrievals: ${stats.retrieval_count ?? 0}`),
       ),
     ),
 

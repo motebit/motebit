@@ -252,6 +252,7 @@ CREATE TABLE IF NOT EXISTS gradient_snapshots (
   graph_connectivity REAL NOT NULL,
   graph_connectivity_raw REAL NOT NULL,
   temporal_stability REAL NOT NULL,
+  retrieval_quality REAL NOT NULL DEFAULT 0,
   stats TEXT NOT NULL
 );
 
@@ -1758,6 +1759,7 @@ export interface GradientSnapshotRow {
   graph_connectivity: number;
   graph_connectivity_raw: number;
   temporal_stability: number;
+  retrieval_quality: number;
   stats: string;
 }
 
@@ -1772,6 +1774,7 @@ export interface GradientSnapshotData {
   graph_connectivity: number;
   graph_connectivity_raw: number;
   temporal_stability: number;
+  retrieval_quality: number;
   stats: Record<string, unknown>;
 }
 
@@ -1787,6 +1790,7 @@ function rowToGradientSnapshot(row: GradientSnapshotRow): GradientSnapshotData {
     graph_connectivity: row.graph_connectivity,
     graph_connectivity_raw: row.graph_connectivity_raw,
     temporal_stability: row.temporal_stability,
+    retrieval_quality: row.retrieval_quality,
     stats: JSON.parse(row.stats) as Record<string, unknown>,
   };
 }
@@ -1799,8 +1803,8 @@ export class SqliteGradientStore {
   constructor(db: DatabaseDriver) {
     this.stmtSave = db.prepare(
       `INSERT OR REPLACE INTO gradient_snapshots
-       (snapshot_id, motebit_id, timestamp, gradient, delta, knowledge_density, knowledge_density_raw, knowledge_quality, graph_connectivity, graph_connectivity_raw, temporal_stability, stats)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (snapshot_id, motebit_id, timestamp, gradient, delta, knowledge_density, knowledge_density_raw, knowledge_quality, graph_connectivity, graph_connectivity_raw, temporal_stability, retrieval_quality, stats)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtLatest = db.prepare(
       `SELECT * FROM gradient_snapshots WHERE motebit_id = ? ORDER BY timestamp DESC LIMIT 1`,
@@ -1824,6 +1828,7 @@ export class SqliteGradientStore {
       snapshot.graph_connectivity,
       snapshot.graph_connectivity_raw,
       snapshot.temporal_stability,
+      snapshot.retrieval_quality,
       JSON.stringify(snapshot.stats),
     );
   }
@@ -1982,6 +1987,11 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   if (userVersion < 17) {
     driver.exec("CREATE INDEX IF NOT EXISTS idx_memory_nodes_retrieve ON memory_nodes (motebit_id, tombstoned, last_accessed DESC)");
     driver.pragma("user_version = 17");
+  }
+
+  if (userVersion < 18) {
+    try { driver.exec("ALTER TABLE gradient_snapshots ADD COLUMN retrieval_quality REAL NOT NULL DEFAULT 0"); } catch (_) { /* already exists */ }
+    driver.pragma("user_version = 18");
   }
 
   const eventStore = new SqliteEventStore(driver);

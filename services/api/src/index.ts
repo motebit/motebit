@@ -540,6 +540,7 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
       graph_connectivity: number;
       graph_connectivity_raw: number;
       temporal_stability: number;
+      retrieval_quality: number;
       stats: string;
     }>;
     const snapshots = rows.map((r) => ({

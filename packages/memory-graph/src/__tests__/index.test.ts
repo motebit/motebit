@@ -354,6 +354,41 @@ describe("MemoryGraph", () => {
     });
   });
 
+  describe("getAndResetRetrievalStats", () => {
+    it("returns zero stats when no retrievals have occurred", () => {
+      const stats = graph.getAndResetRetrievalStats();
+      expect(stats.avgScore).toBe(0);
+      expect(stats.count).toBe(0);
+    });
+
+    it("accumulates similarity scores from retrieve() calls", async () => {
+      await graph.formMemory(
+        { content: "test memory", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 0, 0],
+      );
+
+      await graph.retrieve([1, 0, 0]);
+      const stats = graph.getAndResetRetrievalStats();
+
+      expect(stats.count).toBeGreaterThan(0);
+      expect(stats.avgScore).toBeGreaterThan(0);
+    });
+
+    it("resets after read", async () => {
+      await graph.formMemory(
+        { content: "test memory", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 0, 0],
+      );
+
+      await graph.retrieve([1, 0, 0]);
+      graph.getAndResetRetrievalStats(); // first read clears
+
+      const stats2 = graph.getAndResetRetrievalStats();
+      expect(stats2.avgScore).toBe(0);
+      expect(stats2.count).toBe(0);
+    });
+  });
+
   describe("deleteMemory (tombstoning)", () => {
     it("tombstones the memory node", async () => {
       const node = await graph.formMemory(
