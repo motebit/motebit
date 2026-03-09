@@ -2,7 +2,7 @@
 
 ## Agent Identity File Specification
 
-**Status:** Draft
+**Status:** Stable
 **Version:** 1.0
 **Date:** 2026-02-18
 
@@ -460,4 +460,4 @@ Future versions will use semantic versioning: `motebit/identity@{major}.{minor}`
 
 ---
 
-*motebit/identity@1.0 — Draft Specification, 2026.*
+*motebit/identity@1.0 — Stable Specification, 2026.*
