@@ -429,7 +429,7 @@ function printHelp(): void {
     MOTEBIT_PASSPHRASE    Passphrase for key encryption (required with --yes)
     MOTEBIT_CONFIG_DIR    Override config directory (default: ~/.motebit)
 
-  ${dim("https://github.com/motebit/motebit")}
+  ${dim("https://github.com/hakimlabs/motebit")}
 `);
 }
 

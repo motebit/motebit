@@ -22,13 +22,13 @@
     "verify",
     "signature"
   ],
-  "homepage": "https://github.com/motebit/motebit/tree/main/packages/verify#readme",
+  "homepage": "https://github.com/hakimlabs/motebit/tree/main/packages/verify#readme",
   "bugs": {
-    "url": "https://github.com/motebit/motebit/issues"
+    "url": "https://github.com/hakimlabs/motebit/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/motebit/motebit",
+    "url": "https://github.com/hakimlabs/motebit",
     "directory": "packages/verify"
   },
   "publishConfig": {
