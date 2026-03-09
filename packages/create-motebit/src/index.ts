@@ -21,7 +21,7 @@ import { createRL, input, password, select } from "./prompts.js";
 // Constants
 // ---------------------------------------------------------------------------
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.2";
 
 // ---------------------------------------------------------------------------
 // Colors (ANSI — disabled if NO_COLOR is set)
@@ -81,16 +81,31 @@ function makePackageJson(name: string): string {
     private: true,
     type: "module",
     scripts: {
-      start: "motebit",
-      export: "motebit export",
-      daemon: "motebit run --identity motebit.md",
-      verify: "motebit verify motebit.md",
+      verify: "npx create-motebit verify motebit.md",
     },
     dependencies: {
-      motebit: "0.1.0",
+      "@motebit/verify": "^0.1.0",
     },
   };
   return JSON.stringify(pkg, null, 2) + "\n";
+}
+
+function makeVerifyExample(): string {
+  return `import { verify } from "@motebit/verify";
+import { readFileSync } from "node:fs";
+
+const content = readFileSync("motebit.md", "utf-8");
+const result = await verify(content);
+
+if (result.valid) {
+  console.log("Identity verified:", result.identity.motebit_id);
+  console.log("Public key:", result.identity.identity.public_key.slice(0, 16) + "...");
+  console.log("Trust mode:", result.identity.governance.trust_mode);
+} else {
+  console.error("Verification failed:", result.error);
+  process.exit(1);
+}
+`;
 }
 
 function makeEnvExample(provider: string): string {
@@ -305,6 +320,7 @@ async function guidedScaffold(targetDir: string, nonInteractive: boolean, servic
   writeFileSync(join(absDir, ".env.example"), makeEnvExample(provider), "utf-8");
   writeFileSync(join(absDir, ".gitignore"), GITIGNORE, "utf-8");
   writeFileSync(join(absDir, "motebit.md"), result.identityFileContent, "utf-8");
+  writeFileSync(join(absDir, "verify.js"), makeVerifyExample(), "utf-8");
 
   // Save identity to config (merge with existing)
   const config = loadConfig();
@@ -322,7 +338,8 @@ async function guidedScaffold(targetDir: string, nonInteractive: boolean, servic
   console.log(`  ${green("+")} Created ${bold(relDir)}`);
   console.log();
   console.log(`    motebit.md         ${dim("Signed agent identity")}`);
-  console.log(`    package.json       ${dim("Node project with motebit CLI")}`);
+  console.log(`    verify.js          ${dim("Verification example")}`);
+  console.log(`    package.json       ${dim("Node project")}`);
   console.log(`    .env.example       ${dim("Environment variable template")}`);
   console.log(`    .gitignore         ${dim("Secrets excluded")}`);
   console.log();
@@ -335,8 +352,8 @@ async function guidedScaffold(targetDir: string, nonInteractive: boolean, servic
     console.log(`    cd ${dirName}`);
   }
   console.log(`    npm install`);
-  console.log(`    npx motebit                        ${dim("# Start interactive REPL")}`);
-  console.log(`    npx motebit run --identity motebit.md  ${dim("# Start daemon mode")}`);
+  console.log(`    node verify.js                     ${dim("# Verify your identity")}`);
+  console.log(`    npx create-motebit verify           ${dim("# Or use the CLI verifier")}`);
   console.log();
 }
 
@@ -421,8 +438,8 @@ function printHelp(): void {
 
     1. Generates an Ed25519 keypair and signs a motebit.md identity file
     2. Encrypts your private key and stores it in ~/.motebit/config.json
-    3. Scaffolds a project directory with package.json, .env.example, .gitignore
-    4. Run ${cyan("npx motebit")} to start — identity is already bootstrapped
+    3. Scaffolds a project directory with verify.js, package.json, .env.example
+    4. Run ${cyan("node verify.js")} to verify your identity
 
   ${bold("Environment variables:")}
 

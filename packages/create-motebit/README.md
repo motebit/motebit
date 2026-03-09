@@ -1,6 +1,6 @@
 # create-motebit
 
-Scaffold a motebit agent project.
+Create a cryptographically signed agent identity.
 
 ## Quick Start
 
@@ -8,22 +8,21 @@ Scaffold a motebit agent project.
 npm create motebit my-agent
 cd my-agent
 npm install
-cp .env.example .env     # add your Anthropic API key
-npx motebit              # identity created on first run
+node verify.js
 ```
 
-5 commands from zero to a running agent.
+4 commands from zero to a verified agent identity.
 
 ## What it creates
 
 ```
 my-agent/
-  package.json       motebit agent project (depends on motebit CLI)
-  .env.example       API key configuration
-  .gitignore         secrets and build artifacts
+  motebit.md       Signed agent identity (Ed25519)
+  verify.js        Verification example
+  package.json     Node project with @motebit/verify
+  .env.example     Environment variable template
+  .gitignore       Secrets excluded
 ```
-
-Identity is bootstrapped automatically on first `npx motebit`. Run `npx motebit export` to export a signed `motebit.md` for daemon mode.
 
 ## Verify
 
@@ -46,7 +45,9 @@ The identity file is YAML frontmatter signed with Ed25519. Any tool can verify i
 ## Options
 
 ```
-npm create motebit [dir]          Scaffold a new agent project
+npm create motebit [dir]          Scaffold with identity generation
+npm create motebit [dir] --yes    Non-interactive (requires MOTEBIT_PASSPHRASE)
+npm create motebit [dir] --service  Create a service identity
 npx create-motebit verify [path]  Verify a motebit.md signature
 
 -v, --version         Print version
@@ -56,3 +57,5 @@ npx create-motebit verify [path]  Verify a motebit.md signature
 ## License
 
 MIT — see [LICENSE](./LICENSE).
+
+"Motebit" is a trademark. The MIT License grants rights to this software, not to any Motebit trademarks, logos, or branding. You may not use Motebit branding in a way that suggests endorsement or affiliation without written permission.

@@ -43,7 +43,7 @@ describe("create-motebit", () => {
   it("prints version with --version", () => {
     const { stdout, exitCode } = run(["--version"]);
     expect(exitCode).toBe(0);
-    expect(stdout.trim()).toBe("0.1.0");
+    expect(stdout.trim()).toBe("0.1.2");
   });
 
   it("prints help with --help", () => {
@@ -77,11 +77,14 @@ describe("create-motebit", () => {
     expect(existsSync(join(projectDir, ".gitignore"))).toBe(true);
     expect(existsSync(join(projectDir, "motebit.md"))).toBe(true);
 
+    // verify.js created
+    expect(existsSync(join(projectDir, "verify.js"))).toBe(true);
+
     // package.json has correct content
     const pkg = JSON.parse(readFileSync(join(projectDir, "package.json"), "utf-8"));
-    expect(pkg.dependencies).toHaveProperty("motebit");
-    expect(pkg.dependencies.motebit).toBe("0.1.0");
-    expect(pkg.scripts.start).toBe("motebit");
+    expect(pkg.dependencies).toHaveProperty("@motebit/verify");
+    expect(pkg.dependencies["@motebit/verify"]).toBe("^0.1.0");
+    expect(pkg.scripts.verify).toContain("create-motebit verify");
     expect(pkg.type).toBe("module");
     expect(pkg.private).toBe(true);
     expect(pkg.name).toBe(subDir);
@@ -148,7 +151,7 @@ describe("create-motebit", () => {
     );
     expect(stdout).toContain("cd my-project");
     expect(stdout).toContain("npm install");
-    expect(stdout).toContain("npx motebit");
+    expect(stdout).toContain("node verify.js");
   });
 
   it("shows Motebit ID in output", () => {
