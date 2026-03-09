@@ -8,7 +8,7 @@
     "motebit": "./dist/index.js"
   },
   "files": ["dist/index.js", "dist/index.js.map", "LICENSE", "README.md"],
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "BSL-1.1",
   "keywords": [
     "motebit",
     "agent",

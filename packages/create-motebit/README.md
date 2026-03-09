@@ -55,4 +55,4 @@ npx create-motebit verify [path]  Verify a motebit.md signature
 
 ## License
 
-Motebit Community License — see [LICENSE](./LICENSE). Not open source.
+MIT — see [LICENSE](./LICENSE).

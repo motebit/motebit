@@ -7,6 +7,7 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY packages/sdk/package.json packages/sdk/
 COPY packages/event-log/package.json packages/event-log/
 COPY packages/core-identity/package.json packages/core-identity/
+COPY packages/memory-graph/package.json packages/memory-graph/
 COPY packages/persistence/package.json packages/persistence/
 COPY packages/crypto/package.json packages/crypto/
 COPY packages/policy-invariants/package.json packages/policy-invariants/
@@ -31,6 +32,8 @@ COPY --from=build /app/packages/event-log/dist ./packages/event-log/dist
 COPY --from=build /app/packages/event-log/package.json ./packages/event-log/
 COPY --from=build /app/packages/core-identity/dist ./packages/core-identity/dist
 COPY --from=build /app/packages/core-identity/package.json ./packages/core-identity/
+COPY --from=build /app/packages/memory-graph/dist ./packages/memory-graph/dist
+COPY --from=build /app/packages/memory-graph/package.json ./packages/memory-graph/
 COPY --from=build /app/packages/persistence/dist ./packages/persistence/dist
 COPY --from=build /app/packages/persistence/package.json ./packages/persistence/
 COPY --from=build /app/packages/crypto/dist ./packages/crypto/dist
