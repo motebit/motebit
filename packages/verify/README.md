@@ -14,9 +14,9 @@ npm install @motebit/verify
 
 ```typescript
 import { verify } from "@motebit/verify";
-import fs from "node:fs";
+import { readFileSync } from "node:fs";
 
-const content = fs.readFileSync("motebit.md", "utf-8");
+const content = readFileSync("motebit.md", "utf-8");
 const result = await verify(content);
 
 if (result.valid) {
