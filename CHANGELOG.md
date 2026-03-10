@@ -2,6 +2,12 @@
 
 All notable changes to the published packages are documented here. This project uses [Semantic Versioning](https://semver.org/).
 
+## [0.1.2] - 2026-03-09
+
+### Fixed
+
+- `create-motebit`: depend on `@motebit/verify` instead of unpublished `motebit` package
+
 ## [0.1.1] - 2026-03-09
 
 ### Fixed
