@@ -4,10 +4,12 @@
   <img src="social-preview.png" alt="Motebit — Cryptographic identity for AI agents" width="100%">
 </p>
 
-[![CI](https://github.com/motebit/motebit/actions/workflows/ci.yml/badge.svg)](https://github.com/motebit/motebit/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/create-motebit)](https://www.npmjs.com/package/create-motebit)
-[![License: BSL 1.1](https://img.shields.io/badge/license-BSL%201.1-blue)](LICENSE)
-[![License: MIT](https://img.shields.io/badge/protocol-MIT-green)](LICENSE-MIT)
+<p align="center">
+  <a href="https://github.com/motebit/motebit/actions/workflows/ci.yml"><img src="https://github.com/motebit/motebit/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://www.npmjs.com/package/create-motebit"><img src="https://img.shields.io/npm/v/create-motebit" alt="npm"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSL%201.1-blue" alt="License: BSL 1.1"></a>
+  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/protocol-MIT-green" alt="License: MIT"></a>
+</p>
 
 Cryptographic identity for AI agents.
 
