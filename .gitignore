@@ -43,3 +43,9 @@ infra/terraform/*.tfstate*
 infra/secrets/
 .claude/worktrees/
 .vercel
+
+# Internal strategy docs (keep local, not public)
+COMPETITIVE_LANDSCAPE.md
+OPENCLAW_ZEROCLAW_GITHUB_RESEARCH.md
+THE_AGENTIC_WAVE.md
+THE_THESIS_POST.md

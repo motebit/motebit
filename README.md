@@ -81,11 +81,25 @@ The spec is MIT licensed. Anyone can implement it.
 3. **Accumulate** — the identity persists across sessions. Memory, trust, and governance compound over time
 4. **Delegate** — agents sign tasks and hand them to services with cryptographic proof of who asked
 
+## Design thesis
+
+The motebit is derived from physics, not designed by preference. Five documents derive every decision from a single premise — _a droplet of intelligence under surface tension_:
+
+- [**DROPLET.md**](DROPLET.md) — the body (form, material, eigenmotions)
+- [**LIQUESCENTIA.md**](LIQUESCENTIA.md) — the world (the medium that permits cohesion)
+- [**THE_MUSIC_OF_THE_MEDIUM.md**](THE_MUSIC_OF_THE_MEDIUM.md) — the acoustic interface
+- [**THE_SOVEREIGN_INTERIOR.md**](THE_SOVEREIGN_INTERIOR.md) — identity, memory, trust, governance
+- [**THE_METABOLIC_PRINCIPLE.md**](THE_METABOLIC_PRINCIPLE.md) — what to build vs. what to absorb
+
 ## Why
 
 The agentic economy is missing plumbing. Not more intelligence — we have plenty of that. It needs identity, trust, and governance. The boring, load-bearing infrastructure that lets agents prove who they are, remember what they've done, and enforce policy about what crosses the boundary.
 
 The intelligence is a commodity. The identity is the asset.
+
+## Documentation
+
+- [**docs.motebit.com**](https://docs.motebit.com) — guides for developers, operators, and app reference
 
 ## Community
 
