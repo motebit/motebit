@@ -1281,8 +1281,8 @@ export class MotebitRuntime {
                 Array.isArray(r.tools_used)
               ) {
                 receiptSummary = {
-                  task_id: r.task_id as string,
-                  status: r.status as string,
+                  task_id: r.task_id,
+                  status: r.status,
                   tools_used: r.tools_used as string[],
                 };
               }

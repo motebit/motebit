@@ -74,7 +74,8 @@ function canonicalizeResults(raw: string, maxResults = 5): string {
     const normalized = parsed
       .slice(0, maxResults)
       .map((r: Record<string, unknown>) => {
-        let url = String(r["url"] ?? r["link"] ?? "");
+        const rawUrl = r["url"] ?? r["link"];
+        let url = typeof rawUrl === "string" ? rawUrl : "";
         try {
           const u = new URL(url);
           for (const p of [
@@ -92,10 +93,12 @@ function canonicalizeResults(raw: string, maxResults = 5): string {
         } catch {
           // Not a valid URL — keep as-is
         }
+        const rawTitle = r["title"];
+        const rawSnippet = r["snippet"] ?? r["description"];
         return {
-          title: String(r["title"] ?? ""),
+          title: typeof rawTitle === "string" ? rawTitle : "",
           url,
-          snippet: String(r["snippet"] ?? r["description"] ?? ""),
+          snippet: typeof rawSnippet === "string" ? rawSnippet : "",
         };
       })
       .sort((a, b) => a.url.localeCompare(b.url));

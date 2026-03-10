@@ -85,6 +85,7 @@ module.exports = {
       // through bootstrapIdentity() from @motebit/core-identity.
       // See packages/core-identity/README.md for rationale.
       files: ["apps/*/src/**/*.ts", "services/*/src/**/*.ts"],
+      excludedFiles: ["**/__tests__/**", "**/*.test.ts", "**/*.spec.ts"],
       rules: {
         "no-restricted-imports": [
           "error",

@@ -14,6 +14,7 @@
  * Composite: gradient = kd*0.20 + kq*0.25 + gc*0.15 + ts*0.20 + rq*0.20
  */
 
+import { MemoryType } from "@motebit/sdk";
 import type { MemoryNode, MemoryEdge, EventLogEntry } from "@motebit/sdk";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 
@@ -88,14 +89,14 @@ type ConsolidationAction = "ADD" | "UPDATE" | "REINFORCE" | "NOOP";
 
 function extractConsolidationAction(event: EventLogEntry): ConsolidationAction | null {
   const payload = event.payload;
-  if (payload.action !== undefined) {
-    const action = String(payload.action).toUpperCase();
+  if (payload.action != null) {
+    const action = String(payload.action as string).toUpperCase();
     if (action === "ADD" || action === "UPDATE" || action === "REINFORCE" || action === "NOOP") {
       return action;
     }
   }
-  if (payload.consolidation_action !== undefined) {
-    const action = String(payload.consolidation_action).toUpperCase();
+  if (payload.consolidation_action != null) {
+    const action = String(payload.consolidation_action as string).toUpperCase();
     if (action === "ADD" || action === "UPDATE" || action === "REINFORCE" || action === "NOOP") {
       return action;
     }
@@ -168,9 +169,9 @@ export function computeGradient(
   let totalHalfLife = 0;
 
   for (const node of liveNodes) {
-    const memType = node.memory_type ?? "semantic";
-    if (memType === "semantic") semanticCount++;
-    else if (memType === "episodic") episodicCount++;
+    const memType = node.memory_type ?? MemoryType.Semantic;
+    if (memType === MemoryType.Semantic) semanticCount++;
+    else if (memType === MemoryType.Episodic) episodicCount++;
     if (node.pinned) pinnedCount++;
     totalHalfLife += node.half_life;
   }

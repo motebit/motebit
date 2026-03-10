@@ -25,7 +25,8 @@ export function createSummarizeSearchHandler(
   webSearchAdapter: McpClientAdapter,
 ): (args: Record<string, unknown>) => Promise<ToolResult> {
   return async (args: Record<string, unknown>): Promise<ToolResult> => {
-    const query = String(args["query"] ?? "");
+    const rawQuery = args["query"];
+    const query = typeof rawQuery === "string" ? rawQuery : "";
     if (!query) return { ok: false, error: "Missing query parameter" };
 
     // Delegate to web-search's motebit_task (qualified name: serverName__toolName)
@@ -44,7 +45,8 @@ export function createSummarizeSearchHandler(
         string,
         unknown
       >;
-      const searchResults = String(receipt["result"] ?? raw);
+      const rawResult = receipt["result"];
+      const searchResults = typeof rawResult === "string" ? rawResult : raw;
 
       let parsed: unknown[];
       try {

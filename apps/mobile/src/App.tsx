@@ -800,9 +800,7 @@ export function App(): React.ReactElement {
           const st = a.getState();
           if (st) {
             const lines = Object.entries(st)
-              .map(
-                ([k, v]) => `${k}: ${typeof v === "number" ? (v as number).toFixed(2) : String(v)}`,
-              )
+              .map(([k, v]) => `${k}: ${typeof v === "number" ? v.toFixed(2) : String(v)}`)
               .join("\n");
             addSystemMessage(`State vector:\n${lines}`);
           } else {

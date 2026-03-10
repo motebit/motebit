@@ -564,7 +564,8 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
         return;
       }
       const mw = bearerAuth({ token: apiToken });
-      return mw(c, next);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+      return mw(c as never, next);
     });
   }
 

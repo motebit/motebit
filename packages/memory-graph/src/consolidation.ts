@@ -93,7 +93,7 @@ export function parseConsolidationResponse(
     };
 
     // Validate node ID for actions that reference existing memories
-    if (action !== ConsolidationAction.ADD) {
+    if (decision.action !== ConsolidationAction.ADD) {
       if (!parsed.existingNodeId || !validNodeIds.includes(parsed.existingNodeId)) {
         return fallback;
       }

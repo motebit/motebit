@@ -2318,15 +2318,13 @@ async function handleServe(config: CliConfig): Promise<void> {
         log(`Registered with relay: ${syncUrl}`);
         // Heartbeat every 5 minutes
         heartbeatTimer = setInterval(
-          async () => {
-            try {
-              await fetch(`${syncUrl}/api/v1/agents/heartbeat`, {
-                method: "POST",
-                headers: regHeaders,
-              });
-            } catch {
+          () => {
+            void fetch(`${syncUrl}/api/v1/agents/heartbeat`, {
+              method: "POST",
+              headers: regHeaders,
+            }).catch(() => {
               // Best-effort heartbeat
-            }
+            });
           },
           5 * 60 * 1000,
         );

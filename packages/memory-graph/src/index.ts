@@ -359,7 +359,7 @@ export class MemoryGraph {
     const now = Date.now();
 
     switch (decision.action) {
-      case "update": {
+      case ConsolidationAction.UPDATE: {
         // Set valid_until on old node (preserve history, don't tombstone)
         const oldNode = decision.existingNodeId
           ? await this.storage.getNode(decision.existingNodeId)
@@ -379,7 +379,7 @@ export class MemoryGraph {
         return { node: newNode, decision };
       }
 
-      case "reinforce": {
+      case ConsolidationAction.REINFORCE: {
         // Boost existing node's confidence
         const existingNode = decision.existingNodeId
           ? await this.storage.getNode(decision.existingNodeId)
@@ -403,7 +403,7 @@ export class MemoryGraph {
         return { node: supportNode, decision };
       }
 
-      case "noop": {
+      case ConsolidationAction.NOOP: {
         // Update existing node's last_accessed
         const existingNode = decision.existingNodeId
           ? await this.storage.getNode(decision.existingNodeId)
@@ -416,7 +416,7 @@ export class MemoryGraph {
         return { node: null, decision };
       }
 
-      case "add":
+      case ConsolidationAction.ADD:
       default: {
         const node = await this.formMemory(candidate, embedding, halfLife);
         await this.logConsolidation(decision, node.node_id);
