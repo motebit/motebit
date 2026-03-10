@@ -1,5 +1,9 @@
 # Motebit
 
+<p align="center">
+  <img src="social-preview.png" alt="Motebit — Cryptographic identity for AI agents" width="100%">
+</p>
+
 [![CI](https://github.com/motebit/motebit/actions/workflows/ci.yml/badge.svg)](https://github.com/motebit/motebit/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/create-motebit)](https://www.npmjs.com/package/create-motebit)
 [![License: BSL 1.1](https://img.shields.io/badge/license-BSL%201.1-blue)](LICENSE)
