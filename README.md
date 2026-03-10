@@ -1,5 +1,10 @@
 # Motebit
 
+[![CI](https://github.com/motebit/motebit/actions/workflows/ci.yml/badge.svg)](https://github.com/motebit/motebit/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/create-motebit)](https://www.npmjs.com/package/create-motebit)
+[![License: BSL 1.1](https://img.shields.io/badge/license-BSL%201.1-blue)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/protocol-MIT-green)](LICENSE-MIT)
+
 Cryptographic identity for AI agents.
 
 Every AI agent today is a session — no persistent identity, no memory that compounds, no trust history, no proof of who it is. Motebit is the missing layer: Ed25519 keypairs, signed identity files, governance policy, and portable memory that travel with the agent across devices, providers, and time.
@@ -44,10 +49,10 @@ if (result.valid) {
 
 ## Packages
 
-| Package | Description | License |
-|---------|-------------|---------|
-| [`create-motebit`](https://www.npmjs.com/package/create-motebit) | CLI scaffolder — `npm create motebit` | MIT |
-| [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) | Signature verification library | MIT |
+| Package                                                            | Description                           | License |
+| ------------------------------------------------------------------ | ------------------------------------- | ------- |
+| [`create-motebit`](https://www.npmjs.com/package/create-motebit)   | CLI scaffolder — `npm create motebit` | MIT     |
+| [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) | Signature verification library        | MIT     |
 
 ## Specification
 
@@ -76,12 +81,21 @@ The agentic economy is missing plumbing. Not more intelligence — we have plent
 
 The intelligence is a commodity. The identity is the asset.
 
+## Community
+
+- [GitHub Discussions](https://github.com/motebit/motebit/discussions) — questions, ideas, show & tell
+- [Bug reports](https://github.com/motebit/motebit/issues/new?template=bug_report.yml) — something broken? file it here
+- [Feature requests](https://github.com/motebit/motebit/issues/new?template=feature_request.yml) — propose new capabilities
+- [Contributing guide](CONTRIBUTING.md) — how to get involved
+
 ## License
 
 The protocol layer is MIT licensed:
+
 - [`spec/`](spec/) — identity specification
 - [`packages/verify/`](packages/verify/) — verification library
 - [`packages/create-motebit/`](packages/create-motebit/) — CLI scaffolder
+- [`packages/sdk/`](packages/sdk/) — core types
 
 The platform implementation is [BSL 1.1](LICENSE) — free to use, source-available, converts to MIT per-version after 4 years.
 

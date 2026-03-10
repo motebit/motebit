@@ -4,13 +4,47 @@ Thank you for your interest in contributing.
 
 ## How to help
 
-- **Report bugs** — file an issue using the bug report template
-- **Request features** — file an issue using the feature request template
-- **Ask questions** — use GitHub Discussions
+- **Report bugs** -- file an [issue](https://github.com/motebit/motebit/issues/new?template=bug_report.yml) using the bug report template
+- **Request features** -- file an [issue](https://github.com/motebit/motebit/issues/new?template=feature_request.yml) using the feature request template
+- **Ask questions** -- use [GitHub Discussions](https://github.com/motebit/motebit/discussions)
+- **Improve docs** -- fix typos, clarify guides, add examples
+- **Add tests** -- test coverage is always welcome
 
 ## Before you code
 
 Open an issue first. We want to discuss the approach before you invest time writing code. This saves everyone effort and keeps the codebase coherent.
+
+## Development setup
+
+**Prerequisites:** Node.js >= 20, pnpm 9.15
+
+```bash
+git clone https://github.com/motebit/motebit.git
+cd motebit
+pnpm install
+pnpm run build
+pnpm run test
+```
+
+### Project structure
+
+```
+apps/           Desktop (Tauri), CLI, Mobile (Expo), Web, Admin, Spatial
+packages/       Shared libraries (runtime, crypto, identity, persistence, etc.)
+services/       Backend services (sync relay, web-search)
+spec/           Open specifications (identity-v1.md)
+```
+
+### Common commands
+
+```bash
+pnpm run build              # Build all packages
+pnpm run test               # Test all packages
+pnpm run typecheck          # Type-check all packages
+pnpm run lint               # Lint all packages
+pnpm --filter <pkg> build   # Build a single package
+pnpm --filter <pkg> test    # Test a single package
+```
 
 ## Pull requests
 
@@ -19,19 +53,26 @@ Open an issue first. We want to discuss the approach before you invest time writ
 3. Ensure `pnpm run typecheck` and `pnpm run test` pass
 4. Submit a pull request with a clear description of what and why
 
-By submitting a pull request, you agree that your contributions are licensed under the same terms as the project (BSL 1.1 for platform code, MIT for protocol packages in `spec/`, `packages/verify/`, `packages/create-motebit/`).
+### Commit messages
+
+Write clear, descriptive commit messages. Start with a verb: `Fix`, `Add`, `Update`, `Remove`, `Refactor`. Keep the first line under 72 characters.
 
 ## What we're not accepting yet
 
-We're in early development. Large architectural changes or new packages will likely be declined — not because they're bad ideas, but because we need to stabilize the core first. Bug fixes, documentation improvements, and test coverage are always welcome.
+We're in early development. Large architectural changes or new packages will likely be declined -- not because they're bad ideas, but because we need to stabilize the core first. Bug fixes, documentation improvements, and test coverage are always welcome.
 
 ## Code style
 
 - TypeScript throughout, strict mode
 - Tests in `src/__tests__/` using vitest
 - Error handling: `catch (err: unknown) { const msg = err instanceof Error ? err.message : String(err); }`
-- No secrets in code — OS keyring or environment variables only
+- No secrets in code -- OS keyring or environment variables only
+- Prefer editing existing files over creating new ones
+- No unnecessary abstractions -- three similar lines is better than a premature helper
 
 ## License
 
-The protocol layer (`spec/`, `packages/verify/`, `packages/create-motebit/`) is MIT licensed. Everything else is [BSL 1.1](LICENSE) — source-available, free to use, converts to MIT per-version after 4 years.
+By submitting a pull request, you agree that your contributions are licensed under the same terms as the project:
+
+- **Protocol layer** (`spec/`, `packages/verify/`, `packages/create-motebit/`, `packages/sdk/`) -- MIT
+- **Everything else** -- [BSL 1.1](LICENSE), source-available, converts to MIT per-version after 4 years

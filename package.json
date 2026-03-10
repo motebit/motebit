@@ -3,7 +3,22 @@
   "version": "0.1.0",
   "private": true,
   "license": "BSL-1.1",
-  "description": "Persistent embodied AI presence layer",
+  "description": "Cryptographic identity for AI agents",
+  "homepage": "https://motebit.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/motebit/motebit.git"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "identity",
+    "cryptography",
+    "ed25519",
+    "mcp",
+    "trust",
+    "governance"
+  ],
   "scripts": {
     "build": "turbo run build",
     "test": "turbo run test",

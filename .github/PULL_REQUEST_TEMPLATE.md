@@ -4,11 +4,18 @@
 
 ## Why
 
-<!-- Why is this change needed? Link to an issue if applicable. -->
+<!-- Why is this change needed? Link to an issue if applicable. Fixes #000 -->
 
 ## Test plan
 
 <!-- How did you verify this works? -->
+
+## Checklist
+
+- [ ] Tests added or updated
+- [ ] `pnpm run typecheck` passes
+- [ ] `pnpm run test` passes
+- [ ] No breaking changes (or documented below)
 
 ---
 
