@@ -6,7 +6,7 @@ All notable changes to the published packages are documented here. This project 
 
 ### Fixed
 
-- `create-motebit`: depend on `@motebit/verify` instead of unpublished `motebit` package
+- `create-motebit`: use `@motebit/verify` for signature verification (lightweight, zero monorepo deps)
 
 ## [0.1.1] - 2026-03-09
 
