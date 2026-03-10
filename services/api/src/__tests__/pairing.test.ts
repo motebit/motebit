@@ -13,7 +13,7 @@ function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
-function createTestRelay(): SyncRelay {
+async function createTestRelay(): Promise<SyncRelay> {
   return createSyncRelay({ apiToken: API_TOKEN, enableDeviceAuth: true, verifyDeviceSignature: true });
 }
 
@@ -59,8 +59,8 @@ async function setupIdentityAndDevice(relay: SyncRelay): Promise<{
 describe("Pairing Protocol", () => {
   let relay: SyncRelay;
 
-  beforeEach(() => {
-    relay = createTestRelay();
+  beforeEach(async () => {
+    relay = await createTestRelay();
   });
 
   afterEach(() => {

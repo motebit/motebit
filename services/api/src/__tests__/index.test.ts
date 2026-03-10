@@ -16,7 +16,7 @@ function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
-function createTestRelay(overrides?: { enableDeviceAuth?: boolean; verifyDeviceSignature?: boolean }): SyncRelay {
+async function createTestRelay(overrides?: { enableDeviceAuth?: boolean; verifyDeviceSignature?: boolean }): Promise<SyncRelay> {
   return createSyncRelay({ apiToken: API_TOKEN, ...overrides });
 }
 
@@ -38,8 +38,8 @@ function makeEvent(motebitId: string, clock: number): EventLogEntry {
 describe("Sync Relay", () => {
   let relay: SyncRelay;
 
-  beforeEach(() => {
-    relay = createTestRelay({ enableDeviceAuth: false });
+  beforeEach(async () => {
+    relay = await createTestRelay({ enableDeviceAuth: false });
   });
 
   afterEach(() => {
@@ -311,7 +311,7 @@ describe("Sync Relay — device auth", () => {
   let relay: SyncRelay;
 
   beforeEach(async () => {
-    relay = createTestRelay({ enableDeviceAuth: true });
+    relay = await createTestRelay({ enableDeviceAuth: true });
     // Create an identity to work with
     await relay.app.request("/identity", {
       method: "POST",
@@ -393,8 +393,8 @@ describe("Sync Relay — device auth", () => {
 describe("Sync Relay — signed token auth", () => {
   let relay: SyncRelay;
 
-  beforeEach(() => {
-    relay = createTestRelay({ enableDeviceAuth: true, verifyDeviceSignature: true });
+  beforeEach(async () => {
+    relay = await createTestRelay({ enableDeviceAuth: true, verifyDeviceSignature: true });
   });
 
   afterEach(() => {
@@ -550,8 +550,8 @@ describe("Sync Relay — signed token auth", () => {
 describe("Sync Relay — admin API endpoints", () => {
   let relay: SyncRelay;
 
-  beforeEach(() => {
-    relay = createTestRelay({ enableDeviceAuth: false });
+  beforeEach(async () => {
+    relay = await createTestRelay({ enableDeviceAuth: false });
   });
 
   afterEach(() => {
@@ -750,8 +750,8 @@ describe("Sync Relay — admin API endpoints", () => {
 describe("Sync Relay — agent protocol", () => {
   let relay: SyncRelay;
 
-  beforeEach(() => {
-    relay = createTestRelay({ enableDeviceAuth: false });
+  beforeEach(async () => {
+    relay = await createTestRelay({ enableDeviceAuth: false });
   });
 
   afterEach(() => {
@@ -852,7 +852,7 @@ describe("Sync Relay — agent discovery registry", () => {
   let relay: SyncRelay;
 
   beforeEach(async () => {
-    relay = createTestRelay({ enableDeviceAuth: true, verifyDeviceSignature: true });
+    relay = await createTestRelay({ enableDeviceAuth: true, verifyDeviceSignature: true });
   });
 
   afterEach(() => {

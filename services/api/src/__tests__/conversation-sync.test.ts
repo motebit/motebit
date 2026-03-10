@@ -9,7 +9,7 @@ const API_TOKEN = "test-token";
 const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
 const MOTEBIT_ID = "test-mote";
 
-function createTestRelay(): SyncRelay {
+async function createTestRelay(): Promise<SyncRelay> {
   return createSyncRelay({ apiToken: API_TOKEN, enableDeviceAuth: false });
 }
 
@@ -46,8 +46,8 @@ function makeMessage(conversationId: string, motebitId: string, overrides: Parti
 describe("Conversation Sync Endpoints", () => {
   let relay: SyncRelay;
 
-  beforeEach(() => {
-    relay = createTestRelay();
+  beforeEach(async () => {
+    relay = await createTestRelay();
   });
 
   afterEach(() => {

@@ -55,7 +55,7 @@ import { bearerAuth } from "hono/bearer-auth";
 import { HTTPException } from "hono/http-exception";
 import { EventStore } from "@motebit/event-log";
 import { IdentityManager } from "@motebit/core-identity";
-import { createMotebitDatabase } from "@motebit/persistence";
+import { openMotebitDatabase } from "@motebit/persistence";
 import type { MotebitDatabase } from "@motebit/persistence";
 import type { EventLogEntry, ToolAuditEntry, SyncConversation, SyncConversationMessage, ExecutionReceipt } from "@motebit/sdk";
 import { AgentTaskStatus } from "@motebit/sdk";
@@ -137,10 +137,10 @@ function generatePairingCode(): string {
   return Array.from(bytes).map(b => PAIRING_ALPHABET[b % PAIRING_ALPHABET.length]).join("");
 }
 
-export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
+export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<SyncRelay> {
   const { dbPath = ":memory:", apiToken, corsOrigin = "*", enableDeviceAuth = true, verifyDeviceSignature = true } = config;
 
-  const moteDb: MotebitDatabase = createMotebitDatabase(dbPath);
+  const moteDb: MotebitDatabase = await openMotebitDatabase(dbPath);
   const eventStore = new EventStore(moteDb.eventStore);
   const identityManager = new IdentityManager(moteDb.identityStorage, eventStore);
 
@@ -1361,14 +1361,19 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
 
 // === Standalone boot ===
 
-const app = process.env.VITEST != null ? new Hono() : createSyncRelay({
-  dbPath: process.env.MOTEBIT_DB_PATH,
-  apiToken: process.env.MOTEBIT_API_TOKEN,
-  corsOrigin: process.env.MOTEBIT_CORS_ORIGIN,
-  enableDeviceAuth: process.env.MOTEBIT_ENABLE_DEVICE_AUTH !== "false",
-}).app;
+let app: Hono;
 
-if (process.env.VITEST == null) {
+if (process.env.VITEST != null) {
+  app = new Hono();
+} else {
+  const relay = await createSyncRelay({
+    dbPath: process.env.MOTEBIT_DB_PATH,
+    apiToken: process.env.MOTEBIT_API_TOKEN,
+    corsOrigin: process.env.MOTEBIT_CORS_ORIGIN,
+    enableDeviceAuth: process.env.MOTEBIT_ENABLE_DEVICE_AUTH !== "false",
+  });
+  app = relay.app;
+
   const port = Number(process.env.PORT ?? 3000);
   const server = serve({ fetch: app.fetch, port }, (info) => {
     // eslint-disable-next-line no-console
