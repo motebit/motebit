@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/motebit/motebit/security/policy
+    about: "Do not file security issues publicly. See our security policy."
+  - name: Questions & Discussion
+    url: https://github.com/motebit/motebit/discussions
+    about: "Ask questions, share ideas, or discuss Motebit."

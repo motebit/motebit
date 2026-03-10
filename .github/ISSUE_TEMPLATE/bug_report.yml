@@ -1,0 +1,61 @@
+name: Bug Report
+description: Report a bug in Motebit
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      description: Which app or package is affected?
+      options:
+        - Desktop (Tauri)
+        - Mobile (React Native)
+        - CLI
+        - Web
+        - "@motebit/verify"
+        - "create-motebit"
+        - Other package
+        - API / Sync Relay
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: How can we reproduce this?
+      placeholder: |
+        1. Run `...`
+        2. Click on `...`
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened instead?
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "Package version or commit hash"
+      placeholder: "0.1.0 or abc1234"
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: OS, Node version, logs, screenshots, etc.
