@@ -1,8 +1,8 @@
 # Default owner for everything
-* @danielhakim
+* @hakimlabs
 
 # Protocol layer (MIT)
-spec/ @danielhakim
-packages/verify/ @danielhakim
-packages/create-motebit/ @danielhakim
-packages/sdk/ @danielhakim
+spec/ @hakimlabs
+packages/verify/ @hakimlabs
+packages/create-motebit/ @hakimlabs
+packages/sdk/ @hakimlabs
