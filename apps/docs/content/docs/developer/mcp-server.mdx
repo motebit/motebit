@@ -76,7 +76,7 @@ The differentiator. Submits a prompt for autonomous execution. The motebit runs 
 - Tools used, memories formed
 - Ed25519 signature
 
-Any agent receiving the receipt can verify it was executed by this specific motebit using [`@motebit/verify`](/docs/guides/identity-standard).
+Any agent receiving the receipt can verify it was executed by this specific motebit using [`@motebit/verify`](/docs/developer/identity-standard).
 
 ```json
 { "prompt": "Check the API health endpoint and summarize the response" }
@@ -92,7 +92,7 @@ Lists all tools available to the motebit (built-in + MCP), including their risk 
 
 ## Proxied tools
 
-In addition to the six synthetic tools, the server exposes all tools from the motebit's [tool registry](/docs/guides/tools) — built-in tools and connected MCP server tools. Every proxied tool call passes through the [policy gate](/docs/concepts/governance):
+In addition to the six synthetic tools, the server exposes all tools from the motebit's [tool registry](/docs/developer/tools) — built-in tools and connected MCP server tools. Every proxied tool call passes through the [policy gate](/docs/concepts/governance):
 
 - **Allowed** — executes and returns the result with an identity tag
 - **Denied** — returns a policy denial message

@@ -5,7 +5,7 @@ description: How motebit controls what crosses the surface
 
 The droplet metaphor is literal in the codebase. The body is passive. The interior is active. Governance is the surface tension — it controls what crosses the boundary between the agent's interior (memory, tools, state) and the outside world. Every outbound action passes through the policy gate. Every inbound data payload is sanitized. Every decision is logged.
 
-For the conceptual foundation, see [Governance](/docs/concepts/governance). For where policy sits in the package architecture, see [Architecture](/docs/architecture).
+For the conceptual foundation, see [Governance](/docs/concepts/governance). For where policy sits in the package architecture, see [Architecture](/docs/operator/architecture).
 
 ## The PolicyGate
 
@@ -130,7 +130,7 @@ Every policy decision is recorded to an append-only audit log:
 | `call_id` | Unique identifier for this specific tool call |
 | `timestamp` | When the decision occurred |
 
-The audit log is queryable via the [admin dashboard](/docs/architecture), the CLI (`motebit approvals list`), and programmatically through the `AuditLogger` API. Mode changes (operator mode enable/disable) are also logged as audit entries.
+The audit log is queryable via the [admin dashboard](/docs/operator/architecture), the CLI (`motebit approvals list`), and programmatically through the `AuditLogger` API. Mode changes (operator mode enable/disable) are also logged as audit entries.
 
 ## Fail-closed everywhere
 

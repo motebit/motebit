@@ -1,0 +1,9 @@
+{
+  "title": "Operator Guide",
+  "pages": [
+    "architecture",
+    "daemon-approvals",
+    "governance",
+    "sync"
+  ]
+}

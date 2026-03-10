@@ -1,0 +1,10 @@
+{
+  "title": "App Reference",
+  "pages": [
+    "desktop",
+    "mobile",
+    "cli",
+    "spatial",
+    "configuration"
+  ]
+}

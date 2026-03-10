@@ -3,10 +3,13 @@
   "pages": [
     "introduction",
     "get-your-agent",
-    "architecture",
     "---Concepts---",
     "...concepts",
-    "---Guides---",
-    "...guides"
+    "---Developer Guide---",
+    "...developer",
+    "---App Reference---",
+    "...apps",
+    "---Operator Guide---",
+    "...operator"
   ]
 }

@@ -5,7 +5,7 @@ description: How motebit creates and manages persistent sovereign identity
 
 Session tokens expire. API keys are shared secrets managed by someone else. A motebit agent owns an Ed25519 keypair — the private key never leaves the device, and the identity persists across sessions, devices, and intelligence providers. This guide explains how the cryptographic identity works, from first launch through multi-device sync.
 
-For the conceptual foundation, see [Identity](/docs/concepts/identity). For where identity sits in the package architecture, see [Architecture](/docs/architecture).
+For the conceptual foundation, see [Identity](/docs/concepts/identity). For where identity sits in the package architecture, see [Architecture](/docs/operator/architecture).
 
 ## The identity bootstrap
 
@@ -28,7 +28,7 @@ The file has two parts:
 - **YAML frontmatter** — identity metadata, governance thresholds, privacy rules, memory configuration, and registered devices
 - **Signature comment** — `<!-- motebit:sig:Ed25519:{base64url_signature} -->` on the line immediately following the closing `---`
 
-The signature covers the exact UTF-8 bytes of the frontmatter. Any modification — even a single character — invalidates it. The public key is embedded in the frontmatter, making the file self-contained: verification requires no external service. See the [Identity Standard](/docs/guides/identity-standard) guide for the full file format, creation commands, and verification workflow.
+The signature covers the exact UTF-8 bytes of the frontmatter. Any modification — even a single character — invalidates it. The public key is embedded in the frontmatter, making the file self-contained: verification requires no external service. See the [Identity Standard](/docs/developer/identity-standard) guide for the full file format, creation commands, and verification workflow.
 
 ## Multi-device registration
 
