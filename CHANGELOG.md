@@ -2,17 +2,11 @@
 
 All notable changes to the published packages are documented here. This project uses [Semantic Versioning](https://semver.org/).
 
-## Unreleased
-
-### Planned
-
-- `motebit`: CLI and runtime package — interactive REPL, daemon mode, goal scheduling, operator mode, MCP server (`motebit --serve`). Pending polish for cross-platform native installation.
-
 ## [0.1.2] - 2026-03-09
 
 ### Fixed
 
-- `create-motebit`: use `@motebit/verify` for signature verification (lightweight, zero monorepo deps)
+- `create-motebit`: fixed dependency on unpublished package; use `@motebit/verify` directly
 
 ## [0.1.1] - 2026-03-09
 
