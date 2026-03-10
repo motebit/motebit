@@ -309,10 +309,27 @@ function pinLockoutMs(attempts: number): number {
   return Math.min(PIN_LOCKOUT_BASE_MS * Math.pow(10, exponent), 30 * 60_000);
 }
 
-async function hashPin(pin: string): Promise<string> {
-  const data = new TextEncoder().encode(pin);
-  const hash = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, "0")).join("");
+function toHex(buf: ArrayBuffer): string {
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function hashPin(pin: string, existingSalt?: string): Promise<string> {
+  const salt = existingSalt
+    ? new Uint8Array(existingSalt.match(/.{2}/g)!.map(h => parseInt(h, 16)))
+    : crypto.getRandomValues(new Uint8Array(16));
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(pin),
+    "PBKDF2",
+    false,
+    ["deriveBits"],
+  );
+  const derived = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations: 100_000, hash: "SHA-256" },
+    keyMaterial,
+    256,
+  );
+  return `${toHex(salt.buffer)}:${toHex(derived)}`;
 }
 
 // === In-Memory Storage Factory ===
@@ -651,7 +668,11 @@ export class MotebitRuntime {
       }
     }
 
-    const inputHash = await hashPin(pin);
+    // Support both legacy (plain hex) and salted (salt:key) formats
+    const parts = storedHash.split(":");
+    const inputHash = parts.length === 2
+      ? await hashPin(pin, parts[0])
+      : await hashPin(pin);
     if (inputHash !== storedHash) {
       await this.recordPinFailure(attemptState);
       return { success: false, error: "Incorrect PIN" };

@@ -749,6 +749,9 @@ export class McpServerAdapter {
         return;
       }
 
+      // Reset caller identity for each request to prevent stale state
+      this.lastVerifiedCaller = null;
+
       // Bearer token auth (skip /health, already handled above)
       const authHeader = req.headers["authorization"];
       const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;

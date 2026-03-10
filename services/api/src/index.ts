@@ -378,7 +378,7 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
                 for (const entry of msg.events) {
                   const payload = JSON.stringify({ type: "event", event: entry });
                   for (const peer of peers) {
-                    if (peer.ws !== ws) {
+                    if (peer.ws !== ws && peer.ws.readyState === 1) {
                       peer.ws.send(payload);
                     }
                   }
@@ -398,7 +398,7 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
                 for (const conv of msg.conversations) {
                   const payload = JSON.stringify({ type: "conversation", conversation: conv });
                   for (const peer of peers) {
-                    if (peer.ws !== ws) {
+                    if (peer.ws !== ws && peer.ws.readyState === 1) {
                       peer.ws.send(payload);
                     }
                   }
@@ -418,7 +418,7 @@ export function createSyncRelay(config: SyncRelayConfig = {}): SyncRelay {
                 for (const m of msg.messages) {
                   const payload = JSON.stringify({ type: "conversation_message", message: m });
                   for (const peer of peers) {
-                    if (peer.ws !== ws) {
+                    if (peer.ws !== ws && peer.ws.readyState === 1) {
                       peer.ws.send(payload);
                     }
                   }

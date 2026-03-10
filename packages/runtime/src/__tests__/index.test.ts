@@ -399,10 +399,11 @@ describe("Operator mode PIN auth", () => {
 
     await rt.setupOperatorPin("1234");
     expect(keyring.store.has("operator_pin_hash")).toBe(true);
-    // Stored value is a hex SHA-256 hash, not the raw PIN
+    // Stored value is a PBKDF2 hash with salt, not the raw PIN
     const stored = keyring.store.get("operator_pin_hash")!;
     expect(stored).not.toBe("1234");
-    expect(stored).toMatch(/^[0-9a-f]{64}$/);
+    // Format: salt_hex:derived_key_hex
+    expect(stored).toMatch(/^[0-9a-f]{32}:[0-9a-f]{64}$/);
   });
 
   it("correct PIN enables operator mode", async () => {
@@ -481,7 +482,7 @@ describe("Operator mode PIN auth", () => {
     await expect(rt.setupOperatorPin("1234")).rejects.toThrow("Keyring not available");
   });
 
-  it("PIN hash is deterministic (same PIN → same hash)", async () => {
+  it("PIN hash uses unique salt per setup (same PIN → different hash)", async () => {
     const keyring = createMockKeyring();
     const rt = createRuntimeWithKeyring(keyring);
 
@@ -491,7 +492,11 @@ describe("Operator mode PIN auth", () => {
     await rt.setupOperatorPin("4321");
     const hash2 = keyring.store.get("operator_pin_hash")!;
 
-    expect(hash1).toBe(hash2);
+    // PBKDF2 with random salt: same PIN produces different hashes (correct behavior)
+    expect(hash1).not.toBe(hash2);
+    // But both should still verify correctly
+    const result = await rt.setOperatorMode(true, "4321");
+    expect(result.success).toBe(true);
   });
 
   it("different PINs produce different hashes", async () => {
