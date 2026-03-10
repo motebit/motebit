@@ -248,7 +248,15 @@ describe("update", () => {
 
     const updated = await update(
       original,
-      { governance: { trust_mode: "minimal", max_risk_auto: "R0_READ", require_approval_above: "R0_READ", deny_above: "R2_WRITE", operator_mode: false } },
+      {
+        governance: {
+          trust_mode: "minimal",
+          max_risk_auto: "R0_READ",
+          require_approval_above: "R0_READ",
+          deny_above: "R2_WRITE",
+          operator_mode: false,
+        },
+      },
       kp.privateKey,
     );
 
@@ -298,9 +306,15 @@ describe("service identity", () => {
     const parsed = parse(content);
     expect(parsed.frontmatter.type).toBe("service");
     expect(parsed.frontmatter.service_name).toBe("Flight Search");
-    expect(parsed.frontmatter.service_description).toBe("Search and book flights across major airlines");
+    expect(parsed.frontmatter.service_description).toBe(
+      "Search and book flights across major airlines",
+    );
     expect(parsed.frontmatter.service_url).toBe("https://flights.example.com");
-    expect(parsed.frontmatter.capabilities).toEqual(["flight_search", "flight_booking", "price_alerts"]);
+    expect(parsed.frontmatter.capabilities).toEqual([
+      "flight_search",
+      "flight_booking",
+      "price_alerts",
+    ]);
     expect(parsed.frontmatter.terms_url).toBe("https://flights.example.com/terms");
 
     // Verify
@@ -309,7 +323,11 @@ describe("service identity", () => {
     expect(result.identity).not.toBeNull();
     expect(result.identity!.type).toBe("service");
     expect(result.identity!.service_name).toBe("Flight Search");
-    expect(result.identity!.capabilities).toEqual(["flight_search", "flight_booking", "price_alerts"]);
+    expect(result.identity!.capabilities).toEqual([
+      "flight_search",
+      "flight_booking",
+      "price_alerts",
+    ]);
   });
 
   it("service fields are tamper-proof", async () => {

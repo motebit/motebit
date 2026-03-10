@@ -56,7 +56,10 @@ function formatDateForFilename(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-function messagesToMarkdown(messages: Array<{ role: string; content: string }>, title?: string): string {
+function messagesToMarkdown(
+  messages: Array<{ role: string; content: string }>,
+  title?: string,
+): string {
   const lines: string[] = [];
   if (title != null && title !== "") {
     lines.push(`# ${title}`, "");
@@ -92,10 +95,11 @@ export function initConversations(ctx: DesktopContext): ConversationsAPI {
 
   function populateConversationsList(): void {
     convList.innerHTML = "";
-    void ctx.app.listConversationsAsync(30).then(conversations => {
+    void ctx.app.listConversationsAsync(30).then((conversations) => {
       if (conversations.length === 0) {
         const empty = document.createElement("div");
-        empty.style.cssText = "font-size:12px;color:rgba(0,0,0,0.3);padding:16px;text-align:center;";
+        empty.style.cssText =
+          "font-size:12px;color:rgba(0,0,0,0.3);padding:16px;text-align:center;";
         empty.textContent = "No conversations yet";
         convList.appendChild(empty);
         return;
@@ -108,15 +112,15 @@ export function initConversations(ctx: DesktopContext): ConversationsAPI {
 
         const titleDiv = document.createElement("div");
         titleDiv.className = "conv-item-title";
-        titleDiv.textContent = conv.title != null && conv.title !== "" ? conv.title : "Untitled conversation";
+        titleDiv.textContent =
+          conv.title != null && conv.title !== "" ? conv.title : "Untitled conversation";
         item.appendChild(titleDiv);
 
         if (conv.summary != null && conv.summary !== "") {
           const summaryDiv = document.createElement("div");
           summaryDiv.className = "conv-item-summary";
-          summaryDiv.textContent = conv.summary.length > 120
-            ? conv.summary.slice(0, 120) + "..."
-            : conv.summary;
+          summaryDiv.textContent =
+            conv.summary.length > 120 ? conv.summary.slice(0, 120) + "..." : conv.summary;
           item.appendChild(summaryDiv);
         }
 
@@ -176,12 +180,16 @@ export function initConversations(ctx: DesktopContext): ConversationsAPI {
       motebit_id: ctx.app.motebitId,
       conversation_id: conversationId,
       exported_at: new Date().toISOString(),
-      messages: messages.map(m => ({
+      messages: messages.map((m) => ({
         role: m.role,
         content: m.content,
       })),
     };
-    downloadFile(JSON.stringify(data, null, 2), `motebit-conversation-${conversationId.slice(0, 8)}-${date}.json`, "application/json");
+    downloadFile(
+      JSON.stringify(data, null, 2),
+      `motebit-conversation-${conversationId.slice(0, 8)}-${date}.json`,
+      "application/json",
+    );
     exportMenu.classList.remove("open");
   }
 
@@ -225,7 +233,7 @@ export function initConversations(ctx: DesktopContext): ConversationsAPI {
           title: conv.title,
           started_at: conv.startedAt,
           last_active_at: conv.lastActiveAt,
-          messages: messages.map(m => ({ role: m.role, content: m.content })),
+          messages: messages.map((m) => ({ role: m.role, content: m.content })),
         });
       }
 
@@ -235,7 +243,11 @@ export function initConversations(ctx: DesktopContext): ConversationsAPI {
         exported_at: new Date().toISOString(),
         conversations: allData,
       };
-      downloadFile(JSON.stringify(data, null, 2), `motebit-conversations-${date}.json`, "application/json");
+      downloadFile(
+        JSON.stringify(data, null, 2),
+        `motebit-conversations-${date}.json`,
+        "application/json",
+      );
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       showToast(`Export failed: ${msg}`);
@@ -254,7 +266,8 @@ export function initConversations(ctx: DesktopContext): ConversationsAPI {
       const sections: string[] = [];
       for (const conv of conversations) {
         const messages = await ctx.app.loadConversationById(conv.conversationId);
-        const title = conv.title != null && conv.title !== "" ? conv.title : "Untitled conversation";
+        const title =
+          conv.title != null && conv.title !== "" ? conv.title : "Untitled conversation";
         sections.push(messagesToMarkdown(messages, title));
       }
 
@@ -297,8 +310,12 @@ export function initConversations(ctx: DesktopContext): ConversationsAPI {
   // Export handlers
   document.getElementById("conv-export-json")!.addEventListener("click", exportCurrentJson);
   document.getElementById("conv-export-md")!.addEventListener("click", exportCurrentMarkdown);
-  document.getElementById("conv-export-all-json")!.addEventListener("click", () => { void exportAllJson(); });
-  document.getElementById("conv-export-all-md")!.addEventListener("click", () => { void exportAllMarkdown(); });
+  document.getElementById("conv-export-all-json")!.addEventListener("click", () => {
+    void exportAllJson();
+  });
+  document.getElementById("conv-export-all-md")!.addEventListener("click", () => {
+    void exportAllMarkdown();
+  });
 
   return { open, close };
 }

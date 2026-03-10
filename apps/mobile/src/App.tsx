@@ -40,7 +40,12 @@ import { OpenAITTSProvider } from "./adapters/openai-tts";
 import { ExpoAVSTTProvider } from "./adapters/expo-av-stt";
 import { AudioMonitor } from "./adapters/audio-monitor";
 import { MobileApp, APPROVAL_PRESET_CONFIGS, COLOR_PRESETS } from "./mobile-app";
-import type { MobileSettings, MobileAIConfig, GoalCompleteEvent, GoalApprovalEvent } from "./mobile-app";
+import type {
+  MobileSettings,
+  MobileAIConfig,
+  GoalCompleteEvent,
+  GoalApprovalEvent,
+} from "./mobile-app";
 import { WelcomeOverlay } from "./components/WelcomeOverlay";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { PinDialog } from "./components/PinDialog";
@@ -124,15 +129,25 @@ export function App(): React.ReactElement {
 
   // Toast state
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const showToast = useCallback((msg: string) => { setToastMessage(msg); }, []);
-  const dismissToast = useCallback(() => { setToastMessage(null); }, []);
+  const showToast = useCallback((msg: string) => {
+    setToastMessage(msg);
+  }, []);
+  const dismissToast = useCallback(() => {
+    setToastMessage(null);
+  }, []);
 
   // Banner state (persistent errors with optional action)
-  const [banner, setBanner] = useState<{ message: string; actionLabel?: string; onAction?: () => void } | null>(null);
+  const [banner, setBanner] = useState<{
+    message: string;
+    actionLabel?: string;
+    onAction?: () => void;
+  } | null>(null);
   const showBanner = useCallback((message: string, actionLabel?: string, onAction?: () => void) => {
     setBanner({ message, actionLabel, onAction });
   }, []);
-  const dismissBanner = useCallback(() => { setBanner(null); }, []);
+  const dismissBanner = useCallback(() => {
+    setBanner(null);
+  }, []);
 
   // Voice state — 5-state machine:
   //   off → ambient (mic listening, creature breathes, VAD armed)
@@ -141,7 +156,9 @@ export function App(): React.ReactElement {
   //   transcribing → ambient (result received, auto-send, return to listening)
   //   speaking → ambient (TTS finished or cancelled)
   //   Any → off (explicit stop)
-  const [micState, setMicState] = useState<"off" | "ambient" | "voice" | "transcribing" | "speaking">("off");
+  const [micState, setMicState] = useState<
+    "off" | "ambient" | "voice" | "transcribing" | "speaking"
+  >("off");
   const ttsRef = useRef<TTSProvider | null>(null);
   const sttRef = useRef<STTProvider | null>(null);
   const audioMonitorRef = useRef<AudioMonitor | null>(null);
@@ -157,7 +174,17 @@ export function App(): React.ReactElement {
   const pairingSyncUrlRef = useRef("");
 
   // MCP state
-  const [mcpServers, setMcpServers] = useState<Array<{ name: string; url: string; connected: boolean; toolCount: number; trusted: boolean; motebit: boolean; motebitPublicKey?: string }>>([]);
+  const [mcpServers, setMcpServers] = useState<
+    Array<{
+      name: string;
+      url: string;
+      connected: boolean;
+      toolCount: number;
+      trusted: boolean;
+      motebit: boolean;
+      motebitPublicKey?: string;
+    }>
+  >([]);
 
   // Model indicator
   const [currentModel, setCurrentModel] = useState<string | null>(null);
@@ -176,7 +203,7 @@ export function App(): React.ReactElement {
     if (settings?.theme !== "system") return undefined;
     const sub = Appearance.addChangeListener(() => {
       // Force re-render by updating settings reference
-      setSettings((prev) => prev ? { ...prev } : prev);
+      setSettings((prev) => (prev ? { ...prev } : prev));
     });
     return () => sub.remove();
   }, [settings?.theme]);
@@ -270,26 +297,29 @@ export function App(): React.ReactElement {
   }, []);
 
   // Initialize voice providers — TTS chain: OpenAI TTS → expo-speech fallback
-  const initVoice = useCallback(async (voiceSettings?: { ttsVoice?: string }) => {
-    const openaiKey = await SecureStore.getItemAsync("motebit_openai_api_key");
-    const voice = voiceSettings?.ttsVoice ?? settings?.ttsVoice ?? "alloy";
+  const initVoice = useCallback(
+    async (voiceSettings?: { ttsVoice?: string }) => {
+      const openaiKey = await SecureStore.getItemAsync("motebit_openai_api_key");
+      const voice = voiceSettings?.ttsVoice ?? settings?.ttsVoice ?? "alloy";
 
-    // Build TTS chain: OpenAI (if key available) → system TTS fallback
-    const systemTts = new ExpoSpeechTTSProvider();
-    if (openaiKey != null && openaiKey !== "") {
-      const openaiTts = new OpenAITTSProvider({ apiKey: openaiKey, voice });
-      ttsRef.current = new FallbackTTSProvider([openaiTts, systemTts]);
-    } else {
-      ttsRef.current = systemTts;
-    }
-
-    if (!sttRef.current) {
-      // STT needs an OpenAI API key for Whisper
+      // Build TTS chain: OpenAI (if key available) → system TTS fallback
+      const systemTts = new ExpoSpeechTTSProvider();
       if (openaiKey != null && openaiKey !== "") {
-        sttRef.current = new ExpoAVSTTProvider({ apiKey: openaiKey });
+        const openaiTts = new OpenAITTSProvider({ apiKey: openaiKey, voice });
+        ttsRef.current = new FallbackTTSProvider([openaiTts, systemTts]);
+      } else {
+        ttsRef.current = systemTts;
       }
-    }
-  }, [settings?.ttsVoice]);
+
+      if (!sttRef.current) {
+        // STT needs an OpenAI API key for Whisper
+        if (openaiKey != null && openaiKey !== "") {
+          sttRef.current = new ExpoAVSTTProvider({ apiKey: openaiKey });
+        }
+      }
+    },
+    [settings?.ttsVoice],
+  );
 
   const applyThemeEnvironment = useCallback((a: MobileApp, theme: "light" | "dark" | "system") => {
     const effective = theme === "system" ? (Appearance.getColorScheme() ?? "dark") : theme;
@@ -300,46 +330,51 @@ export function App(): React.ReactElement {
     }
   }, []);
 
-  const initializeAI = useCallback(async (a: MobileApp, s: MobileSettings) => {
-    // Capture operator mode before re-init (initAI creates a new runtime/PolicyGate
-    // that resets to default operatorMode: false)
-    const wasOperatorMode = a.isOperatorMode;
+  const initializeAI = useCallback(
+    async (a: MobileApp, s: MobileSettings) => {
+      // Capture operator mode before re-init (initAI creates a new runtime/PolicyGate
+      // that resets to default operatorMode: false)
+      const wasOperatorMode = a.isOperatorMode;
 
-    const apiKey = (s.provider === "anthropic" || s.provider === "hybrid")
-      ? (await SecureStore.getItemAsync("motebit_anthropic_api_key")) ?? undefined
-      : undefined;
+      const apiKey =
+        s.provider === "anthropic" || s.provider === "hybrid"
+          ? ((await SecureStore.getItemAsync("motebit_anthropic_api_key")) ?? undefined)
+          : undefined;
 
-    await a.initAI({
-      provider: s.provider,
-      model: s.model,
-      apiKey,
-      ollamaEndpoint: (s.provider === "ollama" || s.provider === "hybrid") ? s.ollamaEndpoint : undefined,
-    });
-
-    // Apply governance (restore operator mode captured before re-init)
-    const preset = APPROVAL_PRESET_CONFIGS[s.approvalPreset];
-    if (preset) {
-      a.updatePolicyConfig({
-        requireApprovalAbove: preset.requireApprovalAbove,
-        denyAbove: preset.denyAbove,
-        operatorMode: wasOperatorMode,
-        budget: { maxCallsPerTurn: s.budgetMaxCalls },
+      await a.initAI({
+        provider: s.provider,
+        model: s.model,
+        apiKey,
+        ollamaEndpoint:
+          s.provider === "ollama" || s.provider === "hybrid" ? s.ollamaEndpoint : undefined,
       });
-    }
-    a.updateMemoryGovernance({
-      persistenceThreshold: s.persistenceThreshold,
-      rejectSecrets: s.rejectSecrets,
-      maxMemoriesPerTurn: s.maxMemoriesPerTurn,
-    });
 
-    // Apply color preset and theme environment
-    if (s.colorPreset === "custom") {
-      a.setInteriorColorDirect(deriveInteriorColor(s.customHue, s.customSaturation));
-    } else {
-      a.setInteriorColor(s.colorPreset);
-    }
-    applyThemeEnvironment(a, s.theme);
-  }, [applyThemeEnvironment]);
+      // Apply governance (restore operator mode captured before re-init)
+      const preset = APPROVAL_PRESET_CONFIGS[s.approvalPreset];
+      if (preset) {
+        a.updatePolicyConfig({
+          requireApprovalAbove: preset.requireApprovalAbove,
+          denyAbove: preset.denyAbove,
+          operatorMode: wasOperatorMode,
+          budget: { maxCallsPerTurn: s.budgetMaxCalls },
+        });
+      }
+      a.updateMemoryGovernance({
+        persistenceThreshold: s.persistenceThreshold,
+        rejectSecrets: s.rejectSecrets,
+        maxMemoriesPerTurn: s.maxMemoriesPerTurn,
+      });
+
+      // Apply color preset and theme environment
+      if (s.colorPreset === "custom") {
+        a.setInteriorColorDirect(deriveInteriorColor(s.customHue, s.customSaturation));
+      } else {
+        a.setInteriorColor(s.colorPreset);
+      }
+      applyThemeEnvironment(a, s.theme);
+    },
+    [applyThemeEnvironment],
+  );
 
   const subscribeToState = useCallback((a: MobileApp) => {
     a.subscribe((s) => {
@@ -355,11 +390,12 @@ export function App(): React.ReactElement {
     });
 
     a.onGoalComplete((event: GoalCompleteEvent) => {
-      const content = event.status === "completed" && (event.summary != null && event.summary !== "")
-        ? `Goal completed: ${event.summary}`
-        : event.status === "failed" && (event.error != null && event.error !== "")
-          ? `Goal failed: ${event.error}`
-          : null;
+      const content =
+        event.status === "completed" && event.summary != null && event.summary !== ""
+          ? `Goal completed: ${event.summary}`
+          : event.status === "failed" && event.error != null && event.error !== ""
+            ? `Goal failed: ${event.error}`
+            : null;
       if (content != null) {
         setMessages((prev) => [
           ...prev,
@@ -463,35 +499,50 @@ export function App(): React.ReactElement {
     setMcpServers(app.current.getMcpServers());
   }, []);
 
-  const handleAddMcpServer = useCallback(async (url: string, name: string, trusted?: boolean, motebit?: boolean) => {
-    try {
-      await app.current.addMcpServer({ name, transport: "http", url, trusted: trusted ?? false, motebit: motebit ?? false });
-      refreshMcpServers();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      addSystemMessage(`MCP error: ${msg}`);
-    }
-  }, [refreshMcpServers, addSystemMessage]);
+  const handleAddMcpServer = useCallback(
+    async (url: string, name: string, trusted?: boolean, motebit?: boolean) => {
+      try {
+        await app.current.addMcpServer({
+          name,
+          transport: "http",
+          url,
+          trusted: trusted ?? false,
+          motebit: motebit ?? false,
+        });
+        refreshMcpServers();
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        addSystemMessage(`MCP error: ${msg}`);
+      }
+    },
+    [refreshMcpServers, addSystemMessage],
+  );
 
-  const handleRemoveMcpServer = useCallback(async (name: string) => {
-    try {
-      await app.current.removeMcpServer(name);
-      refreshMcpServers();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      addSystemMessage(`MCP error: ${msg}`);
-    }
-  }, [refreshMcpServers, addSystemMessage]);
+  const handleRemoveMcpServer = useCallback(
+    async (name: string) => {
+      try {
+        await app.current.removeMcpServer(name);
+        refreshMcpServers();
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        addSystemMessage(`MCP error: ${msg}`);
+      }
+    },
+    [refreshMcpServers, addSystemMessage],
+  );
 
-  const handleToggleMcpTrust = useCallback(async (name: string, trusted: boolean) => {
-    try {
-      await app.current.setMcpServerTrust(name, trusted);
-      refreshMcpServers();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      addSystemMessage(`MCP error: ${msg}`);
-    }
-  }, [refreshMcpServers, addSystemMessage]);
+  const handleToggleMcpTrust = useCallback(
+    async (name: string, trusted: boolean) => {
+      try {
+        await app.current.setMcpServerTrust(name, trusted);
+        refreshMcpServers();
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        addSystemMessage(`MCP error: ${msg}`);
+      }
+    },
+    [refreshMcpServers, addSystemMessage],
+  );
 
   // === GL context ===
   const onGLContextCreate = useCallback(async (gl: ExpoWebGLRenderingContext) => {
@@ -510,40 +561,46 @@ export function App(): React.ReactElement {
 
   // === Orbit gesture handlers ===
 
-  const handleGLResponderGrant = useCallback((e: { nativeEvent: { touches: Array<{ pageX: number; pageY: number }> } }) => {
-    app.current.handleOrbitTouchStart();
-    const { touches } = e.nativeEvent;
-    const t0 = touches[0];
-    const t1 = touches[1];
-    if (touches.length === 1 && t0) {
-      lastTouchRef.current = { x: t0.pageX, y: t0.pageY };
-    } else if (touches.length === 2 && t0 && t1) {
-      const dx = t1.pageX - t0.pageX;
-      const dy = t1.pageY - t0.pageY;
-      lastPinchDistRef.current = Math.sqrt(dx * dx + dy * dy);
-      lastTouchRef.current = null;
-    }
-  }, []);
-
-  const handleGLResponderMove = useCallback((e: { nativeEvent: { touches: Array<{ pageX: number; pageY: number }> } }) => {
-    const { touches } = e.nativeEvent;
-    const t0 = touches[0];
-    const t1 = touches[1];
-    if (touches.length === 1 && t0 && lastTouchRef.current) {
-      const dx = t0.pageX - lastTouchRef.current.x;
-      const dy = t0.pageY - lastTouchRef.current.y;
-      app.current.handleOrbitPan(dx, dy);
-      lastTouchRef.current = { x: t0.pageX, y: t0.pageY };
-    } else if (touches.length === 2 && t0 && t1 && lastPinchDistRef.current > 0) {
-      const dx = t1.pageX - t0.pageX;
-      const dy = t1.pageY - t0.pageY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist > 0) {
-        app.current.handleOrbitPinch(dist / lastPinchDistRef.current);
-        lastPinchDistRef.current = dist;
+  const handleGLResponderGrant = useCallback(
+    (e: { nativeEvent: { touches: Array<{ pageX: number; pageY: number }> } }) => {
+      app.current.handleOrbitTouchStart();
+      const { touches } = e.nativeEvent;
+      const t0 = touches[0];
+      const t1 = touches[1];
+      if (touches.length === 1 && t0) {
+        lastTouchRef.current = { x: t0.pageX, y: t0.pageY };
+      } else if (touches.length === 2 && t0 && t1) {
+        const dx = t1.pageX - t0.pageX;
+        const dy = t1.pageY - t0.pageY;
+        lastPinchDistRef.current = Math.sqrt(dx * dx + dy * dy);
+        lastTouchRef.current = null;
       }
-    }
-  }, []);
+    },
+    [],
+  );
+
+  const handleGLResponderMove = useCallback(
+    (e: { nativeEvent: { touches: Array<{ pageX: number; pageY: number }> } }) => {
+      const { touches } = e.nativeEvent;
+      const t0 = touches[0];
+      const t1 = touches[1];
+      if (touches.length === 1 && t0 && lastTouchRef.current) {
+        const dx = t0.pageX - lastTouchRef.current.x;
+        const dy = t0.pageY - lastTouchRef.current.y;
+        app.current.handleOrbitPan(dx, dy);
+        lastTouchRef.current = { x: t0.pageX, y: t0.pageY };
+      } else if (touches.length === 2 && t0 && t1 && lastPinchDistRef.current > 0) {
+        const dx = t1.pageX - t0.pageX;
+        const dy = t1.pageY - t0.pageY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 0) {
+          app.current.handleOrbitPinch(dist / lastPinchDistRef.current);
+          lastPinchDistRef.current = dist;
+        }
+      }
+    },
+    [],
+  );
 
   const handleGLResponderRelease = useCallback(() => {
     app.current.handleOrbitTouchEnd();
@@ -618,7 +675,11 @@ export function App(): React.ReactElement {
   // Auto-start STT when VAD triggers voice state
   const prevMicStateForVADRef = useRef(micState);
   useEffect(() => {
-    if (prevMicStateForVADRef.current === "ambient" && micState === "voice" && vadTriggeredRef.current) {
+    if (
+      prevMicStateForVADRef.current === "ambient" &&
+      micState === "voice" &&
+      vadTriggeredRef.current
+    ) {
       vadTriggeredRef.current = false;
       startVoiceRecording();
     }
@@ -669,138 +730,151 @@ export function App(): React.ReactElement {
   }, [micState, startAmbientMonitor, stopAudioMonitor]);
 
   // === Slash commands ===
-  const handleSlashCommand = useCallback((command: string, args: string) => {
-    const a = app.current;
-    switch (command) {
-      case "model":
-        if (!args) {
-          addSystemMessage(`Current model: ${a.currentModel ?? "none"}`);
-        } else {
-          try {
-            a.setModel(args);
-            setCurrentModel(args);
-            showToast(`Model switched to: ${args}`);
-          } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : String(err);
-            addSystemMessage(`Error: ${msg}`);
-          }
-        }
-        break;
-      case "conversations":
-        setShowConversationPanel(true);
-        break;
-      case "new":
-        a.startNewConversation();
-        setMessages([]);
-        showToast("New conversation started");
-        break;
-      case "memories":
-        setShowMemoryPanel(true);
-        break;
-      case "sync":
-        void a.syncNow().then((result) => {
-          showToast(
-            `Synced: ${result.events_pushed + result.conversations_pushed} pushed, ` +
-            `${result.events_pulled + result.conversations_pulled} pulled`,
-          );
-        }).catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          addSystemMessage(`Sync failed: ${msg}`);
-        });
-        break;
-      case "export":
-        void a.exportAllData().then((data) => {
-          addSystemMessage(`Exported data:\n${data}`);
-        });
-        break;
-      case "settings":
-        setShowSettings(true);
-        break;
-      case "summarize":
-        void (async () => {
-          try {
-            const summary = await a.summarizeConversation();
-            if (summary != null && summary !== "") {
-              addSystemMessage(`Summary:\n${summary}`);
-            } else {
-              addSystemMessage("No conversation to summarize (need at least 2 messages).");
+  const handleSlashCommand = useCallback(
+    (command: string, args: string) => {
+      const a = app.current;
+      switch (command) {
+        case "model":
+          if (!args) {
+            addSystemMessage(`Current model: ${a.currentModel ?? "none"}`);
+          } else {
+            try {
+              a.setModel(args);
+              setCurrentModel(args);
+              showToast(`Model switched to: ${args}`);
+            } catch (err: unknown) {
+              const msg = err instanceof Error ? err.message : String(err);
+              addSystemMessage(`Error: ${msg}`);
             }
-          } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : String(err);
-            addSystemMessage(`Summarization failed: ${msg}`);
           }
-        })();
-        break;
-      case "state": {
-        const st = a.getState();
-        if (st) {
-          const lines = Object.entries(st)
-            .map(([k, v]) => `${k}: ${typeof v === "number" ? (v as number).toFixed(2) : String(v)}`)
-            .join("\n");
-          addSystemMessage(`State vector:\n${lines}`);
-        } else {
-          addSystemMessage("State not available (runtime not initialized)");
-        }
-        break;
-      }
-      case "forget":
-        if (!args) {
-          addSystemMessage("Usage: /forget <nodeId>");
-        } else {
-          void a.deleteMemory(args).then(() => {
-            showToast(`Memory ${args} deleted`);
-          }).catch((err: unknown) => {
-            const msg = err instanceof Error ? err.message : String(err);
-            addSystemMessage(`Error: ${msg}`);
+          break;
+        case "conversations":
+          setShowConversationPanel(true);
+          break;
+        case "new":
+          a.startNewConversation();
+          setMessages([]);
+          showToast("New conversation started");
+          break;
+        case "memories":
+          setShowMemoryPanel(true);
+          break;
+        case "sync":
+          void a
+            .syncNow()
+            .then((result) => {
+              showToast(
+                `Synced: ${result.events_pushed + result.conversations_pushed} pushed, ` +
+                  `${result.events_pulled + result.conversations_pulled} pulled`,
+              );
+            })
+            .catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              addSystemMessage(`Sync failed: ${msg}`);
+            });
+          break;
+        case "export":
+          void a.exportAllData().then((data) => {
+            addSystemMessage(`Exported data:\n${data}`);
           });
+          break;
+        case "settings":
+          setShowSettings(true);
+          break;
+        case "summarize":
+          void (async () => {
+            try {
+              const summary = await a.summarizeConversation();
+              if (summary != null && summary !== "") {
+                addSystemMessage(`Summary:\n${summary}`);
+              } else {
+                addSystemMessage("No conversation to summarize (need at least 2 messages).");
+              }
+            } catch (err: unknown) {
+              const msg = err instanceof Error ? err.message : String(err);
+              addSystemMessage(`Summarization failed: ${msg}`);
+            }
+          })();
+          break;
+        case "state": {
+          const st = a.getState();
+          if (st) {
+            const lines = Object.entries(st)
+              .map(
+                ([k, v]) => `${k}: ${typeof v === "number" ? (v as number).toFixed(2) : String(v)}`,
+              )
+              .join("\n");
+            addSystemMessage(`State vector:\n${lines}`);
+          } else {
+            addSystemMessage("State not available (runtime not initialized)");
+          }
+          break;
         }
-        break;
-      case "clear":
-        a.startNewConversation();
-        setMessages([]);
-        break;
-      case "tools": {
-        const mcpServers = a.getMcpServers();
-        const serverCount = mcpServers.length;
-        let toolCount = 0;
-        const serverLines: string[] = [];
-        for (const srv of mcpServers) {
-          toolCount += srv.toolCount;
-          serverLines.push(`  ${srv.name}: ${srv.toolCount} tools${srv.trusted ? " (trusted)" : ""}`);
+        case "forget":
+          if (!args) {
+            addSystemMessage("Usage: /forget <nodeId>");
+          } else {
+            void a
+              .deleteMemory(args)
+              .then(() => {
+                showToast(`Memory ${args} deleted`);
+              })
+              .catch((err: unknown) => {
+                const msg = err instanceof Error ? err.message : String(err);
+                addSystemMessage(`Error: ${msg}`);
+              });
+          }
+          break;
+        case "clear":
+          a.startNewConversation();
+          setMessages([]);
+          break;
+        case "tools": {
+          const mcpServers = a.getMcpServers();
+          const serverCount = mcpServers.length;
+          let toolCount = 0;
+          const serverLines: string[] = [];
+          for (const srv of mcpServers) {
+            toolCount += srv.toolCount;
+            serverLines.push(
+              `  ${srv.name}: ${srv.toolCount} tools${srv.trusted ? " (trusted)" : ""}`,
+            );
+          }
+          addSystemMessage(
+            `Tools: ${toolCount} from ${serverCount} MCP server${serverCount !== 1 ? "s" : ""}\n` +
+              (serverLines.length > 0 ? serverLines.join("\n") : "  No MCP servers connected"),
+          );
+          break;
         }
-        addSystemMessage(
-          `Tools: ${toolCount} from ${serverCount} MCP server${serverCount !== 1 ? "s" : ""}\n` +
-          (serverLines.length > 0 ? serverLines.join("\n") : "  No MCP servers connected"),
-        );
-        break;
+        case "operator":
+          showToast(a.isOperatorMode ? "Operator mode: ON" : "Operator mode: OFF");
+          break;
+        case "help":
+          addSystemMessage(
+            "Available commands:\n" +
+              "/model — show current model\n" +
+              "/model <name> — switch model\n" +
+              "/conversations — browse past conversations\n" +
+              "/new — start a new conversation\n" +
+              "/memories — browse memories\n" +
+              "/state — show current state vector\n" +
+              "/forget <nodeId> — delete a memory\n" +
+              "/clear — clear conversation\n" +
+              "/tools — list registered tools\n" +
+              "/operator — show operator mode status\n" +
+              "/summarize — summarize current conversation\n" +
+              "/sync — sync with relay\n" +
+              "/export — export all data\n" +
+              "/settings — open settings\n" +
+              "/help — show this message",
+          );
+          break;
+        default:
+          addSystemMessage(`Unknown command: /${command}`);
       }
-      case "operator":
-        showToast(a.isOperatorMode ? "Operator mode: ON" : "Operator mode: OFF");
-        break;
-      case "help":
-        addSystemMessage(
-          "Available commands:\n" +
-          "/model — show current model\n" +
-          "/model <name> — switch model\n" +
-          "/conversations — browse past conversations\n" +
-          "/new — start a new conversation\n" +
-          "/memories — browse memories\n" +
-          "/state — show current state vector\n" +
-          "/forget <nodeId> — delete a memory\n" +
-          "/clear — clear conversation\n" +
-          "/tools — list registered tools\n" +
-          "/operator — show operator mode status\n" +
-          "/summarize — summarize current conversation\n" +
-          "/sync — sync with relay\n" +
-          "/export — export all data\n" +
-          "/settings — open settings\n" +
-          "/help — show this message",
-        );
-        break;
-      default:
-        addSystemMessage(`Unknown command: /${command}`);
-    }
-  }, [addSystemMessage]);
+    },
+    [addSystemMessage],
+  );
 
   // === Send message ===
   const handleSend = useCallback(async () => {
@@ -855,224 +929,246 @@ export function App(): React.ReactElement {
   }, [micState, inputText, handleSend, settings?.voiceAutoSend]);
 
   // === Stream consumer ===
-  const consumeStream = useCallback(async (stream: AsyncGenerator<StreamChunk>) => {
-    let assistantContent = "";
-    const assistantId = crypto.randomUUID();
+  const consumeStream = useCallback(
+    async (stream: AsyncGenerator<StreamChunk>) => {
+      let assistantContent = "";
+      const assistantId = crypto.randomUUID();
 
-    // Add placeholder
-    setMessages((prev) => [
-      ...prev,
-      { id: assistantId, role: "assistant", content: "...", timestamp: Date.now() },
-    ]);
+      // Add placeholder
+      setMessages((prev) => [
+        ...prev,
+        { id: assistantId, role: "assistant", content: "...", timestamp: Date.now() },
+      ]);
 
-    for await (const chunk of stream) {
-      switch (chunk.type) {
-        case "text":
-          assistantContent += chunk.text;
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId ? { ...m, content: stripPartialActionTag(assistantContent) } : m,
-            ),
-          );
-          break;
+      for await (const chunk of stream) {
+        switch (chunk.type) {
+          case "text":
+            assistantContent += chunk.text;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? { ...m, content: stripPartialActionTag(assistantContent) }
+                  : m,
+              ),
+            );
+            break;
 
-        case "tool_status":
-          if (chunk.status === "calling") {
-            addSystemMessage(`Calling ${chunk.name}...`);
+          case "tool_status":
+            if (chunk.status === "calling") {
+              addSystemMessage(`Calling ${chunk.name}...`);
+            }
+            break;
+
+          case "approval_request": {
+            const approvalId = crypto.randomUUID();
+            pendingApprovalRef.current = approvalId;
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: approvalId,
+                role: "approval",
+                content: "",
+                timestamp: Date.now(),
+                toolName: chunk.name,
+                toolArgs: chunk.args,
+                riskLevel: chunk.risk_level,
+                approvalResolved: false,
+              },
+            ]);
+            // Stream pauses here — will resume via handleApproval
+            return;
           }
-          break;
 
-        case "approval_request": {
-          const approvalId = crypto.randomUUID();
-          pendingApprovalRef.current = approvalId;
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: approvalId,
-              role: "approval",
-              content: "",
-              timestamp: Date.now(),
-              toolName: chunk.name,
-              toolArgs: chunk.args,
-              riskLevel: chunk.risk_level,
-              approvalResolved: false,
-            },
-          ]);
-          // Stream pauses here — will resume via handleApproval
-          return;
-        }
+          case "delegation_start":
+            addSystemMessage(`Delegating to ${chunk.server}...`);
+            break;
 
-        case "delegation_start":
-          addSystemMessage(`Delegating to ${chunk.server}...`);
-          break;
-
-        case "delegation_complete": {
-          const status = chunk.receipt != null && chunk.receipt.status === "failed" ? "\u2717" : "\u2713";
-          const toolInfo = chunk.receipt != null ? ` (${chunk.receipt.tools_used.length} tool${chunk.receipt.tools_used.length !== 1 ? "s" : ""})` : "";
-          addSystemMessage(`Delegated to ${chunk.server} ${status}${toolInfo}`);
-          break;
-        }
-
-        case "injection_warning":
-          addSystemMessage(`Warning: injection patterns detected in ${chunk.tool_name}`);
-          break;
-
-        case "result":
-          // Final update
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? { ...m, content: stripTags(assistantContent) || "...", timestamp: Date.now() }
-                : m,
-            ),
-          );
-          break;
-      }
-    }
-
-    // Ensure final content is set and speak via TTS if voice enabled
-    if (assistantContent) {
-      const finalText = stripTags(assistantContent);
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId
-            ? { ...m, content: finalText, timestamp: Date.now() }
-            : m,
-        ),
-      );
-
-      // TTS — speak the response if voice is active and response is enabled
-      const voiceActive = micState !== "off";
-      const responseEnabled = settings?.voiceResponseEnabled !== false;
-      if (voiceActive && responseEnabled && settings?.voiceEnabled === true && ttsRef.current != null && (finalText != null && finalText !== "")) {
-        setMicState("speaking");
-        // Stop ambient monitor during TTS (avoid feedback)
-        if (audioMonitorRef.current?.isRunning === true) {
-          void audioMonitorRef.current.stop();
-        }
-
-        // Start TTS pulse — synthesized wave so creature breathes during speech
-        const startTime = Date.now();
-        ttsPulseRef.current = setInterval(() => {
-          const elapsed = (Date.now() - startTime) / 1000;
-          const base = 0.06;
-          const wave = Math.sin(elapsed * 4.5) * 0.04;
-          const rms = base + wave;
-          app.current.setAudioReactivity({
-            rms,
-            low: base * 0.8 + wave * 0.5,
-            mid: base * 1.2 + wave,
-            high: base * 0.4 + Math.sin(elapsed * 11.3) * 0.03,
-          });
-          setAudioLevel(rms);
-        }, 33);
-
-        try {
-          await ttsRef.current.speak(finalText);
-        } catch {
-          // Non-fatal — TTS failure should not block the UI
-        } finally {
-          // Stop TTS pulse
-          if (ttsPulseRef.current != null) {
-            clearInterval(ttsPulseRef.current);
-            ttsPulseRef.current = null;
+          case "delegation_complete": {
+            const status =
+              chunk.receipt != null && chunk.receipt.status === "failed" ? "\u2717" : "\u2713";
+            const toolInfo =
+              chunk.receipt != null
+                ? ` (${chunk.receipt.tools_used.length} tool${chunk.receipt.tools_used.length !== 1 ? "s" : ""})`
+                : "";
+            addSystemMessage(`Delegated to ${chunk.server} ${status}${toolInfo}`);
+            break;
           }
-          app.current.setAudioReactivity(null);
-          setAudioLevel(0);
-          // Return to ambient — creature keeps listening
-          setMicState("ambient");
+
+          case "injection_warning":
+            addSystemMessage(`Warning: injection patterns detected in ${chunk.tool_name}`);
+            break;
+
+          case "result":
+            // Final update
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? { ...m, content: stripTags(assistantContent) || "...", timestamp: Date.now() }
+                  : m,
+              ),
+            );
+            break;
         }
       }
-    }
-  }, [settings?.voiceEnabled, micState]);
+
+      // Ensure final content is set and speak via TTS if voice enabled
+      if (assistantContent) {
+        const finalText = stripTags(assistantContent);
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId ? { ...m, content: finalText, timestamp: Date.now() } : m,
+          ),
+        );
+
+        // TTS — speak the response if voice is active and response is enabled
+        const voiceActive = micState !== "off";
+        const responseEnabled = settings?.voiceResponseEnabled !== false;
+        if (
+          voiceActive &&
+          responseEnabled &&
+          settings?.voiceEnabled === true &&
+          ttsRef.current != null &&
+          finalText != null &&
+          finalText !== ""
+        ) {
+          setMicState("speaking");
+          // Stop ambient monitor during TTS (avoid feedback)
+          if (audioMonitorRef.current?.isRunning === true) {
+            void audioMonitorRef.current.stop();
+          }
+
+          // Start TTS pulse — synthesized wave so creature breathes during speech
+          const startTime = Date.now();
+          ttsPulseRef.current = setInterval(() => {
+            const elapsed = (Date.now() - startTime) / 1000;
+            const base = 0.06;
+            const wave = Math.sin(elapsed * 4.5) * 0.04;
+            const rms = base + wave;
+            app.current.setAudioReactivity({
+              rms,
+              low: base * 0.8 + wave * 0.5,
+              mid: base * 1.2 + wave,
+              high: base * 0.4 + Math.sin(elapsed * 11.3) * 0.03,
+            });
+            setAudioLevel(rms);
+          }, 33);
+
+          try {
+            await ttsRef.current.speak(finalText);
+          } catch {
+            // Non-fatal — TTS failure should not block the UI
+          } finally {
+            // Stop TTS pulse
+            if (ttsPulseRef.current != null) {
+              clearInterval(ttsPulseRef.current);
+              ttsPulseRef.current = null;
+            }
+            app.current.setAudioReactivity(null);
+            setAudioLevel(0);
+            // Return to ambient — creature keeps listening
+            setMicState("ambient");
+          }
+        }
+      }
+    },
+    [settings?.voiceEnabled, micState],
+  );
 
   // === Approval handler ===
-  const handleApproval = useCallback(async (messageId: string, approved: boolean) => {
-    // Mark card as resolved
-    setMessages((prev) =>
-      prev.map((m) =>
-        m.id === messageId ? { ...m, approvalResolved: true } : m,
-      ),
-    );
+  const handleApproval = useCallback(
+    async (messageId: string, approved: boolean) => {
+      // Mark card as resolved
+      setMessages((prev) =>
+        prev.map((m) => (m.id === messageId ? { ...m, approvalResolved: true } : m)),
+      );
 
-    const a = app.current;
-    const isGoalApproval = pendingGoalApprovalRef.current;
+      const a = app.current;
+      const isGoalApproval = pendingGoalApprovalRef.current;
 
-    if (isGoalApproval) {
-      // Goal approval: stream the continuation via resumeGoalAfterApproval
-      pendingGoalApprovalRef.current = false;
-      try {
-        await consumeStream(a.resumeGoalAfterApproval(approved));
-      } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        addSystemMessage(`[Goal error: ${errMsg}]`);
-      } finally {
-        pendingApprovalRef.current = null;
+      if (isGoalApproval) {
+        // Goal approval: stream the continuation via resumeGoalAfterApproval
+        pendingGoalApprovalRef.current = false;
+        try {
+          await consumeStream(a.resumeGoalAfterApproval(approved));
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          addSystemMessage(`[Goal error: ${errMsg}]`);
+        } finally {
+          pendingApprovalRef.current = null;
+        }
+      } else {
+        // Regular chat approval
+        setIsProcessing(true);
+        try {
+          await consumeStream(a.resumeAfterApproval(approved));
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          addSystemMessage(`[Error: ${errMsg}]`);
+        } finally {
+          setIsProcessing(false);
+          pendingApprovalRef.current = null;
+        }
       }
-    } else {
-      // Regular chat approval
-      setIsProcessing(true);
-      try {
-        await consumeStream(a.resumeAfterApproval(approved));
-      } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        addSystemMessage(`[Error: ${errMsg}]`);
-      } finally {
-        setIsProcessing(false);
-        pendingApprovalRef.current = null;
-      }
-    }
-  }, [consumeStream]);
+    },
+    [consumeStream],
+  );
 
   // === Settings save ===
-  const handleSettingsSave = useCallback(async (newSettings: MobileSettings, aiConfig?: MobileAIConfig) => {
-    const a = app.current;
-    // Capture operator mode before potential re-init (initAI creates new runtime)
-    const wasOperatorMode = a.isOperatorMode;
+  const handleSettingsSave = useCallback(
+    async (newSettings: MobileSettings, aiConfig?: MobileAIConfig) => {
+      const a = app.current;
+      // Capture operator mode before potential re-init (initAI creates new runtime)
+      const wasOperatorMode = a.isOperatorMode;
 
-    await a.saveSettings(newSettings);
-    setSettings(newSettings);
+      await a.saveSettings(newSettings);
+      setSettings(newSettings);
 
-    if (aiConfig) {
-      const ok = await a.initAI(aiConfig);
-      if (!ok) {
-        showBanner("Failed to initialize AI — check API key", "Settings", () => setShowSettings(true));
-      } else {
-        a.start();
-        subscribeToState(a);
-        setCurrentModel(a.currentModel);
-      }
+      if (aiConfig) {
+        const ok = await a.initAI(aiConfig);
+        if (!ok) {
+          showBanner("Failed to initialize AI — check API key", "Settings", () =>
+            setShowSettings(true),
+          );
+        } else {
+          a.start();
+          subscribeToState(a);
+          setCurrentModel(a.currentModel);
+        }
 
-      // Re-apply governance to the new runtime (initAI resets PolicyGate to defaults).
-      // SettingsModal.handleSave already applied these to the old runtime, but the
-      // new runtime needs them too.
-      const preset = APPROVAL_PRESET_CONFIGS[newSettings.approvalPreset];
-      if (preset) {
-        a.updatePolicyConfig({
-          requireApprovalAbove: preset.requireApprovalAbove,
-          denyAbove: preset.denyAbove,
-          operatorMode: wasOperatorMode,
-          budget: { maxCallsPerTurn: newSettings.budgetMaxCalls },
+        // Re-apply governance to the new runtime (initAI resets PolicyGate to defaults).
+        // SettingsModal.handleSave already applied these to the old runtime, but the
+        // new runtime needs them too.
+        const preset = APPROVAL_PRESET_CONFIGS[newSettings.approvalPreset];
+        if (preset) {
+          a.updatePolicyConfig({
+            requireApprovalAbove: preset.requireApprovalAbove,
+            denyAbove: preset.denyAbove,
+            operatorMode: wasOperatorMode,
+            budget: { maxCallsPerTurn: newSettings.budgetMaxCalls },
+          });
+        }
+        a.updateMemoryGovernance({
+          persistenceThreshold: newSettings.persistenceThreshold,
+          rejectSecrets: newSettings.rejectSecrets,
+          maxMemoriesPerTurn: newSettings.maxMemoriesPerTurn,
         });
+        if (newSettings.colorPreset === "custom") {
+          a.setInteriorColorDirect(
+            deriveInteriorColor(newSettings.customHue, newSettings.customSaturation),
+          );
+        } else {
+          a.setInteriorColor(newSettings.colorPreset);
+        }
       }
-      a.updateMemoryGovernance({
-        persistenceThreshold: newSettings.persistenceThreshold,
-        rejectSecrets: newSettings.rejectSecrets,
-        maxMemoriesPerTurn: newSettings.maxMemoriesPerTurn,
-      });
-      if (newSettings.colorPreset === "custom") {
-        a.setInteriorColorDirect(deriveInteriorColor(newSettings.customHue, newSettings.customSaturation));
-      } else {
-        a.setInteriorColor(newSettings.colorPreset);
-      }
-    }
 
-    // Re-init voice providers (user may have added/changed OpenAI key or TTS voice)
-    sttRef.current = null;
-    await initVoice({ ttsVoice: newSettings.ttsVoice });
+      // Re-init voice providers (user may have added/changed OpenAI key or TTS voice)
+      sttRef.current = null;
+      await initVoice({ ttsVoice: newSettings.ttsVoice });
 
-    setShowSettings(false);
-  }, [subscribeToState, addSystemMessage, initVoice]);
+      setShowSettings(false);
+    },
+    [subscribeToState, addSystemMessage, initVoice],
+  );
 
   // === PIN handler ===
 
@@ -1114,25 +1210,28 @@ export function App(): React.ReactElement {
     setShowPin(true);
   }, []);
 
-  const handlePinSubmit = useCallback(async (pin: string) => {
-    const a = app.current;
-    if (pinMode === "setup" || pinMode === "reset") {
-      await a.setupOperatorPin(pin);
-      const result = await a.setOperatorMode(true, pin);
-      if (!result.success) {
-        setPinError(result.error ?? "Failed");
-        return;
+  const handlePinSubmit = useCallback(
+    async (pin: string) => {
+      const a = app.current;
+      if (pinMode === "setup" || pinMode === "reset") {
+        await a.setupOperatorPin(pin);
+        const result = await a.setOperatorMode(true, pin);
+        if (!result.success) {
+          setPinError(result.error ?? "Failed");
+          return;
+        }
+      } else {
+        const result = await a.setOperatorMode(!a.isOperatorMode, pin);
+        if (!result.success) {
+          setPinError(result.error ?? "Incorrect PIN");
+          return;
+        }
       }
-    } else {
-      const result = await a.setOperatorMode(!a.isOperatorMode, pin);
-      if (!result.success) {
-        setPinError(result.error ?? "Incorrect PIN");
-        return;
-      }
-    }
-    setShowPin(false);
-    setPinError("");
-  }, [pinMode]);
+      setShowPin(false);
+      setPinError("");
+    },
+    [pinMode],
+  );
 
   // === Pairing helpers ===
 
@@ -1226,13 +1325,22 @@ export function App(): React.ReactElement {
         void (async () => {
           try {
             const status = await a.pollPairingStatus(syncUrl, pid);
-            if (status.status === "approved" && (status.device_id != null && status.device_id !== "") && (status.motebit_id != null && status.motebit_id !== "")) {
+            if (
+              status.status === "approved" &&
+              status.device_id != null &&
+              status.device_id !== "" &&
+              status.motebit_id != null &&
+              status.motebit_id !== ""
+            ) {
               stopPairingPoll();
-              await a.completePairing({
-                motebitId: status.motebit_id,
-                deviceId: status.device_id,
-                deviceToken: status.device_token ?? "",
-              }, syncUrl);
+              await a.completePairing(
+                {
+                  motebitId: status.motebit_id,
+                  deviceId: status.device_id,
+                  deviceToken: status.device_token ?? "",
+                },
+                syncUrl,
+              );
               closePairingDialog();
               addSystemMessage("Linked to existing motebit");
 
@@ -1262,7 +1370,16 @@ export function App(): React.ReactElement {
     } catch (err: unknown) {
       setPairingStatusText(err instanceof Error ? err.message : String(err));
     }
-  }, [pairingCodeInput, pairingSyncUrlInput, settings, initializeAI, subscribeToState, stopPairingPoll, closePairingDialog, addSystemMessage]);
+  }, [
+    pairingCodeInput,
+    pairingSyncUrlInput,
+    settings,
+    initializeAI,
+    subscribeToState,
+    stopPairingPoll,
+    closePairingDialog,
+    addSystemMessage,
+  ]);
 
   // Device A: approve
   const handlePairingApprove = useCallback(async () => {
@@ -1323,378 +1440,401 @@ export function App(): React.ReactElement {
 
   return (
     <ThemeContext.Provider value={themeColors}>
-    <KeyboardAvoidingView
-      style={ds.container}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-      keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
-    >
-      {/* 3D Rendering — touch responder for orbit controls */}
-      <View
-        style={ds.glContainer}
-        onStartShouldSetResponder={() => true}
-        onMoveShouldSetResponder={() => true}
-        onResponderGrant={handleGLResponderGrant}
-        onResponderMove={handleGLResponderMove}
-        onResponderRelease={handleGLResponderRelease}
+      <KeyboardAvoidingView
+        style={ds.container}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
       >
-        {/* eslint-disable-next-line @typescript-eslint/no-misused-promises */}
-        <GLView style={ds.glView} onContextCreate={onGLContextCreate} />
-        {state && (
-          <View style={ds.stateOverlay}>
-            <Text style={ds.stateText}>
-              attn {state.attention.toFixed(2)} · conf {state.confidence.toFixed(2)} · val {state.affect_valence.toFixed(2)}
-              {app.current.governanceStatus.governed ? " · gov" : ""}
-              {micState !== "off" ? ` · ${micState}` : ""}
+        {/* 3D Rendering — touch responder for orbit controls */}
+        <View
+          style={ds.glContainer}
+          onStartShouldSetResponder={() => true}
+          onMoveShouldSetResponder={() => true}
+          onResponderGrant={handleGLResponderGrant}
+          onResponderMove={handleGLResponderMove}
+          onResponderRelease={handleGLResponderRelease}
+        >
+          {/* eslint-disable-next-line @typescript-eslint/no-misused-promises */}
+          <GLView style={ds.glView} onContextCreate={onGLContextCreate} />
+          {state && (
+            <View style={ds.stateOverlay}>
+              <Text style={ds.stateText}>
+                attn {state.attention.toFixed(2)} · conf {state.confidence.toFixed(2)} · val{" "}
+                {state.affect_valence.toFixed(2)}
+                {app.current.governanceStatus.governed ? " · gov" : ""}
+                {micState !== "off" ? ` · ${micState}` : ""}
+              </Text>
+            </View>
+          )}
+          {/* Top-left buttons: conversations + memories */}
+          <View style={ds.topLeftButtons}>
+            <TouchableOpacity
+              style={ds.overlayButton}
+              onPress={() => setShowConversationPanel(true)}
+              activeOpacity={0.7}
+            >
+              <Text style={ds.overlayButtonText}>{"\u2630"}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={ds.overlayButton}
+              onPress={() => setShowMemoryPanel(true)}
+              activeOpacity={0.7}
+            >
+              <Text style={ds.overlayButtonText}>{"\u25CF"}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={ds.overlayButton}
+              onPress={() => setShowGoalsPanel(true)}
+              activeOpacity={0.7}
+            >
+              <Text style={ds.overlayButtonText}>{"\u25C9"}</Text>
+            </TouchableOpacity>
+          </View>
+          {/* Settings gear */}
+          <TouchableOpacity
+            style={ds.gearButton}
+            onPress={() => setShowSettings(true)}
+            activeOpacity={0.7}
+          >
+            <Text style={ds.gearText}>⚙</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Sync status indicator */}
+        {syncStatus !== "offline" && (
+          <View style={ds.syncIndicator}>
+            <View
+              style={[
+                ds.syncDot,
+                syncStatus === "idle" && ds.syncDotIdle,
+                syncStatus === "syncing" && ds.syncDotSyncing,
+                syncStatus === "error" && ds.syncDotError,
+              ]}
+            />
+            <Text style={ds.syncIndicatorText}>
+              {syncStatus === "syncing"
+                ? "Syncing..."
+                : syncStatus === "error"
+                  ? "Sync error"
+                  : lastSyncTime > 0
+                    ? `Synced ${formatSyncTime(lastSyncTime)}`
+                    : "Connected"}
             </Text>
           </View>
         )}
-        {/* Top-left buttons: conversations + memories */}
-        <View style={ds.topLeftButtons}>
-          <TouchableOpacity
-            style={ds.overlayButton}
-            onPress={() => setShowConversationPanel(true)}
-            activeOpacity={0.7}
-          >
-            <Text style={ds.overlayButtonText}>{"\u2630"}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={ds.overlayButton}
-            onPress={() => setShowMemoryPanel(true)}
-            activeOpacity={0.7}
-          >
-            <Text style={ds.overlayButtonText}>{"\u25CF"}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={ds.overlayButton}
-            onPress={() => setShowGoalsPanel(true)}
-            activeOpacity={0.7}
-          >
-            <Text style={ds.overlayButtonText}>{"\u25C9"}</Text>
-          </TouchableOpacity>
-        </View>
-        {/* Settings gear */}
-        <TouchableOpacity
-          style={ds.gearButton}
-          onPress={() => setShowSettings(true)}
-          activeOpacity={0.7}
-        >
-          <Text style={ds.gearText}>⚙</Text>
-        </TouchableOpacity>
-      </View>
 
-      {/* Sync status indicator */}
-      {syncStatus !== "offline" && (
-        <View style={ds.syncIndicator}>
-          <View style={[
-            ds.syncDot,
-            syncStatus === "idle" && ds.syncDotIdle,
-            syncStatus === "syncing" && ds.syncDotSyncing,
-            syncStatus === "error" && ds.syncDotError,
-          ]} />
-          <Text style={ds.syncIndicatorText}>
-            {syncStatus === "syncing" ? "Syncing..." :
-             syncStatus === "error" ? "Sync error" :
-             lastSyncTime > 0 ? `Synced ${formatSyncTime(lastSyncTime)}` : "Connected"}
-          </Text>
-        </View>
-      )}
+        {/* Goal status indicator */}
+        {goalRunning && (
+          <View style={ds.goalIndicator}>
+            <ActivityIndicator size="small" color={themeColors.accent} />
+            <Text style={ds.goalIndicatorText}>Running goal...</Text>
+          </View>
+        )}
 
-      {/* Goal status indicator */}
-      {goalRunning && (
-        <View style={ds.goalIndicator}>
-          <ActivityIndicator size="small" color={themeColors.accent} />
-          <Text style={ds.goalIndicatorText}>Running goal...</Text>
-        </View>
-      )}
+        {/* Persistent error banner */}
+        {banner != null && (
+          <Banner
+            message={banner.message}
+            actionLabel={banner.actionLabel}
+            onAction={banner.onAction}
+            onDismiss={dismissBanner}
+          />
+        )}
 
-      {/* Persistent error banner */}
-      {banner != null && (
-        <Banner
-          message={banner.message}
-          actionLabel={banner.actionLabel}
-          onAction={banner.onAction}
-          onDismiss={dismissBanner}
-        />
-      )}
-
-      {/* Chat Messages */}
-      <FlatList<ChatMessage>
-        ref={flatListRef}
-        data={messages}
-        keyExtractor={(item) => item.id}
-        style={ds.chatList}
-        contentContainerStyle={ds.chatContent}
-        renderItem={({ item }: { item: ChatMessage }) => {
-          if (item.role === "approval") {
+        {/* Chat Messages */}
+        <FlatList<ChatMessage>
+          ref={flatListRef}
+          data={messages}
+          keyExtractor={(item) => item.id}
+          style={ds.chatList}
+          contentContainerStyle={ds.chatContent}
+          renderItem={({ item }: { item: ChatMessage }) => {
+            if (item.role === "approval") {
+              return (
+                <ApprovalCard
+                  toolName={item.toolName ?? "unknown"}
+                  args={item.toolArgs || {}}
+                  riskLevel={item.riskLevel}
+                  onAllow={() => void handleApproval(item.id, true)}
+                  onDeny={() => void handleApproval(item.id, false)}
+                  disabled={item.approvalResolved}
+                />
+              );
+            }
+            if (item.role === "system") {
+              return (
+                <AnimatedBubble style={ds.systemBubble}>
+                  <Text style={ds.systemText}>{item.content}</Text>
+                </AnimatedBubble>
+              );
+            }
             return (
-              <ApprovalCard
-                toolName={item.toolName ?? "unknown"}
-                args={item.toolArgs || {}}
-                riskLevel={item.riskLevel}
-                onAllow={() => void handleApproval(item.id, true)}
-                onDeny={() => void handleApproval(item.id, false)}
-                disabled={item.approvalResolved}
-              />
-            );
-          }
-          if (item.role === "system") {
-            return (
-              <AnimatedBubble style={ds.systemBubble}>
-                <Text style={ds.systemText}>{item.content}</Text>
+              <AnimatedBubble
+                style={[
+                  ds.messageBubble,
+                  item.role === "user" ? ds.userBubble : ds.assistantBubble,
+                ]}
+              >
+                <Text
+                  style={[ds.messageText, item.role === "user" ? ds.userText : ds.assistantText]}
+                >
+                  {item.content}
+                </Text>
               </AnimatedBubble>
             );
-          }
-          return (
-            <AnimatedBubble style={[ds.messageBubble, item.role === "user" ? ds.userBubble : ds.assistantBubble]}>
-              <Text style={[ds.messageText, item.role === "user" ? ds.userText : ds.assistantText]}>
-                {item.content}
-              </Text>
-            </AnimatedBubble>
-          );
-        }}
-      />
-
-      {/* Voice amplitude indicator */}
-      <VoiceIndicator micState={micState} audioLevel={audioLevel} glowColor={activeGlow} />
-
-      {/* Slash command autocomplete */}
-      <SlashAutocomplete
-        inputText={inputText}
-        onSelect={(cmd) => {
-          setInputText("");
-          handleSlashCommand(cmd, "");
-        }}
-      />
-
-      {/* Model indicator */}
-      {currentModel ? (
-        <Text style={ds.modelIndicator}>{currentModel}</Text>
-      ) : null}
-
-      {/* Input Bar */}
-      <View style={ds.inputBar}>
-        <TextInput
-          style={ds.textInput}
-          value={inputText}
-          onChangeText={setInputText}
-          placeholder="Talk to your motebit..."
-          placeholderTextColor={themeColors.inputPlaceholder}
-          returnKeyType="send"
-          onSubmitEditing={() => void handleSend()}
-          editable={!isProcessing && (micState === "off" || micState === "ambient")}
+          }}
         />
-        {/* Mic button — show when input is empty and not processing */}
-        {!inputText.trim() && !isProcessing ? (
-          <TouchableOpacity
-            style={[
-              ds.micButton,
-              micState !== "off" && micButtonActiveStyle,
-              micState === "voice" && ds.micButtonRecording,
-              micState === "transcribing" && ds.sendButtonDisabled,
-            ]}
-            onPress={() => void handleMicPress()}
-            disabled={micState === "transcribing"}
-            activeOpacity={0.7}
-          >
-            {micState === "transcribing" ? (
-              <ActivityIndicator size="small" color={themeColors.textPrimary} />
-            ) : (
-              <Text style={ds.micButtonText}>
-                {micState === "off" ? "\u{1F399}" :
-                 micState === "ambient" ? "\u{1F399}" :
-                 micState === "voice" ? "\u25A0" :
-                 micState === "speaking" ? "\u23F9" :
-                 "\u{1F399}"}
-              </Text>
-            )}
-          </TouchableOpacity>
-        ) : null}
-        {/* Send button — show when input has text or processing */}
-        {inputText.trim() || isProcessing ? (
-          <TouchableOpacity
-            style={[ds.sendButton, isProcessing && ds.sendButtonDisabled]}
-            onPress={() => void handleSend()}
-            disabled={isProcessing}
-          >
-            {isProcessing ? (
-              <ActivityIndicator size="small" color={themeColors.bgPrimary} />
-            ) : (
-              <Text style={ds.sendButtonText}>↑</Text>
-            )}
-          </TouchableOpacity>
-        ) : null}
-      </View>
 
-      {/* Modals */}
-      <WelcomeOverlay
-        visible={showWelcome}
-        onAccept={() => void handleWelcomeAccept()}
-        onLinkExisting={handleWelcomeLinkExisting}
-      />
+        {/* Voice amplitude indicator */}
+        <VoiceIndicator micState={micState} audioLevel={audioLevel} glowColor={activeGlow} />
 
-      {settings && (
-        <SettingsModal
-          visible={showSettings}
+        {/* Slash command autocomplete */}
+        <SlashAutocomplete
+          inputText={inputText}
+          onSelect={(cmd) => {
+            setInputText("");
+            handleSlashCommand(cmd, "");
+          }}
+        />
+
+        {/* Model indicator */}
+        {currentModel ? <Text style={ds.modelIndicator}>{currentModel}</Text> : null}
+
+        {/* Input Bar */}
+        <View style={ds.inputBar}>
+          <TextInput
+            style={ds.textInput}
+            value={inputText}
+            onChangeText={setInputText}
+            placeholder="Talk to your motebit..."
+            placeholderTextColor={themeColors.inputPlaceholder}
+            returnKeyType="send"
+            onSubmitEditing={() => void handleSend()}
+            editable={!isProcessing && (micState === "off" || micState === "ambient")}
+          />
+          {/* Mic button — show when input is empty and not processing */}
+          {!inputText.trim() && !isProcessing ? (
+            <TouchableOpacity
+              style={[
+                ds.micButton,
+                micState !== "off" && micButtonActiveStyle,
+                micState === "voice" && ds.micButtonRecording,
+                micState === "transcribing" && ds.sendButtonDisabled,
+              ]}
+              onPress={() => void handleMicPress()}
+              disabled={micState === "transcribing"}
+              activeOpacity={0.7}
+            >
+              {micState === "transcribing" ? (
+                <ActivityIndicator size="small" color={themeColors.textPrimary} />
+              ) : (
+                <Text style={ds.micButtonText}>
+                  {micState === "off"
+                    ? "\u{1F399}"
+                    : micState === "ambient"
+                      ? "\u{1F399}"
+                      : micState === "voice"
+                        ? "\u25A0"
+                        : micState === "speaking"
+                          ? "\u23F9"
+                          : "\u{1F399}"}
+                </Text>
+              )}
+            </TouchableOpacity>
+          ) : null}
+          {/* Send button — show when input has text or processing */}
+          {inputText.trim() || isProcessing ? (
+            <TouchableOpacity
+              style={[ds.sendButton, isProcessing && ds.sendButtonDisabled]}
+              onPress={() => void handleSend()}
+              disabled={isProcessing}
+            >
+              {isProcessing ? (
+                <ActivityIndicator size="small" color={themeColors.bgPrimary} />
+              ) : (
+                <Text style={ds.sendButtonText}>↑</Text>
+              )}
+            </TouchableOpacity>
+          ) : null}
+        </View>
+
+        {/* Modals */}
+        <WelcomeOverlay
+          visible={showWelcome}
+          onAccept={() => void handleWelcomeAccept()}
+          onLinkExisting={handleWelcomeLinkExisting}
+        />
+
+        {settings && (
+          <SettingsModal
+            visible={showSettings}
+            app={app.current}
+            settings={settings}
+            syncStatus={syncStatus}
+            lastSyncTime={lastSyncTime}
+            mcpServers={mcpServers}
+            onAddMcpServer={handleAddMcpServer}
+            onRemoveMcpServer={handleRemoveMcpServer}
+            onToggleMcpTrust={handleToggleMcpTrust}
+            onSave={(s, ai) => void handleSettingsSave(s, ai)}
+            onClose={() => setShowSettings(false)}
+            customHue={settings.customHue}
+            customSaturation={settings.customSaturation}
+            onRequestPin={(mode) => void handleRequestPin(mode)}
+            onLinkDevice={() => void handleInitiatePairing()}
+            onSyncNow={() => {
+              void app.current
+                .syncNow()
+                .then((result) => {
+                  addSystemMessage(
+                    `Sync: ${result.events_pushed} events pushed, ${result.events_pulled} pulled, ` +
+                      `${result.conversations_pushed} convs pushed, ${result.conversations_pulled} pulled`,
+                  );
+                })
+                .catch((err: unknown) => {
+                  const msg = err instanceof Error ? err.message : String(err);
+                  addSystemMessage(`Sync failed: ${msg}`);
+                });
+            }}
+            onDisconnectSync={() => {
+              void app.current.disconnectSync().then(() => {
+                setSyncStatus("offline");
+                addSystemMessage("Disconnected from sync relay");
+              });
+            }}
+          />
+        )}
+
+        <PinDialog
+          visible={showPin}
+          mode={pinMode}
+          onSubmit={handlePinSubmit}
+          onCancel={() => {
+            setShowPin(false);
+            setPinError("");
+          }}
+          error={pinError}
+        />
+
+        <MemoryPanel
+          visible={showMemoryPanel}
           app={app.current}
-          settings={settings}
-          syncStatus={syncStatus}
-          lastSyncTime={lastSyncTime}
-          mcpServers={mcpServers}
-          onAddMcpServer={handleAddMcpServer}
-          onRemoveMcpServer={handleRemoveMcpServer}
-          onToggleMcpTrust={handleToggleMcpTrust}
-          onSave={(s, ai) => void handleSettingsSave(s, ai)}
-          onClose={() => setShowSettings(false)}
-          customHue={settings.customHue}
-          customSaturation={settings.customSaturation}
-          onRequestPin={(mode) => void handleRequestPin(mode)}
-          onLinkDevice={() => void handleInitiatePairing()}
-          onSyncNow={() => {
-            void app.current.syncNow().then((result) => {
-              addSystemMessage(
-                `Sync: ${result.events_pushed} events pushed, ${result.events_pulled} pulled, ` +
-                `${result.conversations_pushed} convs pushed, ${result.conversations_pulled} pulled`,
-              );
-            }).catch((err: unknown) => {
-              const msg = err instanceof Error ? err.message : String(err);
-              addSystemMessage(`Sync failed: ${msg}`);
-            });
-          }}
-          onDisconnectSync={() => {
-            void app.current.disconnectSync().then(() => {
-              setSyncStatus("offline");
-              addSystemMessage("Disconnected from sync relay");
-            });
-          }}
+          onClose={() => setShowMemoryPanel(false)}
         />
-      )}
 
-      <PinDialog
-        visible={showPin}
-        mode={pinMode}
-        onSubmit={handlePinSubmit}
-        onCancel={() => { setShowPin(false); setPinError(""); }}
-        error={pinError}
-      />
+        <ConversationPanel
+          visible={showConversationPanel}
+          app={app.current}
+          currentConversationId={app.current.currentConversationId}
+          onLoad={handleLoadConversation}
+          onNew={handleNewConversation}
+          onClose={() => setShowConversationPanel(false)}
+        />
 
-      <MemoryPanel
-        visible={showMemoryPanel}
-        app={app.current}
-        onClose={() => setShowMemoryPanel(false)}
-      />
+        <GoalsPanel
+          visible={showGoalsPanel}
+          app={app.current}
+          onClose={() => setShowGoalsPanel(false)}
+        />
 
-      <ConversationPanel
-        visible={showConversationPanel}
-        app={app.current}
-        currentConversationId={app.current.currentConversationId}
-        onLoad={handleLoadConversation}
-        onNew={handleNewConversation}
-        onClose={() => setShowConversationPanel(false)}
-      />
+        {/* Pairing Modal */}
+        <Modal visible={showPairing} animationType="fade" transparent statusBarTranslucent>
+          <View style={ds.pairingBackdrop}>
+            <View style={ds.pairingCard}>
+              <Text style={ds.pairingTitle}>
+                {pairingMode === "initiate" ? "Link Another Device" : "Link Existing Motebit"}
+              </Text>
 
-      <GoalsPanel
-        visible={showGoalsPanel}
-        app={app.current}
-        onClose={() => setShowGoalsPanel(false)}
-      />
-
-      {/* Pairing Modal */}
-      <Modal visible={showPairing} animationType="fade" transparent statusBarTranslucent>
-        <View style={ds.pairingBackdrop}>
-          <View style={ds.pairingCard}>
-            <Text style={ds.pairingTitle}>
-              {pairingMode === "initiate" ? "Link Another Device" : "Link Existing Motebit"}
-            </Text>
-
-            {/* Sync URL input — shown before code generation (initiate) or submission (claim) */}
-            {((pairingMode === "initiate" && (pairingCode == null || pairingCode === "")) || (pairingMode === "claim" && (pairingId == null || pairingId === ""))) && (
-              <TextInput
-                style={ds.pairingSyncUrlInput}
-                value={pairingSyncUrlInput}
-                onChangeText={setPairingSyncUrlInput}
-                placeholder="Sync relay URL"
-                placeholderTextColor={themeColors.inputPlaceholder}
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="url"
-              />
-            )}
-
-            {pairingMode === "initiate" && (pairingCode != null && pairingCode !== "") ? (
-              <Text style={ds.pairingCodeDisplay}>{pairingCode}</Text>
-            ) : null}
-
-            {pairingMode === "claim" && (pairingId == null || pairingId === "") && (
-              <TextInput
-                style={ds.pairingInput}
-                value={pairingCodeInput}
-                onChangeText={(t) => setPairingCodeInput(t.toUpperCase().slice(0, 6))}
-                placeholder="Enter code"
-                placeholderTextColor={themeColors.inputPlaceholder}
-                maxLength={6}
-                autoCapitalize="characters"
-                autoCorrect={false}
-              />
-            )}
-
-            {pairingClaimName ? (
-              <View style={ds.pairingClaimInfo}>
-                <Text style={ds.pairingClaimText}>"{pairingClaimName}" wants to join</Text>
-              </View>
-            ) : null}
-
-            <Text style={ds.pairingStatusText}>{pairingStatus}</Text>
-
-            <View style={ds.pairingActions}>
-              {pairingMode === "initiate" && !pairingCode && (
-                <TouchableOpacity
-                  style={ds.pairingSubmitBtn}
-                  onPress={() => void handleInitiateConnect()}
-                  activeOpacity={0.7}
-                >
-                  <Text style={ds.pairingSubmitText}>Connect</Text>
-                </TouchableOpacity>
+              {/* Sync URL input — shown before code generation (initiate) or submission (claim) */}
+              {((pairingMode === "initiate" && (pairingCode == null || pairingCode === "")) ||
+                (pairingMode === "claim" && (pairingId == null || pairingId === ""))) && (
+                <TextInput
+                  style={ds.pairingSyncUrlInput}
+                  value={pairingSyncUrlInput}
+                  onChangeText={setPairingSyncUrlInput}
+                  placeholder="Sync relay URL"
+                  placeholderTextColor={themeColors.inputPlaceholder}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="url"
+                />
               )}
-              {pairingMode === "claim" && (pairingId == null || pairingId === "") && (
-                <TouchableOpacity
-                  style={ds.pairingSubmitBtn}
-                  onPress={() => void handlePairingClaimSubmit()}
-                  activeOpacity={0.7}
-                >
-                  <Text style={ds.pairingSubmitText}>Submit</Text>
-                </TouchableOpacity>
-              )}
-              {pairingMode === "initiate" && pairingClaimName ? (
-                <>
-                  <TouchableOpacity
-                    style={ds.pairingDenyBtn}
-                    onPress={() => void handlePairingDeny()}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={ds.pairingDenyText}>Deny</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={ds.pairingApproveBtn}
-                    onPress={() => void handlePairingApprove()}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={ds.pairingApproveText}>Approve</Text>
-                  </TouchableOpacity>
-                </>
+
+              {pairingMode === "initiate" && pairingCode != null && pairingCode !== "" ? (
+                <Text style={ds.pairingCodeDisplay}>{pairingCode}</Text>
               ) : null}
-              <TouchableOpacity
-                style={ds.pairingCancelBtn}
-                onPress={closePairingDialog}
-                activeOpacity={0.7}
-              >
-                <Text style={ds.pairingCancelText}>Cancel</Text>
-              </TouchableOpacity>
+
+              {pairingMode === "claim" && (pairingId == null || pairingId === "") && (
+                <TextInput
+                  style={ds.pairingInput}
+                  value={pairingCodeInput}
+                  onChangeText={(t) => setPairingCodeInput(t.toUpperCase().slice(0, 6))}
+                  placeholder="Enter code"
+                  placeholderTextColor={themeColors.inputPlaceholder}
+                  maxLength={6}
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                />
+              )}
+
+              {pairingClaimName ? (
+                <View style={ds.pairingClaimInfo}>
+                  <Text style={ds.pairingClaimText}>"{pairingClaimName}" wants to join</Text>
+                </View>
+              ) : null}
+
+              <Text style={ds.pairingStatusText}>{pairingStatus}</Text>
+
+              <View style={ds.pairingActions}>
+                {pairingMode === "initiate" && !pairingCode && (
+                  <TouchableOpacity
+                    style={ds.pairingSubmitBtn}
+                    onPress={() => void handleInitiateConnect()}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={ds.pairingSubmitText}>Connect</Text>
+                  </TouchableOpacity>
+                )}
+                {pairingMode === "claim" && (pairingId == null || pairingId === "") && (
+                  <TouchableOpacity
+                    style={ds.pairingSubmitBtn}
+                    onPress={() => void handlePairingClaimSubmit()}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={ds.pairingSubmitText}>Submit</Text>
+                  </TouchableOpacity>
+                )}
+                {pairingMode === "initiate" && pairingClaimName ? (
+                  <>
+                    <TouchableOpacity
+                      style={ds.pairingDenyBtn}
+                      onPress={() => void handlePairingDeny()}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={ds.pairingDenyText}>Deny</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={ds.pairingApproveBtn}
+                      onPress={() => void handlePairingApprove()}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={ds.pairingApproveText}>Approve</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : null}
+                <TouchableOpacity
+                  style={ds.pairingCancelBtn}
+                  onPress={closePairingDialog}
+                  activeOpacity={0.7}
+                >
+                  <Text style={ds.pairingCancelText}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
-        </View>
-      </Modal>
-      <Toast message={toastMessage} onDismiss={dismissToast} />
-    </KeyboardAvoidingView>
+        </Modal>
+        <Toast message={toastMessage} onDismiss={dismissToast} />
+      </KeyboardAvoidingView>
     </ThemeContext.Provider>
   );
 }

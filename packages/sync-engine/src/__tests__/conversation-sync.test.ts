@@ -29,7 +29,10 @@ function makeConversation(overrides: Partial<SyncConversation> = {}): SyncConver
   };
 }
 
-function makeMessage(conversationId: string, overrides: Partial<SyncConversationMessage> = {}): SyncConversationMessage {
+function makeMessage(
+  conversationId: string,
+  overrides: Partial<SyncConversationMessage> = {},
+): SyncConversationMessage {
   return {
     message_id: crypto.randomUUID(),
     conversation_id: conversationId,
@@ -102,18 +105,22 @@ describe("InMemoryConversationSyncStore", () => {
 
   it("last-writer-wins on conversation metadata", () => {
     const convId = "conv-1";
-    store.upsertConversation(makeConversation({
-      conversation_id: convId,
-      last_active_at: 1000,
-      title: "Old title",
-      summary: "Old summary",
-    }));
-    store.upsertConversation(makeConversation({
-      conversation_id: convId,
-      last_active_at: 2000,
-      title: "New title",
-      summary: "New summary",
-    }));
+    store.upsertConversation(
+      makeConversation({
+        conversation_id: convId,
+        last_active_at: 1000,
+        title: "Old title",
+        summary: "Old summary",
+      }),
+    );
+    store.upsertConversation(
+      makeConversation({
+        conversation_id: convId,
+        last_active_at: 2000,
+        title: "New title",
+        summary: "New summary",
+      }),
+    );
 
     const results = store.getConversationsSince(MOTEBIT_ID, 0);
     expect(results).toHaveLength(1);
@@ -354,9 +361,7 @@ describe("HttpConversationSyncAdapter", () => {
 
   it("pushConversations sends POST with correct URL and auth", async () => {
     const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
-    mockFn.mockResolvedValueOnce(
-      new Response(JSON.stringify({ accepted: 1 }), { status: 200 }),
-    );
+    mockFn.mockResolvedValueOnce(new Response(JSON.stringify({ accepted: 1 }), { status: 200 }));
 
     const adapter = new HttpConversationSyncAdapter({
       baseUrl: BASE_URL,
@@ -394,9 +399,7 @@ describe("HttpConversationSyncAdapter", () => {
 
   it("pushMessages sends POST with correct URL", async () => {
     const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
-    mockFn.mockResolvedValueOnce(
-      new Response(JSON.stringify({ accepted: 1 }), { status: 200 }),
-    );
+    mockFn.mockResolvedValueOnce(new Response(JSON.stringify({ accepted: 1 }), { status: 200 }));
 
     const adapter = new HttpConversationSyncAdapter({
       baseUrl: BASE_URL,
@@ -414,9 +417,7 @@ describe("HttpConversationSyncAdapter", () => {
 
   it("pullMessages sends GET with conversation_id and since parameters", async () => {
     const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
-    mockFn.mockResolvedValueOnce(
-      new Response(JSON.stringify({ messages: [] }), { status: 200 }),
-    );
+    mockFn.mockResolvedValueOnce(new Response(JSON.stringify({ messages: [] }), { status: 200 }));
 
     const adapter = new HttpConversationSyncAdapter({
       baseUrl: BASE_URL,
@@ -441,8 +442,9 @@ describe("HttpConversationSyncAdapter", () => {
       motebitId: MOTEBIT_ID,
     });
 
-    await expect(adapter.pushConversations(MOTEBIT_ID, [makeConversation()]))
-      .rejects.toThrow("Push conversations failed: 401 Unauthorized");
+    await expect(adapter.pushConversations(MOTEBIT_ID, [makeConversation()])).rejects.toThrow(
+      "Push conversations failed: 401 Unauthorized",
+    );
   });
 
   it("pullConversations throws on non-200 response", async () => {
@@ -456,8 +458,9 @@ describe("HttpConversationSyncAdapter", () => {
       motebitId: MOTEBIT_ID,
     });
 
-    await expect(adapter.pullConversations(MOTEBIT_ID, 0))
-      .rejects.toThrow("Pull conversations failed: 500 Internal Server Error");
+    await expect(adapter.pullConversations(MOTEBIT_ID, 0)).rejects.toThrow(
+      "Pull conversations failed: 500 Internal Server Error",
+    );
   });
 
   it("omits Authorization header when no authToken", async () => {

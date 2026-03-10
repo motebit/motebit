@@ -32,7 +32,13 @@ const DESCRIPTIONS: Record<PinMode, string> = {
   reset: "Enter a new 4-6 digit PIN.",
 };
 
-export function PinDialog({ visible, mode, onSubmit, onCancel, error }: PinDialogProps): React.ReactElement {
+export function PinDialog({
+  visible,
+  mode,
+  onSubmit,
+  onCancel,
+  error,
+}: PinDialogProps): React.ReactElement {
   const colors = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [pin, setPin] = useState("");
@@ -71,7 +77,7 @@ export function PinDialog({ visible, mode, onSubmit, onCancel, error }: PinDialo
     onCancel();
   };
 
-  const displayError = (error != null && error !== "") ? error : localError;
+  const displayError = error != null && error !== "" ? error : localError;
 
   return (
     <Modal visible={visible} animationType="fade" transparent statusBarTranslucent>
@@ -108,7 +114,11 @@ export function PinDialog({ visible, mode, onSubmit, onCancel, error }: PinDialo
           {displayError ? <Text style={styles.error}>{displayError}</Text> : null}
 
           <View style={styles.buttonRow}>
-            <TouchableOpacity style={styles.cancelButton} onPress={handleCancel} activeOpacity={0.7}>
+            <TouchableOpacity
+              style={styles.cancelButton}
+              onPress={handleCancel}
+              activeOpacity={0.7}
+            >
               <Text style={styles.cancelText}>Cancel</Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -120,9 +130,7 @@ export function PinDialog({ visible, mode, onSubmit, onCancel, error }: PinDialo
               {loading ? (
                 <ActivityIndicator size="small" color={colors.buttonPrimaryText} />
               ) : (
-                <Text style={styles.submitText}>
-                  {mode === "verify" ? "Unlock" : "Set PIN"}
-                </Text>
+                <Text style={styles.submitText}>{mode === "verify" ? "Unlock" : "Set PIN"}</Text>
               )}
             </TouchableOpacity>
           </View>

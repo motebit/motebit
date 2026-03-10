@@ -123,7 +123,11 @@ function showDelegationIndicator(server: string, tool: string): void {
   delegationElements.set(key, el);
 }
 
-function completeDelegationIndicator(server: string, tool: string, receipt?: { task_id: string; status: string; tools_used: string[] }): void {
+function completeDelegationIndicator(
+  server: string,
+  tool: string,
+  receipt?: { task_id: string; status: string; tools_used: string[] },
+): void {
   const key = `${server}:${tool}`;
   const el = delegationElements.get(key);
   if (!el) return;
@@ -140,7 +144,10 @@ function completeDelegationIndicator(server: string, tool: string, receipt?: { t
   }
   setTimeout(() => {
     el.classList.add("fade-out");
-    setTimeout(() => { el.remove(); delegationElements.delete(key); }, 500);
+    setTimeout(() => {
+      el.remove();
+      delegationElements.delete(key);
+    }, 500);
   }, 2000);
 }
 
@@ -152,7 +159,11 @@ export const GREETING_PROMPT_MARKER = "\u241Emotebit:internal:greeting:v1\u241E"
 
 // === Exported Standalone Functions ===
 
-export function addMessage(role: "user" | "assistant" | "system", text: string, immediate = false): void {
+export function addMessage(
+  role: "user" | "assistant" | "system",
+  text: string,
+  immediate = false,
+): void {
   const bubble = document.createElement("div");
   bubble.className = `chat-bubble ${role}`;
   bubble.textContent = text;
@@ -202,8 +213,8 @@ export function addActionMessage(text: string, actions: ActionButton[]): void {
       btn.textContent = action.label;
       btn.addEventListener("click", () => {
         // Disable all buttons in this message after click
-        btnRow.querySelectorAll("button").forEach(b => {
-          (b).disabled = true;
+        btnRow.querySelectorAll("button").forEach((b) => {
+          b.disabled = true;
         });
         action.onClick();
       });
@@ -256,7 +267,10 @@ function completeToolStatus(name: string): void {
   el.classList.add("done");
   setTimeout(() => {
     el.classList.add("fade-out");
-    setTimeout(() => { el.remove(); toolStatusElements.delete(name); }, 500);
+    setTimeout(() => {
+      el.remove();
+      toolStatusElements.delete(name);
+    }, 500);
   }, 1000);
 }
 
@@ -268,7 +282,12 @@ const RISK_LABELS: Record<number, { label: string; cls: string }> = {
   4: { label: "money", cls: "risk-money" },
 };
 
-function showApprovalCard(ctx: DesktopContext, name: string, args: Record<string, unknown>, riskLevel?: number): void {
+function showApprovalCard(
+  ctx: DesktopContext,
+  name: string,
+  args: Record<string, unknown>,
+  riskLevel?: number,
+): void {
   const card = document.createElement("div");
   card.className = "approval-card";
 
@@ -501,9 +520,7 @@ function createMemoryFooter(
       content.textContent = "Sensitive memory";
       content.classList.add("memory-footer-redacted");
     } else {
-      content.textContent = mem.content.length > 80
-        ? mem.content.slice(0, 80) + "…"
-        : mem.content;
+      content.textContent = mem.content.length > 80 ? mem.content.slice(0, 80) + "…" : mem.content;
     }
     item.appendChild(content);
 
@@ -540,9 +557,8 @@ function createMemoryFooter(
         content.textContent = "Sensitive memory";
         content.classList.add("memory-footer-redacted");
       } else {
-        content.textContent = mem.content.length > 80
-          ? mem.content.slice(0, 80) + "…"
-          : mem.content;
+        content.textContent =
+          mem.content.length > 80 ? mem.content.slice(0, 80) + "…" : mem.content;
       }
       item.appendChild(content);
 
@@ -581,7 +597,6 @@ export interface ChatAPI {
 }
 
 export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI {
-
   // === Autocomplete Dropdown ===
 
   const autocompleteEl = document.createElement("div");
@@ -654,7 +669,10 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
       const container = autocompleteEl;
       if (item.offsetTop < container.scrollTop) {
         container.scrollTop = item.offsetTop;
-      } else if (item.offsetTop + item.offsetHeight > container.scrollTop + container.clientHeight) {
+      } else if (
+        item.offsetTop + item.offsetHeight >
+        container.scrollTop + container.clientHeight
+      ) {
         container.scrollTop = item.offsetTop + item.offsetHeight - container.clientHeight;
       }
     }
@@ -762,29 +780,35 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
         if (!args) {
           addMessage("system", "Usage: /forget <nodeId>");
         } else {
-          void ctx.app.deleteMemory(args).then(() => {
-            showToast("Memory deleted");
-          }).catch((err: unknown) => {
-            const msg = err instanceof Error ? err.message : String(err);
-            addMessage("system", `Error: ${msg}`);
-          });
+          void ctx.app
+            .deleteMemory(args)
+            .then(() => {
+              showToast("Memory deleted");
+            })
+            .catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              addMessage("system", `Error: ${msg}`);
+            });
         }
         break;
 
       case "export":
-        void ctx.app.exportAllData().then(json => {
-          const blob = new Blob([json], { type: "application/json" });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = `motebit-export-${Date.now()}.json`;
-          a.click();
-          URL.revokeObjectURL(url);
-          showToast("Export downloaded");
-        }).catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          addMessage("system", `Export failed: ${msg}`);
-        });
+        void ctx.app
+          .exportAllData()
+          .then((json) => {
+            const blob = new Blob([json], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `motebit-export-${Date.now()}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            showToast("Export downloaded");
+          })
+          .catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            addMessage("system", `Export failed: ${msg}`);
+          });
         break;
 
       case "clear":
@@ -825,13 +849,20 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
       case "sync": {
         const config = ctx.getConfig();
         if (config?.syncUrl != null && config.syncUrl !== "") {
-          void ctx.app.syncConversations(config.syncUrl, config.syncMasterToken).then(result => {
-            const total = result.conversations_pushed + result.conversations_pulled + result.messages_pushed + result.messages_pulled;
-            showToast(total > 0 ? `Synced (${total} changes)` : "Already up to date");
-          }).catch((err: unknown) => {
-            const msg = err instanceof Error ? err.message : String(err);
-            addMessage("system", `Sync failed: ${msg}`);
-          });
+          void ctx.app
+            .syncConversations(config.syncUrl, config.syncMasterToken)
+            .then((result) => {
+              const total =
+                result.conversations_pushed +
+                result.conversations_pulled +
+                result.messages_pushed +
+                result.messages_pulled;
+              showToast(total > 0 ? `Synced (${total} changes)` : "Already up to date");
+            })
+            .catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              addMessage("system", `Sync failed: ${msg}`);
+            });
         } else {
           addMessage("system", "No sync relay configured");
         }
@@ -839,16 +870,19 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
       }
 
       case "summarize":
-        void ctx.app.summarizeConversation().then(summary => {
-          if (summary != null && summary !== "") {
-            addMessage("system", `Summary: ${summary}`);
-          } else {
-            addMessage("system", "No conversation to summarize");
-          }
-        }).catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          addMessage("system", `Summarization failed: ${msg}`);
-        });
+        void ctx.app
+          .summarizeConversation()
+          .then((summary) => {
+            if (summary != null && summary !== "") {
+              addMessage("system", `Summary: ${summary}`);
+            } else {
+              addMessage("system", "No conversation to summarize");
+            }
+          })
+          .catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            addMessage("system", `Summarization failed: ${msg}`);
+          });
         break;
 
       case "help":
@@ -915,7 +949,12 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
     let textEl: HTMLSpanElement | null = null;
     const thinkingEl = showThinkingIndicator();
     let accumulated = "";
-    let memoriesRetrieved: Array<{ node_id: string; content: string; confidence: number; sensitivity: string }> = [];
+    let memoriesRetrieved: Array<{
+      node_id: string;
+      content: string;
+      confidence: number;
+      sensitivity: string;
+    }> = [];
     let memoriesFormed: Array<{ node_id: string; content: string; sensitivity: string }> = [];
 
     function ensureBubble(): { bubble: HTMLDivElement; textEl: HTMLSpanElement } {
@@ -956,19 +995,27 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
           removeThinkingIndicator(thinkingEl);
           showApprovalCard(ctx, chunk.name, chunk.args, chunk.risk_level);
         } else if (chunk.type === "injection_warning") {
-          addMessage("system", `Warning: suspicious content detected in ${chunk.tool_name} results`);
+          addMessage(
+            "system",
+            `Warning: suspicious content detected in ${chunk.tool_name} results`,
+          );
         } else if (chunk.type === "result") {
           const r = chunk.result as {
-            memoriesRetrieved?: Array<{ node_id: string; content: string; confidence: number; sensitivity: string }>;
+            memoriesRetrieved?: Array<{
+              node_id: string;
+              content: string;
+              confidence: number;
+              sensitivity: string;
+            }>;
             memoriesFormed?: Array<{ node_id: string; content: string; sensitivity: string }>;
           };
-          memoriesRetrieved = (r.memoriesRetrieved ?? []).map(m => ({
+          memoriesRetrieved = (r.memoriesRetrieved ?? []).map((m) => ({
             node_id: m.node_id,
             content: m.content,
             confidence: m.confidence,
             sensitivity: String(m.sensitivity).toLowerCase(),
           }));
-          memoriesFormed = (r.memoriesFormed ?? []).map(m => ({
+          memoriesFormed = (r.memoriesFormed ?? []).map((m) => ({
             node_id: m.node_id,
             content: m.content,
             sensitivity: String(m.sensitivity).toLowerCase(),
@@ -981,10 +1028,8 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
       // TypeScript can't track closure mutations from ensureBubble() — capture post-loop
       const finalBubble = bubble as HTMLDivElement | null;
       if (finalBubble && (memoriesRetrieved.length > 0 || memoriesFormed.length > 0)) {
-        const footer = createMemoryFooter(
-          memoriesRetrieved,
-          memoriesFormed,
-          (nodeId) => callbacks.openMemoryPanel(nodeId),
+        const footer = createMemoryFooter(memoriesRetrieved, memoriesFormed, (nodeId) =>
+          callbacks.openMemoryPanel(nodeId),
         );
         finalBubble.appendChild(footer);
       }
@@ -1014,7 +1059,9 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
     if (!el) return false;
     el.scrollIntoView({ behavior: "smooth", block: "center" });
     (el as HTMLElement).style.outline = "1px solid rgba(255,255,255,0.3)";
-    setTimeout(() => { (el as HTMLElement).style.outline = ""; }, 2000);
+    setTimeout(() => {
+      (el as HTMLElement).style.outline = "";
+    }, 2000);
     return true;
   }
 
@@ -1075,7 +1122,7 @@ End with a question — you are curious about who they are.`;
         const r = chunk.result as {
           memoriesFormed?: Array<{ node_id: string; content: string; sensitivity: string }>;
         };
-        memoriesFormed = (r.memoriesFormed ?? []).map(m => ({
+        memoriesFormed = (r.memoriesFormed ?? []).map((m) => ({
           node_id: m.node_id,
           content: m.content,
           sensitivity: String(m.sensitivity).toLowerCase(),
@@ -1090,7 +1137,9 @@ End with a question — you are curious about who they are.`;
         if (node) {
           memoriesFormed = [{ node_id: node.node_id, content: node.content, sensitivity: "none" }];
         }
-      } catch { /* best-effort */ }
+      } catch {
+        /* best-effort */
+      }
     }
 
     // Memory footer — always appears (model-tagged or deterministic fallback)
@@ -1106,7 +1155,9 @@ End with a question — you are curious about who they are.`;
         const parsed = JSON.parse(raw) as Record<string, unknown>;
         parsed.first_run_greeting_sent = true;
         await config.invoke("write_config", { json: JSON.stringify(parsed) });
-      } catch { /* non-fatal */ }
+      } catch {
+        /* non-fatal */
+      }
     }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

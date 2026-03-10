@@ -8,9 +8,7 @@ import { AgentTrustLevel } from "@motebit/sdk";
 function makeRuntime(overrides: Partial<ServiceRuntime> = {}): ServiceRuntime {
   return {
     getToolRegistry: () => ({
-      list: () => [
-        { name: "test_tool", description: "A test tool", inputSchema: {} },
-      ],
+      list: () => [{ name: "test_tool", description: "A test tool", inputSchema: {} }],
       execute: vi.fn().mockResolvedValue({ ok: true, data: "result" }),
     }),
     policy: {
@@ -22,13 +20,23 @@ function makeRuntime(overrides: Partial<ServiceRuntime> = {}): ServiceRuntime {
     memory: {
       exportAll: vi.fn().mockResolvedValue({
         nodes: [
-          { content: "test", confidence: 0.9, sensitivity: "none", created_at: 1000, tombstoned: false },
-          { content: "deleted", confidence: 0.5, sensitivity: "none", created_at: 900, tombstoned: true },
+          {
+            content: "test",
+            confidence: 0.9,
+            sensitivity: "none",
+            created_at: 1000,
+            tombstoned: false,
+          },
+          {
+            content: "deleted",
+            confidence: 0.5,
+            sensitivity: "none",
+            created_at: 900,
+            tombstoned: true,
+          },
         ],
       }),
-      retrieve: vi.fn().mockResolvedValue([
-        { content: "retrieved", confidence: 0.8 },
-      ]),
+      retrieve: vi.fn().mockResolvedValue([{ content: "retrieved", confidence: 0.8 }]),
       formMemory: vi.fn().mockResolvedValue({ node_id: "mem-123" }),
     },
     events: {
@@ -139,7 +147,12 @@ describe("wireServerDeps", () => {
       policy: {
         filterTools: (tools) => tools,
         validate: validateSpy,
-        createTurnContext: () => ({ turnId: "t1", toolCallCount: 0, turnStartMs: Date.now(), costAccumulated: 0 }),
+        createTurnContext: () => ({
+          turnId: "t1",
+          toolCallCount: 0,
+          turnStartMs: Date.now(),
+          costAccumulated: 0,
+        }),
       },
     });
     const deps = wireServerDeps(runtime, { motebitId: "test-id" });
@@ -160,7 +173,12 @@ describe("wireServerDeps", () => {
       policy: {
         filterTools: (tools) => tools,
         validate: validateSpy,
-        createTurnContext: () => ({ turnId: "t1", toolCallCount: 0, turnStartMs: Date.now(), costAccumulated: 0 }),
+        createTurnContext: () => ({
+          turnId: "t1",
+          toolCallCount: 0,
+          turnStartMs: Date.now(),
+          costAccumulated: 0,
+        }),
       },
     });
     const deps = wireServerDeps(runtime, { motebitId: "test-id" });

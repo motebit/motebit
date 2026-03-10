@@ -88,9 +88,7 @@ describe("verifyReceiptSequence", () => {
     const receipt = makeReceipt();
     const signed = await signExecutionReceipt(receipt, kp.privateKey);
 
-    const chain: ReceiptChainEntry[] = [
-      { receipt: signed, signer_public_key: kp.publicKey },
-    ];
+    const chain: ReceiptChainEntry[] = [{ receipt: signed, signer_public_key: kp.publicKey }];
     const result = await verifyReceiptSequence(chain);
     expect(result.valid).toBe(true);
   });
@@ -206,14 +204,9 @@ describe("verifyReceiptSequence", () => {
     const kpReal = await generateKeypair();
     const kpWrong = await generateKeypair();
 
-    const signed = await signExecutionReceipt(
-      makeReceipt({ task_id: "x" }),
-      kpReal.privateKey,
-    );
+    const signed = await signExecutionReceipt(makeReceipt({ task_id: "x" }), kpReal.privateKey);
 
-    const chain: ReceiptChainEntry[] = [
-      { receipt: signed, signer_public_key: kpWrong.publicKey },
-    ];
+    const chain: ReceiptChainEntry[] = [{ receipt: signed, signer_public_key: kpWrong.publicKey }];
 
     const result = await verifyReceiptSequence(chain);
     expect(result.valid).toBe(false);
@@ -255,9 +248,7 @@ describe("verifyDelegationChain", () => {
     const kpAlice = await generateKeypair();
     const kpService = await generateKeypair();
 
-    const delegation = await makeDelegation(
-      kpAlice, kpService, "mote-alice", "mote-web-search",
-    );
+    const delegation = await makeDelegation(kpAlice, kpService, "mote-alice", "mote-web-search");
 
     const result = await verifyDelegationChain([delegation]);
     expect(result.valid).toBe(true);
@@ -269,10 +260,18 @@ describe("verifyDelegationChain", () => {
     const kpC = await generateKeypair();
 
     const delegation1 = await makeDelegation(
-      kpAlice, kpB, "mote-alice", "mote-service-b", "web_search",
+      kpAlice,
+      kpB,
+      "mote-alice",
+      "mote-service-b",
+      "web_search",
     );
     const delegation2 = await makeDelegation(
-      kpB, kpC, "mote-service-b", "mote-service-c", "read_url",
+      kpB,
+      kpC,
+      "mote-service-b",
+      "mote-service-c",
+      "read_url",
     );
 
     const result = await verifyDelegationChain([delegation1, delegation2]);
@@ -284,12 +283,8 @@ describe("verifyDelegationChain", () => {
     const kpB = await generateKeypair();
     const kpC = await generateKeypair();
 
-    const delegation1 = await makeDelegation(
-      kpAlice, kpB, "mote-alice", "mote-service-b",
-    );
-    const delegation2 = await makeDelegation(
-      kpB, kpC, "mote-service-WRONG", "mote-service-c",
-    );
+    const delegation1 = await makeDelegation(kpAlice, kpB, "mote-alice", "mote-service-b");
+    const delegation2 = await makeDelegation(kpB, kpC, "mote-service-WRONG", "mote-service-c");
 
     const result = await verifyDelegationChain([delegation1, delegation2]);
     expect(result.valid).toBe(false);
@@ -303,9 +298,7 @@ describe("verifyDelegationChain", () => {
     const kpC = await generateKeypair();
     const kpBogus = await generateKeypair();
 
-    const delegation1 = await makeDelegation(
-      kpAlice, kpB, "mote-alice", "mote-service-b",
-    );
+    const delegation1 = await makeDelegation(kpAlice, kpB, "mote-alice", "mote-service-b");
     const body2: Omit<DelegationToken, "signature"> = {
       delegator_id: "mote-service-b",
       delegator_public_key: toBase64Url(kpBogus.publicKey),
@@ -327,9 +320,7 @@ describe("verifyDelegationChain", () => {
     const kpAlice = await generateKeypair();
     const kpService = await generateKeypair();
 
-    const delegation = await makeDelegation(
-      kpAlice, kpService, "mote-alice", "mote-web-search",
-    );
+    const delegation = await makeDelegation(kpAlice, kpService, "mote-alice", "mote-web-search");
 
     const tampered: DelegationToken = { ...delegation, scope: "TAMPERED_SCOPE" };
 
@@ -343,9 +334,7 @@ describe("verifyDelegationChain", () => {
     const kpAlice = await generateKeypair();
     const kpService = await generateKeypair();
 
-    const delegation = await makeDelegation(
-      kpAlice, kpService, "mote-alice", "mote-web-search",
-    );
+    const delegation = await makeDelegation(kpAlice, kpService, "mote-alice", "mote-web-search");
 
     expect(await verifyDelegation(delegation)).toBe(true);
 
@@ -380,7 +369,9 @@ describe("end-to-end: delegation chain with receipt sequence", () => {
     expect(delegationResult.valid).toBe(true);
 
     const promptHash = await hash(new TextEncoder().encode("search for motebit"));
-    const resultText = JSON.stringify({ results: [{ title: "Motebit", url: "https://motebit.com" }] });
+    const resultText = JSON.stringify({
+      results: [{ title: "Motebit", url: "https://motebit.com" }],
+    });
     const resultHash = await hash(new TextEncoder().encode(resultText));
 
     const receipt = await signExecutionReceipt(

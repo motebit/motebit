@@ -29,7 +29,11 @@ describe("PairingClient", () => {
   describe("initiate", () => {
     it("sends POST to /pairing/initiate with auth token", async () => {
       mockFetch.mockResolvedValue(
-        mockResponse(201, { pairing_id: "pid-1", pairing_code: "ABC123", expires_at: Date.now() + 300000 }),
+        mockResponse(201, {
+          pairing_id: "pid-1",
+          pairing_code: "ABC123",
+          expires_at: Date.now() + 300000,
+        }),
       );
 
       const result = await client.initiate("my-auth-token");
@@ -54,9 +58,7 @@ describe("PairingClient", () => {
 
   describe("claim", () => {
     it("sends POST to /pairing/claim without auth", async () => {
-      mockFetch.mockResolvedValue(
-        mockResponse(200, { pairing_id: "pid-1", motebit_id: "mote-1" }),
-      );
+      mockFetch.mockResolvedValue(mockResponse(200, { pairing_id: "pid-1", motebit_id: "mote-1" }));
 
       const result = await client.claim("ABC123", "Mobile", "a".repeat(64));
 
@@ -65,7 +67,11 @@ describe("PairingClient", () => {
         expect.objectContaining({
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pairing_code: "ABC123", device_name: "Mobile", public_key: "a".repeat(64) }),
+          body: JSON.stringify({
+            pairing_code: "ABC123",
+            device_name: "Mobile",
+            public_key: "a".repeat(64),
+          }),
         }),
       );
       expect(result.pairingId).toBe("pid-1");
@@ -74,7 +80,9 @@ describe("PairingClient", () => {
 
     it("throws on invalid code", async () => {
       mockFetch.mockResolvedValue(mockResponse(404, { error: "Invalid pairing code" }));
-      await expect(client.claim("ZZZZZZ", "Mobile", "a".repeat(64))).rejects.toThrow("Invalid pairing code");
+      await expect(client.claim("ZZZZZZ", "Mobile", "a".repeat(64))).rejects.toThrow(
+        "Invalid pairing code",
+      );
     });
   });
 
@@ -140,7 +148,12 @@ describe("PairingClient", () => {
   describe("pollStatus", () => {
     it("fetches status without auth", async () => {
       mockFetch.mockResolvedValue(
-        mockResponse(200, { status: "approved", motebit_id: "mote-1", device_id: "dev-2", device_token: "tok-2" }),
+        mockResponse(200, {
+          status: "approved",
+          motebit_id: "mote-1",
+          device_id: "dev-2",
+          device_token: "tok-2",
+        }),
       );
 
       const status = await client.pollStatus("pid-1");

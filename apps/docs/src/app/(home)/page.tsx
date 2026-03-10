@@ -32,8 +32,8 @@ export default function HomePage() {
                 It knows who it is.
               </h2>
               <p className="mt-6 text-lg md:text-xl text-zinc-400 dark:text-zinc-500 leading-relaxed max-w-lg mx-auto">
-                Cryptographic identity that persists across time and devices.
-                Not a session token. An entity.
+                Cryptographic identity that persists across time and devices. Not a session token.
+                An entity.
               </p>
             </div>
           </Reveal>
@@ -43,12 +43,10 @@ export default function HomePage() {
         <section className="py-28 md:py-40 px-6">
           <Reveal>
             <div className="mx-auto max-w-2xl text-center">
-              <h2 className="text-3xl md:text-5xl font-bold tracking-[-0.04em]">
-                It remembers.
-              </h2>
+              <h2 className="text-3xl md:text-5xl font-bold tracking-[-0.04em]">It remembers.</h2>
               <p className="mt-6 text-lg md:text-xl text-zinc-400 dark:text-zinc-500 leading-relaxed max-w-lg mx-auto">
-                Memory that compounds. Strengthens with use, fades naturally
-                with time. The longer it runs, the more capable it becomes.
+                Memory that compounds. Strengthens with use, fades naturally with time. The longer
+                it runs, the more capable it becomes.
               </p>
             </div>
           </Reveal>
@@ -62,8 +60,8 @@ export default function HomePage() {
                 It asks before it acts.
               </h2>
               <p className="mt-6 text-lg md:text-xl text-zinc-400 dark:text-zinc-500 leading-relaxed max-w-lg mx-auto">
-                You set the boundaries. Policy gates control what crosses
-                the surface. Sensitivity-aware. Fail-closed by default.
+                You set the boundaries. Policy gates control what crosses the surface.
+                Sensitivity-aware. Fail-closed by default.
               </p>
             </div>
           </Reveal>
@@ -77,9 +75,8 @@ export default function HomePage() {
                 It connects to everything.
               </h2>
               <p className="mt-6 text-lg md:text-xl text-zinc-400 dark:text-zinc-500 leading-relaxed max-w-lg mx-auto">
-                Any intelligence provider. Any tool ecosystem.
-                Any device. The intelligence is a commodity.
-                The identity is the asset.
+                Any intelligence provider. Any tool ecosystem. Any device. The intelligence is a
+                commodity. The identity is the asset.
               </p>
             </div>
           </Reveal>

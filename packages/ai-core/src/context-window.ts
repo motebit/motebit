@@ -50,12 +50,10 @@ export function trimConversation(
   if (cutoff === 0) return kept;
 
   // Prepend context note about trimmed messages
-  const contextNote = conversationSummary != null && conversationSummary !== ""
-    ? `[Earlier in this conversation: ${conversationSummary}]`
-    : `[This conversation continues from earlier. Some messages have been trimmed for context.]`;
+  const contextNote =
+    conversationSummary != null && conversationSummary !== ""
+      ? `[Earlier in this conversation: ${conversationSummary}]`
+      : `[This conversation continues from earlier. Some messages have been trimmed for context.]`;
 
-  return [
-    { role: "user" as const, content: contextNote },
-    ...kept,
-  ];
+  return [{ role: "user" as const, content: contextNote }, ...kept];
 }

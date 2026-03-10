@@ -100,7 +100,10 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
  * Standalone decryption for individual events received via WebSocket onEvent callback.
  * Decrypts the payload in-place if it was encrypted; passes through unencrypted events.
  */
-export async function decryptEventPayload(event: EventLogEntry, key: Uint8Array): Promise<EventLogEntry> {
+export async function decryptEventPayload(
+  event: EventLogEntry,
+  key: Uint8Array,
+): Promise<EventLogEntry> {
   const payload = event.payload;
   if (payload._encrypted == null || payload._encrypted === false) return event;
 
@@ -111,5 +114,8 @@ export async function decryptEventPayload(event: EventLogEntry, key: Uint8Array)
     tag: fromBase64(data.t),
   };
   const plaintext = await decrypt(encrypted, key);
-  return { ...event, payload: JSON.parse(new TextDecoder().decode(plaintext)) as Record<string, unknown> };
+  return {
+    ...event,
+    payload: JSON.parse(new TextDecoder().decode(plaintext)) as Record<string, unknown>,
+  };
 }

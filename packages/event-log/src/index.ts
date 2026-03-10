@@ -65,9 +65,7 @@ export class InMemoryEventStore implements EventStoreAdapter {
   }
 
   tombstone(eventId: string, motebitId: string): Promise<void> {
-    const event = this.events.find(
-      (e) => e.event_id === eventId && e.motebit_id === motebitId,
-    );
+    const event = this.events.find((e) => e.event_id === eventId && e.motebit_id === motebitId);
     if (event !== undefined) {
       // Tombstone is a marker, not a delete — the event stays in the log
       event.tombstoned = true;
@@ -84,9 +82,7 @@ export class InMemoryEventStore implements EventStoreAdapter {
   }
 
   countEvents(motebitId: string): Promise<number> {
-    return Promise.resolve(
-      this.events.filter((e) => e.motebit_id === motebitId).length,
-    );
+    return Promise.resolve(this.events.filter((e) => e.motebit_id === motebitId).length);
   }
 }
 
@@ -120,10 +116,7 @@ export class EventStore {
   /**
    * Replay events in order — useful for rebuilding derived state.
    */
-  async replay(
-    motebitId: string,
-    handler: (entry: EventLogEntry) => Promise<void>,
-  ): Promise<void> {
+  async replay(motebitId: string, handler: (entry: EventLogEntry) => Promise<void>): Promise<void> {
     const events = await this.adapter.query({ motebit_id: motebitId });
     const sorted = events.sort((a, b) => a.version_clock - b.version_clock);
     for (const event of sorted) {

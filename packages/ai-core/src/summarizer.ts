@@ -102,10 +102,7 @@ export async function summarizeConversation(
 /**
  * Check whether summarization should trigger based on message count.
  */
-export function shouldSummarize(
-  messageCount: number,
-  triggerAfterMessages: number,
-): boolean {
+export function shouldSummarize(messageCount: number, triggerAfterMessages: number): boolean {
   if (triggerAfterMessages <= 0) return false;
   return messageCount > 0 && messageCount % triggerAfterMessages === 0;
 }

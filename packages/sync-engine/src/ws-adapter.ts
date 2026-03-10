@@ -35,7 +35,10 @@ export type CustomMessageCallback = (msg: { type: string; [key: string]: unknown
  */
 export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   private ws: WebSocket | null = null;
-  private config: Required<Omit<WebSocketAdapterConfig, "authToken" | "httpFallback" | "localStore" | "onCatchUp">> & Pick<WebSocketAdapterConfig, "authToken" | "httpFallback" | "localStore" | "onCatchUp">;
+  private config: Required<
+    Omit<WebSocketAdapterConfig, "authToken" | "httpFallback" | "localStore" | "onCatchUp">
+  > &
+    Pick<WebSocketAdapterConfig, "authToken" | "httpFallback" | "localStore" | "onCatchUp">;
   private onEventCallbacks: Set<EventReceivedCallback> = new Set();
   private onCustomMessageCallbacks: Set<CustomMessageCallback> = new Set();
   private reconnectAttempt = 0;
@@ -56,9 +59,10 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   connect(): void {
     if (this.ws) return;
 
-    const url = this.config.authToken != null && this.config.authToken !== ""
-      ? `${this.config.url}?token=${encodeURIComponent(this.config.authToken)}`
-      : this.config.url;
+    const url =
+      this.config.authToken != null && this.config.authToken !== ""
+        ? `${this.config.url}?token=${encodeURIComponent(this.config.authToken)}`
+        : this.config.url;
 
     this.ws = new WebSocket(url);
 
@@ -127,7 +131,9 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
 
   onEvent(callback: EventReceivedCallback): () => void {
     this.onEventCallbacks.add(callback);
-    return () => { this.onEventCallbacks.delete(callback); };
+    return () => {
+      this.onEventCallbacks.delete(callback);
+    };
   }
 
   /**
@@ -136,7 +142,9 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
    */
   onCustomMessage(callback: CustomMessageCallback): () => void {
     this.onCustomMessageCallbacks.add(callback);
-    return () => { this.onCustomMessageCallbacks.delete(callback); };
+    return () => {
+      this.onCustomMessageCallbacks.delete(callback);
+    };
   }
 
   /**

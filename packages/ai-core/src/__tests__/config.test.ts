@@ -83,8 +83,6 @@ describe("loadConfig", () => {
     const result = loadConfig(configPath);
     expect(result).toEqual(DEFAULT_CONFIG);
     // eslint-disable-next-line no-console
-    expect(console.warn).toHaveBeenCalledWith(
-      expect.stringContaining("malformed config"),
-    );
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("malformed config"));
   });
 });

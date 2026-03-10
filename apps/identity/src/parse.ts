@@ -70,10 +70,12 @@ function parseYamlValue(raw: string): unknown {
   if (trimmed === "true") return true;
   if (trimmed === "false") return false;
   if (trimmed === "[]") return [];
-  if (trimmed === "{}") return ({});
+  if (trimmed === "{}") return {};
 
-  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-      (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
     return JSON.parse(trimmed) as string;
   }
 
@@ -86,7 +88,9 @@ function parseYamlValue(raw: string): unknown {
 function parseYaml(text: string): MotebitIdentityFile {
   const lines = text.split("\n");
   const root: Record<string, unknown> = {};
-  const stack: Array<{ obj: Record<string, unknown>; indent: number }> = [{ obj: root, indent: -1 }];
+  const stack: Array<{ obj: Record<string, unknown>; indent: number }> = [
+    { obj: root, indent: -1 },
+  ];
   let currentArray: unknown[] | null = null;
   let currentArrayIndent = -1;
 

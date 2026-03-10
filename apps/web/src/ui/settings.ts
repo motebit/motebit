@@ -63,12 +63,12 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   // === Tab Switching (Appearance / Intelligence) ===
 
   function switchTab(tabName: string): void {
-    document.querySelectorAll(".settings-tab").forEach(tab => {
+    document.querySelectorAll(".settings-tab").forEach((tab) => {
       const isActive = (tab as HTMLElement).dataset.tab === tabName;
       tab.classList.toggle("active", isActive);
       tab.setAttribute("aria-selected", String(isActive));
     });
-    document.querySelectorAll(".settings-pane").forEach(pane => {
+    document.querySelectorAll(".settings-pane").forEach((pane) => {
       pane.classList.toggle("active", pane.id === `pane-${tabName}`);
     });
 
@@ -99,7 +99,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
 
   setupIdentityCopyHandlers();
 
-  document.querySelectorAll(".settings-tab").forEach(tab => {
+  document.querySelectorAll(".settings-tab").forEach((tab) => {
     tab.addEventListener("click", () => {
       const name = (tab as HTMLElement).dataset.tab;
       if (name != null && name !== "") switchTab(name);
@@ -110,7 +110,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
 
   function switchProviderTab(provider: ProviderType): void {
     activeProviderTab = provider;
-    providerTabs.forEach(tab => {
+    providerTabs.forEach((tab) => {
       tab.classList.toggle("active", tab.dataset.provider === provider);
     });
     for (const [key, el] of Object.entries(providerConfigs)) {
@@ -134,7 +134,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     }
   }
 
-  providerTabs.forEach(tab => {
+  providerTabs.forEach((tab) => {
     tab.addEventListener("click", () => {
       const provider = tab.dataset.provider as ProviderType;
       if (provider) switchProviderTab(provider);
@@ -227,7 +227,9 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   document.getElementById("settings-btn")?.addEventListener("click", () => open());
 
   // Connect prompt button
-  document.getElementById("connect-prompt-btn")?.addEventListener("click", () => openToTab("intelligence"));
+  document
+    .getElementById("connect-prompt-btn")
+    ?.addEventListener("click", () => openToTab("intelligence"));
 
   // Cancel button
   document.getElementById("settings-cancel")?.addEventListener("click", () => {
@@ -241,7 +243,11 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     let config: ProviderConfig;
     switch (activeProviderTab) {
       case "anthropic":
-        config = { type: "anthropic", apiKey: anthropicApiKey.value.trim(), model: anthropicModel.value };
+        config = {
+          type: "anthropic",
+          apiKey: anthropicApiKey.value.trim(),
+          model: anthropicModel.value,
+        };
         break;
       case "openai":
         config = { type: "openai", apiKey: openaiApiKey.value.trim(), model: openaiModel.value };
@@ -258,9 +264,14 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
 
     // Save soul color
     const preset = colorPicker.getSelectedPreset();
-    const soulColor = preset === "custom"
-      ? { preset: "custom", customHue: colorPicker.getCustomHue(), customSaturation: colorPicker.getCustomSaturation() }
-      : { preset };
+    const soulColor =
+      preset === "custom"
+        ? {
+            preset: "custom",
+            customHue: colorPicker.getCustomHue(),
+            customSaturation: colorPicker.getCustomSaturation(),
+          }
+        : { preset };
     saveSoulColor(soulColor);
 
     // Connect provider

@@ -24,11 +24,7 @@ export default defineConfig({
       deps: {
         // Inline the MCP SDK and its transitive deps so Vite processes them
         // (allowing our plugin to intercept the ajv-formats import).
-        inline: [
-          "@modelcontextprotocol/sdk",
-          "ajv-formats",
-          "ajv",
-        ],
+        inline: ["@modelcontextprotocol/sdk", "ajv-formats", "ajv"],
       },
     },
   },

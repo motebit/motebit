@@ -8,7 +8,11 @@ export { writeFileDefinition, createWriteFileHandler } from "./write-file.js";
 export { shellExecDefinition, createShellExecHandler } from "./shell-exec.js";
 export { recallMemoriesDefinition, createRecallMemoriesHandler } from "./recall-memories.js";
 export { listEventsDefinition, createListEventsHandler } from "./list-events.js";
-export { createSubGoalDefinition, completeGoalDefinition, reportProgressDefinition } from "./goal-tools.js";
+export {
+  createSubGoalDefinition,
+  completeGoalDefinition,
+  reportProgressDefinition,
+} from "./goal-tools.js";
 
 import { webSearchDefinition, createWebSearchHandler } from "./web-search.js";
 import { readUrlDefinition, createReadUrlHandler } from "./read-url.js";
@@ -28,9 +32,7 @@ export interface BuiltinToolOptions {
   eventQueryFn?: (
     limit: number,
     eventType?: string,
-  ) => Promise<
-    Array<{ event_type: string; timestamp: number; payload: Record<string, unknown> }>
-  >;
+  ) => Promise<Array<{ event_type: string; timestamp: number; payload: Record<string, unknown> }>>;
 }
 
 export function registerBuiltinTools(

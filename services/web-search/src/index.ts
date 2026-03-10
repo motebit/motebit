@@ -77,14 +77,26 @@ function canonicalizeResults(raw: string, maxResults = 5): string {
         let url = String(r["url"] ?? r["link"] ?? "");
         try {
           const u = new URL(url);
-          for (const p of ["utm_source", "utm_medium", "utm_campaign", "utm_content", "ref", "fbclid", "gclid"]) {
+          for (const p of [
+            "utm_source",
+            "utm_medium",
+            "utm_campaign",
+            "utm_content",
+            "ref",
+            "fbclid",
+            "gclid",
+          ]) {
             u.searchParams.delete(p);
           }
           url = u.toString();
         } catch {
           // Not a valid URL — keep as-is
         }
-        return { title: String(r["title"] ?? ""), url, snippet: String(r["snippet"] ?? r["description"] ?? "") };
+        return {
+          title: String(r["title"] ?? ""),
+          url,
+          snippet: String(r["snippet"] ?? r["description"] ?? ""),
+        };
       })
       .sort((a, b) => a.url.localeCompare(b.url));
 
@@ -104,7 +116,9 @@ async function main(): Promise<void> {
   // 1. Load and verify identity
   const identityPath = path.resolve(config.identityPath);
   if (!fs.existsSync(identityPath)) {
-    console.error(`No identity file found at ${identityPath}. Generate one: npx create-motebit . --service`);
+    console.error(
+      `No identity file found at ${identityPath}. Generate one: npx create-motebit . --service`,
+    );
     process.exit(1);
   }
   const identityContent = fs.readFileSync(identityPath, "utf-8");
@@ -146,9 +160,7 @@ async function main(): Promise<void> {
     agentTrustStore: moteDb.agentTrustStore,
   };
 
-  const policyOverrides = identity.governance
-    ? governanceToPolicyConfig(identity.governance)
-    : {};
+  const policyOverrides = identity.governance ? governanceToPolicyConfig(identity.governance) : {};
 
   const runtime = new MotebitRuntime(
     { motebitId, policy: { ...policyOverrides } },
@@ -158,11 +170,15 @@ async function main(): Promise<void> {
   log("Runtime initialized (tool server mode — no LLM)");
 
   // 4. Wire handleAgentTask — direct tool execution with signed receipts
-  let handleAgentTask: ((prompt: string) => AsyncGenerator<
-    | { type: "text"; text: string }
-    | { type: "task_result"; receipt: Record<string, unknown> }
-    | { type: string; [key: string]: unknown }
-  >) | undefined;
+  let handleAgentTask:
+    | ((
+        prompt: string,
+      ) => AsyncGenerator<
+        | { type: "text"; text: string }
+        | { type: "task_result"; receipt: Record<string, unknown> }
+        | { type: string; [key: string]: unknown }
+      >)
+    | undefined;
 
   if (config.privateKeyHex) {
     const privateKey = fromHex(config.privateKeyHex);
@@ -181,7 +197,9 @@ async function main(): Promise<void> {
 
       // Use data on success, error message on failure — never undefined
       const resultStr = result.ok
-        ? (typeof result.data === "string" ? result.data : JSON.stringify(result.data ?? null))
+        ? typeof result.data === "string"
+          ? result.data
+          : JSON.stringify(result.data ?? null)
         : (result.error ?? "error");
       const canonical = canonicalizeResults(resultStr);
       const enc = new TextEncoder();

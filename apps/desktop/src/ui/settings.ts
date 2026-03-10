@@ -21,15 +21,27 @@ const settingsApiKey = document.getElementById("settings-apikey") as HTMLInputEl
 const settingsApiKeyToggle = document.getElementById("settings-apikey-toggle") as HTMLButtonElement;
 const settingsOperatorMode = document.getElementById("settings-operator-mode") as HTMLInputElement;
 const mcpServerList = document.getElementById("mcp-server-list") as HTMLDivElement;
-const persistenceThreshold = document.getElementById("settings-persistence-threshold") as HTMLInputElement;
-const persistenceThresholdValue = document.getElementById("persistence-threshold-value") as HTMLSpanElement;
+const persistenceThreshold = document.getElementById(
+  "settings-persistence-threshold",
+) as HTMLInputElement;
+const persistenceThresholdValue = document.getElementById(
+  "persistence-threshold-value",
+) as HTMLSpanElement;
 const rejectSecrets = document.getElementById("settings-reject-secrets") as HTMLInputElement;
 const maxCalls = document.getElementById("settings-max-calls") as HTMLInputElement;
 
-const settingsWhisperApiKey = document.getElementById("settings-whisper-apikey") as HTMLInputElement;
-const settingsWhisperApiKeyToggle = document.getElementById("settings-whisper-apikey-toggle") as HTMLButtonElement;
-const settingsVoiceAutoSend = document.getElementById("settings-voice-autosend") as HTMLInputElement;
-const settingsVoiceResponse = document.getElementById("settings-voice-response") as HTMLInputElement;
+const settingsWhisperApiKey = document.getElementById(
+  "settings-whisper-apikey",
+) as HTMLInputElement;
+const settingsWhisperApiKeyToggle = document.getElementById(
+  "settings-whisper-apikey-toggle",
+) as HTMLButtonElement;
+const settingsVoiceAutoSend = document.getElementById(
+  "settings-voice-autosend",
+) as HTMLInputElement;
+const settingsVoiceResponse = document.getElementById(
+  "settings-voice-response",
+) as HTMLInputElement;
 const settingsTtsVoice = document.getElementById("settings-tts-voice") as HTMLSelectElement;
 
 // === PIN Dialog DOM Refs ===
@@ -130,19 +142,19 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   // === Tab Switching ===
 
   function switchTab(tabName: string): void {
-    document.querySelectorAll(".settings-tab").forEach(tab => {
+    document.querySelectorAll(".settings-tab").forEach((tab) => {
       const isActive = (tab as HTMLElement).dataset.tab === tabName;
       tab.classList.toggle("active", isActive);
       tab.setAttribute("aria-selected", String(isActive));
     });
-    document.querySelectorAll(".settings-pane").forEach(pane => {
+    document.querySelectorAll(".settings-pane").forEach((pane) => {
       pane.classList.toggle("active", pane.id === `pane-${tabName}`);
     });
     if (tabName === "identity") populateIdentityTab();
     if (tabName === "governance") populateGovernanceTab();
   }
 
-  document.querySelectorAll(".settings-tab").forEach(tab => {
+  document.querySelectorAll(".settings-tab").forEach((tab) => {
     tab.addEventListener("click", () => {
       const name = (tab as HTMLElement).dataset.tab;
       if (name != null && name !== "") switchTab(name);
@@ -204,7 +216,8 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   }
 
   settingsModelSelect.addEventListener("change", () => {
-    settingsModelCustom.style.display = settingsModelSelect.value === "__custom__" ? "block" : "none";
+    settingsModelCustom.style.display =
+      settingsModelSelect.value === "__custom__" ? "block" : "none";
     if (settingsModelSelect.value === "__custom__") {
       settingsModelCustom.focus();
     }
@@ -250,7 +263,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
   function selectApprovalPreset(preset: string): void {
     selectedApprovalPreset = preset;
-    document.querySelectorAll(".preset-option").forEach(el => {
+    document.querySelectorAll(".preset-option").forEach((el) => {
       const match = (el as HTMLElement).dataset.preset === preset;
       el.classList.toggle("selected", match);
       const radio: HTMLInputElement | null = el.querySelector("input[type=radio]");
@@ -258,7 +271,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     });
   }
 
-  document.querySelectorAll(".preset-option").forEach(el => {
+  document.querySelectorAll(".preset-option").forEach((el) => {
     el.addEventListener("click", () => {
       const preset = (el as HTMLElement).dataset.preset;
       if (preset != null && preset !== "") selectApprovalPreset(preset);
@@ -273,10 +286,13 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
   function populateIdentityTab(): void {
     const info = ctx.app.getIdentityInfo();
-    (document.getElementById("identity-motebit-id") as HTMLElement).textContent = info.motebitId || "-";
-    (document.getElementById("identity-device-id") as HTMLElement).textContent = info.deviceId || "-";
-    (document.getElementById("identity-public-key") as HTMLElement).textContent =
-      info.publicKey ? info.publicKey.slice(0, 16) + "..." : "-";
+    (document.getElementById("identity-motebit-id") as HTMLElement).textContent =
+      info.motebitId || "-";
+    (document.getElementById("identity-device-id") as HTMLElement).textContent =
+      info.deviceId || "-";
+    (document.getElementById("identity-public-key") as HTMLElement).textContent = info.publicKey
+      ? info.publicKey.slice(0, 16) + "..."
+      : "-";
     const syncBadge = document.getElementById("identity-sync-status") as HTMLElement;
     const syncState = ctx.app.syncStatus;
     const statusLabels: Record<string, string> = {
@@ -292,7 +308,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   }
 
   // Copy buttons
-  document.querySelectorAll(".copy-btn").forEach(btn => {
+  document.querySelectorAll(".copy-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const targetId = (btn as HTMLElement).dataset.copy;
       if (targetId == null || targetId === "") return;
@@ -301,7 +317,9 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         void navigator.clipboard.writeText(el.textContent || "").then(() => {
           const prev = btn.textContent;
           btn.textContent = "Copied";
-          setTimeout(() => { btn.textContent = prev; }, 1500);
+          setTimeout(() => {
+            btn.textContent = prev;
+          }, 1500);
         });
       }
     });
@@ -309,7 +327,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
   // Export button
   document.getElementById("settings-export")!.addEventListener("click", () => {
-    void ctx.app.exportAllData().then(json => {
+    void ctx.app.exportAllData().then((json) => {
       const blob = new Blob([json], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -368,7 +386,9 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         el.classList.add("verify-invalid");
         el.textContent = `Invalid — ${result.error != null && result.error !== "" ? result.error : "signature mismatch"}`;
       }
-      setTimeout(() => { el.style.display = "none"; }, 8000);
+      setTimeout(() => {
+        el.style.display = "none";
+      }, 8000);
     });
     input.click();
   });
@@ -424,9 +444,14 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     const resultDiv = document.createElement("div");
     resultDiv.className = "audit-detail-result";
     if (resultData != null && typeof resultData === "object") {
-      const ok = resultData.ok !== undefined ? ipcString(resultData.ok) : resultData.error != null ? "failed" : "ok";
+      const ok =
+        resultData.ok !== undefined
+          ? ipcString(resultData.ok)
+          : resultData.error != null
+            ? "failed"
+            : "ok";
       const dur = resultData.durationMs != null ? `${ipcString(resultData.durationMs)}ms` : "";
-      resultDiv.textContent = [ok, dur].filter(s => s !== "").join(" · ");
+      resultDiv.textContent = [ok, dur].filter((s) => s !== "").join(" · ");
     } else {
       resultDiv.textContent = ipcString(entry.result);
     }
@@ -440,13 +465,17 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       e.stopPropagation();
       void navigator.clipboard.writeText(entryJson).then(() => {
         copyBtn.textContent = "Copied";
-        setTimeout(() => { copyBtn.textContent = "Copy JSON"; }, 1500);
+        setTimeout(() => {
+          copyBtn.textContent = "Copy JSON";
+        }, 1500);
       });
     });
     detail.appendChild(copyBtn);
 
     row.appendChild(detail);
-    row.addEventListener("click", () => { row.classList.toggle("expanded"); });
+    row.addEventListener("click", () => {
+      row.classList.toggle("expanded");
+    });
     return row;
   }
 
@@ -463,160 +492,173 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     void invoke<Array<Record<string, unknown>>>("db_query", {
       sql: `SELECT call_id, run_id, tool, args, decision, result, injection, timestamp FROM tool_audit_log ORDER BY timestamp DESC LIMIT 50`,
       params: [],
-    }).then((entries: Array<Record<string, unknown>>) => {
-      if (entries.length === 0) {
-        emptyEl.style.display = "block";
-        return;
-      }
-
-      // Group by run_id, preserving order of first appearance
-      const groups: Array<{ runId: string | null; entries: Array<Record<string, unknown>> }> = [];
-      const runIndex = new Map<string, number>();
-
-      for (const entry of entries) {
-        const rid = entry.run_id != null ? ipcString(entry.run_id) : null;
-        if (rid != null && rid !== "" && runIndex.has(rid)) {
-          groups[runIndex.get(rid)!]!.entries.push(entry);
-        } else {
-          if (rid != null && rid !== "") runIndex.set(rid, groups.length);
-          groups.push({ runId: rid, entries: [entry] });
-        }
-      }
-
-      // Separate grouped runs from legacy (no run_id)
-      const runGroups = groups.filter(g => g.runId != null && g.runId !== "");
-      const legacyEntries = groups.filter(g => g.runId == null || g.runId === "").flatMap(g => g.entries);
-
-      for (const group of runGroups) {
-        const groupEl = document.createElement("div");
-        groupEl.className = "audit-run-group";
-        // Auto-expand the first (most recent) group
-        if (listEl.children.length === 0) groupEl.classList.add("expanded");
-
-        const header = document.createElement("div");
-        header.className = "audit-run-header";
-
-        const idSpan = document.createElement("span");
-        idSpan.className = "audit-run-id";
-        idSpan.textContent = `run:${group.runId!.slice(0, 8)}`;
-        header.appendChild(idSpan);
-
-        // Decision summary badges + semantic label
-        const stats = document.createElement("span");
-        stats.className = "audit-run-stats";
-
-        let denied = 0, approval = 0;
-        for (const e of group.entries) {
-          const c = classifyDecision(e.decision);
-          if (c === "denied") denied++;
-          else if (c === "approval") approval++;
+    })
+      .then((entries: Array<Record<string, unknown>>) => {
+        if (entries.length === 0) {
+          emptyEl.style.display = "block";
+          return;
         }
 
-        // Semantic trust badge — only surface when something noteworthy happened
-        if (denied > 0) {
-          const tb = document.createElement("span");
-          tb.className = "audit-decision-badge denied";
-          tb.textContent = "denied";
-          stats.appendChild(tb);
-        } else if (approval > 0) {
-          const tb = document.createElement("span");
-          tb.className = "audit-decision-badge approval";
-          tb.textContent = "approval";
-          stats.appendChild(tb);
-        }
+        // Group by run_id, preserving order of first appearance
+        const groups: Array<{ runId: string | null; entries: Array<Record<string, unknown>> }> = [];
+        const runIndex = new Map<string, number>();
 
-        const countSpan = document.createElement("span");
-        countSpan.className = "audit-run-count";
-        countSpan.textContent = `${group.entries.length} tool${group.entries.length !== 1 ? "s" : ""}`;
-        stats.appendChild(countSpan);
-
-        // Query token count for this run from goal_outcomes (async, fills in when ready)
-        void invoke<Array<{ tokens_used: number | null }>>("db_query", {
-          sql: "SELECT tokens_used FROM goal_outcomes WHERE outcome_id = ?",
-          params: [group.runId],
-        }).then((rows) => {
-          const tokens = rows?.[0]?.tokens_used;
-          if (tokens != null && tokens > 0) {
-            const tokenSpan = document.createElement("span");
-            tokenSpan.className = "audit-run-tokens";
-            tokenSpan.textContent = `${tokens.toLocaleString()} tok`;
-            stats.appendChild(tokenSpan);
+        for (const entry of entries) {
+          const rid = entry.run_id != null ? ipcString(entry.run_id) : null;
+          if (rid != null && rid !== "" && runIndex.has(rid)) {
+            groups[runIndex.get(rid)!]!.entries.push(entry);
+          } else {
+            if (rid != null && rid !== "") runIndex.set(rid, groups.length);
+            groups.push({ runId: rid, entries: [entry] });
           }
-        }).catch(() => {});
+        }
 
-        header.appendChild(stats);
+        // Separate grouped runs from legacy (no run_id)
+        const runGroups = groups.filter((g) => g.runId != null && g.runId !== "");
+        const legacyEntries = groups
+          .filter((g) => g.runId == null || g.runId === "")
+          .flatMap((g) => g.entries);
 
-        // Time — use earliest entry (entries are DESC, so last in array)
-        const earliest = group.entries[group.entries.length - 1]!;
-        const timeSpan = document.createElement("span");
-        timeSpan.className = "audit-run-time";
-        timeSpan.textContent = formatTimeAgo(Number(earliest.timestamp) || 0);
-        header.appendChild(timeSpan);
+        for (const group of runGroups) {
+          const groupEl = document.createElement("div");
+          groupEl.className = "audit-run-group";
+          // Auto-expand the first (most recent) group
+          if (listEl.children.length === 0) groupEl.classList.add("expanded");
 
-        // "View" link — only if the bubble exists in current session
-        if (scrollToRunId) {
-          const viewLink = document.createElement("span");
-          viewLink.className = "audit-run-view";
-          viewLink.textContent = "View";
-          viewLink.addEventListener("click", (e) => {
-            e.stopPropagation();
-            const found = scrollToRunId(group.runId!);
-            if (!found) {
-              viewLink.textContent = "not in session";
-              setTimeout(() => { viewLink.textContent = "View"; }, 1500);
-            }
+          const header = document.createElement("div");
+          header.className = "audit-run-header";
+
+          const idSpan = document.createElement("span");
+          idSpan.className = "audit-run-id";
+          idSpan.textContent = `run:${group.runId!.slice(0, 8)}`;
+          header.appendChild(idSpan);
+
+          // Decision summary badges + semantic label
+          const stats = document.createElement("span");
+          stats.className = "audit-run-stats";
+
+          let denied = 0,
+            approval = 0;
+          for (const e of group.entries) {
+            const c = classifyDecision(e.decision);
+            if (c === "denied") denied++;
+            else if (c === "approval") approval++;
+          }
+
+          // Semantic trust badge — only surface when something noteworthy happened
+          if (denied > 0) {
+            const tb = document.createElement("span");
+            tb.className = "audit-decision-badge denied";
+            tb.textContent = "denied";
+            stats.appendChild(tb);
+          } else if (approval > 0) {
+            const tb = document.createElement("span");
+            tb.className = "audit-decision-badge approval";
+            tb.textContent = "approval";
+            stats.appendChild(tb);
+          }
+
+          const countSpan = document.createElement("span");
+          countSpan.className = "audit-run-count";
+          countSpan.textContent = `${group.entries.length} tool${group.entries.length !== 1 ? "s" : ""}`;
+          stats.appendChild(countSpan);
+
+          // Query token count for this run from goal_outcomes (async, fills in when ready)
+          void invoke<Array<{ tokens_used: number | null }>>("db_query", {
+            sql: "SELECT tokens_used FROM goal_outcomes WHERE outcome_id = ?",
+            params: [group.runId],
+          })
+            .then((rows) => {
+              const tokens = rows?.[0]?.tokens_used;
+              if (tokens != null && tokens > 0) {
+                const tokenSpan = document.createElement("span");
+                tokenSpan.className = "audit-run-tokens";
+                tokenSpan.textContent = `${tokens.toLocaleString()} tok`;
+                stats.appendChild(tokenSpan);
+              }
+            })
+            .catch(() => {});
+
+          header.appendChild(stats);
+
+          // Time — use earliest entry (entries are DESC, so last in array)
+          const earliest = group.entries[group.entries.length - 1]!;
+          const timeSpan = document.createElement("span");
+          timeSpan.className = "audit-run-time";
+          timeSpan.textContent = formatTimeAgo(Number(earliest.timestamp) || 0);
+          header.appendChild(timeSpan);
+
+          // "View" link — only if the bubble exists in current session
+          if (scrollToRunId) {
+            const viewLink = document.createElement("span");
+            viewLink.className = "audit-run-view";
+            viewLink.textContent = "View";
+            viewLink.addEventListener("click", (e) => {
+              e.stopPropagation();
+              const found = scrollToRunId(group.runId!);
+              if (!found) {
+                viewLink.textContent = "not in session";
+                setTimeout(() => {
+                  viewLink.textContent = "View";
+                }, 1500);
+              }
+            });
+            header.appendChild(viewLink);
+          }
+
+          groupEl.appendChild(header);
+          header.addEventListener("click", () => {
+            groupEl.classList.toggle("expanded");
           });
-          header.appendChild(viewLink);
+
+          // Body — individual tool rows (chronological: oldest first)
+          const body = document.createElement("div");
+          body.className = "audit-run-body";
+          const sorted = [...group.entries].reverse();
+          for (const entry of sorted) {
+            body.appendChild(buildAuditRow(entry));
+          }
+          groupEl.appendChild(body);
+
+          listEl.appendChild(groupEl);
         }
 
-        groupEl.appendChild(header);
-        header.addEventListener("click", () => { groupEl.classList.toggle("expanded"); });
+        // Legacy entries — collapsed section at the bottom
+        if (legacyEntries.length > 0) {
+          const legacyGroup = document.createElement("div");
+          legacyGroup.className = "audit-run-group";
 
-        // Body — individual tool rows (chronological: oldest first)
-        const body = document.createElement("div");
-        body.className = "audit-run-body";
-        const sorted = [...group.entries].reverse();
-        for (const entry of sorted) {
-          body.appendChild(buildAuditRow(entry));
+          const legacyHeader = document.createElement("div");
+          legacyHeader.className = "audit-run-header";
+          const legacyLabel = document.createElement("span");
+          legacyLabel.className = "audit-run-id";
+          legacyLabel.textContent = "Older activity";
+          legacyHeader.appendChild(legacyLabel);
+
+          const legacyCount = document.createElement("span");
+          legacyCount.className = "audit-run-count";
+          legacyCount.style.marginLeft = "auto";
+          legacyCount.textContent = `${legacyEntries.length} tool${legacyEntries.length !== 1 ? "s" : ""}`;
+          legacyHeader.appendChild(legacyCount);
+
+          legacyGroup.appendChild(legacyHeader);
+          legacyHeader.addEventListener("click", () => {
+            legacyGroup.classList.toggle("expanded");
+          });
+
+          const legacyBody = document.createElement("div");
+          legacyBody.className = "audit-run-body";
+          for (const entry of legacyEntries) {
+            legacyBody.appendChild(buildAuditRow(entry));
+          }
+          legacyGroup.appendChild(legacyBody);
+
+          listEl.appendChild(legacyGroup);
         }
-        groupEl.appendChild(body);
-
-        listEl.appendChild(groupEl);
-      }
-
-      // Legacy entries — collapsed section at the bottom
-      if (legacyEntries.length > 0) {
-        const legacyGroup = document.createElement("div");
-        legacyGroup.className = "audit-run-group";
-
-        const legacyHeader = document.createElement("div");
-        legacyHeader.className = "audit-run-header";
-        const legacyLabel = document.createElement("span");
-        legacyLabel.className = "audit-run-id";
-        legacyLabel.textContent = "Older activity";
-        legacyHeader.appendChild(legacyLabel);
-
-        const legacyCount = document.createElement("span");
-        legacyCount.className = "audit-run-count";
-        legacyCount.style.marginLeft = "auto";
-        legacyCount.textContent = `${legacyEntries.length} tool${legacyEntries.length !== 1 ? "s" : ""}`;
-        legacyHeader.appendChild(legacyCount);
-
-        legacyGroup.appendChild(legacyHeader);
-        legacyHeader.addEventListener("click", () => { legacyGroup.classList.toggle("expanded"); });
-
-        const legacyBody = document.createElement("div");
-        legacyBody.className = "audit-run-body";
-        for (const entry of legacyEntries) {
-          legacyBody.appendChild(buildAuditRow(entry));
-        }
-        legacyGroup.appendChild(legacyBody);
-
-        listEl.appendChild(legacyGroup);
-      }
-    }).catch(() => {
-      emptyEl.style.display = "block";
-    });
+      })
+      .catch(() => {
+        emptyEl.style.display = "block";
+      });
   }
 
   // === MCP Server List ===
@@ -632,7 +674,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       return;
     }
     for (const config of mcpServersConfig) {
-      const status = servers.find(s => s.name === config.name);
+      const status = servers.find((s) => s.name === config.name);
       const row = document.createElement("div");
       row.className = "mcp-server-row";
 
@@ -671,7 +713,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         row.appendChild(motebitBadge);
       }
 
-      const collision = discoveryCollisions.find(c => c.name === config.name);
+      const collision = discoveryCollisions.find((c) => c.name === config.name);
       if (collision) {
         const warnBadge = document.createElement("span");
         warnBadge.className = "mcp-badge collision";
@@ -695,31 +737,42 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
           const inv = appConfig.invoke;
           config.spawnApproved = true;
           // Persist spawnApproved so we don't re-prompt after restart
-          void inv<string>("read_config").then(raw => {
-            const parsed = JSON.parse(raw) as Record<string, unknown>;
-            parsed.mcp_servers = mcpServersConfig;
-            return inv("write_config", { json: JSON.stringify(parsed) });
-          }).catch(() => { /* non-fatal */ });
-          void ctx.app.connectMcpServerViaTauri(config, inv).then((status) => {
-            if (status.manifestChanged === true) {
-              const diff = status.manifestDiff;
-              const parts = [`${config.name}: tools changed — trust revoked`];
-              if (diff) {
-                if (diff.added.length) parts.push(`+${diff.added.length} added`);
-                if (diff.removed.length) parts.push(`-${diff.removed.length} removed`);
-              }
-              ctx.showToast(parts.join(", "));
-            }
-            // Persist updated manifest hash
-            void inv<string>("read_config").then(raw => {
+          void inv<string>("read_config")
+            .then((raw) => {
               const parsed = JSON.parse(raw) as Record<string, unknown>;
               parsed.mcp_servers = mcpServersConfig;
               return inv("write_config", { json: JSON.stringify(parsed) });
-            }).catch(() => { /* non-fatal */ });
-            renderMcpServerList();
-          }).catch(() => {
-            renderMcpServerList();
-          });
+            })
+            .catch(() => {
+              /* non-fatal */
+            });
+          void ctx.app
+            .connectMcpServerViaTauri(config, inv)
+            .then((status) => {
+              if (status.manifestChanged === true) {
+                const diff = status.manifestDiff;
+                const parts = [`${config.name}: tools changed — trust revoked`];
+                if (diff) {
+                  if (diff.added.length) parts.push(`+${diff.added.length} added`);
+                  if (diff.removed.length) parts.push(`-${diff.removed.length} removed`);
+                }
+                ctx.showToast(parts.join(", "));
+              }
+              // Persist updated manifest hash
+              void inv<string>("read_config")
+                .then((raw) => {
+                  const parsed = JSON.parse(raw) as Record<string, unknown>;
+                  parsed.mcp_servers = mcpServersConfig;
+                  return inv("write_config", { json: JSON.stringify(parsed) });
+                })
+                .catch(() => {
+                  /* non-fatal */
+                });
+              renderMcpServerList();
+            })
+            .catch(() => {
+              renderMcpServerList();
+            });
         });
         row.appendChild(connectBtn);
       }
@@ -728,7 +781,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       removeBtn.className = "mcp-remove-btn";
       removeBtn.textContent = "\u00d7";
       removeBtn.addEventListener("click", () => {
-        mcpServersConfig = mcpServersConfig.filter(s => s.name !== config.name);
+        mcpServersConfig = mcpServersConfig.filter((s) => s.name !== config.name);
         void ctx.app.removeMcpServer(config.name);
         renderMcpServerList();
       });
@@ -748,7 +801,8 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   });
 
   mcpMotebitCheckbox.addEventListener("change", () => {
-    mcpPublicKeyField.style.display = mcpMotebitCheckbox.checked && mcpPublicKeyInput.value ? "flex" : "none";
+    mcpPublicKeyField.style.display =
+      mcpMotebitCheckbox.checked && mcpPublicKeyInput.value ? "flex" : "none";
   });
 
   document.getElementById("mcp-add-cancel")!.addEventListener("click", () => {
@@ -812,7 +866,10 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     const config = ctx.getConfig();
     if (config) {
       settingsProvider.value = config.provider;
-      const currentModel = (ctx.app.currentModel != null && ctx.app.currentModel !== "" ? ctx.app.currentModel : config.model) ?? "";
+      const currentModel =
+        (ctx.app.currentModel != null && ctx.app.currentModel !== ""
+          ? ctx.app.currentModel
+          : config.model) ?? "";
       populateModelSelect(config.provider, currentModel);
     } else {
       populateModelSelect("ollama");
@@ -884,9 +941,16 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       const configData: Record<string, unknown> = {
         default_provider: provider,
         interior_color_preset: colorPicker.getSelectedPreset(),
-        ...(colorPicker.getSelectedPreset() === "custom" && customColor ? {
-          custom_soul_color: { hue: colorPicker.getCustomHue(), saturation: colorPicker.getCustomSaturation(), tint: customColor.tint, glow: customColor.glow },
-        } : {}),
+        ...(colorPicker.getSelectedPreset() === "custom" && customColor
+          ? {
+              custom_soul_color: {
+                hue: colorPicker.getCustomHue(),
+                saturation: colorPicker.getCustomSaturation(),
+                tint: customColor.tint,
+                glow: customColor.glow,
+              },
+            }
+          : {}),
         approval_preset: selectedApprovalPreset,
         mcp_servers: mcpServersConfig,
         memory_governance: {
@@ -966,7 +1030,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     };
     ctx.setConfig(newConfig);
 
-    if (!await ctx.app.initAI(newConfig)) {
+    if (!(await ctx.app.initAI(newConfig))) {
       addMessage("system", "Settings saved — AI initialization failed (check API key)");
     }
 
@@ -1054,7 +1118,10 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
     const result = await ctx.app.setOperatorMode(true, pin);
     if (!result.success) {
-      pinError.textContent = result.error != null && result.error !== "" ? result.error : "Failed to enable operator mode";
+      pinError.textContent =
+        result.error != null && result.error !== ""
+          ? result.error
+          : "Failed to enable operator mode";
       return;
     }
 
@@ -1069,12 +1136,18 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   // === Event Listeners ===
 
   document.getElementById("pin-cancel")!.addEventListener("click", closePinDialog);
-  document.getElementById("pin-submit")!.addEventListener("click", () => { void handlePinSubmit(); });
+  document.getElementById("pin-submit")!.addEventListener("click", () => {
+    void handlePinSubmit();
+  });
   pinInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { void handlePinSubmit(); }
+    if (e.key === "Enter") {
+      void handlePinSubmit();
+    }
   });
   pinConfirmInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { void handlePinSubmit(); }
+    if (e.key === "Enter") {
+      void handlePinSubmit();
+    }
   });
 
   settingsOperatorMode.addEventListener("change", () => {
@@ -1122,16 +1195,36 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     openToTab,
     close,
     updateModelIndicator,
-    getHasApiKeyInKeyring() { return hasApiKeyInKeyring; },
-    setHasApiKeyInKeyring(v: boolean) { hasApiKeyInKeyring = v; },
-    getHasWhisperKeyInKeyring() { return hasWhisperKeyInKeyring; },
-    setHasWhisperKeyInKeyring(v: boolean) { hasWhisperKeyInKeyring = v; },
-    getSelectedApprovalPreset() { return selectedApprovalPreset; },
-    setSelectedApprovalPreset(v: string) { selectedApprovalPreset = v; },
-    getMcpServersConfig() { return mcpServersConfig; },
-    setMcpServersConfig(v: McpServerConfig[]) { mcpServersConfig = v; },
-    setDiscoveryCollisions(v: NameCollision[]) { discoveryCollisions = v; },
-    isPinDialogOpen() { return pinBackdrop.classList.contains("open"); },
+    getHasApiKeyInKeyring() {
+      return hasApiKeyInKeyring;
+    },
+    setHasApiKeyInKeyring(v: boolean) {
+      hasApiKeyInKeyring = v;
+    },
+    getHasWhisperKeyInKeyring() {
+      return hasWhisperKeyInKeyring;
+    },
+    setHasWhisperKeyInKeyring(v: boolean) {
+      hasWhisperKeyInKeyring = v;
+    },
+    getSelectedApprovalPreset() {
+      return selectedApprovalPreset;
+    },
+    setSelectedApprovalPreset(v: string) {
+      selectedApprovalPreset = v;
+    },
+    getMcpServersConfig() {
+      return mcpServersConfig;
+    },
+    setMcpServersConfig(v: McpServerConfig[]) {
+      mcpServersConfig = v;
+    },
+    setDiscoveryCollisions(v: NameCollision[]) {
+      discoveryCollisions = v;
+    },
+    isPinDialogOpen() {
+      return pinBackdrop.classList.contains("open");
+    },
     closePinDialog,
   };
 }

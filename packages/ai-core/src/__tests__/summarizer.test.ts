@@ -1,7 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
 import { summarizeConversation, shouldSummarize } from "../summarizer.js";
 import { TaskRouter } from "../task-router.js";
-import type { ConversationMessage, AIResponse, IntelligenceProvider, ContextPack } from "@motebit/sdk";
+import type {
+  ConversationMessage,
+  AIResponse,
+  IntelligenceProvider,
+  ContextPack,
+} from "@motebit/sdk";
 
 // === Mock Provider ===
 
@@ -151,12 +156,24 @@ describe("summarizeConversation with TaskRouter", () => {
     let currentMaxTokens: number | undefined = 1024;
 
     return {
-      get model() { return currentModel; },
-      get temperature() { return currentTemp; },
-      get maxTokens() { return currentMaxTokens; },
-      setModel: vi.fn((m: string) => { currentModel = m; }),
-      setTemperature: vi.fn((t: number) => { currentTemp = t; }),
-      setMaxTokens: vi.fn((mt: number) => { currentMaxTokens = mt; }),
+      get model() {
+        return currentModel;
+      },
+      get temperature() {
+        return currentTemp;
+      },
+      get maxTokens() {
+        return currentMaxTokens;
+      },
+      setModel: vi.fn((m: string) => {
+        currentModel = m;
+      }),
+      setTemperature: vi.fn((t: number) => {
+        currentTemp = t;
+      }),
+      setMaxTokens: vi.fn((mt: number) => {
+        currentMaxTokens = mt;
+      }),
       generate: vi.fn().mockResolvedValue({
         text: responseText,
         confidence: 0.8,

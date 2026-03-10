@@ -6,8 +6,16 @@ describe("parseDecompositionResponse", () => {
     const json = JSON.stringify({
       title: "Research competitors",
       steps: [
-        { description: "Search for competitors", prompt: "Use web search to find top 3 competitors", optional: false },
-        { description: "Summarize findings", prompt: "Write a summary of competitor pricing", optional: false },
+        {
+          description: "Search for competitors",
+          prompt: "Use web search to find top 3 competitors",
+          optional: false,
+        },
+        {
+          description: "Summarize findings",
+          prompt: "Write a summary of competitor pricing",
+          optional: false,
+        },
       ],
     });
 
@@ -20,10 +28,13 @@ describe("parseDecompositionResponse", () => {
   });
 
   it("strips markdown fences", () => {
-    const wrapped = "```json\n" + JSON.stringify({
-      title: "Plan",
-      steps: [{ description: "Do thing", prompt: "Do the thing", optional: false }],
-    }) + "\n```";
+    const wrapped =
+      "```json\n" +
+      JSON.stringify({
+        title: "Plan",
+        steps: [{ description: "Do thing", prompt: "Do the thing", optional: false }],
+      }) +
+      "\n```";
 
     const result = parseDecompositionResponse(wrapped);
     expect(result.steps).toHaveLength(1);
@@ -66,11 +77,15 @@ describe("parseDecompositionResponse", () => {
   });
 
   it("throws on empty steps array", () => {
-    expect(() => parseDecompositionResponse(JSON.stringify({ title: "Empty", steps: [] }))).toThrow("No steps");
+    expect(() => parseDecompositionResponse(JSON.stringify({ title: "Empty", steps: [] }))).toThrow(
+      "No steps",
+    );
   });
 
   it("throws on missing steps field", () => {
-    expect(() => parseDecompositionResponse(JSON.stringify({ title: "No steps" }))).toThrow("No steps");
+    expect(() => parseDecompositionResponse(JSON.stringify({ title: "No steps" }))).toThrow(
+      "No steps",
+    );
   });
 
   it("skips steps with missing required fields", () => {

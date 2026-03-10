@@ -22,9 +22,9 @@ export type TrustMode = "minimal" | "guarded" | "full";
 
 export interface EncryptedKey {
   ciphertext: string; // hex
-  nonce: string;      // hex
-  tag: string;        // hex
-  salt: string;       // hex
+  nonce: string; // hex
+  tag: string; // hex
+  salt: string; // hex
 }
 
 export interface GenerateIdentityResult {
@@ -103,18 +103,8 @@ async function encrypt(
   key: Uint8Array,
 ): Promise<{ ciphertext: Uint8Array; nonce: Uint8Array; tag: Uint8Array }> {
   const nonce = generateNonce();
-  const cryptoKey = await crypto.subtle.importKey(
-    "raw",
-    key,
-    "AES-GCM",
-    false,
-    ["encrypt"],
-  );
-  const result = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv: nonce },
-    cryptoKey,
-    plaintext,
-  );
+  const cryptoKey = await crypto.subtle.importKey("raw", key, "AES-GCM", false, ["encrypt"]);
+  const result = await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, cryptoKey, plaintext);
   const resultArray = new Uint8Array(result);
   // AES-GCM appends a 16-byte tag
   const ciphertext = resultArray.slice(0, resultArray.length - 16);
@@ -129,13 +119,7 @@ export async function decrypt(
   payload: { ciphertext: Uint8Array; nonce: Uint8Array; tag: Uint8Array },
   key: Uint8Array,
 ): Promise<Uint8Array> {
-  const cryptoKey = await crypto.subtle.importKey(
-    "raw",
-    key,
-    "AES-GCM",
-    false,
-    ["decrypt"],
-  );
+  const cryptoKey = await crypto.subtle.importKey("raw", key, "AES-GCM", false, ["decrypt"]);
   const combined = new Uint8Array(payload.ciphertext.length + payload.tag.length);
   combined.set(payload.ciphertext);
   combined.set(payload.tag, payload.ciphertext.length);
@@ -234,7 +218,12 @@ function serializeValue(value: unknown, level: number): string {
     const lines: string[] = [];
     for (const [k, v] of entries) {
       const serialized = serializeValue(v, level + 1);
-      if (typeof v === "object" && v !== null && !Array.isArray(v) && Object.keys(v as Record<string, unknown>).length > 0) {
+      if (
+        typeof v === "object" &&
+        v !== null &&
+        !Array.isArray(v) &&
+        Object.keys(v as Record<string, unknown>).length > 0
+      ) {
         lines.push(`${indent(level)}${k}:`);
         lines.push(serialized.replace(/^\n/, ""));
       } else if (Array.isArray(v) && v.length > 0) {
@@ -254,7 +243,12 @@ function serializeYaml(data: IdentityFileData): string {
 
   for (const [key, value] of Object.entries(data)) {
     const serialized = serializeValue(value, 1);
-    if (typeof value === "object" && value !== null && !Array.isArray(value) && Object.keys(value as Record<string, unknown>).length > 0) {
+    if (
+      typeof value === "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      Object.keys(value as Record<string, unknown>).length > 0
+    ) {
       lines.push(`${key}:`);
       lines.push(serialized.replace(/^\n/, ""));
     } else if (Array.isArray(value) && value.length > 0) {
@@ -325,10 +319,7 @@ const SIG_SUFFIX = " -->";
 // Key encryption (compatible with CLI's encryptPrivateKey)
 // ---------------------------------------------------------------------------
 
-async function encryptPrivateKey(
-  privKeyHex: string,
-  passphrase: string,
-): Promise<EncryptedKey> {
+async function encryptPrivateKey(privKeyHex: string, passphrase: string): Promise<EncryptedKey> {
   const salt = generateSalt(); // 16 bytes (NIST SP 800-132)
   const key = await deriveKey(passphrase, salt);
   const payload = await encrypt(new TextEncoder().encode(privKeyHex), key);
@@ -366,13 +357,20 @@ export async function generateIdentity(opts: {
   const gov = isService ? SERVICE_GOVERNANCE[opts.trustMode] : GOVERNANCE_PRESETS[opts.trustMode];
 
   // Build service fields conditionally
-  const serviceFields: Partial<Pick<IdentityFileData, "type" | "service_name" | "service_description" | "service_url" | "capabilities" | "terms_url">> = {};
+  const serviceFields: Partial<
+    Pick<
+      IdentityFileData,
+      "type" | "service_name" | "service_description" | "service_url" | "capabilities" | "terms_url"
+    >
+  > = {};
   if (opts.service) {
     if (opts.service.type) serviceFields.type = opts.service.type;
     if (opts.service.service_name) serviceFields.service_name = opts.service.service_name;
-    if (opts.service.service_description) serviceFields.service_description = opts.service.service_description;
+    if (opts.service.service_description)
+      serviceFields.service_description = opts.service.service_description;
     if (opts.service.service_url) serviceFields.service_url = opts.service.service_url;
-    if (opts.service.capabilities && opts.service.capabilities.length > 0) serviceFields.capabilities = opts.service.capabilities;
+    if (opts.service.capabilities && opts.service.capabilities.length > 0)
+      serviceFields.capabilities = opts.service.capabilities;
     if (opts.service.terms_url) serviceFields.terms_url = opts.service.terms_url;
   }
 

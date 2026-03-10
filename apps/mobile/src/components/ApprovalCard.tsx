@@ -19,7 +19,14 @@ interface ApprovalCardProps {
   disabled?: boolean;
 }
 
-export function ApprovalCard({ toolName, args, riskLevel, onAllow, onDeny, disabled }: ApprovalCardProps): React.ReactElement {
+export function ApprovalCard({
+  toolName,
+  args,
+  riskLevel,
+  onAllow,
+  onDeny,
+  disabled,
+}: ApprovalCardProps): React.ReactElement {
   const colors = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const argsPreview = JSON.stringify(args).slice(0, 120);
@@ -36,7 +43,9 @@ export function ApprovalCard({ toolName, args, riskLevel, onAllow, onDeny, disab
         )}
       </View>
       <Text style={styles.toolName}>{toolName}</Text>
-      <Text style={styles.args} numberOfLines={2}>{argsPreview}</Text>
+      <Text style={styles.args} numberOfLines={2}>
+        {argsPreview}
+      </Text>
       <View style={styles.buttonRow}>
         <TouchableOpacity
           style={[styles.button, styles.denyButton, disabled === true && styles.disabled]}

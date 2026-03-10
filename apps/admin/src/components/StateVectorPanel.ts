@@ -1,14 +1,6 @@
 import React from "react";
 import type { MotebitState } from "@motebit/sdk";
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-} from "recharts";
+import { LineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import type { StateSnapshot } from "../hooks/useStateHistory";
 
 const h = React.createElement;
@@ -39,14 +31,26 @@ export function StateVectorPanel({ state, history }: StateVectorPanelProps): Rea
     { name: "curiosity", value: state.curiosity },
   ];
 
-  const chart = h("div", { className: "state-chart-container" },
-    h(ResponsiveContainer as unknown as React.ComponentType<Record<string, unknown>>, { width: "100%", height: 200 },
-      h(LineChart as React.ComponentType<Record<string, unknown>>, { data: chartData },
+  const chart = h(
+    "div",
+    { className: "state-chart-container" },
+    h(
+      ResponsiveContainer as unknown as React.ComponentType<Record<string, unknown>>,
+      { width: "100%", height: 200 },
+      h(
+        LineChart as React.ComponentType<Record<string, unknown>>,
+        { data: chartData },
         h(XAxis as React.ComponentType<Record<string, unknown>>, {
           dataKey: "time",
           stroke: "#8888aa",
           tick: { fill: "#8888aa", fontSize: 11 },
-          label: { value: "seconds ago", position: "insideBottom", offset: -2, fill: "#8888aa", fontSize: 11 },
+          label: {
+            value: "seconds ago",
+            position: "insideBottom",
+            offset: -2,
+            fill: "#8888aa",
+            fontSize: 11,
+          },
         }),
         h(YAxis as React.ComponentType<Record<string, unknown>>, {
           domain: [-1, 1],
@@ -103,25 +107,27 @@ export function StateVectorPanel({ state, history }: StateVectorPanelProps): Rea
 
   const readout = [
     ...fields.map((f) =>
-      h("div", { key: f.name, className: "field" },
+      h(
+        "div",
+        { key: f.name, className: "field" },
         h("span", { className: "label" }, f.name),
         h("span", { className: "value" }, f.value.toFixed(4)),
         h("div", { className: "bar", style: { width: `${Math.abs(f.value) * 100}%` } }),
       ),
     ),
-    h("div", { key: "trust_mode", className: "field" },
+    h(
+      "div",
+      { key: "trust_mode", className: "field" },
       h("span", { className: "label" }, "trust_mode"),
       h("span", { className: "value" }, state.trust_mode),
     ),
-    h("div", { key: "battery_mode", className: "field" },
+    h(
+      "div",
+      { key: "battery_mode", className: "field" },
       h("span", { className: "label" }, "battery_mode"),
       h("span", { className: "value" }, state.battery_mode),
     ),
   ];
 
-  return h("div", { className: "panel" },
-    h("h2", null, "State Vector"),
-    chart,
-    ...readout,
-  );
+  return h("div", { className: "panel" }, h("h2", null, "State Vector"), chart, ...readout);
 }

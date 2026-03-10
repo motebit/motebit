@@ -79,11 +79,12 @@ function renderServiceSection(identity: MotebitIdentityFile): string {
     ? `<p class="service-description">${escapeHtml(identity.service_description)}</p>`
     : "";
 
-  const capabilitiesHtml = identity.capabilities && identity.capabilities.length > 0
-    ? `<div class="capabilities-tags">
-        ${identity.capabilities.map(c => `<span class="capability-tag">${escapeHtml(c)}</span>`).join("")}
+  const capabilitiesHtml =
+    identity.capabilities && identity.capabilities.length > 0
+      ? `<div class="capabilities-tags">
+        ${identity.capabilities.map((c) => `<span class="capability-tag">${escapeHtml(c)}</span>`).join("")}
       </div>`
-    : "";
+      : "";
 
   const urlHtml = identity.service_url
     ? `<div class="meta-row">
@@ -132,27 +133,35 @@ export function renderProfileCard(
   const statusIcon = valid ? "&#10003;" : "&#10007;";
   const statusText = valid ? "Signature verified" : "Invalid signature";
 
-  const devicesHtml = identity.devices.length > 0
-    ? `<div class="card-section">
+  const devicesHtml =
+    identity.devices.length > 0
+      ? `<div class="card-section">
         <h3>Devices</h3>
         <div class="devices-list">
-          ${identity.devices.map(d => `
+          ${identity.devices
+            .map(
+              (d) => `
             <div class="device-row">
               <span class="device-name">${escapeHtml(d.name)}</span>
               <span class="device-id">${escapeHtml(truncateId(d.device_id))}</span>
             </div>
-          `).join("")}
+          `,
+            )
+            .join("")}
         </div>
       </div>`
-    : "";
+      : "";
 
   const retentionHtml = Object.entries(priv.retention_days)
-    .map(([level, days]) => `
+    .map(
+      ([level, days]) => `
       <div class="retention-row">
         <span class="retention-level">${escapeHtml(level)}</span>
         <span class="retention-days">${String(days)}d</span>
       </div>
-    `).join("");
+    `,
+    )
+    .join("");
 
   const serviceSection = renderServiceSection(identity);
 
@@ -264,7 +273,7 @@ export function renderProfileCard(
   `;
 
   // Wire copy buttons
-  container.querySelectorAll<HTMLButtonElement>(".copy-btn").forEach(btn => {
+  container.querySelectorAll<HTMLButtonElement>(".copy-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const text = btn.dataset["copy"];
       if (text) {

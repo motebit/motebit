@@ -34,7 +34,6 @@ describe("computeRawCues", () => {
     expect(typeof cues.glow_intensity).toBe("number");
     expect(typeof cues.eye_dilation).toBe("number");
     expect(typeof cues.smile_curvature).toBe("number");
-
   });
 
   it("higher attention leads to closer hover distance", () => {
@@ -108,28 +107,20 @@ describe("BehaviorEngine", () => {
     engine.compute(makeDefaultState({ processing: 0, confidence: 0 }));
 
     // Second call with huge processing jump
-    const cues = engine.compute(
-      makeDefaultState({ processing: 1.0, confidence: 1.0 }),
-    );
+    const cues = engine.compute(makeDefaultState({ processing: 1.0, confidence: 1.0 }));
 
     // The glow_intensity change should be limited
     const prevGlow = 0.3; // BASE_GLOW from first compute
     const delta = Math.abs(cues.glow_intensity - prevGlow);
-    expect(delta).toBeLessThanOrEqual(
-      SPECIES_CONSTRAINTS.GLOW_DELTA_MAX + 0.001,
-    );
+    expect(delta).toBeLessThanOrEqual(SPECIES_CONSTRAINTS.GLOW_DELTA_MAX + 0.001);
   });
 
   it("compute() enforces drift variation", () => {
     const cues = engine.compute(makeDefaultState({ curiosity: 1.0 }));
     const baseDrift = 0.02;
     const maxVariation = baseDrift * SPECIES_CONSTRAINTS.DRIFT_VARIATION_MAX;
-    expect(cues.drift_amplitude).toBeGreaterThanOrEqual(
-      baseDrift - maxVariation - 0.001,
-    );
-    expect(cues.drift_amplitude).toBeLessThanOrEqual(
-      baseDrift + maxVariation + 0.001,
-    );
+    expect(cues.drift_amplitude).toBeGreaterThanOrEqual(baseDrift - maxVariation - 0.001);
+    expect(cues.drift_amplitude).toBeLessThanOrEqual(baseDrift + maxVariation + 0.001);
   });
 
   it("reset() returns to default calm cues", () => {
@@ -172,13 +163,15 @@ describe("BehaviorEngine", () => {
   });
 
   it("compute with all-zero state produces calm baseline", () => {
-    const cues = engine.compute(makeDefaultState({
-      attention: 0,
-      processing: 0,
-      confidence: 0,
-      affect_valence: 0,
-      curiosity: 0,
-    }));
+    const cues = engine.compute(
+      makeDefaultState({
+        attention: 0,
+        processing: 0,
+        confidence: 0,
+        affect_valence: 0,
+        curiosity: 0,
+      }),
+    );
     // Should be near baseline values
     expect(cues.smile_curvature).toBe(0);
     expect(cues.eye_dilation).toBeCloseTo(0.3, 1);
@@ -186,14 +179,16 @@ describe("BehaviorEngine", () => {
   });
 
   it("compute with all-max state still produces valid cues", () => {
-    const cues = engine.compute(makeDefaultState({
-      attention: 1,
-      processing: 1,
-      confidence: 1,
-      affect_valence: 1,
-      affect_arousal: 0.35,
-      curiosity: 1,
-    }));
+    const cues = engine.compute(
+      makeDefaultState({
+        attention: 1,
+        processing: 1,
+        confidence: 1,
+        affect_valence: 1,
+        affect_arousal: 0.35,
+        curiosity: 1,
+      }),
+    );
     // All values should be finite
     expect(Number.isFinite(cues.hover_distance)).toBe(true);
     expect(Number.isFinite(cues.drift_amplitude)).toBe(true);
@@ -219,7 +214,7 @@ describe("computeRawCues boundary conditions", () => {
 
   it("smile_curvature is clamped to [-0.15, 0.30]", () => {
     const positive = computeRawCues(makeDefaultState({ affect_valence: 1 }));
-    expect(positive.smile_curvature).toBeLessThanOrEqual(0.30);
+    expect(positive.smile_curvature).toBeLessThanOrEqual(0.3);
 
     const negative = computeRawCues(makeDefaultState({ affect_valence: -1 }));
     expect(negative.smile_curvature).toBeGreaterThanOrEqual(-0.15);
@@ -236,9 +231,15 @@ describe("computeRawCues boundary conditions", () => {
   });
 
   it("low-power battery mode reduces drift more than normal", () => {
-    const normal = computeRawCues(makeDefaultState({ battery_mode: BatteryMode.Normal, curiosity: 0.5 }));
-    const lowPower = computeRawCues(makeDefaultState({ battery_mode: BatteryMode.LowPower, curiosity: 0.5 }));
-    const critical = computeRawCues(makeDefaultState({ battery_mode: BatteryMode.Critical, curiosity: 0.5 }));
+    const normal = computeRawCues(
+      makeDefaultState({ battery_mode: BatteryMode.Normal, curiosity: 0.5 }),
+    );
+    const lowPower = computeRawCues(
+      makeDefaultState({ battery_mode: BatteryMode.LowPower, curiosity: 0.5 }),
+    );
+    const critical = computeRawCues(
+      makeDefaultState({ battery_mode: BatteryMode.Critical, curiosity: 0.5 }),
+    );
 
     expect(lowPower.drift_amplitude).toBeLessThan(normal.drift_amplitude);
     expect(critical.drift_amplitude).toBeLessThan(lowPower.drift_amplitude);
@@ -315,7 +316,9 @@ describe("BehaviorEngine speaking and impulses", () => {
     engine.injectImpulse("smile_curvature", 0.5, 0.001); // very short half-life
     // Wait for decay
     const start = Date.now();
-    while (Date.now() - start < 20) { /* spin */ }
+    while (Date.now() - start < 20) {
+      /* spin */
+    }
     const cues = engine.compute(makeDefaultState());
     // With such a short half-life, the impulse should be cleaned up
     expect(cues.smile_curvature).toBeLessThan(0.5);

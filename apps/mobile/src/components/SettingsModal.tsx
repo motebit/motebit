@@ -30,13 +30,28 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   const c = (1 - Math.abs(2 * l - 1)) * s;
   const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
   const m = l - c / 2;
-  let r = 0, g = 0, b = 0;
-  if (h < 60)       { r = c; g = x; }
-  else if (h < 120) { r = x; g = c; }
-  else if (h < 180) { g = c; b = x; }
-  else if (h < 240) { g = x; b = c; }
-  else if (h < 300) { r = x; b = c; }
-  else              { r = c; b = x; }
+  let r = 0,
+    g = 0,
+    b = 0;
+  if (h < 60) {
+    r = c;
+    g = x;
+  } else if (h < 120) {
+    r = x;
+    g = c;
+  } else if (h < 180) {
+    g = c;
+    b = x;
+  } else if (h < 240) {
+    g = x;
+    b = c;
+  } else if (h < 300) {
+    r = x;
+    b = c;
+  } else {
+    r = c;
+    b = x;
+  }
   return [r + m, g + m, b + m];
 }
 
@@ -87,13 +102,13 @@ function formatTimeAgo(ts: number): string {
 
 // Hex colors for preview circles (same 7 as desktop, moonlight first)
 const PRESET_COLORS: Record<string, string> = {
-  moonlight:    "#f0f0ff",
-  amber:        "#ffda99",
-  rose:         "#ffd0e0",
-  violet:       "#d0b8ff",
-  cyan:         "#b8f0ff",
-  ember:        "#ffb8a0",
-  sage:         "#c0f0c8",
+  moonlight: "#f0f0ff",
+  amber: "#ffda99",
+  rose: "#ffd0e0",
+  violet: "#d0b8ff",
+  cyan: "#b8f0ff",
+  ember: "#ffb8a0",
+  sage: "#c0f0c8",
 };
 
 interface SettingsModalProps {
@@ -102,8 +117,21 @@ interface SettingsModalProps {
   settings: MobileSettings;
   syncStatus?: "idle" | "syncing" | "error" | "offline";
   lastSyncTime?: number;
-  mcpServers?: Array<{ name: string; url: string; connected: boolean; toolCount: number; trusted: boolean; motebit: boolean; motebitPublicKey?: string }>;
-  onAddMcpServer?: (url: string, name: string, trusted?: boolean, motebit?: boolean) => Promise<void>;
+  mcpServers?: Array<{
+    name: string;
+    url: string;
+    connected: boolean;
+    toolCount: number;
+    trusted: boolean;
+    motebit: boolean;
+    motebitPublicKey?: string;
+  }>;
+  onAddMcpServer?: (
+    url: string,
+    name: string,
+    trusted?: boolean,
+    motebit?: boolean,
+  ) => Promise<void>;
   onRemoveMcpServer?: (name: string) => Promise<void>;
   onToggleMcpTrust?: (name: string, trusted: boolean) => Promise<void>;
   onSave: (settings: MobileSettings, aiConfig?: MobileAIConfig) => void;
@@ -185,12 +213,19 @@ export function SettingsModal({
 
     // Build AI config if provider, model, or endpoint changed
     let aiConfig: MobileAIConfig | undefined;
-    if (draft.provider !== settings.provider || draft.model !== settings.model || draft.ollamaEndpoint !== settings.ollamaEndpoint) {
+    if (
+      draft.provider !== settings.provider ||
+      draft.model !== settings.model ||
+      draft.ollamaEndpoint !== settings.ollamaEndpoint
+    ) {
       aiConfig = {
         provider: draft.provider,
         model: draft.model,
-        apiKey: (draft.provider === "anthropic" || draft.provider === "hybrid") ? apiKey : undefined,
-        ollamaEndpoint: (draft.provider === "ollama" || draft.provider === "hybrid") ? draft.ollamaEndpoint : undefined,
+        apiKey: draft.provider === "anthropic" || draft.provider === "hybrid" ? apiKey : undefined,
+        ollamaEndpoint:
+          draft.provider === "ollama" || draft.provider === "hybrid"
+            ? draft.ollamaEndpoint
+            : undefined,
       };
     }
 
@@ -274,8 +309,12 @@ export function SettingsModal({
               ttsVoice={draft.ttsVoice}
               openaiKey={openaiKey}
               neuralVadEnabled={draft.neuralVadEnabled}
-              onChangeProvider={(p) => updateDraft({ provider: p, model: p === "ollama" ? "llama3.2" : "claude-sonnet-4-20250514" })}
-
+              onChangeProvider={(p) =>
+                updateDraft({
+                  provider: p,
+                  model: p === "ollama" ? "llama3.2" : "claude-sonnet-4-20250514",
+                })
+              }
               onChangeModel={(m) => updateDraft({ model: m })}
               onChangeApiKey={setApiKey}
               onChangeOllamaEndpoint={(e) => updateDraft({ ollamaEndpoint: e })}
@@ -295,9 +334,7 @@ export function SettingsModal({
               onRequestPin={onRequestPin}
             />
           )}
-          {tab === "goals" && (
-            <GoalsTab app={app} />
-          )}
+          {tab === "goals" && <GoalsTab app={app} />}
           {tab === "sync" && (
             <SyncTab
               syncStatus={syncStatus ?? "offline"}
@@ -357,7 +394,15 @@ const THEME_OPTIONS: { key: ThemePreference; label: string }[] = [
   { key: "system", label: "System" },
 ];
 
-function AppearanceTab({ selected, onSelect, theme, onThemeChange, customHue, customSaturation, onCustomColorChange }: {
+function AppearanceTab({
+  selected,
+  onSelect,
+  theme,
+  onThemeChange,
+  customHue,
+  customSaturation,
+  onCustomColorChange,
+}: {
   selected: string;
   onSelect: (p: string) => void;
   theme: ThemePreference;
@@ -380,15 +425,18 @@ function AppearanceTab({ selected, onSelect, theme, onThemeChange, customHue, cu
   }, [customHue, customSaturation]);
 
   // Slider touch handler — tracks horizontal position on a View
-  const handleSliderTouch = React.useCallback((
-    e: { nativeEvent: { locationX: number } },
-    layoutWidth: number,
-    onUpdate: (fraction: number) => void,
-  ) => {
-    if (layoutWidth <= 0) return;
-    const fraction = Math.max(0, Math.min(1, e.nativeEvent.locationX / layoutWidth));
-    onUpdate(fraction);
-  }, []);
+  const handleSliderTouch = React.useCallback(
+    (
+      e: { nativeEvent: { locationX: number } },
+      layoutWidth: number,
+      onUpdate: (fraction: number) => void,
+    ) => {
+      if (layoutWidth <= 0) return;
+      const fraction = Math.max(0, Math.min(1, e.nativeEvent.locationX / layoutWidth));
+      onUpdate(fraction);
+    },
+    [],
+  );
 
   const [hueWidth, setHueWidth] = React.useState(0);
   const [satWidth, setSatWidth] = React.useState(0);
@@ -404,7 +452,9 @@ function AppearanceTab({ selected, onSelect, theme, onThemeChange, customHue, cu
             onPress={() => onThemeChange(opt.key)}
             activeOpacity={0.7}
           >
-            <Text style={[styles.themeOptionText, theme === opt.key && styles.themeOptionTextSelected]}>
+            <Text
+              style={[styles.themeOptionText, theme === opt.key && styles.themeOptionTextSelected]}
+            >
               {opt.label}
             </Text>
           </TouchableOpacity>
@@ -455,15 +505,28 @@ function AppearanceTab({ selected, onSelect, theme, onThemeChange, customHue, cu
             onLayout={(e) => setHueWidth(e.nativeEvent.layout.width)}
             onStartShouldSetResponder={() => true}
             onMoveShouldSetResponder={() => true}
-            onResponderGrant={(e) => handleSliderTouch(e, hueWidth, (f) => onCustomColorChange(Math.round(f * 360), customSaturation))}
-            onResponderMove={(e) => handleSliderTouch(e, hueWidth, (f) => onCustomColorChange(Math.round(f * 360), customSaturation))}
+            onResponderGrant={(e) =>
+              handleSliderTouch(e, hueWidth, (f) =>
+                onCustomColorChange(Math.round(f * 360), customSaturation),
+              )
+            }
+            onResponderMove={(e) =>
+              handleSliderTouch(e, hueWidth, (f) =>
+                onCustomColorChange(Math.round(f * 360), customSaturation),
+              )
+            }
           >
             {/* Hue gradient background — multiple color stops */}
-            <View style={[StyleSheet.absoluteFill, {
-              borderRadius: 6,
-              flexDirection: "row",
-              overflow: "hidden",
-            }]}>
+            <View
+              style={[
+                StyleSheet.absoluteFill,
+                {
+                  borderRadius: 6,
+                  flexDirection: "row",
+                  overflow: "hidden",
+                },
+              ]}
+            >
               {[0, 60, 120, 180, 240, 300, 360].map((h, i, arr) => {
                 if (i === arr.length - 1) return null;
                 return (
@@ -478,39 +541,61 @@ function AppearanceTab({ selected, onSelect, theme, onThemeChange, customHue, cu
               })}
             </View>
             {/* Thumb */}
-            <View style={[styles.customSliderThumb, {
-              left: `${(customHue / 360) * 100}%`,
-              backgroundColor: `hsl(${customHue}, 85%, 60%)`,
-            }]} />
+            <View
+              style={[
+                styles.customSliderThumb,
+                {
+                  left: `${(customHue / 360) * 100}%`,
+                  backgroundColor: `hsl(${customHue}, 85%, 60%)`,
+                },
+              ]}
+            />
           </View>
 
           {/* Saturation slider */}
           <Text style={styles.customSliderLabel}>Saturation</Text>
           <View
-            style={[styles.customSliderTrack, {
-              backgroundColor: `hsl(${customHue}, 0%, 90%)`,
-            }]}
+            style={[
+              styles.customSliderTrack,
+              {
+                backgroundColor: `hsl(${customHue}, 0%, 90%)`,
+              },
+            ]}
             onLayout={(e) => setSatWidth(e.nativeEvent.layout.width)}
             onStartShouldSetResponder={() => true}
             onMoveShouldSetResponder={() => true}
-            onResponderGrant={(e) => handleSliderTouch(e, satWidth, (f) => onCustomColorChange(customHue, f))}
-            onResponderMove={(e) => handleSliderTouch(e, satWidth, (f) => onCustomColorChange(customHue, f))}
+            onResponderGrant={(e) =>
+              handleSliderTouch(e, satWidth, (f) => onCustomColorChange(customHue, f))
+            }
+            onResponderMove={(e) =>
+              handleSliderTouch(e, satWidth, (f) => onCustomColorChange(customHue, f))
+            }
           >
             {/* Saturation gradient overlay */}
-            <View style={[StyleSheet.absoluteFill, {
-              borderRadius: 6,
-              flexDirection: "row",
-              overflow: "hidden",
-            }]}>
+            <View
+              style={[
+                StyleSheet.absoluteFill,
+                {
+                  borderRadius: 6,
+                  flexDirection: "row",
+                  overflow: "hidden",
+                },
+              ]}
+            >
               <View style={{ flex: 1, backgroundColor: `hsl(${customHue}, 0%, 90%)` }} />
               <View style={{ flex: 1, backgroundColor: `hsl(${customHue}, 50%, 75%)` }} />
               <View style={{ flex: 1, backgroundColor: `hsl(${customHue}, 100%, 60%)` }} />
             </View>
             {/* Thumb */}
-            <View style={[styles.customSliderThumb, {
-              left: `${customSaturation * 100}%`,
-              backgroundColor: `hsl(${customHue}, ${Math.round(customSaturation * 100)}%, 70%)`,
-            }]} />
+            <View
+              style={[
+                styles.customSliderThumb,
+                {
+                  left: `${customSaturation * 100}%`,
+                  backgroundColor: `hsl(${customHue}, ${Math.round(customSaturation * 100)}%, 70%)`,
+                },
+              ]}
+            />
           </View>
         </View>
       )}
@@ -583,21 +668,27 @@ function IntelligenceTab({
           onPress={() => onChangeProvider("ollama")}
           activeOpacity={0.7}
         >
-          <Text style={[styles.radioText, provider === "ollama" && styles.radioTextActive]}>Ollama (Local)</Text>
+          <Text style={[styles.radioText, provider === "ollama" && styles.radioTextActive]}>
+            Ollama (Local)
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.radioItem, provider === "anthropic" && styles.radioActive]}
           onPress={() => onChangeProvider("anthropic")}
           activeOpacity={0.7}
         >
-          <Text style={[styles.radioText, provider === "anthropic" && styles.radioTextActive]}>Anthropic (Cloud)</Text>
+          <Text style={[styles.radioText, provider === "anthropic" && styles.radioTextActive]}>
+            Anthropic (Cloud)
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.radioItem, provider === "hybrid" && styles.radioActive]}
           onPress={() => onChangeProvider("hybrid")}
           activeOpacity={0.7}
         >
-          <Text style={[styles.radioText, provider === "hybrid" && styles.radioTextActive]}>Hybrid (Cloud + Ollama fallback)</Text>
+          <Text style={[styles.radioText, provider === "hybrid" && styles.radioTextActive]}>
+            Hybrid (Cloud + Ollama fallback)
+          </Text>
         </TouchableOpacity>
       </View>
 
@@ -676,7 +767,9 @@ function IntelligenceTab({
               thumbColor={voiceAutoSend ? colors.textPrimary : colors.textMuted}
             />
           </View>
-          <Text style={styles.voiceHint}>Send voice transcript immediately, or drop into input for review</Text>
+          <Text style={styles.voiceHint}>
+            Send voice transcript immediately, or drop into input for review
+          </Text>
 
           {Platform.OS === "ios" && (
             <>
@@ -690,7 +783,8 @@ function IntelligenceTab({
                 />
               </View>
               <Text style={styles.voiceHint}>
-                Use Silero neural network to confirm speech before triggering. Reduces false triggers from ambient noise.
+                Use Silero neural network to confirm speech before triggering. Reduces false
+                triggers from ambient noise.
               </Text>
             </>
           )}
@@ -704,13 +798,17 @@ function IntelligenceTab({
                 onPress={() => onChangeTtsVoice(opt.key)}
                 activeOpacity={0.7}
               >
-                <Text style={[styles.voiceChipText, ttsVoice === opt.key && styles.voiceChipTextActive]}>
+                <Text
+                  style={[styles.voiceChipText, ttsVoice === opt.key && styles.voiceChipTextActive]}
+                >
                   {opt.label}
                 </Text>
               </TouchableOpacity>
             ))}
           </View>
-          <Text style={styles.voiceHint}>OpenAI TTS voice (requires API key below). Falls back to system TTS.</Text>
+          <Text style={styles.voiceHint}>
+            OpenAI TTS voice (requires API key below). Falls back to system TTS.
+          </Text>
         </>
       )}
 
@@ -725,7 +823,9 @@ function IntelligenceTab({
         autoCapitalize="none"
         autoCorrect={false}
       />
-      <Text style={styles.voiceHint}>Used for Whisper STT (voice input) and OpenAI TTS (spoken responses).</Text>
+      <Text style={styles.voiceHint}>
+        Used for Whisper STT (voice input) and OpenAI TTS (spoken responses).
+      </Text>
     </View>
   );
 }
@@ -768,7 +868,9 @@ function GovernanceTab({
             onPress={() => onUpdate({ approvalPreset: key })}
             activeOpacity={0.7}
           >
-            <Text style={[styles.radioText, draft.approvalPreset === key && styles.radioTextActive]}>
+            <Text
+              style={[styles.radioText, draft.approvalPreset === key && styles.radioTextActive]}
+            >
               {config.label}
             </Text>
             <Text style={styles.radioDesc}>{config.description}</Text>
@@ -841,15 +943,23 @@ function SyncTab({
     void app.getSyncUrl().then(setSyncUrl);
   }, [app]);
 
-  const statusLabel = syncStatus === "idle" ? "Connected"
-    : syncStatus === "syncing" ? "Syncing..."
-    : syncStatus === "error" ? "Error"
-    : "Not connected";
+  const statusLabel =
+    syncStatus === "idle"
+      ? "Connected"
+      : syncStatus === "syncing"
+        ? "Syncing..."
+        : syncStatus === "error"
+          ? "Error"
+          : "Not connected";
 
-  const statusColor = syncStatus === "idle" ? colors.statusSuccess
-    : syncStatus === "syncing" ? colors.accent
-    : syncStatus === "error" ? colors.statusError
-    : colors.textMuted;
+  const statusColor =
+    syncStatus === "idle"
+      ? colors.statusSuccess
+      : syncStatus === "syncing"
+        ? colors.accent
+        : syncStatus === "error"
+          ? colors.statusError
+          : colors.textMuted;
 
   return (
     <View>
@@ -866,7 +976,9 @@ function SyncTab({
       {syncUrl != null && syncUrl !== "" && (
         <>
           <Text style={styles.sectionTitle}>Relay</Text>
-          <Text style={styles.monoValue} numberOfLines={1}>{syncUrl}</Text>
+          <Text style={styles.monoValue} numberOfLines={1}>
+            {syncUrl}
+          </Text>
         </>
       )}
 
@@ -939,31 +1051,65 @@ function IdentityTab({
   return (
     <View>
       <Text style={styles.sectionTitle}>Motebit ID</Text>
-      <TouchableOpacity onPress={() => copyToClipboard("motebitId", motebitId)} style={styles.identityFieldRow}>
-        <Text style={[styles.monoValue, styles.identityFieldValue]} numberOfLines={1}>{motebitId}</Text>
-        <Text style={[styles.identityCopyLabel, copiedField === "motebitId" && styles.identityCopiedLabel]}>
+      <TouchableOpacity
+        onPress={() => copyToClipboard("motebitId", motebitId)}
+        style={styles.identityFieldRow}
+      >
+        <Text style={[styles.monoValue, styles.identityFieldValue]} numberOfLines={1}>
+          {motebitId}
+        </Text>
+        <Text
+          style={[
+            styles.identityCopyLabel,
+            copiedField === "motebitId" && styles.identityCopiedLabel,
+          ]}
+        >
           {copiedField === "motebitId" ? "Copied!" : "Copy"}
         </Text>
       </TouchableOpacity>
 
       <Text style={styles.sectionTitle}>Device ID</Text>
-      <TouchableOpacity onPress={() => copyToClipboard("deviceId", deviceId)} style={styles.identityFieldRow}>
-        <Text style={[styles.monoValue, styles.identityFieldValue]} numberOfLines={1}>{deviceId}</Text>
-        <Text style={[styles.identityCopyLabel, copiedField === "deviceId" && styles.identityCopiedLabel]}>
+      <TouchableOpacity
+        onPress={() => copyToClipboard("deviceId", deviceId)}
+        style={styles.identityFieldRow}
+      >
+        <Text style={[styles.monoValue, styles.identityFieldValue]} numberOfLines={1}>
+          {deviceId}
+        </Text>
+        <Text
+          style={[
+            styles.identityCopyLabel,
+            copiedField === "deviceId" && styles.identityCopiedLabel,
+          ]}
+        >
           {copiedField === "deviceId" ? "Copied!" : "Copy"}
         </Text>
       </TouchableOpacity>
 
       <Text style={styles.sectionTitle}>Public Key</Text>
-      <TouchableOpacity onPress={() => copyToClipboard("publicKey", publicKey)} style={styles.identityFieldRow}>
-        <Text style={[styles.monoValue, styles.identityFieldValue]} numberOfLines={2}>{publicKey || "(not generated)"}</Text>
-        <Text style={[styles.identityCopyLabel, copiedField === "publicKey" && styles.identityCopiedLabel]}>
+      <TouchableOpacity
+        onPress={() => copyToClipboard("publicKey", publicKey)}
+        style={styles.identityFieldRow}
+      >
+        <Text style={[styles.monoValue, styles.identityFieldValue]} numberOfLines={2}>
+          {publicKey || "(not generated)"}
+        </Text>
+        <Text
+          style={[
+            styles.identityCopyLabel,
+            copiedField === "publicKey" && styles.identityCopiedLabel,
+          ]}
+        >
           {copiedField === "publicKey" ? "Copied!" : "Copy"}
         </Text>
       </TouchableOpacity>
 
       {onLinkDevice && (
-        <TouchableOpacity style={styles.linkDeviceButton} onPress={onLinkDevice} activeOpacity={0.7}>
+        <TouchableOpacity
+          style={styles.linkDeviceButton}
+          onPress={onLinkDevice}
+          activeOpacity={0.7}
+        >
           <Text style={styles.linkDeviceText}>Link Another Device</Text>
         </TouchableOpacity>
       )}
@@ -1015,32 +1161,40 @@ function GoalsTab({ app }: { app: MobileApp }) {
     refreshGoals();
   }, [newPrompt, newIntervalIdx, newMode, goalStore, identity.motebitId, refreshGoals]);
 
-  const handleToggle = useCallback((goalId: string, enabled: boolean) => {
-    if (!goalStore) return;
-    goalStore.toggleGoal(goalId, enabled);
-    refreshGoals();
-  }, [goalStore, refreshGoals]);
+  const handleToggle = useCallback(
+    (goalId: string, enabled: boolean) => {
+      if (!goalStore) return;
+      goalStore.toggleGoal(goalId, enabled);
+      refreshGoals();
+    },
+    [goalStore, refreshGoals],
+  );
 
-  const handleRemove = useCallback((goalId: string) => {
-    Alert.alert("Remove Goal", "Are you sure you want to delete this goal?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: () => {
-          if (!goalStore) return;
-          goalStore.removeGoal(goalId);
-          refreshGoals();
+  const handleRemove = useCallback(
+    (goalId: string) => {
+      Alert.alert("Remove Goal", "Are you sure you want to delete this goal?", [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => {
+            if (!goalStore) return;
+            goalStore.removeGoal(goalId);
+            refreshGoals();
+          },
         },
-      },
-    ]);
-  }, [goalStore, refreshGoals]);
+      ]);
+    },
+    [goalStore, refreshGoals],
+  );
 
   if (!goalStore) {
     return (
       <View>
         <Text style={styles.sectionTitle}>Goals</Text>
-        <Text style={styles.goalEmptyText}>Goal store not available. Bootstrap identity first.</Text>
+        <Text style={styles.goalEmptyText}>
+          Goal store not available. Bootstrap identity first.
+        </Text>
       </View>
     );
   }
@@ -1054,15 +1208,19 @@ function GoalsTab({ app }: { app: MobileApp }) {
         goals.map((goal) => (
           <View key={goal.goal_id} style={styles.goalRow}>
             <View style={styles.goalInfo}>
-              <Text style={styles.goalPrompt} numberOfLines={2}>{goal.prompt}</Text>
+              <Text style={styles.goalPrompt} numberOfLines={2}>
+                {goal.prompt}
+              </Text>
               <View style={styles.goalMeta}>
                 <Text style={styles.goalMetaText}>{formatInterval(goal.interval_ms)}</Text>
                 <Text style={styles.goalMetaText}>{goal.mode}</Text>
-                <Text style={[
-                  styles.goalMetaText,
-                  goal.status === "paused" && styles.goalMetaWarning,
-                  goal.status === "failed" && styles.goalMetaWarning,
-                ]}>
+                <Text
+                  style={[
+                    styles.goalMetaText,
+                    goal.status === "paused" && styles.goalMetaWarning,
+                    goal.status === "failed" && styles.goalMetaWarning,
+                  ]}
+                >
                   {goal.status}
                 </Text>
                 {goal.last_run_at != null ? (
@@ -1128,7 +1286,9 @@ function GoalsTab({ app }: { app: MobileApp }) {
           onPress={() => setNewMode("recurring")}
           activeOpacity={0.7}
         >
-          <Text style={[styles.radioText, newMode === "recurring" && styles.radioTextActive]}>Recurring</Text>
+          <Text style={[styles.radioText, newMode === "recurring" && styles.radioTextActive]}>
+            Recurring
+          </Text>
           <Text style={styles.radioDesc}>Runs on every interval</Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -1161,7 +1321,15 @@ function ToolsTab({
   onRemove,
   onToggleTrust,
 }: {
-  servers: Array<{ name: string; url: string; connected: boolean; toolCount: number; trusted: boolean; motebit: boolean; motebitPublicKey?: string }>;
+  servers: Array<{
+    name: string;
+    url: string;
+    connected: boolean;
+    toolCount: number;
+    trusted: boolean;
+    motebit: boolean;
+    motebitPublicKey?: string;
+  }>;
   onAdd?: (url: string, name: string, trusted?: boolean, motebit?: boolean) => Promise<void>;
   onRemove?: (name: string) => Promise<void>;
   onToggleTrust?: (name: string, trusted: boolean) => Promise<void>;
@@ -1201,20 +1369,19 @@ function ToolsTab({
     }
   }, [newName, newUrl, onAdd]);
 
-  const handleRemove = useCallback((name: string) => {
-    Alert.alert(
-      "Remove Server",
-      `Disconnect and remove "${name}"?`,
-      [
+  const handleRemove = useCallback(
+    (name: string) => {
+      Alert.alert("Remove Server", `Disconnect and remove "${name}"?`, [
         { text: "Cancel", style: "cancel" },
         {
           text: "Remove",
           style: "destructive",
           onPress: () => void onRemove?.(name),
         },
-      ],
-    );
-  }, [onRemove]);
+      ]);
+    },
+    [onRemove],
+  );
 
   return (
     <View>
@@ -1228,10 +1395,14 @@ function ToolsTab({
           <View key={server.name} style={styles.toolsServerRow}>
             <View style={styles.toolsServerInfo}>
               <View style={styles.toolsServerHeader}>
-                <View style={[
-                  styles.toolsStatusDot,
-                  { backgroundColor: server.connected ? colors.statusSuccess : colors.statusError },
-                ]} />
+                <View
+                  style={[
+                    styles.toolsStatusDot,
+                    {
+                      backgroundColor: server.connected ? colors.statusSuccess : colors.statusError,
+                    },
+                  ]}
+                />
                 <Text style={styles.toolsServerName}>{server.name}</Text>
                 {server.toolCount > 0 && (
                   <View style={styles.toolsCountBadge}>
@@ -1244,7 +1415,9 @@ function ToolsTab({
                   </View>
                 )}
               </View>
-              <Text style={styles.toolsServerUrl} numberOfLines={1}>{server.url}</Text>
+              <Text style={styles.toolsServerUrl} numberOfLines={1}>
+                {server.url}
+              </Text>
               <View style={styles.toolsTrustRow}>
                 <Text style={styles.toolsTrustLabel}>Auto-approve tools</Text>
                 <Switch
@@ -1321,7 +1494,10 @@ function ToolsTab({
       </View>
 
       <TouchableOpacity
-        style={[styles.toolsConnectBtn, (!newName.trim() || !newUrl.trim() || adding) && styles.toolsConnectBtnDisabled]}
+        style={[
+          styles.toolsConnectBtn,
+          (!newName.trim() || !newUrl.trim() || adding) && styles.toolsConnectBtnDisabled,
+        ]}
         onPress={() => void handleConnect()}
         disabled={!newName.trim() || !newUrl.trim() || adding}
         activeOpacity={0.7}
@@ -1343,9 +1519,14 @@ function createSettingsStyles(c: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: c.bgPrimary },
     header: {
-      flexDirection: "row", justifyContent: "space-between", alignItems: "center",
-      paddingHorizontal: 16, paddingTop: Platform.OS === "ios" ? 56 : 16,
-      paddingBottom: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.borderPrimary,
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      paddingHorizontal: 16,
+      paddingTop: Platform.OS === "ios" ? 56 : 16,
+      paddingBottom: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.borderPrimary,
     },
     cancelBtn: { color: c.textMuted, fontSize: 16 },
     headerTitle: { color: c.textPrimary, fontSize: 17, fontWeight: "600" },
@@ -1361,49 +1542,98 @@ function createSettingsStyles(c: ThemeColors) {
     bodyContent: { padding: 20 },
 
     sectionTitle: {
-      color: c.textMuted, fontSize: 12, fontWeight: "600", textTransform: "uppercase",
-      letterSpacing: 0.5, marginTop: 20, marginBottom: 10,
+      color: c.textMuted,
+      fontSize: 12,
+      fontWeight: "600",
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
+      marginTop: 20,
+      marginBottom: 10,
     },
 
     // Theme toggle
     themeToggleGroup: { flexDirection: "row", gap: 8, marginBottom: 20 },
     themeOption: {
-      flex: 1, paddingVertical: 10, borderRadius: 8, backgroundColor: c.bgTertiary, alignItems: "center",
+      flex: 1,
+      paddingVertical: 10,
+      borderRadius: 8,
+      backgroundColor: c.bgTertiary,
+      alignItems: "center",
     },
-    themeOptionSelected: { backgroundColor: c.borderLight, borderWidth: 1, borderColor: c.accentSoft },
+    themeOptionSelected: {
+      backgroundColor: c.borderLight,
+      borderWidth: 1,
+      borderColor: c.accentSoft,
+    },
     themeOptionText: { color: c.textMuted, fontSize: 13, fontWeight: "500" },
     themeOptionTextSelected: { color: c.textSecondary },
 
     // Appearance
     presetGrid: { flexDirection: "row", flexWrap: "wrap", gap: 14, justifyContent: "center" },
     presetCircle: {
-      width: 52, height: 52, borderRadius: 26, borderWidth: 2,
-      borderColor: "transparent", justifyContent: "center", alignItems: "center",
+      width: 52,
+      height: 52,
+      borderRadius: 26,
+      borderWidth: 2,
+      borderColor: "transparent",
+      justifyContent: "center",
+      alignItems: "center",
     },
     presetSelected: { borderColor: c.accent },
     presetCheck: { width: 14, height: 14, borderRadius: 7, backgroundColor: c.accent },
-    presetLabel: { color: c.textMuted, fontSize: 14, textAlign: "center", marginTop: 12, textTransform: "capitalize" },
+    presetLabel: {
+      color: c.textMuted,
+      fontSize: 14,
+      textAlign: "center",
+      marginTop: 12,
+      textTransform: "capitalize",
+    },
 
     // Custom color picker
     customPickerContainer: { marginTop: 16, alignItems: "center", gap: 12 },
-    customPreviewCircle: { width: 48, height: 48, borderRadius: 24, borderWidth: 2, borderColor: c.accent, marginBottom: 4 },
+    customPreviewCircle: {
+      width: 48,
+      height: 48,
+      borderRadius: 24,
+      borderWidth: 2,
+      borderColor: c.accent,
+      marginBottom: 4,
+    },
     customSliderLabel: {
-      color: c.textMuted, fontSize: 11, fontWeight: "600", textTransform: "uppercase",
-      letterSpacing: 0.5, alignSelf: "flex-start",
+      color: c.textMuted,
+      fontSize: 11,
+      fontWeight: "600",
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
+      alignSelf: "flex-start",
     },
     customSliderTrack: {
-      width: "100%", height: 28, borderRadius: 6, backgroundColor: c.borderPrimary,
-      justifyContent: "center", position: "relative",
+      width: "100%",
+      height: 28,
+      borderRadius: 6,
+      backgroundColor: c.borderPrimary,
+      justifyContent: "center",
+      position: "relative",
     },
     customSliderThumb: {
-      position: "absolute", width: 20, height: 20, borderRadius: 10, borderWidth: 2,
-      borderColor: "#fff", top: 4, marginLeft: -10,
+      position: "absolute",
+      width: 20,
+      height: 20,
+      borderRadius: 10,
+      borderWidth: 2,
+      borderColor: "#fff",
+      top: 4,
+      marginLeft: -10,
     },
 
     // Radio
     radioGroup: { gap: 8 },
     radioItem: {
-      backgroundColor: c.bgSecondary, borderRadius: 10, padding: 14, borderWidth: 1, borderColor: c.borderPrimary,
+      backgroundColor: c.bgSecondary,
+      borderRadius: 10,
+      padding: 14,
+      borderWidth: 1,
+      borderColor: c.borderPrimary,
     },
     radioActive: { borderColor: c.accent, backgroundColor: c.accentSoft },
     radioText: { color: c.textSecondary, fontSize: 15, fontWeight: "600" },
@@ -1412,8 +1642,12 @@ function createSettingsStyles(c: ThemeColors) {
     voiceHint: { color: c.textGhost, fontSize: 11, marginTop: 4, marginBottom: 4 },
     voiceGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
     voiceChip: {
-      backgroundColor: c.bgSecondary, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8,
-      borderWidth: 1, borderColor: c.borderPrimary,
+      backgroundColor: c.bgSecondary,
+      borderRadius: 8,
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      borderWidth: 1,
+      borderColor: c.borderPrimary,
     },
     voiceChipActive: { borderColor: c.accent, backgroundColor: c.accentSoft },
     voiceChipText: { color: c.textMuted, fontSize: 13, fontWeight: "600" },
@@ -1421,46 +1655,96 @@ function createSettingsStyles(c: ThemeColors) {
 
     // Fields
     textField: {
-      backgroundColor: c.inputBg, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12,
-      color: c.inputText, fontSize: 15,
+      backgroundColor: c.inputBg,
+      borderRadius: 10,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      color: c.inputText,
+      fontSize: 15,
     },
-    fieldRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginVertical: 6 },
+    fieldRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginVertical: 6,
+    },
     fieldLabel: { color: c.textSecondary, fontSize: 14 },
     numberField: {
-      backgroundColor: c.inputBg, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8,
-      color: c.inputText, fontSize: 15, width: 70, textAlign: "center",
+      backgroundColor: c.inputBg,
+      borderRadius: 8,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      color: c.inputText,
+      fontSize: 15,
+      width: 70,
+      textAlign: "center",
     },
 
     // Switch
-    switchRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginVertical: 8 },
+    switchRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginVertical: 8,
+    },
     switchLabel: { color: c.textSecondary, fontSize: 14 },
 
     // Pin
-    pinButton: { backgroundColor: c.buttonSecondaryBg, borderRadius: 8, paddingHorizontal: 16, paddingVertical: 8 },
+    pinButton: {
+      backgroundColor: c.buttonSecondaryBg,
+      borderRadius: 8,
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+    },
     pinButtonText: { color: c.accent, fontSize: 14, fontWeight: "600" },
 
     // Identity
     monoValue: {
-      color: c.textSecondary, fontSize: 13, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-      backgroundColor: c.bgSecondary, borderRadius: 8, padding: 12, overflow: "hidden",
+      color: c.textSecondary,
+      fontSize: 13,
+      fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+      backgroundColor: c.bgSecondary,
+      borderRadius: 8,
+      padding: 12,
+      overflow: "hidden",
     },
     hint: { color: c.textGhost, fontSize: 11, textAlign: "center", marginTop: 8 },
     linkDeviceButton: {
-      backgroundColor: c.borderLight, borderRadius: 10, paddingVertical: 14, marginTop: 20,
-      alignItems: "center", borderWidth: 1, borderColor: c.accentSoft,
+      backgroundColor: c.borderLight,
+      borderRadius: 10,
+      paddingVertical: 14,
+      marginTop: 20,
+      alignItems: "center",
+      borderWidth: 1,
+      borderColor: c.accentSoft,
     },
     linkDeviceText: { color: c.accent, fontSize: 15, fontWeight: "600" },
     identityFieldRow: { flexDirection: "row", alignItems: "center", gap: 8 },
     identityFieldValue: { flex: 1 },
-    identityCopyLabel: { color: c.textMuted, fontSize: 12, fontWeight: "600", minWidth: 46, textAlign: "center" },
+    identityCopyLabel: {
+      color: c.textMuted,
+      fontSize: 12,
+      fontWeight: "600",
+      minWidth: 46,
+      textAlign: "center",
+    },
     identityCopiedLabel: { color: c.statusSuccess },
     docsButton: {
-      backgroundColor: c.borderLight, borderRadius: 10, paddingVertical: 14, marginTop: 12,
-      alignItems: "center", borderWidth: 1, borderColor: c.accentSoft,
+      backgroundColor: c.borderLight,
+      borderRadius: 10,
+      paddingVertical: 14,
+      marginTop: 12,
+      alignItems: "center",
+      borderWidth: 1,
+      borderColor: c.accentSoft,
     },
     docsText: { color: c.textMuted, fontSize: 15, fontWeight: "600" },
     exportButton: {
-      backgroundColor: c.buttonSecondaryBg, borderRadius: 10, paddingVertical: 14, marginTop: 12, alignItems: "center",
+      backgroundColor: c.buttonSecondaryBg,
+      borderRadius: 10,
+      paddingVertical: 14,
+      marginTop: 12,
+      alignItems: "center",
     },
     exportText: { color: c.accent, fontSize: 15, fontWeight: "600" },
 
@@ -1470,22 +1754,49 @@ function createSettingsStyles(c: ThemeColors) {
     syncStatusLabel: { fontSize: 15, fontWeight: "600" },
     syncLastTime: { color: c.textMuted, fontSize: 12, marginBottom: 8 },
     syncActionButton: {
-      backgroundColor: c.buttonPrimaryBg, borderRadius: 10, paddingVertical: 14, marginTop: 16, alignItems: "center",
+      backgroundColor: c.buttonPrimaryBg,
+      borderRadius: 10,
+      paddingVertical: 14,
+      marginTop: 16,
+      alignItems: "center",
     },
     syncActionDisabled: { opacity: 0.5 },
     syncActionText: { color: c.buttonPrimaryText, fontSize: 15, fontWeight: "600" },
     syncDisconnectButton: {
-      backgroundColor: c.buttonSecondaryBg, borderRadius: 10, paddingVertical: 14, marginTop: 12,
-      alignItems: "center", borderWidth: 1, borderColor: `${c.statusError}40`,
+      backgroundColor: c.buttonSecondaryBg,
+      borderRadius: 10,
+      paddingVertical: 14,
+      marginTop: 12,
+      alignItems: "center",
+      borderWidth: 1,
+      borderColor: `${c.statusError}40`,
     },
     syncDisconnectText: { color: c.statusWarning, fontSize: 15, fontWeight: "600" },
-    syncHint: { color: c.textGhost, fontSize: 13, fontStyle: "italic", textAlign: "center", marginTop: 20 },
+    syncHint: {
+      color: c.textGhost,
+      fontSize: 13,
+      fontStyle: "italic",
+      textAlign: "center",
+      marginTop: 20,
+    },
 
     // Goals
-    goalEmptyText: { color: c.textMuted, fontSize: 13, fontStyle: "italic", textAlign: "center", marginVertical: 12 },
+    goalEmptyText: {
+      color: c.textMuted,
+      fontSize: 13,
+      fontStyle: "italic",
+      textAlign: "center",
+      marginVertical: 12,
+    },
     goalRow: {
-      flexDirection: "row", alignItems: "center", backgroundColor: c.bgSecondary, borderRadius: 10,
-      padding: 12, marginBottom: 8, borderWidth: 1, borderColor: c.borderPrimary,
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: c.bgSecondary,
+      borderRadius: 10,
+      padding: 12,
+      marginBottom: 8,
+      borderWidth: 1,
+      borderColor: c.borderPrimary,
     },
     goalInfo: { flex: 1, marginRight: 10 },
     goalPrompt: { color: c.textPrimary, fontSize: 14, marginBottom: 4 },
@@ -1494,45 +1805,96 @@ function createSettingsStyles(c: ThemeColors) {
     goalMetaWarning: { color: c.statusWarning, fontSize: 11, fontWeight: "600" },
     goalActions: { flexDirection: "row", alignItems: "center", gap: 8 },
     goalDeleteBtn: {
-      width: 28, height: 28, borderRadius: 14, backgroundColor: `${c.statusError}1a`,
-      justifyContent: "center", alignItems: "center",
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      backgroundColor: `${c.statusError}1a`,
+      justifyContent: "center",
+      alignItems: "center",
     },
     goalDeleteText: { color: c.statusError, fontSize: 12, fontWeight: "700" },
     goalAddBtn: {
-      backgroundColor: c.buttonPrimaryBg, borderRadius: 10, paddingVertical: 14, marginTop: 16, alignItems: "center",
+      backgroundColor: c.buttonPrimaryBg,
+      borderRadius: 10,
+      paddingVertical: 14,
+      marginTop: 16,
+      alignItems: "center",
     },
     goalAddBtnDisabled: { opacity: 0.4 },
     goalAddBtnText: { color: c.buttonPrimaryText, fontSize: 15, fontWeight: "600" },
 
     // Tools
-    toolsEmptyText: { color: c.textMuted, fontSize: 13, fontStyle: "italic", textAlign: "center", marginVertical: 12 },
+    toolsEmptyText: {
+      color: c.textMuted,
+      fontSize: 13,
+      fontStyle: "italic",
+      textAlign: "center",
+      marginVertical: 12,
+    },
     toolsServerRow: {
-      flexDirection: "row", alignItems: "center", backgroundColor: c.bgSecondary, borderRadius: 10,
-      padding: 12, marginBottom: 8, borderWidth: 1, borderColor: c.borderPrimary,
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: c.bgSecondary,
+      borderRadius: 10,
+      padding: 12,
+      marginBottom: 8,
+      borderWidth: 1,
+      borderColor: c.borderPrimary,
     },
     toolsServerInfo: { flex: 1, marginRight: 10 },
     toolsServerHeader: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 },
     toolsStatusDot: { width: 8, height: 8, borderRadius: 4 },
     toolsServerName: { color: c.textPrimary, fontSize: 14, fontWeight: "600" },
-    toolsCountBadge: { backgroundColor: c.borderLight, borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2 },
+    toolsCountBadge: {
+      backgroundColor: c.borderLight,
+      borderRadius: 10,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+    },
     toolsCountText: { color: c.textMuted, fontSize: 11, fontWeight: "600" },
     toolsServerUrl: {
-      color: c.textMuted, fontSize: 12, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+      color: c.textMuted,
+      fontSize: 12,
+      fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
     },
     toolsRemoveBtn: {
-      width: 28, height: 28, borderRadius: 14, backgroundColor: `${c.statusError}1a`,
-      justifyContent: "center", alignItems: "center",
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      backgroundColor: `${c.statusError}1a`,
+      justifyContent: "center",
+      alignItems: "center",
     },
     toolsRemoveText: { color: c.statusError, fontSize: 12, fontWeight: "700" },
     toolsConnectBtn: {
-      backgroundColor: c.buttonPrimaryBg, borderRadius: 10, paddingVertical: 14, marginTop: 12, alignItems: "center",
+      backgroundColor: c.buttonPrimaryBg,
+      borderRadius: 10,
+      paddingVertical: 14,
+      marginTop: 12,
+      alignItems: "center",
     },
     toolsConnectBtnDisabled: { opacity: 0.4 },
     toolsConnectText: { color: c.buttonPrimaryText, fontSize: 15, fontWeight: "600" },
-    toolsTrustBadge: { backgroundColor: c.borderLight, borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2 },
+    toolsTrustBadge: {
+      backgroundColor: c.borderLight,
+      borderRadius: 10,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+    },
     toolsTrustText: { color: c.statusSuccess, fontSize: 10, fontWeight: "600" },
-    toolsTrustRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 8 },
+    toolsTrustRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginTop: 8,
+    },
     toolsTrustLabel: { color: c.textMuted, fontSize: 12 },
-    toolsNote: { color: c.textGhost, fontSize: 11, fontStyle: "italic", textAlign: "center", marginTop: 16 },
+    toolsNote: {
+      color: c.textGhost,
+      fontSize: 11,
+      fontStyle: "italic",
+      textAlign: "center",
+      marginTop: 16,
+    },
   });
 }

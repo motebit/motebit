@@ -48,7 +48,9 @@ export function createWriteFileHandler(allowedPaths?: string[]): ToolHandler {
           if (canonical === resolvedAllow) return true;
           const prefix = resolvedAllow.endsWith("/") ? resolvedAllow : resolvedAllow + "/";
           return canonical.startsWith(prefix);
-        } catch { return false; }
+        } catch {
+          return false;
+        }
       });
       if (!allowed) {
         return { ok: false, error: `Access denied: "${canonical}" is outside allowed paths` };

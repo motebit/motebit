@@ -37,7 +37,10 @@ export function buildConsolidationPrompt(
   existing: Array<{ node_id: string; content: string; confidence: number }>,
 ): string {
   const memoryList = existing
-    .map((m, i) => `  ${i + 1}. [id=${m.node_id}] (confidence=${m.confidence.toFixed(2)}) "${m.content}"`)
+    .map(
+      (m, i) =>
+        `  ${i + 1}. [id=${m.node_id}] (confidence=${m.confidence.toFixed(2)}) "${m.content}"`,
+    )
     .join("\n");
 
   return `You are a memory consolidation engine. A new memory is being formed. Compare it against existing memories and decide what to do.
@@ -109,10 +112,7 @@ export function parseConsolidationResponse(
  * Greedy single-linkage clustering by cosine similarity.
  * Used for episodic consolidation — groups related memories for summarization.
  */
-export function clusterBySimilarity(
-  nodes: MemoryNode[],
-  threshold: number,
-): MemoryNode[][] {
+export function clusterBySimilarity(nodes: MemoryNode[], threshold: number): MemoryNode[][] {
   const assigned = new Set<number>();
   const clusters: MemoryNode[][] = [];
 

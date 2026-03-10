@@ -14,6 +14,8 @@ export const DEFAULT_CONFIG: Required<MotebitPersonalityConfig> = {
   temperature: 0.7,
 };
 
-export function resolveConfig(partial: MotebitPersonalityConfig): Required<MotebitPersonalityConfig> {
+export function resolveConfig(
+  partial: MotebitPersonalityConfig,
+): Required<MotebitPersonalityConfig> {
   return { ...DEFAULT_CONFIG, ...partial };
 }

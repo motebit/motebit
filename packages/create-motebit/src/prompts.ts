@@ -24,10 +24,7 @@ export function input(
   });
 }
 
-export function password(
-  rl: readline.Interface,
-  message: string,
-): Promise<string> {
+export function password(rl: readline.Interface, message: string): Promise<string> {
   const stdin = process.stdin;
   const stdout = process.stdout;
 

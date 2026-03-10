@@ -17,8 +17,7 @@ const mockUploadAsync = vi.fn();
 
 vi.mock("expo-av", () => ({
   Audio: {
-    requestPermissionsAsync: (...args: unknown[]) =>
-      mockRequestPermissions(...args),
+    requestPermissionsAsync: (...args: unknown[]) => mockRequestPermissions(...args),
     setAudioModeAsync: (...args: unknown[]) => mockSetAudioMode(...args),
     Recording: {
       createAsync: (...args: unknown[]) => mockCreateRecording(...args),
@@ -331,9 +330,7 @@ describe("ExpoAVSTTProvider", () => {
   describe("error handling", () => {
     it("fires onError on stopAndUnloadAsync failure", async () => {
       setupSuccessfulRecording();
-      mockRecording.stopAndUnloadAsync.mockRejectedValue(
-        new Error("Unload failed"),
-      );
+      mockRecording.stopAndUnloadAsync.mockRejectedValue(new Error("Unload failed"));
 
       const provider = makeProvider();
       const onError = vi.fn();

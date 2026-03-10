@@ -91,20 +91,14 @@ import { AudioMonitor } from "../adapters/audio-monitor.js";
  * The real AudioMonitor uses setInterval at ~30fps; we call tick manually.
  */
 function getTick(monitor: AudioMonitor): () => Promise<void> {
-  return (monitor as unknown as { tick: () => Promise<void> }).tick.bind(
-    monitor,
-  );
+  return (monitor as unknown as { tick: () => Promise<void> }).tick.bind(monitor);
 }
 
 /**
  * Simulate N ticks with a given dB metering value.
  * Returns after all ticks complete.
  */
-async function simulateTicks(
-  monitor: AudioMonitor,
-  count: number,
-  db: number,
-): Promise<void> {
+async function simulateTicks(monitor: AudioMonitor, count: number, db: number): Promise<void> {
   const tick = getTick(monitor);
   mockRecordingInstance.setMetering(db);
   for (let i = 0; i < count; i++) {

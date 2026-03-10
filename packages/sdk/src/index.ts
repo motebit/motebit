@@ -139,7 +139,7 @@ export const SPECIES_CONSTRAINTS = Object.freeze({
   MAX_AROUSAL: 0.35,
   SMILE_DELTA_MAX: 0.08,
   GLOW_DELTA_MAX: 0.15,
-  DRIFT_VARIATION_MAX: 0.10,
+  DRIFT_VARIATION_MAX: 0.1,
 } as const);
 
 export type SpeciesConstraints = typeof SPECIES_CONSTRAINTS;
@@ -426,7 +426,7 @@ export interface MaterialSpec {
   surface_noise_amplitude: number;
   base_color: [number, number, number];
   emissive_intensity: number;
-  tint: [number, number, number];         // Attenuation color — glass absorption spectrum
+  tint: [number, number, number]; // Attenuation color — glass absorption spectrum
 }
 
 export interface LightingSpec {

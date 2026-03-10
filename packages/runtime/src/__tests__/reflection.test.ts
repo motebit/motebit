@@ -19,11 +19,7 @@ vi.mock("@motebit/ai-core", async (importOriginal) => {
   };
 });
 
-import {
-  MotebitRuntime,
-  NullRenderer,
-  createInMemoryStorage,
-} from "../index";
+import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
 import type { StreamingProvider } from "@motebit/ai-core";
 import { reflect as aiReflect } from "@motebit/ai-core";
 import type { AIResponse, ContextPack } from "@motebit/sdk";
@@ -144,9 +140,7 @@ describe("Runtime reflection — learning loop", () => {
 
     // Check event was logged
     const events = await runtime.events.query({ motebit_id: "reflect-test" });
-    const reflectionEvents = events.filter(
-      (e) => e.event_type === EventType.ReflectionCompleted,
-    );
+    const reflectionEvents = events.filter((e) => e.event_type === EventType.ReflectionCompleted);
     expect(reflectionEvents).toHaveLength(1);
     expect(reflectionEvents[0]!.payload).toMatchObject({
       source: "runtime_reflect",

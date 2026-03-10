@@ -36,7 +36,7 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
 
 /** Map of command name to definition for O(1) lookup. */
 export const COMMAND_MAP = new Map<string, SlashCommandDef>(
-  SLASH_COMMANDS.map(cmd => [cmd.name, cmd]),
+  SLASH_COMMANDS.map((cmd) => [cmd.name, cmd]),
 );
 
 /**
@@ -54,7 +54,10 @@ export function parseSlashCommand(input: string): { command: string; args: strin
   const trimmed = input.trim();
   const spaceIdx = trimmed.indexOf(" ");
   if (spaceIdx === -1) return { command: trimmed.slice(1).toLowerCase(), args: "" };
-  return { command: trimmed.slice(1, spaceIdx).toLowerCase(), args: trimmed.slice(spaceIdx + 1).trim() };
+  return {
+    command: trimmed.slice(1, spaceIdx).toLowerCase(),
+    args: trimmed.slice(spaceIdx + 1).trim(),
+  };
 }
 
 /**
@@ -64,7 +67,7 @@ export function parseSlashCommand(input: string): { command: string; args: strin
 export function filterCommands(partial: string): SlashCommandDef[] {
   const lower = partial.toLowerCase();
   if (!lower) return SLASH_COMMANDS;
-  return SLASH_COMMANDS.filter(cmd => cmd.name.startsWith(lower));
+  return SLASH_COMMANDS.filter((cmd) => cmd.name.startsWith(lower));
 }
 
 /**

@@ -78,7 +78,10 @@ const SENSITIVITY_COLORS: Record<string, string> = {
 
 // === Force-Directed Layout ===
 
-function buildGraph(memories: MemoryNode[], edges: MemoryEdge[]): { nodes: GraphNode[]; edges: GraphEdge[] } {
+function buildGraph(
+  memories: MemoryNode[],
+  edges: MemoryEdge[],
+): { nodes: GraphNode[]; edges: GraphEdge[] } {
   const nodeMap = new Map<string, GraphNode>();
   const cx = 150;
   const cy = 150;
@@ -174,7 +177,11 @@ function runForceSimulation(nodes: GraphNode[], edges: GraphEdge[], iterations: 
 
 // === Graph Rendering ===
 
-function renderGraph(ctx2d: CanvasRenderingContext2D, nodes: GraphNode[], edges: GraphEdge[]): void {
+function renderGraph(
+  ctx2d: CanvasRenderingContext2D,
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+): void {
   const canvas = ctx2d.canvas;
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth;
@@ -205,7 +212,11 @@ function renderGraph(ctx2d: CanvasRenderingContext2D, nodes: GraphNode[], edges:
 
   // Draw edges
   for (const e of edges) {
-    const isHighlighted = selectedNodeId != null && selectedNodeId !== "" && highlightedNodes.has(e.source.id) && highlightedNodes.has(e.target.id);
+    const isHighlighted =
+      selectedNodeId != null &&
+      selectedNodeId !== "" &&
+      highlightedNodes.has(e.source.id) &&
+      highlightedNodes.has(e.target.id);
     ctx2d.beginPath();
     ctx2d.moveTo(e.source.x, e.source.y);
     ctx2d.lineTo(e.target.x, e.target.y);
@@ -314,27 +325,26 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
   }
 
   function refreshMemoryData(): void {
-    void Promise.all([
-      ctx.app.listMemories(),
-      ctx.app.listMemoryEdges(),
-    ]).then(([memories, edges]) => {
-      allMemories = memories;
-      allEdges = edges;
-      memoryCount.textContent = String(memories.length);
+    void Promise.all([ctx.app.listMemories(), ctx.app.listMemoryEdges()]).then(
+      ([memories, edges]) => {
+        allMemories = memories;
+        allEdges = edges;
+        memoryCount.textContent = String(memories.length);
 
-      // Invalidate graph cache if memory count changed
-      if (memories.length !== cachedMemoryCount) {
-        cachedGraphNodes = null;
-        cachedGraphEdges = null;
-        cachedMemoryCount = memories.length;
-      }
+        // Invalidate graph cache if memory count changed
+        if (memories.length !== cachedMemoryCount) {
+          cachedGraphNodes = null;
+          cachedGraphEdges = null;
+          cachedMemoryCount = memories.length;
+        }
 
-      if (currentView === "list") {
-        renderMemoryItems(memories, memorySearch.value.trim());
-      } else {
-        renderGraphView();
-      }
-    });
+        if (currentView === "list") {
+          renderMemoryItems(memories, memorySearch.value.trim());
+        } else {
+          renderGraphView();
+        }
+      },
+    );
   }
 
   function setView(mode: ViewMode): void {
@@ -370,7 +380,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
   function renderMemoryItems(memories: MemoryNode[], query: string): void {
     memoryList.innerHTML = "";
     const filtered = query
-      ? memories.filter(m => m.content.toLowerCase().includes(query.toLowerCase()))
+      ? memories.filter((m) => m.content.toLowerCase().includes(query.toLowerCase()))
       : memories;
 
     if (filtered.length === 0) {
@@ -381,15 +391,17 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
       return;
     }
 
-    const pinned = filtered.filter(m => m.pinned);
-    const unpinned = filtered.filter(m => !m.pinned);
+    const pinned = filtered.filter((m) => m.pinned);
+    const unpinned = filtered.filter((m) => !m.pinned);
 
     if (pinned.length > 0) {
       const header = document.createElement("div");
       header.className = "mem-section-header";
       header.textContent = `Pinned (${pinned.length})`;
       memoryList.appendChild(header);
-      for (const mem of pinned) { renderMemoryItem(mem); }
+      for (const mem of pinned) {
+        renderMemoryItem(mem);
+      }
     }
 
     if (unpinned.length > 0) {
@@ -399,7 +411,9 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
         header.textContent = "Recent";
         memoryList.appendChild(header);
       }
-      for (const mem of unpinned) { renderMemoryItem(mem); }
+      for (const mem of unpinned) {
+        renderMemoryItem(mem);
+      }
     }
 
     // Scroll to and highlight focused node
@@ -505,7 +519,10 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
     });
 
     function resetDeleteState(): void {
-      if (confirmTimeout) { clearTimeout(confirmTimeout); confirmTimeout = null; }
+      if (confirmTimeout) {
+        clearTimeout(confirmTimeout);
+        confirmTimeout = null;
+      }
       if (!deleteBtnWrap.isConnected) return;
       deleteBtnWrap.classList.remove("mem-delete-confirming");
       deleteBtn.textContent = "\u00d7";
@@ -609,7 +626,10 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
 
       // Center the graph in the canvas
       if (graph.nodes.length > 0) {
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        let minX = Infinity,
+          minY = Infinity,
+          maxX = -Infinity,
+          maxY = -Infinity;
         for (const n of graph.nodes) {
           minX = Math.min(minX, n.x - n.radius);
           minY = Math.min(minY, n.y - n.radius);
@@ -711,26 +731,31 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
     }
   });
 
-  memoryGraphCanvas.addEventListener("wheel", (e) => {
-    e.preventDefault();
-    const pos = getCanvasPos(e);
-    const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
-    const newZoom = Math.max(0.15, Math.min(5, graphZoom * zoomFactor));
+  memoryGraphCanvas.addEventListener(
+    "wheel",
+    (e) => {
+      e.preventDefault();
+      const pos = getCanvasPos(e);
+      const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
+      const newZoom = Math.max(0.15, Math.min(5, graphZoom * zoomFactor));
 
-    // Zoom toward mouse position
-    graphPanX = pos.x - (pos.x - graphPanX) * (newZoom / graphZoom);
-    graphPanY = pos.y - (pos.y - graphPanY) * (newZoom / graphZoom);
-    graphZoom = newZoom;
+      // Zoom toward mouse position
+      graphPanX = pos.x - (pos.x - graphPanX) * (newZoom / graphZoom);
+      graphPanY = pos.y - (pos.y - graphPanY) * (newZoom / graphZoom);
+      graphZoom = newZoom;
 
-    drawGraph();
-  }, { passive: false });
+      drawGraph();
+    },
+    { passive: false },
+  );
 
   // === Tooltip ===
 
   function showTooltip(node: GraphNode, canvasX: number, canvasY: number): void {
     const mem = node.mem;
     const decayed = ctx.app.getDecayedConfidence(mem);
-    const sensitivityText = mem.sensitivity !== SensitivityLevel.None ? ` | ${mem.sensitivity}` : "";
+    const sensitivityText =
+      mem.sensitivity !== SensitivityLevel.None ? ` | ${mem.sensitivity}` : "";
 
     memoryGraphTooltip.innerHTML =
       `<div class="mem-graph-tooltip-content">${escapeHtml(mem.content)}</div>` +

@@ -4,10 +4,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { SqlJsDriver } from "../sqljs-driver.js";
 import { createMotebitDatabaseFromDriver, type MotebitDatabase } from "../index.js";
-import {
-  EventType,
-  SensitivityLevel,
-} from "@motebit/sdk";
+import { EventType, SensitivityLevel } from "@motebit/sdk";
 import type {
   EventLogEntry,
   MemoryNode,
@@ -27,9 +24,7 @@ describe("sql.js driver (in-memory)", () => {
 
   it("creates all tables", () => {
     const tables = mdb.db
-      .prepare(
-        `SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`,
-      )
+      .prepare(`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`)
       .all() as { name: string }[];
     const names = tables.map((t) => t.name);
     expect(names).toContain("events");

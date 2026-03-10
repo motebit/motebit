@@ -29,7 +29,10 @@ describe("create-motebit", () => {
   let configDir: string;
 
   beforeEach(() => {
-    testDir = join(tmpdir(), `create-motebit-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    testDir = join(
+      tmpdir(),
+      `create-motebit-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
     configDir = join(testDir, ".motebit-config");
     mkdirSync(testDir, { recursive: true });
   });
@@ -60,11 +63,10 @@ describe("create-motebit", () => {
 
   it("scaffolds project with --yes and MOTEBIT_PASSPHRASE", () => {
     const subDir = "my-agent";
-    const { stdout, exitCode } = run(
-      [subDir, "--yes"],
-      testDir,
-      { MOTEBIT_PASSPHRASE: "test-pass-123", MOTEBIT_CONFIG_DIR: configDir },
-    );
+    const { stdout, exitCode } = run([subDir, "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-123",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Created");
     expect(stdout).toContain(subDir);
@@ -118,11 +120,10 @@ describe("create-motebit", () => {
   });
 
   it("--yes without MOTEBIT_PASSPHRASE fails", () => {
-    const { exitCode, stdout } = run(
-      ["my-agent", "--yes"],
-      testDir,
-      { MOTEBIT_PASSPHRASE: "", MOTEBIT_CONFIG_DIR: configDir },
-    );
+    const { exitCode, stdout } = run(["my-agent", "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
     expect(exitCode).toBe(1);
     expect(stdout).toContain("MOTEBIT_PASSPHRASE");
   });
@@ -132,11 +133,10 @@ describe("create-motebit", () => {
   it("refuses to scaffold over existing package.json", () => {
     writeFileSync(join(testDir, "package.json"), "{}", "utf-8");
 
-    const { stdout, exitCode } = run(
-      ["--yes"],
-      testDir,
-      { MOTEBIT_PASSPHRASE: "test", MOTEBIT_CONFIG_DIR: configDir },
-    );
+    const { stdout, exitCode } = run(["--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
     expect(exitCode).toBe(1);
     expect(stdout).toContain("already exists");
   });
@@ -144,31 +144,28 @@ describe("create-motebit", () => {
   // -- console output --
 
   it("prints next steps with cd when using directory arg", () => {
-    const { stdout } = run(
-      ["my-project", "--yes"],
-      testDir,
-      { MOTEBIT_PASSPHRASE: "test-pw", MOTEBIT_CONFIG_DIR: configDir },
-    );
+    const { stdout } = run(["my-project", "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pw",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
     expect(stdout).toContain("cd my-project");
     expect(stdout).toContain("npm install");
     expect(stdout).toContain("node verify.js");
   });
 
   it("shows Motebit ID in output", () => {
-    const { stdout } = run(
-      ["my-project", "--yes"],
-      testDir,
-      { MOTEBIT_PASSPHRASE: "test-pw", MOTEBIT_CONFIG_DIR: configDir },
-    );
+    const { stdout } = run(["my-project", "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pw",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
     expect(stdout).toContain("Motebit ID:");
   });
 
   it("shows config path in output", () => {
-    const { stdout } = run(
-      ["my-project", "--yes"],
-      testDir,
-      { MOTEBIT_PASSPHRASE: "test-pw", MOTEBIT_CONFIG_DIR: configDir },
-    );
+    const { stdout } = run(["my-project", "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pw",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
     expect(stdout).toContain("config.json");
   });
 
@@ -183,11 +180,10 @@ describe("create-motebit", () => {
       "utf-8",
     );
 
-    run(
-      ["my-project", "--yes"],
-      testDir,
-      { MOTEBIT_PASSPHRASE: "test-pw", MOTEBIT_CONFIG_DIR: configDir },
-    );
+    run(["my-project", "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pw",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
 
     const config = JSON.parse(readFileSync(join(configDir, "config.json"), "utf-8"));
     expect(config.some_custom_field).toBe("preserved");
@@ -205,11 +201,10 @@ describe("create-motebit", () => {
 
   it("verifies a generated motebit.md", () => {
     // First scaffold
-    run(
-      ["my-project", "--yes"],
-      testDir,
-      { MOTEBIT_PASSPHRASE: "test-pw", MOTEBIT_CONFIG_DIR: configDir },
-    );
+    run(["my-project", "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pw",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
 
     const identityPath = join(testDir, "my-project", "motebit.md");
     expect(existsSync(identityPath)).toBe(true);

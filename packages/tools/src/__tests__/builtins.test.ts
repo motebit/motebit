@@ -78,7 +78,9 @@ describe("web_search", () => {
   });
 
   it("returns error on network error", async () => {
-    globalThis.fetch = vi.fn().mockRejectedValue(new Error("Network error")) as unknown as typeof fetch;
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValue(new Error("Network error")) as unknown as typeof fetch;
 
     const handler = createWebSearchHandler();
     const result = await handler({ query: "test" });
@@ -88,9 +90,11 @@ describe("web_search", () => {
 
   it("uses a custom SearchProvider when provided", async () => {
     const mockProvider = {
-      search: vi.fn().mockResolvedValue([
-        { title: "Brave Result", url: "https://brave.com", snippet: "Found via Brave" },
-      ]),
+      search: vi
+        .fn()
+        .mockResolvedValue([
+          { title: "Brave Result", url: "https://brave.com", snippet: "Found via Brave" },
+        ]),
     };
 
     const handler = createWebSearchHandler(mockProvider);
@@ -148,7 +152,8 @@ describe("read_url", () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       headers: new Headers({ "content-type": "text/html" }),
-      text: async () => "<html><head><style>body{}</style></head><body><p>Hello World</p><script>alert(1)</script></body></html>",
+      text: async () =>
+        "<html><head><style>body{}</style></head><body><p>Hello World</p><script>alert(1)</script></body></html>",
     }) as unknown as typeof fetch;
 
     const handler = createReadUrlHandler();
@@ -459,7 +464,10 @@ describe("registerBuiltinTools", () => {
     });
 
     expect(registry.size).toBe(7);
-    const names = registry.list().map((t) => t.name).sort();
+    const names = registry
+      .list()
+      .map((t) => t.name)
+      .sort();
     expect(names).toEqual([
       "list_events",
       "read_file",

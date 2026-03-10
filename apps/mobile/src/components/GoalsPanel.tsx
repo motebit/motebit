@@ -72,67 +72,80 @@ export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.Re
     refresh();
   }, [newPrompt, newIntervalIdx, newMode, goalStore, identity.motebitId, refresh]);
 
-  const handleToggle = useCallback((goalId: string, enabled: boolean) => {
-    if (!goalStore) return;
-    goalStore.toggleGoal(goalId, enabled);
-    refresh();
-  }, [goalStore, refresh]);
+  const handleToggle = useCallback(
+    (goalId: string, enabled: boolean) => {
+      if (!goalStore) return;
+      goalStore.toggleGoal(goalId, enabled);
+      refresh();
+    },
+    [goalStore, refresh],
+  );
 
-  const handleRemove = useCallback((goalId: string) => {
-    Alert.alert("Remove Goal", "Are you sure you want to delete this goal?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: () => {
-          if (!goalStore) return;
-          goalStore.removeGoal(goalId);
-          refresh();
+  const handleRemove = useCallback(
+    (goalId: string) => {
+      Alert.alert("Remove Goal", "Are you sure you want to delete this goal?", [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => {
+            if (!goalStore) return;
+            goalStore.removeGoal(goalId);
+            refresh();
+          },
         },
-      },
-    ]);
-  }, [goalStore, refresh]);
+      ]);
+    },
+    [goalStore, refresh],
+  );
 
-  const renderGoal = useCallback(({ item: goal }: { item: Goal }) => (
-    <View style={styles.goalRow}>
-      <View style={styles.goalInfo}>
-        <Text style={styles.goalPrompt} numberOfLines={2}>{goal.prompt}</Text>
-        <View style={styles.goalMeta}>
-          <Text style={styles.goalMetaText}>{formatInterval(goal.interval_ms)}</Text>
-          <Text style={styles.goalMetaText}>{goal.mode}</Text>
-          <Text style={[
-            styles.goalMetaText,
-            (goal.status === "paused" || goal.status === "failed") && styles.goalMetaWarning,
-          ]}>
-            {goal.status}
+  const renderGoal = useCallback(
+    ({ item: goal }: { item: Goal }) => (
+      <View style={styles.goalRow}>
+        <View style={styles.goalInfo}>
+          <Text style={styles.goalPrompt} numberOfLines={2}>
+            {goal.prompt}
           </Text>
-          {goal.last_run_at != null ? (
-            <Text style={styles.goalMetaText}>ran {formatTimeAgo(goal.last_run_at)}</Text>
-          ) : null}
-          {goal.consecutive_failures > 0 ? (
-            <Text style={styles.goalMetaWarning}>
-              {goal.consecutive_failures}/{goal.max_retries} failures
+          <View style={styles.goalMeta}>
+            <Text style={styles.goalMetaText}>{formatInterval(goal.interval_ms)}</Text>
+            <Text style={styles.goalMetaText}>{goal.mode}</Text>
+            <Text
+              style={[
+                styles.goalMetaText,
+                (goal.status === "paused" || goal.status === "failed") && styles.goalMetaWarning,
+              ]}
+            >
+              {goal.status}
             </Text>
-          ) : null}
+            {goal.last_run_at != null ? (
+              <Text style={styles.goalMetaText}>ran {formatTimeAgo(goal.last_run_at)}</Text>
+            ) : null}
+            {goal.consecutive_failures > 0 ? (
+              <Text style={styles.goalMetaWarning}>
+                {goal.consecutive_failures}/{goal.max_retries} failures
+              </Text>
+            ) : null}
+          </View>
+        </View>
+        <View style={styles.goalActions}>
+          <Switch
+            value={goal.enabled}
+            onValueChange={(v) => handleToggle(goal.goal_id, v)}
+            trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
+            thumbColor={goal.enabled ? colors.textPrimary : colors.textMuted}
+          />
+          <TouchableOpacity
+            onPress={() => handleRemove(goal.goal_id)}
+            activeOpacity={0.7}
+            style={styles.goalDeleteBtn}
+          >
+            <Text style={styles.goalDeleteText}>X</Text>
+          </TouchableOpacity>
         </View>
       </View>
-      <View style={styles.goalActions}>
-        <Switch
-          value={goal.enabled}
-          onValueChange={(v) => handleToggle(goal.goal_id, v)}
-          trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
-          thumbColor={goal.enabled ? colors.textPrimary : colors.textMuted}
-        />
-        <TouchableOpacity
-          onPress={() => handleRemove(goal.goal_id)}
-          activeOpacity={0.7}
-          style={styles.goalDeleteBtn}
-        >
-          <Text style={styles.goalDeleteText}>X</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  ), [colors, styles, handleToggle, handleRemove]);
+    ),
+    [colors, styles, handleToggle, handleRemove],
+  );
 
   return (
     <Modal visible={visible} animationType="slide" transparent statusBarTranslucent>
@@ -184,7 +197,9 @@ export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.Re
                     onPress={() => setNewIntervalIdx(idx)}
                     activeOpacity={0.7}
                   >
-                    <Text style={[styles.chipText, newIntervalIdx === idx && styles.chipTextActive]}>
+                    <Text
+                      style={[styles.chipText, newIntervalIdx === idx && styles.chipTextActive]}
+                    >
                       {opt.label}
                     </Text>
                   </TouchableOpacity>

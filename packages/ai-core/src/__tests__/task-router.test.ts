@@ -49,8 +49,8 @@ describe("TaskRouter.resolve()", () => {
 
     expect(config).toEqual({
       model: "claude-sonnet-4-5-20250514", // from default
-      temperature: 0.3,                     // from override
-      maxTokens: 1024,                      // from default
+      temperature: 0.3, // from override
+      maxTokens: 1024, // from default
     });
   });
 
@@ -65,9 +65,9 @@ describe("TaskRouter.resolve()", () => {
     const config = router.resolve("reflection");
 
     expect(config).toEqual({
-      model: "claude-haiku-35",      // from override
-      temperature: 0.7,              // from default
-      maxTokens: 1024,               // from default
+      model: "claude-haiku-35", // from override
+      temperature: 0.7, // from default
+      maxTokens: 1024, // from default
     });
   });
 
@@ -97,8 +97,8 @@ describe("TaskRouter.resolve()", () => {
 
     expect(config).toEqual({
       model: "claude-sonnet-4-5-20250514",
-      temperature: 0.7,   // built-in default
-      maxTokens: 1024,    // built-in default
+      temperature: 0.7, // built-in default
+      maxTokens: 1024, // built-in default
     });
   });
 
@@ -164,12 +164,24 @@ describe("withTaskConfig()", () => {
     let currentMaxTokens = 1024;
 
     const provider = {
-      get model() { return currentModel; },
-      get temperature() { return currentTemp; },
-      get maxTokens() { return currentMaxTokens; },
-      setModel: vi.fn((m: string) => { currentModel = m; }),
-      setTemperature: vi.fn((t: number) => { currentTemp = t; }),
-      setMaxTokens: vi.fn((mt: number) => { currentMaxTokens = mt; }),
+      get model() {
+        return currentModel;
+      },
+      get temperature() {
+        return currentTemp;
+      },
+      get maxTokens() {
+        return currentMaxTokens;
+      },
+      setModel: vi.fn((m: string) => {
+        currentModel = m;
+      }),
+      setTemperature: vi.fn((t: number) => {
+        currentTemp = t;
+      }),
+      setMaxTokens: vi.fn((mt: number) => {
+        currentMaxTokens = mt;
+      }),
       generate: vi.fn().mockResolvedValue({
         text: responseText,
         confidence: 0.8,

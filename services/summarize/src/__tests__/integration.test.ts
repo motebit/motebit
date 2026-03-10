@@ -10,11 +10,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "@motebit/runtime";
-import {
-  InMemoryToolRegistry,
-  webSearchDefinition,
-  readUrlDefinition,
-} from "@motebit/tools";
+import { InMemoryToolRegistry, webSearchDefinition, readUrlDefinition } from "@motebit/tools";
 import type { ToolResult, ExecutionReceipt } from "@motebit/sdk";
 import { McpServerAdapter } from "@motebit/mcp-server";
 import type { MotebitServerDeps } from "@motebit/mcp-server";
@@ -37,7 +33,9 @@ const WS_PORT = 39210;
 const SUM_PORT = 39211;
 
 function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 function stripIdentityTag(text: string): string {
@@ -126,7 +124,9 @@ beforeAll(async () => {
       }
       const completedAt = Date.now();
       const resultStr = result.ok
-        ? (typeof result.data === "string" ? result.data : JSON.stringify(result.data ?? null))
+        ? typeof result.data === "string"
+          ? result.data
+          : JSON.stringify(result.data ?? null)
         : (result.error ?? "error");
       const enc = new TextEncoder();
       const receipt = await signExecutionReceipt(
@@ -145,7 +145,10 @@ beforeAll(async () => {
         },
         wsPrivateKey,
       );
-      yield { type: "task_result" as const, receipt: receipt as unknown as Record<string, unknown> };
+      yield {
+        type: "task_result" as const,
+        receipt: receipt as unknown as Record<string, unknown>,
+      };
     },
   };
 
@@ -170,10 +173,7 @@ beforeAll(async () => {
   await webSearchAdapter.connect();
 
   const sumRegistry = new InMemoryToolRegistry();
-  sumRegistry.register(
-    summarizeSearchDefinition,
-    createSummarizeSearchHandler(webSearchAdapter),
-  );
+  sumRegistry.register(summarizeSearchDefinition, createSummarizeSearchHandler(webSearchAdapter));
 
   sumRuntime = new MotebitRuntime(
     { motebitId: SUM_MOTEBIT_ID },
@@ -228,7 +228,9 @@ beforeAll(async () => {
       }
 
       const resultStr = result.ok
-        ? (typeof result.data === "string" ? result.data : JSON.stringify(result.data ?? null))
+        ? typeof result.data === "string"
+          ? result.data
+          : JSON.stringify(result.data ?? null)
         : (result.error ?? "error");
       const enc = new TextEncoder();
       const receiptBody: Record<string, unknown> = {
@@ -262,21 +264,42 @@ beforeAll(async () => {
   await sumServer.start();
 
   // Connect client to summarize service
-  sumClient = new Client(
-    { name: "test-caller", version: "0.1.0" },
-    { capabilities: {} },
-  );
+  sumClient = new Client({ name: "test-caller", version: "0.1.0" }, { capabilities: {} });
   const transport = new StreamableHTTPClientTransport(new URL(`http://localhost:${SUM_PORT}/mcp`));
   await sumClient.connect(transport);
 }, 30_000);
 
 afterAll(async () => {
-  try { await sumClient.close(); } catch { /* ignore */ }
-  try { await webSearchAdapter.disconnect(); } catch { /* ignore */ }
-  try { await sumServer.stop(); } catch { /* ignore */ }
-  try { await wsServer.stop(); } catch { /* ignore */ }
-  try { sumRuntime.stop(); } catch { /* ignore */ }
-  try { wsRuntime.stop(); } catch { /* ignore */ }
+  try {
+    await sumClient.close();
+  } catch {
+    /* ignore */
+  }
+  try {
+    await webSearchAdapter.disconnect();
+  } catch {
+    /* ignore */
+  }
+  try {
+    await sumServer.stop();
+  } catch {
+    /* ignore */
+  }
+  try {
+    await wsServer.stop();
+  } catch {
+    /* ignore */
+  }
+  try {
+    sumRuntime.stop();
+  } catch {
+    /* ignore */
+  }
+  try {
+    wsRuntime.stop();
+  } catch {
+    /* ignore */
+  }
 });
 
 describe("Multi-Hop Delegation — Summarize → Web-Search", () => {

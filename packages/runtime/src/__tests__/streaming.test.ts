@@ -1,15 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  MotebitRuntime,
-  NullRenderer,
-  SimpleToolRegistry,
-  createInMemoryStorage,
-} from "../index";
-import type {
-  PlatformAdapters,
-  StreamChunk,
-  ConversationStoreAdapter,
-} from "../index";
+import { MotebitRuntime, NullRenderer, SimpleToolRegistry, createInMemoryStorage } from "../index";
+import type { PlatformAdapters, StreamChunk, ConversationStoreAdapter } from "../index";
 import type { StreamingProvider, AgenticChunk, TurnResult } from "@motebit/ai-core";
 import type { AIResponse, ContextPack, ToolHandler } from "@motebit/sdk";
 import { TrustMode, BatteryMode, EventType } from "@motebit/sdk";
@@ -25,7 +16,8 @@ vi.mock("@motebit/ai-core", async () => {
   const actual = await vi.importActual<Record<string, unknown>>("@motebit/ai-core");
   return {
     ...actual,
-    runTurnStreaming: (...args: unknown[]) => mockRunTurnStreaming(...args) as AsyncGenerator<AgenticChunk>,
+    runTurnStreaming: (...args: unknown[]) =>
+      mockRunTurnStreaming(...args) as AsyncGenerator<AgenticChunk>,
     reflect: (...args: unknown[]) => mockAiReflect(...args) as Promise<unknown>,
     summarizeConversation: (...args: unknown[]) => mockSummarize(...args) as Promise<string>,
     shouldSummarize: (...args: unknown[]) => mockShouldSummarize(...args) as boolean,
@@ -109,24 +101,27 @@ async function collectChunks(gen: AsyncGenerator<StreamChunk>): Promise<StreamCh
 }
 
 function createMockConversationStore(): ConversationStoreAdapter {
-  const conversations = new Map<string, {
-    conversationId: string;
-    motebitId: string;
-    startedAt: number;
-    lastActiveAt: number;
-    summary: string | null;
-    messages: Array<{
-      messageId: string;
+  const conversations = new Map<
+    string,
+    {
       conversationId: string;
       motebitId: string;
-      role: string;
-      content: string;
-      toolCalls: string | null;
-      toolCallId: string | null;
-      createdAt: number;
-      tokenEstimate: number;
-    }>;
-  }>();
+      startedAt: number;
+      lastActiveAt: number;
+      summary: string | null;
+      messages: Array<{
+        messageId: string;
+        conversationId: string;
+        motebitId: string;
+        role: string;
+        content: string;
+        toolCalls: string | null;
+        toolCallId: string | null;
+        createdAt: number;
+        tokenEstimate: number;
+      }>;
+    }
+  >();
   let nextId = 1;
 
   return {
@@ -142,12 +137,16 @@ function createMockConversationStore(): ConversationStoreAdapter {
       });
       return id;
     },
-    appendMessage(conversationId: string, motebitId: string, msg: {
-      role: string;
-      content: string;
-      toolCalls?: string;
-      toolCallId?: string;
-    }): void {
+    appendMessage(
+      conversationId: string,
+      motebitId: string,
+      msg: {
+        role: string;
+        content: string;
+        toolCalls?: string;
+        toolCallId?: string;
+      },
+    ): void {
       const conv = conversations.get(conversationId);
       if (!conv) return;
       conv.lastActiveAt = Date.now();
@@ -226,7 +225,10 @@ describe("SimpleToolRegistry", () => {
   });
 
   it("register and list tools", () => {
-    registry.register(toolDef("test_tool", "A test tool"), async () => ({ ok: true, data: "done" }));
+    registry.register(toolDef("test_tool", "A test tool"), async () => ({
+      ok: true,
+      data: "done",
+    }));
     expect(registry.list()).toHaveLength(1);
     expect(registry.list()[0]!.name).toBe("test_tool");
   });
@@ -260,10 +262,9 @@ describe("SimpleToolRegistry", () => {
   });
 
   it("execute() catches handler errors", async () => {
-    registry.register(
-      toolDef("broken", "Broken"),
-      async () => { throw new Error("handler exploded"); },
-    );
+    registry.register(toolDef("broken", "Broken"), async () => {
+      throw new Error("handler exploded");
+    });
     const result = await registry.execute("broken", {});
     expect(result.ok).toBe(false);
     expect(result.error).toBe("handler exploded");
@@ -271,9 +272,9 @@ describe("SimpleToolRegistry", () => {
 
   it("register() throws on duplicate name", () => {
     registry.register(toolDef("dup", "First"), async () => ({ ok: true }));
-    expect(() =>
-      registry.register(toolDef("dup", "Second"), async () => ({ ok: true })),
-    ).toThrow('Tool "dup" already registered');
+    expect(() => registry.register(toolDef("dup", "Second"), async () => ({ ok: true }))).toThrow(
+      'Tool "dup" already registered',
+    );
   });
 
   it("merge() imports tools from another registry", () => {
@@ -342,11 +343,13 @@ describe("sendMessageStreaming", () => {
 
   it("yields text and result chunks", async () => {
     const result = makeTurnResult("Streamed response");
-    mockRunTurnStreaming.mockReturnValue(yieldChunks(
-      { type: "text", text: "Streamed " },
-      { type: "text", text: "response" },
-      { type: "result", result },
-    ));
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        { type: "text", text: "Streamed " },
+        { type: "text", text: "response" },
+        { type: "result", result },
+      ),
+    );
 
     const chunks = await collectChunks(runtime.sendMessageStreaming("hello"));
     expect(chunks).toHaveLength(3);
@@ -356,38 +359,39 @@ describe("sendMessageStreaming", () => {
   });
 
   it("throws without AI provider", async () => {
-    const headless = new MotebitRuntime(
-      { motebitId: "no-ai" },
-      createAdapters(),
-    );
+    const headless = new MotebitRuntime({ motebitId: "no-ai" }, createAdapters());
     await expect(async () => {
-      for await (const _chunk of headless.sendMessageStreaming("hello")) { /* consume */ }
+      for await (const _chunk of headless.sendMessageStreaming("hello")) {
+        /* consume */
+      }
     }).rejects.toThrow("AI not initialized");
   });
 
   it("rejects concurrent streaming calls", async () => {
     const result = makeTurnResult();
-    mockRunTurnStreaming.mockReturnValue(yieldChunks(
-      { type: "text", text: "slow" },
-      { type: "result", result },
-    ));
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks({ type: "text", text: "slow" }, { type: "result", result }),
+    );
 
     const gen = runtime.sendMessageStreaming("first");
     await gen.next();
 
     await expect(async () => {
-      for await (const _chunk of runtime.sendMessageStreaming("second")) { /* consume */ }
+      for await (const _chunk of runtime.sendMessageStreaming("second")) {
+        /* consume */
+      }
     }).rejects.toThrow("Already processing");
 
-    for await (const _chunk of gen) { /* drain */ }
+    for await (const _chunk of gen) {
+      /* drain */
+    }
   });
 
   it("pushes user and assistant messages to conversation history", async () => {
     const result = makeTurnResult("Response text");
-    mockRunTurnStreaming.mockReturnValue(yieldChunks(
-      { type: "text", text: "Response text" },
-      { type: "result", result },
-    ));
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks({ type: "text", text: "Response text" }, { type: "result", result }),
+    );
 
     await collectChunks(runtime.sendMessageStreaming("hello"));
     const history = runtime.getConversationHistory();
@@ -398,9 +402,7 @@ describe("sendMessageStreaming", () => {
 
   it("clears isProcessing after stream completes", async () => {
     const result = makeTurnResult();
-    mockRunTurnStreaming.mockReturnValue(yieldChunks(
-      { type: "result", result },
-    ));
+    mockRunTurnStreaming.mockReturnValue(yieldChunks({ type: "result", result }));
 
     expect(runtime.isProcessing).toBe(false);
     await collectChunks(runtime.sendMessageStreaming("hello"));
@@ -408,10 +410,12 @@ describe("sendMessageStreaming", () => {
   });
 
   it("clears isProcessing even on error", async () => {
-    mockRunTurnStreaming.mockReturnValue((async function*() {
-      yield { type: "text" as const, text: "" };
-      throw new Error("stream failed");
-    })());
+    mockRunTurnStreaming.mockReturnValue(
+      (async function* () {
+        yield { type: "text" as const, text: "" };
+        throw new Error("stream failed");
+      })(),
+    );
 
     await expect(async () => {
       await collectChunks(runtime.sendMessageStreaming("hello"));
@@ -421,9 +425,7 @@ describe("sendMessageStreaming", () => {
 
   it("clears pending approval at start of new stream", async () => {
     const result = makeTurnResult();
-    mockRunTurnStreaming.mockReturnValue(yieldChunks(
-      { type: "result", result },
-    ));
+    mockRunTurnStreaming.mockReturnValue(yieldChunks({ type: "result", result }));
 
     await collectChunks(runtime.sendMessageStreaming("hello"));
     expect(runtime.hasPendingApproval).toBe(false);
@@ -445,12 +447,14 @@ describe("processStream side effects", () => {
 
   it("updates state on tool_status calling", async () => {
     const result = makeTurnResult();
-    mockRunTurnStreaming.mockReturnValue(yieldChunks(
-      { type: "tool_status", name: "read_file", status: "calling" },
-      { type: "tool_status", name: "read_file", status: "done", result: "file content" },
-      { type: "text", text: "Here is the file." },
-      { type: "result", result },
-    ));
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        { type: "tool_status", name: "read_file", status: "calling" },
+        { type: "tool_status", name: "read_file", status: "done", result: "file content" },
+        { type: "text", text: "Here is the file." },
+        { type: "result", result },
+      ),
+    );
 
     const chunks = await collectChunks(runtime.sendMessageStreaming("read a file"));
     expect(chunks).toHaveLength(4);
@@ -460,10 +464,18 @@ describe("processStream side effects", () => {
 
   it("captures pending approval on approval_request", async () => {
     const result = makeTurnResult();
-    mockRunTurnStreaming.mockReturnValue(yieldChunks(
-      { type: "approval_request", tool_call_id: "tc-1", name: "delete_file", args: { path: "/tmp/x" }, risk_level: 0.9 },
-      { type: "result", result },
-    ));
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        {
+          type: "approval_request",
+          tool_call_id: "tc-1",
+          name: "delete_file",
+          args: { path: "/tmp/x" },
+          risk_level: 0.9,
+        },
+        { type: "result", result },
+      ),
+    );
 
     expect(runtime.hasPendingApproval).toBe(false);
     await collectChunks(runtime.sendMessageStreaming("delete something"));
@@ -477,11 +489,13 @@ describe("processStream side effects", () => {
 
   it("yields injection_warning chunks", async () => {
     const result = makeTurnResult();
-    mockRunTurnStreaming.mockReturnValue(yieldChunks(
-      { type: "injection_warning", tool_name: "web_fetch", patterns: ["ignore previous"] },
-      { type: "text", text: "Warning detected." },
-      { type: "result", result },
-    ));
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        { type: "injection_warning", tool_name: "web_fetch", patterns: ["ignore previous"] },
+        { type: "text", text: "Warning detected." },
+        { type: "result", result },
+      ),
+    );
 
     const chunks = await collectChunks(runtime.sendMessageStreaming("fetch url"));
     expect(chunks[0]).toEqual({
@@ -493,10 +507,12 @@ describe("processStream side effects", () => {
 
   it("extracts state tags from accumulated text", async () => {
     const result = makeTurnResult();
-    mockRunTurnStreaming.mockReturnValue(yieldChunks(
-      { type: "text", text: 'Thinking... <state field="curiosity" value="0.9" />' },
-      { type: "result", result },
-    ));
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        { type: "text", text: 'Thinking... <state field="curiosity" value="0.9" />' },
+        { type: "result", result },
+      ),
+    );
 
     // Should extract state tag and push update without error
     await collectChunks(runtime.sendMessageStreaming("tell me about X"));
@@ -504,10 +520,12 @@ describe("processStream side effects", () => {
 
   it("extracts actions from accumulated text", async () => {
     const result = makeTurnResult();
-    mockRunTurnStreaming.mockReturnValue(yieldChunks(
-      { type: "text", text: "I understand *smiles* let me help." },
-      { type: "result", result },
-    ));
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        { type: "text", text: "I understand *smiles* let me help." },
+        { type: "result", result },
+      ),
+    );
 
     // Should extract *smiles* action and convert to state delta without error
     await collectChunks(runtime.sendMessageStreaming("hello"));
@@ -529,15 +547,14 @@ describe("resumeAfterApproval", () => {
 
   it("throws without pending approval", async () => {
     await expect(async () => {
-      for await (const _chunk of runtime.resumeAfterApproval(true)) { /* consume */ }
+      for await (const _chunk of runtime.resumeAfterApproval(true)) {
+        /* consume */
+      }
     }).rejects.toThrow("No pending approval to resume");
   });
 
   it("throws without AI provider", async () => {
-    const headless = new MotebitRuntime(
-      { motebitId: "no-ai" },
-      createAdapters(),
-    );
+    const headless = new MotebitRuntime({ motebitId: "no-ai" }, createAdapters());
     // Set pending approval directly for this edge case test
     (headless as unknown as { _pendingApproval: unknown })._pendingApproval = {
       toolCallId: "tc-1",
@@ -546,31 +563,37 @@ describe("resumeAfterApproval", () => {
       userMessage: "test",
     };
     await expect(async () => {
-      for await (const _chunk of headless.resumeAfterApproval(true)) { /* consume */ }
+      for await (const _chunk of headless.resumeAfterApproval(true)) {
+        /* consume */
+      }
     }).rejects.toThrow("AI not initialized");
   });
 
   it("approved: executes tool and yields tool_status chunks", async () => {
     // Register a tool in the registry
-    runtime.getToolRegistry().register(
-      toolDef("safe_tool", "A safe tool"),
-      async (args) => ({ ok: true, data: `executed with ${JSON.stringify(args)}` }),
-    );
+    runtime.getToolRegistry().register(toolDef("safe_tool", "A safe tool"), async (args) => ({
+      ok: true,
+      data: `executed with ${JSON.stringify(args)}`,
+    }));
 
     // Simulate getting into pending approval state
-    mockRunTurnStreaming.mockReturnValueOnce(yieldChunks(
-      { type: "approval_request", tool_call_id: "tc-1", name: "safe_tool", args: { x: 1 } },
-      { type: "result", result: makeTurnResult() },
-    ));
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks(
+        { type: "approval_request", tool_call_id: "tc-1", name: "safe_tool", args: { x: 1 } },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
     await collectChunks(runtime.sendMessageStreaming("use tool"));
     expect(runtime.hasPendingApproval).toBe(true);
 
     // Resume with approval — continuation stream
     const continuationResult = makeTurnResult("Tool executed successfully");
-    mockRunTurnStreaming.mockReturnValueOnce(yieldChunks(
-      { type: "text", text: "Tool executed successfully" },
-      { type: "result", result: continuationResult },
-    ));
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks(
+        { type: "text", text: "Tool executed successfully" },
+        { type: "result", result: continuationResult },
+      ),
+    );
 
     const chunks = await collectChunks(runtime.resumeAfterApproval(true));
 
@@ -583,41 +606,45 @@ describe("resumeAfterApproval", () => {
 
   it("denied: pushes denial into history and continues", async () => {
     // Simulate pending approval state
-    mockRunTurnStreaming.mockReturnValueOnce(yieldChunks(
-      { type: "approval_request", tool_call_id: "tc-2", name: "risky_tool", args: { y: 2 } },
-      { type: "result", result: makeTurnResult() },
-    ));
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks(
+        { type: "approval_request", tool_call_id: "tc-2", name: "risky_tool", args: { y: 2 } },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
     await collectChunks(runtime.sendMessageStreaming("use risky tool"));
     expect(runtime.hasPendingApproval).toBe(true);
 
     // Resume with denial
     const continuationResult = makeTurnResult("I understand, the tool was denied.");
-    mockRunTurnStreaming.mockReturnValueOnce(yieldChunks(
-      { type: "text", text: "I understand, the tool was denied." },
-      { type: "result", result: continuationResult },
-    ));
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks(
+        { type: "text", text: "I understand, the tool was denied." },
+        { type: "result", result: continuationResult },
+      ),
+    );
 
     const chunks = await collectChunks(runtime.resumeAfterApproval(false));
 
     // Should NOT yield tool_status (tool not executed)
-    const toolStatusChunks = chunks.filter(c => c.type === "tool_status");
+    const toolStatusChunks = chunks.filter((c) => c.type === "tool_status");
     expect(toolStatusChunks).toHaveLength(0);
 
     // Should yield text and result from continuation
-    expect(chunks.some(c => c.type === "text")).toBe(true);
+    expect(chunks.some((c) => c.type === "text")).toBe(true);
     expect(runtime.hasPendingApproval).toBe(false);
   });
 
   it("clears pending approval after resume", async () => {
-    mockRunTurnStreaming.mockReturnValueOnce(yieldChunks(
-      { type: "approval_request", tool_call_id: "tc-3", name: "tool", args: {} },
-    ));
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks({ type: "approval_request", tool_call_id: "tc-3", name: "tool", args: {} }),
+    );
     await collectChunks(runtime.sendMessageStreaming("test"));
 
     const continuationResult = makeTurnResult("ok");
-    mockRunTurnStreaming.mockReturnValueOnce(yieldChunks(
-      { type: "result", result: continuationResult },
-    ));
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks({ type: "result", result: continuationResult }),
+    );
 
     await collectChunks(runtime.resumeAfterApproval(false));
     expect(runtime.hasPendingApproval).toBe(false);
@@ -646,10 +673,9 @@ describe("External tool registration", () => {
   });
 
   it("registerExternalTools skips already-registered tools", () => {
-    runtime.getToolRegistry().register(
-      toolDef("overlap", "Local"),
-      async () => ({ ok: true, data: "local" }),
-    );
+    runtime
+      .getToolRegistry()
+      .register(toolDef("overlap", "Local"), async () => ({ ok: true, data: "local" }));
 
     const external = new SimpleToolRegistry();
     external.register(toolDef("overlap", "External"), async () => ({ ok: true, data: "external" }));
@@ -740,10 +766,9 @@ describe("Conversation persistence", () => {
 
   it("creates conversation on first message", async () => {
     const result = makeTurnResult("reply");
-    mockRunTurnStreaming.mockReturnValue(yieldChunks(
-      { type: "text", text: "reply" },
-      { type: "result", result },
-    ));
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks({ type: "text", text: "reply" }, { type: "result", result }),
+    );
 
     expect(runtime.getConversationId()).toBeNull();
     await collectChunks(runtime.sendMessageStreaming("hello"));
@@ -752,10 +777,9 @@ describe("Conversation persistence", () => {
 
   it("persists user and assistant messages", async () => {
     const result = makeTurnResult("reply");
-    mockRunTurnStreaming.mockReturnValue(yieldChunks(
-      { type: "text", text: "reply" },
-      { type: "result", result },
-    ));
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks({ type: "text", text: "reply" }, { type: "result", result }),
+    );
 
     await collectChunks(runtime.sendMessageStreaming("hello"));
     const convId = runtime.getConversationId()!;
@@ -769,10 +793,9 @@ describe("Conversation persistence", () => {
 
   it("listConversations delegates to store", async () => {
     const result = makeTurnResult("reply");
-    mockRunTurnStreaming.mockReturnValue(yieldChunks(
-      { type: "text", text: "reply" },
-      { type: "result", result },
-    ));
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks({ type: "text", text: "reply" }, { type: "result", result }),
+    );
 
     await collectChunks(runtime.sendMessageStreaming("hello"));
     const convs = runtime.listConversations();
@@ -790,10 +813,9 @@ describe("Conversation persistence", () => {
 
   it("loadConversation replaces history", async () => {
     const result = makeTurnResult("reply");
-    mockRunTurnStreaming.mockReturnValue(yieldChunks(
-      { type: "text", text: "reply" },
-      { type: "result", result },
-    ));
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks({ type: "text", text: "reply" }, { type: "result", result }),
+    );
 
     await collectChunks(runtime.sendMessageStreaming("hello"));
     const convId = runtime.getConversationId()!;
@@ -820,10 +842,9 @@ describe("Conversation persistence", () => {
 
   it("resetConversation clears conversationId", async () => {
     const result = makeTurnResult("reply");
-    mockRunTurnStreaming.mockReturnValue(yieldChunks(
-      { type: "text", text: "reply" },
-      { type: "result", result },
-    ));
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks({ type: "text", text: "reply" }, { type: "result", result }),
+    );
 
     await collectChunks(runtime.sendMessageStreaming("hello"));
     expect(runtime.getConversationId()).not.toBeNull();
@@ -853,10 +874,9 @@ describe("Conversation summarization", () => {
     );
 
     const result = makeTurnResult("reply");
-    mockRunTurnStreaming.mockReturnValue(yieldChunks(
-      { type: "text", text: "reply" },
-      { type: "result", result },
-    ));
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks({ type: "text", text: "reply" }, { type: "result", result }),
+    );
 
     await collectChunks(runtime.sendMessageStreaming("hello"));
 
@@ -871,10 +891,7 @@ describe("Conversation summarization", () => {
 
 describe("setModel", () => {
   it("throws without provider", () => {
-    const headless = new MotebitRuntime(
-      { motebitId: "no-ai" },
-      createAdapters(),
-    );
+    const headless = new MotebitRuntime({ motebitId: "no-ai" }, createAdapters());
     expect(() => headless.setModel("new-model")).toThrow("No AI provider configured");
   });
 });
@@ -887,10 +904,7 @@ describe("reflect", () => {
   });
 
   it("throws without provider", async () => {
-    const headless = new MotebitRuntime(
-      { motebitId: "no-ai" },
-      createAdapters(),
-    );
+    const headless = new MotebitRuntime({ motebitId: "no-ai" }, createAdapters());
     await expect(headless.reflect()).rejects.toThrow("No AI provider configured");
   });
 
@@ -927,7 +941,7 @@ describe("reflect", () => {
     await runtime.reflect();
 
     const memories = await runtime.memory.exportAll();
-    const reflectionMems = memories.nodes.filter(n => n.content.startsWith("[reflection]"));
+    const reflectionMems = memories.nodes.filter((n) => n.content.startsWith("[reflection]"));
     expect(reflectionMems).toHaveLength(2);
     expect(reflectionMems[0]!.content).toContain("Insight one");
     expect(reflectionMems[1]!.content).toContain("Insight two");
@@ -946,23 +960,25 @@ describe("logToolUsed (via tool_status done)", () => {
     );
 
     const result = makeTurnResult();
-    mockRunTurnStreaming.mockReturnValue(yieldChunks(
-      { type: "tool_status", name: "test_tool", status: "calling" },
-      { type: "tool_status", name: "test_tool", status: "done", result: "tool output" },
-      { type: "result", result },
-    ));
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        { type: "tool_status", name: "test_tool", status: "calling" },
+        { type: "tool_status", name: "test_tool", status: "done", result: "tool output" },
+        { type: "result", result },
+      ),
+    );
 
     await collectChunks(runtime.sendMessageStreaming("use test_tool"));
 
     // Give logToolUsed a tick to complete (it's async/void)
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 50));
 
     const events = await runtime.events.query({
       motebit_id: "audit-test",
       event_types: [EventType.ToolUsed],
     });
     expect(events.length).toBeGreaterThanOrEqual(1);
-    expect((events[0]!.payload).tool).toBe("test_tool");
+    expect(events[0]!.payload.tool).toBe("test_tool");
   });
 });
 
@@ -1042,9 +1058,12 @@ describe("Approval timeout", () => {
   it("auto-denies pending approval after timeout", async () => {
     // Set up a stream that yields an approval request then stops
     mockRunTurnStreaming.mockReturnValueOnce(
-      yieldChunks(
-        { type: "approval_request", tool_call_id: "tc-timeout", name: "risky_tool", args: { x: 1 } },
-      ),
+      yieldChunks({
+        type: "approval_request",
+        tool_call_id: "tc-timeout",
+        name: "risky_tool",
+        args: { x: 1 },
+      }),
     );
 
     const runtime = new MotebitRuntime(
@@ -1066,9 +1085,12 @@ describe("Approval timeout", () => {
 
   it("fires onApprovalExpired callback", async () => {
     mockRunTurnStreaming.mockReturnValueOnce(
-      yieldChunks(
-        { type: "approval_request", tool_call_id: "tc-cb", name: "risky_tool", args: {} },
-      ),
+      yieldChunks({
+        type: "approval_request",
+        tool_call_id: "tc-cb",
+        name: "risky_tool",
+        args: {},
+      }),
     );
 
     const runtime = new MotebitRuntime(
@@ -1090,9 +1112,7 @@ describe("Approval timeout", () => {
 
   it("does not fire timeout if approval resolved before expiry", async () => {
     mockRunTurnStreaming.mockReturnValueOnce(
-      yieldChunks(
-        { type: "approval_request", tool_call_id: "tc-fast", name: "tool", args: {} },
-      ),
+      yieldChunks({ type: "approval_request", tool_call_id: "tc-fast", name: "tool", args: {} }),
     );
     // Continuation stream after denial
     mockRunTurnStreaming.mockReturnValueOnce(
@@ -1126,9 +1146,7 @@ describe("Approval timeout", () => {
 
   it("disabled when approvalTimeoutMs is 0", async () => {
     mockRunTurnStreaming.mockReturnValueOnce(
-      yieldChunks(
-        { type: "approval_request", tool_call_id: "tc-no", name: "tool", args: {} },
-      ),
+      yieldChunks({ type: "approval_request", tool_call_id: "tc-no", name: "tool", args: {} }),
     );
 
     const runtime = new MotebitRuntime(
@@ -1168,17 +1186,19 @@ describe("Delegation streaming events", () => {
     setMotebitToolServer(runtime, "motebit_query", "agent-alpha");
 
     const result = makeTurnResult();
-    mockRunTurnStreaming.mockReturnValue(yieldChunks(
-      { type: "tool_status", name: "motebit_query", status: "calling" },
-      { type: "tool_status", name: "motebit_query", status: "done", result: "response" },
-      { type: "text", text: "Got it." },
-      { type: "result", result },
-    ));
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        { type: "tool_status", name: "motebit_query", status: "calling" },
+        { type: "tool_status", name: "motebit_query", status: "done", result: "response" },
+        { type: "text", text: "Got it." },
+        { type: "result", result },
+      ),
+    );
 
     const chunks = await collectChunks(runtime.sendMessageStreaming("ask agent"));
 
-    const delegationStart = chunks.find(c => c.type === "delegation_start");
-    const delegationComplete = chunks.find(c => c.type === "delegation_complete");
+    const delegationStart = chunks.find((c) => c.type === "delegation_start");
+    const delegationComplete = chunks.find((c) => c.type === "delegation_complete");
 
     expect(delegationStart).toEqual({
       type: "delegation_start",
@@ -1194,16 +1214,18 @@ describe("Delegation streaming events", () => {
 
   it("does not emit delegation events for non-motebit tools", async () => {
     const result = makeTurnResult();
-    mockRunTurnStreaming.mockReturnValue(yieldChunks(
-      { type: "tool_status", name: "read_file", status: "calling" },
-      { type: "tool_status", name: "read_file", status: "done", result: "content" },
-      { type: "result", result },
-    ));
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        { type: "tool_status", name: "read_file", status: "calling" },
+        { type: "tool_status", name: "read_file", status: "done", result: "content" },
+        { type: "result", result },
+      ),
+    );
 
     const chunks = await collectChunks(runtime.sendMessageStreaming("read file"));
 
-    const delegationChunks = chunks.filter(c =>
-      c.type === "delegation_start" || c.type === "delegation_complete",
+    const delegationChunks = chunks.filter(
+      (c) => c.type === "delegation_start" || c.type === "delegation_complete",
     );
     expect(delegationChunks).toHaveLength(0);
   });
@@ -1219,16 +1241,20 @@ describe("Delegation streaming events", () => {
     };
 
     const result = makeTurnResult();
-    mockRunTurnStreaming.mockReturnValue(yieldChunks(
-      { type: "tool_status", name: "motebit_task", status: "calling" },
-      { type: "tool_status", name: "motebit_task", status: "done", result: taskReceipt },
-      { type: "result", result },
-    ));
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        { type: "tool_status", name: "motebit_task", status: "calling" },
+        { type: "tool_status", name: "motebit_task", status: "done", result: taskReceipt },
+        { type: "result", result },
+      ),
+    );
 
     const chunks = await collectChunks(runtime.sendMessageStreaming("run task"));
 
-    const delegationComplete = chunks.find(c => c.type === "delegation_complete") as
-      Extract<StreamChunk, { type: "delegation_complete" }>;
+    const delegationComplete = chunks.find((c) => c.type === "delegation_complete") as Extract<
+      StreamChunk,
+      { type: "delegation_complete" }
+    >;
 
     expect(delegationComplete).toBeDefined();
     expect(delegationComplete.receipt).toEqual({
@@ -1242,16 +1268,20 @@ describe("Delegation streaming events", () => {
     setMotebitToolServer(runtime, "motebit_recall", "agent-gamma");
 
     const result = makeTurnResult();
-    mockRunTurnStreaming.mockReturnValue(yieldChunks(
-      { type: "tool_status", name: "motebit_recall", status: "calling" },
-      { type: "tool_status", name: "motebit_recall", status: "done", result: "memories" },
-      { type: "result", result },
-    ));
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        { type: "tool_status", name: "motebit_recall", status: "calling" },
+        { type: "tool_status", name: "motebit_recall", status: "done", result: "memories" },
+        { type: "result", result },
+      ),
+    );
 
     const chunks = await collectChunks(runtime.sendMessageStreaming("recall"));
 
-    const delegationComplete = chunks.find(c => c.type === "delegation_complete") as
-      Extract<StreamChunk, { type: "delegation_complete" }>;
+    const delegationComplete = chunks.find((c) => c.type === "delegation_complete") as Extract<
+      StreamChunk,
+      { type: "delegation_complete" }
+    >;
 
     expect(delegationComplete).toBeDefined();
     expect(delegationComplete.receipt).toBeUndefined();
@@ -1261,17 +1291,19 @@ describe("Delegation streaming events", () => {
     setMotebitToolServer(runtime, "motebit_query", "agent-alpha");
 
     const result = makeTurnResult();
-    mockRunTurnStreaming.mockReturnValue(yieldChunks(
-      { type: "tool_status", name: "motebit_query", status: "calling" },
-      { type: "tool_status", name: "motebit_query", status: "done", result: "ok" },
-      { type: "result", result },
-    ));
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        { type: "tool_status", name: "motebit_query", status: "calling" },
+        { type: "tool_status", name: "motebit_query", status: "done", result: "ok" },
+        { type: "result", result },
+      ),
+    );
 
     const chunks = await collectChunks(runtime.sendMessageStreaming("ask"));
 
     // Delegation events are emitted before the corresponding tool_status chunk
     // Order: delegation_start, tool_status calling, delegation_complete, tool_status done, result
-    const types = chunks.map(c => c.type);
+    const types = chunks.map((c) => c.type);
     expect(types).toContain("delegation_start");
     expect(types).toContain("delegation_complete");
 

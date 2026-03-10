@@ -134,7 +134,10 @@ export async function decomposePlan(
       user_message: userMessage,
       conversation_history: [
         { role: "user" as const, content: DECOMPOSITION_SYSTEM_PROMPT },
-        { role: "assistant" as const, content: "I understand. I will decompose goals into structured JSON plans." },
+        {
+          role: "assistant" as const,
+          content: "I understand. I will decompose goals into structured JSON plans.",
+        },
       ],
     });
 

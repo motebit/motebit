@@ -71,10 +71,7 @@ export function parseVSCodeMcpConfig(content: string): McpServerConfig[] {
 /**
  * Convert a { name: { command, args, env, url } } object into McpServerConfig[].
  */
-function parseServerEntries(
-  entries: Record<string, unknown>,
-  source: string,
-): McpServerConfig[] {
+function parseServerEntries(entries: Record<string, unknown>, source: string): McpServerConfig[] {
   const results: McpServerConfig[] = [];
   for (const [name, value] of Object.entries(entries)) {
     if (value == null || typeof value !== "object") continue;
@@ -88,7 +85,8 @@ function parseServerEntries(
     };
 
     if (typeof entry.command === "string") config.command = entry.command;
-    if (Array.isArray(entry.args)) config.args = entry.args.filter((a): a is string => typeof a === "string");
+    if (Array.isArray(entry.args))
+      config.args = entry.args.filter((a): a is string => typeof a === "string");
     if (typeof entry.url === "string") config.url = entry.url;
     if (entry.env != null && typeof entry.env === "object") {
       config.env = Object.fromEntries(
@@ -99,7 +97,11 @@ function parseServerEntries(
     }
 
     // Skip entries that have neither command nor url — not connectable
-    if ((config.command == null || config.command === "") && (config.url == null || config.url === "")) continue;
+    if (
+      (config.command == null || config.command === "") &&
+      (config.url == null || config.url === "")
+    )
+      continue;
 
     results.push(config);
   }
@@ -124,7 +126,7 @@ export function mergeDiscoveredServers(
   existing: McpServerConfig[],
   discovered: DiscoveryResult[],
 ): { merged: McpServerConfig[]; newServers: McpServerConfig[]; collisions: NameCollision[] } {
-  const existingByName = new Map(existing.map(s => [s.name, s]));
+  const existingByName = new Map(existing.map((s) => [s.name, s]));
   const seenNew = new Set<string>();
   const newServers: McpServerConfig[] = [];
   const collisions: NameCollision[] = [];

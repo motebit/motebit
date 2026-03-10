@@ -1,13 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  Modal,
-  View,
-  Text,
-  FlatList,
-  TouchableOpacity,
-  StyleSheet,
-  Platform,
-} from "react-native";
+import { Modal, View, Text, FlatList, TouchableOpacity, StyleSheet, Platform } from "react-native";
 import type { MobileApp } from "../mobile-app";
 import { useTheme, type ThemeColors } from "../theme";
 

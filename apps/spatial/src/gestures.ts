@@ -26,10 +26,10 @@ export interface GestureCallbacks {
 
 // === Constants ===
 
-const PINCH_THRESHOLD = 0.02;        // 2cm thumb-to-index distance
-const BECKON_CURL_THRESHOLD = 0.6;   // Curl ratio (0=straight, 1=fully curled)
-const DISMISS_VELOCITY = 0.3;        // m/s palm push velocity
-const PAUSE_PALM_UP_DOT = 0.7;       // Palm normal · world-up threshold
+const PINCH_THRESHOLD = 0.02; // 2cm thumb-to-index distance
+const BECKON_CURL_THRESHOLD = 0.6; // Curl ratio (0=straight, 1=fully curled)
+const DISMISS_VELOCITY = 0.3; // m/s palm push velocity
+const PAUSE_PALM_UP_DOT = 0.7; // Palm normal · world-up threshold
 
 // Debounce: minimum time between repeated gesture events (ms)
 const GESTURE_DEBOUNCE_MS = 500;
@@ -85,7 +85,11 @@ export class GestureRecognizer {
     // --- Pinch detection ---
     const pinchDist = distance3(joints.thumbTip, joints.indexTip);
     if (pinchDist < PINCH_THRESHOLD) {
-      this.emit(now, { type: "pinch", hand: handedness, confidence: 1 - pinchDist / PINCH_THRESHOLD });
+      this.emit(now, {
+        type: "pinch",
+        hand: handedness,
+        confidence: 1 - pinchDist / PINCH_THRESHOLD,
+      });
     }
 
     // --- Beckon detection (curl) ---
@@ -114,7 +118,11 @@ export class GestureRecognizer {
         if (velNorm) {
           const d = dot3(velNorm, palmNormalDismiss);
           if (d > 0.5) {
-            this.emit(now, { type: "dismiss", hand: handedness, confidence: Math.min(1, pushSpeed / (DISMISS_VELOCITY * 2)) });
+            this.emit(now, {
+              type: "dismiss",
+              hand: handedness,
+              confidence: Math.min(1, pushSpeed / (DISMISS_VELOCITY * 2)),
+            });
           }
         }
       }
@@ -149,11 +157,31 @@ export class GestureRecognizer {
     const getPos = (index: number): [number, number, number] | null => {
       // XRHand is iterable by joint index; use string key mapping
       const jointNames: string[] = [
-        "wrist", "thumb-metacarpal", "thumb-phalanx-proximal", "thumb-phalanx-distal", "thumb-tip",
-        "index-finger-metacarpal", "index-finger-phalanx-proximal", "index-finger-phalanx-intermediate", "index-finger-phalanx-distal", "index-finger-tip",
-        "middle-finger-metacarpal", "middle-finger-phalanx-proximal", "middle-finger-phalanx-intermediate", "middle-finger-phalanx-distal", "middle-finger-tip",
-        "ring-finger-metacarpal", "ring-finger-phalanx-proximal", "ring-finger-phalanx-intermediate", "ring-finger-phalanx-distal", "ring-finger-tip",
-        "pinky-finger-metacarpal", "pinky-finger-phalanx-proximal", "pinky-finger-phalanx-intermediate", "pinky-finger-phalanx-distal", "pinky-finger-tip",
+        "wrist",
+        "thumb-metacarpal",
+        "thumb-phalanx-proximal",
+        "thumb-phalanx-distal",
+        "thumb-tip",
+        "index-finger-metacarpal",
+        "index-finger-phalanx-proximal",
+        "index-finger-phalanx-intermediate",
+        "index-finger-phalanx-distal",
+        "index-finger-tip",
+        "middle-finger-metacarpal",
+        "middle-finger-phalanx-proximal",
+        "middle-finger-phalanx-intermediate",
+        "middle-finger-phalanx-distal",
+        "middle-finger-tip",
+        "ring-finger-metacarpal",
+        "ring-finger-phalanx-proximal",
+        "ring-finger-phalanx-intermediate",
+        "ring-finger-phalanx-distal",
+        "ring-finger-tip",
+        "pinky-finger-metacarpal",
+        "pinky-finger-phalanx-proximal",
+        "pinky-finger-phalanx-intermediate",
+        "pinky-finger-phalanx-distal",
+        "pinky-finger-tip",
       ];
       const name = jointNames[index];
       if (name == null) return null;
@@ -174,7 +202,16 @@ export class GestureRecognizer {
     const ringMcp = getPos(RING_MCP);
     const wrist = getPos(WRIST);
 
-    if (!thumbTip || !indexTip || !middleTip || !ringTip || !indexMcp || !middleMcp || !ringMcp || !wrist) {
+    if (
+      !thumbTip ||
+      !indexTip ||
+      !middleTip ||
+      !ringTip ||
+      !indexMcp ||
+      !middleMcp ||
+      !ringMcp ||
+      !wrist
+    ) {
       return null;
     }
 
@@ -262,7 +299,9 @@ interface JointPositions {
 }
 
 function distance3(a: [number, number, number], b: [number, number, number]): number {
-  const dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
+  const dx = a[0] - b[0],
+    dy = a[1] - b[1],
+    dz = a[2] - b[2];
   return Math.sqrt(dx * dx + dy * dy + dz * dz);
 }
 

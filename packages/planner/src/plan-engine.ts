@@ -148,7 +148,9 @@ export class PlanEngine {
         // Skip already completed/skipped steps (for resume)
         if (step.status === StepStatus.Completed || step.status === StepStatus.Skipped) {
           if (step.result_summary != null && step.result_summary !== "") {
-            completedResults.push(`[Step ${step.ordinal + 1}: ${step.description}]\n${step.result_summary}`);
+            completedResults.push(
+              `[Step ${step.ordinal + 1}: ${step.description}]\n${step.result_summary}`,
+            );
           }
           continue;
         }
@@ -237,17 +239,32 @@ export class PlanEngine {
 
             // Adaptive re-planning: retry with failure context if we have a decomposition context
             if (ctx && planRetryCount < maxPlanRetries) {
-              const retryOutcomes = this.buildRetryOutcomes(plan, steps, step, lastError, completedResults);
+              const retryOutcomes = this.buildRetryOutcomes(
+                plan,
+                steps,
+                step,
+                lastError,
+                completedResults,
+              );
               const retryCtx: DecompositionContext = {
                 ...ctx,
                 previousOutcomes: retryOutcomes,
               };
 
               try {
-                const { plan: newPlan, truncatedFrom: retryTruncated } = await this.createPlan(plan.goal_id, plan.motebit_id, retryCtx, deps);
+                const { plan: newPlan, truncatedFrom: retryTruncated } = await this.createPlan(
+                  plan.goal_id,
+                  plan.motebit_id,
+                  retryCtx,
+                  deps,
+                );
                 yield { type: "plan_retrying", failedPlan, newPlan };
                 if (retryTruncated != null) {
-                  yield { type: "plan_truncated", requestedSteps: retryTruncated, maxSteps: this.config.maxStepsPerPlan ?? 10 };
+                  yield {
+                    type: "plan_truncated",
+                    requestedSteps: retryTruncated,
+                    maxSteps: this.config.maxStepsPerPlan ?? 10,
+                  };
                 }
 
                 const newSteps = this.store.getStepsForPlan(newPlan.plan_id);
@@ -299,7 +316,9 @@ export class PlanEngine {
     completedResults: string[],
   ): string[] {
     const outcomes: string[] = [];
-    outcomes.push(`Original plan "${plan.title}" failed at step ${failedStep.ordinal + 1}: ${failedStep.description}`);
+    outcomes.push(
+      `Original plan "${plan.title}" failed at step ${failedStep.ordinal + 1}: ${failedStep.description}`,
+    );
     outcomes.push(`Error: ${error}`);
 
     if (completedResults.length > 0) {
@@ -324,7 +343,10 @@ export class PlanEngine {
     priorResults: string[],
     deps: MotebitLoopDependencies,
     runId?: string,
-  ): AsyncGenerator<PlanChunk, { suspended: boolean; toolCallsMade: number; responseText: string }> {
+  ): AsyncGenerator<
+    PlanChunk,
+    { suspended: boolean; toolCallsMade: number; responseText: string }
+  > {
     // Build step prompt with accumulated context
     const contextParts: string[] = [];
     if (priorResults.length > 0) {

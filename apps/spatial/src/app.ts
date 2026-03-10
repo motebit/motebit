@@ -76,7 +76,9 @@ function loadSettings(): SpatialSettings {
         proactiveEnabled: parsed.proactiveEnabled ?? true,
       };
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   return {
     provider: "anthropic",
     apiKey: "",
@@ -190,29 +192,33 @@ function updateProviderUI(provider: string): void {
   }
 }
 
-settingsSave?.addEventListener("click", (e) => void (async (e: Event) => {
-  e.preventDefault();
-  const settings: SpatialSettings = {
-    provider: providerSelect.value as "anthropic" | "ollama",
-    apiKey: apiKeyInput.value.trim(),
-    model: modelInput.value.trim(),
-    voiceEnabled: voiceToggle.checked,
-    openaiApiKey: openaiKeyInput?.value.trim() ?? "",
-    ttsVoice: (ttsVoiceSelect?.value as OpenAITTSVoice) ?? "nova",
-    vadSensitivity: vadSlider ? parseFloat(vadSlider.value) : 0.5,
-    proactiveEnabled: proactiveToggle?.checked ?? true,
-  };
-  saveSettings(settings);
+settingsSave?.addEventListener(
+  "click",
+  (e) =>
+    void (async (e: Event) => {
+      e.preventDefault();
+      const settings: SpatialSettings = {
+        provider: providerSelect.value as "anthropic" | "ollama",
+        apiKey: apiKeyInput.value.trim(),
+        model: modelInput.value.trim(),
+        voiceEnabled: voiceToggle.checked,
+        openaiApiKey: openaiKeyInput?.value.trim() ?? "",
+        ttsVoice: (ttsVoiceSelect?.value as OpenAITTSVoice) ?? "nova",
+        vadSensitivity: vadSlider ? parseFloat(vadSlider.value) : 0.5,
+        proactiveEnabled: proactiveToggle?.checked ?? true,
+      };
+      saveSettings(settings);
 
-  if (!await tryInitAI(settings)) {
-    statusEl.textContent = "API key required for Anthropic";
-    return;
-  }
+      if (!(await tryInitAI(settings))) {
+        statusEl.textContent = "API key required for Anthropic";
+        return;
+      }
 
-  void initVoiceIfEnabled(settings);
-  settingsOverlay.classList.add("hidden");
-  showMainOverlay();
-})(e));
+      void initVoiceIfEnabled(settings);
+      settingsOverlay.classList.add("hidden");
+      showMainOverlay();
+    })(e),
+);
 
 settingsSkip?.addEventListener("click", () => {
   // Skip AI — just run the creature with idle cues
@@ -328,7 +334,10 @@ async function startAR(): Promise<void> {
  * Uses camera forward vector and estimated creature position from orbital state.
  */
 function updateGazeAttention(
-  camera: { matrixWorld: { elements: ArrayLike<number> }; position: { x: number; y: number; z: number } },
+  camera: {
+    matrixWorld: { elements: ArrayLike<number> };
+    position: { x: number; y: number; z: number };
+  },
   headPos: [number, number, number],
 ): void {
   // Extract camera forward vector from matrixWorld (3rd column, negated for -Z forward)
@@ -342,7 +351,7 @@ function updateGazeAttention(
   // Estimate creature world position from orbital state + anthropometry
   // Shoulder right: head + (0.20, -0.35, -0.05)
   const state = app.dynamics.getState();
-  const anchorX = cx + 0.20;
+  const anchorX = cx + 0.2;
   const anchorY = cy - 0.35;
   const anchorZ = cz - 0.05;
 

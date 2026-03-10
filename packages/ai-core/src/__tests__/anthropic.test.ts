@@ -100,8 +100,7 @@ describe("extractMemoryTags", () => {
   });
 
   it("handles unknown sensitivity as none", () => {
-    const text =
-      '<memory confidence="0.5" sensitivity="unknown">Something</memory>';
+    const text = '<memory confidence="0.5" sensitivity="unknown">Something</memory>';
     const candidates = extractMemoryTags(text);
     expect(candidates[0]!.sensitivity).toBe(SensitivityLevel.None);
   });
@@ -119,8 +118,7 @@ describe("extractStateTags", () => {
   });
 
   it("extracts multiple state tags", () => {
-    const text =
-      '<state field="curiosity" value="0.9"/><state field="attention" value="0.6"/>';
+    const text = '<state field="curiosity" value="0.9"/><state field="attention" value="0.6"/>';
     const updates = extractStateTags(text);
     expect(updates.curiosity).toBe(0.9);
     expect(updates.attention).toBe(0.6);
@@ -297,16 +295,13 @@ describe("CloudProvider Anthropic integration", () => {
     const response = await provider.generate(makeContextPack());
 
     expect(response.memory_candidates).toHaveLength(1);
-    expect(response.memory_candidates[0]!.content).toBe(
-      "User enjoys hiking on weekends",
-    );
+    expect(response.memory_candidates[0]!.content).toBe("User enjoys hiking on weekends");
     expect(response.memory_candidates[0]!.confidence).toBe(0.85);
     expect(response.text).not.toContain("<memory");
   });
 
   it("parses state tags from response", async () => {
-    const responseText =
-      'Wow! <state field="curiosity" value="0.9"/> That\'s fascinating!';
+    const responseText = 'Wow! <state field="curiosity" value="0.9"/> That\'s fascinating!';
     mockFetchSuccess(responseText);
 
     const provider = new CloudProvider(config);
@@ -320,9 +315,7 @@ describe("CloudProvider Anthropic integration", () => {
     mockFetchError(429, JSON.stringify({ error: { message: "Rate limit" } }));
 
     const provider = new CloudProvider(config);
-    await expect(provider.generate(makeContextPack())).rejects.toThrow(
-      "Anthropic API error 429",
-    );
+    await expect(provider.generate(makeContextPack())).rejects.toThrow("Anthropic API error 429");
   });
 
   it("uses custom base_url when provided", async () => {

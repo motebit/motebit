@@ -40,7 +40,10 @@ export function createSummarizeSearchHandler(
     try {
       const raw = typeof result.data === "string" ? result.data : JSON.stringify(result.data);
       // The result from motebit_task is a JSON receipt — extract the result field
-      const receipt = JSON.parse(raw.replace(/\n\[motebit:[^\]]+\]$/, "")) as Record<string, unknown>;
+      const receipt = JSON.parse(raw.replace(/\n\[motebit:[^\]]+\]$/, "")) as Record<
+        string,
+        unknown
+      >;
       const searchResults = String(receipt["result"] ?? raw);
 
       let parsed: unknown[];
@@ -54,7 +57,10 @@ export function createSummarizeSearchHandler(
       const summary = `Search results for "${query}" (top ${top3.length} via web-search delegate):\n${JSON.stringify(top3)}`;
       return { ok: true, data: summary };
     } catch {
-      return { ok: true, data: `Delegated search for "${query}": ${typeof result.data === "string" ? result.data : JSON.stringify(result.data)}` };
+      return {
+        ok: true,
+        data: `Delegated search for "${query}": ${typeof result.data === "string" ? result.data : JSON.stringify(result.data)}`,
+      };
     }
   };
 }

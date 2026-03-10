@@ -113,9 +113,9 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
     const maxG = Math.max(glow[0], glow[1], glow[2], 0.01);
     const satPow = 1.3;
     waveformColor = {
-      r: Math.min(255, Math.round(((glow[0] / maxG) ** (1 / satPow)) * glow[0] * 300)),
-      g: Math.min(255, Math.round(((glow[1] / maxG) ** (1 / satPow)) * glow[1] * 300)),
-      b: Math.min(255, Math.round(((glow[2] / maxG) ** (1 / satPow)) * glow[2] * 300)),
+      r: Math.min(255, Math.round((glow[0] / maxG) ** (1 / satPow) * glow[0] * 300)),
+      g: Math.min(255, Math.round((glow[1] / maxG) ** (1 / satPow) * glow[1] * 300)),
+      b: Math.min(255, Math.round((glow[2] / maxG) ** (1 / satPow) * glow[2] * 300)),
     };
   }
 
@@ -141,7 +141,10 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
     } catch {
       if (!micErrorShown) {
         micErrorShown = true;
-        addMessage("system", `Microphone access denied — ${permissionHint("microphone")}, then grant access to Motebit.`);
+        addMessage(
+          "system",
+          `Microphone access denied — ${permissionHint("microphone")}, then grant access to Motebit.`,
+        );
       }
       return false;
     }
@@ -165,7 +168,7 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
       analyserNode = null;
     }
     if (micStream) {
-      micStream.getTracks().forEach(t => t.stop());
+      micStream.getTracks().forEach((t) => t.stop());
       micStream = null;
     }
     fallbackSpeechConfidence = 0;
@@ -205,7 +208,10 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
     } catch (err: unknown) {
       sileroVadFailed = true;
       // eslint-disable-next-line no-console
-      console.warn("Silero VAD failed to load, falling back to energy heuristic:", err instanceof Error ? err.message : String(err));
+      console.warn(
+        "Silero VAD failed to load, falling back to energy heuristic:",
+        err instanceof Error ? err.message : String(err),
+      );
     }
   }
 
@@ -234,7 +240,7 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
   }
 
   async function enterAmbient(): Promise<void> {
-    if (!await ensureAudioPipeline()) return;
+    if (!(await ensureAudioPipeline())) return;
     micState = "ambient";
     micBtn.classList.add("ambient");
     micBtn.classList.remove("active");
@@ -259,7 +265,7 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
     speechActiveInVoice = false;
     silenceOnsetTime = 0;
 
-    if (!await ensureAudioPipeline()) return;
+    if (!(await ensureAudioPipeline())) return;
 
     if (sttAvailable) {
       sttProvider.onResult = (transcript: string, isFinal: boolean) => {
@@ -274,13 +280,19 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
 
       sttProvider.onError = (error: string) => {
         if (error === "no-speech" || error === "aborted") return;
-        if (error === "not-allowed" || error === "service-not-allowed"
-            || error === "Microphone permission denied"
-            || error === "SpeechRecognition API not available") {
+        if (
+          error === "not-allowed" ||
+          error === "service-not-allowed" ||
+          error === "Microphone permission denied" ||
+          error === "SpeechRecognition API not available"
+        ) {
           sttAvailable = false;
           if (!sttErrorShown) {
             sttErrorShown = true;
-            addMessage("system", `Speech recognition needs permission — ${permissionHint("speech")}. Using Whisper fallback.`);
+            addMessage(
+              "system",
+              `Speech recognition needs permission — ${permissionHint("speech")}. Using Whisper fallback.`,
+            );
           }
           return;
         }
@@ -334,7 +346,11 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
 
     const recorderWasActive = mediaRecorder?.state === "recording";
     if (mediaRecorder) {
-      try { mediaRecorder.stop(); } catch { /* */ }
+      try {
+        mediaRecorder.stop();
+      } catch {
+        /* */
+      }
       mediaRecorder = null;
     }
 
@@ -386,7 +402,9 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
 
       let whisperApiKey: string | undefined;
       try {
-        const keyVal = await config.invoke<string | null>("keyring_get", { key: "whisper_api_key" });
+        const keyVal = await config.invoke<string | null>("keyring_get", {
+          key: "whisper_api_key",
+        });
         whisperApiKey = keyVal ?? undefined;
       } catch {
         // No key available
@@ -474,7 +492,7 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
 
       let sumSq = 0;
       for (let j = 0; j < timeDomain.length; j++) {
-        const v = (timeDomain[j]! / 128.0) - 1.0;
+        const v = timeDomain[j]! / 128.0 - 1.0;
         sumSq += v * v;
       }
       const rms = Math.sqrt(sumSq / timeDomain.length);
@@ -485,7 +503,9 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
       const binCount = freqDomain.length;
       const lowEnd = Math.max(1, Math.floor(binCount * 0.06));
       const midEnd = Math.max(2, Math.floor(binCount * 0.25));
-      let lowE = 0, midE = 0, highE = 0;
+      let lowE = 0,
+        midE = 0,
+        highE = 0;
       for (let j = 0; j < binCount; j++) {
         const v = freqDomain[j]! / 255;
         if (j < lowEnd) lowE += v;
@@ -493,8 +513,8 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
         else highE += v;
       }
       lowE /= lowEnd;
-      midE /= (midEnd - lowEnd);
-      highE /= (binCount - midEnd);
+      midE /= midEnd - lowEnd;
+      highE /= binCount - midEnd;
 
       smoothedLow += (lowE > smoothedLow ? 0.3 : 0.04) * (lowE - smoothedLow);
       smoothedMid += (midE > smoothedMid ? 0.3 : 0.04) * (midE - smoothedMid);
@@ -526,10 +546,7 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
       });
 
       if (sileroVadFailed) {
-        const isSpeechLike =
-          smoothedFlatness < 0.65 &&
-          gatedRms > 0.02 &&
-          smoothedMid > 0.08;
+        const isSpeechLike = smoothedFlatness < 0.65 && gatedRms > 0.02 && smoothedMid > 0.08;
 
         if (isSpeechLike) {
           fallbackSpeechConfidence += 0.08 * (1 - fallbackSpeechConfidence);
@@ -569,31 +586,34 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
     micBtn.classList.add("ambient");
     startTTSPulse();
 
-    ttsProvider.speak(text).then(() => {
-      if (!ttsSpeaking) return;
-      ttsSpeaking = false;
-      stopTTSPulse();
-      if (micStream && audioContext && analyserNode) {
-        micState = "ambient";
-        micBtn.classList.add("ambient");
-        if (sileroVad) void sileroVad.start();
-        startAmbientLoop();
-      } else {
-        micState = "off";
-        micBtn.classList.remove("ambient");
-      }
-    }).catch(() => {
-      if (!ttsSpeaking) return;
-      ttsSpeaking = false;
-      stopTTSPulse();
-      if (micState === "speaking") {
-        micState = micStream ? "ambient" : "off";
-        if (micState === "ambient") {
+    ttsProvider
+      .speak(text)
+      .then(() => {
+        if (!ttsSpeaking) return;
+        ttsSpeaking = false;
+        stopTTSPulse();
+        if (micStream && audioContext && analyserNode) {
+          micState = "ambient";
+          micBtn.classList.add("ambient");
           if (sileroVad) void sileroVad.start();
           startAmbientLoop();
+        } else {
+          micState = "off";
+          micBtn.classList.remove("ambient");
         }
-      }
-    });
+      })
+      .catch(() => {
+        if (!ttsSpeaking) return;
+        ttsSpeaking = false;
+        stopTTSPulse();
+        if (micState === "speaking") {
+          micState = micStream ? "ambient" : "off";
+          if (micState === "ambient") {
+            if (sileroVad) void sileroVad.start();
+            startAmbientLoop();
+          }
+        }
+      });
   }
 
   function cancelTTS(): void {
@@ -667,10 +687,10 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
     };
 
     const waves = [
-      { tf: 0.7,  sf: 6.5,  amp: 0.40, alpha: 0.10, lw: 16,  band: 0 },
-      { tf: 1.1,  sf: 9.3,  amp: 0.32, alpha: 0.28, lw: 4.5, band: 1 },
-      { tf: 1.5,  sf: 13.1, amp: 0.25, alpha: 0.50, lw: 2.5, band: 1 },
-      { tf: 2.1,  sf: 17.4, amp: 0.15, alpha: 0.88, lw: 1.5, band: 2 },
+      { tf: 0.7, sf: 6.5, amp: 0.4, alpha: 0.1, lw: 16, band: 0 },
+      { tf: 1.1, sf: 9.3, amp: 0.32, alpha: 0.28, lw: 4.5, band: 1 },
+      { tf: 1.5, sf: 13.1, amp: 0.25, alpha: 0.5, lw: 2.5, band: 1 },
+      { tf: 2.1, sf: 17.4, amp: 0.15, alpha: 0.88, lw: 1.5, band: 2 },
     ];
 
     const N = 64;
@@ -691,7 +711,7 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
 
       let sumSq = 0;
       for (let j = 0; j < timeDomain.length; j++) {
-        const v = (timeDomain[j]! / 128.0) - 1.0;
+        const v = timeDomain[j]! / 128.0 - 1.0;
         sumSq += v * v;
       }
       const rms = Math.sqrt(sumSq / timeDomain.length);
@@ -702,7 +722,9 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
       const binCount = freqDomain.length;
       const lowEnd = Math.max(1, Math.floor(binCount * 0.06));
       const midEnd = Math.max(2, Math.floor(binCount * 0.25));
-      let lowE = 0, midE = 0, highE = 0;
+      let lowE = 0,
+        midE = 0,
+        highE = 0;
       for (let j = 0; j < binCount; j++) {
         const v = freqDomain[j]! / 255;
         if (j < lowEnd) lowE += v;
@@ -710,8 +732,8 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
         else highE += v;
       }
       lowE /= lowEnd;
-      midE /= (midEnd - lowEnd);
-      highE /= (binCount - midEnd);
+      midE /= midEnd - lowEnd;
+      highE /= binCount - midEnd;
 
       smoothedLow += (lowE > smoothedLow ? 0.35 : 0.05) * (lowE - smoothedLow);
       smoothedMid += (midE > smoothedMid ? 0.35 : 0.05) * (midE - smoothedMid);
@@ -767,7 +789,7 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
 
       for (let i = 0; i < N; i++) {
         const bufIdx = Math.floor((i / N) * timeDomain.length);
-        const raw = (timeDomain[bufIdx]! / 128.0) - 1.0;
+        const raw = timeDomain[bufIdx]! / 128.0 - 1.0;
         const target = raw * (1 + voiceGain * 5);
         waveformSmoothed[i] = waveformSmoothed[i]! + (target - waveformSmoothed[i]!) * sampleDecay;
       }
@@ -817,7 +839,9 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
   }
 
   return {
-    getMicState() { return micState; },
+    getMicState() {
+      return micState;
+    },
     toggleVoice,
     stopVoice,
     stopAmbient,
@@ -826,12 +850,24 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
     updateVoiceGlowColor,
     rebuildTtsProvider,
     sizeWaveformCanvas,
-    getVoiceAutoSend() { return voiceAutoSend; },
-    setVoiceAutoSend(v: boolean) { voiceAutoSend = v; },
-    getVoiceResponseEnabled() { return voiceResponseEnabled; },
-    setVoiceResponseEnabled(v: boolean) { voiceResponseEnabled = v; },
-    getTtsVoice() { return ttsVoice; },
-    setTtsVoice(v: string) { ttsVoice = v; },
+    getVoiceAutoSend() {
+      return voiceAutoSend;
+    },
+    setVoiceAutoSend(v: boolean) {
+      voiceAutoSend = v;
+    },
+    getVoiceResponseEnabled() {
+      return voiceResponseEnabled;
+    },
+    setVoiceResponseEnabled(v: boolean) {
+      voiceResponseEnabled = v;
+    },
+    getTtsVoice() {
+      return ttsVoice;
+    },
+    setTtsVoice(v: string) {
+      ttsVoice = v;
+    },
     releaseAudioResources,
   };
 }

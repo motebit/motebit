@@ -5,10 +5,16 @@ import { LocalStorageStateSnapshot } from "../state-snapshot.js";
 const localStore = new Map<string, string>();
 const localStorageMock: Storage = {
   getItem: (key: string) => localStore.get(key) ?? null,
-  setItem: (key: string, value: string) => { localStore.set(key, value); },
-  removeItem: (key: string) => { localStore.delete(key); },
+  setItem: (key: string, value: string) => {
+    localStore.set(key, value);
+  },
+  removeItem: (key: string) => {
+    localStore.delete(key);
+  },
   clear: () => localStore.clear(),
-  get length() { return localStore.size; },
+  get length() {
+    return localStore.size;
+  },
   key: (_index: number) => null,
 };
 

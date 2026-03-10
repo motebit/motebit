@@ -30,7 +30,9 @@ export function fromBase64Url(str: string): Uint8Array {
 }
 
 export function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 // ---------------------------------------------------------------------------

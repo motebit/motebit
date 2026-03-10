@@ -13,7 +13,10 @@ async function createTestRelay(): Promise<SyncRelay> {
   return createSyncRelay({ apiToken: API_TOKEN, enableDeviceAuth: false });
 }
 
-function makeConversation(motebitId: string, overrides: Partial<SyncConversation> = {}): SyncConversation {
+function makeConversation(
+  motebitId: string,
+  overrides: Partial<SyncConversation> = {},
+): SyncConversation {
   return {
     conversation_id: crypto.randomUUID(),
     motebit_id: motebitId,
@@ -26,7 +29,11 @@ function makeConversation(motebitId: string, overrides: Partial<SyncConversation
   };
 }
 
-function makeMessage(conversationId: string, motebitId: string, overrides: Partial<SyncConversationMessage> = {}): SyncConversationMessage {
+function makeMessage(
+  conversationId: string,
+  motebitId: string,
+  overrides: Partial<SyncConversationMessage> = {},
+): SyncConversationMessage {
   return {
     message_id: crypto.randomUUID(),
     conversation_id: conversationId,
@@ -175,7 +182,11 @@ describe("Conversation Sync Endpoints", () => {
     );
 
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { motebit_id: string; conversation_id: string; messages: SyncConversationMessage[] };
+    const body = (await res.json()) as {
+      motebit_id: string;
+      conversation_id: string;
+      messages: SyncConversationMessage[];
+    };
     expect(body.motebit_id).toBe(MOTEBIT_ID);
     expect(body.conversation_id).toBe(convId);
     expect(body.messages).toHaveLength(2);
@@ -205,10 +216,10 @@ describe("Conversation Sync Endpoints", () => {
   });
 
   it("GET /sync/:id/messages returns 400 when conversation_id missing", async () => {
-    const res = await relay.app.request(
-      `/sync/${MOTEBIT_ID}/messages?since=0`,
-      { method: "GET", headers: AUTH_HEADER },
-    );
+    const res = await relay.app.request(`/sync/${MOTEBIT_ID}/messages?since=0`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
     expect(res.status).toBe(400);
   });
 
@@ -305,7 +316,9 @@ describe("Conversation Sync Endpoints", () => {
   // --- Auth ---
 
   it("returns 401 when no token provided on conversation sync routes", async () => {
-    const res = await relay.app.request(`/sync/${MOTEBIT_ID}/conversations?since=0`, { method: "GET" });
+    const res = await relay.app.request(`/sync/${MOTEBIT_ID}/conversations?since=0`, {
+      method: "GET",
+    });
     expect(res.status).toBe(401);
   });
 });

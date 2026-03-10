@@ -33,9 +33,10 @@ export class BudgetEnforcer {
     const callsRemaining = Math.max(0, this.config.maxCallsPerTurn - ctx.toolCallCount);
     const timeRemaining = Math.max(0, this.config.maxTurnDurationMs - elapsed);
     // Normalize: 0 means unlimited → use -1 sentinel (never exhausted)
-    const costRemaining = this.config.maxCostPerTurn > 0
-      ? Math.max(0, this.config.maxCostPerTurn - ctx.costAccumulated)
-      : -1;
+    const costRemaining =
+      this.config.maxCostPerTurn > 0
+        ? Math.max(0, this.config.maxCostPerTurn - ctx.costAccumulated)
+        : -1;
 
     if (callsRemaining <= 0) {
       return {

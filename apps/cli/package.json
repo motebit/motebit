@@ -7,7 +7,12 @@
   "bin": {
     "motebit": "./dist/index.js"
   },
-  "files": ["dist/index.js", "dist/index.js.map", "LICENSE", "README.md"],
+  "files": [
+    "dist/index.js",
+    "dist/index.js.map",
+    "LICENSE",
+    "README.md"
+  ],
   "license": "BSL-1.1",
   "keywords": [
     "motebit",

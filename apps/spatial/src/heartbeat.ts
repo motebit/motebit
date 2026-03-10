@@ -18,9 +18,9 @@ import type { PresenceState } from "./spatial-app";
 
 // === Constants ===
 
-const TICK_INTERVAL_MS = 60_000;              // 60s heartbeat
-const MIN_UTTERANCE_INTERVAL_MS = 300_000;    // 5 minutes between proactive speech
-const MAX_PROACTIVE_TOKENS = 80;              // Keep responses very short
+const TICK_INTERVAL_MS = 60_000; // 60s heartbeat
+const MIN_UTTERANCE_INTERVAL_MS = 300_000; // 5 minutes between proactive speech
+const MAX_PROACTIVE_TOKENS = 80; // Keep responses very short
 
 // === Types ===
 
@@ -59,8 +59,10 @@ export class AmbientHeartbeat {
   }
 
   setCallbacks(callbacks: Partial<HeartbeatCallbacks>): void {
-    if (callbacks.onProactiveUtterance !== undefined) this.callbacks.onProactiveUtterance = callbacks.onProactiveUtterance;
-    if (callbacks.getPresenceState !== undefined) this.callbacks.getPresenceState = callbacks.getPresenceState;
+    if (callbacks.onProactiveUtterance !== undefined)
+      this.callbacks.onProactiveUtterance = callbacks.onProactiveUtterance;
+    if (callbacks.getPresenceState !== undefined)
+      this.callbacks.getPresenceState = callbacks.getPresenceState;
   }
 
   /** Start the heartbeat tick loop. */
@@ -122,9 +124,10 @@ export class AmbientHeartbeat {
       if (!trimmed || trimmed === "[silence]" || trimmed.startsWith("[silence]")) return;
 
       // Truncate if somehow too long
-      const text = trimmed.length > MAX_PROACTIVE_TOKENS * 5
-        ? trimmed.slice(0, MAX_PROACTIVE_TOKENS * 5) + "..."
-        : trimmed;
+      const text =
+        trimmed.length > MAX_PROACTIVE_TOKENS * 5
+          ? trimmed.slice(0, MAX_PROACTIVE_TOKENS * 5) + "..."
+          : trimmed;
 
       this.lastUtteranceTime = now;
       this.callbacks.onProactiveUtterance?.(text);

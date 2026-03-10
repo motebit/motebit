@@ -27,7 +27,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
 function filterCommands(partial: string): SlashCommand[] {
   if (!partial) return SLASH_COMMANDS;
   const query = partial.toLowerCase();
-  return SLASH_COMMANDS.filter(c => c.name.startsWith(query));
+  return SLASH_COMMANDS.filter((c) => c.name.startsWith(query));
 }
 
 interface SlashAutocompleteProps {
@@ -35,7 +35,10 @@ interface SlashAutocompleteProps {
   onSelect: (command: string) => void;
 }
 
-export function SlashAutocomplete({ inputText, onSelect }: SlashAutocompleteProps): React.ReactElement | null {
+export function SlashAutocomplete({
+  inputText,
+  onSelect,
+}: SlashAutocompleteProps): React.ReactElement | null {
   const colors = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 

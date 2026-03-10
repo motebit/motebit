@@ -73,11 +73,11 @@ export interface GradientConfig {
 }
 
 const DEFAULT_CONFIG: GradientConfig = {
-  weight_kd: 0.20,
+  weight_kd: 0.2,
   weight_kq: 0.25,
   weight_gc: 0.15,
-  weight_ts: 0.20,
-  weight_rq: 0.20,
+  weight_ts: 0.2,
+  weight_rq: 0.2,
   kd_norm_k: 50,
   gc_norm_k: 2,
 };
@@ -122,8 +122,8 @@ export function computeGradient(
   // Filter to live (non-tombstoned) nodes
   const liveNodes = nodes.filter((n) => !n.tombstoned);
   const liveNodeIds = new Set(liveNodes.map((n) => n.node_id));
-  const liveEdges = edges.filter((e) =>
-    liveNodeIds.has(e.source_id) || liveNodeIds.has(e.target_id),
+  const liveEdges = edges.filter(
+    (e) => liveNodeIds.has(e.source_id) || liveNodeIds.has(e.target_id),
   );
 
   // === Knowledge Density (kd) ===
@@ -178,7 +178,7 @@ export function computeGradient(
   const totalTyped = semanticCount + episodicCount;
   const semanticRatio = totalTyped > 0 ? semanticCount / totalTyped : 0;
   const pinnedRatio = nodeCount > 0 ? pinnedCount / nodeCount : 0;
-  const avgHalfLifeDays = nodeCount > 0 ? (totalHalfLife / nodeCount) / MS_PER_DAY : 0;
+  const avgHalfLifeDays = nodeCount > 0 ? totalHalfLife / nodeCount / MS_PER_DAY : 0;
   const halfLifeScore = Math.min(avgHalfLifeDays / 30, 1);
 
   const ts = 0.6 * semanticRatio + 0.2 * pinnedRatio + 0.2 * halfLifeScore;
@@ -187,7 +187,12 @@ export function computeGradient(
   const rq = retrievalStats?.avgScore ?? 0;
 
   // === Composite ===
-  const gradient = cfg.weight_kd * kd + cfg.weight_kq * kq + cfg.weight_gc * gc + cfg.weight_ts * ts + cfg.weight_rq * rq;
+  const gradient =
+    cfg.weight_kd * kd +
+    cfg.weight_kq * kq +
+    cfg.weight_gc * gc +
+    cfg.weight_ts * ts +
+    cfg.weight_rq * rq;
   const delta = previousGradient !== null ? gradient - previousGradient : 0;
 
   const avgConfidence = nodeCount > 0 ? totalConfidence / nodeCount : 0;

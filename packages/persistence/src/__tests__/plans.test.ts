@@ -131,8 +131,12 @@ describe("SqlitePlanStore", () => {
 
   it("gets next pending step", () => {
     moteDb.planStore.savePlan(makePlan());
-    moteDb.planStore.saveStep(makeStep({ step_id: "step-001", ordinal: 0, status: StepStatus.Completed }));
-    moteDb.planStore.saveStep(makeStep({ step_id: "step-002", ordinal: 1, status: StepStatus.Pending }));
+    moteDb.planStore.saveStep(
+      makeStep({ step_id: "step-001", ordinal: 0, status: StepStatus.Completed }),
+    );
+    moteDb.planStore.saveStep(
+      makeStep({ step_id: "step-002", ordinal: 1, status: StepStatus.Pending }),
+    );
 
     const next = moteDb.planStore.getNextPendingStep("plan-001");
     expect(next).not.toBeNull();
@@ -148,9 +152,11 @@ describe("SqlitePlanStore", () => {
 
   it("stores and retrieves depends_on array", () => {
     moteDb.planStore.savePlan(makePlan());
-    moteDb.planStore.saveStep(makeStep({
-      depends_on: ["plan-001:0", "plan-001:1"],
-    }));
+    moteDb.planStore.saveStep(
+      makeStep({
+        depends_on: ["plan-001:0", "plan-001:1"],
+      }),
+    );
 
     const step = moteDb.planStore.getStep("step-001");
     expect(step!.depends_on).toEqual(["plan-001:0", "plan-001:1"]);
@@ -166,14 +172,18 @@ describe("SqlitePlanStore", () => {
 
   it("gets most recent plan for goal when multiple exist", () => {
     const now = Date.now();
-    moteDb.planStore.savePlan(makePlan({
-      plan_id: "plan-old",
-      created_at: now - 1000,
-    }));
-    moteDb.planStore.savePlan(makePlan({
-      plan_id: "plan-new",
-      created_at: now,
-    }));
+    moteDb.planStore.savePlan(
+      makePlan({
+        plan_id: "plan-old",
+        created_at: now - 1000,
+      }),
+    );
+    moteDb.planStore.savePlan(
+      makePlan({
+        plan_id: "plan-new",
+        created_at: now,
+      }),
+    );
 
     const found = moteDb.planStore.getPlanForGoal("goal-001");
     expect(found!.plan_id).toBe("plan-new");

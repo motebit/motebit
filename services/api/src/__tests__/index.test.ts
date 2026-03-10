@@ -13,10 +13,15 @@ const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
 const MOTEBIT_ID = "test-mote";
 
 function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
-async function createTestRelay(overrides?: { enableDeviceAuth?: boolean; verifyDeviceSignature?: boolean }): Promise<SyncRelay> {
+async function createTestRelay(overrides?: {
+  enableDeviceAuth?: boolean;
+  verifyDeviceSignature?: boolean;
+}): Promise<SyncRelay> {
   return createSyncRelay({ apiToken: API_TOKEN, ...overrides });
 }
 
@@ -334,7 +339,9 @@ describe("Sync Relay — device auth", () => {
     return body.motebit_id;
   }
 
-  async function registerDevice(motebitId: string): Promise<{ device_id: string; device_token: string }> {
+  async function registerDevice(
+    motebitId: string,
+  ): Promise<{ device_id: string; device_token: string }> {
     const res = await relay.app.request("/device/register", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -401,7 +408,9 @@ describe("Sync Relay — signed token auth", () => {
     relay.close();
   });
 
-  async function createIdentityAndDevice(pubKeyHex: string): Promise<{ motebitId: string; deviceId: string; deviceToken: string }> {
+  async function createIdentityAndDevice(
+    pubKeyHex: string,
+  ): Promise<{ motebitId: string; deviceId: string; deviceToken: string }> {
     // Create identity
     const identityRes = await relay.app.request("/identity", {
       method: "POST",
@@ -414,11 +423,19 @@ describe("Sync Relay — signed token auth", () => {
     const deviceRes = await relay.app.request("/device/register", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
-      body: JSON.stringify({ motebit_id: identity.motebit_id, device_name: "Test", public_key: pubKeyHex }),
+      body: JSON.stringify({
+        motebit_id: identity.motebit_id,
+        device_name: "Test",
+        public_key: pubKeyHex,
+      }),
     });
     const device = (await deviceRes.json()) as { device_id: string; device_token: string };
 
-    return { motebitId: identity.motebit_id, deviceId: device.device_id, deviceToken: device.device_token };
+    return {
+      motebitId: identity.motebit_id,
+      deviceId: device.device_id,
+      deviceToken: device.device_token,
+    };
   }
 
   it("allows sync with a valid signed token", async () => {
@@ -516,11 +533,19 @@ describe("Sync Relay — signed token auth", () => {
     const deviceRes = await relay.app.request("/device/register", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
-      body: JSON.stringify({ motebit_id: identity.motebit_id, device_name: "My Device", public_key: pubKeyHex }),
+      body: JSON.stringify({
+        motebit_id: identity.motebit_id,
+        device_name: "My Device",
+        public_key: pubKeyHex,
+      }),
     });
 
     expect(deviceRes.status).toBe(201);
-    const device = (await deviceRes.json()) as { device_id: string; public_key: string; device_name: string };
+    const device = (await deviceRes.json()) as {
+      device_id: string;
+      public_key: string;
+      device_name: string;
+    };
     expect(device.public_key).toBe(pubKeyHex);
     expect(device.device_name).toBe("My Device");
   });
@@ -584,7 +609,11 @@ describe("Sync Relay — admin API endpoints", () => {
       headers: AUTH_HEADER,
     });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { motebit_id: string; memories: unknown[]; edges: unknown[] };
+    const body = (await res.json()) as {
+      motebit_id: string;
+      memories: unknown[];
+      edges: unknown[];
+    };
     expect(body.motebit_id).toBe(MOTEBIT_ID);
     expect(body.memories).toEqual([]);
     expect(body.edges).toEqual([]);
@@ -611,15 +640,17 @@ describe("Sync Relay — admin API endpoints", () => {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({
-        conversations: [{
-          conversation_id: "conv-1",
-          motebit_id: MOTEBIT_ID,
-          started_at: 1000,
-          last_active_at: 2000,
-          title: "Test Chat",
-          summary: null,
-          message_count: 5,
-        }],
+        conversations: [
+          {
+            conversation_id: "conv-1",
+            motebit_id: MOTEBIT_ID,
+            started_at: 1000,
+            last_active_at: 2000,
+            title: "Test Chat",
+            summary: null,
+            message_count: 5,
+          },
+        ],
       }),
     });
 
@@ -628,7 +659,10 @@ describe("Sync Relay — admin API endpoints", () => {
       headers: AUTH_HEADER,
     });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { motebit_id: string; conversations: Array<{ conversation_id: string; title: string }> };
+    const body = (await res.json()) as {
+      motebit_id: string;
+      conversations: Array<{ conversation_id: string; title: string }>;
+    };
     expect(body.motebit_id).toBe(MOTEBIT_ID);
     expect(body.conversations).toHaveLength(1);
     expect(body.conversations[0]!.conversation_id).toBe("conv-1");
@@ -641,27 +675,30 @@ describe("Sync Relay — admin API endpoints", () => {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({
-        messages: [{
-          message_id: "msg-1",
-          conversation_id: "conv-1",
-          motebit_id: MOTEBIT_ID,
-          role: "user",
-          content: "hello",
-          tool_calls: null,
-          tool_call_id: null,
-          created_at: 1000,
-          token_estimate: 5,
-        }, {
-          message_id: "msg-2",
-          conversation_id: "conv-1",
-          motebit_id: MOTEBIT_ID,
-          role: "assistant",
-          content: "hi there",
-          tool_calls: null,
-          tool_call_id: null,
-          created_at: 2000,
-          token_estimate: 8,
-        }],
+        messages: [
+          {
+            message_id: "msg-1",
+            conversation_id: "conv-1",
+            motebit_id: MOTEBIT_ID,
+            role: "user",
+            content: "hello",
+            tool_calls: null,
+            tool_call_id: null,
+            created_at: 1000,
+            token_estimate: 5,
+          },
+          {
+            message_id: "msg-2",
+            conversation_id: "conv-1",
+            motebit_id: MOTEBIT_ID,
+            role: "assistant",
+            content: "hi there",
+            tool_calls: null,
+            tool_call_id: null,
+            created_at: 2000,
+            token_estimate: 8,
+          },
+        ],
       }),
     });
 
@@ -703,7 +740,10 @@ describe("Sync Relay — admin API endpoints", () => {
       headers: AUTH_HEADER,
     });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { motebit_id: string; devices: Array<{ device_name: string }> };
+    const body = (await res.json()) as {
+      motebit_id: string;
+      devices: Array<{ device_name: string }>;
+    };
     expect(body.motebit_id).toBe(identity.motebit_id);
     expect(body.devices).toHaveLength(1);
     expect(body.devices[0]!.device_name).toBe("Laptop");
@@ -831,7 +871,11 @@ describe("Sync Relay — agent protocol", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { motebit_id: string; online_devices: number; governance: Record<string, unknown> };
+    const body = (await res.json()) as {
+      motebit_id: string;
+      online_devices: number;
+      governance: Record<string, unknown>;
+    };
     expect(body.motebit_id).toBe(identity.motebit_id);
     expect(body.online_devices).toBe(0);
     expect(body.governance).toBeDefined();
@@ -859,7 +903,11 @@ describe("Sync Relay — agent discovery registry", () => {
     relay.close();
   });
 
-  async function setupIdentityAndToken(): Promise<{ motebitId: string; token: string; pubKeyHex: string }> {
+  async function setupIdentityAndToken(): Promise<{
+    motebitId: string;
+    token: string;
+    pubKeyHex: string;
+  }> {
     const keypair = await generateKeypair();
     const pubKeyHex = bytesToHex(keypair.publicKey);
 
@@ -875,13 +923,22 @@ describe("Sync Relay — agent discovery registry", () => {
     const deviceRes = await relay.app.request("/device/register", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
-      body: JSON.stringify({ motebit_id: identity.motebit_id, device_name: "Test", public_key: pubKeyHex }),
+      body: JSON.stringify({
+        motebit_id: identity.motebit_id,
+        device_name: "Test",
+        public_key: pubKeyHex,
+      }),
     });
     const device = (await deviceRes.json()) as { device_id: string };
 
     // Create signed token
     const token = await createSignedToken(
-      { mid: identity.motebit_id, did: device.device_id, iat: Date.now(), exp: Date.now() + 5 * 60 * 1000 },
+      {
+        mid: identity.motebit_id,
+        did: device.device_id,
+        iat: Date.now(),
+        exp: Date.now() + 5 * 60 * 1000,
+      },
       keypair.privateKey,
     );
 
@@ -907,7 +964,11 @@ describe("Sync Relay — agent discovery registry", () => {
       }),
     });
     expect(regRes.status).toBe(200);
-    const regBody = (await regRes.json()) as { registered: boolean; motebit_id: string; expires_at: number };
+    const regBody = (await regRes.json()) as {
+      registered: boolean;
+      motebit_id: string;
+      expires_at: number;
+    };
     expect(regBody.registered).toBe(true);
     expect(regBody.motebit_id).toBe(motebitId);
     expect(regBody.expires_at).toBeTypeOf("number");
@@ -918,13 +979,24 @@ describe("Sync Relay — agent discovery registry", () => {
       headers: { Authorization: `Bearer ${token}` },
     });
     expect(discoverRes.status).toBe(200);
-    const discoverBody = (await discoverRes.json()) as { agents: Array<{ motebit_id: string; public_key: string; endpoint_url: string; capabilities: string[]; metadata: { name: string; description: string } }> };
+    const discoverBody = (await discoverRes.json()) as {
+      agents: Array<{
+        motebit_id: string;
+        public_key: string;
+        endpoint_url: string;
+        capabilities: string[];
+        metadata: { name: string; description: string };
+      }>;
+    };
     expect(discoverBody.agents).toHaveLength(1);
     expect(discoverBody.agents[0]!.motebit_id).toBe(motebitId);
     expect(discoverBody.agents[0]!.public_key).toBe(pubKeyHex);
     expect(discoverBody.agents[0]!.endpoint_url).toBe("https://example.com/mcp");
     expect(discoverBody.agents[0]!.capabilities).toEqual(["query", "remember"]);
-    expect(discoverBody.agents[0]!.metadata).toEqual({ name: "Test Agent", description: "A test agent" });
+    expect(discoverBody.agents[0]!.metadata).toEqual({
+      name: "Test Agent",
+      description: "A test agent",
+    });
   });
 
   it("heartbeat refreshes TTL", async () => {
@@ -1001,7 +1073,10 @@ describe("Sync Relay — agent discovery registry", () => {
     await relay.app.request("/api/v1/agents/register", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${agentA.token}` },
-      body: JSON.stringify({ endpoint_url: "https://a.example.com/mcp", capabilities: ["query", "remember"] }),
+      body: JSON.stringify({
+        endpoint_url: "https://a.example.com/mcp",
+        capabilities: ["query", "remember"],
+      }),
     });
 
     // Register agent B with "search" only

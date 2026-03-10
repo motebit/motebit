@@ -140,7 +140,11 @@ const GITIGNORE = `node_modules/
 // guidedScaffold — interactive identity + project creation
 // ---------------------------------------------------------------------------
 
-async function guidedScaffold(targetDir: string, nonInteractive: boolean, serviceMode: boolean): Promise<void> {
+async function guidedScaffold(
+  targetDir: string,
+  nonInteractive: boolean,
+  serviceMode: boolean,
+): Promise<void> {
   console.log();
   console.log(`  ${bold("create-motebit")} ${dim(`v${VERSION}`)}`);
   console.log();
@@ -265,7 +269,10 @@ async function guidedScaffold(targetDir: string, nonInteractive: boolean, servic
 
     const capabilitiesRaw = await input(rl2, "? Capabilities (comma-separated)");
     const capabilities = capabilitiesRaw
-      ? capabilitiesRaw.split(",").map(s => s.trim()).filter(Boolean)
+      ? capabilitiesRaw
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
       : [];
 
     const serviceUrl = await input(rl2, "? Service URL (optional)");
@@ -285,13 +292,18 @@ async function guidedScaffold(targetDir: string, nonInteractive: boolean, servic
     const serviceName = process.env["MOTEBIT_SERVICE_NAME"];
     const serviceDescription = process.env["MOTEBIT_SERVICE_DESCRIPTION"];
     if (!serviceName || !serviceDescription) {
-      console.log(`  ${red("!")} --service with --yes requires MOTEBIT_SERVICE_NAME and MOTEBIT_SERVICE_DESCRIPTION env vars.`);
+      console.log(
+        `  ${red("!")} --service with --yes requires MOTEBIT_SERVICE_NAME and MOTEBIT_SERVICE_DESCRIPTION env vars.`,
+      );
       console.log();
       process.exit(1);
     }
     const capabilitiesRaw = process.env["MOTEBIT_SERVICE_CAPABILITIES"];
     const capabilities = capabilitiesRaw
-      ? capabilitiesRaw.split(",").map(s => s.trim()).filter(Boolean)
+      ? capabilitiesRaw
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
       : [];
     serviceOpts = {
       type: "service",

@@ -49,7 +49,9 @@ describe("SqliteApprovalStore", () => {
     const now = Date.now();
     moteDb.approvalStore.add(makeApproval({ approval_id: "a1", created_at: now }));
     moteDb.approvalStore.add(makeApproval({ approval_id: "a2", created_at: now + 100 }));
-    moteDb.approvalStore.add(makeApproval({ approval_id: "a3", status: "approved", created_at: now + 200 }));
+    moteDb.approvalStore.add(
+      makeApproval({ approval_id: "a3", status: "approved", created_at: now + 200 }),
+    );
 
     const pending = moteDb.approvalStore.listPending("mote-abc");
     expect(pending).toHaveLength(2);
@@ -60,8 +62,12 @@ describe("SqliteApprovalStore", () => {
   it("listAll returns all statuses ordered by created_at DESC", () => {
     const now = Date.now();
     moteDb.approvalStore.add(makeApproval({ approval_id: "a1", created_at: now }));
-    moteDb.approvalStore.add(makeApproval({ approval_id: "a2", status: "approved", created_at: now + 100 }));
-    moteDb.approvalStore.add(makeApproval({ approval_id: "a3", status: "denied", created_at: now + 200 }));
+    moteDb.approvalStore.add(
+      makeApproval({ approval_id: "a2", status: "approved", created_at: now + 100 }),
+    );
+    moteDb.approvalStore.add(
+      makeApproval({ approval_id: "a3", status: "denied", created_at: now + 200 }),
+    );
 
     const all = moteDb.approvalStore.listAll("mote-abc");
     expect(all).toHaveLength(3);
@@ -102,15 +108,19 @@ describe("SqliteApprovalStore", () => {
   it("expireStale expires past-due items and leaves fresh ones", () => {
     const now = Date.now();
     // Already expired
-    moteDb.approvalStore.add(makeApproval({
-      approval_id: "expired-1",
-      expires_at: now - 1000,
-    }));
+    moteDb.approvalStore.add(
+      makeApproval({
+        approval_id: "expired-1",
+        expires_at: now - 1000,
+      }),
+    );
     // Still fresh
-    moteDb.approvalStore.add(makeApproval({
-      approval_id: "fresh-1",
-      expires_at: now + 3_600_000,
-    }));
+    moteDb.approvalStore.add(
+      makeApproval({
+        approval_id: "fresh-1",
+        expires_at: now + 3_600_000,
+      }),
+    );
 
     const count = moteDb.approvalStore.expireStale(now);
     expect(count).toBe(1);
@@ -125,11 +135,13 @@ describe("SqliteApprovalStore", () => {
 
   it("expireStale does not expire already-resolved items", () => {
     const now = Date.now();
-    moteDb.approvalStore.add(makeApproval({
-      approval_id: "already-approved",
-      expires_at: now - 1000,
-      status: "approved",
-    }));
+    moteDb.approvalStore.add(
+      makeApproval({
+        approval_id: "already-approved",
+        expires_at: now - 1000,
+        status: "approved",
+      }),
+    );
 
     const count = moteDb.approvalStore.expireStale(now);
     expect(count).toBe(0);

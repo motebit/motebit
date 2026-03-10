@@ -192,7 +192,13 @@ describe("mergeDiscoveredServers", () => {
       {
         source: "Claude Desktop",
         servers: [
-          { name: "fs", transport: "stdio" as const, command: "npx", trusted: false, source: "Claude Desktop" },
+          {
+            name: "fs",
+            transport: "stdio" as const,
+            command: "npx",
+            trusted: false,
+            source: "Claude Desktop",
+          },
         ],
       },
     ];
@@ -211,7 +217,13 @@ describe("mergeDiscoveredServers", () => {
       {
         source: "Claude Desktop",
         servers: [
-          { name: "fs", transport: "stdio" as const, command: "npx", trusted: false, source: "Claude Desktop" },
+          {
+            name: "fs",
+            transport: "stdio" as const,
+            command: "npx",
+            trusted: false,
+            source: "Claude Desktop",
+          },
         ],
       },
     ];
@@ -229,14 +241,32 @@ describe("mergeDiscoveredServers", () => {
       {
         source: "Claude Desktop",
         servers: [
-          { name: "github", transport: "stdio" as const, command: "npx", trusted: false, source: "Claude Desktop" },
+          {
+            name: "github",
+            transport: "stdio" as const,
+            command: "npx",
+            trusted: false,
+            source: "Claude Desktop",
+          },
         ],
       },
       {
         source: "Claude Code",
         servers: [
-          { name: "github", transport: "stdio" as const, command: "npx", trusted: false, source: "Claude Code" },
-          { name: "postgres", transport: "stdio" as const, command: "npx", trusted: false, source: "Claude Code" },
+          {
+            name: "github",
+            transport: "stdio" as const,
+            command: "npx",
+            trusted: false,
+            source: "Claude Code",
+          },
+          {
+            name: "postgres",
+            transport: "stdio" as const,
+            command: "npx",
+            trusted: false,
+            source: "Claude Code",
+          },
         ],
       },
     ];
@@ -245,7 +275,7 @@ describe("mergeDiscoveredServers", () => {
     expect(merged).toHaveLength(2);
     expect(newServers).toHaveLength(2);
     // First source wins for duplicate name
-    expect(newServers.find(s => s.name === "github")?.source).toBe("Claude Desktop");
+    expect(newServers.find((s) => s.name === "github")?.source).toBe("Claude Desktop");
   });
 
   it("preserves existing servers in order", () => {
@@ -254,19 +284,33 @@ describe("mergeDiscoveredServers", () => {
       { name: "b", transport: "stdio", command: "b" },
     ];
     const discovered = [
-      { source: "Test", servers: [{ name: "c", transport: "stdio" as const, command: "c", trusted: false, source: "Test" }] },
+      {
+        source: "Test",
+        servers: [
+          { name: "c", transport: "stdio" as const, command: "c", trusted: false, source: "Test" },
+        ],
+      },
     ];
 
     const { merged } = mergeDiscoveredServers(existing, discovered);
-    expect(merged.map(s => s.name)).toEqual(["a", "b", "c"]);
+    expect(merged.map((s) => s.name)).toEqual(["a", "b", "c"]);
   });
 
   it("returns empty newServers when all discovered already exist", () => {
-    const existing: McpServerConfig[] = [
-      { name: "fs", transport: "stdio", command: "npx" },
-    ];
+    const existing: McpServerConfig[] = [{ name: "fs", transport: "stdio", command: "npx" }];
     const discovered = [
-      { source: "Claude Desktop", servers: [{ name: "fs", transport: "stdio" as const, command: "npx", trusted: false, source: "Claude Desktop" }] },
+      {
+        source: "Claude Desktop",
+        servers: [
+          {
+            name: "fs",
+            transport: "stdio" as const,
+            command: "npx",
+            trusted: false,
+            source: "Claude Desktop",
+          },
+        ],
+      },
     ];
 
     const { merged, newServers } = mergeDiscoveredServers(existing, discovered);
@@ -282,7 +326,13 @@ describe("mergeDiscoveredServers", () => {
       {
         source: "Claude Desktop",
         servers: [
-          { name: "fs", transport: "stdio" as const, command: "npx", trusted: false, source: "Claude Desktop" },
+          {
+            name: "fs",
+            transport: "stdio" as const,
+            command: "npx",
+            trusted: false,
+            source: "Claude Desktop",
+          },
         ],
       },
     ];
@@ -296,14 +346,18 @@ describe("mergeDiscoveredServers", () => {
   });
 
   it("does not report collision when same name has same command", () => {
-    const existing: McpServerConfig[] = [
-      { name: "fs", transport: "stdio", command: "npx" },
-    ];
+    const existing: McpServerConfig[] = [{ name: "fs", transport: "stdio", command: "npx" }];
     const discovered = [
       {
         source: "Claude Desktop",
         servers: [
-          { name: "fs", transport: "stdio" as const, command: "npx", trusted: false, source: "Claude Desktop" },
+          {
+            name: "fs",
+            transport: "stdio" as const,
+            command: "npx",
+            trusted: false,
+            source: "Claude Desktop",
+          },
         ],
       },
     ];
@@ -320,7 +374,13 @@ describe("mergeDiscoveredServers", () => {
       {
         source: "VS Code",
         servers: [
-          { name: "api", transport: "http" as const, url: "http://localhost:4000", trusted: false, source: "VS Code" },
+          {
+            name: "api",
+            transport: "http" as const,
+            url: "http://localhost:4000",
+            trusted: false,
+            source: "VS Code",
+          },
         ],
       },
     ];

@@ -6,7 +6,11 @@
   "bin": {
     "create-motebit": "./dist/index.js"
   },
-  "files": ["dist", "LICENSE", "README.md"],
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
   "license": "MIT",
   "keywords": [
     "motebit",

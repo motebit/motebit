@@ -26,7 +26,11 @@ const CEILING_THRESHOLD = 5;
 
 // === Exported Functions ===
 
-export function addMessage(role: "user" | "assistant" | "system", text: string, immediate = false): void {
+export function addMessage(
+  role: "user" | "assistant" | "system",
+  text: string,
+  immediate = false,
+): void {
   const bubble = document.createElement("div");
   bubble.className = `chat-bubble ${role}`;
   bubble.textContent = text;
@@ -139,7 +143,10 @@ export function completeToolStatus(name: string): void {
   el.classList.add("done");
   setTimeout(() => {
     el.classList.add("fade-out");
-    setTimeout(() => { el.remove(); toolStatusElements.delete(name); }, 500);
+    setTimeout(() => {
+      el.remove();
+      toolStatusElements.delete(name);
+    }, 500);
   }, 1000);
 }
 
@@ -148,7 +155,8 @@ export function completeToolStatus(name: string): void {
 function showThinkingIndicator(): HTMLElement {
   const el = document.createElement("div");
   el.className = "thinking-indicator";
-  el.innerHTML = '<div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div>';
+  el.innerHTML =
+    '<div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div>';
   chatLog.appendChild(el);
   void el.offsetWidth;
   el.classList.add("visible");
@@ -372,11 +380,7 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
               firstChunkReceived = true;
               removeThinkingIndicator(thinkingEl);
             }
-            const approved = await showApprovalCard(
-              chunk.name,
-              chunk.args,
-              chunk.risk_level,
-            );
+            const approved = await showApprovalCard(chunk.name, chunk.args, chunk.risk_level);
             // Resume the stream after approval decision
             for await (const resumeChunk of ctx.app.resumeAfterApproval(approved)) {
               if (resumeChunk.type === "text") {
@@ -404,7 +408,10 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
           }
 
           case "injection_warning": {
-            addMessage("system", `Injection warning from tool "${chunk.tool_name}": ${chunk.patterns.join(", ")}`);
+            addMessage(
+              "system",
+              `Injection warning from tool "${chunk.tool_name}": ${chunk.patterns.join(", ")}`,
+            );
             break;
           }
 

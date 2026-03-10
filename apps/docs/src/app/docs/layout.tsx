@@ -9,13 +9,7 @@ export default function Layout({ children }: { children: any }) {
       nav={{
         title: (
           <>
-            <img
-              src="/motebit-mark.svg"
-              alt=""
-              width={22}
-              height={22}
-              aria-hidden="true"
-            />
+            <img src="/motebit-mark.svg" alt="" width={22} height={22} aria-hidden="true" />
             Motebit
           </>
         ),

@@ -9,13 +9,20 @@ interface BannerProps {
   onDismiss: () => void;
 }
 
-export function Banner({ message, actionLabel, onAction, onDismiss }: BannerProps): React.ReactElement {
+export function Banner({
+  message,
+  actionLabel,
+  onAction,
+  onDismiss,
+}: BannerProps): React.ReactElement {
   const colors = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   return (
     <View style={styles.container}>
-      <Text style={styles.message} numberOfLines={2}>{message}</Text>
+      <Text style={styles.message} numberOfLines={2}>
+        {message}
+      </Text>
       <View style={styles.actions}>
         {actionLabel != null && onAction != null && (
           <TouchableOpacity style={styles.actionButton} onPress={onAction} activeOpacity={0.7}>

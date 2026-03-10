@@ -9,10 +9,23 @@ export const createSubGoalDefinition: ToolDefinition = {
     type: "object",
     properties: {
       prompt: { type: "string", description: "What the sub-goal should accomplish" },
-      interval: { type: "string", description: "How often to run (e.g. '1h', '30m', '1d'). Default: '1h'" },
-      once: { type: "boolean", description: "If true, goal runs once then completes. Default: false" },
-      wall_clock_ms: { type: "number", description: "Max wall-clock time per run in ms. Default: scheduler default (10 min)." },
-      project_id: { type: "string", description: "Project ID for grouping related goals. Goals with same project_id share context." },
+      interval: {
+        type: "string",
+        description: "How often to run (e.g. '1h', '30m', '1d'). Default: '1h'",
+      },
+      once: {
+        type: "boolean",
+        description: "If true, goal runs once then completes. Default: false",
+      },
+      wall_clock_ms: {
+        type: "number",
+        description: "Max wall-clock time per run in ms. Default: scheduler default (10 min).",
+      },
+      project_id: {
+        type: "string",
+        description:
+          "Project ID for grouping related goals. Goals with same project_id share context.",
+      },
     },
     required: ["prompt"],
   },

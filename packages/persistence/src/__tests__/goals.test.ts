@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { createMotebitDatabase, type MotebitDatabase, type Goal, type GoalOutcome } from "../index.js";
+import {
+  createMotebitDatabase,
+  type MotebitDatabase,
+  type Goal,
+  type GoalOutcome,
+} from "../index.js";
 
 describe("SqliteGoalStore", () => {
   let moteDb: MotebitDatabase;
@@ -206,11 +211,13 @@ describe("SqliteGoalOutcomeStore", () => {
   });
 
   it("stores failed outcomes with error messages", () => {
-    moteDb.goalOutcomeStore.add(makeOutcome({
-      status: "failed",
-      summary: null,
-      error_message: "Connection timeout",
-    }));
+    moteDb.goalOutcomeStore.add(
+      makeOutcome({
+        status: "failed",
+        summary: null,
+        error_message: "Connection timeout",
+      }),
+    );
     const outcomes = moteDb.goalOutcomeStore.listForGoal("goal-001");
     expect(outcomes[0]!.status).toBe("failed");
     expect(outcomes[0]!.error_message).toBe("Connection timeout");

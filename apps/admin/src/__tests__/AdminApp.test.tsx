@@ -176,72 +176,99 @@ function setupFetchMock() {
   globalThis.fetch = vi.fn().mockImplementation((url: string): Promise<Partial<Response>> => {
     if (url.includes("/api/v1/state/")) {
       return Promise.resolve({
-        ok: true, status: 200, statusText: "OK",
+        ok: true,
+        status: 200,
+        statusText: "OK",
         json: () => Promise.resolve(mockState),
         text: () => Promise.resolve(JSON.stringify(mockState)),
       });
     }
     if (url.includes("/api/v1/memory/")) {
       return Promise.resolve({
-        ok: true, status: 200, statusText: "OK",
+        ok: true,
+        status: 200,
+        statusText: "OK",
         json: () => Promise.resolve(mockMemory),
         text: () => Promise.resolve(JSON.stringify(mockMemory)),
       });
     }
     if (url.includes("/api/v1/sync/")) {
       return Promise.resolve({
-        ok: true, status: 200, statusText: "OK",
+        ok: true,
+        status: 200,
+        statusText: "OK",
         json: () => Promise.resolve(mockEvents),
         text: () => Promise.resolve(JSON.stringify(mockEvents)),
       });
     }
     if (url.includes("/api/v1/audit/")) {
       return Promise.resolve({
-        ok: true, status: 200, statusText: "OK",
+        ok: true,
+        status: 200,
+        statusText: "OK",
         json: () => Promise.resolve({ motebit_id: "default-motebit", entries: [] }),
         text: () => Promise.resolve(JSON.stringify({ motebit_id: "default-motebit", entries: [] })),
       });
     }
     if (url.includes("/api/v1/goals/")) {
       return Promise.resolve({
-        ok: true, status: 200, statusText: "OK",
+        ok: true,
+        status: 200,
+        statusText: "OK",
         json: () => Promise.resolve(mockGoals),
         text: () => Promise.resolve(JSON.stringify(mockGoals)),
       });
     }
     if (url.includes("/api/v1/conversations/") && url.includes("/messages")) {
       return Promise.resolve({
-        ok: true, status: 200, statusText: "OK",
-        json: () => Promise.resolve({ motebit_id: "default-motebit", conversation_id: "c1", messages: [] }),
-        text: () => Promise.resolve(JSON.stringify({ motebit_id: "default-motebit", conversation_id: "c1", messages: [] })),
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: () =>
+          Promise.resolve({ motebit_id: "default-motebit", conversation_id: "c1", messages: [] }),
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({ motebit_id: "default-motebit", conversation_id: "c1", messages: [] }),
+          ),
       });
     }
     if (url.includes("/api/v1/conversations/")) {
       return Promise.resolve({
-        ok: true, status: 200, statusText: "OK",
+        ok: true,
+        status: 200,
+        statusText: "OK",
         json: () => Promise.resolve(mockConversations),
         text: () => Promise.resolve(JSON.stringify(mockConversations)),
       });
     }
     if (url.includes("/api/v1/plans/")) {
       return Promise.resolve({
-        ok: true, status: 200, statusText: "OK",
+        ok: true,
+        status: 200,
+        statusText: "OK",
         json: () => Promise.resolve(mockPlans),
         text: () => Promise.resolve(JSON.stringify(mockPlans)),
       });
     }
     if (url.includes("/api/v1/devices/")) {
       return Promise.resolve({
-        ok: true, status: 200, statusText: "OK",
+        ok: true,
+        status: 200,
+        statusText: "OK",
         json: () => Promise.resolve(mockDevices),
         text: () => Promise.resolve(JSON.stringify(mockDevices)),
       });
     }
     if (url.includes("/api/v1/gradient/")) {
       return Promise.resolve({
-        ok: true, status: 200, statusText: "OK",
+        ok: true,
+        status: 200,
+        statusText: "OK",
         json: () => Promise.resolve({ motebit_id: "default-motebit", current: null, history: [] }),
-        text: () => Promise.resolve(JSON.stringify({ motebit_id: "default-motebit", current: null, history: [] })),
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({ motebit_id: "default-motebit", current: null, history: [] }),
+          ),
       });
     }
     return Promise.reject(new Error(`Unexpected URL: ${url}`));

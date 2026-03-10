@@ -1,9 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import {
-  MotebitRuntime,
-  NullRenderer,
-  createInMemoryStorage,
-} from "../index";
+import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
 import type { PlatformAdapters, AgentTrustStoreAdapter } from "../index";
 import { AgentTrustLevel } from "@motebit/sdk";
 import type { AgentTrustRecord } from "@motebit/sdk";
@@ -17,7 +13,10 @@ class InMemoryAgentTrustStore implements AgentTrustStoreAdapter {
     return `${motebitId}::${remoteMotebitId}`;
   }
 
-  async getAgentTrust(motebitId: string, remoteMotebitId: string): Promise<AgentTrustRecord | null> {
+  async getAgentTrust(
+    motebitId: string,
+    remoteMotebitId: string,
+  ): Promise<AgentTrustRecord | null> {
     return this.records.get(this.key(motebitId, remoteMotebitId)) ?? null;
   }
 
@@ -33,7 +32,11 @@ class InMemoryAgentTrustStore implements AgentTrustStoreAdapter {
     return result.sort((a, b) => b.last_seen_at - a.last_seen_at);
   }
 
-  async updateTrustLevel(motebitId: string, remoteMotebitId: string, level: AgentTrustLevel): Promise<void> {
+  async updateTrustLevel(
+    motebitId: string,
+    remoteMotebitId: string,
+    level: AgentTrustLevel,
+  ): Promise<void> {
     const existing = this.records.get(this.key(motebitId, remoteMotebitId));
     if (existing) {
       existing.trust_level = level;
@@ -42,7 +45,10 @@ class InMemoryAgentTrustStore implements AgentTrustStoreAdapter {
   }
 }
 
-function createAdaptersWithTrust(): { adapters: PlatformAdapters; trustStore: InMemoryAgentTrustStore } {
+function createAdaptersWithTrust(): {
+  adapters: PlatformAdapters;
+  trustStore: InMemoryAgentTrustStore;
+} {
   const trustStore = new InMemoryAgentTrustStore();
   const storage = createInMemoryStorage();
   return {
@@ -59,10 +65,7 @@ describe("MotebitRuntime Agent Trust", () => {
 
   beforeEach(() => {
     const { adapters } = createAdaptersWithTrust();
-    runtime = new MotebitRuntime(
-      { motebitId: "test-mote", tickRateHz: 0 },
-      adapters,
-    );
+    runtime = new MotebitRuntime({ motebitId: "test-mote", tickRateHz: 0 }, adapters);
   });
 
   it("records first interaction as FirstContact", async () => {
@@ -160,10 +163,7 @@ describe("MotebitRuntime bumpTrustFromReceipt", () => {
   beforeEach(() => {
     const result = createAdaptersWithTrust();
     trustStore = result.trustStore;
-    runtime = new MotebitRuntime(
-      { motebitId: "test-mote", tickRateHz: 0 },
-      result.adapters,
-    );
+    runtime = new MotebitRuntime({ motebitId: "test-mote", tickRateHz: 0 }, result.adapters);
   });
 
   it("creates FirstContact for unknown motebit on verified receipt", async () => {

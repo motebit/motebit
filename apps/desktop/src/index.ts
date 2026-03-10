@@ -6,7 +6,18 @@
  */
 
 import { MotebitRuntime, SimpleToolRegistry } from "@motebit/runtime";
-import type { TurnResult, StorageAdapters, StreamChunk, KeyringAdapter, OperatorModeResult, AuditLogSink, InteriorColor, McpServerConfig, PolicyConfig, MemoryGovernanceConfig } from "@motebit/runtime";
+import type {
+  TurnResult,
+  StorageAdapters,
+  StreamChunk,
+  KeyringAdapter,
+  OperatorModeResult,
+  AuditLogSink,
+  InteriorColor,
+  McpServerConfig,
+  PolicyConfig,
+  MemoryGovernanceConfig,
+} from "@motebit/runtime";
 import { ThreeJSAdapter } from "@motebit/render-engine";
 import {
   CloudProvider,
@@ -28,14 +39,41 @@ import {
 } from "@motebit/core-identity";
 import { InMemoryAuditLog } from "@motebit/privacy-layer";
 import { createSignedToken, deriveSyncEncryptionKey } from "@motebit/crypto";
-import { generate as generateIdentityFile, parse as parseIdentityFile, verify as verifyIdentity, governanceToPolicyConfig } from "@motebit/identity-file";
-import { PairingClient, ConversationSyncEngine, HttpConversationSyncAdapter, HttpEventStoreAdapter, WebSocketEventStoreAdapter, EncryptedEventStoreAdapter, decryptEventPayload } from "@motebit/sync-engine";
-import type { PairingSession, PairingStatus, ConversationSyncStoreAdapter, SyncStatus } from "@motebit/sync-engine";
+import {
+  generate as generateIdentityFile,
+  parse as parseIdentityFile,
+  verify as verifyIdentity,
+  governanceToPolicyConfig,
+} from "@motebit/identity-file";
+import {
+  PairingClient,
+  ConversationSyncEngine,
+  HttpConversationSyncAdapter,
+  HttpEventStoreAdapter,
+  WebSocketEventStoreAdapter,
+  EncryptedEventStoreAdapter,
+  decryptEventPayload,
+} from "@motebit/sync-engine";
+import type {
+  PairingSession,
+  PairingStatus,
+  ConversationSyncStoreAdapter,
+  SyncStatus,
+} from "@motebit/sync-engine";
 import type { SyncConversation, SyncConversationMessage } from "@motebit/sdk";
 import { PlanEngine, InMemoryPlanStore } from "@motebit/planner";
 import type { PlanChunk, PlanStoreAdapter } from "@motebit/planner";
 import { PlanStatus } from "@motebit/sdk";
-import { TauriEventStore, TauriMemoryStorage, TauriIdentityStorage, TauriAuditLog, TauriStateSnapshotStorage, TauriConversationStore, TauriPlanStore, type InvokeFn } from "./tauri-storage.js";
+import {
+  TauriEventStore,
+  TauriMemoryStorage,
+  TauriIdentityStorage,
+  TauriAuditLog,
+  TauriStateSnapshotStorage,
+  TauriConversationStore,
+  TauriPlanStore,
+  type InvokeFn,
+} from "./tauri-storage.js";
 import { registerDesktopTools } from "./desktop-tools.js";
 import {
   createSubGoalDefinition,
@@ -45,14 +83,28 @@ import {
 export type { InvokeFn } from "./tauri-storage.js";
 
 // Re-export runtime types for main.ts consumption
-export type { TurnResult, StreamChunk, OperatorModeResult, InteriorColor, McpServerConfig, PolicyConfig, MemoryGovernanceConfig };
+export type {
+  TurnResult,
+  StreamChunk,
+  OperatorModeResult,
+  InteriorColor,
+  McpServerConfig,
+  PolicyConfig,
+  MemoryGovernanceConfig,
+};
 export type { PairingSession, PairingStatus };
 export type { MemoryNode, MemoryEdge };
 export type { DeletionCertificate } from "@motebit/crypto";
 
 // === Sync Status ===
 
-export type SyncIndicatorStatus = "disconnected" | "connecting" | "connected" | "syncing" | "conflict" | "error";
+export type SyncIndicatorStatus =
+  | "disconnected"
+  | "connecting"
+  | "connected"
+  | "syncing"
+  | "conflict"
+  | "error";
 
 export interface SyncStatusEvent {
   status: SyncIndicatorStatus;
@@ -109,7 +161,10 @@ export interface TauriCommands {
   write_config(json: string): Promise<void>;
   read_file_tool(path: string): Promise<string>;
   write_file_tool(path: string, content: string): Promise<string>;
-  shell_exec_tool(command: string, cwd: string | null): Promise<{ stdout: string; stderr: string; exit_code: number }>;
+  shell_exec_tool(
+    command: string,
+    cwd: string | null,
+  ): Promise<{ stdout: string; stderr: string; exit_code: number }>;
   transcribe_audio(audio_base64: string, api_key: string | null): Promise<string>;
 }
 
@@ -182,7 +237,11 @@ class TauriToolAuditSink implements AuditLogSink {
 
 // === Storage Factory ===
 
-function createTauriStorage(invoke: InvokeFn, stateSnapshot?: TauriStateSnapshotStorage, conversationStore?: TauriConversationStore): StorageAdapters {
+function createTauriStorage(
+  invoke: InvokeFn,
+  stateSnapshot?: TauriStateSnapshotStorage,
+  conversationStore?: TauriConversationStore,
+): StorageAdapters {
   return {
     eventStore: new TauriEventStore(invoke),
     memoryStorage: new TauriMemoryStorage(invoke),
@@ -194,7 +253,11 @@ function createTauriStorage(invoke: InvokeFn, stateSnapshot?: TauriStateSnapshot
   };
 }
 
-function createDesktopStorage(config: DesktopAIConfig, stateSnapshot?: TauriStateSnapshotStorage, conversationStore?: TauriConversationStore): StorageAdapters {
+function createDesktopStorage(
+  config: DesktopAIConfig,
+  stateSnapshot?: TauriStateSnapshotStorage,
+  conversationStore?: TauriConversationStore,
+): StorageAdapters {
   if (config.isTauri && config.invoke) {
     return createTauriStorage(config.invoke, stateSnapshot, conversationStore);
   }
@@ -209,13 +272,13 @@ function createDesktopStorage(config: DesktopAIConfig, stateSnapshot?: TauriStat
 // === Color Presets ===
 
 export const COLOR_PRESETS: Record<string, InteriorColor> = {
-  moonlight:    { tint: [0.95, 0.95, 1.0], glow: [0.8, 0.85, 1.0] },
-  amber:        { tint: [1.0, 0.85, 0.6], glow: [0.9, 0.7, 0.3] },
-  rose:         { tint: [1.0, 0.82, 0.88], glow: [0.9, 0.5, 0.6] },
-  violet:       { tint: [0.88, 0.8, 1.0], glow: [0.6, 0.4, 0.9] },
-  cyan:         { tint: [0.8, 0.95, 1.0], glow: [0.3, 0.8, 0.9] },
-  ember:        { tint: [1.0, 0.75, 0.65], glow: [0.9, 0.35, 0.2] },
-  sage:         { tint: [0.82, 0.95, 0.85], glow: [0.4, 0.75, 0.5] },
+  moonlight: { tint: [0.95, 0.95, 1.0], glow: [0.8, 0.85, 1.0] },
+  amber: { tint: [1.0, 0.85, 0.6], glow: [0.9, 0.7, 0.3] },
+  rose: { tint: [1.0, 0.82, 0.88], glow: [0.9, 0.5, 0.6] },
+  violet: { tint: [0.88, 0.8, 1.0], glow: [0.6, 0.4, 0.9] },
+  cyan: { tint: [0.8, 0.95, 1.0], glow: [0.3, 0.8, 0.9] },
+  ember: { tint: [1.0, 0.75, 0.65], glow: [0.9, 0.35, 0.2] },
+  sage: { tint: [0.82, 0.95, 0.85], glow: [0.4, 0.75, 0.5] },
 };
 
 // === MCP Server Status ===
@@ -239,9 +302,7 @@ export interface BootstrapResult {
   deviceId: string;
 }
 
-export type GovernanceStatus =
-  | { governed: true }
-  | { governed: false; reason: string };
+export type GovernanceStatus = { governed: true } | { governed: false; reason: string };
 
 export class DesktopApp {
   private runtime: MotebitRuntime | null = null;
@@ -309,7 +370,7 @@ export class DesktopApp {
       },
       async write(state) {
         const raw = await invoke<string>("read_config");
-        const config = { ...JSON.parse(raw) as Record<string, unknown>, ...state };
+        const config = { ...(JSON.parse(raw) as Record<string, unknown>), ...state };
         await invoke<void>("write_config", { json: JSON.stringify(config) });
       },
     };
@@ -347,17 +408,22 @@ export class DesktopApp {
               motebitId: result.motebitId,
               ownerId: result.motebitId,
               publicKeyHex: result.publicKeyHex,
-              devices: [{
-                device_id: result.deviceId,
-                name: "Desktop",
-                public_key: result.publicKeyHex,
-                registered_at: new Date().toISOString(),
-              }],
+              devices: [
+                {
+                  device_id: result.deviceId,
+                  name: "Desktop",
+                  public_key: result.publicKeyHex,
+                  registered_at: new Date().toISOString(),
+                },
+              ],
             },
             privKeyBytes,
           );
           const raw = await invoke<string>("read_config");
-          const config = { ...JSON.parse(raw) as Record<string, unknown>, _identity_file: identityFileContent };
+          const config = {
+            ...(JSON.parse(raw) as Record<string, unknown>),
+            _identity_file: identityFileContent,
+          };
           await invoke<void>("write_config", { json: JSON.stringify(config) });
         }
       } catch {
@@ -365,13 +431,19 @@ export class DesktopApp {
       }
     }
 
-    return { isFirstLaunch: result.isFirstLaunch, motebitId: result.motebitId, deviceId: result.deviceId };
+    return {
+      isFirstLaunch: result.isFirstLaunch,
+      motebitId: result.motebitId,
+      deviceId: result.deviceId,
+    };
   }
 
   /**
    * Get the device keypair from keyring + config. Returns null if not available.
    */
-  async getDeviceKeypair(invoke: InvokeFn): Promise<{ publicKey: string; privateKey: string } | null> {
+  async getDeviceKeypair(
+    invoke: InvokeFn,
+  ): Promise<{ publicKey: string; privateKey: string } | null> {
     const raw = await invoke<string>("read_config");
     const config = JSON.parse(raw) as Record<string, unknown>;
     const publicKey = config.device_public_key as string | undefined;
@@ -476,7 +548,14 @@ export class DesktopApp {
       this.runtime.renderFrame(deltaTime, time);
     } else {
       this.renderer.render({
-        cues: { hover_distance: 0.4, drift_amplitude: 0.02, glow_intensity: 0.3, eye_dilation: 0.3, smile_curvature: 0, speaking_activity: 0 },
+        cues: {
+          hover_distance: 0.4,
+          drift_amplitude: 0.02,
+          glow_intensity: 0.3,
+          eye_dilation: 0.3,
+          smile_curvature: 0,
+          speaking_activity: 0,
+        },
         delta_time: deltaTime,
         time,
       });
@@ -523,9 +602,7 @@ export class DesktopApp {
    * Returns false only if Anthropic provider is selected but no API key is provided.
    */
   async initAI(config: DesktopAIConfig): Promise<boolean> {
-    const resolved = config.personalityConfig
-      ? resolveConfig(config.personalityConfig)
-      : undefined;
+    const resolved = config.personalityConfig ? resolveConfig(config.personalityConfig) : undefined;
     const temperature = resolved?.temperature;
 
     let provider;
@@ -536,7 +613,8 @@ export class DesktopApp {
       this._activeProvider = "ollama";
     } else {
       if (config.apiKey == null || config.apiKey === "") return false;
-      const model = config.model != null && config.model !== "" ? config.model : "claude-sonnet-4-20250514";
+      const model =
+        config.model != null && config.model !== "" ? config.model : "claude-sonnet-4-20250514";
       const base_url = config.isTauri ? "https://api.anthropic.com" : "/api/anthropic";
       provider = new CloudProvider({
         provider: "anthropic",
@@ -566,7 +644,8 @@ export class DesktopApp {
 
     const storage = createDesktopStorage(config, stateSnapshot, conversationStore);
     this._localEventStore = storage.eventStore;
-    const keyring = config.isTauri && config.invoke ? new TauriKeyringAdapter(config.invoke) : undefined;
+    const keyring =
+      config.isTauri && config.invoke ? new TauriKeyringAdapter(config.invoke) : undefined;
 
     // Read governance from motebit.md identity file.
     // Fail-closed: in Tauri mode, tools are only registered if governance is valid.
@@ -582,7 +661,11 @@ export class DesktopApp {
         if (identityFileContent != null && identityFileContent !== "") {
           const parsed = parseIdentityFile(identityFileContent);
           const gov = parsed.frontmatter.governance;
-          if (gov?.max_risk_auto != null && gov?.require_approval_above != null && gov?.deny_above != null) {
+          if (
+            gov?.max_risk_auto != null &&
+            gov?.require_approval_above != null &&
+            gov?.deny_above != null
+          ) {
             const govPolicy = governanceToPolicyConfig(gov);
             policyConfig = {
               maxRiskLevel: govPolicy.maxRiskAuto,
@@ -598,7 +681,12 @@ export class DesktopApp {
     }
 
     this.runtime = new MotebitRuntime(
-      { motebitId: this.motebitId, tickRateHz: 2, policy: policyConfig, memoryGovernance: config.memoryGovernance },
+      {
+        motebitId: this.motebitId,
+        tickRateHz: 2,
+        policy: policyConfig,
+        memoryGovernance: config.memoryGovernance,
+      },
       { storage, renderer: this.renderer, ai: provider, keyring },
     );
 
@@ -622,7 +710,10 @@ export class DesktopApp {
         ? { governed: true }
         : { governed: false, reason: "dev mode" };
     } else {
-      this._governanceStatus = { governed: false, reason: "missing or invalid governance in motebit.md" };
+      this._governanceStatus = {
+        governed: false,
+        reason: "missing or invalid governance in motebit.md",
+      };
     }
 
     // Register goal-management tools (available during goal execution)
@@ -647,104 +738,102 @@ export class DesktopApp {
       if (!match) return 3_600_000; // default 1h
       const n = parseInt(match[1]!, 10);
       switch (match[2]!.toLowerCase()) {
-        case "s": return n * 1_000;
-        case "m": return n * 60_000;
-        case "h": return n * 3_600_000;
-        case "d": return n * 86_400_000;
-        default: return 3_600_000;
+        case "s":
+          return n * 1_000;
+        case "m":
+          return n * 60_000;
+        case "h":
+          return n * 3_600_000;
+        case "d":
+          return n * 86_400_000;
+        default:
+          return 3_600_000;
       }
     };
 
-    registry.register(
-      createSubGoalDefinition,
-      async (args: Record<string, unknown>) => {
-        if (this._currentGoalId == null || this._currentGoalId === "") {
-          return { ok: false, error: "No active goal context" };
-        }
-        const prompt = args.prompt as string;
-        const interval = args.interval as string | undefined;
-        const once = args.once as boolean | undefined;
-        const intervalMs = interval != null && interval !== "" ? parseInterval(interval) : 3_600_000;
-        const mode = once === true ? "once" : "recurring";
-        const subGoalId = crypto.randomUUID();
+    registry.register(createSubGoalDefinition, async (args: Record<string, unknown>) => {
+      if (this._currentGoalId == null || this._currentGoalId === "") {
+        return { ok: false, error: "No active goal context" };
+      }
+      const prompt = args.prompt as string;
+      const interval = args.interval as string | undefined;
+      const once = args.once as boolean | undefined;
+      const intervalMs = interval != null && interval !== "" ? parseInterval(interval) : 3_600_000;
+      const mode = once === true ? "once" : "recurring";
+      const subGoalId = crypto.randomUUID();
 
-        try {
-          await invoke("goals_create", {
-            motebit_id: this.motebitId,
-            goal_id: subGoalId,
-            prompt,
-            interval_ms: intervalMs,
-            mode,
-          });
-          // Set parent_goal_id
-          await invoke<number>("db_execute", {
-            sql: "UPDATE goals SET parent_goal_id = ? WHERE goal_id = ?",
-            params: [this._currentGoalId, subGoalId],
-          });
-          return { ok: true, data: { goal_id: subGoalId, prompt, mode, interval_ms: intervalMs } };
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return { ok: false, error: msg };
-        }
-      },
-    );
+      try {
+        await invoke("goals_create", {
+          motebit_id: this.motebitId,
+          goal_id: subGoalId,
+          prompt,
+          interval_ms: intervalMs,
+          mode,
+        });
+        // Set parent_goal_id
+        await invoke<number>("db_execute", {
+          sql: "UPDATE goals SET parent_goal_id = ? WHERE goal_id = ?",
+          params: [this._currentGoalId, subGoalId],
+        });
+        return { ok: true, data: { goal_id: subGoalId, prompt, mode, interval_ms: intervalMs } };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: msg };
+      }
+    });
 
-    registry.register(
-      completeGoalDefinition,
-      async (args: Record<string, unknown>) => {
-        if (this._currentGoalId == null || this._currentGoalId === "") {
-          return { ok: false, error: "No active goal context" };
-        }
-        const reason = args.reason as string;
-        try {
-          await invoke<number>("db_execute", {
-            sql: "UPDATE goals SET status = 'completed' WHERE goal_id = ?",
-            params: [this._currentGoalId],
-          });
-          // Best-effort event log
-          try {
-            await this.runtime!.events.append({
-              event_id: crypto.randomUUID(),
-              motebit_id: this.motebitId,
-              event_type: EventType.GoalCompleted,
-              payload: { goal_id: this._currentGoalId, reason },
-              version_clock: await this.runtime!.events.getLatestClock(this.motebitId) + 1,
-              timestamp: Date.now(),
-              tombstoned: false,
-            });
-          } catch { /* best-effort */ }
-          return { ok: true, data: { goal_id: this._currentGoalId, status: "completed", reason } };
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return { ok: false, error: msg };
-        }
-      },
-    );
-
-    registry.register(
-      reportProgressDefinition,
-      async (args: Record<string, unknown>) => {
-        if (this._currentGoalId == null || this._currentGoalId === "") {
-          return { ok: false, error: "No active goal context" };
-        }
-        const note = args.note as string;
+    registry.register(completeGoalDefinition, async (args: Record<string, unknown>) => {
+      if (this._currentGoalId == null || this._currentGoalId === "") {
+        return { ok: false, error: "No active goal context" };
+      }
+      const reason = args.reason as string;
+      try {
+        await invoke<number>("db_execute", {
+          sql: "UPDATE goals SET status = 'completed' WHERE goal_id = ?",
+          params: [this._currentGoalId],
+        });
+        // Best-effort event log
         try {
           await this.runtime!.events.append({
             event_id: crypto.randomUUID(),
             motebit_id: this.motebitId,
-            event_type: EventType.GoalProgress,
-            payload: { goal_id: this._currentGoalId, note },
-            version_clock: await this.runtime!.events.getLatestClock(this.motebitId) + 1,
+            event_type: EventType.GoalCompleted,
+            payload: { goal_id: this._currentGoalId, reason },
+            version_clock: (await this.runtime!.events.getLatestClock(this.motebitId)) + 1,
             timestamp: Date.now(),
             tombstoned: false,
           });
-          return { ok: true, data: { goal_id: this._currentGoalId, note } };
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return { ok: false, error: msg };
+        } catch {
+          /* best-effort */
         }
-      },
-    );
+        return { ok: true, data: { goal_id: this._currentGoalId, status: "completed", reason } };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: msg };
+      }
+    });
+
+    registry.register(reportProgressDefinition, async (args: Record<string, unknown>) => {
+      if (this._currentGoalId == null || this._currentGoalId === "") {
+        return { ok: false, error: "No active goal context" };
+      }
+      const note = args.note as string;
+      try {
+        await this.runtime!.events.append({
+          event_id: crypto.randomUUID(),
+          motebit_id: this.motebitId,
+          event_type: EventType.GoalProgress,
+          payload: { goal_id: this._currentGoalId, note },
+          version_clock: (await this.runtime!.events.getLatestClock(this.motebitId)) + 1,
+          timestamp: Date.now(),
+          tombstoned: false,
+        });
+        return { ok: true, data: { goal_id: this._currentGoalId, note } };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: msg };
+      }
+    });
   }
 
   get isOperatorMode(): boolean {
@@ -818,12 +907,23 @@ export class DesktopApp {
         disconnect(): Promise<void>;
         getTools(): unknown[];
         registerInto(registry: unknown): void;
-        checkManifest(pinnedHash?: string, pinnedToolNames?: string[]): Promise<{
-          ok: boolean; hash: string; previousHash?: string; toolCount: number;
-          toolNames: string[]; diff?: { added: string[]; removed: string[] };
+        checkManifest(
+          pinnedHash?: string,
+          pinnedToolNames?: string[],
+        ): Promise<{
+          ok: boolean;
+          hash: string;
+          previousHash?: string;
+          toolCount: number;
+          toolNames: string[];
+          diff?: { added: string[]; removed: string[] };
         }>;
         readonly isMotebit: boolean;
-        readonly verifiedIdentity: { verified: boolean; motebit_id?: string; public_key?: string } | null;
+        readonly verifiedIdentity: {
+          verified: boolean;
+          motebit_id?: string;
+          public_key?: string;
+        } | null;
         readonly serverConfig: McpServerConfig;
       };
     }>);
@@ -831,7 +931,10 @@ export class DesktopApp {
     await adapter.connect();
 
     // Manifest pinning — verify tools haven't changed since last connection
-    const manifestCheck = await adapter.checkManifest(config.toolManifestHash, config.pinnedToolNames);
+    const manifestCheck = await adapter.checkManifest(
+      config.toolManifestHash,
+      config.pinnedToolNames,
+    );
     let manifestChanged = false;
     let manifestDiff: { added: string[]; removed: string[] } | undefined;
     if (!manifestCheck.ok) {
@@ -916,7 +1019,11 @@ export class DesktopApp {
   }
 
   /** Read-only snapshot of the effective memory governance config. Returns null if runtime not initialized. */
-  getMemoryGovernance(): { persistenceThreshold: number; maxMemoriesPerTurn: number; rejectSecrets: boolean } | null {
+  getMemoryGovernance(): {
+    persistenceThreshold: number;
+    maxMemoriesPerTurn: number;
+    rejectSecrets: boolean;
+  } | null {
     if (!this.runtime) return null;
     return { ...this.runtime.memoryGovernor.getConfig() };
   }
@@ -938,10 +1045,13 @@ export class DesktopApp {
   /** List all registered tool names and descriptions. */
   listTools(): Array<{ name: string; description: string }> {
     if (!this.runtime) return [];
-    return this.runtime.getToolRegistry().list().map(t => ({
-      name: t.name,
-      description: t.description ?? "",
-    }));
+    return this.runtime
+      .getToolRegistry()
+      .list()
+      .map((t) => ({
+        name: t.name,
+        description: t.description ?? "",
+      }));
   }
 
   // === Identity ===
@@ -970,8 +1080,8 @@ export class DesktopApp {
     const RISK_NAMES = ["R0_READ", "R1_DRAFT", "R2_WRITE", "R3_EXECUTE", "R4_MONEY"];
     const preset = configData.approval_preset as string | undefined;
     const PRESET_GOV: Record<string, { require: number; deny: number }> = {
-      cautious:   { require: 0, deny: 3 },
-      balanced:   { require: 1, deny: 3 },
+      cautious: { require: 0, deny: 3 },
+      balanced: { require: 1, deny: 3 },
       autonomous: { require: 3, deny: 4 },
     };
     const presetGov = PRESET_GOV[preset ?? "balanced"] ?? PRESET_GOV.balanced!;
@@ -984,7 +1094,9 @@ export class DesktopApp {
     };
 
     // Map memory_governance config → identity-file memory fields
-    const memGov = configData.memory_governance as { persistence_threshold?: number; reject_secrets?: boolean } | undefined;
+    const memGov = configData.memory_governance as
+      | { persistence_threshold?: number; reject_secrets?: boolean }
+      | undefined;
     const memory = {
       confidence_threshold: memGov?.persistence_threshold ?? 0.3,
       half_life_days: 7,
@@ -992,12 +1104,14 @@ export class DesktopApp {
     };
 
     // Build device list from current device
-    const devices = [{
-      device_id: this.deviceId,
-      name: "Desktop",
-      public_key: this.publicKey,
-      registered_at: new Date().toISOString(),
-    }];
+    const devices = [
+      {
+        device_id: this.deviceId,
+        name: "Desktop",
+        public_key: this.publicKey,
+        registered_at: new Date().toISOString(),
+      },
+    ];
 
     // Convert hex private key to Uint8Array
     const privHex = keypair.privateKey;
@@ -1071,9 +1185,7 @@ export class DesktopApp {
     if (!this.runtime) return [];
     try {
       const { nodes } = await this.runtime.memory.exportAll();
-      return nodes
-        .filter(n => !n.tombstoned)
-        .sort((a, b) => b.created_at - a.created_at);
+      return nodes.filter((n) => !n.tombstoned).sort((a, b) => b.created_at - a.created_at);
     } catch {
       return [];
     }
@@ -1102,7 +1214,9 @@ export class DesktopApp {
     );
   }
 
-  async deleteMemory(nodeId: string): Promise<import("@motebit/crypto").DeletionCertificate | null> {
+  async deleteMemory(
+    nodeId: string,
+  ): Promise<import("@motebit/crypto").DeletionCertificate | null> {
     if (!this.runtime) return null;
     try {
       return await this.runtime.privacy.deleteMemory(nodeId, this.motebitId);
@@ -1114,13 +1228,15 @@ export class DesktopApp {
   }
 
   /** List deletion certificates from the audit log. */
-  async listDeletionCertificates(): Promise<Array<{
-    auditId: string;
-    timestamp: number;
-    targetId: string;
-    tombstoneHash: string;
-    deletedBy: string;
-  }>> {
+  async listDeletionCertificates(): Promise<
+    Array<{
+      auditId: string;
+      timestamp: number;
+      targetId: string;
+      tombstoneHash: string;
+      deletedBy: string;
+    }>
+  > {
     if (!this.runtime) return [];
     try {
       const records = await this.runtime.auditLog.query(this.motebitId);
@@ -1146,11 +1262,7 @@ export class DesktopApp {
 
   /** Compute effective confidence after half-life decay. */
   getDecayedConfidence(node: MemoryNode): number {
-    return computeDecayedConfidence(
-      node.confidence,
-      node.half_life,
-      Date.now() - node.created_at,
-    );
+    return computeDecayedConfidence(node.confidence, node.half_life, Date.now() - node.created_at);
   }
 
   // === Pairing: Device A (existing device) ===
@@ -1158,7 +1270,10 @@ export class DesktopApp {
   /**
    * Initiate a pairing session. Returns a 6-char code to display to the user.
    */
-  async initiatePairing(invoke: InvokeFn, syncUrl: string): Promise<{ pairingCode: string; pairingId: string }> {
+  async initiatePairing(
+    invoke: InvokeFn,
+    syncUrl: string,
+  ): Promise<{ pairingCode: string; pairingId: string }> {
     const keypair = await this.getDeviceKeypair(invoke);
     if (!keypair) throw new Error("No device keypair available");
 
@@ -1171,7 +1286,11 @@ export class DesktopApp {
   /**
    * Get the current state of a pairing session (Device A polls for claim).
    */
-  async getPairingSession(invoke: InvokeFn, syncUrl: string, pairingId: string): Promise<PairingSession> {
+  async getPairingSession(
+    invoke: InvokeFn,
+    syncUrl: string,
+    pairingId: string,
+  ): Promise<PairingSession> {
     const keypair = await this.getDeviceKeypair(invoke);
     if (!keypair) throw new Error("No device keypair available");
 
@@ -1183,7 +1302,11 @@ export class DesktopApp {
   /**
    * Approve a claimed pairing session, registering Device B.
    */
-  async approvePairing(invoke: InvokeFn, syncUrl: string, pairingId: string): Promise<{ deviceId: string }> {
+  async approvePairing(
+    invoke: InvokeFn,
+    syncUrl: string,
+    pairingId: string,
+  ): Promise<{ deviceId: string }> {
     const keypair = await this.getDeviceKeypair(invoke);
     if (!keypair) throw new Error("No device keypair available");
 
@@ -1210,7 +1333,10 @@ export class DesktopApp {
   /**
    * Claim a pairing session using a code from Device A.
    */
-  async claimPairing(syncUrl: string, code: string): Promise<{ pairingId: string; motebitId: string }> {
+  async claimPairing(
+    syncUrl: string,
+    code: string,
+  ): Promise<{ pairingId: string; motebitId: string }> {
     if (!this.publicKey) throw new Error("No public key available — bootstrap first");
 
     const client = new PairingClient({ relayUrl: syncUrl });
@@ -1228,7 +1354,10 @@ export class DesktopApp {
   /**
    * Complete pairing by storing the received identity (Device B).
    */
-  async completePairing(invoke: InvokeFn, result: { motebitId: string; deviceId: string; deviceToken: string }): Promise<void> {
+  async completePairing(
+    invoke: InvokeFn,
+    result: { motebitId: string; deviceId: string; deviceToken: string },
+  ): Promise<void> {
     const raw = await invoke<string>("read_config");
     const config = JSON.parse(raw) as Record<string, unknown>;
 
@@ -1413,7 +1542,9 @@ export class DesktopApp {
       void this.goalTick(invoke);
     }, 60_000);
     // Run first tick after a short delay (let UI settle)
-    setTimeout(() => { void this.goalTick(invoke); }, 5_000);
+    setTimeout(() => {
+      void this.goalTick(invoke);
+    }, 5_000);
   }
 
   stopGoalScheduler(): void {
@@ -1479,10 +1610,19 @@ export class DesktopApp {
           // Wall-clock limit: 10 minutes per goal run
           const GOAL_WALL_CLOCK_MS = 10 * 60 * 1000;
           const abortController = new AbortController();
-          const deadlineTimer = setTimeout(() => abortController.abort(new Error("Goal exceeded 10-minute wall-clock limit")), GOAL_WALL_CLOCK_MS);
+          const deadlineTimer = setTimeout(
+            () => abortController.abort(new Error("Goal exceeded 10-minute wall-clock limit")),
+            GOAL_WALL_CLOCK_MS,
+          );
           let result: Awaited<ReturnType<typeof this.executePlanGoal>>;
           try {
-            result = await this.executePlanGoal(goal, outcomes ?? [], invoke, runId, abortController.signal);
+            result = await this.executePlanGoal(
+              goal,
+              outcomes ?? [],
+              invoke,
+              runId,
+              abortController.signal,
+            );
           } finally {
             clearTimeout(deadlineTimer);
           }
@@ -1584,7 +1724,12 @@ export class DesktopApp {
    */
   private async executePlanGoal(
     goal: { goal_id: string; prompt: string; mode: string },
-    outcomes: Array<{ ran_at: number; status: string; summary: string | null; error_message: string | null }>,
+    outcomes: Array<{
+      ran_at: number;
+      status: string;
+      summary: string | null;
+      error_message: string | null;
+    }>,
     invoke: InvokeFn,
     runId?: string,
     signal?: AbortSignal,
@@ -1608,7 +1753,7 @@ export class DesktopApp {
 
     // Pre-load any existing active plan for this goal (async cache warm-up for Tauri)
     if (this.planStoreRef && "preloadForGoal" in this.planStoreRef) {
-      await (this.planStoreRef).preloadForGoal(goal.goal_id);
+      await this.planStoreRef.preloadForGoal(goal.goal_id);
     }
 
     // Check for existing active plan (resume interrupted plan)
@@ -1618,18 +1763,27 @@ export class DesktopApp {
     if (plan && plan.status === PlanStatus.Active) {
       planStream = this.planEngine.resumePlan(plan.plan_id, loopDeps, undefined, runId);
     } else {
-      const created = await this.planEngine.createPlan(goal.goal_id, this.motebitId, {
-        goalPrompt: goal.prompt,
-        previousOutcomes: outcomes.map((o) =>
-          o.status === "failed" ? `failed: ${o.error_message ?? "unknown"}` : `${o.status}: ${o.summary ?? "no summary"}`,
-        ),
-        availableTools: registry.list().map((t) => t.name),
-      }, loopDeps);
+      const created = await this.planEngine.createPlan(
+        goal.goal_id,
+        this.motebitId,
+        {
+          goalPrompt: goal.prompt,
+          previousOutcomes: outcomes.map((o) =>
+            o.status === "failed"
+              ? `failed: ${o.error_message ?? "unknown"}`
+              : `${o.status}: ${o.summary ?? "no summary"}`,
+          ),
+          availableTools: registry.list().map((t) => t.name),
+        },
+        loopDeps,
+      );
       const newPlan = created.plan;
       plan = newPlan;
       if (created.truncatedFrom != null && created.truncatedFrom > 0) {
         // eslint-disable-next-line no-console
-        console.warn(`Plan truncated from ${created.truncatedFrom} to ${newPlan.total_steps} steps (max ${newPlan.total_steps})`);
+        console.warn(
+          `Plan truncated from ${created.truncatedFrom} to ${newPlan.total_steps} steps (max ${newPlan.total_steps})`,
+        );
       }
       planStream = this.planEngine.executePlan(newPlan.plan_id, loopDeps, undefined, runId);
     }
@@ -1642,7 +1796,12 @@ export class DesktopApp {
    */
   private async executeSingleTurnGoal(
     goal: { goal_id: string; prompt: string; mode: string },
-    outcomes: Array<{ ran_at: number; status: string; summary: string | null; error_message: string | null }>,
+    outcomes: Array<{
+      ran_at: number;
+      status: string;
+      summary: string | null;
+      error_message: string | null;
+    }>,
     invoke: InvokeFn,
     runId?: string,
     signal?: AbortSignal,
@@ -1686,7 +1845,11 @@ export class DesktopApp {
         if (toolCallsMade > MAX_TOOL_CALLS_PER_RUN) {
           throw new Error(`Goal exceeded ${MAX_TOOL_CALLS_PER_RUN} tool calls — run stopped`);
         }
-      } else if (chunk.type === "result" && chunk.result.totalTokens != null && chunk.result.totalTokens > 0) {
+      } else if (
+        chunk.type === "result" &&
+        chunk.result.totalTokens != null &&
+        chunk.result.totalTokens > 0
+      ) {
         tokensUsed += chunk.result.totalTokens;
       } else if (chunk.type === "approval_request") {
         this._pendingGoalApproval = {
@@ -1703,11 +1866,21 @@ export class DesktopApp {
           args: chunk.args,
           riskLevel: chunk.risk_level,
         });
-        return { suspended: true, toolCallsMade, responseText: accumulated, tokensUsed: tokensUsed > 0 ? tokensUsed : undefined };
+        return {
+          suspended: true,
+          toolCallsMade,
+          responseText: accumulated,
+          tokensUsed: tokensUsed > 0 ? tokensUsed : undefined,
+        };
       }
     }
 
-    return { suspended: false, toolCallsMade, responseText: accumulated, tokensUsed: tokensUsed > 0 ? tokensUsed : undefined };
+    return {
+      suspended: false,
+      toolCallsMade,
+      responseText: accumulated,
+      tokensUsed: tokensUsed > 0 ? tokensUsed : undefined,
+    };
   }
 
   /**
@@ -1773,7 +1946,11 @@ export class DesktopApp {
             if (toolCallsMade > MAX_TOOL_CALLS_PER_RUN) {
               throw new Error(`Goal exceeded ${MAX_TOOL_CALLS_PER_RUN} tool calls — run stopped`);
             }
-          } else if (chunk.chunk.type === "result" && chunk.chunk.result.totalTokens != null && chunk.chunk.result.totalTokens > 0) {
+          } else if (
+            chunk.chunk.type === "result" &&
+            chunk.chunk.result.totalTokens != null &&
+            chunk.chunk.result.totalTokens > 0
+          ) {
             tokensUsed += chunk.chunk.result.totalTokens;
           }
           break;
@@ -1819,7 +1996,15 @@ export class DesktopApp {
             args: innerChunk.args,
             riskLevel: innerChunk.risk_level,
           });
-          return { suspended: true, toolCallsMade, responseText, planTitle, stepsCompleted, totalSteps, tokensUsed: tokensUsed > 0 ? tokensUsed : undefined };
+          return {
+            suspended: true,
+            toolCallsMade,
+            responseText,
+            planTitle,
+            stepsCompleted,
+            totalSteps,
+            tokensUsed: tokensUsed > 0 ? tokensUsed : undefined,
+          };
         }
 
         case "plan_completed":
@@ -1832,7 +2017,15 @@ export class DesktopApp {
       }
     }
 
-    return { suspended: false, toolCallsMade, responseText, planTitle, stepsCompleted, totalSteps, tokensUsed: tokensUsed > 0 ? tokensUsed : undefined };
+    return {
+      suspended: false,
+      toolCallsMade,
+      responseText,
+      planTitle,
+      stepsCompleted,
+      totalSteps,
+      tokensUsed: tokensUsed > 0 ? tokensUsed : undefined,
+    };
   }
 
   // === MCP via Tauri Commands ===
@@ -1881,7 +2074,11 @@ export class DesktopApp {
         jsonrpc: "2.0",
         id: 1,
         method: "initialize",
-        params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "motebit-desktop", version: "0.1.0" } },
+        params: {
+          protocolVersion: "2024-11-05",
+          capabilities: {},
+          clientInfo: { name: "motebit-desktop", version: "0.1.0" },
+        },
       });
       const listPayload = JSON.stringify({
         jsonrpc: "2.0",
@@ -1905,12 +2102,21 @@ export class DesktopApp {
 
       if (shellResult.exit_code === 0 && shellResult.stdout) {
         // Parse JSON-RPC responses from stdout
-        const lines = shellResult.stdout.split("\n").filter(l => l.trim());
+        const lines = shellResult.stdout.split("\n").filter((l) => l.trim());
         let toolCount = 0;
 
         for (const line of lines) {
           try {
-            const response = JSON.parse(line) as { id?: number; result?: { tools?: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }> } };
+            const response = JSON.parse(line) as {
+              id?: number;
+              result?: {
+                tools?: Array<{
+                  name: string;
+                  description?: string;
+                  inputSchema?: Record<string, unknown>;
+                }>;
+              };
+            };
             if (response.id === 2 && response.result?.tools) {
               const tempRegistry = new SimpleToolRegistry();
               for (const mcpTool of response.result.tools) {
@@ -1972,12 +2178,20 @@ export class DesktopApp {
         const fullCommand = [config.command!, ...(config.args ?? [])].join(" ");
         const callPayload = [
           JSON.stringify({
-            jsonrpc: "2.0", id: 1, method: "initialize",
-            params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "motebit-desktop", version: "0.1.0" } },
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: {
+              protocolVersion: "2024-11-05",
+              capabilities: {},
+              clientInfo: { name: "motebit-desktop", version: "0.1.0" },
+            },
           }),
           JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
           JSON.stringify({
-            jsonrpc: "2.0", id: 2, method: "tools/call",
+            jsonrpc: "2.0",
+            id: 2,
+            method: "tools/call",
             params: { name: mcpToolName, arguments: args },
           }),
         ].join("\n");
@@ -1989,14 +2203,17 @@ export class DesktopApp {
         );
 
         if (result.stdout) {
-          const lines = result.stdout.split("\n").filter(l => l.trim());
+          const lines = result.stdout.split("\n").filter((l) => l.trim());
           for (const line of lines) {
             try {
-              const response = JSON.parse(line) as { id?: number; result?: { content?: Array<{ type: string; text?: string }>; isError?: boolean } };
+              const response = JSON.parse(line) as {
+                id?: number;
+                result?: { content?: Array<{ type: string; text?: string }>; isError?: boolean };
+              };
               if (response.id === 2 && response.result) {
                 const textContent = (response.result.content ?? [])
-                  .filter(c => c.type === "text")
-                  .map(c => c.text ?? "")
+                  .filter((c) => c.type === "text")
+                  .map((c) => c.text ?? "")
                   .join("\n");
                 return {
                   ok: response.result.isError !== true,
@@ -2004,7 +2221,9 @@ export class DesktopApp {
                   error: response.result.isError === true ? textContent : undefined,
                 };
               }
-            } catch { /* skip */ }
+            } catch {
+              /* skip */
+            }
           }
         }
 
@@ -2019,20 +2238,24 @@ export class DesktopApp {
   // === Conversation Browsing ===
 
   /** List recent conversations (async, for UI). Returns empty array if no conversation store. */
-  async listConversationsAsync(limit = 20): Promise<Array<{
-    conversationId: string;
-    startedAt: number;
-    lastActiveAt: number;
-    title: string | null;
-    summary: string | null;
-    messageCount: number;
-  }>> {
+  async listConversationsAsync(limit = 20): Promise<
+    Array<{
+      conversationId: string;
+      startedAt: number;
+      lastActiveAt: number;
+      title: string | null;
+      summary: string | null;
+      messageCount: number;
+    }>
+  > {
     if (!this.conversationStoreRef) return [];
     return this.conversationStoreRef.listConversationsAsync(this.motebitId, limit);
   }
 
   /** Load a past conversation by ID — replaces the current chat. Returns the message list. */
-  async loadConversationById(conversationId: string): Promise<Array<{ role: string; content: string }>> {
+  async loadConversationById(
+    conversationId: string,
+  ): Promise<Array<{ role: string; content: string }>> {
     if (!this.runtime || !this.conversationStoreRef) return [];
 
     // Load messages asynchronously into the cache
@@ -2062,8 +2285,11 @@ export class DesktopApp {
    */
   async getConversationSummary(conversationId: string): Promise<string | null> {
     if (!this.conversationStoreRef) return null;
-    const conversations = await this.conversationStoreRef.listConversationsAsync(this.motebitId, 100);
-    const conv = conversations.find(c => c.conversationId === conversationId);
+    const conversations = await this.conversationStoreRef.listConversationsAsync(
+      this.motebitId,
+      100,
+    );
+    const conv = conversations.find((c) => c.conversationId === conversationId);
     return conv?.summary ?? null;
   }
 
@@ -2085,13 +2311,12 @@ export class DesktopApp {
     const existingSummary = await this.getConversationSummary(conversationId);
 
     // Use the ai-core summarizeConversation via generateCompletion (side-channel)
-    const formatted = history
-      .map(m => `${m.role}: ${m.content}`)
-      .join("\n");
+    const formatted = history.map((m) => `${m.role}: ${m.content}`).join("\n");
 
-    const prompt = existingSummary != null && existingSummary !== ""
-      ? `Update this conversation summary with the new messages.\n\nExisting summary:\n${existingSummary}\n\nNew messages:\n${formatted}\n\nReturn ONLY the updated summary (2-4 sentences). No quotes, no explanation.`
-      : `Summarize this conversation in 2-4 concise sentences. Return ONLY the summary, no quotes, no explanation.\n\n${formatted}`;
+    const prompt =
+      existingSummary != null && existingSummary !== ""
+        ? `Update this conversation summary with the new messages.\n\nExisting summary:\n${existingSummary}\n\nNew messages:\n${formatted}\n\nReturn ONLY the updated summary (2-4 sentences). No quotes, no explanation.`
+        : `Summarize this conversation in 2-4 concise sentences. Return ONLY the summary, no quotes, no explanation.\n\n${formatted}`;
 
     const summary = await this.runtime.generateCompletion(prompt);
     const cleaned = summary.trim();
@@ -2122,18 +2347,24 @@ export class DesktopApp {
 
     // Check if already titled
     const convos = await this.conversationStoreRef.listConversationsAsync(this.motebitId, 50);
-    const current = convos.find(c => c.conversationId === conversationId);
+    const current = convos.find((c) => c.conversationId === conversationId);
     if (current?.title != null && current.title !== "") return current.title;
 
     this._autoTitlePending = true;
 
     try {
       // Use a focused prompt to generate a short title
-      const firstMessages = history.slice(0, 6).map(m => `${m.role}: ${m.content.slice(0, 200)}`).join("\n");
+      const firstMessages = history
+        .slice(0, 6)
+        .map((m) => `${m.role}: ${m.content.slice(0, 200)}`)
+        .join("\n");
       const titlePrompt = `Generate a very short title (5-7 words max) for this conversation. Return ONLY the title, no quotes, no explanation.\n\n${firstMessages}`;
 
       const result = await this.runtime.sendMessage(titlePrompt);
-      const title = result.response.trim().replace(/^["']|["']$/g, "").slice(0, 100);
+      const title = result.response
+        .trim()
+        .replace(/^["']|["']$/g, "")
+        .slice(0, 100);
 
       if (title && title.length > 0 && title.length < 100) {
         this.conversationStoreRef.updateTitle(conversationId, title);
@@ -2169,7 +2400,7 @@ export class DesktopApp {
 
     // Check if already titled
     const convos = await this.conversationStoreRef.listConversationsAsync(this.motebitId, 50);
-    const current = convos.find(c => c.conversationId === conversationId);
+    const current = convos.find((c) => c.conversationId === conversationId);
     if (current?.title != null && current.title !== "") return null; // Already has a title
 
     if (this._autoTitlePending) return null;
@@ -2177,13 +2408,19 @@ export class DesktopApp {
 
     try {
       const history = this.runtime.getConversationHistory();
-      const firstMessages = history.slice(0, 6).map(m => `${m.role}: ${m.content.slice(0, 200)}`).join("\n");
+      const firstMessages = history
+        .slice(0, 6)
+        .map((m) => `${m.role}: ${m.content.slice(0, 200)}`)
+        .join("\n");
 
       // Try AI-generated title via side-channel (no conversation pollution)
       try {
         const prompt = `Generate a very short title (5-7 words max) for this conversation. Return ONLY the title, no quotes, no explanation.\n\n${firstMessages}`;
         const raw = await this.runtime.generateCompletion(prompt);
-        const title = raw.trim().replace(/^["']|["']$/g, "").slice(0, 100);
+        const title = raw
+          .trim()
+          .replace(/^["']|["']$/g, "")
+          .slice(0, 100);
         if (title.length > 0 && title.length < 100) {
           this.conversationStoreRef.updateTitle(conversationId, title);
           return title;
@@ -2193,7 +2430,7 @@ export class DesktopApp {
       }
 
       // Heuristic fallback: first 7 words of first user message
-      const firstUserMsg = history.find(m => m.role === "user");
+      const firstUserMsg = history.find((m) => m.role === "user");
       if (firstUserMsg) {
         const words = firstUserMsg.content.split(/\s+/);
         let title = words.slice(0, 7).join(" ");
@@ -2218,36 +2455,51 @@ export class DesktopApp {
    * Sync conversations with the remote relay server.
    * Creates a ConversationSyncEngine that bridges TauriConversationStore to the relay.
    */
-  async syncConversations(syncUrl: string, authToken?: string): Promise<{
+  async syncConversations(
+    syncUrl: string,
+    authToken?: string,
+  ): Promise<{
     conversations_pushed: number;
     conversations_pulled: number;
     messages_pushed: number;
     messages_pulled: number;
   }> {
     if (!this.conversationStoreRef) {
-      return { conversations_pushed: 0, conversations_pulled: 0, messages_pushed: 0, messages_pulled: 0 };
+      return {
+        conversations_pushed: 0,
+        conversations_pulled: 0,
+        messages_pushed: 0,
+        messages_pulled: 0,
+      };
     }
 
     this.emitSyncStatus({ status: "syncing" });
 
-    const storeAdapter = new TauriConversationSyncStoreAdapter(this.conversationStoreRef, this.motebitId);
+    const storeAdapter = new TauriConversationSyncStoreAdapter(
+      this.conversationStoreRef,
+      this.motebitId,
+    );
     // Pre-fetch local data before sync (async Tauri -> sync adapter bridge)
     await storeAdapter.prefetch(0);
 
     const syncEngine = new ConversationSyncEngine(storeAdapter, this.motebitId);
-    syncEngine.connectRemote(new HttpConversationSyncAdapter({
-      baseUrl: syncUrl,
-      motebitId: this.motebitId,
-      authToken,
-    }));
+    syncEngine.connectRemote(
+      new HttpConversationSyncAdapter({
+        baseUrl: syncUrl,
+        motebitId: this.motebitId,
+        authToken,
+      }),
+    );
 
     try {
       const result = await syncEngine.sync();
       this.emitSyncStatus({
         status: "connected",
         lastSyncAt: Date.now(),
-        eventsPushed: this._lastSyncStatus.eventsPushed + result.conversations_pushed + result.messages_pushed,
-        eventsPulled: this._lastSyncStatus.eventsPulled + result.conversations_pulled + result.messages_pulled,
+        eventsPushed:
+          this._lastSyncStatus.eventsPushed + result.conversations_pushed + result.messages_pushed,
+        eventsPulled:
+          this._lastSyncStatus.eventsPulled + result.conversations_pulled + result.messages_pulled,
       });
       return result;
     } catch (err: unknown) {
@@ -2297,7 +2549,10 @@ export class DesktopApp {
     const encryptedHttp = new EncryptedEventStoreAdapter({ inner: httpAdapter, key: encKey });
 
     // WebSocket URL: http(s) → ws(s)
-    const wsUrl = syncUrl.replace(/^https?/, (m) => m === "https" ? "wss" : "ws") + "/ws/sync/" + this.motebitId;
+    const wsUrl =
+      syncUrl.replace(/^https?/, (m) => (m === "https" ? "wss" : "ws")) +
+      "/ws/sync/" +
+      this.motebitId;
 
     const localEventStore = this._localEventStore;
     const wsAdapter = new WebSocketEventStoreAdapter({
@@ -2308,7 +2563,10 @@ export class DesktopApp {
       localStore: localEventStore ?? undefined,
       onCatchUp: (pulled) => {
         if (pulled > 0) {
-          this.emitSyncStatus({ lastSyncAt: Date.now(), eventsPulled: this._lastSyncStatus.eventsPulled + pulled });
+          this.emitSyncStatus({
+            lastSyncAt: Date.now(),
+            eventsPulled: this._lastSyncStatus.eventsPulled + pulled,
+          });
         }
       },
     });
@@ -2387,13 +2645,21 @@ export class DesktopApp {
     }, 4.5 * 60_000);
 
     // One-shot conversation sync (stays HTTP — no WS needed for conversations)
-    void this.syncConversations(syncUrl, token).then((result) => {
-      this.emitSyncStatus({
-        lastSyncAt: Date.now(),
-        eventsPushed: this._lastSyncStatus.eventsPushed + result.conversations_pushed + result.messages_pushed,
-        eventsPulled: this._lastSyncStatus.eventsPulled + result.conversations_pulled + result.messages_pulled,
-      });
-    }).catch(() => {});
+    void this.syncConversations(syncUrl, token)
+      .then((result) => {
+        this.emitSyncStatus({
+          lastSyncAt: Date.now(),
+          eventsPushed:
+            this._lastSyncStatus.eventsPushed +
+            result.conversations_pushed +
+            result.messages_pushed,
+          eventsPulled:
+            this._lastSyncStatus.eventsPulled +
+            result.conversations_pulled +
+            result.messages_pulled,
+        });
+      })
+      .catch(() => {});
   }
 
   /**
@@ -2438,12 +2704,14 @@ class TauriConversationSyncStoreAdapter implements ConversationSyncStoreAdapter 
 
   getConversationsSince(motebitId: string, since: number): SyncConversation[] {
     // Return from pre-fetched data. The sync() call pre-loads before use.
-    return this._conversations.filter(c => c.motebit_id === motebitId && c.last_active_at > since);
+    return this._conversations.filter(
+      (c) => c.motebit_id === motebitId && c.last_active_at > since,
+    );
   }
 
   getMessagesSince(conversationId: string, since: number): SyncConversationMessage[] {
     const msgs = this._messages.get(conversationId) ?? [];
-    return msgs.filter(m => m.created_at > since);
+    return msgs.filter((m) => m.created_at > since);
   }
 
   upsertConversation(conv: SyncConversation): void {

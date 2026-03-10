@@ -50,14 +50,14 @@ The workflow at `.github/workflows/deploy-sync.yml` auto-deploys on push to `mai
 
 ## Environment Variables
 
-| Variable | Required | Default | Purpose |
-|----------|----------|---------|---------|
-| `PORT` | No | `3000` | HTTP/WS listen port |
-| `NODE_ENV` | No | `production` | Runtime environment |
-| `MOTEBIT_DB_PATH` | Yes | `:memory:` | SQLite database file path |
-| `MOTEBIT_API_TOKEN` | Yes | — | Master bearer token for admin routes |
-| `MOTEBIT_CORS_ORIGIN` | No | `*` | CORS origin whitelist |
-| `MOTEBIT_ENABLE_DEVICE_AUTH` | No | `true` | Require per-device signed tokens |
+| Variable                     | Required | Default      | Purpose                              |
+| ---------------------------- | -------- | ------------ | ------------------------------------ |
+| `PORT`                       | No       | `3000`       | HTTP/WS listen port                  |
+| `NODE_ENV`                   | No       | `production` | Runtime environment                  |
+| `MOTEBIT_DB_PATH`            | Yes      | `:memory:`   | SQLite database file path            |
+| `MOTEBIT_API_TOKEN`          | Yes      | —            | Master bearer token for admin routes |
+| `MOTEBIT_CORS_ORIGIN`        | No       | `*`          | CORS origin whitelist                |
+| `MOTEBIT_ENABLE_DEVICE_AUTH` | No       | `true`       | Require per-device signed tokens     |
 
 ## Architecture
 

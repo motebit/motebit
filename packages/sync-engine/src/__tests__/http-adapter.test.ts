@@ -41,9 +41,7 @@ describe("HttpEventStoreAdapter", () => {
 
   it("append sends POST to push endpoint with correct URL and auth header", async () => {
     const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
-    mockFn.mockResolvedValueOnce(
-      new Response(JSON.stringify({ accepted: 1 }), { status: 200 }),
-    );
+    mockFn.mockResolvedValueOnce(new Response(JSON.stringify({ accepted: 1 }), { status: 200 }));
 
     const adapter = new HttpEventStoreAdapter({
       baseUrl: BASE_URL,
@@ -69,9 +67,7 @@ describe("HttpEventStoreAdapter", () => {
   it("query sends GET to pull endpoint with after_clock param", async () => {
     const events = [makeEvent(1), makeEvent(2)];
     const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
-    mockFn.mockResolvedValueOnce(
-      new Response(JSON.stringify({ events }), { status: 200 }),
-    );
+    mockFn.mockResolvedValueOnce(new Response(JSON.stringify({ events }), { status: 200 }));
 
     const adapter = new HttpEventStoreAdapter({
       baseUrl: BASE_URL,
@@ -91,9 +87,7 @@ describe("HttpEventStoreAdapter", () => {
 
   it("query defaults after_clock to 0 when filter has no after_version_clock", async () => {
     const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
-    mockFn.mockResolvedValueOnce(
-      new Response(JSON.stringify({ events: [] }), { status: 200 }),
-    );
+    mockFn.mockResolvedValueOnce(new Response(JSON.stringify({ events: [] }), { status: 200 }));
 
     const adapter = new HttpEventStoreAdapter({
       baseUrl: BASE_URL,
@@ -172,9 +166,7 @@ describe("HttpEventStoreAdapter", () => {
 
   it("omits Authorization header when no authToken is provided", async () => {
     const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
-    mockFn.mockResolvedValueOnce(
-      new Response(JSON.stringify({ events: [] }), { status: 200 }),
-    );
+    mockFn.mockResolvedValueOnce(new Response(JSON.stringify({ events: [] }), { status: 200 }));
 
     const adapter = new HttpEventStoreAdapter({
       baseUrl: BASE_URL,
@@ -202,9 +194,7 @@ describe("HttpEventStoreAdapter", () => {
 
   it("strips trailing slashes from baseUrl", async () => {
     const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
-    mockFn.mockResolvedValueOnce(
-      new Response(JSON.stringify({ events: [] }), { status: 200 }),
-    );
+    mockFn.mockResolvedValueOnce(new Response(JSON.stringify({ events: [] }), { status: 200 }));
 
     const adapter = new HttpEventStoreAdapter({
       baseUrl: "http://localhost:3000///",

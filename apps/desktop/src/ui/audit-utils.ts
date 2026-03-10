@@ -1,6 +1,10 @@
 export function parseJsonSafe(str: unknown): unknown {
   if (typeof str !== "string") return str;
-  try { return JSON.parse(str); } catch { return str; }
+  try {
+    return JSON.parse(str);
+  } catch {
+    return str;
+  }
 }
 
 /** Safely convert an unknown IPC value to string. */
@@ -23,6 +27,7 @@ export function classifyDecision(raw: unknown): "allowed" | "denied" | "approval
   }
   const str = ipcString(raw).toLowerCase();
   if (str.includes("denied") || str.includes("deny")) return "denied";
-  if (str.includes("approval") || str.includes("requires") || str.includes("pending")) return "approval";
+  if (str.includes("approval") || str.includes("requires") || str.includes("pending"))
+    return "approval";
   return "allowed";
 }

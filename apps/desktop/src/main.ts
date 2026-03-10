@@ -1,8 +1,28 @@
-import { DesktopApp, COLOR_PRESETS, type DesktopAIConfig, type McpServerConfig, type GoalCompleteEvent, type GoalApprovalEvent, type GoalPlanProgressEvent, type SyncStatusEvent, type SyncIndicatorStatus } from "./index";
+import {
+  DesktopApp,
+  COLOR_PRESETS,
+  type DesktopAIConfig,
+  type McpServerConfig,
+  type GoalCompleteEvent,
+  type GoalApprovalEvent,
+  type GoalPlanProgressEvent,
+  type SyncStatusEvent,
+  type SyncIndicatorStatus,
+} from "./index";
 import type { DesktopContext } from "./types";
 import { formatTimeAgo } from "./types";
 import { loadDesktopConfig } from "./ui/config";
-import { addMessage, addActionMessage, showToast, showBanner, dismissBanner, initChat, showGoalApprovalCard, streamGreeting, GREETING_PROMPT_MARKER } from "./ui/chat";
+import {
+  addMessage,
+  addActionMessage,
+  showToast,
+  showBanner,
+  dismissBanner,
+  initChat,
+  showGoalApprovalCard,
+  streamGreeting,
+  GREETING_PROMPT_MARKER,
+} from "./ui/chat";
 import { deriveInteriorColor } from "./ui/color-picker";
 import { initColorPicker } from "./ui/color-picker";
 import { initConversations } from "./ui/conversations";
@@ -36,7 +56,9 @@ let greetingSent = false;
 const ctx: DesktopContext = {
   app,
   getConfig: () => currentConfig,
-  setConfig: (c) => { currentConfig = c; },
+  setConfig: (c) => {
+    currentConfig = c;
+  },
   addMessage,
   showToast,
 };
@@ -64,7 +86,12 @@ const chat = initChat(ctx, {
   updateModelIndicator: () => settings.updateModelIndicator(),
 });
 
-const settings = initSettings(ctx, { colorPicker, voice, pairing, scrollToRunId: (id) => chat.scrollToRunId(id) });
+const settings = initSettings(ctx, {
+  colorPicker,
+  voice,
+  pairing,
+  scrollToRunId: (id) => chat.scrollToRunId(id),
+});
 
 // === Theme ===
 
@@ -123,51 +150,50 @@ document.addEventListener("keydown", (e) => {
  * On failure, shows an actionable message with Retry and Skip options.
  * On skip, closes welcome overlay and runs in limited mode.
  */
-async function tryBootstrapIdentity(invoke: import("./tauri-storage.js").InvokeFn): Promise<import("./index").BootstrapResult | null> {
+async function tryBootstrapIdentity(
+  invoke: import("./tauri-storage.js").InvokeFn,
+): Promise<import("./index").BootstrapResult | null> {
   try {
     const result = await app.bootstrap(invoke);
     dismissBanner("identity-limited");
     return result;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    addActionMessage(
-      `Identity setup failed: ${msg}`,
-      [
-        {
-          label: "Retry",
-          primary: true,
-          onClick: () => {
-            void tryBootstrapIdentity(invoke).then(result => {
-              if (result?.isFirstLaunch === true) {
-                isFirstLaunch = true;
-                addMessage("system", "Your mote has been created");
-              }
-            });
-          },
+    addActionMessage(`Identity setup failed: ${msg}`, [
+      {
+        label: "Retry",
+        primary: true,
+        onClick: () => {
+          void tryBootstrapIdentity(invoke).then((result) => {
+            if (result?.isFirstLaunch === true) {
+              isFirstLaunch = true;
+              addMessage("system", "Your mote has been created");
+            }
+          });
         },
-        {
-          label: "Skip",
-          onClick: () => {
-            showBanner({
-              id: "identity-limited",
-              text: "Running in limited mode \u2014 identity not set up",
-              actionLabel: "Setup",
-              onAction: () => {
-                void tryBootstrapIdentity(invoke).then(result => {
-                  if (result) {
-                    dismissBanner("identity-limited");
-                    if (result.isFirstLaunch) {
-                      isFirstLaunch = true;
-                      addMessage("system", "Your mote has been created");
-                    }
+      },
+      {
+        label: "Skip",
+        onClick: () => {
+          showBanner({
+            id: "identity-limited",
+            text: "Running in limited mode \u2014 identity not set up",
+            actionLabel: "Setup",
+            onAction: () => {
+              void tryBootstrapIdentity(invoke).then((result) => {
+                if (result) {
+                  dismissBanner("identity-limited");
+                  if (result.isFirstLaunch) {
+                    isFirstLaunch = true;
+                    addMessage("system", "Your mote has been created");
                   }
-                });
-              },
-            });
-          },
+                }
+              });
+            },
+          });
         },
-      ],
-    );
+      },
+    ]);
     return null;
   }
 }
@@ -189,7 +215,10 @@ async function tryInitAI(config: DesktopAIConfig): Promise<boolean> {
       const success = await app.initAI(config);
       if (success) {
         dismissBanner("ai-disconnected");
-        addMessage("system", `Connected to local Ollama (${detection.bestModel}). No API key needed.`);
+        addMessage(
+          "system",
+          `Connected to local Ollama (${detection.bestModel}). No API key needed.`,
+        );
         return true;
       }
     }
@@ -210,7 +239,10 @@ async function tryInitAI(config: DesktopAIConfig): Promise<boolean> {
           primary: true,
           onClick: () => {
             const latestConfig = currentConfig;
-            if (latestConfig) void tryInitAI(latestConfig).then(ok => { if (ok) onAIReady(latestConfig); });
+            if (latestConfig)
+              void tryInitAI(latestConfig).then((ok) => {
+                if (ok) onAIReady(latestConfig);
+              });
           },
         },
         {
@@ -220,23 +252,23 @@ async function tryInitAI(config: DesktopAIConfig): Promise<boolean> {
       ],
     );
   } else {
-    addActionMessage(
-      "AI connection failed: could not reach provider",
-      [
-        {
-          label: "Retry",
-          primary: true,
-          onClick: () => {
-            const latestConfig = currentConfig;
-            if (latestConfig) void tryInitAI(latestConfig).then(ok => { if (ok) onAIReady(latestConfig); });
-          },
+    addActionMessage("AI connection failed: could not reach provider", [
+      {
+        label: "Retry",
+        primary: true,
+        onClick: () => {
+          const latestConfig = currentConfig;
+          if (latestConfig)
+            void tryInitAI(latestConfig).then((ok) => {
+              if (ok) onAIReady(latestConfig);
+            });
         },
-        {
-          label: "Settings",
-          onClick: () => settings.openToTab("intelligence"),
-        },
-      ],
-    );
+      },
+      {
+        label: "Settings",
+        onClick: () => settings.openToTab("intelligence"),
+      },
+    ]);
   }
 
   showBanner({
@@ -264,20 +296,21 @@ async function trySyncRegistration(
     await app.startSync(invoke, syncUrl, token ?? masterToken);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    addActionMessage(
-      `Sync relay connection failed: ${msg}`,
-      [
-        {
-          label: "Retry",
-          primary: true,
-          onClick: () => { void trySyncRegistration(invoke, syncUrl, masterToken); },
+    addActionMessage(`Sync relay connection failed: ${msg}`, [
+      {
+        label: "Retry",
+        primary: true,
+        onClick: () => {
+          void trySyncRegistration(invoke, syncUrl, masterToken);
         },
-        {
-          label: "Dismiss",
-          onClick: () => { /* User chose to continue without sync */ },
+      },
+      {
+        label: "Dismiss",
+        onClick: () => {
+          /* User chose to continue without sync */
         },
-      ],
-    );
+      },
+    ]);
   }
 }
 
@@ -305,24 +338,23 @@ async function tryConnectMcpServer(
     }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    addActionMessage(
-      `MCP server "${mcpConfig.name}" failed to connect: ${msg}`,
-      [
-        {
-          label: "Retry",
-          primary: true,
-          onClick: () => { void tryConnectMcpServer(mcpConfig, invoke); },
+    addActionMessage(`MCP server "${mcpConfig.name}" failed to connect: ${msg}`, [
+      {
+        label: "Retry",
+        primary: true,
+        onClick: () => {
+          void tryConnectMcpServer(mcpConfig, invoke);
         },
-        {
-          label: "Remove",
-          onClick: () => {
-            void app.removeMcpServer(mcpConfig.name);
-            const configs = settings.getMcpServersConfig().filter(c => c.name !== mcpConfig.name);
-            settings.setMcpServersConfig(configs);
-          },
+      },
+      {
+        label: "Remove",
+        onClick: () => {
+          void app.removeMcpServer(mcpConfig.name);
+          const configs = settings.getMcpServersConfig().filter((c) => c.name !== mcpConfig.name);
+          settings.setMcpServersConfig(configs);
         },
-      ],
-    );
+      },
+    ]);
   }
 }
 
@@ -369,9 +401,10 @@ async function discoverAndConnectMcpServers(
   // Single allowlisted IPC — Rust reads only known config paths
   let configSources: Array<{ name: string; path: string; content: string | null }>;
   try {
-    configSources = await invoke<Array<{ name: string; path: string; content: string | null }>>(
-      "discover_mcp_configs",
-    );
+    configSources =
+      await invoke<Array<{ name: string; path: string; content: string | null }>>(
+        "discover_mcp_configs",
+      );
   } catch {
     return;
   }
@@ -405,7 +438,9 @@ async function discoverAndConnectMcpServers(
   settings.setDiscoveryCollisions(collisions);
   for (const c of collisions) {
     // eslint-disable-next-line no-console
-    console.warn(`MCP discovery: name collision for "${c.name}" — kept existing (${c.existingCommand ?? "?"}) , skipped ${c.discoveredSource ?? "?"} (${c.discoveredCommand ?? "?"})`);
+    console.warn(
+      `MCP discovery: name collision for "${c.name}" — kept existing (${c.existingCommand ?? "?"}) , skipped ${c.discoveredSource ?? "?"} (${c.discoveredCommand ?? "?"})`,
+    );
   }
 
   if (newServers.length === 0) return;
@@ -415,13 +450,21 @@ async function discoverAndConnectMcpServers(
   await persistMcpConfig(invoke, merged);
 
   // Split by transport type — unknown transports are not auto-connected
-  const remoteServers = newServers.filter(s => isRemoteTransport(s.transport));
-  const spawnServers = newServers.filter(s => isSpawnTransport(s.transport) && s.spawnApproved !== true);
-  const preApproved = newServers.filter(s => isSpawnTransport(s.transport) && s.spawnApproved === true);
-  const unknownTransport = newServers.filter(s => !isRemoteTransport(s.transport) && !isSpawnTransport(s.transport));
+  const remoteServers = newServers.filter((s) => isRemoteTransport(s.transport));
+  const spawnServers = newServers.filter(
+    (s) => isSpawnTransport(s.transport) && s.spawnApproved !== true,
+  );
+  const preApproved = newServers.filter(
+    (s) => isSpawnTransport(s.transport) && s.spawnApproved === true,
+  );
+  const unknownTransport = newServers.filter(
+    (s) => !isRemoteTransport(s.transport) && !isSpawnTransport(s.transport),
+  );
   for (const s of unknownTransport) {
     // eslint-disable-next-line no-console
-    console.warn(`MCP discovery: unknown transport "${s.transport}" for "${s.name}" — not auto-connecting`);
+    console.warn(
+      `MCP discovery: unknown transport "${s.transport}" for "${s.name}" — not auto-connecting`,
+    );
   }
 
   // Auto-connect remote servers (no process spawn)
@@ -429,12 +472,14 @@ async function discoverAndConnectMcpServers(
     void tryConnectMcpServer(mcpConfig, invoke);
   }
   if (remoteServers.length > 0) {
-    showToast(`Connected ${remoteServers.length} discovered MCP server${remoteServers.length !== 1 ? "s" : ""}`);
+    showToast(
+      `Connected ${remoteServers.length} discovered MCP server${remoteServers.length !== 1 ? "s" : ""}`,
+    );
   }
 
   // Spawn-transport servers require one-time user confirmation
   if (spawnServers.length > 0) {
-    const names = spawnServers.map(s => s.name).join(", ");
+    const names = spawnServers.map((s) => s.name).join(", ");
     addActionMessage(
       `Discovered ${spawnServers.length} MCP server${spawnServers.length !== 1 ? "s" : ""}: ${names}`,
       [
@@ -448,7 +493,9 @@ async function discoverAndConnectMcpServers(
             }
             // Persist spawnApproved so we don't ask again
             void persistMcpConfig(invoke, settings.getMcpServersConfig());
-            showToast(`Connecting ${spawnServers.length} MCP server${spawnServers.length !== 1 ? "s" : ""}`);
+            showToast(
+              `Connecting ${spawnServers.length} MCP server${spawnServers.length !== 1 ? "s" : ""}`,
+            );
           },
         },
         {
@@ -457,13 +504,17 @@ async function discoverAndConnectMcpServers(
             settings.openToTab("intelligence");
             // Wait one layout pass for panel to be visible before scrolling
             requestAnimationFrame(() => {
-              document.getElementById("mcp-server-list")?.scrollIntoView({ behavior: "smooth", block: "center" });
+              document
+                .getElementById("mcp-server-list")
+                ?.scrollIntoView({ behavior: "smooth", block: "center" });
             });
           },
         },
         {
           label: "Dismiss",
-          onClick: () => { /* Servers remain in config for later manual connect */ },
+          onClick: () => {
+            /* Servers remain in config for later manual connect */
+          },
         },
       ],
     );
@@ -507,15 +558,19 @@ function onAIReady(config: DesktopAIConfig): void {
       goals.onGoalExecuting(executing);
     });
     app.onGoalComplete((event: GoalCompleteEvent) => {
-      const promptSnippet = event.prompt.length > 50 ? event.prompt.slice(0, 50) + "..." : event.prompt;
+      const promptSnippet =
+        event.prompt.length > 50 ? event.prompt.slice(0, 50) + "..." : event.prompt;
       if (event.status === "completed") {
-        const planInfo = event.planTitle != null && event.planTitle !== ""
-          ? ` [${event.stepsCompleted ?? 0}/${event.totalSteps ?? 0} steps]`
-          : "";
-        const summary = event.summary != null && event.summary !== "" ? `: ${event.summary.slice(0, 120)}` : "";
+        const planInfo =
+          event.planTitle != null && event.planTitle !== ""
+            ? ` [${event.stepsCompleted ?? 0}/${event.totalSteps ?? 0} steps]`
+            : "";
+        const summary =
+          event.summary != null && event.summary !== "" ? `: ${event.summary.slice(0, 120)}` : "";
         addMessage("system", `Goal completed "${promptSnippet}"${planInfo}${summary}`);
       } else {
-        const err = event.error != null && event.error !== "" ? `: ${event.error.slice(0, 80)}` : "";
+        const err =
+          event.error != null && event.error !== "" ? `: ${event.error.slice(0, 80)}` : "";
         addMessage("system", `Goal failed "${promptSnippet}"${err}`);
       }
       goals.onGoalComplete(event);
@@ -537,9 +592,8 @@ function onAIReady(config: DesktopAIConfig): void {
       goals.onPlanProgress(event);
     });
     app.onGoalApproval((event: GoalApprovalEvent) => {
-      const promptSnippet = event.goalPrompt.length > 50
-        ? event.goalPrompt.slice(0, 50) + "..."
-        : event.goalPrompt;
+      const promptSnippet =
+        event.goalPrompt.length > 50 ? event.goalPrompt.slice(0, 50) + "..." : event.goalPrompt;
       addMessage("system", `Goal "${promptSnippet}" needs approval:`);
       showGoalApprovalCard(ctx, event);
     });
@@ -609,22 +663,33 @@ async function bootstrap(): Promise<void> {
       await tryBootstrapIdentity(invoke);
     } else {
       const action = await new Promise<"create" | "link">((resolve) => {
-        document.getElementById("welcome-start")!.addEventListener("click", () => resolve("create"));
-        document.getElementById("welcome-link-existing")!.addEventListener("click", () => resolve("link"));
+        document
+          .getElementById("welcome-start")!
+          .addEventListener("click", () => resolve("create"));
+        document
+          .getElementById("welcome-link-existing")!
+          .addEventListener("click", () => resolve("link"));
       });
 
       if (action === "link") {
         const linkSyncUrl = (parsed.sync_url as string | undefined) ?? "";
         if (linkSyncUrl === "") {
           welcomeBackdrop.classList.remove("open");
-          addMessage("system", "No sync relay configured \u2014 set sync_url in config to link devices");
+          addMessage(
+            "system",
+            "No sync relay configured \u2014 set sync_url in config to link devices",
+          );
           const result = await tryBootstrapIdentity(invoke);
           if (result?.isFirstLaunch === true) {
             isFirstLaunch = true;
             addMessage("system", "Your mote has been created");
           }
         } else {
-          try { await app.bootstrap(invoke); } catch { /* Non-fatal — we just need the keypair */ }
+          try {
+            await app.bootstrap(invoke);
+          } catch {
+            /* Non-fatal — we just need the keypair */
+          }
           pairing.startClaim(invoke, linkSyncUrl);
         }
       } else {
@@ -635,7 +700,12 @@ async function bootstrap(): Promise<void> {
           addMessage("system", "Your mote has been created");
         }
 
-        if (config.syncUrl != null && config.syncUrl !== "" && config.syncMasterToken != null && config.syncMasterToken !== "") {
+        if (
+          config.syncUrl != null &&
+          config.syncUrl !== "" &&
+          config.syncMasterToken != null &&
+          config.syncMasterToken !== ""
+        ) {
           void trySyncRegistration(invoke, config.syncUrl, config.syncMasterToken);
         }
       }
@@ -643,7 +713,11 @@ async function bootstrap(): Promise<void> {
 
     // Load persisted settings from config
     if (typeof parsed.interior_color_preset === "string") {
-      if (parsed.interior_color_preset === "custom" && parsed.custom_soul_color != null && typeof parsed.custom_soul_color === "object") {
+      if (
+        parsed.interior_color_preset === "custom" &&
+        parsed.custom_soul_color != null &&
+        typeof parsed.custom_soul_color === "object"
+      ) {
         const csc = parsed.custom_soul_color as Record<string, unknown>;
         if (typeof csc.hue === "number" && typeof csc.saturation === "number") {
           colorPicker.setCustomHue(csc.hue);
@@ -652,7 +726,10 @@ async function bootstrap(): Promise<void> {
           colorPicker.setSelectedPreset("custom");
           app.setInteriorColorDirect(colorPicker.getCustomInteriorColor()!);
         }
-      } else if (parsed.interior_color_preset === "borosilicate" || !COLOR_PRESETS[parsed.interior_color_preset]) {
+      } else if (
+        parsed.interior_color_preset === "borosilicate" ||
+        !COLOR_PRESETS[parsed.interior_color_preset]
+      ) {
         colorPicker.setSelectedPreset("moonlight");
         app.setInteriorColor("moonlight");
       } else {
@@ -675,18 +752,22 @@ async function bootstrap(): Promise<void> {
         ptv.textContent = mg.persistence_threshold.toFixed(2);
       }
       if (typeof mg.reject_secrets === "boolean") {
-        (document.getElementById("settings-reject-secrets") as HTMLInputElement).checked = mg.reject_secrets;
+        (document.getElementById("settings-reject-secrets") as HTMLInputElement).checked =
+          mg.reject_secrets;
       }
       // Pass persisted governance to config so initAI forwards it to MotebitRuntime
       config.memoryGovernance = {
-        persistenceThreshold: typeof mg.persistence_threshold === "number" ? mg.persistence_threshold : undefined,
+        persistenceThreshold:
+          typeof mg.persistence_threshold === "number" ? mg.persistence_threshold : undefined,
         rejectSecrets: typeof mg.reject_secrets === "boolean" ? mg.reject_secrets : undefined,
       };
     }
     if (parsed.budget != null && typeof parsed.budget === "object") {
       const b = parsed.budget as Record<string, unknown>;
       if (typeof b.maxCallsPerTurn === "number") {
-        (document.getElementById("settings-max-calls") as HTMLInputElement).value = String(b.maxCallsPerTurn);
+        (document.getElementById("settings-max-calls") as HTMLInputElement).value = String(
+          b.maxCallsPerTurn,
+        );
       }
     }
 
@@ -699,7 +780,10 @@ async function bootstrap(): Promise<void> {
     }
 
     // Theme preference from config (overrides localStorage)
-    if (typeof parsed.theme === "string" && (parsed.theme === "light" || parsed.theme === "dark" || parsed.theme === "system")) {
+    if (
+      typeof parsed.theme === "string" &&
+      (parsed.theme === "light" || parsed.theme === "dark" || parsed.theme === "system")
+    ) {
       theme.setPreference(parsed.theme);
     }
 
@@ -709,11 +793,15 @@ async function bootstrap(): Promise<void> {
     try {
       const keyVal = await invoke<string | null>("keyring_get", { key: "api_key" });
       settings.setHasApiKeyInKeyring(keyVal != null && keyVal !== "");
-    } catch { /* Keyring unavailable */ }
+    } catch {
+      /* Keyring unavailable */
+    }
     try {
       const whisperVal = await invoke<string | null>("keyring_get", { key: "whisper_api_key" });
       settings.setHasWhisperKeyInKeyring(whisperVal != null && whisperVal !== "");
-    } catch { /* Keyring unavailable */ }
+    } catch {
+      /* Keyring unavailable */
+    }
   } else {
     welcomeBackdrop.classList.remove("open");
   }
@@ -808,9 +896,10 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
         break;
       case "connected":
         checkEl.style.display = "";
-        indicator.title = event.lastSyncAt != null && event.lastSyncAt > 0
-          ? `Sync: Connected (last sync ${formatTimeAgo(event.lastSyncAt)})`
-          : "Sync: Connected";
+        indicator.title =
+          event.lastSyncAt != null && event.lastSyncAt > 0
+            ? `Sync: Connected (last sync ${formatTimeAgo(event.lastSyncAt)})`
+            : "Sync: Connected";
         break;
       case "syncing":
         arrowsEl.style.display = "";
@@ -844,7 +933,10 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
       error: "Error",
     };
     popupStatus.textContent = statusLabels[lastEvent.status];
-    popupLastSync.textContent = lastEvent.lastSyncAt != null && lastEvent.lastSyncAt > 0 ? formatTimeAgo(lastEvent.lastSyncAt) : "Never";
+    popupLastSync.textContent =
+      lastEvent.lastSyncAt != null && lastEvent.lastSyncAt > 0
+        ? formatTimeAgo(lastEvent.lastSyncAt)
+        : "Never";
     popupPushed.textContent = String(lastEvent.eventsPushed);
     popupPulled.textContent = String(lastEvent.eventsPulled);
 
@@ -877,14 +969,20 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
   });
 
   indicator.addEventListener("mouseleave", () => {
-    if (tooltipTimer) { clearTimeout(tooltipTimer); tooltipTimer = null; }
+    if (tooltipTimer) {
+      clearTimeout(tooltipTimer);
+      tooltipTimer = null;
+    }
     tooltip.classList.remove("visible");
   });
 
   // Click handler
   indicator.addEventListener("click", () => {
     tooltip.classList.remove("visible");
-    if (tooltipTimer) { clearTimeout(tooltipTimer); tooltipTimer = null; }
+    if (tooltipTimer) {
+      clearTimeout(tooltipTimer);
+      tooltipTimer = null;
+    }
 
     if (popupOpen) {
       popup.classList.remove("open");
@@ -895,13 +993,21 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
     // If error/disconnected, attempt reconnect via toast
     if (currentStatus === "error" || currentStatus === "disconnected") {
       const config = ctx.getConfig();
-      if (config?.syncUrl != null && config.syncUrl !== "" && config.isTauri && config.invoke != null) {
-        void ctx.app.startSync(config.invoke, config.syncUrl, config.syncMasterToken).then(() => {
-          ctx.showToast("Sync reconnected");
-        }).catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          ctx.showToast(`Sync failed: ${msg}`);
-        });
+      if (
+        config?.syncUrl != null &&
+        config.syncUrl !== "" &&
+        config.isTauri &&
+        config.invoke != null
+      ) {
+        void ctx.app
+          .startSync(config.invoke, config.syncUrl, config.syncMasterToken)
+          .then(() => {
+            ctx.showToast("Sync reconnected");
+          })
+          .catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            ctx.showToast(`Sync failed: ${msg}`);
+          });
       } else {
         ctx.showToast("No sync relay configured");
       }
@@ -910,7 +1016,9 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
 
     // If conflict, show toast with conflict info
     if (currentStatus === "conflict" && lastEvent != null) {
-      ctx.showToast(`${lastEvent.conflictCount} sync conflict${lastEvent.conflictCount !== 1 ? "s" : ""} detected`);
+      ctx.showToast(
+        `${lastEvent.conflictCount} sync conflict${lastEvent.conflictCount !== 1 ? "s" : ""} detected`,
+      );
       return;
     }
 
@@ -928,20 +1036,36 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
 
     const config = ctx.getConfig();
     if (lastEvent?.status === "error" || lastEvent?.status === "disconnected") {
-      if (config?.syncUrl != null && config.syncUrl !== "" && config.isTauri && config.invoke != null) {
-        void ctx.app.startSync(config.invoke, config.syncUrl, config.syncMasterToken).catch(() => {});
+      if (
+        config?.syncUrl != null &&
+        config.syncUrl !== "" &&
+        config.isTauri &&
+        config.invoke != null
+      ) {
+        void ctx.app
+          .startSync(config.invoke, config.syncUrl, config.syncMasterToken)
+          .catch(() => {});
       }
     } else if (lastEvent?.status === "conflict") {
-      ctx.showToast(`${lastEvent.conflictCount} conflict${lastEvent.conflictCount !== 1 ? "s" : ""} — resolve in settings`);
+      ctx.showToast(
+        `${lastEvent.conflictCount} conflict${lastEvent.conflictCount !== 1 ? "s" : ""} — resolve in settings`,
+      );
     } else {
       if (config?.syncUrl != null && config.syncUrl !== "") {
-        void ctx.app.syncConversations(config.syncUrl, config.syncMasterToken).then(result => {
-          const total = result.conversations_pushed + result.conversations_pulled + result.messages_pushed + result.messages_pulled;
-          ctx.showToast(total > 0 ? `Synced (${total} changes)` : "Already up to date");
-        }).catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          ctx.showToast(`Sync failed: ${msg}`);
-        });
+        void ctx.app
+          .syncConversations(config.syncUrl, config.syncMasterToken)
+          .then((result) => {
+            const total =
+              result.conversations_pushed +
+              result.conversations_pulled +
+              result.messages_pushed +
+              result.messages_pulled;
+            ctx.showToast(total > 0 ? `Synced (${total} changes)` : "Already up to date");
+          })
+          .catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            ctx.showToast(`Sync failed: ${msg}`);
+          });
       }
     }
   });

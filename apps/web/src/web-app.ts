@@ -5,10 +5,7 @@ import { ThreeJSAdapter } from "@motebit/render-engine";
 import type { AudioReactivity } from "@motebit/render-engine";
 import type { StreamingProvider } from "@motebit/ai-core/browser";
 import { createBrowserStorage, IdbConversationStore } from "@motebit/browser-persistence";
-import {
-  bootstrapIdentity,
-  type BootstrapConfigStore,
-} from "@motebit/core-identity";
+import { bootstrapIdentity, type BootstrapConfigStore } from "@motebit/core-identity";
 import { createSignedToken, deriveSyncEncryptionKey } from "@motebit/crypto";
 import {
   HttpEventStoreAdapter,
@@ -39,13 +36,13 @@ import { EncryptedKeyStore } from "./encrypted-keystore";
 export type InteriorColor = { tint: [number, number, number]; glow: [number, number, number] };
 
 export const COLOR_PRESETS: Record<string, InteriorColor> = {
-  moonlight:    { tint: [0.95, 0.95, 1.0], glow: [0.8, 0.85, 1.0] },
-  amber:        { tint: [1.0, 0.85, 0.6], glow: [0.9, 0.7, 0.3] },
-  rose:         { tint: [1.0, 0.82, 0.88], glow: [0.9, 0.5, 0.6] },
-  violet:       { tint: [0.88, 0.8, 1.0], glow: [0.6, 0.4, 0.9] },
-  cyan:         { tint: [0.8, 0.95, 1.0], glow: [0.3, 0.8, 0.9] },
-  ember:        { tint: [1.0, 0.75, 0.65], glow: [0.9, 0.35, 0.2] },
-  sage:         { tint: [0.82, 0.95, 0.85], glow: [0.4, 0.75, 0.5] },
+  moonlight: { tint: [0.95, 0.95, 1.0], glow: [0.8, 0.85, 1.0] },
+  amber: { tint: [1.0, 0.85, 0.6], glow: [0.9, 0.7, 0.3] },
+  rose: { tint: [1.0, 0.82, 0.88], glow: [0.9, 0.5, 0.6] },
+  violet: { tint: [0.88, 0.8, 1.0], glow: [0.6, 0.4, 0.9] },
+  cyan: { tint: [0.8, 0.95, 1.0], glow: [0.3, 0.8, 0.9] },
+  ember: { tint: [1.0, 0.75, 0.65], glow: [0.9, 0.35, 0.2] },
+  sage: { tint: [0.82, 0.95, 0.85], glow: [0.4, 0.75, 0.5] },
 };
 
 // Re-export provider utilities
@@ -55,7 +52,10 @@ export { createProvider, WebLLMProvider };
 const HASH_DIM = 64;
 function hashEmbed(text: string): number[] {
   const vec = new Array<number>(HASH_DIM).fill(0);
-  const words = text.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+  const words = text
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w.length > 0);
   for (const w of words) {
     let h = 0;
     for (let i = 0; i < w.length; i++) h = ((h << 5) - h + w.charCodeAt(i)) | 0;
@@ -72,7 +72,13 @@ function hashEmbed(text: string): number[] {
 // Legacy Tier 1 localStorage key — will be migrated to cryptographic identity
 const LEGACY_MOTEBIT_ID_KEY = "motebit-web-id";
 
-export type WebSyncStatus = "offline" | "connecting" | "connected" | "syncing" | "error" | "disconnected";
+export type WebSyncStatus =
+  | "offline"
+  | "connecting"
+  | "connected"
+  | "syncing"
+  | "error"
+  | "disconnected";
 
 export class WebApp {
   private renderer = new ThreeJSAdapter();
@@ -255,10 +261,7 @@ export class WebApp {
     if (!this.runtime) return;
     const registry = this.runtime.getToolRegistry();
 
-    registry.register(
-      webSearchDefinition,
-      createWebSearchHandler(new DuckDuckGoSearchProvider()),
-    );
+    registry.register(webSearchDefinition, createWebSearchHandler(new DuckDuckGoSearchProvider()));
     registry.register(readUrlDefinition, createReadUrlHandler());
     registry.register(
       recallMemoriesDefinition,
@@ -266,7 +269,7 @@ export class WebApp {
         if (!this.runtime) return [];
         const embedding = hashEmbed(query);
         const nodes = await this.runtime.memory.retrieve(embedding, { limit });
-        return nodes.map(n => ({ content: n.content, confidence: n.confidence }));
+        return nodes.map((n) => ({ content: n.content, confidence: n.confidence }));
       }),
     );
     registry.register(
@@ -278,7 +281,7 @@ export class WebApp {
           limit,
           event_types: eventType ? [eventType as EventType] : undefined,
         });
-        return events.map(e => ({
+        return events.map((e) => ({
           event_type: e.event_type,
           timestamp: e.timestamp,
           payload: e.payload,
@@ -473,7 +476,9 @@ export class WebApp {
 
   onSyncStatusChange(cb: (status: WebSyncStatus) => void): () => void {
     this._syncStatusListeners.add(cb);
-    return () => { this._syncStatusListeners.delete(cb); };
+    return () => {
+      this._syncStatusListeners.delete(cb);
+    };
   }
 
   private setSyncStatus(status: WebSyncStatus): void {
@@ -536,7 +541,10 @@ export class WebApp {
     const encryptedHttp = new EncryptedEventStoreAdapter({ inner: httpAdapter, key: encKey });
 
     // WebSocket URL
-    const wsUrl = relayUrl.replace(/^https?/, (m) => m === "https" ? "wss" : "ws") + "/ws/sync/" + this._motebitId;
+    const wsUrl =
+      relayUrl.replace(/^https?/, (m) => (m === "https" ? "wss" : "ws")) +
+      "/ws/sync/" +
+      this._motebitId;
 
     const localEventStore = this._localEventStore;
     const wsAdapter = new WebSocketEventStoreAdapter({

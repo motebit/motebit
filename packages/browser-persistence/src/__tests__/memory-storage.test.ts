@@ -92,17 +92,21 @@ describe("IdbMemoryStorage", () => {
 
   it("queryNodes filters by decayed confidence", async () => {
     // Node with very short half-life, created far in the past — will have decayed
-    await storage.saveNode(makeNode({
-      confidence: 0.5,
-      half_life: 1, // 1ms half-life
-      created_at: Date.now() - 100000, // 100 seconds ago
-    }));
+    await storage.saveNode(
+      makeNode({
+        confidence: 0.5,
+        half_life: 1, // 1ms half-life
+        created_at: Date.now() - 100000, // 100 seconds ago
+      }),
+    );
     // Node with high confidence and long half-life
-    await storage.saveNode(makeNode({
-      confidence: 0.9,
-      half_life: 7 * 24 * 60 * 60 * 1000,
-      created_at: Date.now(),
-    }));
+    await storage.saveNode(
+      makeNode({
+        confidence: 0.9,
+        half_life: 7 * 24 * 60 * 60 * 1000,
+        created_at: Date.now(),
+      }),
+    );
 
     const results = await storage.queryNodes({
       motebit_id: "mote-1",

@@ -49,7 +49,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     }
 
     const { nodes } = await runtime.memory.exportAll();
-    const active = nodes.filter(n => !n.tombstoned);
+    const active = nodes.filter((n) => !n.tombstoned);
 
     memoryList.innerHTML = "";
 
@@ -199,9 +199,11 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
 
   // Close sync popup on outside click
   document.addEventListener("click", (e) => {
-    if (syncPopup.classList.contains("open") &&
-        !syncPopup.contains(e.target as Node) &&
-        !syncStatusEl.contains(e.target as Node)) {
+    if (
+      syncPopup.classList.contains("open") &&
+      !syncPopup.contains(e.target as Node) &&
+      !syncStatusEl.contains(e.target as Node)
+    ) {
       syncPopup.classList.remove("open");
     }
   });

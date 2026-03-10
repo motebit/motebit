@@ -17,9 +17,7 @@ function makeAnchor(position: [number, number, number]): SpatialAnchor {
   };
 }
 
-function makeRelative(
-  overrides: Partial<BodyRelativePosition> = {},
-): BodyRelativePosition {
+function makeRelative(overrides: Partial<BodyRelativePosition> = {}): BodyRelativePosition {
   return {
     offset: [0, 0, 0],
     reference: "head",
@@ -118,16 +116,22 @@ describe("computeWorldPosition", () => {
 
     const [x, y, z] = computeWorldPosition(anchor, relative);
     expect(x).toBeCloseTo(10 + 1 + 0.5, 10); // body.x + offset.x + orbitX
-    expect(y).toBeCloseTo(20 + 2, 10);        // body.y + offset.y (no orbit Y)
-    expect(z).toBeCloseTo(30 + 3 + 0, 10);    // body.z + offset.z + orbitZ
+    expect(y).toBeCloseTo(20 + 2, 10); // body.y + offset.y (no orbit Y)
+    expect(z).toBeCloseTo(30 + 3 + 0, 10); // body.z + offset.z + orbitZ
   });
 
   it("handles different orbit radii", () => {
     const anchor = makeAnchor([0, 0, 0]);
     const angle = Math.PI / 4; // 45 degrees
 
-    const small = computeWorldPosition(anchor, makeRelative({ orbit_radius: 0.1, orbit_angle: angle }));
-    const large = computeWorldPosition(anchor, makeRelative({ orbit_radius: 10.0, orbit_angle: angle }));
+    const small = computeWorldPosition(
+      anchor,
+      makeRelative({ orbit_radius: 0.1, orbit_angle: angle }),
+    );
+    const large = computeWorldPosition(
+      anchor,
+      makeRelative({ orbit_radius: 10.0, orbit_angle: angle }),
+    );
 
     // X component: cos(PI/4) * radius
     expect(small[0]).toBeCloseTo(Math.cos(angle) * 0.1, 10);

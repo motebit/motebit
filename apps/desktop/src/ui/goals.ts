@@ -83,11 +83,11 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
     // Show brief completion summary on the progress card before fading
     if (progressCard && progressStepEl) {
       const statusLabel = event.status === "completed" ? "Completed" : "Failed";
-      const summary = event.summary != null && event.summary !== "" ? `: ${event.summary.slice(0, 80)}` : "";
+      const summary =
+        event.summary != null && event.summary !== "" ? `: ${event.summary.slice(0, 80)}` : "";
       progressStepEl.textContent = `${statusLabel}${summary}`;
-      progressStepEl.style.color = event.status === "completed"
-        ? "rgba(34, 197, 94, 0.8)"
-        : "rgba(248, 113, 113, 0.8)";
+      progressStepEl.style.color =
+        event.status === "completed" ? "rgba(34, 197, 94, 0.8)" : "rgba(248, 113, 113, 0.8)";
     }
 
     // Fade the card after a short delay
@@ -134,7 +134,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
 
     const stepText = document.createElement("div");
     stepText.className = "goal-progress-step";
-    stepText.innerHTML = '<span class="step-index">0/' + totalSteps + '</span>Starting...';
+    stepText.innerHTML = '<span class="step-index">0/' + totalSteps + "</span>Starting...";
     card.appendChild(stepText);
 
     goalProgressContainer.innerHTML = "";
@@ -189,18 +189,20 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
     // Helper: timestamp-range fallback for legacy rows without run_id
     const loadFallback = (): void => {
       const startTs = ranAt - 5000;
-      const endTs = currentIndex > 0
-        ? Number(allOutcomes[currentIndex - 1]!.ran_at) || Date.now()
-        : Date.now();
+      const endTs =
+        currentIndex > 0 ? Number(allOutcomes[currentIndex - 1]!.ran_at) || Date.now() : Date.now();
 
       void invoke<Array<Record<string, unknown>>>("db_query", {
         sql: `SELECT tool, decision, result, timestamp FROM tool_audit_log WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC LIMIT 50`,
         params: [startTs, endTs],
-      }).then((fallbackEntries: Array<Record<string, unknown>>) => {
-        renderAuditEntries(fallbackEntries, container, true);
-      }).catch(() => {
-        container.innerHTML = '<span style="font-size:10px;color:var(--text-ghost)">Failed to load</span>';
-      });
+      })
+        .then((fallbackEntries: Array<Record<string, unknown>>) => {
+          renderAuditEntries(fallbackEntries, container, true);
+        })
+        .catch(() => {
+          container.innerHTML =
+            '<span style="font-size:10px;color:var(--text-ghost)">Failed to load</span>';
+        });
     };
 
     // Skip run_id query if outcomeId is empty (legacy row)
@@ -213,15 +215,18 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
     void invoke<Array<Record<string, unknown>>>("db_query", {
       sql: `SELECT tool, decision, result, timestamp FROM tool_audit_log WHERE run_id = ? ORDER BY timestamp ASC LIMIT 50`,
       params: [outcomeId],
-    }).then((entries: Array<Record<string, unknown>>) => {
-      if (entries.length > 0) {
-        renderAuditEntries(entries, container, false);
-        return;
-      }
-      loadFallback();
-    }).catch(() => {
-      container.innerHTML = '<span style="font-size:10px;color:var(--text-ghost)">Failed to load</span>';
-    });
+    })
+      .then((entries: Array<Record<string, unknown>>) => {
+        if (entries.length > 0) {
+          renderAuditEntries(entries, container, false);
+          return;
+        }
+        loadFallback();
+      })
+      .catch(() => {
+        container.innerHTML =
+          '<span style="font-size:10px;color:var(--text-ghost)">Failed to load</span>';
+      });
   }
 
   function renderAuditEntries(
@@ -231,7 +236,8 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
   ): void {
     container.innerHTML = "";
     if (entries.length === 0) {
-      container.innerHTML = '<span style="font-size:10px;color:var(--text-ghost)">No tool details</span>';
+      container.innerHTML =
+        '<span style="font-size:10px;color:var(--text-ghost)">No tool details</span>';
       return;
     }
     for (const entry of entries) {
@@ -278,96 +284,99 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
     const invoke = config.invoke;
 
     goalList.innerHTML = "";
-    void invoke<Array<Record<string, unknown>>>("goals_list", { motebitId }).then(goals => {
-      if (goals.length === 0) {
-        const empty = document.createElement("div");
-        empty.className = "goal-empty";
-        empty.textContent = "No goals yet";
-        goalList.appendChild(empty);
-        return;
-      }
-
-      for (const goal of goals) {
-        const item = document.createElement("div");
-        item.className = "goal-item";
-
-        const promptDiv = document.createElement("div");
-        promptDiv.className = "goal-item-prompt";
-        const promptText = ipcString(goal.prompt);
-        promptDiv.textContent = promptText.length > 60 ? promptText.slice(0, 60) + "..." : promptText;
-        promptDiv.title = promptText;
-        item.appendChild(promptDiv);
-
-        const metaDiv = document.createElement("div");
-        metaDiv.className = "goal-item-meta";
-
-        const statusDot = document.createElement("span");
-        const status = ipcString(goal.status, "active");
-        statusDot.className = `goal-status-dot ${status}`;
-        metaDiv.appendChild(statusDot);
-
-        const statusText = document.createElement("span");
-        statusText.textContent = status;
-        metaDiv.appendChild(statusText);
-
-        const intervalSpan = document.createElement("span");
-        intervalSpan.textContent = formatInterval(Number(goal.interval_ms) || 0);
-        metaDiv.appendChild(intervalSpan);
-
-        const modeSpan = document.createElement("span");
-        modeSpan.textContent = ipcString(goal.mode, "recurring");
-        metaDiv.appendChild(modeSpan);
-
-        item.appendChild(metaDiv);
-
-        const actions = document.createElement("div");
-        actions.className = "goal-item-actions";
-
-        const goalId = String(goal.goal_id);
-
-        if (status === "active" || status === "paused") {
-          const toggleBtn = document.createElement("button");
-          toggleBtn.textContent = status === "active" ? "Pause" : "Resume";
-          toggleBtn.addEventListener("click", () => {
-            void toggleGoal(goalId);
-          });
-          actions.appendChild(toggleBtn);
+    void invoke<Array<Record<string, unknown>>>("goals_list", { motebitId })
+      .then((goals) => {
+        if (goals.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "goal-empty";
+          empty.textContent = "No goals yet";
+          goalList.appendChild(empty);
+          return;
         }
 
-        const historyBtn = document.createElement("button");
-        historyBtn.className = "goal-toggle-outcomes";
-        historyBtn.textContent = "History";
-        actions.appendChild(historyBtn);
+        for (const goal of goals) {
+          const item = document.createElement("div");
+          item.className = "goal-item";
 
-        const deleteBtn = document.createElement("button");
-        deleteBtn.className = "goal-delete-btn";
-        deleteBtn.textContent = "Delete";
-        deleteBtn.addEventListener("click", () => {
-          void deleteGoal(goalId);
-        });
-        actions.appendChild(deleteBtn);
+          const promptDiv = document.createElement("div");
+          promptDiv.className = "goal-item-prompt";
+          const promptText = ipcString(goal.prompt);
+          promptDiv.textContent =
+            promptText.length > 60 ? promptText.slice(0, 60) + "..." : promptText;
+          promptDiv.title = promptText;
+          item.appendChild(promptDiv);
 
-        item.appendChild(actions);
+          const metaDiv = document.createElement("div");
+          metaDiv.className = "goal-item-meta";
 
-        const outcomesDiv = document.createElement("div");
-        outcomesDiv.className = "goal-outcomes";
-        item.appendChild(outcomesDiv);
+          const statusDot = document.createElement("span");
+          const status = ipcString(goal.status, "active");
+          statusDot.className = `goal-status-dot ${status}`;
+          metaDiv.appendChild(statusDot);
 
-        historyBtn.addEventListener("click", () => {
-          const isOpen = outcomesDiv.classList.contains("open");
-          if (isOpen) {
-            outcomesDiv.classList.remove("open");
-          } else {
-            outcomesDiv.classList.add("open");
-            loadGoalOutcomes(goalId, outcomesDiv);
+          const statusText = document.createElement("span");
+          statusText.textContent = status;
+          metaDiv.appendChild(statusText);
+
+          const intervalSpan = document.createElement("span");
+          intervalSpan.textContent = formatInterval(Number(goal.interval_ms) || 0);
+          metaDiv.appendChild(intervalSpan);
+
+          const modeSpan = document.createElement("span");
+          modeSpan.textContent = ipcString(goal.mode, "recurring");
+          metaDiv.appendChild(modeSpan);
+
+          item.appendChild(metaDiv);
+
+          const actions = document.createElement("div");
+          actions.className = "goal-item-actions";
+
+          const goalId = String(goal.goal_id);
+
+          if (status === "active" || status === "paused") {
+            const toggleBtn = document.createElement("button");
+            toggleBtn.textContent = status === "active" ? "Pause" : "Resume";
+            toggleBtn.addEventListener("click", () => {
+              void toggleGoal(goalId);
+            });
+            actions.appendChild(toggleBtn);
           }
-        });
 
-        goalList.appendChild(item);
-      }
-    }).catch(() => {
-      goalList.innerHTML = '<div class="goal-empty">Failed to load goals</div>';
-    });
+          const historyBtn = document.createElement("button");
+          historyBtn.className = "goal-toggle-outcomes";
+          historyBtn.textContent = "History";
+          actions.appendChild(historyBtn);
+
+          const deleteBtn = document.createElement("button");
+          deleteBtn.className = "goal-delete-btn";
+          deleteBtn.textContent = "Delete";
+          deleteBtn.addEventListener("click", () => {
+            void deleteGoal(goalId);
+          });
+          actions.appendChild(deleteBtn);
+
+          item.appendChild(actions);
+
+          const outcomesDiv = document.createElement("div");
+          outcomesDiv.className = "goal-outcomes";
+          item.appendChild(outcomesDiv);
+
+          historyBtn.addEventListener("click", () => {
+            const isOpen = outcomesDiv.classList.contains("open");
+            if (isOpen) {
+              outcomesDiv.classList.remove("open");
+            } else {
+              outcomesDiv.classList.add("open");
+              loadGoalOutcomes(goalId, outcomesDiv);
+            }
+          });
+
+          goalList.appendChild(item);
+        }
+      })
+      .catch(() => {
+        goalList.innerHTML = '<div class="goal-empty">Failed to load goals</div>';
+      });
   }
 
   function loadGoalOutcomes(goalId: string, container: HTMLDivElement): void {
@@ -375,44 +384,49 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
     if (config?.isTauri !== true || config.invoke == null) return;
     const invoke = config.invoke;
 
-    container.innerHTML = '<div style="font-size:11px;color:rgba(0,0,0,0.3);padding:2px 0;">Loading...</div>';
-    void invoke<Array<Record<string, unknown>>>("goals_outcomes", { goalId, limit: 5 }).then(outcomes => {
-      container.innerHTML = "";
-      if (outcomes.length === 0) {
-        container.innerHTML = '<div style="font-size:11px;color:rgba(0,0,0,0.3);padding:2px 0;">No runs yet</div>';
-        return;
-      }
-      for (const outcome of outcomes) {
-        const row = document.createElement("div");
-        row.className = "goal-outcome-row";
-
-        const dot = document.createElement("span");
-        const oStatus = ipcString(outcome.status);
-        dot.className = `goal-status-dot ${oStatus === "completed" ? "active" : "suspended"}`;
-        row.appendChild(dot);
-
-        const summary = document.createElement("span");
-        summary.className = "goal-outcome-summary";
-        if (oStatus === "completed" && outcome.summary != null) {
-          summary.textContent = ipcString(outcome.summary);
-        } else if (outcome.error_message != null) {
-          summary.textContent = ipcString(outcome.error_message);
-          summary.style.color = "rgba(248,113,113,0.8)";
-        } else {
-          summary.textContent = oStatus;
+    container.innerHTML =
+      '<div style="font-size:11px;color:rgba(0,0,0,0.3);padding:2px 0;">Loading...</div>';
+    void invoke<Array<Record<string, unknown>>>("goals_outcomes", { goalId, limit: 5 })
+      .then((outcomes) => {
+        container.innerHTML = "";
+        if (outcomes.length === 0) {
+          container.innerHTML =
+            '<div style="font-size:11px;color:rgba(0,0,0,0.3);padding:2px 0;">No runs yet</div>';
+          return;
         }
-        row.appendChild(summary);
+        for (const outcome of outcomes) {
+          const row = document.createElement("div");
+          row.className = "goal-outcome-row";
 
-        const time = document.createElement("span");
-        time.className = "goal-outcome-time";
-        time.textContent = formatTimeAgo(Number(outcome.ran_at) || 0);
-        row.appendChild(time);
+          const dot = document.createElement("span");
+          const oStatus = ipcString(outcome.status);
+          dot.className = `goal-status-dot ${oStatus === "completed" ? "active" : "suspended"}`;
+          row.appendChild(dot);
 
-        container.appendChild(row);
-      }
-    }).catch(() => {
-      container.innerHTML = '<div style="font-size:11px;color:rgba(0,0,0,0.3);">Failed to load</div>';
-    });
+          const summary = document.createElement("span");
+          summary.className = "goal-outcome-summary";
+          if (oStatus === "completed" && outcome.summary != null) {
+            summary.textContent = ipcString(outcome.summary);
+          } else if (outcome.error_message != null) {
+            summary.textContent = ipcString(outcome.error_message);
+            summary.style.color = "rgba(248,113,113,0.8)";
+          } else {
+            summary.textContent = oStatus;
+          }
+          row.appendChild(summary);
+
+          const time = document.createElement("span");
+          time.className = "goal-outcome-time";
+          time.textContent = formatTimeAgo(Number(outcome.ran_at) || 0);
+          row.appendChild(time);
+
+          container.appendChild(row);
+        }
+      })
+      .catch(() => {
+        container.innerHTML =
+          '<div style="font-size:11px;color:rgba(0,0,0,0.3);">Failed to load</div>';
+      });
   }
 
   // === Recent Outcomes (cross-goal) ===
@@ -432,98 +446,101 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
             ORDER BY o.ran_at DESC
             LIMIT 15`,
       params: [motebitId],
-    }).then((outcomes: Array<Record<string, unknown>>) => {
-      goalRecentList.innerHTML = "";
-      if (outcomes.length === 0) {
-        goalRecentHeader.style.display = "none";
-        return;
-      }
-      goalRecentHeader.style.display = "flex";
-
-      for (let i = 0; i < outcomes.length; i++) {
-        const outcome = outcomes[i]!;
-        const row = document.createElement("div");
-        row.className = "goal-recent-row";
-
-        const header = document.createElement("div");
-        header.className = "goal-recent-row-header";
-
-        const statusBadge = document.createElement("span");
-        const oStatus = ipcString(outcome.status);
-        statusBadge.className = `goal-recent-status ${oStatus}`;
-        statusBadge.textContent = oStatus;
-        header.appendChild(statusBadge);
-
-        const prompt = document.createElement("span");
-        prompt.className = "goal-recent-prompt";
-        const promptText = ipcString(outcome.prompt);
-        prompt.textContent = promptText.length > 40 ? promptText.slice(0, 40) + "..." : promptText;
-        prompt.title = promptText;
-        header.appendChild(prompt);
-
-        const time = document.createElement("span");
-        time.className = "goal-recent-time";
-        time.textContent = formatTimeAgo(Number(outcome.ran_at) || 0);
-        header.appendChild(time);
-
-        row.appendChild(header);
-
-        // Expandable detail
-        const detail = document.createElement("div");
-        detail.className = "goal-recent-detail";
-
-        const summaryDiv = document.createElement("div");
-        if (oStatus === "completed" && outcome.summary != null) {
-          summaryDiv.className = "goal-recent-summary";
-          summaryDiv.textContent = ipcString(outcome.summary);
-        } else if (outcome.error_message != null) {
-          summaryDiv.className = "goal-recent-summary error";
-          summaryDiv.textContent = ipcString(outcome.error_message);
+    })
+      .then((outcomes: Array<Record<string, unknown>>) => {
+        goalRecentList.innerHTML = "";
+        if (outcomes.length === 0) {
+          goalRecentHeader.style.display = "none";
+          return;
         }
-        if (summaryDiv.textContent) {
-          detail.appendChild(summaryDiv);
-        }
+        goalRecentHeader.style.display = "flex";
 
-        const meta = document.createElement("div");
-        meta.className = "goal-recent-meta";
-        const toolCalls = Number(outcome.tool_calls_made) || 0;
-        if (toolCalls > 0) {
-          const toolSpan = document.createElement("span");
-          toolSpan.textContent = `${toolCalls} tool call${toolCalls !== 1 ? "s" : ""}`;
-          meta.appendChild(toolSpan);
-        }
-        if (meta.children.length > 0) {
-          detail.appendChild(meta);
-        }
+        for (let i = 0; i < outcomes.length; i++) {
+          const outcome = outcomes[i]!;
+          const row = document.createElement("div");
+          row.className = "goal-recent-row";
 
-        // Audit inline container for tool call details
-        const auditContainer = document.createElement("div");
-        auditContainer.className = "audit-inline-list";
-        if (toolCalls > 0) {
-          detail.appendChild(auditContainer);
-        }
+          const header = document.createElement("div");
+          header.className = "goal-recent-row-header";
 
-        row.appendChild(detail);
+          const statusBadge = document.createElement("span");
+          const oStatus = ipcString(outcome.status);
+          statusBadge.className = `goal-recent-status ${oStatus}`;
+          statusBadge.textContent = oStatus;
+          header.appendChild(statusBadge);
 
-        // Toggle expand with lazy audit loading
-        let auditLoaded = false;
-        const outcomeIndex = i;
-        row.addEventListener("click", () => {
-          row.classList.toggle("expanded");
-          if (row.classList.contains("expanded") && toolCalls > 0 && !auditLoaded) {
-            auditLoaded = true;
-            const oId = ipcString(outcome.outcome_id);
-            const ranAt = Number(outcome.ran_at) || 0;
-            loadOutcomeAuditEntries(oId, ranAt, outcomes, outcomeIndex, auditContainer, invoke);
+          const prompt = document.createElement("span");
+          prompt.className = "goal-recent-prompt";
+          const promptText = ipcString(outcome.prompt);
+          prompt.textContent =
+            promptText.length > 40 ? promptText.slice(0, 40) + "..." : promptText;
+          prompt.title = promptText;
+          header.appendChild(prompt);
+
+          const time = document.createElement("span");
+          time.className = "goal-recent-time";
+          time.textContent = formatTimeAgo(Number(outcome.ran_at) || 0);
+          header.appendChild(time);
+
+          row.appendChild(header);
+
+          // Expandable detail
+          const detail = document.createElement("div");
+          detail.className = "goal-recent-detail";
+
+          const summaryDiv = document.createElement("div");
+          if (oStatus === "completed" && outcome.summary != null) {
+            summaryDiv.className = "goal-recent-summary";
+            summaryDiv.textContent = ipcString(outcome.summary);
+          } else if (outcome.error_message != null) {
+            summaryDiv.className = "goal-recent-summary error";
+            summaryDiv.textContent = ipcString(outcome.error_message);
           }
-        });
+          if (summaryDiv.textContent) {
+            detail.appendChild(summaryDiv);
+          }
 
-        goalRecentList.appendChild(row);
-      }
-    }).catch(() => {
-      goalRecentHeader.style.display = "none";
-      goalRecentList.innerHTML = "";
-    });
+          const meta = document.createElement("div");
+          meta.className = "goal-recent-meta";
+          const toolCalls = Number(outcome.tool_calls_made) || 0;
+          if (toolCalls > 0) {
+            const toolSpan = document.createElement("span");
+            toolSpan.textContent = `${toolCalls} tool call${toolCalls !== 1 ? "s" : ""}`;
+            meta.appendChild(toolSpan);
+          }
+          if (meta.children.length > 0) {
+            detail.appendChild(meta);
+          }
+
+          // Audit inline container for tool call details
+          const auditContainer = document.createElement("div");
+          auditContainer.className = "audit-inline-list";
+          if (toolCalls > 0) {
+            detail.appendChild(auditContainer);
+          }
+
+          row.appendChild(detail);
+
+          // Toggle expand with lazy audit loading
+          let auditLoaded = false;
+          const outcomeIndex = i;
+          row.addEventListener("click", () => {
+            row.classList.toggle("expanded");
+            if (row.classList.contains("expanded") && toolCalls > 0 && !auditLoaded) {
+              auditLoaded = true;
+              const oId = ipcString(outcome.outcome_id);
+              const ranAt = Number(outcome.ran_at) || 0;
+              loadOutcomeAuditEntries(oId, ranAt, outcomes, outcomeIndex, auditContainer, invoke);
+            }
+          });
+
+          goalRecentList.appendChild(row);
+        }
+      })
+      .catch(() => {
+        goalRecentHeader.style.display = "none";
+        goalRecentList.innerHTML = "";
+      });
   }
 
   // === Plan History ===
@@ -540,22 +557,27 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
     void invoke<Array<Record<string, unknown>>>("db_query", {
       sql: `SELECT * FROM plans WHERE motebit_id = ? ORDER BY created_at DESC LIMIT 10`,
       params: [motebitId],
-    }).then((plans: Array<Record<string, unknown>>) => {
-      if (plans.length === 0) {
+    })
+      .then((plans: Array<Record<string, unknown>>) => {
+        if (plans.length === 0) {
+          planHistoryHeader.style.display = "none";
+          planHistoryList.innerHTML = "";
+          planHistoryList.classList.remove("open");
+          return;
+        }
+        planHistoryHeader.style.display = "flex";
+        renderPlanList(plans, invoke);
+      })
+      .catch(() => {
         planHistoryHeader.style.display = "none";
         planHistoryList.innerHTML = "";
-        planHistoryList.classList.remove("open");
-        return;
-      }
-      planHistoryHeader.style.display = "flex";
-      renderPlanList(plans, invoke);
-    }).catch(() => {
-      planHistoryHeader.style.display = "none";
-      planHistoryList.innerHTML = "";
-    });
+      });
   }
 
-  function renderPlanList(plans: Array<Record<string, unknown>>, invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>): void {
+  function renderPlanList(
+    plans: Array<Record<string, unknown>>,
+    invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>,
+  ): void {
     planHistoryList.innerHTML = "";
 
     for (const plan of plans) {
@@ -631,99 +653,105 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
     }
   }
 
-  function loadPlanSteps(planId: string, container: HTMLDivElement, invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>): void {
+  function loadPlanSteps(
+    planId: string,
+    container: HTMLDivElement,
+    invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>,
+  ): void {
     container.innerHTML = '<div class="plan-history-empty">Loading...</div>';
 
     void invoke<Array<Record<string, unknown>>>("db_query", {
       sql: `SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY ordinal ASC`,
       params: [planId],
-    }).then((steps: Array<Record<string, unknown>>) => {
-      container.innerHTML = "";
-      if (steps.length === 0) {
-        container.innerHTML = '<div class="plan-history-empty">No steps</div>';
-        return;
-      }
+    })
+      .then((steps: Array<Record<string, unknown>>) => {
+        container.innerHTML = "";
+        if (steps.length === 0) {
+          container.innerHTML = '<div class="plan-history-empty">No steps</div>';
+          return;
+        }
 
-      for (const step of steps) {
-        const row = document.createElement("div");
-        row.className = "plan-step-row";
+        for (const step of steps) {
+          const row = document.createElement("div");
+          row.className = "plan-step-row";
 
-        // Status dot
-        const dot = document.createElement("span");
-        const stepStatus = ipcString(step.status, "pending");
-        dot.className = `plan-step-dot ${stepStatus}`;
-        row.appendChild(dot);
+          // Status dot
+          const dot = document.createElement("span");
+          const stepStatus = ipcString(step.status, "pending");
+          dot.className = `plan-step-dot ${stepStatus}`;
+          row.appendChild(dot);
 
-        // Content column
-        const content = document.createElement("div");
-        content.className = "plan-step-content";
+          // Content column
+          const content = document.createElement("div");
+          content.className = "plan-step-content";
 
-        // Description
-        const desc = document.createElement("div");
-        desc.className = "plan-step-desc";
-        const ordinal = Number(step.ordinal) + 1;
-        desc.textContent = `${ordinal}. ${ipcString(step.description)}`;
-        content.appendChild(desc);
+          // Description
+          const desc = document.createElement("div");
+          desc.className = "plan-step-desc";
+          const ordinal = Number(step.ordinal) + 1;
+          desc.textContent = `${ordinal}. ${ipcString(step.description)}`;
+          content.appendChild(desc);
 
-        // Meta (duration, tool calls, retries)
-        const meta = document.createElement("div");
-        meta.className = "plan-step-meta";
+          // Meta (duration, tool calls, retries)
+          const meta = document.createElement("div");
+          meta.className = "plan-step-meta";
 
-        const startedAt = step.started_at != null ? Number(step.started_at) : null;
-        const completedAt = step.completed_at != null ? Number(step.completed_at) : null;
-        if (startedAt != null) {
-          const duration = formatStepDuration(startedAt, completedAt);
-          if (duration) {
-            const durationSpan = document.createElement("span");
-            durationSpan.textContent = duration;
-            meta.appendChild(durationSpan);
+          const startedAt = step.started_at != null ? Number(step.started_at) : null;
+          const completedAt = step.completed_at != null ? Number(step.completed_at) : null;
+          if (startedAt != null) {
+            const duration = formatStepDuration(startedAt, completedAt);
+            if (duration) {
+              const durationSpan = document.createElement("span");
+              durationSpan.textContent = duration;
+              meta.appendChild(durationSpan);
+            }
           }
-        }
 
-        const toolCalls = Number(step.tool_calls_made) || 0;
-        if (toolCalls > 0) {
-          const toolSpan = document.createElement("span");
-          toolSpan.textContent = `${toolCalls} tool${toolCalls !== 1 ? "s" : ""}`;
-          meta.appendChild(toolSpan);
-        }
+          const toolCalls = Number(step.tool_calls_made) || 0;
+          if (toolCalls > 0) {
+            const toolSpan = document.createElement("span");
+            toolSpan.textContent = `${toolCalls} tool${toolCalls !== 1 ? "s" : ""}`;
+            meta.appendChild(toolSpan);
+          }
 
-        const retries = Number(step.retry_count) || 0;
-        if (retries > 0) {
-          const retrySpan = document.createElement("span");
-          retrySpan.textContent = `${retries} retr${retries !== 1 ? "ies" : "y"}`;
-          meta.appendChild(retrySpan);
-        }
+          const retries = Number(step.retry_count) || 0;
+          if (retries > 0) {
+            const retrySpan = document.createElement("span");
+            retrySpan.textContent = `${retries} retr${retries !== 1 ? "ies" : "y"}`;
+            meta.appendChild(retrySpan);
+          }
 
-        if (meta.children.length > 0) {
-          content.appendChild(meta);
-        }
+          if (meta.children.length > 0) {
+            content.appendChild(meta);
+          }
 
-        // Result summary (truncated, expandable)
-        if (step.result_summary != null) {
-          const result = document.createElement("div");
-          result.className = "plan-step-result";
-          result.textContent = ipcString(step.result_summary);
-          result.addEventListener("click", (e) => {
-            e.stopPropagation();
-            result.classList.toggle("expanded-text");
-          });
-          content.appendChild(result);
-        }
+          // Result summary (truncated, expandable)
+          if (step.result_summary != null) {
+            const result = document.createElement("div");
+            result.className = "plan-step-result";
+            result.textContent = ipcString(step.result_summary);
+            result.addEventListener("click", (e) => {
+              e.stopPropagation();
+              result.classList.toggle("expanded-text");
+            });
+            content.appendChild(result);
+          }
 
-        // Error message
-        if (step.error_message != null) {
-          const error = document.createElement("div");
-          error.className = "plan-step-error";
-          error.textContent = ipcString(step.error_message);
-          content.appendChild(error);
-        }
+          // Error message
+          if (step.error_message != null) {
+            const error = document.createElement("div");
+            error.className = "plan-step-error";
+            error.textContent = ipcString(step.error_message);
+            content.appendChild(error);
+          }
 
-        row.appendChild(content);
-        container.appendChild(row);
-      }
-    }).catch(() => {
-      container.innerHTML = '<div class="plan-history-empty">Failed to load steps</div>';
-    });
+          row.appendChild(content);
+          container.appendChild(row);
+        }
+      })
+      .catch(() => {
+        container.innerHTML = '<div class="plan-history-empty">Failed to load steps</div>';
+      });
   }
 
   function formatStepDuration(startedAt: number, completedAt: number | null): string {

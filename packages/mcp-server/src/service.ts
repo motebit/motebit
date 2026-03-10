@@ -13,7 +13,13 @@
 
 import { McpServerAdapter } from "./index.js";
 import type { MotebitServerDeps } from "./index.js";
-import type { ToolDefinition, ToolResult, PolicyDecision, EventLogEntry, TurnContext } from "@motebit/sdk";
+import type {
+  ToolDefinition,
+  ToolResult,
+  PolicyDecision,
+  EventLogEntry,
+  TurnContext,
+} from "@motebit/sdk";
 import { EventType, SensitivityLevel, AgentTrustLevel } from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
@@ -29,11 +35,7 @@ export interface ServiceToolRegistry {
 /** Minimal policy gate interface. */
 export interface ServicePolicyGate {
   filterTools(tools: ToolDefinition[]): ToolDefinition[];
-  validate(
-    tool: ToolDefinition,
-    args: Record<string, unknown>,
-    context: unknown,
-  ): PolicyDecision;
+  validate(tool: ToolDefinition, args: Record<string, unknown>, context: unknown): PolicyDecision;
   createTurnContext(): unknown;
 }
 
@@ -76,7 +78,9 @@ export interface ServiceRuntime {
   events: ServiceEventStore;
 
   /** Optional: look up trust record for a remote motebit. */
-  getAgentTrust?(remoteMotebitId: string): Promise<{ trust_level: string; public_key?: string } | null>;
+  getAgentTrust?(
+    remoteMotebitId: string,
+  ): Promise<{ trust_level: string; public_key?: string } | null>;
   /** Optional: record an interaction with a remote motebit. */
   recordAgentInteraction?(remoteMotebitId: string, publicKey?: string): Promise<unknown>;
 }
@@ -112,9 +116,7 @@ export interface WireServerDepsOptions {
   >;
 
   /** If provided, wires sendMessage for motebit_query synthetic tool. */
-  sendMessage?: (
-    text: string,
-  ) => Promise<{ response: string; memoriesFormed: number }>;
+  sendMessage?: (text: string) => Promise<{ response: string; memoriesFormed: number }>;
 }
 
 export function wireServerDeps(
@@ -233,7 +235,11 @@ export function wireServerDeps(
   // Optional: callback on caller verification
   if (runtime.recordAgentInteraction) {
     const recordInteraction = runtime.recordAgentInteraction.bind(runtime);
-    deps.onCallerVerified = (callerMotebitId: string, publicKey: string, _trustLevel: AgentTrustLevel) => {
+    deps.onCallerVerified = (
+      callerMotebitId: string,
+      publicKey: string,
+      _trustLevel: AgentTrustLevel,
+    ) => {
       void recordInteraction(callerMotebitId, publicKey);
     };
   }
@@ -287,8 +293,7 @@ export async function startServiceServer(
   deps: MotebitServerDeps,
   config: ServiceServerConfig,
 ): Promise<ServiceHandle> {
-  const serverName =
-    config.name ?? `motebit-service-${deps.motebitId.slice(0, 8)}`;
+  const serverName = config.name ?? `motebit-service-${deps.motebitId.slice(0, 8)}`;
 
   const mcpServer = new McpServerAdapter(
     {
@@ -315,8 +320,7 @@ export async function startServiceServer(
       const regHeaders: Record<string, string> = {
         "Content-Type": "application/json",
       };
-      if (config.apiToken)
-        regHeaders["Authorization"] = `Bearer ${config.apiToken}`;
+      if (config.apiToken) regHeaders["Authorization"] = `Bearer ${config.apiToken}`;
 
       const endpointUrl = `http://localhost:${config.port}`;
       const regResp = await fetch(`${config.syncUrl}/api/v1/agents/register`, {
@@ -330,16 +334,19 @@ export async function startServiceServer(
         }),
       });
       if (regResp.ok) {
-        heartbeatTimer = setInterval(async () => {
-          try {
-            await fetch(`${config.syncUrl}/api/v1/agents/heartbeat`, {
-              method: "POST",
-              headers: regHeaders,
-            });
-          } catch {
-            // Best-effort heartbeat
-          }
-        }, 5 * 60 * 1000);
+        heartbeatTimer = setInterval(
+          async () => {
+            try {
+              await fetch(`${config.syncUrl}/api/v1/agents/heartbeat`, {
+                method: "POST",
+                headers: regHeaders,
+              });
+            } catch {
+              // Best-effort heartbeat
+            }
+          },
+          5 * 60 * 1000,
+        );
       }
     } catch {
       // Best-effort relay registration
@@ -357,8 +364,7 @@ export async function startServiceServer(
     if (config.syncUrl) {
       try {
         const headers: Record<string, string> = {};
-        if (config.apiToken)
-          headers["Authorization"] = `Bearer ${config.apiToken}`;
+        if (config.apiToken) headers["Authorization"] = `Bearer ${config.apiToken}`;
         await fetch(`${config.syncUrl}/api/v1/agents/deregister`, {
           method: "DELETE",
           headers,

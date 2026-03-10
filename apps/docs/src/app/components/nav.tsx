@@ -21,13 +21,11 @@ export function Nav() {
       }`}
     >
       <div className="mx-auto max-w-5xl px-6 h-12 flex items-center justify-between">
-        <Link href="/" className="flex items-center gap-2 text-zinc-900/90 dark:text-zinc-100/90 text-[13px] font-medium tracking-tight">
-          <img
-            src="/motebit-mark.svg"
-            alt=""
-            width={20}
-            height={20}
-          />
+        <Link
+          href="/"
+          className="flex items-center gap-2 text-zinc-900/90 dark:text-zinc-100/90 text-[13px] font-medium tracking-tight"
+        >
+          <img src="/motebit-mark.svg" alt="" width={20} height={20} />
           Motebit
         </Link>
         <div className="flex items-center gap-5">

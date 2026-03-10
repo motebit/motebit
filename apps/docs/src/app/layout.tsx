@@ -13,9 +13,7 @@ export default function RootLayout({ children }: { children: any }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <body>
-        <RootProvider>
-          {children}
-        </RootProvider>
+        <RootProvider>{children}</RootProvider>
       </body>
     </html>
   );

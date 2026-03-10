@@ -226,9 +226,7 @@ describe("filterMemories", () => {
   });
 
   it("strips sensitivity field from output", () => {
-    const memories = [
-      { content: "a", confidence: 0.9, sensitivity: "none", created_at: 1 },
-    ];
+    const memories = [{ content: "a", confidence: 0.9, sensitivity: "none", created_at: 1 }];
     const result = filterMemories(memories, 50);
     expect(result[0]).toEqual({ content: "a", confidence: 0.9, created_at: 1 });
     expect("sensitivity" in result[0]!).toBe(false);
@@ -385,7 +383,13 @@ describe("McpServerAdapter — lifecycle", () => {
 describe("McpServerAdapter — tool registration", () => {
   it("registers visible tools on start()", async () => {
     const tools: ToolDefinition[] = [
-      toolDef("search", { inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } }),
+      toolDef("search", {
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      }),
       toolDef("status"),
     ];
     const deps = makeDeps({
@@ -401,10 +405,7 @@ describe("McpServerAdapter — tool registration", () => {
   });
 
   it("only registers tools that pass filterTools", async () => {
-    const tools: ToolDefinition[] = [
-      toolDef("allowed"),
-      toolDef("denied"),
-    ];
+    const tools: ToolDefinition[] = [toolDef("allowed"), toolDef("denied")];
     const deps = makeDeps({
       listTools: () => tools,
       filterTools: (t) => t.filter((td) => td.name === "allowed"),
@@ -457,10 +458,7 @@ describe("McpServerAdapter — tool registration", () => {
 // ============================================================
 
 describe("McpServerAdapter — tool execution", () => {
-  async function startWithTool(
-    tool: ToolDefinition,
-    deps: Partial<MotebitServerDeps> = {},
-  ) {
+  async function startWithTool(tool: ToolDefinition, deps: Partial<MotebitServerDeps> = {}) {
     const fullDeps = makeDeps({
       listTools: () => [tool],
       ...deps,
@@ -475,7 +473,10 @@ describe("McpServerAdapter — tool execution", () => {
       executeTool: async () => ({ ok: true, data: "executed!" }),
     });
 
-    const result = (await handler({})) as { content: Array<{ type: string; text: string }>; isError?: boolean };
+    const result = (await handler({})) as {
+      content: Array<{ type: string; text: string }>;
+      isError?: boolean;
+    };
 
     expect(result.isError).toBeFalsy();
     expect(result.content).toHaveLength(1);
@@ -505,11 +506,7 @@ describe("McpServerAdapter — tool execution", () => {
     await handler({});
 
     expect(logToolCall).toHaveBeenCalledTimes(1);
-    expect(logToolCall).toHaveBeenCalledWith(
-      "audited",
-      {},
-      { ok: true, data: "done" },
-    );
+    expect(logToolCall).toHaveBeenCalledWith("audited", {}, { ok: true, data: "done" });
   });
 
   it("returns policy denial with reason", async () => {
@@ -689,10 +686,7 @@ describe("McpServerAdapter — resources", () => {
   });
 
   it("does NOT register state resource when exposeState is false", async () => {
-    const adapter = new McpServerAdapter(
-      makeConfig({ exposeState: false }),
-      makeDeps(),
-    );
+    const adapter = new McpServerAdapter(makeConfig({ exposeState: false }), makeDeps());
     await adapter.start();
     expect(registrations.resources.has("state")).toBe(false);
   });
@@ -726,10 +720,7 @@ describe("McpServerAdapter — resources", () => {
   });
 
   it("does NOT register memories resource when exposeMemories is false", async () => {
-    const adapter = new McpServerAdapter(
-      makeConfig({ exposeMemories: false }),
-      makeDeps(),
-    );
+    const adapter = new McpServerAdapter(makeConfig({ exposeMemories: false }), makeDeps());
     await adapter.start();
     expect(registrations.resources.has("memories")).toBe(false);
   });
@@ -978,7 +969,9 @@ describe("McpServerAdapter — synthetic tools", () => {
 
   it("registers motebit_task when handleAgentTask is provided", async () => {
     const deps = makeDeps({
-      handleAgentTask: async function* () { /* empty */ },
+      handleAgentTask: async function* () {
+        /* empty */
+      },
     });
     const adapter = new McpServerAdapter(makeConfig(), deps);
     await adapter.start();
@@ -1284,10 +1277,7 @@ describe("McpServerAdapter — HTTP auth", () => {
   });
 
   it("skips auth when authToken is not configured", async () => {
-    const adapter = new McpServerAdapter(
-      makeConfig({ transport: "http", port: 0 }),
-      makeDeps(),
-    );
+    const adapter = new McpServerAdapter(makeConfig({ transport: "http", port: 0 }), makeDeps());
     await adapter.start();
 
     const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
@@ -1316,7 +1306,12 @@ describe("McpServerAdapter — mutual authentication", () => {
   }
 
   it("rejects motebit: token when caller is not in knownCallers and no resolveCallerKey", async () => {
-    const claims = { mid: "unknown-caller-id", did: "d1", iat: Date.now(), exp: Date.now() + 60000 };
+    const claims = {
+      mid: "unknown-caller-id",
+      did: "d1",
+      iat: Date.now(),
+      exp: Date.now() + 60000,
+    };
     const token = `${fakeClaimsB64(claims)}.fakesig`;
 
     const adapter = new McpServerAdapter(
@@ -1350,7 +1345,10 @@ describe("McpServerAdapter — mutual authentication", () => {
     const claims = { mid: callerId, did: "d1", iat: Date.now(), exp: Date.now() + 60000 };
     const token = `${fakeClaimsB64(claims)}.fakesig`;
 
-    const knownCallers = new Map<string, { publicKey: string; trustLevel: import("../index.js").AgentTrustLevel }>();
+    const knownCallers = new Map<
+      string,
+      { publicKey: string; trustLevel: import("../index.js").AgentTrustLevel }
+    >();
     const { AgentTrustLevel: ATL } = await import("../index.js");
     knownCallers.set(callerId, {
       publicKey: "aabbccdd".repeat(8),
@@ -1378,10 +1376,7 @@ describe("McpServerAdapter — mutual authentication", () => {
   });
 
   it("rejects motebit: token with malformed payload (no dot)", async () => {
-    const adapter = new McpServerAdapter(
-      makeConfig({ transport: "http", port: 0 }),
-      makeDeps(),
-    );
+    const adapter = new McpServerAdapter(makeConfig({ transport: "http", port: 0 }), makeDeps());
     await adapter.start();
 
     const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
@@ -1397,10 +1392,7 @@ describe("McpServerAdapter — mutual authentication", () => {
   });
 
   it("rejects motebit: token with invalid base64 in claims", async () => {
-    const adapter = new McpServerAdapter(
-      makeConfig({ transport: "http", port: 0 }),
-      makeDeps(),
-    );
+    const adapter = new McpServerAdapter(makeConfig({ transport: "http", port: 0 }), makeDeps());
     await adapter.start();
 
     const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
@@ -1476,10 +1468,7 @@ describe("McpServerAdapter — mutual authentication", () => {
   });
 
   it("open access when no authToken and no motebit: prefix", async () => {
-    const adapter = new McpServerAdapter(
-      makeConfig({ transport: "http", port: 0 }),
-      makeDeps(),
-    );
+    const adapter = new McpServerAdapter(makeConfig({ transport: "http", port: 0 }), makeDeps());
     await adapter.start();
 
     const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
@@ -1519,7 +1508,9 @@ describe("McpServerAdapter — mutual authentication", () => {
     await adapter.start();
 
     // Simulate setting lastVerifiedCaller (as would happen during HTTP auth)
-    const adapterAny = adapter as unknown as { lastVerifiedCaller: { motebitId: string; trustLevel: string } | null };
+    const adapterAny = adapter as unknown as {
+      lastVerifiedCaller: { motebitId: string; trustLevel: string } | null;
+    };
     adapterAny.lastVerifiedCaller = {
       motebitId: "caller-mote-id",
       trustLevel: ATL.Verified,

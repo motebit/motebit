@@ -15,8 +15,7 @@ export function HeroSection() {
       <div
         className="absolute inset-x-0 bottom-0 h-[50vh] pointer-events-none z-[1]"
         style={{
-          background:
-            "linear-gradient(to bottom, transparent, var(--hero-fade) 85%)",
+          background: "linear-gradient(to bottom, transparent, var(--hero-fade) 85%)",
         }}
       />
 

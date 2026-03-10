@@ -43,7 +43,15 @@ import {
 } from "@motebit/tools";
 import type { SearchProvider } from "@motebit/tools";
 import { connectMcpServers, McpClientAdapter, type McpServerConfig } from "@motebit/mcp-client";
-import { deriveKey, encrypt, decrypt, generateSalt, deriveSyncEncryptionKey, createSignedToken, verifySignedToken } from "@motebit/crypto";
+import {
+  deriveKey,
+  encrypt,
+  decrypt,
+  generateSalt,
+  deriveSyncEncryptionKey,
+  createSignedToken,
+  verifySignedToken,
+} from "@motebit/crypto";
 import type { EncryptedPayload } from "@motebit/crypto";
 import {
   bootstrapIdentity as sharedBootstrapIdentity,
@@ -56,7 +64,10 @@ import {
   governanceToPolicyConfig,
 } from "@motebit/identity-file";
 import { McpServerAdapter } from "@motebit/mcp-server";
-import type { MotebitServerDeps, McpServerConfig as McpServerAdapterConfig } from "@motebit/mcp-server";
+import type {
+  MotebitServerDeps,
+  McpServerConfig as McpServerAdapterConfig,
+} from "@motebit/mcp-server";
 import { PlanEngine } from "@motebit/planner";
 import { GoalScheduler } from "./scheduler.js";
 import { parseInterval } from "./intervals.js";
@@ -84,9 +95,9 @@ interface FullConfig {
   cli_private_key?: string;
   cli_encrypted_key?: {
     ciphertext: string; // hex
-    nonce: string;      // hex
-    tag: string;        // hex
-    salt: string;       // hex
+    nonce: string; // hex
+    tag: string; // hex
+    salt: string; // hex
   };
   // MCP servers (user-configured)
   mcp_servers?: McpServerConfig[];
@@ -201,9 +212,10 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
   }
 
   const defaultModel = provider === "ollama" ? "llama3.2" : "claude-sonnet-4-5-20250514";
-  const allowedPaths = values["allowed-paths"] != null && values["allowed-paths"] !== ""
-    ? values["allowed-paths"].split(",").map((p) => p.trim())
-    : [process.cwd()];
+  const allowedPaths =
+    values["allowed-paths"] != null && values["allowed-paths"] !== ""
+      ? values["allowed-paths"].split(",").map((p) => p.trim())
+      : [process.cwd()];
 
   return {
     provider,
@@ -232,7 +244,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
 // --- Help / Version ---
 
 export function printHelp(): void {
-  console.log(`
+  console.log(
+    `
 Usage: motebit [command] [options]
 
 Commands:
@@ -301,7 +314,8 @@ Slash commands (in REPL):
   /mcp untrust <name> Mark MCP server as untrusted (tools require approval)
   /operator          Show operator mode status
   quit, exit         Exit the REPL
-`.trim());
+`.trim(),
+  );
 }
 
 export function printVersion(): void {
@@ -461,7 +475,10 @@ function getDbPath(override?: string): string {
 
 // --- Provider Factory ---
 
-function createProvider(config: CliConfig, personalityConfig?: MotebitPersonalityConfig): StreamingProvider {
+function createProvider(
+  config: CliConfig,
+  personalityConfig?: MotebitPersonalityConfig,
+): StreamingProvider {
   const temperature = personalityConfig?.temperature ?? 0.7;
 
   if (config.provider === "ollama") {
@@ -487,7 +504,9 @@ function createProvider(config: CliConfig, personalityConfig?: MotebitPersonalit
 // --- Identity Bootstrap ---
 
 function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 function fromHex(hex: string): Uint8Array {
@@ -541,7 +560,8 @@ async function bootstrapIdentity(
 ): Promise<{ motebitId: string; isFirstLaunch: boolean }> {
   const configStore: BootstrapConfigStore = {
     read() {
-      if (fullConfig.motebit_id == null || fullConfig.motebit_id === "") return Promise.resolve(null);
+      if (fullConfig.motebit_id == null || fullConfig.motebit_id === "")
+        return Promise.resolve(null);
       return Promise.resolve({
         motebit_id: fullConfig.motebit_id,
         device_id: fullConfig.device_id ?? "",
@@ -609,7 +629,11 @@ function buildToolRegistry(
   };
   const eventQueryFn = async (limit: number, eventType?: string) => {
     if (!runtimeRef.current) return [];
-    const filter: { motebit_id: string; limit: number; event_types?: import("@motebit/sdk").EventType[] } = {
+    const filter: {
+      motebit_id: string;
+      limit: number;
+      event_types?: import("@motebit/sdk").EventType[];
+    } = {
       motebit_id: motebitId,
       limit,
     };
@@ -719,7 +743,11 @@ async function consumeStream(
   runtime: MotebitRuntime,
   rl: readline.Interface,
 ): Promise<void> {
-  let pendingApproval: { tool_call_id: string; name: string; args: Record<string, unknown> } | null = null;
+  let pendingApproval: {
+    tool_call_id: string;
+    name: string;
+    args: Record<string, unknown>;
+  } | null = null;
 
   for await (const chunk of stream) {
     switch (chunk.type) {
@@ -748,11 +776,15 @@ async function consumeStream(
         console.log("\n");
 
         if (result.memoriesFormed.length > 0) {
-          console.log(`  [memories: ${result.memoriesFormed.map((m: { content: string }) => m.content).join(", ")}]`);
+          console.log(
+            `  [memories: ${result.memoriesFormed.map((m: { content: string }) => m.content).join(", ")}]`,
+          );
         }
 
         const s = result.stateAfter;
-        console.log(`  [state: attention=${s.attention.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} curiosity=${s.curiosity.toFixed(2)}]`);
+        console.log(
+          `  [state: attention=${s.attention.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} curiosity=${s.curiosity.toFixed(2)}]`,
+        );
         const bodyLine = formatBodyAwareness(result.cues);
         if (bodyLine) console.log(`  ${bodyLine}`);
         console.log();
@@ -795,7 +827,8 @@ export async function handleSlashCommand(
 ): Promise<void> {
   switch (cmd) {
     case "help":
-      console.log(`
+      console.log(
+        `
 Available commands:
   /help              Show this help
   /memories          List all memories
@@ -826,7 +859,8 @@ Available commands:
   /discover dom.com  Discover motebit at domain via DNS/well-known
   /operator          Show operator mode status
   quit, exit         Exit
-`.trim());
+`.trim(),
+      );
       break;
 
     case "memories": {
@@ -922,17 +956,25 @@ Available commands:
         if (syncUrl != null && syncUrl !== "") {
           try {
             console.log("Syncing conversations...");
-            const convStoreAdapter = new SqliteConversationSyncStoreAdapter(repl.moteDb.conversationStore);
+            const convStoreAdapter = new SqliteConversationSyncStoreAdapter(
+              repl.moteDb.conversationStore,
+            );
             const convSyncEngine = new ConversationSyncEngine(convStoreAdapter, repl.motebitId);
             const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
-            convSyncEngine.connectRemote(new HttpConversationSyncAdapter({
-              baseUrl: syncUrl,
-              motebitId: repl.motebitId,
-              authToken: syncToken,
-            }));
+            convSyncEngine.connectRemote(
+              new HttpConversationSyncAdapter({
+                baseUrl: syncUrl,
+                motebitId: repl.motebitId,
+                authToken: syncToken,
+              }),
+            );
             const convResult = await convSyncEngine.sync();
-            console.log(`  Conversations — pushed: ${convResult.conversations_pushed}, pulled: ${convResult.conversations_pulled}`);
-            console.log(`  Messages — pushed: ${convResult.messages_pushed}, pulled: ${convResult.messages_pulled}`);
+            console.log(
+              `  Conversations — pushed: ${convResult.conversations_pushed}, pulled: ${convResult.conversations_pulled}`,
+            );
+            console.log(
+              `  Messages — pushed: ${convResult.messages_pushed}, pulled: ${convResult.messages_pulled}`,
+            );
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(`Conversation sync failed: ${message}`);
@@ -967,7 +1009,9 @@ Available commands:
           const id = c.conversationId.slice(0, 8);
           const ago = formatTimeAgo(Date.now() - c.lastActiveAt);
           const title = c.title ?? "(untitled)";
-          console.log(`  ${id}  ${ago.padEnd(10)} ${String(c.messageCount).padEnd(4)} msgs  ${title}`);
+          console.log(
+            `  ${id}  ${ago.padEnd(10)} ${String(c.messageCount).padEnd(4)} msgs  ${title}`,
+          );
         }
         console.log("\nLoad a conversation: /conversation <id>");
       }
@@ -985,14 +1029,18 @@ Available commands:
         break;
       }
       const convList = runtime.listConversations(100);
-      const match = convList.find((c) => c.conversationId === args || c.conversationId.startsWith(args));
+      const match = convList.find(
+        (c) => c.conversationId === args || c.conversationId.startsWith(args),
+      );
       if (!match) {
         console.log(`No conversation found matching "${args}".`);
         break;
       }
       runtime.loadConversation(match.conversationId);
       const history = runtime.getConversationHistory();
-      console.log(`Loaded conversation ${match.conversationId.slice(0, 8)} (${history.length} messages)`);
+      console.log(
+        `Loaded conversation ${match.conversationId.slice(0, 8)} (${history.length} messages)`,
+      );
       break;
     }
 
@@ -1004,7 +1052,10 @@ Available commands:
       break;
 
     case "goals": {
-      if (!repl) { console.log("Goals not available in this context."); break; }
+      if (!repl) {
+        console.log("Goals not available in this context.");
+        break;
+      }
       const goals = repl.moteDb.goalStore.list(repl.motebitId);
       if (goals.length === 0) {
         console.log("No goals scheduled. Use /goal add to create one.");
@@ -1014,27 +1065,41 @@ Available commands:
       for (const g of goals) {
         const id = g.goal_id.slice(0, 8);
         const interval = formatMs(g.interval_ms);
-        const statusIcon = g.status === "active" ? "+" : g.status === "paused" ? "~" : g.status === "completed" ? "*" : "!";
+        const statusIcon =
+          g.status === "active"
+            ? "+"
+            : g.status === "paused"
+              ? "~"
+              : g.status === "completed"
+                ? "*"
+                : "!";
         const mode = g.mode === "once" ? " (once)" : "";
         const outcomes = repl.moteDb.goalOutcomeStore.listForGoal(g.goal_id, 1);
-        const lastOutcome = outcomes.length > 0
-          ? ` — last: ${outcomes[0]!.status}${outcomes[0]!.summary != null && outcomes[0]!.summary !== "" ? ` "${outcomes[0]!.summary.slice(0, 30)}"` : ""}`
-          : "";
-        console.log(`  [${statusIcon}] ${id}  "${g.prompt.slice(0, 45)}" every ${interval}${mode}${lastOutcome}`);
+        const lastOutcome =
+          outcomes.length > 0
+            ? ` — last: ${outcomes[0]!.status}${outcomes[0]!.summary != null && outcomes[0]!.summary !== "" ? ` "${outcomes[0]!.summary.slice(0, 30)}"` : ""}`
+            : "";
+        console.log(
+          `  [${statusIcon}] ${id}  "${g.prompt.slice(0, 45)}" every ${interval}${mode}${lastOutcome}`,
+        );
       }
       console.log(`\n  + active  ~ paused  * completed  ! failed`);
       break;
     }
 
     case "goal": {
-      if (!repl) { console.log("Goals not available in this context."); break; }
+      if (!repl) {
+        console.log("Goals not available in this context.");
+        break;
+      }
       const parts = args.match(/^(\S+)\s*([\s\S]*)$/) ?? [];
       const goalSub = parts[1] ?? "";
       const goalArgs = (parts[2] ?? "").trim();
 
       if (goalSub === "add") {
         // Parse: /goal add "prompt" --every 30m [--once]
-        const promptMatch = goalArgs.match(/^["'](.+?)["']\s*(.*)$/) ?? goalArgs.match(/^(\S+)\s*(.*)$/);
+        const promptMatch =
+          goalArgs.match(/^["'](.+?)["']\s*(.*)$/) ?? goalArgs.match(/^(\S+)\s*(.*)$/);
         if (!promptMatch) {
           console.log('Usage: /goal add "check emails" --every 30m [--once]');
           break;
@@ -1043,7 +1108,9 @@ Available commands:
         const rest = promptMatch[2] ?? "";
         const everyMatch = rest.match(/--every\s+(\S+)/);
         if (!everyMatch) {
-          console.log("Error: --every <interval> is required. E.g. /goal add \"check emails\" --every 30m");
+          console.log(
+            'Error: --every <interval> is required. E.g. /goal add "check emails" --every 30m',
+          );
           break;
         }
         let intervalMs: number;
@@ -1088,33 +1155,59 @@ Available commands:
         const modeLabel = once ? " (one-shot)" : "";
         const wallClockLabel = wallClockMs != null ? ` (wall-clock: ${wallClockMatch![1]})` : "";
         const projectLabel = projectId != null ? ` [project: ${projectId}]` : "";
-        console.log(`Goal added: ${goalId.slice(0, 8)} — "${prompt}" every ${everyMatch[1]}${modeLabel}${wallClockLabel}${projectLabel}`);
+        console.log(
+          `Goal added: ${goalId.slice(0, 8)} — "${prompt}" every ${everyMatch[1]}${modeLabel}${wallClockLabel}${projectLabel}`,
+        );
       } else if (goalSub === "remove") {
-        if (!goalArgs) { console.log("Usage: /goal remove <goal_id>"); break; }
+        if (!goalArgs) {
+          console.log("Usage: /goal remove <goal_id>");
+          break;
+        }
         const goals = repl.moteDb.goalStore.list(repl.motebitId);
         const match = goals.find((g) => g.goal_id === goalArgs || g.goal_id.startsWith(goalArgs));
-        if (!match) { console.log(`No goal found matching "${goalArgs}".`); break; }
+        if (!match) {
+          console.log(`No goal found matching "${goalArgs}".`);
+          break;
+        }
         repl.moteDb.goalStore.remove(match.goal_id);
         console.log(`Goal removed: ${match.goal_id.slice(0, 8)}`);
       } else if (goalSub === "pause") {
-        if (!goalArgs) { console.log("Usage: /goal pause <goal_id>"); break; }
+        if (!goalArgs) {
+          console.log("Usage: /goal pause <goal_id>");
+          break;
+        }
         const goals = repl.moteDb.goalStore.list(repl.motebitId);
         const match = goals.find((g) => g.goal_id === goalArgs || g.goal_id.startsWith(goalArgs));
-        if (!match) { console.log(`No goal found matching "${goalArgs}".`); break; }
+        if (!match) {
+          console.log(`No goal found matching "${goalArgs}".`);
+          break;
+        }
         repl.moteDb.goalStore.setEnabled(match.goal_id, false);
         console.log(`Goal paused: ${match.goal_id.slice(0, 8)}`);
       } else if (goalSub === "resume") {
-        if (!goalArgs) { console.log("Usage: /goal resume <goal_id>"); break; }
+        if (!goalArgs) {
+          console.log("Usage: /goal resume <goal_id>");
+          break;
+        }
         const goals = repl.moteDb.goalStore.list(repl.motebitId);
         const match = goals.find((g) => g.goal_id === goalArgs || g.goal_id.startsWith(goalArgs));
-        if (!match) { console.log(`No goal found matching "${goalArgs}".`); break; }
+        if (!match) {
+          console.log(`No goal found matching "${goalArgs}".`);
+          break;
+        }
         repl.moteDb.goalStore.setEnabled(match.goal_id, true);
         console.log(`Goal resumed: ${match.goal_id.slice(0, 8)}`);
       } else if (goalSub === "outcomes") {
-        if (!goalArgs) { console.log("Usage: /goal outcomes <goal_id>"); break; }
+        if (!goalArgs) {
+          console.log("Usage: /goal outcomes <goal_id>");
+          break;
+        }
         const goals = repl.moteDb.goalStore.list(repl.motebitId);
         const match = goals.find((g) => g.goal_id === goalArgs || g.goal_id.startsWith(goalArgs));
-        if (!match) { console.log(`No goal found matching "${goalArgs}".`); break; }
+        if (!match) {
+          console.log(`No goal found matching "${goalArgs}".`);
+          break;
+        }
         const outcomes = repl.moteDb.goalOutcomeStore.listForGoal(match.goal_id, 10);
         if (outcomes.length === 0) {
           console.log(`No outcomes for goal ${match.goal_id.slice(0, 8)}.`);
@@ -1123,19 +1216,27 @@ Available commands:
         console.log(`\nOutcomes for ${match.goal_id.slice(0, 8)} (${outcomes.length}):\n`);
         for (const o of outcomes) {
           const ago = formatTimeAgo(Date.now() - o.ran_at);
-          const detail = o.error_message != null && o.error_message !== ""
-            ? `[error: ${o.error_message.slice(0, 40)}]`
-            : (o.summary != null && o.summary !== "" ? `"${o.summary.slice(0, 50)}"` : "—");
-          console.log(`  ${ago.padEnd(10)} ${o.status.padEnd(11)} tools:${o.tool_calls_made} mem:${o.memories_formed}  ${detail}`);
+          const detail =
+            o.error_message != null && o.error_message !== ""
+              ? `[error: ${o.error_message.slice(0, 40)}]`
+              : o.summary != null && o.summary !== ""
+                ? `"${o.summary.slice(0, 50)}"`
+                : "—";
+          console.log(
+            `  ${ago.padEnd(10)} ${o.status.padEnd(11)} tools:${o.tool_calls_made} mem:${o.memories_formed}  ${detail}`,
+          );
         }
       } else {
-        console.log('Usage: /goal [add|remove|pause|resume|outcomes] — or /goals to list');
+        console.log("Usage: /goal [add|remove|pause|resume|outcomes] — or /goals to list");
       }
       break;
     }
 
     case "approvals": {
-      if (!repl) { console.log("Approvals not available in this context."); break; }
+      if (!repl) {
+        console.log("Approvals not available in this context.");
+        break;
+      }
       const items = repl.moteDb.approvalStore.listAll(repl.motebitId);
       const pending = items.filter((a) => a.status === "pending");
       if (pending.length === 0) {
@@ -1213,13 +1314,20 @@ Available commands:
             const adapter = repl?.mcpAdapters.find((a) => a.serverName === s.name);
             const connected = adapter?.isConnected ? "connected" : "disconnected";
             const motebitStatus = adapter?.isMotebit
-              ? adapter.verifiedIdentity?.verified ? " motebit:verified" : " motebit:unverified"
+              ? adapter.verifiedIdentity?.verified
+                ? " motebit:verified"
+                : " motebit:unverified"
               : "";
-            console.log(`  ${s.name.padEnd(20)} ${transport.padEnd(6)} ${(isTrusted ? "trusted" : "untrusted").padEnd(10)} ${connected}${motebitStatus}`);
+            console.log(
+              `  ${s.name.padEnd(20)} ${transport.padEnd(6)} ${(isTrusted ? "trusted" : "untrusted").padEnd(10)} ${connected}${motebitStatus}`,
+            );
           }
         }
       } else if (subCmd === "add") {
-        if (!repl) { console.log("REPL context not available."); break; }
+        if (!repl) {
+          console.log("REPL context not available.");
+          break;
+        }
         // Parse: /mcp add <name> <url> [--motebit]
         const addArgs = subArgs;
         const motebitFlag = addArgs.includes("--motebit");
@@ -1240,11 +1348,13 @@ Available commands:
           transport: "http",
           url: addUrl,
           ...(motebitFlag ? { motebit: true } : {}),
-          ...(motebitFlag && repl.privateKeyBytes && repl.deviceId ? {
-            callerMotebitId: repl.motebitId,
-            callerDeviceId: repl.deviceId,
-            callerPrivateKey: repl.privateKeyBytes,
-          } : {}),
+          ...(motebitFlag && repl.privateKeyBytes && repl.deviceId
+            ? {
+                callerMotebitId: repl.motebitId,
+                callerDeviceId: repl.deviceId,
+                callerPrivateKey: repl.privateKeyBytes,
+              }
+            : {}),
         };
         const adapter = new McpClientAdapter(serverCfg);
         try {
@@ -1263,7 +1373,11 @@ Available commands:
           runtime.registerExternalTools(`mcp:${addName}`, tmpRegistry);
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
-          try { await adapter.disconnect(); } catch { /* best effort */ }
+          try {
+            await adapter.disconnect();
+          } catch {
+            /* best effort */
+          }
           console.log(`Failed to register tools from "${addName}": ${message}`);
           break;
         }
@@ -1287,27 +1401,44 @@ Available commands:
           : "";
         console.log(`Added "${addName}" — ${manifest.toolCount} tool(s)${verifiedStr}`);
       } else if (subCmd === "remove") {
-        if (!repl) { console.log("REPL context not available."); break; }
+        if (!repl) {
+          console.log("REPL context not available.");
+          break;
+        }
         const removeName = subArgs[0];
-        if (!removeName) { console.log("Usage: /mcp remove <name>"); break; }
+        if (!removeName) {
+          console.log("Usage: /mcp remove <name>");
+          break;
+        }
         // Disconnect adapter if connected
         const adapterIdx = repl.mcpAdapters.findIndex((a) => a.serverName === removeName);
         if (adapterIdx >= 0) {
           const removedAdapter = repl.mcpAdapters[adapterIdx];
           if (removedAdapter) {
-            try { await removedAdapter.disconnect(); } catch { /* best effort */ }
+            try {
+              await removedAdapter.disconnect();
+            } catch {
+              /* best effort */
+            }
           }
           repl.mcpAdapters.splice(adapterIdx, 1);
         }
         // Unregister tools from runtime
         runtime.unregisterExternalTools(`mcp:${removeName}`);
         // Remove from config
-        fullConfig.mcp_servers = (fullConfig.mcp_servers ?? []).filter((s) => s.name !== removeName);
-        fullConfig.mcp_trusted_servers = (fullConfig.mcp_trusted_servers ?? []).filter((n) => n !== removeName);
+        fullConfig.mcp_servers = (fullConfig.mcp_servers ?? []).filter(
+          (s) => s.name !== removeName,
+        );
+        fullConfig.mcp_trusted_servers = (fullConfig.mcp_trusted_servers ?? []).filter(
+          (n) => n !== removeName,
+        );
         saveFullConfig(fullConfig);
         console.log(`Removed "${removeName}".`);
       } else if (subCmd === "trust") {
-        if (!serverName) { console.log("Usage: /mcp trust <server-name>"); break; }
+        if (!serverName) {
+          console.log("Usage: /mcp trust <server-name>");
+          break;
+        }
         const trusted = fullConfig.mcp_trusted_servers ?? [];
         if (!trusted.includes(serverName)) {
           fullConfig.mcp_trusted_servers = [...trusted, serverName];
@@ -1315,13 +1446,18 @@ Available commands:
         }
         console.log(`Marked "${serverName}" as trusted. Restart to apply.`);
       } else if (subCmd === "untrust") {
-        if (!serverName) { console.log("Usage: /mcp untrust <server-name>"); break; }
+        if (!serverName) {
+          console.log("Usage: /mcp untrust <server-name>");
+          break;
+        }
         const trusted = fullConfig.mcp_trusted_servers ?? [];
         fullConfig.mcp_trusted_servers = trusted.filter((n) => n !== serverName);
         saveFullConfig(fullConfig);
         console.log(`Marked "${serverName}" as untrusted. Restart to apply.`);
       } else {
-        console.log("Usage: /mcp [list|add <name> <url>|remove <name>|trust <name>|untrust <name>]");
+        console.log(
+          "Usage: /mcp [list|add <name> <url>|remove <name>|trust <name>|untrust <name>]",
+        );
       }
       break;
     }
@@ -1369,14 +1505,26 @@ Available commands:
           console.log(`Discovery failed: ${resp.status} ${resp.statusText}`);
           break;
         }
-        const data = await resp.json() as { agents: Array<{ motebit_id: string; endpoint_url: string; capabilities: string[]; public_key: string }> };
+        const data = (await resp.json()) as {
+          agents: Array<{
+            motebit_id: string;
+            endpoint_url: string;
+            capabilities: string[];
+            public_key: string;
+          }>;
+        };
         if (data.agents.length === 0) {
-          console.log(capParam ? `No agents found with capability "${capParam}".` : "No agents registered.");
+          console.log(
+            capParam ? `No agents found with capability "${capParam}".` : "No agents registered.",
+          );
         } else {
           console.log(`\nDiscovered agents (${data.agents.length}):\n`);
           for (const agent of data.agents) {
-            const caps = agent.capabilities.length > 0 ? agent.capabilities.slice(0, 5).join(", ") : "none";
-            console.log(`  ${agent.motebit_id.slice(0, 12).padEnd(14)} ${agent.endpoint_url.padEnd(30)} [${caps}]`);
+            const caps =
+              agent.capabilities.length > 0 ? agent.capabilities.slice(0, 5).join(", ") : "none";
+            console.log(
+              `  ${agent.motebit_id.slice(0, 12).padEnd(14)} ${agent.endpoint_url.padEnd(30)} [${caps}]`,
+            );
           }
         }
       } catch (err: unknown) {
@@ -1423,8 +1571,16 @@ async function handleDoctor(): Promise<void> {
     const driverName = db.db.driverName;
     db.close();
     fs.unlinkSync(tmpDbPath);
-    try { fs.unlinkSync(tmpDbPath + "-wal"); } catch { /* ignore */ }
-    try { fs.unlinkSync(tmpDbPath + "-shm"); } catch { /* ignore */ }
+    try {
+      fs.unlinkSync(tmpDbPath + "-wal");
+    } catch {
+      /* ignore */
+    }
+    try {
+      fs.unlinkSync(tmpDbPath + "-shm");
+    } catch {
+      /* ignore */
+    }
     checks.push({ name: "SQLite", ok: true, detail: `${driverName} loaded and functional` });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1434,9 +1590,17 @@ async function handleDoctor(): Promise<void> {
   // @xenova/transformers (optional)
   try {
     await import("@xenova/transformers");
-    checks.push({ name: "Embeddings", ok: true, detail: "@xenova/transformers available (local embeddings)" });
+    checks.push({
+      name: "Embeddings",
+      ok: true,
+      detail: "@xenova/transformers available (local embeddings)",
+    });
   } catch {
-    checks.push({ name: "Embeddings", ok: true, detail: "not installed (optional — hash-based fallback active)" });
+    checks.push({
+      name: "Embeddings",
+      ok: true,
+      detail: "not installed (optional — hash-based fallback active)",
+    });
   }
 
   // Existing identity
@@ -1476,7 +1640,7 @@ async function handleExport(config: CliConfig): Promise<void> {
   let passphrase: string;
 
   if (fullConfig.cli_encrypted_key) {
-    passphrase = envPassphrase ?? await promptPassphrase(rl, "Passphrase: ");
+    passphrase = envPassphrase ?? (await promptPassphrase(rl, "Passphrase: "));
     try {
       await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
     } catch {
@@ -1485,14 +1649,24 @@ async function handleExport(config: CliConfig): Promise<void> {
       process.exit(1);
     }
   } else if (fullConfig.cli_private_key != null && fullConfig.cli_private_key !== "") {
-    passphrase = envPassphrase ?? await promptPassphrase(rl, "Set a passphrase for key encryption: ");
-    if (passphrase === "") { console.error("Error: passphrase cannot be empty."); rl.close(); process.exit(1); }
+    passphrase =
+      envPassphrase ?? (await promptPassphrase(rl, "Set a passphrase for key encryption: "));
+    if (passphrase === "") {
+      console.error("Error: passphrase cannot be empty.");
+      rl.close();
+      process.exit(1);
+    }
     fullConfig.cli_encrypted_key = await encryptPrivateKey(fullConfig.cli_private_key, passphrase);
     delete fullConfig.cli_private_key;
     saveFullConfig(fullConfig);
   } else {
-    passphrase = envPassphrase ?? await promptPassphrase(rl, "Set a passphrase for your mote's key: ");
-    if (!passphrase) { console.error("Error: passphrase cannot be empty."); rl.close(); process.exit(1); }
+    passphrase =
+      envPassphrase ?? (await promptPassphrase(rl, "Set a passphrase for your mote's key: "));
+    if (!passphrase) {
+      console.error("Error: passphrase cannot be empty.");
+      rl.close();
+      process.exit(1);
+    }
   }
 
   // Bootstrap identity if needed
@@ -1516,7 +1690,12 @@ async function handleExport(config: CliConfig): Promise<void> {
 
   // Collect device info
   const devices = [];
-  if (updatedConfig.device_id != null && updatedConfig.device_id !== "" && updatedConfig.device_public_key != null && updatedConfig.device_public_key !== "") {
+  if (
+    updatedConfig.device_id != null &&
+    updatedConfig.device_id !== "" &&
+    updatedConfig.device_public_key != null &&
+    updatedConfig.device_public_key !== ""
+  ) {
     devices.push({
       device_id: updatedConfig.device_id,
       name: "cli",
@@ -1537,9 +1716,10 @@ async function handleExport(config: CliConfig): Promise<void> {
   );
 
   // Determine output path
-  const outputPath = config.output != null && config.output !== ""
-    ? path.resolve(config.output)
-    : path.resolve("motebit.md");
+  const outputPath =
+    config.output != null && config.output !== ""
+      ? path.resolve(config.output)
+      : path.resolve("motebit.md");
 
   fs.writeFileSync(outputPath, content, "utf-8");
   console.log(`Your agent identity file has been created: ${outputPath}`);
@@ -1549,9 +1729,10 @@ async function handleExport(config: CliConfig): Promise<void> {
 // --- Subcommand: run (daemon mode) ---
 
 async function handleRun(config: CliConfig): Promise<void> {
-  const identityPath = config.identity != null && config.identity !== ""
-    ? path.resolve(config.identity)
-    : path.resolve("motebit.md");
+  const identityPath =
+    config.identity != null && config.identity !== ""
+      ? path.resolve(config.identity)
+      : path.resolve("motebit.md");
 
   let identityContent: string;
   try {
@@ -1565,7 +1746,8 @@ async function handleRun(config: CliConfig): Promise<void> {
   const verifyResult = await verifyIdentityFile(identityContent);
   if (!verifyResult.valid || !verifyResult.identity) {
     console.error(`Error: invalid identity file signature.`);
-    if (verifyResult.error != null && verifyResult.error !== "") console.error(`  ${verifyResult.error}`);
+    if (verifyResult.error != null && verifyResult.error !== "")
+      console.error(`  ${verifyResult.error}`);
     process.exit(1);
   }
 
@@ -1577,7 +1759,9 @@ async function handleRun(config: CliConfig): Promise<void> {
   const requiredFields = ["max_risk_auto", "require_approval_above", "deny_above"] as const;
   for (const field of requiredFields) {
     if (!gov[field]) {
-      console.error(`Error: motebit.md governance.${field} is missing or empty. All three governance thresholds are required for daemon mode.`);
+      console.error(
+        `Error: motebit.md governance.${field} is missing or empty. All three governance thresholds are required for daemon mode.`,
+      );
       process.exit(1);
     }
   }
@@ -1601,7 +1785,11 @@ async function handleRun(config: CliConfig): Promise<void> {
       config.provider = personalityConfig.default_provider!;
     }
   }
-  if (personalityConfig.default_model != null && personalityConfig.default_model !== "" && !process.argv.includes("--model")) {
+  if (
+    personalityConfig.default_model != null &&
+    personalityConfig.default_model !== "" &&
+    !process.argv.includes("--model")
+  ) {
     config.model = personalityConfig.default_model;
   }
 
@@ -1656,11 +1844,20 @@ async function handleRun(config: CliConfig): Promise<void> {
 
   // Start goal scheduler
   const goals = moteDb.goalStore.list(motebitId);
-  const scheduler = new GoalScheduler(runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore, motebitId, denyAbove);
+  const scheduler = new GoalScheduler(
+    runtime,
+    moteDb.goalStore,
+    moteDb.approvalStore,
+    moteDb.goalOutcomeStore,
+    motebitId,
+    denyAbove,
+  );
   scheduler.setPlanEngine(new PlanEngine(moteDb.planStore), moteDb.planStore);
   scheduler.start();
 
-  console.log(`Daemon running. motebit_id: ${motebitId.slice(0, 8)}... Goals: ${goals.length}. Policy: max_risk_auto=${RiskLevel[maxRiskAuto]}, deny_above=${RiskLevel[denyAbove]}`);
+  console.log(
+    `Daemon running. motebit_id: ${motebitId.slice(0, 8)}... Goals: ${goals.length}. Policy: max_risk_auto=${RiskLevel[maxRiskAuto]}, deny_above=${RiskLevel[denyAbove]}`,
+  );
 
   // Wire agent task handler via WebSocket (if sync URL configured)
   const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
@@ -1697,7 +1894,12 @@ async function handleRun(config: CliConfig): Promise<void> {
     if (privKeyBytes && fullConfig.device_id) {
       try {
         authToken = await createSignedToken(
-          { mid: motebitId, did: fullConfig.device_id, iat: Date.now(), exp: Date.now() + 5 * 60 * 1000 },
+          {
+            mid: motebitId,
+            did: fullConfig.device_id,
+            iat: Date.now(),
+            exp: Date.now() + 5 * 60 * 1000,
+          },
           privKeyBytes,
         );
       } catch {
@@ -1725,7 +1927,9 @@ async function handleRun(config: CliConfig): Promise<void> {
       wsAdapter.onCustomMessage((msg) => {
         if (msg.type === "task_request" && msg.task) {
           const task = msg.task as AgentTask;
-          console.log(`\nAgent task received: ${task.task_id.slice(0, 8)}... prompt: "${task.prompt.slice(0, 80)}"`);
+          console.log(
+            `\nAgent task received: ${task.task_id.slice(0, 8)}... prompt: "${task.prompt.slice(0, 80)}"`,
+          );
 
           // Claim the task
           wsAdapter!.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
@@ -1747,11 +1951,13 @@ async function handleRun(config: CliConfig): Promise<void> {
                   method: "POST",
                   headers: {
                     "Content-Type": "application/json",
-                    "Authorization": `Bearer ${syncToken ?? ""}`,
+                    Authorization: `Bearer ${syncToken ?? ""}`,
                   },
                   body: JSON.stringify(receipt),
                 });
-                console.log(`Agent task ${task.task_id.slice(0, 8)}... ${receipt.status}. Tools: [${receipt.tools_used.join(", ")}]`);
+                console.log(
+                  `Agent task ${task.task_id.slice(0, 8)}... ${receipt.status}. Tools: [${receipt.tools_used.join(", ")}]`,
+                );
               }
             } catch (err: unknown) {
               const errMsg = err instanceof Error ? err.message : String(err);
@@ -1792,15 +1998,23 @@ async function handleServe(config: CliConfig): Promise<void> {
   // Determine transport and port
   const transport = (config.serveTransport ?? "stdio") as "stdio" | "http";
   if (transport !== "stdio" && transport !== "http") {
-    console.error(`Error: --serve-transport must be "stdio" or "http", got "${transport as string}"`);
+    console.error(
+      `Error: --serve-transport must be "stdio" or "http", got "${transport as string}"`,
+    );
     process.exit(1);
   }
-  const port = config.servePort != null && config.servePort !== "" ? parseInt(config.servePort, 10) : 3100;
+  const port =
+    config.servePort != null && config.servePort !== "" ? parseInt(config.servePort, 10) : 3100;
 
   // For stdio mode, all diagnostic output must go to stderr (stdout is the MCP JSON-RPC transport)
-  const log = transport === "stdio"
-    ? (...args: unknown[]) => { console.error(...args); }
-    : (...args: unknown[]) => { console.log(...args); };
+  const log =
+    transport === "stdio"
+      ? (...args: unknown[]) => {
+          console.error(...args);
+        }
+      : (...args: unknown[]) => {
+          console.log(...args);
+        };
 
   // Load identity file if provided, otherwise use ambient config
   let motebitId: string;
@@ -1825,7 +2039,8 @@ async function handleServe(config: CliConfig): Promise<void> {
     const verifyResult = await verifyIdentityFile(identityContent);
     if (!verifyResult.valid || !verifyResult.identity) {
       console.error(`Error: invalid identity file signature.`);
-      if (verifyResult.error != null && verifyResult.error !== "") console.error(`  ${verifyResult.error}`);
+      if (verifyResult.error != null && verifyResult.error !== "")
+        console.error(`  ${verifyResult.error}`);
       process.exit(1);
     }
 
@@ -1852,7 +2067,9 @@ async function handleServe(config: CliConfig): Promise<void> {
     // Ambient mode — use config identity
     const fullConfig = loadFullConfig();
     if (fullConfig.motebit_id == null || fullConfig.motebit_id === "") {
-      console.error("Error: no motebit identity found. Run `motebit` first to create an identity, or use --identity <path>.");
+      console.error(
+        "Error: no motebit identity found. Run `motebit` first to create an identity, or use --identity <path>.",
+      );
       process.exit(1);
     }
     motebitId = fullConfig.motebit_id;
@@ -1873,7 +2090,11 @@ async function handleServe(config: CliConfig): Promise<void> {
       config.provider = personalityConfig.default_provider!;
     }
   }
-  if (personalityConfig.default_model != null && personalityConfig.default_model !== "" && !process.argv.includes("--model")) {
+  if (
+    personalityConfig.default_model != null &&
+    personalityConfig.default_model !== "" &&
+    !process.argv.includes("--model")
+  ) {
     config.model = personalityConfig.default_model;
   }
 
@@ -2073,7 +2294,10 @@ async function handleServe(config: CliConfig): Promise<void> {
   const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
   if (transport === "http" && syncUrl) {
     try {
-      const toolNames = runtime.getToolRegistry().list().map((t) => t.name);
+      const toolNames = runtime
+        .getToolRegistry()
+        .list()
+        .map((t) => t.name);
 
       const regHeaders: Record<string, string> = { "Content-Type": "application/json" };
       const masterToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
@@ -2093,16 +2317,19 @@ async function handleServe(config: CliConfig): Promise<void> {
       if (regResp.ok) {
         log(`Registered with relay: ${syncUrl}`);
         // Heartbeat every 5 minutes
-        heartbeatTimer = setInterval(async () => {
-          try {
-            await fetch(`${syncUrl}/api/v1/agents/heartbeat`, {
-              method: "POST",
-              headers: regHeaders,
-            });
-          } catch {
-            // Best-effort heartbeat
-          }
-        }, 5 * 60 * 1000);
+        heartbeatTimer = setInterval(
+          async () => {
+            try {
+              await fetch(`${syncUrl}/api/v1/agents/heartbeat`, {
+                method: "POST",
+                headers: regHeaders,
+              });
+            } catch {
+              // Best-effort heartbeat
+            }
+          },
+          5 * 60 * 1000,
+        );
       } else {
         log(`Registry registration failed: ${regResp.status}`);
       }
@@ -2147,7 +2374,7 @@ async function handleGoalAdd(config: CliConfig): Promise<void> {
     process.exit(1);
   }
   if (config.every == null || config.every === "") {
-    console.error('Error: --every <interval> is required. E.g. --every 30m');
+    console.error("Error: --every <interval> is required. E.g. --every 30m");
     process.exit(1);
   }
 
@@ -2209,8 +2436,15 @@ async function handleGoalAdd(config: CliConfig): Promise<void> {
     motebit_id: motebitId,
     timestamp: Date.now(),
     event_type: EventType.GoalCreated,
-    payload: { goal_id: goalId, prompt, interval_ms: intervalMs, mode, wall_clock_ms: wallClockMs, project_id: projectId },
-    version_clock: await moteDb.eventStore.getLatestClock(motebitId) + 1,
+    payload: {
+      goal_id: goalId,
+      prompt,
+      interval_ms: intervalMs,
+      mode,
+      wall_clock_ms: wallClockMs,
+      project_id: projectId,
+    },
+    version_clock: (await moteDb.eventStore.getLatestClock(motebitId)) + 1,
     tombstoned: false,
   });
 
@@ -2218,7 +2452,9 @@ async function handleGoalAdd(config: CliConfig): Promise<void> {
   const modeLabel = mode === "once" ? " (one-shot)" : "";
   const wallClockLabel = wallClockMs != null ? ` (wall-clock: ${config.wallClock})` : "";
   const projectLabel = projectId != null ? ` [project: ${projectId}]` : "";
-  console.log(`Goal added: ${goalId.slice(0, 8)} — "${prompt}" every ${config.every}${modeLabel}${wallClockLabel}${projectLabel}`);
+  console.log(
+    `Goal added: ${goalId.slice(0, 8)} — "${prompt}" every ${config.every}${modeLabel}${wallClockLabel}${projectLabel}`,
+  );
 }
 
 async function handleGoalList(config: CliConfig): Promise<void> {
@@ -2240,7 +2476,9 @@ async function handleGoalList(config: CliConfig): Promise<void> {
   }
 
   console.log(`\nGoals (${goals.length}):\n`);
-  console.log("  ID        Prompt                                     Interval    Status      Last Outcome");
+  console.log(
+    "  ID        Prompt                                     Interval    Status      Last Outcome",
+  );
   console.log("  " + "-".repeat(105));
 
   for (const g of goals) {
@@ -2307,9 +2545,12 @@ async function handleGoalOutcomes(config: CliConfig): Promise<void> {
     const status = o.status.padEnd(11);
     const tools = String(o.tool_calls_made).padEnd(6);
     const memories = String(o.memories_formed).padEnd(9);
-    const detail = o.error_message != null && o.error_message !== ""
-      ? `[error: ${o.error_message.slice(0, 40)}]`
-      : (o.summary != null && o.summary !== "" ? o.summary.slice(0, 50) : "—");
+    const detail =
+      o.error_message != null && o.error_message !== ""
+        ? `[error: ${o.error_message.slice(0, 40)}]`
+        : o.summary != null && o.summary !== ""
+          ? o.summary.slice(0, 50)
+          : "—";
     console.log(`  ${ranAt}  ${status} ${tools} ${memories} ${detail}`);
   }
   console.log();
@@ -2364,7 +2605,7 @@ async function handleGoalRemove(config: CliConfig): Promise<void> {
     timestamp: Date.now(),
     event_type: EventType.GoalRemoved,
     payload: { goal_id: match.goal_id },
-    version_clock: await moteDb.eventStore.getLatestClock(motebitId) + 1,
+    version_clock: (await moteDb.eventStore.getLatestClock(motebitId)) + 1,
     tombstoned: false,
   });
 
@@ -2454,7 +2695,9 @@ async function handleApprovalShow(config: CliConfig): Promise<void> {
 
   // Support prefix match
   const all = moteDb.approvalStore.listAll(motebitId);
-  const match = all.find((a) => a.approval_id === approvalId || a.approval_id.startsWith(approvalId));
+  const match = all.find(
+    (a) => a.approval_id === approvalId || a.approval_id.startsWith(approvalId),
+  );
   moteDb.close();
 
   if (!match) {
@@ -2465,7 +2708,9 @@ async function handleApprovalShow(config: CliConfig): Promise<void> {
   console.log(`Approval ID:    ${match.approval_id}`);
   console.log(`Status:         ${match.status}`);
   console.log(`Tool:           ${match.tool_name}`);
-  console.log(`Risk Level:     ${match.risk_level >= 0 ? RiskLevel[match.risk_level] ?? match.risk_level : "unknown"}`);
+  console.log(
+    `Risk Level:     ${match.risk_level >= 0 ? (RiskLevel[match.risk_level] ?? match.risk_level) : "unknown"}`,
+  );
   console.log(`Goal ID:        ${match.goal_id}`);
   console.log(`Args Preview:   ${match.args_preview.slice(0, 100)}`);
   console.log(`Args Hash:      ${match.args_hash.slice(0, 16)}...`);
@@ -2497,7 +2742,9 @@ async function handleApprovalApprove(config: CliConfig): Promise<void> {
   const moteDb = await openMotebitDatabase(dbPath);
 
   const all = moteDb.approvalStore.listAll(motebitId);
-  const match = all.find((a) => a.approval_id === approvalId || a.approval_id.startsWith(approvalId));
+  const match = all.find(
+    (a) => a.approval_id === approvalId || a.approval_id.startsWith(approvalId),
+  );
 
   if (!match) {
     console.error(`Error: no approval found matching "${approvalId}".`);
@@ -2535,7 +2782,9 @@ async function handleApprovalDeny(config: CliConfig): Promise<void> {
   const moteDb = await openMotebitDatabase(dbPath);
 
   const all = moteDb.approvalStore.listAll(motebitId);
-  const match = all.find((a) => a.approval_id === approvalId || a.approval_id.startsWith(approvalId));
+  const match = all.find(
+    (a) => a.approval_id === approvalId || a.approval_id.startsWith(approvalId),
+  );
 
   if (!match) {
     console.error(`Error: no approval found matching "${approvalId}".`);
@@ -2570,8 +2819,14 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  if (config.help) { printHelp(); return; }
-  if (config.version) { printVersion(); return; }
+  if (config.help) {
+    printHelp();
+    return;
+  }
+  if (config.version) {
+    printVersion();
+    return;
+  }
 
   // --- Subcommands: export / verify ---
 
@@ -2601,7 +2856,8 @@ async function main(): Promise<void> {
       process.exit(0);
     } else {
       console.error(`Signature:   invalid`);
-      if (result.error != null && result.error !== "") console.error(`Error:       ${result.error}`);
+      if (result.error != null && result.error !== "")
+        console.error(`Error:       ${result.error}`);
       process.exit(1);
     }
   }
@@ -2658,7 +2914,7 @@ async function main(): Promise<void> {
     } else if (goalCmd === "resume") {
       await handleGoalSetEnabled(config, true);
     } else {
-      console.error('Usage: motebit goal [add|list|outcomes|remove|pause|resume]');
+      console.error("Usage: motebit goal [add|list|outcomes|remove|pause|resume]");
       process.exit(1);
     }
     return;
@@ -2677,7 +2933,11 @@ async function main(): Promise<void> {
       config.provider = personalityConfig.default_provider!;
     }
   }
-  if (personalityConfig.default_model != null && personalityConfig.default_model !== "" && !process.argv.includes("--model")) {
+  if (
+    personalityConfig.default_model != null &&
+    personalityConfig.default_model !== "" &&
+    !process.argv.includes("--model")
+  ) {
     config.model = personalityConfig.default_model;
   }
 
@@ -2690,7 +2950,7 @@ async function main(): Promise<void> {
 
   if (fullConfig.cli_encrypted_key) {
     // Existing encrypted key — need passphrase to decrypt
-    passphrase = envPassphrase ?? await promptPassphrase(rl, "Passphrase: ");
+    passphrase = envPassphrase ?? (await promptPassphrase(rl, "Passphrase: "));
     try {
       await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
     } catch {
@@ -2701,7 +2961,8 @@ async function main(): Promise<void> {
   } else if (fullConfig.cli_private_key != null && fullConfig.cli_private_key !== "") {
     // Migration: plaintext key exists — encrypt it
     console.log("Migrating private key to encrypted storage...");
-    passphrase = envPassphrase ?? await promptPassphrase(rl, "Set a passphrase for key encryption: ");
+    passphrase =
+      envPassphrase ?? (await promptPassphrase(rl, "Set a passphrase for key encryption: "));
     if (passphrase === "") {
       console.error("Error: passphrase cannot be empty.");
       rl.close();
@@ -2713,7 +2974,8 @@ async function main(): Promise<void> {
     console.log("Private key encrypted and plaintext removed.");
   } else {
     // First launch — prompt for new passphrase
-    passphrase = envPassphrase ?? await promptPassphrase(rl, "Set a passphrase for your mote's key: ");
+    passphrase =
+      envPassphrase ?? (await promptPassphrase(rl, "Set a passphrase for your mote's key: "));
     if (!passphrase) {
       console.error("Error: passphrase cannot be empty.");
       rl.close();
@@ -2753,15 +3015,24 @@ async function main(): Promise<void> {
     ...s,
     trusted: trustedServers.includes(s.name),
     // Inject caller identity for motebit-to-motebit connections
-    ...(s.motebit && privateKeyBytes && deviceId ? {
-      callerMotebitId: motebitId,
-      callerDeviceId: deviceId,
-      callerPrivateKey: privateKeyBytes,
-    } : {}),
+    ...(s.motebit && privateKeyBytes && deviceId
+      ? {
+          callerMotebitId: motebitId,
+          callerDeviceId: deviceId,
+          callerPrivateKey: privateKeyBytes,
+        }
+      : {}),
   }));
 
   // Create runtime with tools, policy, MCP config
-  const { runtime, moteDb } = await createRuntime(config, motebitId, toolRegistry, mcpServers, personalityConfig, syncEncKey);
+  const { runtime, moteDb } = await createRuntime(
+    config,
+    motebitId,
+    toolRegistry,
+    mcpServers,
+    personalityConfig,
+    syncEncKey,
+  );
   runtimeRef.current = runtime;
 
   // Connect MCP servers
@@ -2829,7 +3100,9 @@ async function main(): Promise<void> {
   console.log();
 
   const prompt = (): void => {
-    rl.question("you> ", (line) => { void handleLine(line); });
+    rl.question("you> ", (line) => {
+      void handleLine(line);
+    });
   };
 
   const handleLine = async (line: string): Promise<void> => {
@@ -2842,11 +3115,20 @@ async function main(): Promise<void> {
       return;
     }
 
-    if (trimmed === "") { prompt(); return; }
+    if (trimmed === "") {
+      prompt();
+      return;
+    }
 
     if (isSlashCommand(trimmed)) {
       const { command, args } = parseSlashCommand(trimmed);
-      await handleSlashCommand(command, args, runtime, config, fullConfig, { moteDb, motebitId, mcpAdapters, privateKeyBytes, deviceId });
+      await handleSlashCommand(command, args, runtime, config, fullConfig, {
+        moteDb,
+        motebitId,
+        mcpAdapters,
+        privateKeyBytes,
+        deviceId,
+      });
       console.log();
       prompt();
       return;
@@ -2864,7 +3146,9 @@ async function main(): Promise<void> {
         }
 
         const s = result.stateAfter;
-        console.log(`  [state: attention=${s.attention.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} curiosity=${s.curiosity.toFixed(2)}]`);
+        console.log(
+          `  [state: attention=${s.attention.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} curiosity=${s.curiosity.toFixed(2)}]`,
+        );
         const bodyLine = formatBodyAwareness(result.cues);
         if (bodyLine) console.log(`  ${bodyLine}`);
         console.log();

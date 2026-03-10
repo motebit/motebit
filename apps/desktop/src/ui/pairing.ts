@@ -41,7 +41,8 @@ export function initPairing(ctx: DesktopContext): PairingAPI {
     pairingClaimInfo.style.display = "none";
     pairingClaimInfo.textContent = "";
     pairingStatus.textContent = "";
-    pairingActions.innerHTML = '<button class="pairing-btn-cancel" id="pairing-cancel">Cancel</button>';
+    pairingActions.innerHTML =
+      '<button class="pairing-btn-cancel" id="pairing-cancel">Cancel</button>';
     document.getElementById("pairing-cancel")!.addEventListener("click", close);
   }
 
@@ -166,7 +167,11 @@ export function initPairing(ctx: DesktopContext): PairingAPI {
     pairingCodeInput.focus();
   }
 
-  async function handlePairingClaim(invoke: InvokeFn, syncUrl: string, code: string): Promise<void> {
+  async function handlePairingClaim(
+    invoke: InvokeFn,
+    syncUrl: string,
+    code: string,
+  ): Promise<void> {
     pairingStatus.textContent = "Claiming...";
     pairingInputRow.style.display = "none";
 
@@ -185,7 +190,13 @@ export function initPairing(ctx: DesktopContext): PairingAPI {
         void (async () => {
           try {
             const status = await ctx.app.pollPairingStatus(syncUrl, pairingId);
-            if (status.status === "approved" && status.device_id != null && status.device_id !== "" && status.motebit_id != null && status.motebit_id !== "") {
+            if (
+              status.status === "approved" &&
+              status.device_id != null &&
+              status.device_id !== "" &&
+              status.motebit_id != null &&
+              status.motebit_id !== ""
+            ) {
               if (pairingPollTimer) {
                 clearInterval(pairingPollTimer);
                 pairingPollTimer = null;

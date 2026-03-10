@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "better-sqlite3";
-import { TauriEventStore, TauriMemoryStorage, TauriPlanStore, type InvokeFn } from "../tauri-storage";
+import {
+  TauriEventStore,
+  TauriMemoryStorage,
+  TauriPlanStore,
+  type InvokeFn,
+} from "../tauri-storage";
 
 // Schema matching main.rs SCHEMA constant
 const SCHEMA = `
@@ -261,16 +266,18 @@ describe("TauriMemoryStorage", () => {
     storage = new TauriMemoryStorage(createMockInvoke(db));
   });
 
-  const makeNode = (overrides: Partial<{
-    node_id: string;
-    motebit_id: string;
-    content: string;
-    confidence: number;
-    sensitivity: string;
-    tombstoned: boolean;
-    pinned: boolean;
-    half_life: number;
-  }> = {}) => ({
+  const makeNode = (
+    overrides: Partial<{
+      node_id: string;
+      motebit_id: string;
+      content: string;
+      confidence: number;
+      sensitivity: string;
+      tombstoned: boolean;
+      pinned: boolean;
+      half_life: number;
+    }> = {},
+  ) => ({
     node_id: overrides.node_id ?? "n1",
     motebit_id: overrides.motebit_id ?? "m1",
     content: overrides.content ?? "test memory",
@@ -421,13 +428,15 @@ describe("TauriPlanStore", () => {
     store = new TauriPlanStore(createMockInvoke(db));
   });
 
-  const makePlan = (overrides: Partial<{
-    plan_id: string;
-    goal_id: string;
-    motebit_id: string;
-    title: string;
-    status: string;
-  }> = {}) => ({
+  const makePlan = (
+    overrides: Partial<{
+      plan_id: string;
+      goal_id: string;
+      motebit_id: string;
+      title: string;
+      status: string;
+    }> = {},
+  ) => ({
     plan_id: overrides.plan_id ?? "plan-1",
     goal_id: overrides.goal_id ?? "goal-1",
     motebit_id: overrides.motebit_id ?? "m1",
@@ -439,13 +448,15 @@ describe("TauriPlanStore", () => {
     total_steps: 2,
   });
 
-  const makeStep = (overrides: Partial<{
-    step_id: string;
-    plan_id: string;
-    ordinal: number;
-    description: string;
-    status: string;
-  }> = {}) => ({
+  const makeStep = (
+    overrides: Partial<{
+      step_id: string;
+      plan_id: string;
+      ordinal: number;
+      description: string;
+      status: string;
+    }> = {},
+  ) => ({
     step_id: overrides.step_id ?? "step-1",
     plan_id: overrides.plan_id ?? "plan-1",
     ordinal: overrides.ordinal ?? 0,
@@ -553,10 +564,14 @@ describe("TauriPlanStore", () => {
   it("preloadForGoal loads plan + steps from DB into cache", async () => {
     // Insert directly via SQL to simulate existing DB data
     const now = Date.now();
-    db.prepare(`INSERT INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run("plan-db", "goal-db", "m1", "DB Plan", "active", now, now, 0, 1);
-    db.prepare(`INSERT INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, tool_calls_made, retry_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run("step-db", "plan-db", 0, "DB Step", "Do it", "[]", 0, "pending", 0, 0);
+    db.prepare(
+      `INSERT INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run("plan-db", "goal-db", "m1", "DB Plan", "active", now, now, 0, 1);
+    db.prepare(
+      `INSERT INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, tool_calls_made, retry_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run("step-db", "plan-db", 0, "DB Step", "Do it", "[]", 0, "pending", 0, 0);
 
     // Create a fresh store and preload
     const freshStore = new TauriPlanStore(createMockInvoke(db));
@@ -587,7 +602,7 @@ describe("TauriPlanStore", () => {
     store.savePlan(makePlan());
 
     // Give the fire-and-forget write a tick to complete
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
     // Verify it's in the DB
     const rows = db.prepare("SELECT * FROM plans WHERE plan_id = ?").all("plan-1");
@@ -599,7 +614,7 @@ describe("TauriPlanStore", () => {
     store.savePlan(makePlan());
     store.saveStep(makeStep());
 
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
     const rows = db.prepare("SELECT * FROM plan_steps WHERE step_id = ?").all("step-1");
     expect(rows).toHaveLength(1);

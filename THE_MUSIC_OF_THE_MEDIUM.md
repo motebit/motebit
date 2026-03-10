@@ -116,7 +116,7 @@ For a perfectly tonal spectrum (all energy at one frequency), the geometric mean
 
 Between these limits, the measure is continuous. A rich chord has low flatness. A crowd murmuring has high flatness. A voice speaking has intermediate flatness that fluctuates with each syllable.
 
-This measure requires no training data, no statistical model, no classification boundary. It is a property of the signal itself — as intrinsic as frequency or amplitude. A flat spectrum *is* noise. A peaked spectrum *is* tone. Spectral flatness does not decide this. It measures it.
+This measure requires no training data, no statistical model, no classification boundary. It is a property of the signal itself — as intrinsic as frequency or amplitude. A flat spectrum _is_ noise. A peaked spectrum _is_ tone. Spectral flatness does not decide this. It measures it.
 
 ### 4.2 — Band Limitation
 
@@ -160,7 +160,7 @@ The adaptation is asymmetric:
 
 **Slow rise.** When constant pressure increases, the surface tension absorbs it gradually. The boundary stretches to accommodate the new load. This takes time — surface tension is a restoring force, and restoring forces resist change. The droplet slowly accepts the louder room.
 
-**Fast fall.** When constant pressure drops, the surface tension snaps back. Relaxation is faster than absorption because the restoring force *wants* to return to equilibrium. The surface tension does not resist recovery — it drives it.
+**Fast fall.** When constant pressure drops, the surface tension snaps back. Relaxation is faster than absorption because the restoring force _wants_ to return to equilibrium. The surface tension does not resist recovery — it drives it.
 
 The physical basis is thermodynamic: it costs energy to deform a surface, but the surface releases that energy spontaneously when the deforming force is removed. Absorption stores energy. Relaxation releases it. Storage is slow. Release is fast.
 
@@ -216,7 +216,7 @@ The iridescence shifts. The rainbow on the glass shimmers. The colors refract at
 
 High-frequency tonal content — the overtones of music, the sibilants of speech, the transient attack of a plucked string — produces the strongest shimmer. This is because tonal high-frequency content has the coherence to build micro-oscillations over multiple cycles, while broadband high-frequency content (hiss, static) cancels itself out. Spectral flatness operates here as everywhere: coherent excitation resonates, incoherent excitation is absorbed.
 
-The motebit's iridescence is always present (DROPLET.md §V) — it is a property of the glass and the spectral gradient of Liquescentia. But when the medium carries music, the iridescence *moves*. The static rainbow becomes a living one. The glass is the same. The light through it shifts because the surface through which it refracts is vibrating with the medium's harmonics.
+The motebit's iridescence is always present (DROPLET.md §V) — it is a property of the glass and the spectral gradient of Liquescentia. But when the medium carries music, the iridescence _moves_. The static rainbow becomes a living one. The glass is the same. The light through it shifts because the surface through which it refracts is vibrating with the medium's harmonics.
 
 ---
 
@@ -264,4 +264,4 @@ That is sufficient.
 
 ---
 
-*The Music of the Medium, 2026.*
+_The Music of the Medium, 2026._

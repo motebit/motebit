@@ -7,20 +7,41 @@ import type { ToolDefinition, ToolRiskProfile } from "@motebit/sdk";
  */
 const RISK_RULES: { pattern: RegExp; profile: Partial<ToolRiskProfile> }[] = [
   // R4 Money
-  { pattern: /\b(pay|payment|charge|invoice|refund|transfer|checkout|stripe|billing)\b/i, profile: { risk: RiskLevel.R4_MONEY, sideEffect: SideEffect.IRREVERSIBLE } },
+  {
+    pattern: /\b(pay|payment|charge|invoice|refund|transfer|checkout|stripe|billing)\b/i,
+    profile: { risk: RiskLevel.R4_MONEY, sideEffect: SideEffect.IRREVERSIBLE },
+  },
   // R3 Execute
-  { pattern: /\b(shell|exec|run|command|deploy|restart|kill)\b/i, profile: { risk: RiskLevel.R3_EXECUTE, sideEffect: SideEffect.IRREVERSIBLE } },
+  {
+    pattern: /\b(shell|exec|run|command|deploy|restart|kill)\b/i,
+    profile: { risk: RiskLevel.R3_EXECUTE, sideEffect: SideEffect.IRREVERSIBLE },
+  },
   // R2 Write
-  { pattern: /\b(write|create|update|delete|remove|send|post|push|merge)\b/i, profile: { risk: RiskLevel.R2_WRITE, sideEffect: SideEffect.REVERSIBLE } },
+  {
+    pattern: /\b(write|create|update|delete|remove|send|post|push|merge)\b/i,
+    profile: { risk: RiskLevel.R2_WRITE, sideEffect: SideEffect.REVERSIBLE },
+  },
   // R1 Draft
-  { pattern: /\b(draft|compose|generate|suggest|plan|prepare|format)\b/i, profile: { risk: RiskLevel.R1_DRAFT, sideEffect: SideEffect.NONE } },
+  {
+    pattern: /\b(draft|compose|generate|suggest|plan|prepare|format)\b/i,
+    profile: { risk: RiskLevel.R1_DRAFT, sideEffect: SideEffect.NONE },
+  },
   // R0 Read (default)
-  { pattern: /\b(read|get|list|search|fetch|query|recall|check|view|browse)\b/i, profile: { risk: RiskLevel.R0_READ, sideEffect: SideEffect.NONE } },
+  {
+    pattern: /\b(read|get|list|search|fetch|query|recall|check|view|browse)\b/i,
+    profile: { risk: RiskLevel.R0_READ, sideEffect: SideEffect.NONE },
+  },
 ];
 
 const DATA_CLASS_RULES: { pattern: RegExp; dataClass: DataClass }[] = [
-  { pattern: /\b(secret|credential|token|password|key|seed|ssn|private_key)\b/i, dataClass: DataClass.SECRET },
-  { pattern: /\b(personal|private|memory|calendar|email|inbox|contact|photo)\b/i, dataClass: DataClass.PRIVATE },
+  {
+    pattern: /\b(secret|credential|token|password|key|seed|ssn|private_key)\b/i,
+    dataClass: DataClass.SECRET,
+  },
+  {
+    pattern: /\b(personal|private|memory|calendar|email|inbox|contact|photo)\b/i,
+    dataClass: DataClass.PRIVATE,
+  },
 ];
 
 /**
@@ -64,8 +85,7 @@ export function classifyTool(tool: ToolDefinition): ToolRiskProfile {
   }
 
   // Approval is derived: R2+ always requires approval, or tool's explicit flag
-  const requiresApproval =
-    tool.requiresApproval === true || risk >= RiskLevel.R2_WRITE;
+  const requiresApproval = tool.requiresApproval === true || risk >= RiskLevel.R2_WRITE;
 
   return { risk, dataClass, sideEffect, requiresApproval };
 }

@@ -10,11 +10,7 @@ vi.mock("@motebit/memory-graph", async (importOriginal) => {
   };
 });
 
-import {
-  MotebitRuntime,
-  NullRenderer,
-  createInMemoryStorage,
-} from "../index";
+import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
 import type { StreamingProvider } from "@motebit/ai-core";
 import type { AIResponse, ContextPack } from "@motebit/sdk";
 

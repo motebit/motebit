@@ -1,4 +1,15 @@
-import type { EventLogEntry, EventType, MemoryNode, MemoryEdge, MotebitIdentity, AuditRecord, SensitivityLevel, RelationType, Plan, PlanStep } from "@motebit/sdk";
+import type {
+  EventLogEntry,
+  EventType,
+  MemoryNode,
+  MemoryEdge,
+  MotebitIdentity,
+  AuditRecord,
+  SensitivityLevel,
+  RelationType,
+  Plan,
+  PlanStep,
+} from "@motebit/sdk";
 import { PlanStatus, StepStatus } from "@motebit/sdk";
 import type { PlanStoreAdapter } from "@motebit/planner";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
@@ -6,7 +17,12 @@ import type { MemoryStorageAdapter, MemoryQuery } from "@motebit/memory-graph";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 import type { IdentityStorage, DeviceRegistration } from "@motebit/core-identity";
 import type { AuditLogAdapter } from "@motebit/privacy-layer";
-import type { StateSnapshotAdapter, ConversationStoreAdapter, GradientStoreAdapter, GradientSnapshot } from "@motebit/runtime";
+import type {
+  StateSnapshotAdapter,
+  ConversationStoreAdapter,
+  GradientStoreAdapter,
+  GradientSnapshot,
+} from "@motebit/runtime";
 
 // === IPC Helpers ===
 
@@ -255,7 +271,8 @@ export class TauriMemoryStorage implements MemoryStorageAdapter {
       params.push(query.pinned ? 1 : 0);
     }
 
-    const needsAppFilter = query.min_confidence !== undefined || query.sensitivity_filter !== undefined;
+    const needsAppFilter =
+      query.min_confidence !== undefined || query.sensitivity_filter !== undefined;
     let sql = `SELECT * FROM memory_nodes WHERE ${conditions.join(" AND ")}`;
 
     if (query.limit !== undefined) {
@@ -276,11 +293,7 @@ export class TauriMemoryStorage implements MemoryStorageAdapter {
       const now = Date.now();
       const minConf = query.min_confidence;
       results = results.filter((n) => {
-        const decayed = computeDecayedConfidence(
-          n.confidence,
-          n.half_life,
-          now - n.created_at,
-        );
+        const decayed = computeDecayedConfidence(n.confidence, n.half_life, now - n.created_at);
         return decayed >= minConf;
       });
     }
@@ -324,11 +337,9 @@ export class TauriMemoryStorage implements MemoryStorageAdapter {
   }
 
   async tombstoneNode(nodeId: string): Promise<void> {
-    await dbExecute(
-      this.invoke,
-      "UPDATE memory_nodes SET tombstoned = 1 WHERE node_id = ?",
-      [nodeId],
-    );
+    await dbExecute(this.invoke, "UPDATE memory_nodes SET tombstoned = 1 WHERE node_id = ?", [
+      nodeId,
+    ]);
   }
 
   async pinNode(nodeId: string, pinned: boolean): Promise<void> {
@@ -398,7 +409,12 @@ export class TauriIdentityStorage implements IdentityStorage {
     );
     if (rows.length === 0) return null;
     const r = rows[0]!;
-    return { motebit_id: r.motebit_id, created_at: r.created_at, owner_id: r.owner_id, version_clock: r.version_clock };
+    return {
+      motebit_id: r.motebit_id,
+      created_at: r.created_at,
+      owner_id: r.owner_id,
+      version_clock: r.version_clock,
+    };
   }
 
   async loadByOwner(ownerId: string): Promise<MotebitIdentity | null> {
@@ -409,7 +425,12 @@ export class TauriIdentityStorage implements IdentityStorage {
     );
     if (rows.length === 0) return null;
     const r = rows[0]!;
-    return { motebit_id: r.motebit_id, created_at: r.created_at, owner_id: r.owner_id, version_clock: r.version_clock };
+    return {
+      motebit_id: r.motebit_id,
+      created_at: r.created_at,
+      owner_id: r.owner_id,
+      version_clock: r.version_clock,
+    };
   }
 
   async saveDevice(device: DeviceRegistration): Promise<void> {
@@ -417,7 +438,14 @@ export class TauriIdentityStorage implements IdentityStorage {
       this.invoke,
       `INSERT OR REPLACE INTO devices (device_id, motebit_id, device_token, public_key, registered_at, device_name)
        VALUES (?, ?, ?, ?, ?, ?)`,
-      [device.device_id, device.motebit_id, device.device_token, device.public_key, device.registered_at, device.device_name ?? null],
+      [
+        device.device_id,
+        device.motebit_id,
+        device.device_token,
+        device.public_key,
+        device.registered_at,
+        device.device_name ?? null,
+      ],
     );
   }
 
@@ -610,23 +638,29 @@ const ACTIVE_CONVERSATION_WINDOW_MS = 4 * 60 * 60 * 1000;
 export class TauriConversationStore implements ConversationStoreAdapter {
   // ConversationStoreAdapter is sync, but Tauri IPC is async.
   // We use the same preload/cache strategy as TauriStateSnapshotStorage.
-  private _activeCache = new Map<string, {
-    conversationId: string;
-    startedAt: number;
-    lastActiveAt: number;
-    summary: string | null;
-  } | null>();
-  private _messagesCache = new Map<string, Array<{
-    messageId: string;
-    conversationId: string;
-    motebitId: string;
-    role: string;
-    content: string;
-    toolCalls: string | null;
-    toolCallId: string | null;
-    createdAt: number;
-    tokenEstimate: number;
-  }>>();
+  private _activeCache = new Map<
+    string,
+    {
+      conversationId: string;
+      startedAt: number;
+      lastActiveAt: number;
+      summary: string | null;
+    } | null
+  >();
+  private _messagesCache = new Map<
+    string,
+    Array<{
+      messageId: string;
+      conversationId: string;
+      motebitId: string;
+      role: string;
+      content: string;
+      toolCalls: string | null;
+      toolCallId: string | null;
+      createdAt: number;
+      tokenEstimate: number;
+    }>
+  >();
 
   constructor(private invoke: InvokeFn) {}
 
@@ -651,17 +685,20 @@ export class TauriConversationStore implements ConversationStoreAdapter {
         "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY created_at ASC",
         [row.conversation_id],
       );
-      this._messagesCache.set(row.conversation_id, msgRows.map(r => ({
-        messageId: r.message_id,
-        conversationId: r.conversation_id,
-        motebitId: r.motebit_id,
-        role: r.role,
-        content: r.content,
-        toolCalls: r.tool_calls,
-        toolCallId: r.tool_call_id,
-        createdAt: r.created_at,
-        tokenEstimate: r.token_estimate,
-      })));
+      this._messagesCache.set(
+        row.conversation_id,
+        msgRows.map((r) => ({
+          messageId: r.message_id,
+          conversationId: r.conversation_id,
+          motebitId: r.motebit_id,
+          role: r.role,
+          content: r.content,
+          toolCalls: r.tool_calls,
+          toolCallId: r.tool_call_id,
+          createdAt: r.created_at,
+          tokenEstimate: r.token_estimate,
+        })),
+      );
     } else {
       this._activeCache.set(motebitId, null);
     }
@@ -679,12 +716,16 @@ export class TauriConversationStore implements ConversationStoreAdapter {
     return conversationId;
   }
 
-  appendMessage(conversationId: string, motebitId: string, msg: {
-    role: string;
-    content: string;
-    toolCalls?: string;
-    toolCallId?: string;
-  }): void {
+  appendMessage(
+    conversationId: string,
+    motebitId: string,
+    msg: {
+      role: string;
+      content: string;
+      toolCalls?: string;
+      toolCallId?: string;
+    },
+  ): void {
     const messageId = crypto.randomUUID();
     const now = Date.now();
     const tokenEstimate = Math.ceil(msg.content.length / 4);
@@ -692,7 +733,17 @@ export class TauriConversationStore implements ConversationStoreAdapter {
       this.invoke,
       `INSERT INTO conversation_messages (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [messageId, conversationId, motebitId, msg.role, msg.content, msg.toolCalls ?? null, msg.toolCallId ?? null, now, tokenEstimate],
+      [
+        messageId,
+        conversationId,
+        motebitId,
+        msg.role,
+        msg.content,
+        msg.toolCalls ?? null,
+        msg.toolCallId ?? null,
+        now,
+        tokenEstimate,
+      ],
     );
     void dbExecute(
       this.invoke,
@@ -701,7 +752,10 @@ export class TauriConversationStore implements ConversationStoreAdapter {
     );
   }
 
-  loadMessages(conversationId: string, _limit?: number): Array<{
+  loadMessages(
+    conversationId: string,
+    _limit?: number,
+  ): Array<{
     messageId: string;
     conversationId: string;
     motebitId: string;
@@ -726,14 +780,16 @@ export class TauriConversationStore implements ConversationStoreAdapter {
   }
 
   updateSummary(conversationId: string, summary: string): void {
-    void dbExecute(
-      this.invoke,
-      "UPDATE conversations SET summary = ? WHERE conversation_id = ?",
-      [summary, conversationId],
-    );
+    void dbExecute(this.invoke, "UPDATE conversations SET summary = ? WHERE conversation_id = ?", [
+      summary,
+      conversationId,
+    ]);
   }
 
-  listConversations(_motebitId: string, _limit = 20): Array<{
+  listConversations(
+    _motebitId: string,
+    _limit = 20,
+  ): Array<{
     conversationId: string;
     startedAt: number;
     lastActiveAt: number;
@@ -745,20 +801,25 @@ export class TauriConversationStore implements ConversationStoreAdapter {
   }
 
   /** Async list of conversations — populates the sync cache and returns results. */
-  async listConversationsAsync(motebitId: string, limit = 20): Promise<Array<{
-    conversationId: string;
-    startedAt: number;
-    lastActiveAt: number;
-    title: string | null;
-    summary: string | null;
-    messageCount: number;
-  }>> {
+  async listConversationsAsync(
+    motebitId: string,
+    limit = 20,
+  ): Promise<
+    Array<{
+      conversationId: string;
+      startedAt: number;
+      lastActiveAt: number;
+      title: string | null;
+      summary: string | null;
+      messageCount: number;
+    }>
+  > {
     const rows = await dbQuery<ConversationRow>(
       this.invoke,
       "SELECT * FROM conversations WHERE motebit_id = ? ORDER BY last_active_at DESC LIMIT ?",
       [motebitId, limit],
     );
-    const results = rows.map(r => ({
+    const results = rows.map((r) => ({
       conversationId: r.conversation_id,
       startedAt: r.started_at,
       lastActiveAt: r.last_active_at,
@@ -772,23 +833,25 @@ export class TauriConversationStore implements ConversationStoreAdapter {
   }
 
   /** Async load messages for a specific conversation (for switching). */
-  async loadMessagesAsync(conversationId: string): Promise<Array<{
-    messageId: string;
-    conversationId: string;
-    motebitId: string;
-    role: string;
-    content: string;
-    toolCalls: string | null;
-    toolCallId: string | null;
-    createdAt: number;
-    tokenEstimate: number;
-  }>> {
+  async loadMessagesAsync(conversationId: string): Promise<
+    Array<{
+      messageId: string;
+      conversationId: string;
+      motebitId: string;
+      role: string;
+      content: string;
+      toolCalls: string | null;
+      toolCallId: string | null;
+      createdAt: number;
+      tokenEstimate: number;
+    }>
+  > {
     const rows = await dbQuery<ConversationMessageRow>(
       this.invoke,
       "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY created_at ASC",
       [conversationId],
     );
-    const messages = rows.map(r => ({
+    const messages = rows.map((r) => ({
       messageId: r.message_id,
       conversationId: r.conversation_id,
       motebitId: r.motebit_id,
@@ -806,11 +869,10 @@ export class TauriConversationStore implements ConversationStoreAdapter {
 
   /** Update the title of a conversation. */
   updateTitle(conversationId: string, title: string): void {
-    void dbExecute(
-      this.invoke,
-      "UPDATE conversations SET title = ? WHERE conversation_id = ?",
-      [title, conversationId],
-    );
+    void dbExecute(this.invoke, "UPDATE conversations SET title = ? WHERE conversation_id = ?", [
+      title,
+      conversationId,
+    ]);
   }
 
   /** Get total message count for the active conversation (from DB, async). */
@@ -824,21 +886,26 @@ export class TauriConversationStore implements ConversationStoreAdapter {
   }
 
   /** Async methods for conversation sync (getConversationsSince, getMessagesSince, upsertConversation, upsertMessage). */
-  async getConversationsSince(motebitId: string, since: number): Promise<Array<{
-    conversation_id: string;
-    motebit_id: string;
-    started_at: number;
-    last_active_at: number;
-    title: string | null;
-    summary: string | null;
-    message_count: number;
-  }>> {
+  async getConversationsSince(
+    motebitId: string,
+    since: number,
+  ): Promise<
+    Array<{
+      conversation_id: string;
+      motebit_id: string;
+      started_at: number;
+      last_active_at: number;
+      title: string | null;
+      summary: string | null;
+      message_count: number;
+    }>
+  > {
     const rows = await dbQuery<ConversationRow>(
       this.invoke,
       "SELECT * FROM conversations WHERE motebit_id = ? AND last_active_at > ? ORDER BY last_active_at ASC",
       [motebitId, since],
     );
-    return rows.map(r => ({
+    return rows.map((r) => ({
       conversation_id: r.conversation_id,
       motebit_id: r.motebit_id,
       started_at: r.started_at,
@@ -849,23 +916,28 @@ export class TauriConversationStore implements ConversationStoreAdapter {
     }));
   }
 
-  async getMessagesSince(conversationId: string, since: number): Promise<Array<{
-    message_id: string;
-    conversation_id: string;
-    motebit_id: string;
-    role: string;
-    content: string;
-    tool_calls: string | null;
-    tool_call_id: string | null;
-    created_at: number;
-    token_estimate: number;
-  }>> {
+  async getMessagesSince(
+    conversationId: string,
+    since: number,
+  ): Promise<
+    Array<{
+      message_id: string;
+      conversation_id: string;
+      motebit_id: string;
+      role: string;
+      content: string;
+      tool_calls: string | null;
+      tool_call_id: string | null;
+      created_at: number;
+      token_estimate: number;
+    }>
+  > {
     const rows = await dbQuery<ConversationMessageRow>(
       this.invoke,
       "SELECT * FROM conversation_messages WHERE conversation_id = ? AND created_at > ? ORDER BY created_at ASC",
       [conversationId, since],
     );
-    return rows.map(r => ({
+    return rows.map((r) => ({
       message_id: r.message_id,
       conversation_id: r.conversation_id,
       motebit_id: r.motebit_id,
@@ -891,7 +963,15 @@ export class TauriConversationStore implements ConversationStoreAdapter {
       this.invoke,
       `INSERT OR REPLACE INTO conversations (conversation_id, motebit_id, started_at, last_active_at, title, summary, message_count)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [conv.conversation_id, conv.motebit_id, conv.started_at, conv.last_active_at, conv.title, conv.summary, conv.message_count],
+      [
+        conv.conversation_id,
+        conv.motebit_id,
+        conv.started_at,
+        conv.last_active_at,
+        conv.title,
+        conv.summary,
+        conv.message_count,
+      ],
     );
   }
 
@@ -910,7 +990,17 @@ export class TauriConversationStore implements ConversationStoreAdapter {
       this.invoke,
       `INSERT OR IGNORE INTO conversation_messages (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [msg.message_id, msg.conversation_id, msg.motebit_id, msg.role, msg.content, msg.tool_calls, msg.tool_call_id, msg.created_at, msg.token_estimate],
+      [
+        msg.message_id,
+        msg.conversation_id,
+        msg.motebit_id,
+        msg.role,
+        msg.content,
+        msg.tool_calls,
+        msg.tool_call_id,
+        msg.created_at,
+        msg.token_estimate,
+      ],
     );
   }
 
@@ -1030,7 +1120,17 @@ export class TauriPlanStore implements PlanStoreAdapter {
       this.invoke,
       `INSERT OR REPLACE INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [plan.plan_id, plan.goal_id, plan.motebit_id, plan.title, plan.status, plan.created_at, plan.updated_at, plan.current_step_index, plan.total_steps],
+      [
+        plan.plan_id,
+        plan.goal_id,
+        plan.motebit_id,
+        plan.title,
+        plan.status,
+        plan.created_at,
+        plan.updated_at,
+        plan.current_step_index,
+        plan.total_steps,
+      ],
     );
   }
 
@@ -1055,7 +1155,17 @@ export class TauriPlanStore implements PlanStoreAdapter {
       this.invoke,
       `INSERT OR REPLACE INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [merged.plan_id, merged.goal_id, merged.motebit_id, merged.title, merged.status, merged.created_at, merged.updated_at, merged.current_step_index, merged.total_steps],
+      [
+        merged.plan_id,
+        merged.goal_id,
+        merged.motebit_id,
+        merged.title,
+        merged.status,
+        merged.created_at,
+        merged.updated_at,
+        merged.current_step_index,
+        merged.total_steps,
+      ],
     );
   }
 
@@ -1065,7 +1175,22 @@ export class TauriPlanStore implements PlanStoreAdapter {
       this.invoke,
       `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [step.step_id, step.plan_id, step.ordinal, step.description, step.prompt, JSON.stringify(step.depends_on), step.optional ? 1 : 0, step.status, step.result_summary, step.error_message, step.tool_calls_made, step.started_at, step.completed_at, step.retry_count],
+      [
+        step.step_id,
+        step.plan_id,
+        step.ordinal,
+        step.description,
+        step.prompt,
+        JSON.stringify(step.depends_on),
+        step.optional ? 1 : 0,
+        step.status,
+        step.result_summary,
+        step.error_message,
+        step.tool_calls_made,
+        step.started_at,
+        step.completed_at,
+        step.retry_count,
+      ],
     );
   }
 
@@ -1091,7 +1216,22 @@ export class TauriPlanStore implements PlanStoreAdapter {
       this.invoke,
       `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [merged.step_id, merged.plan_id, merged.ordinal, merged.description, merged.prompt, JSON.stringify(merged.depends_on), merged.optional ? 1 : 0, merged.status, merged.result_summary, merged.error_message, merged.tool_calls_made, merged.started_at, merged.completed_at, merged.retry_count],
+      [
+        merged.step_id,
+        merged.plan_id,
+        merged.ordinal,
+        merged.description,
+        merged.prompt,
+        JSON.stringify(merged.depends_on),
+        merged.optional ? 1 : 0,
+        merged.status,
+        merged.result_summary,
+        merged.error_message,
+        merged.tool_calls_made,
+        merged.started_at,
+        merged.completed_at,
+        merged.retry_count,
+      ],
     );
   }
 
@@ -1170,7 +1310,21 @@ export class TauriGradientStore implements GradientStoreAdapter {
       this.invoke,
       `INSERT OR REPLACE INTO gradient_snapshots (snapshot_id, motebit_id, timestamp, gradient, delta, knowledge_density, knowledge_density_raw, knowledge_quality, graph_connectivity, graph_connectivity_raw, temporal_stability, retrieval_quality, stats)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [snapshotId, snapshot.motebit_id, snapshot.timestamp, snapshot.gradient, snapshot.delta, snapshot.knowledge_density, snapshot.knowledge_density_raw, snapshot.knowledge_quality, snapshot.graph_connectivity, snapshot.graph_connectivity_raw, snapshot.temporal_stability, snapshot.retrieval_quality, JSON.stringify(snapshot.stats)],
+      [
+        snapshotId,
+        snapshot.motebit_id,
+        snapshot.timestamp,
+        snapshot.gradient,
+        snapshot.delta,
+        snapshot.knowledge_density,
+        snapshot.knowledge_density_raw,
+        snapshot.knowledge_quality,
+        snapshot.graph_connectivity,
+        snapshot.graph_connectivity_raw,
+        snapshot.temporal_stability,
+        snapshot.retrieval_quality,
+        JSON.stringify(snapshot.stats),
+      ],
     );
   }
 
@@ -1180,8 +1334,6 @@ export class TauriGradientStore implements GradientStoreAdapter {
   }
 
   list(motebitId: string, limit = 100): GradientSnapshot[] {
-    return this.snapshots
-      .filter((s) => s.motebit_id === motebitId)
-      .slice(0, limit);
+    return this.snapshots.filter((s) => s.motebit_id === motebitId).slice(0, limit);
   }
 }

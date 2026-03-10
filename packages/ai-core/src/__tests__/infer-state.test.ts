@@ -19,10 +19,7 @@ function defaultState(): MotebitState {
 
 describe("inferStateFromText", () => {
   it("positive text nudges affect_valence up", () => {
-    const result = inferStateFromText(
-      "I'm so happy and glad to help you today!",
-      defaultState(),
-    );
+    const result = inferStateFromText("I'm so happy and glad to help you today!", defaultState());
     expect(result.affect_valence).toBe(0.15);
   });
 
@@ -43,26 +40,17 @@ describe("inferStateFromText", () => {
   });
 
   it("question marks nudge curiosity up", () => {
-    const result = inferStateFromText(
-      "What do you think? Would that work?",
-      defaultState(),
-    );
+    const result = inferStateFromText("What do you think? Would that work?", defaultState());
     expect(result.curiosity).toBe(0.2);
   });
 
   it("single question mark nudges curiosity by 0.1", () => {
-    const result = inferStateFromText(
-      "What do you think about that?",
-      defaultState(),
-    );
+    const result = inferStateFromText("What do you think about that?", defaultState());
     expect(result.curiosity).toBe(0.1);
   });
 
   it("curiosity nudge caps at 0.2", () => {
-    const result = inferStateFromText(
-      "Really? Why? How? When? Where?",
-      defaultState(),
-    );
+    const result = inferStateFromText("Really? Why? How? When? Where?", defaultState());
     expect(result.curiosity).toBe(0.2);
   });
 
@@ -111,17 +99,15 @@ describe("inferStateFromText", () => {
   });
 
   it("informal markers nudge social_distance down", () => {
-    const result = inferStateFromText(
-      "That's awesome! Let me think...",
-      defaultState(),
-    );
+    const result = inferStateFromText("That's awesome! Let me think...", defaultState());
     // exclamation (-0.05) + ellipsis (-0.05) = -0.10
     expect(result.social_distance).toBe(0.4);
   });
 
   it("neutral text returns empty object", () => {
     // 50-200 chars, no keywords, no question marks, no informal markers
-    const neutral = "The process involves several sequential steps that produce the desired output for the system.";
+    const neutral =
+      "The process involves several sequential steps that produce the desired output for the system.";
     const result = inferStateFromText(neutral, defaultState());
     expect(Object.keys(result)).toHaveLength(0);
   });

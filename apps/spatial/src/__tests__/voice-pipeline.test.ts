@@ -193,9 +193,12 @@ describe("SpatialVoicePipeline lifecycle", () => {
 
   it("start() fires onStateChange → ambient", async () => {
     const states: string[] = [];
-    const pipeline = new SpatialVoicePipeline({}, {
-      onStateChange: (s) => states.push(s),
-    });
+    const pipeline = new SpatialVoicePipeline(
+      {},
+      {
+        onStateChange: (s) => states.push(s),
+      },
+    );
     await pipeline.start();
     expect(states).toContain("ambient");
     pipeline.stop();
@@ -203,9 +206,12 @@ describe("SpatialVoicePipeline lifecycle", () => {
 
   it("stop() transitions to off", async () => {
     const states: string[] = [];
-    const pipeline = new SpatialVoicePipeline({}, {
-      onStateChange: (s) => states.push(s),
-    });
+    const pipeline = new SpatialVoicePipeline(
+      {},
+      {
+        onStateChange: (s) => states.push(s),
+      },
+    );
     await pipeline.start();
     pipeline.stop();
     expect(pipeline.state).toBe("off");
@@ -258,8 +264,12 @@ describe("SpatialVoicePipeline state getters", () => {
       onResult: null,
       onEnd: null,
       listening: false,
-      start: vi.fn(function (this: typeof mockSTT) { this.listening = true; }),
-      stop: vi.fn(function (this: typeof mockSTT) { this.listening = false; }),
+      start: vi.fn(function (this: typeof mockSTT) {
+        this.listening = true;
+      }),
+      stop: vi.fn(function (this: typeof mockSTT) {
+        this.listening = false;
+      }),
     };
     mockTTS = {
       speak: vi.fn().mockResolvedValue(undefined),
@@ -303,8 +313,12 @@ describe("SpatialVoicePipeline speak", () => {
       onResult: null,
       onEnd: null,
       listening: false,
-      start: vi.fn(function (this: typeof mockSTT) { this.listening = true; }),
-      stop: vi.fn(function (this: typeof mockSTT) { this.listening = false; }),
+      start: vi.fn(function (this: typeof mockSTT) {
+        this.listening = true;
+      }),
+      stop: vi.fn(function (this: typeof mockSTT) {
+        this.listening = false;
+      }),
     };
     mockTTS = {
       speak: vi.fn().mockResolvedValue(undefined),
@@ -319,9 +333,12 @@ describe("SpatialVoicePipeline speak", () => {
 
   it("speak() calls TTS and transitions states", async () => {
     const states: string[] = [];
-    const pipeline = new SpatialVoicePipeline({}, {
-      onStateChange: (s) => states.push(s),
-    });
+    const pipeline = new SpatialVoicePipeline(
+      {},
+      {
+        onStateChange: (s) => states.push(s),
+      },
+    );
     await pipeline.start();
     states.length = 0; // Clear start-up transitions
 
@@ -403,8 +420,12 @@ describe("SpatialVoicePipeline processing state", () => {
       onResult: null,
       onEnd: null,
       listening: false,
-      start: vi.fn(function (this: typeof mockSTT) { this.listening = true; }),
-      stop: vi.fn(function (this: typeof mockSTT) { this.listening = false; }),
+      start: vi.fn(function (this: typeof mockSTT) {
+        this.listening = true;
+      }),
+      stop: vi.fn(function (this: typeof mockSTT) {
+        this.listening = false;
+      }),
     };
     mockTTS = {
       speak: vi.fn().mockResolvedValue(undefined),
@@ -524,8 +545,12 @@ describe("SpatialVoicePipeline STT callbacks", () => {
       onResult: null,
       onEnd: null,
       listening: false,
-      start: vi.fn(function (this: typeof mockSTT) { this.listening = true; }),
-      stop: vi.fn(function (this: typeof mockSTT) { this.listening = false; }),
+      start: vi.fn(function (this: typeof mockSTT) {
+        this.listening = true;
+      }),
+      stop: vi.fn(function (this: typeof mockSTT) {
+        this.listening = false;
+      }),
     };
     mockTTS = {
       speak: vi.fn().mockResolvedValue(undefined),
@@ -540,9 +565,12 @@ describe("SpatialVoicePipeline STT callbacks", () => {
 
   it("STT onResult fires onTranscript for final results", async () => {
     const transcripts: string[] = [];
-    const pipeline = new SpatialVoicePipeline({}, {
-      onTranscript: (t) => transcripts.push(t),
-    });
+    const pipeline = new SpatialVoicePipeline(
+      {},
+      {
+        onTranscript: (t) => transcripts.push(t),
+      },
+    );
     await pipeline.start();
 
     // Simulate STT firing a final result
@@ -554,9 +582,12 @@ describe("SpatialVoicePipeline STT callbacks", () => {
 
   it("STT onResult ignores non-final results", async () => {
     const transcripts: string[] = [];
-    const pipeline = new SpatialVoicePipeline({}, {
-      onTranscript: (t) => transcripts.push(t),
-    });
+    const pipeline = new SpatialVoicePipeline(
+      {},
+      {
+        onTranscript: (t) => transcripts.push(t),
+      },
+    );
     await pipeline.start();
 
     mockSTT.onResult?.("Hell", false);
@@ -567,9 +598,12 @@ describe("SpatialVoicePipeline STT callbacks", () => {
 
   it("STT onResult ignores empty transcripts", async () => {
     const transcripts: string[] = [];
-    const pipeline = new SpatialVoicePipeline({}, {
-      onTranscript: (t) => transcripts.push(t),
-    });
+    const pipeline = new SpatialVoicePipeline(
+      {},
+      {
+        onTranscript: (t) => transcripts.push(t),
+      },
+    );
     await pipeline.start();
 
     mockSTT.onResult?.("   ", true);
@@ -580,9 +614,12 @@ describe("SpatialVoicePipeline STT callbacks", () => {
 
   it("STT onEnd returns to ambient when listening", async () => {
     const states: string[] = [];
-    const pipeline = new SpatialVoicePipeline({}, {
-      onStateChange: (s) => states.push(s),
-    });
+    const pipeline = new SpatialVoicePipeline(
+      {},
+      {
+        onStateChange: (s) => states.push(s),
+      },
+    );
     await pipeline.start();
 
     // Force into listening state

@@ -34,7 +34,7 @@ export class BraveSearchProvider implements SearchProvider {
 
     const res = await fetch(url, {
       headers: {
-        "Accept": "application/json",
+        Accept: "application/json",
         "Accept-Encoding": "gzip",
         "X-Subscription-Token": this.apiKey,
       },
@@ -49,7 +49,8 @@ export class BraveSearchProvider implements SearchProvider {
 
     return webResults
       .filter((r): r is Required<Pick<BraveWebResult, "title" | "url">> & BraveWebResult =>
-        Boolean(r.title && r.url))
+        Boolean(r.title && r.url),
+      )
       .map((r) => ({
         title: r.title,
         url: r.url,

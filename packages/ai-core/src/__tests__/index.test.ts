@@ -1,8 +1,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { packContext, CloudProvider, HybridProvider, stripPartialActionTag, getImpulsesForAction } from "../index";
+import {
+  packContext,
+  CloudProvider,
+  HybridProvider,
+  stripPartialActionTag,
+  getImpulsesForAction,
+} from "../index";
 import type { CloudProviderConfig, HybridProviderConfig } from "../index";
 import { TrustMode, BatteryMode, SensitivityLevel, EventType } from "@motebit/sdk";
-import type { AIResponse, ContextPack, MemoryCandidate, MotebitState, EventLogEntry, MemoryNode } from "@motebit/sdk";
+import type {
+  AIResponse,
+  ContextPack,
+  MemoryCandidate,
+  MotebitState,
+  EventLogEntry,
+  MemoryNode,
+} from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -146,9 +159,7 @@ describe("packContext", () => {
   });
 
   it("limits to last 10 events", () => {
-    const events = Array.from({ length: 15 }, (_, i) =>
-      makeEvent({ event_id: `e${i}` }),
-    );
+    const events = Array.from({ length: 15 }, (_, i) => makeEvent({ event_id: `e${i}` }));
     const result = packContext(makeContextPack({ recent_events: events }));
     const eventLines = result
       .split("\n")
@@ -209,9 +220,7 @@ describe("CloudProvider", () => {
     mockFetchError(401, "Unauthorized");
 
     const provider = new CloudProvider(config);
-    await expect(provider.generate(makeContextPack())).rejects.toThrow(
-      "Anthropic API error 401",
-    );
+    await expect(provider.generate(makeContextPack())).rejects.toThrow("Anthropic API error 401");
   });
 
   it("estimateConfidence() returns 0.8", async () => {
@@ -272,7 +281,8 @@ describe("HybridProvider", () => {
 
   it("falls back to ollama on cloud failure when configured", async () => {
     // First call (cloud) fails, second call (Ollama) succeeds
-    const fetchMock = vi.fn()
+    const fetchMock = vi
+      .fn()
       .mockRejectedValueOnce(new Error("Network error"))
       .mockResolvedValueOnce({
         ok: true,
@@ -375,7 +385,7 @@ describe("getImpulsesForAction", () => {
   it("returns impulses for smile action", () => {
     const impulses = getImpulsesForAction("smile");
     expect(impulses.length).toBeGreaterThan(0);
-    expect(impulses.some(i => i.field === "smile_curvature")).toBe(true);
+    expect(impulses.some((i) => i.field === "smile_curvature")).toBe(true);
   });
 
   it("returns impulses for blink action", () => {

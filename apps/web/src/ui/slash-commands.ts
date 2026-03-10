@@ -24,7 +24,7 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
 
 function filterCommands(partial: string): SlashCommandDef[] {
   const query = partial.toLowerCase();
-  return SLASH_COMMANDS.filter(c => c.name.startsWith(query));
+  return SLASH_COMMANDS.filter((c) => c.name.startsWith(query));
 }
 
 // === DOM Refs ===
@@ -39,7 +39,11 @@ export interface SlashCommandsCallbacks {
   openMemory(): void;
 }
 
-export function initSlashCommands(chatAPI: ChatAPI, ctx: WebContext, callbacks: SlashCommandsCallbacks): void {
+export function initSlashCommands(
+  chatAPI: ChatAPI,
+  ctx: WebContext,
+  callbacks: SlashCommandsCallbacks,
+): void {
   let selectedIndex = 0;
   let visible = false;
   let matches: SlashCommandDef[] = [];
@@ -126,8 +130,8 @@ export function initSlashCommands(chatAPI: ChatAPI, ctx: WebContext, callbacks: 
         const runtime = ctx.app.getRuntime();
         if (runtime) {
           const state = runtime.getState();
-          const lines = Object.entries(state).map(([k, v]) =>
-            `${k}: ${typeof v === "number" ? v.toFixed(3) : String(v)}`
+          const lines = Object.entries(state).map(
+            ([k, v]) => `${k}: ${typeof v === "number" ? v.toFixed(3) : String(v)}`,
           );
           addMessage("system", lines.join("\n"));
         } else {
@@ -143,7 +147,7 @@ export function initSlashCommands(chatAPI: ChatAPI, ctx: WebContext, callbacks: 
           if (tools.length === 0) {
             addMessage("system", "No tools registered.");
           } else {
-            const names = tools.map(t => t.name).join(", ");
+            const names = tools.map((t) => t.name).join(", ");
             addMessage("system", `Registered tools: ${names}`);
           }
         } else {

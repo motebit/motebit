@@ -77,7 +77,7 @@ export class OpenAITTSProvider implements TTSProvider {
       const response = await fetch(url, {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${this.apiKey}`,
+          Authorization: `Bearer ${this.apiKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -90,9 +90,7 @@ export class OpenAITTSProvider implements TTSProvider {
 
       if (!response.ok) {
         const body = await response.text().catch(() => "");
-        throw new Error(
-          `OpenAI TTS error: ${response.status}${body ? ` — ${body}` : ""}`,
-        );
+        throw new Error(`OpenAI TTS error: ${response.status}${body ? ` — ${body}` : ""}`);
       }
 
       if (this._cancelled) {

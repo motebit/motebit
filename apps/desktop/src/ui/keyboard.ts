@@ -52,7 +52,14 @@ export function initKeyboard(deps: KeyboardDeps): void {
     const tag = el.tagName.toLowerCase();
     if (tag === "input") {
       const type = (el as HTMLInputElement).type.toLowerCase();
-      return type === "text" || type === "password" || type === "number" || type === "search" || type === "url" || type === "email";
+      return (
+        type === "text" ||
+        type === "password" ||
+        type === "number" ||
+        type === "search" ||
+        type === "url" ||
+        type === "email"
+      );
     }
     return tag === "textarea" || (el as HTMLElement).isContentEditable;
   }
@@ -61,7 +68,7 @@ export function initKeyboard(deps: KeyboardDeps): void {
 
   // Update Cmd/Ctrl labels in shortcut overlay on non-Mac
   if (!isMac) {
-    document.querySelectorAll("#shortcut-dialog .shortcut-key").forEach(el => {
+    document.querySelectorAll("#shortcut-dialog .shortcut-key").forEach((el) => {
       if (el.textContent === "Cmd") el.textContent = "Ctrl";
     });
   }

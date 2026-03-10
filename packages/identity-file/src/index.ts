@@ -59,7 +59,12 @@ function serializeValue(value: unknown, level: number): string {
     const lines: string[] = [];
     for (const [k, v] of entries) {
       const serialized = serializeValue(v, level + 1);
-      if (typeof v === "object" && v !== null && !Array.isArray(v) && Object.keys(v as Record<string, unknown>).length > 0) {
+      if (
+        typeof v === "object" &&
+        v !== null &&
+        !Array.isArray(v) &&
+        Object.keys(v as Record<string, unknown>).length > 0
+      ) {
         lines.push(`${indent(level)}${k}:`);
         lines.push(serialized.replace(/^\n/, ""));
       } else if (Array.isArray(v) && v.length > 0) {
@@ -79,7 +84,12 @@ function serializeYaml(data: MotebitIdentityFile): string {
 
   for (const [key, value] of Object.entries(data)) {
     const serialized = serializeValue(value, 1);
-    if (typeof value === "object" && value !== null && !Array.isArray(value) && Object.keys(value as Record<string, unknown>).length > 0) {
+    if (
+      typeof value === "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      Object.keys(value as Record<string, unknown>).length > 0
+    ) {
       lines.push(`${key}:`);
       lines.push(serialized.replace(/^\n/, ""));
     } else if (Array.isArray(value) && value.length > 0) {
@@ -120,18 +130,22 @@ export interface GenerateOptions {
   service?: ServiceIdentityOptions;
 }
 
-export async function generate(
-  opts: GenerateOptions,
-  privateKey: Uint8Array,
-): Promise<string> {
+export async function generate(opts: GenerateOptions, privateKey: Uint8Array): Promise<string> {
   // Build service fields conditionally
-  const serviceFields: Partial<Pick<MotebitIdentityFile, "type" | "service_name" | "service_description" | "service_url" | "capabilities" | "terms_url">> = {};
+  const serviceFields: Partial<
+    Pick<
+      MotebitIdentityFile,
+      "type" | "service_name" | "service_description" | "service_url" | "capabilities" | "terms_url"
+    >
+  > = {};
   if (opts.service) {
     if (opts.service.type) serviceFields.type = opts.service.type;
     if (opts.service.service_name) serviceFields.service_name = opts.service.service_name;
-    if (opts.service.service_description) serviceFields.service_description = opts.service.service_description;
+    if (opts.service.service_description)
+      serviceFields.service_description = opts.service.service_description;
     if (opts.service.service_url) serviceFields.service_url = opts.service.service_url;
-    if (opts.service.capabilities && opts.service.capabilities.length > 0) serviceFields.capabilities = opts.service.capabilities;
+    if (opts.service.capabilities && opts.service.capabilities.length > 0)
+      serviceFields.capabilities = opts.service.capabilities;
     if (opts.service.terms_url) serviceFields.terms_url = opts.service.terms_url;
   }
 
@@ -206,7 +220,9 @@ export async function update(
 // --- Helpers ---
 
 export function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 // --- Risk Level Bridge ---
@@ -235,7 +251,9 @@ export interface GovernancePolicyConfig {
   denyAbove: RiskLevel;
 }
 
-export function governanceToPolicyConfig(gov: MotebitIdentityFile["governance"]): GovernancePolicyConfig {
+export function governanceToPolicyConfig(
+  gov: MotebitIdentityFile["governance"],
+): GovernancePolicyConfig {
   return {
     operatorMode: gov.operator_mode,
     maxRiskAuto: parseRiskLevel(gov.max_risk_auto),

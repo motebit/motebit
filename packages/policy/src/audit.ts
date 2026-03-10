@@ -121,7 +121,11 @@ export class AuditLogger {
       callId,
       tool,
       args,
-      decision: { allowed: !blocked, requiresApproval: false, reason: blocked ? "injection_blocked" : "injection_warned" },
+      decision: {
+        allowed: !blocked,
+        requiresApproval: false,
+        reason: blocked ? "injection_blocked" : "injection_warned",
+      },
       injection,
       timestamp: Date.now(),
     });

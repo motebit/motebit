@@ -55,15 +55,16 @@ function mockFetchError(status: number, body: string): void {
 
 function mockFetchStreamSuccess(chunks: string[]): void {
   const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
-  const ndjson = chunks
-    .map((content, i) =>
-      JSON.stringify({
-        model: "llama3.2",
-        message: { role: "assistant", content },
-        done: i === chunks.length - 1,
-      }),
-    )
-    .join("\n") + "\n";
+  const ndjson =
+    chunks
+      .map((content, i) =>
+        JSON.stringify({
+          model: "llama3.2",
+          message: { role: "assistant", content },
+          done: i === chunks.length - 1,
+        }),
+      )
+      .join("\n") + "\n";
 
   const stream = new ReadableStream({
     start(controller) {
@@ -181,8 +182,7 @@ describe("OllamaProvider", () => {
   });
 
   it("parses state tags from response", async () => {
-    const responseText =
-      'Wow! <state field="curiosity" value="0.9"/> That\'s fascinating!';
+    const responseText = 'Wow! <state field="curiosity" value="0.9"/> That\'s fascinating!';
     mockFetchSuccess(responseText);
 
     const provider = new OllamaProvider(config);
@@ -223,9 +223,7 @@ describe("OllamaProvider", () => {
     mockFetchError(500, "Internal error");
 
     const provider = new OllamaProvider(config);
-    await expect(provider.generate(makeContextPack())).rejects.toThrow(
-      "Ollama API error 500",
-    );
+    await expect(provider.generate(makeContextPack())).rejects.toThrow("Ollama API error 500");
   });
 
   it("handles connection refused with helpful message", async () => {
@@ -233,9 +231,7 @@ describe("OllamaProvider", () => {
     mockFn.mockRejectedValueOnce(new Error("fetch failed: ECONNREFUSED"));
 
     const provider = new OllamaProvider(config);
-    await expect(provider.generate(makeContextPack())).rejects.toThrow(
-      "Is Ollama running?",
-    );
+    await expect(provider.generate(makeContextPack())).rejects.toThrow("Is Ollama running?");
   });
 
   // --- generateStream() ---
@@ -244,9 +240,7 @@ describe("OllamaProvider", () => {
     mockFetchStreamSuccess(["Hello", " world", "!"]);
 
     const provider = new OllamaProvider(config);
-    const chunks: Array<
-      { type: "text"; text: string } | { type: "done"; response: unknown }
-    > = [];
+    const chunks: Array<{ type: "text"; text: string } | { type: "done"; response: unknown }> = [];
 
     for await (const chunk of provider.generateStream(makeContextPack())) {
       chunks.push(chunk);

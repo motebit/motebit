@@ -1,10 +1,4 @@
 {
   "title": "Developer Guide",
-  "pages": [
-    "identity-standard",
-    "identity-crypto",
-    "delegation",
-    "mcp-server",
-    "tools"
-  ]
+  "pages": ["identity-standard", "identity-crypto", "delegation", "mcp-server", "tools"]
 }

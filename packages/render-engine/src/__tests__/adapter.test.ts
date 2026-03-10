@@ -96,9 +96,10 @@ describe("organicNoise", () => {
 describe("Breathing physics", () => {
   function computeBreath(t: number, audioBreathScale = 1): number {
     const raw = Math.sin(t * 2.0);
-    return (raw > 0
-      ? raw * 0.015
-      : Math.sign(raw) * Math.pow(Math.abs(raw), 0.6) * 0.015) * audioBreathScale;
+    return (
+      (raw > 0 ? raw * 0.015 : Math.sign(raw) * Math.pow(Math.abs(raw), 0.6) * 0.015) *
+      audioBreathScale
+    );
   }
 
   it("positive half is linear", () => {
@@ -148,9 +149,7 @@ describe("Breathing physics", () => {
 describe("Gravity sag physics", () => {
   function computeSag(t: number): number {
     const raw = Math.sin(t * 0.32 * Math.PI * 2);
-    return raw > 0
-      ? raw * 0.032
-      : Math.sign(raw) * Math.pow(Math.abs(raw), 0.5) * 0.032;
+    return raw > 0 ? raw * 0.032 : Math.sign(raw) * Math.pow(Math.abs(raw), 0.5) * 0.032;
   }
 
   it("positive half (gravity pull) is linear", () => {
@@ -239,10 +238,18 @@ describe("Eye dilation range", () => {
 
 describe("Audio reactivity scaling", () => {
   it("null audio produces neutral values", () => {
-    function breathScale(a: AudioReactivity | null): number { return a ? 1 + a.rms * 2.5 : 1; }
-    function glowBoost(a: AudioReactivity | null): number { return a ? a.low * 0.25 : 0; }
-    function driftBoost(a: AudioReactivity | null): number { return a ? a.mid * 0.015 : 0; }
-    function shimmerBoost(a: AudioReactivity | null): number { return a ? a.high * 0.35 : 0; }
+    function breathScale(a: AudioReactivity | null): number {
+      return a ? 1 + a.rms * 2.5 : 1;
+    }
+    function glowBoost(a: AudioReactivity | null): number {
+      return a ? a.low * 0.25 : 0;
+    }
+    function driftBoost(a: AudioReactivity | null): number {
+      return a ? a.mid * 0.015 : 0;
+    }
+    function shimmerBoost(a: AudioReactivity | null): number {
+      return a ? a.high * 0.35 : 0;
+    }
     expect(breathScale(null)).toBe(1);
     expect(glowBoost(null)).toBe(0);
     expect(driftBoost(null)).toBe(0);
@@ -251,10 +258,10 @@ describe("Audio reactivity scaling", () => {
 
   it("full-energy audio produces expected scaling", () => {
     const a: AudioReactivity = { rms: 1, low: 1, mid: 1, high: 1 };
-    expect(1 + a.rms * 2.5).toBe(3.5);       // breath scale
-    expect(a.low * 0.25).toBe(0.25);          // glow boost
-    expect(a.mid * 0.015).toBe(0.015);        // drift boost
-    expect(a.high * 0.35).toBe(0.35);         // iridescence boost
+    expect(1 + a.rms * 2.5).toBe(3.5); // breath scale
+    expect(a.low * 0.25).toBe(0.25); // glow boost
+    expect(a.mid * 0.015).toBe(0.015); // drift boost
+    expect(a.high * 0.35).toBe(0.35); // iridescence boost
   });
 
   it("each band is independent", () => {
@@ -353,16 +360,18 @@ describe("ThreeJSAdapter (headless)", () => {
 
   it("render with extreme cue values does not crash", async () => {
     await adapter.init(null);
-    adapter.render(defaultFrame({
-      cues: {
-        hover_distance: 10,
-        drift_amplitude: 5,
-        glow_intensity: 100,
-        eye_dilation: 1,
-        smile_curvature: 1,
-        speaking_activity: 0,
-      },
-    }));
+    adapter.render(
+      defaultFrame({
+        cues: {
+          hover_distance: 10,
+          drift_amplitude: 5,
+          glow_intensity: 100,
+          eye_dilation: 1,
+          smile_curvature: 1,
+          speaking_activity: 0,
+        },
+      }),
+    );
   });
 
   it("render with zero delta_time does not crash", async () => {
@@ -416,7 +425,9 @@ describe("SpatialAdapter (complete)", () => {
   });
 
   it("setAudioReactivity does not throw", () => {
-    expect(() => adapter.setAudioReactivity({ rms: 0.5, low: 0.3, mid: 0.4, high: 0.2 })).not.toThrow();
+    expect(() =>
+      adapter.setAudioReactivity({ rms: 0.5, low: 0.3, mid: 0.4, high: 0.2 }),
+    ).not.toThrow();
     expect(() => adapter.setAudioReactivity(null)).not.toThrow();
   });
 
@@ -496,7 +507,8 @@ describe("WebXRThreeJSAdapter", () => {
 
   it("setCreatureWorldPosition stores base position", () => {
     adapter.setCreatureWorldPosition(1, -0.5, -1);
-    const bp = (adapter as unknown as { basePosition: { x: number; y: number; z: number } }).basePosition;
+    const bp = (adapter as unknown as { basePosition: { x: number; y: number; z: number } })
+      .basePosition;
     expect(bp).toEqual({ x: 1, y: -0.5, z: -1 });
   });
 
@@ -523,11 +535,13 @@ describe("WebXRThreeJSAdapter", () => {
 
   it("setInteriorColor is safe headless", async () => {
     await adapter.init(null);
-    expect(() => adapter.setInteriorColor({
-      tint: [0.8, 0.6, 0.9],
-      glow: [0.3, 0.2, 0.5],
-      glowIntensity: 0.05,
-    })).not.toThrow();
+    expect(() =>
+      adapter.setInteriorColor({
+        tint: [0.8, 0.6, 0.9],
+        glow: [0.3, 0.2, 0.5],
+        glowIntensity: 0.05,
+      }),
+    ).not.toThrow();
   });
 
   it("setAudioReactivity stores and clears value", async () => {
@@ -573,16 +587,18 @@ describe("WebXRThreeJSAdapter", () => {
 
   it("render with extreme cue values does not crash", async () => {
     await adapter.init(null);
-    adapter.render(defaultFrame({
-      cues: {
-        hover_distance: 100,
-        drift_amplitude: 50,
-        glow_intensity: 10,
-        eye_dilation: 1,
-        smile_curvature: 1,
-        speaking_activity: 0,
-      },
-    }));
+    adapter.render(
+      defaultFrame({
+        cues: {
+          hover_distance: 100,
+          drift_amplitude: 50,
+          glow_intensity: 10,
+          eye_dilation: 1,
+          smile_curvature: 1,
+          speaking_activity: 0,
+        },
+      }),
+    );
   });
 
   it("full lifecycle", async () => {

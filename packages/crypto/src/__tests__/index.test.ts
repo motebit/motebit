@@ -232,11 +232,7 @@ describe("hash", () => {
 
 describe("createDeletionCertificate", () => {
   it("creates a valid deletion certificate", async () => {
-    const cert = await createDeletionCertificate(
-      "node-123",
-      "memory",
-      "user-456",
-    );
+    const cert = await createDeletionCertificate("node-123", "memory", "user-456");
 
     expect(cert.target_id).toBe("node-123");
     expect(cert.target_type).toBe("memory");
@@ -491,7 +487,9 @@ describe("signExecutionReceipt / verifyExecutionReceipt", () => {
 // ---------------------------------------------------------------------------
 
 describe("verifyReceiptChain", () => {
-  function makeReceipt(overrides?: Partial<Omit<SignableReceipt, "signature">>): Omit<SignableReceipt, "signature"> {
+  function makeReceipt(
+    overrides?: Partial<Omit<SignableReceipt, "signature">>,
+  ): Omit<SignableReceipt, "signature"> {
     return {
       task_id: "task-001",
       motebit_id: "mote-123",
@@ -559,7 +557,10 @@ describe("verifyReceiptChain", () => {
 
     // Sign the parent receipt with the delegation included
     const parentSigned = await signExecutionReceipt(
-      { ...makeReceipt({ task_id: "parent-001", motebit_id: "mote-parent" }), delegation_receipts: [childSigned] },
+      {
+        ...makeReceipt({ task_id: "parent-001", motebit_id: "mote-parent" }),
+        delegation_receipts: [childSigned],
+      },
       parentKp.privateKey,
     );
 
@@ -590,14 +591,15 @@ describe("verifyReceiptChain", () => {
 
     // Sign parent receipt with delegation
     const parentSigned = await signExecutionReceipt(
-      { ...makeReceipt({ task_id: "parent-002", motebit_id: "mote-parent" }), delegation_receipts: [childSigned] },
+      {
+        ...makeReceipt({ task_id: "parent-002", motebit_id: "mote-parent" }),
+        delegation_receipts: [childSigned],
+      },
       parentKp.privateKey,
     );
 
     // Only parent key is known — child's motebit_id is missing from knownKeys
-    const knownKeys: KnownKeys = new Map([
-      ["mote-parent", parentKp.publicKey],
-    ]);
+    const knownKeys: KnownKeys = new Map([["mote-parent", parentKp.publicKey]]);
     const result = await verifyReceiptChain(parentSigned, knownKeys);
 
     expect(result.verified).toBe(true);

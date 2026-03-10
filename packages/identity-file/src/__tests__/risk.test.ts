@@ -50,12 +50,14 @@ describe("governanceToPolicyConfig", () => {
   });
 
   it("throws on invalid governance risk levels", () => {
-    expect(() => governanceToPolicyConfig({
-      trust_mode: "guarded",
-      max_risk_auto: "UNKNOWN",
-      require_approval_above: "R1_DRAFT",
-      deny_above: "R4_MONEY",
-      operator_mode: false,
-    })).toThrow('Unknown risk level "UNKNOWN"');
+    expect(() =>
+      governanceToPolicyConfig({
+        trust_mode: "guarded",
+        max_risk_auto: "UNKNOWN",
+        require_approval_above: "R1_DRAFT",
+        deny_above: "R4_MONEY",
+        operator_mode: false,
+      }),
+    ).toThrow('Unknown risk level "UNKNOWN"');
   });
 });

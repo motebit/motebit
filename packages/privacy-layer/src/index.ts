@@ -1,9 +1,4 @@
-import type {
-  MemoryNode,
-  AuditRecord,
-  ExportManifest,
-  MotebitIdentity,
-} from "@motebit/sdk";
+import type { MemoryNode, AuditRecord, ExportManifest, MotebitIdentity } from "@motebit/sdk";
 import { EventType, SensitivityLevel } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MemoryGraph, MemoryStorageAdapter } from "@motebit/memory-graph";
@@ -52,11 +47,13 @@ export class MemoryInspector {
   /**
    * Browse all memory nodes (UI-facing API).
    */
-  async listMemories(options: {
-    include_tombstoned?: boolean;
-    sensitivity?: SensitivityLevel[];
-    limit?: number;
-  } = {}): Promise<MemoryNode[]> {
+  async listMemories(
+    options: {
+      include_tombstoned?: boolean;
+      sensitivity?: SensitivityLevel[];
+      limit?: number;
+    } = {},
+  ): Promise<MemoryNode[]> {
     await this.audit("list_memories", "memory", "*", { options });
 
     return this.storage.queryNodes({
@@ -105,10 +102,7 @@ export class SensitivityManager {
   /**
    * Set the sensitivity level for a memory node.
    */
-  async setSensitivity(
-    nodeId: string,
-    level: SensitivityLevel,
-  ): Promise<void> {
+  async setSensitivity(nodeId: string, level: SensitivityLevel): Promise<void> {
     const node = await this.storage.getNode(nodeId);
     if (node === null) {
       throw new Error(`Memory node not found: ${nodeId}`);
@@ -132,7 +126,10 @@ export class SensitivityManager {
   /**
    * Get retention rules for a sensitivity level.
    */
-  getRetentionRules(level: SensitivityLevel): { max_retention_days: number; display_allowed: boolean } {
+  getRetentionRules(level: SensitivityLevel): {
+    max_retention_days: number;
+    display_allowed: boolean;
+  } {
     switch (level) {
       case SensitivityLevel.None:
         return { max_retention_days: Infinity, display_allowed: true };
@@ -163,10 +160,7 @@ export class DeleteManager {
   /**
    * Delete a memory with full audit trail and deletion certificate.
    */
-  async deleteMemory(
-    nodeId: string,
-    deletedBy: string,
-  ): Promise<DeletionCertificate> {
+  async deleteMemory(nodeId: string, deletedBy: string): Promise<DeletionCertificate> {
     // Create deletion certificate
     const cert = await createDeletionCertificate(nodeId, "memory", deletedBy);
 

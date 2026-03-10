@@ -6,7 +6,10 @@
 
 export const EMBEDDING_DIMENSIONS = 384;
 
-type Pipeline = (text: string, options: { pooling: string; normalize: boolean }) => Promise<{ data: Float32Array }>;
+type Pipeline = (
+  text: string,
+  options: { pooling: string; normalize: boolean },
+) => Promise<{ data: Float32Array }>;
 
 let pipelineInstance: Pipeline | null = null;
 let pipelineFailed = false;

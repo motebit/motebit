@@ -11,6 +11,7 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent — a ves
 **Position in the agentic economy.** MCP defines capability — what tools an agent can reach — but says nothing about who the agent is. There is no trust accumulation, no audit trail, no governance. Motebit is the missing layer: cryptographic identity (Ed25519 keypairs, device registration, signed tokens) that can prove who it is to any service, persistent memory that compounds instead of resetting, and policy governance that controls what crosses the surface.
 
 **The three things no one else is building together:**
+
 1. **Persistent sovereign identity** — not a session token, a cryptographic entity that exists across time and devices
 2. **Accumulated trust** — memory, state history, audit trails that make the agent more capable the longer it runs
 3. **Governance at the boundary** — sensitivity-aware privacy and policy that controls what crosses the surface
@@ -84,6 +85,7 @@ pnpm --filter @motebit/desktop test    # Test single package
 ## Desktop App (Flagship)
 
 Tauri app. Two key files for the UI layer:
+
 - `apps/desktop/index.html` — all HTML + CSS (chat, settings panel, PIN dialog, welcome overlay)
 - `apps/desktop/src/main.ts` — DOM wiring, bootstrap, settings save, PIN flow
 - `apps/desktop/src/index.ts` — DesktopApp class: identity bootstrap, AI init, streaming, operator mode

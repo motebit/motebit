@@ -1,12 +1,32 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import type { MotebitState, MemoryNode, MemoryEdge, EventLogEntry, ToolAuditEntry } from "@motebit/sdk";
+import type {
+  MotebitState,
+  MemoryNode,
+  MemoryEdge,
+  EventLogEntry,
+  ToolAuditEntry,
+} from "@motebit/sdk";
 import { TrustMode, BatteryMode } from "@motebit/sdk";
 import { computeRawCues } from "@motebit/behavior-engine";
 import {
-  fetchState, fetchMemory, fetchEvents, fetchAudit, deleteMemoryNode,
-  fetchGoals, fetchConversations, fetchDevices, fetchPlans, fetchGradient,
+  fetchState,
+  fetchMemory,
+  fetchEvents,
+  fetchAudit,
+  deleteMemoryNode,
+  fetchGoals,
+  fetchConversations,
+  fetchDevices,
+  fetchPlans,
+  fetchGradient,
 } from "./api";
-import type { GoalEntry, ConversationEntry, DeviceEntry, PlanEntry, GradientSnapshotEntry } from "./api";
+import type {
+  GoalEntry,
+  ConversationEntry,
+  DeviceEntry,
+  PlanEntry,
+  GradientSnapshotEntry,
+} from "./api";
 import { useStateHistory } from "./hooks/useStateHistory";
 import { ConnectionStatus } from "./components/ConnectionStatus";
 import { StateVectorPanel } from "./components/StateVectorPanel";
@@ -51,56 +71,71 @@ export function AdminApp(): React.ReactElement {
 
   const cues = computeRawCues(state);
 
-  const refresh = useCallback(async (signal: AbortSignal) => {
-    try {
-      const [stateRes, memoryRes, eventsRes, auditRes, goalsRes, convRes, devicesRes, plansRes, gradientRes] = await Promise.all([
-        fetchState(signal),
-        fetchMemory(signal),
-        fetchEvents(maxClockRef.current, signal),
-        fetchAudit(signal),
-        fetchGoals(signal),
-        fetchConversations(signal),
-        fetchDevices(signal),
-        fetchPlans(signal),
-        fetchGradient(signal),
-      ]);
+  const refresh = useCallback(
+    async (signal: AbortSignal) => {
+      try {
+        const [
+          stateRes,
+          memoryRes,
+          eventsRes,
+          auditRes,
+          goalsRes,
+          convRes,
+          devicesRes,
+          plansRes,
+          gradientRes,
+        ] = await Promise.all([
+          fetchState(signal),
+          fetchMemory(signal),
+          fetchEvents(maxClockRef.current, signal),
+          fetchAudit(signal),
+          fetchGoals(signal),
+          fetchConversations(signal),
+          fetchDevices(signal),
+          fetchPlans(signal),
+          fetchGradient(signal),
+        ]);
 
-      setState(stateRes.state);
-      pushHistory(stateRes.state);
-      setMemories(memoryRes.memories);
-      setEdges(memoryRes.edges);
-      setAudit(auditRes.entries);
-      setGoals(goalsRes.goals);
-      setConversations(convRes.conversations);
-      setDevices(devicesRes.devices);
-      setPlans(plansRes.plans);
-      setGradientCurrent(gradientRes.current);
-      setGradientHistory(gradientRes.history);
+        setState(stateRes.state);
+        pushHistory(stateRes.state);
+        setMemories(memoryRes.memories);
+        setEdges(memoryRes.edges);
+        setAudit(auditRes.entries);
+        setGoals(goalsRes.goals);
+        setConversations(convRes.conversations);
+        setDevices(devicesRes.devices);
+        setPlans(plansRes.plans);
+        setGradientCurrent(gradientRes.current);
+        setGradientHistory(gradientRes.history);
 
-      if (eventsRes.events.length > 0) {
-        setEvents((prev) => {
-          const existingIds = new Set(prev.map((e) => e.event_id));
-          const newEvents = eventsRes.events.filter((e) => !existingIds.has(e.event_id));
-          return [...prev, ...newEvents];
-        });
-        const maxClock = Math.max(...eventsRes.events.map((e) => e.version_clock));
-        if (maxClock > maxClockRef.current) {
-          maxClockRef.current = maxClock;
+        if (eventsRes.events.length > 0) {
+          setEvents((prev) => {
+            const existingIds = new Set(prev.map((e) => e.event_id));
+            const newEvents = eventsRes.events.filter((e) => !existingIds.has(e.event_id));
+            return [...prev, ...newEvents];
+          });
+          const maxClock = Math.max(...eventsRes.events.map((e) => e.version_clock));
+          if (maxClock > maxClockRef.current) {
+            maxClockRef.current = maxClock;
+          }
+        }
+
+        setConnected(true);
+      } catch (err) {
+        if (!(err instanceof DOMException && err.name === "AbortError")) {
+          setConnected(false);
         }
       }
-
-      setConnected(true);
-    } catch (err) {
-      if (!(err instanceof DOMException && err.name === "AbortError")) {
-        setConnected(false);
-      }
-    }
-  }, [pushHistory]);
+    },
+    [pushHistory],
+  );
 
   useEffect(() => {
     const controller = new AbortController();
     void refresh(controller.signal);
-    const interval = setInterval(() => { void refresh(controller.signal); }, 2000);
+    const interval = setInterval(() => {
+      void refresh(controller.signal);
+    }, 2000);
     return () => {
       controller.abort();
       clearInterval(interval);
@@ -116,13 +151,30 @@ export function AdminApp(): React.ReactElement {
     }
   }, []);
 
-  const nav = React.createElement("nav", { className: "admin-nav" },
-    ["state", "memory", "behavior", "events", "audit", "goals", "plans", "conversations", "devices", "gradient"].map((panel) =>
-      React.createElement("button", {
-        key: panel,
-        className: panel === activePanel ? "active" : "",
-        onClick: () => setActivePanel(panel),
-      }, panel),
+  const nav = React.createElement(
+    "nav",
+    { className: "admin-nav" },
+    [
+      "state",
+      "memory",
+      "behavior",
+      "events",
+      "audit",
+      "goals",
+      "plans",
+      "conversations",
+      "devices",
+      "gradient",
+    ].map((panel) =>
+      React.createElement(
+        "button",
+        {
+          key: panel,
+          className: panel === activePanel ? "active" : "",
+          onClick: () => setActivePanel(panel),
+        },
+        panel,
+      ),
     ),
   );
 
@@ -132,7 +184,13 @@ export function AdminApp(): React.ReactElement {
       content = React.createElement(StateVectorPanel, { state, history: historyRef.current });
       break;
     case "memory":
-      content = React.createElement(MemoryGraphPanel, { memories, edges, onDelete: (nodeId: string) => { void handleDeleteMemory(nodeId); } });
+      content = React.createElement(MemoryGraphPanel, {
+        memories,
+        edges,
+        onDelete: (nodeId: string) => {
+          void handleDeleteMemory(nodeId);
+        },
+      });
       break;
     case "behavior":
       content = React.createElement(BehaviorPanel, { cues });
@@ -156,15 +214,22 @@ export function AdminApp(): React.ReactElement {
       content = React.createElement(DevicesPanel, { devices });
       break;
     case "gradient":
-      content = React.createElement(GradientPanel, { current: gradientCurrent, history: gradientHistory });
+      content = React.createElement(GradientPanel, {
+        current: gradientCurrent,
+        history: gradientHistory,
+      });
       break;
     default:
-      content = React.createElement("div", { className: "panel" },
+      content = React.createElement(
+        "div",
+        { className: "panel" },
         React.createElement("p", null, "Unknown panel"),
       );
   }
 
-  const header = React.createElement("div", { className: "admin-header" },
+  const header = React.createElement(
+    "div",
+    { className: "admin-header" },
     React.createElement("h1", null, "Motebit Admin"),
     React.createElement(ConnectionStatus, { connected }),
   );

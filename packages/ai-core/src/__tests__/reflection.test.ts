@@ -1,7 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
 import { reflect, parseReflectionResponse } from "../reflection.js";
 import { TaskRouter } from "../task-router.js";
-import type { ConversationMessage, AIResponse, IntelligenceProvider, ContextPack } from "@motebit/sdk";
+import type {
+  ConversationMessage,
+  AIResponse,
+  IntelligenceProvider,
+  ContextPack,
+} from "@motebit/sdk";
 
 // === Mock Provider ===
 
@@ -89,13 +94,8 @@ ASSESSMENT:
 Good interaction.`;
 
     const result = parseReflectionResponse(text);
-    expect(result.insights).toEqual([
-      "User likes jazz",
-      "User is from Seattle",
-    ]);
-    expect(result.planAdjustments).toEqual([
-      "Reference music in responses",
-    ]);
+    expect(result.insights).toEqual(["User likes jazz", "User is from Seattle"]);
+    expect(result.planAdjustments).toEqual(["Reference music in responses"]);
   });
 
   it("handles only insights and assessment", () => {
@@ -194,13 +194,7 @@ ADJUSTMENTS:
 ASSESSMENT:
 Good recall.`);
 
-    await reflect(
-      null,
-      [],
-      [],
-      [{ content: "User likes jazz music" }],
-      provider,
-    );
+    await reflect(null, [], [], [{ content: "User likes jazz music" }], provider);
 
     const call = (provider.generate as ReturnType<typeof vi.fn>).mock.calls[0]![0] as ContextPack;
     expect(call.user_message).toContain("User likes jazz music");
@@ -275,12 +269,24 @@ describe("reflect with TaskRouter", () => {
     let currentMaxTokens: number | undefined = 1024;
 
     return {
-      get model() { return currentModel; },
-      get temperature() { return currentTemp; },
-      get maxTokens() { return currentMaxTokens; },
-      setModel: vi.fn((m: string) => { currentModel = m; }),
-      setTemperature: vi.fn((t: number) => { currentTemp = t; }),
-      setMaxTokens: vi.fn((mt: number) => { currentMaxTokens = mt; }),
+      get model() {
+        return currentModel;
+      },
+      get temperature() {
+        return currentTemp;
+      },
+      get maxTokens() {
+        return currentMaxTokens;
+      },
+      setModel: vi.fn((m: string) => {
+        currentModel = m;
+      }),
+      setTemperature: vi.fn((t: number) => {
+        currentTemp = t;
+      }),
+      setMaxTokens: vi.fn((mt: number) => {
+        currentMaxTokens = mt;
+      }),
       generate: vi.fn().mockResolvedValue({
         text: responseText,
         confidence: 0.8,

@@ -144,7 +144,9 @@ beforeAll(async () => {
       const completedAt = Date.now();
 
       const resultStr = result.ok
-        ? (typeof result.data === "string" ? result.data : JSON.stringify(result.data ?? null))
+        ? typeof result.data === "string"
+          ? result.data
+          : JSON.stringify(result.data ?? null)
         : (result.error ?? "error");
 
       const enc = new TextEncoder();
@@ -183,18 +185,27 @@ beforeAll(async () => {
   await server.start();
 
   // 7. Connect MCP client
-  client = new Client(
-    { name: "test-client", version: "0.1.0" },
-    { capabilities: {} },
-  );
+  client = new Client({ name: "test-client", version: "0.1.0" }, { capabilities: {} });
   const transport = new StreamableHTTPClientTransport(new URL(`http://localhost:${TEST_PORT}/mcp`));
   await client.connect(transport);
 }, 30_000);
 
 afterAll(async () => {
-  try { await client.close(); } catch { /* ignore */ }
-  try { await server.stop(); } catch { /* ignore */ }
-  try { runtime.stop(); } catch { /* ignore */ }
+  try {
+    await client.close();
+  } catch {
+    /* ignore */
+  }
+  try {
+    await server.stop();
+  } catch {
+    /* ignore */
+  }
+  try {
+    runtime.stop();
+  } catch {
+    /* ignore */
+  }
 });
 
 describe("Web Search Service — Protocol Loop", () => {
@@ -250,9 +261,24 @@ describe("Web Search Service — Protocol Loop", () => {
     const receipt = JSON.parse(stripIdentityTag(text)) as Record<string, unknown>;
 
     // Verify using the public key
-    const pubKeyBytes = new Uint8Array((publicKeyHex.match(/.{2}/g) ?? []).map((h) => parseInt(h, 16)));
+    const pubKeyBytes = new Uint8Array(
+      (publicKeyHex.match(/.{2}/g) ?? []).map((h) => parseInt(h, 16)),
+    );
     const valid = await verifyExecutionReceipt(
-      receipt as unknown as { task_id: string; motebit_id: string; device_id: string; submitted_at: number; completed_at: number; status: string; result: string; tools_used: string[]; memories_formed: number; prompt_hash: string; result_hash: string; signature: string },
+      receipt as unknown as {
+        task_id: string;
+        motebit_id: string;
+        device_id: string;
+        submitted_at: number;
+        completed_at: number;
+        status: string;
+        result: string;
+        tools_used: string[];
+        memories_formed: number;
+        prompt_hash: string;
+        result_hash: string;
+        signature: string;
+      },
       pubKeyBytes,
     );
     expect(valid).toBe(true);

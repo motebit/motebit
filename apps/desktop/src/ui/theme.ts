@@ -22,7 +22,7 @@ function applyTheme(pref: ThemePreference): void {
 }
 
 function updateToggleUI(): void {
-  document.querySelectorAll("#theme-toggle-group .theme-option").forEach(btn => {
+  document.querySelectorAll("#theme-toggle-group .theme-option").forEach((btn) => {
     const val = (btn as HTMLElement).dataset.theme;
     const selected = val === currentPreference;
     btn.classList.toggle("selected", selected);
@@ -41,11 +41,15 @@ function persist(pref: ThemePreference, isTauri: boolean, invoke?: unknown): voi
   // Also persist to Tauri config if available
   if (isTauri && invoke != null) {
     const invokeFn = invoke as (cmd: string, args: Record<string, unknown>) => Promise<string>;
-    void invokeFn("read_config", {}).then((raw: string) => {
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      parsed.theme = pref;
-      return invokeFn("write_config", { json: JSON.stringify(parsed) });
-    }).catch(() => { /* Non-fatal */ });
+    void invokeFn("read_config", {})
+      .then((raw: string) => {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        parsed.theme = pref;
+        return invokeFn("write_config", { json: JSON.stringify(parsed) });
+      })
+      .catch(() => {
+        /* Non-fatal */
+      });
   }
 }
 
@@ -79,7 +83,7 @@ export function initTheme(isTauri: boolean, invoke?: unknown): ThemeAPI {
   mediaQuery.addEventListener("change", onMediaChange);
 
   // Wire up toggle buttons
-  document.querySelectorAll("#theme-toggle-group .theme-option").forEach(btn => {
+  document.querySelectorAll("#theme-toggle-group .theme-option").forEach((btn) => {
     btn.addEventListener("click", () => {
       const pref = (btn as HTMLElement).dataset.theme as ThemePreference;
       if (pref) {
@@ -92,7 +96,9 @@ export function initTheme(isTauri: boolean, invoke?: unknown): ThemeAPI {
   });
 
   return {
-    getPreference() { return currentPreference; },
+    getPreference() {
+      return currentPreference;
+    },
     setPreference(pref: ThemePreference) {
       currentPreference = pref;
       applyTheme(pref);

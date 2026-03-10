@@ -4,12 +4,20 @@ import type { EventStoreAdapter } from "@motebit/event-log";
 export { HttpEventStoreAdapter } from "./http-adapter.js";
 export type { HttpAdapterConfig } from "./http-adapter.js";
 export { WebSocketEventStoreAdapter } from "./ws-adapter.js";
-export type { WebSocketAdapterConfig, EventReceivedCallback, CustomMessageCallback } from "./ws-adapter.js";
+export type {
+  WebSocketAdapterConfig,
+  EventReceivedCallback,
+  CustomMessageCallback,
+} from "./ws-adapter.js";
 export { EncryptedEventStoreAdapter, decryptEventPayload } from "./encrypted-adapter.js";
 export type { EncryptedAdapterConfig } from "./encrypted-adapter.js";
 export { PairingClient } from "./pairing-client.js";
 export type { PairingClientConfig, PairingSession, PairingStatus } from "./pairing-client.js";
-export { ConversationSyncEngine, HttpConversationSyncAdapter, InMemoryConversationSyncStore } from "./conversation-sync.js";
+export {
+  ConversationSyncEngine,
+  HttpConversationSyncAdapter,
+  InMemoryConversationSyncStore,
+} from "./conversation-sync.js";
 export type {
   ConversationSyncConfig,
   ConversationSyncStatus,
@@ -64,11 +72,7 @@ export class SyncEngine {
   private syncInterval: ReturnType<typeof setInterval> | null = null;
   private conflicts: ConflictEdge[] = [];
 
-  constructor(
-    localStore: EventStoreAdapter,
-    motebitId: string,
-    config: Partial<SyncConfig> = {},
-  ) {
+  constructor(localStore: EventStoreAdapter, motebitId: string, config: Partial<SyncConfig> = {}) {
     this.config = { ...DEFAULT_SYNC_CONFIG, ...config };
     this.localStore = localStore;
     this.cursor = {
@@ -213,19 +217,13 @@ export class SyncEngine {
     return { count: newEvents.length, events: newEvents };
   }
 
-  private detectConflicts(
-    pushed: EventLogEntry[],
-    pulled: EventLogEntry[],
-  ): ConflictEdge[] {
+  private detectConflicts(pushed: EventLogEntry[], pulled: EventLogEntry[]): ConflictEdge[] {
     const conflicts: ConflictEdge[] = [];
 
     // Simple conflict detection: same version_clock from different sources
     for (const local of pushed) {
       for (const remote of pulled) {
-        if (
-          local.version_clock === remote.version_clock &&
-          local.event_id !== remote.event_id
-        ) {
+        if (local.version_clock === remote.version_clock && local.event_id !== remote.event_id) {
           conflicts.push({
             local_event: local,
             remote_event: remote,

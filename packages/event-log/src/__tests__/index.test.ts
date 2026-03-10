@@ -49,15 +49,9 @@ describe("InMemoryEventStore", () => {
   });
 
   it("filters by event_types", async () => {
-    await store.append(
-      makeEvent({ event_type: EventType.StateUpdated }),
-    );
-    await store.append(
-      makeEvent({ event_type: EventType.MemoryFormed }),
-    );
-    await store.append(
-      makeEvent({ event_type: EventType.IdentityCreated }),
-    );
+    await store.append(makeEvent({ event_type: EventType.StateUpdated }));
+    await store.append(makeEvent({ event_type: EventType.MemoryFormed }));
+    await store.append(makeEvent({ event_type: EventType.IdentityCreated }));
     const results = await store.query({
       event_types: [EventType.StateUpdated, EventType.MemoryFormed],
     });
@@ -136,16 +130,12 @@ describe("EventStore", () => {
 
   it("rejects empty event_id", async () => {
     const event = makeEvent({ event_id: "" });
-    await expect(eventStore.append(event)).rejects.toThrow(
-      "event_id must not be empty",
-    );
+    await expect(eventStore.append(event)).rejects.toThrow("event_id must not be empty");
   });
 
   it("rejects empty motebit_id", async () => {
     const event = makeEvent({ motebit_id: "" });
-    await expect(eventStore.append(event)).rejects.toThrow(
-      "motebit_id must not be empty",
-    );
+    await expect(eventStore.append(event)).rejects.toThrow("motebit_id must not be empty");
   });
 
   it("appends valid events", async () => {
@@ -156,15 +146,9 @@ describe("EventStore", () => {
   });
 
   it("replay processes events in version_clock order", async () => {
-    await eventStore.append(
-      makeEvent({ motebit_id: "m1", version_clock: 3 }),
-    );
-    await eventStore.append(
-      makeEvent({ motebit_id: "m1", version_clock: 1 }),
-    );
-    await eventStore.append(
-      makeEvent({ motebit_id: "m1", version_clock: 2 }),
-    );
+    await eventStore.append(makeEvent({ motebit_id: "m1", version_clock: 3 }));
+    await eventStore.append(makeEvent({ motebit_id: "m1", version_clock: 1 }));
+    await eventStore.append(makeEvent({ motebit_id: "m1", version_clock: 2 }));
 
     const order: number[] = [];
     await eventStore.replay("m1", (entry) => {
@@ -175,12 +159,8 @@ describe("EventStore", () => {
   });
 
   it("replay only processes events for the specified motebit", async () => {
-    await eventStore.append(
-      makeEvent({ motebit_id: "m1", version_clock: 1 }),
-    );
-    await eventStore.append(
-      makeEvent({ motebit_id: "m2", version_clock: 2 }),
-    );
+    await eventStore.append(makeEvent({ motebit_id: "m1", version_clock: 1 }));
+    await eventStore.append(makeEvent({ motebit_id: "m2", version_clock: 2 }));
 
     const seen: string[] = [];
     await eventStore.replay("m1", (entry) => {

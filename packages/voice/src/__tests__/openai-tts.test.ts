@@ -55,10 +55,7 @@ let lastFetchBody: Record<string, unknown> | null = null;
 let lastFetchHeaders: Record<string, string> | null = null;
 let lastFetchUrl: string | null = null;
 
-function installFetchMock(options?: {
-  status?: number;
-  body?: string;
-}): void {
+function installFetchMock(options?: { status?: number; body?: string }): void {
   const status = options?.status ?? 200;
   const body = options?.body ?? "";
 
@@ -290,9 +287,7 @@ describe("OpenAITTSProvider", () => {
       apiKey: "sk-test",
       audioContext: ctx as unknown as AudioContext,
     });
-    await expect(provider.speak("bad audio")).rejects.toThrow(
-      "Unable to decode audio data",
-    );
+    await expect(provider.speak("bad audio")).rejects.toThrow("Unable to decode audio data");
     expect(provider.speaking).toBe(false);
   });
 
@@ -388,13 +383,6 @@ describe("OpenAITTSProvider", () => {
   // -------------------------------------------------------------------------
 
   it("exports the list of available voices", () => {
-    expect(TTS_VOICES).toEqual([
-      "alloy",
-      "echo",
-      "fable",
-      "onyx",
-      "nova",
-      "shimmer",
-    ]);
+    expect(TTS_VOICES).toEqual(["alloy", "echo", "fable", "onyx", "nova", "shimmer"]);
   });
 });

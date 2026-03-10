@@ -30,9 +30,9 @@ export class IdbEventStore implements EventStoreAdapter {
         [filter.motebit_id, -Infinity],
         [filter.motebit_id, Infinity],
       );
-      results = await idbRequest(index.getAll(range)) as EventLogEntry[];
+      results = (await idbRequest(index.getAll(range))) as EventLogEntry[];
     } else {
-      results = await idbRequest(store.getAll()) as EventLogEntry[];
+      results = (await idbRequest(store.getAll())) as EventLogEntry[];
     }
 
     // JS-side filtering (events bounded by compaction, so full-scan is fine)
@@ -62,10 +62,7 @@ export class IdbEventStore implements EventStoreAdapter {
     const index = store.index("motebit_clock");
 
     // Open cursor in reverse direction on [motebit_id, version_clock]
-    const range = IDBKeyRange.bound(
-      [motebitId, -Infinity],
-      [motebitId, Infinity],
-    );
+    const range = IDBKeyRange.bound([motebitId, -Infinity], [motebitId, Infinity]);
 
     return new Promise((resolve, reject) => {
       const req = index.openCursor(range, "prev");
@@ -84,7 +81,7 @@ export class IdbEventStore implements EventStoreAdapter {
   async tombstone(eventId: string, _motebitId: string): Promise<void> {
     const tx = this.db.transaction("events", "readwrite");
     const store = tx.objectStore("events");
-    const entry = await idbRequest(store.get(eventId)) as EventLogEntry | undefined;
+    const entry = (await idbRequest(store.get(eventId))) as EventLogEntry | undefined;
     if (entry) {
       entry.tombstoned = true;
       await idbRequest(store.put(entry));
@@ -95,10 +92,7 @@ export class IdbEventStore implements EventStoreAdapter {
     const tx = this.db.transaction("events", "readwrite");
     const store = tx.objectStore("events");
     const index = store.index("motebit_clock");
-    const range = IDBKeyRange.bound(
-      [motebitId, -Infinity],
-      [motebitId, beforeClock],
-    );
+    const range = IDBKeyRange.bound([motebitId, -Infinity], [motebitId, beforeClock]);
 
     let deleted = 0;
     return new Promise((resolve, reject) => {
@@ -121,10 +115,7 @@ export class IdbEventStore implements EventStoreAdapter {
     const tx = this.db.transaction("events", "readonly");
     const store = tx.objectStore("events");
     const index = store.index("motebit_time");
-    const range = IDBKeyRange.bound(
-      [motebitId, -Infinity],
-      [motebitId, Infinity],
-    );
+    const range = IDBKeyRange.bound([motebitId, -Infinity], [motebitId, Infinity]);
     return idbRequest(index.count(range));
   }
 }

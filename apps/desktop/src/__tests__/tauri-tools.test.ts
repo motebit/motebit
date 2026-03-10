@@ -227,9 +227,9 @@ describe("createTauriShellExecHandler", () => {
   });
 
   it("returns error when invoke rejects (e.g. timeout)", async () => {
-    const invoke: InvokeFn = vi.fn().mockRejectedValue(
-      new Error("Command timed out after 30 seconds"),
-    );
+    const invoke: InvokeFn = vi
+      .fn()
+      .mockRejectedValue(new Error("Command timed out after 30 seconds"));
     const handler = createTauriShellExecHandler(invoke);
 
     const result = await handler({ command: "sleep 60" });

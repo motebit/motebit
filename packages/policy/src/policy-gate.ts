@@ -116,7 +116,11 @@ export class PolicyGate {
         crypto.randomUUID(),
         "__operator_mode_change",
         { from: previous, to: enabled },
-        { allowed: true, requiresApproval: false, reason: `Operator mode ${enabled ? "enabled" : "disabled"}` },
+        {
+          allowed: true,
+          requiresApproval: false,
+          reason: `Operator mode ${enabled ? "enabled" : "disabled"}`,
+        },
       );
     }
   }
@@ -177,11 +181,7 @@ export class PolicyGate {
    * Validate a tool call before execution.
    * Returns the policy decision: allowed, needs approval, or denied.
    */
-  validate(
-    tool: ToolDefinition,
-    args: Record<string, unknown>,
-    ctx: TurnContext,
-  ): PolicyDecision {
+  validate(tool: ToolDefinition, args: Record<string, unknown>, ctx: TurnContext): PolicyDecision {
     const profile = this.classify(tool);
     const maxRisk = this.getEffectiveMaxRisk();
     const callId = crypto.randomUUID();
@@ -198,7 +198,8 @@ export class PolicyGate {
     }
 
     // 2. Risk level check — three-band governance when thresholds are set
-    const hasBands = this.config.requireApprovalAbove !== undefined && this.config.denyAbove !== undefined;
+    const hasBands =
+      this.config.requireApprovalAbove !== undefined && this.config.denyAbove !== undefined;
 
     if (hasBands) {
       // Three-band: auto-allow / require-approval / hard-deny
@@ -231,7 +232,10 @@ export class PolicyGate {
         allowed: false,
         requiresApproval: false,
         reason: budgetResult.reason,
-        budgetRemaining: { calls: budgetResult.remaining.calls, timeMs: budgetResult.remaining.timeMs },
+        budgetRemaining: {
+          calls: budgetResult.remaining.calls,
+          timeMs: budgetResult.remaining.timeMs,
+        },
       };
       this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision, ctx.runId);
       return decision;
@@ -259,7 +263,12 @@ export class PolicyGate {
     }
 
     // 5. Domain allowlist check for URL tools — deny on invalid URL
-    if (this.config.domainAllowList && this.config.domainAllowList.length > 0 && args.url && typeof args.url === "string") {
+    if (
+      this.config.domainAllowList &&
+      this.config.domainAllowList.length > 0 &&
+      args.url &&
+      typeof args.url === "string"
+    ) {
       let hostname: string;
       try {
         hostname = new URL(args.url).hostname;
@@ -274,8 +283,8 @@ export class PolicyGate {
         return decision;
       }
 
-      const allowed = this.config.domainAllowList.some((d) =>
-        hostname === d || hostname.endsWith(`.${d}`),
+      const allowed = this.config.domainAllowList.some(
+        (d) => hostname === d || hostname.endsWith(`.${d}`),
       );
       if (!allowed) {
         const decision: PolicyDecision = {
@@ -343,7 +352,10 @@ export class PolicyGate {
     const decision: PolicyDecision = {
       allowed: true,
       requiresApproval: needsApproval,
-      budgetRemaining: { calls: budgetResult.remaining.calls, timeMs: budgetResult.remaining.timeMs },
+      budgetRemaining: {
+        calls: budgetResult.remaining.calls,
+        timeMs: budgetResult.remaining.timeMs,
+      },
     };
 
     this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision, ctx.runId);
@@ -365,7 +377,10 @@ export class PolicyGate {
    * Sanitize a tool result and report whether injection was detected.
    * Used by the agentic loop to yield injection_warning chunks.
    */
-  sanitizeAndCheck(result: ToolResult, toolName: string): {
+  sanitizeAndCheck(
+    result: ToolResult,
+    toolName: string,
+  ): {
     result: ToolResult;
     injectionDetected: boolean;
     injectionPatterns: string[];

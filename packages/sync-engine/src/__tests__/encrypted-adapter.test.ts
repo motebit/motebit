@@ -147,7 +147,7 @@ describe("EncryptedEventStoreAdapter", () => {
 
   it("handles payload with unicode and special characters", async () => {
     const { adapter } = makeAdapter();
-    const payload = { text: "Hello 🌊 world — \"quotes\" & <tags>" };
+    const payload = { text: 'Hello 🌊 world — "quotes" & <tags>' };
     await adapter.append(makeEvent(1, payload));
 
     const results = await adapter.query({ motebit_id: MOTEBIT_ID });

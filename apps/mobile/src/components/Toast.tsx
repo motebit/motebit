@@ -8,7 +8,11 @@ interface ToastProps {
   onDismiss: () => void;
 }
 
-export function Toast({ message, duration = 3000, onDismiss }: ToastProps): React.ReactElement | null {
+export function Toast({
+  message,
+  duration = 3000,
+  onDismiss,
+}: ToastProps): React.ReactElement | null {
   const colors = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const opacity = useRef(new Animated.Value(0)).current;

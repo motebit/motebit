@@ -8,7 +8,11 @@ interface WelcomeOverlayProps {
   onLinkExisting?: () => void;
 }
 
-export function WelcomeOverlay({ visible, onAccept, onLinkExisting }: WelcomeOverlayProps): React.ReactElement {
+export function WelcomeOverlay({
+  visible,
+  onAccept,
+  onLinkExisting,
+}: WelcomeOverlayProps): React.ReactElement {
   const colors = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
@@ -18,19 +22,22 @@ export function WelcomeOverlay({ visible, onAccept, onLinkExisting }: WelcomeOve
         <View style={styles.card}>
           <Text style={styles.title}>Your Motebit</Text>
           <Text style={styles.body}>
-            A motebit is a sovereign AI companion. It generates a cryptographic
-            identity that belongs to you — stored in your device's secure
-            keychain, never on a server.
+            A motebit is a sovereign AI companion. It generates a cryptographic identity that
+            belongs to you — stored in your device's secure keychain, never on a server.
           </Text>
           <Text style={styles.body}>
-            Your private key stays on this device. Your intelligence provider is
-            pluggable. The body is yours.
+            Your private key stays on this device. Your intelligence provider is pluggable. The body
+            is yours.
           </Text>
           <TouchableOpacity style={styles.button} onPress={onAccept} activeOpacity={0.8}>
             <Text style={styles.buttonText}>Create My Mote</Text>
           </TouchableOpacity>
           {onLinkExisting && (
-            <TouchableOpacity style={styles.linkButton} onPress={onLinkExisting} activeOpacity={0.7}>
+            <TouchableOpacity
+              style={styles.linkButton}
+              onPress={onLinkExisting}
+              activeOpacity={0.7}
+            >
               <Text style={styles.linkText}>I have an existing motebit</Text>
             </TouchableOpacity>
           )}

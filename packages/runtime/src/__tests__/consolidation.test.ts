@@ -38,30 +38,23 @@ describe("clusterBySimilarity (episodic consolidation)", () => {
 
     // a+b should cluster, c+d should cluster
     expect(clusters.length).toBe(2);
-    const clusterIds = clusters.map(c => c.map(n => n.node_id).sort());
+    const clusterIds = clusters.map((c) => c.map((n) => n.node_id).sort());
     expect(clusterIds).toContainEqual(["a", "b"]);
     expect(clusterIds).toContainEqual(["c", "d"]);
   });
 
   it("returns singletons for dissimilar vectors", () => {
-    const nodes = [
-      makeNode("a", [1, 0, 0]),
-      makeNode("b", [0, 1, 0]),
-      makeNode("c", [0, 0, 1]),
-    ];
+    const nodes = [makeNode("a", [1, 0, 0]), makeNode("b", [0, 1, 0]), makeNode("c", [0, 0, 1])];
 
     const clusters = clusterBySimilarity(nodes, 0.9);
     expect(clusters.length).toBe(3);
-    expect(clusters.every(c => c.length === 1)).toBe(true);
+    expect(clusters.every((c) => c.length === 1)).toBe(true);
   });
 
   it("pinned memories would be excluded before clustering (filtering is caller responsibility)", () => {
     // This test verifies that the clustering function itself doesn't
     // filter — the caller (consolidateEpisodicMemories) handles filtering
-    const nodes = [
-      makeNode("a", [1, 0, 0], { pinned: true }),
-      makeNode("b", [0.98, 0.02, 0]),
-    ];
+    const nodes = [makeNode("a", [1, 0, 0], { pinned: true }), makeNode("b", [0.98, 0.02, 0])];
 
     // Clustering doesn't know about pinned — it just clusters
     const clusters = clusterBySimilarity(nodes, 0.9);

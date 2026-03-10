@@ -57,7 +57,13 @@ import { EventStore } from "@motebit/event-log";
 import { IdentityManager } from "@motebit/core-identity";
 import { openMotebitDatabase } from "@motebit/persistence";
 import type { MotebitDatabase } from "@motebit/persistence";
-import type { EventLogEntry, ToolAuditEntry, SyncConversation, SyncConversationMessage, ExecutionReceipt } from "@motebit/sdk";
+import type {
+  EventLogEntry,
+  ToolAuditEntry,
+  SyncConversation,
+  SyncConversationMessage,
+  ExecutionReceipt,
+} from "@motebit/sdk";
 import { AgentTaskStatus } from "@motebit/sdk";
 import type { AgentTask } from "@motebit/sdk";
 import type { WSContext } from "hono/ws";
@@ -72,7 +78,9 @@ function hexToBytes(hex: string): Uint8Array {
 }
 
 /** Decode the payload half of a signed token without verifying the signature. */
-function parseTokenPayloadUnsafe(token: string): { mid: string; did: string; iat: number; exp: number } | null {
+function parseTokenPayloadUnsafe(
+  token: string,
+): { mid: string; did: string; iat: number; exp: number } | null {
   const dotIdx = token.indexOf(".");
   if (dotIdx === -1) return null;
   try {
@@ -105,10 +113,10 @@ async function verifySignedTokenForDevice(
 
 export interface SyncRelayConfig {
   dbPath?: string;
-  apiToken?: string;       // Legacy single token (still supported as admin/master token)
+  apiToken?: string; // Legacy single token (still supported as admin/master token)
   corsOrigin?: string;
-  enableDeviceAuth?: boolean;  // When true, validates per-device tokens (default: true)
-  verifyDeviceSignature?: boolean;  // When true, uses Ed25519 signed token verification (default: true)
+  enableDeviceAuth?: boolean; // When true, validates per-device tokens (default: true)
+  verifyDeviceSignature?: boolean; // When true, uses Ed25519 signed token verification (default: true)
 }
 
 export interface ConnectedDevice {
@@ -134,11 +142,19 @@ const PAIRING_TTL_MS = 5 * 60 * 1000; // 5 minutes
 function generatePairingCode(): string {
   const bytes = new Uint8Array(PAIRING_CODE_LENGTH);
   crypto.getRandomValues(bytes);
-  return Array.from(bytes).map(b => PAIRING_ALPHABET[b % PAIRING_ALPHABET.length]).join("");
+  return Array.from(bytes)
+    .map((b) => PAIRING_ALPHABET[b % PAIRING_ALPHABET.length])
+    .join("");
 }
 
 export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<SyncRelay> {
-  const { dbPath = ":memory:", apiToken, corsOrigin = "*", enableDeviceAuth = true, verifyDeviceSignature = true } = config;
+  const {
+    dbPath = ":memory:",
+    apiToken,
+    corsOrigin = "*",
+    enableDeviceAuth = true,
+    verifyDeviceSignature = true,
+  } = config;
 
   const moteDb: MotebitDatabase = await openMotebitDatabase(dbPath);
   const eventStore = new EventStore(moteDb.eventStore);
@@ -210,7 +226,10 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // In-memory agent task queue: task_id → { task, receipt?, expiresAt }
   const TASK_TTL_MS = 10 * 60 * 1000; // 10 minutes
-  const taskQueue = new Map<string, { task: AgentTask; receipt?: ExecutionReceipt; expiresAt: number }>();
+  const taskQueue = new Map<
+    string,
+    { task: AgentTask; receipt?: ExecutionReceipt; expiresAt: number }
+  >();
 
   // Periodic cleanup of expired tasks and agent registrations
   const taskCleanupInterval = setInterval(() => {
@@ -342,7 +361,9 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
         async onMessage(event, ws) {
           try {
             const raw = event.data;
-            const msg = JSON.parse(typeof raw === "string" ? raw : new TextDecoder().decode(raw as ArrayBuffer)) as {
+            const msg = JSON.parse(
+              typeof raw === "string" ? raw : new TextDecoder().decode(raw as ArrayBuffer),
+            ) as {
               type: string;
               events?: EventLogEntry[];
               conversations?: SyncConversation[];
@@ -354,9 +375,21 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
             if (msg.type === "task_claim" && msg.task_id) {
               const entry = taskQueue.get(msg.task_id);
               if (!entry || entry.task.motebit_id !== motebitId) {
-                ws.send(JSON.stringify({ type: "task_claim_rejected", task_id: msg.task_id, reason: "Task not found" }));
+                ws.send(
+                  JSON.stringify({
+                    type: "task_claim_rejected",
+                    task_id: msg.task_id,
+                    reason: "Task not found",
+                  }),
+                );
               } else if (entry.task.status !== AgentTaskStatus.Pending) {
-                ws.send(JSON.stringify({ type: "task_claim_rejected", task_id: msg.task_id, reason: "Task already claimed" }));
+                ws.send(
+                  JSON.stringify({
+                    type: "task_claim_rejected",
+                    task_id: msg.task_id,
+                    reason: "Task already claimed",
+                  }),
+                );
               } else {
                 entry.task.status = AgentTaskStatus.Claimed;
                 entry.task.claimed_by = deviceId;
@@ -390,7 +423,9 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
               for (const conv of msg.conversations) {
                 upsertSyncConversation(conv);
               }
-              ws.send(JSON.stringify({ type: "ack_conversations", accepted: msg.conversations.length }));
+              ws.send(
+                JSON.stringify({ type: "ack_conversations", accepted: msg.conversations.length }),
+              );
 
               // Fan out conversation updates to peers
               const peers = connections.get(motebitId);
@@ -433,7 +468,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
         onClose(_event, ws) {
           const peers = connections.get(motebitId);
           if (peers) {
-            const idx = peers.findIndex(p => p.ws === ws);
+            const idx = peers.findIndex((p) => p.ws === ws);
             if (idx !== -1) peers.splice(idx, 1);
             if (peers.length === 0) connections.delete(motebitId);
           }
@@ -447,7 +482,9 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     const motebitId = c.req.param("motebitId");
     const body = await c.req.json<{ events: EventLogEntry[] }>();
     if (!Array.isArray(body.events)) {
-      throw new HTTPException(400, { message: "Missing or invalid 'events' field (must be array)" });
+      throw new HTTPException(400, {
+        message: "Missing or invalid 'events' field (must be array)",
+      });
     }
     for (const event of body.events) {
       await eventStore.append(event);
@@ -490,18 +527,31 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // --- Device: register ---
   app.post("/device/register", async (c) => {
-    const body = await c.req.json<{ motebit_id: string; device_name?: string; public_key?: string }>();
+    const body = await c.req.json<{
+      motebit_id: string;
+      device_name?: string;
+      public_key?: string;
+    }>();
     if (!body.motebit_id) {
       throw new HTTPException(400, { message: "Missing 'motebit_id' field" });
     }
-    if (body.public_key !== undefined && (typeof body.public_key !== "string" || !/^[0-9a-f]{64}$/i.test(body.public_key))) {
-      throw new HTTPException(400, { message: "Invalid 'public_key' — must be 64-char hex string (32 bytes Ed25519 public key)" });
+    if (
+      body.public_key !== undefined &&
+      (typeof body.public_key !== "string" || !/^[0-9a-f]{64}$/i.test(body.public_key))
+    ) {
+      throw new HTTPException(400, {
+        message: "Invalid 'public_key' — must be 64-char hex string (32 bytes Ed25519 public key)",
+      });
     }
     const identity = await identityManager.load(body.motebit_id);
     if (!identity) {
       throw new HTTPException(404, { message: "Identity not found" });
     }
-    const device = await identityManager.registerDevice(body.motebit_id, body.device_name, body.public_key);
+    const device = await identityManager.registerDevice(
+      body.motebit_id,
+      body.device_name,
+      body.public_key,
+    );
     return c.json(device, 201);
   });
 
@@ -523,9 +573,10 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     const turnId = c.req.query("turn_id");
     let entries: ToolAuditEntry[] = [];
     if (moteDb.toolAuditSink != null) {
-      entries = turnId != null && turnId !== ""
-        ? moteDb.toolAuditSink.query(turnId)
-        : moteDb.toolAuditSink.getAll();
+      entries =
+        turnId != null && turnId !== ""
+          ? moteDb.toolAuditSink.query(turnId)
+          : moteDb.toolAuditSink.getAll();
     }
     return c.json({ motebit_id: motebitId, entries });
   });
@@ -557,9 +608,11 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   app.get("/api/v1/gradient/:motebitId", (c) => {
     const motebitId = c.req.param("motebitId");
     const limit = Number(c.req.query("limit") ?? "100");
-    const rows = moteDb.db.prepare(
-      `SELECT * FROM gradient_snapshots WHERE motebit_id = ? ORDER BY timestamp DESC LIMIT ?`,
-    ).all(motebitId, limit) as Array<{
+    const rows = moteDb.db
+      .prepare(
+        `SELECT * FROM gradient_snapshots WHERE motebit_id = ? ORDER BY timestamp DESC LIMIT ?`,
+      )
+      .all(motebitId, limit) as Array<{
       motebit_id: string;
       timestamp: number;
       gradient: number;
@@ -631,9 +684,9 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   // --- Conversations: list all (from sync relay storage) ---
   app.get("/api/v1/conversations/:motebitId", (c) => {
     const motebitId = c.req.param("motebitId");
-    const conversations = moteDb.db.prepare(
-      `SELECT * FROM sync_conversations WHERE motebit_id = ? ORDER BY last_active_at DESC`,
-    ).all(motebitId) as Array<Record<string, unknown>>;
+    const conversations = moteDb.db
+      .prepare(`SELECT * FROM sync_conversations WHERE motebit_id = ? ORDER BY last_active_at DESC`)
+      .all(motebitId) as Array<Record<string, unknown>>;
     return c.json({ motebit_id: motebitId, conversations });
   });
 
@@ -641,9 +694,11 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   app.get("/api/v1/conversations/:motebitId/:conversationId/messages", (c) => {
     const motebitId = c.req.param("motebitId");
     const conversationId = c.req.param("conversationId");
-    const messages = moteDb.db.prepare(
-      `SELECT * FROM sync_conversation_messages WHERE conversation_id = ? AND motebit_id = ? ORDER BY created_at ASC`,
-    ).all(conversationId, motebitId) as Array<Record<string, unknown>>;
+    const messages = moteDb.db
+      .prepare(
+        `SELECT * FROM sync_conversation_messages WHERE conversation_id = ? AND motebit_id = ? ORDER BY created_at ASC`,
+      )
+      .all(conversationId, motebitId) as Array<Record<string, unknown>>;
     return c.json({ motebit_id: motebitId, conversation_id: conversationId, messages });
   });
 
@@ -686,7 +741,9 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   });
 
   // --- Pairing: helper to verify device auth and extract motebitId ---
-  async function verifyPairingAuth(authHeader: string | undefined): Promise<{ motebitId: string; deviceId: string } | null> {
+  async function verifyPairingAuth(
+    authHeader: string | undefined,
+  ): Promise<{ motebitId: string; deviceId: string } | null> {
     if (authHeader == null || !authHeader.startsWith("Bearer ")) return null;
     const token = authHeader.slice(7);
 
@@ -716,17 +773,25 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     const now = Date.now();
     const expiresAt = now + PAIRING_TTL_MS;
 
-    moteDb.db.prepare(`
+    moteDb.db
+      .prepare(
+        `
       INSERT INTO pairing_sessions (pairing_id, motebit_id, initiator_device_id, pairing_code, status, created_at, expires_at)
       VALUES (?, ?, ?, ?, 'pending', ?, ?)
-    `).run(pairingId, device.motebitId, device.deviceId, pairingCode, now, expiresAt);
+    `,
+      )
+      .run(pairingId, device.motebitId, device.deviceId, pairingCode, now, expiresAt);
 
     return c.json({ pairing_id: pairingId, pairing_code: pairingCode, expires_at: expiresAt }, 201);
   });
 
   // --- Pairing: claim (Device B, no auth) ---
   app.post("/pairing/claim", async (c) => {
-    const body = await c.req.json<{ pairing_code: string; device_name: string; public_key: string }>();
+    const body = await c.req.json<{
+      pairing_code: string;
+      device_name: string;
+      public_key: string;
+    }>();
     const { pairing_code, device_name, public_key } = body;
 
     if (!pairing_code || typeof pairing_code !== "string" || !/^[A-Z2-9]{6}$/.test(pairing_code)) {
@@ -739,9 +804,13 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       throw new HTTPException(400, { message: "Invalid public_key — must be 64-char hex string" });
     }
 
-    const session = moteDb.db.prepare(`
+    const session = moteDb.db
+      .prepare(
+        `
       SELECT * FROM pairing_sessions WHERE pairing_code = ?
-    `).get(pairing_code) as Record<string, unknown> | undefined;
+    `,
+      )
+      .get(pairing_code) as Record<string, unknown> | undefined;
 
     if (!session) {
       throw new HTTPException(404, { message: "Invalid pairing code" });
@@ -753,9 +822,13 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       throw new HTTPException(409, { message: "Pairing code already used" });
     }
 
-    moteDb.db.prepare(`
+    moteDb.db
+      .prepare(
+        `
       UPDATE pairing_sessions SET status = 'claimed', claiming_device_name = ?, claiming_public_key = ? WHERE pairing_id = ?
-    `).run(device_name, public_key, session.pairing_id as string);
+    `,
+      )
+      .run(device_name, public_key, session.pairing_id as string);
 
     return c.json({ pairing_id: session.pairing_id, motebit_id: session.motebit_id });
   });
@@ -768,9 +841,13 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     }
 
     const pairingId = c.req.param("pairingId");
-    const session = moteDb.db.prepare(`
+    const session = moteDb.db
+      .prepare(
+        `
       SELECT * FROM pairing_sessions WHERE pairing_id = ?
-    `).get(pairingId) as Record<string, unknown> | undefined;
+    `,
+      )
+      .get(pairingId) as Record<string, unknown> | undefined;
 
     if (!session) {
       throw new HTTPException(404, { message: "Pairing session not found" });
@@ -799,9 +876,13 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     }
 
     const pairingId = c.req.param("pairingId");
-    const session = moteDb.db.prepare(`
+    const session = moteDb.db
+      .prepare(
+        `
       SELECT * FROM pairing_sessions WHERE pairing_id = ?
-    `).get(pairingId) as Record<string, unknown> | undefined;
+    `,
+      )
+      .get(pairingId) as Record<string, unknown> | undefined;
 
     if (!session) {
       throw new HTTPException(404, { message: "Pairing session not found" });
@@ -810,7 +891,9 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       throw new HTTPException(403, { message: "Not authorized for this pairing session" });
     }
     if ((session.status as string) !== "claimed") {
-      throw new HTTPException(409, { message: `Cannot approve — status is '${String(session.status)}'` });
+      throw new HTTPException(409, {
+        message: `Cannot approve — status is '${String(session.status)}'`,
+      });
     }
 
     // Register the claiming device under the same motebit identity
@@ -820,9 +903,13 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       session.claiming_public_key as string,
     );
 
-    moteDb.db.prepare(`
+    moteDb.db
+      .prepare(
+        `
       UPDATE pairing_sessions SET status = 'approved', approved_device_id = ?, approved_device_token = ? WHERE pairing_id = ?
-    `).run(registeredDevice.device_id, registeredDevice.device_token, pairingId);
+    `,
+      )
+      .run(registeredDevice.device_id, registeredDevice.device_token, pairingId);
 
     return c.json({
       device_id: registeredDevice.device_id,
@@ -839,9 +926,13 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     }
 
     const pairingId = c.req.param("pairingId");
-    const session = moteDb.db.prepare(`
+    const session = moteDb.db
+      .prepare(
+        `
       SELECT * FROM pairing_sessions WHERE pairing_id = ?
-    `).get(pairingId) as Record<string, unknown> | undefined;
+    `,
+      )
+      .get(pairingId) as Record<string, unknown> | undefined;
 
     if (!session) {
       throw new HTTPException(404, { message: "Pairing session not found" });
@@ -850,9 +941,13 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       throw new HTTPException(403, { message: "Not authorized for this pairing session" });
     }
 
-    moteDb.db.prepare(`
+    moteDb.db
+      .prepare(
+        `
       UPDATE pairing_sessions SET status = 'denied' WHERE pairing_id = ?
-    `).run(pairingId);
+    `,
+      )
+      .run(pairingId);
 
     return c.json({ status: "denied" });
   });
@@ -860,9 +955,13 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   // --- Pairing: status (Device B polls, no auth) ---
   app.get("/pairing/:pairingId/status", (c) => {
     const pairingId = c.req.param("pairingId");
-    const session = moteDb.db.prepare(`
+    const session = moteDb.db
+      .prepare(
+        `
       SELECT status, motebit_id, approved_device_id, approved_device_token FROM pairing_sessions WHERE pairing_id = ?
-    `).get(pairingId) as Record<string, unknown> | undefined;
+    `,
+      )
+      .get(pairingId) as Record<string, unknown> | undefined;
 
     if (!session) {
       throw new HTTPException(404, { message: "Pairing session not found" });
@@ -881,41 +980,45 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   // === Conversation Sync Helpers ===
 
   function upsertSyncConversation(conv: SyncConversation): void {
-    moteDb.db.prepare(
-      `INSERT INTO sync_conversations (conversation_id, motebit_id, started_at, last_active_at, title, summary, message_count)
+    moteDb.db
+      .prepare(
+        `INSERT INTO sync_conversations (conversation_id, motebit_id, started_at, last_active_at, title, summary, message_count)
        VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(conversation_id) DO UPDATE SET
          last_active_at = MAX(excluded.last_active_at, sync_conversations.last_active_at),
          title = CASE WHEN excluded.last_active_at >= sync_conversations.last_active_at THEN excluded.title ELSE sync_conversations.title END,
          summary = CASE WHEN excluded.last_active_at >= sync_conversations.last_active_at THEN excluded.summary ELSE sync_conversations.summary END,
          message_count = MAX(excluded.message_count, sync_conversations.message_count)`,
-    ).run(
-      conv.conversation_id,
-      conv.motebit_id,
-      conv.started_at,
-      conv.last_active_at,
-      conv.title,
-      conv.summary,
-      conv.message_count,
-    );
+      )
+      .run(
+        conv.conversation_id,
+        conv.motebit_id,
+        conv.started_at,
+        conv.last_active_at,
+        conv.title,
+        conv.summary,
+        conv.message_count,
+      );
   }
 
   function upsertSyncMessage(msg: SyncConversationMessage): void {
-    moteDb.db.prepare(
-      `INSERT OR IGNORE INTO sync_conversation_messages
+    moteDb.db
+      .prepare(
+        `INSERT OR IGNORE INTO sync_conversation_messages
        (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      msg.message_id,
-      msg.conversation_id,
-      msg.motebit_id,
-      msg.role,
-      msg.content,
-      msg.tool_calls,
-      msg.tool_call_id,
-      msg.created_at,
-      msg.token_estimate,
-    );
+      )
+      .run(
+        msg.message_id,
+        msg.conversation_id,
+        msg.motebit_id,
+        msg.role,
+        msg.content,
+        msg.tool_calls,
+        msg.tool_call_id,
+        msg.created_at,
+        msg.token_estimate,
+      );
   }
 
   // --- Conversation Sync: push conversations ---
@@ -923,7 +1026,9 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     const motebitId = c.req.param("motebitId");
     const body = await c.req.json<{ conversations: SyncConversation[] }>();
     if (!Array.isArray(body.conversations)) {
-      throw new HTTPException(400, { message: "Missing or invalid 'conversations' field (must be array)" });
+      throw new HTTPException(400, {
+        message: "Missing or invalid 'conversations' field (must be array)",
+      });
     }
     for (const conv of body.conversations) {
       upsertSyncConversation(conv);
@@ -950,9 +1055,11 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   app.get("/sync/:motebitId/conversations", (c) => {
     const motebitId = c.req.param("motebitId");
     const since = Number(c.req.query("since") ?? "0");
-    const rows = moteDb.db.prepare(
-      `SELECT * FROM sync_conversations WHERE motebit_id = ? AND last_active_at > ? ORDER BY last_active_at ASC`,
-    ).all(motebitId, since) as SyncConversation[];
+    const rows = moteDb.db
+      .prepare(
+        `SELECT * FROM sync_conversations WHERE motebit_id = ? AND last_active_at > ? ORDER BY last_active_at ASC`,
+      )
+      .all(motebitId, since) as SyncConversation[];
     return c.json({ motebit_id: motebitId, conversations: rows, since });
   });
 
@@ -961,7 +1068,9 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     const motebitId = c.req.param("motebitId");
     const body = await c.req.json<{ messages: SyncConversationMessage[] }>();
     if (!Array.isArray(body.messages)) {
-      throw new HTTPException(400, { message: "Missing or invalid 'messages' field (must be array)" });
+      throw new HTTPException(400, {
+        message: "Missing or invalid 'messages' field (must be array)",
+      });
     }
     for (const msg of body.messages) {
       upsertSyncMessage(msg);
@@ -992,10 +1101,17 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     if (conversationId == null || conversationId === "") {
       throw new HTTPException(400, { message: "Missing 'conversation_id' query parameter" });
     }
-    const rows = moteDb.db.prepare(
-      `SELECT * FROM sync_conversation_messages WHERE conversation_id = ? AND motebit_id = ? AND created_at > ? ORDER BY created_at ASC`,
-    ).all(conversationId, motebitId, since) as SyncConversationMessage[];
-    return c.json({ motebit_id: motebitId, conversation_id: conversationId, messages: rows, since });
+    const rows = moteDb.db
+      .prepare(
+        `SELECT * FROM sync_conversation_messages WHERE conversation_id = ? AND motebit_id = ? AND created_at > ? ORDER BY created_at ASC`,
+      )
+      .all(conversationId, motebitId, since) as SyncConversationMessage[];
+    return c.json({
+      motebit_id: motebitId,
+      conversation_id: conversationId,
+      messages: rows,
+      since,
+    });
   });
 
   // === Agent Protocol Endpoints ===
@@ -1006,7 +1122,11 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       // Only apply master token auth to POST (submit) requests
       if (c.req.method === "POST" && !c.req.url.includes("/result")) {
         const authHeader = c.req.header("authorization");
-        if (authHeader == null || !authHeader.startsWith("Bearer ") || authHeader.slice(7) !== apiToken) {
+        if (
+          authHeader == null ||
+          !authHeader.startsWith("Bearer ") ||
+          authHeader.slice(7) !== apiToken
+        ) {
           throw new HTTPException(401, { message: "Master token required" });
         }
       }
@@ -1016,7 +1136,11 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   app.post("/agent/:motebitId/task", async (c) => {
     const motebitId = c.req.param("motebitId");
-    const body = await c.req.json<{ prompt: string; submitted_by?: string; wall_clock_ms?: number }>();
+    const body = await c.req.json<{
+      prompt: string;
+      submitted_by?: string;
+      wall_clock_ms?: number;
+    }>();
 
     if (!body.prompt || typeof body.prompt !== "string" || body.prompt.trim() === "") {
       throw new HTTPException(400, { message: "Missing or empty 'prompt' field" });
@@ -1091,11 +1215,12 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
     const receipt = await c.req.json<ExecutionReceipt>();
     entry.receipt = receipt;
-    entry.task.status = receipt.status === "completed"
-      ? AgentTaskStatus.Completed
-      : receipt.status === "denied"
-        ? AgentTaskStatus.Denied
-        : AgentTaskStatus.Failed;
+    entry.task.status =
+      receipt.status === "completed"
+        ? AgentTaskStatus.Completed
+        : receipt.status === "denied"
+          ? AgentTaskStatus.Denied
+          : AgentTaskStatus.Failed;
 
     // Fan out task_result to all connected devices
     const peers = connections.get(motebitId);
@@ -1196,7 +1321,12 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
 
     // For master token, require motebit_id in body
-    const body = await c.req.json<{ motebit_id?: string; endpoint_url: string; capabilities: string[]; metadata?: { name?: string; description?: string } }>();
+    const body = await c.req.json<{
+      motebit_id?: string;
+      endpoint_url: string;
+      capabilities: string[];
+      metadata?: { name?: string; description?: string };
+    }>();
     const motebitId = callerMotebitId ?? body.motebit_id;
     if (!motebitId || typeof motebitId !== "string") {
       throw new HTTPException(400, { message: "Missing motebit_id" });
@@ -1206,7 +1336,9 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       throw new HTTPException(400, { message: "Missing or invalid 'endpoint_url'" });
     }
     if (!Array.isArray(body.capabilities)) {
-      throw new HTTPException(400, { message: "Missing or invalid 'capabilities' (must be array)" });
+      throw new HTTPException(400, {
+        message: "Missing or invalid 'capabilities' (must be array)",
+      });
     }
 
     // Look up public key from devices
@@ -1217,7 +1349,9 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     const now = Date.now();
     const expiresAt = now + 15 * 60 * 1000; // 15 minutes
 
-    moteDb.db.prepare(`
+    moteDb.db
+      .prepare(
+        `
       INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, capabilities, metadata, registered_at, last_heartbeat, expires_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(motebit_id) DO UPDATE SET
@@ -1227,16 +1361,18 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
         metadata = excluded.metadata,
         last_heartbeat = excluded.last_heartbeat,
         expires_at = excluded.expires_at
-    `).run(
-      motebitId,
-      publicKey,
-      body.endpoint_url,
-      JSON.stringify(body.capabilities),
-      body.metadata ? JSON.stringify(body.metadata) : null,
-      now,
-      now,
-      expiresAt,
-    );
+    `,
+      )
+      .run(
+        motebitId,
+        publicKey,
+        body.endpoint_url,
+        JSON.stringify(body.capabilities),
+        body.metadata ? JSON.stringify(body.metadata) : null,
+        now,
+        now,
+        expiresAt,
+      );
 
     return c.json({ registered: true, motebit_id: motebitId, expires_at: expiresAt });
   });
@@ -1251,9 +1387,13 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     const now = Date.now();
     const expiresAt = now + 15 * 60 * 1000;
 
-    const result = moteDb.db.prepare(`
+    const result = moteDb.db
+      .prepare(
+        `
       UPDATE agent_registry SET last_heartbeat = ?, expires_at = ? WHERE motebit_id = ?
-    `).run(now, expiresAt, callerMotebitId);
+    `,
+      )
+      .run(now, expiresAt, callerMotebitId);
 
     if (result.changes === 0) {
       throw new HTTPException(404, { message: "Agent not registered" });
@@ -1273,27 +1413,43 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     let rows: Array<Record<string, unknown>>;
 
     if (capability && motebitId) {
-      rows = moteDb.db.prepare(`
+      rows = moteDb.db
+        .prepare(
+          `
         SELECT * FROM agent_registry
         WHERE expires_at > ? AND motebit_id = ?
           AND EXISTS (SELECT 1 FROM json_each(capabilities) WHERE value = ?)
         LIMIT ?
-      `).all(now, motebitId, capability, limit) as Array<Record<string, unknown>>;
+      `,
+        )
+        .all(now, motebitId, capability, limit) as Array<Record<string, unknown>>;
     } else if (capability) {
-      rows = moteDb.db.prepare(`
+      rows = moteDb.db
+        .prepare(
+          `
         SELECT * FROM agent_registry
         WHERE expires_at > ?
           AND EXISTS (SELECT 1 FROM json_each(capabilities) WHERE value = ?)
         LIMIT ?
-      `).all(now, capability, limit) as Array<Record<string, unknown>>;
+      `,
+        )
+        .all(now, capability, limit) as Array<Record<string, unknown>>;
     } else if (motebitId) {
-      rows = moteDb.db.prepare(`
+      rows = moteDb.db
+        .prepare(
+          `
         SELECT * FROM agent_registry WHERE expires_at > ? AND motebit_id = ? LIMIT ?
-      `).all(now, motebitId, limit) as Array<Record<string, unknown>>;
+      `,
+        )
+        .all(now, motebitId, limit) as Array<Record<string, unknown>>;
     } else {
-      rows = moteDb.db.prepare(`
+      rows = moteDb.db
+        .prepare(
+          `
         SELECT * FROM agent_registry WHERE expires_at > ? LIMIT ?
-      `).all(now, limit) as Array<Record<string, unknown>>;
+      `,
+        )
+        .all(now, limit) as Array<Record<string, unknown>>;
     }
 
     const agents = rows.map((r) => ({
@@ -1301,7 +1457,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       public_key: r.public_key,
       endpoint_url: r.endpoint_url,
       capabilities: JSON.parse(r.capabilities as string) as string[],
-      metadata: r.metadata ? JSON.parse(r.metadata as string) as Record<string, unknown> : null,
+      metadata: r.metadata ? (JSON.parse(r.metadata as string) as Record<string, unknown>) : null,
     }));
 
     return c.json({ agents });
@@ -1312,9 +1468,13 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     const motebitId = c.req.param("motebitId");
     const now = Date.now();
 
-    const row = moteDb.db.prepare(`
+    const row = moteDb.db
+      .prepare(
+        `
       SELECT * FROM agent_registry WHERE motebit_id = ? AND expires_at > ?
-    `).get(motebitId, now) as Record<string, unknown> | undefined;
+    `,
+      )
+      .get(motebitId, now) as Record<string, unknown> | undefined;
 
     if (!row) {
       throw new HTTPException(404, { message: "Agent not found" });
@@ -1325,7 +1485,9 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       public_key: row.public_key,
       endpoint_url: row.endpoint_url,
       capabilities: JSON.parse(row.capabilities as string) as string[],
-      metadata: row.metadata ? JSON.parse(row.metadata as string) as Record<string, unknown> : null,
+      metadata: row.metadata
+        ? (JSON.parse(row.metadata as string) as Record<string, unknown>)
+        : null,
     });
   });
 

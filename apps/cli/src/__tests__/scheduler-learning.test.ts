@@ -28,12 +28,14 @@ interface MockRuntimeResult {
   memoryGraph: MockMemoryGraph;
 }
 
-function createMockRuntime(opts: {
-  yieldApproval?: boolean;
-  onStream?: (registeredTools: Map<string, ToolHandler>) => Promise<void>;
-  streamText?: string;
-  relevantMemories?: MemoryNode[];
-} = {}): MockRuntimeResult {
+function createMockRuntime(
+  opts: {
+    yieldApproval?: boolean;
+    onStream?: (registeredTools: Map<string, ToolHandler>) => Promise<void>;
+    streamText?: string;
+    relevantMemories?: MemoryNode[];
+  } = {},
+): MockRuntimeResult {
   let _hasPending = false;
   const registeredTools = new Map<string, ToolHandler>();
   const eventsAppended: Array<{ event_type: string; payload: Record<string, unknown> }> = [];
@@ -81,9 +83,7 @@ function createMockRuntime(opts: {
       register: vi.fn().mockImplementation((def: ToolDefinition, handler: ToolHandler) => {
         registeredTools.set(def.name, handler);
       }),
-      list: vi.fn().mockReturnValue([
-        { name: "shell_exec", description: "Execute shell command" },
-      ]),
+      list: vi.fn().mockReturnValue([{ name: "shell_exec", description: "Execute shell command" }]),
     }),
     getLoopDeps: vi.fn().mockReturnValue({
       motebitId: "mote-test",
@@ -126,8 +126,8 @@ function makeGoal(overrides: Partial<Goal> = {}): Goal {
     parent_goal_id: null,
     max_retries: 3,
     consecutive_failures: 0,
-      wall_clock_ms: null,
-      project_id: null,
+    wall_clock_ms: null,
+    project_id: null,
     ...overrides,
   };
 }
@@ -145,12 +145,18 @@ describe("GoalScheduler — learning loop", () => {
 
   describe("goal outcome → memory", () => {
     it("forms a memory from completed goal outcome", async () => {
-      const { runtime, memoryGraph } = createMockRuntime({ streamText: "System health check passed. All services running." });
+      const { runtime, memoryGraph } = createMockRuntime({
+        streamText: "System health check passed. All services running.",
+      });
       moteDb.goalStore.add(makeGoal());
 
       const scheduler = new GoalScheduler(
-        runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore,
-        "mote-test", RiskLevel.R3_EXECUTE,
+        runtime,
+        moteDb.goalStore,
+        moteDb.approvalStore,
+        moteDb.goalOutcomeStore,
+        "mote-test",
+        RiskLevel.R3_EXECUTE,
       );
       scheduler.registerGoalTools();
       await scheduler.tickOnce();
@@ -175,8 +181,12 @@ describe("GoalScheduler — learning loop", () => {
       moteDb.goalStore.add(makeGoal());
 
       const scheduler = new GoalScheduler(
-        runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore,
-        "mote-test", RiskLevel.R3_EXECUTE,
+        runtime,
+        moteDb.goalStore,
+        moteDb.approvalStore,
+        moteDb.goalOutcomeStore,
+        "mote-test",
+        RiskLevel.R3_EXECUTE,
       );
       scheduler.registerGoalTools();
       await scheduler.tickOnce();
@@ -246,8 +256,12 @@ describe("GoalScheduler — learning loop", () => {
       } as unknown as PlanEngine;
 
       const scheduler = new GoalScheduler(
-        runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore,
-        "mote-test", RiskLevel.R3_EXECUTE,
+        runtime,
+        moteDb.goalStore,
+        moteDb.approvalStore,
+        moteDb.goalOutcomeStore,
+        "mote-test",
+        RiskLevel.R3_EXECUTE,
       );
       scheduler.registerGoalTools();
       scheduler.setPlanEngine(mockPlanEngine, planStore as unknown as PlanStoreAdapter);
@@ -294,10 +308,15 @@ describe("GoalScheduler — learning loop", () => {
         isExecuting: false,
         createPlan: vi.fn().mockResolvedValue({
           plan: {
-            plan_id: "plan-2", goal_id: "goal-001", motebit_id: "mote-test",
-            title: "Empty reflection", status: "active",
-            created_at: Date.now(), updated_at: Date.now(),
-            current_step_index: 0, total_steps: 1,
+            plan_id: "plan-2",
+            goal_id: "goal-001",
+            motebit_id: "mote-test",
+            title: "Empty reflection",
+            status: "active",
+            created_at: Date.now(),
+            updated_at: Date.now(),
+            current_step_index: 0,
+            total_steps: 1,
           },
         }),
         executePlan: vi.fn().mockImplementation(async function* () {
@@ -312,8 +331,12 @@ describe("GoalScheduler — learning loop", () => {
       } as unknown as PlanEngine;
 
       const scheduler = new GoalScheduler(
-        runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore,
-        "mote-test", RiskLevel.R3_EXECUTE,
+        runtime,
+        moteDb.goalStore,
+        moteDb.approvalStore,
+        moteDb.goalOutcomeStore,
+        "mote-test",
+        RiskLevel.R3_EXECUTE,
       );
       scheduler.registerGoalTools();
       scheduler.setPlanEngine(mockPlanEngine, planStore as unknown as PlanStoreAdapter);
@@ -328,18 +351,30 @@ describe("GoalScheduler — learning loop", () => {
     it("retrieves relevant memories and passes them to plan decomposition", async () => {
       const relevantMemories: MemoryNode[] = [
         {
-          node_id: "n1", motebit_id: "mote-test",
+          node_id: "n1",
+          motebit_id: "mote-test",
           content: "[goal_learning] Health check takes ~5 seconds",
-          embedding: [], confidence: 0.7, sensitivity: "none" as any,
-          created_at: Date.now(), last_accessed: Date.now(),
-          half_life: 604800000, tombstoned: false, pinned: false,
+          embedding: [],
+          confidence: 0.7,
+          sensitivity: "none" as any,
+          created_at: Date.now(),
+          last_accessed: Date.now(),
+          half_life: 604800000,
+          tombstoned: false,
+          pinned: false,
         },
         {
-          node_id: "n2", motebit_id: "mote-test",
+          node_id: "n2",
+          motebit_id: "mote-test",
           content: "[goal_outcome] Previous health check found slow DB queries",
-          embedding: [], confidence: 0.6, sensitivity: "none" as any,
-          created_at: Date.now(), last_accessed: Date.now(),
-          half_life: 604800000, tombstoned: false, pinned: false,
+          embedding: [],
+          confidence: 0.6,
+          sensitivity: "none" as any,
+          created_at: Date.now(),
+          last_accessed: Date.now(),
+          half_life: 604800000,
+          tombstoned: false,
+          pinned: false,
         },
       ];
 
@@ -349,10 +384,15 @@ describe("GoalScheduler — learning loop", () => {
       const planStore = new InMemoryPlanStore();
       const createPlanSpy = vi.fn().mockResolvedValue({
         plan: {
-          plan_id: "plan-3", goal_id: "goal-001", motebit_id: "mote-test",
-          title: "Informed plan", status: "active",
-          created_at: Date.now(), updated_at: Date.now(),
-          current_step_index: 0, total_steps: 1,
+          plan_id: "plan-3",
+          goal_id: "goal-001",
+          motebit_id: "mote-test",
+          title: "Informed plan",
+          status: "active",
+          created_at: Date.now(),
+          updated_at: Date.now(),
+          current_step_index: 0,
+          total_steps: 1,
         },
       });
 
@@ -367,8 +407,12 @@ describe("GoalScheduler — learning loop", () => {
       } as unknown as PlanEngine;
 
       const scheduler = new GoalScheduler(
-        runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore,
-        "mote-test", RiskLevel.R3_EXECUTE,
+        runtime,
+        moteDb.goalStore,
+        moteDb.approvalStore,
+        moteDb.goalOutcomeStore,
+        "mote-test",
+        RiskLevel.R3_EXECUTE,
       );
       scheduler.registerGoalTools();
       scheduler.setPlanEngine(mockPlanEngine, planStore as unknown as PlanStoreAdapter);
@@ -393,10 +437,15 @@ describe("GoalScheduler — learning loop", () => {
       const planStore = new InMemoryPlanStore();
       const createPlanSpy = vi.fn().mockResolvedValue({
         plan: {
-          plan_id: "plan-4", goal_id: "goal-001", motebit_id: "mote-test",
-          title: "No memories", status: "active",
-          created_at: Date.now(), updated_at: Date.now(),
-          current_step_index: 0, total_steps: 1,
+          plan_id: "plan-4",
+          goal_id: "goal-001",
+          motebit_id: "mote-test",
+          title: "No memories",
+          status: "active",
+          created_at: Date.now(),
+          updated_at: Date.now(),
+          current_step_index: 0,
+          total_steps: 1,
         },
       });
 
@@ -411,8 +460,12 @@ describe("GoalScheduler — learning loop", () => {
       } as unknown as PlanEngine;
 
       const scheduler = new GoalScheduler(
-        runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore,
-        "mote-test", RiskLevel.R3_EXECUTE,
+        runtime,
+        moteDb.goalStore,
+        moteDb.approvalStore,
+        moteDb.goalOutcomeStore,
+        "mote-test",
+        RiskLevel.R3_EXECUTE,
       );
       scheduler.registerGoalTools();
       scheduler.setPlanEngine(mockPlanEngine, planStore as unknown as PlanStoreAdapter);
@@ -430,10 +483,15 @@ describe("GoalScheduler — learning loop", () => {
       const planStore = new InMemoryPlanStore();
       const createPlanSpy = vi.fn().mockResolvedValue({
         plan: {
-          plan_id: "plan-5", goal_id: "goal-001", motebit_id: "mote-test",
-          title: "Fallback plan", status: "active",
-          created_at: Date.now(), updated_at: Date.now(),
-          current_step_index: 0, total_steps: 1,
+          plan_id: "plan-5",
+          goal_id: "goal-001",
+          motebit_id: "mote-test",
+          title: "Fallback plan",
+          status: "active",
+          created_at: Date.now(),
+          updated_at: Date.now(),
+          current_step_index: 0,
+          total_steps: 1,
         },
       });
 
@@ -448,8 +506,12 @@ describe("GoalScheduler — learning loop", () => {
       } as unknown as PlanEngine;
 
       const scheduler = new GoalScheduler(
-        runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore,
-        "mote-test", RiskLevel.R3_EXECUTE,
+        runtime,
+        moteDb.goalStore,
+        moteDb.approvalStore,
+        moteDb.goalOutcomeStore,
+        "mote-test",
+        RiskLevel.R3_EXECUTE,
       );
       scheduler.registerGoalTools();
       scheduler.setPlanEngine(mockPlanEngine, planStore as unknown as PlanStoreAdapter);

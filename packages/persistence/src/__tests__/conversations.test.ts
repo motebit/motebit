@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { createMotebitDatabase, type MotebitDatabase, type Conversation, type ConversationMessage } from "../index.js";
+import {
+  createMotebitDatabase,
+  type MotebitDatabase,
+  type Conversation,
+  type ConversationMessage,
+} from "../index.js";
 
 describe("SqliteConversationStore", () => {
   let moteDb: MotebitDatabase;
@@ -153,7 +158,9 @@ describe("SqliteConversationStore", () => {
 
     const messages = moteDb.conversationStore.loadMessages(convId);
     expect(messages).toHaveLength(2);
-    expect(messages[0]!.toolCalls).toBe(JSON.stringify([{ id: "tc-1", name: "search", args: { q: "hello" } }]));
+    expect(messages[0]!.toolCalls).toBe(
+      JSON.stringify([{ id: "tc-1", name: "search", args: { q: "hello" } }]),
+    );
     expect(messages[1]!.toolCallId).toBe("tc-1");
   });
 
@@ -232,7 +239,10 @@ describe("SqliteConversationStore", () => {
   it("getMessagesSince orders by created_at ASC", () => {
     const convId = moteDb.conversationStore.createConversation("mote-abc");
     moteDb.conversationStore.appendMessage(convId, "mote-abc", { role: "user", content: "msg1" });
-    moteDb.conversationStore.appendMessage(convId, "mote-abc", { role: "assistant", content: "msg2" });
+    moteDb.conversationStore.appendMessage(convId, "mote-abc", {
+      role: "assistant",
+      content: "msg2",
+    });
     moteDb.conversationStore.appendMessage(convId, "mote-abc", { role: "user", content: "msg3" });
 
     const results = moteDb.conversationStore.getMessagesSince(convId, 0);

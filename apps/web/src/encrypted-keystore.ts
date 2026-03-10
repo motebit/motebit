@@ -85,11 +85,7 @@ async function storeWithWebCrypto(hex: string): Promise<void> {
 
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encoded = new TextEncoder().encode(hex);
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
-    wrappingKey,
-    encoded,
-  );
+  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, wrappingKey, encoded);
 
   const db = await openKeystoreDB();
   await idbPut(db, IDB_KEY, { wrappingKey, iv, ciphertext });
@@ -98,11 +94,13 @@ async function storeWithWebCrypto(hex: string): Promise<void> {
 
 async function loadWithWebCrypto(): Promise<string | null> {
   const db = await openKeystoreDB();
-  const record = await idbGet(db, IDB_KEY) as {
-    wrappingKey: CryptoKey;
-    iv: Uint8Array;
-    ciphertext: ArrayBuffer;
-  } | undefined;
+  const record = (await idbGet(db, IDB_KEY)) as
+    | {
+        wrappingKey: CryptoKey;
+        iv: Uint8Array;
+        ciphertext: ArrayBuffer;
+      }
+    | undefined;
   db.close();
 
   if (!record) return null;
@@ -125,9 +123,10 @@ async function loadWithWebCrypto(): Promise<string | null> {
 async function deriveKeyFromOrigin(): Promise<{ key: CryptoKey; salt: Uint8Array }> {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const existingSalt = localStorage.getItem(LS_SALT_KEY);
-  const useSalt = existingSalt != null && existingSalt !== ""
-    ? Uint8Array.from(atob(existingSalt), (c) => c.charCodeAt(0))
-    : salt;
+  const useSalt =
+    existingSalt != null && existingSalt !== ""
+      ? Uint8Array.from(atob(existingSalt), (c) => c.charCodeAt(0))
+      : salt;
 
   if (existingSalt == null || existingSalt === "") {
     localStorage.setItem(LS_SALT_KEY, btoa(String.fromCharCode(...useSalt)));
@@ -156,7 +155,7 @@ async function storeWithFallback(hex: string): Promise<void> {
   // eslint-disable-next-line no-console
   console.warn(
     "[motebit] Using localStorage fallback for private key storage. " +
-    "This is less secure than IndexedDB + WebCrypto. Only use in development."
+      "This is less secure than IndexedDB + WebCrypto. Only use in development.",
   );
 
   const { key } = await deriveKeyFromOrigin();

@@ -26,11 +26,11 @@ import type { AudioReactivity } from "@motebit/render-engine";
 // === Types ===
 
 export type PipelineState =
-  | "off"          // Microphone not initialized
-  | "ambient"      // Listening for VAD onset, feeding audio analysis
-  | "listening"    // VAD triggered, STT active
-  | "processing"   // Transcript sent to AI
-  | "speaking";    // TTS playing
+  | "off" // Microphone not initialized
+  | "ambient" // Listening for VAD onset, feeding audio analysis
+  | "listening" // VAD triggered, STT active
+  | "processing" // Transcript sent to AI
+  | "speaking"; // TTS playing
 
 export interface VoicePipelineConfig {
   /** OpenAI API key for high-quality TTS (optional — falls back to Web Speech). */
@@ -193,7 +193,11 @@ export class SpatialVoicePipeline {
     this.tts?.cancel();
 
     if (this.vadInstance) {
-      try { this.vadInstance.destroy(); } catch { /* ignore */ }
+      try {
+        this.vadInstance.destroy();
+      } catch {
+        /* ignore */
+      }
       this.vadInstance = null;
     }
 
@@ -289,8 +293,10 @@ export class SpatialVoicePipeline {
   /** Update callbacks. */
   setCallbacks(callbacks: Partial<VoicePipelineCallbacks>): void {
     if (callbacks.onTranscript !== undefined) this.callbacks.onTranscript = callbacks.onTranscript;
-    if (callbacks.onStateChange !== undefined) this.callbacks.onStateChange = callbacks.onStateChange;
-    if (callbacks.onAudioReactivity !== undefined) this.callbacks.onAudioReactivity = callbacks.onAudioReactivity;
+    if (callbacks.onStateChange !== undefined)
+      this.callbacks.onStateChange = callbacks.onStateChange;
+    if (callbacks.onAudioReactivity !== undefined)
+      this.callbacks.onAudioReactivity = callbacks.onAudioReactivity;
   }
 
   // === Internals: TTS chain ===
@@ -372,7 +378,8 @@ export class SpatialVoicePipeline {
     if (this.analysisAnimId) return;
 
     const analyze = (): void => {
-      if (this._state === "off" || !this.analyserNode || !this.timeDomain || !this.freqDomain) return;
+      if (this._state === "off" || !this.analyserNode || !this.timeDomain || !this.freqDomain)
+        return;
 
       this.analyserNode.getByteTimeDomainData(this.timeDomain);
       this.analyserNode.getByteFrequencyData(this.freqDomain);
@@ -380,7 +387,7 @@ export class SpatialVoicePipeline {
       // RMS energy
       let sumSq = 0;
       for (let j = 0; j < this.timeDomain.length; j++) {
-        const v = (this.timeDomain[j]! / 128.0) - 1.0;
+        const v = this.timeDomain[j]! / 128.0 - 1.0;
         sumSq += v * v;
       }
       const rms = Math.sqrt(sumSq / this.timeDomain.length);
@@ -393,7 +400,9 @@ export class SpatialVoicePipeline {
       const binCount = this.freqDomain.length;
       const lowEnd = Math.max(1, Math.floor(binCount * 0.06));
       const midEnd = Math.max(2, Math.floor(binCount * 0.25));
-      let lowE = 0, midE = 0, highE = 0;
+      let lowE = 0,
+        midE = 0,
+        highE = 0;
       for (let j = 0; j < binCount; j++) {
         const v = this.freqDomain[j]! / 255;
         if (j < lowEnd) lowE += v;
@@ -401,8 +410,8 @@ export class SpatialVoicePipeline {
         else highE += v;
       }
       lowE /= lowEnd;
-      midE /= (midEnd - lowEnd);
-      highE /= (binCount - midEnd);
+      midE /= midEnd - lowEnd;
+      highE /= binCount - midEnd;
 
       this.smoothedLow += (lowE > this.smoothedLow ? 0.3 : 0.04) * (lowE - this.smoothedLow);
       this.smoothedMid += (midE > this.smoothedMid ? 0.3 : 0.04) * (midE - this.smoothedMid);
@@ -475,9 +484,7 @@ export class SpatialVoicePipeline {
     const midThreshold = 0.08 * (1.1 - sensitivity);
 
     const isSpeechLike =
-      this.smoothedFlatness < 0.65 &&
-      gatedRms > rmsThreshold &&
-      this.smoothedMid > midThreshold;
+      this.smoothedFlatness < 0.65 && gatedRms > rmsThreshold && this.smoothedMid > midThreshold;
 
     if (isSpeechLike) {
       this.fallbackSpeechConfidence += 0.08 * (1 - this.fallbackSpeechConfidence);
@@ -515,7 +522,8 @@ export class SpatialVoicePipeline {
       typeof window !== "undefined" &&
       typeof navigator !== "undefined" &&
       typeof navigator.mediaDevices?.getUserMedia === "function" &&
-      (typeof AudioContext !== "undefined" || typeof (window as unknown as Record<string, unknown>).webkitAudioContext !== "undefined")
+      (typeof AudioContext !== "undefined" ||
+        typeof (window as unknown as Record<string, unknown>).webkitAudioContext !== "undefined")
     );
   }
 }

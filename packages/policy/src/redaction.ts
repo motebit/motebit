@@ -34,11 +34,18 @@ const SECRET_PATTERNS: { pattern: RegExp; label: string }[] = [
   // JWTs
   { pattern: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, label: "JWT" },
   // Private keys (PEM) — capped at 10KB to avoid catastrophic backtracking
-  { pattern: /-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----[\s\S]{0,10000}?-----END\s+(RSA\s+)?PRIVATE\s+KEY-----/g, label: "PRIVATE_KEY" },
+  {
+    pattern:
+      /-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----[\s\S]{0,10000}?-----END\s+(RSA\s+)?PRIVATE\s+KEY-----/g,
+    label: "PRIVATE_KEY",
+  },
   // US SSN
   { pattern: /\b\d{3}[- ]?\d{2}[- ]?\d{4}\b/g, label: "SSN" },
   // Hex secrets: only match when preceded by an assignment-like context (key=, secret:, token=, etc.)
-  { pattern: /\b(?:key|secret|token|password|credential)\s*[:=]\s*[0-9a-f]{32,}\b/gi, label: "HEX_SECRET" },
+  {
+    pattern: /\b(?:key|secret|token|password|credential)\s*[:=]\s*[0-9a-f]{32,}\b/gi,
+    label: "HEX_SECRET",
+  },
   // Base64 encoded secrets (long base64 strings)
   { pattern: /\b[A-Za-z0-9+/]{40,}={0,2}\b/g, label: "ENCODED_SECRET" },
   // Seed phrases: require exactly 12 or 24 BIP-39-length words (3-8 chars each)

@@ -63,10 +63,7 @@ export function enforceCueDelta(prev: BehaviorCues, next: BehaviorCues): Behavio
  * Enforce drift variation limit: drift_amplitude cannot vary more than
  * DRIFT_VARIATION_MAX from a baseline.
  */
-export function enforceDriftVariation(
-  baseline: number,
-  current: number,
-): number {
+export function enforceDriftVariation(baseline: number, current: number): number {
   const maxVariation = baseline * SPECIES_CONSTRAINTS.DRIFT_VARIATION_MAX;
   return clamp(current, baseline - maxVariation, baseline + maxVariation);
 }
@@ -120,7 +117,7 @@ export function assertSpeciesIntegrity(): void {
   if (SPECIES_CONSTRAINTS.GLOW_DELTA_MAX !== 0.15) {
     throw new Error("GLOW_DELTA_MAX has been tampered with");
   }
-  if (SPECIES_CONSTRAINTS.DRIFT_VARIATION_MAX !== 0.10) {
+  if (SPECIES_CONSTRAINTS.DRIFT_VARIATION_MAX !== 0.1) {
     throw new Error("DRIFT_VARIATION_MAX has been tampered with");
   }
 }

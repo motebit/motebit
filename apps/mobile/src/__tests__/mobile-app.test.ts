@@ -6,8 +6,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const secureStoreData = new Map<string, string>();
 vi.mock("expo-secure-store", () => ({
   getItemAsync: vi.fn((key: string) => Promise.resolve(secureStoreData.get(key) ?? null)),
-  setItemAsync: vi.fn((key: string, value: string) => { secureStoreData.set(key, value); return Promise.resolve(); }),
-  deleteItemAsync: vi.fn((key: string) => { secureStoreData.delete(key); return Promise.resolve(); }),
+  setItemAsync: vi.fn((key: string, value: string) => {
+    secureStoreData.set(key, value);
+    return Promise.resolve();
+  }),
+  deleteItemAsync: vi.fn((key: string) => {
+    secureStoreData.delete(key);
+    return Promise.resolve();
+  }),
 }));
 
 // expo-sqlite
@@ -30,8 +36,14 @@ const asyncStoreData = new Map<string, string>();
 vi.mock("@react-native-async-storage/async-storage", () => ({
   default: {
     getItem: vi.fn((key: string) => Promise.resolve(asyncStoreData.get(key) ?? null)),
-    setItem: vi.fn((key: string, value: string) => { asyncStoreData.set(key, value); return Promise.resolve(); }),
-    removeItem: vi.fn((key: string) => { asyncStoreData.delete(key); return Promise.resolve(); }),
+    setItem: vi.fn((key: string, value: string) => {
+      asyncStoreData.set(key, value);
+      return Promise.resolve();
+    }),
+    removeItem: vi.fn((key: string) => {
+      asyncStoreData.delete(key);
+      return Promise.resolve();
+    }),
   },
 }));
 
@@ -52,29 +64,53 @@ vi.mock("@motebit/crypto", () => ({
 
 // @motebit/core-identity
 vi.mock("@motebit/core-identity", () => ({
-  bootstrapIdentity: vi.fn(async (opts: {
-    configStore: { read(): Promise<{ motebit_id: string; device_id: string; device_public_key: string } | null>; write(s: { motebit_id: string; device_id: string; device_public_key: string }): Promise<void> };
-    keyStore: { storePrivateKey(hex: string): Promise<void> };
-  }) => {
-    const existing = await opts.configStore.read();
-    if (existing && existing.motebit_id) {
-      return {
-        motebitId: existing.motebit_id,
-        deviceId: existing.device_id,
-        publicKeyHex: existing.device_public_key,
-        isFirstLaunch: false,
+  bootstrapIdentity: vi.fn(
+    async (opts: {
+      configStore: {
+        read(): Promise<{
+          motebit_id: string;
+          device_id: string;
+          device_public_key: string;
+        } | null>;
+        write(s: {
+          motebit_id: string;
+          device_id: string;
+          device_public_key: string;
+        }): Promise<void>;
       };
-    }
-    const motebitId = "test-mote-" + crypto.randomUUID().slice(0, 8);
-    const deviceId = "test-device-" + crypto.randomUUID().slice(0, 8);
-    const publicKeyHex = "ab".repeat(32);
-    await opts.keyStore.storePrivateKey("cd".repeat(64));
-    await opts.configStore.write({ motebit_id: motebitId, device_id: deviceId, device_public_key: publicKeyHex });
-    return { motebitId, deviceId, publicKeyHex, isFirstLaunch: true };
-  }),
+      keyStore: { storePrivateKey(hex: string): Promise<void> };
+    }) => {
+      const existing = await opts.configStore.read();
+      if (existing && existing.motebit_id) {
+        return {
+          motebitId: existing.motebit_id,
+          deviceId: existing.device_id,
+          publicKeyHex: existing.device_public_key,
+          isFirstLaunch: false,
+        };
+      }
+      const motebitId = "test-mote-" + crypto.randomUUID().slice(0, 8);
+      const deviceId = "test-device-" + crypto.randomUUID().slice(0, 8);
+      const publicKeyHex = "ab".repeat(32);
+      await opts.keyStore.storePrivateKey("cd".repeat(64));
+      await opts.configStore.write({
+        motebit_id: motebitId,
+        device_id: deviceId,
+        device_public_key: publicKeyHex,
+      });
+      return { motebitId, deviceId, publicKeyHex, isFirstLaunch: true };
+    },
+  ),
   // MotebitRuntime imports IdentityManager internally
   IdentityManager: vi.fn().mockImplementation(() => ({
-    create: vi.fn(() => Promise.resolve({ motebit_id: "rt-mote", created_at: Date.now(), owner_id: "rt", version_clock: 0 })),
+    create: vi.fn(() =>
+      Promise.resolve({
+        motebit_id: "rt-mote",
+        created_at: Date.now(),
+        owner_id: "rt",
+        version_clock: 0,
+      }),
+    ),
     load: vi.fn(() => Promise.resolve(null)),
     loadByOwner: vi.fn(() => Promise.resolve(null)),
     registerDevice: vi.fn(() => Promise.resolve()),
@@ -89,23 +125,67 @@ vi.mock("@motebit/core-identity", () => ({
 
 // @motebit/tools/web-safe
 vi.mock("@motebit/tools/web-safe", () => ({
-  webSearchDefinition: { name: "web_search", description: "Search the web", inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } },
-  createWebSearchHandler: vi.fn(() => vi.fn(() => Promise.resolve({ ok: true, data: "mock results" }))),
-  readUrlDefinition: { name: "read_url", description: "Read a URL", inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] } },
-  createReadUrlHandler: vi.fn(() => vi.fn(() => Promise.resolve({ ok: true, data: "mock content" }))),
-  recallMemoriesDefinition: { name: "recall_memories", description: "Recall memories", inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } },
-  createRecallMemoriesHandler: vi.fn((_fn: unknown) => vi.fn(() => Promise.resolve({ ok: true, data: "mock memories" }))),
-  listEventsDefinition: { name: "list_events", description: "List events", inputSchema: { type: "object", properties: {} } },
-  createListEventsHandler: vi.fn((_fn: unknown) => vi.fn(() => Promise.resolve({ ok: true, data: "mock events" }))),
-  createSubGoalDefinition: { name: "create_sub_goal", description: "Create sub-goal", inputSchema: { type: "object", properties: { prompt: { type: "string" } }, required: ["prompt"] } },
-  completeGoalDefinition: { name: "complete_goal", description: "Complete goal", inputSchema: { type: "object", properties: { reason: { type: "string" } }, required: ["reason"] } },
-  reportProgressDefinition: { name: "report_progress", description: "Report progress", inputSchema: { type: "object", properties: { note: { type: "string" } }, required: ["note"] } },
+  webSearchDefinition: {
+    name: "web_search",
+    description: "Search the web",
+    inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+  },
+  createWebSearchHandler: vi.fn(() =>
+    vi.fn(() => Promise.resolve({ ok: true, data: "mock results" })),
+  ),
+  readUrlDefinition: {
+    name: "read_url",
+    description: "Read a URL",
+    inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] },
+  },
+  createReadUrlHandler: vi.fn(() =>
+    vi.fn(() => Promise.resolve({ ok: true, data: "mock content" })),
+  ),
+  recallMemoriesDefinition: {
+    name: "recall_memories",
+    description: "Recall memories",
+    inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+  },
+  createRecallMemoriesHandler: vi.fn((_fn: unknown) =>
+    vi.fn(() => Promise.resolve({ ok: true, data: "mock memories" })),
+  ),
+  listEventsDefinition: {
+    name: "list_events",
+    description: "List events",
+    inputSchema: { type: "object", properties: {} },
+  },
+  createListEventsHandler: vi.fn((_fn: unknown) =>
+    vi.fn(() => Promise.resolve({ ok: true, data: "mock events" })),
+  ),
+  createSubGoalDefinition: {
+    name: "create_sub_goal",
+    description: "Create sub-goal",
+    inputSchema: {
+      type: "object",
+      properties: { prompt: { type: "string" } },
+      required: ["prompt"],
+    },
+  },
+  completeGoalDefinition: {
+    name: "complete_goal",
+    description: "Complete goal",
+    inputSchema: {
+      type: "object",
+      properties: { reason: { type: "string" } },
+      required: ["reason"],
+    },
+  },
+  reportProgressDefinition: {
+    name: "report_progress",
+    description: "Report progress",
+    inputSchema: { type: "object", properties: { note: { type: "string" } }, required: ["note"] },
+  },
   DuckDuckGoSearchProvider: vi.fn().mockImplementation(() => ({})),
 }));
 
 // @motebit/memory-graph — mock embedText while preserving MemoryGraph class
 vi.mock("@motebit/memory-graph", async (importOriginal) => {
-  const actual = await importOriginal() as Record<string, unknown>;
+  const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,
     embedText: vi.fn(() => Promise.resolve(new Array(384).fill(0))),
@@ -359,7 +439,10 @@ describe("MobileApp.initAI with custom endpoint", () => {
   });
 
   it("accepts custom ollamaEndpoint", async () => {
-    const result = await app.initAI({ provider: "ollama", ollamaEndpoint: "http://192.168.1.50:11434" });
+    const result = await app.initAI({
+      provider: "ollama",
+      ollamaEndpoint: "http://192.168.1.50:11434",
+    });
     expect(result).toBe(true);
     expect(app.isAIReady).toBe(true);
   });

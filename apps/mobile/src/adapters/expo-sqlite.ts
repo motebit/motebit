@@ -10,14 +10,31 @@
 /* eslint-disable @typescript-eslint/require-await -- sync SQLite methods implementing async interfaces */
 
 import * as SQLite from "expo-sqlite";
-import type { EventLogEntry, EventType, MemoryNode, MemoryEdge, MotebitIdentity, AuditRecord, SensitivityLevel, RelationType, Plan, PlanStep } from "@motebit/sdk";
+import type {
+  EventLogEntry,
+  EventType,
+  MemoryNode,
+  MemoryEdge,
+  MotebitIdentity,
+  AuditRecord,
+  SensitivityLevel,
+  RelationType,
+  Plan,
+  PlanStep,
+} from "@motebit/sdk";
 import { StepStatus } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import type { MemoryStorageAdapter, MemoryQuery } from "@motebit/memory-graph";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 import type { IdentityStorage } from "@motebit/core-identity";
 import type { AuditLogAdapter } from "@motebit/privacy-layer";
-import type { StateSnapshotAdapter, ConversationStoreAdapter, StorageAdapters, GradientStoreAdapter, GradientSnapshot } from "@motebit/runtime";
+import type {
+  StateSnapshotAdapter,
+  ConversationStoreAdapter,
+  StorageAdapters,
+  GradientStoreAdapter,
+  GradientSnapshot,
+} from "@motebit/runtime";
 import type { SyncConversation, SyncConversationMessage } from "@motebit/sdk";
 import type { ConversationSyncStoreAdapter } from "@motebit/sync-engine";
 import type { PlanStoreAdapter } from "@motebit/planner";
@@ -304,7 +321,16 @@ export class ExpoSqliteEventStore implements EventStoreAdapter {
     this.db.runSync(
       `INSERT OR IGNORE INTO events (event_id, motebit_id, device_id, event_type, payload, version_clock, timestamp, tombstoned)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [entry.event_id, entry.motebit_id, entry.device_id ?? null, entry.event_type, JSON.stringify(entry.payload), entry.version_clock, entry.timestamp, entry.tombstoned ? 1 : 0],
+      [
+        entry.event_id,
+        entry.motebit_id,
+        entry.device_id ?? null,
+        entry.event_type,
+        JSON.stringify(entry.payload),
+        entry.version_clock,
+        entry.timestamp,
+        entry.tombstoned ? 1 : 0,
+      ],
     );
   }
 
@@ -312,19 +338,34 @@ export class ExpoSqliteEventStore implements EventStoreAdapter {
     const conditions: string[] = [];
     const params: (string | number)[] = [];
 
-    if (filter.motebit_id !== undefined) { conditions.push("motebit_id = ?"); params.push(filter.motebit_id); }
+    if (filter.motebit_id !== undefined) {
+      conditions.push("motebit_id = ?");
+      params.push(filter.motebit_id);
+    }
     if (filter.event_types !== undefined && filter.event_types.length > 0) {
       conditions.push(`event_type IN (${filter.event_types.map(() => "?").join(", ")})`);
       params.push(...filter.event_types);
     }
-    if (filter.after_timestamp !== undefined) { conditions.push("timestamp > ?"); params.push(filter.after_timestamp); }
-    if (filter.before_timestamp !== undefined) { conditions.push("timestamp < ?"); params.push(filter.before_timestamp); }
-    if (filter.after_version_clock !== undefined) { conditions.push("version_clock > ?"); params.push(filter.after_version_clock); }
+    if (filter.after_timestamp !== undefined) {
+      conditions.push("timestamp > ?");
+      params.push(filter.after_timestamp);
+    }
+    if (filter.before_timestamp !== undefined) {
+      conditions.push("timestamp < ?");
+      params.push(filter.before_timestamp);
+    }
+    if (filter.after_version_clock !== undefined) {
+      conditions.push("version_clock > ?");
+      params.push(filter.after_version_clock);
+    }
 
     let sql = "SELECT * FROM events";
     if (conditions.length > 0) sql += " WHERE " + conditions.join(" AND ");
     sql += " ORDER BY version_clock ASC";
-    if (filter.limit !== undefined) { sql += " LIMIT ?"; params.push(filter.limit); }
+    if (filter.limit !== undefined) {
+      sql += " LIMIT ?";
+      params.push(filter.limit);
+    }
 
     const rows = this.db.getAllSync<EventRow>(sql, params);
     return rows.map(rowToEvent);
@@ -339,10 +380,10 @@ export class ExpoSqliteEventStore implements EventStoreAdapter {
   }
 
   async tombstone(eventId: string, motebitId: string): Promise<void> {
-    this.db.runSync(
-      "UPDATE events SET tombstoned = 1 WHERE event_id = ? AND motebit_id = ?",
-      [eventId, motebitId],
-    );
+    this.db.runSync("UPDATE events SET tombstoned = 1 WHERE event_id = ? AND motebit_id = ?", [
+      eventId,
+      motebitId,
+    ]);
   }
 
   async compact(motebitId: string, beforeClock: number): Promise<number> {
@@ -350,10 +391,10 @@ export class ExpoSqliteEventStore implements EventStoreAdapter {
       "SELECT COUNT(*) as cnt FROM events WHERE motebit_id = ? AND version_clock <= ?",
       [motebitId, beforeClock],
     );
-    this.db.runSync(
-      "DELETE FROM events WHERE motebit_id = ? AND version_clock <= ?",
-      [motebitId, beforeClock],
-    );
+    this.db.runSync("DELETE FROM events WHERE motebit_id = ? AND version_clock <= ?", [
+      motebitId,
+      beforeClock,
+    ]);
     return before?.cnt ?? 0;
   }
 
@@ -376,12 +417,29 @@ export class ExpoSqliteMemoryStorage implements MemoryStorageAdapter {
       `INSERT OR REPLACE INTO memory_nodes
        (node_id, motebit_id, content, embedding, confidence, sensitivity, created_at, last_accessed, half_life, tombstoned, pinned, memory_type, valid_from, valid_until)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [node.node_id, node.motebit_id, node.content, JSON.stringify(node.embedding), node.confidence, node.sensitivity, node.created_at, node.last_accessed, node.half_life, node.tombstoned ? 1 : 0, node.pinned ? 1 : 0, node.memory_type ?? "semantic", node.valid_from ?? null, node.valid_until ?? null],
+      [
+        node.node_id,
+        node.motebit_id,
+        node.content,
+        JSON.stringify(node.embedding),
+        node.confidence,
+        node.sensitivity,
+        node.created_at,
+        node.last_accessed,
+        node.half_life,
+        node.tombstoned ? 1 : 0,
+        node.pinned ? 1 : 0,
+        node.memory_type ?? "semantic",
+        node.valid_from ?? null,
+        node.valid_until ?? null,
+      ],
     );
   }
 
   async getNode(nodeId: string): Promise<MemoryNode | null> {
-    const row = this.db.getFirstSync<NodeRow>("SELECT * FROM memory_nodes WHERE node_id = ?", [nodeId]);
+    const row = this.db.getFirstSync<NodeRow>("SELECT * FROM memory_nodes WHERE node_id = ?", [
+      nodeId,
+    ]);
     return row ? rowToNode(row) : null;
   }
 
@@ -399,7 +457,8 @@ export class ExpoSqliteMemoryStorage implements MemoryStorageAdapter {
       params.push(query.pinned ? 1 : 0);
     }
 
-    const needsAppFilter = query.min_confidence !== undefined || query.sensitivity_filter !== undefined;
+    const needsAppFilter =
+      query.min_confidence !== undefined || query.sensitivity_filter !== undefined;
     let sql = `SELECT * FROM memory_nodes WHERE ${conditions.join(" AND ")}`;
 
     if (query.limit !== undefined) {
@@ -419,7 +478,9 @@ export class ExpoSqliteMemoryStorage implements MemoryStorageAdapter {
     if (query.min_confidence !== undefined) {
       const now = Date.now();
       const minConf = query.min_confidence;
-      results = results.filter((n) => computeDecayedConfidence(n.confidence, n.half_life, now - n.created_at) >= minConf);
+      results = results.filter(
+        (n) => computeDecayedConfidence(n.confidence, n.half_life, now - n.created_at) >= minConf,
+      );
     }
 
     if (query.sensitivity_filter !== undefined) {
@@ -435,7 +496,14 @@ export class ExpoSqliteMemoryStorage implements MemoryStorageAdapter {
     this.db.runSync(
       `INSERT OR REPLACE INTO memory_edges (edge_id, source_id, target_id, relation_type, weight, confidence)
        VALUES (?, ?, ?, ?, ?, ?)`,
-      [edge.edge_id, edge.source_id, edge.target_id, edge.relation_type, edge.weight, edge.confidence],
+      [
+        edge.edge_id,
+        edge.source_id,
+        edge.target_id,
+        edge.relation_type,
+        edge.weight,
+        edge.confidence,
+      ],
     );
   }
 
@@ -452,11 +520,16 @@ export class ExpoSqliteMemoryStorage implements MemoryStorageAdapter {
   }
 
   async pinNode(nodeId: string, pinned: boolean): Promise<void> {
-    this.db.runSync("UPDATE memory_nodes SET pinned = ? WHERE node_id = ? AND tombstoned = 0", [pinned ? 1 : 0, nodeId]);
+    this.db.runSync("UPDATE memory_nodes SET pinned = ? WHERE node_id = ? AND tombstoned = 0", [
+      pinned ? 1 : 0,
+      nodeId,
+    ]);
   }
 
   async getAllNodes(motebitId: string): Promise<MemoryNode[]> {
-    const rows = this.db.getAllSync<NodeRow>("SELECT * FROM memory_nodes WHERE motebit_id = ?", [motebitId]);
+    const rows = this.db.getAllSync<NodeRow>("SELECT * FROM memory_nodes WHERE motebit_id = ?", [
+      motebitId,
+    ]);
     return rows.map(rowToNode);
   }
 
@@ -485,12 +558,17 @@ export class ExpoSqliteIdentityStorage implements IdentityStorage {
   }
 
   async load(motebitId: string): Promise<MotebitIdentity | null> {
-    const row = this.db.getFirstSync<IdentityRow>("SELECT * FROM identities WHERE motebit_id = ?", [motebitId]);
+    const row = this.db.getFirstSync<IdentityRow>("SELECT * FROM identities WHERE motebit_id = ?", [
+      motebitId,
+    ]);
     return row ? rowToIdentity(row) : null;
   }
 
   async loadByOwner(ownerId: string): Promise<MotebitIdentity | null> {
-    const row = this.db.getFirstSync<IdentityRow>("SELECT * FROM identities WHERE owner_id = ? LIMIT 1", [ownerId]);
+    const row = this.db.getFirstSync<IdentityRow>(
+      "SELECT * FROM identities WHERE owner_id = ? LIMIT 1",
+      [ownerId],
+    );
     return row ? rowToIdentity(row) : null;
   }
 }
@@ -504,15 +582,29 @@ export class ExpoSqliteAuditLog implements AuditLogAdapter {
     this.db.runSync(
       `INSERT INTO audit_log (audit_id, motebit_id, timestamp, action, target_type, target_id, details)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [entry.audit_id, entry.motebit_id, entry.timestamp, entry.action, entry.target_type, entry.target_id, JSON.stringify(entry.details)],
+      [
+        entry.audit_id,
+        entry.motebit_id,
+        entry.timestamp,
+        entry.action,
+        entry.target_type,
+        entry.target_id,
+        JSON.stringify(entry.details),
+      ],
     );
   }
 
-  async query(motebitId: string, options: { limit?: number; after?: number } = {}): Promise<AuditRecord[]> {
+  async query(
+    motebitId: string,
+    options: { limit?: number; after?: number } = {},
+  ): Promise<AuditRecord[]> {
     const conditions: string[] = ["motebit_id = ?"];
     const params: (string | number)[] = [motebitId];
 
-    if (options.after !== undefined) { conditions.push("timestamp > ?"); params.push(options.after); }
+    if (options.after !== undefined) {
+      conditions.push("timestamp > ?");
+      params.push(options.after);
+    }
 
     const sql = `SELECT * FROM audit_log WHERE ${conditions.join(" AND ")} ORDER BY timestamp ASC`;
     const rows = this.db.getAllSync<AuditRow>(sql, params);
@@ -593,19 +685,33 @@ export class ExpoSqliteConversationStore implements ConversationStoreAdapter {
     return conversationId;
   }
 
-  appendMessage(conversationId: string, motebitId: string, msg: {
-    role: string;
-    content: string;
-    toolCalls?: string;
-    toolCallId?: string;
-  }): void {
+  appendMessage(
+    conversationId: string,
+    motebitId: string,
+    msg: {
+      role: string;
+      content: string;
+      toolCalls?: string;
+      toolCallId?: string;
+    },
+  ): void {
     const messageId = crypto.randomUUID();
     const now = Date.now();
     const tokenEstimate = Math.ceil(msg.content.length / 4);
     this.db.runSync(
       `INSERT INTO conversation_messages (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [messageId, conversationId, motebitId, msg.role, msg.content, msg.toolCalls ?? null, msg.toolCallId ?? null, now, tokenEstimate],
+      [
+        messageId,
+        conversationId,
+        motebitId,
+        msg.role,
+        msg.content,
+        msg.toolCalls ?? null,
+        msg.toolCallId ?? null,
+        now,
+        tokenEstimate,
+      ],
     );
     this.db.runSync(
       "UPDATE conversations SET last_active_at = ?, message_count = message_count + 1 WHERE conversation_id = ?",
@@ -613,7 +719,10 @@ export class ExpoSqliteConversationStore implements ConversationStoreAdapter {
     );
   }
 
-  loadMessages(conversationId: string, limit?: number): Array<{
+  loadMessages(
+    conversationId: string,
+    limit?: number,
+  ): Array<{
     messageId: string;
     conversationId: string;
     motebitId: string;
@@ -624,7 +733,8 @@ export class ExpoSqliteConversationStore implements ConversationStoreAdapter {
     createdAt: number;
     tokenEstimate: number;
   }> {
-    let sql = "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY created_at ASC";
+    let sql =
+      "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY created_at ASC";
     const params: (string | number)[] = [conversationId];
     if (limit !== undefined) {
       sql += " LIMIT ?";
@@ -665,17 +775,17 @@ export class ExpoSqliteConversationStore implements ConversationStoreAdapter {
   }
 
   updateSummary(conversationId: string, summary: string): void {
-    this.db.runSync(
-      "UPDATE conversations SET summary = ? WHERE conversation_id = ?",
-      [summary, conversationId],
-    );
+    this.db.runSync("UPDATE conversations SET summary = ? WHERE conversation_id = ?", [
+      summary,
+      conversationId,
+    ]);
   }
 
   updateTitle(conversationId: string, title: string): void {
-    this.db.runSync(
-      "UPDATE conversations SET title = ? WHERE conversation_id = ?",
-      [title, conversationId],
-    );
+    this.db.runSync("UPDATE conversations SET title = ? WHERE conversation_id = ?", [
+      title,
+      conversationId,
+    ]);
   }
 
   getMessageCount(conversationId: string): number {
@@ -686,7 +796,10 @@ export class ExpoSqliteConversationStore implements ConversationStoreAdapter {
     return row?.message_count ?? 0;
   }
 
-  listConversations(motebitId: string, limit = 20): Array<{
+  listConversations(
+    motebitId: string,
+    limit = 20,
+  ): Array<{
     conversationId: string;
     startedAt: number;
     lastActiveAt: number;
@@ -827,10 +940,7 @@ export class ExpoGoalStore {
   }
 
   updateLastRun(goalId: string, timestamp: number): void {
-    this.db.runSync(
-      "UPDATE goals SET last_run_at = ? WHERE goal_id = ?",
-      [timestamp, goalId],
-    );
+    this.db.runSync("UPDATE goals SET last_run_at = ? WHERE goal_id = ?", [timestamp, goalId]);
   }
 
   insertOutcome(outcome: GoalOutcome): void {
@@ -853,10 +963,7 @@ export class ExpoGoalStore {
   }
 
   setStatus(goalId: string, status: GoalStatus): void {
-    this.db.runSync(
-      "UPDATE goals SET status = ? WHERE goal_id = ?",
-      [status, goalId],
-    );
+    this.db.runSync("UPDATE goals SET status = ? WHERE goal_id = ?", [status, goalId]);
   }
 
   incrementFailures(goalId: string): void {
@@ -870,21 +977,20 @@ export class ExpoGoalStore {
       [goalId],
     );
     if (row && row.consecutive_failures >= row.max_retries) {
-      this.db.runSync(
-        "UPDATE goals SET status = 'paused' WHERE goal_id = ?",
-        [goalId],
-      );
+      this.db.runSync("UPDATE goals SET status = 'paused' WHERE goal_id = ?", [goalId]);
     }
   }
 
   resetFailures(goalId: string): void {
-    this.db.runSync(
-      "UPDATE goals SET consecutive_failures = 0 WHERE goal_id = ?",
-      [goalId],
-    );
+    this.db.runSync("UPDATE goals SET consecutive_failures = 0 WHERE goal_id = ?", [goalId]);
   }
 
-  addGoal(motebitId: string, prompt: string, intervalMs: number, mode: GoalMode = "recurring"): string {
+  addGoal(
+    motebitId: string,
+    prompt: string,
+    intervalMs: number,
+    mode: GoalMode = "recurring",
+  ): string {
     const goalId = crypto.randomUUID();
     const now = Date.now();
     this.db.runSync(
@@ -900,10 +1006,11 @@ export class ExpoGoalStore {
   }
 
   toggleGoal(goalId: string, enabled: boolean): void {
-    this.db.runSync(
-      "UPDATE goals SET enabled = ?, status = ? WHERE goal_id = ?",
-      [enabled ? 1 : 0, enabled ? "active" : "paused", goalId],
-    );
+    this.db.runSync("UPDATE goals SET enabled = ?, status = ? WHERE goal_id = ?", [
+      enabled ? 1 : 0,
+      enabled ? "active" : "paused",
+      goalId,
+    ]);
   }
 }
 
@@ -954,7 +1061,11 @@ function rowToPlan(row: PlanRow): Plan {
 
 function rowToPlanStep(row: PlanStepRow): PlanStep {
   let dependsOn: string[] = [];
-  try { dependsOn = JSON.parse(row.depends_on) as string[]; } catch { /* empty */ }
+  try {
+    dependsOn = JSON.parse(row.depends_on) as string[];
+  } catch {
+    /* empty */
+  }
   return {
     step_id: row.step_id,
     plan_id: row.plan_id,
@@ -980,7 +1091,17 @@ export class ExpoPlanStore implements PlanStoreAdapter {
     this.db.runSync(
       `INSERT OR REPLACE INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [plan.plan_id, plan.goal_id, plan.motebit_id, plan.title, plan.status, plan.created_at, plan.updated_at, plan.current_step_index, plan.total_steps],
+      [
+        plan.plan_id,
+        plan.goal_id,
+        plan.motebit_id,
+        plan.title,
+        plan.status,
+        plan.created_at,
+        plan.updated_at,
+        plan.current_step_index,
+        plan.total_steps,
+      ],
     );
   }
 
@@ -1000,11 +1121,26 @@ export class ExpoPlanStore implements PlanStoreAdapter {
   updatePlan(planId: string, updates: Partial<Plan>): void {
     const fields: string[] = [];
     const values: SQLite.SQLiteBindValue[] = [];
-    if (updates.title !== undefined) { fields.push("title = ?"); values.push(updates.title); }
-    if (updates.status !== undefined) { fields.push("status = ?"); values.push(updates.status); }
-    if (updates.updated_at !== undefined) { fields.push("updated_at = ?"); values.push(updates.updated_at); }
-    if (updates.current_step_index !== undefined) { fields.push("current_step_index = ?"); values.push(updates.current_step_index); }
-    if (updates.total_steps !== undefined) { fields.push("total_steps = ?"); values.push(updates.total_steps); }
+    if (updates.title !== undefined) {
+      fields.push("title = ?");
+      values.push(updates.title);
+    }
+    if (updates.status !== undefined) {
+      fields.push("status = ?");
+      values.push(updates.status);
+    }
+    if (updates.updated_at !== undefined) {
+      fields.push("updated_at = ?");
+      values.push(updates.updated_at);
+    }
+    if (updates.current_step_index !== undefined) {
+      fields.push("current_step_index = ?");
+      values.push(updates.current_step_index);
+    }
+    if (updates.total_steps !== undefined) {
+      fields.push("total_steps = ?");
+      values.push(updates.total_steps);
+    }
     if (fields.length === 0) return;
     values.push(planId);
     this.db.runSync(`UPDATE plans SET ${fields.join(", ")} WHERE plan_id = ?`, values);
@@ -1014,30 +1150,71 @@ export class ExpoPlanStore implements PlanStoreAdapter {
     this.db.runSync(
       `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [step.step_id, step.plan_id, step.ordinal, step.description, step.prompt, JSON.stringify(step.depends_on), step.optional ? 1 : 0, step.status, step.result_summary, step.error_message, step.tool_calls_made, step.started_at, step.completed_at, step.retry_count],
+      [
+        step.step_id,
+        step.plan_id,
+        step.ordinal,
+        step.description,
+        step.prompt,
+        JSON.stringify(step.depends_on),
+        step.optional ? 1 : 0,
+        step.status,
+        step.result_summary,
+        step.error_message,
+        step.tool_calls_made,
+        step.started_at,
+        step.completed_at,
+        step.retry_count,
+      ],
     );
   }
 
   getStep(stepId: string): PlanStep | null {
-    const row = this.db.getFirstSync<PlanStepRow>("SELECT * FROM plan_steps WHERE step_id = ?", [stepId]);
+    const row = this.db.getFirstSync<PlanStepRow>("SELECT * FROM plan_steps WHERE step_id = ?", [
+      stepId,
+    ]);
     return row ? rowToPlanStep(row) : null;
   }
 
   getStepsForPlan(planId: string): PlanStep[] {
-    const rows = this.db.getAllSync<PlanStepRow>("SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY ordinal ASC", [planId]);
+    const rows = this.db.getAllSync<PlanStepRow>(
+      "SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY ordinal ASC",
+      [planId],
+    );
     return rows.map(rowToPlanStep);
   }
 
   updateStep(stepId: string, updates: Partial<PlanStep>): void {
     const fields: string[] = [];
     const values: SQLite.SQLiteBindValue[] = [];
-    if (updates.status !== undefined) { fields.push("status = ?"); values.push(updates.status); }
-    if (updates.result_summary !== undefined) { fields.push("result_summary = ?"); values.push(updates.result_summary); }
-    if (updates.error_message !== undefined) { fields.push("error_message = ?"); values.push(updates.error_message); }
-    if (updates.tool_calls_made !== undefined) { fields.push("tool_calls_made = ?"); values.push(updates.tool_calls_made); }
-    if (updates.started_at !== undefined) { fields.push("started_at = ?"); values.push(updates.started_at); }
-    if (updates.completed_at !== undefined) { fields.push("completed_at = ?"); values.push(updates.completed_at); }
-    if (updates.retry_count !== undefined) { fields.push("retry_count = ?"); values.push(updates.retry_count); }
+    if (updates.status !== undefined) {
+      fields.push("status = ?");
+      values.push(updates.status);
+    }
+    if (updates.result_summary !== undefined) {
+      fields.push("result_summary = ?");
+      values.push(updates.result_summary);
+    }
+    if (updates.error_message !== undefined) {
+      fields.push("error_message = ?");
+      values.push(updates.error_message);
+    }
+    if (updates.tool_calls_made !== undefined) {
+      fields.push("tool_calls_made = ?");
+      values.push(updates.tool_calls_made);
+    }
+    if (updates.started_at !== undefined) {
+      fields.push("started_at = ?");
+      values.push(updates.started_at);
+    }
+    if (updates.completed_at !== undefined) {
+      fields.push("completed_at = ?");
+      values.push(updates.completed_at);
+    }
+    if (updates.retry_count !== undefined) {
+      fields.push("retry_count = ?");
+      values.push(updates.retry_count);
+    }
     if (fields.length === 0) return;
     values.push(stepId);
     this.db.runSync(`UPDATE plan_steps SET ${fields.join(", ")} WHERE step_id = ?`, values);
@@ -1101,7 +1278,15 @@ export class ExpoSqliteConversationSyncStore implements ConversationSyncStoreAda
       this.db.runSync(
         `INSERT INTO conversations (conversation_id, motebit_id, started_at, last_active_at, title, summary, message_count)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [conv.conversation_id, conv.motebit_id, conv.started_at, conv.last_active_at, conv.title, conv.summary, conv.message_count],
+        [
+          conv.conversation_id,
+          conv.motebit_id,
+          conv.started_at,
+          conv.last_active_at,
+          conv.title,
+          conv.summary,
+          conv.message_count,
+        ],
       );
     } else if (conv.last_active_at >= existing.last_active_at) {
       this.db.runSync(
@@ -1117,7 +1302,17 @@ export class ExpoSqliteConversationSyncStore implements ConversationSyncStoreAda
       `INSERT OR IGNORE INTO conversation_messages
        (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [msg.message_id, msg.conversation_id, msg.motebit_id, msg.role, msg.content, msg.tool_calls, msg.tool_call_id, msg.created_at, msg.token_estimate],
+      [
+        msg.message_id,
+        msg.conversation_id,
+        msg.motebit_id,
+        msg.role,
+        msg.content,
+        msg.tool_calls,
+        msg.tool_call_id,
+        msg.created_at,
+        msg.token_estimate,
+      ],
     );
   }
 }
@@ -1165,7 +1360,21 @@ export class ExpoGradientStore implements GradientStoreAdapter {
     this.db.runSync(
       `INSERT OR REPLACE INTO gradient_snapshots (snapshot_id, motebit_id, timestamp, gradient, delta, knowledge_density, knowledge_density_raw, knowledge_quality, graph_connectivity, graph_connectivity_raw, temporal_stability, retrieval_quality, stats)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [snapshotId, snapshot.motebit_id, snapshot.timestamp, snapshot.gradient, snapshot.delta, snapshot.knowledge_density, snapshot.knowledge_density_raw, snapshot.knowledge_quality, snapshot.graph_connectivity, snapshot.graph_connectivity_raw, snapshot.temporal_stability, snapshot.retrieval_quality, JSON.stringify(snapshot.stats)],
+      [
+        snapshotId,
+        snapshot.motebit_id,
+        snapshot.timestamp,
+        snapshot.gradient,
+        snapshot.delta,
+        snapshot.knowledge_density,
+        snapshot.knowledge_density_raw,
+        snapshot.knowledge_quality,
+        snapshot.graph_connectivity,
+        snapshot.graph_connectivity_raw,
+        snapshot.temporal_stability,
+        snapshot.retrieval_quality,
+        JSON.stringify(snapshot.stats),
+      ],
     );
   }
 
@@ -1216,7 +1425,9 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
 
   if (userVersion < 2) {
     try {
-      db.execSync("ALTER TABLE state_snapshots ADD COLUMN version_clock INTEGER NOT NULL DEFAULT 0");
+      db.execSync(
+        "ALTER TABLE state_snapshots ADD COLUMN version_clock INTEGER NOT NULL DEFAULT 0",
+      );
     } catch {
       // Column may already exist on new DBs
     }
@@ -1351,9 +1562,21 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
 
   // Migration 7: memory consolidation columns
   if (userVersion < 7) {
-    try { db.execSync("ALTER TABLE memory_nodes ADD COLUMN memory_type TEXT DEFAULT 'semantic'"); } catch { /* already exists */ }
-    try { db.execSync("ALTER TABLE memory_nodes ADD COLUMN valid_from INTEGER"); } catch { /* already exists */ }
-    try { db.execSync("ALTER TABLE memory_nodes ADD COLUMN valid_until INTEGER"); } catch { /* already exists */ }
+    try {
+      db.execSync("ALTER TABLE memory_nodes ADD COLUMN memory_type TEXT DEFAULT 'semantic'");
+    } catch {
+      /* already exists */
+    }
+    try {
+      db.execSync("ALTER TABLE memory_nodes ADD COLUMN valid_from INTEGER");
+    } catch {
+      /* already exists */
+    }
+    try {
+      db.execSync("ALTER TABLE memory_nodes ADD COLUMN valid_until INTEGER");
+    } catch {
+      /* already exists */
+    }
     db.execSync("PRAGMA user_version = 7");
   }
 
@@ -1386,7 +1609,9 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
   // Migration 9: composite index for memory query optimization
   if (userVersion < 9) {
     try {
-      db.execSync("CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote_tomb_pin ON memory_nodes (motebit_id, tombstoned, pinned)");
+      db.execSync(
+        "CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote_tomb_pin ON memory_nodes (motebit_id, tombstoned, pinned)",
+      );
     } catch {
       // Index may already exist on new DBs
     }
@@ -1396,7 +1621,9 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
   // Migration 10: retrieval index for ORDER BY last_accessed DESC + LIMIT
   if (userVersion < 10) {
     try {
-      db.execSync("CREATE INDEX IF NOT EXISTS idx_memory_nodes_retrieve ON memory_nodes (motebit_id, tombstoned, last_accessed DESC)");
+      db.execSync(
+        "CREATE INDEX IF NOT EXISTS idx_memory_nodes_retrieve ON memory_nodes (motebit_id, tombstoned, last_accessed DESC)",
+      );
     } catch {
       // Index may already exist on new DBs
     }
@@ -1406,7 +1633,9 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
   // Migration 11: add retrieval_quality column to gradient_snapshots
   if (userVersion < 11) {
     try {
-      db.execSync("ALTER TABLE gradient_snapshots ADD COLUMN retrieval_quality REAL NOT NULL DEFAULT 0");
+      db.execSync(
+        "ALTER TABLE gradient_snapshots ADD COLUMN retrieval_quality REAL NOT NULL DEFAULT 0",
+      );
     } catch {
       // Column may already exist on new DBs
     }

@@ -1,12 +1,5 @@
 import React from "react";
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-} from "recharts";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import type { GradientSnapshotEntry } from "../api";
 
 const h = React.createElement;
@@ -24,20 +17,35 @@ function gradientColor(value: number): string {
 
 function deltaIndicator(delta: number): React.ReactElement {
   if (delta > 0.001) {
-    return h("span", { style: { color: "#2ecc71", marginLeft: 8, fontSize: 14 } }, `+${delta.toFixed(4)}`);
+    return h(
+      "span",
+      { style: { color: "#2ecc71", marginLeft: 8, fontSize: 14 } },
+      `+${delta.toFixed(4)}`,
+    );
   }
   if (delta < -0.001) {
-    return h("span", { style: { color: "#e74c3c", marginLeft: 8, fontSize: 14 } }, delta.toFixed(4));
+    return h(
+      "span",
+      { style: { color: "#e74c3c", marginLeft: 8, fontSize: 14 } },
+      delta.toFixed(4),
+    );
   }
   return h("span", { style: { color: "#8888aa", marginLeft: 8, fontSize: 14 } }, "0.0000");
 }
 
 function MetricBar({ label, value }: { label: string; value: number }): React.ReactElement {
   const pct = Math.max(0, Math.min(100, value * 100));
-  return h("div", { className: "gradient-metric-bar" },
+  return h(
+    "div",
+    { className: "gradient-metric-bar" },
     h("div", { className: "gradient-metric-label" }, label),
-    h("div", { className: "gradient-metric-track" },
-      h("div", { className: "gradient-metric-fill", style: { width: `${pct}%`, backgroundColor: gradientColor(value) } }),
+    h(
+      "div",
+      { className: "gradient-metric-track" },
+      h("div", {
+        className: "gradient-metric-fill",
+        style: { width: `${pct}%`, backgroundColor: gradientColor(value) },
+      }),
     ),
     h("div", { className: "gradient-metric-value" }, value.toFixed(3)),
   );
@@ -45,9 +53,15 @@ function MetricBar({ label, value }: { label: string; value: number }): React.Re
 
 export function GradientPanel({ current, history }: GradientPanelProps): React.ReactElement {
   if (!current) {
-    return h("div", { className: "panel" },
+    return h(
+      "div",
+      { className: "panel" },
       h("h2", null, "Intelligence Gradient"),
-      h("div", { className: "empty" }, "No gradient data yet. Run housekeeping to compute the first snapshot."),
+      h(
+        "div",
+        { className: "empty" },
+        "No gradient data yet. Run housekeeping to compute the first snapshot.",
+      ),
     );
   }
 
@@ -62,9 +76,15 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
     rq: snap.retrieval_quality,
   }));
 
-  const chart = h("div", { className: "gradient-chart-container" },
-    h(ResponsiveContainer as unknown as React.ComponentType<Record<string, unknown>>, { width: "100%", height: 220 },
-      h(LineChart as React.ComponentType<Record<string, unknown>>, { data: chartData },
+  const chart = h(
+    "div",
+    { className: "gradient-chart-container" },
+    h(
+      ResponsiveContainer as unknown as React.ComponentType<Record<string, unknown>>,
+      { width: "100%", height: 220 },
+      h(
+        LineChart as React.ComponentType<Record<string, unknown>>,
+        { data: chartData },
         h(XAxis as React.ComponentType<Record<string, unknown>>, {
           dataKey: "time",
           stroke: "#8888aa",
@@ -84,22 +104,52 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
           },
         }),
         h(Line as React.ComponentType<Record<string, unknown>>, {
-          type: "monotone", dataKey: "gradient", stroke: "#2ecc71", strokeWidth: 2, dot: false, name: "Gradient",
+          type: "monotone",
+          dataKey: "gradient",
+          stroke: "#2ecc71",
+          strokeWidth: 2,
+          dot: false,
+          name: "Gradient",
         }),
         h(Line as React.ComponentType<Record<string, unknown>>, {
-          type: "monotone", dataKey: "kd", stroke: "#3498db", strokeWidth: 1, dot: false, name: "Knowledge Density",
+          type: "monotone",
+          dataKey: "kd",
+          stroke: "#3498db",
+          strokeWidth: 1,
+          dot: false,
+          name: "Knowledge Density",
         }),
         h(Line as React.ComponentType<Record<string, unknown>>, {
-          type: "monotone", dataKey: "kq", stroke: "#e67e22", strokeWidth: 1, dot: false, name: "Knowledge Quality",
+          type: "monotone",
+          dataKey: "kq",
+          stroke: "#e67e22",
+          strokeWidth: 1,
+          dot: false,
+          name: "Knowledge Quality",
         }),
         h(Line as React.ComponentType<Record<string, unknown>>, {
-          type: "monotone", dataKey: "gc", stroke: "#9b59b6", strokeWidth: 1, dot: false, name: "Graph Connectivity",
+          type: "monotone",
+          dataKey: "gc",
+          stroke: "#9b59b6",
+          strokeWidth: 1,
+          dot: false,
+          name: "Graph Connectivity",
         }),
         h(Line as React.ComponentType<Record<string, unknown>>, {
-          type: "monotone", dataKey: "ts", stroke: "#1abc9c", strokeWidth: 1, dot: false, name: "Temporal Stability",
+          type: "monotone",
+          dataKey: "ts",
+          stroke: "#1abc9c",
+          strokeWidth: 1,
+          dot: false,
+          name: "Temporal Stability",
         }),
         h(Line as React.ComponentType<Record<string, unknown>>, {
-          type: "monotone", dataKey: "rq", stroke: "#e74c3c", strokeWidth: 1, dot: false, name: "Retrieval Quality",
+          type: "monotone",
+          dataKey: "rq",
+          stroke: "#e74c3c",
+          strokeWidth: 1,
+          dot: false,
+          name: "Retrieval Quality",
         }),
       ),
     ),
@@ -107,20 +157,30 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
 
   const stats = current.stats;
 
-  return h("div", { className: "panel" },
+  return h(
+    "div",
+    { className: "panel" },
     h("h2", null, "Intelligence Gradient"),
 
     // Hero number
-    h("div", { className: "gradient-hero" },
-      h("span", {
-        className: "gradient-score",
-        style: { color: gradientColor(current.gradient), fontSize: 48, fontWeight: "bold" },
-      }, current.gradient.toFixed(4)),
+    h(
+      "div",
+      { className: "gradient-hero" },
+      h(
+        "span",
+        {
+          className: "gradient-score",
+          style: { color: gradientColor(current.gradient), fontSize: 48, fontWeight: "bold" },
+        },
+        current.gradient.toFixed(4),
+      ),
       deltaIndicator(current.delta),
     ),
 
     // Sub-metrics
-    h("div", { className: "gradient-metrics" },
+    h(
+      "div",
+      { className: "gradient-metrics" },
       h(MetricBar, { label: "Knowledge Density", value: current.knowledge_density }),
       h(MetricBar, { label: "Knowledge Quality", value: current.knowledge_quality }),
       h(MetricBar, { label: "Graph Connectivity", value: current.graph_connectivity }),
@@ -132,9 +192,13 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
     history.length > 1 ? chart : null,
 
     // Raw stats
-    h("div", { className: "gradient-stats" },
+    h(
+      "div",
+      { className: "gradient-stats" },
       h("h3", null, "Raw Stats"),
-      h("div", { className: "stats-grid" },
+      h(
+        "div",
+        { className: "stats-grid" },
         h("span", null, `Nodes: ${stats.live_nodes}`),
         h("span", null, `Edges: ${stats.live_edges}`),
         h("span", null, `Semantic: ${stats.semantic_count}`),
@@ -153,7 +217,9 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
     ),
 
     // Timestamp
-    h("div", { className: "gradient-timestamp" },
+    h(
+      "div",
+      { className: "gradient-timestamp" },
       `Last computed: ${new Date(current.timestamp).toISOString()}`,
     ),
   );

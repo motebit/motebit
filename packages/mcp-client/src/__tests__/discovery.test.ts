@@ -48,9 +48,9 @@ function makeResolveTxtFail(error: Error): ResolveTxtFn {
 }
 
 function makeResolveTxtHang(): ResolveTxtFn {
-  return vi.fn<ResolveTxtFn>().mockImplementation(
-    () => new Promise((_resolve) => setTimeout(() => _resolve([]), 10000)),
-  );
+  return vi
+    .fn<ResolveTxtFn>()
+    .mockImplementation(() => new Promise((_resolve) => setTimeout(() => _resolve([]), 10000)));
 }
 
 // ---------------------------------------------------------------------------
@@ -68,7 +68,9 @@ afterEach(() => {
 describe("discoverByDns", () => {
   it("discovers a motebit via valid TXT record", async () => {
     const resolve = makeResolveTxt([
-      ["v=motebit1 url=https://example.com/.well-known/motebit.md endpoint=https://example.com/mcp"],
+      [
+        "v=motebit1 url=https://example.com/.well-known/motebit.md endpoint=https://example.com/mcp",
+      ],
     ]);
     mockFetchResponse(VALID_IDENTITY_FILE);
 
@@ -77,7 +79,9 @@ describe("discoverByDns", () => {
     expect(result.domain).toBe("example.com");
     expect(result.identityVerified).toBe(true);
     expect(result.motebitId).toBe("mote_01234567-89ab-cdef-0123-456789abcdef");
-    expect(result.publicKey).toBe("aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb");
+    expect(result.publicKey).toBe(
+      "aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb",
+    );
     expect(result.motebitType).toBe("service");
     expect(result.serviceName).toBe("Flight Search");
     expect(result.endpointUrl).toBe("https://example.com/mcp");
@@ -97,9 +101,7 @@ describe("discoverByDns", () => {
   });
 
   it("returns error when no v=motebit1 record found", async () => {
-    const resolve = makeResolveTxt([
-      ["v=spf1 include:example.com ~all"],
-    ]);
+    const resolve = makeResolveTxt([["v=spf1 include:example.com ~all"]]);
 
     const result = await discoverByDns("example.com", resolve);
     expect(result.identityVerified).toBe(false);
@@ -107,9 +109,7 @@ describe("discoverByDns", () => {
   });
 
   it("returns error when TXT record missing url field", async () => {
-    const resolve = makeResolveTxt([
-      ["v=motebit1 endpoint=https://example.com/mcp"],
-    ]);
+    const resolve = makeResolveTxt([["v=motebit1 endpoint=https://example.com/mcp"]]);
 
     const result = await discoverByDns("example.com", resolve);
     expect(result.identityVerified).toBe(false);
@@ -126,9 +126,7 @@ describe("discoverByDns", () => {
   });
 
   it("returns error when identity file is missing required fields", async () => {
-    const resolve = makeResolveTxt([
-      ["v=motebit1 url=https://example.com/.well-known/motebit.md"],
-    ]);
+    const resolve = makeResolveTxt([["v=motebit1 url=https://example.com/.well-known/motebit.md"]]);
     mockFetchResponse("---\nspec: motebit/identity@1.0\n---\n# No ID here\n");
 
     const result = await discoverByDns("example.com", resolve);
@@ -137,9 +135,7 @@ describe("discoverByDns", () => {
   });
 
   it("returns error on HTTP fetch failure", async () => {
-    const resolve = makeResolveTxt([
-      ["v=motebit1 url=https://example.com/.well-known/motebit.md"],
-    ]);
+    const resolve = makeResolveTxt([["v=motebit1 url=https://example.com/.well-known/motebit.md"]]);
     mockFetchResponse("Not Found", false, 404);
 
     const result = await discoverByDns("example.com", resolve);
@@ -157,9 +153,7 @@ describe("discoverByDns", () => {
   }, 10000);
 
   it("works without endpoint field in TXT record", async () => {
-    const resolve = makeResolveTxt([
-      ["v=motebit1 url=https://example.com/.well-known/motebit.md"],
-    ]);
+    const resolve = makeResolveTxt([["v=motebit1 url=https://example.com/.well-known/motebit.md"]]);
     mockFetchResponse(VALID_IDENTITY_FILE);
 
     const result = await discoverByDns("example.com", resolve);

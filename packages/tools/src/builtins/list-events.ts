@@ -17,9 +17,7 @@ export function createListEventsHandler(
   queryFn: (
     limit: number,
     eventType?: string,
-  ) => Promise<
-    Array<{ event_type: string; timestamp: number; payload: Record<string, unknown> }>
-  >,
+  ) => Promise<Array<{ event_type: string; timestamp: number; payload: Record<string, unknown> }>>,
 ): ToolHandler {
   return async (args) => {
     const limit = (args.limit as number) ?? 10;

@@ -34,10 +34,10 @@ function dbToLinear(db: number): number {
 }
 
 // VAD constants
-const SPEECH_THRESHOLD = 0.03;       // Gated RMS above this = speech
-const SPEECH_ONSET_FRAMES = 9;       // ~300ms at 30fps before triggering
-const SPEECH_OFFSET_FRAMES = 15;     // ~500ms of silence before re-arming
-const SILENCE_STOP_FRAMES = 45;      // ~1500ms at 30fps — auto-stop after speech ends
+const SPEECH_THRESHOLD = 0.03; // Gated RMS above this = speech
+const SPEECH_ONSET_FRAMES = 9; // ~300ms at 30fps before triggering
+const SPEECH_OFFSET_FRAMES = 15; // ~500ms of silence before re-arming
+const SILENCE_STOP_FRAMES = 45; // ~1500ms at 30fps — auto-stop after speech ends
 
 // Silero confirmation cooldown after rejection (ms)
 const SILERO_COOLDOWN_MS = 2000;
@@ -50,8 +50,8 @@ const SILERO_RECORDING_OPTIONS: Audio.RecordingOptions = {
   isMeteringEnabled: true,
   android: {
     extension: ".3gp",
-    outputFormat: 2,      // THREE_GPP
-    audioEncoder: 1,      // AMR_NB
+    outputFormat: 2, // THREE_GPP
+    audioEncoder: 1, // AMR_NB
     sampleRate: 44100,
     numberOfChannels: 1,
     bitRate: 128000,
@@ -59,7 +59,7 @@ const SILERO_RECORDING_OPTIONS: Audio.RecordingOptions = {
   ios: {
     extension: ".wav",
     outputFormat: "lpcm",
-    audioQuality: 32,     // LOW
+    audioQuality: 32, // LOW
     sampleRate: 16000,
     numberOfChannels: 1,
     bitRate: 256000,
@@ -94,8 +94,10 @@ function parseWavPcm(base64: string): Float32Array {
   let dataSize = 0;
   while (dataOffset < bytes.length - 8) {
     const chunkId = String.fromCharCode(
-      bytes[dataOffset]!, bytes[dataOffset + 1]!,
-      bytes[dataOffset + 2]!, bytes[dataOffset + 3]!,
+      bytes[dataOffset]!,
+      bytes[dataOffset + 1]!,
+      bytes[dataOffset + 2]!,
+      bytes[dataOffset + 3]!,
     );
     const chunkSize =
       bytes[dataOffset + 4]! |
@@ -384,9 +386,10 @@ export class AudioMonitor {
 
       // 4. Extract last ~1 second (16000 samples at 16kHz)
       const lastSecondCount = 16000;
-      const samples = allSamples.length > lastSecondCount
-        ? allSamples.slice(allSamples.length - lastSecondCount)
-        : allSamples;
+      const samples =
+        allSamples.length > lastSecondCount
+          ? allSamples.slice(allSamples.length - lastSecondCount)
+          : allSamples;
 
       // 5. Run Silero inference
       this.sileroVad.resetState();
@@ -432,11 +435,7 @@ export class AudioMonitor {
         ? SILERO_RECORDING_OPTIONS
         : Audio.RecordingOptionsPresets.LOW_QUALITY;
 
-      const { recording } = await Audio.Recording.createAsync(
-        recordingOptions,
-        null,
-        100,
-      );
+      const { recording } = await Audio.Recording.createAsync(recordingOptions, null, 100);
       this.recording = recording;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);

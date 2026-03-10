@@ -18,13 +18,12 @@ export class IdbAuditLog implements AuditLogAdapter {
     const store = tx.objectStore("audit_log");
     const index = store.index("motebit_time");
 
-    const lower = options.after !== undefined
-      ? [motebitId, options.after + 1]
-      : [motebitId, -Infinity];
+    const lower =
+      options.after !== undefined ? [motebitId, options.after + 1] : [motebitId, -Infinity];
     const range = IDBKeyRange.bound(lower, [motebitId, Infinity]);
 
     // Collect all matching records
-    const all = await idbRequest(index.getAll(range)) as AuditRecord[];
+    const all = (await idbRequest(index.getAll(range))) as AuditRecord[];
 
     // Return most recent N (matches InMemory's slice(-limit) semantics)
     if (options.limit !== undefined) {

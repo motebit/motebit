@@ -16,7 +16,7 @@
 
 5. **The SOUL.md / HEARTBEAT.md pattern is interesting.** Personality-as-markdown and autonomous check-ins are patterns Motebit could learn from — but Motebit already has the richer version (behavior engine, state vector, species constraints).
 
-6. **Positioning opportunity:** OpenClaw is the *body without governance*. Motebit is *governance built into the body*. If OpenClaw is "your AI agent," Motebit is "your AI agent that can prove who it is, remembers responsibly, and has rules about what crosses the boundary."
+6. **Positioning opportunity:** OpenClaw is the _body without governance_. Motebit is _governance built into the body_. If OpenClaw is "your AI agent," Motebit is "your AI agent that can prove who it is, remembers responsibly, and has rules about what crosses the boundary."
 
 ---
 
@@ -32,7 +32,7 @@
 
 3. **AIEOS (AI Entity Object Specification)** — a portable, standardized format for AI personas that maintain consistent behavioral traits across models. Worth watching as a potential interop standard. Motebit's identity primitives are stronger (cryptographic vs. behavioral), but persona portability is a good UX concept.
 
-4. **The ecosystem is fragmenting fast.** OpenClaw → ZeroClaw → MicroClaw → PicoClaw → NanoBot → Moltis. Everyone is racing to build the *runtime*. Nobody is building the *identity layer that sits above all runtimes*. Motebit should position as the sovereign identity that can ride ANY runtime.
+4. **The ecosystem is fragmenting fast.** OpenClaw → ZeroClaw → MicroClaw → PicoClaw → NanoBot → Moltis. Everyone is racing to build the _runtime_. Nobody is building the _identity layer that sits above all runtimes_. Motebit should position as the sovereign identity that can ride ANY runtime.
 
 ---
 
@@ -49,7 +49,7 @@
    - Agent memory = none, starts from zero each session → **no accumulated trust**
    - Agent governance = repo-level settings, not agent-level → **no sovereign governance**
 
-2. **The `.agent.md` convention is emerging.** GitHub uses `.agent.md` files with YAML frontmatter for custom agent definitions. Anthropic uses `CLAUDE.md`. OpenClaw uses `SOUL.md`. The industry is converging on "agent identity as a markdown file." Motebit's approach is fundamentally different — identity is a **cryptographic primitive**, not a text file. But Motebit could adopt the convention as a *human-readable complement* to the cryptographic layer.
+2. **The `.agent.md` convention is emerging.** GitHub uses `.agent.md` files with YAML frontmatter for custom agent definitions. Anthropic uses `CLAUDE.md`. OpenClaw uses `SOUL.md`. The industry is converging on "agent identity as a markdown file." Motebit's approach is fundamentally different — identity is a **cryptographic primitive**, not a text file. But Motebit could adopt the convention as a _human-readable complement_ to the cryptographic layer.
 
 3. **GitHub Actions as agent runtime** is a major trend. Agents triggered by events, sandboxed in containers, with safe-output permission controls. This validates the event-driven, policy-gated architecture Motebit already builds.
 
@@ -59,17 +59,17 @@
 
 ## Strategic Synthesis
 
-| Dimension | OpenClaw | ZeroClaw | GitHub Agents | **Motebit** |
-|---|---|---|---|---|
-| Identity | None | None | Ephemeral PATs | **Ed25519, persistent** |
-| Memory | Markdown logs | SQLite hybrid | None (per-session) | **Event-sourced graph** |
-| Governance | None (512 vulns) | Basic sandboxing | Repo-level settings | **PolicyGate + audit** |
-| Pluggable LLM | Yes | Yes | Yes | **Yes** |
-| MCP | No | No | Deep integration | **Native** |
-| Runtime weight | Heavy (Node.js, >1GB) | Ultra-light (Rust, <5MB) | Cloud (Actions) | Medium (Node.js) |
-| Stars/traction | 200K | 9.2K | Millions of users | Early |
+| Dimension      | OpenClaw              | ZeroClaw                 | GitHub Agents       | **Motebit**             |
+| -------------- | --------------------- | ------------------------ | ------------------- | ----------------------- |
+| Identity       | None                  | None                     | Ephemeral PATs      | **Ed25519, persistent** |
+| Memory         | Markdown logs         | SQLite hybrid            | None (per-session)  | **Event-sourced graph** |
+| Governance     | None (512 vulns)      | Basic sandboxing         | Repo-level settings | **PolicyGate + audit**  |
+| Pluggable LLM  | Yes                   | Yes                      | Yes                 | **Yes**                 |
+| MCP            | No                    | No                       | Deep integration    | **Native**              |
+| Runtime weight | Heavy (Node.js, >1GB) | Ultra-light (Rust, <5MB) | Cloud (Actions)     | Medium (Node.js)        |
+| Stars/traction | 200K                  | 9.2K                     | Millions of users   | Early                   |
 
-**The bottom line:** The agent runtime is commoditizing at light speed (OpenClaw → ZeroClaw → dozens of forks). GitHub is making agent capabilities table stakes. Everyone is building the *body*. **Nobody is building the soul that persists, proves itself, and governs its own boundaries.** That's Motebit.
+**The bottom line:** The agent runtime is commoditizing at light speed (OpenClaw → ZeroClaw → dozens of forks). GitHub is making agent capabilities table stakes. Everyone is building the _body_. **Nobody is building the soul that persists, proves itself, and governs its own boundaries.** That's Motebit.
 
 ---
 
@@ -105,4 +105,4 @@
 - [WSO2: Why AI Agents Need Identity](https://wso2.com/library/blogs/why-ai-agents-need-their-own-identity-lessons-from-2025-and-resolutions-for-2026/)
 - [Enterprise Times: AI Agent Identity Blueprint](https://www.enterprisetimes.co.uk/2026/02/12/why-ai-agents-need-their-own-identity-a-blueprint-for-success-in-2026/)
 
-*Last updated: February 2026*
+_Last updated: February 2026_

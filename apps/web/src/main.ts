@@ -26,14 +26,18 @@ let currentConfig: ProviderConfig | null = null;
 const ctx: WebContext = {
   app,
   getConfig: () => currentConfig,
-  setConfig: (c) => { currentConfig = c; },
+  setConfig: (c) => {
+    currentConfig = c;
+  },
   addMessage,
   showToast,
 };
 
 // === Module Init ===
 
-const colorPicker = initColorPicker(ctx, () => { voiceAPI.updateVoiceGlowColor(); });
+const colorPicker = initColorPicker(ctx, () => {
+  voiceAPI.updateVoiceGlowColor();
+});
 
 const chatAPI = initChat(ctx, {
   openSettings: () => settings.open(),
@@ -135,10 +139,16 @@ async function bootstrap(): Promise<void> {
   // Restore soul color from localStorage
   const soulColor = loadSoulColor();
   if (soulColor != null) {
-    if (soulColor.preset === "custom" && soulColor.customHue != null && soulColor.customSaturation != null) {
+    if (
+      soulColor.preset === "custom" &&
+      soulColor.customHue != null &&
+      soulColor.customSaturation != null
+    ) {
       colorPicker.setCustomHue(soulColor.customHue);
       colorPicker.setCustomSaturation(soulColor.customSaturation);
-      colorPicker.setCustomInteriorColor(deriveInteriorColor(soulColor.customHue, soulColor.customSaturation));
+      colorPicker.setCustomInteriorColor(
+        deriveInteriorColor(soulColor.customHue, soulColor.customSaturation),
+      );
       colorPicker.setSelectedPreset("custom");
       app.setInteriorColorDirect(colorPicker.getCustomInteriorColor()!);
     } else if (soulColor.preset !== "moonlight") {

@@ -117,9 +117,18 @@ export class CursorPresence {
 
         // EMA smoothing
         this.state = {
-          attention: Math.min(1, lerp(this.state.attention ?? 0.1, targetAttention, alpha) + 0.5 * spike),
-          curiosity: Math.min(1, lerp(this.state.curiosity ?? 0.1, targetCuriosity, alpha) + 0.3 * spike),
-          social_distance: Math.max(0, lerp(this.state.social_distance ?? 0.7, targetSocialDistance, alpha) - 0.3 * spike),
+          attention: Math.min(
+            1,
+            lerp(this.state.attention ?? 0.1, targetAttention, alpha) + 0.5 * spike,
+          ),
+          curiosity: Math.min(
+            1,
+            lerp(this.state.curiosity ?? 0.1, targetCuriosity, alpha) + 0.3 * spike,
+          ),
+          social_distance: Math.max(
+            0,
+            lerp(this.state.social_distance ?? 0.7, targetSocialDistance, alpha) - 0.3 * spike,
+          ),
         };
       }
 

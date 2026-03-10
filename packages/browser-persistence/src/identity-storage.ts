@@ -12,7 +12,9 @@ export class IdbIdentityStorage implements IdentityStorage {
 
   async load(motebitId: string): Promise<MotebitIdentity | null> {
     const tx = this.db.transaction("identities", "readonly");
-    const result = (await idbRequest(tx.objectStore("identities").get(motebitId))) as MotebitIdentity | undefined;
+    const result = (await idbRequest(tx.objectStore("identities").get(motebitId))) as
+      | MotebitIdentity
+      | undefined;
     return result ?? null;
   }
 
@@ -31,7 +33,9 @@ export class IdbIdentityStorage implements IdentityStorage {
 
   async loadDevice(deviceId: string): Promise<DeviceRegistration | null> {
     const tx = this.db.transaction("devices", "readonly");
-    const result = (await idbRequest(tx.objectStore("devices").get(deviceId))) as DeviceRegistration | undefined;
+    const result = (await idbRequest(tx.objectStore("devices").get(deviceId))) as
+      | DeviceRegistration
+      | undefined;
     return result ?? null;
   }
 
@@ -47,6 +51,6 @@ export class IdbIdentityStorage implements IdentityStorage {
     const tx = this.db.transaction("devices", "readonly");
     const store = tx.objectStore("devices");
     const index = store.index("motebit_id");
-    return await idbRequest(index.getAll(IDBKeyRange.only(motebitId))) as DeviceRegistration[];
+    return (await idbRequest(index.getAll(IDBKeyRange.only(motebitId)))) as DeviceRegistration[];
   }
 }

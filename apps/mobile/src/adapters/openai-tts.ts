@@ -57,7 +57,7 @@ export class OpenAITTSProvider implements TTSProvider {
       const response = await fetch("https://api.openai.com/v1/audio/speech", {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${this.apiKey}`,
+          Authorization: `Bearer ${this.apiKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({

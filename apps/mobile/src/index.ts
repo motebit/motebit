@@ -11,5 +11,15 @@
 
 export { App } from "./App";
 export { MobileApp, COLOR_PRESETS, APPROVAL_PRESET_CONFIGS } from "./mobile-app";
-export type { MobileSettings, MobileAIConfig, MobileBootstrapResult, ApprovalPresetConfig } from "./mobile-app";
-export { createExpoStorage, ExpoSqliteConversationStore, ExpoGLAdapter, SecureStoreAdapter } from "./adapters";
+export type {
+  MobileSettings,
+  MobileAIConfig,
+  MobileBootstrapResult,
+  ApprovalPresetConfig,
+} from "./mobile-app";
+export {
+  createExpoStorage,
+  ExpoSqliteConversationStore,
+  ExpoGLAdapter,
+  SecureStoreAdapter,
+} from "./adapters";

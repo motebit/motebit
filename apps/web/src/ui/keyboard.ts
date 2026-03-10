@@ -35,7 +35,8 @@ export function initKeyboard(callbacks: KeyboardCallbacks): void {
 
     // Don't fire shortcuts when typing in input fields (except meta combos)
     const target = e.target as HTMLElement;
-    const isInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
+    const isInput =
+      target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
 
     // Cmd+K — focus input (always)
     if (meta && e.key === "k") {

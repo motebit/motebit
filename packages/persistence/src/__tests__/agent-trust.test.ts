@@ -39,11 +39,13 @@ describe("SqliteAgentTrustStore", () => {
 
   it("upserts on setAgentTrust (updates existing record)", async () => {
     await moteDb.agentTrustStore.setAgentTrust(makeRecord());
-    await moteDb.agentTrustStore.setAgentTrust(makeRecord({
-      interaction_count: 5,
-      last_seen_at: 2000,
-      trust_level: AgentTrustLevel.Verified,
-    }));
+    await moteDb.agentTrustStore.setAgentTrust(
+      makeRecord({
+        interaction_count: 5,
+        last_seen_at: 2000,
+        trust_level: AgentTrustLevel.Verified,
+      }),
+    );
 
     const found = await moteDb.agentTrustStore.getAgentTrust("mote-local", "mote-remote-1");
     expect(found!.interaction_count).toBe(5);
@@ -52,9 +54,15 @@ describe("SqliteAgentTrustStore", () => {
   });
 
   it("lists all trust records for a motebit", async () => {
-    await moteDb.agentTrustStore.setAgentTrust(makeRecord({ remote_motebit_id: "r1", last_seen_at: 100 }));
-    await moteDb.agentTrustStore.setAgentTrust(makeRecord({ remote_motebit_id: "r2", last_seen_at: 200 }));
-    await moteDb.agentTrustStore.setAgentTrust(makeRecord({ remote_motebit_id: "r3", last_seen_at: 150 }));
+    await moteDb.agentTrustStore.setAgentTrust(
+      makeRecord({ remote_motebit_id: "r1", last_seen_at: 100 }),
+    );
+    await moteDb.agentTrustStore.setAgentTrust(
+      makeRecord({ remote_motebit_id: "r2", last_seen_at: 200 }),
+    );
+    await moteDb.agentTrustStore.setAgentTrust(
+      makeRecord({ remote_motebit_id: "r3", last_seen_at: 150 }),
+    );
 
     const list = await moteDb.agentTrustStore.listAgentTrust("mote-local");
     expect(list).toHaveLength(3);
@@ -72,7 +80,11 @@ describe("SqliteAgentTrustStore", () => {
 
   it("updates trust level", async () => {
     await moteDb.agentTrustStore.setAgentTrust(makeRecord());
-    await moteDb.agentTrustStore.updateTrustLevel("mote-local", "mote-remote-1", AgentTrustLevel.Trusted);
+    await moteDb.agentTrustStore.updateTrustLevel(
+      "mote-local",
+      "mote-remote-1",
+      AgentTrustLevel.Trusted,
+    );
 
     const found = await moteDb.agentTrustStore.getAgentTrust("mote-local", "mote-remote-1");
     expect(found!.trust_level).toBe(AgentTrustLevel.Trusted);
@@ -81,10 +93,12 @@ describe("SqliteAgentTrustStore", () => {
   });
 
   it("stores and retrieves public_key and notes", async () => {
-    await moteDb.agentTrustStore.setAgentTrust(makeRecord({
-      public_key: "ed25519:abc123",
-      notes: "First met during task delegation",
-    }));
+    await moteDb.agentTrustStore.setAgentTrust(
+      makeRecord({
+        public_key: "ed25519:abc123",
+        notes: "First met during task delegation",
+      }),
+    );
 
     const found = await moteDb.agentTrustStore.getAgentTrust("mote-local", "mote-remote-1");
     expect(found!.public_key).toBe("ed25519:abc123");
@@ -99,10 +113,16 @@ describe("SqliteAgentTrustStore", () => {
   });
 
   it("can block an agent", async () => {
-    await moteDb.agentTrustStore.setAgentTrust(makeRecord({
-      trust_level: AgentTrustLevel.Trusted,
-    }));
-    await moteDb.agentTrustStore.updateTrustLevel("mote-local", "mote-remote-1", AgentTrustLevel.Blocked);
+    await moteDb.agentTrustStore.setAgentTrust(
+      makeRecord({
+        trust_level: AgentTrustLevel.Trusted,
+      }),
+    );
+    await moteDb.agentTrustStore.updateTrustLevel(
+      "mote-local",
+      "mote-remote-1",
+      AgentTrustLevel.Blocked,
+    );
 
     const found = await moteDb.agentTrustStore.getAgentTrust("mote-local", "mote-remote-1");
     expect(found!.trust_level).toBe(AgentTrustLevel.Blocked);

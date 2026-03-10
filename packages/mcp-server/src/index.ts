@@ -3,14 +3,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import {
-  AgentTrustLevel,
-} from "@motebit/sdk";
-import type {
-  ToolDefinition,
-  ToolResult,
-  PolicyDecision,
-} from "@motebit/sdk";
+import { AgentTrustLevel } from "@motebit/sdk";
+import type { ToolDefinition, ToolResult, PolicyDecision } from "@motebit/sdk";
 
 // Re-export for consumers
 export type { MotebitServerDeps, McpServerConfig };
@@ -49,16 +43,11 @@ interface MotebitServerDeps {
     args: Record<string, unknown>,
     caller?: CallerIdentity,
   ): PolicyDecision;
-  executeTool(
-    name: string,
-    args: Record<string, unknown>,
-  ): Promise<ToolResult>;
+  executeTool(name: string, args: Record<string, unknown>): Promise<ToolResult>;
 
   // Resources
   getState(): Record<string, unknown>;
-  getMemories(
-    limit?: number,
-  ): Promise<
+  getMemories(limit?: number): Promise<
     Array<{
       content: string;
       confidence: number;
@@ -68,11 +57,7 @@ interface MotebitServerDeps {
   >;
 
   // Audit
-  logToolCall(
-    name: string,
-    args: Record<string, unknown>,
-    result: ToolResult,
-  ): void;
+  logToolCall(name: string, args: Record<string, unknown>, result: ToolResult): void;
 
   // Synthetic tool backends (all optional — tool only registered when dep is provided)
   sendMessage?(text: string): Promise<{ response: string; memoriesFormed: number }>;
@@ -80,10 +65,7 @@ interface MotebitServerDeps {
     query: string,
     limit?: number,
   ): Promise<Array<{ content: string; confidence: number; similarity: number }>>;
-  storeMemory?(
-    content: string,
-    sensitivity?: string,
-  ): Promise<{ node_id: string }>;
+  storeMemory?(content: string, sensitivity?: string): Promise<{ node_id: string }>;
   handleAgentTask?(
     prompt: string,
   ): AsyncGenerator<
@@ -94,11 +76,16 @@ interface MotebitServerDeps {
   identityFileContent?: string;
 
   /** Resolve a caller's public key and trust level by motebit ID. */
-  resolveCallerKey?(motebitId: string): Promise<{ publicKey: string; trustLevel: AgentTrustLevel } | null>;
+  resolveCallerKey?(
+    motebitId: string,
+  ): Promise<{ publicKey: string; trustLevel: AgentTrustLevel } | null>;
   /** Called on first contact with an unknown caller. Returns the trust level to assign. */
   onCallerVerified?(motebitId: string, publicKey: string, trustLevel: AgentTrustLevel): void;
   /** Verify a signed token. Returns parsed payload if valid, null otherwise. Injected from @motebit/crypto. */
-  verifySignedToken?(token: string, publicKey: Uint8Array): Promise<{ mid: string; did: string; iat: number; exp: number } | null>;
+  verifySignedToken?(
+    token: string,
+    publicKey: Uint8Array,
+  ): Promise<{ mid: string; did: string; iat: number; exp: number } | null>;
 }
 
 // === Config ===
@@ -145,17 +132,13 @@ export function riskToAnnotations(riskHint?: ToolDefinition["riskHint"]): {
 
 // === Result formatting with identity tag ===
 
-export function formatResult(
-  result: ToolResult,
-  motebitId: string,
-  publicKeyHex?: string,
-): string {
+export function formatResult(result: ToolResult, motebitId: string, publicKeyHex?: string): string {
   const data =
     result.ok && result.data !== undefined
       ? typeof result.data === "string"
         ? result.data
         : JSON.stringify(result.data)
-      : result.error ?? "no data";
+      : (result.error ?? "no data");
 
   const keyFragment = publicKeyHex ? publicKeyHex.slice(0, 16) : "none";
   const idFragment = motebitId.slice(0, 8);
@@ -164,11 +147,7 @@ export function formatResult(
 
 // === Privacy filter for memories ===
 
-const EXCLUDED_SENSITIVITIES = new Set<string>([
-  "medical",
-  "financial",
-  "secret",
-]);
+const EXCLUDED_SENSITIVITIES = new Set<string>(["medical", "financial", "secret"]);
 
 export function filterMemories(
   memories: Array<{
@@ -325,22 +304,13 @@ export class McpServerAdapter {
           },
         );
       } else if (hasAnnotations) {
-        server.tool(
-          tool.name,
-          tool.description,
-          annotations,
-          async () => {
-            return this.handleToolCall(tool, {});
-          },
-        );
+        server.tool(tool.name, tool.description, annotations, async () => {
+          return this.handleToolCall(tool, {});
+        });
       } else {
-        server.tool(
-          tool.name,
-          tool.description,
-          async () => {
-            return this.handleToolCall(tool, {});
-          },
-        );
+        server.tool(tool.name, tool.description, async () => {
+          return this.handleToolCall(tool, {});
+        });
       }
     }
   }
@@ -386,11 +356,7 @@ export class McpServerAdapter {
     this.deps.logToolCall(tool.name, args, result);
 
     // Format with identity tag
-    const formatted = formatResult(
-      result,
-      this.deps.motebitId,
-      this.deps.publicKeyHex,
-    );
+    const formatted = formatResult(result, this.deps.motebitId, this.deps.publicKeyHex);
 
     return {
       content: [{ type: "text" as const, text: formatted }],
@@ -405,10 +371,12 @@ export class McpServerAdapter {
       const text = typeof data === "string" ? data : JSON.stringify(data);
       const result: ToolResult = { ok: true, data: text };
       return {
-        content: [{
-          type: "text" as const,
-          text: formatResult(result, this.deps.motebitId, this.deps.publicKeyHex),
-        }],
+        content: [
+          {
+            type: "text" as const,
+            text: formatResult(result, this.deps.motebitId, this.deps.publicKeyHex),
+          },
+        ],
       };
     };
 
@@ -439,10 +407,12 @@ export class McpServerAdapter {
           // Fail-closed: external callers cannot store high-sensitivity memories
           if (args.sensitivity && EXCLUDED_SENSITIVITIES.has(args.sensitivity)) {
             return {
-              content: [{
-                type: "text" as const,
-                text: `Denied: external callers cannot store memories with sensitivity "${args.sensitivity}"`,
-              }],
+              content: [
+                {
+                  type: "text" as const,
+                  text: `Denied: external callers cannot store memories with sensitivity "${args.sensitivity}"`,
+                },
+              ],
               isError: true,
             };
           }
@@ -484,7 +454,8 @@ export class McpServerAdapter {
             if (chunk.type === "text") {
               responseText += (chunk as { type: "text"; text: string }).text;
             } else if (chunk.type === "task_result") {
-              receipt = (chunk as { type: "task_result"; receipt: Record<string, unknown> }).receipt;
+              receipt = (chunk as { type: "task_result"; receipt: Record<string, unknown> })
+                .receipt;
             }
           }
 
@@ -500,97 +471,77 @@ export class McpServerAdapter {
     }
 
     // motebit_identity — always registered (no dep required)
-    server.tool(
-      "motebit_identity",
-      "Return this motebit's identity information",
-      async () => {
-        if (this.deps.identityFileContent) {
-          return fmt(this.deps.identityFileContent);
-        }
-        const identity: Record<string, unknown> = {
-          motebit_id: this.deps.motebitId,
-          public_key: this.deps.publicKeyHex ?? null,
-        };
-        if (this.config.motebitType) {
-          identity.motebit_type = this.config.motebitType;
-        }
-        return fmt(identity);
-      },
-    );
+    server.tool("motebit_identity", "Return this motebit's identity information", async () => {
+      if (this.deps.identityFileContent) {
+        return fmt(this.deps.identityFileContent);
+      }
+      const identity: Record<string, unknown> = {
+        motebit_id: this.deps.motebitId,
+        public_key: this.deps.publicKeyHex ?? null,
+      };
+      if (this.config.motebitType) {
+        identity.motebit_type = this.config.motebitType;
+      }
+      return fmt(identity);
+    });
 
     // motebit_tools — always registered
-    server.tool(
-      "motebit_tools",
-      "List available tools with risk levels",
-      async () => {
-        const tools = this.deps.listTools().map((t) => ({
-          name: t.name,
-          description: t.description,
-          risk: t.riskHint?.risk ?? null,
-        }));
-        this.deps.logToolCall("motebit_tools", {}, { ok: true, data: tools });
-        return fmt(tools);
-      },
-    );
+    server.tool("motebit_tools", "List available tools with risk levels", async () => {
+      const tools = this.deps.listTools().map((t) => ({
+        name: t.name,
+        description: t.description,
+        risk: t.riskHint?.risk ?? null,
+      }));
+      this.deps.logToolCall("motebit_tools", {}, { ok: true, data: tools });
+      return fmt(tools);
+    });
   }
 
   // --- Resource Registration ---
 
   private registerResourcesOn(server: McpServer): void {
     // Identity resource — always exposed
-    server.resource(
-      "identity",
-      "motebit://identity",
-      async () => ({
-        contents: [
-          {
-            uri: "motebit://identity",
-            mimeType: "application/json",
-            text: JSON.stringify({
-              motebit_id: this.deps.motebitId,
-              public_key: this.deps.publicKeyHex ?? null,
-            }),
-          },
-        ],
-      }),
-    );
+    server.resource("identity", "motebit://identity", async () => ({
+      contents: [
+        {
+          uri: "motebit://identity",
+          mimeType: "application/json",
+          text: JSON.stringify({
+            motebit_id: this.deps.motebitId,
+            public_key: this.deps.publicKeyHex ?? null,
+          }),
+        },
+      ],
+    }));
 
     // State resource
     if (this.config.exposeState !== false) {
-      server.resource(
-        "state",
-        "motebit://state",
-        async () => ({
-          contents: [
-            {
-              uri: "motebit://state",
-              mimeType: "application/json",
-              text: JSON.stringify(this.deps.getState()),
-            },
-          ],
-        }),
-      );
+      server.resource("state", "motebit://state", async () => ({
+        contents: [
+          {
+            uri: "motebit://state",
+            mimeType: "application/json",
+            text: JSON.stringify(this.deps.getState()),
+          },
+        ],
+      }));
     }
 
     // Memories resource (privacy-filtered)
     if (this.config.exposeMemories !== false) {
-      server.resource(
-        "memories",
-        "motebit://memories",
-        async () => {
-          const raw = await this.deps.getMemories(50);
-          const filtered = filterMemories(raw, 50);
-          return {
-            contents: [
-              {
-                uri: "motebit://memories",
-                mimeType: "application/json",
-                text: JSON.stringify(filtered),
-              },
-            ],
-          };
-        },
-      );
+      server.resource("memories", "motebit://memories", async () => {
+        const raw = await this.deps.getMemories(50);
+        const filtered = filterMemories(raw, 50);
+        return {
+          contents: [
+            {
+              uri: "motebit://memories",
+              mimeType: "application/json",
+              text: JSON.stringify(filtered),
+            },
+          ],
+        };
+      });
     }
   }
 
@@ -790,11 +741,13 @@ export class McpServerAdapter {
             body = JSON.parse(Buffer.concat(bodyChunks).toString());
           } catch {
             res.writeHead(400, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({
-              jsonrpc: "2.0",
-              error: { code: -32700, message: "Parse error: invalid JSON" },
-              id: null,
-            }));
+            res.end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                error: { code: -32700, message: "Parse error: invalid JSON" },
+                id: null,
+              }),
+            );
             return;
           }
 
@@ -824,11 +777,13 @@ export class McpServerAdapter {
           } else {
             // Invalid: no session ID and not an init request
             res.writeHead(400, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({
-              jsonrpc: "2.0",
-              error: { code: -32000, message: "Bad Request: No valid session ID provided" },
-              id: null,
-            }));
+            res.end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                error: { code: -32000, message: "Bad Request: No valid session ID provided" },
+                id: null,
+              }),
+            );
             return;
           }
 

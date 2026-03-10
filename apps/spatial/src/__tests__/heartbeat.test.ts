@@ -41,10 +41,13 @@ describe("AmbientHeartbeat", () => {
   it("stop() clears the tick timer", async () => {
     const rt = createMockRuntime();
     const utterances: string[] = [];
-    const hb = new AmbientHeartbeat({}, {
-      onProactiveUtterance: (text) => utterances.push(text),
-      getPresenceState: () => "ambient",
-    });
+    const hb = new AmbientHeartbeat(
+      {},
+      {
+        onProactiveUtterance: (text) => utterances.push(text),
+        getPresenceState: () => "ambient",
+      },
+    );
     hb.setRuntime(rt);
     hb.start();
     hb.stop();
@@ -79,10 +82,13 @@ describe("heartbeat tick", () => {
     const rt = createMockRuntime("A gentle thought.");
     const utterances: string[] = [];
 
-    const hb = new AmbientHeartbeat({}, {
-      onProactiveUtterance: (text) => utterances.push(text),
-      getPresenceState: () => "ambient",
-    });
+    const hb = new AmbientHeartbeat(
+      {},
+      {
+        onProactiveUtterance: (text) => utterances.push(text),
+        getPresenceState: () => "ambient",
+      },
+    );
     hb.setRuntime(rt);
     hb.start();
 
@@ -97,10 +103,13 @@ describe("heartbeat tick", () => {
     const rt = createMockRuntime("I noticed you.");
     const utterances: string[] = [];
 
-    const hb = new AmbientHeartbeat({}, {
-      onProactiveUtterance: (text) => utterances.push(text),
-      getPresenceState: () => "attentive",
-    });
+    const hb = new AmbientHeartbeat(
+      {},
+      {
+        onProactiveUtterance: (text) => utterances.push(text),
+        getPresenceState: () => "attentive",
+      },
+    );
     hb.setRuntime(rt);
     hb.start();
 
@@ -113,9 +122,12 @@ describe("heartbeat tick", () => {
 
   it("does not fire when presence is engaged", async () => {
     const rt = createMockRuntime("Should not speak.");
-    const hb = new AmbientHeartbeat({}, {
-      getPresenceState: () => "engaged",
-    });
+    const hb = new AmbientHeartbeat(
+      {},
+      {
+        getPresenceState: () => "engaged",
+      },
+    );
     hb.setRuntime(rt);
     hb.start();
 
@@ -127,9 +139,12 @@ describe("heartbeat tick", () => {
 
   it("does not fire when presence is speaking", async () => {
     const rt = createMockRuntime("Nope.");
-    const hb = new AmbientHeartbeat({}, {
-      getPresenceState: () => "speaking",
-    });
+    const hb = new AmbientHeartbeat(
+      {},
+      {
+        getPresenceState: () => "speaking",
+      },
+    );
     hb.setRuntime(rt);
     hb.start();
 
@@ -141,9 +156,12 @@ describe("heartbeat tick", () => {
 
   it("does not fire when presence is processing", async () => {
     const rt = createMockRuntime("Nope.");
-    const hb = new AmbientHeartbeat({}, {
-      getPresenceState: () => "processing",
-    });
+    const hb = new AmbientHeartbeat(
+      {},
+      {
+        getPresenceState: () => "processing",
+      },
+    );
     hb.setRuntime(rt);
     hb.start();
 
@@ -155,9 +173,12 @@ describe("heartbeat tick", () => {
 
   it("does not fire when presence is dormant", async () => {
     const rt = createMockRuntime("Nope.");
-    const hb = new AmbientHeartbeat({}, {
-      getPresenceState: () => "dormant",
-    });
+    const hb = new AmbientHeartbeat(
+      {},
+      {
+        getPresenceState: () => "dormant",
+      },
+    );
     hb.setRuntime(rt);
     hb.start();
 
@@ -171,9 +192,12 @@ describe("heartbeat tick", () => {
     const rt = createMockRuntime("Default ambient.");
     const utterances: string[] = [];
 
-    const hb = new AmbientHeartbeat({}, {
-      onProactiveUtterance: (text) => utterances.push(text),
-    });
+    const hb = new AmbientHeartbeat(
+      {},
+      {
+        onProactiveUtterance: (text) => utterances.push(text),
+      },
+    );
     hb.setRuntime(rt);
     hb.start();
 
@@ -202,10 +226,13 @@ describe("heartbeat silence", () => {
     const rt = createMockRuntime("[silence]");
     const utterances: string[] = [];
 
-    const hb = new AmbientHeartbeat({}, {
-      onProactiveUtterance: (text) => utterances.push(text),
-      getPresenceState: () => "ambient",
-    });
+    const hb = new AmbientHeartbeat(
+      {},
+      {
+        onProactiveUtterance: (text) => utterances.push(text),
+        getPresenceState: () => "ambient",
+      },
+    );
     hb.setRuntime(rt);
     hb.start();
 
@@ -220,10 +247,13 @@ describe("heartbeat silence", () => {
     const rt = createMockRuntime("   ");
     const utterances: string[] = [];
 
-    const hb = new AmbientHeartbeat({}, {
-      onProactiveUtterance: (text) => utterances.push(text),
-      getPresenceState: () => "ambient",
-    });
+    const hb = new AmbientHeartbeat(
+      {},
+      {
+        onProactiveUtterance: (text) => utterances.push(text),
+        getPresenceState: () => "ambient",
+      },
+    );
     hb.setRuntime(rt);
     hb.start();
 
@@ -237,10 +267,13 @@ describe("heartbeat silence", () => {
     const rt = createMockRuntime("[silence] I have nothing to say.");
     const utterances: string[] = [];
 
-    const hb = new AmbientHeartbeat({}, {
-      onProactiveUtterance: (text) => utterances.push(text),
-      getPresenceState: () => "ambient",
-    });
+    const hb = new AmbientHeartbeat(
+      {},
+      {
+        onProactiveUtterance: (text) => utterances.push(text),
+        getPresenceState: () => "ambient",
+      },
+    );
     hb.setRuntime(rt);
     hb.start();
 
@@ -268,10 +301,13 @@ describe("heartbeat rate limiting", () => {
     const rt = createMockRuntime("Thought.");
     const utterances: string[] = [];
 
-    const hb = new AmbientHeartbeat({}, {
-      onProactiveUtterance: (text) => utterances.push(text),
-      getPresenceState: () => "ambient",
-    });
+    const hb = new AmbientHeartbeat(
+      {},
+      {
+        onProactiveUtterance: (text) => utterances.push(text),
+        getPresenceState: () => "ambient",
+      },
+    );
     hb.setRuntime(rt);
     hb.start();
 
@@ -311,13 +347,18 @@ describe("heartbeat error handling", () => {
 
   it("survives generateCompletion failure and keeps running", async () => {
     const rt = createMockRuntime("ok");
-    (rt.generateCompletion as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("Network error"));
+    (rt.generateCompletion as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("Network error"),
+    );
 
     const utterances: string[] = [];
-    const hb = new AmbientHeartbeat({}, {
-      onProactiveUtterance: (text) => utterances.push(text),
-      getPresenceState: () => "ambient",
-    });
+    const hb = new AmbientHeartbeat(
+      {},
+      {
+        onProactiveUtterance: (text) => utterances.push(text),
+        getPresenceState: () => "ambient",
+      },
+    );
     hb.setRuntime(rt);
     hb.start();
 
@@ -339,10 +380,13 @@ describe("heartbeat error handling", () => {
 
   it("does not tick without runtime", async () => {
     const utterances: string[] = [];
-    const hb = new AmbientHeartbeat({}, {
-      onProactiveUtterance: (text) => utterances.push(text),
-      getPresenceState: () => "ambient",
-    });
+    const hb = new AmbientHeartbeat(
+      {},
+      {
+        onProactiveUtterance: (text) => utterances.push(text),
+        getPresenceState: () => "ambient",
+      },
+    );
     // No setRuntime() call
     hb.start();
 
@@ -370,10 +414,13 @@ describe("heartbeat updateConfig", () => {
     const rt = createMockRuntime("Hello.");
     const utterances: string[] = [];
 
-    const hb = new AmbientHeartbeat({}, {
-      onProactiveUtterance: (text) => utterances.push(text),
-      getPresenceState: () => "ambient",
-    });
+    const hb = new AmbientHeartbeat(
+      {},
+      {
+        onProactiveUtterance: (text) => utterances.push(text),
+        getPresenceState: () => "ambient",
+      },
+    );
     hb.setRuntime(rt);
     hb.start();
 
@@ -389,10 +436,13 @@ describe("heartbeat updateConfig", () => {
     const rt = createMockRuntime("Back again.");
     const utterances: string[] = [];
 
-    const hb = new AmbientHeartbeat({ enabled: false }, {
-      onProactiveUtterance: (text) => utterances.push(text),
-      getPresenceState: () => "ambient",
-    });
+    const hb = new AmbientHeartbeat(
+      { enabled: false },
+      {
+        onProactiveUtterance: (text) => utterances.push(text),
+        getPresenceState: () => "ambient",
+      },
+    );
     hb.setRuntime(rt);
     hb.start(); // No-op because disabled
 
@@ -412,10 +462,13 @@ describe("heartbeat updateConfig", () => {
     const rt = createMockRuntime(longText);
     const utterances: string[] = [];
 
-    const hb = new AmbientHeartbeat({}, {
-      onProactiveUtterance: (text) => utterances.push(text),
-      getPresenceState: () => "ambient",
-    });
+    const hb = new AmbientHeartbeat(
+      {},
+      {
+        onProactiveUtterance: (text) => utterances.push(text),
+        getPresenceState: () => "ambient",
+      },
+    );
     hb.setRuntime(rt);
     hb.start();
 

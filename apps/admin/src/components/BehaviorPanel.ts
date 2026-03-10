@@ -22,7 +22,9 @@ export function BehaviorPanel({ cues }: BehaviorPanelProps): React.ReactElement 
     transition: "all 0.5s ease",
   };
 
-  const preview = h("div", { className: "mote-preview-container" },
+  const preview = h(
+    "div",
+    { className: "mote-preview-container" },
     h("div", { className: "mote-body", style: moteStyle }),
   );
 
@@ -36,16 +38,14 @@ export function BehaviorPanel({ cues }: BehaviorPanelProps): React.ReactElement 
   ];
 
   const readout = fields.map((f) =>
-    h("div", { key: f.name, className: "field" },
+    h(
+      "div",
+      { key: f.name, className: "field" },
       h("span", { className: "label" }, f.name),
       h("span", { className: "value" }, f.value.toFixed(4)),
       h("div", { className: "bar", style: { width: `${Math.abs(f.value) * 100}%` } }),
     ),
   );
 
-  return h("div", { className: "panel" },
-    h("h2", null, "Behavior Cues"),
-    preview,
-    ...readout,
-  );
+  return h("div", { className: "panel" }, h("h2", null, "Behavior Cues"), preview, ...readout);
 }

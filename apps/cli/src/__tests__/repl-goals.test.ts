@@ -21,8 +21,8 @@ function makeGoal(overrides: Partial<Goal> = {}): Goal {
     parent_goal_id: null,
     max_retries: 3,
     consecutive_failures: 0,
-      wall_clock_ms: null,
-      project_id: null,
+    wall_clock_ms: null,
+    project_id: null,
     ...overrides,
   };
 }
@@ -69,7 +69,14 @@ describe("REPL /goals command", () => {
   it("lists goals with status icons", async () => {
     const repl = makeRepl(moteDb);
     moteDb.goalStore.add(makeGoal());
-    moteDb.goalStore.add(makeGoal({ goal_id: "goal-002", prompt: "send daily report", status: "paused", enabled: false }));
+    moteDb.goalStore.add(
+      makeGoal({
+        goal_id: "goal-002",
+        prompt: "send daily report",
+        status: "paused",
+        enabled: false,
+      }),
+    );
 
     await handleSlashCommand("goals", "", stubRuntime, stubConfig, undefined, repl);
 
@@ -112,7 +119,14 @@ describe("REPL /goal add command", () => {
 
   it("adds a recurring goal with quoted prompt", async () => {
     const repl = makeRepl(moteDb);
-    await handleSlashCommand("goal", 'add "check emails" --every 30m', stubRuntime, stubConfig, undefined, repl);
+    await handleSlashCommand(
+      "goal",
+      'add "check emails" --every 30m',
+      stubRuntime,
+      stubConfig,
+      undefined,
+      repl,
+    );
 
     const goals = moteDb.goalStore.list("mote-test");
     expect(goals).toHaveLength(1);
@@ -123,7 +137,14 @@ describe("REPL /goal add command", () => {
 
   it("adds a one-shot goal with --once flag", async () => {
     const repl = makeRepl(moteDb);
-    await handleSlashCommand("goal", 'add "deploy once" --every 1h --once', stubRuntime, stubConfig, undefined, repl);
+    await handleSlashCommand(
+      "goal",
+      'add "deploy once" --every 1h --once',
+      stubRuntime,
+      stubConfig,
+      undefined,
+      repl,
+    );
 
     const goals = moteDb.goalStore.list("mote-test");
     expect(goals).toHaveLength(1);
@@ -173,7 +194,14 @@ describe("REPL /goal remove/pause/resume", () => {
 
   it("reports not found for unknown goal id", async () => {
     const repl = makeRepl(moteDb);
-    await handleSlashCommand("goal", "remove nonexistent", stubRuntime, stubConfig, undefined, repl);
+    await handleSlashCommand(
+      "goal",
+      "remove nonexistent",
+      stubRuntime,
+      stubConfig,
+      undefined,
+      repl,
+    );
 
     const calls = (console.log as ReturnType<typeof vi.fn>).mock.calls.flat().join("\n");
     expect(calls).toContain("No goal found");

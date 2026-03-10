@@ -76,10 +76,13 @@ describe("parseReflectionResponse", () => {
   });
 
   it("strips markdown fences from response", () => {
-    const wrapped = "```json\n" + JSON.stringify({
-      summary: "Plan completed.",
-      memoryCandidates: ["Learning 1"],
-    }) + "\n```";
+    const wrapped =
+      "```json\n" +
+      JSON.stringify({
+        summary: "Plan completed.",
+        memoryCandidates: ["Learning 1"],
+      }) +
+      "\n```";
 
     const result = parseReflectionResponse(wrapped);
     expect(result.summary).toBe("Plan completed.");
@@ -143,10 +146,12 @@ describe("parseReflectionResponse", () => {
 
 describe("reflectOnPlan", () => {
   it("calls provider with plan and step context", async () => {
-    const provider = createMockProvider(JSON.stringify({
-      summary: "Learned about competitors.",
-      memoryCandidates: ["Competitor pricing varies widely"],
-    }));
+    const provider = createMockProvider(
+      JSON.stringify({
+        summary: "Learned about competitors.",
+        memoryCandidates: ["Competitor pricing varies widely"],
+      }),
+    );
 
     const plan = makePlan();
     const steps = [
@@ -174,10 +179,12 @@ describe("reflectOnPlan", () => {
   });
 
   it("includes step errors in prompt", async () => {
-    const provider = createMockProvider(JSON.stringify({
-      summary: "Plan had a skipped step.",
-      memoryCandidates: [],
-    }));
+    const provider = createMockProvider(
+      JSON.stringify({
+        summary: "Plan had a skipped step.",
+        memoryCandidates: [],
+      }),
+    );
 
     const plan = makePlan();
     const steps = [
@@ -212,10 +219,12 @@ describe("reflectOnPlan", () => {
   });
 
   it("passes minimal state and empty context", async () => {
-    const provider = createMockProvider(JSON.stringify({
-      summary: "Done.",
-      memoryCandidates: [],
-    }));
+    const provider = createMockProvider(
+      JSON.stringify({
+        summary: "Done.",
+        memoryCandidates: [],
+      }),
+    );
 
     await reflectOnPlan(makePlan(), [makeStep()], provider);
 
@@ -226,10 +235,12 @@ describe("reflectOnPlan", () => {
   });
 
   it("includes system prompt in conversation history", async () => {
-    const provider = createMockProvider(JSON.stringify({
-      summary: "Done.",
-      memoryCandidates: [],
-    }));
+    const provider = createMockProvider(
+      JSON.stringify({
+        summary: "Done.",
+        memoryCandidates: [],
+      }),
+    );
 
     await reflectOnPlan(makePlan(), [makeStep()], provider);
 
@@ -240,10 +251,12 @@ describe("reflectOnPlan", () => {
   });
 
   it("trims long step results to 500 chars", async () => {
-    const provider = createMockProvider(JSON.stringify({
-      summary: "Done.",
-      memoryCandidates: [],
-    }));
+    const provider = createMockProvider(
+      JSON.stringify({
+        summary: "Done.",
+        memoryCandidates: [],
+      }),
+    );
 
     const longResult = "x".repeat(1000);
     const steps = [makeStep({ result_summary: longResult })];

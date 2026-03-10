@@ -3,23 +3,55 @@ import type { MotebitState } from "@motebit/sdk";
 // === Word lists ===
 
 const POSITIVE_WORDS = [
-  "happy", "glad", "wonderful", "love", "great", "excited", "joy",
-  "amazing", "fantastic", "delighted", "cheerful", "thrilled",
+  "happy",
+  "glad",
+  "wonderful",
+  "love",
+  "great",
+  "excited",
+  "joy",
+  "amazing",
+  "fantastic",
+  "delighted",
+  "cheerful",
+  "thrilled",
 ];
 
 const NEGATIVE_WORDS = [
-  "sorry", "sad", "unfortunately", "difficult", "worry", "miss",
-  "struggle", "afraid", "upset", "frustrated", "confused", "lost",
+  "sorry",
+  "sad",
+  "unfortunately",
+  "difficult",
+  "worry",
+  "miss",
+  "struggle",
+  "afraid",
+  "upset",
+  "frustrated",
+  "confused",
+  "lost",
 ];
 
 const HEDGING_WORDS = [
-  "maybe", "perhaps", "might", "not sure", "i think", "possibly",
-  "probably", "could be", "uncertain",
+  "maybe",
+  "perhaps",
+  "might",
+  "not sure",
+  "i think",
+  "possibly",
+  "probably",
+  "could be",
+  "uncertain",
 ];
 
 const DEFINITIVE_WORDS = [
-  "certainly", "absolutely", "definitely", "clearly", "exactly",
-  "without doubt", "of course",
+  "certainly",
+  "absolutely",
+  "definitely",
+  "clearly",
+  "exactly",
+  "without doubt",
+  "of course",
 ];
 
 // === Ranges (from policy-invariants) ===
@@ -74,53 +106,32 @@ export function inferStateFromText(
   const hasPositive = hasMatch(text, wordBoundaryPattern(POSITIVE_WORDS));
   const hasNegative = hasMatch(text, wordBoundaryPattern(NEGATIVE_WORDS));
   if (hasPositive && !hasNegative) {
-    updates.affect_valence = clampField(
-      "affect_valence",
-      currentState.affect_valence + 0.15,
-    );
+    updates.affect_valence = clampField("affect_valence", currentState.affect_valence + 0.15);
   } else if (hasNegative && !hasPositive) {
-    updates.affect_valence = clampField(
-      "affect_valence",
-      currentState.affect_valence - 0.15,
-    );
+    updates.affect_valence = clampField("affect_valence", currentState.affect_valence - 0.15);
   }
 
   // --- curiosity (question marks) ---
   const questionCount = (text.match(/\?/g) ?? []).length;
   if (questionCount > 0) {
     const nudge = Math.min(questionCount * 0.1, 0.2);
-    updates.curiosity = clampField(
-      "curiosity",
-      currentState.curiosity + nudge,
-    );
+    updates.curiosity = clampField("curiosity", currentState.curiosity + nudge);
   }
 
   // --- attention (response length) ---
   if (text.length > 200) {
-    updates.attention = clampField(
-      "attention",
-      currentState.attention + 0.1,
-    );
+    updates.attention = clampField("attention", currentState.attention + 0.1);
   } else if (text.length < 50) {
-    updates.attention = clampField(
-      "attention",
-      currentState.attention - 0.1,
-    );
+    updates.attention = clampField("attention", currentState.attention - 0.1);
   }
 
   // --- confidence ---
   const hasHedging = hasMatch(text, wordBoundaryPattern(HEDGING_WORDS));
   const hasDefinitive = hasMatch(text, wordBoundaryPattern(DEFINITIVE_WORDS));
   if (hasHedging && !hasDefinitive) {
-    updates.confidence = clampField(
-      "confidence",
-      currentState.confidence - 0.1,
-    );
+    updates.confidence = clampField("confidence", currentState.confidence - 0.1);
   } else if (hasDefinitive && !hasHedging) {
-    updates.confidence = clampField(
-      "confidence",
-      currentState.confidence + 0.1,
-    );
+    updates.confidence = clampField("confidence", currentState.confidence + 0.1);
   }
 
   // --- social_distance (informal markers) ---

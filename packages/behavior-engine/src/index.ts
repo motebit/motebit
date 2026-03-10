@@ -19,12 +19,20 @@ const SPATIAL = {
  */
 export function computeRawCues(state: MotebitState): BehaviorCues {
   // Hover distance: high attention → closer, idle → retreat
-  const attentionDistance = SPATIAL.FACE_DISTANCE + (1 - state.attention) * (SPATIAL.SHOULDER_DISTANCE - SPATIAL.FACE_DISTANCE);
+  const attentionDistance =
+    SPATIAL.FACE_DISTANCE +
+    (1 - state.attention) * (SPATIAL.SHOULDER_DISTANCE - SPATIAL.FACE_DISTANCE);
   const idleBlend = 1 - Math.max(state.attention, state.processing, state.curiosity);
-  const hover_distance = attentionDistance + idleBlend * (SPATIAL.RETREAT_DISTANCE - SPATIAL.SHOULDER_DISTANCE);
+  const hover_distance =
+    attentionDistance + idleBlend * (SPATIAL.RETREAT_DISTANCE - SPATIAL.SHOULDER_DISTANCE);
 
   // Drift amplitude: slight increase with curiosity, decrease in low power
-  const batteryFactor = state.battery_mode === BatteryMode.Critical ? 0.3 : state.battery_mode === BatteryMode.LowPower ? 0.6 : 1.0;
+  const batteryFactor =
+    state.battery_mode === BatteryMode.Critical
+      ? 0.3
+      : state.battery_mode === BatteryMode.LowPower
+        ? 0.6
+        : 1.0;
   const drift_amplitude = SPATIAL.BASE_DRIFT * (1 + state.curiosity * 0.5) * batteryFactor;
 
   // Glow: processing and confidence
@@ -34,7 +42,7 @@ export function computeRawCues(state: MotebitState): BehaviorCues {
   const eye_dilation = clamp(0.3 + state.attention * 0.4 + state.curiosity * 0.3, 0, 1);
 
   // Smile: affect maps to visible curvature
-  const smile_curvature = clamp(state.affect_valence * 0.35, -0.15, 0.30);
+  const smile_curvature = clamp(state.affect_valence * 0.35, -0.15, 0.3);
 
   return {
     hover_distance,

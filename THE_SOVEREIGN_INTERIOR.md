@@ -236,4 +236,4 @@ That is sufficient.
 
 ---
 
-*Motebit, 2026.*
+_Motebit, 2026._

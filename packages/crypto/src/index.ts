@@ -70,13 +70,16 @@ export function generateSalt(): Uint8Array {
 /**
  * Encrypt plaintext with a 256-bit key using AES-256-GCM via Web Crypto API.
  */
-export async function encrypt(
-  plaintext: Uint8Array,
-  key: Uint8Array,
-): Promise<EncryptedPayload> {
+export async function encrypt(plaintext: Uint8Array, key: Uint8Array): Promise<EncryptedPayload> {
   const nonce = generateNonce();
-  const cryptoKey = await crypto.subtle.importKey("raw", key as BufferSource, "AES-GCM", false, ["encrypt"]);
-  const result = await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce as BufferSource }, cryptoKey, plaintext as BufferSource);
+  const cryptoKey = await crypto.subtle.importKey("raw", key as BufferSource, "AES-GCM", false, [
+    "encrypt",
+  ]);
+  const result = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: nonce as BufferSource },
+    cryptoKey,
+    plaintext as BufferSource,
+  );
   const resultArray = new Uint8Array(result);
   // AES-GCM appends a 16-byte tag
   const ciphertext = resultArray.slice(0, resultArray.length - 16);
@@ -87,11 +90,10 @@ export async function encrypt(
 /**
  * Decrypt an encrypted payload with a 256-bit key.
  */
-export async function decrypt(
-  payload: EncryptedPayload,
-  key: Uint8Array,
-): Promise<Uint8Array> {
-  const cryptoKey = await crypto.subtle.importKey("raw", key as BufferSource, "AES-GCM", false, ["decrypt"]);
+export async function decrypt(payload: EncryptedPayload, key: Uint8Array): Promise<Uint8Array> {
+  const cryptoKey = await crypto.subtle.importKey("raw", key as BufferSource, "AES-GCM", false, [
+    "decrypt",
+  ]);
   // Reconstruct ciphertext + tag for Web Crypto API
   const combined = new Uint8Array(payload.ciphertext.length + payload.tag.length);
   combined.set(payload.ciphertext);
@@ -133,10 +135,22 @@ export async function deriveKey(
  * Used for sync encryption: all devices sharing the same identity derive the same key.
  */
 export async function deriveSyncEncryptionKey(privateKey: Uint8Array): Promise<Uint8Array> {
-  const keyMaterial = await crypto.subtle.importKey("raw", privateKey as BufferSource, "HKDF", false, ["deriveBits"]);
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    privateKey as BufferSource,
+    "HKDF",
+    false,
+    ["deriveBits"],
+  );
   const bits = await crypto.subtle.deriveBits(
-    { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(0), info: new TextEncoder().encode("motebit-sync-encryption-v1") },
-    keyMaterial, 256,
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: new Uint8Array(0),
+      info: new TextEncoder().encode("motebit-sync-encryption-v1"),
+    },
+    keyMaterial,
+    256,
   );
   return new Uint8Array(bits);
 }
@@ -201,7 +215,11 @@ export async function sign(message: Uint8Array, privateKey: Uint8Array): Promise
 /**
  * Verify an Ed25519 signature.
  */
-export async function verify(signature: Uint8Array, message: Uint8Array, publicKey: Uint8Array): Promise<boolean> {
+export async function verify(
+  signature: Uint8Array,
+  message: Uint8Array,
+  publicKey: Uint8Array,
+): Promise<boolean> {
   try {
     return await ed.verifyAsync(signature, message, publicKey);
   } catch {
@@ -420,9 +438,7 @@ async function verifyDelegations(
   if (!receipt.delegation_receipts || receipt.delegation_receipts.length === 0) {
     return [];
   }
-  return Promise.all(
-    receipt.delegation_receipts.map((dr) => verifyReceiptChain(dr, knownKeys)),
-  );
+  return Promise.all(receipt.delegation_receipts.map((dr) => verifyReceiptChain(dr, knownKeys)));
 }
 
 // === Delegation Tokens ===
@@ -436,11 +452,11 @@ export interface DelegationToken {
   delegator_id: string;
   delegator_public_key: string; // base64url-encoded Ed25519 public key
   delegate_id: string;
-  delegate_public_key: string;  // base64url-encoded Ed25519 public key
-  scope: string;                // what the delegate is authorized to do
+  delegate_public_key: string; // base64url-encoded Ed25519 public key
+  scope: string; // what the delegate is authorized to do
   issued_at: number;
   expires_at: number;
-  signature: string;            // base64url-encoded Ed25519 signature
+  signature: string; // base64url-encoded Ed25519 signature
 }
 
 /**
@@ -461,9 +477,7 @@ export async function signDelegation(
  * Verify a delegation token's signature using the delegator's public key.
  * Does NOT check expiration — caller should check `expires_at` separately.
  */
-export async function verifyDelegation(
-  delegation: DelegationToken,
-): Promise<boolean> {
+export async function verifyDelegation(delegation: DelegationToken): Promise<boolean> {
   const { signature, ...body } = delegation;
   const canonical = canonicalJson(body);
   const message = new TextEncoder().encode(canonical);

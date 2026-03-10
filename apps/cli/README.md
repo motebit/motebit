@@ -45,10 +45,10 @@ A motebit is a persistent, cryptographically-anchored agent — a vessel that co
 
 ## Providers
 
-| Provider | Setup |
-|----------|-------|
-| **Anthropic** | `export ANTHROPIC_API_KEY=sk-ant-...` |
-| **Ollama** | Install [Ollama](https://ollama.ai), `motebit --provider ollama` |
+| Provider      | Setup                                                            |
+| ------------- | ---------------------------------------------------------------- |
+| **Anthropic** | `export ANTHROPIC_API_KEY=sk-ant-...`                            |
+| **Ollama**    | Install [Ollama](https://ollama.ai), `motebit --provider ollama` |
 
 ## Troubleshooting
 

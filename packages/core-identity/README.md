@@ -72,11 +72,11 @@ interface BootstrapKeyStore {
 
 Every surface produces the same shape:
 
-| Field | Format | Example |
-|---|---|---|
-| `motebitId` | UUID v7 | `019726a3-4f8b-7e12-8a9c-1d2e3f4a5b6c` |
-| `deviceId` | UUID v4 | `a1b2c3d4-e5f6-7890-abcd-ef1234567890` |
-| `publicKeyHex` | 64-char lowercase hex | `aabbccdd...` (32 bytes Ed25519) |
+| Field          | Format                | Example                                |
+| -------------- | --------------------- | -------------------------------------- |
+| `motebitId`    | UUID v7               | `019726a3-4f8b-7e12-8a9c-1d2e3f4a5b6c` |
+| `deviceId`     | UUID v4               | `a1b2c3d4-e5f6-7890-abcd-ef1234567890` |
+| `publicKeyHex` | 64-char lowercase hex | `aabbccdd...` (32 bytes Ed25519)       |
 
 The cross-surface canonicality test in `src/__tests__/bootstrap.test.ts` enforces this invariant.
 

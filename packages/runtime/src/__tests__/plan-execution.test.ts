@@ -1,9 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import {
-  MotebitRuntime,
-  NullRenderer,
-  createInMemoryStorage,
-} from "../index";
+import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
 import type { PlatformAdapters, PlanChunk } from "../index";
 import type { StreamingProvider, AgenticChunk } from "@motebit/ai-core";
 import type { AIResponse, ContextPack } from "@motebit/sdk";
@@ -18,7 +14,8 @@ vi.mock("@motebit/ai-core", async () => {
   const actual = await vi.importActual<Record<string, unknown>>("@motebit/ai-core");
   return {
     ...actual,
-    runTurnStreaming: (...args: unknown[]) => mockRunTurnStreaming(...args) as AsyncGenerator<AgenticChunk>,
+    runTurnStreaming: (...args: unknown[]) =>
+      mockRunTurnStreaming(...args) as AsyncGenerator<AgenticChunk>,
     // Stub summarization/reflection to avoid side effects
     summarizeConversation: vi.fn().mockResolvedValue(null),
     shouldSummarize: vi.fn().mockReturnValue(false),
@@ -28,7 +25,9 @@ vi.mock("@motebit/ai-core", async () => {
 
 // === Helpers ===
 
-function createMockProvider(planSteps?: Array<{ description: string; prompt: string }>): StreamingProvider {
+function createMockProvider(
+  planSteps?: Array<{ description: string; prompt: string }>,
+): StreamingProvider {
   const steps = planSteps ?? [
     { description: "Step 1: Research", prompt: "Research the topic" },
     { description: "Step 2: Summarize", prompt: "Summarize findings" },
@@ -70,10 +69,11 @@ function createMockProvider(planSteps?: Array<{ description: string; prompt: str
   };
 }
 
-function createAdapters(provider?: StreamingProvider, planStore?: InMemoryPlanStore): PlatformAdapters {
-  const storage = planStore
-    ? { ...createInMemoryStorage(), planStore }
-    : createInMemoryStorage();
+function createAdapters(
+  provider?: StreamingProvider,
+  planStore?: InMemoryPlanStore,
+): PlatformAdapters {
+  const storage = planStore ? { ...createInMemoryStorage(), planStore } : createInMemoryStorage();
   return {
     storage,
     renderer: new NullRenderer(),
@@ -94,13 +94,23 @@ function setupStreamMock(responses: string[]): void {
         memoriesFormed: [],
         memoriesRetrieved: [],
         stateAfter: {
-          attention: 0.5, processing: 0.1, confidence: 0.5,
-          affect_valence: 0, affect_arousal: 0, social_distance: 0.5,
-          curiosity: 0.5, trust_mode: "full" as never, battery_mode: "normal" as never,
+          attention: 0.5,
+          processing: 0.1,
+          confidence: 0.5,
+          affect_valence: 0,
+          affect_arousal: 0,
+          social_distance: 0.5,
+          curiosity: 0.5,
+          trust_mode: "full" as never,
+          battery_mode: "normal" as never,
         },
         cues: {
-          hover_distance: 0.4, drift_amplitude: 0.02, glow_intensity: 0.3,
-          eye_dilation: 0.3, smile_curvature: 0, speaking_activity: 0,
+          hover_distance: 0.4,
+          drift_amplitude: 0.02,
+          glow_intensity: 0.3,
+          eye_dilation: 0.3,
+          smile_curvature: 0,
+          speaking_activity: 0,
         },
       },
     };
@@ -131,12 +141,11 @@ describe("MotebitRuntime.executePlan", () => {
   });
 
   it("throws without AI provider", async () => {
-    const headless = new MotebitRuntime(
-      { motebitId: "no-ai" },
-      createAdapters(),
-    );
+    const headless = new MotebitRuntime({ motebitId: "no-ai" }, createAdapters());
     await expect(async () => {
-      for await (const _chunk of headless.executePlan("goal-1", "Do something")) { /* consume */ }
+      for await (const _chunk of headless.executePlan("goal-1", "Do something")) {
+        /* consume */
+      }
     }).rejects.toThrow("AI not initialized");
   });
 
@@ -190,25 +199,24 @@ describe("MotebitRuntime.executePlan", () => {
 
   it("passes available tools to decomposition context", async () => {
     // Register a tool before executing a plan
-    runtime.getToolRegistry().register(
-      { name: "test_tool", description: "Test", inputSchema: {} },
-      async () => ({ ok: true }),
-    );
+    runtime
+      .getToolRegistry()
+      .register({ name: "test_tool", description: "Test", inputSchema: {} }, async () => ({
+        ok: true,
+      }));
 
     setupStreamMock(["step done"]);
 
     // Execute plan — provider.generate will receive availableTools via the decomposition prompt
-    const chunks = await collectChunks(
-      runtime.executePlan("goal-5", "Use tools"),
-    );
+    const chunks = await collectChunks(runtime.executePlan("goal-5", "Use tools"));
 
     // Verify plan was created (decomposition succeeded)
     expect(chunks.some((c) => c.type === "plan_created")).toBe(true);
 
     // The decomposition prompt should have included tool names
     const generateCalls = (provider.generate as ReturnType<typeof vi.fn>).mock.calls;
-    const decompositionCall = generateCalls.find(
-      (call: unknown[]) => (call[0] as ContextPack).user_message.includes("Available tools"),
+    const decompositionCall = generateCalls.find((call: unknown[]) =>
+      (call[0] as ContextPack).user_message.includes("Available tools"),
     );
     expect(decompositionCall).toBeDefined();
   });
@@ -233,12 +241,11 @@ describe("MotebitRuntime.resumePlan", () => {
   });
 
   it("throws without AI provider", async () => {
-    const headless = new MotebitRuntime(
-      { motebitId: "no-ai" },
-      createAdapters(),
-    );
+    const headless = new MotebitRuntime({ motebitId: "no-ai" }, createAdapters());
     await expect(async () => {
-      for await (const _chunk of headless.resumePlan("plan-1")) { /* consume */ }
+      for await (const _chunk of headless.resumePlan("plan-1")) {
+        /* consume */
+      }
     }).rejects.toThrow("AI not initialized");
   });
 
@@ -309,7 +316,9 @@ describe("MotebitRuntime.resumePlan", () => {
 
   it("throws when plan does not exist", async () => {
     await expect(async () => {
-      for await (const _chunk of runtime.resumePlan("nonexistent")) { /* consume */ }
+      for await (const _chunk of runtime.resumePlan("nonexistent")) {
+        /* consume */
+      }
     }).rejects.toThrow("Plan not found");
   });
 
@@ -327,7 +336,9 @@ describe("MotebitRuntime.resumePlan", () => {
     });
 
     await expect(async () => {
-      for await (const _chunk of runtime.resumePlan("plan-completed")) { /* consume */ }
+      for await (const _chunk of runtime.resumePlan("plan-completed")) {
+        /* consume */
+      }
     }).rejects.toThrow("not active");
   });
 });
@@ -336,9 +347,7 @@ describe("MotebitRuntime plan execution with custom PlanStoreAdapter", () => {
   it("uses planStore from StorageAdapters when provided", async () => {
     vi.clearAllMocks();
     const planStore = new InMemoryPlanStore();
-    const provider = createMockProvider([
-      { description: "Single step", prompt: "Do it" },
-    ]);
+    const provider = createMockProvider([{ description: "Single step", prompt: "Do it" }]);
 
     const runtime = new MotebitRuntime(
       { motebitId: "custom-store", tickRateHz: 0 },
@@ -365,9 +374,7 @@ describe("MotebitRuntime plan execution with custom PlanStoreAdapter", () => {
 
   it("defaults to InMemoryPlanStore when not provided", async () => {
     vi.clearAllMocks();
-    const provider = createMockProvider([
-      { description: "Single step", prompt: "Do it" },
-    ]);
+    const provider = createMockProvider([{ description: "Single step", prompt: "Do it" }]);
 
     const runtime = new MotebitRuntime(
       { motebitId: "default-store", tickRateHz: 0 },

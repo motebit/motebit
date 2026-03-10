@@ -12,7 +12,12 @@
 import { Renderer } from "expo-three";
 import * as THREE from "three";
 import { CANONICAL_SPEC } from "@motebit/render-engine";
-import type { RenderAdapter, RenderFrame, InteriorColor, AudioReactivity } from "@motebit/render-engine";
+import type {
+  RenderAdapter,
+  RenderFrame,
+  InteriorColor,
+  AudioReactivity,
+} from "@motebit/render-engine";
 import type { RenderSpec, BehaviorCues } from "@motebit/sdk";
 
 const BODY_R = 0.14;
@@ -34,22 +39,22 @@ interface EnvironmentPreset {
 }
 
 const ENV_LIGHT: EnvironmentPreset = {
-  zenith:      [0.22, 0.32, 0.72],   // saturated blue upper sky
-  horizon:     [0.92, 0.62, 0.35],   // warm amber horizon
-  ground:      [0.15, 0.14, 0.18],   // dark cool ground
-  sun:         [6.0,  3.2,  0.8],    // deep amber-gold key
-  fill:        [0.3,  0.5,  2.2],    // blue-violet fill — spectral opposite of sun
-  groundPanel: [0.50, 0.32, 0.18],   // warm ground bounce
-  warmTint:    [1.25, 0.94, 0.68],   // warm side: red boost, blue cut
-  coolTint:    [0.68, 0.88, 1.30],   // cool side: blue boost, red cut
+  zenith: [0.22, 0.32, 0.72], // saturated blue upper sky
+  horizon: [0.92, 0.62, 0.35], // warm amber horizon
+  ground: [0.15, 0.14, 0.18], // dark cool ground
+  sun: [6.0, 3.2, 0.8], // deep amber-gold key
+  fill: [0.3, 0.5, 2.2], // blue-violet fill — spectral opposite of sun
+  groundPanel: [0.5, 0.32, 0.18], // warm ground bounce
+  warmTint: [1.25, 0.94, 0.68], // warm side: red boost, blue cut
+  coolTint: [0.68, 0.88, 1.3], // cool side: blue boost, red cut
 };
 
 const ENV_DARK: EnvironmentPreset = {
-  zenith:      [0.02, 0.02, 0.04],
-  horizon:     [0.04, 0.03, 0.03],
-  ground:      [0.02, 0.02, 0.02],
-  sun:         [2.0,  1.8,  1.5],
-  fill:        [0.3,  0.4,  0.8],
+  zenith: [0.02, 0.02, 0.04],
+  horizon: [0.04, 0.03, 0.03],
+  ground: [0.02, 0.02, 0.02],
+  sun: [2.0, 1.8, 1.5],
+  fill: [0.3, 0.4, 0.8],
   groundPanel: [0.08, 0.06, 0.05],
 };
 
@@ -67,9 +72,12 @@ function createEnvironmentMap(
   const envScene = new THREE.Scene();
 
   const skyGeo = new THREE.SphereGeometry(5, 64, 32);
-  const z = preset.zenith, h = preset.horizon, g = preset.ground;
+  const z = preset.zenith,
+    h = preset.horizon,
+    g = preset.ground;
   const hasSpectral = preset.warmTint && preset.coolTint;
-  const w = preset.warmTint ?? [1, 1, 1], c = preset.coolTint ?? [1, 1, 1];
+  const w = preset.warmTint ?? [1, 1, 1],
+    c = preset.coolTint ?? [1, 1, 1];
 
   const skyMat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
@@ -95,13 +103,17 @@ function createEnvironmentMap(
         } else {
           color = mix(horizon * 0.5, ground, pow(-y, 0.4));
         }
-        ${hasSpectral ? `
+        ${
+          hasSpectral
+            ? `
         float azimuth = atan(dir.z, dir.x) / 3.14159;
         float warmFactor = azimuth * 0.5 + 0.5;
         vec3 warm = vec3(${w[0]}, ${w[1]}, ${w[2]});
         vec3 cool = vec3(${c[0]}, ${c[1]}, ${c[2]});
         color *= mix(cool, warm, warmFactor);
-        ` : ""}
+        `
+            : ""
+        }
         gl_FragColor = vec4(color, 1.0);
       }
     `,
@@ -199,15 +211,15 @@ function createSmile(): THREE.Mesh {
 const CAM_DEFAULT_THETA = 0;
 const CAM_DEFAULT_PHI = Math.PI / 2;
 const CAM_DEFAULT_RADIUS = 3;
-const CAM_PAN_SENSITIVITY = 0.005;        // radians per pixel of gesture delta
-const CAM_LERP_FACTOR = 0.08;             // per-frame interpolation speed
+const CAM_PAN_SENSITIVITY = 0.005; // radians per pixel of gesture delta
+const CAM_LERP_FACTOR = 0.08; // per-frame interpolation speed
 const CAM_PHI_MIN = (10 / 180) * Math.PI; // ~10° — avoid gimbal flip at poles
 const CAM_PHI_MAX = (170 / 180) * Math.PI;
 const CAM_RADIUS_MIN = 0.5;
 const CAM_RADIUS_MAX = 4.0;
-const CAM_RESET_DURATION = 0.5;           // seconds for double-tap reset animation
-const CAM_MOMENTUM_FRICTION = 0.92;       // per-frame velocity multiplier (1 = no friction)
-const CAM_MOMENTUM_MIN = 0.0002;          // radians/frame below which momentum stops
+const CAM_RESET_DURATION = 0.5; // seconds for double-tap reset animation
+const CAM_MOMENTUM_FRICTION = 0.92; // per-frame velocity multiplier (1 = no friction)
+const CAM_MOMENTUM_MIN = 0.0002; // radians/frame below which momentum stops
 
 export class ExpoGLAdapter implements RenderAdapter {
   private renderer: THREE.WebGLRenderer | null = null;
@@ -269,12 +281,7 @@ export class ExpoGLAdapter implements RenderAdapter {
       this.scene.background = new THREE.Color(0x0a0a0a);
     }
 
-    this.camera = new THREE.PerspectiveCamera(
-      45,
-      this.width / this.height,
-      0.1,
-      100,
-    );
+    this.camera = new THREE.PerspectiveCamera(45, this.width / this.height, 0.1, 100);
     this.camera.position.set(0, 0, 3);
 
     // Lighting — ambient + directional supplement the environment map
@@ -342,7 +349,10 @@ export class ExpoGLAdapter implements RenderAdapter {
   /** Signal that touch has ended — momentum begins coasting. */
   handleTouchEnd(): void {
     this.camTouching = false;
-    if (Math.abs(this.camVelocityTheta) > CAM_MOMENTUM_MIN || Math.abs(this.camVelocityPhi) > CAM_MOMENTUM_MIN) {
+    if (
+      Math.abs(this.camVelocityTheta) > CAM_MOMENTUM_MIN ||
+      Math.abs(this.camVelocityPhi) > CAM_MOMENTUM_MIN
+    ) {
       this.camDirty = true;
     }
   }
@@ -357,10 +367,7 @@ export class ExpoGLAdapter implements RenderAdapter {
     const dTheta = -dx * CAM_PAN_SENSITIVITY;
     const dPhi = -dy * CAM_PAN_SENSITIVITY;
     this.camTargetTheta += dTheta;
-    this.camTargetPhi = Math.max(
-      CAM_PHI_MIN,
-      Math.min(CAM_PHI_MAX, this.camTargetPhi + dPhi),
-    );
+    this.camTargetPhi = Math.max(CAM_PHI_MIN, Math.min(CAM_PHI_MAX, this.camTargetPhi + dPhi));
     // Track velocity for momentum (exponential moving average)
     this.camVelocityTheta = this.camVelocityTheta * 0.5 + dTheta * 0.5;
     this.camVelocityPhi = this.camVelocityPhi * 0.5 + dPhi * 0.5;
@@ -393,29 +400,37 @@ export class ExpoGLAdapter implements RenderAdapter {
   }
 
   render(frame: RenderFrame): void {
-    if (!this.renderer || !this.scene || !this.camera || !this.creature || !this.bodyMesh || !this.bodyMaterial) return;
+    if (
+      !this.renderer ||
+      !this.scene ||
+      !this.camera ||
+      !this.creature ||
+      !this.bodyMesh ||
+      !this.bodyMaterial
+    )
+      return;
 
     const cues: BehaviorCues = frame.cues;
     const t = frame.time;
 
     // Audio modulation — four dimensions match desktop ThreeJSAdapter
     const a = this.audio;
-    const audioBreathScale = a ? 1 + a.rms * 2.5 : 1;       // RMS → breathing amplitude
-    const audioGlow = a ? a.low * 0.25 : 0;                  // Bass → interior heat
-    const audioDrift = a ? a.mid * 0.015 : 0;                // Midrange → swaying motion
-    const audioShimmer = a ? a.high * 0.35 : 0;              // Transients → glass shimmer
+    const audioBreathScale = a ? 1 + a.rms * 2.5 : 1; // RMS → breathing amplitude
+    const audioGlow = a ? a.low * 0.25 : 0; // Bass → interior heat
+    const audioDrift = a ? a.mid * 0.015 : 0; // Midrange → swaying motion
+    const audioShimmer = a ? a.high * 0.35 : 0; // Transients → glass shimmer
 
     // Breathing — asymmetric oblate/prolate oscillation
     const breatheRaw = Math.sin(t * 2.0);
-    const breathe = (breatheRaw > 0
-      ? breatheRaw * 0.015
-      : Math.sign(breatheRaw) * Math.pow(Math.abs(breatheRaw), 0.6) * 0.015) * audioBreathScale;
+    const breathe =
+      (breatheRaw > 0
+        ? breatheRaw * 0.015
+        : Math.sign(breatheRaw) * Math.pow(Math.abs(breatheRaw), 0.6) * 0.015) * audioBreathScale;
 
     // Gravity sag — slow cycle
     const sagRaw = Math.sin(t * 0.32 * Math.PI * 2);
-    const sag = sagRaw > 0
-      ? sagRaw * 0.032
-      : Math.sign(sagRaw) * Math.pow(Math.abs(sagRaw), 0.5) * 0.032;
+    const sag =
+      sagRaw > 0 ? sagRaw * 0.032 : Math.sign(sagRaw) * Math.pow(Math.abs(sagRaw), 0.5) * 0.032;
 
     const REST_Y = 0.97;
     this.bodyMesh.scale.set(
@@ -426,12 +441,16 @@ export class ExpoGLAdapter implements RenderAdapter {
 
     // Organic drift — midrange audio increases sway
     const drift = cues.drift_amplitude + audioDrift;
-    this.creature.position.y = organicNoise(t, [1.5, 2.37, 0.73]) * 0.01 * cues.hover_distance - sag * 0.01;
+    this.creature.position.y =
+      organicNoise(t, [1.5, 2.37, 0.73]) * 0.01 * cues.hover_distance - sag * 0.01;
     this.creature.position.x = organicNoise(t, [0.7, 1.13, 0.31]) * drift;
     this.creature.position.z = organicNoise(t, [0.5, 0.83, 0.23]) * drift * 0.25;
 
     // Interior glow — bass frequencies brighten interior
-    this.bodyMaterial.emissiveIntensity = Math.max(0, (cues.glow_intensity - 0.3) * 0.2 + audioGlow);
+    this.bodyMaterial.emissiveIntensity = Math.max(
+      0,
+      (cues.glow_intensity - 0.3) * 0.2 + audioGlow,
+    );
 
     // Glass shimmer — transients increase iridescence
     this.bodyMaterial.iridescence = 0.4 + audioShimmer;
@@ -457,14 +476,18 @@ export class ExpoGLAdapter implements RenderAdapter {
 
       // Handle double-tap reset animation
       if (this.camResetProgress >= 0) {
-        const dt = this.camLastRenderTime > 0 ? Math.min(now - this.camLastRenderTime, 0.1) : 1 / 60;
+        const dt =
+          this.camLastRenderTime > 0 ? Math.min(now - this.camLastRenderTime, 0.1) : 1 / 60;
         this.camResetProgress = Math.min(1, this.camResetProgress + dt / CAM_RESET_DURATION);
         // Smooth-step easing for natural feel
         const p = this.camResetProgress;
         const ease = p * p * (3 - 2 * p);
-        this.camCurrentTheta = this.camResetStartTheta + (CAM_DEFAULT_THETA - this.camResetStartTheta) * ease;
-        this.camCurrentPhi = this.camResetStartPhi + (CAM_DEFAULT_PHI - this.camResetStartPhi) * ease;
-        this.camCurrentRadius = this.camResetStartRadius + (CAM_DEFAULT_RADIUS - this.camResetStartRadius) * ease;
+        this.camCurrentTheta =
+          this.camResetStartTheta + (CAM_DEFAULT_THETA - this.camResetStartTheta) * ease;
+        this.camCurrentPhi =
+          this.camResetStartPhi + (CAM_DEFAULT_PHI - this.camResetStartPhi) * ease;
+        this.camCurrentRadius =
+          this.camResetStartRadius + (CAM_DEFAULT_RADIUS - this.camResetStartRadius) * ease;
 
         if (this.camResetProgress >= 1) {
           // Animation complete — snap to defaults
@@ -479,7 +502,11 @@ export class ExpoGLAdapter implements RenderAdapter {
         }
       } else {
         // Apply momentum when finger is up and velocity is significant
-        if (!this.camTouching && (Math.abs(this.camVelocityTheta) > CAM_MOMENTUM_MIN || Math.abs(this.camVelocityPhi) > CAM_MOMENTUM_MIN)) {
+        if (
+          !this.camTouching &&
+          (Math.abs(this.camVelocityTheta) > CAM_MOMENTUM_MIN ||
+            Math.abs(this.camVelocityPhi) > CAM_MOMENTUM_MIN)
+        ) {
           this.camTargetTheta += this.camVelocityTheta;
           this.camTargetPhi = Math.max(
             CAM_PHI_MIN,
@@ -498,7 +525,9 @@ export class ExpoGLAdapter implements RenderAdapter {
         this.camCurrentRadius += (this.camTargetRadius - this.camCurrentRadius) * CAM_LERP_FACTOR;
 
         // Check convergence — stop doing math once close enough
-        const hasVelocity = Math.abs(this.camVelocityTheta) > CAM_MOMENTUM_MIN || Math.abs(this.camVelocityPhi) > CAM_MOMENTUM_MIN;
+        const hasVelocity =
+          Math.abs(this.camVelocityTheta) > CAM_MOMENTUM_MIN ||
+          Math.abs(this.camVelocityPhi) > CAM_MOMENTUM_MIN;
         const dTheta = Math.abs(this.camTargetTheta - this.camCurrentTheta);
         const dPhi = Math.abs(this.camTargetPhi - this.camCurrentPhi);
         const dRadius = Math.abs(this.camTargetRadius - this.camCurrentRadius);

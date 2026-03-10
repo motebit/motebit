@@ -18,8 +18,8 @@ import { generate, parse, verify, governanceToPolicyConfig, toHex } from "../ind
 const RISK_NAMES = ["R0_READ", "R1_DRAFT", "R2_WRITE", "R3_EXECUTE", "R4_MONEY"];
 
 const PRESET_GOV: Record<string, { require: number; deny: number }> = {
-  cautious:   { require: 0, deny: 3 },
-  balanced:   { require: 1, deny: 3 },
+  cautious: { require: 0, deny: 3 },
+  balanced: { require: 1, deny: 3 },
   autonomous: { require: 3, deny: 4 },
 };
 
@@ -72,12 +72,14 @@ describe("desktop export round-trip", () => {
           publicKeyHex: kp.publicKeyHex,
           governance,
           memory,
-          devices: [{
-            device_id: "dev-test",
-            name: "Desktop",
-            public_key: kp.publicKeyHex,
-            registered_at: new Date().toISOString(),
-          }],
+          devices: [
+            {
+              device_id: "dev-test",
+              name: "Desktop",
+              public_key: kp.publicKeyHex,
+              registered_at: new Date().toISOString(),
+            },
+          ],
         },
         kp.privateKey,
       );
@@ -93,7 +95,9 @@ describe("desktop export round-trip", () => {
       // Governance fields survive round-trip
       expect(parsed.frontmatter.governance.trust_mode).toBe(governance.trust_mode);
       expect(parsed.frontmatter.governance.max_risk_auto).toBe(governance.max_risk_auto);
-      expect(parsed.frontmatter.governance.require_approval_above).toBe(governance.require_approval_above);
+      expect(parsed.frontmatter.governance.require_approval_above).toBe(
+        governance.require_approval_above,
+      );
       expect(parsed.frontmatter.governance.deny_above).toBe(governance.deny_above);
       expect(parsed.frontmatter.governance.operator_mode).toBe(false);
 

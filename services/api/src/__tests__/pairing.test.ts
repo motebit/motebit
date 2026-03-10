@@ -10,11 +10,17 @@ const API_TOKEN = "test-token";
 const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
 
 function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 async function createTestRelay(): Promise<SyncRelay> {
-  return createSyncRelay({ apiToken: API_TOKEN, enableDeviceAuth: true, verifyDeviceSignature: true });
+  return createSyncRelay({
+    apiToken: API_TOKEN,
+    enableDeviceAuth: true,
+    verifyDeviceSignature: true,
+  });
 }
 
 async function setupIdentityAndDevice(relay: SyncRelay): Promise<{
@@ -30,7 +36,7 @@ async function setupIdentityAndDevice(relay: SyncRelay): Promise<{
     headers: { "Content-Type": "application/json", ...AUTH_HEADER },
     body: JSON.stringify({ owner_id: "test-owner" }),
   });
-  const identity = await identityRes.json() as { motebit_id: string };
+  const identity = (await identityRes.json()) as { motebit_id: string };
 
   // Generate keypair
   const keypair = await generateKeypair();
@@ -41,17 +47,32 @@ async function setupIdentityAndDevice(relay: SyncRelay): Promise<{
   const deviceRes = await relay.app.request("/device/register", {
     method: "POST",
     headers: { "Content-Type": "application/json", ...AUTH_HEADER },
-    body: JSON.stringify({ motebit_id: identity.motebit_id, device_name: "Test Desktop", public_key: publicKeyHex }),
+    body: JSON.stringify({
+      motebit_id: identity.motebit_id,
+      device_name: "Test Desktop",
+      public_key: publicKeyHex,
+    }),
   });
-  const device = await deviceRes.json() as { device_id: string };
+  const device = (await deviceRes.json()) as { device_id: string };
 
   // Create signed token
   const authToken = await createSignedToken(
-    { mid: identity.motebit_id, did: device.device_id, iat: Date.now(), exp: Date.now() + 5 * 60 * 1000 },
+    {
+      mid: identity.motebit_id,
+      did: device.device_id,
+      iat: Date.now(),
+      exp: Date.now() + 5 * 60 * 1000,
+    },
     keypair.privateKey,
   );
 
-  return { motebitId: identity.motebit_id, deviceId: device.device_id, publicKeyHex, privateKeyHex, authToken };
+  return {
+    motebitId: identity.motebit_id,
+    deviceId: device.device_id,
+    publicKeyHex,
+    privateKeyHex,
+    authToken,
+  };
 }
 
 // === Tests ===
@@ -78,7 +99,11 @@ describe("Pairing Protocol", () => {
     });
 
     expect(res.status).toBe(201);
-    const body = await res.json() as { pairing_id: string; pairing_code: string; expires_at: number };
+    const body = (await res.json()) as {
+      pairing_id: string;
+      pairing_code: string;
+      expires_at: number;
+    };
     expect(body.pairing_id).toBeTruthy();
     expect(body.pairing_code).toMatch(/^[A-Z2-9]{6}$/);
     expect(body.expires_at).toBeGreaterThan(Date.now());
@@ -102,7 +127,7 @@ describe("Pairing Protocol", () => {
       method: "POST",
       headers: { Authorization: `Bearer ${authToken}` },
     });
-    const { pairing_code } = await initRes.json() as { pairing_code: string };
+    const { pairing_code } = (await initRes.json()) as { pairing_code: string };
 
     // Generate keypair for Device B
     const keypairB = await generateKeypair();
@@ -112,11 +137,15 @@ describe("Pairing Protocol", () => {
     const claimRes = await relay.app.request("/pairing/claim", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pairing_code: pairing_code, device_name: "Mobile", public_key: pubKeyB }),
+      body: JSON.stringify({
+        pairing_code: pairing_code,
+        device_name: "Mobile",
+        public_key: pubKeyB,
+      }),
     });
 
     expect(claimRes.status).toBe(200);
-    const claimBody = await claimRes.json() as { pairing_id: string; motebit_id: string };
+    const claimBody = (await claimRes.json()) as { pairing_id: string; motebit_id: string };
     expect(claimBody.pairing_id).toBeTruthy();
     expect(claimBody.motebit_id).toBe(motebitId);
   });
@@ -125,7 +154,11 @@ describe("Pairing Protocol", () => {
     const res = await relay.app.request("/pairing/claim", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pairing_code: "abc", device_name: "Mobile", public_key: "a".repeat(64) }),
+      body: JSON.stringify({
+        pairing_code: "abc",
+        device_name: "Mobile",
+        public_key: "a".repeat(64),
+      }),
     });
     expect(res.status).toBe(400);
   });
@@ -134,7 +167,11 @@ describe("Pairing Protocol", () => {
     const res = await relay.app.request("/pairing/claim", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pairing_code: "ABCDEF", device_name: "Mobile", public_key: "a".repeat(64) }),
+      body: JSON.stringify({
+        pairing_code: "ABCDEF",
+        device_name: "Mobile",
+        public_key: "a".repeat(64),
+      }),
     });
     expect(res.status).toBe(404);
   });
@@ -146,7 +183,7 @@ describe("Pairing Protocol", () => {
       method: "POST",
       headers: { Authorization: `Bearer ${authToken}` },
     });
-    const { pairing_code } = await initRes.json() as { pairing_code: string };
+    const { pairing_code } = (await initRes.json()) as { pairing_code: string };
 
     const keypairB = await generateKeypair();
     const pubKeyB = bytesToHex(keypairB.publicKey);
@@ -174,7 +211,7 @@ describe("Pairing Protocol", () => {
       method: "POST",
       headers: { Authorization: `Bearer ${authToken}` },
     });
-    const { pairing_code } = await initRes.json() as { pairing_code: string };
+    const { pairing_code } = (await initRes.json()) as { pairing_code: string };
 
     const res = await relay.app.request("/pairing/claim", {
       method: "POST",
@@ -194,7 +231,10 @@ describe("Pairing Protocol", () => {
       method: "POST",
       headers: { Authorization: `Bearer ${authToken}` },
     });
-    const { pairing_id, pairing_code } = await initRes.json() as { pairing_id: string; pairing_code: string };
+    const { pairing_id, pairing_code } = (await initRes.json()) as {
+      pairing_id: string;
+      pairing_code: string;
+    };
 
     // 2. Claim
     const keypairB = await generateKeypair();
@@ -210,7 +250,7 @@ describe("Pairing Protocol", () => {
       headers: { Authorization: `Bearer ${authToken}` },
     });
     expect(sessionRes.status).toBe(200);
-    const session = await sessionRes.json() as { status: string; claiming_device_name: string };
+    const session = (await sessionRes.json()) as { status: string; claiming_device_name: string };
     expect(session.status).toBe("claimed");
     expect(session.claiming_device_name).toBe("Mobile");
 
@@ -220,7 +260,11 @@ describe("Pairing Protocol", () => {
       headers: { Authorization: `Bearer ${authToken}` },
     });
     expect(approveRes.status).toBe(200);
-    const approveBody = await approveRes.json() as { device_id: string; device_token: string; motebit_id: string };
+    const approveBody = (await approveRes.json()) as {
+      device_id: string;
+      device_token: string;
+      motebit_id: string;
+    };
     expect(approveBody.device_id).toBeTruthy();
     expect(approveBody.device_token).toBeTruthy();
     expect(approveBody.motebit_id).toBe(motebitId);
@@ -228,7 +272,12 @@ describe("Pairing Protocol", () => {
     // 5. Status poll (Device B)
     const statusRes = await relay.app.request(`/pairing/${pairing_id}/status`);
     expect(statusRes.status).toBe(200);
-    const status = await statusRes.json() as { status: string; device_id: string; device_token: string; motebit_id: string };
+    const status = (await statusRes.json()) as {
+      status: string;
+      device_id: string;
+      device_token: string;
+      motebit_id: string;
+    };
     expect(status.status).toBe("approved");
     expect(status.device_id).toBe(approveBody.device_id);
     expect(status.motebit_id).toBe(motebitId);
@@ -243,7 +292,10 @@ describe("Pairing Protocol", () => {
       method: "POST",
       headers: { Authorization: `Bearer ${authToken}` },
     });
-    const { pairing_id, pairing_code } = await initRes.json() as { pairing_id: string; pairing_code: string };
+    const { pairing_id, pairing_code } = (await initRes.json()) as {
+      pairing_id: string;
+      pairing_code: string;
+    };
 
     const keypairB = await generateKeypair();
     const pubKeyB = bytesToHex(keypairB.publicKey);
@@ -260,7 +312,7 @@ describe("Pairing Protocol", () => {
     expect(denyRes.status).toBe(200);
 
     const statusRes = await relay.app.request(`/pairing/${pairing_id}/status`);
-    const status = await statusRes.json() as { status: string };
+    const status = (await statusRes.json()) as { status: string };
     expect(status.status).toBe("denied");
   });
 
@@ -281,7 +333,10 @@ describe("Pairing Protocol", () => {
       method: "POST",
       headers: { Authorization: `Bearer ${deviceA.authToken}` },
     });
-    const { pairing_id, pairing_code } = await initRes.json() as { pairing_id: string; pairing_code: string };
+    const { pairing_id, pairing_code } = (await initRes.json()) as {
+      pairing_id: string;
+      pairing_code: string;
+    };
 
     const keypairB = await generateKeypair();
     const pubKeyB = bytesToHex(keypairB.publicKey);
@@ -308,11 +363,11 @@ describe("Pairing Protocol", () => {
       method: "POST",
       headers: { Authorization: `Bearer ${authToken}` },
     });
-    const { pairing_id } = await initRes.json() as { pairing_id: string };
+    const { pairing_id } = (await initRes.json()) as { pairing_id: string };
 
     const statusRes = await relay.app.request(`/pairing/${pairing_id}/status`);
     expect(statusRes.status).toBe(200);
-    const status = await statusRes.json() as { status: string; motebit_id?: string };
+    const status = (await statusRes.json()) as { status: string; motebit_id?: string };
     expect(status.status).toBe("pending");
     expect(status.motebit_id).toBeUndefined();
   });

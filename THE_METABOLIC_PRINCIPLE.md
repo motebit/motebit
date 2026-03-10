@@ -42,14 +42,14 @@ What crosses the surface tension boundary inward is nutrient. What the interior 
 
 The distinction is precise:
 
-| Nutrient (absorbed) | Structure (built) |
-|---|---|
-| AI inference (any provider) | Memory graph, state vector, personality |
-| Speech detection (VAD model) | Voice onset → state transition |
-| Speech-to-text (any engine) | Transcribed intent → conversation |
-| Text-to-speech (any voice) | Spoken response → acoustic presence |
-| Embedding vectors (any model) | Semantic similarity → memory retrieval |
-| Tool results (any MCP server) | Integrated knowledge → interior state |
+| Nutrient (absorbed)           | Structure (built)                       |
+| ----------------------------- | --------------------------------------- |
+| AI inference (any provider)   | Memory graph, state vector, personality |
+| Speech detection (VAD model)  | Voice onset → state transition          |
+| Speech-to-text (any engine)   | Transcribed intent → conversation       |
+| Text-to-speech (any voice)    | Spoken response → acoustic presence     |
+| Embedding vectors (any model) | Semantic similarity → memory retrieval  |
+| Tool results (any MCP server) | Integrated knowledge → interior state   |
 
 The left column is replaceable. The right column is sovereign. The left column is the ocean. The right column is the vessel.
 
@@ -153,4 +153,4 @@ That is sufficient.
 
 ---
 
-*The Metabolic Principle, 2026.*
+_The Metabolic Principle, 2026._

@@ -228,9 +228,9 @@ describe("GestureRecognizer beckon", () => {
     // With tipDist ≈ 0.014, mcpDist ≈ 0.072 → curl ≈ 0.81
 
     // Curled tips very close to wrist
-    positions["index-finger-tip"] = [0.01, 0.01, 0];  // dist ≈ 0.014
-    positions["middle-finger-tip"] = [0, 0.01, 0];     // dist = 0.01
-    positions["ring-finger-tip"] = [-0.01, 0.01, 0];   // dist ≈ 0.014
+    positions["index-finger-tip"] = [0.01, 0.01, 0]; // dist ≈ 0.014
+    positions["middle-finger-tip"] = [0, 0.01, 0]; // dist = 0.01
+    positions["ring-finger-tip"] = [-0.01, 0.01, 0]; // dist ≈ 0.014
 
     const { hand, referenceSpace, frame } = createMockXRData(positions);
     gr.update(hand, "left", referenceSpace, frame);

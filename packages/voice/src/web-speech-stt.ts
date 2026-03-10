@@ -31,10 +31,12 @@ export class WebSpeechSTTProvider implements STTProvider {
     // Detect API availability (standard or webkit-prefixed).
     const win = typeof window !== "undefined" ? window : undefined;
     this._ctor =
-      ((win as unknown as Record<string, unknown> | undefined)
-        ?.SpeechRecognition as SpeechRecognitionCtor | undefined) ??
-      ((win as unknown as Record<string, unknown> | undefined)
-        ?.webkitSpeechRecognition as SpeechRecognitionCtor | undefined) ??
+      ((win as unknown as Record<string, unknown> | undefined)?.SpeechRecognition as
+        | SpeechRecognitionCtor
+        | undefined) ??
+      ((win as unknown as Record<string, unknown> | undefined)?.webkitSpeechRecognition as
+        | SpeechRecognitionCtor
+        | undefined) ??
       null;
   }
 
@@ -84,11 +86,7 @@ export class WebSpeechSTTProvider implements STTProvider {
       this._listening = false;
 
       // Auto-restart in continuous mode unless manually stopped or denied.
-      if (
-        this._continuous &&
-        !this._stoppedManually &&
-        !this._permissionDenied
-      ) {
+      if (this._continuous && !this._stoppedManually && !this._permissionDenied) {
         this.start(options);
         return;
       }

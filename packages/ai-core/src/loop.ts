@@ -1,4 +1,16 @@
-import type { BehaviorCues, MotebitState, MemoryNode, MemoryCandidate, ToolRegistry, ToolDefinition, ToolResult, ToolRiskProfile, PolicyDecision, TurnContext, ConversationMessage } from "@motebit/sdk";
+import type {
+  BehaviorCues,
+  MotebitState,
+  MemoryNode,
+  MemoryCandidate,
+  ToolRegistry,
+  ToolDefinition,
+  ToolResult,
+  ToolRiskProfile,
+  PolicyDecision,
+  TurnContext,
+  ConversationMessage,
+} from "@motebit/sdk";
 import { EventType, RelationType } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MemoryGraph, ConsolidationProvider } from "@motebit/memory-graph";
@@ -15,9 +27,12 @@ const MAX_TOOL_ITERATIONS = 10;
 // === Missed-memory heuristic detection ===
 
 const PREFERENCE_RE = /\b(?:i\s+(?:like|prefer|love|enjoy|hate|dislike|can't stand))\s+(.{3,60})/gi;
-const PERSONAL_FACT_RE = /\b(?:i(?:'m|\s+am)\s+from|i\s+live\s+in|i\s+work\s+at|my\s+name\s+is|i(?:'m|\s+am)\s+a\b)\s+(.{2,60})/gi;
-const GOAL_RE = /\b(?:i\s+want\s+to|i(?:'m|\s+am)\s+planning\s+to|i\s+need\s+to|i(?:'m|\s+am)\s+trying\s+to|my\s+goal\s+is)\s+(.{3,80})/gi;
-const CORRECTION_RE = /\b(?:actually,?\s+i\s+meant|no,?\s+i\s+(?:said|mean)|i\s+meant\s+to\s+say)\s+(.{3,80})/gi;
+const PERSONAL_FACT_RE =
+  /\b(?:i(?:'m|\s+am)\s+from|i\s+live\s+in|i\s+work\s+at|my\s+name\s+is|i(?:'m|\s+am)\s+a\b)\s+(.{2,60})/gi;
+const GOAL_RE =
+  /\b(?:i\s+want\s+to|i(?:'m|\s+am)\s+planning\s+to|i\s+need\s+to|i(?:'m|\s+am)\s+trying\s+to|my\s+goal\s+is)\s+(.{3,80})/gi;
+const CORRECTION_RE =
+  /\b(?:actually,?\s+i\s+meant|no,?\s+i\s+(?:said|mean)|i\s+meant\s+to\s+say)\s+(.{3,80})/gi;
 
 /**
  * Lightweight heuristic check for memory-worthy patterns in conversation text
@@ -87,7 +102,10 @@ export interface LoopPolicyGate {
   validate(tool: ToolDefinition, args: Record<string, unknown>, ctx: TurnContext): PolicyDecision;
   classify(tool: ToolDefinition): ToolRiskProfile;
   sanitizeResult(result: ToolResult, toolName: string): ToolResult;
-  sanitizeAndCheck?(result: ToolResult, toolName: string): {
+  sanitizeAndCheck?(
+    result: ToolResult,
+    toolName: string,
+  ): {
     result: ToolResult;
     injectionDetected: boolean;
     injectionPatterns: string[];
@@ -99,7 +117,12 @@ export interface LoopPolicyGate {
     callId: string,
     tool: string,
     args: Record<string, unknown>,
-    injection: { detected: boolean; patterns: string[]; directiveDensity?: number; structuralFlags?: string[] },
+    injection: {
+      detected: boolean;
+      patterns: string[];
+      directiveDensity?: number;
+      structuralFlags?: string[];
+    },
     blocked: boolean,
     runId?: string,
   ): void;
@@ -112,7 +135,9 @@ export interface LoopPolicyGate {
  * MemoryGovernor from @motebit/policy satisfies this through structural typing.
  */
 export interface LoopMemoryGovernor {
-  evaluate(candidates: MemoryCandidate[]): { candidate: MemoryCandidate; memoryClass: string; reason: string }[];
+  evaluate(
+    candidates: MemoryCandidate[],
+  ): { candidate: MemoryCandidate; memoryClass: string; reason: string }[];
 }
 
 export interface MotebitLoopDependencies {
@@ -149,7 +174,13 @@ export interface TurnOptions {
 export type AgenticChunk =
   | { type: "text"; text: string }
   | { type: "tool_status"; name: string; status: "calling" | "done"; result?: unknown }
-  | { type: "approval_request"; tool_call_id: string; name: string; args: Record<string, unknown>; risk_level?: number }
+  | {
+      type: "approval_request";
+      tool_call_id: string;
+      name: string;
+      args: Record<string, unknown>;
+      risk_level?: number;
+    }
   | { type: "injection_warning"; tool_name: string; patterns: string[] }
   | { type: "result"; result: TurnResult };
 
@@ -191,14 +222,7 @@ export async function* runTurnStreaming(
   userMessage: string,
   options?: TurnOptions,
 ): AsyncGenerator<AgenticChunk> {
-  const {
-    motebitId,
-    eventStore,
-    memoryGraph,
-    stateEngine,
-    behaviorEngine,
-    provider,
-  } = deps;
+  const { motebitId, eventStore, memoryGraph, stateEngine, behaviorEngine, provider } = deps;
 
   // 1. Query recent events
   const recentEvents = await eventStore.query({
@@ -214,22 +238,19 @@ export async function* runTurnStreaming(
   });
 
   // Merge: pinned first (cap 5), then similarity (deduplicated)
-  const pinnedIds = new Set(pinnedMemories.map(m => m.node_id));
-  const dedupedSimilarity = similarityMemories.filter(m => !pinnedIds.has(m.node_id));
+  const pinnedIds = new Set(pinnedMemories.map((m) => m.node_id));
+  const dedupedSimilarity = similarityMemories.filter((m) => !pinnedIds.has(m.node_id));
   const relevantMemories = [...pinnedMemories.slice(0, 5), ...dedupedSimilarity];
 
   // 3. Pack context and stream from provider (agentic loop)
   const currentState = stateEngine.getState();
   const rawToolDefs = deps.tools ? deps.tools.list() : undefined;
-  const toolDefs = rawToolDefs && deps.policyGate
-    ? deps.policyGate.filterTools(rawToolDefs)
-    : rawToolDefs;
+  const toolDefs =
+    rawToolDefs && deps.policyGate ? deps.policyGate.filterTools(rawToolDefs) : rawToolDefs;
 
   let turnCtx = deps.policyGate?.createTurnContext(options?.runId);
 
-  const conversationHistory: ConversationMessage[] = [
-    ...(options?.conversationHistory ?? []),
-  ];
+  const conversationHistory: ConversationMessage[] = [...(options?.conversationHistory ?? [])];
 
   let finalText = "";
   let finalResponse;
@@ -243,9 +264,12 @@ export async function* runTurnStreaming(
       relevant_memories: relevantMemories,
       current_state: currentState,
       user_message: iteration === 1 ? userMessage : "",
-      conversation_history: iteration === 1
-        ? conversationHistory.length > 0 ? conversationHistory : undefined
-        : conversationHistory,
+      conversation_history:
+        iteration === 1
+          ? conversationHistory.length > 0
+            ? conversationHistory
+            : undefined
+          : conversationHistory,
       behavior_cues: options?.previousCues,
       tools: toolDefs,
       sessionInfo: options?.sessionInfo,
@@ -292,9 +316,7 @@ export async function* runTurnStreaming(
     };
     conversationHistory.push(assistantMsg);
 
-    const toolDefsMap = new Map(
-      (toolDefs ?? []).map((t) => [t.name, t]),
-    );
+    const toolDefsMap = new Map((toolDefs ?? []).map((t) => [t.name, t]));
 
     let allBlocked = true;
 
@@ -306,7 +328,12 @@ export async function* runTurnStreaming(
         const decision = deps.policyGate.validate(toolDef, toolCall.args, turnCtx);
 
         if (!decision.allowed) {
-          yield { type: "tool_status", name: toolCall.name, status: "done", result: decision.reason };
+          yield {
+            type: "tool_status",
+            name: toolCall.name,
+            status: "done",
+            result: decision.reason,
+          };
           conversationHistory.push({
             role: "tool",
             tool_call_id: toolCall.id,
@@ -344,10 +371,15 @@ export async function* runTurnStreaming(
           const check = deps.policyGate.sanitizeAndCheck(result, toolCall.name);
           sanitized = check.result;
           if (check.injectionDetected) {
-            yield { type: "injection_warning", tool_name: toolCall.name, patterns: check.injectionPatterns };
+            yield {
+              type: "injection_warning",
+              tool_name: toolCall.name,
+              patterns: check.injectionPatterns,
+            };
 
             // Fail-closed: block on high-confidence injection (regex match or structural flag)
-            const highConfidence = check.injectionPatterns.length > 0 || ((check.structuralFlags ?? []).length > 0);
+            const highConfidence =
+              check.injectionPatterns.length > 0 || (check.structuralFlags ?? []).length > 0;
             const injectionData = {
               detected: true,
               patterns: check.injectionPatterns,
@@ -358,8 +390,13 @@ export async function* runTurnStreaming(
             // Log to audit trail
             if (turnCtx != null && typeof deps.policyGate.logInjection === "function") {
               deps.policyGate.logInjection(
-                turnCtx.turnId, toolCall.id, toolCall.name, toolCall.args,
-                injectionData, highConfidence, turnCtx.runId,
+                turnCtx.turnId,
+                toolCall.id,
+                toolCall.name,
+                toolCall.args,
+                injectionData,
+                highConfidence,
+                turnCtx.runId,
               );
             }
 
@@ -379,7 +416,12 @@ export async function* runTurnStreaming(
           sanitized = deps.policyGate.sanitizeResult(result, toolCall.name);
         }
 
-        yield { type: "tool_status", name: toolCall.name, status: "done", result: sanitized.data ?? sanitized.error };
+        yield {
+          type: "tool_status",
+          name: toolCall.name,
+          status: "done",
+          result: sanitized.data ?? sanitized.error,
+        };
 
         conversationHistory.push({
           role: "tool",
@@ -408,12 +450,18 @@ export async function* runTurnStreaming(
       allBlocked = false;
       yield { type: "tool_status", name: toolCall.name, status: "calling" };
       const result = await deps.tools.execute(toolCall.name, toolCall.args);
-      yield { type: "tool_status", name: toolCall.name, status: "done", result: result.data ?? result.error };
+      yield {
+        type: "tool_status",
+        name: toolCall.name,
+        status: "done",
+        result: result.data ?? result.error,
+      };
 
       // Fallback path: no PolicyGate — still wrap in boundaries for defense-in-depth
-      const wrappedResult = result.data != null
-        ? { ...result, data: wrapExternalData(result.data, toolCall.name) }
-        : result;
+      const wrappedResult =
+        result.data != null
+          ? { ...result, data: wrapExternalData(result.data, toolCall.name) }
+          : result;
       conversationHistory.push({
         role: "tool",
         tool_call_id: toolCall.id,
@@ -444,7 +492,9 @@ export async function* runTurnStreaming(
     const embedding = await embedText(candidate.content);
     if (deps.consolidationProvider) {
       const { node } = await memoryGraph.consolidateAndForm(
-        candidate, embedding, deps.consolidationProvider,
+        candidate,
+        embedding,
+        deps.consolidationProvider,
       );
       if (node) memoriesFormed.push(node);
     } else {

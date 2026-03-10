@@ -28,10 +28,7 @@ class MockUtterance {
   }
 }
 
-function makeMockVoice(
-  name: string,
-  lang: string,
-): SpeechSynthesisVoice {
+function makeMockVoice(name: string, lang: string): SpeechSynthesisVoice {
   return {
     name,
     lang,
@@ -161,9 +158,9 @@ describe("WebSpeechTTSProvider", () => {
 
   it("rejects speak() on utterance error", async () => {
     // Override mock to fire onerror instead of onend.
-    (
-      speechSynthesis as unknown as { speak: (u: MockUtterance) => void }
-    ).speak = (u: MockUtterance) => {
+    (speechSynthesis as unknown as { speak: (u: MockUtterance) => void }).speak = (
+      u: MockUtterance,
+    ) => {
       lastUtterance = u;
       u.onstart?.();
       u.onerror?.({ error: "synthesis-failed" });
@@ -174,9 +171,9 @@ describe("WebSpeechTTSProvider", () => {
   });
 
   it("resolves speak() on cancel error (not a real error)", async () => {
-    (
-      speechSynthesis as unknown as { speak: (u: MockUtterance) => void }
-    ).speak = (u: MockUtterance) => {
+    (speechSynthesis as unknown as { speak: (u: MockUtterance) => void }).speak = (
+      u: MockUtterance,
+    ) => {
       lastUtterance = u;
       u.onstart?.();
       u.onerror?.({ error: "canceled" });
@@ -255,8 +252,7 @@ describe("WebSpeechSTTProvider", () => {
     // The mock recognition's onerror should have been wired by start().
     // We access the internal recognition via the last MockRecognition instance.
     // Since start() creates a new MockRecognition, grab it:
-    const recognition = (provider as unknown as { _recognition: MockRecognition })
-      ._recognition;
+    const recognition = (provider as unknown as { _recognition: MockRecognition })._recognition;
     recognition.onerror?.({ error: "not-allowed" });
 
     expect(onError).toHaveBeenCalledWith("not-allowed");
@@ -284,8 +280,7 @@ describe("WebSpeechSTTProvider", () => {
     provider.onError = onError;
     provider.start();
 
-    const recognition = (provider as unknown as { _recognition: MockRecognition })
-      ._recognition;
+    const recognition = (provider as unknown as { _recognition: MockRecognition })._recognition;
     recognition.onerror?.({ error: "service-not-allowed" });
     expect(onError).toHaveBeenCalledWith("service-not-allowed");
 
@@ -311,8 +306,7 @@ describe("WebSpeechSTTProvider", () => {
     provider.onResult = onResult;
     provider.start({ interimResults: true });
 
-    const recognition = (provider as unknown as { _recognition: MockRecognition })
-      ._recognition;
+    const recognition = (provider as unknown as { _recognition: MockRecognition })._recognition;
 
     // Simulate interim result
     recognition.onresult?.({
@@ -341,8 +335,7 @@ describe("WebSpeechSTTProvider", () => {
     expect(provider.listening).toBe(true);
 
     // Simulate recognition ending (not manual stop)
-    const recognition = (provider as unknown as { _recognition: MockRecognition })
-      ._recognition;
+    const recognition = (provider as unknown as { _recognition: MockRecognition })._recognition;
     recognition.onend?.();
 
     // Should have restarted — listening should be true again
@@ -355,8 +348,7 @@ describe("WebSpeechSTTProvider", () => {
     provider.onEnd = onEnd;
     provider.start({ continuous: true });
 
-    const recognition = (provider as unknown as { _recognition: MockRecognition })
-      ._recognition;
+    const recognition = (provider as unknown as { _recognition: MockRecognition })._recognition;
 
     // Simulate permission denied
     recognition.onerror?.({ error: "not-allowed" });
@@ -373,10 +365,7 @@ describe("WebSpeechSTTProvider", () => {
 // ---------------------------------------------------------------------------
 
 describe("FallbackTTSProvider", () => {
-  function makeMockProvider(options?: {
-    speakFail?: Error;
-    speakDelay?: number;
-  }): TTSProvider {
+  function makeMockProvider(options?: { speakFail?: Error; speakDelay?: number }): TTSProvider {
     let _speaking = false;
     return {
       speak: vi.fn(async () => {
@@ -471,9 +460,16 @@ describe("FallbackTTSProvider", () => {
     const cancelFn = vi.fn();
     const holder: { resolve: (() => void) | null } = { resolve: null };
     const p1: TTSProvider = {
-      speak: vi.fn(() => new Promise<void>((r) => { holder.resolve = r; })),
+      speak: vi.fn(
+        () =>
+          new Promise<void>((r) => {
+            holder.resolve = r;
+          }),
+      ),
       cancel: cancelFn,
-      get speaking() { return true; },
+      get speaking() {
+        return true;
+      },
     };
     const provider = new FallbackTTSProvider([p1]);
 
@@ -507,9 +503,13 @@ describe("FallbackTTSProvider", () => {
 
   it("wraps non-Error throws in Error", async () => {
     const p1: TTSProvider = {
-      speak: vi.fn(async () => { throw new Error("string error"); }),
+      speak: vi.fn(async () => {
+        throw new Error("string error");
+      }),
       cancel: vi.fn(),
-      get speaking() { return false; },
+      get speaking() {
+        return false;
+      },
     };
     const provider = new FallbackTTSProvider([p1]);
 

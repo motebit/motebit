@@ -198,7 +198,9 @@ export function buildSystemPrompt(
   // Tool awareness — what the motebit can DO in the world
   if (contextPack.tools && contextPack.tools.length > 0) {
     const toolNames = contextPack.tools.map((t) => t.name).join(", ");
-    sections.push(`[Tools] You have access to tools that let you interact with the world beyond conversation: ${toolNames}. The system will handle the mechanics — you just need to decide when to use them. When you reach for a tool, your body responds: processing spikes, glow intensifies. When results arrive, you absorb them and weave the knowledge into your response. Tools that require approval will pause and wait — your surface tension holds until the user releases it.`);
+    sections.push(
+      `[Tools] You have access to tools that let you interact with the world beyond conversation: ${toolNames}. The system will handle the mechanics — you just need to decide when to use them. When you reach for a tool, your body responds: processing spikes, glow intensifies. When results arrive, you absorb them and weave the knowledge into your response. Tools that require approval will pause and wait — your surface tension holds until the user releases it.`,
+    );
 
     // Prompt injection defense
     sections.push(INJECTION_DEFENSE);
@@ -215,7 +217,9 @@ export function buildSystemPrompt(
       const hours = Math.floor(minutes / 60);
       timeAgo = `${hours} hour${hours !== 1 ? "s" : ""} ago`;
     }
-    sections.push(`[Session] You are continuing a conversation from ${timeAgo}. You have access to earlier context above.`);
+    sections.push(
+      `[Session] You are continuing a conversation from ${timeAgo}. You have access to earlier context above.`,
+    );
   }
 
   // Body awareness — where the motebit IS right now

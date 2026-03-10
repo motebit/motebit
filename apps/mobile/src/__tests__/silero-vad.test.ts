@@ -104,16 +104,12 @@ describe("SileroVAD", () => {
       const ok = await vad.init();
 
       expect(ok).toBe(true);
-      expect(mockGetInfoAsync).toHaveBeenCalledWith(
-        "/mock/documents/silero_vad_v5.onnx",
-      );
+      expect(mockGetInfoAsync).toHaveBeenCalledWith("/mock/documents/silero_vad_v5.onnx");
       expect(mockDownloadAsync).toHaveBeenCalledWith(
         expect.stringContaining("silero_vad.onnx"),
         "/mock/documents/silero_vad_v5.onnx",
       );
-      expect(mockSessionCreate).toHaveBeenCalledWith(
-        "/mock/documents/silero_vad_v5.onnx",
-      );
+      expect(mockSessionCreate).toHaveBeenCalledWith("/mock/documents/silero_vad_v5.onnx");
     });
 
     it("skips download if model already cached", async () => {

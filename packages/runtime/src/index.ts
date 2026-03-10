@@ -1,8 +1,24 @@
-import type { MotebitState, BehaviorCues, ConversationMessage, ToolRegistry, AgentTask, ExecutionReceipt, AgentTrustRecord } from "@motebit/sdk";
+import type {
+  MotebitState,
+  BehaviorCues,
+  ConversationMessage,
+  ToolRegistry,
+  AgentTask,
+  ExecutionReceipt,
+  AgentTrustRecord,
+} from "@motebit/sdk";
 import { EventType, SensitivityLevel, AgentTrustLevel } from "@motebit/sdk";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 import type { EventStoreAdapter } from "@motebit/event-log";
-import { MemoryGraph, InMemoryMemoryStorage, embedText, computeDecayedConfidence, buildConsolidationPrompt, parseConsolidationResponse, clusterBySimilarity } from "@motebit/memory-graph";
+import {
+  MemoryGraph,
+  InMemoryMemoryStorage,
+  embedText,
+  computeDecayedConfidence,
+  buildConsolidationPrompt,
+  parseConsolidationResponse,
+  clusterBySimilarity,
+} from "@motebit/memory-graph";
 import type { ConsolidationProvider } from "@motebit/memory-graph";
 import type { MemoryStorageAdapter } from "@motebit/memory-graph";
 import { StateVectorEngine } from "@motebit/state-vector";
@@ -14,7 +30,12 @@ import type { AuditLogAdapter } from "@motebit/privacy-layer";
 import { SyncEngine } from "@motebit/sync-engine";
 import type { RenderSpec } from "@motebit/sdk";
 import { CANONICAL_SPEC } from "@motebit/render-engine/spec";
-import type { RenderAdapter, RenderFrame, InteriorColor, AudioReactivity } from "@motebit/render-engine/spec";
+import type {
+  RenderAdapter,
+  RenderFrame,
+  InteriorColor,
+  AudioReactivity,
+} from "@motebit/render-engine/spec";
 import {
   runTurn,
   runTurnStreaming,
@@ -58,17 +79,33 @@ import { computeGradient, InMemoryGradientStore } from "./gradient.js";
 import type { GradientSnapshot, GradientStoreAdapter } from "./gradient.js";
 
 // Re-export key types for consumers
-export type { TurnResult, AgenticChunk, ReflectionResult, MotebitLoopDependencies } from "@motebit/ai-core";
+export type {
+  TurnResult,
+  AgenticChunk,
+  ReflectionResult,
+  MotebitLoopDependencies,
+} from "@motebit/ai-core";
 export type { StreamingProvider } from "@motebit/ai-core";
 export type { TaskRouterConfig, TaskType, ResolvedTaskConfig } from "@motebit/ai-core";
-export type { MotebitState, BehaviorCues, ToolRegistry, ConversationMessage, AgentTrustRecord } from "@motebit/sdk";
+export type {
+  MotebitState,
+  BehaviorCues,
+  ToolRegistry,
+  ConversationMessage,
+  AgentTrustRecord,
+} from "@motebit/sdk";
 export { AgentTrustLevel } from "@motebit/sdk";
 export type { EventStoreAdapter } from "@motebit/event-log";
 export type { MemoryStorageAdapter } from "@motebit/memory-graph";
 export type { IdentityStorage } from "@motebit/core-identity";
 export type { AuditLogAdapter } from "@motebit/privacy-layer";
 export type { DeletionCertificate } from "@motebit/crypto";
-export type { RenderAdapter, RenderFrame, InteriorColor, AudioReactivity } from "@motebit/render-engine/spec";
+export type {
+  RenderAdapter,
+  RenderFrame,
+  InteriorColor,
+  AudioReactivity,
+} from "@motebit/render-engine/spec";
 export type { RenderSpec } from "@motebit/sdk";
 export { PolicyGate } from "@motebit/policy";
 export type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
@@ -117,21 +154,33 @@ class SimpleToolRegistry implements ToolRegistry {
     this.tools.set(tool.name, { definition: tool, handler });
   }
 
-  list(): ToolDefinition[] { return [...this.tools.values()].map((t) => t.definition); }
-  has(name: string): boolean { return this.tools.has(name); }
-  get(name: string): ToolDefinition | undefined { return this.tools.get(name)?.definition; }
+  list(): ToolDefinition[] {
+    return [...this.tools.values()].map((t) => t.definition);
+  }
+  has(name: string): boolean {
+    return this.tools.has(name);
+  }
+  get(name: string): ToolDefinition | undefined {
+    return this.tools.get(name)?.definition;
+  }
 
   async execute(name: string, args: Record<string, unknown>): Promise<ToolResult> {
     const entry = this.tools.get(name);
     if (!entry) return { ok: false, error: `Unknown tool: ${name}` };
-    try { return await entry.handler(args); }
-    catch (err: unknown) { return { ok: false, error: err instanceof Error ? err.message : String(err) }; }
+    try {
+      return await entry.handler(args);
+    } catch (err: unknown) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   merge(other: ToolRegistry): void {
     for (const def of other.list()) {
       if (!this.tools.has(def.name)) {
-        this.tools.set(def.name, { definition: def, handler: (args) => other.execute(def.name, args) });
+        this.tools.set(def.name, {
+          definition: def,
+          handler: (args) => other.execute(def.name, args),
+        });
       }
     }
   }
@@ -140,7 +189,9 @@ class SimpleToolRegistry implements ToolRegistry {
     return this.tools.delete(name);
   }
 
-  get size(): number { return this.tools.size; }
+  get size(): number {
+    return this.tools.size;
+  }
 }
 
 export { SimpleToolRegistry };
@@ -151,13 +202,20 @@ export { SimpleToolRegistry };
 
 export interface ConversationStoreAdapter {
   createConversation(motebitId: string): string;
-  appendMessage(conversationId: string, motebitId: string, msg: {
-    role: string;
-    content: string;
-    toolCalls?: string;
-    toolCallId?: string;
-  }): void;
-  loadMessages(conversationId: string, limit?: number): Array<{
+  appendMessage(
+    conversationId: string,
+    motebitId: string,
+    msg: {
+      role: string;
+      content: string;
+      toolCalls?: string;
+      toolCallId?: string;
+    },
+  ): void;
+  loadMessages(
+    conversationId: string,
+    limit?: number,
+  ): Array<{
     messageId: string;
     conversationId: string;
     motebitId: string;
@@ -176,7 +234,10 @@ export interface ConversationStoreAdapter {
   } | null;
   updateSummary(conversationId: string, summary: string): void;
   updateTitle(conversationId: string, title: string): void;
-  listConversations(motebitId: string, limit?: number): Array<{
+  listConversations(
+    motebitId: string,
+    limit?: number,
+  ): Array<{
     conversationId: string;
     startedAt: number;
     lastActiveAt: number;
@@ -202,7 +263,11 @@ export interface AgentTrustStoreAdapter {
   getAgentTrust(motebitId: string, remoteMotebitId: string): Promise<AgentTrustRecord | null>;
   setAgentTrust(record: AgentTrustRecord): Promise<void>;
   listAgentTrust(motebitId: string): Promise<AgentTrustRecord[]>;
-  updateTrustLevel(motebitId: string, remoteMotebitId: string, level: AgentTrustLevel): Promise<void>;
+  updateTrustLevel(
+    motebitId: string,
+    remoteMotebitId: string,
+    level: AgentTrustLevel,
+  ): Promise<void>;
 }
 
 export interface StorageAdapters {
@@ -229,9 +294,13 @@ export interface PlatformAdapters {
 // === Null Renderer (for CLI / headless) ===
 
 export class NullRenderer implements RenderAdapter {
-  init(_target: unknown): Promise<void> { return Promise.resolve(); }
+  init(_target: unknown): Promise<void> {
+    return Promise.resolve();
+  }
   render(_frame: RenderFrame): void {}
-  getSpec(): RenderSpec { return CANONICAL_SPEC; }
+  getSpec(): RenderSpec {
+    return CANONICAL_SPEC;
+  }
   resize(_w: number, _h: number): void {}
   setBackground(_color: number | null): void {}
   setDarkEnvironment(): void {}
@@ -272,13 +341,24 @@ export interface RuntimeConfig {
 export type StreamChunk =
   | { type: "text"; text: string }
   | { type: "tool_status"; name: string; status: "calling" | "done"; result?: unknown }
-  | { type: "approval_request"; tool_call_id: string; name: string; args: Record<string, unknown>; risk_level?: number }
+  | {
+      type: "approval_request";
+      tool_call_id: string;
+      name: string;
+      args: Record<string, unknown>;
+      risk_level?: number;
+    }
   | { type: "injection_warning"; tool_name: string; patterns: string[] }
   | { type: "approval_expired"; tool_name: string }
   | { type: "result"; result: TurnResult }
   | { type: "task_result"; receipt: ExecutionReceipt }
   | { type: "delegation_start"; server: string; tool: string; motebit_id?: string }
-  | { type: "delegation_complete"; server: string; tool: string; receipt?: { task_id: string; status: string; tools_used: string[] } };
+  | {
+      type: "delegation_complete";
+      server: string;
+      tool: string;
+      receipt?: { task_id: string; status: string; tools_used: string[] };
+    };
 
 // === Operator Mode Result ===
 
@@ -310,12 +390,14 @@ function pinLockoutMs(attempts: number): number {
 }
 
 function toHex(buf: ArrayBuffer): string {
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 async function hashPin(pin: string, existingSalt?: string): Promise<string> {
   const salt = existingSalt
-    ? new Uint8Array(existingSalt.match(/.{2}/g)!.map(h => parseInt(h, 16)))
+    ? new Uint8Array(existingSalt.match(/.{2}/g)!.map((h) => parseInt(h, 16)))
     : crypto.getRandomValues(new Uint8Array(16));
   const keyMaterial = await crypto.subtle.importKey(
     "raw",
@@ -431,15 +513,8 @@ export class MotebitRuntime {
 
     // Data stores
     this.events = new EventStore(adapters.storage.eventStore);
-    this.memory = new MemoryGraph(
-      adapters.storage.memoryStorage,
-      this.events,
-      this.motebitId,
-    );
-    this.identity = new IdentityManager(
-      adapters.storage.identityStorage,
-      this.events,
-    );
+    this.memory = new MemoryGraph(adapters.storage.memoryStorage, this.events, this.motebitId);
+    this.identity = new IdentityManager(adapters.storage.identityStorage, this.events);
     this.auditLog = adapters.storage.auditLog;
     this.privacy = new PrivacyLayer(
       adapters.storage.memoryStorage,
@@ -448,10 +523,7 @@ export class MotebitRuntime {
       adapters.storage.auditLog,
       this.motebitId,
     );
-    this.sync = new SyncEngine(
-      adapters.storage.eventStore,
-      this.motebitId,
-    );
+    this.sync = new SyncEngine(adapters.storage.eventStore, this.motebitId);
 
     // State -> cue computation
     this.state.subscribe((state: MotebitState) => {
@@ -596,12 +668,15 @@ export class MotebitRuntime {
    * Decomposes the goal into steps, then executes each step sequentially,
    * streaming PlanChunk events for progress tracking.
    */
-  async *executePlan(goalId: string, goalPrompt: string, runId?: string): AsyncGenerator<PlanChunk> {
+  async *executePlan(
+    goalId: string,
+    goalPrompt: string,
+    runId?: string,
+  ): AsyncGenerator<PlanChunk> {
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
 
-    const availableTools = this.toolRegistry.size > 0
-      ? this.toolRegistry.list().map((t) => t.name)
-      : undefined;
+    const availableTools =
+      this.toolRegistry.size > 0 ? this.toolRegistry.list().map((t) => t.name) : undefined;
 
     const { plan } = await this.planEngine.createPlan(
       goalId,
@@ -670,9 +745,7 @@ export class MotebitRuntime {
 
     // Support both legacy (plain hex) and salted (salt:key) formats
     const parts = storedHash.split(":");
-    const inputHash = parts.length === 2
-      ? await hashPin(pin, parts[0])
-      : await hashPin(pin);
+    const inputHash = parts.length === 2 ? await hashPin(pin, parts[0]) : await hashPin(pin);
     if (inputHash !== storedHash) {
       await this.recordPinFailure(attemptState);
       return { success: false, error: "Incorrect PIN" };
@@ -903,7 +976,10 @@ export class MotebitRuntime {
         const { verifyExecutionReceipt } = await import("@motebit/crypto");
         for (const dr of delegationReceipts) {
           // Look up stored public key for the delegatee
-          const trustRecord = await this.agentTrustStore.getAgentTrust(this.motebitId, dr.motebit_id);
+          const trustRecord = await this.agentTrustStore.getAgentTrust(
+            this.motebitId,
+            dr.motebit_id,
+          );
           if (trustRecord?.public_key) {
             const fromHex = (hex: string): Uint8Array => {
               const bytes = new Uint8Array(hex.length / 2);
@@ -979,7 +1055,9 @@ export class MotebitRuntime {
             device_id: receipt.device_id,
             completed_at: receipt.completed_at,
             signature: receipt.signature.slice(0, 16),
-            delegation_receipts: receipt.delegation_receipts?.map(function summarize(dr: ExecutionReceipt): Record<string, unknown> {
+            delegation_receipts: receipt.delegation_receipts?.map(function summarize(
+              dr: ExecutionReceipt,
+            ): Record<string, unknown> {
               return {
                 task_id: dr.task_id,
                 motebit_id: dr.motebit_id,
@@ -1031,25 +1109,43 @@ export class MotebitRuntime {
           const check = this.policy.sanitizeAndCheck(result, pending.toolName);
           sanitized = check.result;
           if (check.injectionDetected) {
-            yield { type: "injection_warning" as const, tool_name: pending.toolName, patterns: check.injectionPatterns };
+            yield {
+              type: "injection_warning" as const,
+              tool_name: pending.toolName,
+              patterns: check.injectionPatterns,
+            };
           }
         } else if (typeof this.policy.sanitizeResult === "function") {
           sanitized = this.policy.sanitizeResult(result, pending.toolName);
         }
 
-        yield { type: "tool_status" as const, name: pending.toolName, status: "done" as const, result: sanitized.data ?? sanitized.error };
+        yield {
+          type: "tool_status" as const,
+          name: pending.toolName,
+          status: "done" as const,
+          result: sanitized.data ?? sanitized.error,
+        };
         void this.logToolUsed(pending.toolName, sanitized.data ?? sanitized.error);
 
         // Push tool call + result into conversation history for continuation
         this.conversationHistory.push(
-          { role: "assistant" as const, content: `[tool_use: ${pending.toolName}(${JSON.stringify(pending.args)})]` },
+          {
+            role: "assistant" as const,
+            content: `[tool_use: ${pending.toolName}(${JSON.stringify(pending.args)})]`,
+          },
           { role: "user" as const, content: `[tool_result: ${JSON.stringify(sanitized)}]` },
         );
       } else {
         // Push denial into conversation history
         this.conversationHistory.push(
-          { role: "assistant" as const, content: `[tool_use: ${pending.toolName}(${JSON.stringify(pending.args)})]` },
-          { role: "user" as const, content: `[tool_result: {"ok":false,"error":"User denied this tool call."}]` },
+          {
+            role: "assistant" as const,
+            content: `[tool_use: ${pending.toolName}(${JSON.stringify(pending.args)})]`,
+          },
+          {
+            role: "user" as const,
+            content: `[tool_result: {"ok":false,"error":"User denied this tool call."}]`,
+          },
         );
       }
 
@@ -1093,8 +1189,14 @@ export class MotebitRuntime {
       this._pendingApproval = null;
       // Push denial into conversation history so LLM sees it on next turn
       this.conversationHistory.push(
-        { role: "assistant" as const, content: `[tool_use: ${expired.toolName}(${JSON.stringify(expired.args)})]` },
-        { role: "user" as const, content: `[tool_result: {"ok":false,"error":"Approval timed out after ${this.approvalTimeoutMs}ms"}]` },
+        {
+          role: "assistant" as const,
+          content: `[tool_use: ${expired.toolName}(${JSON.stringify(expired.args)})]`,
+        },
+        {
+          role: "user" as const,
+          content: `[tool_result: {"ok":false,"error":"Approval timed out after ${this.approvalTimeoutMs}ms"}]`,
+        },
       );
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
@@ -1168,10 +1270,16 @@ export class MotebitRuntime {
           // Emit delegation_complete for motebit MCP tools
           if (motebitServer) {
             // Extract receipt summary if this was a motebit_task call with a receipt result
-            let receiptSummary: { task_id: string; status: string; tools_used: string[] } | undefined;
+            let receiptSummary:
+              | { task_id: string; status: string; tools_used: string[] }
+              | undefined;
             if (chunk.result != null && typeof chunk.result === "object") {
               const r = chunk.result as Record<string, unknown>;
-              if (typeof r.task_id === "string" && typeof r.status === "string" && Array.isArray(r.tools_used)) {
+              if (
+                typeof r.task_id === "string" &&
+                typeof r.status === "string" &&
+                Array.isArray(r.tools_used)
+              ) {
                 receiptSummary = {
                   task_id: r.task_id as string,
                   status: r.status as string,
@@ -1180,7 +1288,12 @@ export class MotebitRuntime {
               }
             }
             this.behavior.setDelegating(false);
-            yield { type: "delegation_complete", server: motebitServer, tool: chunk.name, receipt: receiptSummary };
+            yield {
+              type: "delegation_complete",
+              server: motebitServer,
+              tool: chunk.name,
+              receipt: receiptSummary,
+            };
           }
         }
       }
@@ -1229,14 +1342,13 @@ export class MotebitRuntime {
   async reflect(goals?: Array<{ description: string; status: string }>): Promise<ReflectionResult> {
     if (!this.provider) throw new Error("No AI provider configured");
 
-    const summary = this.conversationId != null && this.conversationId !== "" && this.conversationStore != null
-      ? this.conversationStore.getActiveConversation(this.motebitId)?.summary ?? null
-      : null;
+    const summary =
+      this.conversationId != null && this.conversationId !== "" && this.conversationStore != null
+        ? (this.conversationStore.getActiveConversation(this.motebitId)?.summary ?? null)
+        : null;
 
     const recentMemories = await this.memory.exportAll();
-    const memories = recentMemories.nodes
-      .slice(0, 10)
-      .map((n) => ({ content: n.content }));
+    const memories = recentMemories.nodes.slice(0, 10).map((n) => ({ content: n.content }));
 
     const result = await aiReflect(
       summary,
@@ -1342,7 +1454,8 @@ export class MotebitRuntime {
       user_message: prompt,
     };
 
-    const doGenerate = async (p: import("@motebit/sdk").IntelligenceProvider) => (await p.generate(contextPack)).text;
+    const doGenerate = async (p: import("@motebit/sdk").IntelligenceProvider) =>
+      (await p.generate(contextPack)).text;
 
     let result: string;
     if (taskType && this.taskRouter) {
@@ -1415,9 +1528,10 @@ export class MotebitRuntime {
 
   /** Generate a title for the current conversation via AI, with heuristic fallback. */
   async autoTitle(): Promise<string | null> {
-    if (this.conversationStore == null || this.conversationId == null || this.conversationId === "") return null;
+    if (this.conversationStore == null || this.conversationId == null || this.conversationId === "")
+      return null;
     const convos = this.conversationStore.listConversations(this.motebitId, 100);
-    const current = convos.find(c => c.conversationId === this.conversationId);
+    const current = convos.find((c) => c.conversationId === this.conversationId);
     if (current?.title != null && current.title !== "") return null; // already titled
 
     const history = this.getConversationHistory();
@@ -1425,10 +1539,16 @@ export class MotebitRuntime {
 
     if (this.provider) {
       try {
-        const snippet = history.slice(0, 6).map(m => `${m.role}: ${m.content.slice(0, 200)}`).join("\n");
+        const snippet = history
+          .slice(0, 6)
+          .map((m) => `${m.role}: ${m.content.slice(0, 200)}`)
+          .join("\n");
         const prompt = `Generate a very short title (5-7 words max) for this conversation. Return ONLY the title, no quotes, no explanation.\n\n${snippet}`;
         const raw = await this.generateCompletion(prompt, "title_generation");
-        const title = raw.trim().replace(/^["']|["']$/g, "").slice(0, 100);
+        const title = raw
+          .trim()
+          .replace(/^["']|["']$/g, "")
+          .slice(0, 100);
         if (title.length > 0 && title.length < 100) {
           this.conversationStore.updateTitle(this.conversationId, title);
           return title;
@@ -1439,7 +1559,7 @@ export class MotebitRuntime {
     }
 
     // Heuristic fallback: first 7 words of first user message
-    const first = history.find(m => m.role === "user");
+    const first = history.find((m) => m.role === "user");
     if (first) {
       const words = first.content.split(/\s+/);
       let title = words.slice(0, 7).join(" ");
@@ -1454,11 +1574,23 @@ export class MotebitRuntime {
 
   /** Manually trigger summarization of the current conversation. */
   async summarizeCurrentConversation(): Promise<string | null> {
-    if (this.provider == null || this.conversationStore == null || this.conversationId == null || this.conversationId === "") return null;
+    if (
+      this.provider == null ||
+      this.conversationStore == null ||
+      this.conversationId == null ||
+      this.conversationId === ""
+    )
+      return null;
     const history = this.getConversationHistory();
     if (history.length < 2) return null;
-    const existingSummary = this.conversationStore.getActiveConversation(this.motebitId)?.summary ?? null;
-    const summary = await summarizeConversation(history, existingSummary, this.provider, this.taskRouter ?? undefined);
+    const existingSummary =
+      this.conversationStore.getActiveConversation(this.motebitId)?.summary ?? null;
+    const summary = await summarizeConversation(
+      history,
+      existingSummary,
+      this.provider,
+      this.taskRouter ?? undefined,
+    );
     if (summary && this.conversationId) {
       this.conversationStore.updateSummary(this.conversationId, summary);
     }
@@ -1639,11 +1771,14 @@ export class MotebitRuntime {
    * Groups similar episodic memories by embedding, asks LLM to summarize each cluster,
    * and forms a new semantic memory from the summary.
    */
-  private async consolidateEpisodicMemories(allNodes: import("@motebit/sdk").MemoryNode[], now: number): Promise<void> {
+  private async consolidateEpisodicMemories(
+    allNodes: import("@motebit/sdk").MemoryNode[],
+    now: number,
+  ): Promise<void> {
     const { MemoryType: MT } = await import("@motebit/sdk");
 
     // Find episodic memories past 50% of their half-life, not tombstoned, not pinned
-    const candidates = allNodes.filter(n => {
+    const candidates = allNodes.filter((n) => {
       if (n.tombstoned || n.pinned) return false;
       if (n.memory_type !== MT.Episodic) return false;
       const elapsed = now - n.created_at;
@@ -1659,7 +1794,7 @@ export class MotebitRuntime {
       if (cluster.length < 2) continue;
 
       // Summarize cluster via LLM
-      const contents = cluster.map(n => `- ${n.content}`).join("\n");
+      const contents = cluster.map((n) => `- ${n.content}`).join("\n");
       const prompt = `Summarize the following episodic observations into a single factual statement:\n${contents}\n\nRespond with ONLY the summary sentence.`;
 
       try {
@@ -1718,7 +1853,9 @@ export class MotebitRuntime {
     return this.computeAndStoreGradient(nodes);
   }
 
-  private async computeAndStoreGradient(allNodes: import("@motebit/sdk").MemoryNode[]): Promise<GradientSnapshot> {
+  private async computeAndStoreGradient(
+    allNodes: import("@motebit/sdk").MemoryNode[],
+  ): Promise<GradientSnapshot> {
     // Fetch edges and recent consolidation events
     const exported = await this.memory.exportAll();
     const edges = exported.edges;
@@ -1764,7 +1901,10 @@ export class MotebitRuntime {
             current_state: stateEngine.getState(),
             user_message: prompt,
           });
-          return parseConsolidationResponse(result.text, existing.map(e => e.node_id));
+          return parseConsolidationResponse(
+            result.text,
+            existing.map((e) => e.node_id),
+          );
         },
       };
 
@@ -1791,14 +1931,11 @@ export class MotebitRuntime {
 
   /** Trim conversation history to fit within token budget. In-memory history stays complete. */
   private trimHistory(): ConversationMessage[] {
-    const summary = this.conversationId != null && this.conversationId !== "" && this.conversationStore != null
-      ? this.conversationStore.getActiveConversation(this.motebitId)?.summary ?? null
-      : null;
-    return trimConversation(
-      this.conversationHistory,
-      MotebitRuntime.CONVERSATION_BUDGET,
-      summary,
-    );
+    const summary =
+      this.conversationId != null && this.conversationId !== "" && this.conversationStore != null
+        ? (this.conversationStore.getActiveConversation(this.motebitId)?.summary ?? null)
+        : null;
+    return trimConversation(this.conversationHistory, MotebitRuntime.CONVERSATION_BUDGET, summary);
   }
 
   private pushToHistory(userMessage: string, assistantResponse: string): void {
@@ -1829,7 +1966,8 @@ export class MotebitRuntime {
     if (
       this.provider &&
       this.conversationStore != null &&
-      this.conversationId != null && this.conversationId !== "" &&
+      this.conversationId != null &&
+      this.conversationId !== "" &&
       shouldSummarize(this.conversationHistory.length, this.summarizeAfterMessages)
     ) {
       void this.runSummarization();
@@ -1837,10 +1975,16 @@ export class MotebitRuntime {
   }
 
   private async runSummarization(): Promise<void> {
-    if (this.provider == null || this.conversationStore == null || this.conversationId == null || this.conversationId === "") return;
+    if (
+      this.provider == null ||
+      this.conversationStore == null ||
+      this.conversationId == null ||
+      this.conversationId === ""
+    )
+      return;
     try {
-      const existingSummary = this.conversationStore
-        .getActiveConversation(this.motebitId)?.summary ?? null;
+      const existingSummary =
+        this.conversationStore.getActiveConversation(this.motebitId)?.summary ?? null;
       const summary = await summarizeConversation(
         this.conversationHistory,
         existingSummary,
@@ -1918,7 +2062,11 @@ export class MotebitRuntime {
    * If no record exists, creates one at FirstContact level.
    * If one exists, bumps interaction_count and last_seen_at.
    */
-  async recordAgentInteraction(remoteMotebitId: string, publicKey?: string, motebitType?: string): Promise<AgentTrustRecord | null> {
+  async recordAgentInteraction(
+    remoteMotebitId: string,
+    publicKey?: string,
+    motebitType?: string,
+  ): Promise<AgentTrustRecord | null> {
     if (this.agentTrustStore == null) return null;
     const now = Date.now();
     const existing = await this.agentTrustStore.getAgentTrust(this.motebitId, remoteMotebitId);

@@ -1,9 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import {
-  MotebitRuntime,
-  NullRenderer,
-  createInMemoryStorage,
-} from "../index";
+import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
 import type { PlatformAdapters, KeyringAdapter } from "../index";
 import type { StreamingProvider } from "@motebit/ai-core";
 import type { AIResponse, ContextPack } from "@motebit/sdk";
@@ -32,7 +28,10 @@ function createMockProvider(responseText = "Hello from mock"): StreamingProvider
   };
 }
 
-function createAdapters(provider?: StreamingProvider, storage?: ReturnType<typeof createInMemoryStorage>): PlatformAdapters {
+function createAdapters(
+  provider?: StreamingProvider,
+  storage?: ReturnType<typeof createInMemoryStorage>,
+): PlatformAdapters {
   return {
     storage: storage ?? createInMemoryStorage(),
     renderer: new NullRenderer(),
@@ -96,10 +95,7 @@ describe("MotebitRuntime", () => {
   it("isAIReady reflects provider state", () => {
     expect(runtime.isAIReady).toBe(true);
 
-    const noAI = new MotebitRuntime(
-      { motebitId: "headless" },
-      createAdapters(),
-    );
+    const noAI = new MotebitRuntime({ motebitId: "headless" }, createAdapters());
     expect(noAI.isAIReady).toBe(false);
     noAI.stop();
   });
@@ -114,10 +110,7 @@ describe("MotebitRuntime", () => {
   });
 
   it("setProvider wires up AI after construction", () => {
-    const headless = new MotebitRuntime(
-      { motebitId: "late-bind" },
-      createAdapters(),
-    );
+    const headless = new MotebitRuntime({ motebitId: "late-bind" }, createAdapters());
     expect(headless.isAIReady).toBe(false);
 
     headless.setProvider(createMockProvider());
@@ -125,10 +118,7 @@ describe("MotebitRuntime", () => {
   });
 
   it("sendMessage throws without provider", async () => {
-    const headless = new MotebitRuntime(
-      { motebitId: "no-ai" },
-      createAdapters(),
-    );
+    const headless = new MotebitRuntime({ motebitId: "no-ai" }, createAdapters());
     await expect(headless.sendMessage("hello")).rejects.toThrow("AI not initialized");
   });
 
@@ -142,17 +132,21 @@ describe("MotebitRuntime", () => {
   it("sendMessage rejects concurrent calls", async () => {
     const slowProvider = createMockProvider();
     slowProvider.generate = vi.fn().mockImplementation(
-      () => new Promise((resolve) => setTimeout(() => resolve({
-        text: "slow",
-        confidence: 0.8,
-        memory_candidates: [],
-        state_updates: {},
-      }), 100)),
+      () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                text: "slow",
+                confidence: 0.8,
+                memory_candidates: [],
+                state_updates: {},
+              }),
+            100,
+          ),
+        ),
     );
-    const rt = new MotebitRuntime(
-      { motebitId: "concurrent" },
-      createAdapters(slowProvider),
-    );
+    const rt = new MotebitRuntime({ motebitId: "concurrent" }, createAdapters(slowProvider));
 
     const first = rt.sendMessage("one");
     await expect(rt.sendMessage("two")).rejects.toThrow("Already processing");
@@ -223,14 +217,21 @@ describe("MotebitRuntime", () => {
   it("saves state on stop and restores on construction", () => {
     let saved: string | null = null;
     const snapshot = {
-      saveState(_id: string, json: string) { saved = json; },
-      loadState(_id: string) { return saved; },
+      saveState(_id: string, json: string) {
+        saved = json;
+      },
+      loadState(_id: string) {
+        return saved;
+      },
     };
 
     // Directly serialize a known state via the engine, then stop to trigger save
     const rt1 = new MotebitRuntime(
       { motebitId: "snap" },
-      { ...createAdapters(createMockProvider()), storage: { ...createInMemoryStorage(), stateSnapshot: snapshot } },
+      {
+        ...createAdapters(createMockProvider()),
+        storage: { ...createInMemoryStorage(), stateSnapshot: snapshot },
+      },
     );
     // Force internal state directly via deserialize (bypasses EMA)
     rt1.state.deserialize(JSON.stringify({ ...rt1.getState(), attention: 0.75 }));
@@ -242,7 +243,10 @@ describe("MotebitRuntime", () => {
 
     const rt2 = new MotebitRuntime(
       { motebitId: "snap" },
-      { ...createAdapters(createMockProvider()), storage: { ...createInMemoryStorage(), stateSnapshot: snapshot } },
+      {
+        ...createAdapters(createMockProvider()),
+        storage: { ...createInMemoryStorage(), stateSnapshot: snapshot },
+      },
     );
     expect(rt2.getState().attention).toBe(0.75);
   });
@@ -252,7 +256,20 @@ describe("NullRenderer", () => {
   it("implements RenderAdapter interface", async () => {
     const renderer = new NullRenderer();
     await renderer.init(null);
-    expect(() => renderer.render({ cues: { hover_distance: 0, drift_amplitude: 0, glow_intensity: 0, eye_dilation: 0, smile_curvature: 0, speaking_activity: 0 }, delta_time: 0.016, time: 1 })).not.toThrow();
+    expect(() =>
+      renderer.render({
+        cues: {
+          hover_distance: 0,
+          drift_amplitude: 0,
+          glow_intensity: 0,
+          eye_dilation: 0,
+          smile_curvature: 0,
+          speaking_activity: 0,
+        },
+        delta_time: 0.016,
+        time: 1,
+      }),
+    ).not.toThrow();
     expect(renderer.getSpec()).toBeDefined();
     expect(() => renderer.resize(800, 600)).not.toThrow();
     expect(() => renderer.dispose()).not.toThrow();
@@ -351,8 +368,12 @@ function createMockKeyring(): KeyringAdapter & { store: Map<string, string> } {
   return {
     store,
     get: vi.fn(async (key: string) => store.get(key) ?? null),
-    set: vi.fn(async (key: string, value: string) => { store.set(key, value); }),
-    delete: vi.fn(async (key: string) => { store.delete(key); }),
+    set: vi.fn(async (key: string, value: string) => {
+      store.set(key, value);
+    }),
+    delete: vi.fn(async (key: string) => {
+      store.delete(key);
+    }),
   };
 }
 
@@ -688,10 +709,7 @@ describe("Operator mode PIN rate limiting", () => {
 describe("generateCompletion", () => {
   it("calls provider.generate and returns text without affecting history", async () => {
     const provider = createMockProvider("Title result");
-    const rt = new MotebitRuntime(
-      { motebitId: "gen-test" },
-      createAdapters(provider),
-    );
+    const rt = new MotebitRuntime({ motebitId: "gen-test" }, createAdapters(provider));
 
     // Send a normal message first to populate history
     await rt.sendMessage("hello");
@@ -706,20 +724,14 @@ describe("generateCompletion", () => {
   });
 
   it("throws without AI provider configured", async () => {
-    const rt = new MotebitRuntime(
-      { motebitId: "no-provider" },
-      createAdapters(),
-    );
+    const rt = new MotebitRuntime({ motebitId: "no-provider" }, createAdapters());
 
     await expect(rt.generateCompletion("prompt")).rejects.toThrow("No AI provider");
   });
 
   it("does not change state during generateCompletion", async () => {
     const provider = createMockProvider("response");
-    const rt = new MotebitRuntime(
-      { motebitId: "state-test" },
-      createAdapters(provider),
-    );
+    const rt = new MotebitRuntime({ motebitId: "state-test" }, createAdapters(provider));
 
     const stateBefore = rt.getState();
     await rt.generateCompletion("classify this");
@@ -734,17 +746,19 @@ describe("generateCompletion", () => {
 // === Session Continuity ===
 
 describe("Session continuity", () => {
-  function createMockConversationStore(messages: Array<{
-    messageId: string;
-    conversationId: string;
-    motebitId: string;
-    role: string;
-    content: string;
-    toolCalls: string | null;
-    toolCallId: string | null;
-    createdAt: number;
-    tokenEstimate: number;
-  }>) {
+  function createMockConversationStore(
+    messages: Array<{
+      messageId: string;
+      conversationId: string;
+      motebitId: string;
+      role: string;
+      content: string;
+      toolCalls: string | null;
+      toolCallId: string | null;
+      createdAt: number;
+      tokenEstimate: number;
+    }>,
+  ) {
     return {
       createConversation: vi.fn().mockReturnValue("conv-1"),
       appendMessage: vi.fn(),
@@ -765,14 +779,26 @@ describe("Session continuity", () => {
     const now = Date.now();
     const store = createMockConversationStore([
       {
-        messageId: "m1", conversationId: "conv-1", motebitId: "sess-test",
-        role: "user", content: "hello", toolCalls: null, toolCallId: null,
-        createdAt: now - 3600_000, tokenEstimate: 5,
+        messageId: "m1",
+        conversationId: "conv-1",
+        motebitId: "sess-test",
+        role: "user",
+        content: "hello",
+        toolCalls: null,
+        toolCallId: null,
+        createdAt: now - 3600_000,
+        tokenEstimate: 5,
       },
       {
-        messageId: "m2", conversationId: "conv-1", motebitId: "sess-test",
-        role: "assistant", content: "hi there", toolCalls: null, toolCallId: null,
-        createdAt: now - 3500_000, tokenEstimate: 10,
+        messageId: "m2",
+        conversationId: "conv-1",
+        motebitId: "sess-test",
+        role: "assistant",
+        content: "hi there",
+        toolCalls: null,
+        toolCallId: null,
+        createdAt: now - 3500_000,
+        tokenEstimate: 10,
       },
     ]);
 
@@ -796,14 +822,26 @@ describe("Session continuity", () => {
     const lastActiveAt = now - 600_000;
     const store = createMockConversationStore([
       {
-        messageId: "m1", conversationId: "conv-1", motebitId: "sess-flow",
-        role: "user", content: "hello", toolCalls: null, toolCallId: null,
-        createdAt: now - 3600_000, tokenEstimate: 5,
+        messageId: "m1",
+        conversationId: "conv-1",
+        motebitId: "sess-flow",
+        role: "user",
+        content: "hello",
+        toolCalls: null,
+        toolCallId: null,
+        createdAt: now - 3600_000,
+        tokenEstimate: 5,
       },
       {
-        messageId: "m2", conversationId: "conv-1", motebitId: "sess-flow",
-        role: "assistant", content: "hi", toolCalls: null, toolCallId: null,
-        createdAt: now - 3500_000, tokenEstimate: 5,
+        messageId: "m2",
+        conversationId: "conv-1",
+        motebitId: "sess-flow",
+        role: "assistant",
+        content: "hi",
+        toolCalls: null,
+        toolCallId: null,
+        createdAt: now - 3500_000,
+        tokenEstimate: 5,
       },
     ]);
     store.getActiveConversation.mockReturnValue({

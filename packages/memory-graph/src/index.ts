@@ -11,7 +11,12 @@ import type { ConsolidationProvider, ConsolidationDecision } from "./consolidati
 import type { EventStore } from "@motebit/event-log";
 
 export { embedText, embedTextHash, EMBEDDING_DIMENSIONS, resetPipeline } from "./embeddings.js";
-export { ConsolidationAction, buildConsolidationPrompt, parseConsolidationResponse, clusterBySimilarity } from "./consolidation.js";
+export {
+  ConsolidationAction,
+  buildConsolidationPrompt,
+  parseConsolidationResponse,
+  clusterBySimilarity,
+} from "./consolidation.js";
 export type { ConsolidationProvider, ConsolidationDecision } from "./consolidation.js";
 
 // === Scoring Configuration ===
@@ -41,7 +46,11 @@ const DEFAULT_SCORING_CONFIG: ScoringConfig = {
  * Normalize scoring weights so they sum to 1.
  * Accepts the three weight fields and returns normalized values.
  */
-function normalizeWeights(similarity: number, confidence: number, recency: number): { similarity: number; confidence: number; recency: number } {
+function normalizeWeights(
+  similarity: number,
+  confidence: number,
+  recency: number,
+): { similarity: number; confidence: number; recency: number } {
   const sum = similarity + confidence + recency;
   if (sum === 0) return { similarity: 1 / 3, confidence: 1 / 3, recency: 1 / 3 };
   return {
@@ -132,9 +141,7 @@ export class InMemoryMemoryStorage implements MemoryStorageAdapter {
   }
 
   queryNodes(query: MemoryQuery): Promise<MemoryNode[]> {
-    let results = Array.from(this.nodes.values()).filter(
-      (n) => n.motebit_id === query.motebit_id,
-    );
+    let results = Array.from(this.nodes.values()).filter((n) => n.motebit_id === query.motebit_id);
 
     if (query.include_tombstoned !== true) {
       results = results.filter((n) => !n.tombstoned);
@@ -147,19 +154,13 @@ export class InMemoryMemoryStorage implements MemoryStorageAdapter {
     if (query.min_confidence !== undefined) {
       const now = Date.now();
       results = results.filter((n) => {
-        const decayed = computeDecayedConfidence(
-          n.confidence,
-          n.half_life,
-          now - n.created_at,
-        );
+        const decayed = computeDecayedConfidence(n.confidence, n.half_life, now - n.created_at);
         return decayed >= query.min_confidence!;
       });
     }
 
     if (query.sensitivity_filter !== undefined) {
-      results = results.filter((n) =>
-        query.sensitivity_filter!.includes(n.sensitivity),
-      );
+      results = results.filter((n) => query.sensitivity_filter!.includes(n.sensitivity));
     }
 
     if (query.limit !== undefined) {
@@ -241,14 +242,17 @@ export class MemoryGraph {
   getAndResetRetrievalStats(): { avgScore: number; count: number } {
     if (this._retrievalScores.length === 0) return { avgScore: 0, count: 0 };
     const sum = this._retrievalScores.reduce((a, b) => a + b, 0);
-    const result = { avgScore: sum / this._retrievalScores.length, count: this._retrievalScores.length };
+    const result = {
+      avgScore: sum / this._retrievalScores.length,
+      count: this._retrievalScores.length,
+    };
     this._retrievalScores = [];
     return result;
   }
 
   /** Default half-lives by memory type. */
   static readonly HALF_LIFE_SEMANTIC = 30 * 24 * 60 * 60 * 1000; // 30 days
-  static readonly HALF_LIFE_EPISODIC = 3 * 24 * 60 * 60 * 1000;  // 3 days
+  static readonly HALF_LIFE_EPISODIC = 3 * 24 * 60 * 60 * 1000; // 3 days
 
   /**
    * Form a new memory from a candidate.
@@ -261,8 +265,11 @@ export class MemoryGraph {
     const nodeId = crypto.randomUUID();
     const now = Date.now();
     const memoryType = candidate.memory_type ?? MemoryType.Semantic;
-    const resolvedHalfLife = halfLife ??
-      (memoryType === MemoryType.Episodic ? MemoryGraph.HALF_LIFE_EPISODIC : MemoryGraph.HALF_LIFE_SEMANTIC);
+    const resolvedHalfLife =
+      halfLife ??
+      (memoryType === MemoryType.Episodic
+        ? MemoryGraph.HALF_LIFE_EPISODIC
+        : MemoryGraph.HALF_LIFE_SEMANTIC);
 
     const node: MemoryNode = {
       node_id: nodeId,
@@ -343,7 +350,7 @@ export class MemoryGraph {
     }
 
     // Ask provider to classify
-    const existing = similar.map(n => ({
+    const existing = similar.map((n) => ({
       node_id: n.node_id,
       content: n.content,
       confidence: n.confidence,
@@ -418,7 +425,10 @@ export class MemoryGraph {
     }
   }
 
-  private async logConsolidation(decision: ConsolidationDecision, newNodeId?: string): Promise<void> {
+  private async logConsolidation(
+    decision: ConsolidationDecision,
+    newNodeId?: string,
+  ): Promise<void> {
     try {
       const clock = await this.eventStore.getLatestClock(this.motebitId);
       await this.eventStore.append({
@@ -475,7 +485,11 @@ export class MemoryGraph {
 
     // Merge per-call overrides with instance config
     const config = perCallConfig ? { ...this.scoringConfig, ...perCallConfig } : this.scoringConfig;
-    const weights = normalizeWeights(config.similarityWeight, config.confidenceWeight, config.recencyWeight);
+    const weights = normalizeWeights(
+      config.similarityWeight,
+      config.confidenceWeight,
+      config.recencyWeight,
+    );
 
     // Pass 1: weighted filter
     const candidates = await this.storage.queryNodes({
@@ -491,9 +505,7 @@ export class MemoryGraph {
     // Temporal filter: exclude expired memories unless requested
     const filtered = includeExpired
       ? candidates
-      : candidates.filter(node =>
-          node.valid_until == null || node.valid_until > now,
-        );
+      : candidates.filter((node) => node.valid_until == null || node.valid_until > now);
 
     const scored = filtered.map((node) => {
       const similarity = dotProduct(queryEmbedding, node.embedding);
@@ -505,7 +517,10 @@ export class MemoryGraph {
       // Exponential decay: recencyBoost = 0.5^(elapsed / halfLife)
       const elapsed = now - node.last_accessed;
       const recencyBoost = Math.pow(0.5, elapsed / config.recencyHalfLife);
-      const score = similarity * weights.similarity + decayedConfidence * weights.confidence + recencyBoost * weights.recency;
+      const score =
+        similarity * weights.similarity +
+        decayedConfidence * weights.confidence +
+        recencyBoost * weights.recency;
       return { node, score };
     });
 
@@ -520,7 +535,7 @@ export class MemoryGraph {
 
     // Pass 3: Graph expansion — 1-hop neighbors via edges
     if (expandEdges && topResults.length > 0) {
-      const resultIds = new Set(topResults.map(r => r.node.node_id));
+      const resultIds = new Set(topResults.map((r) => r.node.node_id));
 
       for (const { node: parent, score: parentScore } of [...topResults]) {
         const edges = await this.storage.getEdges(parent.node_id);
@@ -532,7 +547,8 @@ export class MemoryGraph {
           if (!neighbor || neighbor.tombstoned) continue;
 
           // Temporal filter for neighbor
-          if (!includeExpired && neighbor.valid_until != null && neighbor.valid_until <= now) continue;
+          if (!includeExpired && neighbor.valid_until != null && neighbor.valid_until <= now)
+            continue;
 
           const neighborScore = parentScore * edgeDiscountFactor * edge.weight * edge.confidence;
           topResults.push({ node: neighbor, score: neighborScore });

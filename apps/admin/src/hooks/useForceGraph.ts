@@ -1,11 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import {
-  forceSimulation,
-  forceLink,
-  forceManyBody,
-  forceCenter,
-  forceCollide,
-} from "d3-force";
+import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide } from "d3-force";
 import type { SimulationNodeDatum, SimulationLinkDatum } from "d3-force";
 import type { MemoryNode, MemoryEdge } from "@motebit/sdk";
 

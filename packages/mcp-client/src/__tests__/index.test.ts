@@ -54,7 +54,9 @@ function httpConfig(overrides: Partial<McpServerConfig> = {}): McpServerConfig {
   };
 }
 
-function mcpToolsResponse(tools: Array<{ name: string; description?: string; inputSchema?: unknown }>) {
+function mcpToolsResponse(
+  tools: Array<{ name: string; description?: string; inputSchema?: unknown }>,
+) {
   return { tools };
 }
 
@@ -105,7 +107,9 @@ describe("McpClientAdapter — connect validation", () => {
 
 describe("McpClientAdapter — stdio transport", () => {
   it("creates StdioClientTransport with correct params", async () => {
-    const adapter = new McpClientAdapter(stdioConfig({ args: ["--port", "3000"], env: { FOO: "bar" } }));
+    const adapter = new McpClientAdapter(
+      stdioConfig({ args: ["--port", "3000"], env: { FOO: "bar" } }),
+    );
     await adapter.connect();
 
     expect(mockStdioTransport).toHaveBeenCalledWith({
@@ -121,9 +125,7 @@ describe("McpClientAdapter — stdio transport", () => {
     const adapter = new McpClientAdapter(stdioConfig({ args: undefined }));
     await adapter.connect();
 
-    expect(mockStdioTransport).toHaveBeenCalledWith(
-      expect.objectContaining({ args: [] }),
-    );
+    expect(mockStdioTransport).toHaveBeenCalledWith(expect.objectContaining({ args: [] }));
   });
 });
 
@@ -157,9 +159,9 @@ describe("McpClientAdapter — connect idempotency", () => {
 
 describe("McpClientAdapter — disconnect", () => {
   it("closes the client and clears tools", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "tool1", description: "Tool 1" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "tool1", description: "Tool 1" }]),
+    );
     const adapter = new McpClientAdapter(stdioConfig());
     await adapter.connect();
     expect(adapter.getTools()).toHaveLength(1);
@@ -184,9 +186,9 @@ describe("McpClientAdapter — disconnect", () => {
 
 describe("McpClientAdapter — tool discovery", () => {
   it("prefixes tool names with server name", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "get_weather", description: "Get weather" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "get_weather", description: "Get weather" }]),
+    );
 
     const adapter = new McpClientAdapter(stdioConfig({ name: "weather" }));
     await adapter.connect();
@@ -197,9 +199,9 @@ describe("McpClientAdapter — tool discovery", () => {
   });
 
   it("prefixes description with server name", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "tool1", description: "Does something" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "tool1", description: "Does something" }]),
+    );
 
     const adapter = new McpClientAdapter(stdioConfig({ name: "myserver" }));
     await adapter.connect();
@@ -208,9 +210,7 @@ describe("McpClientAdapter — tool discovery", () => {
   });
 
   it("uses tool name as fallback description", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "tool_no_desc" },
-    ]));
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([{ name: "tool_no_desc" }]));
 
     const adapter = new McpClientAdapter(stdioConfig({ name: "srv" }));
     await adapter.connect();
@@ -220,9 +220,9 @@ describe("McpClientAdapter — tool discovery", () => {
 
   it("preserves inputSchema from MCP tool", async () => {
     const schema = { type: "object", properties: { city: { type: "string" } }, required: ["city"] };
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "query", description: "Query", inputSchema: schema },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "query", description: "Query", inputSchema: schema }]),
+    );
 
     const adapter = new McpClientAdapter(stdioConfig());
     await adapter.connect();
@@ -231,9 +231,9 @@ describe("McpClientAdapter — tool discovery", () => {
   });
 
   it("defaults inputSchema to empty object schema when absent", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "simple", description: "No schema" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "simple", description: "No schema" }]),
+    );
 
     const adapter = new McpClientAdapter(stdioConfig());
     await adapter.connect();
@@ -242,9 +242,9 @@ describe("McpClientAdapter — tool discovery", () => {
   });
 
   it("marks tools as requiresApproval when server is untrusted (default)", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "risky_tool", description: "Risky" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "risky_tool", description: "Risky" }]),
+    );
 
     const adapter = new McpClientAdapter(stdioConfig({ trusted: undefined }));
     await adapter.connect();
@@ -253,9 +253,7 @@ describe("McpClientAdapter — tool discovery", () => {
   });
 
   it("marks tools as requiresApproval when trusted is false", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "tool1", description: "T" },
-    ]));
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([{ name: "tool1", description: "T" }]));
 
     const adapter = new McpClientAdapter(stdioConfig({ trusted: false }));
     await adapter.connect();
@@ -264,9 +262,9 @@ describe("McpClientAdapter — tool discovery", () => {
   });
 
   it("does NOT mark requiresApproval when trusted is true", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "safe_tool", description: "Safe" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "safe_tool", description: "Safe" }]),
+    );
 
     const adapter = new McpClientAdapter(stdioConfig({ trusted: true }));
     await adapter.connect();
@@ -275,11 +273,13 @@ describe("McpClientAdapter — tool discovery", () => {
   });
 
   it("discovers multiple tools", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "a", description: "A" },
-      { name: "b", description: "B" },
-      { name: "c", description: "C" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([
+        { name: "a", description: "A" },
+        { name: "b", description: "B" },
+        { name: "c", description: "C" },
+      ]),
+    );
 
     const adapter = new McpClientAdapter(stdioConfig({ name: "multi" }));
     await adapter.connect();
@@ -290,9 +290,7 @@ describe("McpClientAdapter — tool discovery", () => {
   });
 
   it("returns a copy of tools (not mutable internal array)", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "x", description: "X" },
-    ]));
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([{ name: "x", description: "X" }]));
 
     const adapter = new McpClientAdapter(stdioConfig());
     await adapter.connect();
@@ -318,9 +316,9 @@ describe("McpClientAdapter — executeTool", () => {
   });
 
   it("strips server prefix when calling MCP tool", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "get_data", description: "Get data" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "get_data", description: "Get data" }]),
+    );
     mockCallTool.mockResolvedValueOnce({
       content: [{ type: "text", text: "result" }],
       isError: false,
@@ -472,7 +470,11 @@ describe("McpClientAdapter — executeTool", () => {
 // ============================================================
 
 describe("McpClientAdapter — external data boundary", () => {
-  async function execWithText(text: string, serverName = "srv", toolName = "tool"): Promise<string> {
+  async function execWithText(
+    text: string,
+    serverName = "srv",
+    toolName = "tool",
+  ): Promise<string> {
     mockListTools.mockResolvedValueOnce(mcpToolsResponse([{ name: toolName, description: "T" }]));
     mockCallTool.mockResolvedValueOnce({
       content: [{ type: "text", text }],
@@ -487,7 +489,9 @@ describe("McpClientAdapter — external data boundary", () => {
 
   it("wraps result in EXTERNAL_DATA tags", async () => {
     const data = await execWithText("safe data");
-    expect(data).toMatch(/^\[EXTERNAL_DATA source="mcp:srv:tool"\]\nsafe data\n\[\/EXTERNAL_DATA\]$/);
+    expect(data).toMatch(
+      /^\[EXTERNAL_DATA source="mcp:srv:tool"\]\nsafe data\n\[\/EXTERNAL_DATA\]$/,
+    );
   });
 
   it("escapes existing [EXTERNAL_DATA tags in result", async () => {
@@ -517,7 +521,7 @@ describe("McpClientAdapter — external data boundary", () => {
 
   it("sanitizes brackets/quotes/backslashes in tool name", async () => {
     const data = await execWithText("data", "srv", 'inject"]evil');
-    expect(data).toContain('mcp:srv:inject__evil');
+    expect(data).toContain("mcp:srv:inject__evil");
   });
 
   it("truncates long server names to 50 chars", async () => {
@@ -568,10 +572,12 @@ describe("McpClientAdapter — external data boundary", () => {
 
 describe("McpClientAdapter — registerInto", () => {
   it("registers all discovered tools into a registry", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "a", description: "A" },
-      { name: "b", description: "B" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([
+        { name: "a", description: "A" },
+        { name: "b", description: "B" },
+      ]),
+    );
 
     const adapter = new McpClientAdapter(stdioConfig({ name: "srv" }));
     await adapter.connect();
@@ -585,10 +591,12 @@ describe("McpClientAdapter — registerInto", () => {
   });
 
   it("skips tools already in the registry", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "existing", description: "Exists" },
-      { name: "new_tool", description: "New" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([
+        { name: "existing", description: "Exists" },
+        { name: "new_tool", description: "New" },
+      ]),
+    );
 
     const adapter = new McpClientAdapter(stdioConfig({ name: "srv" }));
     await adapter.connect();
@@ -611,9 +619,7 @@ describe("McpClientAdapter — registerInto", () => {
   });
 
   it("registered handlers delegate to executeTool", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "run", description: "Run" },
-    ]));
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([{ name: "run", description: "Run" }]));
     mockCallTool.mockResolvedValueOnce({
       content: [{ type: "text", text: "executed" }],
       isError: false,
@@ -645,10 +651,10 @@ describe("connectMcpServers", () => {
       .mockResolvedValueOnce(mcpToolsResponse([{ name: "t2", description: "T2" }]));
 
     const registry = new InMemoryToolRegistry();
-    const adapters = await connectMcpServers([
-      stdioConfig({ name: "s1" }),
-      stdioConfig({ name: "s2" }),
-    ], registry);
+    const adapters = await connectMcpServers(
+      [stdioConfig({ name: "s1" }), stdioConfig({ name: "s2" })],
+      registry,
+    );
 
     expect(adapters).toHaveLength(2);
     expect(adapters[0]!.serverName).toBe("s1");
@@ -668,10 +674,10 @@ describe("connectMcpServers", () => {
     const registry = new InMemoryToolRegistry();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    const adapters = await connectMcpServers([
-      stdioConfig({ name: "failing" }),
-      stdioConfig({ name: "working" }),
-    ], registry);
+    const adapters = await connectMcpServers(
+      [stdioConfig({ name: "failing" }), stdioConfig({ name: "working" })],
+      registry,
+    );
 
     expect(adapters).toHaveLength(1);
     expect(adapters[0]!.serverName).toBe("working");
@@ -687,10 +693,10 @@ describe("connectMcpServers", () => {
     const registry = new InMemoryToolRegistry();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    const adapters = await connectMcpServers([
-      stdioConfig({ name: "a" }),
-      stdioConfig({ name: "b" }),
-    ], registry);
+    const adapters = await connectMcpServers(
+      [stdioConfig({ name: "a" }), stdioConfig({ name: "b" })],
+      registry,
+    );
 
     expect(adapters).toEqual([]);
     expect(warnSpy).toHaveBeenCalledTimes(2);
@@ -713,10 +719,10 @@ describe("connectMcpServers", () => {
     const registry = new InMemoryToolRegistry();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    const adapters = await connectMcpServers([
-      stdioConfig({ name: "bad" }),
-      stdioConfig({ name: "good" }),
-    ], registry);
+    const adapters = await connectMcpServers(
+      [stdioConfig({ name: "bad" }), stdioConfig({ name: "good" })],
+      registry,
+    );
 
     expect(adapters).toHaveLength(1);
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("plain string error"));
@@ -737,9 +743,7 @@ describe("McpClientAdapter — checkManifest", () => {
   });
 
   it("returns ok:true and hash on first pin (no previousHash)", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "tool_a", description: "A" },
-    ]));
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([{ name: "tool_a", description: "A" }]));
     const adapter = new McpClientAdapter(stdioConfig({ name: "srv" }));
     await adapter.connect();
 
@@ -752,9 +756,7 @@ describe("McpClientAdapter — checkManifest", () => {
   });
 
   it("returns ok:true when hash matches", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "tool_a", description: "A" },
-    ]));
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([{ name: "tool_a", description: "A" }]));
     const adapter = new McpClientAdapter(stdioConfig({ name: "srv" }));
     await adapter.connect();
 
@@ -765,30 +767,31 @@ describe("McpClientAdapter — checkManifest", () => {
   });
 
   it("returns ok:false when hash mismatches", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "tool_a", description: "A" },
-    ]));
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([{ name: "tool_a", description: "A" }]));
     const adapter = new McpClientAdapter(stdioConfig({ name: "srv" }));
     await adapter.connect();
 
-    const result = await adapter.checkManifest("0000000000000000000000000000000000000000000000000000000000000000");
+    const result = await adapter.checkManifest(
+      "0000000000000000000000000000000000000000000000000000000000000000",
+    );
     expect(result.ok).toBe(false);
-    expect(result.previousHash).toBe("0000000000000000000000000000000000000000000000000000000000000000");
+    expect(result.previousHash).toBe(
+      "0000000000000000000000000000000000000000000000000000000000000000",
+    );
   });
 
   it("computes diff showing added tools", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "tool_a", description: "A" },
-      { name: "tool_b", description: "B" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([
+        { name: "tool_a", description: "A" },
+        { name: "tool_b", description: "B" },
+      ]),
+    );
     const adapter = new McpClientAdapter(stdioConfig({ name: "srv" }));
     await adapter.connect();
 
     // Previous manifest only had tool_a
-    const result = await adapter.checkManifest(
-      "stale_hash",
-      ["srv__tool_a"],
-    );
+    const result = await adapter.checkManifest("stale_hash", ["srv__tool_a"]);
     expect(result.ok).toBe(false);
     expect(result.diff).toBeDefined();
     expect(result.diff!.added).toEqual(["srv__tool_b"]);
@@ -796,17 +799,12 @@ describe("McpClientAdapter — checkManifest", () => {
   });
 
   it("computes diff showing removed tools", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "tool_a", description: "A" },
-    ]));
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([{ name: "tool_a", description: "A" }]));
     const adapter = new McpClientAdapter(stdioConfig({ name: "srv" }));
     await adapter.connect();
 
     // Previous manifest had tool_a + tool_b
-    const result = await adapter.checkManifest(
-      "stale_hash",
-      ["srv__tool_a", "srv__tool_b"],
-    );
+    const result = await adapter.checkManifest("stale_hash", ["srv__tool_a", "srv__tool_b"]);
     expect(result.ok).toBe(false);
     expect(result.diff).toBeDefined();
     expect(result.diff!.added).toEqual([]);
@@ -814,26 +812,23 @@ describe("McpClientAdapter — checkManifest", () => {
   });
 
   it("computes diff showing both added and removed", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "tool_b", description: "B" },
-      { name: "tool_c", description: "C" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([
+        { name: "tool_b", description: "B" },
+        { name: "tool_c", description: "C" },
+      ]),
+    );
     const adapter = new McpClientAdapter(stdioConfig({ name: "srv" }));
     await adapter.connect();
 
-    const result = await adapter.checkManifest(
-      "stale_hash",
-      ["srv__tool_a", "srv__tool_b"],
-    );
+    const result = await adapter.checkManifest("stale_hash", ["srv__tool_a", "srv__tool_b"]);
     expect(result.ok).toBe(false);
     expect(result.diff!.added).toEqual(["srv__tool_c"]);
     expect(result.diff!.removed).toEqual(["srv__tool_a"]);
   });
 
   it("no diff when pinnedToolNames not provided", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "tool_a", description: "A" },
-    ]));
+    mockListTools.mockResolvedValueOnce(mcpToolsResponse([{ name: "tool_a", description: "A" }]));
     const adapter = new McpClientAdapter(stdioConfig({ name: "srv" }));
     await adapter.connect();
 
@@ -871,20 +866,29 @@ describe("McpClientAdapter — delegation receipts", () => {
     };
 
     // Setup: discover tools including motebit_identity and motebit_task
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "motebit_identity", description: "Identity" },
-      { name: "motebit_task", description: "Task" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([
+        { name: "motebit_identity", description: "Identity" },
+        { name: "motebit_task", description: "Task" },
+      ]),
+    );
     // Identity verification call
     mockCallTool.mockResolvedValueOnce({
-      content: [{ type: "text", text: JSON.stringify({ motebit_id: "remote-mote", public_key: "ab".repeat(32) }) }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ motebit_id: "remote-mote", public_key: "ab".repeat(32) }),
+        },
+      ],
       isError: false,
     });
 
-    const adapter = new McpClientAdapter(httpConfig({
-      name: "mote-srv",
-      motebit: true,
-    }));
+    const adapter = new McpClientAdapter(
+      httpConfig({
+        name: "mote-srv",
+        motebit: true,
+      }),
+    );
     await adapter.connect();
     expect(adapter.verifiedIdentity?.verified).toBe(true);
 
@@ -919,19 +923,28 @@ describe("McpClientAdapter — delegation receipts", () => {
       signature: "sig456",
     };
 
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "motebit_identity", description: "Identity" },
-      { name: "motebit_task", description: "Task" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([
+        { name: "motebit_identity", description: "Identity" },
+        { name: "motebit_task", description: "Task" },
+      ]),
+    );
     mockCallTool.mockResolvedValueOnce({
-      content: [{ type: "text", text: JSON.stringify({ motebit_id: "remote-mote", public_key: "cd".repeat(32) }) }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ motebit_id: "remote-mote", public_key: "cd".repeat(32) }),
+        },
+      ],
       isError: false,
     });
 
-    const adapter = new McpClientAdapter(httpConfig({
-      name: "mote-srv",
-      motebit: true,
-    }));
+    const adapter = new McpClientAdapter(
+      httpConfig({
+        name: "mote-srv",
+        motebit: true,
+      }),
+    );
     await adapter.connect();
 
     // Receipt with identity tag suffix
@@ -947,19 +960,28 @@ describe("McpClientAdapter — delegation receipts", () => {
   });
 
   it("does not capture receipts for non-motebit_task tools", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "motebit_identity", description: "Identity" },
-      { name: "motebit_query", description: "Query" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([
+        { name: "motebit_identity", description: "Identity" },
+        { name: "motebit_query", description: "Query" },
+      ]),
+    );
     mockCallTool.mockResolvedValueOnce({
-      content: [{ type: "text", text: JSON.stringify({ motebit_id: "remote-mote", public_key: "ef".repeat(32) }) }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ motebit_id: "remote-mote", public_key: "ef".repeat(32) }),
+        },
+      ],
       isError: false,
     });
 
-    const adapter = new McpClientAdapter(httpConfig({
-      name: "mote-srv",
-      motebit: true,
-    }));
+    const adapter = new McpClientAdapter(
+      httpConfig({
+        name: "mote-srv",
+        motebit: true,
+      }),
+    );
     await adapter.connect();
 
     mockCallTool.mockResolvedValueOnce({
@@ -972,19 +994,28 @@ describe("McpClientAdapter — delegation receipts", () => {
   });
 
   it("silently skips non-JSON motebit_task results", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "motebit_identity", description: "Identity" },
-      { name: "motebit_task", description: "Task" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([
+        { name: "motebit_identity", description: "Identity" },
+        { name: "motebit_task", description: "Task" },
+      ]),
+    );
     mockCallTool.mockResolvedValueOnce({
-      content: [{ type: "text", text: JSON.stringify({ motebit_id: "remote-mote", public_key: "11".repeat(32) }) }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ motebit_id: "remote-mote", public_key: "11".repeat(32) }),
+        },
+      ],
       isError: false,
     });
 
-    const adapter = new McpClientAdapter(httpConfig({
-      name: "mote-srv",
-      motebit: true,
-    }));
+    const adapter = new McpClientAdapter(
+      httpConfig({
+        name: "mote-srv",
+        motebit: true,
+      }),
+    );
     await adapter.connect();
 
     mockCallTool.mockResolvedValueOnce({
@@ -1009,9 +1040,9 @@ describe("McpClientAdapter — motebit identity verification", () => {
   });
 
   it("does not verify identity when motebit is not set", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "motebit_identity", description: "Identity" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "motebit_identity", description: "Identity" }]),
+    );
 
     const adapter = new McpClientAdapter(httpConfig({ name: "normal-srv" }));
     await adapter.connect();
@@ -1023,11 +1054,16 @@ describe("McpClientAdapter — motebit identity verification", () => {
   });
 
   it("verifies identity and pins key on first connect", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "motebit_identity", description: "Identity" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "motebit_identity", description: "Identity" }]),
+    );
     mockCallTool.mockResolvedValueOnce({
-      content: [{ type: "text", text: JSON.stringify({ motebit_id: "mote-123", public_key: "aa".repeat(32) }) }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ motebit_id: "mote-123", public_key: "aa".repeat(32) }),
+        },
+      ],
       isError: false,
     });
 
@@ -1047,19 +1083,23 @@ describe("McpClientAdapter — motebit identity verification", () => {
 
   it("accepts matching pinned key", async () => {
     const pubKey = "bb".repeat(32);
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "motebit_identity", description: "Identity" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "motebit_identity", description: "Identity" }]),
+    );
     mockCallTool.mockResolvedValueOnce({
-      content: [{ type: "text", text: JSON.stringify({ motebit_id: "mote-456", public_key: pubKey }) }],
+      content: [
+        { type: "text", text: JSON.stringify({ motebit_id: "mote-456", public_key: pubKey }) },
+      ],
       isError: false,
     });
 
-    const adapter = new McpClientAdapter(httpConfig({
-      name: "mote-srv",
-      motebit: true,
-      motebitPublicKey: pubKey,
-    } as Partial<McpServerConfig>));
+    const adapter = new McpClientAdapter(
+      httpConfig({
+        name: "mote-srv",
+        motebit: true,
+        motebitPublicKey: pubKey,
+      } as Partial<McpServerConfig>),
+    );
     await adapter.connect();
 
     expect(adapter.verifiedIdentity?.verified).toBe(true);
@@ -1067,52 +1107,63 @@ describe("McpClientAdapter — motebit identity verification", () => {
   });
 
   it("disconnects and throws on key mismatch", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "motebit_identity", description: "Identity" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "motebit_identity", description: "Identity" }]),
+    );
     mockCallTool.mockResolvedValueOnce({
-      content: [{ type: "text", text: JSON.stringify({ motebit_id: "mote-789", public_key: "cc".repeat(32) }) }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ motebit_id: "mote-789", public_key: "cc".repeat(32) }),
+        },
+      ],
       isError: false,
     });
 
-    const adapter = new McpClientAdapter(httpConfig({
-      name: "mote-srv",
-      motebit: true,
-      motebitPublicKey: "dd".repeat(32), // different key
-    } as Partial<McpServerConfig>));
+    const adapter = new McpClientAdapter(
+      httpConfig({
+        name: "mote-srv",
+        motebit: true,
+        motebitPublicKey: "dd".repeat(32), // different key
+      } as Partial<McpServerConfig>),
+    );
 
     await expect(adapter.connect()).rejects.toThrow("public key mismatch");
     expect(mockClose).toHaveBeenCalled();
   });
 
   it("disconnects and throws when identity call fails", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "motebit_identity", description: "Identity" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "motebit_identity", description: "Identity" }]),
+    );
     mockCallTool.mockRejectedValueOnce(new Error("Tool not found"));
 
-    const adapter = new McpClientAdapter(httpConfig({
-      name: "mote-srv",
-      motebit: true,
-    } as Partial<McpServerConfig>));
+    const adapter = new McpClientAdapter(
+      httpConfig({
+        name: "mote-srv",
+        motebit: true,
+      } as Partial<McpServerConfig>),
+    );
 
     await expect(adapter.connect()).rejects.toThrow("identity verification failed");
     expect(mockClose).toHaveBeenCalled();
   });
 
   it("disconnects and throws when identity response is missing fields", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "motebit_identity", description: "Identity" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "motebit_identity", description: "Identity" }]),
+    );
     mockCallTool.mockResolvedValueOnce({
       content: [{ type: "text", text: JSON.stringify({ motebit_id: "mote-x" }) }], // missing public_key
       isError: false,
     });
 
-    const adapter = new McpClientAdapter(httpConfig({
-      name: "mote-srv",
-      motebit: true,
-    } as Partial<McpServerConfig>));
+    const adapter = new McpClientAdapter(
+      httpConfig({
+        name: "mote-srv",
+        motebit: true,
+      } as Partial<McpServerConfig>),
+    );
 
     await expect(adapter.connect()).rejects.toThrow("missing motebit_id or public_key");
     expect(mockClose).toHaveBeenCalled();
@@ -1125,18 +1176,20 @@ identity:
   public_key: "${"ee".repeat(32)}"
 ---`;
 
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "motebit_identity", description: "Identity" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "motebit_identity", description: "Identity" }]),
+    );
     mockCallTool.mockResolvedValueOnce({
       content: [{ type: "text", text: yamlResponse }],
       isError: false,
     });
 
-    const adapter = new McpClientAdapter(httpConfig({
-      name: "mote-srv",
-      motebit: true,
-    } as Partial<McpServerConfig>));
+    const adapter = new McpClientAdapter(
+      httpConfig({
+        name: "mote-srv",
+        motebit: true,
+      } as Partial<McpServerConfig>),
+    );
     await adapter.connect();
 
     expect(adapter.verifiedIdentity?.verified).toBe(true);
@@ -1145,23 +1198,26 @@ identity:
   });
 
   it("strips identity tag from identity response", async () => {
-    const taggedResponse = JSON.stringify({
-      motebit_id: "mote-tagged",
-      public_key: "ff".repeat(32),
-    }) + "\n[motebit:mote-tagged]";
+    const taggedResponse =
+      JSON.stringify({
+        motebit_id: "mote-tagged",
+        public_key: "ff".repeat(32),
+      }) + "\n[motebit:mote-tagged]";
 
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "motebit_identity", description: "Identity" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "motebit_identity", description: "Identity" }]),
+    );
     mockCallTool.mockResolvedValueOnce({
       content: [{ type: "text", text: taggedResponse }],
       isError: false,
     });
 
-    const adapter = new McpClientAdapter(httpConfig({
-      name: "mote-srv",
-      motebit: true,
-    } as Partial<McpServerConfig>));
+    const adapter = new McpClientAdapter(
+      httpConfig({
+        name: "mote-srv",
+        motebit: true,
+      } as Partial<McpServerConfig>),
+    );
     await adapter.connect();
 
     expect(adapter.verifiedIdentity?.verified).toBe(true);
@@ -1182,18 +1238,25 @@ describe("McpClientAdapter — motebit caller identity", () => {
 
   it("does not attach auth header when caller fields are missing", async () => {
     // motebit: true but no callerMotebitId/callerPrivateKey
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "motebit_identity", description: "Identity" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "motebit_identity", description: "Identity" }]),
+    );
     mockCallTool.mockResolvedValueOnce({
-      content: [{ type: "text", text: JSON.stringify({ motebit_id: "remote-1", public_key: "aa".repeat(32) }) }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ motebit_id: "remote-1", public_key: "aa".repeat(32) }),
+        },
+      ],
       isError: false,
     });
 
-    const adapter = new McpClientAdapter(httpConfig({
-      name: "mote-srv",
-      motebit: true,
-    } as Partial<McpServerConfig>));
+    const adapter = new McpClientAdapter(
+      httpConfig({
+        name: "mote-srv",
+        motebit: true,
+      } as Partial<McpServerConfig>),
+    );
     await adapter.connect();
 
     // Transport should have been created with the URL and no transport opts
@@ -1202,28 +1265,39 @@ describe("McpClientAdapter — motebit caller identity", () => {
   });
 
   it("attaches signed bearer token when caller identity fields are present", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "motebit_identity", description: "Identity" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "motebit_identity", description: "Identity" }]),
+    );
     mockCallTool.mockResolvedValueOnce({
-      content: [{ type: "text", text: JSON.stringify({ motebit_id: "remote-2", public_key: "bb".repeat(32) }) }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ motebit_id: "remote-2", public_key: "bb".repeat(32) }),
+        },
+      ],
       isError: false,
     });
 
-    const adapter = new McpClientAdapter(httpConfig({
-      name: "mote-srv",
-      motebit: true,
-      callerMotebitId: "my-mote-id",
-      callerDeviceId: "my-device-id",
-      callerPrivateKey: new Uint8Array(64),
-    } as Partial<McpServerConfig>));
+    const adapter = new McpClientAdapter(
+      httpConfig({
+        name: "mote-srv",
+        motebit: true,
+        callerMotebitId: "my-mote-id",
+        callerDeviceId: "my-device-id",
+        callerPrivateKey: new Uint8Array(64),
+      } as Partial<McpServerConfig>),
+    );
     await adapter.connect();
 
     // Transport should have been created with URL + transport opts containing auth header
     expect(mockHttpTransport).toHaveBeenCalledTimes(1);
     expect(mockHttpTransport.mock.calls[0]!.length).toBe(2);
-    const transportOpts = mockHttpTransport.mock.calls[0]![1] as { requestInit: { headers: Record<string, string> } };
-    expect(transportOpts.requestInit.headers["Authorization"]).toBe("Bearer motebit:mock-signed-token");
+    const transportOpts = mockHttpTransport.mock.calls[0]![1] as {
+      requestInit: { headers: Record<string, string> };
+    };
+    expect(transportOpts.requestInit.headers["Authorization"]).toBe(
+      "Bearer motebit:mock-signed-token",
+    );
   });
 });
 
@@ -1245,57 +1319,76 @@ describe("McpClientAdapter — motebitType", () => {
   });
 
   it("defaults to 'service' when motebit:true is set without motebitType", () => {
-    const adapter = new McpClientAdapter(stdioConfig({ motebit: true } as Partial<McpServerConfig>));
+    const adapter = new McpClientAdapter(
+      stdioConfig({ motebit: true } as Partial<McpServerConfig>),
+    );
     expect(adapter.motebitType).toBe("service");
     expect(adapter.isMotebit).toBe(true);
   });
 
   it("returns 'personal' when motebitType is set to personal", () => {
-    const adapter = new McpClientAdapter(stdioConfig({ motebitType: "personal" } as Partial<McpServerConfig>));
+    const adapter = new McpClientAdapter(
+      stdioConfig({ motebitType: "personal" } as Partial<McpServerConfig>),
+    );
     expect(adapter.motebitType).toBe("personal");
     expect(adapter.isMotebit).toBe(true);
   });
 
   it("returns 'service' when motebitType is set to service", () => {
-    const adapter = new McpClientAdapter(stdioConfig({ motebitType: "service" } as Partial<McpServerConfig>));
+    const adapter = new McpClientAdapter(
+      stdioConfig({ motebitType: "service" } as Partial<McpServerConfig>),
+    );
     expect(adapter.motebitType).toBe("service");
     expect(adapter.isMotebit).toBe(true);
   });
 
   it("returns 'collaborative' when motebitType is set to collaborative", () => {
-    const adapter = new McpClientAdapter(stdioConfig({ motebitType: "collaborative" } as Partial<McpServerConfig>));
+    const adapter = new McpClientAdapter(
+      stdioConfig({ motebitType: "collaborative" } as Partial<McpServerConfig>),
+    );
     expect(adapter.motebitType).toBe("collaborative");
     expect(adapter.isMotebit).toBe(true);
   });
 
   it("motebitType overrides motebit:true default", () => {
-    const adapter = new McpClientAdapter(stdioConfig({
-      motebit: true,
-      motebitType: "collaborative",
-    } as Partial<McpServerConfig>));
+    const adapter = new McpClientAdapter(
+      stdioConfig({
+        motebit: true,
+        motebitType: "collaborative",
+      } as Partial<McpServerConfig>),
+    );
     expect(adapter.motebitType).toBe("collaborative");
   });
 
   it("isMotebit returns true when only motebitType is set (no motebit flag)", () => {
-    const adapter = new McpClientAdapter(stdioConfig({ motebitType: "personal" } as Partial<McpServerConfig>));
+    const adapter = new McpClientAdapter(
+      stdioConfig({ motebitType: "personal" } as Partial<McpServerConfig>),
+    );
     expect(adapter.isMotebit).toBe(true);
     // motebit flag is not set
     expect(adapter.serverConfig.motebit).toBeUndefined();
   });
 
   it("verifies identity when motebitType is set without motebit flag", async () => {
-    mockListTools.mockResolvedValueOnce(mcpToolsResponse([
-      { name: "motebit_identity", description: "Identity" },
-    ]));
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "motebit_identity", description: "Identity" }]),
+    );
     mockCallTool.mockResolvedValueOnce({
-      content: [{ type: "text", text: JSON.stringify({ motebit_id: "mote-typed", public_key: "ab".repeat(32) }) }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ motebit_id: "mote-typed", public_key: "ab".repeat(32) }),
+        },
+      ],
       isError: false,
     });
 
-    const adapter = new McpClientAdapter(httpConfig({
-      name: "typed-srv",
-      motebitType: "service",
-    } as Partial<McpServerConfig>));
+    const adapter = new McpClientAdapter(
+      httpConfig({
+        name: "typed-srv",
+        motebitType: "service",
+      } as Partial<McpServerConfig>),
+    );
     await adapter.connect();
 
     expect(adapter.verifiedIdentity?.verified).toBe(true);

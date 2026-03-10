@@ -1,4 +1,10 @@
-import type { MotebitState, MemoryNode, MemoryEdge, EventLogEntry, ToolAuditEntry } from "@motebit/sdk";
+import type {
+  MotebitState,
+  MemoryNode,
+  MemoryEdge,
+  EventLogEntry,
+  ToolAuditEntry,
+} from "@motebit/sdk";
 
 // === Config ===
 
@@ -95,11 +101,14 @@ export function fetchEvents(afterClock: number, signal?: AbortSignal): Promise<E
   );
 }
 
-export function deleteMemoryNode(nodeId: string, signal?: AbortSignal): Promise<DeleteMemoryResponse> {
-  return apiFetch<DeleteMemoryResponse>(
-    `/api/v1/memory/${config.motebitId}/${nodeId}`,
-    { method: "DELETE", signal },
-  );
+export function deleteMemoryNode(
+  nodeId: string,
+  signal?: AbortSignal,
+): Promise<DeleteMemoryResponse> {
+  return apiFetch<DeleteMemoryResponse>(`/api/v1/memory/${config.motebitId}/${nodeId}`, {
+    method: "DELETE",
+    signal,
+  });
 }
 
 export function fetchAudit(signal?: AbortSignal): Promise<AuditResponse> {
@@ -175,7 +184,10 @@ export function fetchConversations(signal?: AbortSignal): Promise<ConversationsR
   return apiFetch<ConversationsResponse>(`/api/v1/conversations/${config.motebitId}`, { signal });
 }
 
-export function fetchConversationMessages(conversationId: string, signal?: AbortSignal): Promise<ConversationMessagesResponse> {
+export function fetchConversationMessages(
+  conversationId: string,
+  signal?: AbortSignal,
+): Promise<ConversationMessagesResponse> {
   return apiFetch<ConversationMessagesResponse>(
     `/api/v1/conversations/${config.motebitId}/${conversationId}/messages`,
     { signal },

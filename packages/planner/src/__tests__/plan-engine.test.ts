@@ -32,13 +32,23 @@ function setupStreamMock(responses: string[]): void {
         memoriesFormed: [],
         memoriesRetrieved: [],
         stateAfter: {
-          attention: 0.5, processing: 0.1, confidence: 0.5,
-          affect_valence: 0, affect_arousal: 0, social_distance: 0.5,
-          curiosity: 0.5, trust_mode: "full" as never, battery_mode: "normal" as never,
+          attention: 0.5,
+          processing: 0.1,
+          confidence: 0.5,
+          affect_valence: 0,
+          affect_arousal: 0,
+          social_distance: 0.5,
+          curiosity: 0.5,
+          trust_mode: "full" as never,
+          battery_mode: "normal" as never,
         },
         cues: {
-          hover_distance: 0.4, drift_amplitude: 0.02, glow_intensity: 0.3,
-          eye_dilation: 0.3, smile_curvature: 0, speaking_activity: 0,
+          hover_distance: 0.4,
+          drift_amplitude: 0.02,
+          glow_intensity: 0.3,
+          eye_dilation: 0.3,
+          smile_curvature: 0,
+          speaking_activity: 0,
         },
       },
     };
@@ -96,9 +106,14 @@ describe("PlanEngine", () => {
     const deps = makeMockDeps();
     setupStreamMock(["step 1 result", "step 2 result"]);
 
-    const { plan } = await engine.createPlan("goal-1", "mote-1", {
-      goalPrompt: "Research competitors",
-    }, deps);
+    const { plan } = await engine.createPlan(
+      "goal-1",
+      "mote-1",
+      {
+        goalPrompt: "Research competitors",
+      },
+      deps,
+    );
 
     expect(plan.plan_id).toBeTruthy();
     expect(plan.goal_id).toBe("goal-1");
@@ -117,9 +132,14 @@ describe("PlanEngine", () => {
     const deps = makeMockDeps();
     setupStreamMock(["step 1 done", "step 2 done"]);
 
-    const { plan } = await engine.createPlan("goal-1", "mote-1", {
-      goalPrompt: "Do something",
-    }, deps);
+    const { plan } = await engine.createPlan(
+      "goal-1",
+      "mote-1",
+      {
+        goalPrompt: "Do something",
+      },
+      deps,
+    );
 
     const chunks = await collectChunks(engine.executePlan(plan.plan_id, deps));
 
@@ -408,7 +428,9 @@ describe("PlanEngine", () => {
       // For reflection, it will also be called — we need to make it return
       // reflection JSON on subsequent calls.
       let generateCallCount = 0;
-      ((deps.provider as unknown as { generate: ReturnType<typeof vi.fn> }).generate).mockImplementation(async () => {
+      (
+        deps.provider as unknown as { generate: ReturnType<typeof vi.fn> }
+      ).generate.mockImplementation(async () => {
         generateCallCount++;
         if (generateCallCount === 1) {
           // First call: decomposition
@@ -436,9 +458,14 @@ describe("PlanEngine", () => {
 
       setupStreamMock(["step done"]);
 
-      const { plan } = await engine.createPlan("goal-1", "mote-1", {
-        goalPrompt: "Do something",
-      }, deps);
+      const { plan } = await engine.createPlan(
+        "goal-1",
+        "mote-1",
+        {
+          goalPrompt: "Do something",
+        },
+        deps,
+      );
 
       const chunks = await collectChunks(engine.executePlan(plan.plan_id, deps));
 
@@ -452,7 +479,10 @@ describe("PlanEngine", () => {
       expect(reflectionIdx).toBeGreaterThan(completedIdx);
 
       // Verify reflection content
-      const reflectionChunk = chunks.find((c) => c.type === "reflection") as { type: "reflection"; result: { summary: string; memoryCandidates: string[] } };
+      const reflectionChunk = chunks.find((c) => c.type === "reflection") as {
+        type: "reflection";
+        result: { summary: string; memoryCandidates: string[] };
+      };
       expect(reflectionChunk.result.summary).toBe("Plan completed successfully.");
       expect(reflectionChunk.result.memoryCandidates).toEqual(["Learned something useful"]);
     });
@@ -465,9 +495,14 @@ describe("PlanEngine", () => {
       const deps = makeMockDeps();
       setupStreamMock(["step done"]);
 
-      const { plan } = await engine.createPlan("goal-1", "mote-1", {
-        goalPrompt: "Do something",
-      }, deps);
+      const { plan } = await engine.createPlan(
+        "goal-1",
+        "mote-1",
+        {
+          goalPrompt: "Do something",
+        },
+        deps,
+      );
 
       const chunks = await collectChunks(engine.executePlan(plan.plan_id, deps));
 
@@ -480,7 +515,9 @@ describe("PlanEngine", () => {
       const deps = makeMockDeps();
 
       let generateCallCount = 0;
-      ((deps.provider as unknown as { generate: ReturnType<typeof vi.fn> }).generate).mockImplementation(async () => {
+      (
+        deps.provider as unknown as { generate: ReturnType<typeof vi.fn> }
+      ).generate.mockImplementation(async () => {
         generateCallCount++;
         if (generateCallCount === 1) {
           return {
@@ -499,9 +536,14 @@ describe("PlanEngine", () => {
 
       setupStreamMock(["step done"]);
 
-      const { plan } = await engine.createPlan("goal-1", "mote-1", {
-        goalPrompt: "Do something",
-      }, deps);
+      const { plan } = await engine.createPlan(
+        "goal-1",
+        "mote-1",
+        {
+          goalPrompt: "Do something",
+        },
+        deps,
+      );
 
       const chunks = await collectChunks(engine.executePlan(plan.plan_id, deps));
 
@@ -511,7 +553,10 @@ describe("PlanEngine", () => {
       expect(types).toContain("reflection");
 
       // Verify it's the fallback content
-      const reflectionChunk = chunks.find((c) => c.type === "reflection") as { type: "reflection"; result: { summary: string; memoryCandidates: string[] } };
+      const reflectionChunk = chunks.find((c) => c.type === "reflection") as {
+        type: "reflection";
+        result: { summary: string; memoryCandidates: string[] };
+      };
       expect(reflectionChunk.result.summary).toContain("Test plan");
       expect(reflectionChunk.result.memoryCandidates).toEqual([]);
 
@@ -527,7 +572,9 @@ describe("PlanEngine", () => {
 
       // Make provider.generate return different plans on successive calls
       let generateCallCount = 0;
-      ((deps.provider as unknown as { generate: ReturnType<typeof vi.fn> }).generate).mockImplementation(async () => {
+      (
+        deps.provider as unknown as { generate: ReturnType<typeof vi.fn> }
+      ).generate.mockImplementation(async () => {
         generateCallCount++;
         if (generateCallCount === 1) {
           // First plan: has a step that will fail
@@ -598,7 +645,11 @@ describe("PlanEngine", () => {
       expect(types).toContain("plan_completed");
 
       // Verify plan_retrying chunk has both plans
-      const retryChunk = chunks.find((c) => c.type === "plan_retrying") as { type: "plan_retrying"; failedPlan: Plan; newPlan: Plan };
+      const retryChunk = chunks.find((c) => c.type === "plan_retrying") as {
+        type: "plan_retrying";
+        failedPlan: Plan;
+        newPlan: Plan;
+      };
       expect(retryChunk.failedPlan.title).toBe("Original plan");
       expect(retryChunk.newPlan.title).toBe("Retry plan");
 
@@ -711,7 +762,9 @@ describe("PlanEngine", () => {
 
       // First generate: original plan, second: retry plan (decomposePlan catches errors)
       let generateCallCount = 0;
-      ((deps.provider as unknown as { generate: ReturnType<typeof vi.fn> }).generate).mockImplementation(async () => {
+      (
+        deps.provider as unknown as { generate: ReturnType<typeof vi.fn> }
+      ).generate.mockImplementation(async () => {
         generateCallCount++;
         if (generateCallCount === 1) {
           return {

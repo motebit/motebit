@@ -13,7 +13,9 @@ export class IdbMemoryStorage implements MemoryStorageAdapter {
 
   async getNode(nodeId: string): Promise<MemoryNode | null> {
     const tx = this.db.transaction("memory_nodes", "readonly");
-    const result = (await idbRequest(tx.objectStore("memory_nodes").get(nodeId))) as MemoryNode | undefined;
+    const result = (await idbRequest(tx.objectStore("memory_nodes").get(nodeId))) as
+      | MemoryNode
+      | undefined;
     return result ?? null;
   }
 
@@ -22,7 +24,7 @@ export class IdbMemoryStorage implements MemoryStorageAdapter {
     const store = tx.objectStore("memory_nodes");
     const index = store.index("motebit_id");
     const range = IDBKeyRange.only(query.motebit_id);
-    let results = await idbRequest(index.getAll(range)) as MemoryNode[];
+    let results = (await idbRequest(index.getAll(range))) as MemoryNode[];
 
     // Filter tombstoned
     if (query.include_tombstoned !== true) {
@@ -38,20 +40,14 @@ export class IdbMemoryStorage implements MemoryStorageAdapter {
     if (query.min_confidence !== undefined) {
       const now = Date.now();
       results = results.filter((n) => {
-        const decayed = computeDecayedConfidence(
-          n.confidence,
-          n.half_life,
-          now - n.created_at,
-        );
+        const decayed = computeDecayedConfidence(n.confidence, n.half_life, now - n.created_at);
         return decayed >= query.min_confidence!;
       });
     }
 
     // Filter by sensitivity
     if (query.sensitivity_filter !== undefined) {
-      results = results.filter((n) =>
-        query.sensitivity_filter!.includes(n.sensitivity),
-      );
+      results = results.filter((n) => query.sensitivity_filter!.includes(n.sensitivity));
     }
 
     // Sort by recency and apply limit
@@ -73,12 +69,12 @@ export class IdbMemoryStorage implements MemoryStorageAdapter {
     const store = tx.objectStore("memory_edges");
 
     // Union of source_id and target_id lookups
-    const bySource = await idbRequest(
+    const bySource = (await idbRequest(
       store.index("source_id").getAll(IDBKeyRange.only(nodeId)),
-    ) as MemoryEdge[];
-    const byTarget = await idbRequest(
+    )) as MemoryEdge[];
+    const byTarget = (await idbRequest(
       store.index("target_id").getAll(IDBKeyRange.only(nodeId)),
-    ) as MemoryEdge[];
+    )) as MemoryEdge[];
 
     // Deduplicate by edge_id
     const seen = new Set<string>();
@@ -95,7 +91,7 @@ export class IdbMemoryStorage implements MemoryStorageAdapter {
   async tombstoneNode(nodeId: string): Promise<void> {
     const tx = this.db.transaction("memory_nodes", "readwrite");
     const store = tx.objectStore("memory_nodes");
-    const node = await idbRequest(store.get(nodeId)) as MemoryNode | undefined;
+    const node = (await idbRequest(store.get(nodeId))) as MemoryNode | undefined;
     if (node) {
       node.tombstoned = true;
       await idbRequest(store.put(node));
@@ -105,7 +101,7 @@ export class IdbMemoryStorage implements MemoryStorageAdapter {
   async pinNode(nodeId: string, pinned: boolean): Promise<void> {
     const tx = this.db.transaction("memory_nodes", "readwrite");
     const store = tx.objectStore("memory_nodes");
-    const node = await idbRequest(store.get(nodeId)) as MemoryNode | undefined;
+    const node = (await idbRequest(store.get(nodeId))) as MemoryNode | undefined;
     if (node && !node.tombstoned) {
       node.pinned = pinned;
       await idbRequest(store.put(node));
@@ -116,7 +112,7 @@ export class IdbMemoryStorage implements MemoryStorageAdapter {
     const tx = this.db.transaction("memory_nodes", "readonly");
     const store = tx.objectStore("memory_nodes");
     const index = store.index("motebit_id");
-    return await idbRequest(index.getAll(IDBKeyRange.only(motebitId))) as MemoryNode[];
+    return (await idbRequest(index.getAll(IDBKeyRange.only(motebitId)))) as MemoryNode[];
   }
 
   async getAllEdges(motebitId: string): Promise<MemoryEdge[]> {
@@ -125,14 +121,12 @@ export class IdbMemoryStorage implements MemoryStorageAdapter {
     const nodeStore = tx.objectStore("memory_nodes");
     const edgeStore = tx.objectStore("memory_edges");
 
-    const nodes = await idbRequest(
+    const nodes = (await idbRequest(
       nodeStore.index("motebit_id").getAll(IDBKeyRange.only(motebitId)),
-    ) as MemoryNode[];
+    )) as MemoryNode[];
     const nodeIds = new Set(nodes.map((n) => n.node_id));
 
-    const allEdges = await idbRequest(edgeStore.getAll()) as MemoryEdge[];
-    return allEdges.filter(
-      (e) => nodeIds.has(e.source_id) || nodeIds.has(e.target_id),
-    );
+    const allEdges = (await idbRequest(edgeStore.getAll())) as MemoryEdge[];
+    return allEdges.filter((e) => nodeIds.has(e.source_id) || nodeIds.has(e.target_id));
   }
 }

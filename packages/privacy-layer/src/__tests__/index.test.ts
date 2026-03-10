@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { InMemoryAuditLog, PrivacyLayer } from "../index";
 import {
-  InMemoryAuditLog,
-  PrivacyLayer,
-} from "../index";
-import { InMemoryMemoryStorage, MemoryGraph, type MemoryStorageAdapter } from "@motebit/memory-graph";
+  InMemoryMemoryStorage,
+  MemoryGraph,
+  type MemoryStorageAdapter,
+} from "@motebit/memory-graph";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 import { SensitivityLevel, EventType } from "@motebit/sdk";
 import type { MemoryNode, AuditRecord, MotebitIdentity } from "@motebit/sdk";
@@ -150,13 +151,7 @@ describe("PrivacyLayer", () => {
     eventStore = new EventStore(new InMemoryEventStore());
     auditLog = new InMemoryAuditLog();
     memoryGraph = new MemoryGraph(storage, eventStore, MOTEBIT_ID);
-    privacyLayer = new PrivacyLayer(
-      storage,
-      memoryGraph,
-      eventStore,
-      auditLog,
-      MOTEBIT_ID,
-    );
+    privacyLayer = new PrivacyLayer(storage, memoryGraph, eventStore, auditLog, MOTEBIT_ID);
   });
 
   describe("listMemories", () => {
@@ -171,9 +166,7 @@ describe("PrivacyLayer", () => {
       // Verify audit trail
       const auditRecords = await auditLog.query(MOTEBIT_ID);
       expect(auditRecords.length).toBeGreaterThanOrEqual(1);
-      expect(
-        auditRecords.some((r) => r.action === "list_memories"),
-      ).toBe(true);
+      expect(auditRecords.some((r) => r.action === "list_memories")).toBe(true);
     });
 
     it("returns empty when no memories exist", async () => {
@@ -193,10 +186,7 @@ describe("PrivacyLayer", () => {
         [1, 0],
       );
 
-      const cert = await privacyLayer.deleteMemory(
-        node.node_id,
-        "user-1",
-      );
+      const cert = await privacyLayer.deleteMemory(node.node_id, "user-1");
 
       expect(cert.target_id).toBe(node.node_id);
       expect(cert.target_type).toBe("memory");
@@ -247,9 +237,7 @@ describe("PrivacyLayer", () => {
       await privacyLayer.exportAll(makeIdentity());
 
       const events = await eventStore.query({ motebit_id: MOTEBIT_ID });
-      expect(
-        events.some((e) => e.event_type === EventType.ExportRequested),
-      ).toBe(true);
+      expect(events.some((e) => e.event_type === EventType.ExportRequested)).toBe(true);
     });
   });
 

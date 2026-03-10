@@ -1,4 +1,11 @@
-import type { BehaviorCues, RenderSpec, GeometrySpec, MaterialSpec, LightingSpec, TrustMode } from "@motebit/sdk";
+import type {
+  BehaviorCues,
+  RenderSpec,
+  GeometrySpec,
+  MaterialSpec,
+  LightingSpec,
+  TrustMode,
+} from "@motebit/sdk";
 
 // === Canonical Render Spec ===
 
@@ -9,14 +16,14 @@ export const CANONICAL_GEOMETRY: GeometrySpec = {
 };
 
 export const CANONICAL_MATERIAL: MaterialSpec = {
-  ior: 1.22,                              // Rendering IOR — enough refraction to lens the environment
+  ior: 1.22, // Rendering IOR — enough refraction to lens the environment
   subsurface: 0.05,
-  roughness: 0.0,                         // Surface tension smooths to perfection at this scale
+  roughness: 0.0, // Surface tension smooths to perfection at this scale
   clearcoat: 0.4,
   surface_noise_amplitude: 0.002,
   base_color: [1.0, 1.0, 1.0],
-  emissive_intensity: 0.0,                // Zero at rest — glows only during processing
-  tint: [0.95, 0.95, 1.0],               // Default: near-neutral cool white — moonlight
+  emissive_intensity: 0.0, // Zero at rest — glows only during processing
+  tint: [0.95, 0.95, 1.0], // Default: near-neutral cool white — moonlight
 };
 
 export const CANONICAL_LIGHTING: LightingSpec = {

@@ -43,7 +43,10 @@ describe("parseSlashCommand", () => {
   });
 
   it("trims whitespace from args", () => {
-    expect(parseSlashCommand("/model  spaced  arg ")).toEqual({ command: "model", args: "spaced  arg" });
+    expect(parseSlashCommand("/model  spaced  arg ")).toEqual({
+      command: "model",
+      args: "spaced  arg",
+    });
   });
 
   it("handles single slash", () => {
@@ -75,9 +78,9 @@ describe("filterCommands", () => {
 
   it("filters by prefix", () => {
     const result = filterCommands("m");
-    expect(result.every(cmd => cmd.name.startsWith("m"))).toBe(true);
-    expect(result.map(cmd => cmd.name)).toContain("model");
-    expect(result.map(cmd => cmd.name)).toContain("memories");
+    expect(result.every((cmd) => cmd.name.startsWith("m"))).toBe(true);
+    expect(result.map((cmd) => cmd.name)).toContain("model");
+    expect(result.map((cmd) => cmd.name)).toContain("memories");
   });
 
   it("returns exact match", () => {
@@ -93,8 +96,8 @@ describe("filterCommands", () => {
 
   it("is case-insensitive", () => {
     const result = filterCommands("M");
-    expect(result.map(cmd => cmd.name)).toContain("model");
-    expect(result.map(cmd => cmd.name)).toContain("memories");
+    expect(result.map((cmd) => cmd.name)).toContain("model");
+    expect(result.map((cmd) => cmd.name)).toContain("memories");
   });
 
   it("filters to single match for unique prefix", () => {
@@ -106,7 +109,7 @@ describe("filterCommands", () => {
   it("returns multiple matches for shared prefix", () => {
     const result = filterCommands("s");
     expect(result.length).toBeGreaterThanOrEqual(2);
-    const names = result.map(cmd => cmd.name);
+    const names = result.map((cmd) => cmd.name);
     expect(names).toContain("state");
     expect(names).toContain("settings");
     expect(names).toContain("summarize");
@@ -140,7 +143,7 @@ describe("formatHelpText", () => {
 
   it("includes arg hints for commands that accept args", () => {
     const text = formatHelpText();
-    const cmdsWithArgs = SLASH_COMMANDS.filter(cmd => cmd.hasArgs === true);
+    const cmdsWithArgs = SLASH_COMMANDS.filter((cmd) => cmd.hasArgs === true);
     expect(cmdsWithArgs.length).toBeGreaterThan(0);
     for (const cmd of cmdsWithArgs) {
       if (cmd.argHint != null && cmd.argHint !== "") {
@@ -156,7 +159,7 @@ describe("formatHelpText", () => {
 
 describe("SLASH_COMMANDS", () => {
   it("has no duplicate command names", () => {
-    const names = SLASH_COMMANDS.map(cmd => cmd.name);
+    const names = SLASH_COMMANDS.map((cmd) => cmd.name);
     const unique = new Set(names);
     expect(unique.size).toBe(names.length);
   });
@@ -170,11 +173,22 @@ describe("SLASH_COMMANDS", () => {
 
   it("includes the 14 expected commands", () => {
     const expected = [
-      "model", "memories", "state", "forget", "export",
-      "clear", "conversations", "goals", "tools", "settings",
-      "operator", "summarize", "sync", "help",
+      "model",
+      "memories",
+      "state",
+      "forget",
+      "export",
+      "clear",
+      "conversations",
+      "goals",
+      "tools",
+      "settings",
+      "operator",
+      "summarize",
+      "sync",
+      "help",
     ];
-    const names = SLASH_COMMANDS.map(cmd => cmd.name);
+    const names = SLASH_COMMANDS.map((cmd) => cmd.name);
     for (const name of expected) {
       expect(names).toContain(name);
     }

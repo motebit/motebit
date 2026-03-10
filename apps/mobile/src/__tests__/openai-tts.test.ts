@@ -35,11 +35,7 @@ import { OpenAITTSProvider, TTS_VOICES } from "../adapters/openai-tts.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeProvider(overrides?: {
-  apiKey?: string;
-  voice?: string;
-  model?: string;
-}) {
+function makeProvider(overrides?: { apiKey?: string; voice?: string; model?: string }) {
   return new OpenAITTSProvider({
     apiKey: overrides?.apiKey ?? "test-key",
     voice: overrides?.voice,
@@ -57,7 +53,10 @@ function mockFetchSuccess(audioBytes = new Uint8Array([0xff, 0xfb, 0x90])) {
     status: 200,
     arrayBuffer: vi.fn(async () => audioBytes.buffer),
   };
-  vi.stubGlobal("fetch", vi.fn(async () => mockResponse));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => mockResponse),
+  );
   return mockResponse;
 }
 
@@ -67,7 +66,10 @@ function mockFetchError(status = 500) {
     status,
     arrayBuffer: vi.fn(),
   };
-  vi.stubGlobal("fetch", vi.fn(async () => mockResponse));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => mockResponse),
+  );
   return mockResponse;
 }
 
@@ -112,14 +114,7 @@ describe("OpenAITTSProvider", () => {
 
   describe("exports", () => {
     it("exports TTS_VOICES array with 6 voices", () => {
-      expect(TTS_VOICES).toEqual([
-        "alloy",
-        "echo",
-        "fable",
-        "onyx",
-        "nova",
-        "shimmer",
-      ]);
+      expect(TTS_VOICES).toEqual(["alloy", "echo", "fable", "onyx", "nova", "shimmer"]);
     });
   });
 
@@ -207,9 +202,7 @@ describe("OpenAITTSProvider", () => {
       );
 
       // Body contains the text
-      const body = JSON.parse(
-        (fetch as ReturnType<typeof vi.fn>).mock.calls[0]![1].body,
-      );
+      const body = JSON.parse((fetch as ReturnType<typeof vi.fn>).mock.calls[0]![1].body);
       expect(body.input).toBe("hello world");
       expect(body.response_format).toBe("mp3");
 
@@ -237,9 +230,7 @@ describe("OpenAITTSProvider", () => {
       mockFetchError(429);
 
       const provider = makeProvider();
-      await expect(provider.speak("test")).rejects.toThrow(
-        "OpenAI TTS error: 429",
-      );
+      await expect(provider.speak("test")).rejects.toThrow("OpenAI TTS error: 429");
       expect(provider.speaking).toBe(false);
     });
 
@@ -266,11 +257,9 @@ describe("OpenAITTSProvider", () => {
       await provider.speak("test");
 
       // btoa("Hello") = "SGVsbG8="
-      expect(mockWriteString).toHaveBeenCalledWith(
-        expect.any(String),
-        "SGVsbG8=",
-        { encoding: "base64" },
-      );
+      expect(mockWriteString).toHaveBeenCalledWith(expect.any(String), "SGVsbG8=", {
+        encoding: "base64",
+      });
     });
 
     it("early-returns without playing if cancelled after API response", async () => {
@@ -298,7 +287,10 @@ describe("OpenAITTSProvider", () => {
           return new Uint8Array([1, 2, 3]).buffer;
         }),
       };
-      vi.stubGlobal("fetch", vi.fn(async () => mockResponse));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => mockResponse),
+      );
 
       await provider.speak("test");
 
@@ -358,9 +350,7 @@ describe("OpenAITTSProvider", () => {
 
       provider.cancel();
 
-      expect(
-        (provider as unknown as { _sound: unknown })._sound,
-      ).toBeNull();
+      expect((provider as unknown as { _sound: unknown })._sound).toBeNull();
     });
   });
 

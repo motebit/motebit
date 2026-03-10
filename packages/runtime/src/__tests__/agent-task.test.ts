@@ -1,9 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import {
-  MotebitRuntime,
-  NullRenderer,
-  createInMemoryStorage,
-} from "../index";
+import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
 import type { PlatformAdapters, StreamChunk } from "../index";
 import type { StreamingProvider } from "@motebit/ai-core";
 import type { AIResponse, ContextPack } from "@motebit/sdk";
@@ -42,7 +38,9 @@ function createAdapters(provider: StreamingProvider): PlatformAdapters {
   };
 }
 
-async function getTaskResult(gen: AsyncGenerator<StreamChunk>): Promise<StreamChunk & { type: "task_result" }> {
+async function getTaskResult(
+  gen: AsyncGenerator<StreamChunk>,
+): Promise<StreamChunk & { type: "task_result" }> {
   for await (const chunk of gen) {
     if (chunk.type === "task_result") return chunk;
   }

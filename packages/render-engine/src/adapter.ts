@@ -1,11 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TrustMode, type BehaviorCues, type RenderSpec } from "@motebit/sdk";
-import {
-  CANONICAL_SPEC,
-  CANONICAL_MATERIAL,
-  smoothDelta,
-} from "./spec.js";
+import { CANONICAL_SPEC, CANONICAL_MATERIAL, smoothDelta } from "./spec.js";
 import type { RenderAdapter, RenderFrame, InteriorColor, AudioReactivity } from "./spec.js";
 
 // === Constants ===
@@ -44,13 +40,13 @@ function createBody(): { mesh: THREE.Mesh; material: THREE.MeshPhysicalMaterial 
     clearcoatRoughness: 0.02,
     envMapIntensity: 1.2,
     emissive: new THREE.Color(0.8, 0.85, 1.0), // §6.4 — processing heat visible through glass (moonlight default)
-    emissiveIntensity: 0.0,                    // Zero at rest — only glows during processing
-    iridescence: 0.4,                         // Thin-film interference — bumped for spectral env
+    emissiveIntensity: 0.0, // Zero at rest — only glows during processing
+    iridescence: 0.4, // Thin-film interference — bumped for spectral env
     iridescenceIOR: 1.3,
     iridescenceThicknessRange: [100, 400],
     side: THREE.FrontSide,
     attenuationColor: new THREE.Color(tint[0], tint[1], tint[2]),
-    attenuationDistance: BODY_R * 0.7,         // shorter distance = more visible tinting
+    attenuationDistance: BODY_R * 0.7, // shorter distance = more visible tinting
   });
 
   const mesh = new THREE.Mesh(geo, mat);
@@ -84,7 +80,7 @@ function createEye(): THREE.Group {
   bigCatch.renderOrder = 3;
   group.add(bigCatch);
 
-  const smallCatchGeo = new THREE.SphereGeometry(EYE_R * 0.10, 16, 16);
+  const smallCatchGeo = new THREE.SphereGeometry(EYE_R * 0.1, 16, 16);
   const smallCatch = new THREE.Mesh(smallCatchGeo, catchMat);
   smallCatch.position.set(-EYE_R * 0.2, -EYE_R * 0.15, EYE_R * 0.95);
   smallCatch.renderOrder = 3;
@@ -141,24 +137,30 @@ export const ENV_LIGHT: EnvironmentPreset = {
   // A prism needs a spectrum. Uniform environments make glass invisible.
   // Key insight: ground-sky contrast defines the glass edge; chromatic spread
   // defines what iridescence and attenuation have to work with.
-  zenith:      [0.22, 0.32, 0.72],   // saturated blue upper sky
-  horizon:     [0.92, 0.62, 0.35],   // warm amber horizon — strong hue vs zenith
-  ground:      [0.15, 0.14, 0.18],   // dark cool ground — contrast with bright horizon
-  sun:         [6.0, 3.2, 0.8],      // deep amber-gold key — maximum chromatic identity
-  fill:        [0.3, 0.5, 2.2],      // blue-violet fill — spectral opposite of sun
-  groundPanel: [0.50, 0.32, 0.18],   // warm ground bounce
-  warmTint:    [1.25, 0.94, 0.68],   // warm side: strong red boost, blue cut
-  coolTint:    [0.68, 0.88, 1.30],   // cool side: strong blue boost, red cut
+  zenith: [0.22, 0.32, 0.72], // saturated blue upper sky
+  horizon: [0.92, 0.62, 0.35], // warm amber horizon — strong hue vs zenith
+  ground: [0.15, 0.14, 0.18], // dark cool ground — contrast with bright horizon
+  sun: [6.0, 3.2, 0.8], // deep amber-gold key — maximum chromatic identity
+  fill: [0.3, 0.5, 2.2], // blue-violet fill — spectral opposite of sun
+  groundPanel: [0.5, 0.32, 0.18], // warm ground bounce
+  warmTint: [1.25, 0.94, 0.68], // warm side: strong red boost, blue cut
+  coolTint: [0.68, 0.88, 1.3], // cool side: strong blue boost, red cut
 };
 
-function createEnvironmentMap(renderer: THREE.WebGLRenderer, preset: EnvironmentPreset = ENV_DEFAULT): THREE.Texture {
+function createEnvironmentMap(
+  renderer: THREE.WebGLRenderer,
+  preset: EnvironmentPreset = ENV_DEFAULT,
+): THREE.Texture {
   const pmrem = new THREE.PMREMGenerator(renderer);
   const envScene = new THREE.Scene();
 
   const skyGeo = new THREE.SphereGeometry(5, 64, 32);
-  const z = preset.zenith, h = preset.horizon, g = preset.ground;
+  const z = preset.zenith,
+    h = preset.horizon,
+    g = preset.ground;
   const hasSpectral = preset.warmTint && preset.coolTint;
-  const w = preset.warmTint ?? [1, 1, 1], c = preset.coolTint ?? [1, 1, 1];
+  const w = preset.warmTint ?? [1, 1, 1],
+    c = preset.coolTint ?? [1, 1, 1];
   const skyMat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
     uniforms: {},
@@ -183,7 +185,9 @@ function createEnvironmentMap(renderer: THREE.WebGLRenderer, preset: Environment
         } else {
           color = mix(horizon * 0.5, ground, pow(-y, 0.4));
         }
-        ${hasSpectral ? `
+        ${
+          hasSpectral
+            ? `
         // Spectral: horizontal warm-cool gradient around the azimuth.
         // The sky becomes a soft prism — warm on one side, cool on the other.
         // Glass refracts this gradient, making transmission visible.
@@ -192,7 +196,9 @@ function createEnvironmentMap(renderer: THREE.WebGLRenderer, preset: Environment
         vec3 warm = vec3(${w[0]}, ${w[1]}, ${w[2]});
         vec3 cool = vec3(${c[0]}, ${c[1]}, ${c[2]});
         color *= mix(cool, warm, warmFactor);
-        ` : ''}
+        `
+            : ""
+        }
         gl_FragColor = vec4(color, 1.0);
       }
     `,
@@ -200,19 +206,28 @@ function createEnvironmentMap(renderer: THREE.WebGLRenderer, preset: Environment
   envScene.add(new THREE.Mesh(skyGeo, skyMat));
 
   // Circle panels avoid square reflection artifacts on polished surfaces
-  const sunMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(...preset.sun), side: THREE.DoubleSide });
+  const sunMat = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(...preset.sun),
+    side: THREE.DoubleSide,
+  });
   const sunPanel = new THREE.Mesh(new THREE.CircleGeometry(0.85, 32), sunMat);
   sunPanel.position.set(3, 3, 2);
   sunPanel.lookAt(0, 0, 0);
   envScene.add(sunPanel);
 
-  const fillMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(...preset.fill), side: THREE.DoubleSide });
+  const fillMat = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(...preset.fill),
+    side: THREE.DoubleSide,
+  });
   const fillPanel = new THREE.Mesh(new THREE.CircleGeometry(1.1, 32), fillMat);
   fillPanel.position.set(-2.5, 2, -1);
   fillPanel.lookAt(0, 0, 0);
   envScene.add(fillPanel);
 
-  const groundMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(...preset.groundPanel), side: THREE.DoubleSide });
+  const groundMat = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(...preset.groundPanel),
+    side: THREE.DoubleSide,
+  });
   const groundPanel = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), groundMat);
   groundPanel.position.set(0, -3, 0);
   groundPanel.rotation.x = Math.PI / 2;
@@ -236,20 +251,20 @@ function createEnvironmentMap(renderer: THREE.WebGLRenderer, preset: Environment
 // makes the blink dramatic from the front, subtle from the side.
 
 interface BlinkState {
-  nextBlinkAt: number;        // render time (s) for next blink
-  blinkStart: number;         // render time when current blink started, -1 if idle
-  doubleBlink: boolean;       // will this be a double-blink
+  nextBlinkAt: number; // render time (s) for next blink
+  blinkStart: number; // render time when current blink started, -1 if idle
+  doubleBlink: boolean; // will this be a double-blink
   secondBlinkPending: boolean;
 }
 
-const BLINK_CLOSE = 0.080;   // seconds — snap shut
-const BLINK_HOLD = 0.040;    // held closed
-const BLINK_OPEN = 0.130;    // float back open
+const BLINK_CLOSE = 0.08; // seconds — snap shut
+const BLINK_HOLD = 0.04; // held closed
+const BLINK_OPEN = 0.13; // float back open
 const BLINK_TOTAL = BLINK_CLOSE + BLINK_HOLD + BLINK_OPEN;
-const BLINK_MIN = 2.5;       // min seconds between blinks
-const BLINK_MAX = 6.0;       // max seconds between blinks
-const DOUBLE_CHANCE = 0.15;  // 15% chance of double-blink
-const DOUBLE_GAP = 0.180;    // seconds between double-blink pair
+const BLINK_MIN = 2.5; // min seconds between blinks
+const BLINK_MAX = 6.0; // max seconds between blinks
+const DOUBLE_CHANCE = 0.15; // 15% chance of double-blink
+const DOUBLE_GAP = 0.18; // seconds between double-blink pair
 
 function createBlinkState(): BlinkState {
   return {
@@ -260,7 +275,12 @@ function createBlinkState(): BlinkState {
   };
 }
 
-function computeBlinkFactor(state: BlinkState, time: number, glow: number, speaking: number): number {
+function computeBlinkFactor(
+  state: BlinkState,
+  time: number,
+  glow: number,
+  speaking: number,
+): number {
   // Check if it's time to start a blink
   if (state.blinkStart < 0) {
     if (time >= state.nextBlinkAt) {
@@ -303,7 +323,8 @@ function computeBlinkFactor(state: BlinkState, time: number, glow: number, speak
   // Thinking suppresses blinks (concentration). Speaking increases rate.
   const thinkStretch = glow > 0.4 ? 1.5 : 1.0;
   const speakShrink = speaking > 0.01 ? 0.7 : 1.0;
-  const interval = (BLINK_MIN + Math.random() * (BLINK_MAX - BLINK_MIN)) * thinkStretch * speakShrink;
+  const interval =
+    (BLINK_MIN + Math.random() * (BLINK_MAX - BLINK_MIN)) * thinkStretch * speakShrink;
   state.nextBlinkAt = time + interval;
   state.doubleBlink = Math.random() < DOUBLE_CHANCE;
   state.secondBlinkPending = false;
@@ -361,7 +382,12 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.scene.environment = envMap;
     this.scene.background = envMap;
 
-    this.camera = new THREE.PerspectiveCamera(45, canvas.clientWidth / canvas.clientHeight, 0.01, 10);
+    this.camera = new THREE.PerspectiveCamera(
+      45,
+      canvas.clientWidth / canvas.clientHeight,
+      0.01,
+      10,
+    );
     this.camera.position.set(0, 0.02, 0.85);
     this.camera.lookAt(0, -0.015, 0);
 
@@ -406,18 +432,41 @@ export class ThreeJSAdapter implements RenderAdapter {
   }
 
   render(frame: RenderFrame): void {
-    if (!this.initialized || !this.creature || !this.bodyMesh || !this.bodyMaterial || !this.renderer || !this.scene || !this.camera) return;
+    if (
+      !this.initialized ||
+      !this.creature ||
+      !this.bodyMesh ||
+      !this.bodyMaterial ||
+      !this.renderer ||
+      !this.scene ||
+      !this.camera
+    )
+      return;
 
     const dt = frame.delta_time;
     const t = frame.time;
 
     this.currentCues = {
       hover_distance: smoothDelta(this.currentCues.hover_distance, frame.cues.hover_distance, dt),
-      drift_amplitude: smoothDelta(this.currentCues.drift_amplitude, frame.cues.drift_amplitude, dt),
+      drift_amplitude: smoothDelta(
+        this.currentCues.drift_amplitude,
+        frame.cues.drift_amplitude,
+        dt,
+      ),
       glow_intensity: smoothDelta(this.currentCues.glow_intensity, frame.cues.glow_intensity, dt),
       eye_dilation: smoothDelta(this.currentCues.eye_dilation, frame.cues.eye_dilation, dt),
-      smile_curvature: smoothDelta(this.currentCues.smile_curvature, frame.cues.smile_curvature, dt, 8.0),
-      speaking_activity: smoothDelta(this.currentCues.speaking_activity, frame.cues.speaking_activity, dt, 12.0),
+      smile_curvature: smoothDelta(
+        this.currentCues.smile_curvature,
+        frame.cues.smile_curvature,
+        dt,
+        8.0,
+      ),
+      speaking_activity: smoothDelta(
+        this.currentCues.speaking_activity,
+        frame.cues.speaking_activity,
+        dt,
+        12.0,
+      ),
     };
 
     const cues = this.currentCues;
@@ -425,10 +474,10 @@ export class ThreeJSAdapter implements RenderAdapter {
 
     // Audio reactivity — sound pressure modulates the creature's body language.
     // Additive: layers on top of behavior cues, not replacing them.
-    const audioBreathScale = a ? 1 + a.rms * 2.5 : 1;             // breathe bigger with sound energy
-    const audioGlow = a ? a.low * 0.25 : 0;                       // bass → interior heat
-    const audioDrift = a ? a.mid * 0.015 : 0;                     // melody → swaying
-    const audioShimmer = a ? a.high * 0.35 : 0;                   // transients → glass iridescence
+    const audioBreathScale = a ? 1 + a.rms * 2.5 : 1; // breathe bigger with sound energy
+    const audioGlow = a ? a.low * 0.25 : 0; // bass → interior heat
+    const audioDrift = a ? a.mid * 0.015 : 0; // melody → swaying
+    const audioShimmer = a ? a.high * 0.35 : 0; // transients → glass iridescence
 
     // Buoyancy bob — micro-pressure gradients in the medium (§6.3)
     this.creature.position.y = organicNoise(t, [1.5, 2.37, 0.73]) * 0.01 * cues.hover_distance;
@@ -443,34 +492,36 @@ export class ThreeJSAdapter implements RenderAdapter {
     // Rate rises with glow (proxy for processing): calm ~2 Hz, thinking ~3.1 Hz
     const breatheRate = 2.0 + cues.glow_intensity * 1.5;
     const breatheRaw = Math.sin(t * breatheRate);
-    const breathe = (breatheRaw > 0
-      ? breatheRaw * 0.015
-      : Math.sign(breatheRaw) * Math.pow(Math.abs(breatheRaw), 0.6) * 0.015) * audioBreathScale;
+    const breathe =
+      (breatheRaw > 0
+        ? breatheRaw * 0.015
+        : Math.sign(breatheRaw) * Math.pow(Math.abs(breatheRaw), 0.6) * 0.015) * audioBreathScale;
 
     // Gravity sag — slow cycle, weight pulls down, tension recovers
     const sagRaw = Math.sin(t * 0.32 * Math.PI * 2); // 0.32 Hz
-    const sag = sagRaw > 0
-      ? sagRaw * 0.032                                                    // gravity pulls slowly
-      : Math.sign(sagRaw) * Math.pow(Math.abs(sagRaw), 0.5) * 0.032;     // tension snaps back
-    this.creature.position.y += -sag * 0.01;  // body dips under gravity
+    const sag =
+      sagRaw > 0
+        ? sagRaw * 0.032 // gravity pulls slowly
+        : Math.sign(sagRaw) * Math.pow(Math.abs(sagRaw), 0.5) * 0.032; // tension snaps back
+    this.creature.position.y += -sag * 0.01; // body dips under gravity
 
     // Bo > 0: gravity perturbs the sphere at rest (§2.2 — the signature of a body with weight)
     const REST_Y = 0.97;
     this.bodyMesh.scale.set(
-      1.0 + breathe + sag * 0.15,       // X: widens as Y compresses (volume conservation)
-      REST_Y - breathe - sag * 0.3,     // Y: oblate at rest, flattens further under sag
-      1.0 + breathe + sag * 0.15,       // Z: widens as Y compresses
+      1.0 + breathe + sag * 0.15, // X: widens as Y compresses (volume conservation)
+      REST_Y - breathe - sag * 0.3, // Y: oblate at rest, flattens further under sag
+      1.0 + breathe + sag * 0.15, // Z: widens as Y compresses
     );
 
     // Trust mode visual modulation — glass clarity maps to trust level
-    const trustThickness = this.trustMode === TrustMode.Full ? 0.18
-      : this.trustMode === TrustMode.Guarded ? 0.25 : 0.35;
+    const trustThickness =
+      this.trustMode === TrustMode.Full ? 0.18 : this.trustMode === TrustMode.Guarded ? 0.25 : 0.35;
     this.bodyMaterial.thickness = smoothDelta(this.bodyMaterial.thickness, trustThickness, dt, 2.0);
 
     // Attenuation color: user's soul color is the base; trust mode desaturates toward neutral
     const baseTint = this.interiorColor?.tint ?? [0.95, 0.95, 1.0];
-    const trustDesaturation = this.trustMode === TrustMode.Full ? 0
-      : this.trustMode === TrustMode.Guarded ? 0.3 : 0.6;
+    const trustDesaturation =
+      this.trustMode === TrustMode.Full ? 0 : this.trustMode === TrustMode.Guarded ? 0.3 : 0.6;
     const tintTarget = new THREE.Color(
       baseTint[0] + (0.85 - baseTint[0]) * trustDesaturation,
       baseTint[1] + (0.85 - baseTint[1]) * trustDesaturation,
@@ -484,7 +535,9 @@ export class ThreeJSAdapter implements RenderAdapter {
     // Minimal trust: suppress interior glow entirely
     const trustGlowScale = this.trustMode === TrustMode.Minimal ? 0 : 1;
     const baseGlowIntensity = this.interiorColor?.glowIntensity ?? 0;
-    this.bodyMaterial.emissiveIntensity = Math.max(baseGlowIntensity, Math.max(0, cues.glow_intensity - 0.4) * 0.6 + audioGlow) * trustGlowScale;
+    this.bodyMaterial.emissiveIntensity =
+      Math.max(baseGlowIntensity, Math.max(0, cues.glow_intensity - 0.4) * 0.6 + audioGlow) *
+      trustGlowScale;
 
     // Iridescence — high-frequency transients shimmer the glass surface
     // Active listening indicator: subtle ~1Hz oscillation (visual recording light)
@@ -503,15 +556,22 @@ export class ThreeJSAdapter implements RenderAdapter {
       // Asymmetric curiosity: left eye opens wider (the "interested" eyebrow)
       const curiosityAsym = Math.max(0, cues.eye_dilation - 0.3) * 0.25;
       // Speaking micro-saccades — eyes search while talking, alive not dead
-      const speakGaze = cues.speaking_activity > 0.01
-        ? organicNoise(t, [1.1, 1.7, 2.3]) * cues.speaking_activity * 0.04
-        : 0;
+      const speakGaze =
+        cues.speaking_activity > 0.01
+          ? organicNoise(t, [1.1, 1.7, 2.3]) * cues.speaking_activity * 0.04
+          : 0;
       // Speaking widening pulse — eyes open slightly when forming thoughts
-      const speakWiden = cues.speaking_activity > 0.01
-        ? (0.5 + 0.5 * organicNoise(t, [0.8, 1.3])) * cues.speaking_activity * 0.06
-        : 0;
+      const speakWiden =
+        cues.speaking_activity > 0.01
+          ? (0.5 + 0.5 * organicNoise(t, [0.8, 1.3])) * cues.speaking_activity * 0.06
+          : 0;
       // Blink — the breath of the face
-      const blink = computeBlinkFactor(this.blinkState, t, cues.glow_intensity, cues.speaking_activity);
+      const blink = computeBlinkFactor(
+        this.blinkState,
+        t,
+        cues.glow_intensity,
+        cues.speaking_activity,
+      );
       const leftScale = eyeScale + curiosityAsym + speakWiden;
       const rightScale = eyeScale + speakWiden;
       this.leftEye.scale.set(leftScale, leftScale * blink, leftScale);
@@ -526,9 +586,10 @@ export class ThreeJSAdapter implements RenderAdapter {
       this.leftEye.position.y = 0.015 + thinkLift + speakGaze;
       this.rightEye.position.y = 0.015 + thinkLift + speakGaze * 0.7;
       // Horizontal micro-drift during speaking
-      const speakHGaze = cues.speaking_activity > 0.01
-        ? organicNoise(t, [0.9, 1.5]) * cues.speaking_activity * 0.003
-        : 0;
+      const speakHGaze =
+        cues.speaking_activity > 0.01
+          ? organicNoise(t, [0.9, 1.5]) * cues.speaking_activity * 0.003
+          : 0;
       this.leftEye.position.x = -0.055 + speakHGaze;
       this.rightEye.position.x = 0.055 + speakHGaze;
     }
@@ -537,9 +598,10 @@ export class ThreeJSAdapter implements RenderAdapter {
     if (this.smileMesh) {
       const baseSmile = 0.6 + cues.smile_curvature * 3.0;
       // Soft speaking movement — a murmur, not a shout
-      const speakOsc = cues.speaking_activity > 0.01
-        ? organicNoise(t, [23.2, 27.0, 32.0]) * cues.speaking_activity * 0.12
-        : 0;
+      const speakOsc =
+        cues.speaking_activity > 0.01
+          ? organicNoise(t, [23.2, 27.0, 32.0]) * cues.speaking_activity * 0.12
+          : 0;
       this.smileMesh.scale.y = baseSmile + speakOsc;
       this.smileMesh.scale.x = 1.0 + cues.speaking_activity * organicNoise(t, [18.2, 23.9]) * 0.05;
     }
@@ -650,8 +712,14 @@ export class ThreeJSAdapter implements RenderAdapter {
         }
       });
     }
-    if (this.controls) { this.controls.dispose(); this.controls = null; }
-    if (this.renderer) { this.renderer.dispose(); this.renderer = null; }
+    if (this.controls) {
+      this.controls.dispose();
+      this.controls = null;
+    }
+    if (this.renderer) {
+      this.renderer.dispose();
+      this.renderer = null;
+    }
     this.scene = null;
     this.camera = null;
     this.initialized = false;
@@ -662,9 +730,13 @@ export class ThreeJSAdapter implements RenderAdapter {
 
 export class SpatialAdapter implements RenderAdapter {
   private spec: RenderSpec = CANONICAL_SPEC;
-  init(_target: unknown): Promise<void> { return Promise.resolve(); }
+  init(_target: unknown): Promise<void> {
+    return Promise.resolve();
+  }
   render(_frame: RenderFrame): void {}
-  getSpec(): RenderSpec { return this.spec; }
+  getSpec(): RenderSpec {
+    return this.spec;
+  }
   resize(_width: number, _height: number): void {}
   setBackground(_color: number | null): void {}
   setDarkEnvironment(): void {}
@@ -757,7 +829,12 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     this.scene.environment = this.envMap;
 
     // Camera managed by WebXR — position/orientation come from head tracking
-    this.camera = new THREE.PerspectiveCamera(50, canvas.clientWidth / canvas.clientHeight, 0.01, 100);
+    this.camera = new THREE.PerspectiveCamera(
+      50,
+      canvas.clientWidth / canvas.clientHeight,
+      0.01,
+      100,
+    );
 
     // === Creature ===
     this.creature = new THREE.Group();
@@ -801,18 +878,41 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
   }
 
   render(frame: RenderFrame): void {
-    if (!this.initialized || !this.creature || !this.bodyMesh || !this.bodyMaterial || !this.renderer || !this.scene || !this.camera) return;
+    if (
+      !this.initialized ||
+      !this.creature ||
+      !this.bodyMesh ||
+      !this.bodyMaterial ||
+      !this.renderer ||
+      !this.scene ||
+      !this.camera
+    )
+      return;
 
     const dt = frame.delta_time;
     const t = frame.time;
 
     this.currentCues = {
       hover_distance: smoothDelta(this.currentCues.hover_distance, frame.cues.hover_distance, dt),
-      drift_amplitude: smoothDelta(this.currentCues.drift_amplitude, frame.cues.drift_amplitude, dt),
+      drift_amplitude: smoothDelta(
+        this.currentCues.drift_amplitude,
+        frame.cues.drift_amplitude,
+        dt,
+      ),
       glow_intensity: smoothDelta(this.currentCues.glow_intensity, frame.cues.glow_intensity, dt),
       eye_dilation: smoothDelta(this.currentCues.eye_dilation, frame.cues.eye_dilation, dt),
-      smile_curvature: smoothDelta(this.currentCues.smile_curvature, frame.cues.smile_curvature, dt, 8.0),
-      speaking_activity: smoothDelta(this.currentCues.speaking_activity, frame.cues.speaking_activity, dt, 12.0),
+      smile_curvature: smoothDelta(
+        this.currentCues.smile_curvature,
+        frame.cues.smile_curvature,
+        dt,
+        8.0,
+      ),
+      speaking_activity: smoothDelta(
+        this.currentCues.speaking_activity,
+        frame.cues.speaking_activity,
+        dt,
+        12.0,
+      ),
     };
 
     const cues = this.currentCues;
@@ -820,10 +920,10 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
 
     // Audio reactivity — sound pressure modulates the creature's body language.
     // Additive: layers on top of behavior cues, not replacing them.
-    const audioBreathScale = a ? 1 + a.rms * 2.5 : 1;             // breathe bigger with sound energy
-    const audioGlow = a ? a.low * 0.25 : 0;                       // bass → interior heat
-    const audioDrift = a ? a.mid * 0.015 : 0;                     // melody → swaying
-    const audioShimmer = a ? a.high * 0.35 : 0;                   // transients → glass iridescence
+    const audioBreathScale = a ? 1 + a.rms * 2.5 : 1; // breathe bigger with sound energy
+    const audioGlow = a ? a.low * 0.25 : 0; // bass → interior heat
+    const audioDrift = a ? a.mid * 0.015 : 0; // melody → swaying
+    const audioShimmer = a ? a.high * 0.35 : 0; // transients → glass iridescence
 
     // === Perturbations relative to base position ===
     // In AR, the creature has a world position (set by orbital dynamics or manual placement).
@@ -839,9 +939,8 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
 
     // Gravity sag — slow cycle, weight pulls down, tension recovers
     const sagRaw = Math.sin(t * 0.32 * Math.PI * 2);
-    const sag = sagRaw > 0
-      ? sagRaw * 0.032
-      : Math.sign(sagRaw) * Math.pow(Math.abs(sagRaw), 0.5) * 0.032;
+    const sag =
+      sagRaw > 0 ? sagRaw * 0.032 : Math.sign(sagRaw) * Math.pow(Math.abs(sagRaw), 0.5) * 0.032;
 
     this.creature.position.set(
       this.basePosition.x + driftX,
@@ -853,9 +952,10 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     const REST_Y = 0.97;
     const breatheRate = 2.0 + cues.glow_intensity * 1.5;
     const breatheRaw = Math.sin(t * breatheRate);
-    const breathe = (breatheRaw > 0
-      ? breatheRaw * 0.015
-      : Math.sign(breatheRaw) * Math.pow(Math.abs(breatheRaw), 0.6) * 0.015) * audioBreathScale;
+    const breathe =
+      (breatheRaw > 0
+        ? breatheRaw * 0.015
+        : Math.sign(breatheRaw) * Math.pow(Math.abs(breatheRaw), 0.6) * 0.015) * audioBreathScale;
 
     this.bodyMesh.scale.set(
       1.0 + breathe + sag * 0.15,
@@ -864,14 +964,14 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     );
 
     // Trust mode visual modulation — glass clarity maps to trust level
-    const trustThickness = this.trustMode === TrustMode.Full ? 0.18
-      : this.trustMode === TrustMode.Guarded ? 0.25 : 0.35;
+    const trustThickness =
+      this.trustMode === TrustMode.Full ? 0.18 : this.trustMode === TrustMode.Guarded ? 0.25 : 0.35;
     this.bodyMaterial.thickness = smoothDelta(this.bodyMaterial.thickness, trustThickness, dt, 2.0);
 
     // Attenuation color: user's soul color is the base; trust mode desaturates toward neutral
     const baseTint = this.interiorColor?.tint ?? [0.95, 0.95, 1.0];
-    const trustDesaturation = this.trustMode === TrustMode.Full ? 0
-      : this.trustMode === TrustMode.Guarded ? 0.3 : 0.6;
+    const trustDesaturation =
+      this.trustMode === TrustMode.Full ? 0 : this.trustMode === TrustMode.Guarded ? 0.3 : 0.6;
     const tintTarget = new THREE.Color(
       baseTint[0] + (0.85 - baseTint[0]) * trustDesaturation,
       baseTint[1] + (0.85 - baseTint[1]) * trustDesaturation,
@@ -883,7 +983,9 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     // Minimal trust: suppress interior glow entirely
     const trustGlowScale = this.trustMode === TrustMode.Minimal ? 0 : 1;
     const baseGlowIntensity = this.interiorColor?.glowIntensity ?? 0;
-    this.bodyMaterial.emissiveIntensity = Math.max(baseGlowIntensity, Math.max(0, cues.glow_intensity - 0.4) * 0.6 + audioGlow) * trustGlowScale;
+    this.bodyMaterial.emissiveIntensity =
+      Math.max(baseGlowIntensity, Math.max(0, cues.glow_intensity - 0.4) * 0.6 + audioGlow) *
+      trustGlowScale;
 
     // Iridescence — high-frequency transients shimmer the glass surface
     // Active listening indicator: subtle ~1Hz oscillation (visual recording light)
@@ -902,15 +1004,22 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
       // Asymmetric curiosity: left eye opens wider (the "interested" eyebrow)
       const curiosityAsym = Math.max(0, cues.eye_dilation - 0.3) * 0.25;
       // Speaking micro-saccades — eyes search while talking, alive not dead
-      const speakGaze = cues.speaking_activity > 0.01
-        ? organicNoise(t, [1.1, 1.7, 2.3]) * cues.speaking_activity * 0.04
-        : 0;
+      const speakGaze =
+        cues.speaking_activity > 0.01
+          ? organicNoise(t, [1.1, 1.7, 2.3]) * cues.speaking_activity * 0.04
+          : 0;
       // Speaking widening pulse — eyes open slightly when forming thoughts
-      const speakWiden = cues.speaking_activity > 0.01
-        ? (0.5 + 0.5 * organicNoise(t, [0.8, 1.3])) * cues.speaking_activity * 0.06
-        : 0;
+      const speakWiden =
+        cues.speaking_activity > 0.01
+          ? (0.5 + 0.5 * organicNoise(t, [0.8, 1.3])) * cues.speaking_activity * 0.06
+          : 0;
       // Blink — the breath of the face
-      const blink = computeBlinkFactor(this.blinkState, t, cues.glow_intensity, cues.speaking_activity);
+      const blink = computeBlinkFactor(
+        this.blinkState,
+        t,
+        cues.glow_intensity,
+        cues.speaking_activity,
+      );
       const leftScale = eyeScale + curiosityAsym + speakWiden;
       const rightScale = eyeScale + speakWiden;
       this.leftEye.scale.set(leftScale, leftScale * blink, leftScale);
@@ -925,9 +1034,10 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
       this.leftEye.position.y = 0.015 + thinkLift + speakGaze;
       this.rightEye.position.y = 0.015 + thinkLift + speakGaze * 0.7;
       // Horizontal micro-drift during speaking
-      const speakHGaze = cues.speaking_activity > 0.01
-        ? organicNoise(t, [0.9, 1.5]) * cues.speaking_activity * 0.003
-        : 0;
+      const speakHGaze =
+        cues.speaking_activity > 0.01
+          ? organicNoise(t, [0.9, 1.5]) * cues.speaking_activity * 0.003
+          : 0;
       this.leftEye.position.x = -0.055 + speakHGaze;
       this.rightEye.position.x = 0.055 + speakHGaze;
     }
@@ -936,9 +1046,10 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     if (this.smileMesh) {
       const baseSmile = 0.6 + cues.smile_curvature * 3.0;
       // Soft speaking movement — a murmur, not a shout
-      const speakOsc = cues.speaking_activity > 0.01
-        ? organicNoise(t, [23.2, 27.0, 32.0]) * cues.speaking_activity * 0.12
-        : 0;
+      const speakOsc =
+        cues.speaking_activity > 0.01
+          ? organicNoise(t, [23.2, 27.0, 32.0]) * cues.speaking_activity * 0.12
+          : 0;
       this.smileMesh.scale.y = baseSmile + speakOsc;
       this.smileMesh.scale.x = 1.0 + cues.speaking_activity * organicNoise(t, [18.2, 23.9]) * 0.05;
     }
@@ -1086,7 +1197,10 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     this.rightEye = null;
     this.smileMesh = null;
 
-    if (this.envMap) { this.envMap.dispose(); this.envMap = null; }
+    if (this.envMap) {
+      this.envMap.dispose();
+      this.envMap = null;
+    }
     if (this.scene) {
       this.scene.traverse((obj) => {
         if (obj instanceof THREE.Mesh) {
@@ -1096,7 +1210,10 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
         }
       });
     }
-    if (this.renderer) { this.renderer.dispose(); this.renderer = null; }
+    if (this.renderer) {
+      this.renderer.dispose();
+      this.renderer = null;
+    }
     this.scene = null;
     this.camera = null;
     this.initialized = false;

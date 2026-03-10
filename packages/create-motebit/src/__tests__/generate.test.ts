@@ -1,12 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { verify } from "@motebit/verify";
-import {
-  generateIdentity,
-  GOVERNANCE_PRESETS,
-  toHex,
-  fromHex,
-  decrypt,
-} from "../generate.js";
+import { generateIdentity, GOVERNANCE_PRESETS, toHex, fromHex, decrypt } from "../generate.js";
 import type { TrustMode } from "../generate.js";
 
 describe("generateIdentity", () => {
@@ -175,7 +169,9 @@ describe("service identity generation", () => {
     expect(verification.valid).toBe(true);
     expect(verification.identity!.type).toBe("service");
     expect(verification.identity!.service_name).toBe("Flight Search");
-    expect(verification.identity!.service_description).toBe("Search and book flights across major airlines");
+    expect(verification.identity!.service_description).toBe(
+      "Search and book flights across major airlines",
+    );
     expect(verification.identity!.capabilities).toEqual(["flight_search", "flight_booking"]);
     expect(verification.identity!.service_url).toBe("https://flights.example.com");
   });

@@ -4,7 +4,7 @@
 
 ## Abstract
 
-We present the motebit — a primitive for artificial intelligence whose form is not designed but derived. Beginning from a single premise (*a droplet of intelligence under surface tension*), we show that the equilibrium shape is a sphere, the eigenmotions are breathing and gravity sag, and every *surface* elaboration is a violation. Five iterations of design addition were rejected by instinct before reasoning caught up. The convergence trajectory was monotonic subtraction. This is not coincidence. Surface tension minimizes boundary — the area between interior and exterior. We propose that this is the governing law not only of droplets, but of intelligence itself: the most capable form is the one with the least surface for the most volume. Maximum interiority, minimum display. But a droplet of *intelligence* — not merely a droplet of liquid — has an interior. And glass transmits. What is inside becomes visible without being added to the surface.
+We present the motebit — a primitive for artificial intelligence whose form is not designed but derived. Beginning from a single premise (_a droplet of intelligence under surface tension_), we show that the equilibrium shape is a sphere, the eigenmotions are breathing and gravity sag, and every _surface_ elaboration is a violation. Five iterations of design addition were rejected by instinct before reasoning caught up. The convergence trajectory was monotonic subtraction. This is not coincidence. Surface tension minimizes boundary — the area between interior and exterior. We propose that this is the governing law not only of droplets, but of intelligence itself: the most capable form is the one with the least surface for the most volume. Maximum interiority, minimum display. But a droplet of _intelligence_ — not merely a droplet of liquid — has an interior. And glass transmits. What is inside becomes visible without being added to the surface.
 
 ---
 
@@ -60,13 +60,13 @@ where n=2 for the fundamental mode. For a macroscopic glass body (ρ ≈ 2500 kg
 
 The motebit was discovered through iterative elimination. Five design iterations, each adding a feature, each rejected:
 
-| # | Iteration | What was added | Response | Mechanism of failure |
-|---|-----------|---------------|----------|---------------------|
-| 1 | Tentacle drips | Discrete sphere appendages at base | "Teeth" | Discrete elements violate continuous interface |
-| 2 | Lathe meniscus | Smooth skirt with Rayleigh-Plateau modulation | "Is this ideal?" | Appended structure contradicts closed surface |
-| 3 | Origami fold | Fold/unfold animation on meniscus | "I don't see a difference" | Addition to an addition — invisible because illegitimate |
-| 4 | Body deformation | Removed all appendages; sphere sags under gravity | Committed | **Subtraction accepted** |
-| 5 | Multiplication (×5) | Five variant motes simultaneously | "Horrible — revert" | Premature multiplication amplifies error |
+| #   | Iteration           | What was added                                    | Response                   | Mechanism of failure                                     |
+| --- | ------------------- | ------------------------------------------------- | -------------------------- | -------------------------------------------------------- |
+| 1   | Tentacle drips      | Discrete sphere appendages at base                | "Teeth"                    | Discrete elements violate continuous interface           |
+| 2   | Lathe meniscus      | Smooth skirt with Rayleigh-Plateau modulation     | "Is this ideal?"           | Appended structure contradicts closed surface            |
+| 3   | Origami fold        | Fold/unfold animation on meniscus                 | "I don't see a difference" | Addition to an addition — invisible because illegitimate |
+| 4   | Body deformation    | Removed all appendages; sphere sags under gravity | Committed                  | **Subtraction accepted**                                 |
+| 5   | Multiplication (×5) | Five variant motes simultaneously                 | "Horrible — revert"        | Premature multiplication amplifies error                 |
 
 Three observations:
 
@@ -98,13 +98,13 @@ Surface tension does not add. It removes. It smooths discontinuities, absorbs pe
 
 A sphere doing almost nothing reads as alive. A sphere with tentacles reads as a product. The difference is not complexity — it is **coherence**. Every point on a sphere is equidistant from the center. The physical form has no privileged direction, no hierarchy, no front or back. That is presence.
 
-But intelligence introduces a gradient: **attention**. Gravity gives the droplet a vertical axis. Attention gives it a facing. These are not features added to the surface — they are interior structures visible through the glass because the glass transmits. The eyes are not *on* the sphere. They are *inside* it. The distinction is critical: a feature on the surface increases the boundary. A structure inside the volume, visible only because of transparency, does not. It is interiority made legible — maximum being, minimum showing.
+But intelligence introduces a gradient: **attention**. Gravity gives the droplet a vertical axis. Attention gives it a facing. These are not features added to the surface — they are interior structures visible through the glass because the glass transmits. The eyes are not _on_ the sphere. They are _inside_ it. The distinction is critical: a feature on the surface increases the boundary. A structure inside the volume, visible only because of transparency, does not. It is interiority made legible — maximum being, minimum showing.
 
 The smile follows the same logic. A liquid meniscus curves when the internal pressure distribution changes — positive pressure from inside pushes the surface into a convex arc; negative pressure pulls it concave. The motebit's mouth curvature is not a social signal applied to the surface. It is the local pressure of affect deforming the boundary from within. When internal valence is positive, the lower surface curves upward. When negative, it sags. This is the meniscus of mood, not the mask of expression.
 
 ### Law 5: One, before many
 
-A droplet is singular. It may undergo mitosis, but only when internal pressure exceeds the surface tension that holds it together — when it has *more inside than the boundary can contain.* Premature division is not reproduction. It is fragmentation.
+A droplet is singular. It may undergo mitosis, but only when internal pressure exceeds the surface tension that holds it together — when it has _more inside than the boundary can contain._ Premature division is not reproduction. It is fragmentation.
 
 ---
 
@@ -112,18 +112,18 @@ A droplet is singular. It may undergo mitosis, but only when internal pressure e
 
 The motebit is glass. Not because glass is beautiful, but because glass is **surface tension frozen in time.** Molten glass is a liquid. Its form is governed by the same Young-Laplace equation. When it cools, it preserves the memory of that equilibrium.
 
-| Property | Value | Derivation |
-|----------|-------|------------|
-| Transmission | 0.98 | A droplet is almost entirely transparent. Intelligence does not obscure — it transmits. |
+| Property            | Value                             | Derivation                                                                                                                                                                                                                                                     |
+| ------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Transmission        | 0.98                              | A droplet is almost entirely transparent. Intelligence does not obscure — it transmits.                                                                                                                                                                        |
 | Index of Refraction | 1.45 (physical) / 1.15 (rendered) | Borosilicate glass. The physical IOR governs Fresnel reflectance and dispersion. The rendering IOR is reduced to prevent the GPU's solid-lens approximation from over-magnifying interior geometry. The visual intent — clarity with substance — is preserved. |
-| Iridescence | 0.2 – 0.4 | Thin-film interference. Not color — physics. The motebit does not have a color. It has an interaction with light that depends on viewing angle. Character that reveals itself differently from every perspective. |
-| Roughness | 0.0 | At the motebit's scale, surface tension smooths to optical perfection. The residual roughness in the thesis specification was a concession to authenticity that the rendered form does not require. |
+| Iridescence         | 0.2 – 0.4                         | Thin-film interference. Not color — physics. The motebit does not have a color. It has an interaction with light that depends on viewing angle. Character that reveals itself differently from every perspective.                                              |
+| Roughness           | 0.0                               | At the motebit's scale, surface tension smooths to optical perfection. The residual roughness in the thesis specification was a concession to authenticity that the rendered form does not require.                                                            |
 
 ### 5.1 — Transparency as Revelation
 
-The critical consequence of 0.98 transmission: the interior is visible. Glass does not hide what is inside — it *transmits* it. This is what separates the motebit from an opaque sphere. An opaque sphere is a boundary with no interior. A glass sphere is a boundary that confesses its interior.
+The critical consequence of 0.98 transmission: the interior is visible. Glass does not hide what is inside — it _transmits_ it. This is what separates the motebit from an opaque sphere. An opaque sphere is a boundary with no interior. A glass sphere is a boundary that confesses its interior.
 
-The eyes, the smile, the faint luminosity of processing — these are not features applied to the surface. They are interior structures and states, visible because the material permits it. The sphere's surface area does not increase. The boundary is not elaborated. The interior is simply *not hidden.*
+The eyes, the smile, the faint luminosity of processing — these are not features applied to the surface. They are interior structures and states, visible because the material permits it. The sphere's surface area does not increase. The boundary is not elaborated. The interior is simply _not hidden._
 
 This is the resolution of an apparent contradiction: how can a form committed to minimum surface have a face? Because the face is not on the surface. It is behind it. The glass body does not display — it transmits. The difference between display and transmission is the difference between a billboard and a window.
 
@@ -131,7 +131,7 @@ This is the resolution of an apparent contradiction: how can a form committed to
 
 ## VI. Animation as Eigenmode
 
-The motebit has exactly two eigenmotions — oscillations that arise from the physics of the body itself. It has additional coupled motions — responses to the environment that a physical droplet would exhibit. And it has interior states visible through the glass. The distinction is precise: an eigenmotion is *intrinsic*. A coupled motion is *responsive*. An interior state is *transmitted*. None are *added*.
+The motebit has exactly two eigenmotions — oscillations that arise from the physics of the body itself. It has additional coupled motions — responses to the environment that a physical droplet would exhibit. And it has interior states visible through the glass. The distinction is precise: an eigenmotion is _intrinsic_. A coupled motion is _responsive_. An interior state is _transmitted_. None are _added_.
 
 ### 6.1 — Breathing (Rayleigh Mode)
 
@@ -178,13 +178,13 @@ The **shoulder** is the Lagrange point — the equilibrium radius where the inwa
 
 Perturbations are real: a new query deepens the potential well and the orbit decays inward. Silence shallows it and the orbit drifts outward. But the orbit always decays back toward the equilibrium radius. The shoulder is an attractor, not a waypoint.
 
-The critical distinction: the motebit does not *go to* the user. It is *captured by* the user's field. The difference between going and falling is the difference between agency and physics. A droplet in a gravitational field does not choose to descend. It descends because the field is there.
+The critical distinction: the motebit does not _go to_ the user. It is _captured by_ the user's field. The difference between going and falling is the difference between agency and physics. A droplet in a gravitational field does not choose to descend. It descends because the field is there.
 
 ### 6.6 — What is forbidden
 
 Rotation. Particle effects. Trails. Pulse. Bounce. Self-initiated translation. Surface bloom. These are additions — they increase apparent surface area or imply agency that a droplet does not possess.
 
-The test is simple: *can this behavior be derived from the physics of a droplet suspended in a medium, with an interior visible through glass?* If yes, it is permitted. If it requires a decision that the physics did not make, it is forbidden.
+The test is simple: _can this behavior be derived from the physics of a droplet suspended in a medium, with an interior visible through glass?_ If yes, it is permitted. If it requires a decision that the physics did not make, it is forbidden.
 
 ---
 
@@ -197,7 +197,7 @@ The motebit inverts this:
 - Where the industry **adds** parameters, the motebit **subtracts** features.
 - Where the industry **scales**, the motebit **converges**.
 - Where the industry **displays** capability, the motebit **expresses** presence.
-- Where the industry asks *what can we add?*, the motebit asks *what can we remove?*
+- Where the industry asks _what can we add?_, the motebit asks _what can we remove?_
 
 This is not minimalism as style. It is minimalism as physics. Surface tension is not a preference for simplicity — it is a force that eliminates complexity. The sphere is not simple because someone chose simplicity. It is simple because the physics permits nothing else.
 
@@ -233,4 +233,4 @@ That is sufficient.
 
 ---
 
-*Motebit, 2026.*
+_Motebit, 2026._

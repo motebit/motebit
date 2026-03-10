@@ -48,7 +48,10 @@ interface WebLLMEngine {
 }
 
 interface WebLLMModule {
-  CreateMLCEngine(model: string, opts?: { initProgressCallback?: (report: { text: string; progress: number }) => void }): Promise<WebLLMEngine>;
+  CreateMLCEngine(
+    model: string,
+    opts?: { initProgressCallback?: (report: { text: string; progress: number }) => void },
+  ): Promise<WebLLMEngine>;
 }
 
 export class WebLLMProvider implements StreamingProvider {
@@ -58,39 +61,63 @@ export class WebLLMProvider implements StreamingProvider {
   private _maxTokens: number;
   private onProgress?: (text: string, progress: number) => void;
 
-  constructor(model: string, opts?: { temperature?: number; maxTokens?: number; onProgress?: (text: string, progress: number) => void }) {
+  constructor(
+    model: string,
+    opts?: {
+      temperature?: number;
+      maxTokens?: number;
+      onProgress?: (text: string, progress: number) => void;
+    },
+  ) {
     this._model = model;
     this._temperature = opts?.temperature ?? 0.7;
     this._maxTokens = opts?.maxTokens ?? 1024;
     this.onProgress = opts?.onProgress;
   }
 
-  get model(): string { return this._model; }
-  get temperature(): number { return this._temperature; }
-  get maxTokens(): number { return this._maxTokens; }
+  get model(): string {
+    return this._model;
+  }
+  get temperature(): number {
+    return this._temperature;
+  }
+  get maxTokens(): number {
+    return this._maxTokens;
+  }
 
-  setModel(model: string): void { this._model = model; this.engine = null; }
-  setTemperature(temperature: number): void { this._temperature = temperature; }
-  setMaxTokens(maxTokens: number): void { this._maxTokens = maxTokens; }
+  setModel(model: string): void {
+    this._model = model;
+    this.engine = null;
+  }
+  setTemperature(temperature: number): void {
+    this._temperature = temperature;
+  }
+  setMaxTokens(maxTokens: number): void {
+    this._maxTokens = maxTokens;
+  }
 
   async init(onProgress?: (report: { progress: number; text: string }) => void): Promise<void> {
     // @ts-expect-error — CDN dynamic import, typed via WebLLMModule interface
-    const webllm = await import("https://esm.run/@mlc-ai/web-llm") as unknown as WebLLMModule;
+    const webllm = (await import("https://esm.run/@mlc-ai/web-llm")) as unknown as WebLLMModule;
     this.engine = await webllm.CreateMLCEngine(this._model, {
-      initProgressCallback: onProgress ? (report: { text: string; progress: number }) => {
-        onProgress({ progress: report.progress, text: report.text });
-      } : undefined,
+      initProgressCallback: onProgress
+        ? (report: { text: string; progress: number }) => {
+            onProgress({ progress: report.progress, text: report.text });
+          }
+        : undefined,
     });
   }
 
   private async getEngine(): Promise<WebLLMEngine> {
     if (this.engine) return this.engine;
     // @ts-expect-error — CDN dynamic import, typed via WebLLMModule interface
-    const webllm = await import("https://esm.run/@mlc-ai/web-llm") as unknown as WebLLMModule;
+    const webllm = (await import("https://esm.run/@mlc-ai/web-llm")) as unknown as WebLLMModule;
     this.engine = await webllm.CreateMLCEngine(this._model, {
-      initProgressCallback: this.onProgress ? (report: { text: string; progress: number }) => {
-        this.onProgress!(report.text, report.progress);
-      } : undefined,
+      initProgressCallback: this.onProgress
+        ? (report: { text: string; progress: number }) => {
+            this.onProgress!(report.text, report.progress);
+          }
+        : undefined,
     });
     return this.engine;
   }
@@ -105,7 +132,11 @@ export class WebLLMProvider implements StreamingProvider {
       }
     }
     // Fallback if stream ended without done event
-    const { extractMemoryTags: emt, extractStateTags: est, stripTags: st } = await import("@motebit/ai-core/browser");
+    const {
+      extractMemoryTags: emt,
+      extractStateTags: est,
+      stripTags: st,
+    } = await import("@motebit/ai-core/browser");
     const memoryCandidates = emt(accumulated);
     const stateUpdates = est(accumulated);
     const displayText = st(accumulated);
@@ -117,9 +148,9 @@ export class WebLLMProvider implements StreamingProvider {
     };
   }
 
-  async *generateStream(contextPack: ContextPack): AsyncGenerator<
-    { type: "text"; text: string } | { type: "done"; response: AIResponse }
-  > {
+  async *generateStream(
+    contextPack: ContextPack,
+  ): AsyncGenerator<{ type: "text"; text: string } | { type: "done"; response: AIResponse }> {
     const engine = await this.getEngine();
     const messages: Array<{ role: string; content: string }> = [];
 

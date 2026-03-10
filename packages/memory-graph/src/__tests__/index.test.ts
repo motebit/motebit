@@ -445,11 +445,7 @@ describe("MemoryGraph", () => {
         [0, 1],
       );
 
-      const edge = await graph.link(
-        nodeA.node_id,
-        nodeB.node_id,
-        RelationType.Related,
-      );
+      const edge = await graph.link(nodeA.node_id, nodeB.node_id, RelationType.Related);
 
       expect(edge.source_id).toBe(nodeA.node_id);
       expect(edge.target_id).toBe(nodeB.node_id);
@@ -476,13 +472,7 @@ describe("MemoryGraph", () => {
         [0, 1],
       );
 
-      const edge = await graph.link(
-        nodeA.node_id,
-        nodeB.node_id,
-        RelationType.CausedBy,
-        0.5,
-        0.7,
-      );
+      const edge = await graph.link(nodeA.node_id, nodeB.node_id, RelationType.CausedBy, 0.5, 0.7);
 
       expect(edge.weight).toBe(0.5);
       expect(edge.confidence).toBe(0.7);
@@ -532,11 +522,7 @@ describe("MemoryGraph", () => {
         },
         [0, 1],
       );
-      await graph.link(
-        nodeA.node_id,
-        nodeB.node_id,
-        RelationType.Related,
-      );
+      await graph.link(nodeA.node_id, nodeB.node_id, RelationType.Related);
 
       const exported = await graph.exportAll();
       expect(exported.nodes).toHaveLength(2);
@@ -862,7 +848,7 @@ describe("MemoryGraph", () => {
 
       // Query is very similar to A
       const results = await graph.retrieve([0.99, 0.01, 0], { limit: 10, expandEdges: true });
-      const ids = results.map(r => r.node_id);
+      const ids = results.map((r) => r.node_id);
 
       expect(ids).toContain(nodeA.node_id);
       expect(ids).toContain(nodeB.node_id); // expanded via edge
@@ -881,7 +867,7 @@ describe("MemoryGraph", () => {
       await graph.link(nodeA.node_id, nodeB.node_id, RelationType.Related, 1.0, 1.0);
 
       const results = await graph.retrieve([0.99, 0.01, 0], { limit: 10, expandEdges: false });
-      const ids = results.map(r => r.node_id);
+      const ids = results.map((r) => r.node_id);
 
       expect(ids).toContain(nodeA.node_id);
       // B should NOT appear since expansion is disabled and its embedding is dissimilar
@@ -902,7 +888,7 @@ describe("MemoryGraph", () => {
       await graph.deleteMemory(nodeB.node_id);
 
       const results = await graph.retrieve([0.99, 0.01, 0], { limit: 10, expandEdges: true });
-      const ids = results.map(r => r.node_id);
+      const ids = results.map((r) => r.node_id);
 
       expect(ids).toContain(nodeA.node_id);
       expect(ids).not.toContain(nodeB.node_id); // tombstoned
@@ -929,7 +915,7 @@ describe("MemoryGraph", () => {
       });
 
       // B should appear with discounted score
-      const ids = results.map(r => r.node_id);
+      const ids = results.map((r) => r.node_id);
       expect(ids).toContain(nodeB.node_id);
     });
   });
@@ -954,7 +940,7 @@ describe("MemoryGraph", () => {
       await storage.saveNode(expired);
 
       const results = await graph.retrieve([1, 0, 0], { limit: 10 });
-      const ids = results.map(r => r.node_id);
+      const ids = results.map((r) => r.node_id);
 
       expect(ids).toContain(current.node_id);
       expect(ids).not.toContain(expired.node_id);
@@ -969,7 +955,7 @@ describe("MemoryGraph", () => {
       await storage.saveNode(expired);
 
       const results = await graph.retrieve([1, 0, 0], { limit: 10, includeExpired: true });
-      const ids = results.map(r => r.node_id);
+      const ids = results.map((r) => r.node_id);
 
       expect(ids).toContain(expired.node_id);
     });
@@ -989,7 +975,7 @@ describe("MemoryGraph", () => {
       await graph.link(nodeA.node_id, nodeB.node_id, RelationType.Related, 1.0, 1.0);
 
       const results = await graph.retrieve([0.99, 0.01, 0], { limit: 10, expandEdges: true });
-      const ids = results.map(r => r.node_id);
+      const ids = results.map((r) => r.node_id);
 
       expect(ids).toContain(nodeA.node_id);
       expect(ids).not.toContain(nodeB.node_id);
@@ -1013,7 +999,12 @@ describe("MemoryGraph", () => {
     it("uses 3-day half-life for episodic memories", async () => {
       const { MemoryType: MT } = await import("@motebit/sdk");
       const node = await graph.formMemory(
-        { content: "something happened", confidence: 0.8, sensitivity: SensitivityLevel.None, memory_type: MT.Episodic },
+        {
+          content: "something happened",
+          confidence: 0.8,
+          sensitivity: SensitivityLevel.None,
+          memory_type: MT.Episodic,
+        },
         [1, 0, 0],
       );
       expect(node.half_life).toBe(3 * 24 * 60 * 60 * 1000);

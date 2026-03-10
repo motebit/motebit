@@ -32,7 +32,11 @@ const STATE_INTENSITY: Record<MicState, number> = {
   speaking: 0.7,
 };
 
-export function VoiceIndicator({ micState, audioLevel, glowColor }: VoiceIndicatorProps): React.ReactElement | null {
+export function VoiceIndicator({
+  micState,
+  audioLevel,
+  glowColor,
+}: VoiceIndicatorProps): React.ReactElement | null {
   const colors = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const barAnims = useRef<Animated.Value[]>(
@@ -104,7 +108,9 @@ export function VoiceIndicator({ micState, audioLevel, glowColor }: VoiceIndicat
       pulseRef.current?.stop();
       pulseAnim.setValue(0.3);
     }
-    return () => { pulseRef.current?.stop(); };
+    return () => {
+      pulseRef.current?.stop();
+    };
   }, [micState, pulseAnim]);
 
   // Derive bar color from soul color + state intensity
@@ -113,9 +119,9 @@ export function VoiceIndicator({ micState, audioLevel, glowColor }: VoiceIndicat
     const intensity = STATE_INTENSITY[micState];
     const maxG = Math.max(glowColor[0], glowColor[1], glowColor[2], 0.01);
     const satPow = 1.3;
-    const r = Math.min(255, Math.round(((glowColor[0] / maxG) ** (1 / satPow)) * glowColor[0] * 300));
-    const g = Math.min(255, Math.round(((glowColor[1] / maxG) ** (1 / satPow)) * glowColor[1] * 300));
-    const b = Math.min(255, Math.round(((glowColor[2] / maxG) ** (1 / satPow)) * glowColor[2] * 300));
+    const r = Math.min(255, Math.round((glowColor[0] / maxG) ** (1 / satPow) * glowColor[0] * 300));
+    const g = Math.min(255, Math.round((glowColor[1] / maxG) ** (1 / satPow) * glowColor[1] * 300));
+    const b = Math.min(255, Math.round((glowColor[2] / maxG) ** (1 / satPow) * glowColor[2] * 300));
     return `rgba(${r},${g},${b},${(0.3 + intensity * 0.5).toFixed(2)})`;
   }, [glowColor, micState]);
 

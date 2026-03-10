@@ -76,7 +76,6 @@ describe("embedText (hash fallback when pipeline fails)", () => {
     const b = await embedText("test input");
     expect(a).toEqual(b);
   });
-
 });
 
 describe("embedTextHash (fallback)", () => {

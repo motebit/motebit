@@ -20,34 +20,34 @@ jobs:
 ### With options
 
 ```yaml
-      - uses: motebit/motebit/packages/github-action@main
-        with:
-          path: 'agents/my-agent/motebit.md'
-          fail-on-missing: 'false'
+- uses: motebit/motebit/packages/github-action@main
+  with:
+    path: "agents/my-agent/motebit.md"
+    fail-on-missing: "false"
 ```
 
 ### Using outputs
 
 ```yaml
-      - uses: motebit/motebit/packages/github-action@main
-        id: identity
-      - run: echo "Agent ${{ steps.identity.outputs.motebit-id }} verified"
+- uses: motebit/motebit/packages/github-action@main
+  id: identity
+- run: echo "Agent ${{ steps.identity.outputs.motebit-id }} verified"
 ```
 
 ## Inputs
 
-| Input | Default | Description |
-|-------|---------|-------------|
-| `path` | `motebit.md` | Path to the identity file |
-| `fail-on-missing` | `true` | Fail if the file doesn't exist |
-| `node-version` | `20` | Node.js version |
+| Input             | Default      | Description                    |
+| ----------------- | ------------ | ------------------------------ |
+| `path`            | `motebit.md` | Path to the identity file      |
+| `fail-on-missing` | `true`       | Fail if the file doesn't exist |
+| `node-version`    | `20`         | Node.js version                |
 
 ## Outputs
 
-| Output | Description |
-|--------|-------------|
-| `valid` | `true` if signature is valid |
-| `motebit-id` | The `motebit_id` from the file |
+| Output       | Description                          |
+| ------------ | ------------------------------------ |
+| `valid`      | `true` if signature is valid         |
+| `motebit-id` | The `motebit_id` from the file       |
 | `public-key` | First 16 hex chars of the public key |
 
 ## What it checks

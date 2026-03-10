@@ -4,7 +4,7 @@ Every AI agent you've ever used has the same problem: when the conversation ends
 
 It has no identity. No memory that compounds. No trust history. No proof of who it is. Every session starts from nothing. Every context window is a new birth and a new death.
 
-We've built agents that can reason, write code, search the web, execute multi-step plans. But we haven't built agents that *persist*. We gave them intelligence and forgot to give them existence.
+We've built agents that can reason, write code, search the web, execute multi-step plans. But we haven't built agents that _persist_. We gave them intelligence and forgot to give them existence.
 
 ---
 
@@ -39,7 +39,7 @@ An agent with identity can:
 - **Enforce governance** — sensitivity levels, risk thresholds, approval requirements, retention policies. Not imposed by the provider, but defined by the owner.
 - **Persist across providers** — the intelligence is pluggable. The identity is the constant.
 
-This is what's missing from the agentic economy. MCP defined capability — what tools an agent can reach. But it says nothing about *who* the agent is.
+This is what's missing from the agentic economy. MCP defined capability — what tools an agent can reach. But it says nothing about _who_ the agent is.
 
 ---
 
@@ -101,10 +101,10 @@ The agentic economy needs plumbing. Not more intelligence — we have plenty of 
 
 ---
 
-*Motebit is cryptographic identity for AI agents. The spec is open. The tools are free. Start here:*
+_Motebit is cryptographic identity for AI agents. The spec is open. The tools are free. Start here:_
 
 ```bash
 npm create motebit
 ```
 
-*[GitHub](https://github.com/motebit/motebit) | [Spec](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md) | [npm](https://www.npmjs.com/package/create-motebit)*
+_[GitHub](https://github.com/motebit/motebit) | [Spec](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md) | [npm](https://www.npmjs.com/package/create-motebit)_

@@ -94,7 +94,7 @@ export class InMemoryIdentityStorage implements IdentityStorage {
   }
 
   listDevices(motebitId: string): Promise<DeviceRegistration[]> {
-    return Promise.resolve([...this.devices.values()].filter(d => d.motebit_id === motebitId));
+    return Promise.resolve([...this.devices.values()].filter((d) => d.motebit_id === motebitId));
   }
 }
 
@@ -109,9 +109,18 @@ export class IdentityManager {
   ) {}
 
   /** Returns the device-capable storage, falling back to an in-memory store. */
-  private get deviceStore(): Required<Pick<IdentityStorage, "saveDevice" | "loadDevice" | "loadDeviceByToken" | "listDevices">> {
-    if (this.storage.saveDevice && this.storage.loadDevice && this.storage.loadDeviceByToken && this.storage.listDevices) {
-      return this.storage as Required<Pick<IdentityStorage, "saveDevice" | "loadDevice" | "loadDeviceByToken" | "listDevices">>;
+  private get deviceStore(): Required<
+    Pick<IdentityStorage, "saveDevice" | "loadDevice" | "loadDeviceByToken" | "listDevices">
+  > {
+    if (
+      this.storage.saveDevice &&
+      this.storage.loadDevice &&
+      this.storage.loadDeviceByToken &&
+      this.storage.listDevices
+    ) {
+      return this.storage as Required<
+        Pick<IdentityStorage, "saveDevice" | "loadDevice" | "loadDeviceByToken" | "listDevices">
+      >;
     }
     if (!this.deviceFallback) {
       this.deviceFallback = new InMemoryDeviceStore();
@@ -187,7 +196,11 @@ export class IdentityManager {
    * Register a new device for a motebit identity. Returns the device
    * registration including a unique device_token for authentication.
    */
-  async registerDevice(motebitId: string, deviceName?: string, publicKey?: string): Promise<DeviceRegistration> {
+  async registerDevice(
+    motebitId: string,
+    deviceName?: string,
+    publicKey?: string,
+  ): Promise<DeviceRegistration> {
     const device: DeviceRegistration = {
       device_id: crypto.randomUUID(),
       motebit_id: motebitId,
@@ -256,7 +269,9 @@ export interface BootstrapResult {
 }
 
 function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 /**
@@ -350,6 +365,6 @@ class InMemoryDeviceStore {
   }
 
   listDevices(motebitId: string): Promise<DeviceRegistration[]> {
-    return Promise.resolve([...this.devices.values()].filter(d => d.motebit_id === motebitId));
+    return Promise.resolve([...this.devices.values()].filter((d) => d.motebit_id === motebitId));
   }
 }

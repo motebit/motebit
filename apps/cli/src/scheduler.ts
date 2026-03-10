@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
-import type { SqliteGoalStore, SqliteApprovalStore, SqliteGoalOutcomeStore, Goal, GoalOutcome } from "@motebit/persistence";
+import type {
+  SqliteGoalStore,
+  SqliteApprovalStore,
+  SqliteGoalOutcomeStore,
+  Goal,
+  GoalOutcome,
+} from "@motebit/persistence";
 import { EventType, RiskLevel, PlanStatus, SensitivityLevel } from "@motebit/sdk";
 import type { ToolHandler } from "@motebit/sdk";
 import {
@@ -73,7 +79,9 @@ export class GoalScheduler {
       this.approvalStore.resolve(a.approval_id, "denied", "daemon_restart");
     }
     if (orphans.length > 0) {
-      console.log(`[scheduler] cleaned up ${orphans.length} orphaned approval(s) from previous run`);
+      console.log(
+        `[scheduler] cleaned up ${orphans.length} orphaned approval(s) from previous run`,
+      );
     }
   }
 
@@ -102,10 +110,14 @@ export class GoalScheduler {
 
     const createSubGoalHandler: ToolHandler = (args) => {
       if (this.currentGoalId == null || this.currentGoalId === "") {
-        return Promise.resolve({ ok: false, error: "No active goal context — this tool can only be used during goal execution." });
+        return Promise.resolve({
+          ok: false,
+          error: "No active goal context — this tool can only be used during goal execution.",
+        });
       }
       const prompt = args.prompt as string;
-      if (prompt == null || prompt === "") return Promise.resolve({ ok: false, error: "Missing required parameter: prompt" });
+      if (prompt == null || prompt === "")
+        return Promise.resolve({ ok: false, error: "Missing required parameter: prompt" });
 
       const intervalStr = (args.interval as string) ?? "1h";
       let intervalMs: number;
@@ -119,7 +131,8 @@ export class GoalScheduler {
       const goalId = crypto.randomUUID();
 
       const wallClockMs = typeof args.wall_clock_ms === "number" ? args.wall_clock_ms : null;
-      const projectId = typeof args.project_id === "string" && args.project_id !== "" ? args.project_id : null;
+      const projectId =
+        typeof args.project_id === "string" && args.project_id !== "" ? args.project_id : null;
 
       this.goalStore.add({
         goal_id: goalId,
@@ -139,12 +152,18 @@ export class GoalScheduler {
       });
 
       console.log(`[goal] sub-goal created: ${goalId.slice(0, 8)} — "${prompt.slice(0, 40)}"`);
-      return Promise.resolve({ ok: true, data: `Sub-goal created: ${goalId.slice(0, 8)} — "${prompt}"` });
+      return Promise.resolve({
+        ok: true,
+        data: `Sub-goal created: ${goalId.slice(0, 8)} — "${prompt}"`,
+      });
     };
 
     const completeGoalHandler: ToolHandler = async (args) => {
       if (this.currentGoalId == null || this.currentGoalId === "") {
-        return { ok: false, error: "No active goal context — this tool can only be used during goal execution." };
+        return {
+          ok: false,
+          error: "No active goal context — this tool can only be used during goal execution.",
+        };
       }
       const reason = args.reason as string;
       if (!reason) return { ok: false, error: "Missing required parameter: reason" };
@@ -173,7 +192,10 @@ export class GoalScheduler {
 
     const reportProgressHandler: ToolHandler = async (args) => {
       if (this.currentGoalId == null || this.currentGoalId === "") {
-        return { ok: false, error: "No active goal context — this tool can only be used during goal execution." };
+        return {
+          ok: false,
+          error: "No active goal context — this tool can only be used during goal execution.",
+        };
       }
       const note = args.note as string;
       if (!note) return { ok: false, error: "Missing required parameter: note" };
@@ -254,8 +276,9 @@ export class GoalScheduler {
         }
 
         // Sibling context: other active children of the same parent
-        const siblings = this.goalStore.listChildren(goal.parent_goal_id)
-          .filter(sg => sg.goal_id !== goal.goal_id && sg.status === "active")
+        const siblings = this.goalStore
+          .listChildren(goal.parent_goal_id)
+          .filter((sg) => sg.goal_id !== goal.goal_id && sg.status === "active")
           .slice(0, 5);
         if (siblings.length > 0) {
           lines.push("");
@@ -275,8 +298,9 @@ export class GoalScheduler {
 
     // Project context: other active goals with the same project_id
     if (goal.project_id) {
-      const projectGoals = this.goalStore.listByProject(goal.project_id, this.motebitId)
-        .filter(pg => pg.goal_id !== goal.goal_id && pg.status === "active")
+      const projectGoals = this.goalStore
+        .listByProject(goal.project_id, this.motebitId)
+        .filter((pg) => pg.goal_id !== goal.goal_id && pg.status === "active")
         .slice(0, 5);
       if (projectGoals.length > 0) {
         lines.push("");
@@ -345,7 +369,12 @@ export class GoalScheduler {
           const wallClock = goal.wall_clock_ms ?? this.goalWallClockMs;
           const abortController = new AbortController();
           const deadlineTimer = setTimeout(
-            () => abortController.abort(new Error(`Goal exceeded ${Math.round(wallClock / 60_000)}-minute wall-clock limit`)),
+            () =>
+              abortController.abort(
+                new Error(
+                  `Goal exceeded ${Math.round(wallClock / 60_000)}-minute wall-clock limit`,
+                ),
+              ),
             wallClock,
           );
 
@@ -398,7 +427,9 @@ export class GoalScheduler {
           const refreshed = this.goalStore.get(goal.goal_id);
           if (goal.mode === "once" && refreshed && refreshed.status === "active") {
             this.goalStore.setStatus(goal.goal_id, "completed");
-            void this.logGoalEvent(EventType.GoalCompleted, goal.goal_id, { reason: "one-shot auto-complete" });
+            void this.logGoalEvent(EventType.GoalCompleted, goal.goal_id, {
+              reason: "one-shot auto-complete",
+            });
           }
 
           console.log(`[goal] completed: ${goal.goal_id.slice(0, 8)}`);
@@ -424,7 +455,9 @@ export class GoalScheduler {
           const refreshed = this.goalStore.get(goal.goal_id);
           if (refreshed && refreshed.consecutive_failures >= refreshed.max_retries) {
             this.goalStore.setStatus(goal.goal_id, "paused");
-            console.warn(`[goal] auto-paused ${goal.goal_id.slice(0, 8)} after ${refreshed.consecutive_failures} consecutive failures`);
+            console.warn(
+              `[goal] auto-paused ${goal.goal_id.slice(0, 8)} after ${refreshed.consecutive_failures} consecutive failures`,
+            );
           }
         } finally {
           this.currentGoalId = null;
@@ -498,8 +531,16 @@ export class GoalScheduler {
           // Track in-memory (runtime holds the actual suspended state)
           this.suspended.set(approvalId, { approvalId, goalId, createdAt: now });
 
-          console.log(`\n  [approval-pending] ${chunk.name} — approval_id: ${approvalId.slice(0, 8)}`);
-          void this.logApprovalEvent(EventType.ApprovalRequested, goalId, approvalId, chunk.name, chunk.args);
+          console.log(
+            `\n  [approval-pending] ${chunk.name} — approval_id: ${approvalId.slice(0, 8)}`,
+          );
+          void this.logApprovalEvent(
+            EventType.ApprovalRequested,
+            goalId,
+            approvalId,
+            chunk.name,
+            chunk.args,
+          );
 
           // Record suspended outcome
           this.goalOutcomeStore.add({
@@ -534,7 +575,12 @@ export class GoalScheduler {
     return { suspended: false, toolCallsMade, memoriesFormed, responseText };
   }
 
-  private async executePlanGoal(goal: Goal, outcomes: GoalOutcome[], runId?: string, signal?: AbortSignal): Promise<GoalStreamResult> {
+  private async executePlanGoal(
+    goal: Goal,
+    outcomes: GoalOutcome[],
+    runId?: string,
+    signal?: AbortSignal,
+  ): Promise<GoalStreamResult> {
     const loopDeps = this.runtime.getLoopDeps();
     if (!loopDeps) throw new Error("AI not initialized — no loop deps available");
 
@@ -551,17 +597,26 @@ export class GoalScheduler {
       // Retrieve relevant memories to inform plan decomposition
       const relevantMemories = await this.retrieveRelevantMemories(goal.prompt);
 
-      const created = await this.planEngine!.createPlan(goal.goal_id, this.motebitId, {
-        goalPrompt: goal.prompt,
-        previousOutcomes: outcomes.map((o) =>
-          o.status === "failed" ? `failed: ${o.error_message ?? "unknown"}` : `${o.status}: ${o.summary ?? "no summary"}`,
-        ),
-        availableTools: registry.list().map((t) => t.name),
-        relevantMemories: relevantMemories.length > 0 ? relevantMemories : undefined,
-      }, loopDeps);
+      const created = await this.planEngine!.createPlan(
+        goal.goal_id,
+        this.motebitId,
+        {
+          goalPrompt: goal.prompt,
+          previousOutcomes: outcomes.map((o) =>
+            o.status === "failed"
+              ? `failed: ${o.error_message ?? "unknown"}`
+              : `${o.status}: ${o.summary ?? "no summary"}`,
+          ),
+          availableTools: registry.list().map((t) => t.name),
+          relevantMemories: relevantMemories.length > 0 ? relevantMemories : undefined,
+        },
+        loopDeps,
+      );
       plan = created.plan;
       if (created.truncatedFrom != null) {
-        console.warn(`[plan] truncated from ${created.truncatedFrom} to ${plan.total_steps} steps (max ${plan.total_steps})`);
+        console.warn(
+          `[plan] truncated from ${created.truncatedFrom} to ${plan.total_steps} steps (max ${plan.total_steps})`,
+        );
       }
       planStream = this.planEngine!.executePlan(plan.plan_id, loopDeps, undefined, runId);
     }
@@ -616,9 +671,7 @@ export class GoalScheduler {
               process.stdout.write(`\n  [tool] ${chunk.chunk.name}...`);
               toolCallsMade++;
               if (toolCallsMade > MAX_TOOL_CALLS_PER_RUN) {
-                throw new Error(
-                  `Goal exceeded ${MAX_TOOL_CALLS_PER_RUN} tool calls — run stopped`,
-                );
+                throw new Error(`Goal exceeded ${MAX_TOOL_CALLS_PER_RUN} tool calls — run stopped`);
               }
             } else {
               process.stdout.write(" done\n");
@@ -677,8 +730,16 @@ export class GoalScheduler {
           });
 
           this.suspended.set(approvalId, { approvalId, goalId, createdAt: now });
-          console.log(`\n  [approval-pending] ${innerChunk.name} — approval_id: ${approvalId.slice(0, 8)}`);
-          void this.logApprovalEvent(EventType.ApprovalRequested, goalId, approvalId, innerChunk.name, innerChunk.args);
+          console.log(
+            `\n  [approval-pending] ${innerChunk.name} — approval_id: ${approvalId.slice(0, 8)}`,
+          );
+          void this.logApprovalEvent(
+            EventType.ApprovalRequested,
+            goalId,
+            approvalId,
+            innerChunk.name,
+            innerChunk.args,
+          );
 
           return { suspended: true, toolCallsMade, memoriesFormed, responseText };
         }
@@ -700,7 +761,10 @@ export class GoalScheduler {
 
         case "reflection": {
           console.log(`[plan] reflection: ${chunk.result.summary}`);
-          const stored = await this.persistReflectionMemories(chunk.result.memoryCandidates, goalId);
+          const stored = await this.persistReflectionMemories(
+            chunk.result.memoryCandidates,
+            goalId,
+          );
           memoriesFormed += stored;
           void this.logGoalEvent(EventType.ReflectionCompleted, goalId, {
             source: "plan_reflection",
@@ -744,7 +808,9 @@ export class GoalScheduler {
       if (item.status !== "approved" && item.status !== "denied") continue;
 
       const approved = item.status === "approved";
-      console.log(`[approval] draining ${approved ? "approved" : "denied"}: ${approvalId.slice(0, 8)}`);
+      console.log(
+        `[approval] draining ${approved ? "approved" : "denied"}: ${approvalId.slice(0, 8)}`,
+      );
 
       if (this.runtime.hasPendingApproval) {
         this.currentGoalId = turn.goalId;
@@ -758,7 +824,14 @@ export class GoalScheduler {
 
       this.suspended.delete(approvalId);
       const eventType = approved ? EventType.ApprovalApproved : EventType.ApprovalDenied;
-      void this.logApprovalEvent(eventType, turn.goalId, approvalId, item.tool_name, {}, item.denied_reason);
+      void this.logApprovalEvent(
+        eventType,
+        turn.goalId,
+        approvalId,
+        item.tool_name,
+        {},
+        item.denied_reason,
+      );
     }
   }
 

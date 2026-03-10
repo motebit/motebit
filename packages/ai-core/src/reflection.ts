@@ -93,7 +93,11 @@ export function parseReflectionResponse(text: string): ReflectionResult {
   }
 
   // Fallback: if parsing completely failed, treat whole text as assessment
-  if (result.insights.length === 0 && result.planAdjustments.length === 0 && !result.selfAssessment) {
+  if (
+    result.insights.length === 0 &&
+    result.planAdjustments.length === 0 &&
+    !result.selfAssessment
+  ) {
     result.selfAssessment = text.trim();
   }
 
@@ -146,9 +150,7 @@ export async function reflect(
   }
 
   if (activeGoals.length > 0) {
-    const goalList = activeGoals
-      .map((g) => `- ${g.description} (${g.status})`)
-      .join("\n");
+    const goalList = activeGoals.map((g) => `- ${g.description} (${g.status})`).join("\n");
     sections.push(`[Active Goals]\n${goalList}`);
   }
 

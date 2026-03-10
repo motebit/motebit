@@ -68,7 +68,11 @@ import {
   parse as parseIdentityFile,
   governanceToPolicyConfig,
 } from "@motebit/identity-file";
-import { createExpoStorage, ExpoGoalStore, ExpoSqliteConversationStore } from "./adapters/expo-sqlite";
+import {
+  createExpoStorage,
+  ExpoGoalStore,
+  ExpoSqliteConversationStore,
+} from "./adapters/expo-sqlite";
 import type { ExpoStorageResult } from "./adapters/expo-sqlite";
 import { ExpoGLAdapter } from "./adapters/expo-gl";
 import { SecureStoreAdapter } from "./adapters/secure-store";
@@ -76,13 +80,13 @@ import { SecureStoreAdapter } from "./adapters/secure-store";
 // === Color Presets (same 7 as desktop) ===
 
 export const COLOR_PRESETS: Record<string, InteriorColor> = {
-  moonlight:    { tint: [0.95, 0.95, 1.0], glow: [0.8, 0.85, 1.0] },
-  amber:        { tint: [1.0, 0.85, 0.6], glow: [0.9, 0.7, 0.3] },
-  rose:         { tint: [1.0, 0.82, 0.88], glow: [0.9, 0.5, 0.6] },
-  violet:       { tint: [0.88, 0.8, 1.0], glow: [0.6, 0.4, 0.9] },
-  cyan:         { tint: [0.8, 0.95, 1.0], glow: [0.3, 0.8, 0.9] },
-  ember:        { tint: [1.0, 0.75, 0.65], glow: [0.9, 0.35, 0.2] },
-  sage:         { tint: [0.82, 0.95, 0.85], glow: [0.4, 0.75, 0.5] },
+  moonlight: { tint: [0.95, 0.95, 1.0], glow: [0.8, 0.85, 1.0] },
+  amber: { tint: [1.0, 0.85, 0.6], glow: [0.9, 0.7, 0.3] },
+  rose: { tint: [1.0, 0.82, 0.88], glow: [0.9, 0.5, 0.6] },
+  violet: { tint: [0.88, 0.8, 1.0], glow: [0.6, 0.4, 0.9] },
+  cyan: { tint: [0.8, 0.95, 1.0], glow: [0.3, 0.8, 0.9] },
+  ember: { tint: [1.0, 0.75, 0.65], glow: [0.9, 0.35, 0.2] },
+  sage: { tint: [0.82, 0.95, 0.85], glow: [0.4, 0.75, 0.5] },
 };
 
 // === Approval Presets ===
@@ -210,11 +214,16 @@ function parseInterval(s: string): number {
   if (!match) return 3_600_000;
   const n = parseInt(match[1]!, 10);
   switch (match[2]!.toLowerCase()) {
-    case "m": return n * 60_000;
-    case "h": return n * 3_600_000;
-    case "d": return n * 86_400_000;
-    case "w": return n * 604_800_000;
-    default: return 3_600_000;
+    case "m":
+      return n * 60_000;
+    case "h":
+      return n * 3_600_000;
+    case "d":
+      return n * 86_400_000;
+    case "w":
+      return n * 604_800_000;
+    default:
+      return 3_600_000;
   }
 }
 
@@ -227,7 +236,10 @@ export class MobileApp {
   private keyring: SecureStoreAdapter;
 
   // Governance status
-  private _governanceStatus: { governed: boolean; reason?: string } = { governed: false, reason: "not initialized" };
+  private _governanceStatus: { governed: boolean; reason?: string } = {
+    governed: false,
+    reason: "not initialized",
+  };
 
   // Sync state
   private syncEngine: SyncEngine | null = null;
@@ -332,12 +344,14 @@ export class MobileApp {
               motebitId: result.motebitId,
               ownerId: result.motebitId,
               publicKeyHex: result.publicKeyHex,
-              devices: [{
-                device_id: result.deviceId,
-                name: "Mobile",
-                public_key: result.publicKeyHex,
-                registered_at: new Date().toISOString(),
-              }],
+              devices: [
+                {
+                  device_id: result.deviceId,
+                  name: "Mobile",
+                  public_key: result.publicKeyHex,
+                  registered_at: new Date().toISOString(),
+                },
+              ],
             },
             privKeyBytes,
           );
@@ -402,7 +416,14 @@ export class MobileApp {
       if (identityFileContent != null && identityFileContent !== "") {
         const parsed = parseIdentityFile(identityFileContent);
         const gov = parsed.frontmatter.governance;
-        if (gov?.max_risk_auto != null && gov.max_risk_auto !== "" && gov.require_approval_above != null && gov.require_approval_above !== "" && gov.deny_above != null && gov.deny_above !== "") {
+        if (
+          gov?.max_risk_auto != null &&
+          gov.max_risk_auto !== "" &&
+          gov.require_approval_above != null &&
+          gov.require_approval_above !== "" &&
+          gov.deny_above != null &&
+          gov.deny_above !== ""
+        ) {
           const govPolicy = governanceToPolicyConfig(gov);
           policyConfig = {
             maxRiskLevel: govPolicy.maxRiskAuto,
@@ -411,7 +432,10 @@ export class MobileApp {
           };
           this._governanceStatus = { governed: true };
         } else {
-          this._governanceStatus = { governed: false, reason: "incomplete governance in identity file" };
+          this._governanceStatus = {
+            governed: false,
+            reason: "incomplete governance in identity file",
+          };
         }
       } else {
         this._governanceStatus = { governed: false, reason: "no identity file" };
@@ -491,10 +515,13 @@ export class MobileApp {
       const prompt = args.prompt as string;
       const interval = args.interval as string | undefined;
       const once = args.once as boolean | undefined;
-      const intervalMs = (interval != null && interval !== "") ? parseInterval(interval) : 3_600_000;
+      const intervalMs = interval != null && interval !== "" ? parseInterval(interval) : 3_600_000;
       const mode = once === true ? "once" : "recurring";
       const subGoalId = goalStore.addGoal(this.motebitId, prompt, intervalMs, mode);
-      return Promise.resolve({ ok: true, data: { goal_id: subGoalId, prompt, mode, interval_ms: intervalMs } });
+      return Promise.resolve({
+        ok: true,
+        data: { goal_id: subGoalId, prompt, mode, interval_ms: intervalMs },
+      });
     });
 
     registry.register(completeGoalDefinition, (args: Record<string, unknown>) => {
@@ -503,7 +530,10 @@ export class MobileApp {
       }
       const reason = args.reason as string;
       goalStore.setStatus(this._currentGoalId, "completed");
-      return Promise.resolve({ ok: true, data: { goal_id: this._currentGoalId, status: "completed", reason } });
+      return Promise.resolve({
+        ok: true,
+        data: { goal_id: this._currentGoalId, status: "completed", reason },
+      });
     });
 
     registry.register(reportProgressDefinition, (args: Record<string, unknown>) => {
@@ -540,7 +570,14 @@ export class MobileApp {
       this.runtime.renderFrame(deltaTime, time);
     } else {
       this.renderer.render({
-        cues: { hover_distance: 0.4, drift_amplitude: 0.02, glow_intensity: 0.3, eye_dilation: 0.3, smile_curvature: 0, speaking_activity: 0 },
+        cues: {
+          hover_distance: 0.4,
+          drift_amplitude: 0.02,
+          glow_intensity: 0.3,
+          eye_dilation: 0.3,
+          smile_curvature: 0,
+          speaking_activity: 0,
+        },
         delta_time: deltaTime,
         time,
       });
@@ -676,7 +713,9 @@ export class MobileApp {
 
   async addMcpServer(config: McpServerConfig): Promise<void> {
     if (config.transport !== "http") {
-      throw new Error("Mobile only supports HTTP MCP servers. Use the desktop or CLI app for stdio servers.");
+      throw new Error(
+        "Mobile only supports HTTP MCP servers. Use the desktop or CLI app for stdio servers.",
+      );
     }
     if (config.url == null || config.url === "") {
       throw new Error("HTTP MCP server requires a url");
@@ -686,7 +725,10 @@ export class MobileApp {
     await adapter.connect();
 
     // Manifest pinning: pin hash on first connect, revoke trust on mismatch
-    const manifestResult = await adapter.checkManifest(config.toolManifestHash, config.pinnedToolNames);
+    const manifestResult = await adapter.checkManifest(
+      config.toolManifestHash,
+      config.pinnedToolNames,
+    );
     if (!manifestResult.ok) {
       config.trusted = false; // Tools changed — revoke trust
     }
@@ -728,7 +770,15 @@ export class MobileApp {
     this._toolsChangedCallback?.();
   }
 
-  getMcpServers(): Array<{ name: string; url: string; connected: boolean; toolCount: number; trusted: boolean; motebit: boolean; motebitPublicKey?: string }> {
+  getMcpServers(): Array<{
+    name: string;
+    url: string;
+    connected: boolean;
+    toolCount: number;
+    trusted: boolean;
+    motebit: boolean;
+    motebitPublicKey?: string;
+  }> {
     return this._mcpServers.map((config) => {
       const adapter = this.mcpAdapters.get(config.name);
       return {
@@ -771,10 +821,12 @@ export class MobileApp {
       const def = {
         name: mcpTool.name,
         description: `[${config.name}] ${mcpTool.description ?? mcpTool.name}`,
-        inputSchema: (mcpTool.inputSchema ?? { type: "object", properties: {} }),
+        inputSchema: mcpTool.inputSchema ?? { type: "object", properties: {} },
         ...(config.trusted === true ? {} : { requiresApproval: true as const }),
       };
-      tempRegistry.register(def, (args: Record<string, unknown>) => adapter.executeTool(mcpTool.name, args));
+      tempRegistry.register(def, (args: Record<string, unknown>) =>
+        adapter.executeTool(mcpTool.name, args),
+      );
     }
     if (this.runtime) {
       this.runtime.registerExternalTools(`mcp:${config.name}`, tempRegistry);
@@ -794,7 +846,10 @@ export class MobileApp {
           await adapter.connect();
 
           // Check manifest integrity on reconnect
-          const manifestResult = await adapter.checkManifest(config.toolManifestHash, config.pinnedToolNames);
+          const manifestResult = await adapter.checkManifest(
+            config.toolManifestHash,
+            config.pinnedToolNames,
+          );
           if (!manifestResult.ok) {
             config.trusted = false;
           }
@@ -849,7 +904,7 @@ export class MobileApp {
     const raw = await AsyncStorage.getItem(SETTINGS_KEY);
     if (raw == null || raw === "") return { ...DEFAULT_SETTINGS };
     try {
-      const loaded = { ...DEFAULT_SETTINGS, ...JSON.parse(raw) as Partial<MobileSettings> };
+      const loaded = { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<MobileSettings>) };
       // Migration: borosilicate was removed — remap to moonlight
       if (loaded.colorPreset === "borosilicate") loaded.colorPreset = "moonlight";
       return loaded;
@@ -946,11 +1001,7 @@ export class MobileApp {
 
   /** Compute effective confidence after half-life decay. */
   getDecayedConfidence(node: MemoryNode): number {
-    return computeDecayedConfidence(
-      node.confidence,
-      node.half_life,
-      Date.now() - node.created_at,
-    );
+    return computeDecayedConfidence(node.confidence, node.half_life, Date.now() - node.created_at);
   }
 
   // === Conversation Browsing ===
@@ -1101,7 +1152,10 @@ export class MobileApp {
 
   // === Pairing: Device B (new device) ===
 
-  async claimPairing(syncUrl: string, code: string): Promise<{ pairingId: string; motebitId: string }> {
+  async claimPairing(
+    syncUrl: string,
+    code: string,
+  ): Promise<{ pairingId: string; motebitId: string }> {
     if (!this.publicKey) throw new Error("No public key available — bootstrap first");
     const client = new PairingClient({ relayUrl: syncUrl });
     return client.claim(code.toUpperCase(), "Mobile", this.publicKey);
@@ -1112,7 +1166,10 @@ export class MobileApp {
     return client.pollStatus(pairingId);
   }
 
-  async completePairing(result: { motebitId: string; deviceId: string; deviceToken: string }, syncUrl?: string): Promise<void> {
+  async completePairing(
+    result: { motebitId: string; deviceId: string; deviceToken: string },
+    syncUrl?: string,
+  ): Promise<void> {
     await this.keyring.set("motebit_id", result.motebitId);
     await this.keyring.set("device_id", result.deviceId);
     await this.keyring.set("device_token", result.deviceToken);
@@ -1159,7 +1216,7 @@ export class MobileApp {
   }
 
   async startSync(syncUrl?: string): Promise<void> {
-    const url = (syncUrl != null && syncUrl !== "") ? syncUrl : (await this.getSyncUrl());
+    const url = syncUrl != null && syncUrl !== "" ? syncUrl : await this.getSyncUrl();
     if (url == null || url === "" || !this.storage) return;
 
     await this.setSyncUrl(url);
@@ -1170,11 +1227,9 @@ export class MobileApp {
 
     // Create engines (they don't start their own timers — we manage the interval
     // ourselves so we can refresh the auth token each cycle)
-    this.syncEngine = new SyncEngine(
-      this.storage.eventStore,
-      this.motebitId,
-      { sync_interval_ms: MobileApp.SYNC_INTERVAL_MS },
-    );
+    this.syncEngine = new SyncEngine(this.storage.eventStore, this.motebitId, {
+      sync_interval_ms: MobileApp.SYNC_INTERVAL_MS,
+    });
 
     this.conversationSyncEngine = new ConversationSyncEngine(
       this.storage.conversationSyncStore,
@@ -1295,7 +1350,10 @@ export class MobileApp {
 
       if (encKey) {
         const encryptedHttp = new EncryptedEventStoreAdapter({ inner: httpAdapter, key: encKey });
-        const wsUrl = syncUrl.replace(/^https?/, (m) => m === "https" ? "wss" : "ws") + "/ws/sync/" + this.motebitId;
+        const wsUrl =
+          syncUrl.replace(/^https?/, (m) => (m === "https" ? "wss" : "ws")) +
+          "/ws/sync/" +
+          this.motebitId;
 
         const localEventStore = this._localEventStore;
         const wsAdapter = new WebSocketEventStoreAdapter({
@@ -1382,7 +1440,9 @@ export class MobileApp {
       void this.goalTick();
     }, 60_000);
     // Run first tick after a short delay (let UI settle)
-    setTimeout(() => { void this.goalTick(); }, 5_000);
+    setTimeout(() => {
+      void this.goalTick();
+    }, 5_000);
   }
 
   stopGoalScheduler(): void {
@@ -1512,7 +1572,12 @@ export class MobileApp {
   /** Execute a goal with PlanEngine multi-step decomposition. */
   private async executePlanGoal(
     goal: { goal_id: string; prompt: string; mode: string },
-    outcomes: Array<{ ran_at: number; status: string; summary: string | null; error_message: string | null }>,
+    outcomes: Array<{
+      ran_at: number;
+      status: string;
+      summary: string | null;
+      error_message: string | null;
+    }>,
   ): Promise<{ suspended: boolean; summary: string }> {
     const loopDeps = this.runtime!.getLoopDeps()!;
     const planStore = this.storage!.planStore;
@@ -1525,13 +1590,20 @@ export class MobileApp {
     if (plan && plan.status === PlanStatus.Active) {
       planStream = this.planEngine!.resumePlan(plan.plan_id, loopDeps);
     } else {
-      const created = await this.planEngine!.createPlan(goal.goal_id, this.motebitId, {
-        goalPrompt: goal.prompt,
-        previousOutcomes: outcomes.map((o) =>
-          o.status === "failed" ? `failed: ${o.error_message ?? "unknown"}` : `${o.status}: ${o.summary ?? "no summary"}`,
-        ),
-        availableTools: registry.list().map((t) => t.name),
-      }, loopDeps);
+      const created = await this.planEngine!.createPlan(
+        goal.goal_id,
+        this.motebitId,
+        {
+          goalPrompt: goal.prompt,
+          previousOutcomes: outcomes.map((o) =>
+            o.status === "failed"
+              ? `failed: ${o.error_message ?? "unknown"}`
+              : `${o.status}: ${o.summary ?? "no summary"}`,
+          ),
+          availableTools: registry.list().map((t) => t.name),
+        },
+        loopDeps,
+      );
       plan = created.plan;
       planStream = this.planEngine!.executePlan(created.plan.plan_id, loopDeps);
     }
@@ -1582,7 +1654,12 @@ export class MobileApp {
   /** Execute a goal with simple single-turn streaming (fallback). */
   private async executeSingleTurnGoal(
     goal: { goal_id: string; prompt: string; mode: string },
-    outcomes: Array<{ ran_at: number; status: string; summary: string | null; error_message: string | null }>,
+    outcomes: Array<{
+      ran_at: number;
+      status: string;
+      summary: string | null;
+      error_message: string | null;
+    }>,
     now: number,
   ): Promise<{ suspended: boolean; summary: string }> {
     let context = `You are executing a scheduled goal.\n\nGoal: ${goal.prompt}`;
@@ -1683,11 +1760,15 @@ export class MobileApp {
         memories_formed: 0,
         error_message: error,
       });
-    } catch { /* non-fatal */ }
+    } catch {
+      /* non-fatal */
+    }
 
     try {
       goalStore.incrementFailures(goal.goal_id);
-    } catch { /* non-fatal */ }
+    } catch {
+      /* non-fatal */
+    }
 
     this._goalCompleteCallback?.({
       goalId: goal.goal_id,

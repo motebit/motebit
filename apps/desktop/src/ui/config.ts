@@ -7,7 +7,8 @@ export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
     const { invoke } = await import("@tauri-apps/api/core");
     const raw = await invoke<string>("read_config");
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const provider: DesktopAIConfig["provider"] = (parsed.default_provider as DesktopAIConfig["provider"] | undefined) ?? "ollama";
+    const provider: DesktopAIConfig["provider"] =
+      (parsed.default_provider as DesktopAIConfig["provider"] | undefined) ?? "ollama";
     const model = (parsed.default_model as string | undefined) ?? undefined;
 
     // Try keyring first, fall back to config file
@@ -34,7 +35,15 @@ export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
       }
     }
 
-    return { provider, model, apiKey, isTauri: true, invoke: invoke as InvokeFn, syncUrl, syncMasterToken };
+    return {
+      provider,
+      model,
+      apiKey,
+      isTauri: true,
+      invoke: invoke as InvokeFn,
+      syncUrl,
+      syncMasterToken,
+    };
   }
 
   // Vite dev mode — read from env vars

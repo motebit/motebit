@@ -11,12 +11,14 @@ interface MockRuntimeResult {
   eventsAppended: Array<{ event_type: string; payload: Record<string, unknown> }>;
 }
 
-function createMockRuntime(opts: {
-  yieldApproval?: boolean;
-  approvalToolName?: string;
-  approvalArgs?: Record<string, unknown>;
-  onStream?: (registeredTools: Map<string, ToolHandler>) => Promise<void>;
-} = {}): MockRuntimeResult {
+function createMockRuntime(
+  opts: {
+    yieldApproval?: boolean;
+    approvalToolName?: string;
+    approvalArgs?: Record<string, unknown>;
+    onStream?: (registeredTools: Map<string, ToolHandler>) => Promise<void>;
+  } = {},
+): MockRuntimeResult {
   let _hasPending = false;
   const registeredTools = new Map<string, ToolHandler>();
   const eventsAppended: Array<{ event_type: string; payload: Record<string, unknown> }> = [];
@@ -26,7 +28,9 @@ function createMockRuntime(opts: {
       return _hasPending;
     },
     get pendingApprovalInfo() {
-      return _hasPending ? { toolName: opts.approvalToolName ?? "shell_exec", args: opts.approvalArgs ?? {} } : null;
+      return _hasPending
+        ? { toolName: opts.approvalToolName ?? "shell_exec", args: opts.approvalArgs ?? {} }
+        : null;
     },
     async *sendMessageStreaming(_text: string): AsyncGenerator<StreamChunk> {
       if (opts.yieldApproval === true) {
@@ -50,7 +54,12 @@ function createMockRuntime(opts: {
       _hasPending = false;
       if (approved) {
         yield { type: "tool_status" as const, name: "shell_exec", status: "calling" as const };
-        yield { type: "tool_status" as const, name: "shell_exec", status: "done" as const, result: "output" };
+        yield {
+          type: "tool_status" as const,
+          name: "shell_exec",
+          status: "done" as const,
+          result: "output",
+        };
       }
       yield { type: "result" as const, result: { memoriesFormed: [] } as any };
     },
@@ -86,8 +95,8 @@ function makeGoal(overrides: Partial<Goal> = {}): Goal {
     parent_goal_id: null,
     max_retries: 3,
     consecutive_failures: 0,
-      wall_clock_ms: null,
-      project_id: null,
+    wall_clock_ms: null,
+    project_id: null,
     ...overrides,
   };
 }
@@ -108,8 +117,12 @@ describe("GoalScheduler — approval lifecycle", () => {
     moteDb.goalStore.add(makeGoal());
 
     const scheduler = new GoalScheduler(
-      runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore,
-      "mote-test", RiskLevel.R3_EXECUTE,
+      runtime,
+      moteDb.goalStore,
+      moteDb.approvalStore,
+      moteDb.goalOutcomeStore,
+      "mote-test",
+      RiskLevel.R3_EXECUTE,
     );
     scheduler.registerGoalTools();
     await scheduler.tickOnce();
@@ -130,8 +143,12 @@ describe("GoalScheduler — approval lifecycle", () => {
     moteDb.goalStore.add(makeGoal());
 
     const scheduler = new GoalScheduler(
-      runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore,
-      "mote-test", RiskLevel.R3_EXECUTE,
+      runtime,
+      moteDb.goalStore,
+      moteDb.approvalStore,
+      moteDb.goalOutcomeStore,
+      "mote-test",
+      RiskLevel.R3_EXECUTE,
     );
     scheduler.registerGoalTools();
     await scheduler.tickOnce();
@@ -199,8 +216,12 @@ describe("GoalScheduler — approval lifecycle", () => {
     moteDb.goalStore.add(makeGoal());
 
     const scheduler = new GoalScheduler(
-      runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore,
-      "mote-test", RiskLevel.R3_EXECUTE,
+      runtime,
+      moteDb.goalStore,
+      moteDb.approvalStore,
+      moteDb.goalOutcomeStore,
+      "mote-test",
+      RiskLevel.R3_EXECUTE,
     );
     scheduler.registerGoalTools();
     await scheduler.tickOnce();
@@ -231,8 +252,12 @@ describe("GoalScheduler — report_progress invariant", () => {
     moteDb.goalStore.add(makeGoal());
 
     const scheduler = new GoalScheduler(
-      runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore,
-      "mote-test", RiskLevel.R3_EXECUTE,
+      runtime,
+      moteDb.goalStore,
+      moteDb.approvalStore,
+      moteDb.goalOutcomeStore,
+      "mote-test",
+      RiskLevel.R3_EXECUTE,
     );
 
     // Register tools, then tick to run the goal and create a baseline outcome
@@ -269,8 +294,12 @@ describe("GoalScheduler — report_progress invariant", () => {
     moteDb.goalStore.add(makeGoal());
 
     const scheduler = new GoalScheduler(
-      runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore,
-      "mote-test", RiskLevel.R3_EXECUTE,
+      runtime,
+      moteDb.goalStore,
+      moteDb.approvalStore,
+      moteDb.goalOutcomeStore,
+      "mote-test",
+      RiskLevel.R3_EXECUTE,
     );
     scheduler.registerGoalTools();
     await scheduler.tickOnce();
@@ -332,8 +361,12 @@ describe("GoalScheduler — orphan approval cleanup on start", () => {
 
     const { runtime } = createMockRuntime();
     const scheduler = new GoalScheduler(
-      runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore,
-      "mote-test", RiskLevel.R3_EXECUTE,
+      runtime,
+      moteDb.goalStore,
+      moteDb.approvalStore,
+      moteDb.goalOutcomeStore,
+      "mote-test",
+      RiskLevel.R3_EXECUTE,
     );
     // start() triggers cleanup before first tick
     scheduler.start(999_999); // long interval so tick doesn't re-fire
@@ -367,8 +400,12 @@ describe("GoalScheduler — orphan approval cleanup on start", () => {
 
     const { runtime } = createMockRuntime();
     const scheduler = new GoalScheduler(
-      runtime, moteDb.goalStore, moteDb.approvalStore, moteDb.goalOutcomeStore,
-      "mote-test", RiskLevel.R3_EXECUTE,
+      runtime,
+      moteDb.goalStore,
+      moteDb.approvalStore,
+      moteDb.goalOutcomeStore,
+      "mote-test",
+      RiskLevel.R3_EXECUTE,
     );
     scheduler.start(999_999);
     scheduler.stop();

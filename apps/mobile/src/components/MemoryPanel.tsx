@@ -46,18 +46,21 @@ export function MemoryPanel({ visible, app, onClose }: MemoryPanelProps): React.
     }
   }, [visible, refresh]);
 
-  const handleDelete = useCallback((nodeId: string) => {
-    Alert.alert("Delete Memory", "This memory will be permanently removed.", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: () => {
-          void app.deleteMemory(nodeId).then(refresh);
+  const handleDelete = useCallback(
+    (nodeId: string) => {
+      Alert.alert("Delete Memory", "This memory will be permanently removed.", [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => {
+            void app.deleteMemory(nodeId).then(refresh);
+          },
         },
-      },
-    ]);
-  }, [app, refresh]);
+      ]);
+    },
+    [app, refresh],
+  );
 
   const filtered = search.trim()
     ? memories.filter((m) => m.content.toLowerCase().includes(search.toLowerCase()))

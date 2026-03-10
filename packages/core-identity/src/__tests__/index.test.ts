@@ -1,8 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import {
-  IdentityManager,
-  InMemoryIdentityStorage,
-} from "../index";
+import { IdentityManager, InMemoryIdentityStorage } from "../index";
 import type { DeviceRegistration } from "../index";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 
@@ -109,9 +106,27 @@ describe("InMemoryIdentityStorage", () => {
   });
 
   it("listDevices returns devices for a given motebitId", async () => {
-    await storage.saveDevice({ device_id: "d1", motebit_id: "m1", device_token: "t1", public_key: "aa".repeat(32), registered_at: 1 });
-    await storage.saveDevice({ device_id: "d2", motebit_id: "m1", device_token: "t2", public_key: "bb".repeat(32), registered_at: 2 });
-    await storage.saveDevice({ device_id: "d3", motebit_id: "m2", device_token: "t3", public_key: "cc".repeat(32), registered_at: 3 });
+    await storage.saveDevice({
+      device_id: "d1",
+      motebit_id: "m1",
+      device_token: "t1",
+      public_key: "aa".repeat(32),
+      registered_at: 1,
+    });
+    await storage.saveDevice({
+      device_id: "d2",
+      motebit_id: "m1",
+      device_token: "t2",
+      public_key: "bb".repeat(32),
+      registered_at: 2,
+    });
+    await storage.saveDevice({
+      device_id: "d3",
+      motebit_id: "m2",
+      device_token: "t3",
+      public_key: "cc".repeat(32),
+      registered_at: 3,
+    });
 
     const devicesM1 = await storage.listDevices("m1");
     expect(devicesM1).toHaveLength(2);
@@ -206,9 +221,7 @@ describe("IdentityManager", () => {
   });
 
   it("incrementClock() throws for unknown identity", async () => {
-    await expect(manager.incrementClock("nonexistent")).rejects.toThrow(
-      "Identity not found",
-    );
+    await expect(manager.incrementClock("nonexistent")).rejects.toThrow("Identity not found");
   });
 
   it("export() returns the identity data", async () => {

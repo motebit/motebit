@@ -8,13 +8,28 @@ export function hslToRgb(h: number, s: number, l: number): [number, number, numb
   const c = (1 - Math.abs(2 * l - 1)) * s;
   const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
   const m = l - c / 2;
-  let r = 0, g = 0, b = 0;
-  if (h < 60)       { r = c; g = x; }
-  else if (h < 120) { r = x; g = c; }
-  else if (h < 180) { g = c; b = x; }
-  else if (h < 240) { g = x; b = c; }
-  else if (h < 300) { r = x; b = c; }
-  else              { r = c; b = x; }
+  let r = 0,
+    g = 0,
+    b = 0;
+  if (h < 60) {
+    r = c;
+    g = x;
+  } else if (h < 120) {
+    r = x;
+    g = c;
+  } else if (h < 180) {
+    g = c;
+    b = x;
+  } else if (h < 240) {
+    g = x;
+    b = c;
+  } else if (h < 300) {
+    r = x;
+    b = c;
+  } else {
+    r = c;
+    b = x;
+  }
   return [r + m, g + m, b + m];
 }
 
@@ -43,7 +58,8 @@ let previousColorPreset = "moonlight";
 let customHue = 220;
 let customSaturation = 0.7;
 let customInteriorColor: InteriorColor | null = null;
-let previousCustomState: { hue: number; saturation: number; color: InteriorColor | null } | null = null;
+let previousCustomState: { hue: number; saturation: number; color: InteriorColor | null } | null =
+  null;
 
 // === DOM Refs ===
 
@@ -87,7 +103,7 @@ export function initColorPicker(ctx: DesktopContext, onColorChanged: () => void)
     customInteriorColor = deriveInteriorColor(customHue, customSaturation);
     ctx.app.setInteriorColorDirect(customInteriorColor);
     onColorChanged();
-    const customSwatch = document.querySelector('.color-swatch.custom');
+    const customSwatch = document.querySelector(".color-swatch.custom");
     if (customSwatch != null && customInteriorColor != null) {
       (customSwatch as HTMLElement).style.background = swatchGradient(customInteriorColor);
     }
@@ -114,12 +130,16 @@ export function initColorPicker(ctx: DesktopContext, onColorChanged: () => void)
     });
   }
 
-  initPickerDrag(hueStrip, (f) => { customHue = Math.round(f * 360); });
-  initPickerDrag(satStrip, (f) => { customSaturation = f; });
+  initPickerDrag(hueStrip, (f) => {
+    customHue = Math.round(f * 360);
+  });
+  initPickerDrag(satStrip, (f) => {
+    customSaturation = f;
+  });
 
   function selectColorPreset(name: string): void {
     selectedColorPreset = name;
-    document.querySelectorAll(".color-swatch").forEach(el => {
+    document.querySelectorAll(".color-swatch").forEach((el) => {
       el.classList.toggle("selected", (el as HTMLElement).dataset.preset === name);
     });
     if (name === "custom") {
@@ -151,7 +171,8 @@ export function initColorPicker(ctx: DesktopContext, onColorChanged: () => void)
       colorPresetGrid.appendChild(btn);
     }
     const customBtn = document.createElement("button");
-    customBtn.className = "color-swatch custom" + (selectedColorPreset === "custom" ? " selected" : "");
+    customBtn.className =
+      "color-swatch custom" + (selectedColorPreset === "custom" ? " selected" : "");
     customBtn.dataset.preset = "custom";
     if (customInteriorColor) {
       customBtn.style.background = swatchGradient(customInteriorColor);
@@ -170,20 +191,42 @@ export function initColorPicker(ctx: DesktopContext, onColorChanged: () => void)
 
   return {
     getActiveColor() {
-      return selectedColorPreset === "custom" ? customInteriorColor : (COLOR_PRESETS[selectedColorPreset] ?? null);
+      return selectedColorPreset === "custom"
+        ? customInteriorColor
+        : (COLOR_PRESETS[selectedColorPreset] ?? null);
     },
-    getSelectedPreset() { return selectedColorPreset; },
-    setSelectedPreset(name: string) { selectedColorPreset = name; },
-    getCustomHue() { return customHue; },
-    setCustomHue(h: number) { customHue = h; },
-    getCustomSaturation() { return customSaturation; },
-    setCustomSaturation(s: number) { customSaturation = s; },
-    getCustomInteriorColor() { return customInteriorColor; },
-    setCustomInteriorColor(c: InteriorColor | null) { customInteriorColor = c; },
+    getSelectedPreset() {
+      return selectedColorPreset;
+    },
+    setSelectedPreset(name: string) {
+      selectedColorPreset = name;
+    },
+    getCustomHue() {
+      return customHue;
+    },
+    setCustomHue(h: number) {
+      customHue = h;
+    },
+    getCustomSaturation() {
+      return customSaturation;
+    },
+    setCustomSaturation(s: number) {
+      customSaturation = s;
+    },
+    getCustomInteriorColor() {
+      return customInteriorColor;
+    },
+    setCustomInteriorColor(c: InteriorColor | null) {
+      customInteriorColor = c;
+    },
     buildColorSwatches,
     savePreviousState() {
       previousColorPreset = selectedColorPreset;
-      previousCustomState = { hue: customHue, saturation: customSaturation, color: customInteriorColor ? { ...customInteriorColor } : null };
+      previousCustomState = {
+        hue: customHue,
+        saturation: customSaturation,
+        color: customInteriorColor ? { ...customInteriorColor } : null,
+      };
     },
     restorePreviousState() {
       if (selectedColorPreset !== previousColorPreset || selectedColorPreset === "custom") {

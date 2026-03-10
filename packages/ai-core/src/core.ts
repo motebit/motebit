@@ -53,7 +53,9 @@ export function packContext(contextPack: ContextPack): string {
 
   // Current state summary
   const s = contextPack.current_state;
-  parts.push(`[State] attention=${s.attention.toFixed(2)} processing=${s.processing.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} arousal=${s.affect_arousal.toFixed(2)} social_distance=${s.social_distance.toFixed(2)} curiosity=${s.curiosity.toFixed(2)} trust=${s.trust_mode} battery=${s.battery_mode}`);
+  parts.push(
+    `[State] attention=${s.attention.toFixed(2)} processing=${s.processing.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} arousal=${s.affect_arousal.toFixed(2)} social_distance=${s.social_distance.toFixed(2)} curiosity=${s.curiosity.toFixed(2)} trust=${s.trust_mode} battery=${s.battery_mode}`,
+  );
 
   // Recent events (last 10)
   const recentEvents = contextPack.recent_events.slice(-10);
@@ -66,8 +68,12 @@ export function packContext(contextPack: ContextPack): string {
 
   // Relevant memories — grouped by type
   if (contextPack.relevant_memories.length > 0) {
-    const semantic = contextPack.relevant_memories.filter(m => m.memory_type !== MemoryType.Episodic);
-    const episodic = contextPack.relevant_memories.filter(m => m.memory_type === MemoryType.Episodic);
+    const semantic = contextPack.relevant_memories.filter(
+      (m) => m.memory_type !== MemoryType.Episodic,
+    );
+    const episodic = contextPack.relevant_memories.filter(
+      (m) => m.memory_type === MemoryType.Episodic,
+    );
 
     if (semantic.length > 0) {
       parts.push("[What I Know]");
@@ -135,9 +141,7 @@ interface AnthropicSSEEvent {
 
 // === Tag Extraction ===
 
-export function extractMemoryTags(
-  text: string,
-): MemoryCandidate[] {
+export function extractMemoryTags(text: string): MemoryCandidate[] {
   const regex =
     /<memory\s+confidence="([^"]+)"\s+sensitivity="([^"]+)"(?:\s+type="([^"]+)")?\s*>([\s\S]*?)<\/memory>/g;
   const candidates: MemoryCandidate[] = [];
@@ -154,9 +158,7 @@ export function extractMemoryTags(
   return candidates;
 }
 
-export function extractStateTags(
-  text: string,
-): Partial<MotebitState> {
+export function extractStateTags(text: string): Partial<MotebitState> {
   const regex = /<state\s+field="([^"]+)"\s+value="([^"]+)"\s*\/>/g;
   const updates: Record<string, unknown> = {};
   let match;
@@ -186,34 +188,56 @@ export function extractActions(text: string): string[] {
 // Action keywords → MotebitState field deltas
 const ACTION_RULES: { pattern: RegExp; updates: Partial<MotebitState> }[] = [
   // Movement / proximity (allow words between verb and direction)
-  { pattern: /\b(?:drift|move|lean|float|scoot|inch|nudge)s?\b.*\b(?:closer|toward|nearer|in)\b/i, updates: { social_distance: -0.15 } },
-  { pattern: /\b(?:drift|move|pull|float|back|retreat|withdraw)s?\b.*\b(?:away|back)\b/i, updates: { social_distance: 0.15 } },
+  {
+    pattern: /\b(?:drift|move|lean|float|scoot|inch|nudge)s?\b.*\b(?:closer|toward|nearer|in)\b/i,
+    updates: { social_distance: -0.15 },
+  },
+  {
+    pattern: /\b(?:drift|move|pull|float|back|retreat|withdraw)s?\b.*\b(?:away|back)\b/i,
+    updates: { social_distance: 0.15 },
+  },
   // Glow / light
-  { pattern: /\b(?:glow|brighten|shimmer|sparkle|pulse)s?\b/i, updates: { processing: 0.2, affect_valence: 0.1 } },
+  {
+    pattern: /\b(?:glow|brighten|shimmer|sparkle|pulse)s?\b/i,
+    updates: { processing: 0.2, affect_valence: 0.1 },
+  },
   { pattern: /\b(?:dim|fade)s?\b/i, updates: { processing: -0.15 } },
   // Eyes
-  { pattern: /\b(?:eyes?\s+widen|wide[\s-]eyed|look(?:s|ing)?\s+closely|peer)s?\b/i, updates: { attention: 0.35, curiosity: 0.25 } },
+  {
+    pattern: /\b(?:eyes?\s+widen|wide[\s-]eyed|look(?:s|ing)?\s+closely|peer)s?\b/i,
+    updates: { attention: 0.35, curiosity: 0.25 },
+  },
   { pattern: /\b(?:squint|narrow)s?\b/i, updates: { attention: -0.1 } },
   { pattern: /\b(?:blink)s?\b/i, updates: { attention: 0.05 } },
   // Expression
   { pattern: /\b(?:smile|grin|beam)s?\b/i, updates: { affect_valence: 0.35 } },
   { pattern: /\b(?:frown|wince|grimace)s?\b/i, updates: { affect_valence: -0.35 } },
   // Energy / motion
-  { pattern: /\b(?:bounce|bob|wiggle|sway|jiggle)s?\b/i, updates: { affect_arousal: 0.2, curiosity: 0.1 } },
+  {
+    pattern: /\b(?:bounce|bob|wiggle|sway|jiggle)s?\b/i,
+    updates: { affect_arousal: 0.2, curiosity: 0.1 },
+  },
   { pattern: /\b(?:still|calm|settle)s?\b/i, updates: { affect_arousal: -0.1 } },
   // Cognitive
-  { pattern: /\b(?:think|ponder|consider|contemplate)s?\b/i, updates: { processing: 0.2, attention: 0.1 } },
+  {
+    pattern: /\b(?:think|ponder|consider|contemplate)s?\b/i,
+    updates: { processing: 0.2, attention: 0.1 },
+  },
   { pattern: /\b(?:nod)s?\b/i, updates: { confidence: 0.15, affect_valence: 0.1 } },
   { pattern: /\b(?:tilt)s?\b/i, updates: { curiosity: 0.3 } },
   // Tool-calling: interacting with the world
-  { pattern: /\b(?:reach|extend)(?:es|ing)?\s*(?:out)?\b/i, updates: { processing: 0.25, attention: 0.2, curiosity: 0.1 } },
+  {
+    pattern: /\b(?:reach|extend)(?:es|ing)?\s*(?:out)?\b/i,
+    updates: { processing: 0.25, attention: 0.2, curiosity: 0.1 },
+  },
   { pattern: /\b(?:absorb|ingest|intake)s?\b/i, updates: { processing: 0.15, attention: 0.1 } },
-  { pattern: /\b(?:present|reveal|display|show)s?\b/i, updates: { confidence: 0.1, affect_valence: 0.1, social_distance: -0.1 } },
+  {
+    pattern: /\b(?:present|reveal|display|show)s?\b/i,
+    updates: { confidence: 0.1, affect_valence: 0.1, social_distance: -0.1 },
+  },
 ];
 
-export function actionsToStateUpdates(
-  actions: string[],
-): Partial<MotebitState> {
+export function actionsToStateUpdates(actions: string[]): Partial<MotebitState> {
   const deltas: Record<string, number> = {};
   for (const action of actions) {
     for (const rule of ACTION_RULES) {
@@ -243,45 +267,68 @@ export function stripTags(text: string): string {
 
 import type { BehaviorCues } from "@motebit/sdk";
 
-const IMPULSE_MAP: { pattern: RegExp; impulses: Array<{ field: keyof BehaviorCues; magnitude: number; halfLife: number }> }[] = [
+const IMPULSE_MAP: {
+  pattern: RegExp;
+  impulses: Array<{ field: keyof BehaviorCues; magnitude: number; halfLife: number }>;
+}[] = [
   // Eyes lead — smile squint is the dominant signal, mouth follows gently
-  { pattern: /\bsmiles?\b/i, impulses: [
-    { field: "eye_dilation", magnitude: -0.12, halfLife: 2.5 },
-    { field: "smile_curvature", magnitude: 0.05, halfLife: 2 },
-  ]},
-  { pattern: /\bgrins?\b/i, impulses: [
-    { field: "eye_dilation", magnitude: -0.16, halfLife: 2.5 },
-    { field: "smile_curvature", magnitude: 0.06, halfLife: 2 },
-  ]},
-  { pattern: /\bbeams?\b/i, impulses: [
-    { field: "eye_dilation", magnitude: -0.20, halfLife: 3 },
-    { field: "smile_curvature", magnitude: 0.08, halfLife: 2.5 },
-  ]},
-  { pattern: /\bfrowns?\b/i, impulses: [
-    { field: "eye_dilation", magnitude: 0.08, halfLife: 2 },
-    { field: "smile_curvature", magnitude: -0.04, halfLife: 2 },
-  ]},
-  { pattern: /\btilts?\b/i, impulses: [
-    { field: "eye_dilation", magnitude: 0.18, halfLife: 3 },
-  ]},
-  { pattern: /\b(?:eyes?\s+)?widens?\b/i, impulses: [
-    { field: "eye_dilation", magnitude: 0.22, halfLife: 2.5 },
-  ]},
-  { pattern: /\b(?:bounce|wiggle)s?\b/i, impulses: [
-    { field: "drift_amplitude", magnitude: 0.008, halfLife: 1.5 },
-    { field: "eye_dilation", magnitude: 0.06, halfLife: 1 },
-  ]},
-  { pattern: /\bnods?\b/i, impulses: [
-    { field: "eye_dilation", magnitude: -0.06, halfLife: 1.5 },
-    { field: "smile_curvature", magnitude: 0.03, halfLife: 1.5 },
-  ]},
-  { pattern: /\bblinks?\b/i, impulses: [
-    { field: "eye_dilation", magnitude: -0.20, halfLife: 0.3 },
-  ]},
+  {
+    pattern: /\bsmiles?\b/i,
+    impulses: [
+      { field: "eye_dilation", magnitude: -0.12, halfLife: 2.5 },
+      { field: "smile_curvature", magnitude: 0.05, halfLife: 2 },
+    ],
+  },
+  {
+    pattern: /\bgrins?\b/i,
+    impulses: [
+      { field: "eye_dilation", magnitude: -0.16, halfLife: 2.5 },
+      { field: "smile_curvature", magnitude: 0.06, halfLife: 2 },
+    ],
+  },
+  {
+    pattern: /\bbeams?\b/i,
+    impulses: [
+      { field: "eye_dilation", magnitude: -0.2, halfLife: 3 },
+      { field: "smile_curvature", magnitude: 0.08, halfLife: 2.5 },
+    ],
+  },
+  {
+    pattern: /\bfrowns?\b/i,
+    impulses: [
+      { field: "eye_dilation", magnitude: 0.08, halfLife: 2 },
+      { field: "smile_curvature", magnitude: -0.04, halfLife: 2 },
+    ],
+  },
+  { pattern: /\btilts?\b/i, impulses: [{ field: "eye_dilation", magnitude: 0.18, halfLife: 3 }] },
+  {
+    pattern: /\b(?:eyes?\s+)?widens?\b/i,
+    impulses: [{ field: "eye_dilation", magnitude: 0.22, halfLife: 2.5 }],
+  },
+  {
+    pattern: /\b(?:bounce|wiggle)s?\b/i,
+    impulses: [
+      { field: "drift_amplitude", magnitude: 0.008, halfLife: 1.5 },
+      { field: "eye_dilation", magnitude: 0.06, halfLife: 1 },
+    ],
+  },
+  {
+    pattern: /\bnods?\b/i,
+    impulses: [
+      { field: "eye_dilation", magnitude: -0.06, halfLife: 1.5 },
+      { field: "smile_curvature", magnitude: 0.03, halfLife: 1.5 },
+    ],
+  },
+  {
+    pattern: /\bblinks?\b/i,
+    impulses: [{ field: "eye_dilation", magnitude: -0.2, halfLife: 0.3 }],
+  },
 ];
 
 /** Match action text against IMPULSE_MAP and return all matching impulse specs. */
-export function getImpulsesForAction(action: string): Array<{ field: keyof BehaviorCues; magnitude: number; halfLife: number }> {
+export function getImpulsesForAction(
+  action: string,
+): Array<{ field: keyof BehaviorCues; magnitude: number; halfLife: number }> {
   const result: Array<{ field: keyof BehaviorCues; magnitude: number; halfLife: number }> = [];
   for (const entry of IMPULSE_MAP) {
     if (entry.pattern.test(action)) {
@@ -326,9 +373,9 @@ export interface StreamingProvider extends IntelligenceProvider {
   setModel(model: string): void;
   setTemperature?(temperature: number): void;
   setMaxTokens?(maxTokens: number): void;
-  generateStream(contextPack: ContextPack): AsyncGenerator<
-    { type: "text"; text: string } | { type: "done"; response: AIResponse }
-  >;
+  generateStream(
+    contextPack: ContextPack,
+  ): AsyncGenerator<{ type: "text"; text: string } | { type: "done"; response: AIResponse }>;
 }
 
 // === Cloud Provider ===
@@ -393,18 +440,16 @@ export class CloudProvider implements StreamingProvider {
 
     if (!res.ok) {
       const errorText = await res.text();
-      throw new Error(
-        `Anthropic API error ${res.status}: ${errorText}`,
-      );
+      throw new Error(`Anthropic API error ${res.status}: ${errorText}`);
     }
 
     const data = (await res.json()) as AnthropicResponse;
     return this.parseAnthropicResponse(data);
   }
 
-  async *generateStream(contextPack: ContextPack): AsyncGenerator<
-    { type: "text"; text: string } | { type: "done"; response: AIResponse }
-  > {
+  async *generateStream(
+    contextPack: ContextPack,
+  ): AsyncGenerator<{ type: "text"; text: string } | { type: "done"; response: AIResponse }> {
     const baseUrl = this.config.base_url ?? this.getDefaultBaseUrl();
     const systemPrompt = this.buildSystemPrompt(contextPack);
     const messages = this.buildMessages(contextPack);
@@ -438,9 +483,7 @@ export class CloudProvider implements StreamingProvider {
 
     if (!res.ok) {
       const errorText = await res.text();
-      throw new Error(
-        `Anthropic API error ${res.status}: ${errorText}`,
-      );
+      throw new Error(`Anthropic API error ${res.status}: ${errorText}`);
     }
 
     let accumulated = "";
@@ -483,14 +526,27 @@ export class CloudProvider implements StreamingProvider {
                 activeToolJson = "";
               }
             } else if (event.type === "content_block_delta") {
-              if (event.delta?.type === "text_delta" && event.delta.text != null && event.delta.text !== "") {
+              if (
+                event.delta?.type === "text_delta" &&
+                event.delta.text != null &&
+                event.delta.text !== ""
+              ) {
                 accumulated += event.delta.text;
                 yield { type: "text", text: event.delta.text };
-              } else if (event.delta?.type === "input_json_delta" && event.delta.partial_json != null && event.delta.partial_json !== "") {
+              } else if (
+                event.delta?.type === "input_json_delta" &&
+                event.delta.partial_json != null &&
+                event.delta.partial_json !== ""
+              ) {
                 activeToolJson += event.delta.partial_json;
               }
             } else if (event.type === "content_block_stop") {
-              if (activeToolId != null && activeToolId !== "" && activeToolName != null && activeToolName !== "") {
+              if (
+                activeToolId != null &&
+                activeToolId !== "" &&
+                activeToolName != null &&
+                activeToolName !== ""
+              ) {
                 let args: Record<string, unknown> = {};
                 try {
                   args = JSON.parse(activeToolJson || "{}") as Record<string, unknown>;
@@ -528,7 +584,9 @@ export class CloudProvider implements StreamingProvider {
         memory_candidates: memoryCandidates,
         state_updates: stateUpdates,
         ...(currentToolCalls.length > 0 ? { tool_calls: currentToolCalls } : {}),
-        ...((inputTokens || outputTokens) ? { usage: { input_tokens: inputTokens, output_tokens: outputTokens } } : {}),
+        ...(inputTokens || outputTokens
+          ? { usage: { input_tokens: inputTokens, output_tokens: outputTokens } }
+          : {}),
       },
     };
   }
@@ -537,9 +595,7 @@ export class CloudProvider implements StreamingProvider {
     return Promise.resolve(0.8);
   }
 
-  extractMemoryCandidates(
-    response: AIResponse,
-  ): Promise<MemoryCandidate[]> {
+  extractMemoryCandidates(response: AIResponse): Promise<MemoryCandidate[]> {
     return Promise.resolve(response.memory_candidates);
   }
 
@@ -636,9 +692,7 @@ export class HybridProvider implements StreamingProvider {
   constructor(config: HybridProviderConfig) {
     this.config = config;
     this.cloud = new CloudProvider(config.cloud);
-    this.local = config.ollama
-      ? new OllamaProvider(config.ollama)
-      : null;
+    this.local = config.ollama ? new OllamaProvider(config.ollama) : null;
   }
 
   get model(): string {
@@ -676,9 +730,9 @@ export class HybridProvider implements StreamingProvider {
     }
   }
 
-  async *generateStream(contextPack: ContextPack): AsyncGenerator<
-    { type: "text"; text: string } | { type: "done"; response: AIResponse }
-  > {
+  async *generateStream(
+    contextPack: ContextPack,
+  ): AsyncGenerator<{ type: "text"; text: string } | { type: "done"; response: AIResponse }> {
     try {
       yield* this.cloud.generateStream(contextPack);
     } catch {
@@ -819,9 +873,9 @@ export class OllamaProvider implements StreamingProvider {
     return response;
   }
 
-  async *generateStream(contextPack: ContextPack): AsyncGenerator<
-    { type: "text"; text: string } | { type: "done"; response: AIResponse }
-  > {
+  async *generateStream(
+    contextPack: ContextPack,
+  ): AsyncGenerator<{ type: "text"; text: string } | { type: "done"; response: AIResponse }> {
     const baseUrl = this.config.base_url ?? "http://localhost:11434";
     const messages = this.buildMessages(contextPack);
 
@@ -950,9 +1004,7 @@ export class OllamaProvider implements StreamingProvider {
   private buildMessages(contextPack: ContextPack): Record<string, unknown>[] {
     const systemPrompt = this.buildSystemPrompt(contextPack);
     const history = contextPack.conversation_history ?? [];
-    const messages: Record<string, unknown>[] = [
-      { role: "system", content: systemPrompt },
-    ];
+    const messages: Record<string, unknown>[] = [{ role: "system", content: systemPrompt }];
 
     for (const msg of history) {
       if (msg.role === "tool") {
@@ -1002,7 +1054,9 @@ export interface OllamaDetectionResult {
  * Never throws — returns `{ available: false }` on any error.
  * Times out after 2 seconds to avoid blocking startup.
  */
-export async function detectOllama(baseUrl = "http://localhost:11434"): Promise<OllamaDetectionResult> {
+export async function detectOllama(
+  baseUrl = "http://localhost:11434",
+): Promise<OllamaDetectionResult> {
   const empty: OllamaDetectionResult = { available: false, models: [], url: "", bestModel: "" };
   try {
     const controller = new AbortController();
@@ -1017,13 +1071,13 @@ export async function detectOllama(baseUrl = "http://localhost:11434"): Promise<
     if (!res.ok) return empty;
 
     const data = (await res.json()) as { models?: Array<{ name: string }> };
-    const models = (data.models ?? []).map(m => m.name);
+    const models = (data.models ?? []).map((m) => m.name);
     if (models.length === 0) return { ...empty, available: true, url: baseUrl };
 
     // Pick best model: try preferred list first (match base name ignoring :tag)
     let bestModel = "";
     for (const preferred of PREFERRED_OLLAMA_MODELS) {
-      const match = models.find(m => m === preferred || m.startsWith(`${preferred}:`));
+      const match = models.find((m) => m === preferred || m.startsWith(`${preferred}:`));
       if (match != null) {
         bestModel = match;
         break;

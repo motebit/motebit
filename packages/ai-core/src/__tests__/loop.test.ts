@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("@motebit/memory-graph", async () => {
-  const actual = await vi.importActual<typeof import("@motebit/memory-graph")>("@motebit/memory-graph");
+  const actual =
+    await vi.importActual<typeof import("@motebit/memory-graph")>("@motebit/memory-graph");
   return { ...actual, embedText: (text: string) => Promise.resolve(actual.embedTextHash(text)) };
 });
 
@@ -14,7 +15,13 @@ import { MemoryGraph, InMemoryMemoryStorage } from "@motebit/memory-graph";
 import { StateVectorEngine } from "@motebit/state-vector";
 import { BehaviorEngine } from "@motebit/behavior-engine";
 import { SensitivityLevel } from "@motebit/sdk";
-import type { AIResponse, ContextPack, ToolRegistry, ToolDefinition, ToolResult } from "@motebit/sdk";
+import type {
+  AIResponse,
+  ContextPack,
+  ToolRegistry,
+  ToolDefinition,
+  ToolResult,
+} from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -107,13 +114,9 @@ describe("runTurn", () => {
 
     // Memory should have been formed
     expect(result.memoriesFormed).toHaveLength(1);
-    expect(result.memoriesFormed[0]!.content).toBe(
-      "User enjoys hiking on weekends",
-    );
+    expect(result.memoriesFormed[0]!.content).toBe("User enjoys hiking on weekends");
     expect(result.memoriesFormed[0]!.confidence).toBe(0.9);
-    expect(result.memoriesFormed[0]!.sensitivity).toBe(
-      SensitivityLevel.Personal,
-    );
+    expect(result.memoriesFormed[0]!.sensitivity).toBe(SensitivityLevel.Personal);
 
     // State and cues should be present
     expect(result.stateAfter).toBeDefined();
@@ -125,9 +128,7 @@ describe("runTurn", () => {
     mockFetchError(500, "Internal Server Error");
 
     const deps = makeDeps();
-    await expect(runTurn(deps, "Hello")).rejects.toThrow(
-      "Anthropic API error 500",
-    );
+    await expect(runTurn(deps, "Hello")).rejects.toThrow("Anthropic API error 500");
   });
 
   it("handles response with no memory candidates", async () => {
@@ -198,7 +199,7 @@ describe("runTurn", () => {
     // Form two memories in one turn
     mockFetchSuccess(
       'Interesting! <memory confidence="0.9" sensitivity="none">User studies piano</memory> ' +
-      '<memory confidence="0.8" sensitivity="none">User practices piano daily</memory>',
+        '<memory confidence="0.8" sensitivity="none">User practices piano daily</memory>',
     );
     const result = await runTurn(deps, "I study piano and practice daily");
     expect(result.memoriesFormed).toHaveLength(2);
@@ -330,9 +331,7 @@ describe("runTurn", () => {
         confidence: 0.8,
         memory_candidates: [],
         state_updates: {},
-        tool_calls: [
-          { id: "tc_1", name: "get_weather", args: { location: "San Francisco" } },
-        ],
+        tool_calls: [{ id: "tc_1", name: "get_weather", args: { location: "San Francisco" } }],
       },
       // Second call: provider responds with tool result incorporated
       {
@@ -376,9 +375,7 @@ describe("runTurn", () => {
         confidence: 0.8,
         memory_candidates: [],
         state_updates: {},
-        tool_calls: [
-          { id: "tc_approval", name: "send_email", args: { to: "test@example.com" } },
-        ],
+        tool_calls: [{ id: "tc_approval", name: "send_email", args: { to: "test@example.com" } }],
       },
     ]);
 
@@ -395,15 +392,11 @@ describe("runTurn", () => {
     const deps = makeDeps();
 
     // Turn 1
-    mockFetchSuccess(
-      'Hi! <memory confidence="0.8" sensitivity="none">Fact 1</memory>',
-    );
+    mockFetchSuccess('Hi! <memory confidence="0.8" sensitivity="none">Fact 1</memory>');
     await runTurn(deps, "Message 1");
 
     // Turn 2
-    mockFetchSuccess(
-      'Hey! <memory confidence="0.7" sensitivity="none">Fact 2</memory>',
-    );
+    mockFetchSuccess('Hey! <memory confidence="0.7" sensitivity="none">Fact 2</memory>');
     await runTurn(deps, "Message 2");
 
     // Check events have incrementing clocks
@@ -448,7 +441,9 @@ function makeMockProvider(responses: AIResponse[]): StreamingProvider {
   };
 }
 
-function makeMockToolRegistry(tools: Map<string, { def: ToolDefinition; result: ToolResult }>): ToolRegistry {
+function makeMockToolRegistry(
+  tools: Map<string, { def: ToolDefinition; result: ToolResult }>,
+): ToolRegistry {
   return {
     list(): ToolDefinition[] {
       return [...tools.values()].map((t) => t.def);
@@ -464,7 +459,10 @@ function makeMockToolRegistry(tools: Map<string, { def: ToolDefinition; result: 
   };
 }
 
-function makeDepsWithProvider(provider: StreamingProvider, tools?: ToolRegistry): MotebitLoopDependencies {
+function makeDepsWithProvider(
+  provider: StreamingProvider,
+  tools?: ToolRegistry,
+): MotebitLoopDependencies {
   const eventStore = new EventStore(new InMemoryEventStore());
   const storage = new InMemoryMemoryStorage();
   const memoryGraph = new MemoryGraph(storage, eventStore, MOTEBIT_ID);
@@ -507,7 +505,10 @@ describe("runTurnStreaming (agentic loop)", () => {
     expect(textChunks).toHaveLength(1);
     expect((textChunks[0] as { type: "text"; text: string }).text).toBe("Hello there!");
 
-    const resultChunk = chunks.find((c) => c.type === "result") as { type: "result"; result: { response: string } };
+    const resultChunk = chunks.find((c) => c.type === "result") as {
+      type: "result";
+      result: { response: string };
+    };
     expect(resultChunk).toBeDefined();
     expect(resultChunk.result.response).toBe("Hello there!");
   });
@@ -536,9 +537,7 @@ describe("runTurnStreaming (agentic loop)", () => {
         confidence: 0.8,
         memory_candidates: [],
         state_updates: {},
-        tool_calls: [
-          { id: "tc_1", name: "get_weather", args: { location: "San Francisco" } },
-        ],
+        tool_calls: [{ id: "tc_1", name: "get_weather", args: { location: "San Francisco" } }],
       },
       // Second call: provider responds with tool result incorporated
       {
@@ -570,7 +569,10 @@ describe("runTurnStreaming (agentic loop)", () => {
     expect(toolDoneChunk!.result).toEqual({ temp: 72, condition: "sunny" });
 
     // Final result should contain the follow-up text
-    const resultChunk = chunks.find((c) => c.type === "result") as { type: "result"; result: { response: string } };
+    const resultChunk = chunks.find((c) => c.type === "result") as {
+      type: "result";
+      result: { response: string };
+    };
     expect(resultChunk).toBeDefined();
     expect(resultChunk.result.response).toContain("72°F");
   });
@@ -599,9 +601,7 @@ describe("runTurnStreaming (agentic loop)", () => {
         confidence: 0.8,
         memory_candidates: [],
         state_updates: {},
-        tool_calls: [
-          { id: "tc_approval", name: "send_email", args: { to: "test@example.com" } },
-        ],
+        tool_calls: [{ id: "tc_approval", name: "send_email", args: { to: "test@example.com" } }],
       },
     ]);
 
@@ -612,12 +612,14 @@ describe("runTurnStreaming (agentic loop)", () => {
       chunks.push(chunk);
     }
 
-    const approvalChunk = chunks.find((c) => c.type === "approval_request") as {
-      type: "approval_request";
-      tool_call_id: string;
-      name: string;
-      args: Record<string, unknown>;
-    } | undefined;
+    const approvalChunk = chunks.find((c) => c.type === "approval_request") as
+      | {
+          type: "approval_request";
+          tool_call_id: string;
+          name: string;
+          args: Record<string, unknown>;
+        }
+      | undefined;
     expect(approvalChunk).toBeDefined();
     expect(approvalChunk!.name).toBe("send_email");
     expect(approvalChunk!.tool_call_id).toBe("tc_approval");
@@ -653,16 +655,16 @@ describe("runTurnStreaming (agentic loop)", () => {
       confidence: 0.8,
       memory_candidates: [],
       state_updates: {},
-      tool_calls: [
-        { id: "tc_loop", name: "infinite_tool", args: {} },
-      ],
+      tool_calls: [{ id: "tc_loop", name: "infinite_tool", args: {} }],
     };
 
     let callCount = 0;
     const provider: StreamingProvider = {
       model: "test-model",
       setModel: vi.fn(),
-      async generate() { return alwaysToolCall; },
+      async generate() {
+        return alwaysToolCall;
+      },
       async *generateStream() {
         callCount++;
         yield { type: "text" as const, text: "Calling tool again..." };
@@ -688,21 +690,28 @@ describe("runTurnStreaming (agentic loop)", () => {
   });
 
   it("includes memoriesRetrieved in result chunk", async () => {
-    const deps = makeDepsWithProvider(makeMockProvider([
-      {
-        text: 'Nice! <memory confidence="0.9" sensitivity="none">User likes cats</memory>',
-        confidence: 0.8,
-        memory_candidates: [{ content: "User likes cats", confidence: 0.9, sensitivity: SensitivityLevel.None }],
-        state_updates: {},
-      },
-    ]));
+    const deps = makeDepsWithProvider(
+      makeMockProvider([
+        {
+          text: 'Nice! <memory confidence="0.9" sensitivity="none">User likes cats</memory>',
+          confidence: 0.8,
+          memory_candidates: [
+            { content: "User likes cats", confidence: 0.9, sensitivity: SensitivityLevel.None },
+          ],
+          state_updates: {},
+        },
+      ]),
+    );
 
     // Turn 1: form a memory
     const chunks1: AgenticChunk[] = [];
     for await (const chunk of runTurnStreaming(deps, "I like cats")) {
       chunks1.push(chunk);
     }
-    const result1 = chunks1.find((c) => c.type === "result") as { type: "result"; result: { memoriesFormed: unknown[]; memoriesRetrieved: unknown[] } };
+    const result1 = chunks1.find((c) => c.type === "result") as {
+      type: "result";
+      result: { memoriesFormed: unknown[]; memoriesRetrieved: unknown[] };
+    };
     expect(result1.result.memoriesFormed).toHaveLength(1);
     expect(result1.result.memoriesRetrieved).toHaveLength(0); // no prior memories
 
@@ -722,27 +731,37 @@ describe("runTurnStreaming (agentic loop)", () => {
     for await (const chunk of runTurnStreaming(deps, "What animals do I like?")) {
       chunks2.push(chunk);
     }
-    const result2 = chunks2.find((c) => c.type === "result") as { type: "result"; result: { memoriesRetrieved: Array<{ content: string }> } };
+    const result2 = chunks2.find((c) => c.type === "result") as {
+      type: "result";
+      result: { memoriesRetrieved: Array<{ content: string }> };
+    };
     expect(result2.result.memoriesRetrieved.length).toBeGreaterThan(0);
     expect(result2.result.memoriesRetrieved[0]!.content).toBe("User likes cats");
   });
 
   it("pinned memories appear in memoriesRetrieved", async () => {
-    const deps = makeDepsWithProvider(makeMockProvider([
-      {
-        text: 'Nice! <memory confidence="0.9" sensitivity="none">User likes dogs</memory>',
-        confidence: 0.8,
-        memory_candidates: [{ content: "User likes dogs", confidence: 0.9, sensitivity: SensitivityLevel.None }],
-        state_updates: {},
-      },
-    ]));
+    const deps = makeDepsWithProvider(
+      makeMockProvider([
+        {
+          text: 'Nice! <memory confidence="0.9" sensitivity="none">User likes dogs</memory>',
+          confidence: 0.8,
+          memory_candidates: [
+            { content: "User likes dogs", confidence: 0.9, sensitivity: SensitivityLevel.None },
+          ],
+          state_updates: {},
+        },
+      ]),
+    );
 
     // Turn 1: form a memory and pin it
     const chunks1: AgenticChunk[] = [];
     for await (const chunk of runTurnStreaming(deps, "I like dogs")) {
       chunks1.push(chunk);
     }
-    const result1 = chunks1.find((c) => c.type === "result") as { type: "result"; result: { memoriesFormed: Array<{ node_id: string }> } };
+    const result1 = chunks1.find((c) => c.type === "result") as {
+      type: "result";
+      result: { memoriesFormed: Array<{ node_id: string }> };
+    };
     const nodeId = result1.result.memoriesFormed[0]!.node_id;
     await deps.memoryGraph.pinMemory(nodeId, true);
 
@@ -761,27 +780,37 @@ describe("runTurnStreaming (agentic loop)", () => {
     for await (const chunk of runTurnStreaming(deps, "What do I like?")) {
       chunks2.push(chunk);
     }
-    const result2 = chunks2.find((c) => c.type === "result") as { type: "result"; result: { memoriesRetrieved: Array<{ node_id: string; pinned: boolean }> } };
+    const result2 = chunks2.find((c) => c.type === "result") as {
+      type: "result";
+      result: { memoriesRetrieved: Array<{ node_id: string; pinned: boolean }> };
+    };
     const retrieved = result2.result.memoriesRetrieved;
-    expect(retrieved.some(m => m.node_id === nodeId && m.pinned)).toBe(true);
+    expect(retrieved.some((m) => m.node_id === nodeId && m.pinned)).toBe(true);
   });
 
   it("pinned memories are not duplicated when also similarity-matched", async () => {
-    const deps = makeDepsWithProvider(makeMockProvider([
-      {
-        text: 'Cool! <memory confidence="0.9" sensitivity="none">User enjoys cycling</memory>',
-        confidence: 0.8,
-        memory_candidates: [{ content: "User enjoys cycling", confidence: 0.9, sensitivity: SensitivityLevel.None }],
-        state_updates: {},
-      },
-    ]));
+    const deps = makeDepsWithProvider(
+      makeMockProvider([
+        {
+          text: 'Cool! <memory confidence="0.9" sensitivity="none">User enjoys cycling</memory>',
+          confidence: 0.8,
+          memory_candidates: [
+            { content: "User enjoys cycling", confidence: 0.9, sensitivity: SensitivityLevel.None },
+          ],
+          state_updates: {},
+        },
+      ]),
+    );
 
     // Turn 1: form and pin
     const chunks1: AgenticChunk[] = [];
     for await (const chunk of runTurnStreaming(deps, "I enjoy cycling")) {
       chunks1.push(chunk);
     }
-    const result1 = chunks1.find((c) => c.type === "result") as { type: "result"; result: { memoriesFormed: Array<{ node_id: string }> } };
+    const result1 = chunks1.find((c) => c.type === "result") as {
+      type: "result";
+      result: { memoriesFormed: Array<{ node_id: string }> };
+    };
     const nodeId = result1.result.memoriesFormed[0]!.node_id;
     await deps.memoryGraph.pinMemory(nodeId, true);
 
@@ -800,9 +829,12 @@ describe("runTurnStreaming (agentic loop)", () => {
     for await (const chunk of runTurnStreaming(deps, "Tell me about cycling")) {
       chunks2.push(chunk);
     }
-    const result2 = chunks2.find((c) => c.type === "result") as { type: "result"; result: { memoriesRetrieved: Array<{ node_id: string }> } };
-    const ids = result2.result.memoriesRetrieved.map(m => m.node_id);
-    const occurrences = ids.filter(id => id === nodeId);
+    const result2 = chunks2.find((c) => c.type === "result") as {
+      type: "result";
+      result: { memoriesRetrieved: Array<{ node_id: string }> };
+    };
+    const ids = result2.result.memoriesRetrieved.map((m) => m.node_id);
+    const occurrences = ids.filter((id) => id === nodeId);
     expect(occurrences).toHaveLength(1); // no duplicates
   });
 
@@ -822,7 +854,10 @@ describe("runTurnStreaming (agentic loop)", () => {
       chunks.push(chunk);
     }
 
-    const resultChunk = chunks.find((c) => c.type === "result") as { type: "result"; result: { memoriesRetrieved: unknown[] } };
+    const resultChunk = chunks.find((c) => c.type === "result") as {
+      type: "result";
+      result: { memoriesRetrieved: unknown[] };
+    };
     expect(resultChunk.result.memoriesRetrieved).toEqual([]);
   });
 
@@ -863,7 +898,10 @@ describe("runTurnStreaming (agentic loop)", () => {
     const toolChunks = chunks.filter((c) => c.type === "tool_status");
     expect(toolChunks).toHaveLength(0);
 
-    const resultChunk = chunks.find((c) => c.type === "result") as { type: "result"; result: { response: string } };
+    const resultChunk = chunks.find((c) => c.type === "result") as {
+      type: "result";
+      result: { response: string };
+    };
     expect(resultChunk.result.response).toBe("I don't need any tools for this.");
   });
 });

@@ -50,12 +50,12 @@ export interface SpatialAIConfig {
 // === Presence State Machine ===
 
 export type PresenceState =
-  | "dormant"       // App backgrounded / headset off
-  | "ambient"       // Headset on, idle
-  | "attentive"     // Gaze hit or VAD onset
-  | "engaged"       // Transcript sent to AI
-  | "speaking"      // TTS playing
-  | "processing";   // AI turn in progress
+  | "dormant" // App backgrounded / headset off
+  | "ambient" // Headset on, idle
+  | "attentive" // Gaze hit or VAD onset
+  | "engaged" // Transcript sent to AI
+  | "speaking" // TTS playing
+  | "processing"; // AI turn in progress
 
 interface PresenceMapping {
   social_distance: number;
@@ -64,11 +64,11 @@ interface PresenceMapping {
 }
 
 const PRESENCE_MAP: Record<PresenceState, PresenceMapping> = {
-  dormant:    { social_distance: 1.0, attention: 0,    processing: 0 },
-  ambient:    { social_distance: 0.6, attention: 0.1,  processing: 0 },
-  attentive:  { social_distance: 0.3, attention: 0.7,  processing: 0.1 },
-  engaged:    { social_distance: 0.1, attention: 0.9,  processing: 0.5 },
-  speaking:   { social_distance: 0.1, attention: 0.8,  processing: 0.3 },
+  dormant: { social_distance: 1.0, attention: 0, processing: 0 },
+  ambient: { social_distance: 0.6, attention: 0.1, processing: 0 },
+  attentive: { social_distance: 0.3, attention: 0.7, processing: 0.1 },
+  engaged: { social_distance: 0.1, attention: 0.9, processing: 0.5 },
+  speaking: { social_distance: 0.1, attention: 0.8, processing: 0.3 },
   processing: { social_distance: 0.15, attention: 0.85, processing: 0.95 },
 };
 
@@ -239,9 +239,7 @@ export class SpatialApp {
    * Returns false if the provider needs an API key that wasn't provided.
    */
   async initAI(config: SpatialAIConfig): Promise<boolean> {
-    const resolved = config.personalityConfig
-      ? resolveConfig(config.personalityConfig)
-      : undefined;
+    const resolved = config.personalityConfig ? resolveConfig(config.personalityConfig) : undefined;
     const temperature = resolved?.temperature;
 
     let provider;
@@ -255,7 +253,8 @@ export class SpatialApp {
       });
     } else {
       if (config.apiKey == null || config.apiKey === "") return false;
-      const model = config.model != null && config.model !== "" ? config.model : "claude-sonnet-4-20250514";
+      const model =
+        config.model != null && config.model !== "" ? config.model : "claude-sonnet-4-20250514";
       provider = new CloudProvider({
         provider: "anthropic",
         api_key: config.apiKey,
@@ -265,7 +264,7 @@ export class SpatialApp {
       });
     }
 
-    const storage = this.storage ?? await createBrowserStorage();
+    const storage = this.storage ?? (await createBrowserStorage());
 
     this.runtime = new MotebitRuntime(
       { motebitId: this.motebitId, tickRateHz: 2 },
@@ -364,11 +363,7 @@ export class SpatialApp {
    * Tick orbital dynamics and position the creature.
    * Call this each frame in the XR animation loop.
    */
-  tickOrbital(
-    dt: number,
-    time: number,
-    headPosition: [number, number, number],
-  ): void {
+  tickOrbital(dt: number, time: number, headPosition: [number, number, number]): void {
     const anchors = estimateBodyAnchors(headPosition);
     const shoulderAnchor = getAnchorForReference(anchors, "shoulder_right");
 

@@ -47,106 +47,106 @@ Additional Markdown content MAY appear after the signature comment. It is not co
 
 ### 3.1 — Top-level fields
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `spec` | string | yes | Specification version. MUST be `"motebit/identity@1.0"` for this version. |
-| `motebit_id` | string | yes | Unique agent identifier. SHOULD be a UUID v7 (time-ordered). |
-| `created_at` | string | yes | ISO 8601 timestamp of identity creation. |
-| `owner_id` | string | yes | Identifier of the entity that owns this agent. Opaque string — format is application-defined. |
+| Field        | Type   | Required | Description                                                                                   |
+| ------------ | ------ | -------- | --------------------------------------------------------------------------------------------- |
+| `spec`       | string | yes      | Specification version. MUST be `"motebit/identity@1.0"` for this version.                     |
+| `motebit_id` | string | yes      | Unique agent identifier. SHOULD be a UUID v7 (time-ordered).                                  |
+| `created_at` | string | yes      | ISO 8601 timestamp of identity creation.                                                      |
+| `owner_id`   | string | yes      | Identifier of the entity that owns this agent. Opaque string — format is application-defined. |
 
 ### 3.2 — `identity`
 
 Cryptographic identity. The public half of the keypair that signs this file.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `algorithm` | string | yes | Signing algorithm. MUST be `"Ed25519"` for this version. |
-| `public_key` | string | yes | Hex-encoded Ed25519 public key (64 hex characters = 32 bytes). |
+| Field        | Type   | Required | Description                                                    |
+| ------------ | ------ | -------- | -------------------------------------------------------------- |
+| `algorithm`  | string | yes      | Signing algorithm. MUST be `"Ed25519"` for this version.       |
+| `public_key` | string | yes      | Hex-encoded Ed25519 public key (64 hex characters = 32 bytes). |
 
 ### 3.3 — `governance`
 
 Declares the agent's operational boundaries — what it may do autonomously, what requires approval, and what is forbidden.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `trust_mode` | string | yes | One of: `"minimal"`, `"guarded"`, `"full"`. Determines baseline permeability of the agent's boundary. |
-| `max_risk_auto` | string | yes | Maximum risk level the agent may execute without approval. One of the risk levels defined in §3.3.1. |
-| `require_approval_above` | string | yes | Tool calls above this risk level require explicit user approval. |
-| `deny_above` | string | yes | Tool calls above this risk level are unconditionally denied. |
-| `operator_mode` | boolean | yes | Whether elevated-privilege mode is enabled (typically PIN-gated). |
+| Field                    | Type    | Required | Description                                                                                           |
+| ------------------------ | ------- | -------- | ----------------------------------------------------------------------------------------------------- |
+| `trust_mode`             | string  | yes      | One of: `"minimal"`, `"guarded"`, `"full"`. Determines baseline permeability of the agent's boundary. |
+| `max_risk_auto`          | string  | yes      | Maximum risk level the agent may execute without approval. One of the risk levels defined in §3.3.1.  |
+| `require_approval_above` | string  | yes      | Tool calls above this risk level require explicit user approval.                                      |
+| `deny_above`             | string  | yes      | Tool calls above this risk level are unconditionally denied.                                          |
+| `operator_mode`          | boolean | yes      | Whether elevated-privilege mode is enabled (typically PIN-gated).                                     |
 
 #### 3.3.1 — Risk Levels
 
 Risk levels form an ordered enumeration from lowest to highest:
 
-| Level | Name | Description |
-|-------|------|-------------|
-| 0 | `R0_READ` | Read-only operations. No side effects. |
-| 1 | `R1_DRAFT` | Content generation, drafts, suggestions. Reversible. |
-| 2 | `R2_WRITE` | Write operations. File creation, data modification. |
-| 3 | `R3_EXECUTE` | Code execution, system commands, external API calls. |
-| 4 | `R4_MONEY` | Financial transactions, purchases, irreversible commitments. |
+| Level | Name         | Description                                                  |
+| ----- | ------------ | ------------------------------------------------------------ |
+| 0     | `R0_READ`    | Read-only operations. No side effects.                       |
+| 1     | `R1_DRAFT`   | Content generation, drafts, suggestions. Reversible.         |
+| 2     | `R2_WRITE`   | Write operations. File creation, data modification.          |
+| 3     | `R3_EXECUTE` | Code execution, system commands, external API calls.         |
+| 4     | `R4_MONEY`   | Financial transactions, purchases, irreversible commitments. |
 
 The governance thresholds MUST satisfy: `max_risk_auto <= require_approval_above <= deny_above`. A verifier SHOULD warn if this constraint is violated.
 
 #### 3.3.2 — Trust Modes
 
-| Mode | Semantics |
-|------|-----------|
+| Mode      | Semantics                                                                                       |
+| --------- | ----------------------------------------------------------------------------------------------- |
 | `minimal` | Maximum restriction. Agent operates with lowest autonomy. Suitable for untrusted or new agents. |
-| `guarded` | Default. Agent has moderate autonomy within declared risk bounds. |
-| `full` | Agent has maximum autonomy within declared risk bounds. Implies established trust relationship. |
+| `guarded` | Default. Agent has moderate autonomy within declared risk bounds.                               |
+| `full`    | Agent has maximum autonomy within declared risk bounds. Implies established trust relationship. |
 
 ### 3.4 — `privacy`
 
 Declares how the agent handles information sensitivity and retention.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `default_sensitivity` | string | yes | Default sensitivity classification for unclassified information. One of the sensitivity levels defined in §3.4.1. |
-| `retention_days` | object | yes | Map of sensitivity level to maximum retention in days. Keys are sensitivity level names, values are positive integers. |
-| `fail_closed` | boolean | yes | If `true`, the agent denies access when sensitivity cannot be determined. If `false`, the agent permits access at `default_sensitivity`. SHOULD be `true`. |
+| Field                 | Type    | Required | Description                                                                                                                                                |
+| --------------------- | ------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `default_sensitivity` | string  | yes      | Default sensitivity classification for unclassified information. One of the sensitivity levels defined in §3.4.1.                                          |
+| `retention_days`      | object  | yes      | Map of sensitivity level to maximum retention in days. Keys are sensitivity level names, values are positive integers.                                     |
+| `fail_closed`         | boolean | yes      | If `true`, the agent denies access when sensitivity cannot be determined. If `false`, the agent permits access at `default_sensitivity`. SHOULD be `true`. |
 
 #### 3.4.1 — Sensitivity Levels
 
-| Level | Name | Description |
-|-------|------|-------------|
-| 0 | `none` | Non-sensitive information. |
-| 1 | `personal` | Personally identifiable information. |
-| 2 | `medical` | Health and medical data. |
-| 3 | `financial` | Financial data, account information. |
-| 4 | `secret` | Secrets, credentials, cryptographic material. |
+| Level | Name        | Description                                   |
+| ----- | ----------- | --------------------------------------------- |
+| 0     | `none`      | Non-sensitive information.                    |
+| 1     | `personal`  | Personally identifiable information.          |
+| 2     | `medical`   | Health and medical data.                      |
+| 3     | `financial` | Financial data, account information.          |
+| 4     | `secret`    | Secrets, credentials, cryptographic material. |
 
 ### 3.5 — `memory`
 
 Declares the agent's memory behavior.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `half_life_days` | number | yes | Memory decay half-life in days. Memories not reinforced within this period lose half their confidence. Positive number. |
-| `confidence_threshold` | number | yes | Minimum confidence for a memory to be retained. Range: 0.0 to 1.0. |
-| `per_turn_limit` | number | yes | Maximum number of new memories the agent may create per interaction turn. Positive integer. |
+| Field                  | Type   | Required | Description                                                                                                             |
+| ---------------------- | ------ | -------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `half_life_days`       | number | yes      | Memory decay half-life in days. Memories not reinforced within this period lose half their confidence. Positive number. |
+| `confidence_threshold` | number | yes      | Minimum confidence for a memory to be retained. Range: 0.0 to 1.0.                                                      |
+| `per_turn_limit`       | number | yes      | Maximum number of new memories the agent may create per interaction turn. Positive integer.                             |
 
 ### 3.6 — Service Identity (optional)
 
 Service identity fields allow a `motebit.md` to describe an AI service — a motebit that accepts inbound calls rather than initiating outbound interactions. All fields in this section are optional. When absent, the identity defaults to `type: "personal"`.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `type` | string | no | Identity type. One of: `"personal"`, `"service"`, `"collaborative"`. Defaults to `"personal"` when absent. |
-| `service_name` | string | no | Human-readable service name. SHOULD be present when `type` is `"service"`. |
-| `service_description` | string | no | Brief description of what the service does. |
-| `service_url` | string | no | URL where the service is reachable. SHOULD be HTTPS. |
-| `capabilities` | string[] | no | Declared capability list. Each entry is a short identifier (e.g., `"flight_search"`, `"price_alerts"`). |
-| `terms_url` | string | no | URL to terms of service or usage policy. |
+| Field                 | Type     | Required | Description                                                                                                |
+| --------------------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------- |
+| `type`                | string   | no       | Identity type. One of: `"personal"`, `"service"`, `"collaborative"`. Defaults to `"personal"` when absent. |
+| `service_name`        | string   | no       | Human-readable service name. SHOULD be present when `type` is `"service"`.                                 |
+| `service_description` | string   | no       | Brief description of what the service does.                                                                |
+| `service_url`         | string   | no       | URL where the service is reachable. SHOULD be HTTPS.                                                       |
+| `capabilities`        | string[] | no       | Declared capability list. Each entry is a short identifier (e.g., `"flight_search"`, `"price_alerts"`).    |
+| `terms_url`           | string   | no       | URL to terms of service or usage policy.                                                                   |
 
 #### 3.6.1 — Identity Types
 
-| Type | Semantics |
-|------|-----------|
-| `personal` | A personal agent acting on behalf of a user. The default. |
-| `service` | An AI service that accepts inbound requests. Declares capabilities and may expose a service URL. |
-| `collaborative` | A multi-party agent with shared governance. Reserved for future use. |
+| Type            | Semantics                                                                                        |
+| --------------- | ------------------------------------------------------------------------------------------------ |
+| `personal`      | A personal agent acting on behalf of a user. The default.                                        |
+| `service`       | An AI service that accepts inbound requests. Declares capabilities and may expose a service URL. |
+| `collaborative` | A multi-party agent with shared governance. Reserved for future use.                             |
 
 #### 3.6.2 — Capabilities
 
@@ -177,12 +177,12 @@ The signature covers all frontmatter fields including service fields, so they ar
 
 Array of registered devices. MAY be empty. Each device entry:
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `device_id` | string | yes | Unique device identifier. |
-| `name` | string | yes | Human-readable device name. |
-| `public_key` | string | yes | Hex-encoded Ed25519 public key for this device. |
-| `registered_at` | string | yes | ISO 8601 timestamp of device registration. |
+| Field           | Type   | Required | Description                                     |
+| --------------- | ------ | -------- | ----------------------------------------------- |
+| `device_id`     | string | yes      | Unique device identifier.                       |
+| `name`          | string | yes      | Human-readable device name.                     |
+| `public_key`    | string | yes      | Hex-encoded Ed25519 public key for this device. |
+| `registered_at` | string | yes      | ISO 8601 timestamp of device registration.      |
 
 ---
 
@@ -297,6 +297,7 @@ devices:
     public_key: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
     registered_at: "2026-02-18T00:00:00.000Z"
 ---
+
 <!-- motebit:sig:Ed25519:dGhpcyBpcyBhIHBsYWNlaG9sZGVyIHNpZ25hdHVyZQ -->
 ```
 
@@ -345,6 +346,7 @@ memory:
   per_turn_limit: 5
 devices: []
 ---
+
 <!-- motebit:sig:Ed25519:dGhpcyBpcyBhIHBsYWNlaG9sZGVyIHNpZ25hdHVyZQ -->
 ```
 
@@ -354,13 +356,13 @@ Note: When `type` is absent, the identity is treated as `"personal"`. The servic
 
 ## 6. File Conventions
 
-| Convention | Value |
-|------------|-------|
-| **Filename** | `motebit.md` |
-| **Placement** | Project root, or `~/.motebit/identity.md` for user-global identity |
-| **Encoding** | UTF-8, no BOM |
+| Convention       | Value                                                                         |
+| ---------------- | ----------------------------------------------------------------------------- |
+| **Filename**     | `motebit.md`                                                                  |
+| **Placement**    | Project root, or `~/.motebit/identity.md` for user-global identity            |
+| **Encoding**     | UTF-8, no BOM                                                                 |
 | **Line endings** | LF (`\n`). Verifiers MUST normalize CRLF to LF before signature verification. |
-| **MIME type** | `text/markdown` |
+| **MIME type**    | `text/markdown`                                                               |
 
 ### 6.1 — Discovery
 
@@ -415,16 +417,16 @@ Implementations SHOULD use a restricted YAML parser that handles only the data t
 
 ### 8.5 — Threat Model
 
-| Threat | Mitigation | Residual Risk |
-|--------|-----------|---------------|
-| **Frontmatter tampering** | Ed25519 signature covers exact YAML bytes; any modification invalidates | None — cryptographic guarantee |
-| **Private key theft** | Key stored in OS keychain or encrypted at rest; never in the identity file | Physical/OS-level compromise |
-| **Identity impersonation** | Public key is self-certifying; verification requires matching keypair | No PKI — trust is application-defined |
-| **Key compromise** | Generate new keypair + new `motebit_id`; old identity is abandoned | No revocation broadcast mechanism |
-| **Replay of old identity file** | `created_at` timestamp allows freshness checks; applications define policy | Verifier must enforce freshness |
-| **YAML injection** | Restricted parser; no anchors/aliases/tags; only spec-defined types | Full YAML parsers may be vulnerable |
-| **Signature stripping** | Verifiers MUST reject files without a valid signature comment | Applications that skip verification |
-| **Post-signature content injection** | Signature scope is frontmatter only; post-signature content is untrusted | Applications must not trust unsigned content |
+| Threat                               | Mitigation                                                                 | Residual Risk                                |
+| ------------------------------------ | -------------------------------------------------------------------------- | -------------------------------------------- |
+| **Frontmatter tampering**            | Ed25519 signature covers exact YAML bytes; any modification invalidates    | None — cryptographic guarantee               |
+| **Private key theft**                | Key stored in OS keychain or encrypted at rest; never in the identity file | Physical/OS-level compromise                 |
+| **Identity impersonation**           | Public key is self-certifying; verification requires matching keypair      | No PKI — trust is application-defined        |
+| **Key compromise**                   | Generate new keypair + new `motebit_id`; old identity is abandoned         | No revocation broadcast mechanism            |
+| **Replay of old identity file**      | `created_at` timestamp allows freshness checks; applications define policy | Verifier must enforce freshness              |
+| **YAML injection**                   | Restricted parser; no anchors/aliases/tags; only spec-defined types        | Full YAML parsers may be vulnerable          |
+| **Signature stripping**              | Verifiers MUST reject files without a valid signature comment              | Applications that skip verification          |
+| **Post-signature content injection** | Signature scope is frontmatter only; post-signature content is untrusted   | Applications must not trust unsigned content |
 
 **Trust boundary:** A valid `motebit.md` proves the holder has the private key. It does NOT prove the holder is trustworthy, authorized, or human. Trust is accumulated at the application layer through history, reputation, and governance — not by the identity file alone.
 
@@ -460,4 +462,4 @@ Future versions will use semantic versioning: `motebit/identity@{major}.{minor}`
 
 ---
 
-*motebit/identity@1.0 — Stable Specification, 2026.*
+_motebit/identity@1.0 — Stable Specification, 2026._

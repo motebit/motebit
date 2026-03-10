@@ -174,7 +174,10 @@ describe("parseSlashCommand", () => {
 
   it("parses command with args", () => {
     expect(parseSlashCommand("/model mistral")).toEqual({ command: "model", args: "mistral" });
-    expect(parseSlashCommand("/model  spaced  arg ")).toEqual({ command: "model", args: "spaced  arg" });
+    expect(parseSlashCommand("/model  spaced  arg ")).toEqual({
+      command: "model",
+      args: "spaced  arg",
+    });
   });
 
   it("handles single slash", () => {
@@ -346,8 +349,12 @@ describe("DesktopApp.initAI tools", () => {
     await app.initAI({ provider: "ollama", isTauri: false });
 
     // The runtime should have the 4 browser-safe tools registered
-    const toolNames = (app as unknown as { runtime: { getToolRegistry(): { list(): { name: string }[] } } })
-      .runtime.getToolRegistry().list().map((t) => t.name);
+    const toolNames = (
+      app as unknown as { runtime: { getToolRegistry(): { list(): { name: string }[] } } }
+    ).runtime
+      .getToolRegistry()
+      .list()
+      .map((t) => t.name);
 
     expect(toolNames).toContain("web_search");
     expect(toolNames).toContain("read_url");
@@ -364,8 +371,12 @@ describe("DesktopApp.initAI tools", () => {
     };
     await app.initAI({ provider: "ollama", isTauri: true, invoke: mockInvoke });
 
-    const toolNames = (app as unknown as { runtime: { getToolRegistry(): { list(): { name: string }[] } } })
-      .runtime.getToolRegistry().list().map((t) => t.name);
+    const toolNames = (
+      app as unknown as { runtime: { getToolRegistry(): { list(): { name: string }[] } } }
+    ).runtime
+      .getToolRegistry()
+      .list()
+      .map((t) => t.name);
 
     // Desktop tools (web_search, recall_memories, etc.) require governance
     expect(toolNames).not.toContain("web_search");
@@ -468,7 +479,9 @@ describe("DesktopApp.governanceStatus", () => {
     };
     await app.initAI({ provider: "ollama", isTauri: true, invoke: mockInvoke });
     expect(app.governanceStatus.governed).toBe(false);
-    expect((app.governanceStatus as { reason: string }).reason).toContain("missing or invalid governance");
+    expect((app.governanceStatus as { reason: string }).reason).toContain(
+      "missing or invalid governance",
+    );
   });
 });
 
@@ -487,8 +500,12 @@ describe("DesktopApp goal tools", () => {
     app = new DesktopApp();
     await app.initAI({ provider: "ollama", isTauri: false });
 
-    const toolNames = (app as unknown as { runtime: { getToolRegistry(): { list(): { name: string }[] } } })
-      .runtime.getToolRegistry().list().map((t) => t.name);
+    const toolNames = (
+      app as unknown as { runtime: { getToolRegistry(): { list(): { name: string }[] } } }
+    ).runtime
+      .getToolRegistry()
+      .list()
+      .map((t) => t.name);
     expect(toolNames).not.toContain("create_sub_goal");
     expect(toolNames).not.toContain("complete_goal");
     expect(toolNames).not.toContain("report_progress");
@@ -500,8 +517,12 @@ describe("DesktopApp goal tools", () => {
     const invoke = createMockInvoke(db);
     await app.initAI({ provider: "ollama", isTauri: true, invoke });
 
-    const toolNames = (app as unknown as { runtime: { getToolRegistry(): { list(): { name: string }[] } } })
-      .runtime.getToolRegistry().list().map((t) => t.name);
+    const toolNames = (
+      app as unknown as { runtime: { getToolRegistry(): { list(): { name: string }[] } } }
+    ).runtime
+      .getToolRegistry()
+      .list()
+      .map((t) => t.name);
 
     expect(toolNames).toContain("create_sub_goal");
     expect(toolNames).toContain("complete_goal");
@@ -514,8 +535,18 @@ describe("DesktopApp goal tools", () => {
     const invoke = createMockInvoke(db);
     await app.initAI({ provider: "ollama", isTauri: true, invoke });
 
-    const registry = (app as unknown as { runtime: { getToolRegistry(): { execute(name: string, args: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> } } })
-      .runtime.getToolRegistry();
+    const registry = (
+      app as unknown as {
+        runtime: {
+          getToolRegistry(): {
+            execute(
+              name: string,
+              args: Record<string, unknown>,
+            ): Promise<{ ok: boolean; error?: string }>;
+          };
+        };
+      }
+    ).runtime.getToolRegistry();
 
     const result = await registry.execute("create_sub_goal", { prompt: "test sub-goal" });
     expect(result.ok).toBe(false);
@@ -528,8 +559,18 @@ describe("DesktopApp goal tools", () => {
     const invoke = createMockInvoke(db);
     await app.initAI({ provider: "ollama", isTauri: true, invoke });
 
-    const registry = (app as unknown as { runtime: { getToolRegistry(): { execute(name: string, args: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> } } })
-      .runtime.getToolRegistry();
+    const registry = (
+      app as unknown as {
+        runtime: {
+          getToolRegistry(): {
+            execute(
+              name: string,
+              args: Record<string, unknown>,
+            ): Promise<{ ok: boolean; error?: string }>;
+          };
+        };
+      }
+    ).runtime.getToolRegistry();
 
     const result = await registry.execute("complete_goal", { reason: "done" });
     expect(result.ok).toBe(false);
@@ -542,8 +583,18 @@ describe("DesktopApp goal tools", () => {
     const invoke = createMockInvoke(db);
     await app.initAI({ provider: "ollama", isTauri: true, invoke });
 
-    const registry = (app as unknown as { runtime: { getToolRegistry(): { execute(name: string, args: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> } } })
-      .runtime.getToolRegistry();
+    const registry = (
+      app as unknown as {
+        runtime: {
+          getToolRegistry(): {
+            execute(
+              name: string,
+              args: Record<string, unknown>,
+            ): Promise<{ ok: boolean; error?: string }>;
+          };
+        };
+      }
+    ).runtime.getToolRegistry();
 
     const result = await registry.execute("report_progress", { note: "halfway done" });
     expect(result.ok).toBe(false);
@@ -659,7 +710,10 @@ function createMockInvoke(db: MockDbState): InvokeFn {
   return ((cmd: string, args?: Record<string, unknown>) => {
     if (cmd === "db_query") {
       const sql = (args?.sql as string) ?? "";
-      if (sql.includes("FROM conversations") && sql.includes("ORDER BY last_active_at DESC LIMIT 1")) {
+      if (
+        sql.includes("FROM conversations") &&
+        sql.includes("ORDER BY last_active_at DESC LIMIT 1")
+      ) {
         return Promise.resolve(db.conversations.slice(0, 1));
       }
       if (sql.includes("FROM conversations")) {
@@ -667,26 +721,26 @@ function createMockInvoke(db: MockDbState): InvokeFn {
       }
       if (sql.includes("FROM conversation_messages")) {
         const convId = (args?.params as unknown[])?.[0] as string;
-        return Promise.resolve(db.messages.filter(m => m.conversation_id === convId));
+        return Promise.resolve(db.messages.filter((m) => m.conversation_id === convId));
       }
       if (sql.includes("FROM goals")) {
-        return Promise.resolve(db.goals.filter(g => g.enabled === 1 && g.status === "active"));
+        return Promise.resolve(db.goals.filter((g) => g.enabled === 1 && g.status === "active"));
       }
       if (sql.includes("FROM goal_outcomes")) {
         return Promise.resolve(db.goalOutcomes);
       }
       if (sql.includes("message_count FROM conversations")) {
         const convId = (args?.params as unknown[])?.[0] as string;
-        const conv = db.conversations.find(c => c.conversation_id === convId);
+        const conv = db.conversations.find((c) => c.conversation_id === convId);
         return Promise.resolve(conv ? [{ message_count: conv.message_count }] : []);
       }
       if (sql.includes("FROM plans")) {
         const goalId = (args?.params as unknown[])?.[0] as string;
-        return Promise.resolve(db.plans.filter(p => p.goal_id === goalId));
+        return Promise.resolve(db.plans.filter((p) => p.goal_id === goalId));
       }
       if (sql.includes("FROM plan_steps")) {
         const planId = (args?.params as unknown[])?.[0] as string;
-        return Promise.resolve(db.planSteps.filter(s => s.plan_id === planId));
+        return Promise.resolve(db.planSteps.filter((s) => s.plan_id === planId));
       }
       if (sql.includes("MAX(version_clock)")) {
         return Promise.resolve([{ max_clock: 0 }]);
@@ -705,7 +759,15 @@ function createMockInvoke(db: MockDbState): InvokeFn {
 }
 
 function emptyDb(): MockDbState {
-  return { conversations: [], messages: [], goals: [], goalOutcomes: [], plans: [], planSteps: [], executions: [] };
+  return {
+    conversations: [],
+    messages: [],
+    goals: [],
+    goalOutcomes: [],
+    plans: [],
+    planSteps: [],
+    executions: [],
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -942,14 +1004,16 @@ describe("DesktopApp.startGoalScheduler / stopGoalScheduler", () => {
     await vi.advanceTimersByTimeAsync(6_000);
     const afterInitial = invoke.mock.calls.filter(
       (call: unknown[]) =>
-        call[0] === "db_query" && ((call[1] as Record<string, unknown>)?.sql as string)?.includes("FROM goals"),
+        call[0] === "db_query" &&
+        ((call[1] as Record<string, unknown>)?.sql as string)?.includes("FROM goals"),
     ).length;
 
     // Advance past multiple 60s intervals — none should fire (setInterval was cleared)
     await vi.advanceTimersByTimeAsync(180_000);
     const afterIntervals = invoke.mock.calls.filter(
       (call: unknown[]) =>
-        call[0] === "db_query" && ((call[1] as Record<string, unknown>)?.sql as string)?.includes("FROM goals"),
+        call[0] === "db_query" &&
+        ((call[1] as Record<string, unknown>)?.sql as string)?.includes("FROM goals"),
     ).length;
 
     // No additional goal queries after the initial timeout
@@ -1046,11 +1110,13 @@ describe("DesktopApp.goalTick (via startGoalScheduler)", () => {
     await app.initAI({ provider: "ollama", isTauri: true, invoke });
 
     const completeCalls: Array<{ goalId: string; status: string; error: string | null }> = [];
-    app.onGoalComplete((event) => completeCalls.push({
-      goalId: event.goalId,
-      status: event.status,
-      error: event.error,
-    }));
+    app.onGoalComplete((event) =>
+      completeCalls.push({
+        goalId: event.goalId,
+        status: event.status,
+        error: event.error,
+      }),
+    );
 
     const statusCalls: boolean[] = [];
     app.onGoalStatus((executing) => statusCalls.push(executing));
@@ -1061,11 +1127,15 @@ describe("DesktopApp.goalTick (via startGoalScheduler)", () => {
     await vi.advanceTimersByTimeAsync(6_000);
 
     // Should have attempted the goal, failed, and recorded the failure
-    const failInserts = db.executions.filter(e => e.sql.includes("INSERT INTO goal_outcomes") && e.sql.includes("failed"));
+    const failInserts = db.executions.filter(
+      (e) => e.sql.includes("INSERT INTO goal_outcomes") && e.sql.includes("failed"),
+    );
     expect(failInserts.length).toBeGreaterThanOrEqual(1);
 
     // Should have incremented consecutive_failures
-    const failUpdates = db.executions.filter(e => e.sql.includes("consecutive_failures = consecutive_failures + 1"));
+    const failUpdates = db.executions.filter((e) =>
+      e.sql.includes("consecutive_failures = consecutive_failures + 1"),
+    );
     expect(failUpdates.length).toBeGreaterThanOrEqual(1);
 
     // onGoalComplete should have fired with failed status
@@ -1105,7 +1175,7 @@ describe("DesktopApp.goalTick (via startGoalScheduler)", () => {
     await vi.advanceTimersByTimeAsync(6_000);
 
     // Should have paused the goal (consecutive_failures 0 + 1 >= max_retries 1)
-    const pauseUpdates = db.executions.filter(e =>
+    const pauseUpdates = db.executions.filter((e) =>
       e.sql.includes("UPDATE goals SET status = 'paused'"),
     );
     expect(pauseUpdates.length).toBeGreaterThanOrEqual(1);
@@ -1207,7 +1277,8 @@ async function setupAppWithConversation(opts: {
   });
 
   // Build messages for the mock DB
-  const firstContent = opts.firstUserContent ?? "Tell me about the history of computing and how it evolved over time";
+  const firstContent =
+    opts.firstUserContent ?? "Tell me about the history of computing and how it evolved over time";
   for (let i = 0; i < opts.messageCount; i++) {
     const isUser = i % 2 === 0;
     db.messages.push({
@@ -1215,7 +1286,7 @@ async function setupAppWithConversation(opts: {
       conversation_id: convId,
       motebit_id: "desktop-local",
       role: isUser ? "user" : "assistant",
-      content: i === 0 ? firstContent : (isUser ? `Follow-up question ${i}` : `Response ${i}`),
+      content: i === 0 ? firstContent : isUser ? `Follow-up question ${i}` : `Response ${i}`,
       tool_calls: null,
       tool_call_id: null,
       created_at: 1000 + i,
@@ -1230,7 +1301,7 @@ async function setupAppWithConversation(opts: {
   const internals = appInternals(app);
   const rt = internals.runtime!;
   rt.conversationId = convId;
-  rt.conversationHistory = db.messages.map(m => ({ role: m.role, content: m.content }));
+  rt.conversationHistory = db.messages.map((m) => ({ role: m.role, content: m.content }));
 
   return { app, db };
 }
@@ -1371,7 +1442,9 @@ describe("DesktopApp.generateTitleInBackground", () => {
 
   /** Force AI path to fail so heuristic fallback is tested. */
   function forceHeuristicPath(desktopApp: DesktopApp): void {
-    const rt = appInternals(desktopApp).runtime as unknown as { generateCompletion: (p: string) => Promise<string> };
+    const rt = appInternals(desktopApp).runtime as unknown as {
+      generateCompletion: (p: string) => Promise<string>;
+    };
     rt.generateCompletion = vi.fn().mockRejectedValue(new Error("No provider"));
   }
 
@@ -1432,7 +1505,7 @@ describe("DesktopApp.generateTitleInBackground", () => {
     await app.generateTitleInBackground();
 
     // Check that the mock DB recorded the UPDATE for the title
-    const titleUpdates = setup.db.executions.filter(e =>
+    const titleUpdates = setup.db.executions.filter((e) =>
       e.sql.includes("UPDATE conversations SET title"),
     );
     expect(titleUpdates).toHaveLength(1);
@@ -1448,7 +1521,9 @@ describe("DesktopApp.generateTitleInBackground", () => {
     app = setup.app;
 
     // Mock generateCompletion on the runtime to simulate successful AI response
-    const rt = appInternals(app).runtime as unknown as { generateCompletion: (p: string) => Promise<string> };
+    const rt = appInternals(app).runtime as unknown as {
+      generateCompletion: (p: string) => Promise<string>;
+    };
     rt.generateCompletion = vi.fn().mockResolvedValue("Quantum Computing and Cryptography");
 
     const result = await app.generateTitleInBackground();
@@ -1468,7 +1543,9 @@ describe("DesktopApp.generateTitleInBackground", () => {
     app = setup.app;
 
     // Mock generateCompletion to throw (simulating provider failure)
-    const rt = appInternals(app).runtime as unknown as { generateCompletion: (p: string) => Promise<string> };
+    const rt = appInternals(app).runtime as unknown as {
+      generateCompletion: (p: string) => Promise<string>;
+    };
     rt.generateCompletion = vi.fn().mockRejectedValue(new Error("Connection refused"));
 
     const result = await app.generateTitleInBackground();
@@ -1483,7 +1560,9 @@ describe("DesktopApp.generateTitleInBackground", () => {
     });
     app = setup.app;
 
-    const rt = appInternals(app).runtime as unknown as { generateCompletion: (p: string) => Promise<string> };
+    const rt = appInternals(app).runtime as unknown as {
+      generateCompletion: (p: string) => Promise<string>;
+    };
     rt.generateCompletion = vi.fn().mockResolvedValue('"Today\'s Weather Forecast"');
 
     const result = await app.generateTitleInBackground();
@@ -1599,8 +1678,12 @@ describe("DesktopApp.summarizeConversation", () => {
     app = setup.app;
 
     // Mock generateCompletion
-    const rt = appInternals(app).runtime as unknown as { generateCompletion: (p: string) => Promise<string> };
-    rt.generateCompletion = vi.fn().mockResolvedValue("A conversation about computing history and evolution.");
+    const rt = appInternals(app).runtime as unknown as {
+      generateCompletion: (p: string) => Promise<string>;
+    };
+    rt.generateCompletion = vi
+      .fn()
+      .mockResolvedValue("A conversation about computing history and evolution.");
 
     const result = await app.summarizeConversation();
     expect(result).toBe("A conversation about computing history and evolution.");
@@ -1615,12 +1698,14 @@ describe("DesktopApp.summarizeConversation", () => {
     const setup = await setupAppWithConversation({ messageCount: 6 });
     app = setup.app;
 
-    const rt = appInternals(app).runtime as unknown as { generateCompletion: (p: string) => Promise<string> };
+    const rt = appInternals(app).runtime as unknown as {
+      generateCompletion: (p: string) => Promise<string>;
+    };
     rt.generateCompletion = vi.fn().mockResolvedValue("Summary of the conversation.");
 
     await app.summarizeConversation();
 
-    const summaryUpdates = setup.db.executions.filter(e =>
+    const summaryUpdates = setup.db.executions.filter((e) =>
       e.sql.includes("UPDATE conversations SET summary"),
     );
     expect(summaryUpdates).toHaveLength(1);
@@ -1659,7 +1744,7 @@ describe("DesktopApp.summarizeConversation", () => {
     const internals = appInternals(app);
     const rt = internals.runtime!;
     rt.conversationId = "conv-summ";
-    rt.conversationHistory = db.messages.map(m => ({ role: m.role, content: m.content }));
+    rt.conversationHistory = db.messages.map((m) => ({ role: m.role, content: m.content }));
 
     const rtTyped = rt as unknown as { generateCompletion: (p: string) => Promise<string> };
     rtTyped.generateCompletion = vi.fn().mockResolvedValue("Updated summary.");
@@ -1667,7 +1752,8 @@ describe("DesktopApp.summarizeConversation", () => {
     const result = await app.summarizeConversation();
     expect(result).toBe("Updated summary.");
 
-    const prompt = (rtTyped.generateCompletion as ReturnType<typeof vi.fn>).mock.calls[0]![0] as string;
+    const prompt = (rtTyped.generateCompletion as ReturnType<typeof vi.fn>).mock
+      .calls[0]![0] as string;
     expect(prompt).toContain("Update this conversation summary");
     expect(prompt).toContain("Previous summary content.");
   });

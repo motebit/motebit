@@ -54,13 +54,19 @@ function buildReflectionPrompt(plan: Plan, steps: PlanStep[]): string {
   parts.push("");
 
   for (const step of steps) {
-    const statusLabel = step.status === StepStatus.Completed ? "completed" : step.status === StepStatus.Skipped ? "skipped" : step.status;
+    const statusLabel =
+      step.status === StepStatus.Completed
+        ? "completed"
+        : step.status === StepStatus.Skipped
+          ? "skipped"
+          : step.status;
     parts.push(`Step ${step.ordinal + 1} (${statusLabel}): ${step.description}`);
     if (step.result_summary != null && step.result_summary !== "") {
       // Cap each step result to avoid blowing context
-      const trimmed = step.result_summary.length > 500
-        ? step.result_summary.slice(0, 500) + "..."
-        : step.result_summary;
+      const trimmed =
+        step.result_summary.length > 500
+          ? step.result_summary.slice(0, 500) + "..."
+          : step.result_summary;
       parts.push(`  Result: ${trimmed}`);
     }
     if (step.error_message != null && step.error_message !== "") {
@@ -134,7 +140,10 @@ export async function reflectOnPlan(
       user_message: userMessage,
       conversation_history: [
         { role: "user" as const, content: REFLECTION_SYSTEM_PROMPT },
-        { role: "assistant" as const, content: "I understand. I will synthesize plan learnings into structured JSON." },
+        {
+          role: "assistant" as const,
+          content: "I understand. I will synthesize plan learnings into structured JSON.",
+        },
       ],
     });
 

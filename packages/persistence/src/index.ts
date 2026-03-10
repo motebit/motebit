@@ -17,10 +17,7 @@ import type {
 } from "@motebit/sdk";
 import { PlanStatus, StepStatus, AgentTrustLevel } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
-import type {
-  MemoryStorageAdapter,
-  MemoryQuery,
-} from "@motebit/memory-graph";
+import type { MemoryStorageAdapter, MemoryQuery } from "@motebit/memory-graph";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 import type { IdentityStorage, DeviceRegistration } from "@motebit/core-identity";
 import type { AuditLogAdapter } from "@motebit/privacy-layer";
@@ -361,16 +358,16 @@ export class SqliteEventStore implements EventStoreAdapter {
   }
 
   async compact(motebitId: string, beforeClock: number): Promise<number> {
-    const info = this.db.prepare(
-      "DELETE FROM events WHERE motebit_id = ? AND version_clock <= ?",
-    ).run(motebitId, beforeClock);
+    const info = this.db
+      .prepare("DELETE FROM events WHERE motebit_id = ? AND version_clock <= ?")
+      .run(motebitId, beforeClock);
     return info.changes;
   }
 
   async countEvents(motebitId: string): Promise<number> {
-    const row = this.db.prepare(
-      "SELECT COUNT(*) as cnt FROM events WHERE motebit_id = ?",
-    ).get(motebitId) as { cnt: number };
+    const row = this.db
+      .prepare("SELECT COUNT(*) as cnt FROM events WHERE motebit_id = ?")
+      .get(motebitId) as { cnt: number };
     return row.cnt;
   }
 }
@@ -419,9 +416,7 @@ export class SqliteMemoryStorage implements MemoryStorageAdapter {
        (node_id, motebit_id, content, embedding, confidence, sensitivity, created_at, last_accessed, half_life, tombstoned, pinned, memory_type, valid_from, valid_until)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
-    this.stmtGetNode = db.prepare(
-      `SELECT * FROM memory_nodes WHERE node_id = ?`,
-    );
+    this.stmtGetNode = db.prepare(`SELECT * FROM memory_nodes WHERE node_id = ?`);
     this.stmtSaveEdge = db.prepare(
       `INSERT OR REPLACE INTO memory_edges
        (edge_id, source_id, target_id, relation_type, weight, confidence)
@@ -430,12 +425,8 @@ export class SqliteMemoryStorage implements MemoryStorageAdapter {
     this.stmtGetEdges = db.prepare(
       `SELECT * FROM memory_edges WHERE source_id = ? OR target_id = ?`,
     );
-    this.stmtTombstoneNode = db.prepare(
-      `UPDATE memory_nodes SET tombstoned = 1 WHERE node_id = ?`,
-    );
-    this.stmtGetAllNodes = db.prepare(
-      `SELECT * FROM memory_nodes WHERE motebit_id = ?`,
-    );
+    this.stmtTombstoneNode = db.prepare(`UPDATE memory_nodes SET tombstoned = 1 WHERE node_id = ?`);
+    this.stmtGetAllNodes = db.prepare(`SELECT * FROM memory_nodes WHERE motebit_id = ?`);
     this.stmtPinNode = db.prepare(
       `UPDATE memory_nodes SET pinned = ? WHERE node_id = ? AND tombstoned = 0`,
     );
@@ -509,20 +500,14 @@ export class SqliteMemoryStorage implements MemoryStorageAdapter {
       const now = Date.now();
       const minConf = query.min_confidence;
       results = results.filter((n) => {
-        const decayed = computeDecayedConfidence(
-          n.confidence,
-          n.half_life,
-          now - n.created_at,
-        );
+        const decayed = computeDecayedConfidence(n.confidence, n.half_life, now - n.created_at);
         return decayed >= minConf;
       });
     }
 
     if (query.sensitivity_filter !== undefined) {
       const allowed = query.sensitivity_filter;
-      results = results.filter((n) =>
-        allowed.includes(n.sensitivity),
-      );
+      results = results.filter((n) => allowed.includes(n.sensitivity));
     }
 
     if (query.limit !== undefined) {
@@ -645,25 +630,15 @@ export class SqliteIdentityStorage implements IdentityStorage {
       `INSERT OR REPLACE INTO identities (motebit_id, created_at, owner_id, version_clock)
        VALUES (?, ?, ?, ?)`,
     );
-    this.stmtLoad = db.prepare(
-      `SELECT * FROM identities WHERE motebit_id = ?`,
-    );
-    this.stmtLoadByOwner = db.prepare(
-      `SELECT * FROM identities WHERE owner_id = ? LIMIT 1`,
-    );
+    this.stmtLoad = db.prepare(`SELECT * FROM identities WHERE motebit_id = ?`);
+    this.stmtLoadByOwner = db.prepare(`SELECT * FROM identities WHERE owner_id = ? LIMIT 1`);
     this.stmtSaveDevice = db.prepare(
       `INSERT OR REPLACE INTO devices (device_id, motebit_id, device_token, public_key, registered_at, device_name)
        VALUES (?, ?, ?, ?, ?, ?)`,
     );
-    this.stmtLoadDevice = db.prepare(
-      `SELECT * FROM devices WHERE device_id = ?`,
-    );
-    this.stmtLoadDeviceByToken = db.prepare(
-      `SELECT * FROM devices WHERE device_token = ?`,
-    );
-    this.stmtListDevices = db.prepare(
-      `SELECT * FROM devices WHERE motebit_id = ?`,
-    );
+    this.stmtLoadDevice = db.prepare(`SELECT * FROM devices WHERE device_id = ?`);
+    this.stmtLoadDeviceByToken = db.prepare(`SELECT * FROM devices WHERE device_token = ?`);
+    this.stmtListDevices = db.prepare(`SELECT * FROM devices WHERE motebit_id = ?`);
   }
 
   async save(identity: MotebitIdentity): Promise<void> {
@@ -839,9 +814,7 @@ export class SqliteStateSnapshot {
       `INSERT OR REPLACE INTO state_snapshots (motebit_id, state_json, updated_at, version_clock)
        VALUES (?, ?, ?, ?)`,
     );
-    this.stmtLoad = db.prepare(
-      `SELECT state_json FROM state_snapshots WHERE motebit_id = ?`,
-    );
+    this.stmtLoad = db.prepare(`SELECT state_json FROM state_snapshots WHERE motebit_id = ?`);
     this.stmtLoadClock = db.prepare(
       `SELECT version_clock FROM state_snapshots WHERE motebit_id = ?`,
     );
@@ -884,7 +857,9 @@ function rowToToolAudit(row: ToolAuditRow): ToolAuditEntry {
     tool: row.tool,
     args: JSON.parse(row.args) as Record<string, unknown>,
     decision: JSON.parse(row.decision) as PolicyDecision,
-    result: row.result ? (JSON.parse(row.result) as { ok: boolean; durationMs: number }) : undefined,
+    result: row.result
+      ? (JSON.parse(row.result) as { ok: boolean; durationMs: number })
+      : undefined,
     timestamp: row.timestamp,
   };
   if (row.run_id !== null) {
@@ -909,9 +884,7 @@ export class SqliteToolAuditSink implements AuditLogSink {
     this.stmtQueryTurn = db.prepare(
       `SELECT * FROM tool_audit_log WHERE turn_id = ? ORDER BY timestamp ASC`,
     );
-    this.stmtGetAll = db.prepare(
-      `SELECT * FROM tool_audit_log ORDER BY timestamp ASC`,
-    );
+    this.stmtGetAll = db.prepare(`SELECT * FROM tool_audit_log ORDER BY timestamp ASC`);
   }
 
   append(entry: ToolAuditEntry): void {
@@ -1430,12 +1403,16 @@ export class SqliteConversationStore {
     return conversationId;
   }
 
-  appendMessage(conversationId: string, motebitId: string, msg: {
-    role: string;
-    content: string;
-    toolCalls?: string;
-    toolCallId?: string;
-  }): void {
+  appendMessage(
+    conversationId: string,
+    motebitId: string,
+    msg: {
+      role: string;
+      content: string;
+      toolCalls?: string;
+      toolCallId?: string;
+    },
+  ): void {
     const messageId = crypto.randomUUID();
     const now = Date.now();
     const tokenEstimate = Math.ceil(msg.content.length / 4);
@@ -1455,9 +1432,11 @@ export class SqliteConversationStore {
 
   loadMessages(conversationId: string, limit?: number): ConversationMessage[] {
     if (limit !== undefined) {
-      const rows = this.db.prepare(
-        `SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY created_at ASC LIMIT ?`,
-      ).all(conversationId, limit) as ConversationMessageRow[];
+      const rows = this.db
+        .prepare(
+          `SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY created_at ASC LIMIT ?`,
+        )
+        .all(conversationId, limit) as ConversationMessageRow[];
       return rows.map(rowToConversationMessage);
     }
     const rows = this.stmtLoadMessages.all(conversationId) as ConversationMessageRow[];
@@ -1476,9 +1455,9 @@ export class SqliteConversationStore {
   }
 
   updateTitle(conversationId: string, title: string): void {
-    this.db.prepare(
-      `UPDATE conversations SET title = ? WHERE conversation_id = ?`,
-    ).run(title, conversationId);
+    this.db
+      .prepare(`UPDATE conversations SET title = ? WHERE conversation_id = ?`)
+      .run(title, conversationId);
   }
 
   listConversations(motebitId: string, limit = 20): Conversation[] {
@@ -1490,65 +1469,73 @@ export class SqliteConversationStore {
 
   /** Get conversations updated since a given timestamp. */
   getConversationsSince(motebitId: string, since: number): Conversation[] {
-    const rows = this.db.prepare(
-      `SELECT * FROM conversations WHERE motebit_id = ? AND last_active_at > ? ORDER BY last_active_at ASC`,
-    ).all(motebitId, since) as ConversationRow[];
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM conversations WHERE motebit_id = ? AND last_active_at > ? ORDER BY last_active_at ASC`,
+      )
+      .all(motebitId, since) as ConversationRow[];
     return rows.map(rowToConversation);
   }
 
   /** Get messages for a conversation created since a given timestamp. */
   getMessagesSince(conversationId: string, since: number): ConversationMessage[] {
-    const rows = this.db.prepare(
-      `SELECT * FROM conversation_messages WHERE conversation_id = ? AND created_at > ? ORDER BY created_at ASC`,
-    ).all(conversationId, since) as ConversationMessageRow[];
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM conversation_messages WHERE conversation_id = ? AND created_at > ? ORDER BY created_at ASC`,
+      )
+      .all(conversationId, since) as ConversationMessageRow[];
     return rows.map(rowToConversationMessage);
   }
 
   /** Upsert a conversation from sync (last-writer-wins on metadata). */
   upsertConversation(conv: Conversation): void {
-    this.db.prepare(
-      `INSERT INTO conversations (conversation_id, motebit_id, started_at, last_active_at, title, summary, message_count)
+    this.db
+      .prepare(
+        `INSERT INTO conversations (conversation_id, motebit_id, started_at, last_active_at, title, summary, message_count)
        VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(conversation_id) DO UPDATE SET
          last_active_at = MAX(excluded.last_active_at, conversations.last_active_at),
          title = CASE WHEN excluded.last_active_at >= conversations.last_active_at THEN excluded.title ELSE conversations.title END,
          summary = CASE WHEN excluded.last_active_at >= conversations.last_active_at THEN excluded.summary ELSE conversations.summary END,
          message_count = MAX(excluded.message_count, conversations.message_count)`,
-    ).run(
-      conv.conversationId,
-      conv.motebitId,
-      conv.startedAt,
-      conv.lastActiveAt,
-      conv.title,
-      conv.summary,
-      conv.messageCount,
-    );
+      )
+      .run(
+        conv.conversationId,
+        conv.motebitId,
+        conv.startedAt,
+        conv.lastActiveAt,
+        conv.title,
+        conv.summary,
+        conv.messageCount,
+      );
   }
 
   /** Upsert a message from sync (append-only, ignore duplicates). */
   upsertMessage(msg: ConversationMessage): void {
-    this.db.prepare(
-      `INSERT OR IGNORE INTO conversation_messages
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO conversation_messages
        (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      msg.messageId,
-      msg.conversationId,
-      msg.motebitId,
-      msg.role,
-      msg.content,
-      msg.toolCalls,
-      msg.toolCallId,
-      msg.createdAt,
-      msg.tokenEstimate,
-    );
+      )
+      .run(
+        msg.messageId,
+        msg.conversationId,
+        msg.motebitId,
+        msg.role,
+        msg.content,
+        msg.toolCalls,
+        msg.toolCallId,
+        msg.createdAt,
+        msg.tokenEstimate,
+      );
   }
 
   /** Get a single conversation by ID. */
   getConversation(conversationId: string): Conversation | null {
-    const row = this.db.prepare(
-      `SELECT * FROM conversations WHERE conversation_id = ?`,
-    ).get(conversationId) as ConversationRow | undefined;
+    const row = this.db
+      .prepare(`SELECT * FROM conversations WHERE conversation_id = ?`)
+      .get(conversationId) as ConversationRow | undefined;
     if (row === undefined) return null;
     return rowToConversation(row);
   }
@@ -1909,7 +1896,10 @@ export class SqliteAgentTrustStore {
     );
   }
 
-  async getAgentTrust(motebitId: string, remoteMotebitId: string): Promise<AgentTrustRecord | null> {
+  async getAgentTrust(
+    motebitId: string,
+    remoteMotebitId: string,
+  ): Promise<AgentTrustRecord | null> {
     const row = this.stmtGet.get(motebitId, remoteMotebitId) as AgentTrustRow | undefined;
     if (row === undefined) return null;
     return rowToAgentTrust(row);
@@ -1933,7 +1923,11 @@ export class SqliteAgentTrustStore {
     return rows.map(rowToAgentTrust);
   }
 
-  async updateTrustLevel(motebitId: string, remoteMotebitId: string, level: AgentTrustLevel): Promise<void> {
+  async updateTrustLevel(
+    motebitId: string,
+    remoteMotebitId: string,
+    level: AgentTrustLevel,
+  ): Promise<void> {
     this.stmtUpdateLevel.run(level, Date.now(), motebitId, remoteMotebitId);
   }
 }
@@ -1963,7 +1957,8 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   driver.pragma("journal_mode = WAL");
   driver.pragma("foreign_keys = ON");
 
-  const userVersion = (driver.pragma("user_version") as { user_version: number }[])[0]!.user_version;
+  const userVersion = (driver.pragma("user_version") as { user_version: number }[])[0]!
+    .user_version;
 
   initSchema(driver);
 
@@ -1978,7 +1973,9 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
 
   if (userVersion < 2) {
     try {
-      driver.exec("ALTER TABLE state_snapshots ADD COLUMN version_clock INTEGER NOT NULL DEFAULT 0");
+      driver.exec(
+        "ALTER TABLE state_snapshots ADD COLUMN version_clock INTEGER NOT NULL DEFAULT 0",
+      );
     } catch (_) {
       // Column may already exist on new DBs
     }
@@ -1999,7 +1996,11 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     // Goal intelligence: new columns on goals, new goal_outcomes table
     // goal_outcomes table is in SCHEMA for new DBs; ALTER handles upgrades
     const addCol = (table: string, col: string, def: string) => {
-      try { driver.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`); } catch (_) { /* already exists */ }
+      try {
+        driver.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+      } catch (_) {
+        /* already exists */
+      }
     };
     addCol("goals", "mode", "TEXT NOT NULL DEFAULT 'recurring'");
     addCol("goals", "status", "TEXT NOT NULL DEFAULT 'active'");
@@ -2022,49 +2023,79 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   if (userVersion < 8) {
     try {
       driver.exec("ALTER TABLE memory_nodes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
-    } catch (_) { /* already exists */ }
+    } catch (_) {
+      /* already exists */
+    }
     driver.pragma("user_version = 8");
   }
 
   if (userVersion < 9) {
     try {
       driver.exec("ALTER TABLE tool_audit_log ADD COLUMN run_id TEXT");
-    } catch (_) { /* already exists on new DBs */ }
+    } catch (_) {
+      /* already exists on new DBs */
+    }
     try {
       driver.exec("CREATE INDEX IF NOT EXISTS idx_tool_audit_run ON tool_audit_log (run_id)");
-    } catch (_) { /* already exists */ }
+    } catch (_) {
+      /* already exists */
+    }
     driver.pragma("user_version = 9");
   }
 
   if (userVersion < 10) {
     try {
       driver.exec("ALTER TABLE tool_audit_log ADD COLUMN injection TEXT");
-    } catch (_) { /* already exists on new DBs */ }
+    } catch (_) {
+      /* already exists on new DBs */
+    }
     driver.pragma("user_version = 10");
   }
 
   if (userVersion < 11) {
     try {
       driver.exec("ALTER TABLE goal_outcomes ADD COLUMN tokens_used INTEGER");
-    } catch (_) { /* already exists on new DBs */ }
+    } catch (_) {
+      /* already exists on new DBs */
+    }
     driver.pragma("user_version = 11");
   }
 
   if (userVersion < 12) {
-    try { driver.exec("ALTER TABLE goals ADD COLUMN wall_clock_ms INTEGER"); } catch (_) { /* already exists */ }
+    try {
+      driver.exec("ALTER TABLE goals ADD COLUMN wall_clock_ms INTEGER");
+    } catch (_) {
+      /* already exists */
+    }
     driver.pragma("user_version = 12");
   }
 
   if (userVersion < 13) {
-    try { driver.exec("ALTER TABLE goals ADD COLUMN project_id TEXT"); } catch (_) { /* already exists */ }
+    try {
+      driver.exec("ALTER TABLE goals ADD COLUMN project_id TEXT");
+    } catch (_) {
+      /* already exists */
+    }
     driver.exec("CREATE INDEX IF NOT EXISTS idx_goals_project ON goals (project_id)");
     driver.pragma("user_version = 13");
   }
 
   if (userVersion < 14) {
-    try { driver.exec("ALTER TABLE memory_nodes ADD COLUMN memory_type TEXT DEFAULT 'semantic'"); } catch (_) { /* already exists */ }
-    try { driver.exec("ALTER TABLE memory_nodes ADD COLUMN valid_from INTEGER"); } catch (_) { /* already exists */ }
-    try { driver.exec("ALTER TABLE memory_nodes ADD COLUMN valid_until INTEGER"); } catch (_) { /* already exists */ }
+    try {
+      driver.exec("ALTER TABLE memory_nodes ADD COLUMN memory_type TEXT DEFAULT 'semantic'");
+    } catch (_) {
+      /* already exists */
+    }
+    try {
+      driver.exec("ALTER TABLE memory_nodes ADD COLUMN valid_from INTEGER");
+    } catch (_) {
+      /* already exists */
+    }
+    try {
+      driver.exec("ALTER TABLE memory_nodes ADD COLUMN valid_until INTEGER");
+    } catch (_) {
+      /* already exists */
+    }
     driver.pragma("user_version = 14");
   }
 
@@ -2074,17 +2105,27 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   }
 
   if (userVersion < 16) {
-    driver.exec("CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote_tomb_pin ON memory_nodes (motebit_id, tombstoned, pinned)");
+    driver.exec(
+      "CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote_tomb_pin ON memory_nodes (motebit_id, tombstoned, pinned)",
+    );
     driver.pragma("user_version = 16");
   }
 
   if (userVersion < 17) {
-    driver.exec("CREATE INDEX IF NOT EXISTS idx_memory_nodes_retrieve ON memory_nodes (motebit_id, tombstoned, last_accessed DESC)");
+    driver.exec(
+      "CREATE INDEX IF NOT EXISTS idx_memory_nodes_retrieve ON memory_nodes (motebit_id, tombstoned, last_accessed DESC)",
+    );
     driver.pragma("user_version = 17");
   }
 
   if (userVersion < 18) {
-    try { driver.exec("ALTER TABLE gradient_snapshots ADD COLUMN retrieval_quality REAL NOT NULL DEFAULT 0"); } catch (_) { /* already exists */ }
+    try {
+      driver.exec(
+        "ALTER TABLE gradient_snapshots ADD COLUMN retrieval_quality REAL NOT NULL DEFAULT 0",
+      );
+    } catch (_) {
+      /* already exists */
+    }
     driver.pragma("user_version = 18");
   }
 

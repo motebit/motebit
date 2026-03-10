@@ -2,8 +2,18 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { ToolDefinition, ToolResult, ExecutionReceipt } from "@motebit/sdk";
 import { InMemoryToolRegistry } from "@motebit/tools";
 
-export { discoverByDns, discoverByWellKnown, discoverMotebit, discoverViaRelay } from "./discovery.js";
-export type { DnsDiscoveryResult, ResolveTxtFn, RelayDiscoveryResult, RelayDiscoveryOptions } from "./discovery.js";
+export {
+  discoverByDns,
+  discoverByWellKnown,
+  discoverMotebit,
+  discoverViaRelay,
+} from "./discovery.js";
+export type {
+  DnsDiscoveryResult,
+  ResolveTxtFn,
+  RelayDiscoveryResult,
+  RelayDiscoveryOptions,
+} from "./discovery.js";
 
 export interface McpServerConfig {
   name: string;
@@ -119,9 +129,7 @@ export class McpClientAdapter {
 
     if (this.config.transport === "stdio") {
       if (!this.config.command) {
-        throw new Error(
-          `MCP server "${this.config.name}" requires a command for stdio transport`,
-        );
+        throw new Error(`MCP server "${this.config.name}" requires a command for stdio transport`);
       }
       const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
       const transport = new StdioClientTransport({
@@ -132,18 +140,21 @@ export class McpClientAdapter {
       await this.client.connect(transport);
     } else {
       if (!this.config.url) {
-        throw new Error(
-          `MCP server "${this.config.name}" requires a url for http transport`,
-        );
+        throw new Error(`MCP server "${this.config.name}" requires a url for http transport`);
       }
-      const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+      const { StreamableHTTPClientTransport } =
+        await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
 
       // Build request options with optional motebit auth
       const requestInit: Record<string, unknown> = {};
-      if ((this.config.motebit || this.config.motebitType) && this.config.callerMotebitId && this.config.callerPrivateKey) {
+      if (
+        (this.config.motebit || this.config.motebitType) &&
+        this.config.callerMotebitId &&
+        this.config.callerPrivateKey
+      ) {
         const token = await this.createCallerToken();
         if (token) {
-          requestInit.headers = { "Authorization": `Bearer motebit:${token}` };
+          requestInit.headers = { Authorization: `Bearer motebit:${token}` };
         }
       }
 
@@ -188,9 +199,7 @@ export class McpClientAdapter {
         name: "motebit_identity",
         arguments: {},
       });
-      const textContent = (
-        result.content as Array<{ type: string; text?: string }>
-      )
+      const textContent = (result.content as Array<{ type: string; text?: string }>)
         .filter((c) => c.type === "text")
         .map((c) => c.text ?? "")
         .join("\n");
@@ -236,7 +245,11 @@ export class McpClientAdapter {
 
   /** Create a signed token identifying this motebit as the caller. */
   private async createCallerToken(): Promise<string | null> {
-    if (!this.config.callerMotebitId || !this.config.callerDeviceId || !this.config.callerPrivateKey) {
+    if (
+      !this.config.callerMotebitId ||
+      !this.config.callerDeviceId ||
+      !this.config.callerPrivateKey
+    ) {
       return null;
     }
     try {
@@ -288,7 +301,10 @@ export class McpClientAdapter {
    * Compare the current tool manifest against a pinned hash.
    * Returns the check result with the current hash, tool names, and diff (if changed).
    */
-  async checkManifest(pinnedHash?: string, pinnedToolNames?: string[]): Promise<ManifestCheckResult> {
+  async checkManifest(
+    pinnedHash?: string,
+    pinnedToolNames?: string[],
+  ): Promise<ManifestCheckResult> {
     const hash = await computeManifestHash(this.discoveredTools);
     const toolNames = this.discoveredTools.map((t) => t.name);
     if (!pinnedHash) {
@@ -296,9 +312,8 @@ export class McpClientAdapter {
       return { ok: true, hash, toolCount: this.discoveredTools.length, toolNames };
     }
     const ok = hash === pinnedHash;
-    const diff = !ok && pinnedToolNames
-      ? computeManifestDiff(pinnedToolNames, toolNames)
-      : undefined;
+    const diff =
+      !ok && pinnedToolNames ? computeManifestDiff(pinnedToolNames, toolNames) : undefined;
     return {
       ok,
       hash,
@@ -309,10 +324,7 @@ export class McpClientAdapter {
     };
   }
 
-  async executeTool(
-    qualifiedName: string,
-    args: Record<string, unknown>,
-  ): Promise<ToolResult> {
+  async executeTool(qualifiedName: string, args: Record<string, unknown>): Promise<ToolResult> {
     const prefix = `${this.config.name}__`;
     if (!qualifiedName.startsWith(prefix)) {
       return {
@@ -327,9 +339,7 @@ export class McpClientAdapter {
         name: mcpToolName,
         arguments: args,
       });
-      const textContent = (
-        result.content as Array<{ type: string; text?: string }>
-      )
+      const textContent = (result.content as Array<{ type: string; text?: string }>)
         .filter((c) => c.type === "text")
         .map((c) => c.text ?? "")
         .join("\n");
@@ -432,9 +442,7 @@ export async function connectMcpServers(
       adapters.push(adapter);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      console.warn(
-        `Failed to connect to MCP server "${config.name}": ${message}`,
-      );
+      console.warn(`Failed to connect to MCP server "${config.name}": ${message}`);
     }
   }
 

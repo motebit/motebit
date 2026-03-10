@@ -390,7 +390,11 @@ describe("verify — service identity", () => {
     expect(result.identity!.service_name).toBe("Flight Search");
     expect(result.identity!.service_description).toBe("Search and book flights");
     expect(result.identity!.service_url).toBe("https://flights.example.com");
-    expect(result.identity!.capabilities).toEqual(["flight_search", "flight_booking", "price_alerts"]);
+    expect(result.identity!.capabilities).toEqual([
+      "flight_search",
+      "flight_booking",
+      "price_alerts",
+    ]);
     expect(result.identity!.terms_url).toBe("https://flights.example.com/terms");
   });
 

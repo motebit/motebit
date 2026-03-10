@@ -14,7 +14,15 @@ export function HeroCreature() {
     let animId: number | undefined;
     let themeObserver: MutationObserver | undefined;
     let resizeObserver: ResizeObserver | undefined;
-    let adapter: { render: (opts: unknown) => void; resize: (w: number, h: number) => void; dispose: () => void; setLightEnvironment: () => void; setDarkEnvironment: () => void } | undefined;
+    let adapter:
+      | {
+          render: (opts: unknown) => void;
+          resize: (w: number, h: number) => void;
+          dispose: () => void;
+          setLightEnvironment: () => void;
+          setDarkEnvironment: () => void;
+        }
+      | undefined;
 
     (async () => {
       try {

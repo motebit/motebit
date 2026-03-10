@@ -30,7 +30,9 @@ async function handleFile(file: File): Promise<void> {
   const text = await file.text();
 
   if (!text.includes("---")) {
-    showError("This does not appear to be a motebit.md identity file. Expected YAML frontmatter between --- delimiters.");
+    showError(
+      "This does not appear to be a motebit.md identity file. Expected YAML frontmatter between --- delimiters.",
+    );
     return;
   }
 

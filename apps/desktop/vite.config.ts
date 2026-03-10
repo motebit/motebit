@@ -29,15 +29,15 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
-      '/api/anthropic': {
-        target: 'https://api.anthropic.com',
+      "/api/anthropic": {
+        target: "https://api.anthropic.com",
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/anthropic/, ''),
+        rewrite: (path) => path.replace(/^\/api\/anthropic/, ""),
       },
-      '/api/ollama': {
-        target: 'http://localhost:11434',
+      "/api/ollama": {
+        target: "http://localhost:11434",
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/ollama/, ''),
+        rewrite: (path) => path.replace(/^\/api\/ollama/, ""),
       },
     },
   },

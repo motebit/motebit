@@ -130,30 +130,21 @@ describe("enforceCueDelta", () => {
     const prev = makeDefaultCues({ smile_curvature: 0 });
     const next = makeDefaultCues({ smile_curvature: 0.5 }); // large jump
     const result = enforceCueDelta(prev, next);
-    expect(result.smile_curvature).toBeCloseTo(
-      SPECIES_CONSTRAINTS.SMILE_DELTA_MAX,
-      10,
-    );
+    expect(result.smile_curvature).toBeCloseTo(SPECIES_CONSTRAINTS.SMILE_DELTA_MAX, 10);
   });
 
   it("limits negative smile delta", () => {
     const prev = makeDefaultCues({ smile_curvature: 0 });
     const next = makeDefaultCues({ smile_curvature: -0.5 });
     const result = enforceCueDelta(prev, next);
-    expect(result.smile_curvature).toBeCloseTo(
-      -SPECIES_CONSTRAINTS.SMILE_DELTA_MAX,
-      10,
-    );
+    expect(result.smile_curvature).toBeCloseTo(-SPECIES_CONSTRAINTS.SMILE_DELTA_MAX, 10);
   });
 
   it("limits glow_intensity delta to GLOW_DELTA_MAX", () => {
     const prev = makeDefaultCues({ glow_intensity: 0.3 });
     const next = makeDefaultCues({ glow_intensity: 0.9 }); // large jump
     const result = enforceCueDelta(prev, next);
-    expect(result.glow_intensity).toBeCloseTo(
-      0.3 + SPECIES_CONSTRAINTS.GLOW_DELTA_MAX,
-      10,
-    );
+    expect(result.glow_intensity).toBeCloseTo(0.3 + SPECIES_CONSTRAINTS.GLOW_DELTA_MAX, 10);
   });
 
   it("allows small deltas within limits", () => {
@@ -197,20 +188,14 @@ describe("enforceDriftVariation", () => {
     const baseline = 0.5;
     const current = 0.8; // way above 10% variation (0.05)
     const result = enforceDriftVariation(baseline, current);
-    expect(result).toBeCloseTo(
-      baseline + baseline * SPECIES_CONSTRAINTS.DRIFT_VARIATION_MAX,
-      10,
-    );
+    expect(result).toBeCloseTo(baseline + baseline * SPECIES_CONSTRAINTS.DRIFT_VARIATION_MAX, 10);
   });
 
   it("clamps value when below min variation", () => {
     const baseline = 0.5;
     const current = 0.1; // way below
     const result = enforceDriftVariation(baseline, current);
-    expect(result).toBeCloseTo(
-      baseline - baseline * SPECIES_CONSTRAINTS.DRIFT_VARIATION_MAX,
-      10,
-    );
+    expect(result).toBeCloseTo(baseline - baseline * SPECIES_CONSTRAINTS.DRIFT_VARIATION_MAX, 10);
   });
 });
 
@@ -253,9 +238,7 @@ describe("validateState", () => {
   });
 
   it("reports social_distance out of range", () => {
-    const violations = validateState(
-      makeDefaultState({ social_distance: -0.1 }),
-    );
+    const violations = validateState(makeDefaultState({ social_distance: -0.1 }));
     expect(violations.some((v) => v.includes("social_distance"))).toBe(true);
   });
 

@@ -68,10 +68,8 @@ export class TaskRouter {
     const override = this.config.overrides?.[taskType];
     return {
       model: override?.model ?? this.config.default.model,
-      temperature:
-        override?.temperature ?? this.config.default.temperature ?? 0.7,
-      maxTokens:
-        override?.maxTokens ?? this.config.default.maxTokens ?? 1024,
+      temperature: override?.temperature ?? this.config.default.temperature ?? 0.7,
+      maxTokens: override?.maxTokens ?? this.config.default.maxTokens ?? 1024,
     };
   }
 }

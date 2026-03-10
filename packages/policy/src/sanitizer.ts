@@ -118,9 +118,7 @@ function normalizeForDetection(text: string): string {
 
 /** Sanitize a source label: strip special chars, truncate. */
 function sanitizeSource(source: string): string {
-  return source
-    .replace(/[\[\]"\\]/g, "_")
-    .slice(0, MAX_SOURCE_LENGTH);
+  return source.replace(/[\[\]"\\]/g, "_").slice(0, MAX_SOURCE_LENGTH);
 }
 
 /** Strip boundary markers from content so it can't escape the sandbox. */
@@ -178,10 +176,16 @@ const STRUCTURAL_ANOMALIES: Array<{ pattern: RegExp; flag: string }> = [
   { pattern: /\{\s*"messages"\s*:\s*\[/i, flag: "chat_completion_format" },
 
   // Markdown headers that look like prompt sections
-  { pattern: /^#{1,3}\s+(?:system|instructions|system prompt)\s*$/im, flag: "prompt_section_header" },
+  {
+    pattern: /^#{1,3}\s+(?:system|instructions|system prompt)\s*$/im,
+    flag: "prompt_section_header",
+  },
 
   // XML-style prompt framing tags
-  { pattern: /<\s*(?:instructions|rules|system_prompt|persona|context)\s*>/i, flag: "xml_prompt_framing" },
+  {
+    pattern: /<\s*(?:instructions|rules|system_prompt|persona|context)\s*>/i,
+    flag: "xml_prompt_framing",
+  },
 ];
 
 /**
@@ -245,8 +249,7 @@ ${safeContent}
 ${DATA_BOUNDARY_END}`;
 
     // Any layer can trigger detection independently
-    const injectionDetected =
-      detected.length > 0 || densityFlag || structuralFlags.length > 0;
+    const injectionDetected = detected.length > 0 || densityFlag || structuralFlags.length > 0;
 
     return {
       content: wrapped,

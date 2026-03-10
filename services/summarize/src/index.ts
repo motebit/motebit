@@ -71,7 +71,9 @@ async function main(): Promise<void> {
   // 1. Load and verify identity
   const identityPath = path.resolve(config.identityPath);
   if (!fs.existsSync(identityPath)) {
-    console.error(`No identity file found at ${identityPath}. Generate one: npx create-motebit . --service`);
+    console.error(
+      `No identity file found at ${identityPath}. Generate one: npx create-motebit . --service`,
+    );
     process.exit(1);
   }
   const identityContent = fs.readFileSync(identityPath, "utf-8");
@@ -101,9 +103,7 @@ async function main(): Promise<void> {
     agentTrustStore: moteDb.agentTrustStore,
   };
 
-  const policyOverrides = identity.governance
-    ? governanceToPolicyConfig(identity.governance)
-    : {};
+  const policyOverrides = identity.governance ? governanceToPolicyConfig(identity.governance) : {};
 
   // 3. Build tool registry with summarize_search
   const registry = new InMemoryToolRegistry();
@@ -118,10 +118,7 @@ async function main(): Promise<void> {
   log(`Connected to web-search at ${config.webSearchUrl}`);
 
   // Register our tool now that we have the adapter
-  registry.register(
-    summarizeSearchDefinition,
-    createSummarizeSearchHandler(webSearchAdapter),
-  );
+  registry.register(summarizeSearchDefinition, createSummarizeSearchHandler(webSearchAdapter));
 
   const runtime = new MotebitRuntime(
     { motebitId, policy: { ...policyOverrides } },
@@ -131,11 +128,15 @@ async function main(): Promise<void> {
   log("Runtime initialized (delegating tool server — no LLM)");
 
   // 5. Wire handleAgentTask — execute summarize_search, nest delegation receipts
-  let handleAgentTask: ((prompt: string) => AsyncGenerator<
-    | { type: "text"; text: string }
-    | { type: "task_result"; receipt: Record<string, unknown> }
-    | { type: string; [key: string]: unknown }
-  >) | undefined;
+  let handleAgentTask:
+    | ((
+        prompt: string,
+      ) => AsyncGenerator<
+        | { type: "text"; text: string }
+        | { type: "task_result"; receipt: Record<string, unknown> }
+        | { type: string; [key: string]: unknown }
+      >)
+    | undefined;
 
   if (config.privateKeyHex) {
     const privateKey = fromHex(config.privateKeyHex);
@@ -159,7 +160,9 @@ async function main(): Promise<void> {
       }
 
       const resultStr = result.ok
-        ? (typeof result.data === "string" ? result.data : JSON.stringify(result.data ?? null))
+        ? typeof result.data === "string"
+          ? result.data
+          : JSON.stringify(result.data ?? null)
         : (result.error ?? "error");
 
       const enc = new TextEncoder();

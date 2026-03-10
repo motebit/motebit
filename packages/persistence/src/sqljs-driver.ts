@@ -91,9 +91,10 @@ export class SqlJsDriver implements DatabaseDriver {
     // user_version (get) → return [{user_version: N}] to match better-sqlite3
     if (/^user_version$/i.test(trimmed)) {
       const result = this.db.exec("PRAGMA user_version");
-      const value = result.length > 0 && result[0]!.values.length > 0
-        ? result[0]!.values[0]![0] as number
-        : 0;
+      const value =
+        result.length > 0 && result[0]!.values.length > 0
+          ? (result[0]!.values[0]![0] as number)
+          : 0;
       return [{ user_version: value }];
     }
 

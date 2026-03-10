@@ -1,10 +1,4 @@
 {
   "title": "App Reference",
-  "pages": [
-    "desktop",
-    "mobile",
-    "cli",
-    "spatial",
-    "configuration"
-  ]
+  "pages": ["desktop", "mobile", "cli", "spatial", "configuration"]
 }

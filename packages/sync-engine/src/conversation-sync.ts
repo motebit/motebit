@@ -30,7 +30,11 @@ export interface ConversationSyncRemoteAdapter {
   pushConversations(motebitId: string, conversations: SyncConversation[]): Promise<number>;
   pullConversations(motebitId: string, since: number): Promise<SyncConversation[]>;
   pushMessages(motebitId: string, messages: SyncConversationMessage[]): Promise<number>;
-  pullMessages(motebitId: string, conversationId: string, since: number): Promise<SyncConversationMessage[]>;
+  pullMessages(
+    motebitId: string,
+    conversationId: string,
+    since: number,
+  ): Promise<SyncConversationMessage[]>;
 }
 
 // === HTTP Conversation Sync Adapter ===
@@ -94,7 +98,11 @@ export class HttpConversationSyncAdapter implements ConversationSyncRemoteAdapte
     return body.accepted;
   }
 
-  async pullMessages(motebitId: string, conversationId: string, since: number): Promise<SyncConversationMessage[]> {
+  async pullMessages(
+    motebitId: string,
+    conversationId: string,
+    since: number,
+  ): Promise<SyncConversationMessage[]> {
     const url = `${this.baseUrl}/sync/${motebitId}/messages?conversation_id=${conversationId}&since=${since}`;
     const res = await fetch(url, {
       method: "GET",
@@ -238,30 +246,47 @@ export class ConversationSyncEngine {
   async sync(): Promise<ConversationSyncResult> {
     if (this.remoteAdapter === null) {
       this.setStatus("offline");
-      return { conversations_pushed: 0, conversations_pulled: 0, messages_pushed: 0, messages_pulled: 0 };
+      return {
+        conversations_pushed: 0,
+        conversations_pulled: 0,
+        messages_pushed: 0,
+        messages_pulled: 0,
+      };
     }
 
     this.setStatus("syncing");
 
     try {
       // Push local conversations updated since last sync
-      const localConversations = this.localStore.getConversationsSince(this.motebitId, this.lastSyncTimestamp);
+      const localConversations = this.localStore.getConversationsSince(
+        this.motebitId,
+        this.lastSyncTimestamp,
+      );
       let conversationsPushed = 0;
       if (localConversations.length > 0) {
-        conversationsPushed = await this.remoteAdapter.pushConversations(this.motebitId, localConversations);
+        conversationsPushed = await this.remoteAdapter.pushConversations(
+          this.motebitId,
+          localConversations,
+        );
       }
 
       // Push local messages for those conversations
       let messagesPushed = 0;
       for (const conv of localConversations) {
-        const localMessages = this.localStore.getMessagesSince(conv.conversation_id, this.lastSyncTimestamp);
+        const localMessages = this.localStore.getMessagesSince(
+          conv.conversation_id,
+          this.lastSyncTimestamp,
+        );
         if (localMessages.length > 0) {
           messagesPushed += await this.remoteAdapter.pushMessages(this.motebitId, localMessages);
         }
       }
 
       // Pull remote conversations updated since last sync
-      const remoteConversations = await this.remoteAdapter.pullConversations(this.motebitId, this.lastSyncTimestamp);
+      const remoteConversations = await this.remoteAdapter.pullConversations(
+        this.motebitId,
+        this.lastSyncTimestamp,
+      );
       let conversationsPulled = 0;
       for (const conv of remoteConversations) {
         this.localStore.upsertConversation(conv);
@@ -293,14 +318,21 @@ export class ConversationSyncEngine {
       };
     } catch {
       this.setStatus("error");
-      return { conversations_pushed: 0, conversations_pulled: 0, messages_pushed: 0, messages_pulled: 0 };
+      return {
+        conversations_pushed: 0,
+        conversations_pulled: 0,
+        messages_pushed: 0,
+        messages_pulled: 0,
+      };
     }
   }
 
   /** Subscribe to status changes. */
   onStatusChange(listener: (status: ConversationSyncStatus) => void): () => void {
     this.statusListeners.add(listener);
-    return () => { this.statusListeners.delete(listener); };
+    return () => {
+      this.statusListeners.delete(listener);
+    };
   }
 
   /** Get current sync status. */

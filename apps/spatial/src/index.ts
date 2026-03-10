@@ -11,7 +11,13 @@
  */
 
 import type { RenderSpec } from "@motebit/sdk";
-import { CANONICAL_SPEC, type RenderAdapter, type RenderFrame, type InteriorColor, type AudioReactivity } from "@motebit/render-engine";
+import {
+  CANONICAL_SPEC,
+  type RenderAdapter,
+  type RenderFrame,
+  type InteriorColor,
+  type AudioReactivity,
+} from "@motebit/render-engine";
 
 // === Spatial Anchor ===
 
@@ -25,7 +31,13 @@ export interface SpatialAnchor {
 
 // === Body-Relative Positioning ===
 
-export type BodyReference = "head" | "shoulder_right" | "shoulder_left" | "chest" | "hand_right" | "hand_left";
+export type BodyReference =
+  | "head"
+  | "shoulder_right"
+  | "shoulder_left"
+  | "chest"
+  | "hand_right"
+  | "hand_left";
 
 export interface BodyRelativePosition {
   /** Offset from body center, normalized */
@@ -93,7 +105,7 @@ const DEFAULT_ORBITAL_CONFIG: OrbitalConfig = {
   minRadius: 0.15,
   maxRadius: 0.8,
   angularSpeed: 0.3,
-  dampingRatio: 0.7,       // underdamped — overshoots before settling
+  dampingRatio: 0.7, // underdamped — overshoots before settling
   springStiffness: 4.0,
   bobAmplitude: 0.015,
   bobFrequencies: [1.5, 2.37, 0.73],
@@ -157,14 +169,19 @@ export class OrbitalDynamics {
     // c = 2 * dampingRatio * sqrt(k) — underdamped when dampingRatio < 1
     const displacement = this.state.radius - rEq;
     const springForce = -this.config.springStiffness * displacement;
-    const dampingForce = -2 * this.config.dampingRatio
-      * Math.sqrt(this.config.springStiffness)
-      * this.state.radialVelocity;
+    const dampingForce =
+      -2 *
+      this.config.dampingRatio *
+      Math.sqrt(this.config.springStiffness) *
+      this.state.radialVelocity;
     const radialAccel = springForce + dampingForce;
 
     this.state.radialVelocity += radialAccel * clampedDt;
     this.state.radius += this.state.radialVelocity * clampedDt;
-    this.state.radius = Math.max(this.config.minRadius, Math.min(this.config.maxRadius, this.state.radius));
+    this.state.radius = Math.max(
+      this.config.minRadius,
+      Math.min(this.config.maxRadius, this.state.radius),
+    );
 
     // === Angular dynamics — Kepler ===
     // Conservation of angular momentum: ω ∝ 1/r²
@@ -186,11 +203,7 @@ export class OrbitalDynamics {
     for (const f of this.config.bobFrequencies) bobSum += Math.sin(time * f);
     const bob = (bobSum / this.config.bobFrequencies.length) * this.config.bobAmplitude;
 
-    return [
-      anchor[0] + orbitX,
-      anchor[1] + bob,
-      anchor[2] + orbitZ,
-    ];
+    return [anchor[0] + orbitX, anchor[1] + bob, anchor[2] + orbitZ];
   }
 
   private updateAnchor(newAnchor: [number, number, number], dt: number): void {
@@ -254,8 +267,8 @@ export class OrbitalDynamics {
 // Hands come from XR hand tracking (when available).
 
 /** Anthropometric constants for deriving body anchors from head pose. */
-const SHOULDER_DROP_Y = -0.35;    // Shoulder is ~35cm below head center
-const SHOULDER_OFFSET_X = 0.20;   // Shoulder is ~20cm lateral from head center
+const SHOULDER_DROP_Y = -0.35; // Shoulder is ~35cm below head center
+const SHOULDER_OFFSET_X = 0.2; // Shoulder is ~20cm lateral from head center
 const SHOULDER_FORWARD_Z = -0.05; // Shoulder is slightly behind head
 
 export interface BodyAnchors {
@@ -297,12 +310,18 @@ export function getAnchorForReference(
   reference: BodyReference,
 ): [number, number, number] | null {
   switch (reference) {
-    case "head": return anchors.head;
-    case "shoulder_right": return anchors.shoulder_right;
-    case "shoulder_left": return anchors.shoulder_left;
-    case "chest": return anchors.chest;
-    case "hand_right": return anchors.hand_right;
-    case "hand_left": return anchors.hand_left;
+    case "head":
+      return anchors.head;
+    case "shoulder_right":
+      return anchors.shoulder_right;
+    case "shoulder_left":
+      return anchors.shoulder_left;
+    case "chest":
+      return anchors.chest;
+    case "hand_right":
+      return anchors.hand_right;
+    case "hand_left":
+      return anchors.hand_left;
   }
 }
 
@@ -324,7 +343,9 @@ export class WebXRAdapter implements RenderAdapter {
   }
 
   render(_frame: RenderFrame): void {}
-  getSpec(): RenderSpec { return this.spec; }
+  getSpec(): RenderSpec {
+    return this.spec;
+  }
   resize(_width: number, _height: number): void {}
   setBackground(_color: number | null): void {}
   setDarkEnvironment(): void {}

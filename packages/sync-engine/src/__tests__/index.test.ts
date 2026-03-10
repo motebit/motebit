@@ -162,7 +162,9 @@ describe("SyncEngine", () => {
     const failingStore: EventStoreAdapter = {
       append: vi.fn<EventStoreAdapter["append"]>().mockRejectedValue(new Error("network error")),
       query: vi.fn<EventStoreAdapter["query"]>().mockRejectedValue(new Error("network error")),
-      getLatestClock: vi.fn<EventStoreAdapter["getLatestClock"]>().mockRejectedValue(new Error("network error")),
+      getLatestClock: vi
+        .fn<EventStoreAdapter["getLatestClock"]>()
+        .mockRejectedValue(new Error("network error")),
       tombstone: vi.fn<EventStoreAdapter["tombstone"]>(),
     };
     engine.connectRemote(failingStore);

@@ -30,7 +30,10 @@ export interface ConversationsAPI {
   close(): void;
 }
 
-export function initConversations(ctx: WebContext, callbacks: ConversationsCallbacks): ConversationsAPI {
+export function initConversations(
+  ctx: WebContext,
+  callbacks: ConversationsCallbacks,
+): ConversationsAPI {
   function open(): void {
     conversationsPanel.classList.add("open");
     conversationsBackdrop.classList.add("open");
@@ -48,7 +51,8 @@ export function initConversations(ctx: WebContext, callbacks: ConversationsCallb
 
     if (conversations.length === 0) {
       const empty = document.createElement("div");
-      empty.style.cssText = "font-size:12px;color:var(--text-ghost);padding:16px;text-align:center;";
+      empty.style.cssText =
+        "font-size:12px;color:var(--text-ghost);padding:16px;text-align:center;";
       empty.textContent = "No conversations yet";
       convList.appendChild(empty);
       return;

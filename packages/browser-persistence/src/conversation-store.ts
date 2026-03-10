@@ -45,12 +45,16 @@ export class IdbConversationStore implements ConversationStoreAdapter {
     return conversationId;
   }
 
-  appendMessage(conversationId: string, motebitId: string, msg: {
-    role: string;
-    content: string;
-    toolCalls?: string;
-    toolCallId?: string;
-  }): void {
+  appendMessage(
+    conversationId: string,
+    motebitId: string,
+    msg: {
+      role: string;
+      content: string;
+      toolCalls?: string;
+      toolCallId?: string;
+    },
+  ): void {
     const now = Date.now();
     const messageId = crypto.randomUUID();
     const record: MessageRecord = {
@@ -128,7 +132,10 @@ export class IdbConversationStore implements ConversationStoreAdapter {
     };
   }
 
-  listConversations(motebitId: string, limit?: number): Array<{
+  listConversations(
+    motebitId: string,
+    limit?: number,
+  ): Array<{
     conversationId: string;
     startedAt: number;
     lastActiveAt: number;
@@ -146,19 +153,25 @@ export class IdbConversationStore implements ConversationStoreAdapter {
   // === Preload / Cache ===
 
   private _messageCache = new Map<string, MessageRecord[]>();
-  private _activeConversationCache = new Map<string, {
-    conversationId: string;
-    startedAt: number;
-    lastActiveAt: number;
-    summary: string | null;
-  }>();
-  private _conversationListCache = new Map<string, Array<{
-    conversationId: string;
-    startedAt: number;
-    lastActiveAt: number;
-    title: string | null;
-    messageCount: number;
-  }>>();
+  private _activeConversationCache = new Map<
+    string,
+    {
+      conversationId: string;
+      startedAt: number;
+      lastActiveAt: number;
+      summary: string | null;
+    }
+  >();
+  private _conversationListCache = new Map<
+    string,
+    Array<{
+      conversationId: string;
+      startedAt: number;
+      lastActiveAt: number;
+      title: string | null;
+      messageCount: number;
+    }>
+  >();
 
   /** Preload conversation data from IDB into sync caches. Call before runtime construction. */
   async preload(motebitId: string): Promise<void> {
@@ -168,19 +181,22 @@ export class IdbConversationStore implements ConversationStoreAdapter {
 
     // Load all conversations for this motebit
     const convIndex = convStore.index("motebit_id");
-    const allConvs = await idbRequest(convIndex.getAll(motebitId)) as ConversationRecord[];
+    const allConvs = (await idbRequest(convIndex.getAll(motebitId))) as ConversationRecord[];
 
     // Sort by lastActiveAt descending
     allConvs.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
 
     // Cache conversation list
-    this._conversationListCache.set(motebitId, allConvs.map((c) => ({
-      conversationId: c.conversationId,
-      startedAt: c.startedAt,
-      lastActiveAt: c.lastActiveAt,
-      title: c.title,
-      messageCount: c.messageCount,
-    })));
+    this._conversationListCache.set(
+      motebitId,
+      allConvs.map((c) => ({
+        conversationId: c.conversationId,
+        startedAt: c.startedAt,
+        lastActiveAt: c.lastActiveAt,
+        title: c.title,
+        messageCount: c.messageCount,
+      })),
+    );
 
     // Find active conversation (within 4h window)
     const cutoff = Date.now() - ACTIVE_CONVERSATION_WINDOW_MS;
@@ -196,7 +212,7 @@ export class IdbConversationStore implements ConversationStoreAdapter {
 
       // Load messages for the active conversation
       const msgIndex = msgStore.index("conversation_id");
-      const msgs = await idbRequest(msgIndex.getAll(active.conversationId)) as MessageRecord[];
+      const msgs = (await idbRequest(msgIndex.getAll(active.conversationId))) as MessageRecord[];
       msgs.sort((a, b) => a.createdAt - b.createdAt);
       this._messageCache.set(active.conversationId, msgs);
     }

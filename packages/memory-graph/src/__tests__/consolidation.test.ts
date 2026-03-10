@@ -5,10 +5,7 @@ import {
   parseConsolidationResponse,
   clusterBySimilarity,
 } from "../consolidation";
-import {
-  MemoryGraph,
-  InMemoryMemoryStorage,
-} from "../index";
+import { MemoryGraph, InMemoryMemoryStorage } from "../index";
 import type { ConsolidationProvider } from "../consolidation";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 import { SensitivityLevel, RelationType } from "@motebit/sdk";
@@ -98,7 +95,8 @@ describe("parseConsolidationResponse", () => {
   });
 
   it("extracts JSON from surrounding text", () => {
-    const raw = 'Here is my analysis: {"action": "add", "reason": "Genuinely new"} Hope that helps!';
+    const raw =
+      'Here is my analysis: {"action": "add", "reason": "Genuinely new"} Hope that helps!';
     const decision = parseConsolidationResponse(raw, validIds);
     expect(decision.action).toBe(ConsolidationAction.ADD);
     expect(decision.reason).toBe("Genuinely new");
@@ -136,22 +134,18 @@ describe("clusterBySimilarity", () => {
     const clusters = clusterBySimilarity(nodes, 0.9);
     // a and b should cluster (very similar), c should be standalone
     expect(clusters.length).toBe(2);
-    const big = clusters.find(c => c.length === 2)!;
-    const small = clusters.find(c => c.length === 1)!;
-    expect(big.map(n => n.node_id).sort()).toEqual(["a", "b"]);
+    const big = clusters.find((c) => c.length === 2)!;
+    const small = clusters.find((c) => c.length === 1)!;
+    expect(big.map((n) => n.node_id).sort()).toEqual(["a", "b"]);
     expect(small[0]!.node_id).toBe("c");
   });
 
   it("keeps dissimilar vectors as singletons", () => {
-    const nodes = [
-      makeNode("a", [1, 0, 0]),
-      makeNode("b", [0, 1, 0]),
-      makeNode("c", [0, 0, 1]),
-    ];
+    const nodes = [makeNode("a", [1, 0, 0]), makeNode("b", [0, 1, 0]), makeNode("c", [0, 0, 1])];
 
     const clusters = clusterBySimilarity(nodes, 0.9);
     expect(clusters.length).toBe(3);
-    expect(clusters.every(c => c.length === 1)).toBe(true);
+    expect(clusters.every((c) => c.length === 1)).toBe(true);
   });
 
   it("returns empty array for empty input", () => {
@@ -174,7 +168,11 @@ describe("MemoryGraph.consolidateAndForm", () => {
     graph = new MemoryGraph(storage, eventStore, "test-mote");
   });
 
-  function mockProvider(decision: { action: string; existingNodeId?: string; reason: string }): ConsolidationProvider {
+  function mockProvider(decision: {
+    action: string;
+    existingNodeId?: string;
+    reason: string;
+  }): ConsolidationProvider {
     return {
       classify: async (_newContent, _existing) => ({
         action: decision.action as ConsolidationAction,
@@ -247,7 +245,7 @@ describe("MemoryGraph.consolidateAndForm", () => {
 
     // Check Supersedes edge exists
     const edges = await storage.getEdges(newNode!.node_id);
-    const supersedesEdge = edges.find(e => e.relation_type === RelationType.Supersedes);
+    const supersedesEdge = edges.find((e) => e.relation_type === RelationType.Supersedes);
     expect(supersedesEdge).toBeDefined();
     expect(supersedesEdge!.target_id).toBe(oldNode.node_id);
   });
@@ -265,7 +263,11 @@ describe("MemoryGraph.consolidateAndForm", () => {
     });
 
     const { node: supportNode, decision } = await graph.consolidateAndForm(
-      { content: "User mentioned liking Python again", confidence: 0.6, sensitivity: SensitivityLevel.None },
+      {
+        content: "User mentioned liking Python again",
+        confidence: 0.6,
+        sensitivity: SensitivityLevel.None,
+      },
       [0.95, 0.05, 0],
       provider,
     );
@@ -279,7 +281,7 @@ describe("MemoryGraph.consolidateAndForm", () => {
 
     // Check Reinforces edge
     const edges = await storage.getEdges(supportNode!.node_id);
-    const reinforcesEdge = edges.find(e => e.relation_type === RelationType.Reinforces);
+    const reinforcesEdge = edges.find((e) => e.relation_type === RelationType.Reinforces);
     expect(reinforcesEdge).toBeDefined();
   });
 
@@ -291,7 +293,7 @@ describe("MemoryGraph.consolidateAndForm", () => {
 
     const originalAccessed = existingNode.last_accessed;
     // Small delay to ensure time difference
-    await new Promise(r => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 10));
 
     const provider = mockProvider({
       action: "noop",
