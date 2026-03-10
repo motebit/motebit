@@ -69,7 +69,7 @@ Switch providers, and everything comes with you. Switch devices, and the identit
 
 ## The standard
 
-We wrote an open specification: [motebit/identity@1.0](https://github.com/hakimlabs/motebit/blob/main/spec/identity-v1.md). MIT licensed. It defines a human-readable, cryptographically signed identity file format for AI agents.
+We wrote an open specification: [motebit/identity@1.0](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md). MIT licensed. It defines a human-readable, cryptographically signed identity file format for AI agents.
 
 A `motebit.md` file is YAML frontmatter — identity, governance, privacy, memory configuration — signed with Ed25519. Any tool can verify it. The spec is 10 pages. The verification algorithm is 8 steps.
 
@@ -107,4 +107,4 @@ The agentic economy needs plumbing. Not more intelligence — we have plenty of 
 npm create motebit
 ```
 
-*[GitHub](https://github.com/hakimlabs/motebit) | [Spec](https://github.com/hakimlabs/motebit/blob/main/spec/identity-v1.md) | [npm](https://www.npmjs.com/package/create-motebit)*
+*[GitHub](https://github.com/motebit/motebit) | [Spec](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md) | [npm](https://www.npmjs.com/package/create-motebit)*

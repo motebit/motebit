@@ -2,7 +2,7 @@
 
 Standalone verifier for `motebit.md` agent identity files.
 
-Implements the verification algorithm from the [motebit/identity@1.0](https://github.com/hakimlabs/motebit/blob/main/spec/identity-v1.md) specification. Zero monorepo dependencies — only [`@noble/ed25519`](https://github.com/paulmillr/noble-ed25519) for cryptography.
+Implements the verification algorithm from the [motebit/identity@1.0](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md) specification. Zero monorepo dependencies — only [`@noble/ed25519`](https://github.com/paulmillr/noble-ed25519) for cryptography.
 
 ## Install
 
@@ -55,7 +55,7 @@ Throws if the file is malformed (missing frontmatter delimiters or signature).
 
 A `motebit.md` is a human-readable, cryptographically signed agent identity file. It contains YAML frontmatter with identity, governance, privacy, and memory configuration, followed by an Ed25519 signature in an HTML comment.
 
-See the [motebit/identity@1.0 specification](https://github.com/hakimlabs/motebit/blob/main/spec/identity-v1.md) for details.
+See the [motebit/identity@1.0 specification](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md) for details.
 
 ## License
 

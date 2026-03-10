@@ -8,7 +8,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "test": "echo 'No tests yet'",
     "typecheck": "tsc --noEmit",
+    "lint": "echo 'No lint configured'",
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
