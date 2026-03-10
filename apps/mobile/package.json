@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "license": "BSL-1.1",
   "private": true,
-  "main": "expo-router/entry",
+  "main": "expo/AppEntry",
   "scripts": {
     "start": "expo start",
     "ios": "expo run:ios",

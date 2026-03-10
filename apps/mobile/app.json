@@ -1,0 +1,10 @@
+{
+  "expo": {
+    "name": "Motebit",
+    "slug": "motebit",
+    "version": "1.0.0",
+    "scheme": "motebit",
+    "platforms": ["ios", "android"],
+    "newArchEnabled": false
+  }
+}
