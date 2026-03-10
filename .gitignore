@@ -42,3 +42,4 @@ infra/terraform/.terraform/
 infra/terraform/*.tfstate*
 infra/secrets/
 .claude/worktrees/
+.vercel
