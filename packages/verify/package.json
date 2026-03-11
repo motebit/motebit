@@ -1,6 +1,6 @@
 {
   "name": "@motebit/verify",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Verify motebit.md agent identity files — Ed25519 signature verification for the motebit/identity@1.0 spec",
   "type": "module",
   "main": "./dist/index.js",

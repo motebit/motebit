@@ -32,14 +32,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build @motebit/verify
-        run: pnpm --filter @motebit/verify build
-
-      - name: Build create-motebit
-        run: pnpm --filter create-motebit build
-
-      - name: Build motebit CLI
-        run: pnpm --filter motebit build
+      - name: Build all packages
+        run: pnpm build
 
       - name: Test @motebit/verify
         run: pnpm --filter @motebit/verify test
