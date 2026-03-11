@@ -156,5 +156,5 @@ Motebit is calm software. Do not confirm what the user can already see.
 - Config file: `~/.motebit/config.json` for non-secret settings
 - Database: `~/.motebit/motebit.db` (SQLite, WAL mode)
 
-- **Sibling boundary rule.** When you fix a boundary (auth, policy, validation, rendering), audit all sibling boundaries for the same gap in the same pass. A fix applied to one path but not its siblings is incomplete.
+- **Sibling boundary rule.** When you fix a boundary (auth, policy, validation, rendering), audit all sibling boundaries for the same gap in the same pass. A fix applied to one path but not its siblings is incomplete. Docs are siblings of code — when implementation changes, sync CLAUDE.md, docs site, and spec in the same commit.
 - Dependency overrides in `package.json` must be upper-bounded (`>=4.59.0 <5.0.0`), especially for 0.x semver.
