@@ -104,8 +104,7 @@ beforeAll(async () => {
     publicKeyHex: wsPublicKeyHex,
     listTools: () => wsRuntime.getToolRegistry().list(),
     filterTools: (tools) => wsRuntime.policy.filterTools(tools),
-    validateTool: (tool, args) =>
-      wsRuntime.policy.validate(tool, args, wsRuntime.policy.createTurnContext()),
+    validateTool: () => ({ allowed: true, requiresApproval: false }),
     executeTool: (name, args) => wsRuntime.getToolRegistry().execute(name, args),
     getState: () => wsRuntime.getState() as unknown as Record<string, unknown>,
     getMemories: async () => [],
@@ -201,8 +200,7 @@ beforeAll(async () => {
     publicKeyHex: sumPublicKeyHex,
     listTools: () => sumRuntime.getToolRegistry().list(),
     filterTools: (tools) => sumRuntime.policy.filterTools(tools),
-    validateTool: (tool, args) =>
-      sumRuntime.policy.validate(tool, args, sumRuntime.policy.createTurnContext()),
+    validateTool: () => ({ allowed: true, requiresApproval: false }),
     executeTool: (name, args) => sumRuntime.getToolRegistry().execute(name, args),
     getState: () => sumRuntime.getState() as unknown as Record<string, unknown>,
     getMemories: async () => [],

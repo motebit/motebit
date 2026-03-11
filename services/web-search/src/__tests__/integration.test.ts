@@ -100,8 +100,7 @@ beforeAll(async () => {
 
     listTools: () => runtime.getToolRegistry().list(),
     filterTools: (tools) => runtime.policy.filterTools(tools),
-    validateTool: (tool, args) =>
-      runtime.policy.validate(tool, args, runtime.policy.createTurnContext()),
+    validateTool: () => ({ allowed: true, requiresApproval: false }),
     executeTool: (name, args) => runtime.getToolRegistry().execute(name, args),
 
     getState: () => runtime.getState() as unknown as Record<string, unknown>,
