@@ -150,10 +150,5 @@ Motebit is calm software. Do not confirm what the user can already see.
 - Config file: `~/.motebit/config.json` for non-secret settings
 - Database: `~/.motebit/motebit.db` (SQLite, WAL mode)
 
-### Engineering principles
-- **Sibling boundary rule.** When you find a bug in a boundary (auth, policy, validation, rendering), grep for all sibling boundaries that should have the same protection and fix them in the same pass. A fix applied to one path but not its siblings is an incomplete fix.
-- **Fail explicit, not silent.** Guard clauses that reject (`ws.close(4000)`, `throw new HTTPException(400)`) over default values (`?? ""`) at trust boundaries. A silent default turns a visible failure into an invisible wrong state.
-- **Dead config is a lie.** Remove overrides, flags, and rules that no longer apply. Stale config misleads future readers into thinking a problem still exists. If it's a no-op, delete it.
-- **Cap dependency overrides.** Always upper-bound version overrides (`>=4.59.0 <5.0.0`). Open-ended `>=` on 0.x semver or across majors can pull breaking changes on the next install.
-- **If CI doesn't test it, it's not protected.** A check that isn't in the pipeline will silently regress. If a package has no lint script, `turbo run lint` skips it without warning. If typecheck isn't blocking, nobody notices it failing.
-- **Split by domain, not by size.** When a file needs splitting, each module should have a single reason to change (config, identity, commands, daemon) — not arbitrary line-count buckets.
+- **Sibling boundary rule.** When you fix a boundary (auth, policy, validation, rendering), audit all sibling boundaries for the same gap in the same pass. A fix applied to one path but not its siblings is incomplete.
+- Dependency overrides in `package.json` must be upper-bounded (`>=4.59.0 <5.0.0`), especially for 0.x semver.
