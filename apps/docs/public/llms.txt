@@ -1,0 +1,67 @@
+# Motebit
+
+> Cryptographic identity for AI agents. Ed25519 keypairs, signed identity files, governance policy, and portable memory that travel with the agent across devices, providers, and time.
+
+Motebit is the missing identity layer for the agentic economy. MCP defines what tools an agent can reach. Motebit defines who the agent is.
+
+A motebit is a persistent, cryptographically-anchored, sovereign agent. The intelligence provider is pluggable. The identity — with its accumulated memory, trust, and governance — is the asset.
+
+## Quick Start
+
+- `npm create motebit` generates a signed agent identity in 30 seconds
+- `@motebit/verify` verifies any `motebit.md` identity file
+- `motebit/identity@1.0` is the open specification (MIT licensed)
+
+## Concepts
+
+- [Introduction](https://docs.motebit.com/docs/introduction): What is motebit, and why does it exist.
+- [Identity](https://docs.motebit.com/docs/concepts/identity): Cryptographic identity that persists across time, devices, and providers.
+- [Memory](https://docs.motebit.com/docs/concepts/memory): Semantic memory that accumulates, decays, and respects sensitivity.
+- [Intelligence](https://docs.motebit.com/docs/concepts/intelligence): Pluggable LLM providers — the intelligence is a commodity, the identity is the asset.
+- [Governance](https://docs.motebit.com/docs/concepts/governance): Surface tension — what crosses the boundary between the agent and the world.
+- [The Droplet](https://docs.motebit.com/docs/concepts/the-droplet): Form thesis — surface tension, glass, breathing, orbital mechanics.
+
+## Getting Started
+
+- [Get Your Agent](https://docs.motebit.com/docs/get-your-agent): Download the desktop app, create an identity, and meet your motebit.
+- [Configuration](https://docs.motebit.com/docs/apps/configuration): Config files, environment variables, models, and MCP servers.
+
+## Apps
+
+- [Desktop App](https://docs.motebit.com/docs/apps/desktop): Setup, operator mode, PIN flow, and the Tauri runtime.
+- [Mobile App](https://docs.motebit.com/docs/apps/mobile): Expo setup, dual providers, voice input, goals, and MCP trust.
+- [CLI](https://docs.motebit.com/docs/apps/cli): The developer REPL — slash commands, streaming, and debugging.
+- [Spatial App](https://docs.motebit.com/docs/apps/spatial): WebXR, orbital mechanics, hand tracking, and flat preview.
+
+## Developer Guide
+
+- [Identity Standard](https://docs.motebit.com/docs/developer/identity-standard): Create and verify motebit.md agent identity files — the motebit/identity@1.0 specification.
+- [Identity & Cryptography](https://docs.motebit.com/docs/developer/identity-crypto): How motebit creates and manages persistent sovereign identity.
+- [Agent-to-Agent Delegation](https://docs.motebit.com/docs/developer/delegation): Discover, verify, delegate, and prove — the cryptographic protocol for agent collaboration.
+- [Tools](https://docs.motebit.com/docs/developer/tools): Built-in tools, MCP integration, and the trust model.
+- [MCP Server Mode](https://docs.motebit.com/docs/developer/mcp-server): Expose your motebit as a callable agent — synthetic tools, signed receipts, and bearer auth.
+
+## Operator Guide
+
+- [Architecture](https://docs.motebit.com/docs/operator/architecture): Monorepo structure, package layers, and data flow.
+- [Daemon Mode & Approvals](https://docs.motebit.com/docs/operator/daemon-approvals): Running motebit as a daemon — scheduled goals, approval queue, and governance enforcement.
+- [Policy & Governance](https://docs.motebit.com/docs/operator/governance): How motebit controls what crosses the surface.
+- [Sync](https://docs.motebit.com/docs/operator/sync): Multi-device sync, the relay server, and conflict detection.
+
+## Open Specification
+
+- [motebit/identity@1.0](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md): The open specification for agent identity files. MIT licensed.
+
+## Packages
+
+- [create-motebit](https://www.npmjs.com/package/create-motebit): CLI scaffolder — `npm create motebit`. MIT licensed.
+- [@motebit/verify](https://www.npmjs.com/package/@motebit/verify): Ed25519 signature verification for motebit.md identity files. MIT licensed.
+
+## Optional
+
+- [GitHub Repository](https://github.com/motebit/motebit): Source code, issue tracker, discussions.
+- [DROPLET.md](https://github.com/motebit/motebit/blob/main/DROPLET.md): Design thesis — the body derived from physics.
+- [THE_SOVEREIGN_INTERIOR.md](https://github.com/motebit/motebit/blob/main/THE_SOVEREIGN_INTERIOR.md): Identity thesis — cryptographic interior.
+- [LIQUESCENTIA.md](https://github.com/motebit/motebit/blob/main/LIQUESCENTIA.md): The world — the medium that permits cohesion.
+- [THE_MUSIC_OF_THE_MEDIUM.md](https://github.com/motebit/motebit/blob/main/THE_MUSIC_OF_THE_MEDIUM.md): Acoustic interface — pressure coupling through surface tension.
+- [THE_METABOLIC_PRINCIPLE.md](https://github.com/motebit/motebit/blob/main/THE_METABOLIC_PRINCIPLE.md): Build enzymes, absorb glucose.
