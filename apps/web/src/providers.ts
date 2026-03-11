@@ -236,5 +236,18 @@ export function createProvider(config: ProviderConfig): StreamingProvider | Inte
         temperature: config.temperature,
         maxTokens: config.maxTokens,
       });
+    case "proxy": {
+      const proxyConfig: CloudProviderConfig = {
+        provider: "anthropic",
+        api_key: "", // proxy supplies the key server-side
+        model: config.model,
+        base_url: config.baseUrl ?? PROXY_BASE_URL,
+        max_tokens: config.maxTokens,
+        temperature: config.temperature,
+      };
+      return new CloudProvider(proxyConfig);
+    }
   }
 }
+
+export const PROXY_BASE_URL = "https://docs.motebit.com/api/proxy";

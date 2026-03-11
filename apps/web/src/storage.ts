@@ -1,6 +1,6 @@
 // === Provider Config ===
 
-export type ProviderType = "anthropic" | "openai" | "ollama" | "webllm";
+export type ProviderType = "anthropic" | "openai" | "ollama" | "webllm" | "proxy";
 
 export interface ProviderConfig {
   type: ProviderType;

@@ -4,7 +4,7 @@ import type { ProviderConfig } from "./storage";
 import { loadProviderConfig, loadSoulColor, loadSyncUrl, saveProviderConfig } from "./storage";
 import { deriveInteriorColor } from "./ui/color-picker";
 import { initColorPicker } from "./ui/color-picker";
-import { checkWebGPU, WebLLMProvider } from "./providers";
+import { checkWebGPU, WebLLMProvider, PROXY_BASE_URL } from "./providers";
 import { initChat, addMessage, showToast } from "./ui/chat";
 import { initSettings } from "./ui/settings";
 import { initConversations } from "./ui/conversations";
@@ -113,8 +113,37 @@ document.addEventListener("keydown", (e) => {
 
 // === Bootstrap ===
 
+const DEFAULT_PROXY_MODEL = "claude-haiku-4-5-20251001";
 const DEFAULT_WEBLLM_MODEL = "Llama-3.2-3B-Instruct-q4f16_1-MLC";
 
+/** Try to connect via the free proxy — instant, no download. */
+async function autoInitProxy(): Promise<boolean> {
+  try {
+    // Quick connectivity check — HEAD-like request to confirm the proxy is reachable
+    const res = await fetch(`${PROXY_BASE_URL}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: DEFAULT_PROXY_MODEL, messages: [], max_tokens: 1 }),
+    });
+    // 400 = proxy is alive but rejected empty messages (expected)
+    // 429 = rate limited but proxy exists
+    // 200 = shouldn't happen with empty messages but fine
+    if (res.status === 400 || res.status === 429 || res.ok) {
+      const config = { type: "proxy" as const, model: DEFAULT_PROXY_MODEL };
+      app.connectProvider(config);
+      currentConfig = config;
+      saveProviderConfig(config);
+      settings.updateModelIndicator();
+      settings.updateConnectPrompt();
+      return true;
+    }
+  } catch {
+    // Network error, proxy unreachable
+  }
+  return false;
+}
+
+/** Fallback: load a language model into the browser via WebLLM. */
 async function autoInitWebLLM(model: string = DEFAULT_WEBLLM_MODEL): Promise<void> {
   const heading = document.getElementById("connect-prompt-heading");
   const text = document.getElementById("connect-prompt-text");
@@ -122,7 +151,6 @@ async function autoInitWebLLM(model: string = DEFAULT_WEBLLM_MODEL): Promise<voi
   const progress = document.getElementById("connect-prompt-progress");
   const fill = document.getElementById("connect-prompt-progress-fill");
 
-  // Transform the connect prompt into a loading indicator
   if (heading) heading.textContent = "Waking up";
   if (text) text.textContent = "Loading a small language model into your browser...";
   if (btn) btn.style.display = "none";
@@ -132,7 +160,6 @@ async function autoInitWebLLM(model: string = DEFAULT_WEBLLM_MODEL): Promise<voi
     const provider = new WebLLMProvider(model);
     await provider.init((report) => {
       if (fill) fill.style.width = `${Math.round(report.progress * 100)}%`;
-      // Show short status text during download
       if (text) {
         if (report.progress < 1) {
           text.textContent = report.text.length > 60 ? report.text.slice(0, 57) + "..." : report.text;
@@ -149,7 +176,6 @@ async function autoInitWebLLM(model: string = DEFAULT_WEBLLM_MODEL): Promise<voi
     settings.updateModelIndicator();
     settings.updateConnectPrompt();
   } catch {
-    // WebLLM failed (incompatible GPU, out of memory, etc.) — restore connect prompt
     if (heading) heading.textContent = "Give it a voice";
     if (text) text.textContent = "Connect an AI provider and this little drop of glass will start talking back.";
     if (btn) btn.style.display = "";
@@ -208,7 +234,6 @@ async function bootstrap(): Promise<void> {
     currentConfig = savedConfig;
 
     if (savedConfig.type === "webllm") {
-      // WebLLM needs async init — re-init silently in background
       void autoInitWebLLM(savedConfig.model);
     } else {
       try {
@@ -218,9 +243,13 @@ async function bootstrap(): Promise<void> {
         // Provider connection failed — user can reconnect via settings
       }
     }
-  } else if (checkWebGPU()) {
-    // First visit, no saved config, WebGPU available — auto-init WebLLM
-    void autoInitWebLLM("Llama-3.2-3B-Instruct-q4f16_1-MLC");
+  } else {
+    // First visit — try free proxy (instant), fall back to WebLLM
+    void autoInitProxy().then((ok) => {
+      if (!ok && checkWebGPU()) {
+        void autoInitWebLLM();
+      }
+    });
   }
 
   settings.updateConnectPrompt();

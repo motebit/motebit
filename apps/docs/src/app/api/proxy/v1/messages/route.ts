@@ -1,0 +1,192 @@
+import { kv } from "@vercel/kv";
+
+export const runtime = "edge";
+
+const DAILY_LIMIT = 5;
+const MAX_BODY_SIZE = 100_000; // 100KB
+const MAX_MESSAGE_LENGTH = 10_000;
+const MAX_MESSAGES = 50;
+const MODEL_ALLOWLIST = [
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-4-20250514",
+];
+
+const ALLOWED_ORIGINS = new Set([
+  "https://motebit.com",
+  "https://www.motebit.com",
+  // Dev
+  ...(process.env.NODE_ENV === "development"
+    ? ["http://localhost:3000", "http://localhost:3002", "http://localhost:5173"]
+    : []),
+]);
+
+function corsHeaders(origin: string): Record<string, string> {
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, x-api-key, anthropic-version",
+    "Access-Control-Max-Age": "86400",
+  };
+}
+
+function getClientIP(request: Request): string {
+  return (
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    request.headers.get("x-real-ip") ??
+    "unknown"
+  );
+}
+
+async function checkRateLimit(
+  ip: string,
+): Promise<{ allowed: boolean; remaining: number }> {
+  const today = new Date().toISOString().slice(0, 10);
+  const key = `proxy:${ip}:${today}`;
+  const count = await kv.incr(key);
+  if (count === 1) {
+    await kv.expire(key, 86400);
+  }
+  return {
+    allowed: count <= DAILY_LIMIT,
+    remaining: Math.max(0, DAILY_LIMIT - count),
+  };
+}
+
+// OPTIONS — CORS preflight
+export function OPTIONS(request: Request): Response {
+  const origin = request.headers.get("origin") ?? "";
+  if (!ALLOWED_ORIGINS.has(origin)) {
+    return new Response(null, { status: 403 });
+  }
+  return new Response(null, { status: 204, headers: corsHeaders(origin) });
+}
+
+// POST — proxy to Anthropic Messages API
+export async function POST(request: Request): Promise<Response> {
+  const origin = request.headers.get("origin") ?? "";
+  if (!ALLOWED_ORIGINS.has(origin)) {
+    return new Response(JSON.stringify({ error: "forbidden" }), {
+      status: 403,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  const cors = corsHeaders(origin);
+
+  // API key check
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return new Response(
+      JSON.stringify({ error: "server_error", message: "Proxy not configured" }),
+      { status: 500, headers: { ...cors, "Content-Type": "application/json" } },
+    );
+  }
+
+  // Rate limit
+  const ip = getClientIP(request);
+  const { allowed, remaining } = await checkRateLimit(ip);
+  if (!allowed) {
+    return new Response(
+      JSON.stringify({
+        error: "rate_limited",
+        message: `You've used your ${DAILY_LIMIT} free messages today. Add your own API key in Settings for unlimited use, or try again tomorrow.`,
+        remaining: 0,
+      }),
+      {
+        status: 429,
+        headers: {
+          ...cors,
+          "Content-Type": "application/json",
+          "Retry-After": "86400",
+          "X-RateLimit-Remaining": "0",
+        },
+      },
+    );
+  }
+
+  // Parse and validate body
+  const contentLength = request.headers.get("content-length");
+  if (contentLength && parseInt(contentLength, 10) > MAX_BODY_SIZE) {
+    return new Response(
+      JSON.stringify({ error: "request_too_large" }),
+      { status: 413, headers: { ...cors, "Content-Type": "application/json" } },
+    );
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return new Response(
+      JSON.stringify({ error: "invalid_json" }),
+      { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+    );
+  }
+
+  // Validate model
+  const model = body.model as string | undefined;
+  if (!model || !MODEL_ALLOWLIST.includes(model)) {
+    return new Response(
+      JSON.stringify({
+        error: "invalid_model",
+        message: `Model must be one of: ${MODEL_ALLOWLIST.join(", ")}`,
+      }),
+      { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+    );
+  }
+
+  // Validate messages
+  const messages = body.messages as Array<{ role: string; content: string }> | undefined;
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return new Response(
+      JSON.stringify({ error: "invalid_messages" }),
+      { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+    );
+  }
+  if (messages.length > MAX_MESSAGES) {
+    return new Response(
+      JSON.stringify({ error: "too_many_messages", message: `Max ${MAX_MESSAGES} messages` }),
+      { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+    );
+  }
+  for (const msg of messages) {
+    if (typeof msg.content === "string" && msg.content.length > MAX_MESSAGE_LENGTH) {
+      return new Response(
+        JSON.stringify({ error: "message_too_long" }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+      );
+    }
+  }
+
+  // Build proxied request — strip tools to keep costs down, force streaming
+  const proxiedBody = {
+    model: body.model,
+    messages: body.messages,
+    system: body.system,
+    max_tokens: Math.min((body.max_tokens as number) || 1024, 2048),
+    temperature: body.temperature,
+    stream: true,
+  };
+
+  // Forward to Anthropic
+  const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify(proxiedBody),
+  });
+
+  // Pipe Anthropic's streaming response directly to the client
+  return new Response(anthropicRes.body, {
+    status: anthropicRes.status,
+    headers: {
+      ...cors,
+      "Content-Type": anthropicRes.headers.get("Content-Type") ?? "text/event-stream",
+      "Cache-Control": "no-cache",
+      "X-RateLimit-Remaining": String(remaining),
+    },
+  });
+}

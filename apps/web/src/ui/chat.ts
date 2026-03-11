@@ -434,7 +434,15 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
       } else if (bubble && !textEl?.textContent) {
         bubble.remove();
       }
-      addMessage("system", `Error: ${msg}`);
+      // Detect rate limit from proxy
+      if (msg.includes("rate_limited") || msg.includes("429")) {
+        addMessage(
+          "system",
+          "You've used your free messages for today. Add your own API key in Settings for unlimited use, or come back tomorrow.",
+        );
+      } else {
+        addMessage("system", `Error: ${msg}`);
+      }
     } finally {
       setProcessing(false);
     }
