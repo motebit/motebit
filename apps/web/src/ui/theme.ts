@@ -3,6 +3,7 @@ export type ThemePreference = "light" | "dark" | "system";
 const THEME_KEY = "motebit-theme";
 
 let currentPreference: ThemePreference = "system";
+let hasExplicitChoice = false;
 let mediaQuery: MediaQueryList | null = null;
 
 function getEffectiveTheme(pref: ThemePreference): "light" | "dark" {
@@ -34,14 +35,12 @@ function updateToggleUI(): void {
 }
 
 function persist(pref: ThemePreference, isTauri: boolean, invoke?: unknown): void {
-  // Always persist to localStorage for immediate access on next load
   try {
     localStorage.setItem(THEME_KEY, pref);
   } catch {
     // localStorage unavailable
   }
 
-  // Also persist to Tauri config if available
   if (isTauri && invoke != null) {
     const invokeFn = invoke as (cmd: string, args: Record<string, unknown>) => Promise<string>;
     void invokeFn("read_config", {})
@@ -67,17 +66,19 @@ export function initTheme(
   onChange?: (effective: "light" | "dark") => void,
 ): ThemeAPI {
   onChangeCallback = onChange ?? null;
-  // Load persisted preference
+
+  // Only restore a persisted preference if the user explicitly chose one before
   try {
     const stored = localStorage.getItem(THEME_KEY);
     if (stored === "light" || stored === "dark" || stored === "system") {
       currentPreference = stored;
+      hasExplicitChoice = true;
     }
   } catch {
     // localStorage unavailable
   }
 
-  // Apply immediately
+  // Apply immediately — "system" follows OS, explicit choice overrides
   applyTheme(currentPreference);
   updateToggleUI();
 
@@ -90,12 +91,13 @@ export function initTheme(
   };
   mediaQuery.addEventListener("change", onMediaChange);
 
-  // Wire up toggle buttons
+  // Wire up toggle buttons — only persist on explicit user action
   document.querySelectorAll("#theme-toggle-group .theme-option").forEach((btn) => {
     btn.addEventListener("click", () => {
       const pref = (btn as HTMLElement).dataset.theme as ThemePreference;
       if (pref) {
         currentPreference = pref;
+        hasExplicitChoice = true;
         applyTheme(pref);
         updateToggleUI();
         persist(pref, isTauri, invoke);
@@ -109,6 +111,7 @@ export function initTheme(
     },
     setPreference(pref: ThemePreference) {
       currentPreference = pref;
+      hasExplicitChoice = true;
       applyTheme(pref);
       updateToggleUI();
       persist(pref, isTauri, invoke);
