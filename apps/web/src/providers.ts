@@ -250,4 +250,4 @@ export function createProvider(config: ProviderConfig): StreamingProvider | Inte
   }
 }
 
-export const PROXY_BASE_URL = "https://docs.motebit.com/api/proxy";
+export const PROXY_BASE_URL = "https://api.motebit.com";

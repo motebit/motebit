@@ -281,9 +281,6 @@ importers:
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@vercel/kv':
-        specifier: ^2.0.0
-        version: 2.0.0
       framer-motion:
         specifier: ^12.34.1
         version: 12.34.1(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -1083,6 +1080,31 @@ importers:
       vitest:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1)(lightningcss@1.30.2)(terser@5.46.0)
+
+  services/proxy:
+    dependencies:
+      '@vercel/kv':
+        specifier: ^2.0.0
+        version: 2.0.0
+      next:
+        specifier: ^15.0.0
+        version: 15.5.12(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      react:
+        specifier: ^19.0.0
+        version: 19.2.4
+      react-dom:
+        specifier: ^19.0.0
+        version: 19.2.4(react@19.2.4)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.14
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
 
   services/summarize:
     dependencies:

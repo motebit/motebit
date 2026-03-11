@@ -12,7 +12,6 @@
     "clean": "rm -rf .next .turbo *.tsbuildinfo out"
   },
   "dependencies": {
-    "@vercel/kv": "^2.0.0",
     "@motebit/render-engine": "workspace:*",
     "@motebit/sdk": "workspace:*",
     "framer-motion": "^12.34.1",
