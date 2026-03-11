@@ -893,6 +893,14 @@ export class DesktopApp {
     this.renderer.setInteriorColor(color);
   }
 
+  setDarkEnvironment(): void {
+    this.renderer.setDarkEnvironment();
+  }
+
+  setLightEnvironment(): void {
+    this.renderer.setLightEnvironment();
+  }
+
   setAudioReactivity(energy: { rms: number; low: number; mid: number; high: number } | null): void {
     this.renderer.setAudioReactivity(energy);
   }

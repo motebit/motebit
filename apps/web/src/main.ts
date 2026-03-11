@@ -87,9 +87,14 @@ const gatedPanels = initGatedPanels(ctx);
 // === Theme ===
 
 // Side-effect: sets up theme toggle + data-theme attribute.
-// Liquescentia (3D environment) is always ENV_LIGHT — glass needs
-// chromatic variation to refract. Dark mode only changes UI chrome.
-void initTheme(false);
+// onChange syncs the 3D environment with the CSS theme.
+void initTheme(false, undefined, (effective) => {
+  if (effective === "dark") {
+    app.setDarkEnvironment();
+  } else {
+    app.setLightEnvironment();
+  }
+});
 
 // === Escape Key Handler ===
 
@@ -114,6 +119,11 @@ document.addEventListener("keydown", (e) => {
 
 async function bootstrap(): Promise<void> {
   await app.init(canvas!);
+
+  // Sync 3D environment with current theme (initTheme runs before renderer exists)
+  if (document.documentElement.dataset.theme === "dark") {
+    app.setDarkEnvironment();
+  }
 
   // Initialize IDB storage, migration, and runtime
   await app.bootstrap();
