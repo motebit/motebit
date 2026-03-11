@@ -431,6 +431,23 @@ export async function* runTurnStreaming(
         continue;
       }
 
+      // Policy gate filtered this tool out — do NOT execute.
+      // The tool may still exist in the registry, but policy excluded it for a reason.
+      if (deps.policyGate && !toolDef) {
+        yield {
+          type: "tool_status",
+          name: toolCall.name,
+          status: "done",
+          result: "Tool not available",
+        };
+        conversationHistory.push({
+          role: "tool",
+          tool_call_id: toolCall.id,
+          content: JSON.stringify({ ok: false, error: "Tool not available" }),
+        });
+        continue;
+      }
+
       // Fallback: no policy gate — use legacy requiresApproval check
       if (toolDef?.requiresApproval === true) {
         yield {

@@ -352,6 +352,10 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
                 return;
               }
             }
+          } else if (enableDeviceAuth && (token == null || token === "")) {
+            // No token provided but device auth is required — reject (mirrors REST middleware)
+            ws.close(4001, "Missing device token");
+            return;
           } else if (apiToken != null && apiToken !== "" && token !== apiToken) {
             ws.close(4001, "Unauthorized");
             return;
@@ -1180,9 +1184,28 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   });
 
   // GET /agent/:motebitId/task/:taskId — poll task status
-  app.get("/agent/:motebitId/task/:taskId", (c) => {
+  app.get("/agent/:motebitId/task/:taskId", async (c) => {
     const motebitId = c.req.param("motebitId");
     const taskId = c.req.param("taskId");
+
+    // Device auth: require signed token or master token
+    const authHeader = c.req.header("authorization");
+    if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+      throw new HTTPException(401, { message: "Authorization required" });
+    }
+    const token = authHeader.slice(7);
+    if (apiToken == null || token !== apiToken) {
+      // Verify as device signed token
+      if (enableDeviceAuth && token.includes(".")) {
+        const verified = await verifySignedTokenForDevice(token, motebitId, identityManager);
+        if (!verified) {
+          throw new HTTPException(403, { message: "Device not authorized" });
+        }
+      } else {
+        throw new HTTPException(403, { message: "Invalid authorization" });
+      }
+    }
+
     const entry = taskQueue.get(taskId);
 
     if (!entry || entry.task.motebit_id !== motebitId) {
@@ -1221,6 +1244,20 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     }
 
     const receipt = await c.req.json<ExecutionReceipt>();
+
+    // Structural validation: require essential receipt fields
+    const validStatuses = ["completed", "failed", "denied"];
+    if (
+      typeof receipt.task_id !== "string" || receipt.task_id === "" ||
+      typeof receipt.motebit_id !== "string" || receipt.motebit_id === "" ||
+      typeof receipt.signature !== "string" || receipt.signature === "" ||
+      typeof receipt.status !== "string" || !validStatuses.includes(receipt.status)
+    ) {
+      throw new HTTPException(400, {
+        message: "Invalid receipt: must include non-empty task_id, motebit_id, signature, and valid status",
+      });
+    }
+
     entry.receipt = receipt;
     entry.task.status =
       receipt.status === "completed"

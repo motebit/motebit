@@ -101,8 +101,15 @@ function createSmile(): THREE.Mesh {
     new THREE.Vector3(0.03, 0, 0),
   );
   const geo = new THREE.TubeGeometry(curve, 20, 0.002, 6, false);
-  const mat = new THREE.MeshBasicMaterial({ color: 0x111111 });
-  return new THREE.Mesh(geo, mat);
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0x111111,
+    polygonOffset: true,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 1,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.renderOrder = 1;
+  return mesh;
 }
 
 interface EnvironmentPreset {

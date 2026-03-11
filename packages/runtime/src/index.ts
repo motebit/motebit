@@ -73,7 +73,7 @@ type McpClientAdapter = {
 import { PlanEngine, InMemoryPlanStore } from "@motebit/planner";
 import type { PlanChunk } from "@motebit/planner";
 import type { PlanStoreAdapter } from "@motebit/planner";
-import { PolicyGate, MemoryGovernor } from "@motebit/policy";
+import { PolicyGate, MemoryGovernor, MemoryClass } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 import { computeGradient, InMemoryGradientStore } from "./gradient.js";
 import type { GradientSnapshot, GradientStoreAdapter } from "./gradient.js";
@@ -1379,15 +1379,17 @@ export class MotebitRuntime {
   private async storeReflectionInsights(result: ReflectionResult): Promise<void> {
     for (const insight of result.insights) {
       try {
-        const embedding = await embedText(`[reflection] ${insight}`);
-        await this.memory.formMemory(
-          {
-            content: `[reflection] ${insight}`,
-            confidence: 0.7,
-            sensitivity: SensitivityLevel.None,
-          },
-          embedding,
-        );
+        const candidate = {
+          content: `[reflection] ${insight}`,
+          confidence: 0.7,
+          sensitivity: SensitivityLevel.None,
+        };
+        const [decision] = this.memoryGovernor.evaluate([candidate]);
+        if (decision && decision.memoryClass === MemoryClass.REJECTED) {
+          continue;
+        }
+        const embedding = await embedText(candidate.content);
+        await this.memory.formMemory(candidate, embedding);
         // Memory formed — brief confidence + warmth spike visible through glass
         const cur = this.state.getState();
         this.state.pushUpdate({
@@ -1402,15 +1404,17 @@ export class MotebitRuntime {
     // Store plan adjustments as memories — behavioral learnings for future planning
     for (const adjustment of result.planAdjustments) {
       try {
-        const embedding = await embedText(`[plan_adjustment] ${adjustment}`);
-        await this.memory.formMemory(
-          {
-            content: `[plan_adjustment] ${adjustment}`,
-            confidence: 0.6,
-            sensitivity: SensitivityLevel.None,
-          },
-          embedding,
-        );
+        const candidate = {
+          content: `[plan_adjustment] ${adjustment}`,
+          confidence: 0.6,
+          sensitivity: SensitivityLevel.None,
+        };
+        const [decision] = this.memoryGovernor.evaluate([candidate]);
+        if (decision && decision.memoryClass === MemoryClass.REJECTED) {
+          continue;
+        }
+        const embedding = await embedText(candidate.content);
+        await this.memory.formMemory(candidate, embedding);
       } catch {
         // Memory formation is best-effort during reflection
       }
@@ -1812,18 +1816,19 @@ export class MotebitRuntime {
         const avgConf = cluster.reduce((sum, n) => sum + n.confidence, 0) / cluster.length;
         const newConf = Math.min(1.0, avgConf + 0.1);
 
-        // Form new semantic memory
+        // Form new semantic memory — governor checks for secrets in the summary text
+        const candidate = {
+          content: summary,
+          confidence: newConf,
+          sensitivity: cluster[0]!.sensitivity,
+          memory_type: MT.Semantic,
+        };
+        const [decision] = this.memoryGovernor.evaluate([candidate]);
+        if (decision && decision.memoryClass === MemoryClass.REJECTED) {
+          continue;
+        }
         const embedding = await embedText(summary);
-        await this.memory.formMemory(
-          {
-            content: summary,
-            confidence: newConf,
-            sensitivity: cluster[0]!.sensitivity,
-            memory_type: MT.Semantic,
-          },
-          embedding,
-          MemoryGraph.HALF_LIFE_SEMANTIC,
-        );
+        await this.memory.formMemory(candidate, embedding, MemoryGraph.HALF_LIFE_SEMANTIC);
 
         // Tombstone the episodic cluster members
         for (const node of cluster) {

@@ -3,7 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { AgentTrustLevel } from "@motebit/sdk";
+import { AgentTrustLevel, RiskLevel } from "@motebit/sdk";
 import type { ToolDefinition, ToolResult, PolicyDecision } from "@motebit/sdk";
 
 // Re-export for consumers
@@ -366,6 +366,60 @@ export class McpServerAdapter {
 
   // --- Synthetic Tool Registration ---
 
+  /**
+   * Build a ToolDefinition for a synthetic tool so it can be validated
+   * through the same PolicyGate path as proxied tools.
+   */
+  private static syntheticToolDef(
+    name: string,
+    description: string,
+    risk: RiskLevel,
+  ): ToolDefinition {
+    return {
+      name,
+      description,
+      inputSchema: {},
+      riskHint: { risk },
+    };
+  }
+
+  /**
+   * Validate a synthetic tool through PolicyGate. Returns null if allowed,
+   * or an error result if denied or requires approval.
+   */
+  private validateSyntheticTool(
+    toolDef: ToolDefinition,
+    args: Record<string, unknown>,
+  ): { content: Array<{ type: "text"; text: string }>; isError: true } | null {
+    const decision = this.deps.validateTool(toolDef, args, this.lastVerifiedCaller ?? undefined);
+
+    if (!decision.allowed && !decision.requiresApproval) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Policy denied: ${decision.reason ?? "tool not allowed by governance policy"}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    if (decision.requiresApproval) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Governance: tool "${toolDef.name}" requires approval from the motebit owner. This tool is in the approval band of the governance policy.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    return null;
+  }
+
   private registerSyntheticToolsOn(server: McpServer): void {
     const fmt = (data: unknown): { content: Array<{ type: "text"; text: string }> } => {
       const text = typeof data === "string" ? data : JSON.stringify(data);
@@ -382,11 +436,19 @@ export class McpServerAdapter {
 
     if (this.deps.sendMessage) {
       const sendMessage = this.deps.sendMessage;
+      const toolDef = McpServerAdapter.syntheticToolDef(
+        "motebit_query",
+        "Ask this motebit a question — AI response with memory context",
+        RiskLevel.R2_WRITE,
+      );
       server.tool(
         "motebit_query",
         "Ask this motebit a question — AI response with memory context",
         { message: z.string().describe("The question or message to send") },
         async (args: { message: string }) => {
+          const denied = this.validateSyntheticTool(toolDef, args);
+          if (denied) return denied;
+
           const result = await sendMessage(args.message);
           this.deps.logToolCall("motebit_query", args, { ok: true, data: result.response });
           return fmt({ response: result.response, memories_formed: result.memoriesFormed });
@@ -396,6 +458,11 @@ export class McpServerAdapter {
 
     if (this.deps.storeMemory) {
       const storeMemory = this.deps.storeMemory;
+      const toolDef = McpServerAdapter.syntheticToolDef(
+        "motebit_remember",
+        "Store a memory in this motebit",
+        RiskLevel.R2_WRITE,
+      );
       server.tool(
         "motebit_remember",
         "Store a memory in this motebit",
@@ -404,6 +471,9 @@ export class McpServerAdapter {
           sensitivity: z.string().optional().describe("Sensitivity level (none, personal)"),
         },
         async (args: { content: string; sensitivity?: string }) => {
+          const denied = this.validateSyntheticTool(toolDef, args);
+          if (denied) return denied;
+
           // Fail-closed: external callers cannot store high-sensitivity memories
           if (args.sensitivity && EXCLUDED_SENSITIVITIES.has(args.sensitivity)) {
             return {
@@ -425,6 +495,11 @@ export class McpServerAdapter {
 
     if (this.deps.queryMemories) {
       const queryMemories = this.deps.queryMemories;
+      const toolDef = McpServerAdapter.syntheticToolDef(
+        "motebit_recall",
+        "Search this motebit's semantic memory",
+        RiskLevel.R1_DRAFT,
+      );
       server.tool(
         "motebit_recall",
         "Search this motebit's semantic memory",
@@ -433,6 +508,9 @@ export class McpServerAdapter {
           limit: z.number().optional().describe("Max results to return"),
         },
         async (args: { query: string; limit?: number }) => {
+          const denied = this.validateSyntheticTool(toolDef, args);
+          if (denied) return denied;
+
           const results = await queryMemories(args.query, args.limit);
           this.deps.logToolCall("motebit_recall", args, { ok: true, data: results });
           return fmt(results);
@@ -442,11 +520,19 @@ export class McpServerAdapter {
 
     if (this.deps.handleAgentTask) {
       const handleAgentTask = this.deps.handleAgentTask;
+      const toolDef = McpServerAdapter.syntheticToolDef(
+        "motebit_task",
+        "Submit an autonomous task — returns a signed ExecutionReceipt",
+        RiskLevel.R3_EXECUTE,
+      );
       server.tool(
         "motebit_task",
         "Submit an autonomous task — returns a signed ExecutionReceipt",
         { prompt: z.string().describe("The task prompt for the agent to execute") },
         async (args: { prompt: string }) => {
+          const denied = this.validateSyntheticTool(toolDef, args);
+          if (denied) return denied;
+
           let receipt: Record<string, unknown> | undefined;
           let responseText = "";
 
@@ -470,8 +556,17 @@ export class McpServerAdapter {
       );
     }
 
-    // motebit_identity — always registered (no dep required)
+    // motebit_identity — read-only, audit logging only (no side effects)
+    const identityToolDef = McpServerAdapter.syntheticToolDef(
+      "motebit_identity",
+      "Return this motebit's identity information",
+      RiskLevel.R0_READ,
+    );
     server.tool("motebit_identity", "Return this motebit's identity information", async () => {
+      const denied = this.validateSyntheticTool(identityToolDef, {});
+      if (denied) return denied;
+
+      this.deps.logToolCall("motebit_identity", {}, { ok: true, data: "identity" });
       if (this.deps.identityFileContent) {
         return fmt(this.deps.identityFileContent);
       }
@@ -485,8 +580,16 @@ export class McpServerAdapter {
       return fmt(identity);
     });
 
-    // motebit_tools — always registered
+    // motebit_tools — read-only, audit logging only (no side effects)
+    const toolsToolDef = McpServerAdapter.syntheticToolDef(
+      "motebit_tools",
+      "List available tools with risk levels",
+      RiskLevel.R0_READ,
+    );
     server.tool("motebit_tools", "List available tools with risk levels", async () => {
+      const denied = this.validateSyntheticTool(toolsToolDef, {});
+      if (denied) return denied;
+
       const tools = this.deps.listTools().map((t) => ({
         name: t.name,
         description: t.description,
