@@ -318,7 +318,8 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   app.get(
     "/ws/sync/:motebitId",
     upgradeWebSocket((c) => {
-      const motebitId = c.req.param("motebitId");
+      // Route param is guaranteed by /ws/sync/:motebitId pattern; guard in onOpen for defense-in-depth
+      const motebitId = c.req.param("motebitId") as string;
       const url = new URL(c.req.url, "http://localhost");
       const deviceId = url.searchParams.get("device_id") ?? crypto.randomUUID();
       const token = url.searchParams.get("token");
@@ -326,6 +327,11 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       return {
         // eslint-disable-next-line @typescript-eslint/no-misused-promises -- hono ws adapter supports async handlers
         async onOpen(_event, ws) {
+          if (!motebitId) {
+            ws.close(4000, "Missing motebitId");
+            return;
+          }
+
           // Validate token for WebSocket connections
           if (enableDeviceAuth && token != null && token !== "") {
             // Master token bypass
