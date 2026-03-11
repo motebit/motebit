@@ -63,8 +63,13 @@ function createEye(): THREE.Group {
     color: 0x080808,
     roughness: 0.05,
     metalness: 0.0,
+    polygonOffset: true,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 1,
   });
-  group.add(new THREE.Mesh(eyeGeo, eyeMat));
+  const eyeMesh = new THREE.Mesh(eyeGeo, eyeMat);
+  eyeMesh.renderOrder = 1;
+  group.add(eyeMesh);
 
   const catchMat = new THREE.MeshBasicMaterial({
     color: 0xffffff,
@@ -385,7 +390,7 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.camera = new THREE.PerspectiveCamera(
       45,
       canvas.clientWidth / canvas.clientHeight,
-      0.01,
+      0.1,
       10,
     );
     this.camera.position.set(0, 0.02, 0.85);
@@ -832,7 +837,7 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     this.camera = new THREE.PerspectiveCamera(
       50,
       canvas.clientWidth / canvas.clientHeight,
-      0.01,
+      0.1,
       100,
     );
 
