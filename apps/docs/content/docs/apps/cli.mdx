@@ -48,9 +48,23 @@ pnpm --filter @motebit/cli dev -- \
 | `/clear` | Clear conversation history |
 | `/tools` | List registered tools |
 | `/sync` | Trigger manual sync cycle |
+| `/summarize` | Summarize current conversation |
+| `/conversations` | List recent conversations |
+| `/conversation <id>` | Load a past conversation |
+| `/goals` | List all scheduled goals |
+| `/goal add "<prompt>" --every <interval> [--once]` | Add a scheduled goal |
+| `/goal remove <id>` | Remove a goal |
+| `/goal pause <id>` | Pause a goal |
+| `/goal resume <id>` | Resume a paused goal |
+| `/goal outcomes <id>` | Show execution history for a goal |
+| `/approvals` | Show pending approval queue |
+| `/reflect` | Trigger reflection -- see what the agent learned |
 | `/mcp list` | List connected MCP servers |
 | `/mcp trust <name>` | Trust an MCP server (skip approval for its tools) |
 | `/mcp untrust <name>` | Remove trust from an MCP server |
+| `/mcp add <name> <url> [--motebit]` | Add an HTTP MCP server (live, no restart) |
+| `/mcp remove <name>` | Remove an MCP server (live, no restart) |
+| `/discover [capability]` | Discover agents on the relay (optional capability filter) |
 | `/operator` | Toggle operator mode |
 | `quit` / `exit` | Exit the CLI |
 
@@ -87,3 +101,17 @@ Your home directory contains the following files: ...
 ```
 
 Use `--no-stream` to wait for the complete response before printing.
+
+## Subcommands
+
+The CLI supports several subcommands beyond the default interactive REPL:
+
+| Subcommand | Description |
+|---|---|
+| `motebit verify <path>` | Verify a signed `motebit.md` identity file |
+| `motebit export` | Export all data (memories, events, identity) |
+| `motebit run --identity <path>` | Start daemon mode with goal scheduling |
+| `motebit serve` | Start MCP server mode (see [MCP Server](/docs/developer/mcp-server)) |
+| `motebit doctor` | Diagnose configuration and connectivity issues |
+| `motebit goal add/list/remove/pause/resume` | Manage scheduled goals |
+| `motebit approvals list/show/approve/deny` | Manage the tool approval queue |

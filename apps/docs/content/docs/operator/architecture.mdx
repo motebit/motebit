@@ -12,7 +12,7 @@ Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Nod
 | `apps/desktop` | Tauri (Rust + webview). Flagship client. Three.js glass creature, identity bootstrap, operator mode, voice input, audio-reactive rendering, goal execution, multi-device pairing, MCP discovery with manifest pinning. |
 | `apps/cli` | Node.js REPL + daemon. Full operator console — chat, goal scheduling, tool approval queue, operator mode, `motebit export` / `verify`. |
 | `apps/mobile` | React Native + Expo. Full parity. expo-gl + Three.js rendering, SQLite adapters, dual providers (Anthropic + Ollama + Hybrid), plan-based goal execution, MCP per-server trust, approval queue UI, voice input. |
-| `apps/admin` | React + Vite dashboard. 9-tab real-time monitoring — state vector, memory graph, behavior cues, event log, tool audit, goals, plans, conversations, devices. |
+| `apps/admin` | React + Vite dashboard. 10-tab real-time monitoring — state vector, memory graph, behavior cues, event log, tool audit, goals, plans, conversations, devices, intelligence gradient. |
 | `apps/spatial` | AR/VR positioning library. Body-relative orbital mechanics, WebXR audio reactivity. |
 | `apps/docs` | Fumadocs + Next.js. This site. |
 | `packages/` | 18 shared TypeScript packages — the interior of the system. |
@@ -63,6 +63,9 @@ The outermost layer. These packages face the renderer, the public npm registry, 
 | `verify` | Standalone public verifier for `motebit.md`. Zero monorepo deps, MIT licensed. |
 | `create-motebit` | Public CLI — `npm create motebit`. Generates and verifies signed identity files. |
 | `policy-invariants` | Clamping rules, state bounds validation. |
+| `browser-persistence` | In-browser storage adapters (IndexedDB) for web contexts. |
+| `github-action` | GitHub Action for verifying motebit identity files in CI. |
+| `planner` | PlanEngine — decomposes goals into multi-step plans with dependency tracking. |
 | `voice` | Voice input pipeline — VAD, transcription, audio routing. |
 
 ## Data flow

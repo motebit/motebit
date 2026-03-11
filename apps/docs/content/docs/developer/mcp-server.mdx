@@ -21,14 +21,15 @@ motebit --serve
 motebit --serve --serve-transport http --serve-port 3100
 ```
 
-With an identity file and bearer auth:
+With an identity file:
 
 ```bash
 motebit --serve \
   --serve-transport http \
-  --identity motebit.md \
-  --serve-auth-token my-secret-token
+  --identity motebit.md
 ```
+
+Auth tokens are configured via the config file (`authToken` field), not via CLI flag.
 
 ## Synthetic tools
 
@@ -123,8 +124,7 @@ Authorization: Bearer my-secret-token
 ```
 
 - `/health` — always public (returns `{ status: "ok", motebit_id: "..." }`)
-- `/sse` — requires auth (SSE connection for MCP transport)
-- `/messages` — requires auth (JSON-RPC messages)
+- `POST /mcp` — requires auth (StreamableHTTP transport, uses `Mcp-Session-Id` header for session management)
 
 Requests with a missing or incorrect token receive a `401 Unauthorized` response. If no `authToken` is configured, all endpoints are open.
 

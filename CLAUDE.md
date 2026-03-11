@@ -53,6 +53,10 @@ packages/
   identity-file/   Generate, parse, verify motebit.md — cryptographically signed agent identity files (internal)
   verify/          Standalone public verifier for motebit.md — zero monorepo deps, MIT licensed
   create-motebit/  Public CLI: `npm create motebit` — generates + verifies signed identity files
+  browser-persistence/ Browser SQLite adapters, sql.js
+  planner/           PlanEngine: goal decomposition, reflection, plan adjustment
+  voice/             Voice pipeline: VAD, STT, TTS adapters
+  github-action/     GitHub Action for identity verification
   policy-invariants/ Clamping rules, state bounds validation
 
 spec/
@@ -60,6 +64,8 @@ spec/
 
 services/
   api/             Sync relay server: REST + WebSocket, device auth (master token + Ed25519 signed tokens), fan-out
+  summarize/       Conversation summarization service
+  web-search/      Reference service: web search + URL reading via MCP
 ```
 
 ## Key Patterns
@@ -94,15 +100,15 @@ Tauri app. Two key files for the UI layer:
 
 **Operator mode:** PIN-protected (4-6 digits, SHA-256 hash in keyring). Gates high-risk tools. Tool calls produce audit log entries (allowed/denied/requires_approval).
 
-**Rendering:** Three.js glass droplet — MeshPhysicalMaterial (transmission 0.98, IOR 1.15, iridescence 0.3), breathing at ~0.3 Hz, gravity sag, Brownian drift, interior glow on processing.
+**Rendering:** Three.js glass droplet — MeshPhysicalMaterial (transmission 0.94, IOR 1.22, iridescence 0.4), breathing at 2.0-3.5 Hz, gravity sag, Brownian drift, interior glow on processing.
 
 ## CLI App (Operator Console)
 
-`apps/cli/src/index.ts` — Full operator console. Published to npm as `motebit`. Bundled with tsup — all workspace packages inlined, native deps external.
+`apps/cli/src/` — Full operator console. Entry point in `index.ts`, split into modules: `config.ts`, `args.ts`, `identity.ts`, `runtime-factory.ts`, `stream.ts`, `slash-commands.ts`, `subcommands.ts`, `daemon.ts`, `utils.ts`. Published to npm as `motebit`. Bundled with tsup — all workspace packages inlined, native deps external.
 
 **Subcommands:** `motebit export`, `motebit verify <path>`, `motebit run --identity <path>` (daemon), `motebit goal add/list/remove/pause/resume`, `motebit approvals list/show/approve/deny`. Default (no subcommand) enters interactive REPL.
 
-**REPL commands:** `/model`, `/memories`, `/state`, `/forget`, `/export`, `/sync`, `/clear`, `/tools`, `/mcp list/trust/untrust`, `/operator`, `/help`.
+**REPL commands:** `/model`, `/memories`, `/state`, `/forget`, `/export`, `/sync`, `/clear`, `/tools`, `/mcp list/trust/untrust/add/remove`, `/operator`, `/help`, `/summarize`, `/conversations`, `/conversation`, `/goals`, `/goal`, `/approvals`, `/reflect`, `/discover`.
 
 **Identity:** Ed25519 keypair generated on first launch, private key encrypted with PBKDF2 (passphrase-protected), stored in `~/.motebit/config.json`. Supports operator mode via `--operator` flag.
 
@@ -110,7 +116,7 @@ Tauri app. Two key files for the UI layer:
 
 **Dependencies:** 13 workspace packages (runtime, ai-core, persistence, crypto, etc.). Direct better-sqlite3 persistence.
 
-**MCP server mode:** `motebit --serve` exposes the motebit as an MCP server. Supports stdio and HTTP (SSE) transport. Six synthetic tools: `motebit_query` (AI response with memory), `motebit_remember` (store memory, sensitivity-capped at "personal" for external callers), `motebit_recall` (semantic search, privacy-filtered), `motebit_task` (autonomous execution with signed `ExecutionReceipt`), `motebit_identity` (identity file or JSON), `motebit_tools` (capability discovery). All proxied tools pass through PolicyGate. Optional HTTP bearer auth (`authToken` config). All results identity-tagged via `formatResult()`. Deps are optional — synthetic tools only registered when their backend callback is provided.
+**MCP server mode:** `motebit --serve` exposes the motebit as an MCP server. Supports stdio and HTTP (StreamableHTTP) transport. Synthetic tools: `motebit_query` (AI response with memory), `motebit_remember` (store memory, sensitivity-capped at "personal" for external callers), `motebit_recall` (semantic search, privacy-filtered), `motebit_task` (autonomous execution with signed `ExecutionReceipt`), `motebit_identity` (identity file or JSON), `motebit_tools` (capability discovery). All synthetic and proxied tools pass through PolicyGate. Optional HTTP bearer auth (`authToken` config). All results identity-tagged via `formatResult()`. Deps are optional — synthetic tools only registered when their backend callback is provided.
 
 ## Mobile App
 

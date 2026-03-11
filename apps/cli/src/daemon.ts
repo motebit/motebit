@@ -597,7 +597,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
     log(`MCP server running (stdio). ${toolCount} tools exposed.`);
     log(`Policy: ${config.operator ? "operator" : "ambient"} mode.`);
   } else {
-    log(`MCP server running on http://localhost:${port} (SSE). ${toolCount} tools exposed.`);
+    log(`MCP server running on http://localhost:${port} (StreamableHTTP). ${toolCount} tools exposed.`);
     log(`Policy: ${config.operator ? "operator" : "ambient"} mode.`);
   }
 
