@@ -23,6 +23,7 @@ import {
   CloudProvider,
   OllamaProvider,
   resolveConfig,
+  DEFAULT_OLLAMA_URL,
   type MotebitPersonalityConfig,
 } from "@motebit/ai-core";
 import {
@@ -247,7 +248,7 @@ export class SpatialApp {
       const model = config.model != null && config.model !== "" ? config.model : "llama3.2";
       provider = new OllamaProvider({
         model,
-        base_url: "http://localhost:11434",
+        base_url: DEFAULT_OLLAMA_URL,
         max_tokens: 1024,
         temperature,
       });

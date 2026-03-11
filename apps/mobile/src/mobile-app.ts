@@ -19,7 +19,7 @@ import type {
   PolicyConfig,
   MemoryGovernanceConfig,
 } from "@motebit/runtime";
-import { CloudProvider, OllamaProvider, HybridProvider } from "@motebit/ai-core";
+import { CloudProvider, OllamaProvider, HybridProvider, DEFAULT_OLLAMA_URL } from "@motebit/ai-core";
 import { createSignedToken, deriveSyncEncryptionKey } from "@motebit/crypto";
 import {
   bootstrapIdentity as sharedBootstrapIdentity,
@@ -144,7 +144,7 @@ export interface MobileSettings {
 const DEFAULT_SETTINGS: MobileSettings = {
   provider: "ollama",
   model: "llama3.2",
-  ollamaEndpoint: "http://localhost:11434",
+  ollamaEndpoint: DEFAULT_OLLAMA_URL,
   colorPreset: "moonlight",
   customHue: 220,
   customSaturation: 0.7,
@@ -375,7 +375,7 @@ export class MobileApp {
     let provider;
     if (config.provider === "ollama") {
       const model = config.model ?? "llama3.2";
-      const base_url = config.ollamaEndpoint ?? "http://localhost:11434";
+      const base_url = config.ollamaEndpoint ?? DEFAULT_OLLAMA_URL;
       provider = new OllamaProvider({ model, base_url, max_tokens: 1024 });
     } else if (config.provider === "hybrid") {
       if (config.apiKey == null || config.apiKey === "") return false;
@@ -390,7 +390,7 @@ export class MobileApp {
         },
         ollama: {
           model: "llama3.2",
-          base_url: config.ollamaEndpoint ?? "http://localhost:11434",
+          base_url: config.ollamaEndpoint ?? DEFAULT_OLLAMA_URL,
           max_tokens: 1024,
         },
         fallback_to_local: true,

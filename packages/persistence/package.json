@@ -10,6 +10,7 @@
     "build": "tsc -b",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {

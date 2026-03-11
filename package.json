@@ -38,6 +38,7 @@
     "prettier": "^3.3.0",
     "turbo": "^2.3.0",
     "typescript": "^5.6.0",
+    "@vitest/coverage-v8": "^2.1.0",
     "vitest": "^2.1.0"
   },
   "pnpm": {
@@ -45,6 +46,16 @@
       "tar": ">=7.5.7",
       "node-fetch": ">=2.6.7",
       "hono": ">=4.11.10"
+    },
+    "peerDependencyRules": {
+      "allowedVersions": {
+        "react-dom>react": "18",
+        "expo-three>three": ">=0.170.0",
+        "@expo/browser-polyfill>react": "18",
+        "@expo/browser-polyfill>react-native": ">=0.76.0",
+        "@expo/browser-polyfill>expo-file-system": ">=17.0.0",
+        "react-helmet-async>react-dom": "19"
+      }
     }
   },
   "packageManager": "pnpm@9.15.0",

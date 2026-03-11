@@ -1,6 +1,7 @@
 import {
   CloudProvider,
   OllamaProvider,
+  DEFAULT_OLLAMA_URL,
   type CloudProviderConfig,
   type OllamaProviderConfig,
   type StreamingProvider,
@@ -11,7 +12,7 @@ import {
 import type { AIResponse, ContextPack, IntelligenceProvider, MemoryCandidate } from "@motebit/sdk";
 import type { ProviderConfig } from "./storage";
 
-export { CloudProvider, OllamaProvider };
+export { CloudProvider, OllamaProvider, DEFAULT_OLLAMA_URL };
 export type { StreamingProvider };
 
 // === Utility Functions ===
@@ -224,7 +225,7 @@ export function createProvider(config: ProviderConfig): StreamingProvider | Inte
     case "ollama": {
       const ollamaConfig: OllamaProviderConfig = {
         model: config.model,
-        base_url: config.baseUrl ?? "http://localhost:11434",
+        base_url: config.baseUrl ?? DEFAULT_OLLAMA_URL,
         max_tokens: config.maxTokens,
         temperature: config.temperature,
       };

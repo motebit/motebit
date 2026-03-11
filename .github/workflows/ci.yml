@@ -37,8 +37,19 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Test
-        run: pnpm test
+      - name: Test with coverage
+        run: pnpm test -- -- --coverage --coverage.reporter=text --coverage.reporter=json-summary --coverage.reporter=json
+
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports
+          path: |
+            packages/*/coverage/
+            apps/*/coverage/
+            services/*/coverage/
+          retention-days: 14
 
   format:
     runs-on: ubuntu-latest

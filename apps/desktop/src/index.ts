@@ -24,6 +24,7 @@ import {
   OllamaProvider,
   detectOllama,
   resolveConfig,
+  DEFAULT_OLLAMA_URL,
   type MotebitPersonalityConfig,
 } from "@motebit/ai-core";
 export type { OllamaDetectionResult } from "@motebit/ai-core";
@@ -608,7 +609,7 @@ export class DesktopApp {
     let provider;
     if (config.provider === "ollama") {
       const model = config.model != null && config.model !== "" ? config.model : "llama3.2";
-      const base_url = config.isTauri ? "http://localhost:11434" : "/api/ollama";
+      const base_url = config.isTauri ? DEFAULT_OLLAMA_URL : "/api/ollama";
       provider = new OllamaProvider({ model, base_url, max_tokens: 1024, temperature });
       this._activeProvider = "ollama";
     } else {

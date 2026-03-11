@@ -1,7 +1,7 @@
 import type { WebContext } from "../types";
 import type { ProviderConfig, ProviderType } from "../storage";
 import { saveProviderConfig, saveSoulColor } from "../storage";
-import { detectOllamaModels, checkWebGPU, WebLLMProvider } from "../providers";
+import { detectOllamaModels, checkWebGPU, WebLLMProvider, DEFAULT_OLLAMA_URL } from "../providers";
 import type { ColorPickerAPI } from "./color-picker";
 
 // === DOM Refs ===
@@ -144,7 +144,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   // === Ollama Auto-Detection ===
 
   async function detectAndPopulateOllama(): Promise<void> {
-    const baseUrl = ollamaBaseUrl.value.trim() || "http://localhost:11434";
+    const baseUrl = ollamaBaseUrl.value.trim() || DEFAULT_OLLAMA_URL;
     ollamaStatus.textContent = "Detecting...";
     ollamaStatus.className = "ollama-status";
 
@@ -195,7 +195,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
           openaiModel.value = config.model;
           break;
         case "ollama":
-          ollamaBaseUrl.value = config.baseUrl || "http://localhost:11434";
+          ollamaBaseUrl.value = config.baseUrl || DEFAULT_OLLAMA_URL;
           void detectAndPopulateOllama().then(() => {
             ollamaModel.value = config.model;
           });

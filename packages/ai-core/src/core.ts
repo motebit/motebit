@@ -14,6 +14,9 @@ import type {
 import { SensitivityLevel, MemoryType } from "@motebit/sdk";
 import { buildSystemPrompt as buildPrompt } from "./prompt.js";
 
+/** Default URL for a local Ollama instance. */
+export const DEFAULT_OLLAMA_URL = "http://localhost:11434";
+
 export { inferStateFromText } from "./infer-state.js";
 export { buildSystemPrompt, derivePersonalityNote, formatBodyAwareness } from "./prompt.js";
 export { trimConversation } from "./context-window.js";
@@ -802,7 +805,7 @@ export class OllamaProvider implements StreamingProvider {
   }
 
   async generate(contextPack: ContextPack): Promise<AIResponse> {
-    const baseUrl = this.config.base_url ?? "http://localhost:11434";
+    const baseUrl = this.config.base_url ?? DEFAULT_OLLAMA_URL;
     const messages = this.buildMessages(contextPack);
 
     const body: Record<string, unknown> = {
@@ -876,7 +879,7 @@ export class OllamaProvider implements StreamingProvider {
   async *generateStream(
     contextPack: ContextPack,
   ): AsyncGenerator<{ type: "text"; text: string } | { type: "done"; response: AIResponse }> {
-    const baseUrl = this.config.base_url ?? "http://localhost:11434";
+    const baseUrl = this.config.base_url ?? DEFAULT_OLLAMA_URL;
     const messages = this.buildMessages(contextPack);
 
     const body: Record<string, unknown> = {
@@ -1055,7 +1058,7 @@ export interface OllamaDetectionResult {
  * Times out after 2 seconds to avoid blocking startup.
  */
 export async function detectOllama(
-  baseUrl = "http://localhost:11434",
+  baseUrl = DEFAULT_OLLAMA_URL,
 ): Promise<OllamaDetectionResult> {
   const empty: OllamaDetectionResult = { available: false, models: [], url: "", bestModel: "" };
   try {
