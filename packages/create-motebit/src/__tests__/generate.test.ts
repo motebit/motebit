@@ -18,6 +18,27 @@ describe("generateIdentity", () => {
     expect(verification.identity!.identity.public_key).toBe(result.publicKeyHex);
   });
 
+  it("generates UUID v7 identifiers (version 7, variant 10)", async () => {
+    const result = await generateIdentity({
+      name: "test",
+      trustMode: "guarded",
+      passphrase: "pw",
+    });
+
+    // Standard UUID format
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+    expect(result.motebitId).toMatch(uuidPattern);
+    expect(result.deviceId).toMatch(uuidPattern);
+
+    // Version nibble (char 15, 0-indexed in the hex without dashes) should be '7'
+    expect(result.motebitId[14]).toBe("7");
+    expect(result.deviceId[14]).toBe("7");
+
+    // Variant nibble (char 20 in the formatted string) should be 8, 9, a, or b
+    expect(result.motebitId[19]).toMatch(/[89ab]/);
+    expect(result.deviceId[19]).toMatch(/[89ab]/);
+  });
+
   it("generates unique motebit_id and device_id per call", async () => {
     const a = await generateIdentity({
       name: "agent-a",

@@ -62,6 +62,42 @@ function toBase64Url(data: Uint8Array): string {
 }
 
 // ---------------------------------------------------------------------------
+// UUID v7 (RFC 9562) — inlined to avoid monorepo dependency on core-identity
+// ---------------------------------------------------------------------------
+
+function generateUUIDv7(): string {
+  const now = Date.now();
+  const rand = new Uint8Array(10);
+  crypto.getRandomValues(rand);
+
+  // Bytes 0-5: 48-bit Unix timestamp in milliseconds (big-endian)
+  // Byte 6: version (0111) + 4 bits random
+  // Byte 7: 8 bits random
+  // Byte 8: variant (10) + 6 bits random
+  // Bytes 9-15: 48 bits random
+  const bytes = new Uint8Array(16);
+  bytes[0] = (now / 2 ** 40) & 0xff;
+  bytes[1] = (now / 2 ** 32) & 0xff;
+  bytes[2] = (now / 2 ** 24) & 0xff;
+  bytes[3] = (now / 2 ** 16) & 0xff;
+  bytes[4] = (now / 2 ** 8) & 0xff;
+  bytes[5] = now & 0xff;
+  bytes[6] = (0x70 | (rand[0]! & 0x0f)); // version 7
+  bytes[7] = rand[1]!;
+  bytes[8] = (0x80 | (rand[2]! & 0x3f)); // variant 10
+  bytes[9] = rand[3]!;
+  bytes[10] = rand[4]!;
+  bytes[11] = rand[5]!;
+  bytes[12] = rand[6]!;
+  bytes[13] = rand[7]!;
+  bytes[14] = rand[8]!;
+  bytes[15] = rand[9]!;
+
+  const h = toHex(bytes);
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+}
+
+// ---------------------------------------------------------------------------
 // Crypto (inlined from @motebit/crypto)
 // ---------------------------------------------------------------------------
 
@@ -349,8 +385,8 @@ export async function generateIdentity(opts: {
   const privateKeyHex = toHex(secretKey);
 
   // Generate IDs
-  const motebitId = crypto.randomUUID();
-  const deviceId = crypto.randomUUID();
+  const motebitId = generateUUIDv7();
+  const deviceId = generateUUIDv7();
 
   // Build identity file data — use service governance presets for service motebits
   const isService = opts.service?.type === "service";

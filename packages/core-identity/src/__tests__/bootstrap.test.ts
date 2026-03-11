@@ -167,8 +167,9 @@ describe("bootstrapIdentity", () => {
     expect(new Set(keys).size).toBe(surfaces.length);
   });
 
-  it("config exists but DB missing: re-creates in DB, returns existing config", async () => {
-    // Simulate: config has identity data but DB is empty (e.g. DB was wiped)
+  it("config exists but DB missing: re-creates in DB with SAME motebit_id, returns existing config", async () => {
+    // Simulate: config has identity data but DB is empty (e.g. create-motebit wrote
+    // config but not DB, or DB was wiped)
     configStore.data = {
       motebit_id: "orphaned-id",
       device_id: "old-device",
@@ -189,5 +190,35 @@ describe("bootstrapIdentity", () => {
     expect(result.motebitId).toBe("orphaned-id");
     expect(result.deviceId).toBe("old-device");
     expect(result.publicKeyHex).toBe("aa".repeat(32));
+
+    // DB identity must have the SAME motebit_id as config (not a new one)
+    const dbIdentity = await identityStorage.load("orphaned-id");
+    expect(dbIdentity).not.toBeNull();
+    expect(dbIdentity!.motebit_id).toBe("orphaned-id");
+    expect(dbIdentity!.owner_id).toBe("test");
+  });
+
+  it("config exists but DB missing and no public key: still restores identity", async () => {
+    // Edge case: config written by older version without device_public_key
+    configStore.data = {
+      motebit_id: "orphaned-id-2",
+      device_id: "old-device-2",
+      device_public_key: "",
+    };
+
+    const result = await bootstrapIdentity({
+      surfaceName: "test",
+      identityStorage,
+      eventStoreAdapter,
+      configStore,
+      keyStore,
+    });
+
+    expect(result.isFirstLaunch).toBe(false);
+    expect(result.motebitId).toBe("orphaned-id-2");
+
+    const dbIdentity = await identityStorage.load("orphaned-id-2");
+    expect(dbIdentity).not.toBeNull();
+    expect(dbIdentity!.motebit_id).toBe("orphaned-id-2");
   });
 });

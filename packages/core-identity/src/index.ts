@@ -307,9 +307,39 @@ export async function bootstrapIdentity(opts: {
         isFirstLaunch: false,
       };
     }
-    // Config has ID but DB doesn't — re-create in DB (crash recovery)
-    // Use create() to restore, then return existing config (keypair is already in keystore)
-    await identityManager.create(surfaceName);
+    // Config has ID but DB doesn't — re-create in DB using the EXISTING identity
+    // from config (e.g. create-motebit wrote config but not DB, or DB was wiped).
+    // We must NOT call identityManager.create() because that generates a new UUID.
+    const restoredIdentity: MotebitIdentity = {
+      motebit_id: existing.motebit_id,
+      created_at: Date.now(),
+      owner_id: surfaceName,
+      version_clock: 0,
+    };
+    await identityStorage.save(restoredIdentity);
+
+    // Log the restore event
+    const restoreClock = await eventStore.getLatestClock(existing.motebit_id);
+    const restoreEvent: EventLogEntry = {
+      event_id: generateUUIDv7(),
+      motebit_id: existing.motebit_id,
+      timestamp: restoredIdentity.created_at,
+      event_type: EventType.IdentityCreated,
+      payload: { owner_id: surfaceName, restored: true },
+      version_clock: restoreClock + 1,
+      tombstoned: false,
+    };
+    await eventStore.append(restoreEvent);
+
+    // Register the device with the existing public key from config
+    if (existing.device_public_key) {
+      await identityManager.registerDevice(
+        existing.motebit_id,
+        surfaceName,
+        existing.device_public_key,
+      );
+    }
+
     return {
       motebitId: existing.motebit_id,
       deviceId: existing.device_id,

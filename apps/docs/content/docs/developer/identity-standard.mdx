@@ -13,21 +13,23 @@ The file is YAML frontmatter containing identity, governance, privacy, and memor
 npm create motebit
 ```
 
-This generates two files:
+This scaffolds a project directory containing:
 
 - **`motebit.md`** — the signed identity file (commit this to your repo)
-- **`~/.motebit/keys/<id>.key`** — the Ed25519 private key (never commit this)
+
+The Ed25519 private key is encrypted with your passphrase (PBKDF2 + AES-256-GCM) and stored as `cli_encrypted_key` in `~/.motebit/config.json` — a JSON object with `ciphertext`, `nonce`, `tag`, and `salt` fields, all hex-encoded. Never commit this file.
 
 ```
-  + Generated agent identity
+  + Created ./my-agent
 
-    motebit_id   486d9bf5-88d3-4f1f-93f8-a934c4ed72c5
-    public_key   f253860af10ad705...
-    algorithm    Ed25519
-    trust_mode   guarded
+    motebit.md         Signed agent identity
+    verify.js          Verification example
+    package.json       Node project
+    .env.example       Environment variable template
+    .gitignore         Secrets excluded
 
-  > motebit.md written (signed identity file)
-  > ~/.motebit/keys/486d9bf5.key (private key, chmod 600)
+  Identity stored in ~/.motebit/config.json
+  Motebit ID: 486d9bf5-88d3-4f1f-93f8-a934c4ed72c5
 ```
 
 ## Verify a signature
@@ -124,7 +126,7 @@ The signature is stored as a base64url-encoded value in an HTML comment after th
 | Threat | Mitigation |
 |--------|-----------|
 | Frontmatter tampering | Ed25519 signature — any change invalidates |
-| Private key theft | Stored with chmod 600 or in OS keychain; never in the identity file |
+| Private key theft | Encrypted at rest (PBKDF2 + AES-256-GCM) in config or OS keychain; never in the identity file |
 | Identity impersonation | Public key is self-certifying; verification requires the matching keypair |
 | Key compromise | Generate new keypair + new `motebit_id`; old identity is abandoned |
 | YAML injection | Restricted parser; no anchors/aliases/tags |
