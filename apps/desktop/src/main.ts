@@ -96,13 +96,7 @@ const settings = initSettings(ctx, {
 // === Theme ===
 
 const isTauri = typeof window !== "undefined" && !!window.__TAURI__;
-const theme = initTheme(isTauri, undefined, (effective) => {
-  if (effective === "dark") {
-    app.setDarkEnvironment();
-  } else {
-    app.setLightEnvironment();
-  }
-});
+const theme = initTheme(isTauri);
 
 // === Keyboard Shortcuts ===
 
@@ -630,11 +624,6 @@ function onAIReady(config: DesktopAIConfig): void {
 
 async function bootstrap(): Promise<void> {
   await app.init(canvas);
-
-  // Sync 3D environment with current theme (initTheme runs before renderer exists)
-  if (document.documentElement.dataset.theme === "dark") {
-    app.setDarkEnvironment();
-  }
 
   app.start();
 

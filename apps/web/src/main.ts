@@ -1,9 +1,10 @@
 import { WebApp } from "./web-app";
 import type { WebContext } from "./types";
 import type { ProviderConfig } from "./storage";
-import { loadProviderConfig, loadSoulColor, loadSyncUrl } from "./storage";
+import { loadProviderConfig, loadSoulColor, loadSyncUrl, saveProviderConfig } from "./storage";
 import { deriveInteriorColor } from "./ui/color-picker";
 import { initColorPicker } from "./ui/color-picker";
+import { checkWebGPU, WebLLMProvider } from "./providers";
 import { initChat, addMessage, showToast } from "./ui/chat";
 import { initSettings } from "./ui/settings";
 import { initConversations } from "./ui/conversations";
@@ -87,14 +88,9 @@ const gatedPanels = initGatedPanels(ctx);
 // === Theme ===
 
 // Side-effect: sets up theme toggle + data-theme attribute.
-// onChange syncs the 3D environment with the CSS theme.
-void initTheme(false, undefined, (effective) => {
-  if (effective === "dark") {
-    app.setDarkEnvironment();
-  } else {
-    app.setLightEnvironment();
-  }
-});
+// Liquescentia (3D environment) is always ENV_LIGHT — glass needs
+// chromatic variation to refract. Dark mode only changes UI chrome.
+void initTheme(false);
 
 // === Escape Key Handler ===
 
@@ -117,13 +113,52 @@ document.addEventListener("keydown", (e) => {
 
 // === Bootstrap ===
 
+const DEFAULT_WEBLLM_MODEL = "Llama-3.2-3B-Instruct-q4f16_1-MLC";
+
+async function autoInitWebLLM(model: string = DEFAULT_WEBLLM_MODEL): Promise<void> {
+  const heading = document.getElementById("connect-prompt-heading");
+  const text = document.getElementById("connect-prompt-text");
+  const btn = document.getElementById("connect-prompt-btn");
+  const progress = document.getElementById("connect-prompt-progress");
+  const fill = document.getElementById("connect-prompt-progress-fill");
+
+  // Transform the connect prompt into a loading indicator
+  if (heading) heading.textContent = "Waking up";
+  if (text) text.textContent = "Loading a small language model into your browser...";
+  if (btn) btn.style.display = "none";
+  if (progress) progress.style.display = "block";
+
+  try {
+    const provider = new WebLLMProvider(model);
+    await provider.init((report) => {
+      if (fill) fill.style.width = `${Math.round(report.progress * 100)}%`;
+      // Show short status text during download
+      if (text) {
+        if (report.progress < 1) {
+          text.textContent = report.text.length > 60 ? report.text.slice(0, 57) + "..." : report.text;
+        } else {
+          text.textContent = "Ready";
+        }
+      }
+    });
+
+    app.setProviderDirect(provider);
+    const config = { type: "webllm" as const, model };
+    currentConfig = config;
+    saveProviderConfig(config);
+    settings.updateModelIndicator();
+    settings.updateConnectPrompt();
+  } catch {
+    // WebLLM failed (incompatible GPU, out of memory, etc.) — restore connect prompt
+    if (heading) heading.textContent = "Give it a voice";
+    if (text) text.textContent = "Connect an AI provider and this little drop of glass will start talking back.";
+    if (btn) btn.style.display = "";
+    if (progress) progress.style.display = "none";
+  }
+}
+
 async function bootstrap(): Promise<void> {
   await app.init(canvas!);
-
-  // Sync 3D environment with current theme (initTheme runs before renderer exists)
-  if (document.documentElement.dataset.theme === "dark") {
-    app.setDarkEnvironment();
-  }
 
   // Initialize IDB storage, migration, and runtime
   await app.bootstrap();
@@ -172,8 +207,10 @@ async function bootstrap(): Promise<void> {
   if (savedConfig != null) {
     currentConfig = savedConfig;
 
-    // WebLLM needs async init — don't auto-connect (user must re-init via Settings)
-    if (savedConfig.type !== "webllm") {
+    if (savedConfig.type === "webllm") {
+      // WebLLM needs async init — re-init silently in background
+      void autoInitWebLLM(savedConfig.model);
+    } else {
       try {
         app.connectProvider(savedConfig);
         settings.updateModelIndicator();
@@ -181,6 +218,9 @@ async function bootstrap(): Promise<void> {
         // Provider connection failed — user can reconnect via settings
       }
     }
+  } else if (checkWebGPU()) {
+    // First visit, no saved config, WebGPU available — auto-init WebLLM
+    void autoInitWebLLM("Llama-3.2-3B-Instruct-q4f16_1-MLC");
   }
 
   settings.updateConnectPrompt();
