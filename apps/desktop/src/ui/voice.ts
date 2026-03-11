@@ -59,8 +59,12 @@ const VAD_CONFIDENCE_THRESHOLD = 0.55;
 
 let speechActiveInVoice = false;
 let silenceOnsetTime = 0;
-const SILENCE_DURATION_MS = 1500;
-const SPEECH_RMS_THRESHOLD = 0.015;
+const SILENCE_DURATION_MS = 1200;
+const SPEECH_RMS_THRESHOLD = 0.02;
+
+// Cooldown after TTS to prevent mic picking up speaker output
+let ttsCooldownUntil = 0;
+const TTS_COOLDOWN_MS = 800;
 
 let waveformColor = { r: 153, g: 163, b: 230 };
 let micErrorShown = false;
@@ -198,7 +202,7 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
         baseAssetPath: "/",
         onnxWASMBasePath: "/",
         onSpeechStart: () => {
-          if (micState === "ambient") {
+          if (micState === "ambient" && performance.now() > ttsCooldownUntil) {
             void startVoice();
           }
         },
@@ -221,7 +225,7 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
     } else if (micState === "ambient") {
       stopAmbient();
     } else if (micState === "voice") {
-      stopVoice(true, true);
+      stopVoice(true, false);
     } else if (micState === "speaking") {
       cancelTTS();
       void startVoice();
@@ -545,7 +549,7 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
         high: smoothedHigh * gate * damping * shimmer,
       });
 
-      if (sileroVadFailed) {
+      if (sileroVadFailed && performance.now() > ttsCooldownUntil) {
         const isSpeechLike = smoothedFlatness < 0.65 && gatedRms > 0.02 && smoothedMid > 0.08;
 
         if (isSpeechLike) {
@@ -593,10 +597,16 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
         ttsSpeaking = false;
         stopTTSPulse();
         if (micStream && audioContext && analyserNode) {
+          // Cooldown: wait before re-entering ambient to avoid picking up speaker echo
+          ttsCooldownUntil = performance.now() + TTS_COOLDOWN_MS;
           micState = "ambient";
           micBtn.classList.add("ambient");
-          if (sileroVad) void sileroVad.start();
-          startAmbientLoop();
+          setTimeout(() => {
+            if (micState === "ambient") {
+              if (sileroVad) void sileroVad.start();
+              startAmbientLoop();
+            }
+          }, TTS_COOLDOWN_MS);
         } else {
           micState = "off";
           micBtn.classList.remove("ambient");
@@ -609,8 +619,13 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
         if (micState === "speaking") {
           micState = micStream ? "ambient" : "off";
           if (micState === "ambient") {
-            if (sileroVad) void sileroVad.start();
-            startAmbientLoop();
+            ttsCooldownUntil = performance.now() + TTS_COOLDOWN_MS;
+            setTimeout(() => {
+              if (micState === "ambient") {
+                if (sileroVad) void sileroVad.start();
+                startAmbientLoop();
+              }
+            }, TTS_COOLDOWN_MS);
           }
         }
       });
