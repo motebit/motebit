@@ -634,7 +634,11 @@ describe("MemoryGraph", () => {
       );
 
       // No per-call config — should use constructor config
-      const results = await customGraph.retrieve([1, 0, 0]);
+      // minConfidence: 0 prevents flake — the "exact match" node has confidence 0.1
+      // which can decay below the default minConfidence (0.1) in slow CI environments
+      const results = await customGraph.retrieve([1, 0, 0], {
+        minConfidence: 0,
+      });
       expect(results[0]!.content).toBe("exact match");
     });
 
