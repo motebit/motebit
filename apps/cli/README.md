@@ -62,8 +62,8 @@ Run `motebit doctor` to diagnose issues after install.
 
 ## Documentation
 
-See [motebit.dev](https://motebit.dev) for full documentation.
+See [docs.motebit.com](https://docs.motebit.com) for full documentation.
 
 ## License
 
-Motebit Community License — see [LICENSE](./LICENSE).
+BSL-1.1 — see [LICENSE](./LICENSE).

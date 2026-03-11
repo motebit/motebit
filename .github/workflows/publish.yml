@@ -38,11 +38,17 @@ jobs:
       - name: Build create-motebit
         run: pnpm --filter create-motebit build
 
+      - name: Build motebit CLI
+        run: pnpm --filter motebit build
+
       - name: Test @motebit/verify
         run: pnpm --filter @motebit/verify test
 
       - name: Test create-motebit
         run: pnpm --filter create-motebit test
+
+      - name: Test motebit CLI
+        run: pnpm --filter motebit test
 
       - name: Publish @motebit/verify
         run: pnpm --filter @motebit/verify publish --no-git-checks --provenance ${{ (github.event_name == 'workflow_dispatch' && inputs.dry-run) && '--dry-run' || '' }}
@@ -51,5 +57,10 @@ jobs:
 
       - name: Publish create-motebit
         run: pnpm --filter create-motebit publish --no-git-checks --provenance ${{ (github.event_name == 'workflow_dispatch' && inputs.dry-run) && '--dry-run' || '' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish motebit CLI
+        run: pnpm --filter motebit publish --no-git-checks --provenance ${{ (github.event_name == 'workflow_dispatch' && inputs.dry-run) && '--dry-run' || '' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

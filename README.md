@@ -28,6 +28,8 @@ node verify.js
 
 Four commands. Thirty seconds. A cryptographically signed agent identity on your filesystem.
 
+**[Documentation](https://docs.motebit.com)** — guides, architecture, API reference
+
 ## What you get
 
 ```

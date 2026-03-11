@@ -367,6 +367,9 @@ async function guidedScaffold(
   console.log(`    node verify.js                     ${dim("# Verify your identity")}`);
   console.log(`    npx create-motebit verify           ${dim("# Or use the CLI verifier")}`);
   console.log();
+  console.log(`  Full agent:  ${cyan("npm install -g motebit")}`);
+  console.log(`  Learn more:  ${dim("https://docs.motebit.com")}`);
+  console.log();
 }
 
 // ---------------------------------------------------------------------------

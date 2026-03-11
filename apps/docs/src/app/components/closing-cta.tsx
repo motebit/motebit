@@ -6,7 +6,7 @@ export function ClosingCTA() {
       <h2 className="text-3xl md:text-5xl font-bold tracking-[-0.04em]">Begin.</h2>
       <div className="mt-10">
         <Link
-          href="/docs/introduction"
+          href="/docs/get-your-agent"
           className="inline-block px-8 py-3 rounded-full bg-zinc-900 text-white text-sm font-medium hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200 transition-colors"
         >
           Read the Documentation

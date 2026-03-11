@@ -297,6 +297,56 @@
       white-space: nowrap;
     }
 
+    /* First-visit welcome overlay */
+    #welcome-overlay {
+      position: fixed;
+      bottom: 32px;
+      left: 50%;
+      transform: translateX(-50%) translateY(8px) scale(0.96);
+      z-index: 25;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      padding: 14px 24px;
+      border-radius: 16px;
+      background: var(--bg-glass);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--border);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      cursor: pointer;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.5s ease, transform 0.5s ease;
+    }
+    #welcome-overlay.show {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateX(-50%) translateY(0) scale(1);
+    }
+    .welcome-name {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-primary);
+      letter-spacing: 0.02em;
+    }
+    .welcome-tagline {
+      font-size: 12px;
+      color: var(--text-muted);
+      text-align: center;
+    }
+    .welcome-link {
+      font-size: 12px;
+      color: var(--accent-text);
+      text-decoration: none;
+      margin-top: 4px;
+      transition: color 0.2s ease;
+    }
+    .welcome-link:hover {
+      color: var(--accent-hover);
+    }
+
     /* Toast notifications */
     #toast-container {
       position: fixed;
@@ -3927,6 +3977,38 @@
       <button class="shortcut-dismiss" id="shortcut-dismiss">Done</button>
     </div>
   </div>
+
+  <!-- First-visit context overlay -->
+  <div id="welcome-overlay">
+    <span class="welcome-name">motebit</span>
+    <span class="welcome-tagline">A droplet of intelligence under surface tension</span>
+    <a class="welcome-link" href="https://docs.motebit.com" target="_blank" rel="noopener">Learn more &rarr;</a>
+  </div>
+  <script>
+    (function () {
+      var el = document.getElementById('welcome-overlay');
+      if (!el) return;
+      if (localStorage.getItem('motebit_welcome_dismissed')) {
+        el.remove();
+        return;
+      }
+      // Fade in after a short delay so creature loads first
+      requestAnimationFrame(function () {
+        setTimeout(function () { el.classList.add('show'); }, 600);
+      });
+      function dismiss() {
+        el.classList.remove('show');
+        localStorage.setItem('motebit_welcome_dismissed', '1');
+        el.addEventListener('transitionend', function () { el.remove(); });
+      }
+      el.addEventListener('click', function (e) {
+        if (e.target.classList.contains('welcome-link')) return;
+        dismiss();
+      });
+      // Dismiss when user starts interacting with the app
+      document.getElementById('chat-input')?.addEventListener('focus', dismiss, { once: true });
+    })();
+  </script>
 
   <script type="module" src="/src/main.ts"></script>
 </body>
