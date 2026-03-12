@@ -235,6 +235,7 @@ export async function createRuntime(
     stateSnapshot: moteDb.stateSnapshot,
     toolAuditSink: moteDb.toolAuditSink,
     conversationStore: moteDb.conversationStore,
+    agentTrustStore: moteDb.agentTrustStore,
   };
 
   const runtime = new MotebitRuntime(

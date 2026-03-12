@@ -19,6 +19,7 @@ import {
   fetchDevices,
   fetchPlans,
   fetchGradient,
+  fetchAgentTrust,
 } from "./api";
 import type {
   GoalEntry,
@@ -26,6 +27,7 @@ import type {
   DeviceEntry,
   PlanEntry,
   GradientSnapshotEntry,
+  AgentTrustEntry,
 } from "./api";
 import { useStateHistory } from "./hooks/useStateHistory";
 import { ConnectionStatus } from "./components/ConnectionStatus";
@@ -39,6 +41,7 @@ import { ConversationsPanel } from "./components/ConversationsPanel";
 import { DevicesPanel } from "./components/DevicesPanel";
 import { PlansPanel } from "./components/PlansPanel";
 import { GradientPanel } from "./components/GradientPanel";
+import { TrustPanel } from "./components/TrustPanel";
 
 const DEFAULT_STATE: MotebitState = {
   attention: 0,
@@ -64,6 +67,7 @@ export function AdminApp(): React.ReactElement {
   const [plans, setPlans] = useState<PlanEntry[]>([]);
   const [gradientCurrent, setGradientCurrent] = useState<GradientSnapshotEntry | null>(null);
   const [gradientHistory, setGradientHistory] = useState<GradientSnapshotEntry[]>([]);
+  const [trustRecords, setTrustRecords] = useState<AgentTrustEntry[]>([]);
   const [connected, setConnected] = useState(false);
   const [activePanel, setActivePanel] = useState<string>("state");
   const maxClockRef = useRef(0);
@@ -84,6 +88,7 @@ export function AdminApp(): React.ReactElement {
           devicesRes,
           plansRes,
           gradientRes,
+          trustRes,
         ] = await Promise.all([
           fetchState(signal),
           fetchMemory(signal),
@@ -94,6 +99,7 @@ export function AdminApp(): React.ReactElement {
           fetchDevices(signal),
           fetchPlans(signal),
           fetchGradient(signal),
+          fetchAgentTrust(signal),
         ]);
 
         setState(stateRes.state);
@@ -107,6 +113,7 @@ export function AdminApp(): React.ReactElement {
         setPlans(plansRes.plans);
         setGradientCurrent(gradientRes.current);
         setGradientHistory(gradientRes.history);
+        setTrustRecords(trustRes.records);
 
         if (eventsRes.events.length > 0) {
           setEvents((prev) => {
@@ -165,6 +172,7 @@ export function AdminApp(): React.ReactElement {
       "conversations",
       "devices",
       "gradient",
+      "trust",
     ].map((panel) =>
       React.createElement(
         "button",
@@ -218,6 +226,9 @@ export function AdminApp(): React.ReactElement {
         current: gradientCurrent,
         history: gradientHistory,
       });
+      break;
+    case "trust":
+      content = React.createElement(TrustPanel, { records: trustRecords });
       break;
     default:
       content = React.createElement(

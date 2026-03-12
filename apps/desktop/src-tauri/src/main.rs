@@ -205,6 +205,21 @@ CREATE TABLE IF NOT EXISTS gradient_snapshots (
   stats TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_gradient_motebit_ts ON gradient_snapshots (motebit_id, timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS agent_trust (
+  motebit_id TEXT NOT NULL,
+  remote_motebit_id TEXT NOT NULL,
+  trust_level TEXT NOT NULL DEFAULT 'unknown',
+  public_key TEXT,
+  first_seen_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  interaction_count INTEGER NOT NULL DEFAULT 0,
+  successful_tasks INTEGER NOT NULL DEFAULT 0,
+  failed_tasks INTEGER NOT NULL DEFAULT 0,
+  notes TEXT,
+  PRIMARY KEY (motebit_id, remote_motebit_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_trust_motebit ON agent_trust (motebit_id);
 ";
 
 fn json_to_sql_value(v: &JsonValue) -> SqlValue {

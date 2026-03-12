@@ -148,6 +148,9 @@ importers:
       '@motebit/planner':
         specifier: workspace:*
         version: link:../../packages/planner
+      '@motebit/policy':
+        specifier: workspace:*
+        version: link:../../packages/policy
       '@motebit/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime

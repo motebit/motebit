@@ -73,6 +73,7 @@ import {
   TauriStateSnapshotStorage,
   TauriConversationStore,
   TauriPlanStore,
+  TauriAgentTrustStore,
   type InvokeFn,
 } from "./tauri-storage.js";
 import { registerDesktopTools } from "./desktop-tools.js";
@@ -251,6 +252,7 @@ function createTauriStorage(
     toolAuditSink: new TauriToolAuditSink(invoke),
     stateSnapshot,
     conversationStore,
+    agentTrustStore: new TauriAgentTrustStore(invoke),
   };
 }
 

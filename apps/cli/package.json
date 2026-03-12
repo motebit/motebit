@@ -61,6 +61,7 @@
     "@motebit/behavior-engine": "workspace:*",
     "@motebit/persistence": "workspace:*",
     "@motebit/planner": "workspace:*",
+    "@motebit/policy": "workspace:*",
     "@motebit/sync-engine": "workspace:*",
     "@motebit/tools": "workspace:*",
     "@motebit/mcp-client": "workspace:*",

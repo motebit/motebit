@@ -26,6 +26,7 @@
  *   GET  /api/v1/audit/:motebitId                      — tool audit log
  *   GET  /api/v1/plans/:motebitId                      — list plans with steps
  *   GET  /api/v1/plans/:motebitId/:planId              — single plan with steps
+ *   GET  /api/v1/agent-trust/:motebitId                 — agent trust records
  *   GET  /api/v1/gradient/:motebitId?limit=100         — intelligence gradient snapshots
  *   GET  /api/v1/sync/:motebitId/pull                  — pull events (aliased for admin)
  *   POST /api/v1/agents/register                       — register/refresh agent MCP endpoint
@@ -613,6 +614,13 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     }
     const steps = moteDb.planStore.getStepsForPlan(planId);
     return c.json({ motebit_id: motebitId, plan: { ...plan, steps } });
+  });
+
+  // --- Agent Trust: trust records for known agents ---
+  app.get("/api/v1/agent-trust/:motebitId", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const records = await moteDb.agentTrustStore.listAgentTrust(motebitId);
+    return c.json({ motebit_id: motebitId, records });
   });
 
   // --- Gradient: intelligence gradient snapshots ---

@@ -67,6 +67,10 @@ pnpm --filter @motebit/cli dev -- \
 | `/mcp add <name> <url> [--motebit]` | Add an HTTP MCP server (live, no restart) |
 | `/mcp remove <name>` | Remove an MCP server (live, no restart) |
 | `/discover [capability]` | Discover agents on the relay (optional capability filter) |
+| `/agents` | List known agents with trust levels and reputation scores |
+| `/agents info <id>` | Full trust record detail for an agent |
+| `/agents trust <id> <level>` | Set trust level (first_contact, verified, trusted, blocked) |
+| `/agents block <id>` | Block an agent |
 | `/operator` | Toggle operator mode |
 | `quit` / `exit` | Exit the CLI |
 

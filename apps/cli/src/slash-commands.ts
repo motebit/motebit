@@ -5,6 +5,8 @@ import { computeDecayedConfidence } from "@motebit/memory-graph";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { McpClientAdapter, type McpServerConfig } from "@motebit/mcp-client";
 import { InMemoryToolRegistry } from "@motebit/tools";
+import { AgentTrustLevel } from "@motebit/sdk";
+import { computeReputationScore } from "@motebit/policy";
 import type { CliConfig } from "./args.js";
 import type { FullConfig } from "./config.js";
 import { saveFullConfig } from "./config.js";
@@ -87,6 +89,10 @@ Available commands:
   /mcp remove <name> Remove an MCP server
   /mcp trust <name>  Trust an MCP server
   /mcp untrust <name> Untrust an MCP server
+  /agents            List known agents with trust levels and reputation
+  /agents info <id>  Full trust record detail for an agent
+  /agents trust <id> <level>  Set trust level (first_contact|verified|trusted|blocked)
+  /agents block <id> Shorthand for setting Blocked
   /discover [cap]    Discover agents on the relay (optional capability filter)
   /discover dom.com  Discover motebit at domain via DNS/well-known
   /operator          Show operator mode status
@@ -839,6 +845,130 @@ Available commands:
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         console.log(`Discovery error: ${message}`);
+      }
+      break;
+    }
+
+    case "agents": {
+      const records = await runtime.listTrustedAgents();
+      if (!args || args === "") {
+        // /agents — list all
+        if (records.length === 0) {
+          console.log("No known agents. Interact with an MCP agent to see trust records.");
+          break;
+        }
+        console.log(`\nKnown agents (${records.length}):\n`);
+        for (const r of records) {
+          const rep = computeReputationScore(r);
+          const successful = r.successful_tasks ?? 0;
+          const failed = r.failed_tasks ?? 0;
+          const totalTasks = successful + failed;
+          const taskStr = totalTasks > 0 ? `tasks:${successful}/${totalTasks}` : "tasks:0";
+          const ago = formatTimeAgo(Date.now() - r.last_seen_at);
+          const levelColor =
+            r.trust_level === AgentTrustLevel.Trusted
+              ? "\x1b[32m"   // green
+              : r.trust_level === AgentTrustLevel.Verified
+                ? "\x1b[33m" // yellow
+                : r.trust_level === AgentTrustLevel.Blocked
+                  ? "\x1b[31m" // red
+                  : "\x1b[2m"; // dim
+          const reset = "\x1b[0m";
+          console.log(
+            `  ${r.remote_motebit_id.slice(0, 12)}  ${levelColor}${r.trust_level.padEnd(13)}${reset} rep:${rep.toFixed(2)}  ${taskStr.padEnd(12)} interactions:${r.interaction_count}  last seen ${ago}`,
+          );
+        }
+      } else {
+        const parts = args.match(/^(\S+)\s*([\s\S]*)$/) ?? [];
+        const agentSub = parts[1] ?? "";
+        const agentArgs = (parts[2] ?? "").trim();
+
+        if (agentSub === "info") {
+          if (!agentArgs) {
+            console.log("Usage: /agents info <id>");
+            break;
+          }
+          const match = records.find(
+            (r) => r.remote_motebit_id === agentArgs || r.remote_motebit_id.startsWith(agentArgs),
+          );
+          if (!match) {
+            console.log(`No agent found matching "${agentArgs}".`);
+            break;
+          }
+          const rep = computeReputationScore(match);
+          const successful = match.successful_tasks ?? 0;
+          const failed = match.failed_tasks ?? 0;
+          console.log(`\nAgent: ${match.remote_motebit_id}`);
+          console.log(`  Trust level:      ${match.trust_level}`);
+          console.log(`  Reputation:       ${rep.toFixed(4)}`);
+          console.log(`  Interactions:     ${match.interaction_count}`);
+          console.log(`  Tasks succeeded:  ${successful}`);
+          console.log(`  Tasks failed:     ${failed}`);
+          console.log(`  First seen:       ${new Date(match.first_seen_at).toISOString()}`);
+          console.log(`  Last seen:        ${new Date(match.last_seen_at).toISOString()}`);
+          if (match.public_key) {
+            console.log(`  Public key:       ${match.public_key.slice(0, 16)}...`);
+          }
+          if (match.notes) {
+            console.log(`  Notes:            ${match.notes}`);
+          }
+        } else if (agentSub === "trust") {
+          const trustParts = agentArgs.split(/\s+/);
+          const trustId = trustParts[0];
+          const trustLevel = trustParts[1];
+          if (!trustId || !trustLevel) {
+            console.log("Usage: /agents trust <id> <first_contact|verified|trusted|blocked>");
+            break;
+          }
+          const validLevels = Object.values(AgentTrustLevel);
+          if (!validLevels.includes(trustLevel as AgentTrustLevel)) {
+            console.log(`Invalid trust level. Valid: ${validLevels.join(", ")}`);
+            break;
+          }
+          const match = records.find(
+            (r) => r.remote_motebit_id === trustId || r.remote_motebit_id.startsWith(trustId),
+          );
+          if (!match) {
+            console.log(`No agent found matching "${trustId}".`);
+            break;
+          }
+          await runtime.setAgentTrustLevel(match.remote_motebit_id, trustLevel as AgentTrustLevel);
+          console.log(`Trust level for ${match.remote_motebit_id.slice(0, 12)} set to: ${trustLevel}`);
+        } else if (agentSub === "block") {
+          if (!agentArgs) {
+            console.log("Usage: /agents block <id>");
+            break;
+          }
+          const match = records.find(
+            (r) => r.remote_motebit_id === agentArgs || r.remote_motebit_id.startsWith(agentArgs),
+          );
+          if (!match) {
+            console.log(`No agent found matching "${agentArgs}".`);
+            break;
+          }
+          await runtime.setAgentTrustLevel(match.remote_motebit_id, AgentTrustLevel.Blocked);
+          console.log(`Agent ${match.remote_motebit_id.slice(0, 12)} blocked.`);
+        } else {
+          // Treat as /agents info <id> for convenience
+          const match = records.find(
+            (r) => r.remote_motebit_id === agentSub || r.remote_motebit_id.startsWith(agentSub),
+          );
+          if (match) {
+            const rep = computeReputationScore(match);
+            const successful = match.successful_tasks ?? 0;
+            const failed = match.failed_tasks ?? 0;
+            console.log(`\nAgent: ${match.remote_motebit_id}`);
+            console.log(`  Trust level:      ${match.trust_level}`);
+            console.log(`  Reputation:       ${rep.toFixed(4)}`);
+            console.log(`  Interactions:     ${match.interaction_count}`);
+            console.log(`  Tasks succeeded:  ${successful}`);
+            console.log(`  Tasks failed:     ${failed}`);
+            console.log(`  First seen:       ${new Date(match.first_seen_at).toISOString()}`);
+            console.log(`  Last seen:        ${new Date(match.last_seen_at).toISOString()}`);
+          } else {
+            console.log("Usage: /agents [info <id>|trust <id> <level>|block <id>]");
+          }
+        }
       }
       break;
     }

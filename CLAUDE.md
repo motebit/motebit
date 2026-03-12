@@ -108,7 +108,7 @@ Tauri app. Two key files for the UI layer:
 
 **Subcommands:** `motebit id`, `motebit export`, `motebit verify <path>`, `motebit run --identity <path>` (daemon), `motebit goal add/list/remove/pause/resume`, `motebit approvals list/show/approve/deny`. Default (no subcommand) enters interactive REPL.
 
-**REPL commands:** `/model`, `/memories`, `/graph`, `/curious`, `/state`, `/forget`, `/export`, `/sync`, `/clear`, `/tools`, `/mcp list/trust/untrust/add/remove`, `/operator`, `/help`, `/summarize`, `/conversations`, `/conversation`, `/goals`, `/goal`, `/approvals`, `/reflect`, `/discover`.
+**REPL commands:** `/model`, `/memories`, `/graph`, `/curious`, `/state`, `/forget`, `/export`, `/sync`, `/clear`, `/tools`, `/mcp list/trust/untrust/add/remove`, `/agents [info/trust/block]`, `/operator`, `/help`, `/summarize`, `/conversations`, `/conversation`, `/goals`, `/goal`, `/approvals`, `/reflect`, `/discover`.
 
 **Identity:** Ed25519 keypair generated on first launch, private key encrypted with PBKDF2 (passphrase-protected), stored in `~/.motebit/config.json`. Supports operator mode via `--operator` flag.
 
@@ -124,7 +124,7 @@ Tauri app. Two key files for the UI layer:
 
 ## Admin Dashboard
 
-`apps/admin/src/AdminApp.tsx` — React + Vite. 10 tabs: State Vector (Recharts trending), Memory Graph (D3-force), Behavior Cues (live preview), Event Log, Tool Audit Log, Goals, Plans, Conversations (with message drill-down), Devices, Intelligence Gradient (hero score, 7 sub-metric bars: kd/kq/gc/ts/rq/ie/te, trend chart). Polls API every 2s. All endpoints wired to API relay. Configured via `VITE_API_URL`, `VITE_MOTEBIT_ID`, `VITE_API_TOKEN`.
+`apps/admin/src/AdminApp.tsx` — React + Vite. 11 tabs: State Vector (Recharts trending), Memory Graph (D3-force), Behavior Cues (live preview), Event Log, Tool Audit Log, Goals, Plans, Conversations (with message drill-down), Devices, Intelligence Gradient (hero score, 7 sub-metric bars: kd/kq/gc/ts/rq/ie/te, trend chart), Agent Trust (trust levels, reputation, task success). Polls API every 2s. All endpoints wired to API relay. Configured via `VITE_API_URL`, `VITE_MOTEBIT_ID`, `VITE_API_TOKEN`.
 
 ## State Vector (9 fields)
 

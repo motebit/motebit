@@ -9,8 +9,9 @@ import type {
   RelationType,
   Plan,
   PlanStep,
+  AgentTrustRecord,
 } from "@motebit/sdk";
-import { PlanStatus, StepStatus } from "@motebit/sdk";
+import { PlanStatus, StepStatus, AgentTrustLevel } from "@motebit/sdk";
 import type { PlanStoreAdapter } from "@motebit/planner";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import type { MemoryStorageAdapter, MemoryQuery } from "@motebit/memory-graph";
@@ -22,6 +23,7 @@ import type {
   ConversationStoreAdapter,
   GradientStoreAdapter,
   GradientSnapshot,
+  AgentTrustStoreAdapter,
 } from "@motebit/runtime";
 
 // === IPC Helpers ===
@@ -1335,5 +1337,88 @@ export class TauriGradientStore implements GradientStoreAdapter {
 
   list(motebitId: string, limit = 100): GradientSnapshot[] {
     return this.snapshots.filter((s) => s.motebit_id === motebitId).slice(0, limit);
+  }
+}
+
+// === TauriAgentTrustStore ===
+
+interface AgentTrustRow {
+  motebit_id: string;
+  remote_motebit_id: string;
+  trust_level: string;
+  public_key: string | null;
+  first_seen_at: number;
+  last_seen_at: number;
+  interaction_count: number;
+  successful_tasks: number;
+  failed_tasks: number;
+  notes: string | null;
+}
+
+function rowToAgentTrust(row: AgentTrustRow): AgentTrustRecord {
+  const record: AgentTrustRecord = {
+    motebit_id: row.motebit_id,
+    remote_motebit_id: row.remote_motebit_id,
+    trust_level: row.trust_level as AgentTrustLevel,
+    first_seen_at: row.first_seen_at,
+    last_seen_at: row.last_seen_at,
+    interaction_count: row.interaction_count,
+    successful_tasks: row.successful_tasks,
+    failed_tasks: row.failed_tasks,
+  };
+  if (row.public_key !== null) record.public_key = row.public_key;
+  if (row.notes !== null) record.notes = row.notes;
+  return record;
+}
+
+export class TauriAgentTrustStore implements AgentTrustStoreAdapter {
+  constructor(private invoke: InvokeFn) {}
+
+  async getAgentTrust(motebitId: string, remoteMotebitId: string): Promise<AgentTrustRecord | null> {
+    const rows = await dbQuery<AgentTrustRow>(
+      this.invoke,
+      "SELECT * FROM agent_trust WHERE motebit_id = ? AND remote_motebit_id = ?",
+      [motebitId, remoteMotebitId],
+    );
+    if (rows.length === 0) return null;
+    return rowToAgentTrust(rows[0]!);
+  }
+
+  async setAgentTrust(record: AgentTrustRecord): Promise<void> {
+    await dbExecute(
+      this.invoke,
+      `INSERT OR REPLACE INTO agent_trust
+       (motebit_id, remote_motebit_id, trust_level, public_key, first_seen_at, last_seen_at, interaction_count, successful_tasks, failed_tasks, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        record.motebit_id,
+        record.remote_motebit_id,
+        record.trust_level,
+        record.public_key ?? null,
+        record.first_seen_at,
+        record.last_seen_at,
+        record.interaction_count,
+        record.successful_tasks ?? 0,
+        record.failed_tasks ?? 0,
+        record.notes ?? null,
+      ],
+    );
+  }
+
+  async listAgentTrust(motebitId: string): Promise<AgentTrustRecord[]> {
+    const rows = await dbQuery<AgentTrustRow>(
+      this.invoke,
+      "SELECT * FROM agent_trust WHERE motebit_id = ? ORDER BY last_seen_at DESC",
+      [motebitId],
+    );
+    return rows.map(rowToAgentTrust);
+  }
+
+  async updateTrustLevel(motebitId: string, remoteMotebitId: string, level: AgentTrustLevel): Promise<void> {
+    await dbExecute(
+      this.invoke,
+      "UPDATE agent_trust SET trust_level = ?, last_seen_at = ? WHERE motebit_id = ? AND remote_motebit_id = ?",
+      [level, Date.now(), motebitId, remoteMotebitId],
+    );
   }
 }

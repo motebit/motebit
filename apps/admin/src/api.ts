@@ -312,3 +312,27 @@ export interface GradientResponse {
 export function fetchGradient(signal?: AbortSignal): Promise<GradientResponse> {
   return apiFetch<GradientResponse>(`/api/v1/gradient/${config.motebitId}`, { signal });
 }
+
+// === Agent Trust ===
+
+export interface AgentTrustEntry {
+  motebit_id: string;
+  remote_motebit_id: string;
+  trust_level: string;
+  public_key?: string;
+  first_seen_at: number;
+  last_seen_at: number;
+  interaction_count: number;
+  successful_tasks?: number;
+  failed_tasks?: number;
+  notes?: string;
+}
+
+export interface AgentTrustResponse {
+  motebit_id: string;
+  records: AgentTrustEntry[];
+}
+
+export function fetchAgentTrust(signal?: AbortSignal): Promise<AgentTrustResponse> {
+  return apiFetch<AgentTrustResponse>(`/api/v1/agent-trust/${config.motebitId}`, { signal });
+}

@@ -21,8 +21,9 @@ import type {
   RelationType,
   Plan,
   PlanStep,
+  AgentTrustRecord,
 } from "@motebit/sdk";
-import { StepStatus } from "@motebit/sdk";
+import { StepStatus, AgentTrustLevel } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import type { MemoryStorageAdapter, MemoryQuery } from "@motebit/memory-graph";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
@@ -34,6 +35,7 @@ import type {
   StorageAdapters,
   GradientStoreAdapter,
   GradientSnapshot,
+  AgentTrustStoreAdapter,
 } from "@motebit/runtime";
 import type { SyncConversation, SyncConversationMessage } from "@motebit/sdk";
 import type { ConversationSyncStoreAdapter } from "@motebit/sync-engine";
@@ -185,6 +187,21 @@ CREATE TABLE IF NOT EXISTS gradient_snapshots (
   stats TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_gradient_motebit_ts ON gradient_snapshots (motebit_id, timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS agent_trust (
+  motebit_id TEXT NOT NULL,
+  remote_motebit_id TEXT NOT NULL,
+  trust_level TEXT NOT NULL DEFAULT 'unknown',
+  public_key TEXT,
+  first_seen_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  interaction_count INTEGER NOT NULL DEFAULT 0,
+  successful_tasks INTEGER NOT NULL DEFAULT 0,
+  failed_tasks INTEGER NOT NULL DEFAULT 0,
+  notes TEXT,
+  PRIMARY KEY (motebit_id, remote_motebit_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_trust_motebit ON agent_trust (motebit_id);
 `;
 
 // === Row Types ===
@@ -1401,12 +1418,91 @@ export class ExpoGradientStore implements GradientStoreAdapter {
   }
 }
 
+// === ExpoAgentTrustStore ===
+
+interface AgentTrustRow {
+  motebit_id: string;
+  remote_motebit_id: string;
+  trust_level: string;
+  public_key: string | null;
+  first_seen_at: number;
+  last_seen_at: number;
+  interaction_count: number;
+  successful_tasks: number;
+  failed_tasks: number;
+  notes: string | null;
+}
+
+function rowToAgentTrust(row: AgentTrustRow): AgentTrustRecord {
+  const record: AgentTrustRecord = {
+    motebit_id: row.motebit_id,
+    remote_motebit_id: row.remote_motebit_id,
+    trust_level: row.trust_level as AgentTrustLevel,
+    first_seen_at: row.first_seen_at,
+    last_seen_at: row.last_seen_at,
+    interaction_count: row.interaction_count,
+    successful_tasks: row.successful_tasks,
+    failed_tasks: row.failed_tasks,
+  };
+  if (row.public_key !== null) record.public_key = row.public_key;
+  if (row.notes !== null) record.notes = row.notes;
+  return record;
+}
+
+export class ExpoAgentTrustStore implements AgentTrustStoreAdapter {
+  constructor(private db: SQLite.SQLiteDatabase) {}
+
+  async getAgentTrust(motebitId: string, remoteMotebitId: string): Promise<AgentTrustRecord | null> {
+    const row = this.db.getFirstSync<AgentTrustRow>(
+      "SELECT * FROM agent_trust WHERE motebit_id = ? AND remote_motebit_id = ?",
+      [motebitId, remoteMotebitId],
+    );
+    return row ? rowToAgentTrust(row) : null;
+  }
+
+  async setAgentTrust(record: AgentTrustRecord): Promise<void> {
+    this.db.runSync(
+      `INSERT OR REPLACE INTO agent_trust
+       (motebit_id, remote_motebit_id, trust_level, public_key, first_seen_at, last_seen_at, interaction_count, successful_tasks, failed_tasks, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        record.motebit_id,
+        record.remote_motebit_id,
+        record.trust_level,
+        record.public_key ?? null,
+        record.first_seen_at,
+        record.last_seen_at,
+        record.interaction_count,
+        record.successful_tasks ?? 0,
+        record.failed_tasks ?? 0,
+        record.notes ?? null,
+      ],
+    );
+  }
+
+  async listAgentTrust(motebitId: string): Promise<AgentTrustRecord[]> {
+    const rows = this.db.getAllSync<AgentTrustRow>(
+      "SELECT * FROM agent_trust WHERE motebit_id = ? ORDER BY last_seen_at DESC",
+      [motebitId],
+    );
+    return rows.map(rowToAgentTrust);
+  }
+
+  async updateTrustLevel(motebitId: string, remoteMotebitId: string, level: AgentTrustLevel): Promise<void> {
+    this.db.runSync(
+      "UPDATE agent_trust SET trust_level = ?, last_seen_at = ? WHERE motebit_id = ? AND remote_motebit_id = ?",
+      [level, Date.now(), motebitId, remoteMotebitId],
+    );
+  }
+}
+
 // === Factory ===
 
 export interface ExpoStorageResult extends StorageAdapters {
   goalStore: ExpoGoalStore;
   planStore: ExpoPlanStore;
   gradientStore: ExpoGradientStore;
+  agentTrustStore: ExpoAgentTrustStore;
   conversationSyncStore: ExpoSqliteConversationSyncStore;
 }
 
@@ -1663,6 +1759,31 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
     db.execSync("PRAGMA user_version = 12");
   }
 
+  // Migration 13: agent_trust table
+  if (userVersion < 13) {
+    try {
+      db.execSync(`
+        CREATE TABLE IF NOT EXISTS agent_trust (
+          motebit_id TEXT NOT NULL,
+          remote_motebit_id TEXT NOT NULL,
+          trust_level TEXT NOT NULL DEFAULT 'unknown',
+          public_key TEXT,
+          first_seen_at INTEGER NOT NULL,
+          last_seen_at INTEGER NOT NULL,
+          interaction_count INTEGER NOT NULL DEFAULT 0,
+          successful_tasks INTEGER NOT NULL DEFAULT 0,
+          failed_tasks INTEGER NOT NULL DEFAULT 0,
+          notes TEXT,
+          PRIMARY KEY (motebit_id, remote_motebit_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_trust_motebit ON agent_trust (motebit_id);
+      `);
+    } catch {
+      // Table may already exist on new DBs
+    }
+    db.execSync("PRAGMA user_version = 13");
+  }
+
   return {
     eventStore: new ExpoSqliteEventStore(db),
     memoryStorage: new ExpoSqliteMemoryStorage(db),
@@ -1673,6 +1794,7 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
     goalStore: new ExpoGoalStore(db),
     planStore: new ExpoPlanStore(db),
     gradientStore: new ExpoGradientStore(db),
+    agentTrustStore: new ExpoAgentTrustStore(db),
     conversationSyncStore: new ExpoSqliteConversationSyncStore(db),
   };
 }
