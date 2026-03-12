@@ -29,6 +29,8 @@ export default function HomePage() {
                   <span className="text-green-600 dark:text-green-500">+ Created ./my-agent</span>
                   <br />
                   <br />
+                  <span className="text-zinc-400 dark:text-zinc-500">$</span> <span className="text-zinc-900 dark:text-zinc-100">npm install -g motebit</span>
+                  <br />
                   <span className="text-zinc-400 dark:text-zinc-500">$</span> <span className="text-zinc-900 dark:text-zinc-100">cd my-agent && motebit run --identity ./motebit.md</span>
                   <br />
                   <span className="text-zinc-400 dark:text-zinc-500">Daemon running. motebit_id: 0195a8... Goals: 0. Policy: max_risk_auto=R1_DRAFT, deny_above=R4_MONEY</span>
