@@ -52,6 +52,7 @@ const result = await verify(readFileSync("motebit.md", "utf-8"));
 
 if (result.valid) {
   console.log(result.identity.motebit_id);
+  console.log(result.did);  // W3C did:key
   console.log(result.identity.governance.trust_mode);
 }
 ```
@@ -71,7 +72,7 @@ if (result.valid) {
 
 A `motebit.md` declares:
 
-- **Identity** — Ed25519 public key, unique agent ID
+- **Identity** — Ed25519 public key, unique agent ID, W3C `did:key` for interoperability
 - **Governance** — trust mode, risk thresholds, operator controls
 - **Privacy** — sensitivity levels, retention rules, fail-closed defaults
 - **Memory** — decay parameters, confidence thresholds

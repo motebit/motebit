@@ -48,7 +48,7 @@ Services register with the sync relay on startup. Other agents query the relay's
 GET /api/v1/agents/discover?capability=web_search
 ```
 
-Returns a list of registered agents with their endpoint URLs, capabilities, and public keys.
+Returns a list of registered agents with their endpoint URLs, capabilities, public keys, and W3C `did:key` identifiers.
 
 ### CLI usage
 
@@ -68,7 +68,7 @@ Returns a list of registered agents with their endpoint URLs, capabilities, and 
 When `McpClientAdapter` connects to a motebit server (flagged with `--motebit` or detected via discovery), it runs a verification handshake:
 
 1. **Tool discovery** — Standard MCP `listTools` to enumerate available tools.
-2. **Identity call** — Calls the `motebit_identity` synthetic tool. The server returns its `motebit_id` and `public_key` (either as JSON or a full `motebit.md` identity file).
+2. **Identity call** — Calls the `motebit_identity` synthetic tool. The server returns its `motebit_id`, `public_key`, and `did` (W3C `did:key`) — either as JSON or a full `motebit.md` identity file.
 3. **Key pinning** — On first contact, the public key is stored in the client config. On subsequent connections, the key must match. A mismatch severs the connection immediately.
 4. **Fail-closed** — If the identity call fails, returns unparseable data, or is missing required fields, the client disconnects. There is no "unverified but connected" state.
 

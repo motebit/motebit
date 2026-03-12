@@ -57,6 +57,7 @@ const result = await verify(content);
 
 if (result.valid) {
   console.log("Verified:", result.identity.motebit_id);
+  console.log("DID:", result.did); // W3C did:key derived from Ed25519 public key
   console.log("Trust mode:", result.identity.governance.trust_mode);
 } else {
   console.error("Failed:", result.error);
