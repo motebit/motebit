@@ -26,19 +26,21 @@ import type { AuditLogSink } from "@motebit/policy";
 
 // === Schema ===
 
-const SCHEMA = `
+// Base table definitions — columns here must match the original v0 schema.
+// Migration-added columns and their indexes live exclusively in runMigrations().
+// On existing DBs, CREATE TABLE IF NOT EXISTS is a no-op, so only migrations
+// can alter the table shape. On new DBs, migrations also run (userVersion=0)
+// and add all columns + indexes incrementally.
+const SCHEMA_TABLES = `
 CREATE TABLE IF NOT EXISTS events (
   event_id TEXT PRIMARY KEY,
   motebit_id TEXT NOT NULL,
-  device_id TEXT,
   event_type TEXT NOT NULL,
   payload TEXT NOT NULL,
   version_clock INTEGER NOT NULL,
   timestamp INTEGER NOT NULL,
   tombstoned INTEGER NOT NULL DEFAULT 0
 );
-
-CREATE INDEX IF NOT EXISTS idx_events_mote_clock ON events (motebit_id, version_clock);
 
 CREATE TABLE IF NOT EXISTS memory_nodes (
   node_id TEXT PRIMARY KEY,
@@ -50,16 +52,8 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
   created_at INTEGER NOT NULL,
   last_accessed INTEGER NOT NULL,
   half_life REAL NOT NULL,
-  tombstoned INTEGER NOT NULL DEFAULT 0,
-  pinned INTEGER NOT NULL DEFAULT 0,
-  memory_type TEXT DEFAULT 'semantic',
-  valid_from INTEGER,
-  valid_until INTEGER
+  tombstoned INTEGER NOT NULL DEFAULT 0
 );
-
-CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote ON memory_nodes (motebit_id);
-CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote_tomb_pin ON memory_nodes (motebit_id, tombstoned, pinned);
-CREATE INDEX IF NOT EXISTS idx_memory_nodes_retrieve ON memory_nodes (motebit_id, tombstoned, last_accessed DESC);
 
 CREATE TABLE IF NOT EXISTS memory_edges (
   edge_id TEXT PRIMARY KEY,
@@ -70,17 +64,12 @@ CREATE TABLE IF NOT EXISTS memory_edges (
   confidence REAL NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_memory_edges_source ON memory_edges (source_id);
-CREATE INDEX IF NOT EXISTS idx_memory_edges_target ON memory_edges (target_id);
-
 CREATE TABLE IF NOT EXISTS identities (
   motebit_id TEXT PRIMARY KEY,
   created_at INTEGER NOT NULL,
   owner_id TEXT NOT NULL,
   version_clock INTEGER NOT NULL
 );
-
-CREATE INDEX IF NOT EXISTS idx_identities_owner ON identities (owner_id);
 
 CREATE TABLE IF NOT EXISTS audit_log (
   audit_id TEXT PRIMARY KEY,
@@ -92,29 +81,21 @@ CREATE TABLE IF NOT EXISTS audit_log (
   details TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_audit_log_mote_ts ON audit_log (motebit_id, timestamp);
-
 CREATE TABLE IF NOT EXISTS state_snapshots (
   motebit_id TEXT PRIMARY KEY,
   state_json TEXT NOT NULL,
-  updated_at INTEGER NOT NULL,
-  version_clock INTEGER NOT NULL DEFAULT 0
+  updated_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS tool_audit_log (
   call_id TEXT PRIMARY KEY,
   turn_id TEXT NOT NULL,
-  run_id TEXT,
   tool TEXT NOT NULL,
   args TEXT NOT NULL,
   decision TEXT NOT NULL,
   result TEXT,
-  injection TEXT,
   timestamp INTEGER NOT NULL
 );
-
-CREATE INDEX IF NOT EXISTS idx_tool_audit_turn ON tool_audit_log (turn_id);
-CREATE INDEX IF NOT EXISTS idx_tool_audit_run ON tool_audit_log (run_id);
 
 CREATE TABLE IF NOT EXISTS devices (
   device_id TEXT PRIMARY KEY,
@@ -125,9 +106,6 @@ CREATE TABLE IF NOT EXISTS devices (
   device_name TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_devices_motebit ON devices (motebit_id);
-CREATE INDEX IF NOT EXISTS idx_devices_token ON devices (device_token);
-
 CREATE TABLE IF NOT EXISTS goals (
   goal_id TEXT PRIMARY KEY,
   motebit_id TEXT NOT NULL,
@@ -135,13 +113,8 @@ CREATE TABLE IF NOT EXISTS goals (
   interval_ms INTEGER NOT NULL,
   last_run_at INTEGER,
   enabled INTEGER NOT NULL DEFAULT 1,
-  created_at INTEGER NOT NULL,
-  wall_clock_ms INTEGER,
-  project_id TEXT
+  created_at INTEGER NOT NULL
 );
-
-CREATE INDEX IF NOT EXISTS idx_goals_motebit ON goals (motebit_id);
-CREATE INDEX IF NOT EXISTS idx_goals_project ON goals (project_id);
 
 CREATE TABLE IF NOT EXISTS goal_outcomes (
   outcome_id TEXT PRIMARY KEY,
@@ -152,11 +125,8 @@ CREATE TABLE IF NOT EXISTS goal_outcomes (
   summary TEXT,
   tool_calls_made INTEGER NOT NULL DEFAULT 0,
   memories_formed INTEGER NOT NULL DEFAULT 0,
-  error_message TEXT,
-  tokens_used INTEGER
+  error_message TEXT
 );
-
-CREATE INDEX IF NOT EXISTS idx_goal_outcomes_goal ON goal_outcomes (goal_id, ran_at DESC);
 
 CREATE TABLE IF NOT EXISTS approval_queue (
   approval_id TEXT PRIMARY KEY,
@@ -173,9 +143,6 @@ CREATE TABLE IF NOT EXISTS approval_queue (
   denied_reason TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_approval_queue_motebit_status
-  ON approval_queue (motebit_id, status);
-
 CREATE TABLE IF NOT EXISTS conversations (
   conversation_id TEXT PRIMARY KEY,
   motebit_id TEXT NOT NULL,
@@ -185,9 +152,6 @@ CREATE TABLE IF NOT EXISTS conversations (
   summary TEXT,
   message_count INTEGER NOT NULL DEFAULT 0
 );
-
-CREATE INDEX IF NOT EXISTS idx_conversations_motebit
-  ON conversations (motebit_id, last_active_at DESC);
 
 CREATE TABLE IF NOT EXISTS conversation_messages (
   message_id TEXT PRIMARY KEY,
@@ -201,9 +165,6 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
   token_estimate INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE INDEX IF NOT EXISTS idx_conv_messages
-  ON conversation_messages (conversation_id, created_at ASC);
-
 CREATE TABLE IF NOT EXISTS plans (
   plan_id TEXT PRIMARY KEY,
   goal_id TEXT NOT NULL,
@@ -215,8 +176,6 @@ CREATE TABLE IF NOT EXISTS plans (
   current_step_index INTEGER NOT NULL DEFAULT 0,
   total_steps INTEGER NOT NULL DEFAULT 0
 );
-
-CREATE INDEX IF NOT EXISTS idx_plans_goal ON plans (goal_id);
 
 CREATE TABLE IF NOT EXISTS plan_steps (
   step_id TEXT PRIMARY KEY,
@@ -236,8 +195,6 @@ CREATE TABLE IF NOT EXISTS plan_steps (
   FOREIGN KEY (plan_id) REFERENCES plans(plan_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_plan_steps_plan ON plan_steps (plan_id, ordinal ASC);
-
 CREATE TABLE IF NOT EXISTS gradient_snapshots (
   snapshot_id TEXT PRIMARY KEY,
   motebit_id TEXT NOT NULL,
@@ -250,11 +207,8 @@ CREATE TABLE IF NOT EXISTS gradient_snapshots (
   graph_connectivity REAL NOT NULL,
   graph_connectivity_raw REAL NOT NULL,
   temporal_stability REAL NOT NULL,
-  retrieval_quality REAL NOT NULL DEFAULT 0,
   stats TEXT NOT NULL
 );
-
-CREATE INDEX IF NOT EXISTS idx_gradient_motebit_ts ON gradient_snapshots (motebit_id, timestamp DESC);
 
 CREATE TABLE IF NOT EXISTS agent_trust (
   motebit_id TEXT NOT NULL,
@@ -267,12 +221,34 @@ CREATE TABLE IF NOT EXISTS agent_trust (
   notes TEXT,
   PRIMARY KEY (motebit_id, remote_motebit_id)
 );
+`;
 
+// Base indexes — only reference columns that exist in SCHEMA_TABLES above.
+// Indexes on migration-added columns are created in their respective migrations.
+const SCHEMA_INDEXES = `
+CREATE INDEX IF NOT EXISTS idx_events_mote_clock ON events (motebit_id, version_clock);
+CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote ON memory_nodes (motebit_id);
+CREATE INDEX IF NOT EXISTS idx_memory_edges_source ON memory_edges (source_id);
+CREATE INDEX IF NOT EXISTS idx_memory_edges_target ON memory_edges (target_id);
+CREATE INDEX IF NOT EXISTS idx_identities_owner ON identities (owner_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_mote_ts ON audit_log (motebit_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_tool_audit_turn ON tool_audit_log (turn_id);
+CREATE INDEX IF NOT EXISTS idx_devices_motebit ON devices (motebit_id);
+CREATE INDEX IF NOT EXISTS idx_devices_token ON devices (device_token);
+CREATE INDEX IF NOT EXISTS idx_goals_motebit ON goals (motebit_id);
+CREATE INDEX IF NOT EXISTS idx_goal_outcomes_goal ON goal_outcomes (goal_id, ran_at DESC);
+CREATE INDEX IF NOT EXISTS idx_approval_queue_motebit_status ON approval_queue (motebit_id, status);
+CREATE INDEX IF NOT EXISTS idx_conversations_motebit ON conversations (motebit_id, last_active_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conv_messages ON conversation_messages (conversation_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_plans_goal ON plans (goal_id);
+CREATE INDEX IF NOT EXISTS idx_plan_steps_plan ON plan_steps (plan_id, ordinal ASC);
+CREATE INDEX IF NOT EXISTS idx_gradient_motebit_ts ON gradient_snapshots (motebit_id, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_trust_motebit ON agent_trust (motebit_id);
 `;
 
 function initSchema(db: DatabaseDriver): void {
-  db.exec(SCHEMA);
+  db.exec(SCHEMA_TABLES);
+  db.exec(SCHEMA_INDEXES);
 }
 
 // === SqliteEventStore ===
