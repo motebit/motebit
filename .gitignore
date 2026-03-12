@@ -30,6 +30,7 @@ coverage/
 *.tgz
 *.map
 vite.config.ts.timestamp-*
+.next/
 
 # Tauri
 apps/desktop/src-tauri/target/
