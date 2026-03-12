@@ -46,7 +46,7 @@ function mockAnthropicResponse(text: string) {
     type: "message",
     role: "assistant",
     content: [{ type: "text", text }],
-    model: "claude-sonnet-4-5-20250514",
+    model: "claude-sonnet-4-5-20250929",
     stop_reason: "end_turn",
     usage: { input_tokens: 100, output_tokens: 50 },
   };
@@ -241,7 +241,7 @@ describe("CloudProvider Anthropic integration", () => {
   const config: CloudProviderConfig = {
     provider: "anthropic",
     api_key: "test-api-key",
-    model: "claude-sonnet-4-5-20250514",
+    model: "claude-sonnet-4-5-20250929",
     max_tokens: 2048,
     temperature: 0.5,
   };
@@ -265,7 +265,7 @@ describe("CloudProvider Anthropic integration", () => {
     const mock = getFetchMock();
     const [, opts] = mock.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(opts.body as string);
-    expect(body.model).toBe("claude-sonnet-4-5-20250514");
+    expect(body.model).toBe("claude-sonnet-4-5-20250929");
     expect(body.max_tokens).toBe(2048);
     expect(body.temperature).toBe(0.5);
     expect(body.messages).toEqual([{ role: "user", content: "Test" }]);

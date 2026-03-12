@@ -82,7 +82,7 @@ function mockAnthropicResponse(text: string) {
     type: "message",
     role: "assistant",
     content: [{ type: "text", text }],
-    model: "claude-sonnet-4-5-20250514",
+    model: "claude-sonnet-4-5-20250929",
     stop_reason: "end_turn",
     usage: { input_tokens: 100, output_tokens: 50 },
   };
@@ -212,7 +212,7 @@ describe("CloudProvider", () => {
   const config: CloudProviderConfig = {
     provider: "anthropic",
     api_key: "test-key",
-    model: "claude-sonnet-4-5-20250514",
+    model: "claude-sonnet-4-5-20250929",
   };
 
   const originalFetch = globalThis.fetch;
@@ -306,7 +306,7 @@ describe("HybridProvider", () => {
       cloud: {
         provider: "anthropic",
         api_key: "test-key",
-        model: "claude-sonnet-4-5-20250514",
+        model: "claude-sonnet-4-5-20250929",
       },
       fallback_to_local: false,
     };
@@ -330,7 +330,7 @@ describe("HybridProvider", () => {
       cloud: {
         provider: "anthropic",
         api_key: "test-key",
-        model: "claude-sonnet-4-5-20250514",
+        model: "claude-sonnet-4-5-20250929",
       },
       ollama: {
         model: "llama3.2",
@@ -351,7 +351,7 @@ describe("HybridProvider", () => {
       cloud: {
         provider: "anthropic",
         api_key: "test-key",
-        model: "claude-sonnet-4-5-20250514",
+        model: "claude-sonnet-4-5-20250929",
       },
       fallback_to_local: false,
     };
@@ -369,7 +369,7 @@ describe("HybridProvider", () => {
       cloud: {
         provider: "anthropic",
         api_key: "test-key",
-        model: "claude-sonnet-4-5-20250514",
+        model: "claude-sonnet-4-5-20250929",
       },
       fallback_to_local: true,
     };
@@ -385,7 +385,7 @@ describe("HybridProvider", () => {
       cloud: {
         provider: "anthropic",
         api_key: "key",
-        model: "claude-sonnet-4-5-20250514",
+        model: "claude-sonnet-4-5-20250929",
       },
       fallback_to_local: false,
     };

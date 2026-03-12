@@ -315,13 +315,14 @@ describe("MemoryGraph.consolidateAndForm", () => {
     expect(updated!.half_life).toBe(365 * 24 * 60 * 60 * 1000);
   });
 
-  it("NOOP: no new node, existing last_accessed updated", async () => {
+  it("NOOP: no new node, existing confidence and half-life compounded", async () => {
     const existingNode = await graph.formMemory(
       { content: "User likes tea", confidence: 0.8, sensitivity: SensitivityLevel.None },
       [1, 0, 0],
     );
 
     const originalAccessed = existingNode.last_accessed;
+    const originalHalfLife = existingNode.half_life;
     // Small delay to ensure time difference
     await new Promise((r) => setTimeout(r, 10));
 
@@ -340,8 +341,10 @@ describe("MemoryGraph.consolidateAndForm", () => {
     expect(decision.action).toBe("noop");
     expect(node).toBeNull();
 
-    // Check last_accessed was updated
+    // Check confidence boosted, half-life compounded, last_accessed updated
     const updated = await storage.getNode(existingNode.node_id);
+    expect(updated!.confidence).toBeCloseTo(0.9); // 0.8 + 0.1
+    expect(updated!.half_life).toBe(originalHalfLife * 1.5);
     expect(updated!.last_accessed).toBeGreaterThanOrEqual(originalAccessed);
   });
 });

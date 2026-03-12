@@ -8,13 +8,13 @@ import type { AIResponse, IntelligenceProvider } from "@motebit/sdk";
 describe("TaskRouter.resolve()", () => {
   it("returns default config when no overrides exist", () => {
     const router = new TaskRouter({
-      default: { model: "claude-sonnet-4-5-20250514", temperature: 0.7, maxTokens: 1024 },
+      default: { model: "claude-sonnet-4-5-20250929", temperature: 0.7, maxTokens: 1024 },
     });
 
     const config = router.resolve("conversation");
 
     expect(config).toEqual({
-      model: "claude-sonnet-4-5-20250514",
+      model: "claude-sonnet-4-5-20250929",
       temperature: 0.7,
       maxTokens: 1024,
     });
@@ -22,7 +22,7 @@ describe("TaskRouter.resolve()", () => {
 
   it("returns default config for task types not in overrides", () => {
     const router = new TaskRouter({
-      default: { model: "claude-sonnet-4-5-20250514", temperature: 0.7, maxTokens: 1024 },
+      default: { model: "claude-sonnet-4-5-20250929", temperature: 0.7, maxTokens: 1024 },
       overrides: {
         summarization: { model: "claude-haiku-35", temperature: 0.3 },
       },
@@ -31,7 +31,7 @@ describe("TaskRouter.resolve()", () => {
     const config = router.resolve("conversation");
 
     expect(config).toEqual({
-      model: "claude-sonnet-4-5-20250514",
+      model: "claude-sonnet-4-5-20250929",
       temperature: 0.7,
       maxTokens: 1024,
     });
@@ -39,7 +39,7 @@ describe("TaskRouter.resolve()", () => {
 
   it("merges partial override with defaults — only specified fields change", () => {
     const router = new TaskRouter({
-      default: { model: "claude-sonnet-4-5-20250514", temperature: 0.7, maxTokens: 1024 },
+      default: { model: "claude-sonnet-4-5-20250929", temperature: 0.7, maxTokens: 1024 },
       overrides: {
         summarization: { temperature: 0.3 },
       },
@@ -48,7 +48,7 @@ describe("TaskRouter.resolve()", () => {
     const config = router.resolve("summarization");
 
     expect(config).toEqual({
-      model: "claude-sonnet-4-5-20250514", // from default
+      model: "claude-sonnet-4-5-20250929", // from default
       temperature: 0.3, // from override
       maxTokens: 1024, // from default
     });
@@ -56,7 +56,7 @@ describe("TaskRouter.resolve()", () => {
 
   it("merges partial override — model only", () => {
     const router = new TaskRouter({
-      default: { model: "claude-sonnet-4-5-20250514", temperature: 0.7, maxTokens: 1024 },
+      default: { model: "claude-sonnet-4-5-20250929", temperature: 0.7, maxTokens: 1024 },
       overrides: {
         reflection: { model: "claude-haiku-35" },
       },
@@ -73,7 +73,7 @@ describe("TaskRouter.resolve()", () => {
 
   it("applies full override — all fields replaced", () => {
     const router = new TaskRouter({
-      default: { model: "claude-sonnet-4-5-20250514", temperature: 0.7, maxTokens: 1024 },
+      default: { model: "claude-sonnet-4-5-20250929", temperature: 0.7, maxTokens: 1024 },
       overrides: {
         title_generation: { model: "claude-haiku-35", temperature: 0.9, maxTokens: 128 },
       },
@@ -90,13 +90,13 @@ describe("TaskRouter.resolve()", () => {
 
   it("falls back to built-in defaults when default config omits temperature and maxTokens", () => {
     const router = new TaskRouter({
-      default: { model: "claude-sonnet-4-5-20250514" },
+      default: { model: "claude-sonnet-4-5-20250929" },
     });
 
     const config = router.resolve("conversation");
 
     expect(config).toEqual({
-      model: "claude-sonnet-4-5-20250514",
+      model: "claude-sonnet-4-5-20250929",
       temperature: 0.7, // built-in default
       maxTokens: 1024, // built-in default
     });
@@ -104,7 +104,7 @@ describe("TaskRouter.resolve()", () => {
 
   it("resolves different task types independently", () => {
     const router = new TaskRouter({
-      default: { model: "claude-sonnet-4-5-20250514", temperature: 0.7, maxTokens: 1024 },
+      default: { model: "claude-sonnet-4-5-20250929", temperature: 0.7, maxTokens: 1024 },
       overrides: {
         summarization: { model: "claude-haiku-35", temperature: 0.3, maxTokens: 512 },
         reflection: { temperature: 0.5, maxTokens: 768 },
@@ -119,7 +119,7 @@ describe("TaskRouter.resolve()", () => {
     expect(summarization.maxTokens).toBe(512);
 
     const reflection = router.resolve("reflection");
-    expect(reflection.model).toBe("claude-sonnet-4-5-20250514"); // default
+    expect(reflection.model).toBe("claude-sonnet-4-5-20250929"); // default
     expect(reflection.temperature).toBe(0.5);
     expect(reflection.maxTokens).toBe(768);
 
@@ -129,26 +129,26 @@ describe("TaskRouter.resolve()", () => {
     expect(title.maxTokens).toBe(64);
 
     const memory = router.resolve("memory_extraction");
-    expect(memory.model).toBe("claude-sonnet-4-5-20250514"); // default
+    expect(memory.model).toBe("claude-sonnet-4-5-20250929"); // default
     expect(memory.temperature).toBe(0.2);
     expect(memory.maxTokens).toBe(1024); // default
 
     const conversation = router.resolve("conversation");
-    expect(conversation.model).toBe("claude-sonnet-4-5-20250514");
+    expect(conversation.model).toBe("claude-sonnet-4-5-20250929");
     expect(conversation.temperature).toBe(0.7);
     expect(conversation.maxTokens).toBe(1024);
   });
 
   it("handles empty overrides object", () => {
     const router = new TaskRouter({
-      default: { model: "claude-sonnet-4-5-20250514", temperature: 0.6, maxTokens: 2048 },
+      default: { model: "claude-sonnet-4-5-20250929", temperature: 0.6, maxTokens: 2048 },
       overrides: {},
     });
 
     const config = router.resolve("summarization");
 
     expect(config).toEqual({
-      model: "claude-sonnet-4-5-20250514",
+      model: "claude-sonnet-4-5-20250929",
       temperature: 0.6,
       maxTokens: 2048,
     });

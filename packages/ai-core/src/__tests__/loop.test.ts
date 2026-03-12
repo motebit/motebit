@@ -60,7 +60,7 @@ function makeDeps(): MotebitLoopDependencies {
   const cloudConfig: CloudProviderConfig = {
     provider: "anthropic",
     api_key: "test-key",
-    model: "claude-sonnet-4-5-20250514",
+    model: "claude-sonnet-4-5-20250929",
   };
 
   const eventStore = new EventStore(new InMemoryEventStore());
