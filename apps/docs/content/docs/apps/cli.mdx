@@ -111,7 +111,31 @@ The CLI supports several subcommands beyond the default interactive REPL:
 | `motebit verify <path>` | Verify a signed `motebit.md` identity file |
 | `motebit export` | Export all data (memories, events, identity) |
 | `motebit run --identity <path>` | Start daemon mode with goal scheduling |
-| `motebit serve` | Start MCP server mode (see [MCP Server](/docs/developer/mcp-server)) |
+| `motebit serve [flags]` | Start MCP server mode (see [MCP Server](/docs/developer/mcp-server)) |
 | `motebit doctor` | Diagnose configuration and connectivity issues |
 | `motebit goal add/list/remove/pause/resume` | Manage scheduled goals |
 | `motebit approvals list/show/approve/deny` | Manage the tool approval queue |
+
+### Serve flags
+
+`motebit serve` exposes your motebit as an MCP server — other agents and tools can call it over stdio or HTTP.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--serve-transport <mode>` | `stdio` | Transport: `stdio` or `http` |
+| `--serve-port <port>` | `3100` | HTTP port (only with `--serve-transport http`) |
+| `--identity <path>` | — | Path to `motebit.md` (loads governance thresholds) |
+| `--operator` | off | Enable operator mode for high-risk tools |
+
+```bash
+# Stdio transport — for MCP host integration (Claude Desktop, etc.)
+motebit serve
+
+# HTTP transport — for remote agents
+motebit serve --serve-transport http --serve-port 3100
+
+# With identity governance
+motebit serve --serve-transport http --identity ./motebit.md
+```
+
+In HTTP mode, the server registers with the sync relay (if configured) and sends a heartbeat every 5 minutes. Authentication is configured via the `authToken` field in `~/.motebit/config.json` — clients pass it as a bearer token.

@@ -86,3 +86,29 @@ Your motebit accumulates:
 - **Audit trail** — Every action, every tool call, every approval decision is logged immutably. You can replay the full history of your agent's behavior.
 
 None of this resets when you switch LLMs. None of it lives on someone else's server. The intelligence is a commodity. The accumulated interior is yours.
+
+## Backup and recovery
+
+Your motebit lives in three files:
+
+| File | What it holds | Where it lives |
+|------|--------------|----------------|
+| `~/.motebit/config.json` | Identity metadata, encrypted private key, device registration, MCP server config | Home directory |
+| `~/.motebit/motebit.db` | Memories, events, audit log, conversations, goals, state snapshots | Home directory |
+| `motebit.md` | Signed identity file (public key, governance, privacy rules) | Your project directory |
+
+Back up `~/.motebit/` and you have everything. The `motebit.md` file is portable — commit it to your repo, share it with services, use it on any machine.
+
+### New device
+
+To use your motebit on another device, pair it. The new device generates its own keypair and registers under your existing identity via a 6-character pairing code. Both devices sync memories and state through the relay. Each device has its own private key — compromise of one doesn't compromise the other.
+
+### Key compromise
+
+There is no central authority to revoke keys. If a private key is compromised:
+
+1. Generate a new identity: `npm create motebit`
+2. The old identity is abandoned — it simply stops being used
+3. Memories do not migrate between identities (each identity has its own isolated memory graph)
+
+This is the same model as SSH keys: if a key is compromised, you generate a new one. The old key is dead. Hardware-backed storage (OS keychain on desktop and mobile) makes compromise unlikely in practice.
