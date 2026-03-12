@@ -1,0 +1,140 @@
+import { describe, it, expect } from "vitest";
+import { AgentTrustLevel } from "@motebit/sdk";
+import type { AgentTrustRecord } from "@motebit/sdk";
+import { computeReputationScore } from "../reputation.js";
+
+const NOW = Date.now();
+
+function makeRecord(overrides: Partial<AgentTrustRecord> = {}): AgentTrustRecord {
+  return {
+    motebit_id: "test-local",
+    remote_motebit_id: "test-remote",
+    trust_level: AgentTrustLevel.Verified,
+    first_seen_at: NOW - 86_400_000 * 30,
+    last_seen_at: NOW,
+    interaction_count: 10,
+    successful_tasks: 5,
+    failed_tasks: 0,
+    ...overrides,
+  };
+}
+
+describe("computeReputationScore", () => {
+  it("returns 0.0 for Blocked agents", () => {
+    const record = makeRecord({ trust_level: AgentTrustLevel.Blocked });
+    expect(computeReputationScore(record, NOW)).toBe(0.0);
+  });
+
+  it("returns 0.0 for Unknown agents", () => {
+    const record = makeRecord({ trust_level: AgentTrustLevel.Unknown });
+    expect(computeReputationScore(record, NOW)).toBe(0.0);
+  });
+
+  it("returns high score for perfect record", () => {
+    const record = makeRecord({
+      interaction_count: 100,
+      successful_tasks: 100,
+      failed_tasks: 0,
+      last_seen_at: NOW,
+    });
+    const score = computeReputationScore(record, NOW);
+    // successRate=1.0, volumeScore=1.0 (capped), recencyScore≈1.0
+    expect(score).toBeGreaterThan(0.8);
+  });
+
+  it("returns low-medium score for new agent with few interactions", () => {
+    const record = makeRecord({
+      interaction_count: 1,
+      successful_tasks: 1,
+      failed_tasks: 0,
+      last_seen_at: NOW,
+    });
+    const score = computeReputationScore(record, NOW);
+    // successRate=1.0, volumeScore=1/50=0.02, recencyScore≈1.0
+    // (1.0 + 0.02 + 1.0) / 3 ≈ 0.673
+    expect(score).toBeGreaterThan(0.5);
+    expect(score).toBeLessThan(0.8);
+  });
+
+  it("returns low score for stale agent (180 days old)", () => {
+    const record = makeRecord({
+      interaction_count: 50,
+      successful_tasks: 50,
+      failed_tasks: 0,
+      last_seen_at: NOW - 86_400_000 * 180,
+    });
+    const score = computeReputationScore(record, NOW);
+    // successRate=1.0, volumeScore=1.0, recencyScore=exp(-180/90)=exp(-2)≈0.135
+    // (1.0 + 1.0 + 0.135) / 3 ≈ 0.712
+    expect(score).toBeLessThan(0.75);
+  });
+
+  it("returns low score for agent with mostly failed tasks", () => {
+    const record = makeRecord({
+      interaction_count: 50,
+      successful_tasks: 2,
+      failed_tasks: 48,
+      last_seen_at: NOW,
+    });
+    const score = computeReputationScore(record, NOW);
+    // successRate=2/50=0.04, volumeScore=1.0, recencyScore≈1.0
+    // (0.04 + 1.0 + 1.0) / 3 ≈ 0.68
+    expect(score).toBeLessThan(0.7);
+  });
+
+  it("defaults successRate to 0.5 when no tasks recorded", () => {
+    const record = makeRecord({
+      interaction_count: 10,
+      successful_tasks: 0,
+      failed_tasks: 0,
+      last_seen_at: NOW,
+    });
+    const score = computeReputationScore(record, NOW);
+    // successRate=0.5, volumeScore=10/50=0.2, recencyScore≈1.0
+    // (0.5 + 0.2 + 1.0) / 3 ≈ 0.567
+    expect(score).toBeCloseTo(0.567, 1);
+  });
+
+  it("caps volumeScore at 1.0 for 50+ interactions", () => {
+    const at50 = computeReputationScore(
+      makeRecord({ interaction_count: 50, last_seen_at: NOW }),
+      NOW,
+    );
+    const at100 = computeReputationScore(
+      makeRecord({ interaction_count: 100, last_seen_at: NOW }),
+      NOW,
+    );
+    // Volume component is the same once saturated
+    expect(at50).toBeCloseTo(at100, 5);
+  });
+
+  it("returns minimal score for FirstContact with 0 interactions", () => {
+    const record = makeRecord({
+      trust_level: AgentTrustLevel.FirstContact,
+      interaction_count: 0,
+      successful_tasks: 0,
+      failed_tasks: 0,
+      last_seen_at: NOW,
+    });
+    const score = computeReputationScore(record, NOW);
+    // successRate=0.5, volumeScore=0.0, recencyScore≈1.0
+    // (0.5 + 0.0 + 1.0) / 3 = 0.5
+    expect(score).toBeCloseTo(0.5, 2);
+  });
+
+  it("always returns a score in [0, 1]", () => {
+    const cases: AgentTrustRecord[] = [
+      makeRecord({ trust_level: AgentTrustLevel.Blocked }),
+      makeRecord({ trust_level: AgentTrustLevel.Unknown }),
+      makeRecord({ interaction_count: 0, successful_tasks: 0, failed_tasks: 0 }),
+      makeRecord({ interaction_count: 10000, successful_tasks: 10000, failed_tasks: 0 }),
+      makeRecord({ last_seen_at: NOW - 86_400_000 * 365 * 5 }), // 5 years stale
+      makeRecord({ last_seen_at: NOW + 86_400_000 }), // future (edge case)
+    ];
+    for (const record of cases) {
+      const score = computeReputationScore(record, NOW);
+      expect(score).toBeGreaterThanOrEqual(0);
+      expect(score).toBeLessThanOrEqual(1);
+    }
+  });
+});

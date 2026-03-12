@@ -81,7 +81,7 @@ export function packContext(contextPack: ContextPack): string {
     if (semantic.length > 0) {
       parts.push("[What I Know]");
       for (const mem of semantic) {
-        const prefix = mem.pinned ? "[pinned] " : "";
+        const prefix = "pinned" in mem && mem.pinned ? "[pinned] " : "";
         parts.push(`  ${prefix}[confidence=${mem.confidence.toFixed(2)}] ${mem.content}`);
       }
     }
@@ -89,7 +89,7 @@ export function packContext(contextPack: ContextPack): string {
     if (episodic.length > 0) {
       parts.push("[What Happened Recently]");
       for (const mem of episodic) {
-        const prefix = mem.pinned ? "[pinned] " : "";
+        const prefix = "pinned" in mem && mem.pinned ? "[pinned] " : "";
         parts.push(`  ${prefix}[confidence=${mem.confidence.toFixed(2)}] ${mem.content}`);
       }
     }

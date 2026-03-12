@@ -2110,11 +2110,16 @@ export class MotebitRuntime {
     const now = Date.now();
     const existing = await this.agentTrustStore.getAgentTrust(this.motebitId, remoteMotebitId);
 
+    const taskSucceeded = receipt.status === "completed";
+    const taskFailed = receipt.status === "failed";
+
     if (existing != null) {
       const updated: AgentTrustRecord = {
         ...existing,
         last_seen_at: now,
         interaction_count: existing.interaction_count + 1,
+        successful_tasks: (existing.successful_tasks ?? 0) + (taskSucceeded ? 1 : 0),
+        failed_tasks: (existing.failed_tasks ?? 0) + (taskFailed ? 1 : 0),
       };
       // Auto-promote FirstContact → Verified after 5 verified interactions
       if (existing.trust_level === AgentTrustLevel.FirstContact && updated.interaction_count >= 5) {
@@ -2131,6 +2136,8 @@ export class MotebitRuntime {
         first_seen_at: now,
         last_seen_at: now,
         interaction_count: 1,
+        successful_tasks: taskSucceeded ? 1 : 0,
+        failed_tasks: taskFailed ? 1 : 0,
       };
       await this.agentTrustStore.setAgentTrust(record);
     }

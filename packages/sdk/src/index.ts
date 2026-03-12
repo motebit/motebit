@@ -34,6 +34,8 @@ export interface AgentTrustRecord {
   first_seen_at: number;
   last_seen_at: number;
   interaction_count: number;
+  successful_tasks?: number;
+  failed_tasks?: number;
   notes?: string;
 }
 
@@ -146,21 +148,26 @@ export type SpeciesConstraints = typeof SPECIES_CONSTRAINTS;
 
 // === Memory ===
 
-export interface MemoryNode {
-  node_id: string;
-  motebit_id: string;
+/** Cognition-facing memory content — what the agent's mind sees. */
+export interface MemoryContent {
   content: string;
-  embedding: number[];
   confidence: number;
   sensitivity: SensitivityLevel;
+  memory_type?: MemoryType;
+  valid_from?: number;
+  valid_until?: number | null;
+}
+
+/** Full memory node including persistence metadata. */
+export interface MemoryNode extends MemoryContent {
+  node_id: string;
+  motebit_id: string;
+  embedding: number[];
   created_at: number;
   last_accessed: number;
   half_life: number;
   tombstoned: boolean;
   pinned: boolean;
-  memory_type?: MemoryType;
-  valid_from?: number;
-  valid_until?: number | null;
 }
 
 export interface MemoryEdge {
@@ -297,7 +304,7 @@ export interface ToolRegistry {
 
 export interface ContextPack {
   recent_events: EventLogEntry[];
-  relevant_memories: MemoryNode[];
+  relevant_memories: MemoryContent[];
   current_state: MotebitState;
   user_message: string;
   conversation_history?: ConversationMessage[];

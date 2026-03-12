@@ -1841,6 +1841,8 @@ interface AgentTrustRow {
   first_seen_at: number;
   last_seen_at: number;
   interaction_count: number;
+  successful_tasks: number;
+  failed_tasks: number;
   notes: string | null;
 }
 
@@ -1853,6 +1855,8 @@ function rowToAgentTrust(row: AgentTrustRow): AgentTrustRecord {
     first_seen_at: row.first_seen_at,
     last_seen_at: row.last_seen_at,
     interaction_count: row.interaction_count,
+    successful_tasks: row.successful_tasks ?? 0,
+    failed_tasks: row.failed_tasks ?? 0,
     notes: row.notes ?? undefined,
   };
 }
@@ -1869,8 +1873,8 @@ export class SqliteAgentTrustStore {
     );
     this.stmtSet = db.prepare(
       `INSERT OR REPLACE INTO agent_trust
-       (motebit_id, remote_motebit_id, trust_level, public_key, first_seen_at, last_seen_at, interaction_count, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       (motebit_id, remote_motebit_id, trust_level, public_key, first_seen_at, last_seen_at, interaction_count, successful_tasks, failed_tasks, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtList = db.prepare(
       `SELECT * FROM agent_trust WHERE motebit_id = ? ORDER BY last_seen_at DESC`,
@@ -1898,6 +1902,8 @@ export class SqliteAgentTrustStore {
       record.first_seen_at,
       record.last_seen_at,
       record.interaction_count,
+      record.successful_tasks ?? 0,
+      record.failed_tasks ?? 0,
       record.notes ?? null,
     );
   }
@@ -2126,6 +2132,16 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
       driver.exec("ALTER TABLE gradient_snapshots ADD COLUMN tool_efficiency REAL NOT NULL DEFAULT 0");
     } catch (_) { /* already exists */ }
     driver.pragma("user_version = 20");
+  }
+
+  if (userVersion < 21) {
+    try {
+      driver.exec("ALTER TABLE agent_trust ADD COLUMN successful_tasks INTEGER NOT NULL DEFAULT 0");
+    } catch (_) { /* already exists */ }
+    try {
+      driver.exec("ALTER TABLE agent_trust ADD COLUMN failed_tasks INTEGER NOT NULL DEFAULT 0");
+    } catch (_) { /* already exists */ }
+    driver.pragma("user_version = 21");
   }
 
   const eventStore = new SqliteEventStore(driver);

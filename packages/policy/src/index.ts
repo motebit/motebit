@@ -16,6 +16,7 @@ export { PolicyGate, DEFAULT_POLICY } from "./policy-gate.js";
 export type { PolicyConfig } from "./policy-gate.js";
 export { MemoryGovernor, MemoryClass, DEFAULT_MEMORY_GOVERNANCE } from "./memory-governance.js";
 export type { MemoryGovernanceConfig, MemoryDecision } from "./memory-governance.js";
+export { computeReputationScore } from "./reputation.js";
 
 // Re-export SDK types used in the policy API
 export type {
