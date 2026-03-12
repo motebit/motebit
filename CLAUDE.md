@@ -33,7 +33,7 @@ apps/
   spatial/     AR/VR positioning library, body-relative orbital mechanics, WebXR audio reactivity
 
 packages/
-  sdk/             Core types: MotebitState, BehaviorCues, MemoryNode, EventLogEntry, PolicyDecision, RenderSpec
+  sdk/             Core types: MotebitState, BehaviorCues, MemoryContent/MemoryNode, EventLogEntry, PolicyDecision, RenderSpec
   runtime/         MotebitRuntime orchestrator — wires all engines, exposes sendMessage/sendMessageStreaming
   ai-core/         Pluggable providers (CloudProvider, OllamaProvider, HybridProvider), agentic turn loop, context packing
   behavior-engine/ computeRawCues(state) → BehaviorCues, EMA smoothing, species constraints, rate limiting
@@ -42,7 +42,7 @@ packages/
   event-log/       Append-only event sourcing with version clocks, compaction, replay
   core-identity/   UUID v7 identity, multi-device registration, Ed25519 public key binding
   crypto/          AES-256-GCM encryption, Ed25519 signing, PBKDF2 derivation, signed tokens (5 min expiry)
-  policy/          PolicyGate (tool approval, budgets, audit), MemoryGovernor (sensitivity-aware), injection defense
+  policy/          PolicyGate (tool approval, budgets, audit), MemoryGovernor (sensitivity-aware), injection defense, reputation scoring
   privacy-layer/   Retention rules by sensitivity, deletion certificates, data export manifests
   sync-engine/     Multi-device sync: HTTP/WebSocket adapters, conflict detection, retry backoff
   render-engine/   RenderSpec (droplet geometry, glass material), ThreeJSAdapter (organic noise, breathing, sag)
@@ -124,7 +124,7 @@ Tauri app. Two key files for the UI layer:
 
 ## Admin Dashboard
 
-`apps/admin/src/AdminApp.tsx` — React + Vite. 10 tabs: State Vector (Recharts trending), Memory Graph (D3-force), Behavior Cues (live preview), Event Log, Tool Audit Log, Goals, Plans, Conversations (with message drill-down), Devices, Intelligence Gradient (hero score, sub-metric bars, trend chart). Polls API every 2s. All endpoints wired to API relay. Configured via `VITE_API_URL`, `VITE_MOTEBIT_ID`, `VITE_API_TOKEN`.
+`apps/admin/src/AdminApp.tsx` — React + Vite. 10 tabs: State Vector (Recharts trending), Memory Graph (D3-force), Behavior Cues (live preview), Event Log, Tool Audit Log, Goals, Plans, Conversations (with message drill-down), Devices, Intelligence Gradient (hero score, 7 sub-metric bars: kd/kq/gc/ts/rq/ie/te, trend chart). Polls API every 2s. All endpoints wired to API relay. Configured via `VITE_API_URL`, `VITE_MOTEBIT_ID`, `VITE_API_TOKEN`.
 
 ## State Vector (9 fields)
 
