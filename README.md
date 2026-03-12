@@ -61,6 +61,7 @@ if (result.valid) {
 | ------------------------------------------------------------------ | ------------------------------------- | ------- |
 | [`create-motebit`](https://www.npmjs.com/package/create-motebit)   | CLI scaffolder — `npm create motebit` | MIT     |
 | [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) | Signature verification library        | MIT     |
+| [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk)       | Core protocol types                   | MIT     |
 
 ## Specification
 
