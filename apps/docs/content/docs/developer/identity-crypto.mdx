@@ -12,7 +12,7 @@ For the conceptual foundation, see [Identity](/docs/concepts/identity). For wher
 On first launch, the system runs a shared bootstrap protocol (`bootstrapIdentity` in `@motebit/core-identity`):
 
 1. **Generate an Ed25519 keypair** using `@noble/ed25519` — a zero-dependency, audited library. The same signing scheme used by SSH, Signal, and WireGuard.
-2. **Store the private key** in the platform's secure storage. On desktop, the Tauri keyring. On CLI, a PBKDF2-encrypted file (`~/.motebit/keys/<id>.key`). On mobile, `expo-secure-store`. The private key never touches a plaintext config file.
+2. **Store the private key** in the platform's secure storage. On desktop, the Tauri keyring. On CLI, PBKDF2-encrypted as `cli_encrypted_key` in `~/.motebit/config.json`. On mobile, `expo-secure-store`. The private key never touches a plaintext config file.
 3. **Generate a UUID v7** `motebit_id` (time-ordered, sortable) and a `device_id`.
 4. **Register the device** against the identity, binding the device's public key to the `motebit_id`.
 5. **Write config** — the `motebit_id`, `device_id`, and public key are persisted to `~/.motebit/config.json` (non-secret metadata only).
