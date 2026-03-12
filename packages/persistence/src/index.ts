@@ -1738,6 +1738,8 @@ export interface GradientSnapshotRow {
   graph_connectivity_raw: number;
   temporal_stability: number;
   retrieval_quality: number;
+  interaction_efficiency: number;
+  tool_efficiency: number;
   stats: string;
 }
 
@@ -1753,6 +1755,8 @@ export interface GradientSnapshotData {
   graph_connectivity_raw: number;
   temporal_stability: number;
   retrieval_quality: number;
+  interaction_efficiency: number;
+  tool_efficiency: number;
   stats: Record<string, unknown>;
 }
 
@@ -1769,6 +1773,8 @@ function rowToGradientSnapshot(row: GradientSnapshotRow): GradientSnapshotData {
     graph_connectivity_raw: row.graph_connectivity_raw,
     temporal_stability: row.temporal_stability,
     retrieval_quality: row.retrieval_quality,
+    interaction_efficiency: row.interaction_efficiency,
+    tool_efficiency: row.tool_efficiency,
     stats: JSON.parse(row.stats) as Record<string, unknown>,
   };
 }
@@ -1781,8 +1787,8 @@ export class SqliteGradientStore {
   constructor(db: DatabaseDriver) {
     this.stmtSave = db.prepare(
       `INSERT OR REPLACE INTO gradient_snapshots
-       (snapshot_id, motebit_id, timestamp, gradient, delta, knowledge_density, knowledge_density_raw, knowledge_quality, graph_connectivity, graph_connectivity_raw, temporal_stability, retrieval_quality, stats)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (snapshot_id, motebit_id, timestamp, gradient, delta, knowledge_density, knowledge_density_raw, knowledge_quality, graph_connectivity, graph_connectivity_raw, temporal_stability, retrieval_quality, interaction_efficiency, tool_efficiency, stats)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtLatest = db.prepare(
       `SELECT * FROM gradient_snapshots WHERE motebit_id = ? ORDER BY timestamp DESC LIMIT 1`,
@@ -1807,6 +1813,8 @@ export class SqliteGradientStore {
       snapshot.graph_connectivity_raw,
       snapshot.temporal_stability,
       snapshot.retrieval_quality,
+      snapshot.interaction_efficiency,
+      snapshot.tool_efficiency,
       JSON.stringify(snapshot.stats),
     );
   }
@@ -2108,6 +2116,16 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   if (userVersion < 19) {
     // agent_trust table is in SCHEMA for new DBs; this handles upgrades from v18
     driver.pragma("user_version = 19");
+  }
+
+  if (userVersion < 20) {
+    try {
+      driver.exec("ALTER TABLE gradient_snapshots ADD COLUMN interaction_efficiency REAL NOT NULL DEFAULT 0");
+    } catch (_) { /* already exists */ }
+    try {
+      driver.exec("ALTER TABLE gradient_snapshots ADD COLUMN tool_efficiency REAL NOT NULL DEFAULT 0");
+    } catch (_) { /* already exists */ }
+    driver.pragma("user_version = 20");
   }
 
   const eventStore = new SqliteEventStore(driver);

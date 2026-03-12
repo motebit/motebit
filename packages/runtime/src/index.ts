@@ -77,7 +77,7 @@ import type { PlanStoreAdapter } from "@motebit/planner";
 import { PolicyGate, MemoryGovernor, MemoryClass } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 import { computeGradient, InMemoryGradientStore } from "./gradient.js";
-import type { GradientSnapshot, GradientStoreAdapter } from "./gradient.js";
+import type { GradientSnapshot, GradientStoreAdapter, BehavioralStats } from "./gradient.js";
 
 // Re-export key types for consumers
 export type {
@@ -112,7 +112,7 @@ export { PolicyGate } from "@motebit/policy";
 export type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 export type { PlanChunk } from "@motebit/planner";
 export type { PlanStoreAdapter } from "@motebit/planner";
-export type { GradientSnapshot, GradientStoreAdapter, GradientConfig } from "./gradient.js";
+export type { GradientSnapshot, GradientStoreAdapter, GradientConfig, BehavioralStats } from "./gradient.js";
 export { computeGradient, InMemoryGradientStore } from "./gradient.js";
 
 // === McpServerConfig (inlined to avoid importing Node-only @motebit/mcp-client) ===
@@ -486,6 +486,13 @@ export class MotebitRuntime {
   private sessionInfo: { continued: boolean; lastActiveAt: number } | null = null;
   private episodicConsolidation: boolean;
   private gradientStore: GradientStoreAdapter;
+  private _behavioralStats: BehavioralStats = {
+    turnCount: 0,
+    totalIterations: 0,
+    toolCallsSucceeded: 0,
+    toolCallsBlocked: 0,
+    toolCallsFailed: 0,
+  };
   private agentTrustStore: AgentTrustStoreAdapter | null;
   private _curiosityTargets: CuriosityTarget[] = [];
 
@@ -880,6 +887,12 @@ export class MotebitRuntime {
         curiosityHints: this.buildCuriosityHints(),
       });
       this.pushToHistory(text, result.response);
+      // Accumulate behavioral stats for the intelligence gradient
+      this._behavioralStats.turnCount++;
+      this._behavioralStats.totalIterations += result.iterations;
+      this._behavioralStats.toolCallsSucceeded += result.toolCallsSucceeded;
+      this._behavioralStats.toolCallsBlocked += result.toolCallsBlocked;
+      this._behavioralStats.toolCallsFailed += result.toolCallsFailed;
       // Session info applies only to the first message after resume
       this.sessionInfo = null;
       return result;
@@ -1332,7 +1345,15 @@ export class MotebitRuntime {
       }
 
       yield chunk;
-      if (chunk.type === "result") result = chunk.result;
+      if (chunk.type === "result") {
+        result = chunk.result;
+        // Accumulate behavioral stats for the intelligence gradient
+        this._behavioralStats.turnCount++;
+        this._behavioralStats.totalIterations += result.iterations;
+        this._behavioralStats.toolCallsSucceeded += result.toolCallsSucceeded;
+        this._behavioralStats.toolCallsBlocked += result.toolCallsBlocked;
+        this._behavioralStats.toolCallsFailed += result.toolCallsFailed;
+      }
     }
 
     if (result) {
@@ -1890,6 +1911,19 @@ export class MotebitRuntime {
     return this.gradientStore.list(this.motebitId, limit);
   }
 
+  /** Return accumulated behavioral stats and reset the accumulator. */
+  getAndResetBehavioralStats(): BehavioralStats {
+    const stats = { ...this._behavioralStats };
+    this._behavioralStats = {
+      turnCount: 0,
+      totalIterations: 0,
+      toolCallsSucceeded: 0,
+      toolCallsBlocked: 0,
+      toolCallsFailed: 0,
+    };
+    return stats;
+  }
+
   /** Force a gradient computation right now (useful for CLI/debug). */
   async computeGradientNow(): Promise<GradientSnapshot> {
     const { nodes } = await this.memory.exportAll();
@@ -1915,6 +1949,7 @@ export class MotebitRuntime {
     const previousGradient = previous ? previous.gradient : null;
 
     const retrievalStats = this.memory.getAndResetRetrievalStats();
+    const behavioralStats = this.getAndResetBehavioralStats();
 
     const snapshot = computeGradient(
       this.motebitId,
@@ -1924,6 +1959,7 @@ export class MotebitRuntime {
       previousGradient,
       undefined,
       retrievalStats,
+      behavioralStats,
     );
 
     this.gradientStore.save(snapshot);

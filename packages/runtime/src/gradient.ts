@@ -1,7 +1,7 @@
 /**
  * Intelligence Gradient — measures how a motebit gets smarter over time.
  *
- * Four sub-metrics, one composite score. Pure aggregation over existing data —
+ * Seven sub-metrics, one composite score. Pure aggregation over existing data —
  * no new LLM calls, no new embeddings.
  *
  * Sub-metrics:
@@ -10,13 +10,18 @@
  *   gc  Graph Connectivity   — edges/nodes ratio, normalized via x/(x+2)
  *   ts  Temporal Stability   — weighted mix of semantic ratio, pinned ratio, avg half-life
  *   rq  Retrieval Quality    — avg cosine similarity of memory retrievals since last housekeeping
+ *   ie  Interaction Efficiency — fewer loop iterations per turn = more efficient
+ *   te  Tool Efficiency      — ratio of succeeded tool calls to total tool calls
  *
- * Composite: gradient = kd*0.20 + kq*0.25 + gc*0.15 + ts*0.20 + rq*0.20
+ * Composite: gradient = kd*0.15 + kq*0.20 + gc*0.10 + ts*0.15 + rq*0.15 + ie*0.15 + te*0.10
  */
 
 import { MemoryType } from "@motebit/sdk";
 import type { MemoryNode, MemoryEdge, EventLogEntry } from "@motebit/sdk";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
+
+/** Must match MAX_TOOL_ITERATIONS in @motebit/ai-core loop.ts */
+const MAX_TOOL_ITERATIONS = 10;
 
 // === Types ===
 
@@ -32,6 +37,8 @@ export interface GradientSnapshot {
   graph_connectivity_raw: number;
   temporal_stability: number;
   retrieval_quality: number;
+  interaction_efficiency: number;
+  tool_efficiency: number;
   stats: {
     live_nodes: number;
     live_edges: number;
@@ -47,6 +54,11 @@ export interface GradientSnapshot {
     total_confidence_mass: number;
     avg_retrieval_score: number;
     retrieval_count: number;
+    avg_iterations_per_turn: number;
+    total_turns: number;
+    tool_calls_succeeded: number;
+    tool_calls_blocked: number;
+    tool_calls_failed: number;
   };
 }
 
@@ -56,17 +68,29 @@ export interface GradientStoreAdapter {
   list(motebitId: string, limit?: number): GradientSnapshot[];
 }
 
+export interface BehavioralStats {
+  turnCount: number;
+  totalIterations: number;
+  toolCallsSucceeded: number;
+  toolCallsBlocked: number;
+  toolCallsFailed: number;
+}
+
 export interface GradientConfig {
-  /** Weight for knowledge density (default 0.20) */
+  /** Weight for knowledge density (default 0.15) */
   weight_kd: number;
-  /** Weight for knowledge quality (default 0.25) */
+  /** Weight for knowledge quality (default 0.20) */
   weight_kq: number;
-  /** Weight for graph connectivity (default 0.15) */
+  /** Weight for graph connectivity (default 0.10) */
   weight_gc: number;
-  /** Weight for temporal stability (default 0.20) */
+  /** Weight for temporal stability (default 0.15) */
   weight_ts: number;
-  /** Weight for retrieval quality (default 0.20) */
+  /** Weight for retrieval quality (default 0.15) */
   weight_rq: number;
+  /** Weight for interaction efficiency (default 0.15) */
+  weight_ie: number;
+  /** Weight for tool efficiency (default 0.10) */
+  weight_te: number;
   /** Normalization constant for knowledge density: x/(x+K) (default 50) */
   kd_norm_k: number;
   /** Normalization constant for graph connectivity: x/(x+K) (default 2) */
@@ -74,11 +98,13 @@ export interface GradientConfig {
 }
 
 const DEFAULT_CONFIG: GradientConfig = {
-  weight_kd: 0.2,
-  weight_kq: 0.25,
-  weight_gc: 0.15,
-  weight_ts: 0.2,
-  weight_rq: 0.2,
+  weight_kd: 0.15,
+  weight_kq: 0.20,
+  weight_gc: 0.10,
+  weight_ts: 0.15,
+  weight_rq: 0.15,
+  weight_ie: 0.15,
+  weight_te: 0.10,
   kd_norm_k: 50,
   gc_norm_k: 2,
 };
@@ -116,6 +142,7 @@ export function computeGradient(
   previousGradient: number | null,
   config?: Partial<GradientConfig>,
   retrievalStats?: { avgScore: number; count: number },
+  behavioralStats?: BehavioralStats,
 ): GradientSnapshot {
   const cfg = { ...DEFAULT_CONFIG, ...config };
   const now = Date.now();
@@ -187,17 +214,52 @@ export function computeGradient(
   // === Retrieval Quality (rq) ===
   const rq = retrievalStats?.avgScore ?? 0;
 
+  // === Interaction Efficiency (ie) ===
+  // 1.0 = always single-iteration, 0.0 = always hitting MAX_TOOL_ITERATIONS (10)
+  let ie: number;
+  if (behavioralStats && behavioralStats.turnCount > 0) {
+    const avgIterations = behavioralStats.totalIterations / behavioralStats.turnCount;
+    ie = 1 - (avgIterations - 1) / (MAX_TOOL_ITERATIONS - 1);
+    ie = Math.max(0, Math.min(1, ie));
+  } else {
+    ie = 0.5;
+  }
+
+  // === Tool Efficiency (te) ===
+  // Ratio of succeeded tool calls to total tool calls
+  let te: number;
+  if (behavioralStats) {
+    const totalToolCalls =
+      behavioralStats.toolCallsSucceeded +
+      behavioralStats.toolCallsBlocked +
+      behavioralStats.toolCallsFailed;
+    if (totalToolCalls > 0) {
+      te = behavioralStats.toolCallsSucceeded / totalToolCalls;
+    } else {
+      te = 0.5;
+    }
+  } else {
+    te = 0.5;
+  }
+
   // === Composite ===
   const gradient =
     cfg.weight_kd * kd +
     cfg.weight_kq * kq +
     cfg.weight_gc * gc +
     cfg.weight_ts * ts +
-    cfg.weight_rq * rq;
+    cfg.weight_rq * rq +
+    cfg.weight_ie * ie +
+    cfg.weight_te * te;
   const delta = previousGradient !== null ? gradient - previousGradient : 0;
 
   const avgConfidence = nodeCount > 0 ? totalConfidence / nodeCount : 0;
   const avgHalfLife = nodeCount > 0 ? totalHalfLife / nodeCount : 0;
+
+  const avgIterationsPerTurn =
+    behavioralStats && behavioralStats.turnCount > 0
+      ? behavioralStats.totalIterations / behavioralStats.turnCount
+      : 0;
 
   return {
     motebit_id: motebitId,
@@ -211,6 +273,8 @@ export function computeGradient(
     graph_connectivity_raw: gcRaw,
     temporal_stability: ts,
     retrieval_quality: rq,
+    interaction_efficiency: ie,
+    tool_efficiency: te,
     stats: {
       live_nodes: nodeCount,
       live_edges: edgeCount,
@@ -226,6 +290,11 @@ export function computeGradient(
       total_confidence_mass: totalConfidenceMass,
       avg_retrieval_score: retrievalStats?.avgScore ?? 0,
       retrieval_count: retrievalStats?.count ?? 0,
+      avg_iterations_per_turn: avgIterationsPerTurn,
+      total_turns: behavioralStats?.turnCount ?? 0,
+      tool_calls_succeeded: behavioralStats?.toolCallsSucceeded ?? 0,
+      tool_calls_blocked: behavioralStats?.toolCallsBlocked ?? 0,
+      tool_calls_failed: behavioralStats?.toolCallsFailed ?? 0,
     },
   };
 }

@@ -1332,6 +1332,8 @@ interface GradientRow {
   graph_connectivity_raw: number;
   temporal_stability: number;
   retrieval_quality: number;
+  interaction_efficiency: number;
+  tool_efficiency: number;
   stats: string;
 }
 
@@ -1348,6 +1350,8 @@ function rowToGradientSnapshot(row: GradientRow): GradientSnapshot {
     graph_connectivity_raw: row.graph_connectivity_raw,
     temporal_stability: row.temporal_stability,
     retrieval_quality: row.retrieval_quality,
+    interaction_efficiency: row.interaction_efficiency,
+    tool_efficiency: row.tool_efficiency,
     stats: JSON.parse(row.stats) as GradientSnapshot["stats"],
   };
 }
@@ -1358,8 +1362,8 @@ export class ExpoGradientStore implements GradientStoreAdapter {
   save(snapshot: GradientSnapshot): void {
     const snapshotId = `gs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     this.db.runSync(
-      `INSERT OR REPLACE INTO gradient_snapshots (snapshot_id, motebit_id, timestamp, gradient, delta, knowledge_density, knowledge_density_raw, knowledge_quality, graph_connectivity, graph_connectivity_raw, temporal_stability, retrieval_quality, stats)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO gradient_snapshots (snapshot_id, motebit_id, timestamp, gradient, delta, knowledge_density, knowledge_density_raw, knowledge_quality, graph_connectivity, graph_connectivity_raw, temporal_stability, retrieval_quality, interaction_efficiency, tool_efficiency, stats)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         snapshotId,
         snapshot.motebit_id,
@@ -1373,6 +1377,8 @@ export class ExpoGradientStore implements GradientStoreAdapter {
         snapshot.graph_connectivity_raw,
         snapshot.temporal_stability,
         snapshot.retrieval_quality,
+        snapshot.interaction_efficiency,
+        snapshot.tool_efficiency,
         JSON.stringify(snapshot.stats),
       ],
     );
@@ -1640,6 +1646,21 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
       // Column may already exist on new DBs
     }
     db.execSync("PRAGMA user_version = 11");
+  }
+
+  // Migration 12: add interaction_efficiency and tool_efficiency to gradient_snapshots
+  if (userVersion < 12) {
+    try {
+      db.execSync("ALTER TABLE gradient_snapshots ADD COLUMN interaction_efficiency REAL NOT NULL DEFAULT 0");
+    } catch {
+      // Column may already exist on new DBs
+    }
+    try {
+      db.execSync("ALTER TABLE gradient_snapshots ADD COLUMN tool_efficiency REAL NOT NULL DEFAULT 0");
+    } catch {
+      // Column may already exist on new DBs
+    }
+    db.execSync("PRAGMA user_version = 12");
   }
 
   return {

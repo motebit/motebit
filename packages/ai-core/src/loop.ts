@@ -161,6 +161,14 @@ export interface TurnResult {
   cues: BehaviorCues;
   /** Total token usage across all LLM calls in this turn, if available. */
   totalTokens?: number;
+  /** Number of agentic loop iterations used in this turn. */
+  iterations: number;
+  /** Number of tool calls that executed successfully. */
+  toolCallsSucceeded: number;
+  /** Number of tool calls blocked by policy or requiring approval. */
+  toolCallsBlocked: number;
+  /** Number of tool calls that failed during execution. */
+  toolCallsFailed: number;
 }
 
 export interface TurnOptions {
@@ -258,6 +266,9 @@ export async function* runTurnStreaming(
   let finalText = "";
   let finalResponse;
   let iteration = 0;
+  let toolCallsSucceeded = 0;
+  let toolCallsBlocked = 0;
+  let toolCallsFailed = 0;
 
   while (iteration < MAX_TOOL_ITERATIONS) {
     iteration++;
@@ -332,6 +343,7 @@ export async function* runTurnStreaming(
         const decision = deps.policyGate.validate(toolDef, toolCall.args, turnCtx);
 
         if (!decision.allowed) {
+          toolCallsBlocked++;
           yield {
             type: "tool_status",
             name: toolCall.name,
@@ -347,6 +359,7 @@ export async function* runTurnStreaming(
         }
 
         if (decision.requiresApproval) {
+          toolCallsBlocked++;
           const profile = deps.policyGate.classify(toolDef);
           yield {
             type: "approval_request",
@@ -366,7 +379,21 @@ export async function* runTurnStreaming(
         // Allowed — execute and record
         allBlocked = false;
         yield { type: "tool_status", name: toolCall.name, status: "calling" };
-        const result = await deps.tools.execute(toolCall.name, toolCall.args);
+
+        let result: ToolResult;
+        try {
+          result = await deps.tools.execute(toolCall.name, toolCall.args);
+        } catch (err: unknown) {
+          toolCallsFailed++;
+          const msg = err instanceof Error ? err.message : String(err);
+          yield { type: "tool_status", name: toolCall.name, status: "done", result: msg };
+          conversationHistory.push({
+            role: "tool",
+            tool_call_id: toolCall.id,
+            content: JSON.stringify({ ok: false, error: msg }),
+          });
+          continue;
+        }
         turnCtx = deps.policyGate.recordToolCall(turnCtx);
 
         // Use sanitizeAndCheck if available (duck-typed), otherwise fall back
@@ -405,6 +432,7 @@ export async function* runTurnStreaming(
             }
 
             if (highConfidence) {
+              toolCallsBlocked++;
               const reason = `Injection detected — tool result blocked (${[...check.injectionPatterns, ...(check.structuralFlags ?? [])].join(", ")})`;
               yield { type: "tool_status", name: toolCall.name, status: "done", result: reason };
               conversationHistory.push({
@@ -420,6 +448,7 @@ export async function* runTurnStreaming(
           sanitized = deps.policyGate.sanitizeResult(result, toolCall.name);
         }
 
+        toolCallsSucceeded++;
         yield {
           type: "tool_status",
           name: toolCall.name,
@@ -438,6 +467,7 @@ export async function* runTurnStreaming(
       // Policy gate filtered this tool out — do NOT execute.
       // The tool may still exist in the registry, but policy excluded it for a reason.
       if (deps.policyGate && !toolDef) {
+        toolCallsBlocked++;
         yield {
           type: "tool_status",
           name: toolCall.name,
@@ -454,6 +484,7 @@ export async function* runTurnStreaming(
 
       // Fallback: no policy gate — use legacy requiresApproval check
       if (toolDef?.requiresApproval === true) {
+        toolCallsBlocked++;
         yield {
           type: "approval_request",
           tool_call_id: toolCall.id,
@@ -470,7 +501,21 @@ export async function* runTurnStreaming(
 
       allBlocked = false;
       yield { type: "tool_status", name: toolCall.name, status: "calling" };
-      const result = await deps.tools.execute(toolCall.name, toolCall.args);
+      let result: ToolResult;
+      try {
+        result = await deps.tools.execute(toolCall.name, toolCall.args);
+      } catch (err: unknown) {
+        toolCallsFailed++;
+        const msg = err instanceof Error ? err.message : String(err);
+        yield { type: "tool_status", name: toolCall.name, status: "done", result: msg };
+        conversationHistory.push({
+          role: "tool",
+          tool_call_id: toolCall.id,
+          content: JSON.stringify({ ok: false, error: msg }),
+        });
+        continue;
+      }
+      toolCallsSucceeded++;
       yield {
         type: "tool_status",
         name: toolCall.name,
@@ -612,6 +657,10 @@ export async function* runTurnStreaming(
       memoriesRetrieved: relevantMemories,
       stateAfter,
       cues,
+      iterations: iteration,
+      toolCallsSucceeded,
+      toolCallsBlocked,
+      toolCallsFailed,
       ...(turnCtx && turnCtx.costAccumulated > 0 ? { totalTokens: turnCtx.costAccumulated } : {}),
     },
   };

@@ -635,6 +635,8 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       graph_connectivity_raw: number;
       temporal_stability: number;
       retrieval_quality: number;
+      interaction_efficiency: number;
+      tool_efficiency: number;
       stats: string;
     }>;
     const snapshots = rows.map((r) => ({

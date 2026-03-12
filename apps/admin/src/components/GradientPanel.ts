@@ -74,6 +74,8 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
     gc: snap.graph_connectivity,
     ts: snap.temporal_stability,
     rq: snap.retrieval_quality,
+    ie: snap.interaction_efficiency,
+    te: snap.tool_efficiency,
   }));
 
   const chart = h(
@@ -151,6 +153,22 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
           dot: false,
           name: "Retrieval Quality",
         }),
+        h(Line as React.ComponentType<Record<string, unknown>>, {
+          type: "monotone",
+          dataKey: "ie",
+          stroke: "#a78bfa",
+          strokeWidth: 1,
+          dot: false,
+          name: "Interaction Efficiency",
+        }),
+        h(Line as React.ComponentType<Record<string, unknown>>, {
+          type: "monotone",
+          dataKey: "te",
+          stroke: "#f472b6",
+          strokeWidth: 1,
+          dot: false,
+          name: "Tool Efficiency",
+        }),
       ),
     ),
   );
@@ -186,6 +204,8 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
       h(MetricBar, { label: "Graph Connectivity", value: current.graph_connectivity }),
       h(MetricBar, { label: "Temporal Stability", value: current.temporal_stability }),
       h(MetricBar, { label: "Retrieval Quality", value: current.retrieval_quality }),
+      h(MetricBar, { label: "Interaction Efficiency", value: current.interaction_efficiency }),
+      h(MetricBar, { label: "Tool Efficiency", value: current.tool_efficiency }),
     ),
 
     // Trend chart
@@ -213,6 +233,11 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
         h("span", null, `NOOP: ${stats.consolidation_noop}`),
         h("span", null, `Avg retrieval: ${(stats.avg_retrieval_score ?? 0).toFixed(3)}`),
         h("span", null, `Retrievals: ${stats.retrieval_count ?? 0}`),
+        h("span", null, `Avg iters/turn: ${(stats.avg_iterations_per_turn ?? 0).toFixed(2)}`),
+        h("span", null, `Total turns: ${stats.total_turns ?? 0}`),
+        h("span", null, `Tool succeeded: ${stats.tool_calls_succeeded ?? 0}`),
+        h("span", null, `Tool blocked: ${stats.tool_calls_blocked ?? 0}`),
+        h("span", null, `Tool failed: ${stats.tool_calls_failed ?? 0}`),
       ),
     ),
 

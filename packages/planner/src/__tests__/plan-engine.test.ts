@@ -50,6 +50,10 @@ function setupStreamMock(responses: string[]): void {
           smile_curvature: 0,
           speaking_activity: 0,
         },
+        iterations: 1,
+        toolCallsSucceeded: 0,
+        toolCallsBlocked: 0,
+        toolCallsFailed: 0,
       },
     };
   });
@@ -275,6 +279,10 @@ describe("PlanEngine", () => {
           memoriesRetrieved: [],
           stateAfter: {} as never,
           cues: {} as never,
+          iterations: 1,
+          toolCallsSucceeded: 0,
+          toolCallsBlocked: 0,
+          toolCallsFailed: 0,
         },
       };
     });
@@ -630,6 +638,10 @@ describe("PlanEngine", () => {
             memoriesRetrieved: [],
             stateAfter: {} as never,
             cues: {} as never,
+            iterations: 1,
+            toolCallsSucceeded: 0,
+            toolCallsBlocked: 0,
+            toolCallsFailed: 0,
           },
         };
       });
