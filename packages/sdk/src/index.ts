@@ -523,6 +523,8 @@ export interface ExecutionReceipt {
 export interface AgentCapabilities {
   motebit_id: string;
   public_key: string;
+  /** W3C did:key URI derived from the Ed25519 public key. */
+  did?: string;
   tools: string[];
   governance: {
     trust_mode: string;

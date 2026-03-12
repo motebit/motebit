@@ -35,6 +35,18 @@ On first launch, the app walks you through identity creation:
 
 On subsequent launches, the identity loads from storage and the keypair from the keyring. No network round-trip required.
 
+## DID interoperability
+
+Every motebit Ed25519 public key can be expressed as a W3C `did:key` — a self-resolving Decentralized Identifier that bridges motebit to the broader identity ecosystem (Verifiable Credentials, DIDComm, MCP-Identity).
+
+The derivation is deterministic: same key, same DID, no registration needed. The `did:key` is computed automatically during verification and exposed in capability advertisements.
+
+```
+did:key:z6Mk...  ← derived from the same Ed25519 public key in motebit.md
+```
+
+This means any system that understands W3C DIDs can verify a motebit agent's identity without knowing anything about the motebit protocol.
+
 ## What this enables
 
 - **Proof of identity** — Any service can verify that a message came from your motebit by checking the signature against the registered public key

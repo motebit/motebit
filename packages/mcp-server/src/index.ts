@@ -5,6 +5,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { AgentTrustLevel, RiskLevel } from "@motebit/sdk";
 import type { ToolDefinition, ToolResult, PolicyDecision } from "@motebit/sdk";
+import { hexPublicKeyToDidKey } from "@motebit/crypto";
 
 // Re-export for consumers
 export type { MotebitServerDeps, McpServerConfig };
@@ -574,6 +575,13 @@ export class McpServerAdapter {
         motebit_id: this.deps.motebitId,
         public_key: this.deps.publicKeyHex ?? null,
       };
+      if (this.deps.publicKeyHex) {
+        try {
+          identity.did = hexPublicKeyToDidKey(this.deps.publicKeyHex);
+        } catch {
+          // Non-fatal
+        }
+      }
       if (this.config.motebitType) {
         identity.motebit_type = this.config.motebitType;
       }

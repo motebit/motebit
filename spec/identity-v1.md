@@ -454,7 +454,33 @@ A service may require agents to prove ownership of their declared identity by si
 
 ---
 
-## 10. Versioning
+## 10. DID Interoperability
+
+A motebit identity's Ed25519 public key can be expressed as a W3C Decentralized Identifier using the `did:key` method ([W3C DID-Core](https://www.w3.org/TR/did-core/), [did:key spec](https://w3c-ccg.github.io/did-method-key/)).
+
+### 10.1 — Derivation
+
+Given the 32-byte Ed25519 public key from `identity.public_key`:
+
+1. Prepend the multicodec prefix for ed25519-pub: `0xed 0x01`
+2. Encode the resulting 34 bytes as base58btc (Bitcoin alphabet: `123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz`)
+3. Prepend `did:key:z`
+
+The resulting URI has the form: `did:key:z6Mk...`
+
+### 10.2 — Properties
+
+- **Deterministic.** The same public key always produces the same `did:key`. No registration, no resolution infrastructure.
+- **Self-resolving.** The DID document can be constructed entirely from the DID itself — no external resolver needed.
+- **Interoperable.** Any system that understands `did:key` can verify signatures from a motebit agent.
+
+### 10.3 — Usage
+
+The `did:key` is a derived identifier, not a replacement for `motebit_id`. It provides a bridge to ecosystems that use W3C DIDs (Verifiable Credentials, DIDComm, MCP-Identity). Implementations SHOULD compute and expose the `did:key` alongside the native `motebit_id` in capability advertisements and verification results.
+
+---
+
+## 11. Versioning
 
 The `spec` field declares which version of this specification the file conforms to. Implementations SHOULD reject files with unrecognized spec versions rather than attempting best-effort parsing.
 

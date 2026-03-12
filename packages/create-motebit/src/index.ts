@@ -99,6 +99,7 @@ const result = await verify(content);
 
 if (result.valid) {
   console.log("Identity verified:", result.identity.motebit_id);
+  if (result.did) console.log("DID:", result.did);
   console.log("Public key:", result.identity.identity.public_key.slice(0, 16) + "...");
   console.log("Trust mode:", result.identity.governance.trust_mode);
 } else {
@@ -396,6 +397,9 @@ async function verifyCmd(filePath: string): Promise<void> {
     console.log(`  ${green("+")} Signature ${green("valid")}`);
     console.log();
     console.log(`    motebit_id   ${cyan(id.motebit_id)}`);
+    if (result.did) {
+      console.log(`    did          ${dim(result.did)}`);
+    }
     console.log(`    public_key   ${dim(id.identity.public_key.slice(0, 16))}...`);
     console.log(`    trust_mode   ${id.governance.trust_mode}`);
     console.log(`    created      ${dim(id.created_at)}`);

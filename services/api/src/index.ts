@@ -67,7 +67,7 @@ import type {
 import { AgentTaskStatus } from "@motebit/sdk";
 import type { AgentTask } from "@motebit/sdk";
 import type { WSContext } from "hono/ws";
-import { verifySignedToken, verifyExecutionReceipt } from "@motebit/crypto";
+import { verifySignedToken, verifyExecutionReceipt, hexPublicKeyToDidKey } from "@motebit/crypto";
 
 function hexToBytes(hex: string): Uint8Array {
   const bytes = new Uint8Array(hex.length / 2);
@@ -1294,9 +1294,17 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     const deviceWithKey = devices.find((d) => d.public_key);
     const publicKey = deviceWithKey ? deviceWithKey.public_key : "";
 
+    let did: string | undefined;
+    try {
+      if (publicKey) did = hexPublicKeyToDidKey(publicKey);
+    } catch {
+      // Non-fatal — public key may be invalid hex
+    }
+
     return c.json({
       motebit_id: motebitId,
       public_key: publicKey,
+      did,
       tools: [],
       governance: {
         trust_mode: "guarded",

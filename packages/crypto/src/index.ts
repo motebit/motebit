@@ -195,6 +195,72 @@ export function secureErase(data: Uint8Array): void {
   data.fill(0);
 }
 
+// === did:key (W3C Decentralized Identifier) ===
+
+/** Base58btc alphabet (Bitcoin/IPFS standard). */
+const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+/**
+ * Encode bytes as base58btc (no dependencies).
+ */
+export function base58btcEncode(bytes: Uint8Array): string {
+  // Count leading zeros
+  let zeros = 0;
+  while (zeros < bytes.length && bytes[zeros] === 0) zeros++;
+
+  // Convert to bigint for base conversion
+  let value = 0n;
+  for (let i = 0; i < bytes.length; i++) {
+    value = value * 256n + BigInt(bytes[i]!);
+  }
+
+  let result = "";
+  while (value > 0n) {
+    const remainder = Number(value % 58n);
+    value = value / 58n;
+    result = BASE58_ALPHABET[remainder]! + result;
+  }
+
+  // Preserve leading zeros as '1's
+  return BASE58_ALPHABET[0]!.repeat(zeros) + result;
+}
+
+/**
+ * Convert a hex string to bytes.
+ */
+export function hexToBytes(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+  }
+  return bytes;
+}
+
+/**
+ * Derive a did:key URI from an Ed25519 public key.
+ *
+ * Format: did:key:z<base58btc(0xed01 + publicKey)>
+ * See: https://w3c-ccg.github.io/did-method-key/
+ */
+export function publicKeyToDidKey(publicKey: Uint8Array): string {
+  if (publicKey.length !== 32) {
+    throw new Error("Ed25519 public key must be 32 bytes");
+  }
+  // 0xed, 0x01 = multicodec varint for ed25519-pub
+  const prefixed = new Uint8Array(34);
+  prefixed[0] = 0xed;
+  prefixed[1] = 0x01;
+  prefixed.set(publicKey, 2);
+  return `did:key:z${base58btcEncode(prefixed)}`;
+}
+
+/**
+ * Derive a did:key URI from a hex-encoded Ed25519 public key.
+ */
+export function hexPublicKeyToDidKey(hexPublicKey: string): string {
+  return publicKeyToDidKey(hexToBytes(hexPublicKey));
+}
+
 // === Ed25519 Signing ===
 
 /**

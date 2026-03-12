@@ -11,6 +11,7 @@
  */
 
 import { sign as ed25519Sign, toBase64Url } from "@motebit/crypto";
+export { publicKeyToDidKey, hexPublicKeyToDidKey } from "@motebit/crypto";
 import { RiskLevel } from "@motebit/sdk";
 import { parse, verify } from "@motebit/verify";
 import type { MotebitIdentityFile, MotebitIdentityType } from "./schema.js";

@@ -21,6 +21,10 @@ import {
   type SignedTokenPayload,
   type SignableReceipt,
   type KnownKeys,
+  base58btcEncode,
+  hexToBytes,
+  publicKeyToDidKey,
+  hexPublicKeyToDidKey,
 } from "../index";
 
 // ---------------------------------------------------------------------------
@@ -620,5 +624,93 @@ describe("verifyReceiptChain", () => {
 
     expect(result.verified).toBe(true);
     expect(result.delegations).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// did:key — W3C DID derivation from Ed25519 public keys
+// ---------------------------------------------------------------------------
+
+describe("base58btcEncode", () => {
+  it("encodes empty bytes as empty string", () => {
+    expect(base58btcEncode(new Uint8Array(0))).toBe("");
+  });
+
+  it("encodes leading zeros as '1' characters", () => {
+    const result = base58btcEncode(new Uint8Array([0, 0, 0, 1]));
+    expect(result.startsWith("111")).toBe(true);
+    expect(result).toBe("1112");
+  });
+
+  it("encodes a known byte sequence correctly", () => {
+    // "Hello" in base58btc = "9Ajdvzr"
+    const hello = new TextEncoder().encode("Hello");
+    expect(base58btcEncode(hello)).toBe("9Ajdvzr");
+  });
+});
+
+describe("hexToBytes", () => {
+  it("converts hex string to Uint8Array", () => {
+    const bytes = hexToBytes("deadbeef");
+    expect(bytes).toEqual(new Uint8Array([0xde, 0xad, 0xbe, 0xef]));
+  });
+
+  it("handles all-zero hex", () => {
+    const bytes = hexToBytes("00000000");
+    expect(bytes).toEqual(new Uint8Array([0, 0, 0, 0]));
+  });
+
+  it("handles empty string", () => {
+    const bytes = hexToBytes("");
+    expect(bytes.length).toBe(0);
+  });
+});
+
+describe("publicKeyToDidKey", () => {
+  it("produces a did:key URI starting with did:key:z", async () => {
+    const kp = await generateKeypair();
+    const did = publicKeyToDidKey(kp.publicKey);
+    expect(did).toMatch(/^did:key:z[1-9A-HJ-NP-Za-km-z]+$/);
+  });
+
+  it("is deterministic — same key produces same DID", async () => {
+    const kp = await generateKeypair();
+    const a = publicKeyToDidKey(kp.publicKey);
+    const b = publicKeyToDidKey(kp.publicKey);
+    expect(a).toBe(b);
+  });
+
+  it("different keys produce different DIDs", async () => {
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    expect(publicKeyToDidKey(kpA.publicKey)).not.toBe(publicKeyToDidKey(kpB.publicKey));
+  });
+
+  it("rejects non-32-byte input", () => {
+    expect(() => publicKeyToDidKey(new Uint8Array(16))).toThrow("32 bytes");
+    expect(() => publicKeyToDidKey(new Uint8Array(64))).toThrow("32 bytes");
+  });
+
+  it("matches known test vector", () => {
+    // Test vector: 32 zero bytes → known did:key
+    // Multicodec prefix ed01 + 32 zero bytes → base58btc
+    const zeroKey = new Uint8Array(32);
+    const did = publicKeyToDidKey(zeroKey);
+    expect(did).toMatch(/^did:key:z/);
+    // The prefix bytes (0xed, 0x01) followed by 32 zeros should produce a consistent result
+    const prefixed = new Uint8Array(34);
+    prefixed[0] = 0xed;
+    prefixed[1] = 0x01;
+    expect(did).toBe(`did:key:z${base58btcEncode(prefixed)}`);
+  });
+});
+
+describe("hexPublicKeyToDidKey", () => {
+  it("converts hex public key to did:key", async () => {
+    const kp = await generateKeypair();
+    const hex = Array.from(kp.publicKey).map(b => b.toString(16).padStart(2, "0")).join("");
+    const didFromHex = hexPublicKeyToDidKey(hex);
+    const didFromBytes = publicKeyToDidKey(kp.publicKey);
+    expect(didFromHex).toBe(didFromBytes);
   });
 });

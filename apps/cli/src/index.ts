@@ -105,6 +105,7 @@ async function main(): Promise<void> {
       const pubKey = result.identity.identity.public_key;
       const fingerprint = pubKey.slice(0, 16) + "...";
       console.log(`Identity:    ${result.identity.motebit_id}`);
+      if (result.did) console.log(`DID:         ${result.did}`);
       console.log(`Public key:  ${fingerprint}`);
       console.log(`Signature:   valid`);
       process.exit(0);

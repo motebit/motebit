@@ -72,6 +72,8 @@ export interface MotebitIdentityFile {
 export interface VerifyResult {
   valid: boolean;
   identity: MotebitIdentityFile | null;
+  /** W3C did:key URI derived from the Ed25519 public key. Present when valid. */
+  did?: string;
   error?: string;
 }
 
@@ -228,6 +230,36 @@ function fromBase64Url(str: string): Uint8Array {
 }
 
 // ---------------------------------------------------------------------------
+// did:key derivation (inlined — verify has zero monorepo deps)
+// ---------------------------------------------------------------------------
+
+const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+function base58btcEncode(bytes: Uint8Array): string {
+  let zeros = 0;
+  while (zeros < bytes.length && bytes[zeros] === 0) zeros++;
+  let value = 0n;
+  for (let i = 0; i < bytes.length; i++) {
+    value = value * 256n + BigInt(bytes[i]!);
+  }
+  let result = "";
+  while (value > 0n) {
+    const remainder = Number(value % 58n);
+    value = value / 58n;
+    result = BASE58_ALPHABET[remainder]! + result;
+  }
+  return BASE58_ALPHABET[0]!.repeat(zeros) + result;
+}
+
+function publicKeyToDidKey(pubKey: Uint8Array): string {
+  const prefixed = new Uint8Array(34);
+  prefixed[0] = 0xed;
+  prefixed[1] = 0x01;
+  prefixed.set(pubKey, 2);
+  return `did:key:z${base58btcEncode(prefixed)}`;
+}
+
+// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
@@ -326,6 +358,7 @@ export async function verify(content: string): Promise<VerifyResult> {
   return {
     valid,
     identity: valid ? parsed.frontmatter : null,
+    did: valid ? publicKeyToDidKey(pubKey) : undefined,
     error: valid ? undefined : "Signature verification failed",
   };
 }

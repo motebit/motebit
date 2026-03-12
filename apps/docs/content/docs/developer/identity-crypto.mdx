@@ -91,6 +91,14 @@ if (result.valid) {
 }
 ```
 
+A valid result includes a `did` field — the W3C `did:key` derived from the Ed25519 public key. This bridges motebit to ecosystems that use Decentralized Identifiers (Verifiable Credentials, DIDComm, MCP-Identity).
+
+```typescript
+if (result.valid) {
+  console.log(result.did); // "did:key:z6Mk..."
+}
+```
+
 A valid signature proves the holder has the private key. It does not prove the holder is trustworthy. Trust is accumulated at the application layer through history, governance, and memory — not by the identity file alone.
 
 ## Key management
