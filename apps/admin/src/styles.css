@@ -172,6 +172,12 @@ body {
   flex-shrink: 0;
 }
 
+.memory-node .half-life {
+  color: var(--text-dim);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
 .memory-node .delete-btn {
   background: none;
   border: none;

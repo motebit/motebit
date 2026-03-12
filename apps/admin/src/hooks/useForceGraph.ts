@@ -8,10 +8,14 @@ export interface GraphNode extends SimulationNodeDatum {
   content: string;
   confidence: number;
   sensitivity: string;
+  halfLife: number;
+  memoryType: string;
+  pinned: boolean;
 }
 
 export interface GraphLink extends SimulationLinkDatum<GraphNode> {
   weight: number;
+  relationType: string;
 }
 
 export function useForceGraph(
@@ -46,6 +50,9 @@ export function useForceGraph(
       content: m.content,
       confidence: m.confidence,
       sensitivity: m.sensitivity as string,
+      halfLife: m.half_life,
+      memoryType: (m.memory_type ?? "semantic") as string,
+      pinned: m.pinned,
     }));
 
     // Filter edges to only those with valid source/target nodes
@@ -55,6 +62,7 @@ export function useForceGraph(
         source: e.source_id,
         target: e.target_id,
         weight: e.weight,
+        relationType: e.relation_type as string,
       }));
 
     const sim = forceSimulation<GraphNode>(nodes)

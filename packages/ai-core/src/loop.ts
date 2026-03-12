@@ -235,6 +235,7 @@ export async function* runTurnStreaming(
   const pinnedMemories = await memoryGraph.getPinnedMemories();
   const similarityMemories = await memoryGraph.retrieve(queryEmbedding, {
     limit: 5,
+    strengthenCoRetrieved: true,
   });
 
   // Merge: pinned first (cap 5), then similarity (deduplicated)

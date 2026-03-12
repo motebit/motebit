@@ -68,6 +68,17 @@ Searches the motebit's memory graph by semantic similarity. Results are privacy-
 { "query": "deployment credentials", "limit": 5 }
 ```
 
+Each result includes:
+
+| Field | Type | Description |
+|---|---|---|
+| `content` | string | Memory text |
+| `confidence` | number | Current confidence (0–1) |
+| `similarity` | number | Cosine similarity to query |
+| `half_life_days` | number | Decay half-life in days (default 30, increases with reinforcement up to 365) |
+| `memory_type` | string | `"semantic"` or `"episodic"` |
+| `created_at` | number | Creation timestamp (ms since epoch) |
+
 ### motebit_task
 
 The differentiator. Submits a prompt for autonomous execution. The motebit runs the full agentic loop (potentially multiple tool calls), then signs the result as an `ExecutionReceipt` with its Ed25519 private key. The receipt includes:

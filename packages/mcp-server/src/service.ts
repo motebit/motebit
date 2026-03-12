@@ -57,7 +57,15 @@ export interface ServiceMemoryGraph {
       sensitivityFilter?: SensitivityLevel[];
       [key: string]: unknown;
     },
-  ): Promise<Array<{ content: string; confidence: number }>>;
+  ): Promise<
+    Array<{
+      content: string;
+      confidence: number;
+      half_life: number;
+      memory_type?: string;
+      created_at: number;
+    }>
+  >;
   formMemory(
     data: { content: string; confidence: number; sensitivity: string },
     embedding: number[],
@@ -190,6 +198,9 @@ export function wireServerDeps(
         content: n.content,
         confidence: n.confidence,
         similarity: 0,
+        half_life_days: Math.round(n.half_life / 86_400_000),
+        memory_type: (n.memory_type ?? "semantic") as string,
+        created_at: n.created_at,
       }));
     };
 

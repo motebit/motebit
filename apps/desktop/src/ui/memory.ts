@@ -454,6 +454,12 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
     conf.textContent = `${Math.round(decayed * 100)}%`;
     metaDiv.appendChild(conf);
 
+    const halfDays = Math.round(mem.half_life / 86_400_000);
+    const halfSpan = document.createElement("span");
+    halfSpan.textContent = `${halfDays}d${mem.half_life > 30 * 86_400_000 ? " \u2191" : ""}`;
+    if (mem.half_life > 30 * 86_400_000) halfSpan.style.color = "#4ade80";
+    metaDiv.appendChild(halfSpan);
+
     const time = document.createElement("span");
     time.textContent = formatTimeAgo(mem.created_at);
     metaDiv.appendChild(time);

@@ -1025,4 +1025,93 @@ describe("MemoryGraph", () => {
       expect(node.half_life).toBe(customHalfLife);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Retrieval Side Effects — last_accessed + Hebbian Co-Retrieval
+  // -------------------------------------------------------------------------
+
+  describe("retrieval side effects", () => {
+    it("updates last_accessed on retrieved nodes", async () => {
+      const node = await graph.formMemory(
+        { content: "test memory", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 0, 0],
+      );
+      const originalAccessed = node.last_accessed;
+
+      // Small delay so timestamps differ
+      await new Promise((r) => setTimeout(r, 10));
+
+      await graph.retrieve([1, 0, 0]);
+
+      const updated = await storage.getNode(node.node_id);
+      expect(updated!.last_accessed).toBeGreaterThan(originalAccessed);
+    });
+
+    it("creates co-retrieval edges when strengthenCoRetrieved is true", async () => {
+      const nodeA = await graph.formMemory(
+        { content: "memory A", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 0, 0],
+      );
+      await graph.formMemory(
+        { content: "memory B", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [0.9, 0.1, 0],
+      );
+
+      // Without strengthenCoRetrieved, no edges created
+      await graph.retrieve([0.95, 0.05, 0]);
+      const edgesBefore = await storage.getEdges(nodeA.node_id);
+      expect(edgesBefore).toHaveLength(0);
+
+      // With strengthenCoRetrieved, Related edges appear
+      await graph.retrieve([0.95, 0.05, 0], { strengthenCoRetrieved: true });
+      const edgesAfter = await storage.getEdges(nodeA.node_id);
+      const coRetrievalEdge = edgesAfter.find((e) => e.relation_type === RelationType.Related);
+      expect(coRetrievalEdge).toBeDefined();
+      expect(coRetrievalEdge!.weight).toBe(0.2);
+      expect(coRetrievalEdge!.confidence).toBe(0.5);
+    });
+
+    it("strengthens existing co-retrieval edges on repeated retrieval", async () => {
+      const nodeA = await graph.formMemory(
+        { content: "memory A", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 0, 0],
+      );
+      await graph.formMemory(
+        { content: "memory B", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [0.9, 0.1, 0],
+      );
+
+      // First co-retrieval: creates edge with weight 0.2
+      await graph.retrieve([0.95, 0.05, 0], { strengthenCoRetrieved: true });
+
+      // Second co-retrieval: strengthens to 0.25
+      await graph.retrieve([0.95, 0.05, 0], { strengthenCoRetrieved: true });
+
+      const edges = await storage.getEdges(nodeA.node_id);
+      const coEdge = edges.find((e) => e.relation_type === RelationType.Related);
+      expect(coEdge!.weight).toBeCloseTo(0.25, 5);
+    });
+
+    it("does not create co-retrieval edges with only one result", async () => {
+      await graph.formMemory(
+        { content: "lonely memory", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 0, 0],
+      );
+
+      await graph.retrieve([1, 0, 0], { strengthenCoRetrieved: true });
+
+      const { edges } = await graph.exportAll();
+      expect(edges).toHaveLength(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // MAX_HALF_LIFE constant
+  // -------------------------------------------------------------------------
+
+  describe("MAX_HALF_LIFE", () => {
+    it("is 365 days in milliseconds", () => {
+      expect(MemoryGraph.MAX_HALF_LIFE).toBe(365 * 24 * 60 * 60 * 1000);
+    });
+  });
 });

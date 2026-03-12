@@ -61,6 +61,7 @@ export async function handleSlashCommand(
 Available commands:
   /help              Show this help
   /memories          List all memories
+  /graph             Memory graph stats — compounding health
   /state             Show current state vector
   /forget <nodeId>   Delete a memory by ID
   /export            Export all memories and state as JSON
@@ -97,12 +98,77 @@ Available commands:
       if (data.nodes.length === 0) {
         console.log("No memories stored yet.");
       } else {
-        console.log(`\nMemories (${data.nodes.length}):\n`);
-        for (const node of data.nodes) {
+        const MS_PER_DAY = 86_400_000;
+        // Build edge count per node
+        const edgeCounts = new Map<string, number>();
+        for (const edge of data.edges) {
+          edgeCounts.set(edge.source_id, (edgeCounts.get(edge.source_id) ?? 0) + 1);
+          edgeCounts.set(edge.target_id, (edgeCounts.get(edge.target_id) ?? 0) + 1);
+        }
+
+        const live = data.nodes.filter((n) => !n.tombstoned);
+        console.log(`\nMemories (${live.length} nodes, ${data.edges.length} edges):\n`);
+        for (const node of live) {
+          const halfDays = Math.round(node.half_life / MS_PER_DAY);
+          const defaultDays = 30;
+          const compounded = halfDays > defaultDays;
+          const type = node.memory_type === "episodic" ? "epi" : "sem";
+          const edges = edgeCounts.get(node.node_id) ?? 0;
+          const pin = node.pinned ? " pin" : "";
+          const compound = compounded ? ` \u2191${halfDays}d` : ` ${halfDays}d`;
           console.log(
-            `  ${node.node_id.slice(0, 8)}  [conf=${node.confidence.toFixed(2)} sens=${node.sensitivity}]  ${node.content}`,
+            `  ${node.node_id.slice(0, 8)}  [${type} conf=${node.confidence.toFixed(2)}${compound} e=${edges}${pin}]  ${node.content}`,
           );
         }
+      }
+      break;
+    }
+
+    case "graph": {
+      const graphData = await runtime.memory.exportAll();
+      const live = graphData.nodes.filter((n) => !n.tombstoned);
+      const liveIds = new Set(live.map((n) => n.node_id));
+      const liveEdges = graphData.edges.filter(
+        (e) => liveIds.has(e.source_id) || liveIds.has(e.target_id),
+      );
+
+      if (live.length === 0) {
+        console.log("No memories in graph.");
+        break;
+      }
+
+      const DAY = 86_400_000;
+      const sem = live.filter((n) => (n.memory_type ?? "semantic") === "semantic").length;
+      const epi = live.filter((n) => n.memory_type === "episodic").length;
+      const pinned = live.filter((n) => n.pinned).length;
+      const avgHalfLife = live.reduce((s, n) => s + n.half_life, 0) / live.length;
+      const compounded = live.filter((n) => n.half_life > 30 * DAY).length;
+      const avgConf = live.reduce((s, n) => s + n.confidence, 0) / live.length;
+
+      // Edge breakdown
+      const edgeTypes = new Map<string, number>();
+      for (const e of liveEdges) {
+        edgeTypes.set(e.relation_type, (edgeTypes.get(e.relation_type) ?? 0) + 1);
+      }
+
+      console.log("\nMemory Graph:\n");
+      console.log(`  Nodes:      ${live.length} (${sem} semantic, ${epi} episodic, ${pinned} pinned)`);
+      console.log(`  Edges:      ${liveEdges.length}`);
+      if (edgeTypes.size > 0) {
+        const parts = Array.from(edgeTypes.entries())
+          .map(([t, c]) => `${c} ${t}`)
+          .join(", ");
+        console.log(`              ${parts}`);
+      }
+      console.log(`  Avg conf:   ${avgConf.toFixed(2)}`);
+      console.log(`  Avg half:   ${Math.round(avgHalfLife / DAY)}d`);
+      console.log(`  Compounded: ${compounded} (half-life > 30d)`);
+      console.log(`  Density:    ${live.length > 0 ? (liveEdges.length / live.length).toFixed(2) : "0"} edges/node`);
+
+      const gradient = runtime.getGradient();
+      if (gradient) {
+        const delta = gradient.delta >= 0 ? `+${gradient.delta.toFixed(4)}` : gradient.delta.toFixed(4);
+        console.log(`\n  Gradient:   ${gradient.gradient.toFixed(4)} (${delta})`);
       }
       break;
     }

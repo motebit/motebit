@@ -65,7 +65,16 @@ interface MotebitServerDeps {
   queryMemories?(
     query: string,
     limit?: number,
-  ): Promise<Array<{ content: string; confidence: number; similarity: number }>>;
+  ): Promise<
+    Array<{
+      content: string;
+      confidence: number;
+      similarity: number;
+      half_life_days?: number;
+      memory_type?: string;
+      created_at?: number;
+    }>
+  >;
   storeMemory?(content: string, sensitivity?: string): Promise<{ node_id: string }>;
   handleAgentTask?(
     prompt: string,

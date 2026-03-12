@@ -30,6 +30,24 @@ Trivia fades. Important things stick — because they get reinforced. When a mem
 
 Memories are never deleted by decay. They simply fall below the retrieval threshold, becoming invisible to the agent unless specifically sought. They can always be reinforced if they become relevant again.
 
+## Compounding — use makes memories durable
+
+When a memory is reinforced (new information confirms an existing fact), two things happen: the confidence gets a boost (+0.1), and the half-life increases by 50%. A semantic memory starts with a 30-day half-life. After 5 reinforcements, it reaches ~228 days. The maximum half-life is 365 days — no memory becomes immortal, but heavily reinforced knowledge becomes very durable.
+
+This is the compounding effect. A memory that gets confirmed once a month will naturally stabilize into long-term knowledge. A memory that's never reinforced gracefully fades.
+
+The intelligence gradient tracks this: the Temporal Stability sub-metric measures the average half-life across all memories. A rising half-life average means the agent is building stable knowledge, not just accumulating transient facts.
+
+## Hebbian co-retrieval
+
+Memories that are frequently retrieved together form associative connections. When two memories appear in the same retrieval result, a `Related` edge is created between them. Repeated co-retrieval strengthens the edge. This is Hebbian learning — neurons that fire together wire together.
+
+These edges feed back into retrieval: the graph expansion pass in `retrieve()` uses edge weights to pull in neighbors of top results. Over time, the memory graph develops structure that reflects how the agent actually uses its knowledge.
+
+## Synthesis — episodic to semantic
+
+Short-lived episodic memories (3-day half-life) are periodically consolidated into long-lived semantic facts. When multiple episodic memories cluster together by meaning, the agent summarizes them into a single semantic memory with a confidence boost. The original episodes are tombstoned, but `PartOf` edges preserve the lineage — you can trace any synthesized fact back to the observations that produced it.
+
 ## Relationships between memories
 
 Memories aren't isolated facts. They can be linked — this caused that, this contradicts that, this is part of that. These relationships let the agent understand not just individual facts but the structure between them: causal chains, contradictions, hierarchies.

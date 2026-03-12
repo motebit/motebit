@@ -250,11 +250,13 @@ describe("MemoryGraph.consolidateAndForm", () => {
     expect(supersedesEdge!.target_id).toBe(oldNode.node_id);
   });
 
-  it("REINFORCE: existing confidence boosted, Reinforces edge exists", async () => {
+  it("REINFORCE: existing confidence boosted, half-life increased, Reinforces edge exists", async () => {
     const existingNode = await graph.formMemory(
       { content: "User likes Python", confidence: 0.7, sensitivity: SensitivityLevel.None },
       [1, 0, 0],
     );
+
+    const originalHalfLife = existingNode.half_life;
 
     const provider = mockProvider({
       action: "reinforce",
@@ -279,10 +281,38 @@ describe("MemoryGraph.consolidateAndForm", () => {
     const updated = await storage.getNode(existingNode.node_id);
     expect(updated!.confidence).toBeCloseTo(0.8, 1);
 
+    // Check half-life was increased by 1.5x (stability compounding)
+    expect(updated!.half_life).toBe(originalHalfLife * 1.5);
+
     // Check Reinforces edge
     const edges = await storage.getEdges(supportNode!.node_id);
     const reinforcesEdge = edges.find((e) => e.relation_type === RelationType.Reinforces);
     expect(reinforcesEdge).toBeDefined();
+  });
+
+  it("REINFORCE: half-life caps at MAX_HALF_LIFE (365 days)", async () => {
+    // Start with a memory near the cap (300-day half-life)
+    const existingNode = await graph.formMemory(
+      { content: "Core identity fact", confidence: 0.9, sensitivity: SensitivityLevel.None },
+      [1, 0, 0],
+      300 * 24 * 60 * 60 * 1000, // 300 days
+    );
+
+    const provider = mockProvider({
+      action: "reinforce",
+      existingNodeId: existingNode.node_id,
+      reason: "Confirms identity",
+    });
+
+    await graph.consolidateAndForm(
+      { content: "Reconfirms identity", confidence: 0.8, sensitivity: SensitivityLevel.None },
+      [0.95, 0.05, 0],
+      provider,
+    );
+
+    const updated = await storage.getNode(existingNode.node_id);
+    // 300 * 1.5 = 450 days, but capped at 365
+    expect(updated!.half_life).toBe(365 * 24 * 60 * 60 * 1000);
   });
 
   it("NOOP: no new node, existing last_accessed updated", async () => {

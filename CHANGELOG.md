@@ -11,6 +11,15 @@ All notable changes to the published packages are documented here. This project 
 - `did` field in `VerifyResult` (verify), `AgentCapabilities` (SDK), MCP `motebit_identity` tool, and API capabilities/discover endpoints
 - DID display in desktop settings, mobile settings, and admin dashboard
 - Spec §10: DID Interoperability section in `identity-v1.md`
+- **Memory compounding** — reinforced memories gain stability (half-life ×1.5 per reinforcement, capped at 365 days), making important knowledge durable instead of just louder
+- **Hebbian co-retrieval** — memories retrieved together automatically form `Related` edges (opt-in via `strengthenCoRetrieved`), building associative structure through natural use
+- **Retrieval recency** — `retrieve()` now updates `last_accessed` on returned nodes, keeping frequently-used memories fresh in future rankings
+- **Synthesis lineage** — episodic consolidation creates `PartOf` edges from synthesized semantic memories to their source nodes before tombstoning, preserving the "Eureka" trail
+- **CLI `/memories` enhanced** — shows memory type, half-life (days), edge count, compounding indicator (arrow for reinforced memories), and pinned status
+- **CLI `/graph` command** — memory graph health summary: node/edge counts, type breakdown, avg half-life, compounded count, edge density, intelligence gradient
+- **Admin Memory Graph** — edge colors by relation type (green=reinforces, blue=related, purple=part_of, yellow=supersedes), compounding ring on reinforced nodes, half-life and type in tooltip
+- **Mobile memory browser** — half-life durability indicator with compounding arrow
+- **MCP `motebit_recall`** — returns `half_life_days`, `memory_type`, and `created_at` alongside existing fields
 
 ### Fixed
 

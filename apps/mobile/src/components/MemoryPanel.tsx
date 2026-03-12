@@ -122,6 +122,10 @@ export function MemoryPanel({ visible, app, onClose }: MemoryPanelProps): React.
                         </View>
                       )}
                       <Text style={styles.metaText}>{Math.round(decayed * 100)}%</Text>
+                      <Text style={styles.metaText}>
+                        {Math.round(item.half_life / 86_400_000)}d half
+                        {item.half_life > 30 * 86_400_000 ? " \u2191" : ""}
+                      </Text>
                       <Text style={styles.metaText}>{formatTimeAgo(item.created_at)}</Text>
                     </View>
                   </View>

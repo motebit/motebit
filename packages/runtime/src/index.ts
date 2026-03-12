@@ -1828,9 +1828,19 @@ export class MotebitRuntime {
           continue;
         }
         const embedding = await embedText(summary);
-        await this.memory.formMemory(candidate, embedding, MemoryGraph.HALF_LIFE_SEMANTIC);
+        const synthesized = await this.memory.formMemory(
+          candidate,
+          embedding,
+          MemoryGraph.HALF_LIFE_SEMANTIC,
+        );
 
-        // Tombstone the episodic cluster members
+        // Create PartOf edges — lineage trail from synthesis to each source
+        const { RelationType: SynthRT } = await import("@motebit/sdk");
+        for (const sourceNode of cluster) {
+          await this.memory.link(synthesized.node_id, sourceNode.node_id, SynthRT.PartOf);
+        }
+
+        // Tombstone the episodic cluster members (edges preserved for lineage)
         for (const node of cluster) {
           await this.memory.deleteMemory(node.node_id);
         }

@@ -253,6 +253,8 @@ export class MemoryGraph {
   /** Default half-lives by memory type. */
   static readonly HALF_LIFE_SEMANTIC = 30 * 24 * 60 * 60 * 1000; // 30 days
   static readonly HALF_LIFE_EPISODIC = 3 * 24 * 60 * 60 * 1000; // 3 days
+  /** Maximum half-life — reinforced memories stabilize but never exceed 1 year. */
+  static readonly MAX_HALF_LIFE = 365 * 24 * 60 * 60 * 1000; // 365 days
 
   /**
    * Form a new memory from a candidate.
@@ -380,12 +382,16 @@ export class MemoryGraph {
       }
 
       case ConsolidationAction.REINFORCE: {
-        // Boost existing node's confidence
+        // Boost existing node's confidence and stability (half-life)
         const existingNode = decision.existingNodeId
           ? await this.storage.getNode(decision.existingNodeId)
           : null;
         if (existingNode) {
           existingNode.confidence = Math.min(1.0, existingNode.confidence + 0.1);
+          existingNode.half_life = Math.min(
+            MemoryGraph.MAX_HALF_LIFE,
+            existingNode.half_life * 1.5,
+          );
           existingNode.last_accessed = now;
           await this.storage.saveNode(existingNode);
         }
@@ -471,6 +477,8 @@ export class MemoryGraph {
       edgeDiscountFactor?: number;
       /** Include temporally expired memories (valid_until in the past). Default false. */
       includeExpired?: boolean;
+      /** Hebbian co-retrieval: create/strengthen Related edges between top results. Default false. */
+      strengthenCoRetrieved?: boolean;
     } = {},
   ): Promise<MemoryNode[]> {
     const {
@@ -481,6 +489,7 @@ export class MemoryGraph {
       expandEdges = true,
       edgeDiscountFactor = 0.7,
       includeExpired = false,
+      strengthenCoRetrieved = false,
     } = options;
 
     // Merge per-call overrides with instance config
@@ -561,7 +570,52 @@ export class MemoryGraph {
       topResults = topResults.slice(0, limit);
     }
 
-    return topResults.map((s) => s.node);
+    const resultNodes = topResults.map((s) => s.node);
+
+    // Update last_accessed on all retrieved nodes — recently retrieved memories stay fresh
+    const retrievalTime = Date.now();
+    for (const node of resultNodes) {
+      node.last_accessed = retrievalTime;
+      await this.storage.saveNode(node);
+    }
+
+    // Hebbian co-retrieval: link top co-retrieved memories
+    if (strengthenCoRetrieved && resultNodes.length >= 2) {
+      await this.linkCoRetrieved(resultNodes.slice(0, 3));
+    }
+
+    return resultNodes;
+  }
+
+  /**
+   * Hebbian co-retrieval: create or strengthen Related edges between
+   * memories that are frequently retrieved together. Neurons that fire
+   * together wire together — co-retrieved memories become more connected.
+   */
+  private async linkCoRetrieved(nodes: MemoryNode[]): Promise<void> {
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i]!;
+        const b = nodes[j]!;
+
+        // Check if an edge already exists between this pair
+        const edges = await this.storage.getEdges(a.node_id);
+        const existing = edges.find(
+          (e) =>
+            (e.source_id === a.node_id && e.target_id === b.node_id) ||
+            (e.source_id === b.node_id && e.target_id === a.node_id),
+        );
+
+        if (existing) {
+          // Strengthen existing edge — small increment, capped at 1.0
+          existing.weight = Math.min(1.0, existing.weight + 0.05);
+          await this.storage.saveEdge(existing);
+        } else {
+          // Create new co-retrieval edge with modest initial weight
+          await this.link(a.node_id, b.node_id, RT.Related, 0.2, 0.5);
+        }
+      }
+    }
   }
 
   /**
