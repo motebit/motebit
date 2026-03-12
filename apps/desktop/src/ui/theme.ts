@@ -3,7 +3,6 @@ export type ThemePreference = "light" | "dark" | "system";
 const THEME_KEY = "motebit-theme";
 
 let currentPreference: ThemePreference = "system";
-let hasExplicitChoice = false;
 let mediaQuery: MediaQueryList | null = null;
 
 function getEffectiveTheme(pref: ThemePreference): "light" | "dark" {
@@ -72,7 +71,6 @@ export function initTheme(
     const stored = localStorage.getItem(THEME_KEY);
     if (stored === "light" || stored === "dark" || stored === "system") {
       currentPreference = stored;
-      hasExplicitChoice = true;
     }
   } catch {
     // localStorage unavailable
@@ -97,8 +95,7 @@ export function initTheme(
       const pref = (btn as HTMLElement).dataset.theme as ThemePreference;
       if (pref) {
         currentPreference = pref;
-        hasExplicitChoice = true;
-        applyTheme(pref);
+          applyTheme(pref);
         updateToggleUI();
         persist(pref, isTauri, invoke);
       }
@@ -111,7 +108,6 @@ export function initTheme(
     },
     setPreference(pref: ThemePreference) {
       currentPreference = pref;
-      hasExplicitChoice = true;
       applyTheme(pref);
       updateToggleUI();
       persist(pref, isTauri, invoke);
