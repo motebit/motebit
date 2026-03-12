@@ -8,6 +8,24 @@ function fingerprint(publicKey: string): string {
   return clean.slice(0, 16) + "...";
 }
 
+// Inline did:key derivation (pure math, no crypto deps needed)
+const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+function hexToDidKey(hex: string): string {
+  const clean = hex.replace(/^0x/, "");
+  if (clean.length !== 64) return "";
+  const bytes = new Uint8Array(34);
+  bytes[0] = 0xed;
+  bytes[1] = 0x01;
+  for (let i = 0; i < 32; i++) bytes[i + 2] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+  let zeros = 0;
+  while (zeros < bytes.length && bytes[zeros] === 0) zeros++;
+  let v = 0n;
+  for (let i = 0; i < bytes.length; i++) v = v * 256n + BigInt(bytes[i]!);
+  let r = "";
+  while (v > 0n) { r = B58[Number(v % 58n)]! + r; v /= 58n; }
+  return `did:key:z${B58[0]!.repeat(zeros)}${r}`;
+}
+
 export function DevicesPanel({ devices }: { devices: DeviceEntry[] }): React.ReactElement {
   const sorted = [...devices].sort((a, b) => b.registered_at - a.registered_at);
 
@@ -40,6 +58,13 @@ export function DevicesPanel({ devices }: { devices: DeviceEntry[] }): React.Rea
             { className: "device-key" },
             `key: ${fingerprint(d.public_key)}`,
           ),
+          hexToDidKey(d.public_key)
+            ? React.createElement(
+                "span",
+                { className: "device-key", style: { fontSize: "10px" } },
+                hexToDidKey(d.public_key),
+              )
+            : null,
           React.createElement(
             "span",
             { className: "timestamp" },

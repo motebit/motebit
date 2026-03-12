@@ -290,6 +290,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       info.motebitId || "-";
     (document.getElementById("identity-device-id") as HTMLElement).textContent =
       info.deviceId || "-";
+    (document.getElementById("identity-did") as HTMLElement).textContent = info.did || "-";
     (document.getElementById("identity-public-key") as HTMLElement).textContent = info.publicKey
       ? info.publicKey.slice(0, 16) + "..."
       : "-";

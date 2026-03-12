@@ -24,7 +24,7 @@ npm install @motebit/sdk
 | **Events** | `EventLogEntry`, `EventType` |
 | **Sync** | `SyncCursor`, `ConflictEdge`, `SyncConversation`, `SyncConversationMessage`, `ConversationSyncResult` |
 | **Plans** | `Plan`, `PlanStep`, `PlanStatus`, `StepStatus` |
-| **Agent protocol** | `AgentTask`, `AgentTaskStatus`, `ExecutionReceipt`, `AgentCapabilities` |
+| **Agent protocol** | `AgentTask`, `AgentTaskStatus`, `ExecutionReceipt`, `AgentCapabilities` (includes `did:key`) |
 | **Render** | `RenderSpec`, `GeometrySpec`, `MaterialSpec`, `LightingSpec` |
 | **Privacy** | `AuditRecord`, `ExportManifest` |
 

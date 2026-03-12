@@ -35,7 +35,7 @@ npx create-motebit verify path/to/motebit.md
 
 A `motebit.md` is a human-readable, cryptographically signed agent identity file. It gives your AI agent:
 
-- **Sovereign identity** — an Ed25519 keypair that proves who the agent is
+- **Sovereign identity** — an Ed25519 keypair that proves who the agent is, with a W3C `did:key` for interoperability
 - **Governance** — trust mode, risk thresholds, operator controls
 - **Privacy** — sensitivity levels, retention rules, fail-closed defaults
 - **Memory** — decay parameters, confidence thresholds

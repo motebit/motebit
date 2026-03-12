@@ -358,6 +358,10 @@ async function guidedScaffold(
   console.log();
   console.log(`  Identity stored in ${dim(configPath())}`);
   console.log(`  Motebit ID: ${cyan(result.motebitId)}`);
+  const verifyResult = await verify(result.identityFileContent);
+  if (verifyResult.did) {
+    console.log(`  DID:        ${dim(verifyResult.did)}`);
+  }
   console.log();
   console.log(`  ${bold("Next steps:")}`);
   console.log();

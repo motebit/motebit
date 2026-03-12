@@ -22,6 +22,7 @@ import type { InteriorColor } from "@motebit/runtime";
 import { COLOR_PRESETS, APPROVAL_PRESET_CONFIGS } from "../mobile-app";
 import { useTheme, type ThemeColors } from "../theme";
 import type { Goal, GoalMode } from "../adapters/expo-sqlite";
+import { hexPublicKeyToDidKey } from "@motebit/crypto";
 
 // === Pure Color Math (copied from desktop color-picker.ts) ===
 
@@ -1040,6 +1041,13 @@ function IdentityTab({
   const styles = useMemo(() => createSettingsStyles(colors), [colors]);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
+  let did = "";
+  try {
+    if (publicKey) did = hexPublicKeyToDidKey(publicKey);
+  } catch {
+    // Non-fatal
+  }
+
   const copyToClipboard = (field: string, value: string) => {
     Clipboard.setString(value);
     setCopiedField(field);
@@ -1067,6 +1075,28 @@ function IdentityTab({
           {copiedField === "motebitId" ? "Copied!" : "Copy"}
         </Text>
       </TouchableOpacity>
+
+      {did ? (
+        <>
+          <Text style={styles.sectionTitle}>DID</Text>
+          <TouchableOpacity
+            onPress={() => copyToClipboard("did", did)}
+            style={styles.identityFieldRow}
+          >
+            <Text style={[styles.monoValue, styles.identityFieldValue]} numberOfLines={2}>
+              {did}
+            </Text>
+            <Text
+              style={[
+                styles.identityCopyLabel,
+                copiedField === "did" && styles.identityCopiedLabel,
+              ]}
+            >
+              {copiedField === "did" ? "Copied!" : "Copy"}
+            </Text>
+          </TouchableOpacity>
+        </>
+      ) : null}
 
       <Text style={styles.sectionTitle}>Device ID</Text>
       <TouchableOpacity

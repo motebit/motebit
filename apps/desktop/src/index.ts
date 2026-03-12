@@ -39,7 +39,7 @@ import {
   type BootstrapKeyStore,
 } from "@motebit/core-identity";
 import { InMemoryAuditLog } from "@motebit/privacy-layer";
-import { createSignedToken, deriveSyncEncryptionKey } from "@motebit/crypto";
+import { createSignedToken, deriveSyncEncryptionKey, hexPublicKeyToDidKey } from "@motebit/crypto";
 import {
   generate as generateIdentityFile,
   parse as parseIdentityFile,
@@ -1065,11 +1065,18 @@ export class DesktopApp {
 
   // === Identity ===
 
-  getIdentityInfo(): { motebitId: string; deviceId: string; publicKey: string } {
+  getIdentityInfo(): { motebitId: string; deviceId: string; publicKey: string; did: string } {
+    let did = "";
+    try {
+      if (this.publicKey) did = hexPublicKeyToDidKey(this.publicKey);
+    } catch {
+      // Non-fatal
+    }
     return {
       motebitId: this.motebitId,
       deviceId: this.deviceId,
       publicKey: this.publicKey,
+      did,
     };
   }
 

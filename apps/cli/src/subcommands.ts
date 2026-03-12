@@ -207,6 +207,13 @@ export async function handleExport(config: CliConfig): Promise<void> {
 
   fs.writeFileSync(outputPath, content, "utf-8");
   console.log(`Your agent identity file has been created: ${outputPath}`);
+  if (updatedConfig.device_public_key) {
+    try {
+      console.log(`DID: ${hexPublicKeyToDidKey(updatedConfig.device_public_key)}`);
+    } catch {
+      // Non-fatal
+    }
+  }
   rl.close();
 }
 

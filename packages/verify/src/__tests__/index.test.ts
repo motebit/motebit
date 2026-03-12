@@ -132,7 +132,16 @@ describe("verify — valid signatures", () => {
     expect(result.identity).not.toBeNull();
     expect(result.identity!.motebit_id).toBe("01234567-89ab-cdef-0123-456789abcdef");
     expect(result.identity!.spec).toBe("motebit/identity@1.0");
+    expect(result.did).toMatch(/^did:key:z[1-9A-HJ-NP-Za-km-z]+$/);
     expect(result.error).toBeUndefined();
+  });
+
+  it("returns deterministic did:key on valid verification", async () => {
+    const { content } = await generateValidFile();
+    const a = await verify(content);
+    const b = await verify(content);
+    expect(a.did).toBe(b.did);
+    expect(a.did).toMatch(/^did:key:z/);
   });
 
   it("returns full identity on success", async () => {

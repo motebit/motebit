@@ -21,7 +21,7 @@ const result = await verify(content);
 
 if (result.valid) {
   console.log("Verified:", result.identity.motebit_id);
-  console.log("Owner:", result.identity.owner_id);
+  console.log("DID:", result.did); // W3C did:key derived from Ed25519 public key
   console.log("Trust:", result.identity.governance.trust_mode);
 } else {
   console.error("Verification failed:", result.error);
@@ -43,7 +43,7 @@ console.log(frontmatter.motebit_id);
 
 Verify a `motebit.md` file's Ed25519 signature.
 
-Returns `{ valid: true, identity }` on success, or `{ valid: false, identity: null, error }` on failure.
+Returns `{ valid: true, identity, did }` on success, or `{ valid: false, identity: null, error }` on failure. The `did` field is the W3C `did:key` URI derived from the Ed25519 public key.
 
 ### `parse(content: string): { frontmatter, signature, rawFrontmatter }`
 

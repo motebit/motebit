@@ -1504,13 +1504,23 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
         .all(now, limit) as Array<Record<string, unknown>>;
     }
 
-    const agents = rows.map((r) => ({
-      motebit_id: r.motebit_id,
-      public_key: r.public_key,
-      endpoint_url: r.endpoint_url,
-      capabilities: JSON.parse(r.capabilities as string) as string[],
-      metadata: r.metadata ? (JSON.parse(r.metadata as string) as Record<string, unknown>) : null,
-    }));
+    const agents = rows.map((r) => {
+      const pk = r.public_key as string;
+      let agentDid: string | undefined;
+      try {
+        if (pk) agentDid = hexPublicKeyToDidKey(pk);
+      } catch {
+        // Non-fatal
+      }
+      return {
+        motebit_id: r.motebit_id,
+        public_key: pk,
+        did: agentDid,
+        endpoint_url: r.endpoint_url,
+        capabilities: JSON.parse(r.capabilities as string) as string[],
+        metadata: r.metadata ? (JSON.parse(r.metadata as string) as Record<string, unknown>) : null,
+      };
+    });
 
     return c.json({ agents });
   });
