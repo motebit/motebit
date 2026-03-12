@@ -31,7 +31,7 @@ npm install @motebit/sdk
 ## Usage
 
 ```typescript
-import { MotebitState, TrustMode, RiskLevel, ExecutionReceipt } from "@motebit/sdk";
+import { MotebitState, TrustMode, BatteryMode, ExecutionReceipt } from "@motebit/sdk";
 
 const state: MotebitState = {
   attention: 0.7,
