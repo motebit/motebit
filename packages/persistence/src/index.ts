@@ -513,6 +513,13 @@ export class SqliteMemoryStorage implements MemoryStorageAdapter {
     this.stmtTombstoneNode.run(nodeId);
   }
 
+  async tombstoneNodeOwned(nodeId: string, motebitId: string): Promise<boolean> {
+    const info = this.db
+      .prepare(`UPDATE memory_nodes SET tombstoned = 1 WHERE node_id = ? AND motebit_id = ?`)
+      .run(nodeId, motebitId);
+    return info.changes > 0;
+  }
+
   async getAllNodes(motebitId: string): Promise<MemoryNode[]> {
     const rows = this.stmtGetAllNodes.all(motebitId) as NodeRow[];
     return rows.map(rowToNode);
@@ -1981,6 +1988,21 @@ export interface MotebitDatabase {
   close(): void;
 }
 
+/**
+ * Run an idempotent ALTER TABLE. Silences "duplicate column" / "already exists" errors
+ * but re-throws anything unexpected (disk full, permission denied, corrupt DB).
+ */
+function migrateExec(driver: DatabaseDriver, sql: string): void {
+  try {
+    driver.exec(sql);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // SQLite returns "duplicate column name: X" or "table X already exists" / "index X already exists"
+    if (/duplicate column|already exists/i.test(msg)) return;
+    throw err;
+  }
+}
+
 /** Run schema creation and migrations on a DatabaseDriver, return MotebitDatabase. */
 export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): MotebitDatabase {
   driver.pragma("journal_mode = WAL");
@@ -1992,144 +2014,80 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   initSchema(driver);
 
   if (userVersion < 1) {
-    try {
-      driver.exec("ALTER TABLE events ADD COLUMN device_id TEXT");
-    } catch (_) {
-      // Column may already exist on new DBs that have it in CREATE TABLE
-    }
+    migrateExec(driver, "ALTER TABLE events ADD COLUMN device_id TEXT");
     driver.pragma("user_version = 1");
   }
 
   if (userVersion < 2) {
-    try {
-      driver.exec(
-        "ALTER TABLE state_snapshots ADD COLUMN version_clock INTEGER NOT NULL DEFAULT 0",
-      );
-    } catch (_) {
-      // Column may already exist on new DBs
-    }
+    migrateExec(driver, "ALTER TABLE state_snapshots ADD COLUMN version_clock INTEGER NOT NULL DEFAULT 0");
     driver.pragma("user_version = 2");
   }
 
   if (userVersion < 3) {
-    // Goals table is in SCHEMA for new DBs; this handles upgrades from v2
     driver.pragma("user_version = 3");
   }
 
   if (userVersion < 4) {
-    // Approval queue table is in SCHEMA for new DBs; this handles upgrades from v3
     driver.pragma("user_version = 4");
   }
 
   if (userVersion < 5) {
-    // Goal intelligence: new columns on goals, new goal_outcomes table
-    // goal_outcomes table is in SCHEMA for new DBs; ALTER handles upgrades
-    const addCol = (table: string, col: string, def: string) => {
-      try {
-        driver.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
-      } catch (_) {
-        /* already exists */
-      }
-    };
-    addCol("goals", "mode", "TEXT NOT NULL DEFAULT 'recurring'");
-    addCol("goals", "status", "TEXT NOT NULL DEFAULT 'active'");
-    addCol("goals", "parent_goal_id", "TEXT");
-    addCol("goals", "max_retries", "INTEGER NOT NULL DEFAULT 3");
-    addCol("goals", "consecutive_failures", "INTEGER NOT NULL DEFAULT 0");
+    migrateExec(driver, "ALTER TABLE goals ADD COLUMN mode TEXT NOT NULL DEFAULT 'recurring'");
+    migrateExec(driver, "ALTER TABLE goals ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
+    migrateExec(driver, "ALTER TABLE goals ADD COLUMN parent_goal_id TEXT");
+    migrateExec(driver, "ALTER TABLE goals ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 3");
+    migrateExec(driver, "ALTER TABLE goals ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0");
     driver.pragma("user_version = 5");
   }
 
   if (userVersion < 6) {
-    // Conversation persistence tables are in SCHEMA for new DBs; this handles upgrades
     driver.pragma("user_version = 6");
   }
 
   if (userVersion < 7) {
-    // Plans + plan_steps tables are in SCHEMA for new DBs; this handles upgrades
     driver.pragma("user_version = 7");
   }
 
   if (userVersion < 8) {
-    try {
-      driver.exec("ALTER TABLE memory_nodes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
-    } catch (_) {
-      /* already exists */
-    }
+    migrateExec(driver, "ALTER TABLE memory_nodes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
     driver.pragma("user_version = 8");
   }
 
   if (userVersion < 9) {
-    try {
-      driver.exec("ALTER TABLE tool_audit_log ADD COLUMN run_id TEXT");
-    } catch (_) {
-      /* already exists on new DBs */
-    }
-    try {
-      driver.exec("CREATE INDEX IF NOT EXISTS idx_tool_audit_run ON tool_audit_log (run_id)");
-    } catch (_) {
-      /* already exists */
-    }
+    migrateExec(driver, "ALTER TABLE tool_audit_log ADD COLUMN run_id TEXT");
+    migrateExec(driver, "CREATE INDEX IF NOT EXISTS idx_tool_audit_run ON tool_audit_log (run_id)");
     driver.pragma("user_version = 9");
   }
 
   if (userVersion < 10) {
-    try {
-      driver.exec("ALTER TABLE tool_audit_log ADD COLUMN injection TEXT");
-    } catch (_) {
-      /* already exists on new DBs */
-    }
+    migrateExec(driver, "ALTER TABLE tool_audit_log ADD COLUMN injection TEXT");
     driver.pragma("user_version = 10");
   }
 
   if (userVersion < 11) {
-    try {
-      driver.exec("ALTER TABLE goal_outcomes ADD COLUMN tokens_used INTEGER");
-    } catch (_) {
-      /* already exists on new DBs */
-    }
+    migrateExec(driver, "ALTER TABLE goal_outcomes ADD COLUMN tokens_used INTEGER");
     driver.pragma("user_version = 11");
   }
 
   if (userVersion < 12) {
-    try {
-      driver.exec("ALTER TABLE goals ADD COLUMN wall_clock_ms INTEGER");
-    } catch (_) {
-      /* already exists */
-    }
+    migrateExec(driver, "ALTER TABLE goals ADD COLUMN wall_clock_ms INTEGER");
     driver.pragma("user_version = 12");
   }
 
   if (userVersion < 13) {
-    try {
-      driver.exec("ALTER TABLE goals ADD COLUMN project_id TEXT");
-    } catch (_) {
-      /* already exists */
-    }
+    migrateExec(driver, "ALTER TABLE goals ADD COLUMN project_id TEXT");
     driver.exec("CREATE INDEX IF NOT EXISTS idx_goals_project ON goals (project_id)");
     driver.pragma("user_version = 13");
   }
 
   if (userVersion < 14) {
-    try {
-      driver.exec("ALTER TABLE memory_nodes ADD COLUMN memory_type TEXT DEFAULT 'semantic'");
-    } catch (_) {
-      /* already exists */
-    }
-    try {
-      driver.exec("ALTER TABLE memory_nodes ADD COLUMN valid_from INTEGER");
-    } catch (_) {
-      /* already exists */
-    }
-    try {
-      driver.exec("ALTER TABLE memory_nodes ADD COLUMN valid_until INTEGER");
-    } catch (_) {
-      /* already exists */
-    }
+    migrateExec(driver, "ALTER TABLE memory_nodes ADD COLUMN memory_type TEXT DEFAULT 'semantic'");
+    migrateExec(driver, "ALTER TABLE memory_nodes ADD COLUMN valid_from INTEGER");
+    migrateExec(driver, "ALTER TABLE memory_nodes ADD COLUMN valid_until INTEGER");
     driver.pragma("user_version = 14");
   }
 
   if (userVersion < 15) {
-    // gradient_snapshots table is in SCHEMA for new DBs; this handles upgrades from v14
     driver.pragma("user_version = 15");
   }
 
@@ -2148,52 +2106,33 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   }
 
   if (userVersion < 18) {
-    try {
-      driver.exec(
-        "ALTER TABLE gradient_snapshots ADD COLUMN retrieval_quality REAL NOT NULL DEFAULT 0",
-      );
-    } catch (_) {
-      /* already exists */
-    }
+    migrateExec(driver, "ALTER TABLE gradient_snapshots ADD COLUMN retrieval_quality REAL NOT NULL DEFAULT 0");
     driver.pragma("user_version = 18");
   }
 
   if (userVersion < 19) {
-    // agent_trust table is in SCHEMA for new DBs; this handles upgrades from v18
     driver.pragma("user_version = 19");
   }
 
   if (userVersion < 20) {
-    try {
-      driver.exec("ALTER TABLE gradient_snapshots ADD COLUMN interaction_efficiency REAL NOT NULL DEFAULT 0");
-    } catch (_) { /* already exists */ }
-    try {
-      driver.exec("ALTER TABLE gradient_snapshots ADD COLUMN tool_efficiency REAL NOT NULL DEFAULT 0");
-    } catch (_) { /* already exists */ }
+    migrateExec(driver, "ALTER TABLE gradient_snapshots ADD COLUMN interaction_efficiency REAL NOT NULL DEFAULT 0");
+    migrateExec(driver, "ALTER TABLE gradient_snapshots ADD COLUMN tool_efficiency REAL NOT NULL DEFAULT 0");
     driver.pragma("user_version = 20");
   }
 
   if (userVersion < 21) {
-    try {
-      driver.exec("ALTER TABLE agent_trust ADD COLUMN successful_tasks INTEGER NOT NULL DEFAULT 0");
-    } catch (_) { /* already exists */ }
-    try {
-      driver.exec("ALTER TABLE agent_trust ADD COLUMN failed_tasks INTEGER NOT NULL DEFAULT 0");
-    } catch (_) { /* already exists */ }
+    migrateExec(driver, "ALTER TABLE agent_trust ADD COLUMN successful_tasks INTEGER NOT NULL DEFAULT 0");
+    migrateExec(driver, "ALTER TABLE agent_trust ADD COLUMN failed_tasks INTEGER NOT NULL DEFAULT 0");
     driver.pragma("user_version = 21");
   }
 
   if (userVersion < 22) {
-    try {
-      driver.exec("ALTER TABLE tool_audit_log ADD COLUMN cost_units INTEGER DEFAULT 0");
-    } catch (_) { /* already exists */ }
+    migrateExec(driver, "ALTER TABLE tool_audit_log ADD COLUMN cost_units INTEGER DEFAULT 0");
     driver.pragma("user_version = 22");
   }
 
   if (userVersion < 23) {
-    try {
-      driver.exec("ALTER TABLE gradient_snapshots ADD COLUMN curiosity_pressure REAL NOT NULL DEFAULT 0");
-    } catch (_) { /* already exists */ }
+    migrateExec(driver, "ALTER TABLE gradient_snapshots ADD COLUMN curiosity_pressure REAL NOT NULL DEFAULT 0");
     driver.pragma("user_version = 23");
   }
 

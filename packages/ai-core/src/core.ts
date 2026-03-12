@@ -104,6 +104,21 @@ export function packContext(contextPack: ContextPack): string {
     parts.push("  If relevant to what the user is saying, you could check in on these. If not, ignore them.");
   }
 
+  // Known agents — trust context so the AI knows its social network
+  if (contextPack.knownAgents && contextPack.knownAgents.length > 0) {
+    parts.push("[Agents I Know]");
+    for (const agent of contextPack.knownAgents) {
+      const tasks = (agent.successful_tasks ?? 0) + (agent.failed_tasks ?? 0);
+      const successRate = tasks > 0 ? ((agent.successful_tasks ?? 0) / tasks * 100).toFixed(0) : "n/a";
+      const daysSince = Math.floor((Date.now() - agent.last_seen_at) / 86_400_000);
+      const timeAgo = daysSince === 0 ? "today" : `${daysSince}d ago`;
+      const id = agent.remote_motebit_id.length > 12
+        ? `${agent.remote_motebit_id.slice(0, 8)}…${agent.remote_motebit_id.slice(-4)}`
+        : agent.remote_motebit_id;
+      parts.push(`  ${id}: ${agent.trust_level} | ${agent.interaction_count} interactions | tasks: ${successRate}% success | last seen ${timeAgo}`);
+    }
+  }
+
   // User message
   parts.push(`[User] ${contextPack.user_message}`);
 
@@ -734,11 +749,11 @@ export class HybridProvider implements StreamingProvider {
   async generate(contextPack: ContextPack): Promise<AIResponse> {
     try {
       return await this.cloud.generate(contextPack);
-    } catch {
+    } catch (err: unknown) {
       if (this.config.fallback_to_local && this.local !== null) {
         return this.local.generate(contextPack);
       }
-      throw new Error("Cloud provider failed and no local fallback available");
+      throw new Error("Cloud provider failed and no local fallback available", { cause: err });
     }
   }
 
@@ -747,11 +762,11 @@ export class HybridProvider implements StreamingProvider {
   ): AsyncGenerator<{ type: "text"; text: string } | { type: "done"; response: AIResponse }> {
     try {
       yield* this.cloud.generateStream(contextPack);
-    } catch {
+    } catch (err: unknown) {
       if (this.config.fallback_to_local && this.local !== null) {
         yield* this.local.generateStream(contextPack);
       } else {
-        throw new Error("Cloud provider failed and no local fallback available");
+        throw new Error("Cloud provider failed and no local fallback available", { cause: err });
       }
     }
   }
@@ -850,6 +865,7 @@ export class OllamaProvider implements StreamingProvider {
       if (message.includes("ECONNREFUSED") || message.includes("fetch failed")) {
         throw new Error(
           `Cannot connect to Ollama at ${baseUrl}. Is Ollama running? Start it with: ollama serve`,
+          { cause: err },
         );
       }
       throw err;
@@ -924,6 +940,7 @@ export class OllamaProvider implements StreamingProvider {
       if (message.includes("ECONNREFUSED") || message.includes("fetch failed")) {
         throw new Error(
           `Cannot connect to Ollama at ${baseUrl}. Is Ollama running? Start it with: ollama serve`,
+          { cause: err },
         );
       }
       throw err;

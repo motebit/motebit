@@ -268,7 +268,7 @@ export class PrivacyLayer {
     try {
       return await this.inspector.listMemories(options);
     } catch (error) {
-      throw new Error(`Privacy layer: access denied (fail-closed). Cause: ${String(error)}`);
+      throw new Error("Privacy layer: access denied (fail-closed)", { cause: error });
     }
   }
 
@@ -276,7 +276,7 @@ export class PrivacyLayer {
     try {
       return await this.inspector.inspectMemory(nodeId);
     } catch (error) {
-      throw new Error(`Privacy layer: access denied (fail-closed). Cause: ${String(error)}`);
+      throw new Error("Privacy layer: access denied (fail-closed)", { cause: error });
     }
   }
 
@@ -284,7 +284,7 @@ export class PrivacyLayer {
     try {
       return await this.sensitivityManager.setSensitivity(nodeId, level);
     } catch (error) {
-      throw new Error(`Privacy layer: access denied (fail-closed). Cause: ${String(error)}`);
+      throw new Error("Privacy layer: access denied (fail-closed)", { cause: error });
     }
   }
 
@@ -292,7 +292,7 @@ export class PrivacyLayer {
     try {
       return await this.deleteManager.deleteMemory(nodeId, deletedBy);
     } catch (error) {
-      throw new Error(`Privacy layer: access denied (fail-closed). Cause: ${String(error)}`);
+      throw new Error("Privacy layer: access denied (fail-closed)", { cause: error });
     }
   }
 
@@ -300,7 +300,7 @@ export class PrivacyLayer {
     try {
       return await this.exportManager.exportAll(identity);
     } catch (error) {
-      throw new Error(`Privacy layer: access denied (fail-closed). Cause: ${String(error)}`);
+      throw new Error("Privacy layer: access denied (fail-closed)", { cause: error });
     }
   }
 

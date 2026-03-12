@@ -179,6 +179,8 @@ export interface TurnOptions {
   sessionInfo?: { continued: boolean; lastActiveAt: number };
   /** Fading memories the agent might want to check in about, if relevant to conversation. */
   curiosityHints?: Array<{ content: string; daysSinceDiscussed: number }>;
+  /** Known agents this motebit has interacted with — trust context for the AI. */
+  knownAgents?: import("@motebit/sdk").AgentTrustRecord[];
 }
 
 export type AgenticChunk =
@@ -288,6 +290,7 @@ export async function* runTurnStreaming(
       tools: toolDefs,
       sessionInfo: options?.sessionInfo,
       curiosityHints: iteration === 1 ? options?.curiosityHints : undefined,
+      knownAgents: iteration === 1 ? options?.knownAgents : undefined,
     };
 
     // On continuation turns, the user_message is empty and the conversation

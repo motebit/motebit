@@ -292,13 +292,20 @@ export async function handleRun(config: CliConfig): Promise<void> {
     runtime.connectSync(httpAdapter);
   }
 
-  // Graceful shutdown on SIGINT/SIGTERM
+  // Graceful shutdown on SIGINT/SIGTERM with safety timeout
   const shutdown = (): void => {
     console.log("\nShutting down...");
-    scheduler.stop();
-    wsAdapter?.disconnect();
-    runtime.stop();
-    moteDb.close();
+    const forceExit = setTimeout(() => process.exit(1), 5_000);
+    if (typeof forceExit.unref === "function") forceExit.unref(); // Don't block event loop
+    try {
+      scheduler.stop();
+      wsAdapter?.disconnect();
+      runtime.stop();
+      moteDb.close();
+    } catch (err: unknown) {
+      console.error("Shutdown error:", err instanceof Error ? err.message : String(err));
+    }
+    clearTimeout(forceExit);
     process.exit(0);
   };
 
@@ -652,24 +659,30 @@ export async function handleServe(config: CliConfig): Promise<void> {
     }
   }
 
-  // Graceful shutdown
+  // Graceful shutdown with safety timeout
   const shutdown = async (): Promise<void> => {
     log("\nShutting down MCP server...");
-    if (heartbeatTimer) clearInterval(heartbeatTimer);
-    // Deregister from relay
-    if (syncUrl) {
-      try {
-        const masterToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
-        const headers: Record<string, string> = {};
-        if (masterToken) headers["Authorization"] = `Bearer ${masterToken}`;
-        await fetch(`${syncUrl}/api/v1/agents/deregister`, { method: "DELETE", headers });
-      } catch {
-        // Best-effort deregistration
+    const forceExit = setTimeout(() => process.exit(1), 5_000);
+    if (typeof forceExit.unref === "function") forceExit.unref();
+    try {
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      if (syncUrl) {
+        try {
+          const masterToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+          const headers: Record<string, string> = {};
+          if (masterToken) headers["Authorization"] = `Bearer ${masterToken}`;
+          await fetch(`${syncUrl}/api/v1/agents/deregister`, { method: "DELETE", headers });
+        } catch {
+          // Best-effort deregistration
+        }
       }
+      await mcpServer.stop();
+      runtime.stop();
+      moteDb.close();
+    } catch (err: unknown) {
+      log(`Shutdown error: ${err instanceof Error ? err.message : String(err)}`);
     }
-    await mcpServer.stop();
-    runtime.stop();
-    moteDb.close();
+    clearTimeout(forceExit);
     process.exit(0);
   };
 

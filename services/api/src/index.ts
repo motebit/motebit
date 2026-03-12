@@ -65,8 +65,8 @@ import type {
   SyncConversationMessage,
   ExecutionReceipt,
 } from "@motebit/sdk";
-import { AgentTaskStatus } from "@motebit/sdk";
-import type { AgentTask } from "@motebit/sdk";
+import { AgentTaskStatus, asMotebitId, asNodeId, asConversationId, asPlanId } from "@motebit/sdk";
+import type { AgentTask, MotebitId, NodeId } from "@motebit/sdk";
 import type { WSContext } from "hono/ws";
 import { verifySignedToken, verifyExecutionReceipt, hexPublicKeyToDidKey } from "@motebit/crypto";
 
@@ -320,7 +320,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     "/ws/sync/:motebitId",
     upgradeWebSocket((c) => {
       // Route param is guaranteed by /ws/sync/:motebitId pattern; guard in onOpen for defense-in-depth
-      const motebitId = c.req.param("motebitId") as string;
+      const motebitId = asMotebitId(c.req.param("motebitId") as string);
       const url = new URL(c.req.url, "http://localhost");
       const deviceId = url.searchParams.get("device_id") ?? crypto.randomUUID();
       const token = url.searchParams.get("token");
@@ -490,7 +490,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // --- Sync: push events (HTTP fallback) ---
   app.post("/sync/:motebitId/push", async (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const body = await c.req.json<{ events: EventLogEntry[] }>();
     if (!Array.isArray(body.events)) {
       throw new HTTPException(400, {
@@ -520,7 +520,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // --- Sync: pull events (HTTP fallback) ---
   app.get("/sync/:motebitId/pull", async (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const afterClock = Number(c.req.query("after_clock") ?? "0");
     const events = await eventStore.query({
       motebit_id: motebitId,
@@ -531,7 +531,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // --- Sync: latest clock ---
   app.get("/sync/:motebitId/clock", async (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const clock = await eventStore.getLatestClock(motebitId);
     return c.json({ motebit_id: motebitId, latest_clock: clock });
   });
@@ -581,7 +581,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   }
 
   app.get("/api/v1/audit/:motebitId", (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const turnId = c.req.query("turn_id");
     let entries: ToolAuditEntry[] = [];
     if (moteDb.toolAuditSink != null) {
@@ -595,7 +595,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // --- Plans: list all plans for a motebit with their steps ---
   app.get("/api/v1/plans/:motebitId", (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const plans = moteDb.planStore.listPlans(motebitId);
     const plansWithSteps = plans.map((plan) => ({
       ...plan,
@@ -606,8 +606,8 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // --- Plans: get single plan with steps ---
   app.get("/api/v1/plans/:motebitId/:planId", (c) => {
-    const motebitId = c.req.param("motebitId");
-    const planId = c.req.param("planId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
+    const planId = asPlanId(c.req.param("planId"));
     const plan = moteDb.planStore.getPlan(planId);
     if (!plan || plan.motebit_id !== motebitId) {
       throw new HTTPException(404, { message: "Plan not found" });
@@ -618,14 +618,14 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // --- Agent Trust: trust records for known agents ---
   app.get("/api/v1/agent-trust/:motebitId", async (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const records = await moteDb.agentTrustStore.listAgentTrust(motebitId);
     return c.json({ motebit_id: motebitId, records });
   });
 
   // --- Gradient: intelligence gradient snapshots ---
   app.get("/api/v1/gradient/:motebitId", (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const limit = Number(c.req.query("limit") ?? "100");
     const rows = moteDb.db
       .prepare(
@@ -660,7 +660,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // --- State: current state vector ---
   app.get("/api/v1/state/:motebitId", (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const json = moteDb.stateSnapshot.loadState(motebitId);
     if (json == null || json === "") {
       return c.json({ motebit_id: motebitId, state: null });
@@ -675,7 +675,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // --- Memory: list all nodes and edges ---
   app.get("/api/v1/memory/:motebitId", async (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const [memories, edges] = await Promise.all([
       moteDb.memoryStorage.getAllNodes(motebitId),
       moteDb.memoryStorage.getAllEdges(motebitId),
@@ -683,12 +683,17 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     return c.json({ motebit_id: motebitId, memories, edges });
   });
 
-  // --- Memory: tombstone a node ---
+  // --- Memory: tombstone a node (ownership-verified, branded IDs) ---
   app.delete("/api/v1/memory/:motebitId/:nodeId", async (c) => {
-    const motebitId = c.req.param("motebitId");
-    const nodeId = c.req.param("nodeId");
+    const motebitId: MotebitId = asMotebitId(c.req.param("motebitId"));
+    const nodeId: NodeId = asNodeId(c.req.param("nodeId"));
     try {
-      await moteDb.memoryStorage.tombstoneNode(nodeId);
+      const deleted = moteDb.memoryStorage.tombstoneNodeOwned
+        ? await moteDb.memoryStorage.tombstoneNodeOwned(nodeId, motebitId)
+        : (await moteDb.memoryStorage.tombstoneNode(nodeId), true);
+      if (!deleted) {
+        return c.json({ motebit_id: motebitId, node_id: nodeId, deleted: false }, 404);
+      }
       return c.json({ motebit_id: motebitId, node_id: nodeId, deleted: true });
     } catch {
       return c.json({ motebit_id: motebitId, node_id: nodeId, deleted: false }, 404);
@@ -697,14 +702,14 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // --- Goals: list all goals ---
   app.get("/api/v1/goals/:motebitId", (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const goals = moteDb.goalStore.list(motebitId);
     return c.json({ motebit_id: motebitId, goals });
   });
 
   // --- Conversations: list all (from sync relay storage) ---
   app.get("/api/v1/conversations/:motebitId", (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const conversations = moteDb.db
       .prepare(`SELECT * FROM sync_conversations WHERE motebit_id = ? ORDER BY last_active_at DESC`)
       .all(motebitId) as Array<Record<string, unknown>>;
@@ -713,8 +718,8 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // --- Conversations: list messages for a conversation ---
   app.get("/api/v1/conversations/:motebitId/:conversationId/messages", (c) => {
-    const motebitId = c.req.param("motebitId");
-    const conversationId = c.req.param("conversationId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
+    const conversationId = asConversationId(c.req.param("conversationId"));
     const messages = moteDb.db
       .prepare(
         `SELECT * FROM sync_conversation_messages WHERE conversation_id = ? AND motebit_id = ? ORDER BY created_at ASC`,
@@ -725,14 +730,14 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // --- Devices: list registered devices ---
   app.get("/api/v1/devices/:motebitId", async (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const devices = await identityManager.listDevices(motebitId);
     return c.json({ motebit_id: motebitId, devices });
   });
 
   // --- Events: alias under /api/v1 prefix (admin dashboard uses this path) ---
   app.get("/api/v1/sync/:motebitId/pull", async (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const afterClock = Number(c.req.query("after_clock") ?? "0");
     const events = await eventStore.query({
       motebit_id: motebitId,
@@ -753,7 +758,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // --- Identity: load ---
   app.get("/identity/:motebitId", async (c) => {
-    const id = c.req.param("motebitId");
+    const id = asMotebitId(c.req.param("motebitId"));
     const identity = await identityManager.load(id);
     if (!identity) {
       return c.json({ error: "identity not found" }, 404);
@@ -1044,7 +1049,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // --- Conversation Sync: push conversations ---
   app.post("/sync/:motebitId/conversations", async (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const body = await c.req.json<{ conversations: SyncConversation[] }>();
     if (!Array.isArray(body.conversations)) {
       throw new HTTPException(400, {
@@ -1074,7 +1079,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // --- Conversation Sync: pull conversations ---
   app.get("/sync/:motebitId/conversations", (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const since = Number(c.req.query("since") ?? "0");
     const rows = moteDb.db
       .prepare(
@@ -1086,7 +1091,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // --- Conversation Sync: push messages ---
   app.post("/sync/:motebitId/messages", async (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const body = await c.req.json<{ messages: SyncConversationMessage[] }>();
     if (!Array.isArray(body.messages)) {
       throw new HTTPException(400, {
@@ -1116,7 +1121,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // --- Conversation Sync: pull messages ---
   app.get("/sync/:motebitId/messages", (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const conversationId = c.req.query("conversation_id");
     const since = Number(c.req.query("since") ?? "0");
     if (conversationId == null || conversationId === "") {
@@ -1156,7 +1161,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   }
 
   app.post("/agent/:motebitId/task", async (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const body = await c.req.json<{
       prompt: string;
       submitted_by?: string;
@@ -1195,7 +1200,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // GET /agent/:motebitId/task/:taskId — poll task status
   app.get("/agent/:motebitId/task/:taskId", async (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const taskId = c.req.param("taskId");
 
     // Device auth: require signed token or master token
@@ -1227,7 +1232,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // POST /agent/:motebitId/task/:taskId/result — device posts signed receipt
   app.post("/agent/:motebitId/task/:taskId/result", async (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const taskId = c.req.param("taskId");
 
     // Device auth: require signed token or master token
@@ -1290,7 +1295,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // GET /agent/:motebitId/capabilities — public (no auth)
   app.get("/agent/:motebitId/capabilities", async (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const identity = await identityManager.load(motebitId);
     if (!identity) {
       throw new HTTPException(404, { message: "Identity not found" });
@@ -1328,7 +1333,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // POST /agent/:motebitId/verify-receipt — public receipt verification
   app.post("/agent/:motebitId/verify-receipt", async (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const receipt = await c.req.json<ExecutionReceipt>();
 
     if (receipt.motebit_id !== motebitId) {
@@ -1537,7 +1542,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // GET /api/v1/agents/:motebitId — get specific agent
   app.get("/api/v1/agents/:motebitId", (c) => {
-    const motebitId = c.req.param("motebitId");
+    const motebitId = asMotebitId(c.req.param("motebitId"));
     const now = Date.now();
 
     const row = moteDb.db

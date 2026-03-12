@@ -879,12 +879,14 @@ export class MotebitRuntime {
 
     try {
       const trimmed = this.trimHistory();
+      const knownAgents = await this.listTrustedAgents();
       const result = await runTurn(this.loopDeps, text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
         runId,
         sessionInfo: this.sessionInfo ?? undefined,
         curiosityHints: this.buildCuriosityHints(),
+        knownAgents: knownAgents.length > 0 ? knownAgents : undefined,
       });
       this.pushToHistory(text, result.response);
       // Accumulate behavioral stats for the intelligence gradient
@@ -913,12 +915,14 @@ export class MotebitRuntime {
 
     try {
       const trimmed = this.trimHistory();
+      const knownAgents = await this.listTrustedAgents();
       const stream = runTurnStreaming(this.loopDeps, text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
         runId,
         sessionInfo: this.sessionInfo ?? undefined,
         curiosityHints: this.buildCuriosityHints(),
+        knownAgents: knownAgents.length > 0 ? knownAgents : undefined,
       });
       // Session info applies only to the first message after resume
       this.sessionInfo = null;
@@ -1844,7 +1848,8 @@ export class MotebitRuntime {
       const prompt = `Summarize the following episodic observations into a single factual statement:\n${contents}\n\nRespond with ONLY the summary sentence.`;
 
       try {
-        const result = await this.provider!.generate({
+        if (!this.provider) return; // Provider may have been cleared concurrently
+        const result = await this.provider.generate({
           recent_events: [],
           relevant_memories: [],
           current_state: this.state.getState(),

@@ -78,6 +78,8 @@ export interface MemoryStorageAdapter {
   saveEdge(edge: MemoryEdge): Promise<void>;
   getEdges(nodeId: string): Promise<MemoryEdge[]>;
   tombstoneNode(nodeId: string): Promise<void>;
+  /** Tombstone with ownership check. Returns true if the node existed and belonged to motebitId. */
+  tombstoneNodeOwned?(nodeId: string, motebitId: string): Promise<boolean>;
   pinNode(nodeId: string, pinned: boolean): Promise<void>;
   getAllNodes(motebitId: string): Promise<MemoryNode[]>;
   getAllEdges(motebitId: string): Promise<MemoryEdge[]>;

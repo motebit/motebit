@@ -136,7 +136,7 @@ describe("HttpEventStoreAdapter", () => {
     await expect(adapter.append(makeEvent(1))).rejects.toThrow("Push failed: 401 Unauthorized");
   });
 
-  it("query throws on non-200 response", async () => {
+  it("query throws on non-200 response (retryable, exhausts retries)", async () => {
     const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
     mockFn.mockResolvedValueOnce(
       new Response("Server Error", { status: 500, statusText: "Internal Server Error" }),
@@ -145,6 +145,7 @@ describe("HttpEventStoreAdapter", () => {
     const adapter = new HttpEventStoreAdapter({
       baseUrl: BASE_URL,
       motebitId: MOTEBIT_ID,
+      maxRetries: 0, // No retries — fail immediately
     });
 
     await expect(adapter.query({})).rejects.toThrow("Pull failed: 500 Internal Server Error");
@@ -190,6 +191,58 @@ describe("HttpEventStoreAdapter", () => {
 
     const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
     expect(mockFn).not.toHaveBeenCalled();
+  });
+
+  it("retries on 500 then succeeds", async () => {
+    const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+    // First call: 500, second call: 200
+    mockFn
+      .mockResolvedValueOnce(new Response("Server Error", { status: 500, statusText: "Internal Server Error" }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ events: [] }), { status: 200 }));
+
+    const adapter = new HttpEventStoreAdapter({
+      baseUrl: BASE_URL,
+      motebitId: MOTEBIT_ID,
+      maxRetries: 2,
+      retryBackoffMs: 1, // Minimal backoff for test speed
+    });
+
+    const events = await adapter.query({});
+    expect(events).toEqual([]);
+    expect(mockFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries on network error then succeeds", async () => {
+    const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mockFn
+      .mockRejectedValueOnce(new Error("ECONNREFUSED"))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ latest_clock: 10 }), { status: 200 }));
+
+    const adapter = new HttpEventStoreAdapter({
+      baseUrl: BASE_URL,
+      motebitId: MOTEBIT_ID,
+      maxRetries: 2,
+      retryBackoffMs: 1,
+    });
+
+    const clock = await adapter.getLatestClock(MOTEBIT_ID);
+    expect(clock).toBe(10);
+    expect(mockFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry on 4xx (non-retryable)", async () => {
+    const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mockFn.mockResolvedValueOnce(new Response("Forbidden", { status: 403, statusText: "Forbidden" }));
+
+    const adapter = new HttpEventStoreAdapter({
+      baseUrl: BASE_URL,
+      motebitId: MOTEBIT_ID,
+      maxRetries: 3,
+      retryBackoffMs: 1,
+    });
+
+    await expect(adapter.append(makeEvent(1))).rejects.toThrow("Push failed: 403 Forbidden");
+    expect(mockFn).toHaveBeenCalledTimes(1); // No retries
   });
 
   it("strips trailing slashes from baseUrl", async () => {

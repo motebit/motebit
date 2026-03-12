@@ -1,3 +1,41 @@
+// === Branded ID Types ===
+//
+// Compile-time safety against accidental ID swaps. Optional brand pattern:
+//   string → MotebitId    ✅  (backward compat — plain strings still assignable)
+//   MotebitId → DeviceId  ❌  (catches the bug — different brand literals)
+//
+// This means branded types can be applied to interfaces WITHOUT breaking existing
+// construction sites. The protection is directional: you can put any string INTO
+// a branded field, but you can't take a MotebitId and use it as a DeviceId.
+//
+// Factory functions (asMotebitId etc.) are for explicit intent at system boundaries.
+
+declare const __brand: unique symbol;
+type Brand<T, B extends string> = T & { readonly [__brand]?: B };
+
+export type MotebitId = Brand<string, "MotebitId">;
+export type DeviceId = Brand<string, "DeviceId">;
+export type NodeId = Brand<string, "NodeId">;
+export type GoalId = Brand<string, "GoalId">;
+export type EventId = Brand<string, "EventId">;
+export type ConversationId = Brand<string, "ConversationId">;
+export type PlanId = Brand<string, "PlanId">;
+
+/** Brand a string as a MotebitId after validation. */
+export function asMotebitId(id: string): MotebitId { return id as MotebitId; }
+/** Brand a string as a DeviceId after validation. */
+export function asDeviceId(id: string): DeviceId { return id as DeviceId; }
+/** Brand a string as a NodeId after validation. */
+export function asNodeId(id: string): NodeId { return id as NodeId; }
+/** Brand a string as a GoalId after validation. */
+export function asGoalId(id: string): GoalId { return id as GoalId; }
+/** Brand a string as an EventId after validation. */
+export function asEventId(id: string): EventId { return id as EventId; }
+/** Brand a string as a ConversationId after validation. */
+export function asConversationId(id: string): ConversationId { return id as ConversationId; }
+/** Brand a string as a PlanId after validation. */
+export function asPlanId(id: string): PlanId { return id as PlanId; }
+
 // === Enums ===
 
 export enum TrustMode {
@@ -27,8 +65,8 @@ export enum MotebitType {
 }
 
 export interface AgentTrustRecord {
-  motebit_id: string;
-  remote_motebit_id: string;
+  motebit_id: MotebitId;
+  remote_motebit_id: MotebitId;
   trust_level: AgentTrustLevel;
   public_key?: string;
   first_seen_at: number;
@@ -104,7 +142,7 @@ export enum MemoryType {
 // === Core Identity ===
 
 export interface MotebitIdentity {
-  readonly motebit_id: string;
+  readonly motebit_id: MotebitId;
   readonly created_at: number;
   readonly owner_id: string;
   version_clock: number;
@@ -160,8 +198,8 @@ export interface MemoryContent {
 
 /** Full memory node including persistence metadata. */
 export interface MemoryNode extends MemoryContent {
-  node_id: string;
-  motebit_id: string;
+  node_id: NodeId;
+  motebit_id: MotebitId;
   embedding: number[];
   created_at: number;
   last_accessed: number;
@@ -172,8 +210,8 @@ export interface MemoryNode extends MemoryContent {
 
 export interface MemoryEdge {
   edge_id: string;
-  source_id: string;
-  target_id: string;
+  source_id: NodeId;
+  target_id: NodeId;
   relation_type: RelationType;
   weight: number;
   confidence: number;
@@ -189,10 +227,10 @@ export interface MemoryCandidate {
 // === Event Log ===
 
 export interface EventLogEntry {
-  event_id: string;
-  motebit_id: string;
+  event_id: EventId;
+  motebit_id: MotebitId;
   /** Device that originated this event (for multi-device conflict resolution) */
-  device_id?: string;
+  device_id?: DeviceId;
   timestamp: number;
   event_type: EventType;
   payload: Record<string, unknown>;
@@ -315,6 +353,8 @@ export interface ContextPack {
   sessionInfo?: { continued: boolean; lastActiveAt: number };
   /** Fading memories the agent might want to check in about, if relevant to conversation. */
   curiosityHints?: Array<{ content: string; daysSinceDiscussed: number }>;
+  /** Known agents this motebit has interacted with — trust levels, reputation, interaction history. */
+  knownAgents?: AgentTrustRecord[];
 }
 
 export type ConversationMessage =
@@ -348,7 +388,7 @@ export interface IntelligenceProvider {
 
 export interface AuditRecord {
   audit_id: string;
-  motebit_id: string;
+  motebit_id: MotebitId;
   timestamp: number;
   action: string;
   target_type: string;
@@ -357,7 +397,7 @@ export interface AuditRecord {
 }
 
 export interface ExportManifest {
-  motebit_id: string;
+  motebit_id: MotebitId;
   exported_at: number;
   identity: MotebitIdentity;
   memories: MemoryNode[];
@@ -369,8 +409,8 @@ export interface ExportManifest {
 // === Sync ===
 
 export interface SyncCursor {
-  motebit_id: string;
-  last_event_id: string;
+  motebit_id: MotebitId;
+  last_event_id: EventId;
   last_version_clock: number;
 }
 
@@ -384,8 +424,8 @@ export interface ConflictEdge {
 
 /** Conversation metadata for sync. Matches persistence Conversation shape using snake_case for wire format. */
 export interface SyncConversation {
-  conversation_id: string;
-  motebit_id: string;
+  conversation_id: ConversationId;
+  motebit_id: MotebitId;
   started_at: number;
   last_active_at: number;
   title: string | null;
@@ -396,8 +436,8 @@ export interface SyncConversation {
 /** Conversation message for sync. Matches persistence ConversationMessage shape using snake_case for wire format. */
 export interface SyncConversationMessage {
   message_id: string;
-  conversation_id: string;
-  motebit_id: string;
+  conversation_id: ConversationId;
+  motebit_id: MotebitId;
   role: string;
   content: string;
   tool_calls: string | null;
@@ -464,7 +504,7 @@ export enum StepStatus {
 
 export interface PlanStep {
   step_id: string;
-  plan_id: string;
+  plan_id: PlanId;
   ordinal: number;
   description: string;
   prompt: string;
@@ -480,9 +520,9 @@ export interface PlanStep {
 }
 
 export interface Plan {
-  plan_id: string;
-  goal_id: string;
-  motebit_id: string;
+  plan_id: PlanId;
+  goal_id: GoalId;
+  motebit_id: MotebitId;
   title: string;
   status: PlanStatus;
   created_at: number;
@@ -505,7 +545,7 @@ export enum AgentTaskStatus {
 
 export interface AgentTask {
   task_id: string;
-  motebit_id: string;
+  motebit_id: MotebitId;
   prompt: string;
   submitted_at: number;
   submitted_by?: string;
@@ -516,8 +556,8 @@ export interface AgentTask {
 
 export interface ExecutionReceipt {
   task_id: string;
-  motebit_id: string;
-  device_id: string;
+  motebit_id: MotebitId;
+  device_id: DeviceId;
   submitted_at: number;
   completed_at: number;
   status: "completed" | "failed" | "denied";
@@ -531,7 +571,7 @@ export interface ExecutionReceipt {
 }
 
 export interface AgentCapabilities {
-  motebit_id: string;
+  motebit_id: MotebitId;
   public_key: string;
   /** W3C did:key URI derived from the Ed25519 public key. */
   did?: string;
