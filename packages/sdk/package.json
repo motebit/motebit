@@ -1,20 +1,63 @@
 {
   "name": "@motebit/sdk",
   "version": "0.1.0",
-  "license": "MIT",
-  "private": true,
+  "description": "Core types for the motebit protocol — state vectors, identity, memory, policy, tools, and agent delegation",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/index.js",
+    "dist/index.js.map",
+    "dist/index.d.ts",
+    "dist/index.d.ts.map",
+    "LICENSE",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "license": "MIT",
+  "keywords": [
+    "motebit",
+    "agent",
+    "identity",
+    "protocol",
+    "types",
+    "state-vector",
+    "memory",
+    "policy",
+    "ed25519",
+    "ai"
+  ],
+  "homepage": "https://github.com/motebit/motebit/tree/main/packages/sdk#readme",
+  "bugs": {
+    "url": "https://github.com/motebit/motebit/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/motebit/motebit",
+    "directory": "packages/sdk"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -b",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
-    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+    "clean": "rm -rf dist .turbo *.tsbuildinfo",
+    "prepublishOnly": "npm run build"
   },
   "devDependencies": {
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
