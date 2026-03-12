@@ -1949,7 +1949,34 @@ export class MotebitRuntime {
     const previousGradient = previous ? previous.gradient : null;
 
     const retrievalStats = this.memory.getAndResetRetrievalStats();
-    const behavioralStats = this.getAndResetBehavioralStats();
+
+    // Derive behavioral stats from audit log (crash-safe source of truth)
+    // instead of the volatile in-memory accumulator.
+    let behavioralStats: BehavioralStats;
+    if (this.toolAuditSink) {
+      const sinceTs = previous ? previous.timestamp : 0;
+      const auditStats = this.toolAuditSink.queryStatsSince(sinceTs);
+      behavioralStats = {
+        turnCount: auditStats.distinctTurns,
+        // Approximate: each tool call ≈ 1 loop iteration
+        totalIterations: auditStats.totalToolCalls,
+        toolCallsSucceeded: auditStats.succeeded,
+        toolCallsBlocked: auditStats.blocked,
+        toolCallsFailed: auditStats.failed,
+      };
+    } else {
+      behavioralStats = this.getAndResetBehavioralStats();
+    }
+
+    // Compute curiosity pressure from current targets
+    let curiosityPressure: { avgScore: number; count: number } | undefined;
+    if (this._curiosityTargets.length > 0) {
+      const totalScore = this._curiosityTargets.reduce((sum, t) => sum + t.curiosityScore, 0);
+      curiosityPressure = {
+        avgScore: totalScore / this._curiosityTargets.length,
+        count: this._curiosityTargets.length,
+      };
+    }
 
     const snapshot = computeGradient(
       this.motebitId,
@@ -1960,6 +1987,7 @@ export class MotebitRuntime {
       undefined,
       retrievalStats,
       behavioralStats,
+      curiosityPressure,
     );
 
     this.gradientStore.save(snapshot);

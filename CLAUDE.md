@@ -124,7 +124,7 @@ Tauri app. Two key files for the UI layer:
 
 ## Admin Dashboard
 
-`apps/admin/src/AdminApp.tsx` — React + Vite. 11 tabs: State Vector (Recharts trending), Memory Graph (D3-force), Behavior Cues (live preview), Event Log, Tool Audit Log, Goals, Plans, Conversations (with message drill-down), Devices, Intelligence Gradient (hero score, 7 sub-metric bars: kd/kq/gc/ts/rq/ie/te, trend chart), Agent Trust (trust levels, reputation, task success). Polls API every 2s. All endpoints wired to API relay. Configured via `VITE_API_URL`, `VITE_MOTEBIT_ID`, `VITE_API_TOKEN`.
+`apps/admin/src/AdminApp.tsx` — React + Vite. 11 tabs: State Vector (Recharts trending), Memory Graph (D3-force), Behavior Cues (live preview), Event Log, Tool Audit Log, Goals, Plans, Conversations (with message drill-down), Devices, Intelligence Gradient (hero score, 8 sub-metric bars: kd/kq/gc/ts/rq/ie/te/cp, trend chart), Agent Trust (trust levels, reputation, task success). Polls API every 2s. All endpoints wired to API relay. Configured via `VITE_API_URL`, `VITE_MOTEBIT_ID`, `VITE_API_TOKEN`.
 
 ## State Vector (9 fields)
 

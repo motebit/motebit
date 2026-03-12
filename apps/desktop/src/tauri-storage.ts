@@ -1260,6 +1260,9 @@ interface GradientRow {
   graph_connectivity_raw: number;
   temporal_stability: number;
   retrieval_quality: number;
+  interaction_efficiency: number;
+  tool_efficiency: number;
+  curiosity_pressure: number;
   stats: string;
 }
 
@@ -1276,6 +1279,9 @@ function rowToGradientSnapshot(row: GradientRow): GradientSnapshot {
     graph_connectivity_raw: row.graph_connectivity_raw,
     temporal_stability: row.temporal_stability,
     retrieval_quality: row.retrieval_quality,
+    interaction_efficiency: row.interaction_efficiency ?? 0,
+    tool_efficiency: row.tool_efficiency ?? 0,
+    curiosity_pressure: row.curiosity_pressure ?? 0,
     stats: JSON.parse(row.stats) as GradientSnapshot["stats"],
   };
 }
@@ -1310,8 +1316,8 @@ export class TauriGradientStore implements GradientStoreAdapter {
     const snapshotId = crypto.randomUUID();
     void dbExecute(
       this.invoke,
-      `INSERT OR REPLACE INTO gradient_snapshots (snapshot_id, motebit_id, timestamp, gradient, delta, knowledge_density, knowledge_density_raw, knowledge_quality, graph_connectivity, graph_connectivity_raw, temporal_stability, retrieval_quality, stats)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO gradient_snapshots (snapshot_id, motebit_id, timestamp, gradient, delta, knowledge_density, knowledge_density_raw, knowledge_quality, graph_connectivity, graph_connectivity_raw, temporal_stability, retrieval_quality, interaction_efficiency, tool_efficiency, curiosity_pressure, stats)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         snapshotId,
         snapshot.motebit_id,
@@ -1325,6 +1331,9 @@ export class TauriGradientStore implements GradientStoreAdapter {
         snapshot.graph_connectivity_raw,
         snapshot.temporal_stability,
         snapshot.retrieval_quality,
+        snapshot.interaction_efficiency,
+        snapshot.tool_efficiency,
+        snapshot.curiosity_pressure,
         JSON.stringify(snapshot.stats),
       ],
     );

@@ -184,6 +184,9 @@ CREATE TABLE IF NOT EXISTS gradient_snapshots (
   graph_connectivity_raw REAL NOT NULL,
   temporal_stability REAL NOT NULL,
   retrieval_quality REAL NOT NULL DEFAULT 0,
+  interaction_efficiency REAL NOT NULL DEFAULT 0,
+  tool_efficiency REAL NOT NULL DEFAULT 0,
+  curiosity_pressure REAL NOT NULL DEFAULT 0,
   stats TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_gradient_motebit_ts ON gradient_snapshots (motebit_id, timestamp DESC);
@@ -1351,6 +1354,7 @@ interface GradientRow {
   retrieval_quality: number;
   interaction_efficiency: number;
   tool_efficiency: number;
+  curiosity_pressure: number;
   stats: string;
 }
 
@@ -1369,6 +1373,7 @@ function rowToGradientSnapshot(row: GradientRow): GradientSnapshot {
     retrieval_quality: row.retrieval_quality,
     interaction_efficiency: row.interaction_efficiency,
     tool_efficiency: row.tool_efficiency,
+    curiosity_pressure: row.curiosity_pressure ?? 0,
     stats: JSON.parse(row.stats) as GradientSnapshot["stats"],
   };
 }
@@ -1379,8 +1384,8 @@ export class ExpoGradientStore implements GradientStoreAdapter {
   save(snapshot: GradientSnapshot): void {
     const snapshotId = `gs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     this.db.runSync(
-      `INSERT OR REPLACE INTO gradient_snapshots (snapshot_id, motebit_id, timestamp, gradient, delta, knowledge_density, knowledge_density_raw, knowledge_quality, graph_connectivity, graph_connectivity_raw, temporal_stability, retrieval_quality, interaction_efficiency, tool_efficiency, stats)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO gradient_snapshots (snapshot_id, motebit_id, timestamp, gradient, delta, knowledge_density, knowledge_density_raw, knowledge_quality, graph_connectivity, graph_connectivity_raw, temporal_stability, retrieval_quality, interaction_efficiency, tool_efficiency, curiosity_pressure, stats)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         snapshotId,
         snapshot.motebit_id,
@@ -1396,6 +1401,7 @@ export class ExpoGradientStore implements GradientStoreAdapter {
         snapshot.retrieval_quality,
         snapshot.interaction_efficiency,
         snapshot.tool_efficiency,
+        snapshot.curiosity_pressure,
         JSON.stringify(snapshot.stats),
       ],
     );
@@ -1782,6 +1788,16 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
       // Table may already exist on new DBs
     }
     db.execSync("PRAGMA user_version = 13");
+  }
+
+  // Migration 14: add curiosity_pressure to gradient_snapshots
+  if (userVersion < 14) {
+    try {
+      db.execSync("ALTER TABLE gradient_snapshots ADD COLUMN curiosity_pressure REAL NOT NULL DEFAULT 0");
+    } catch {
+      // Column may already exist on new DBs
+    }
+    db.execSync("PRAGMA user_version = 14");
   }
 
   return {

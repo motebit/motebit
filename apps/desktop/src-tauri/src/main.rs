@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS tool_audit_log (
   args TEXT NOT NULL,
   decision TEXT NOT NULL,
   result TEXT,
+  cost_units INTEGER DEFAULT 0,
   timestamp INTEGER NOT NULL
 );
 
@@ -202,6 +203,9 @@ CREATE TABLE IF NOT EXISTS gradient_snapshots (
   graph_connectivity_raw REAL NOT NULL,
   temporal_stability REAL NOT NULL,
   retrieval_quality REAL NOT NULL DEFAULT 0,
+  interaction_efficiency REAL NOT NULL DEFAULT 0,
+  tool_efficiency REAL NOT NULL DEFAULT 0,
+  curiosity_pressure REAL NOT NULL DEFAULT 0,
   stats TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_gradient_motebit_ts ON gradient_snapshots (motebit_id, timestamp DESC);

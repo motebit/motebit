@@ -58,18 +58,19 @@ function makeConsolidationEvent(
 }
 
 describe("computeGradient", () => {
-  it("returns baseline gradient for empty motebit (ie/te default to 0.5)", () => {
+  it("returns baseline gradient for empty motebit (ie/te/cp default to 0.5)", () => {
     const result = computeGradient("test-motebit", [], [], [], null);
 
-    // ie=0.5, te=0.5 default when no behavioral stats
-    // gradient = 0.15*0.5 + 0.10*0.5 = 0.125
+    // ie=0.5, te=0.5, cp=0.5 default when no behavioral/curiosity stats
+    // gradient = 0.12*0.5 + 0.10*0.5 + 0.13*0.5 = 0.175
     expect(result.knowledge_density).toBe(0);
     expect(result.knowledge_quality).toBe(0);
     expect(result.graph_connectivity).toBe(0);
     expect(result.temporal_stability).toBe(0);
     expect(result.interaction_efficiency).toBe(0.5);
     expect(result.tool_efficiency).toBe(0.5);
-    expect(result.gradient).toBeCloseTo(0.125, 10);
+    expect(result.curiosity_pressure).toBe(0.5);
+    expect(result.gradient).toBeCloseTo(0.175, 10);
     expect(result.delta).toBe(0);
     expect(result.stats.live_nodes).toBe(0);
     expect(result.stats.live_edges).toBe(0);
@@ -196,7 +197,7 @@ describe("computeGradient", () => {
     expect(result2.temporal_stability).toBeGreaterThan(result1.temporal_stability);
   });
 
-  it("composite is weighted sum of all 7 sub-metrics", () => {
+  it("composite is weighted sum of all 8 sub-metrics", () => {
     const node = makeNode({ confidence: 1.0 });
     const edge = makeEdge(node.node_id, node.node_id);
     const events = [makeConsolidationEvent("REINFORCE")];
@@ -212,12 +213,13 @@ describe("computeGradient", () => {
 
     const expected =
       0.15 * result.knowledge_density +
-      0.20 * result.knowledge_quality +
-      0.10 * result.graph_connectivity +
-      0.15 * result.temporal_stability +
+      0.17 * result.knowledge_quality +
+      0.08 * result.graph_connectivity +
+      0.10 * result.temporal_stability +
       0.15 * result.retrieval_quality +
-      0.15 * result.interaction_efficiency +
-      0.10 * result.tool_efficiency;
+      0.12 * result.interaction_efficiency +
+      0.10 * result.tool_efficiency +
+      0.13 * result.curiosity_pressure;
 
     expect(result.gradient).toBeCloseTo(expected, 10);
   });
@@ -260,8 +262,8 @@ describe("computeGradient", () => {
 
     const result = computeGradient("test-motebit", [dead1, dead2], [], [], null);
 
-    // Memory sub-metrics are 0, but ie/te default to 0.5
-    expect(result.gradient).toBeCloseTo(0.125, 10);
+    // Memory sub-metrics are 0, but ie/te/cp default to 0.5
+    expect(result.gradient).toBeCloseTo(0.175, 10);
     expect(result.stats.live_nodes).toBe(0);
   });
 
@@ -294,6 +296,7 @@ describe("computeGradient", () => {
       weight_rq: 0,
       weight_ie: 0,
       weight_te: 0,
+      weight_cp: 0,
     });
 
     // With all weight on kd, gradient should equal kd
@@ -339,9 +342,9 @@ describe("computeGradient", () => {
       avgScore: 1.0,
       count: 5,
     });
-    // kd/kq/gc/ts = 0, rq = 1.0 * 0.15, ie/te default to 0.5
-    // gradient = 0.15 * 1.0 + 0.15 * 0.5 + 0.10 * 0.5 = 0.275
-    expect(result.gradient).toBeCloseTo(0.275, 10);
+    // kd/kq/gc/ts = 0, rq = 1.0 * 0.15, ie=0.5*0.12, te=0.5*0.10, cp=0.5*0.13
+    // gradient = 0.15 + 0.06 + 0.05 + 0.065 = 0.325
+    expect(result.gradient).toBeCloseTo(0.325, 10);
   });
 
   it("stats are correctly populated", () => {
@@ -452,9 +455,9 @@ describe("behavioral metrics", () => {
     expect(result.tool_efficiency).toBe(0.5);
   });
 
-  it("composite score uses all 7 weights that sum to 1.0", () => {
+  it("composite score uses all 8 weights that sum to 1.0", () => {
     // Verify default weights sum to 1.0
-    const weights = [0.15, 0.20, 0.10, 0.15, 0.15, 0.15, 0.10];
+    const weights = [0.15, 0.17, 0.08, 0.10, 0.15, 0.12, 0.10, 0.13];
     const sum = weights.reduce((a, b) => a + b, 0);
     expect(sum).toBeCloseTo(1.0, 10);
   });
@@ -506,6 +509,7 @@ describe("InMemoryGradientStore", () => {
       retrieval_quality: 0.65,
       interaction_efficiency: 0.8,
       tool_efficiency: 0.9,
+      curiosity_pressure: 0.7,
       stats: {
         live_nodes: 10,
         live_edges: 5,
@@ -526,6 +530,8 @@ describe("InMemoryGradientStore", () => {
         tool_calls_succeeded: 15,
         tool_calls_blocked: 2,
         tool_calls_failed: 1,
+        curiosity_target_count: 0,
+        avg_curiosity_score: 0,
       },
     };
 
@@ -558,6 +564,7 @@ describe("InMemoryGradientStore", () => {
       retrieval_quality: 0,
       interaction_efficiency: 0,
       tool_efficiency: 0,
+      curiosity_pressure: 0,
       stats: {
         live_nodes: 0,
         live_edges: 0,
@@ -578,6 +585,8 @@ describe("InMemoryGradientStore", () => {
         tool_calls_succeeded: 0,
         tool_calls_blocked: 0,
         tool_calls_failed: 0,
+        curiosity_target_count: 0,
+        avg_curiosity_score: 0,
       },
     };
 
@@ -608,6 +617,7 @@ describe("InMemoryGradientStore", () => {
       retrieval_quality: 0,
       interaction_efficiency: 0,
       tool_efficiency: 0,
+      curiosity_pressure: 0,
       stats: {
         live_nodes: 0,
         live_edges: 0,
@@ -628,6 +638,8 @@ describe("InMemoryGradientStore", () => {
         tool_calls_succeeded: 0,
         tool_calls_blocked: 0,
         tool_calls_failed: 0,
+        curiosity_target_count: 0,
+        avg_curiosity_score: 0,
       },
     };
 
@@ -655,6 +667,7 @@ describe("InMemoryGradientStore", () => {
       retrieval_quality: 0,
       interaction_efficiency: 0,
       tool_efficiency: 0,
+      curiosity_pressure: 0,
       stats: {
         live_nodes: 0,
         live_edges: 0,
@@ -675,6 +688,8 @@ describe("InMemoryGradientStore", () => {
         tool_calls_succeeded: 0,
         tool_calls_blocked: 0,
         tool_calls_failed: 0,
+        curiosity_target_count: 0,
+        avg_curiosity_score: 0,
       },
     };
 

@@ -1,19 +1,20 @@
 /**
  * Intelligence Gradient — measures how a motebit gets smarter over time.
  *
- * Seven sub-metrics, one composite score. Pure aggregation over existing data —
+ * Eight sub-metrics, one composite score. Pure aggregation over existing data —
  * no new LLM calls, no new embeddings.
  *
  * Sub-metrics:
- *   kd  Knowledge Density    — sum of decayed confidence, normalized via x/(x+50)
- *   kq  Knowledge Quality    — (reinforce + update) / total consolidation events in 7-day window
- *   gc  Graph Connectivity   — edges/nodes ratio, normalized via x/(x+2)
- *   ts  Temporal Stability   — weighted mix of semantic ratio, pinned ratio, avg half-life
- *   rq  Retrieval Quality    — avg cosine similarity of memory retrievals since last housekeeping
+ *   kd  Knowledge Density      — sum of decayed confidence, normalized via x/(x+50)
+ *   kq  Knowledge Quality      — (reinforce + update) / total consolidation events in 7-day window
+ *   gc  Graph Connectivity     — edges/nodes ratio, normalized via x/(x+2)
+ *   ts  Temporal Stability     — weighted mix of semantic ratio, pinned ratio, avg half-life
+ *   rq  Retrieval Quality      — avg cosine similarity of memory retrievals since last housekeeping
  *   ie  Interaction Efficiency — fewer loop iterations per turn = more efficient
- *   te  Tool Efficiency      — ratio of succeeded tool calls to total tool calls
+ *   te  Tool Efficiency        — ratio of succeeded tool calls to total tool calls
+ *   cp  Curiosity Pressure     — avg curiosity score of top targets (internal self-trust signal)
  *
- * Composite: gradient = kd*0.15 + kq*0.20 + gc*0.10 + ts*0.15 + rq*0.15 + ie*0.15 + te*0.10
+ * Composite: gradient = kd*0.15 + kq*0.17 + gc*0.08 + ts*0.10 + rq*0.15 + ie*0.12 + te*0.10 + cp*0.13
  */
 
 import { MemoryType } from "@motebit/sdk";
@@ -39,6 +40,7 @@ export interface GradientSnapshot {
   retrieval_quality: number;
   interaction_efficiency: number;
   tool_efficiency: number;
+  curiosity_pressure: number;
   stats: {
     live_nodes: number;
     live_edges: number;
@@ -59,6 +61,8 @@ export interface GradientSnapshot {
     tool_calls_succeeded: number;
     tool_calls_blocked: number;
     tool_calls_failed: number;
+    curiosity_target_count: number;
+    avg_curiosity_score: number;
   };
 }
 
@@ -91,6 +95,8 @@ export interface GradientConfig {
   weight_ie: number;
   /** Weight for tool efficiency (default 0.10) */
   weight_te: number;
+  /** Weight for curiosity pressure (default 0.13) */
+  weight_cp: number;
   /** Normalization constant for knowledge density: x/(x+K) (default 50) */
   kd_norm_k: number;
   /** Normalization constant for graph connectivity: x/(x+K) (default 2) */
@@ -99,12 +105,13 @@ export interface GradientConfig {
 
 const DEFAULT_CONFIG: GradientConfig = {
   weight_kd: 0.15,
-  weight_kq: 0.20,
-  weight_gc: 0.10,
-  weight_ts: 0.15,
+  weight_kq: 0.17,
+  weight_gc: 0.08,
+  weight_ts: 0.10,
   weight_rq: 0.15,
-  weight_ie: 0.15,
+  weight_ie: 0.12,
   weight_te: 0.10,
+  weight_cp: 0.13,
   kd_norm_k: 50,
   gc_norm_k: 2,
 };
@@ -143,6 +150,7 @@ export function computeGradient(
   config?: Partial<GradientConfig>,
   retrievalStats?: { avgScore: number; count: number },
   behavioralStats?: BehavioralStats,
+  curiosityPressure?: { avgScore: number; count: number },
 ): GradientSnapshot {
   const cfg = { ...DEFAULT_CONFIG, ...config };
   const now = Date.now();
@@ -242,6 +250,20 @@ export function computeGradient(
     te = 0.5;
   }
 
+  // === Curiosity Pressure (cp) ===
+  // Average curiosity score of top targets — measures how much the agent's
+  // knowledge base is degrading. High pressure = knowledge decaying unattended.
+  // Inverted: high curiosity pressure means LOW self-trust, so cp = 1 - avgCuriosity.
+  let cp: number;
+  if (curiosityPressure && curiosityPressure.count > 0) {
+    // Normalize: curiosity scores are unbounded (confidenceLoss × staleness² × confidence).
+    // Typical range 0-2. Use x/(x+1) to map to 0-1, then invert.
+    const normalizedAvg = curiosityPressure.avgScore / (curiosityPressure.avgScore + 1);
+    cp = 1 - normalizedAvg;
+  } else {
+    cp = 0.5; // No data — neutral
+  }
+
   // === Composite ===
   const gradient =
     cfg.weight_kd * kd +
@@ -250,7 +272,8 @@ export function computeGradient(
     cfg.weight_ts * ts +
     cfg.weight_rq * rq +
     cfg.weight_ie * ie +
-    cfg.weight_te * te;
+    cfg.weight_te * te +
+    cfg.weight_cp * cp;
   const delta = previousGradient !== null ? gradient - previousGradient : 0;
 
   const avgConfidence = nodeCount > 0 ? totalConfidence / nodeCount : 0;
@@ -275,6 +298,7 @@ export function computeGradient(
     retrieval_quality: rq,
     interaction_efficiency: ie,
     tool_efficiency: te,
+    curiosity_pressure: cp,
     stats: {
       live_nodes: nodeCount,
       live_edges: edgeCount,
@@ -295,6 +319,8 @@ export function computeGradient(
       tool_calls_succeeded: behavioralStats?.toolCallsSucceeded ?? 0,
       tool_calls_blocked: behavioralStats?.toolCallsBlocked ?? 0,
       tool_calls_failed: behavioralStats?.toolCallsFailed ?? 0,
+      curiosity_target_count: curiosityPressure?.count ?? 0,
+      avg_curiosity_score: curiosityPressure?.avgScore ?? 0,
     },
   };
 }

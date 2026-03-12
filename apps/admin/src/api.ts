@@ -280,6 +280,7 @@ export interface GradientSnapshotEntry {
   retrieval_quality: number;
   interaction_efficiency: number;
   tool_efficiency: number;
+  curiosity_pressure: number;
   stats: {
     live_nodes: number;
     live_edges: number;
@@ -300,6 +301,8 @@ export interface GradientSnapshotEntry {
     tool_calls_succeeded: number;
     tool_calls_blocked: number;
     tool_calls_failed: number;
+    curiosity_target_count: number;
+    avg_curiosity_score: number;
   };
 }
 

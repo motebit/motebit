@@ -3,14 +3,17 @@
  * a 0.0–1.0 signal for granular policy decisions.
  *
  * Three components, equally weighted:
- *   successRate  = successful_tasks / (successful_tasks + failed_tasks)
+ *   successRate  = (1 + successful_tasks) / (2 + total_tasks)  — Beta-binomial (α=β=1)
  *   volumeScore  = min(interaction_count / 50, 1.0)  — saturates at 50
  *   recencyScore = exp(-daysSinceLastSeen / 90)       — 90-day half-life
+ *
+ * The Beta-binomial prior (Laplace smoothing) prevents extreme scores from
+ * small samples: 0/0 → 0.5 (uncertain), 1/1 → 0.67 (promising), 0/1 → 0.33
+ * (concerning). Converges to MLE as evidence accumulates.
  *
  * Special cases:
  *   - Blocked agents always return 0.0
  *   - Unknown agents return 0.0
- *   - No tasks yet → successRate defaults to 0.5 (neutral)
  */
 
 import { AgentTrustLevel } from "@motebit/sdk";
@@ -29,11 +32,11 @@ export function computeReputationScore(
 
   const timestamp = now ?? Date.now();
 
-  // Success rate: neutral 0.5 when no tasks recorded
+  // Success rate: Beta-binomial with uniform prior (α=β=1, Laplace smoothing)
   const successfulTasks = record.successful_tasks ?? 0;
   const failedTasks = record.failed_tasks ?? 0;
   const totalTasks = successfulTasks + failedTasks;
-  const successRate = totalTasks > 0 ? successfulTasks / totalTasks : 0.5;
+  const successRate = (1 + successfulTasks) / (2 + totalTasks);
 
   // Volume: saturates at 50 interactions
   const volumeScore = Math.min(record.interaction_count / VOLUME_SATURATION, 1.0);

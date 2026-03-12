@@ -22,7 +22,7 @@ import { computeDecayedConfidence } from "@motebit/memory-graph";
 import type { IdentityStorage, DeviceRegistration } from "@motebit/core-identity";
 import type { AuditLogAdapter } from "@motebit/privacy-layer";
 import type { ToolAuditEntry, PolicyDecision } from "@motebit/sdk";
-import type { AuditLogSink } from "@motebit/policy";
+import type { AuditLogSink, AuditStatsSince } from "@motebit/policy";
 
 // === Schema ===
 
@@ -823,6 +823,7 @@ interface ToolAuditRow {
   decision: string;
   result: string | null;
   injection: string | null;
+  cost_units: number;
   timestamp: number;
 }
 
@@ -844,6 +845,9 @@ function rowToToolAudit(row: ToolAuditRow): ToolAuditEntry {
   if (row.injection !== null) {
     entry.injection = JSON.parse(row.injection) as ToolAuditEntry["injection"];
   }
+  if (row.cost_units > 0) {
+    entry.costUnits = row.cost_units;
+  }
   return entry;
 }
 
@@ -851,16 +855,26 @@ export class SqliteToolAuditSink implements AuditLogSink {
   private stmtAppend: PreparedStatement;
   private stmtQueryTurn: PreparedStatement;
   private stmtGetAll: PreparedStatement;
+  private stmtStatsSince: PreparedStatement;
 
   constructor(db: DatabaseDriver) {
     this.stmtAppend = db.prepare(
-      `INSERT OR REPLACE INTO tool_audit_log (call_id, turn_id, run_id, tool, args, decision, result, injection, timestamp)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO tool_audit_log (call_id, turn_id, run_id, tool, args, decision, result, injection, cost_units, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtQueryTurn = db.prepare(
       `SELECT * FROM tool_audit_log WHERE turn_id = ? ORDER BY timestamp ASC`,
     );
     this.stmtGetAll = db.prepare(`SELECT * FROM tool_audit_log ORDER BY timestamp ASC`);
+    this.stmtStatsSince = db.prepare(
+      `SELECT
+        COUNT(DISTINCT turn_id) as distinct_turns,
+        COUNT(*) as total,
+        SUM(CASE WHEN json_extract(decision, '$.allowed') = 0 THEN 1 ELSE 0 END) as blocked,
+        SUM(CASE WHEN json_extract(result, '$.ok') = 1 THEN 1 ELSE 0 END) as succeeded,
+        SUM(CASE WHEN json_extract(result, '$.ok') = 0 THEN 1 ELSE 0 END) as failed
+       FROM tool_audit_log WHERE timestamp > ?`,
+    );
   }
 
   append(entry: ToolAuditEntry): void {
@@ -873,6 +887,7 @@ export class SqliteToolAuditSink implements AuditLogSink {
       JSON.stringify(entry.decision),
       entry.result ? JSON.stringify(entry.result) : null,
       entry.injection ? JSON.stringify(entry.injection) : null,
+      entry.costUnits ?? 0,
       entry.timestamp,
     );
   }
@@ -885,6 +900,26 @@ export class SqliteToolAuditSink implements AuditLogSink {
   getAll(): ToolAuditEntry[] {
     const rows = this.stmtGetAll.all() as ToolAuditRow[];
     return rows.map(rowToToolAudit);
+  }
+
+  queryStatsSince(afterTimestamp: number): AuditStatsSince {
+    const row = this.stmtStatsSince.get(afterTimestamp) as {
+      distinct_turns: number;
+      total: number;
+      blocked: number;
+      succeeded: number;
+      failed: number;
+    } | undefined;
+    if (!row) {
+      return { distinctTurns: 0, totalToolCalls: 0, succeeded: 0, blocked: 0, failed: 0 };
+    }
+    return {
+      distinctTurns: row.distinct_turns ?? 0,
+      totalToolCalls: row.total ?? 0,
+      succeeded: row.succeeded ?? 0,
+      blocked: row.blocked ?? 0,
+      failed: row.failed ?? 0,
+    };
   }
 }
 
@@ -1740,6 +1775,7 @@ export interface GradientSnapshotRow {
   retrieval_quality: number;
   interaction_efficiency: number;
   tool_efficiency: number;
+  curiosity_pressure: number;
   stats: string;
 }
 
@@ -1757,6 +1793,7 @@ export interface GradientSnapshotData {
   retrieval_quality: number;
   interaction_efficiency: number;
   tool_efficiency: number;
+  curiosity_pressure: number;
   stats: Record<string, unknown>;
 }
 
@@ -1775,6 +1812,7 @@ function rowToGradientSnapshot(row: GradientSnapshotRow): GradientSnapshotData {
     retrieval_quality: row.retrieval_quality,
     interaction_efficiency: row.interaction_efficiency,
     tool_efficiency: row.tool_efficiency,
+    curiosity_pressure: row.curiosity_pressure ?? 0,
     stats: JSON.parse(row.stats) as Record<string, unknown>,
   };
 }
@@ -1787,8 +1825,8 @@ export class SqliteGradientStore {
   constructor(db: DatabaseDriver) {
     this.stmtSave = db.prepare(
       `INSERT OR REPLACE INTO gradient_snapshots
-       (snapshot_id, motebit_id, timestamp, gradient, delta, knowledge_density, knowledge_density_raw, knowledge_quality, graph_connectivity, graph_connectivity_raw, temporal_stability, retrieval_quality, interaction_efficiency, tool_efficiency, stats)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (snapshot_id, motebit_id, timestamp, gradient, delta, knowledge_density, knowledge_density_raw, knowledge_quality, graph_connectivity, graph_connectivity_raw, temporal_stability, retrieval_quality, interaction_efficiency, tool_efficiency, curiosity_pressure, stats)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtLatest = db.prepare(
       `SELECT * FROM gradient_snapshots WHERE motebit_id = ? ORDER BY timestamp DESC LIMIT 1`,
@@ -1815,6 +1853,7 @@ export class SqliteGradientStore {
       snapshot.retrieval_quality,
       snapshot.interaction_efficiency,
       snapshot.tool_efficiency,
+      snapshot.curiosity_pressure,
       JSON.stringify(snapshot.stats),
     );
   }
@@ -2142,6 +2181,20 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
       driver.exec("ALTER TABLE agent_trust ADD COLUMN failed_tasks INTEGER NOT NULL DEFAULT 0");
     } catch (_) { /* already exists */ }
     driver.pragma("user_version = 21");
+  }
+
+  if (userVersion < 22) {
+    try {
+      driver.exec("ALTER TABLE tool_audit_log ADD COLUMN cost_units INTEGER DEFAULT 0");
+    } catch (_) { /* already exists */ }
+    driver.pragma("user_version = 22");
+  }
+
+  if (userVersion < 23) {
+    try {
+      driver.exec("ALTER TABLE gradient_snapshots ADD COLUMN curiosity_pressure REAL NOT NULL DEFAULT 0");
+    } catch (_) { /* already exists */ }
+    driver.pragma("user_version = 23");
   }
 
   const eventStore = new SqliteEventStore(driver);

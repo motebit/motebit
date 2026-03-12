@@ -38,7 +38,7 @@ describe("computeReputationScore", () => {
       last_seen_at: NOW,
     });
     const score = computeReputationScore(record, NOW);
-    // successRate=1.0, volumeScore=1.0 (capped), recencyScore≈1.0
+    // successRate=(1+100)/(2+100)≈0.99, volumeScore=1.0 (capped), recencyScore≈1.0
     expect(score).toBeGreaterThan(0.8);
   });
 
@@ -50,10 +50,10 @@ describe("computeReputationScore", () => {
       last_seen_at: NOW,
     });
     const score = computeReputationScore(record, NOW);
-    // successRate=1.0, volumeScore=1/50=0.02, recencyScore≈1.0
-    // (1.0 + 0.02 + 1.0) / 3 ≈ 0.673
-    expect(score).toBeGreaterThan(0.5);
-    expect(score).toBeLessThan(0.8);
+    // successRate=(1+1)/(2+1)=0.667, volumeScore=1/50=0.02, recencyScore≈1.0
+    // (0.667 + 0.02 + 1.0) / 3 ≈ 0.562
+    expect(score).toBeGreaterThan(0.4);
+    expect(score).toBeLessThan(0.7);
   });
 
   it("returns low score for stale agent (180 days old)", () => {
@@ -64,8 +64,8 @@ describe("computeReputationScore", () => {
       last_seen_at: NOW - 86_400_000 * 180,
     });
     const score = computeReputationScore(record, NOW);
-    // successRate=1.0, volumeScore=1.0, recencyScore=exp(-180/90)=exp(-2)≈0.135
-    // (1.0 + 1.0 + 0.135) / 3 ≈ 0.712
+    // successRate=(1+50)/(2+50)≈0.981, volumeScore=1.0, recencyScore=exp(-180/90)≈0.135
+    // (0.981 + 1.0 + 0.135) / 3 ≈ 0.705
     expect(score).toBeLessThan(0.75);
   });
 
@@ -77,12 +77,12 @@ describe("computeReputationScore", () => {
       last_seen_at: NOW,
     });
     const score = computeReputationScore(record, NOW);
-    // successRate=2/50=0.04, volumeScore=1.0, recencyScore≈1.0
-    // (0.04 + 1.0 + 1.0) / 3 ≈ 0.68
+    // successRate=(1+2)/(2+50)=3/52≈0.058, volumeScore=1.0, recencyScore≈1.0
+    // (0.058 + 1.0 + 1.0) / 3 ≈ 0.686
     expect(score).toBeLessThan(0.7);
   });
 
-  it("defaults successRate to 0.5 when no tasks recorded", () => {
+  it("defaults successRate to 0.5 when no tasks recorded (Beta-binomial prior)", () => {
     const record = makeRecord({
       interaction_count: 10,
       successful_tasks: 0,
@@ -90,7 +90,7 @@ describe("computeReputationScore", () => {
       last_seen_at: NOW,
     });
     const score = computeReputationScore(record, NOW);
-    // successRate=0.5, volumeScore=10/50=0.2, recencyScore≈1.0
+    // successRate=(1+0)/(2+0)=0.5, volumeScore=10/50=0.2, recencyScore≈1.0
     // (0.5 + 0.2 + 1.0) / 3 ≈ 0.567
     expect(score).toBeCloseTo(0.567, 1);
   });
@@ -117,7 +117,7 @@ describe("computeReputationScore", () => {
       last_seen_at: NOW,
     });
     const score = computeReputationScore(record, NOW);
-    // successRate=0.5, volumeScore=0.0, recencyScore≈1.0
+    // successRate=(1+0)/(2+0)=0.5, volumeScore=0.0, recencyScore≈1.0
     // (0.5 + 0.0 + 1.0) / 3 = 0.5
     expect(score).toBeCloseTo(0.5, 2);
   });

@@ -235,6 +235,7 @@ export class PolicyGate {
         budgetRemaining: {
           calls: budgetResult.remaining.calls,
           timeMs: budgetResult.remaining.timeMs,
+          cost: budgetResult.remaining.cost,
         },
       };
       this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision, ctx.runId);
@@ -355,6 +356,7 @@ export class PolicyGate {
       budgetRemaining: {
         calls: budgetResult.remaining.calls,
         timeMs: budgetResult.remaining.timeMs,
+        cost: budgetResult.remaining.cost,
       },
     };
 

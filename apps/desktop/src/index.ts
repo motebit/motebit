@@ -210,8 +210,8 @@ class TauriToolAuditSink implements AuditLogSink {
   append(entry: ToolAuditEntry): void {
     // Fire-and-forget — audit writes are best-effort
     void this.invoke("db_execute", {
-      sql: `INSERT OR REPLACE INTO tool_audit_log (call_id, turn_id, run_id, tool, args, decision, result, injection, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      sql: `INSERT OR REPLACE INTO tool_audit_log (call_id, turn_id, run_id, tool, args, decision, result, injection, cost_units, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params: [
         entry.callId,
         entry.turnId,
@@ -221,6 +221,7 @@ class TauriToolAuditSink implements AuditLogSink {
         JSON.stringify(entry.decision),
         entry.result ? JSON.stringify(entry.result) : null,
         entry.injection ? JSON.stringify(entry.injection) : null,
+        entry.costUnits ?? 0,
         entry.timestamp,
       ],
     });
@@ -234,6 +235,12 @@ class TauriToolAuditSink implements AuditLogSink {
 
   getAll(): ToolAuditEntry[] {
     return [];
+  }
+
+  queryStatsSince(_afterTimestamp: number): { distinctTurns: number; totalToolCalls: number; succeeded: number; blocked: number; failed: number } {
+    // Sync interface — return empty. Desktop gradient computation falls back
+    // to the in-memory behavioral stats accumulator.
+    return { distinctTurns: 0, totalToolCalls: 0, succeeded: 0, blocked: 0, failed: 0 };
   }
 }
 

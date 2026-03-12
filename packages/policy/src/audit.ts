@@ -8,10 +8,19 @@ import type { ToolAuditEntry, PolicyDecision, InjectionWarning } from "@motebit/
  * it succeeded, failed, was denied, or required approval.
  */
 
+export interface AuditStatsSince {
+  distinctTurns: number;
+  totalToolCalls: number;
+  succeeded: number;
+  blocked: number;
+  failed: number;
+}
+
 export interface AuditLogSink {
   append(entry: ToolAuditEntry): void;
   query(turnId: string): ToolAuditEntry[];
   getAll(): ToolAuditEntry[];
+  queryStatsSince(afterTimestamp: number): AuditStatsSince;
 }
 
 const DEFAULT_MAX_ENTRIES = 10_000;
@@ -38,6 +47,23 @@ export class InMemoryAuditSink implements AuditLogSink {
 
   getAll(): ToolAuditEntry[] {
     return [...this.entries];
+  }
+
+  queryStatsSince(afterTimestamp: number): AuditStatsSince {
+    const recent = this.entries.filter((e) => e.timestamp > afterTimestamp);
+    const turns = new Set(recent.map((e) => e.turnId));
+    let succeeded = 0;
+    let blocked = 0;
+    let failed = 0;
+    for (const entry of recent) {
+      if (!entry.decision.allowed) {
+        blocked++;
+      } else if (entry.result) {
+        if (entry.result.ok) succeeded++;
+        else failed++;
+      }
+    }
+    return { distinctTurns: turns.size, totalToolCalls: recent.length, succeeded, blocked, failed };
   }
 
   get size(): number {

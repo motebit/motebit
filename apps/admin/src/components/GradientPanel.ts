@@ -76,6 +76,7 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
     rq: snap.retrieval_quality,
     ie: snap.interaction_efficiency,
     te: snap.tool_efficiency,
+    cp: snap.curiosity_pressure,
   }));
 
   const chart = h(
@@ -169,6 +170,14 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
           dot: false,
           name: "Tool Efficiency",
         }),
+        h(Line as React.ComponentType<Record<string, unknown>>, {
+          type: "monotone",
+          dataKey: "cp",
+          stroke: "#f59e0b",
+          strokeWidth: 1,
+          dot: false,
+          name: "Curiosity Pressure",
+        }),
       ),
     ),
   );
@@ -206,6 +215,7 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
       h(MetricBar, { label: "Retrieval Quality", value: current.retrieval_quality }),
       h(MetricBar, { label: "Interaction Efficiency", value: current.interaction_efficiency }),
       h(MetricBar, { label: "Tool Efficiency", value: current.tool_efficiency }),
+      h(MetricBar, { label: "Curiosity Pressure", value: current.curiosity_pressure }),
     ),
 
     // Trend chart
@@ -238,6 +248,8 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
         h("span", null, `Tool succeeded: ${stats.tool_calls_succeeded ?? 0}`),
         h("span", null, `Tool blocked: ${stats.tool_calls_blocked ?? 0}`),
         h("span", null, `Tool failed: ${stats.tool_calls_failed ?? 0}`),
+        h("span", null, `Curiosity targets: ${stats.curiosity_target_count ?? 0}`),
+        h("span", null, `Avg curiosity: ${(stats.avg_curiosity_score ?? 0).toFixed(3)}`),
       ),
     ),
 

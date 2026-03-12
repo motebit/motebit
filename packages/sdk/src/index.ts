@@ -233,7 +233,7 @@ export interface PolicyDecision {
   allowed: boolean;
   requiresApproval: boolean;
   reason?: string;
-  budgetRemaining?: { calls: number; timeMs: number };
+  budgetRemaining?: { calls: number; timeMs: number; cost: number };
 }
 
 export interface TurnContext {
@@ -266,6 +266,7 @@ export interface ToolAuditEntry {
   decision: PolicyDecision;
   result?: { ok: boolean; durationMs: number };
   injection?: InjectionWarning;
+  costUnits?: number;
   timestamp: number;
 }
 

@@ -271,6 +271,18 @@ function setupFetchMock() {
           ),
       });
     }
+    if (url.includes("/api/v1/agent-trust/")) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: () => Promise.resolve({ motebit_id: "default-motebit", records: [] }),
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({ motebit_id: "default-motebit", records: [] }),
+          ),
+      });
+    }
     return Promise.reject(new Error(`Unexpected URL: ${url}`));
   });
 }
