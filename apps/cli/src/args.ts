@@ -60,7 +60,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     throw new Error(`Unknown provider "${provider}". Use "anthropic" or "ollama".`);
   }
 
-  const defaultModel = provider === "ollama" ? "llama3.2" : "claude-sonnet-4-5-20250514";
+  const defaultModel = provider === "ollama" ? "llama3.2" : "claude-sonnet-4-5-20250929";
   const allowedPaths =
     values["allowed-paths"] != null && values["allowed-paths"] !== ""
       ? values["allowed-paths"].split(",").map((p) => p.trim())
@@ -133,13 +133,15 @@ Options:
 
 Providers:
   anthropic               Uses Anthropic API (requires ANTHROPIC_API_KEY)
-                          Default model: claude-sonnet-4-5-20250514
+                          Default model: claude-sonnet-4-5-20250929
   ollama                  Uses local Ollama server (no API key needed)
                           Default model: llama3.2
 
 Slash commands (in REPL):
   /help              Show available commands
-  /memories          List all memories
+  /memories          List all memories (with decay indicators)
+  /graph             Memory graph stats — compounding health
+  /curious           Show decaying memories the agent is curious about
   /state             Show current state vector
   /forget <nodeId>   Delete a memory by ID
   /export            Export all memories and state as JSON
