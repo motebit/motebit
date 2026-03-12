@@ -106,7 +106,7 @@ Tauri app. Two key files for the UI layer:
 
 `apps/cli/src/` — Full operator console. Entry point in `index.ts`, split into modules: `config.ts`, `args.ts`, `identity.ts`, `runtime-factory.ts`, `stream.ts`, `slash-commands.ts`, `subcommands.ts`, `daemon.ts`, `utils.ts`. Published to npm as `motebit`. Bundled with tsup — all workspace packages inlined, native deps external.
 
-**Subcommands:** `motebit export`, `motebit verify <path>`, `motebit run --identity <path>` (daemon), `motebit goal add/list/remove/pause/resume`, `motebit approvals list/show/approve/deny`. Default (no subcommand) enters interactive REPL.
+**Subcommands:** `motebit id`, `motebit export`, `motebit verify <path>`, `motebit run --identity <path>` (daemon), `motebit goal add/list/remove/pause/resume`, `motebit approvals list/show/approve/deny`. Default (no subcommand) enters interactive REPL.
 
 **REPL commands:** `/model`, `/memories`, `/state`, `/forget`, `/export`, `/sync`, `/clear`, `/tools`, `/mcp list/trust/untrust/add/remove`, `/operator`, `/help`, `/summarize`, `/conversations`, `/conversation`, `/goals`, `/goal`, `/approvals`, `/reflect`, `/discover`.
 

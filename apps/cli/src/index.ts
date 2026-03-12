@@ -42,6 +42,7 @@ import {
   handleApprovalShow,
   handleApprovalApprove,
   handleApprovalDeny,
+  handleId,
 } from "./subcommands.js";
 import { handleRun, handleServe } from "./daemon.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
@@ -115,6 +116,11 @@ async function main(): Promise<void> {
         console.error(`Error:       ${result.error}`);
       process.exit(1);
     }
+  }
+
+  if (subcommand === "id") {
+    handleId();
+    return;
   }
 
   if (subcommand === "doctor") {
