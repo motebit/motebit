@@ -18,8 +18,9 @@ import {
   buildConsolidationPrompt,
   parseConsolidationResponse,
   clusterBySimilarity,
+  findCuriosityTargets,
 } from "@motebit/memory-graph";
-import type { ConsolidationProvider } from "@motebit/memory-graph";
+import type { ConsolidationProvider, CuriosityTarget } from "@motebit/memory-graph";
 import type { MemoryStorageAdapter } from "@motebit/memory-graph";
 import { StateVectorEngine } from "@motebit/state-vector";
 import { BehaviorEngine } from "@motebit/behavior-engine";
@@ -96,7 +97,7 @@ export type {
 } from "@motebit/sdk";
 export { AgentTrustLevel } from "@motebit/sdk";
 export type { EventStoreAdapter } from "@motebit/event-log";
-export type { MemoryStorageAdapter } from "@motebit/memory-graph";
+export type { MemoryStorageAdapter, CuriosityTarget } from "@motebit/memory-graph";
 export type { IdentityStorage } from "@motebit/core-identity";
 export type { AuditLogAdapter } from "@motebit/privacy-layer";
 export type { DeletionCertificate } from "@motebit/crypto";
@@ -486,6 +487,7 @@ export class MotebitRuntime {
   private episodicConsolidation: boolean;
   private gradientStore: GradientStoreAdapter;
   private agentTrustStore: AgentTrustStoreAdapter | null;
+  private _curiosityTargets: CuriosityTarget[] = [];
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
     this.motebitId = config.motebitId;
@@ -1740,6 +1742,11 @@ export class MotebitRuntime {
         }
       }
 
+      // Compute curiosity targets — decaying high-value memories worth asking about
+      this._curiosityTargets = findCuriosityTargets(
+        nodes.filter(n => !n.tombstoned && !n.pinned),
+      );
+
       // Log housekeeping run
       const clock = await this.events.getLatestClock(this.motebitId);
       await this.events.append({
@@ -1753,6 +1760,7 @@ export class MotebitRuntime {
           tombstoned_decay: tombstonedDecay,
           tombstoned_retention: tombstonedRetention,
           skipped_pinned: skippedPinned,
+          curiosity_targets: this._curiosityTargets.length,
         },
         version_clock: clock + 1,
         tombstoned: false,
@@ -1848,6 +1856,13 @@ export class MotebitRuntime {
         // Consolidation is best-effort per cluster
       }
     }
+  }
+
+  // === Curiosity Targets ===
+
+  /** Get curiosity targets computed during last housekeeping cycle. */
+  getCuriosityTargets(): CuriosityTarget[] {
+    return this._curiosityTargets;
   }
 
   // === Intelligence Gradient ===

@@ -108,7 +108,7 @@ Tauri app. Two key files for the UI layer:
 
 **Subcommands:** `motebit id`, `motebit export`, `motebit verify <path>`, `motebit run --identity <path>` (daemon), `motebit goal add/list/remove/pause/resume`, `motebit approvals list/show/approve/deny`. Default (no subcommand) enters interactive REPL.
 
-**REPL commands:** `/model`, `/memories`, `/graph`, `/state`, `/forget`, `/export`, `/sync`, `/clear`, `/tools`, `/mcp list/trust/untrust/add/remove`, `/operator`, `/help`, `/summarize`, `/conversations`, `/conversation`, `/goals`, `/goal`, `/approvals`, `/reflect`, `/discover`.
+**REPL commands:** `/model`, `/memories`, `/graph`, `/curious`, `/state`, `/forget`, `/export`, `/sync`, `/clear`, `/tools`, `/mcp list/trust/untrust/add/remove`, `/operator`, `/help`, `/summarize`, `/conversations`, `/conversation`, `/goals`, `/goal`, `/approvals`, `/reflect`, `/discover`.
 
 **Identity:** Ed25519 keypair generated on first launch, private key encrypted with PBKDF2 (passphrase-protected), stored in `~/.motebit/config.json`. Supports operator mode via `--operator` flag.
 

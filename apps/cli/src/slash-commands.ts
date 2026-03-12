@@ -1,6 +1,7 @@
 // --- REPL slash command handler ---
 
 import type { MotebitRuntime, ReflectionResult } from "@motebit/runtime";
+import { computeDecayedConfidence } from "@motebit/memory-graph";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { McpClientAdapter, type McpServerConfig } from "@motebit/mcp-client";
 import { InMemoryToolRegistry } from "@motebit/tools";
@@ -62,6 +63,7 @@ Available commands:
   /help              Show this help
   /memories          List all memories
   /graph             Memory graph stats — compounding health
+  /curious           Show decaying memories the agent is curious about
   /state             Show current state vector
   /forget <nodeId>   Delete a memory by ID
   /export            Export all memories and state as JSON
@@ -107,6 +109,7 @@ Available commands:
         }
 
         const live = data.nodes.filter((n) => !n.tombstoned);
+        const now = Date.now();
         console.log(`\nMemories (${live.length} nodes, ${data.edges.length} edges):\n`);
         for (const node of live) {
           const halfDays = Math.round(node.half_life / MS_PER_DAY);
@@ -116,8 +119,13 @@ Available commands:
           const edges = edgeCounts.get(node.node_id) ?? 0;
           const pin = node.pinned ? " pin" : "";
           const compound = compounded ? ` \u2191${halfDays}d` : ` ${halfDays}d`;
+          // Decay indicator
+          const elapsed = now - node.created_at;
+          const decayed = computeDecayedConfidence(node.confidence, node.half_life, elapsed);
+          const loss = node.confidence - decayed;
+          const decay = loss > 0.3 ? " [fading]" : loss > 0.15 ? " [aging]" : "";
           console.log(
-            `  ${node.node_id.slice(0, 8)}  [${type} conf=${node.confidence.toFixed(2)}${compound} e=${edges}${pin}]  ${node.content}`,
+            `  ${node.node_id.slice(0, 8)}  [${type} conf=${node.confidence.toFixed(2)}${compound} e=${edges}${pin}${decay}]  ${node.content}`,
           );
         }
       }
@@ -164,6 +172,12 @@ Available commands:
       console.log(`  Avg half:   ${Math.round(avgHalfLife / DAY)}d`);
       console.log(`  Compounded: ${compounded} (half-life > 30d)`);
       console.log(`  Density:    ${live.length > 0 ? (liveEdges.length / live.length).toFixed(2) : "0"} edges/node`);
+
+      const curiosityTargets = runtime.getCuriosityTargets();
+      if (curiosityTargets.length > 0) {
+        const topScore = curiosityTargets[0]!.curiosityScore.toFixed(3);
+        console.log(`  Curious:    ${curiosityTargets.length} memories fading (top score: ${topScore})`);
+      }
 
       const gradient = runtime.getGradient();
       if (gradient) {
@@ -826,6 +840,26 @@ Available commands:
         const message = err instanceof Error ? err.message : String(err);
         console.log(`Discovery error: ${message}`);
       }
+      break;
+    }
+
+    case "curious": {
+      const targets = runtime.getCuriosityTargets();
+      if (targets.length === 0) {
+        console.log("No curiosity targets — all memories are healthy or too far gone.");
+        break;
+      }
+      const MS_PER_DAY = 86_400_000;
+      console.log(`\nCuriosity targets (${targets.length}):\n`);
+      for (const t of targets) {
+        const ageDays = Math.round((Date.now() - t.node.created_at) / MS_PER_DAY);
+        const halfDays = Math.round(t.node.half_life / MS_PER_DAY);
+        console.log(
+          `  ${t.node.node_id.slice(0, 8)}  score=${t.curiosityScore.toFixed(3)}  conf=${t.node.confidence.toFixed(2)}\u2192${t.decayedConfidence.toFixed(2)}  loss=${t.confidenceLoss.toFixed(2)}  stale=${t.staleness.toFixed(1)}x  age=${ageDays}d  half=${halfDays}d`,
+        );
+        console.log(`             ${t.node.content}`);
+      }
+      console.log("\nThese memories are fading. Confirm or update them to reinforce.");
       break;
     }
 

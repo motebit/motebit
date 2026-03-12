@@ -61,15 +61,46 @@ export class GoalScheduler {
     this.planStore = store;
   }
 
+  private static readonly MAINTENANCE_PREFIX = "[system:memory_maintenance]";
+
   start(tickMs = 60_000): void {
     if (this.timer) return;
     this.cleanupOrphanedApprovals();
     this.registerGoalTools();
+    this.ensureMaintenanceGoal();
     this.timer = setInterval(() => {
       void this.tick();
     }, tickMs);
     // Run immediately on start
     void this.tick();
+  }
+
+  /**
+   * Ensure a system memory-maintenance goal exists. Idempotent — checks
+   * for existing goal by prompt prefix before creating.
+   */
+  private ensureMaintenanceGoal(): void {
+    const goals = this.goalStore.list(this.motebitId);
+    const existing = goals.find(g => g.prompt.startsWith(GoalScheduler.MAINTENANCE_PREFIX));
+    if (existing) return;
+
+    this.goalStore.add({
+      goal_id: crypto.randomUUID(),
+      motebit_id: this.motebitId,
+      prompt: `${GoalScheduler.MAINTENANCE_PREFIX} Review fading memories and ask the user to confirm or update them.`,
+      interval_ms: 24 * 60 * 60 * 1000, // 24 hours
+      last_run_at: null,
+      enabled: true,
+      created_at: Date.now(),
+      mode: "recurring",
+      status: "active",
+      parent_goal_id: null,
+      max_retries: 3,
+      consecutive_failures: 0,
+      wall_clock_ms: 5 * 60 * 1000, // 5 min wall-clock
+      project_id: null,
+    });
+    console.log("[scheduler] created system memory maintenance goal (24h interval)");
   }
 
   /** Deny any pending approvals left over from a previous daemon run. */
@@ -227,6 +258,11 @@ export class GoalScheduler {
   }
 
   private buildGoalContext(goal: Goal, outcomes: GoalOutcome[], subGoals: Goal[]): string {
+    // Memory maintenance goals get special context with curiosity targets
+    if (goal.prompt.startsWith(GoalScheduler.MAINTENANCE_PREFIX)) {
+      return this.buildMaintenanceContext(outcomes);
+    }
+
     const lines: string[] = [];
     lines.push("You are executing a scheduled goal.");
     lines.push("");
@@ -320,6 +356,49 @@ export class GoalScheduler {
     if (goal.mode === "once") {
       lines.push("");
       lines.push("This is a one-time goal. Use complete_goal when done.");
+    }
+
+    return lines.join("\n");
+  }
+
+  private buildMaintenanceContext(outcomes: GoalOutcome[]): string {
+    const targets = this.runtime.getCuriosityTargets();
+    const lines: string[] = [];
+    lines.push("You are running a memory maintenance check.");
+    lines.push("");
+
+    if (targets.length === 0) {
+      lines.push("All memories are healthy — no fading memories need attention.");
+      lines.push("Just note that maintenance ran and no action was needed, then return.");
+      return lines.join("\n");
+    }
+
+    lines.push(`${targets.length} memor${targets.length === 1 ? "y is" : "ies are"} fading and could use confirmation or update:`);
+    lines.push("");
+
+    const DAY = 86_400_000;
+    for (const t of targets) {
+      const ageDays = Math.round((Date.now() - t.node.created_at) / DAY);
+      const halfDays = Math.round(t.node.half_life / DAY);
+      lines.push(`- "${t.node.content}"`);
+      lines.push(`  confidence: ${t.node.confidence.toFixed(2)} → ${t.decayedConfidence.toFixed(2)} (lost ${t.confidenceLoss.toFixed(2)})  age: ${ageDays}d  half-life: ${halfDays}d`);
+    }
+
+    lines.push("");
+    lines.push("Pick 1-2 of the most interesting fading memories and ask the user a natural question to confirm or update them.");
+    lines.push("If the user confirms, the response will flow through consolidation → REINFORCE → confidence + half-life boost.");
+    lines.push("If the user corrects the information, it will trigger UPDATE → new memory supersedes the old.");
+    lines.push("Keep it conversational — don't list all memories, just pick the most valuable ones.");
+
+    if (outcomes.length > 0) {
+      lines.push("");
+      lines.push("Previous maintenance runs:");
+      for (const o of outcomes.slice(0, 3)) {
+        const ago = formatTimeAgo(Date.now() - o.ran_at);
+        if (o.summary) {
+          lines.push(`  - ${ago}: ${o.summary.slice(0, 100)}`);
+        }
+      }
     }
 
     return lines.join("\n");

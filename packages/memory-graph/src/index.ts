@@ -94,6 +94,68 @@ export function computeDecayedConfidence(
   return initialConfidence * Math.pow(0.5, elapsedMs / halfLife);
 }
 
+// === Curiosity Targets ===
+
+export interface CuriosityTarget {
+  node: MemoryNode;
+  decayedConfidence: number;
+  confidenceLoss: number;
+  staleness: number;
+  curiosityScore: number;
+}
+
+/**
+ * Find high-value memories that are decaying and would benefit from user confirmation.
+ * Pure scoring function — no I/O.
+ *
+ * Score: confidenceLoss × staleness² × node.confidence
+ * - confidenceLoss = how much it's faded (initial - decayed)
+ * - staleness = elapsed / half_life — how many half-lives since last touch
+ * - staleness² = non-linear urgency (under 1 half-life suppressed, over 1 amplified)
+ * - node.confidence = value weight — high-confidence memories matter more
+ */
+export function findCuriosityTargets(
+  nodes: MemoryNode[],
+  options?: {
+    limit?: number;
+    minConfidenceLoss?: number;
+    maxDecayedConfidence?: number;
+    minOriginalConfidence?: number;
+  },
+): CuriosityTarget[] {
+  const {
+    limit = 5,
+    minConfidenceLoss = 0.15,
+    maxDecayedConfidence = 0.7,
+    minOriginalConfidence = 0.5,
+  } = options ?? {};
+
+  const now = Date.now();
+  const results: CuriosityTarget[] = [];
+
+  for (const node of nodes) {
+    if (node.tombstoned || node.pinned) continue;
+    if (node.confidence < minOriginalConfidence) continue;
+
+    const elapsed = now - node.created_at;
+    const decayedConfidence = computeDecayedConfidence(node.confidence, node.half_life, elapsed);
+
+    if (decayedConfidence > maxDecayedConfidence) continue;
+    if (decayedConfidence < 0.1) continue;
+
+    const confidenceLoss = node.confidence - decayedConfidence;
+    if (confidenceLoss < minConfidenceLoss) continue;
+
+    const staleness = node.half_life > 0 ? (now - node.last_accessed) / node.half_life : 0;
+    const curiosityScore = confidenceLoss * staleness * staleness * node.confidence;
+
+    results.push({ node, decayedConfidence, confidenceLoss, staleness, curiosityScore });
+  }
+
+  results.sort((a, b) => b.curiosityScore - a.curiosityScore);
+  return results.slice(0, limit);
+}
+
 // === Cosine Similarity ===
 
 export function cosineSimilarity(a: number[], b: number[]): number {
@@ -410,11 +472,18 @@ export class MemoryGraph {
       }
 
       case ConsolidationAction.NOOP: {
-        // Update existing node's last_accessed
+        // NOOP = "I already know this" — the user confirmed existing knowledge.
+        // Compound: boost confidence + half-life (same as REINFORCE) but don't
+        // create a support node — the duplicate adds no new information.
         const existingNode = decision.existingNodeId
           ? await this.storage.getNode(decision.existingNodeId)
           : null;
         if (existingNode) {
+          existingNode.confidence = Math.min(1.0, existingNode.confidence + 0.1);
+          existingNode.half_life = Math.min(
+            MemoryGraph.MAX_HALF_LIFE,
+            existingNode.half_life * 1.5,
+          );
           existingNode.last_accessed = now;
           await this.storage.saveNode(existingNode);
         }

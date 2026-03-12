@@ -292,6 +292,37 @@ describe("Runtime housekeeping — memory retention enforcement", () => {
     expect(hkSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("populates curiosity targets during housekeeping", async () => {
+    const embedding = new Array(384).fill(0.1);
+
+    // Create a memory that's decaying but still above the persistence threshold (0.5).
+    // confidence 0.9, half-life 30d, backdated 15 days → decayed ≈ 0.9 * 0.5^(15/30) ≈ 0.636
+    // confidenceLoss ≈ 0.264, which exceeds the 0.15 curiosity threshold
+    // decayedConfidence ≈ 0.636, which is above persistence threshold (0.5) but below maxDecayedConfidence (0.7)
+    const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+    const node = await runtime.memory.formMemory(
+      { content: "fading important fact", confidence: 0.9, sensitivity: SensitivityLevel.None },
+      embedding,
+      THIRTY_DAYS,
+    );
+
+    const fifteenDaysAgo = Date.now() - 15 * 24 * 60 * 60 * 1000;
+    node.created_at = fifteenDaysAgo;
+    node.last_accessed = fifteenDaysAgo;
+    await (runtime as any).memory["storage"].saveNode(node);
+
+    // Before housekeeping, no targets
+    expect(runtime.getCuriosityTargets()).toHaveLength(0);
+
+    await runtime.housekeeping();
+
+    const targets = runtime.getCuriosityTargets();
+    expect(targets.length).toBeGreaterThanOrEqual(1);
+    expect(targets[0]!.node.content).toBe("fading important fact");
+    expect(targets[0]!.confidenceLoss).toBeGreaterThan(0.15);
+    expect(targets[0]!.curiosityScore).toBeGreaterThan(0);
+  });
+
   it("does not crash if housekeeping throws internally", async () => {
     // Force exportAll to reject
     vi.spyOn(runtime.memory, "exportAll").mockRejectedValue(new Error("storage failure"));

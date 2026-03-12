@@ -16,7 +16,7 @@ Or with options:
 ```bash
 pnpm --filter @motebit/cli dev -- \
   --provider anthropic \
-  --model claude-sonnet-4-5-20250514 \
+  --model claude-sonnet-4-5-20250929 \
   --operator
 ```
 
@@ -42,7 +42,8 @@ pnpm --filter @motebit/cli dev -- \
 | `/help` | Show available commands |
 | `/model <name>` | Switch model |
 | `/memories` | List stored memories (type, half-life, edge count, compounding status) |
-| `/graph` | Memory graph health — node/edge counts, compounding stats, intelligence gradient |
+| `/graph` | Memory graph health — node/edge counts, compounding stats, curiosity targets, intelligence gradient |
+| `/curious` | Show decaying memories the agent is curious about (score, decay info, content) |
 | `/state` | Show current state vector |
 | `/forget <nodeId>` | Delete a memory by ID |
 | `/export` | Export all data (memories, events, identity) |
