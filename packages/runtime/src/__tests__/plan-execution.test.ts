@@ -112,6 +112,10 @@ function setupStreamMock(responses: string[]): void {
           smile_curvature: 0,
           speaking_activity: 0,
         },
+        iterations: 1,
+        toolCallsSucceeded: 0,
+        toolCallsBlocked: 0,
+        toolCallsFailed: 0,
       },
     };
   });
