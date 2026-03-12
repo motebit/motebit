@@ -12,7 +12,6 @@ export function HeroCreature() {
 
     let disposed = false;
     let animId: number | undefined;
-    let themeObserver: MutationObserver | undefined;
     let resizeObserver: ResizeObserver | undefined;
     let adapter:
       | {
@@ -20,7 +19,6 @@ export function HeroCreature() {
           resize: (w: number, h: number) => void;
           dispose: () => void;
           setLightEnvironment: () => void;
-          setDarkEnvironment: () => void;
         }
       | undefined;
 
@@ -33,23 +31,9 @@ export function HeroCreature() {
         await a.init(canvas);
         adapter = a as typeof adapter;
 
-        // Match environment to current theme — same as desktop app
-        const applyTheme = () => {
-          const isDark = document.documentElement.classList.contains("dark");
-          if (isDark) {
-            a.setDarkEnvironment();
-          } else {
-            a.setLightEnvironment();
-          }
-        };
-        applyTheme();
-
-        // Watch for theme changes
-        themeObserver = new MutationObserver(applyTheme);
-        themeObserver.observe(document.documentElement, {
-          attributes: true,
-          attributeFilter: ["class"],
-        });
+        // Always light environment — glass needs chromatic variation to refract.
+        // Dark mode only changes UI chrome, never the creature's world.
+        a.setLightEnvironment();
 
         resizeObserver = new ResizeObserver((entries) => {
           for (const entry of entries) {
@@ -98,7 +82,6 @@ export function HeroCreature() {
     return () => {
       disposed = true;
       if (animId !== undefined) cancelAnimationFrame(animId);
-      themeObserver?.disconnect();
       resizeObserver?.disconnect();
       adapter?.dispose();
     };
