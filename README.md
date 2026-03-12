@@ -23,10 +23,11 @@ MCP defines what tools an agent can reach. Motebit defines **who the agent is**.
 npm create motebit my-agent
 cd my-agent
 npm install
-node verify.js
+node verify.js                              # verify the signature
+npx motebit run --identity ./motebit.md     # start the agent
 ```
 
-Four commands. Thirty seconds. A cryptographically signed agent identity on your filesystem.
+Five commands. Thirty seconds. From zero to a running agent with cryptographic identity, governance policy, and memory.
 
 **[Documentation](https://docs.motebit.com)** — guides, architecture, API reference
 
