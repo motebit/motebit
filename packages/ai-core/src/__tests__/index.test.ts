@@ -166,6 +166,42 @@ describe("packContext", () => {
       .filter((line) => line.startsWith("  ") && line.includes("state_updated"));
     expect(eventLines).toHaveLength(10);
   });
+
+  it("includes curiosity hints when provided", () => {
+    const result = packContext(
+      makeContextPack({
+        curiosityHints: [
+          { content: "User prefers strict mode", daysSinceDiscussed: 38 },
+          { content: "Deploy uses GitHub Actions", daysSinceDiscussed: 25 },
+        ],
+      }),
+    );
+    expect(result).toContain("[Getting Fuzzy]");
+    expect(result).toContain("User prefers strict mode");
+    expect(result).toContain("38d");
+    expect(result).toContain("Deploy uses GitHub Actions");
+    expect(result).toContain("If relevant");
+  });
+
+  it("omits curiosity section when no hints", () => {
+    const result = packContext(makeContextPack());
+    expect(result).not.toContain("[Getting Fuzzy]");
+  });
+
+  it("limits curiosity hints to 2", () => {
+    const result = packContext(
+      makeContextPack({
+        curiosityHints: [
+          { content: "Fact A", daysSinceDiscussed: 10 },
+          { content: "Fact B", daysSinceDiscussed: 20 },
+          { content: "Fact C", daysSinceDiscussed: 30 },
+        ],
+      }),
+    );
+    expect(result).toContain("Fact A");
+    expect(result).toContain("Fact B");
+    expect(result).not.toContain("Fact C");
+  });
 });
 
 // ---------------------------------------------------------------------------

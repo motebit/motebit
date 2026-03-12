@@ -169,6 +169,8 @@ export interface TurnOptions {
   runId?: string;
   /** Session resumption info — set when the runtime loaded a persisted conversation. */
   sessionInfo?: { continued: boolean; lastActiveAt: number };
+  /** Fading memories the agent might want to check in about, if relevant to conversation. */
+  curiosityHints?: Array<{ content: string; daysSinceDiscussed: number }>;
 }
 
 export type AgenticChunk =
@@ -274,6 +276,7 @@ export async function* runTurnStreaming(
       behavior_cues: options?.previousCues,
       tools: toolDefs,
       sessionInfo: options?.sessionInfo,
+      curiosityHints: iteration === 1 ? options?.curiosityHints : undefined,
     };
 
     // On continuation turns, the user_message is empty and the conversation

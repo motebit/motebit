@@ -852,6 +852,17 @@ export class MotebitRuntime {
     }
   }
 
+  /** Convert curiosity targets to lightweight hints for the context pack. */
+  private buildCuriosityHints(): Array<{ content: string; daysSinceDiscussed: number }> | undefined {
+    if (this._curiosityTargets.length === 0) return undefined;
+    const DAY = 86_400_000;
+    const now = Date.now();
+    return this._curiosityTargets.slice(0, 2).map(t => ({
+      content: t.node.content,
+      daysSinceDiscussed: Math.round((now - t.node.last_accessed) / DAY),
+    }));
+  }
+
   async sendMessage(text: string, runId?: string): Promise<TurnResult> {
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
     if (this._isProcessing) throw new Error("Already processing a message");
@@ -866,6 +877,7 @@ export class MotebitRuntime {
         previousCues: this.latestCues,
         runId,
         sessionInfo: this.sessionInfo ?? undefined,
+        curiosityHints: this.buildCuriosityHints(),
       });
       this.pushToHistory(text, result.response);
       // Session info applies only to the first message after resume
@@ -893,6 +905,7 @@ export class MotebitRuntime {
         previousCues: this.latestCues,
         runId,
         sessionInfo: this.sessionInfo ?? undefined,
+        curiosityHints: this.buildCuriosityHints(),
       });
       // Session info applies only to the first message after resume
       this.sessionInfo = null;

@@ -305,6 +305,8 @@ export interface ContextPack {
   tools?: ToolDefinition[];
   /** Session resumption info — set when continuing a persisted conversation. */
   sessionInfo?: { continued: boolean; lastActiveAt: number };
+  /** Fading memories the agent might want to check in about, if relevant to conversation. */
+  curiosityHints?: Array<{ content: string; daysSinceDiscussed: number }>;
 }
 
 export type ConversationMessage =

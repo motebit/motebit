@@ -95,6 +95,15 @@ export function packContext(contextPack: ContextPack): string {
     }
   }
 
+  // Curiosity hints — fading memories the agent might check in about
+  if (contextPack.curiosityHints && contextPack.curiosityHints.length > 0) {
+    parts.push("[Getting Fuzzy]");
+    for (const hint of contextPack.curiosityHints.slice(0, 2)) {
+      parts.push(`  - "${hint.content}" (haven't discussed in ${hint.daysSinceDiscussed}d)`);
+    }
+    parts.push("  If relevant to what the user is saying, you could check in on these. If not, ignore them.");
+  }
+
   // User message
   parts.push(`[User] ${contextPack.user_message}`);
 
