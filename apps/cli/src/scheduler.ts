@@ -373,26 +373,27 @@ export class GoalScheduler {
       return lines.join("\n");
     }
 
-    lines.push(`${targets.length} memor${targets.length === 1 ? "y is" : "ies are"} fading and could use confirmation or update:`);
+    lines.push("Some things you remember are getting stale. Here's what you're unsure about:");
     lines.push("");
 
     const DAY = 86_400_000;
     for (const t of targets) {
       const ageDays = Math.round((Date.now() - t.node.created_at) / DAY);
-      const halfDays = Math.round(t.node.half_life / DAY);
+      const lastTouchedDays = Math.round((Date.now() - t.node.last_accessed) / DAY);
       lines.push(`- "${t.node.content}"`);
-      lines.push(`  confidence: ${t.node.confidence.toFixed(2)} → ${t.decayedConfidence.toFixed(2)} (lost ${t.confidenceLoss.toFixed(2)})  age: ${ageDays}d  half-life: ${halfDays}d`);
+      lines.push(`  (learned ${ageDays}d ago, last came up ${lastTouchedDays}d ago — getting fuzzy)`);
     }
 
     lines.push("");
-    lines.push("Pick 1-2 of the most interesting fading memories and ask the user a natural question to confirm or update them.");
-    lines.push("If the user confirms, the response will flow through consolidation → REINFORCE → confidence + half-life boost.");
-    lines.push("If the user corrects the information, it will trigger UPDATE → new memory supersedes the old.");
-    lines.push("Keep it conversational — don't list all memories, just pick the most valuable ones.");
+    lines.push("Pick 1-2 that seem most worth checking and ask the user naturally.");
+    lines.push("Frame it as your own uncertainty — \"I remember X, is that still the case?\"");
+    lines.push("Do NOT mention confidence scores, decay, half-life, or maintenance.");
+    lines.push("Do NOT list multiple items — pick the most useful one or two and ask conversationally.");
+    lines.push("If the user confirms or corrects, that's all you need. Keep it brief.");
 
     if (outcomes.length > 0) {
       lines.push("");
-      lines.push("Previous maintenance runs:");
+      lines.push("Previous check-ins:");
       for (const o of outcomes.slice(0, 3)) {
         const ago = formatTimeAgo(Date.now() - o.ran_at);
         if (o.summary) {
