@@ -36,8 +36,18 @@ const ttsVoiceSelect = document.getElementById("tts-voice-select") as HTMLSelect
 const vadSlider = document.getElementById("vad-sensitivity") as HTMLInputElement | null;
 const proactiveToggle = document.getElementById("proactive-toggle") as HTMLInputElement | null;
 
+// Network settings
+const relayUrlInput = document.getElementById("relay-url-input") as HTMLInputElement | null;
+const showNetworkToggle = document.getElementById("show-network-toggle") as HTMLInputElement | null;
+
 // Voice indicator
 const voiceIndicator = document.getElementById("voice-indicator") as HTMLElement;
+
+// Gaze overlay — shown when looking at a remote agent
+const gazeOverlay = document.getElementById("gaze-overlay") as HTMLElement | null;
+const gazeAgentId = document.getElementById("gaze-agent-id") as HTMLElement | null;
+const gazeAgentTrust = document.getElementById("gaze-agent-trust") as HTMLElement | null;
+const gazeAgentCaps = document.getElementById("gaze-agent-caps") as HTMLElement | null;
 
 // === State ===
 
@@ -46,6 +56,8 @@ let lastTime = 0;
 
 // Gaze attention state
 let lastGazeHit = false;
+// Remote agent gaze state
+let gazedAgentId: string | null = null;
 
 // === Settings persistence ===
 
@@ -58,6 +70,8 @@ interface SpatialSettings {
   ttsVoice: OpenAITTSVoice;
   vadSensitivity: number;
   proactiveEnabled: boolean;
+  relayUrl: string;
+  showNetwork: boolean;
 }
 
 function loadSettings(): SpatialSettings {
@@ -74,6 +88,8 @@ function loadSettings(): SpatialSettings {
         ttsVoice: parsed.ttsVoice ?? "nova",
         vadSensitivity: parsed.vadSensitivity ?? 0.5,
         proactiveEnabled: parsed.proactiveEnabled ?? true,
+        relayUrl: parsed.relayUrl ?? "https://motebit-sync.fly.dev",
+        showNetwork: parsed.showNetwork ?? true,
       };
     }
   } catch {
@@ -88,6 +104,8 @@ function loadSettings(): SpatialSettings {
     ttsVoice: "nova",
     vadSensitivity: 0.5,
     proactiveEnabled: true,
+    relayUrl: "https://motebit-sync.fly.dev",
+    showNetwork: true,
   };
 }
 
@@ -121,12 +139,19 @@ async function init(): Promise<void> {
   if (ttsVoiceSelect) ttsVoiceSelect.value = settings.ttsVoice;
   if (vadSlider) vadSlider.value = String(settings.vadSensitivity);
   if (proactiveToggle) proactiveToggle.checked = settings.proactiveEnabled;
+  if (relayUrlInput) relayUrlInput.value = settings.relayUrl;
+  if (showNetworkToggle) showNetworkToggle.checked = settings.showNetwork;
   updateProviderUI(settings.provider);
+
+  // Apply network settings (best-effort relay — does not block boot)
+  app.setNetworkSettings({ relayUrl: settings.relayUrl, showNetwork: settings.showNetwork });
 
   // If we have a saved config that can init, skip settings
   if (await tryInitAI(settings)) {
     settingsOverlay.classList.add("hidden");
     void initVoiceIfEnabled(settings);
+    // Connect to relay after AI init — best-effort, non-blocking
+    void app.connectRelay();
     showMainOverlay();
   } else {
     // Show settings overlay first
@@ -206,8 +231,14 @@ settingsSave?.addEventListener(
         ttsVoice: (ttsVoiceSelect?.value as OpenAITTSVoice) ?? "nova",
         vadSensitivity: vadSlider ? parseFloat(vadSlider.value) : 0.5,
         proactiveEnabled: proactiveToggle?.checked ?? true,
+        relayUrl: relayUrlInput?.value.trim() ?? "https://motebit-sync.fly.dev",
+        showNetwork: showNetworkToggle?.checked ?? true,
       };
       saveSettings(settings);
+
+      // Apply network settings — disconnect and reconnect if relay changed
+      await app.disconnectRelay();
+      app.setNetworkSettings({ relayUrl: settings.relayUrl, showNetwork: settings.showNetwork });
 
       if (!(await tryInitAI(settings))) {
         statusEl.textContent = "API key required for Anthropic";
@@ -215,6 +246,7 @@ settingsSave?.addEventListener(
       }
 
       void initVoiceIfEnabled(settings);
+      void app.connectRelay();
       settingsOverlay.classList.add("hidden");
       showMainOverlay();
     })(e),
@@ -289,8 +321,11 @@ async function startAR(): Promise<void> {
     // Tick orbital dynamics — positions creature relative to shoulder
     app.tickOrbital(dt, t, headPos);
 
-    // Gaze-based attention: check if user is looking at the creature
+    // Gaze-based attention: check if user is looking at the local creature
     updateGazeAttention(camera, headPos);
+
+    // Check gaze against remote agents (for discovery overlay)
+    updateRemoteGaze(camera, headPos);
 
     // Hand gesture recognition (requires XRFrame + hand-tracking feature)
     const session = renderer.xr.getSession();
@@ -323,6 +358,7 @@ async function startAR(): Promise<void> {
       app.dynamics.reset();
       app.gestures.reset();
       lastGazeHit = false;
+      hideGazeOverlay();
     });
   }
 }
@@ -383,6 +419,105 @@ function updateGazeAttention(
   }
 
   lastGazeHit = gazeHit;
+}
+
+// === Remote Agent Gaze Overlay ===
+
+/**
+ * Check if user is looking at a remote agent (discovered via relay).
+ * When a gaze hit occurs, show a floating label with agent info.
+ *
+ * Remote creatures are positioned in a ring around the user at trust-derived
+ * distances. We project each agent's expected world position and check the
+ * gaze ray against a generous 0.3m threshold.
+ */
+function updateRemoteGaze(
+  camera: {
+    matrixWorld: { elements: ArrayLike<number> };
+    position: { x: number; y: number; z: number };
+  },
+  headPos: [number, number, number],
+): void {
+  if (!app.networkConfig.showNetwork) return;
+
+  const agents = app.getDiscoveredAgents();
+  if (agents.length === 0) {
+    if (gazedAgentId !== null) hideGazeOverlay();
+    return;
+  }
+
+  const m = camera.matrixWorld.elements;
+  const fwdX = -m[8]!;
+  const fwdY = -m[9]!;
+  const fwdZ = -m[10]!;
+
+  const [cx, cy, cz] = headPos;
+
+  // Remote creatures are arranged in a circle around the user's position.
+  // We use the same circle layout as circlePosition() in the render engine.
+  const total = agents.length;
+  let closestId: string | null = null;
+  let closestDist = Infinity;
+
+  for (let i = 0; i < total; i++) {
+    const agent = agents[i]!;
+    const REMOTE_MAX = 2.0;
+    const REMOTE_MIN = 0.4;
+    const dist = REMOTE_MAX - agent.trust_score * (REMOTE_MAX - REMOTE_MIN);
+    const angle = (i / total) * Math.PI * 2;
+    const rx = cx + Math.cos(angle) * dist;
+    const ry = cy - 0.35; // ~shoulder height
+    const rz = cz + Math.sin(angle) * dist;
+
+    const dx = rx - cx;
+    const dy = ry - cy;
+    const dz = rz - cz;
+
+    const proj = dx * fwdX + dy * fwdY + dz * fwdZ;
+    if (proj <= 0) continue; // Behind camera
+
+    const perpX = dx - proj * fwdX;
+    const perpY = dy - proj * fwdY;
+    const perpZ = dz - proj * fwdZ;
+    const perpDist = Math.sqrt(perpX * perpX + perpY * perpY + perpZ * perpZ);
+
+    if (perpDist < 0.3 && perpDist < closestDist) {
+      closestDist = perpDist;
+      closestId = agent.motebit_id;
+    }
+  }
+
+  if (closestId !== null) {
+    if (closestId !== gazedAgentId) {
+      gazedAgentId = closestId;
+      const agent = agents.find((a) => a.motebit_id === closestId);
+      if (agent) showGazeOverlay(agent);
+    }
+  } else {
+    if (gazedAgentId !== null) {
+      gazedAgentId = null;
+      hideGazeOverlay();
+    }
+  }
+}
+
+function showGazeOverlay(agent: {
+  motebit_id: string;
+  trust_score: number;
+  capabilities: string[];
+}): void {
+  if (!gazeOverlay) return;
+  if (gazeAgentId) gazeAgentId.textContent = `Agent: ${agent.motebit_id.slice(0, 12)}...`;
+  if (gazeAgentTrust) gazeAgentTrust.textContent = `Trust: ${Math.round(agent.trust_score * 100)}%`;
+  if (gazeAgentCaps) {
+    const caps = agent.capabilities.slice(0, 3).join(", ");
+    gazeAgentCaps.textContent = caps.length > 0 ? `Tools: ${caps}` : "No tools";
+  }
+  gazeOverlay.classList.remove("hidden");
+}
+
+function hideGazeOverlay(): void {
+  gazeOverlay?.classList.add("hidden");
 }
 
 // === Handle input ===

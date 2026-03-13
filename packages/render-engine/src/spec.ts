@@ -75,6 +75,82 @@ export interface RenderAdapter {
   dispose(): void;
 }
 
+// === Multi-Creature Constants & Pure Functions ===
+
+/** Maximum distance (meters) for a remote creature at trust 0. */
+export const REMOTE_MAX_DISTANCE = 2.0;
+
+/** Minimum distance (meters) for a remote creature at trust 1. */
+export const REMOTE_MIN_DISTANCE = 0.4;
+
+/**
+ * Map a trust score (0–1) to a radial distance (meters).
+ * Higher trust → closer (MIN_DISTANCE). Lower trust → farther (MAX_DISTANCE).
+ * Result is clamped to [REMOTE_MIN_DISTANCE, REMOTE_MAX_DISTANCE].
+ */
+export function trustToDistance(trustScore: number): number {
+  const clamped = Math.max(0, Math.min(1, trustScore));
+  const distance = REMOTE_MAX_DISTANCE - clamped * (REMOTE_MAX_DISTANCE - REMOTE_MIN_DISTANCE);
+  // Clamp result to guard against floating-point drift at the boundaries
+  return Math.max(REMOTE_MIN_DISTANCE, Math.min(REMOTE_MAX_DISTANCE, distance));
+}
+
+/**
+ * Map a string ID to a hue (0–360) deterministically.
+ * Uses a djb2 variant hash so the same ID always produces the same hue
+ * and different IDs tend to produce spread-out hues.
+ */
+export function idToHue(id: string): number {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0;
+  return ((hash % 360) + 360) % 360;
+}
+
+// === Multi-Creature Types ===
+
+/** Options for creating or updating a remote creature. */
+export interface RemoteCreatureOpts {
+  /** 0–1 trust score — higher trust places the creature closer (MIN_DISTANCE). */
+  trustScore: number;
+  /** World-space position. If omitted, auto-placed by trustToDistance() on the XZ plane. */
+  position?: { x: number; y: number; z: number };
+  /** Hue 0–360. If omitted, derived from `id` via idToHue(). */
+  hue?: number;
+}
+
+/** Activity state — drives emissive animations. */
+export type RemoteCreatureActivity = "idle" | "processing" | "delegating" | "completed";
+
+/** Internal state tracked per remote creature. */
+export interface RemoteCreatureState {
+  id: string;
+  group: unknown; // THREE.Group — typed as unknown to avoid THREE dep in spec
+  body: unknown; // THREE.Mesh
+  eyes: unknown; // THREE.Group
+  bodyMaterial: unknown; // THREE.MeshPhysicalMaterial
+  trustScore: number;
+  activity: RemoteCreatureActivity;
+  hue: number;
+  /** Per-creature phase offset so breathing is not in lockstep. */
+  phase: number;
+  /** Timestamp when 'completed' state started — drives the flash-then-fade. */
+  completedAt: number;
+}
+
+/** Internal state tracked per delegation line. */
+export interface DelegationLineState {
+  id: string;
+  fromId: string | "self";
+  toId: string;
+  line: unknown; // THREE.Line
+  geometry: unknown; // THREE.BufferGeometry
+  material: unknown; // THREE.LineBasicMaterial
+  /** Active pulse: 0–1 progress along the line, -1 = no pulse. */
+  pulseProgress: number;
+  /** Pulse indicator point mesh. */
+  pulseMesh: unknown; // THREE.Mesh | null
+}
+
 // === Frame-Independent Delta Smoothing ===
 
 export function smoothDelta(

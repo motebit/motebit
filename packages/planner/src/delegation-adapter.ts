@@ -41,6 +41,10 @@ export interface RelayDelegationConfig {
     error: string,
     failedAgentId?: string,
   ) => void;
+  /** Called when delegation starts — lets the caller visualize delegation flow (e.g., constellation arcs). */
+  onDelegationStart?: (targetId: string) => void;
+  /** Called when delegation completes successfully — receives the target agent ID and a caller-assigned line ID for cleanup. */
+  onDelegationComplete?: (targetId: string, lineId: string) => void;
 }
 
 export class RelayDelegationAdapter implements StepDelegationAdapter {

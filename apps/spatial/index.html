@@ -311,6 +311,51 @@
 
     .voice-indicator.hidden { display: none; }
 
+    /* === Gaze Overlay === */
+
+    .gaze-overlay {
+      position: fixed;
+      z-index: 6;
+      pointer-events: none;
+      padding: 10px 14px;
+      background: rgba(10, 10, 15, 0.82);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 10px;
+      backdrop-filter: blur(12px);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 140px;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+
+    .gaze-overlay.visible {
+      opacity: 1;
+    }
+
+    .gaze-overlay.hidden { display: none; }
+
+    .gaze-agent-id {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      color: #e0e0e8;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .gaze-agent-trust {
+      font-size: 11px;
+      opacity: 0.55;
+      letter-spacing: 0.05em;
+    }
+
+    .gaze-agent-caps {
+      font-size: 11px;
+      opacity: 0.4;
+      letter-spacing: 0.03em;
+    }
+
     .voice-dot {
       width: 6px;
       height: 6px;
@@ -380,6 +425,20 @@
           <input type="range" id="vad-sensitivity" min="0" max="1" step="0.1" value="0.5" />
         </div>
 
+        <!-- Network -->
+        <div class="settings-section">Network</div>
+        <div class="form-group">
+          <label for="relay-url-input">Relay URL</label>
+          <input type="text" id="relay-url-input" placeholder="https://motebit-sync.fly.dev" autocomplete="off" />
+        </div>
+        <div class="toggle-group">
+          <label for="show-network-toggle">Show network</label>
+          <div class="toggle-switch">
+            <input type="checkbox" id="show-network-toggle" checked />
+            <span class="toggle-slider"></span>
+          </div>
+        </div>
+
         <!-- Behavior -->
         <div class="settings-section">Behavior</div>
         <div class="toggle-group">
@@ -409,6 +468,13 @@
   <div class="voice-indicator hidden" id="voice-indicator">
     <span class="voice-dot"></span>
     listening
+  </div>
+
+  <!-- Gaze overlay — shown when looking at a remote creature -->
+  <div class="gaze-overlay hidden" id="gaze-overlay">
+    <div class="gaze-agent-id" id="gaze-agent-id"></div>
+    <div class="gaze-agent-trust" id="gaze-agent-trust"></div>
+    <div class="gaze-agent-caps" id="gaze-agent-caps"></div>
   </div>
 
   <script type="module" src="/src/app.ts"></script>

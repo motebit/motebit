@@ -1,8 +1,23 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TrustMode, type BehaviorCues, type RenderSpec } from "@motebit/sdk";
-import { CANONICAL_SPEC, CANONICAL_MATERIAL, smoothDelta } from "./spec.js";
-import type { RenderAdapter, RenderFrame, InteriorColor, AudioReactivity } from "./spec.js";
+import {
+  CANONICAL_SPEC,
+  CANONICAL_MATERIAL,
+  smoothDelta,
+  trustToDistance,
+  idToHue,
+} from "./spec.js";
+import type {
+  RenderAdapter,
+  RenderFrame,
+  InteriorColor,
+  AudioReactivity,
+  RemoteCreatureOpts,
+  RemoteCreatureActivity,
+  RemoteCreatureState,
+  DelegationLineState,
+} from "./spec.js";
 
 // === Constants ===
 
@@ -343,6 +358,248 @@ function computeBlinkFactor(
   return 1.0;
 }
 
+// === Multi-Creature Helpers ===
+// Remote creatures are the same species as the local motebit — same glass, same physics.
+// They are smaller (0.6x), calmer (slower breathing), and tinted by their motebit_id hue.
+
+const REMOTE_SCALE = 0.6; // Visitors are smaller — they're guests, not the protagonist
+
+/** Convert HSL hue (0–360) + fixed saturation/lightness to a THREE.Color. */
+function hueToColor(hue: number, saturation = 0.55, lightness = 0.65): THREE.Color {
+  const color = new THREE.Color();
+  color.setHSL(hue / 360, saturation, lightness);
+  return color;
+}
+
+/** Build a remote creature group (body + eyes). No smile — remote agents are ambient. */
+function createRemoteCreature(hue: number): {
+  group: THREE.Group;
+  body: THREE.Mesh;
+  eyes: THREE.Group;
+  bodyMaterial: THREE.MeshPhysicalMaterial;
+} {
+  const group = new THREE.Group();
+
+  // Body — same glass formula as the main creature, tinted by identity hue
+  const glowColor = hueToColor(hue, 0.7, 0.6);
+  const attenuationColor = hueToColor(hue, 0.4, 0.8);
+
+  const bodyGeo = new THREE.SphereGeometry(BODY_R, 48, 32);
+  const bodyMat = new THREE.MeshPhysicalMaterial({
+    color: new THREE.Color(1.0, 1.0, 1.0),
+    transmission: 0.94,
+    ior: 1.22,
+    thickness: 0.18,
+    roughness: 0.0,
+    clearcoat: 0.4,
+    clearcoatRoughness: 0.02,
+    envMapIntensity: 1.2,
+    emissive: glowColor,
+    emissiveIntensity: 0.0,
+    iridescence: 0.4,
+    iridescenceIOR: 1.3,
+    iridescenceThicknessRange: [100, 400],
+    side: THREE.FrontSide,
+    attenuationColor,
+    attenuationDistance: BODY_R * 0.7,
+  });
+
+  const bodyMesh = new THREE.Mesh(bodyGeo, bodyMat);
+  bodyMesh.renderOrder = 2;
+  group.add(bodyMesh);
+
+  // Eyes — simplified (no catchlights on remote agents, they're ambient presence)
+  const eyes = new THREE.Group();
+  const eyeGeo = new THREE.SphereGeometry(EYE_R * 0.85, 24, 24);
+  const eyeMat = new THREE.MeshStandardMaterial({
+    color: 0x080808,
+    roughness: 0.05,
+    metalness: 0.0,
+    polygonOffset: true,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 1,
+  });
+
+  const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
+  leftEye.position.set(-0.055, 0.015, 0.08);
+  leftEye.renderOrder = 1;
+  eyes.add(leftEye);
+
+  const rightEye = new THREE.Mesh(eyeGeo, eyeMat);
+  rightEye.position.set(0.055, 0.015, 0.08);
+  rightEye.renderOrder = 1;
+  eyes.add(rightEye);
+
+  group.add(eyes);
+
+  group.scale.setScalar(REMOTE_SCALE);
+
+  return { group, body: bodyMesh, eyes, bodyMaterial: bodyMat };
+}
+
+/** Build the delegation arc line (quadratic bezier, warm amber glow). Returns line ID. */
+function createDelegationArc(
+  scene: THREE.Scene,
+  from: THREE.Vector3,
+  to: THREE.Vector3,
+): { line: THREE.Line; geometry: THREE.BufferGeometry; material: THREE.LineBasicMaterial } {
+  // Organic arc — mid-point lifted on Y for catenary feel, not laser-straight
+  const mid = new THREE.Vector3().lerpVectors(from, to, 0.5);
+  mid.y += 0.12;
+
+  const curve = new THREE.QuadraticBezierCurve3(from, mid, to);
+  const points = curve.getPoints(40);
+
+  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  const material = new THREE.LineBasicMaterial({
+    color: new THREE.Color(1.0, 0.72, 0.3), // warm amber — matches ENV_LIGHT sun color
+    transparent: true,
+    opacity: 0.55,
+    linewidth: 1, // Note: linewidth > 1 requires LineSegments2, ignored on most WebGL
+    depthWrite: false,
+  });
+
+  const line = new THREE.Line(geometry, material);
+  line.renderOrder = 1;
+  scene.add(line);
+
+  return { line, geometry, material };
+}
+
+/** Create the pulse indicator — a small warm sphere that travels along the arc. */
+function createPulseMesh(): THREE.Mesh {
+  const geo = new THREE.SphereGeometry(0.008, 8, 8);
+  const mat = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(1.0, 0.85, 0.4),
+    transparent: true,
+    opacity: 0.0,
+    depthWrite: false,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.renderOrder = 4;
+  return mesh;
+}
+
+/** Compute the world position of a remote creature given a flat index (for circle layout). */
+function circlePosition(index: number, total: number, distance: number): THREE.Vector3 {
+  const angle = (index / Math.max(total, 1)) * Math.PI * 2;
+  return new THREE.Vector3(Math.cos(angle) * distance, 0, Math.sin(angle) * distance);
+}
+
+// === Remote Creature Animation ===
+
+function animateRemoteCreature(state: RemoteCreatureState, t: number, dt: number): void {
+  const body = state.body as THREE.Mesh;
+  const eyes = state.eyes as THREE.Group;
+  const mat = state.bodyMaterial as THREE.MeshPhysicalMaterial;
+  const group = state.group as THREE.Group;
+
+  // Breathing — slower/calmer than the main creature (1.4 Hz base vs 2.0 Hz)
+  // Phase offset prevents all remote agents from breathing in unison
+  const breatheRate = state.activity === "processing" ? 2.2 : 1.4;
+  const breatheRaw = Math.sin((t + state.phase) * breatheRate);
+  const breathe =
+    breatheRaw > 0
+      ? breatheRaw * 0.01
+      : Math.sign(breatheRaw) * Math.pow(Math.abs(breatheRaw), 0.6) * 0.01;
+
+  const REST_Y = 0.97;
+  body.scale.set(1.0 + breathe, REST_Y - breathe, 1.0 + breathe);
+
+  // Gentle bob — same physics, slower
+  const bobY = organicNoise(t + state.phase, [1.1, 1.73, 0.61]) * 0.007;
+  const basePos = group.userData.basePosition as THREE.Vector3 | undefined;
+  if (basePos) {
+    group.position.set(basePos.x, basePos.y + bobY, basePos.z);
+  }
+
+  // Activity-state emissive modulation
+  switch (state.activity) {
+    case "idle":
+      mat.emissiveIntensity = smoothDelta(mat.emissiveIntensity, 0.0, dt, 3.0);
+      break;
+
+    case "processing":
+      // Steady moderate glow — active interior
+      mat.emissiveIntensity = smoothDelta(mat.emissiveIntensity, 0.35, dt, 4.0);
+      break;
+
+    case "delegating": {
+      // Slow sine pulse — 0.8 Hz, range 0.15–0.5
+      const pulse = 0.15 + 0.35 * (0.5 + 0.5 * Math.sin((t + state.phase) * 0.8 * Math.PI * 2));
+      mat.emissiveIntensity = pulse;
+      break;
+    }
+
+    case "completed": {
+      // Brief bright flash then fade to idle
+      const elapsed = t - state.completedAt;
+      if (elapsed < 0.25) {
+        // Flash up
+        mat.emissiveIntensity = smoothDelta(mat.emissiveIntensity, 0.9, dt, 15.0);
+      } else {
+        // Fade out
+        mat.emissiveIntensity = smoothDelta(mat.emissiveIntensity, 0.0, dt, 2.5);
+      }
+      break;
+    }
+  }
+
+  // Eyes: calm half-open on remote agents — they're ambient presence, not engaging
+  const eyeScale = state.activity === "processing" ? 0.9 : 0.75;
+  const leftEye = eyes.children[0] as THREE.Mesh;
+  const rightEye = eyes.children[1] as THREE.Mesh;
+  leftEye.scale.setScalar(eyeScale);
+  rightEye.scale.setScalar(eyeScale);
+}
+
+// === Delegation Line Animation ===
+
+function animateDelegationLine(
+  state: DelegationLineState,
+  t: number,
+  dt: number,
+  fromPos: THREE.Vector3,
+  toPos: THREE.Vector3,
+): void {
+  const mat = state.material as THREE.LineBasicMaterial;
+
+  // Gentle opacity breath — the connection is alive
+  const breathOpacity = 0.45 + 0.1 * Math.sin(t * 0.9);
+  mat.opacity = breathOpacity;
+
+  // Recompute arc geometry if either endpoint has moved
+  const geo = state.geometry as THREE.BufferGeometry;
+  const mid = new THREE.Vector3().lerpVectors(fromPos, toPos, 0.5);
+  mid.y += 0.12;
+  const curve = new THREE.QuadraticBezierCurve3(fromPos, mid, toPos);
+  const points = curve.getPoints(40);
+  geo.setFromPoints(points);
+
+  // Pulse animation — a warm dot travelling from source to target
+  const pulseMesh = state.pulseMesh as THREE.Mesh | null;
+  if (pulseMesh && state.pulseProgress >= 0) {
+    const pulseMat = pulseMesh.material as THREE.MeshBasicMaterial;
+    // Progress 0→1 over 0.7 seconds
+    state.pulseProgress = Math.min(1, state.pulseProgress + dt / 0.7);
+
+    // Position along the curve
+    const pt = curve.getPoint(state.pulseProgress);
+    pulseMesh.position.copy(pt);
+
+    // Opacity: ramp up then down (bell curve)
+    const p = state.pulseProgress;
+    const bell = Math.sin(p * Math.PI); // 0→1→0
+    pulseMat.opacity = bell * 0.9;
+
+    if (state.pulseProgress >= 1) {
+      // Pulse complete — hide and reset
+      pulseMat.opacity = 0;
+      state.pulseProgress = -1;
+    }
+  }
+}
+
 // === Three.js Adapter ===
 
 export class ThreeJSAdapter implements RenderAdapter {
@@ -374,6 +631,10 @@ export class ThreeJSAdapter implements RenderAdapter {
   private rightEye: THREE.Group | null = null;
   private smileMesh: THREE.Mesh | null = null;
   private blinkState: BlinkState = createBlinkState();
+
+  // Multi-creature state
+  private remoteCreatures = new Map<string, RemoteCreatureState>();
+  private delegationLines = new Map<string, DelegationLineState>();
 
   init(target: unknown): Promise<void> {
     if (typeof HTMLCanvasElement === "undefined" || !(target instanceof HTMLCanvasElement)) {
@@ -624,6 +885,24 @@ export class ThreeJSAdapter implements RenderAdapter {
       this.creature.rotation.z = organicNoise(t, [0.4, 0.67]) * tiltAmount;
     }
 
+    // === Remote creatures — ambient animation, after the main creature ===
+    // Skip headless entries (group is null). Transition completed → idle after 2s.
+    for (const rc of this.remoteCreatures.values()) {
+      if (!rc.group) continue;
+      if (rc.activity === "completed" && rc.completedAt > 0 && t - rc.completedAt > 2.0) {
+        rc.activity = "idle";
+      }
+      animateRemoteCreature(rc, t, dt);
+    }
+
+    // === Delegation lines — update arc geometry and pulse progress ===
+    for (const dl of this.delegationLines.values()) {
+      if (!dl.line) continue;
+      const fromPos = this._resolveCreaturePosition(dl.fromId);
+      const toPos = this._resolveCreaturePosition(dl.toId);
+      animateDelegationLine(dl, t, dt, fromPos, toPos);
+    }
+
     if (this.controls) this.controls.update();
     this.renderer.render(this.scene, this.camera);
   }
@@ -697,7 +976,258 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.controls.update();
   }
 
+  // === Multi-Creature API ===
+
+  /**
+   * Add a remote creature to the constellation.
+   * Positions it based on trust score and derived hue from the ID.
+   * No-op headless (no scene).
+   */
+  addRemoteCreature(id: string, opts: RemoteCreatureOpts): void {
+    if (this.remoteCreatures.has(id)) return; // already tracked
+
+    const hue = opts.hue ?? idToHue(id);
+    const distance = trustToDistance(opts.trustScore);
+
+    // Headless: track metadata without THREE objects
+    if (!this.scene) {
+      const state: RemoteCreatureState = {
+        id,
+        group: null,
+        body: null,
+        eyes: null,
+        bodyMaterial: null,
+        trustScore: opts.trustScore,
+        activity: "idle",
+        hue,
+        phase: Math.random() * Math.PI * 2,
+        completedAt: -1,
+      };
+      this.remoteCreatures.set(id, state);
+      return;
+    }
+
+    const index = this.remoteCreatures.size;
+    const total = index + 1;
+    const pos = opts.position
+      ? new THREE.Vector3(opts.position.x, opts.position.y, opts.position.z)
+      : circlePosition(index, total, distance);
+
+    const { group, body, eyes, bodyMaterial } = createRemoteCreature(hue);
+    group.position.copy(pos);
+    group.userData.basePosition = pos.clone();
+    this.scene.add(group);
+
+    const state: RemoteCreatureState = {
+      id,
+      group,
+      body,
+      eyes,
+      bodyMaterial,
+      trustScore: opts.trustScore,
+      activity: "idle",
+      hue,
+      phase: Math.random() * Math.PI * 2,
+      completedAt: -1,
+    };
+
+    this.remoteCreatures.set(id, state);
+  }
+
+  /**
+   * Remove a remote creature from the constellation and dispose its Three.js objects.
+   */
+  removeRemoteCreature(id: string): void {
+    const state = this.remoteCreatures.get(id);
+    if (!state) return;
+
+    if (this.scene && state.group) {
+      const group = state.group as THREE.Group;
+      this.scene.remove(group);
+      group.traverse((obj) => {
+        if (obj instanceof THREE.Mesh) {
+          obj.geometry.dispose();
+          if (obj.material instanceof THREE.Material) obj.material.dispose();
+        }
+      });
+    }
+
+    // Remove any delegation lines that reference this creature
+    for (const [lineId, line] of this.delegationLines) {
+      if (line.fromId === id || line.toId === id) {
+        this.removeDelegationLine(lineId);
+      }
+    }
+
+    this.remoteCreatures.delete(id);
+  }
+
+  /**
+   * Update a remote creature's trust score (and derived position).
+   * Updates state but does not teleport the creature — position smooths over time.
+   */
+  updateRemoteCreature(id: string, opts: Partial<RemoteCreatureOpts>): void {
+    const state = this.remoteCreatures.get(id);
+    if (!state) return;
+
+    if (opts.trustScore !== undefined) {
+      state.trustScore = opts.trustScore;
+      const distance = trustToDistance(opts.trustScore);
+      if (state.group && !opts.position) {
+        // Reposition radially: preserve angle, update distance
+        const group = state.group as THREE.Group;
+        const current = group.position;
+        const angle = Math.atan2(current.z, current.x);
+        const newPos = new THREE.Vector3(
+          Math.cos(angle) * distance,
+          current.y,
+          Math.sin(angle) * distance,
+        );
+        group.userData.basePosition = newPos.clone();
+      }
+    }
+
+    if (opts.position) {
+      if (state.group) {
+        const group = state.group as THREE.Group;
+        const pos = new THREE.Vector3(opts.position.x, opts.position.y, opts.position.z);
+        group.userData.basePosition = pos.clone();
+      }
+    }
+
+    if (opts.hue !== undefined) {
+      state.hue = opts.hue;
+    }
+  }
+
+  /**
+   * Set the activity state of a remote creature.
+   * Drives emissive animations on the next render tick.
+   */
+  setRemoteCreatureActivity(id: string, activity: RemoteCreatureActivity): void {
+    const state = this.remoteCreatures.get(id);
+    if (!state) return;
+    if (activity === "completed") {
+      state.completedAt = Date.now() / 1000; // approximate render time
+    }
+    state.activity = activity;
+  }
+
+  /**
+   * Add a delegation arc between two agents.
+   * `fromId` can be "self" (local creature) or a remote creature ID.
+   * Returns the delegation line ID (for later removal).
+   */
+  addDelegationLine(fromId: string | "self", toId: string): string {
+    const lineId = `dl-xr-${this.delegationLines.size}-${Date.now()}`;
+
+    if (!this.scene) {
+      // Headless: track state without THREE objects
+      const state: DelegationLineState = {
+        id: lineId,
+        fromId,
+        toId,
+        line: null,
+        geometry: null,
+        material: null,
+        pulseProgress: -1,
+        pulseMesh: null,
+      };
+      this.delegationLines.set(lineId, state);
+      return lineId;
+    }
+
+    // Resolve positions
+    const fromPos = this._resolveCreaturePosition(fromId);
+    const toPos = this._resolveCreaturePosition(toId);
+
+    const { line, geometry, material } = createDelegationArc(this.scene, fromPos, toPos);
+    const pulseMesh = createPulseMesh();
+    this.scene.add(pulseMesh);
+
+    const state: DelegationLineState = {
+      id: lineId,
+      fromId,
+      toId,
+      line,
+      geometry,
+      material,
+      pulseProgress: -1,
+      pulseMesh,
+    };
+
+    this.delegationLines.set(lineId, state);
+    return lineId;
+  }
+
+  /**
+   * Remove a delegation arc and dispose its Three.js objects.
+   */
+  removeDelegationLine(lineId: string): void {
+    const state = this.delegationLines.get(lineId);
+    if (!state) return;
+
+    if (this.scene) {
+      if (state.line) {
+        const line = state.line as THREE.Line;
+        this.scene.remove(line);
+        const geo = state.geometry as THREE.BufferGeometry;
+        const mat = state.material as THREE.LineBasicMaterial;
+        geo.dispose();
+        mat.dispose();
+      }
+      if (state.pulseMesh) {
+        const pm = state.pulseMesh as THREE.Mesh;
+        this.scene.remove(pm);
+        pm.geometry.dispose();
+        if (pm.material instanceof THREE.Material) pm.material.dispose();
+      }
+    }
+
+    this.delegationLines.delete(lineId);
+  }
+
+  /**
+   * Trigger a pulse on a delegation line (e.g., when a receipt is received).
+   */
+  pulseDelegationLine(lineId: string): void {
+    const state = this.delegationLines.get(lineId);
+    if (!state) return;
+    state.pulseProgress = 0;
+  }
+
+  /** Access the remote creatures map (for testing). */
+  getRemoteCreatures(): Map<string, RemoteCreatureState> {
+    return this.remoteCreatures;
+  }
+
+  /** Access the delegation lines map (for testing). */
+  getDelegationLines(): Map<string, DelegationLineState> {
+    return this.delegationLines;
+  }
+
+  private _resolveCreaturePosition(id: string | "self"): THREE.Vector3 {
+    if (id === "self") {
+      return this.creature
+        ? (this.creature as THREE.Group).position.clone()
+        : new THREE.Vector3(0, 0, 0);
+    }
+    const state = this.remoteCreatures.get(id);
+    if (state?.group) {
+      return (state.group as THREE.Group).position.clone();
+    }
+    return new THREE.Vector3(0, 0, 0);
+  }
+
   dispose(): void {
+    // Dispose remote creatures and delegation lines first
+    for (const id of Array.from(this.remoteCreatures.keys())) {
+      this.removeRemoteCreature(id);
+    }
+    for (const id of Array.from(this.delegationLines.keys())) {
+      this.removeDelegationLine(id);
+    }
+
     if (this.creature) {
       this.creature.traverse((obj) => {
         if (obj instanceof THREE.Mesh) {
@@ -805,6 +1335,10 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
   private listeningActive = false;
   private interiorColor: InteriorColor | null = null;
   private blinkState: BlinkState = createBlinkState();
+
+  // Remote creatures and delegation lines for agent network visualization
+  private remoteCreatures = new Map<string, RemoteCreatureState>();
+  private delegationLines = new Map<string, DelegationLineState>();
 
   /** Check if WebXR immersive-ar is available in this browser. */
   static async isSupported(): Promise<boolean> {
@@ -1072,6 +1606,18 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
       this.creature.rotation.z = organicNoise(t, [0.4, 0.67]) * tiltAmount;
     }
 
+    // Remote creatures — ambient animation
+    for (const state of this.remoteCreatures.values()) {
+      animateRemoteCreature(state, t, dt);
+    }
+
+    // Delegation lines — arc animation + pulse
+    for (const state of this.delegationLines.values()) {
+      const fromPos = this._resolveCreaturePosition(state.fromId);
+      const toPos = this._resolveCreaturePosition(state.toId);
+      animateDelegationLine(state, t, dt, fromPos, toPos);
+    }
+
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -1190,8 +1736,228 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     this.listeningActive = active;
   }
 
+  // === Multi-Creature API (agent network visualization) ===
+
+  addRemoteCreature(id: string, opts: RemoteCreatureOpts): void {
+    if (this.remoteCreatures.has(id)) return;
+
+    const hue = opts.hue ?? idToHue(id);
+    const distance = trustToDistance(opts.trustScore);
+
+    if (!this.scene) {
+      this.remoteCreatures.set(id, {
+        id,
+        group: null,
+        body: null,
+        eyes: null,
+        bodyMaterial: null,
+        trustScore: opts.trustScore,
+        activity: "idle",
+        hue,
+        phase: Math.random() * Math.PI * 2,
+        completedAt: -1,
+      });
+      return;
+    }
+
+    const index = this.remoteCreatures.size;
+    const total = index + 1;
+    const pos = opts.position
+      ? new THREE.Vector3(opts.position.x, opts.position.y, opts.position.z)
+      : circlePosition(index, total, distance);
+
+    const { group, body, eyes, bodyMaterial } = createRemoteCreature(hue);
+    group.position.copy(pos);
+    group.userData.basePosition = pos.clone();
+    this.scene.add(group);
+
+    this.remoteCreatures.set(id, {
+      id,
+      group,
+      body,
+      eyes,
+      bodyMaterial,
+      trustScore: opts.trustScore,
+      activity: "idle",
+      hue,
+      phase: Math.random() * Math.PI * 2,
+      completedAt: -1,
+    });
+  }
+
+  removeRemoteCreature(id: string): void {
+    const state = this.remoteCreatures.get(id);
+    if (!state) return;
+
+    if (this.scene && state.group) {
+      const group = state.group as THREE.Group;
+      this.scene.remove(group);
+      group.traverse((obj) => {
+        if (obj instanceof THREE.Mesh) {
+          obj.geometry.dispose();
+          if (obj.material instanceof THREE.Material) obj.material.dispose();
+        }
+      });
+    }
+
+    for (const [lineId, line] of this.delegationLines) {
+      if (line.fromId === id || line.toId === id) {
+        this.removeDelegationLine(lineId);
+      }
+    }
+
+    this.remoteCreatures.delete(id);
+  }
+
+  updateRemoteCreature(id: string, opts: Partial<RemoteCreatureOpts>): void {
+    const state = this.remoteCreatures.get(id);
+    if (!state) return;
+
+    if (opts.trustScore !== undefined) {
+      state.trustScore = opts.trustScore;
+      const distance = trustToDistance(opts.trustScore);
+      if (state.group && !opts.position) {
+        const group = state.group as THREE.Group;
+        const current = group.position;
+        const angle = Math.atan2(current.z, current.x);
+        group.userData.basePosition = new THREE.Vector3(
+          Math.cos(angle) * distance,
+          current.y,
+          Math.sin(angle) * distance,
+        ).clone();
+      }
+    }
+
+    if (opts.position && state.group) {
+      const group = state.group as THREE.Group;
+      group.userData.basePosition = new THREE.Vector3(
+        opts.position.x,
+        opts.position.y,
+        opts.position.z,
+      ).clone();
+    }
+
+    if (opts.hue !== undefined) state.hue = opts.hue;
+  }
+
+  setRemoteCreatureActivity(id: string, activity: RemoteCreatureActivity): void {
+    const state = this.remoteCreatures.get(id);
+    if (!state) return;
+    if (activity === "completed") state.completedAt = Date.now() / 1000;
+    state.activity = activity;
+  }
+
+  addDelegationLine(fromId: string | "self", toId: string): string {
+    const lineId = `dl-xr-${this.delegationLines.size}-${Date.now()}`;
+
+    if (!this.scene) {
+      this.delegationLines.set(lineId, {
+        id: lineId,
+        fromId,
+        toId,
+        line: null,
+        geometry: null,
+        material: null,
+        pulseProgress: -1,
+        pulseMesh: null,
+      });
+      return lineId;
+    }
+
+    const fromPos = this._resolveCreaturePosition(fromId);
+    const toPos = this._resolveCreaturePosition(toId);
+    const { line, geometry, material } = createDelegationArc(this.scene, fromPos, toPos);
+    const pulseMesh = createPulseMesh();
+    this.scene.add(pulseMesh);
+
+    this.delegationLines.set(lineId, {
+      id: lineId,
+      fromId,
+      toId,
+      line,
+      geometry,
+      material,
+      pulseProgress: -1,
+      pulseMesh,
+    });
+    return lineId;
+  }
+
+  removeDelegationLine(lineId: string): void {
+    const state = this.delegationLines.get(lineId);
+    if (!state) return;
+
+    if (this.scene) {
+      if (state.line) {
+        this.scene.remove(state.line as THREE.Line);
+        (state.geometry as THREE.BufferGeometry).dispose();
+        (state.material as THREE.LineBasicMaterial).dispose();
+      }
+      if (state.pulseMesh) {
+        const pm = state.pulseMesh as THREE.Mesh;
+        this.scene.remove(pm);
+        pm.geometry.dispose();
+        if (pm.material instanceof THREE.Material) pm.material.dispose();
+      }
+    }
+
+    this.delegationLines.delete(lineId);
+  }
+
+  pulseDelegationLine(lineId: string): void {
+    const state = this.delegationLines.get(lineId);
+    if (state) state.pulseProgress = 0;
+  }
+
+  getRemoteCreatures(): Map<string, RemoteCreatureState> {
+    return this.remoteCreatures;
+  }
+
+  getDelegationLines(): Map<string, DelegationLineState> {
+    return this.delegationLines;
+  }
+
+  private _resolveCreaturePosition(id: string | "self"): THREE.Vector3 {
+    if (id === "self") {
+      return this.creature
+        ? (this.creature as THREE.Group).position.clone()
+        : new THREE.Vector3(0, 0, 0);
+    }
+    const state = this.remoteCreatures.get(id);
+    if (state?.group) {
+      return (state.group as THREE.Group).position.clone();
+    }
+    return new THREE.Vector3(0, 0, 0);
+  }
+
   dispose(): void {
     this.endSession().catch(() => {}); // Best-effort session cleanup
+
+    // Dispose remote creatures
+    for (const state of this.remoteCreatures.values()) {
+      if (state.group) {
+        const group = state.group as THREE.Group;
+        group.traverse((obj) => {
+          if (obj instanceof THREE.Mesh) {
+            obj.geometry.dispose();
+            if (obj.material instanceof THREE.Material) obj.material.dispose();
+          }
+        });
+      }
+    }
+    this.remoteCreatures.clear();
+
+    // Dispose delegation lines
+    for (const state of this.delegationLines.values()) {
+      if (state.geometry) (state.geometry as THREE.BufferGeometry).dispose();
+      if (state.material) (state.material as THREE.LineBasicMaterial).dispose();
+      if (state.pulseMesh) {
+        const pm = state.pulseMesh as THREE.Mesh;
+        pm.geometry.dispose();
+        if (pm.material instanceof THREE.Material) pm.material.dispose();
+      }
+    }
+    this.delegationLines.clear();
 
     if (this.creature) {
       this.creature.traverse((obj) => {

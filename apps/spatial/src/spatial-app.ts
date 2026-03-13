@@ -13,12 +13,23 @@
  *
  * Presence state machine drives the creature's body language through the
  * existing pipeline: StateVector → BehaviorEngine → RenderEngine.
+ *
+ * Relay integration (best-effort, gated behind showNetwork setting):
+ * - Registers identity on bootstrap via POST /api/v1/agents/bootstrap
+ * - Registers in agent discovery via POST /api/v1/agents/register
+ * - Discovers other agents every 30 seconds via GET /api/v1/agents/discover
+ * - Visualizes discovered agents as remote creatures (trust-positioned)
+ * - Visualizes delegation flow with animated arcs on the render adapter
  */
 
 import { MotebitRuntime } from "@motebit/runtime";
-import { createBrowserStorage } from "@motebit/browser-persistence";
+import { RelayDelegationAdapter } from "@motebit/runtime";
+import type { StepDelegationAdapter } from "@motebit/runtime";
+import { createBrowserStorage, IdbAgentTrustStore } from "@motebit/browser-persistence";
 import type { StreamChunk, KeyringAdapter, StorageAdapters } from "@motebit/runtime";
 import { WebXRThreeJSAdapter } from "@motebit/render-engine";
+import { trustLevelToScore } from "@motebit/sdk";
+import { AgentTrustLevel } from "@motebit/sdk";
 import {
   CloudProvider,
   OllamaProvider,
@@ -31,6 +42,7 @@ import {
   type BootstrapConfigStore,
   type BootstrapKeyStore,
 } from "@motebit/core-identity";
+import { createSignedToken } from "@motebit/crypto";
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";
 import { OrbitalDynamics, estimateBodyAnchors, getAnchorForReference } from "./index";
 import { SpatialVoicePipeline, type VoicePipelineConfig } from "./voice-pipeline";
@@ -46,6 +58,11 @@ export interface SpatialAIConfig {
   model?: string;
   apiKey?: string;
   personalityConfig?: MotebitPersonalityConfig;
+}
+
+export interface SpatialNetworkSettings {
+  relayUrl: string;
+  showNetwork: boolean;
 }
 
 // === Presence State Machine ===
@@ -73,6 +90,23 @@ const PRESENCE_MAP: Record<PresenceState, PresenceMapping> = {
   processing: { social_distance: 0.15, attention: 0.85, processing: 0.95 },
 };
 
+// === Discovered agent record ===
+
+export interface DiscoveredAgent {
+  motebit_id: string;
+  endpoint_url: string;
+  capabilities: string[];
+  trust_score: number;
+  last_seen: number;
+}
+
+// === Constants ===
+
+const DEFAULT_RELAY_URL = "https://motebit-sync.fly.dev";
+const DISCOVERY_INTERVAL_MS = 30_000; // 30 seconds
+const HEARTBEAT_INTERVAL_MS = 5 * 60_000; // 5 minutes
+const DELEGATION_VIZ_CLEANUP_MS = 3_000; // 3 seconds after receipt
+
 // === SpatialApp ===
 
 export class SpatialApp {
@@ -84,7 +118,9 @@ export class SpatialApp {
 
   private runtime: MotebitRuntime | null = null;
   private storage: StorageAdapters | null = null;
+  private agentTrustStore: IdbAgentTrustStore | null = null;
   private keyring: KeyringAdapter;
+  private keyStore = new EncryptedKeyStore();
   private latestCues: BehaviorCues = {
     hover_distance: 0.4,
     drift_amplitude: 0.02,
@@ -96,6 +132,19 @@ export class SpatialApp {
   private attentionLevel = 0.2;
   private unsubscribeState: (() => void) | null = null;
   private _presenceState: PresenceState = "ambient";
+
+  // Network settings
+  private networkSettings: SpatialNetworkSettings = {
+    relayUrl: DEFAULT_RELAY_URL,
+    showNetwork: true,
+  };
+
+  // Relay / discovery state
+  private discoveredAgents = new Map<string, DiscoveredAgent>();
+  private discoveryTimer: ReturnType<typeof setInterval> | null = null;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private relayAuthToken: string | null = null;
+  private tokenFactory: (() => Promise<string>) | null = null;
 
   motebitId = "spatial-local";
   deviceId = "spatial-local";
@@ -218,6 +267,14 @@ export class SpatialApp {
     const storage = await createBrowserStorage();
     this.storage = storage;
 
+    // Grab the IDB instance for agent trust lookups
+    // IdbAgentTrustStore is returned as agentTrustStore in StorageAdapters
+    const agentTrustStore = (storage as unknown as { agentTrustStore?: IdbAgentTrustStore })
+      .agentTrustStore;
+    if (agentTrustStore) {
+      this.agentTrustStore = agentTrustStore;
+    }
+
     const result = await sharedBootstrapIdentity({
       surfaceName: "Spatial",
       identityStorage: storage.identityStorage,
@@ -229,6 +286,23 @@ export class SpatialApp {
     this.motebitId = result.motebitId;
     this.deviceId = result.deviceId;
     this.publicKey = result.publicKeyHex;
+
+    // Build a token factory for the relay (refreshes on each call — 5-min expiry)
+    const privateKeyHex = await this.keyStore.loadPrivateKey();
+    if (privateKeyHex != null && privateKeyHex !== "") {
+      const privKeyBytes = new Uint8Array(privateKeyHex.length / 2);
+      for (let i = 0; i < privateKeyHex.length; i += 2) {
+        privKeyBytes[i / 2] = parseInt(privateKeyHex.slice(i, i + 2), 16);
+      }
+      const motebitId = this.motebitId;
+      const deviceId = this.deviceId;
+      this.tokenFactory = async (): Promise<string> => {
+        return createSignedToken(
+          { mid: motebitId, did: deviceId, iat: Date.now(), exp: Date.now() + 5 * 60 * 1000 },
+          privKeyBytes,
+        );
+      };
+    }
 
     return { isFirstLaunch: result.isFirstLaunch };
   }
@@ -292,6 +366,314 @@ export class SpatialApp {
 
   get isProcessing(): boolean {
     return this.runtime?.isProcessing ?? false;
+  }
+
+  // === Network Settings ===
+
+  /**
+   * Update relay / agent network settings.
+   * Call this after loading settings from localStorage.
+   */
+  setNetworkSettings(settings: Partial<SpatialNetworkSettings>): void {
+    if (settings.relayUrl !== undefined) this.networkSettings.relayUrl = settings.relayUrl;
+    if (settings.showNetwork !== undefined) this.networkSettings.showNetwork = settings.showNetwork;
+  }
+
+  get networkConfig(): SpatialNetworkSettings {
+    return { ...this.networkSettings };
+  }
+
+  // === Relay Integration ===
+
+  /**
+   * Connect to the relay: bootstrap identity, register for discovery, start heartbeat,
+   * wire RelayDelegationAdapter on the runtime, and start the discovery loop.
+   *
+   * Best-effort — any relay error is swallowed; the app works offline.
+   * Must be called after bootstrap() and initAI().
+   */
+  async connectRelay(): Promise<void> {
+    const { relayUrl, showNetwork } = this.networkSettings;
+    if (relayUrl === "" || !showNetwork) return;
+
+    // Mint an initial token
+    let authToken: string | null = null;
+    if (this.tokenFactory) {
+      try {
+        authToken = await this.tokenFactory();
+        this.relayAuthToken = authToken;
+      } catch {
+        // No private key — relay auth will be anonymous
+      }
+    }
+
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+
+    // 1. Bootstrap identity on relay
+    try {
+      await fetch(`${relayUrl}/api/v1/agents/bootstrap`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          motebit_id: this.motebitId,
+          device_id: this.deviceId,
+          public_key: this.publicKey,
+        }),
+      });
+    } catch {
+      // Best-effort — relay may not support this endpoint
+    }
+
+    // 2. Register capabilities for discovery
+    const toolNames =
+      this.runtime
+        ?.getToolRegistry()
+        .list()
+        .map((t) => t.name) ?? [];
+    try {
+      const regResp = await fetch(`${relayUrl}/api/v1/agents/register`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          motebit_id: this.motebitId,
+          endpoint_url: relayUrl,
+          capabilities: toolNames,
+          metadata: { name: `spatial-${this.motebitId.slice(0, 8)}`, transport: "http" },
+        }),
+      });
+
+      if (regResp.ok) {
+        // Heartbeat every 5 minutes to keep the registry entry alive
+        this.heartbeatTimer = setInterval(() => {
+          void (async () => {
+            try {
+              const freshToken = this.tokenFactory ? await this.tokenFactory() : authToken;
+              const hbHeaders: Record<string, string> = { "Content-Type": "application/json" };
+              if (freshToken) hbHeaders["Authorization"] = `Bearer ${freshToken}`;
+              await fetch(`${relayUrl}/api/v1/agents/heartbeat`, {
+                method: "POST",
+                headers: hbHeaders,
+              });
+            } catch {
+              // Best-effort heartbeat
+            }
+          })();
+        }, HEARTBEAT_INTERVAL_MS);
+      }
+    } catch {
+      // Best-effort registration
+    }
+
+    // 3. Wire RelayDelegationAdapter on the runtime for outbound delegation.
+    // Wrap it with a visualization decorator that intercepts delegateStep() to
+    // show arcs and activity states on the render adapter.
+    if (this.runtime && this.tokenFactory) {
+      const tokenFactory = this.tokenFactory;
+      const motebitId = this.motebitId;
+      const inner = new RelayDelegationAdapter({
+        syncUrl: relayUrl,
+        motebitId,
+        authToken: tokenFactory,
+        // No WebSocket in the spatial app — HTTP polling only
+        sendRaw: () => {},
+        onCustomMessage: () => () => {},
+        getExplorationDrive: () => this.runtime?.getPrecision().explorationDrive,
+        onDelegationFailure: () => {
+          // Delegation failure — clear any active arcs for this step (handled via completion)
+        },
+      });
+
+      // Thin decorator to intercept delegateStep for visualization
+      const adapter = this;
+      const vizAdapter: StepDelegationAdapter = {
+        delegateStep: async (step, timeoutMs, onTaskSubmitted) => {
+          // Use the assigned agent ID if known, otherwise fall back to a generic label
+          const targetId = step.assigned_motebit_id ?? "unknown";
+          const lineId = adapter._onDelegationStart(targetId);
+          try {
+            const result = await inner.delegateStep(step, timeoutMs, onTaskSubmitted);
+            adapter._onDelegationComplete(targetId, lineId);
+            return result;
+          } catch (err: unknown) {
+            // On failure: clean up arc immediately
+            adapter.adapter.removeDelegationLine(lineId);
+            adapter.adapter.setRemoteCreatureActivity(targetId, "idle");
+            throw err;
+          }
+        },
+        pollTaskResult: inner.pollTaskResult.bind(inner),
+      };
+      this.runtime.setDelegationAdapter(vizAdapter);
+    }
+
+    // 4. Start discovery loop
+    this._startDiscoveryLoop();
+  }
+
+  /**
+   * Disconnect from the relay and clean up remote creatures.
+   * Best-effort deregistration.
+   */
+  async disconnectRelay(): Promise<void> {
+    // Stop timers
+    if (this.discoveryTimer) {
+      clearInterval(this.discoveryTimer);
+      this.discoveryTimer = null;
+    }
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+
+    // Best-effort deregistration
+    const { relayUrl } = this.networkSettings;
+    if (relayUrl !== "") {
+      try {
+        const headers: Record<string, string> = {};
+        if (this.relayAuthToken) headers["Authorization"] = `Bearer ${this.relayAuthToken}`;
+        await fetch(`${relayUrl}/api/v1/agents/deregister`, { method: "DELETE", headers });
+      } catch {
+        // Best-effort
+      }
+    }
+
+    // Remove all remote creatures from the render adapter
+    for (const id of this.discoveredAgents.keys()) {
+      this.adapter.removeRemoteCreature(id);
+    }
+    this.discoveredAgents.clear();
+  }
+
+  // === Discovery Loop ===
+
+  private _startDiscoveryLoop(): void {
+    // Run immediately, then on interval
+    void this._runDiscovery();
+    this.discoveryTimer = setInterval(() => {
+      void this._runDiscovery();
+    }, DISCOVERY_INTERVAL_MS);
+  }
+
+  private async _runDiscovery(): Promise<void> {
+    const { relayUrl, showNetwork } = this.networkSettings;
+    if (relayUrl === "" || !showNetwork) return;
+
+    let data: Array<{
+      motebit_id: string;
+      endpoint_url: string;
+      capabilities?: string[];
+    }>;
+
+    try {
+      const freshToken = this.tokenFactory ? await this.tokenFactory() : this.relayAuthToken;
+      const headers: Record<string, string> = {};
+      if (freshToken) headers["Authorization"] = `Bearer ${freshToken}`;
+      const resp = await fetch(`${relayUrl}/api/v1/agents/discover`, { headers });
+      if (!resp.ok) return;
+      const body = (await resp.json()) as { agents?: typeof data } | typeof data | null | undefined;
+      // The relay may return { agents: [...] } or a bare array
+      if (Array.isArray(body)) {
+        data = body;
+      } else if (body != null && typeof body === "object" && Array.isArray(body.agents)) {
+        data = body.agents;
+      } else {
+        return;
+      }
+    } catch {
+      return; // Best-effort
+    }
+
+    // Filter out self
+    const discovered = data.filter((a) => a.motebit_id !== this.motebitId);
+    const discoveredIds = new Set(discovered.map((a) => a.motebit_id));
+
+    // Remove agents that are no longer present
+    for (const id of this.discoveredAgents.keys()) {
+      if (!discoveredIds.has(id)) {
+        this.adapter.removeRemoteCreature(id);
+        this.discoveredAgents.delete(id);
+      }
+    }
+
+    // Add or update discovered agents
+    for (const agent of discovered) {
+      const trustScore = await this._lookupTrustScore(agent.motebit_id);
+
+      if (!this.discoveredAgents.has(agent.motebit_id)) {
+        // New agent — add to render adapter
+        this.adapter.addRemoteCreature(agent.motebit_id, { trustScore });
+      } else {
+        // Existing agent — update trust score (may drift closer/farther)
+        this.adapter.updateRemoteCreature(agent.motebit_id, { trustScore });
+      }
+
+      this.discoveredAgents.set(agent.motebit_id, {
+        motebit_id: agent.motebit_id,
+        endpoint_url: agent.endpoint_url,
+        capabilities: agent.capabilities ?? [],
+        trust_score: trustScore,
+        last_seen: Date.now(),
+      });
+    }
+  }
+
+  private async _lookupTrustScore(remoteMotebitId: string): Promise<number> {
+    if (!this.agentTrustStore) return trustLevelToScore(AgentTrustLevel.Unknown);
+
+    try {
+      const record = await this.agentTrustStore.getAgentTrust(this.motebitId, remoteMotebitId);
+      if (record == null) return trustLevelToScore(AgentTrustLevel.Unknown);
+      return trustLevelToScore(record.trust_level);
+    } catch {
+      return trustLevelToScore(AgentTrustLevel.Unknown);
+    }
+  }
+
+  // === Delegation Visualization ===
+
+  /**
+   * Called when the delegation adapter starts a delegation to a target agent.
+   * Adds a delegation arc and sets the target to processing state.
+   * Returns the line ID for later use.
+   */
+  private _onDelegationStart(targetId: string): string {
+    const lineId = this.adapter.addDelegationLine("self", targetId);
+    this.adapter.setRemoteCreatureActivity(targetId, "processing");
+    return lineId;
+  }
+
+  /**
+   * Called when a receipt is received from a target agent.
+   * Pulses the arc, sets the target to completed, then cleans up after 3s.
+   */
+  private _onDelegationComplete(targetId: string, lineId: string): void {
+    this.adapter.pulseDelegationLine(lineId);
+    this.adapter.setRemoteCreatureActivity(targetId, "completed");
+
+    setTimeout(() => {
+      this.adapter.removeDelegationLine(lineId);
+      this.adapter.setRemoteCreatureActivity(targetId, "idle");
+    }, DELEGATION_VIZ_CLEANUP_MS);
+  }
+
+  /**
+   * Manually trigger delegation visualization (for when runtime delegates via tool).
+   * Returns the line ID.
+   */
+  startDelegationVisualization(targetId: string): string {
+    return this._onDelegationStart(targetId);
+  }
+
+  completeDelegationVisualization(targetId: string, lineId: string): void {
+    this._onDelegationComplete(targetId, lineId);
+  }
+
+  /**
+   * Get discovered agents for the gaze overlay UI.
+   */
+  getDiscoveredAgents(): DiscoveredAgent[] {
+    return Array.from(this.discoveredAgents.values());
   }
 
   // === Messaging ===
@@ -427,6 +809,10 @@ export class SpatialApp {
     this.gestures.reset();
     this.unsubscribeState?.();
     this.runtime?.stop();
+
+    // Clean up relay
+    void this.disconnectRelay();
+
     this.adapter.dispose();
   }
 }
