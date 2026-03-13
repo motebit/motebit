@@ -39,7 +39,12 @@ import {
   type BootstrapKeyStore,
 } from "@motebit/core-identity";
 import { InMemoryAuditLog } from "@motebit/privacy-layer";
-import { createSignedToken, deriveSyncEncryptionKey, hexPublicKeyToDidKey } from "@motebit/crypto";
+import {
+  createSignedToken,
+  deriveSyncEncryptionKey,
+  hexPublicKeyToDidKey,
+  secureErase,
+} from "@motebit/crypto";
 import {
   generate as generateIdentityFile,
   parse as parseIdentityFile,
@@ -429,28 +434,32 @@ export class DesktopApp {
           for (let i = 0; i < keypair.privateKey.length; i += 2) {
             privKeyBytes[i / 2] = parseInt(keypair.privateKey.slice(i, i + 2), 16);
           }
-          const identityFileContent = await generateIdentityFile(
-            {
-              motebitId: result.motebitId,
-              ownerId: result.motebitId,
-              publicKeyHex: result.publicKeyHex,
-              devices: [
-                {
-                  device_id: result.deviceId,
-                  name: "Desktop",
-                  public_key: result.publicKeyHex,
-                  registered_at: new Date().toISOString(),
-                },
-              ],
-            },
-            privKeyBytes,
-          );
-          const raw = await invoke<string>("read_config");
-          const config = {
-            ...(JSON.parse(raw) as Record<string, unknown>),
-            _identity_file: identityFileContent,
-          };
-          await invoke<void>("write_config", { json: JSON.stringify(config) });
+          try {
+            const identityFileContent = await generateIdentityFile(
+              {
+                motebitId: result.motebitId,
+                ownerId: result.motebitId,
+                publicKeyHex: result.publicKeyHex,
+                devices: [
+                  {
+                    device_id: result.deviceId,
+                    name: "Desktop",
+                    public_key: result.publicKeyHex,
+                    registered_at: new Date().toISOString(),
+                  },
+                ],
+              },
+              privKeyBytes,
+            );
+            const raw = await invoke<string>("read_config");
+            const config = {
+              ...(JSON.parse(raw) as Record<string, unknown>),
+              _identity_file: identityFileContent,
+            };
+            await invoke<void>("write_config", { json: JSON.stringify(config) });
+          } finally {
+            secureErase(privKeyBytes);
+          }
         }
       } catch {
         // Non-fatal — identity file generation is best-effort on desktop
@@ -532,23 +541,29 @@ export class DesktopApp {
 
   /**
    * Create a signed token for sync authentication. Tokens expire after 5 minutes.
+   * @param aud — audience claim binding token to a specific endpoint (default: "sync")
    */
-  async createSyncToken(privateKeyHex: string): Promise<string> {
+  async createSyncToken(privateKeyHex: string, aud: string = "sync"): Promise<string> {
     const privKeyBytes = new Uint8Array(privateKeyHex.length / 2);
     for (let i = 0; i < privateKeyHex.length; i += 2) {
       privKeyBytes[i / 2] = parseInt(privateKeyHex.slice(i, i + 2), 16);
     }
 
-    return createSignedToken(
-      {
-        mid: this.motebitId,
-        did: this.deviceId,
-        iat: Date.now(),
-        exp: Date.now() + 5 * 60 * 1000,
-        jti: crypto.randomUUID(),
-      },
-      privKeyBytes,
-    );
+    try {
+      return await createSignedToken(
+        {
+          mid: this.motebitId,
+          did: this.deviceId,
+          iat: Date.now(),
+          exp: Date.now() + 5 * 60 * 1000,
+          jti: crypto.randomUUID(),
+          aud,
+        },
+        privKeyBytes,
+      );
+    } finally {
+      secureErase(privKeyBytes);
+    }
   }
 
   async init(canvas: unknown): Promise<void> {
@@ -1171,17 +1186,21 @@ export class DesktopApp {
       privKeyBytes[i / 2] = parseInt(privHex.slice(i, i + 2), 16);
     }
 
-    return generateIdentityFile(
-      {
-        motebitId: this.motebitId,
-        ownerId: this.motebitId,
-        publicKeyHex: this.publicKey,
-        governance,
-        memory,
-        devices,
-      },
-      privKeyBytes,
-    );
+    try {
+      return await generateIdentityFile(
+        {
+          motebitId: this.motebitId,
+          ownerId: this.motebitId,
+          publicKeyHex: this.publicKey,
+          governance,
+          memory,
+          devices,
+        },
+        privKeyBytes,
+      );
+    } finally {
+      secureErase(privKeyBytes);
+    }
   }
 
   /**
@@ -1328,7 +1347,7 @@ export class DesktopApp {
     const keypair = await this.getDeviceKeypair(invoke);
     if (!keypair) throw new Error("No device keypair available");
 
-    const token = await this.createSyncToken(keypair.privateKey);
+    const token = await this.createSyncToken(keypair.privateKey, "device:auth");
     const client = new PairingClient({ relayUrl: syncUrl });
     const result = await client.initiate(token);
     return { pairingCode: result.pairingCode, pairingId: result.pairingId };
@@ -1345,7 +1364,7 @@ export class DesktopApp {
     const keypair = await this.getDeviceKeypair(invoke);
     if (!keypair) throw new Error("No device keypair available");
 
-    const token = await this.createSyncToken(keypair.privateKey);
+    const token = await this.createSyncToken(keypair.privateKey, "device:auth");
     const client = new PairingClient({ relayUrl: syncUrl });
     return client.getSession(pairingId, token);
   }
@@ -1361,7 +1380,7 @@ export class DesktopApp {
     const keypair = await this.getDeviceKeypair(invoke);
     if (!keypair) throw new Error("No device keypair available");
 
-    const token = await this.createSyncToken(keypair.privateKey);
+    const token = await this.createSyncToken(keypair.privateKey, "device:auth");
     const client = new PairingClient({ relayUrl: syncUrl });
     const result = await client.approve(pairingId, token);
     return { deviceId: result.deviceId };
@@ -1374,7 +1393,7 @@ export class DesktopApp {
     const keypair = await this.getDeviceKeypair(invoke);
     if (!keypair) throw new Error("No device keypair available");
 
-    const token = await this.createSyncToken(keypair.privateKey);
+    const token = await this.createSyncToken(keypair.privateKey, "device:auth");
     const client = new PairingClient({ relayUrl: syncUrl });
     await client.deny(pairingId, token);
   }
@@ -2594,8 +2613,9 @@ export class DesktopApp {
       privKeyBytes[i / 2] = parseInt(keypair.privateKey.slice(i, i + 2), 16);
     }
 
-    // Derive deterministic encryption key from private key
+    // Derive deterministic encryption key from private key, then erase raw bytes
     const encKey = await deriveSyncEncryptionKey(privKeyBytes);
+    secureErase(privKeyBytes);
 
     // Get or create a signed auth token
     let token = authToken;

@@ -322,6 +322,8 @@ export enum EventType {
   PlanStepFailed = "plan_step_failed",
   PlanCompleted = "plan_completed",
   PlanStepDelegated = "plan_step_delegated",
+  CredentialRevoked = "credential_revoked",
+  IdentityRevoked = "identity_revoked",
   PlanFailed = "plan_failed",
   HousekeepingRun = "housekeeping_run",
   ReflectionCompleted = "reflection_completed",

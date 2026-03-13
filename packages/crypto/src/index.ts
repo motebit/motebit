@@ -25,6 +25,8 @@ export interface SignedTokenPayload {
   exp: number;
   /** Unique token nonce (JWT ID) — prevents replay attacks. Required for verification. */
   jti?: string;
+  /** Audience claim — binds token to a specific endpoint/operation. Prevents cross-endpoint replay. */
+  aud?: string;
 }
 
 export interface EncryptedPayload {

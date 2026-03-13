@@ -79,6 +79,43 @@ describe("MotebitRuntime", () => {
     expect(runtime.isRunning).toBe(false);
   });
 
+  it("clearSigningKeys zeros key material on stop", () => {
+    const privateKey = new Uint8Array(32);
+    const publicKey = new Uint8Array(32);
+    crypto.getRandomValues(privateKey);
+    crypto.getRandomValues(publicKey);
+
+    // Verify keys have non-zero data
+    expect(privateKey.some((b) => b !== 0)).toBe(true);
+    expect(publicKey.some((b) => b !== 0)).toBe(true);
+
+    const rt = new MotebitRuntime(
+      { motebitId: "key-test", signingKeys: { privateKey, publicKey } },
+      createAdapters(),
+    );
+    rt.start();
+    rt.stop();
+
+    // After stop, the Uint8Array buffers should be zeroed
+    expect(privateKey.every((b) => b === 0)).toBe(true);
+    expect(publicKey.every((b) => b === 0)).toBe(true);
+  });
+
+  it("clearSigningKeys is safe to call multiple times", () => {
+    const privateKey = new Uint8Array(32);
+    const publicKey = new Uint8Array(32);
+    crypto.getRandomValues(privateKey);
+    crypto.getRandomValues(publicKey);
+
+    const rt = new MotebitRuntime(
+      { motebitId: "key-test-2", signingKeys: { privateKey, publicKey } },
+      createAdapters(),
+    );
+    rt.clearSigningKeys();
+    rt.clearSigningKeys(); // should not throw
+    expect(privateKey.every((b) => b === 0)).toBe(true);
+  });
+
   it("provides default state", () => {
     const state = runtime.getState();
     expect(state.attention).toBe(0);

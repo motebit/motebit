@@ -60,7 +60,7 @@ async function setupIdentityAndDevice(relay: SyncRelay): Promise<{
   });
   const device = (await deviceRes.json()) as { device_id: string };
 
-  // Create signed token
+  // Create signed token for pairing (device auth)
   const authToken = await createSignedToken(
     {
       mid: identity.motebit_id,
@@ -68,6 +68,7 @@ async function setupIdentityAndDevice(relay: SyncRelay): Promise<{
       iat: Date.now(),
       exp: Date.now() + 5 * 60 * 1000,
       jti: crypto.randomUUID(),
+      aud: "device:auth",
     },
     keypair.privateKey,
   );

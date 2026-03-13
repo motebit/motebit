@@ -16,7 +16,7 @@ import { McpClientAdapter } from "@motebit/mcp-client";
 import type { McpServerConfig } from "@motebit/mcp-client";
 import { InMemoryToolRegistry } from "@motebit/tools/web-safe";
 import { bootstrapIdentity, type BootstrapConfigStore } from "@motebit/core-identity";
-import { createSignedToken, deriveSyncEncryptionKey } from "@motebit/crypto";
+import { createSignedToken, deriveSyncEncryptionKey, secureErase } from "@motebit/crypto";
 import {
   HttpEventStoreAdapter,
   WebSocketEventStoreAdapter,
@@ -695,7 +695,7 @@ export class WebApp {
     for (const cb of this._syncStatusListeners) cb(status);
   }
 
-  async createSyncToken(): Promise<string | null> {
+  async createSyncToken(aud: string = "sync"): Promise<string | null> {
     const privateKeyHex = await this.keyStore.loadPrivateKey();
     if (privateKeyHex == null || privateKeyHex === "") return null;
 
@@ -704,16 +704,21 @@ export class WebApp {
       privKeyBytes[i / 2] = parseInt(privateKeyHex.slice(i, i + 2), 16);
     }
 
-    return createSignedToken(
-      {
-        mid: this._motebitId,
-        did: this._deviceId,
-        iat: Date.now(),
-        exp: Date.now() + 5 * 60 * 1000,
-        jti: crypto.randomUUID(),
-      },
-      privKeyBytes,
-    );
+    try {
+      return await createSignedToken(
+        {
+          mid: this._motebitId,
+          did: this._deviceId,
+          iat: Date.now(),
+          exp: Date.now() + 5 * 60 * 1000,
+          jti: crypto.randomUUID(),
+          aud,
+        },
+        privKeyBytes,
+      );
+    } finally {
+      secureErase(privKeyBytes);
+    }
   }
 
   async startSync(relayUrl: string): Promise<void> {
@@ -733,8 +738,9 @@ export class WebApp {
       privKeyBytes[i / 2] = parseInt(privateKeyHex.slice(i, i + 2), 16);
     }
 
-    // Derive deterministic encryption key
+    // Derive deterministic encryption key, then erase raw key bytes
     const encKey = await deriveSyncEncryptionKey(privKeyBytes);
+    secureErase(privKeyBytes);
 
     const token = await this.createSyncToken();
     if (token == null) {

@@ -50,6 +50,7 @@ async function makeSignedToken(
   motebitId: string,
   relayDeviceId: string,
   keypair: KeyPair,
+  aud: string = "sync",
 ): Promise<string> {
   const now = Date.now();
   return createSignedToken(
@@ -59,6 +60,7 @@ async function makeSignedToken(
       iat: now,
       exp: now + 5 * 60 * 1000,
       jti: crypto.randomUUID(),
+      aud,
     },
     keypair.privateKey,
   );
@@ -226,7 +228,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
   // =========================================================================
 
   it("4. Agent A authenticates with a signed device token on a protected endpoint", async () => {
-    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA, "admin:query");
 
     const res = await relay.app.request("/api/v1/agents/discover", {
       method: "GET",
@@ -238,7 +240,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
 
   it("5. Signed token signed by wrong key is rejected 401", async () => {
     // Token claims to be agent A but is signed by B's private key
-    const spoofedToken = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairB);
+    const spoofedToken = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairB, "admin:query");
 
     const res = await relay.app.request("/api/v1/agents/discover", {
       method: "GET",
@@ -250,7 +252,12 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
 
   it("6. Token with wrong device_id is rejected 401", async () => {
     // Valid key, but wrong device_id (not what relay stored for A)
-    const wrongDeviceToken = await makeSignedToken(motebitIdA, "wrong-device-id", keypairA);
+    const wrongDeviceToken = await makeSignedToken(
+      motebitIdA,
+      "wrong-device-id",
+      keypairA,
+      "admin:query",
+    );
 
     const res = await relay.app.request("/api/v1/agents/discover", {
       method: "GET",
@@ -266,7 +273,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
   // =========================================================================
 
   it("7. Agent B registers capabilities in the agent registry", async () => {
-    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB, "admin:query");
 
     const res = await relay.app.request("/api/v1/agents/register", {
       method: "POST",
@@ -293,7 +300,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
   // =========================================================================
 
   it("8. Agent A discovers Agent B via GET /api/v1/agents/discover?capability=web_search", async () => {
-    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA, "admin:query");
 
     const res = await relay.app.request("/api/v1/agents/discover?capability=web_search", {
       method: "GET",
@@ -315,7 +322,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
   });
 
   it("9. Agent A retrieves Agent B's full profile via GET /api/v1/agents/:motebitId", async () => {
-    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA, "admin:query");
 
     const res = await relay.app.request(`/api/v1/agents/${motebitIdB}`, {
       method: "GET",
@@ -342,7 +349,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
   let sharedTaskId: string;
 
   it("10. Agent A submits a task to Agent B's address via signed device token (dualAuth)", async () => {
-    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA, "task:submit");
 
     // Inject B as a connected device so the relay fans the task out via WS
     const bWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
@@ -386,7 +393,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
 
   it("11. Agent B posts a signed ExecutionReceipt back to the relay", async () => {
     // B uses its own signed device token to post the result
-    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB, "task:result");
 
     const receipt = await makeReceipt(sharedTaskId, motebitIdB, relayDeviceIdB, keypairB, {
       status: "completed",
@@ -460,8 +467,8 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
   // =========================================================================
 
   it("14. Relay records latency stats for tasks with wall_clock_ms (trust accumulation)", async () => {
-    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
-    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA, "task:submit");
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB, "task:result");
 
     const taskRes = await relay.app.request(`/agent/${motebitIdB}/task`, {
       method: "POST",
@@ -543,15 +550,21 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
   // =========================================================================
 
   it("17. Settlement audit: priced listing + receipt → settlement record with 5% fee", async () => {
-    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
-    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA, "task:submit");
+    const tokenBListing = await makeSignedToken(
+      motebitIdB,
+      relayDeviceIdB,
+      keypairB,
+      "market:listing",
+    );
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB, "task:result");
 
     // B registers a priced service listing (no pay_to_address → bypasses x402 gate,
     // but settlement audit still runs from pricing lookup on receipt delivery)
     const listingRes = await relay.app.request(`/api/v1/agents/${motebitIdB}/listing`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${tokenB}`,
+        Authorization: `Bearer ${tokenBListing}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -630,7 +643,8 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
   // =========================================================================
 
   it("18. Relay issues AgentReputationCredential to B after successful receipt", async () => {
-    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
+    const tokenASubmit = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA, "task:submit");
+    const tokenACreds = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA, "credentials");
 
     // B is already in the agent registry (from test 7). Connect B's device.
     const bWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
@@ -642,7 +656,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
     const taskRes = await relay.app.request(`/agent/${motebitIdB}/task`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${tokenA}`,
+        Authorization: `Bearer ${tokenASubmit}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -655,7 +669,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
     const { task_id: credTaskId } = (await taskRes.json()) as { task_id: string };
 
     // B posts a successful receipt
-    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB, "task:result");
     const receipt = await makeReceipt(credTaskId, motebitIdB, relayDeviceIdB, keypairB);
     const resultRes = await relay.app.request(`/agent/${motebitIdB}/task/${credTaskId}/result`, {
       method: "POST",
@@ -676,7 +690,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
     // Retrieve credentials from the relay's credential store
     const credsRes = await relay.app.request(`/api/v1/agents/${motebitIdB}/credentials`, {
       method: "GET",
-      headers: { Authorization: `Bearer ${tokenA}` },
+      headers: { Authorization: `Bearer ${tokenACreds}` },
     });
     expect(credsRes.status).toBe(200);
     const credsBody = (await credsRes.json()) as {
@@ -705,7 +719,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
   });
 
   it("19. Public credential verification endpoint validates B's reputation credential", async () => {
-    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA, "credentials");
 
     // Fetch the credential
     const credsRes = await relay.app.request(`/api/v1/agents/${motebitIdB}/credentials`, {
@@ -736,7 +750,12 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
   });
 
   it("20. Verifiable Presentation bundles B's credentials into a signed VP", async () => {
-    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+    const tokenB = await makeSignedToken(
+      motebitIdB,
+      relayDeviceIdB,
+      keypairB,
+      "credentials:present",
+    );
 
     const vpRes = await relay.app.request(`/api/v1/agents/${motebitIdB}/presentation`, {
       method: "POST",
@@ -772,8 +791,8 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
   // =========================================================================
 
   it("21. Tampered receipt (modified result field) is rejected 403 by the relay", async () => {
-    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
-    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA, "task:submit");
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB, "task:result");
 
     // Submit a fresh task
     const taskRes = await relay.app.request(`/agent/${motebitIdB}/task`, {
@@ -818,7 +837,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
   // =========================================================================
 
   it("22. Spatial: delegation_departed sent to submitter and delegation_arrived sent to worker on task submission", async () => {
-    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA, "task:submit");
 
     // Both A and B have WS connections so we can capture events on each side
     const wsA = { send: vi.fn(), close: vi.fn(), readyState: 1 };
@@ -880,8 +899,8 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
   });
 
   it("23. Spatial: delegation_returning sent to submitter and delegation_visitor_departing sent to worker on receipt", async () => {
-    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
-    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA, "task:submit");
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB, "task:result");
 
     // Submit a fresh task so we control the lifecycle end-to-end
     const wsA = { send: vi.fn(), close: vi.fn(), readyState: 1 };
@@ -956,8 +975,8 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
   });
 
   it("24. Spatial: delegation_returning status is 'failed' when receipt.status is 'failed'", async () => {
-    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
-    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA, "task:submit");
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB, "task:result");
 
     const wsA = { send: vi.fn(), close: vi.fn(), readyState: 1 };
     const wsB = { send: vi.fn(), close: vi.fn(), readyState: 1 };
@@ -1121,14 +1140,19 @@ describe("x402 Payment Gate", () => {
   });
 
   it("priced agent with pay_to_address returns 402 to unpaid caller", async () => {
-    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
-    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA, "task:submit");
+    const tokenBListing = await makeSignedToken(
+      motebitIdB,
+      relayDeviceIdB,
+      keypairB,
+      "market:listing",
+    );
 
     // B registers a priced listing WITH pay_to_address → triggers x402 gate
     const listingRes = await relay.app.request(`/api/v1/agents/${motebitIdB}/listing`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${tokenB}`,
+        Authorization: `Bearer ${tokenBListing}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -1167,14 +1191,19 @@ describe("x402 Payment Gate", () => {
   });
 
   it("free agent (no pay_to_address) bypasses x402 gate", async () => {
-    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
-    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA, "task:submit");
+    const tokenBListing = await makeSignedToken(
+      motebitIdB,
+      relayDeviceIdB,
+      keypairB,
+      "market:listing",
+    );
 
     // B updates listing WITHOUT pay_to_address → x402 gate should not apply
     const listingRes = await relay.app.request(`/api/v1/agents/${motebitIdB}/listing`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${tokenB}`,
+        Authorization: `Bearer ${tokenBListing}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -1212,15 +1241,21 @@ describe("x402 Payment Gate", () => {
   });
 
   it("price snapshot is captured at submission time", async () => {
-    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
-    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA, "task:submit");
+    const tokenBListing = await makeSignedToken(
+      motebitIdB,
+      relayDeviceIdB,
+      keypairB,
+      "market:listing",
+    );
+    const tokenBResult = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB, "task:result");
 
     // B registers a priced listing (no pay_to_address so task goes through free,
     // but price_snapshot should still be recorded for settlement audit)
     await relay.app.request(`/api/v1/agents/${motebitIdB}/listing`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${tokenB}`,
+        Authorization: `Bearer ${tokenBListing}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -1258,7 +1293,7 @@ describe("x402 Payment Gate", () => {
     await relay.app.request(`/api/v1/agents/${motebitIdB}/listing`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${tokenB}`,
+        Authorization: `Bearer ${tokenBListing}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -1274,7 +1309,7 @@ describe("x402 Payment Gate", () => {
     await relay.app.request(`/agent/${motebitIdB}/task/${snapshotTaskId}/result`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${tokenB}`,
+        Authorization: `Bearer ${tokenBResult}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(receipt),

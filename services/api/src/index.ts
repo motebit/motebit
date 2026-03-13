@@ -45,6 +45,10 @@
  *   POST /api/v1/agents/:motebitId/presentation?type=  — bundle credentials into signed VP
  *   POST /agent/:motebitId/ledger                       — submit signed execution ledger
  *   GET  /agent/:motebitId/ledger/:goalId               — retrieve signed execution ledger
+ *   POST /api/v1/agents/:motebitId/revoke-tokens             — blacklist specific token JTIs (agent auth)
+ *   POST /api/v1/agents/:motebitId/revoke-credential        — revoke a verifiable credential (agent auth)
+ *   POST /api/v1/agents/:motebitId/revoke                   — mark agent identity as revoked (agent auth)
+ *   GET  /api/v1/credentials/:credentialId/status            — credential revocation status (public)
  *   POST /api/v1/credentials/verify                        — verify a VerifiableCredential (public)
  *   GET  /api/v1/market/candidates?capability=&max_budget=&limit= — scored candidate list (max_budget filters, x402 handles payment)
  *   POST /api/v1/agents/bootstrap                       — register identity + device in one unauthenticated call (rate-limited)
@@ -122,33 +126,52 @@ function hexToBytes(hex: string): Uint8Array {
 /** Decode the payload half of a signed token without verifying the signature. */
 function parseTokenPayloadUnsafe(
   token: string,
-): { mid: string; did: string; iat: number; exp: number } | null {
+): { mid: string; did: string; iat: number; exp: number; jti?: string } | null {
   const dotIdx = token.indexOf(".");
   if (dotIdx === -1) return null;
   try {
     const padded = token.slice(0, dotIdx).replace(/-/g, "+").replace(/_/g, "/");
     const json = atob(padded);
-    return JSON.parse(json) as { mid: string; did: string; iat: number; exp: number };
+    return JSON.parse(json) as { mid: string; did: string; iat: number; exp: number; jti?: string };
   } catch {
     return null;
   }
 }
 
-/** Verify a signed token against a specific device's public key. O(1) lookup by did. */
+/** Verify a signed token against a specific device's public key. O(1) lookup by did.
+ *  When `expectedAudience` is provided, rejects tokens whose `aud` claim doesn't match
+ *  (closes cross-endpoint replay vulnerability).
+ *  Optional blacklistCheck callback rejects tokens whose jti appears in the token blacklist.
+ *  Optional agentRevokedCheck callback rejects tokens for revoked agents.
+ */
 async function verifySignedTokenForDevice(
   token: string,
   motebitId: string,
   identityManager: IdentityManager,
+  expectedAudience?: string,
+  blacklistCheck?: (jti: string, motebitId: string) => boolean,
+  agentRevokedCheck?: (motebitId: string) => boolean,
 ): Promise<boolean> {
   const claims = parseTokenPayloadUnsafe(token);
   if (!claims || claims.mid !== motebitId || !claims.did) return false;
+
+  // Check if the agent's identity has been revoked
+  if (agentRevokedCheck && agentRevokedCheck(motebitId)) return false;
+
+  // Check if this specific token's jti has been blacklisted
+  if (blacklistCheck && claims.jti && blacklistCheck(claims.jti, motebitId)) return false;
 
   const device = await identityManager.loadDeviceById(claims.did, motebitId);
   if (!device || !device.public_key) return false;
 
   const pubKeyBytes = hexToBytes(device.public_key);
   const payload = await verifySignedToken(token, pubKeyBytes);
-  return payload !== null && payload.mid === motebitId;
+  if (payload === null || payload.mid !== motebitId) return false;
+
+  // Audience binding: reject tokens scoped to a different endpoint
+  if (expectedAudience != null && payload.aud !== expectedAudience) return false;
+
+  return true;
 }
 
 // === Canonical JSON (deterministic serialization for execution ledger hashing) ===
@@ -498,6 +521,36 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       CREATE INDEX IF NOT EXISTS idx_relay_key_successions_motebit ON relay_key_successions(motebit_id);
   `);
 
+  // Token blacklist for revocation (jti-based)
+  moteDb.db.exec(`
+      CREATE TABLE IF NOT EXISTS relay_token_blacklist (
+        jti TEXT PRIMARY KEY,
+        motebit_id TEXT NOT NULL,
+        revoked_at TEXT DEFAULT (datetime('now')),
+        expires_at INTEGER NOT NULL
+      );
+  `);
+
+  // Revoked credentials
+  moteDb.db.exec(`
+      CREATE TABLE IF NOT EXISTS relay_revoked_credentials (
+        credential_id TEXT PRIMARY KEY,
+        motebit_id TEXT NOT NULL,
+        revoked_at TEXT DEFAULT (datetime('now')),
+        reason TEXT
+      );
+  `);
+
+  // Add revoked column to agent_registry (column-exists check pattern)
+  try {
+    moteDb.db.exec("ALTER TABLE agent_registry ADD COLUMN revoked INTEGER DEFAULT 0");
+  } catch {
+    /* column may already exist */
+  }
+
+  // Startup cleanup: purge expired blacklist entries
+  moteDb.db.prepare("DELETE FROM relay_token_blacklist WHERE expires_at < ?").run(Date.now());
+
   // Extend sync tables for collaborative fields (column-exists check pattern)
   try {
     moteDb.db.exec("ALTER TABLE sync_plan_steps ADD COLUMN assigned_motebit_id TEXT DEFAULT NULL");
@@ -513,6 +566,21 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     moteDb.db.exec("ALTER TABLE sync_plans ADD COLUMN collaborative INTEGER DEFAULT 0");
   } catch {
     /* column may already exist */
+  }
+
+  // --- Revocation callback helpers ---
+
+  function isTokenBlacklisted(jti: string, _motebitId: string): boolean {
+    const row = moteDb.db.prepare("SELECT 1 FROM relay_token_blacklist WHERE jti = ?").get(jti) as
+      | Record<string, unknown>
+      | undefined;
+    return row !== undefined;
+  }
+  function isAgentRevoked(motebitId: string): boolean {
+    const row = moteDb.db
+      .prepare("SELECT revoked FROM agent_registry WHERE motebit_id = ?")
+      .get(motebitId) as { revoked: number } | undefined;
+    return row?.revoked === 1;
   }
 
   // Track connected WebSocket clients per motebitId with device identity
@@ -752,8 +820,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   app.use("/agent/:motebitId/task/:taskId/result", rateLimitMiddleware(writeLimiter));
   app.use("/agent/:motebitId/ledger", rateLimitMiddleware(writeLimiter));
 
-  // Public endpoints: credential verification (20 req/min)
+  // Public endpoints: credential verification, credential status (20 req/min)
   app.use("/api/v1/credentials/verify", rateLimitMiddleware(publicLimiter));
+  app.use("/api/v1/credentials/:credentialId/status", rateLimitMiddleware(publicLimiter));
+
+  // Write endpoints: revocation (30 req/min)
+  app.use("/api/v1/agents/:motebitId/revoke-tokens", rateLimitMiddleware(writeLimiter));
+  app.use("/api/v1/agents/:motebitId/revoke-credential", rateLimitMiddleware(writeLimiter));
+  app.use("/api/v1/agents/:motebitId/revoke", rateLimitMiddleware(writeLimiter));
 
   // Expensive endpoints: presentation bundling, bootstrap (10 req/min)
   app.use("/api/v1/agents/:motebitId/presentation", rateLimitMiddleware(expensiveLimiter));
@@ -790,7 +864,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
       if (verifyDeviceSignature && token.includes(".")) {
         // Signed token verification — O(1) lookup by device ID from token payload
-        const verified = await verifySignedTokenForDevice(token, motebitId, identityManager);
+        const verified = await verifySignedTokenForDevice(
+          token,
+          motebitId,
+          identityManager,
+          "sync",
+          isTokenBlacklisted,
+          isAgentRevoked,
+        );
         if (!verified) {
           throw new HTTPException(403, { message: "Device not authorized for this motebit" });
         }
@@ -846,7 +927,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
               // OK — master token
             } else if (verifyDeviceSignature && token.includes(".")) {
               // Signed token verification — O(1) lookup by device ID from token payload
-              const verified = await verifySignedTokenForDevice(token, motebitId, identityManager);
+              const verified = await verifySignedTokenForDevice(
+                token,
+                motebitId,
+                identityManager,
+                "sync",
+                isTokenBlacklisted,
+                isAgentRevoked,
+              );
               if (!verified) {
                 ws.close(4003, "Unauthorized");
                 return;
@@ -1154,7 +1242,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     app.use("/api/v1/*", async (c, next) => {
       if (
         c.req.path.startsWith("/api/v1/agents") ||
-        c.req.path.startsWith("/api/v1/credentials/verify")
+        c.req.path.startsWith("/api/v1/credentials/verify") ||
+        c.req.path.match(/\/api\/v1\/credentials\/[^/]+\/status/)
       ) {
         await next();
         return;
@@ -1660,7 +1749,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     const claims = parseTokenPayloadUnsafe(token);
     if (!claims || !claims.mid || !claims.did) return null;
 
-    const verified = await verifySignedTokenForDevice(token, claims.mid, identityManager);
+    const verified = await verifySignedTokenForDevice(
+      token,
+      claims.mid,
+      identityManager,
+      "device:auth",
+      isTokenBlacklisted,
+      isAgentRevoked,
+    );
     if (!verified) return null;
 
     return { motebitId: claims.mid, deviceId: claims.did };
@@ -2193,10 +2289,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
    * dualAuth — accepts either the master API token OR a valid Ed25519 signed device token.
    * Used by task submission so agents can delegate to each other without knowing the master token.
    * Sets c.set("callerMotebitId") on the context when a signed device token is used.
+   * @param expectedAudience — audience claim to enforce on signed tokens (cross-endpoint replay prevention)
    */
   async function dualAuth(
     c: Parameters<Parameters<typeof app.use>[1]>[0],
     next: () => Promise<void>,
+    expectedAudience?: string,
   ): Promise<Response | void> {
     const authHeader = c.req.header("authorization");
     if (authHeader == null || !authHeader.startsWith("Bearer ")) {
@@ -2215,7 +2313,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     if (!claims?.mid) {
       throw new HTTPException(401, { message: "Invalid token" });
     }
-    const valid = await verifySignedTokenForDevice(token, claims.mid, identityManager);
+    const valid = await verifySignedTokenForDevice(
+      token,
+      claims.mid,
+      identityManager,
+      expectedAudience,
+      isTokenBlacklisted,
+      isAgentRevoked,
+    );
     if (!valid) {
       throw new HTTPException(401, { message: "Token verification failed" });
     }
@@ -2230,7 +2335,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       // Only apply auth to POST (submit) requests, not to /result sub-routes
       if (c.req.method === "POST" && !c.req.url.includes("/result")) {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
-        return dualAuth(c, next);
+        return dualAuth(c, next, "task:submit");
       }
       await next();
     });
@@ -2514,7 +2619,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     if (apiToken == null || token !== apiToken) {
       // Verify as device signed token
       if (enableDeviceAuth && token.includes(".")) {
-        const verified = await verifySignedTokenForDevice(token, motebitId, identityManager);
+        const verified = await verifySignedTokenForDevice(
+          token,
+          motebitId,
+          identityManager,
+          "task:query",
+          isTokenBlacklisted,
+          isAgentRevoked,
+        );
         if (!verified) {
           throw new HTTPException(403, { message: "Device not authorized" });
         }
@@ -2546,7 +2658,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     if (apiToken == null || token !== apiToken) {
       // Verify as device signed token
       if (enableDeviceAuth && token.includes(".")) {
-        const verified = await verifySignedTokenForDevice(token, motebitId, identityManager);
+        const verified = await verifySignedTokenForDevice(
+          token,
+          motebitId,
+          identityManager,
+          "task:result",
+          isTokenBlacklisted,
+          isAgentRevoked,
+        );
         if (!verified) {
           throw new HTTPException(403, { message: "Device not authorized" });
         }
@@ -2998,7 +3117,29 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     if (!claims?.mid) {
       throw new HTTPException(401, { message: "Invalid token" });
     }
-    const valid = await verifySignedTokenForDevice(token, claims.mid, identityManager);
+
+    // Determine expected audience from route path
+    const path = c.req.path;
+    let agentAudience: string;
+    if (path.includes("/listing")) {
+      agentAudience = "market:listing";
+    } else if (path.includes("/credentials")) {
+      agentAudience = "credentials";
+    } else if (path.includes("/presentation")) {
+      agentAudience = "credentials:present";
+    } else {
+      // register, heartbeat, deregister, discover, agent info
+      agentAudience = "admin:query";
+    }
+
+    const valid = await verifySignedTokenForDevice(
+      token,
+      claims.mid,
+      identityManager,
+      agentAudience,
+      isTokenBlacklisted,
+      isAgentRevoked,
+    );
     if (!valid) {
       throw new HTTPException(401, { message: "Token verification failed" });
     }
@@ -3100,7 +3241,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     if (!claims?.mid) {
       throw new HTTPException(401, { message: "Invalid token" });
     }
-    const valid = await verifySignedTokenForDevice(token, claims.mid, identityManager);
+    const valid = await verifySignedTokenForDevice(
+      token,
+      claims.mid,
+      identityManager,
+      "proposal",
+      isTokenBlacklisted,
+      isAgentRevoked,
+    );
     if (!valid) {
       throw new HTTPException(401, { message: "Token verification failed" });
     }
@@ -3125,7 +3273,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     if (!claims?.mid) {
       throw new HTTPException(401, { message: "Invalid token" });
     }
-    const valid = await verifySignedTokenForDevice(token, claims.mid, identityManager);
+    const valid = await verifySignedTokenForDevice(
+      token,
+      claims.mid,
+      identityManager,
+      "proposal",
+      isTokenBlacklisted,
+      isAgentRevoked,
+    );
     if (!valid) {
       throw new HTTPException(401, { message: "Token verification failed" });
     }
@@ -3377,6 +3532,71 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       .run(body.new_public_key, motebitId);
 
     return c.json({ ok: true, motebit_id: motebitId });
+  });
+
+  // === Revocation Endpoints ===
+
+  // POST /api/v1/agents/:motebitId/revoke-tokens — blacklist specific token JTIs
+  app.post("/api/v1/agents/:motebitId/revoke-tokens", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    if (callerMotebitId && callerMotebitId !== motebitId) {
+      throw new HTTPException(403, { message: "Cannot revoke tokens for another agent" });
+    }
+    const body = await c.req.json<{ jtis: string[] }>();
+    if (!Array.isArray(body.jtis) || body.jtis.length === 0) {
+      throw new HTTPException(400, { message: "jtis must be a non-empty array" });
+    }
+    const expiresAt = Date.now() + 6 * 60 * 1000; // 6 min (covers 5 min token lifetime + buffer)
+    const stmt = moteDb.db.prepare(
+      "INSERT OR IGNORE INTO relay_token_blacklist (jti, motebit_id, expires_at) VALUES (?, ?, ?)",
+    );
+    for (const jti of body.jtis) {
+      stmt.run(jti, motebitId, expiresAt);
+    }
+    return c.json({ ok: true, revoked: body.jtis.length });
+  });
+
+  // POST /api/v1/agents/:motebitId/revoke-credential — revoke a verifiable credential
+  app.post("/api/v1/agents/:motebitId/revoke-credential", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    if (callerMotebitId && callerMotebitId !== motebitId) {
+      throw new HTTPException(403, { message: "Cannot revoke credentials for another agent" });
+    }
+    const body = await c.req.json<{ credential_id: string; reason?: string }>();
+    if (!body.credential_id) {
+      throw new HTTPException(400, { message: "credential_id is required" });
+    }
+    moteDb.db
+      .prepare(
+        "INSERT OR REPLACE INTO relay_revoked_credentials (credential_id, motebit_id, reason) VALUES (?, ?, ?)",
+      )
+      .run(body.credential_id, motebitId, body.reason ?? null);
+    return c.json({ ok: true, credential_id: body.credential_id });
+  });
+
+  // POST /api/v1/agents/:motebitId/revoke — mark agent identity as revoked
+  app.post("/api/v1/agents/:motebitId/revoke", (c) => {
+    const motebitId = c.req.param("motebitId");
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    if (callerMotebitId && callerMotebitId !== motebitId) {
+      throw new HTTPException(403, { message: "Cannot revoke another agent" });
+    }
+    moteDb.db.prepare("UPDATE agent_registry SET revoked = 1 WHERE motebit_id = ?").run(motebitId);
+    return c.json({ ok: true, motebit_id: motebitId, revoked: true });
+  });
+
+  // GET /api/v1/credentials/:credentialId/status — public credential revocation status
+  app.get("/api/v1/credentials/:credentialId/status", (c) => {
+    const credentialId = c.req.param("credentialId");
+    const row = moteDb.db
+      .prepare("SELECT revoked_at, reason FROM relay_revoked_credentials WHERE credential_id = ?")
+      .get(credentialId) as { revoked_at: string; reason: string | null } | undefined;
+    if (!row) {
+      return c.json({ revoked: false });
+    }
+    return c.json({ revoked: true, revoked_at: row.revoked_at, reason: row.reason ?? "" });
   });
 
   // === Market Endpoints ===

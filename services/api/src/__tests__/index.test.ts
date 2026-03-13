@@ -458,6 +458,7 @@ describe("Sync Relay — signed token auth", () => {
         iat: Date.now(),
         exp: Date.now() + 5 * 60 * 1000,
         jti: crypto.randomUUID(),
+        aud: "sync",
       },
       keypair.privateKey,
     );
@@ -481,6 +482,7 @@ describe("Sync Relay — signed token auth", () => {
         iat: Date.now() - 10 * 60 * 1000,
         exp: Date.now() - 1,
         jti: crypto.randomUUID(),
+        aud: "sync",
       },
       keypair.privateKey,
     );
@@ -506,6 +508,7 @@ describe("Sync Relay — signed token auth", () => {
         iat: Date.now(),
         exp: Date.now() + 5 * 60 * 1000,
         jti: crypto.randomUUID(),
+        aud: "sync",
       },
       keypairB.privateKey,
     );
@@ -538,11 +541,37 @@ describe("Sync Relay — signed token auth", () => {
         iat: Date.now(),
         exp: Date.now() + 5 * 60 * 1000,
         jti: crypto.randomUUID(),
+        aud: "sync",
       },
       keypair.privateKey,
     );
 
     const res = await relay.app.request(`/sync/${otherIdentity.motebit_id}/clock`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("rejects token with wrong audience (cross-endpoint replay)", async () => {
+    const keypair = await generateKeypair();
+    const pubKeyHex = bytesToHex(keypair.publicKey);
+    const { motebitId, deviceId } = await createIdentityAndDevice(pubKeyHex);
+
+    // Create a token with "task:submit" audience — should be rejected by sync endpoint
+    const token = await createSignedToken(
+      {
+        mid: motebitId,
+        did: deviceId,
+        iat: Date.now(),
+        exp: Date.now() + 5 * 60 * 1000,
+        jti: crypto.randomUUID(),
+        aud: "task:submit",
+      },
+      keypair.privateKey,
+    );
+
+    const res = await relay.app.request(`/sync/${motebitId}/clock`, {
       method: "GET",
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -1093,6 +1122,7 @@ describe("Sync Relay — agent protocol", () => {
         iat: Date.now(),
         exp: Date.now() + 300000,
         jti: crypto.randomUUID(),
+        aud: "admin:query",
       },
       serviceKeypair.privateKey,
     );
@@ -1114,7 +1144,7 @@ describe("Sync Relay — agent protocol", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${serviceToken}`,
+        ...AUTH_HEADER,
       },
       body: JSON.stringify({
         capabilities: ["web_search"],
@@ -1211,6 +1241,7 @@ describe("Sync Relay — agent protocol", () => {
         iat: Date.now(),
         exp: Date.now() + 300000,
         jti: crypto.randomUUID(),
+        aud: "admin:query",
       },
       serviceKeypair.privateKey,
     );
@@ -1231,7 +1262,7 @@ describe("Sync Relay — agent protocol", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${serviceToken}`,
+        ...AUTH_HEADER,
       },
       body: JSON.stringify({
         capabilities: ["code_exec"],
@@ -1287,6 +1318,7 @@ describe("Sync Relay — agent protocol", () => {
         iat: Date.now(),
         exp: Date.now() + 300000,
         jti: crypto.randomUUID(),
+        aud: "admin:query",
       },
       serviceKeypair.privateKey,
     );
@@ -1307,7 +1339,7 @@ describe("Sync Relay — agent protocol", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${serviceToken}`,
+        ...AUTH_HEADER,
       },
       body: JSON.stringify({
         capabilities: ["web_search"],
@@ -1783,7 +1815,7 @@ describe("Sync Relay — agent discovery registry", () => {
     });
     const device = (await deviceRes.json()) as { device_id: string };
 
-    // Create signed token
+    // Create signed token for agent registry operations
     const token = await createSignedToken(
       {
         mid: identity.motebit_id,
@@ -1791,6 +1823,7 @@ describe("Sync Relay — agent discovery registry", () => {
         iat: Date.now(),
         exp: Date.now() + 5 * 60 * 1000,
         jti: crypto.randomUUID(),
+        aud: "admin:query",
       },
       keypair.privateKey,
     );
@@ -2549,7 +2582,7 @@ describe("Sync Relay — bootstrap endpoint", () => {
     expect(bootstrapRes.status).toBe(201);
     const { device_id: deviceIdA } = (await bootstrapRes.json()) as { device_id: string };
 
-    // Agent A creates a signed token
+    // Agent A creates a signed token for task submission
     const tokenA = await createSignedToken(
       {
         mid: motebitIdA,
@@ -2557,6 +2590,7 @@ describe("Sync Relay — bootstrap endpoint", () => {
         iat: Date.now(),
         exp: Date.now() + 5 * 60 * 1000,
         jti: crypto.randomUUID(),
+        aud: "task:submit",
       },
       keypairA.privateKey,
     );

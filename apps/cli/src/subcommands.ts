@@ -15,6 +15,7 @@ import {
   verifyVerifiableCredential,
   verifyVerifiablePresentation,
   createSignedToken,
+  secureErase,
 } from "@motebit/crypto";
 import type { VerifiableCredential, VerifiablePresentation } from "@motebit/crypto";
 import type { CliConfig } from "./args.js";
@@ -1497,6 +1498,7 @@ export async function handleRegister(config: CliConfig): Promise<void> {
           iat: Date.now(),
           exp: Date.now() + 5 * 60 * 1000,
           jti: crypto.randomUUID(),
+          aud: "sync",
         },
         privateKeyBytes,
       );
@@ -1529,4 +1531,7 @@ export async function handleRegister(config: CliConfig): Promise<void> {
     );
     console.log(`Run the REPL with --sync-url ${syncUrl} to push your events, then re-register.`);
   }
+
+  // Erase temporary private key bytes
+  if (privateKeyBytes) secureErase(privateKeyBytes);
 }

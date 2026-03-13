@@ -23,7 +23,7 @@ import {
   AgentTaskStatus,
   DeviceCapability,
 } from "@motebit/sdk";
-import { createSignedToken, verifySignedToken } from "@motebit/crypto";
+import { createSignedToken, verifySignedToken, secureErase } from "@motebit/crypto";
 import { verify as verifyIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
 import { McpServerAdapter } from "@motebit/mcp-server";
 import type {
@@ -182,10 +182,10 @@ export async function handleRun(config: CliConfig): Promise<void> {
   const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
   let wsAdapter: WebSocketEventStoreAdapter | null = null;
   let daemonHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  let privKeyBytes: Uint8Array | undefined;
 
   if (syncUrl != null && syncUrl !== "") {
     // Derive private key for signing execution receipts
-    let privKeyBytes: Uint8Array | undefined;
     const deviceId = fullConfig.device_id ?? "unknown";
 
     if (fullConfig.cli_encrypted_key) {
@@ -219,6 +219,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
             iat: Date.now(),
             exp: Date.now() + 5 * 60 * 1000,
             jti: crypto.randomUUID(),
+            aud: "sync",
           },
           privKeyBytes,
         );
@@ -363,6 +364,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
               iat: Date.now(),
               exp: Date.now() + 5 * 60 * 1000,
               jti: crypto.randomUUID(),
+              aud: "task:submit",
             },
             privateKeyForDelegation,
           );
@@ -466,6 +468,8 @@ export async function handleRun(config: CliConfig): Promise<void> {
       wsAdapter?.disconnect();
       runtime.stop();
       moteDb.close();
+      // Erase long-lived private key bytes from daemon scope
+      if (privKeyBytes) secureErase(privKeyBytes);
     } catch (err: unknown) {
       console.error("Shutdown error:", err instanceof Error ? err.message : String(err));
     }

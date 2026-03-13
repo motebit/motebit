@@ -40,6 +40,7 @@ export interface VerifiableCredential<T = Record<string, unknown>> {
   credentialSubject: T & { id: string };
   validFrom: string;
   validUntil?: string;
+  credentialStatus?: { id: string; type: string };
   proof: DataIntegrityProof;
 }
 
@@ -255,6 +256,7 @@ export async function issueGradientCredential(
   publicKey: Uint8Array,
   subjectDid?: string,
   validForMs = ONE_HOUR_MS,
+  statusEndpoint?: string,
 ): Promise<VerifiableCredential<GradientCredentialSubject>> {
   const issuerDid = publicKeyToDidKey(publicKey);
   const subject: GradientCredentialSubject & { id: string } = {
@@ -279,6 +281,9 @@ export async function issueGradientCredential(
     credentialSubject: subject,
     validFrom: now.toISOString(),
     validUntil: new Date(now.getTime() + validForMs).toISOString(),
+    ...(statusEndpoint
+      ? { credentialStatus: { id: statusEndpoint, type: "RevocationList2024" } }
+      : {}),
   };
 
   return signVerifiableCredential(unsignedVC, privateKey, publicKey);
@@ -300,6 +305,7 @@ export async function issueReputationCredential(
   publicKey: Uint8Array,
   subjectDid: string,
   validForMs = ONE_HOUR_MS,
+  statusEndpoint?: string,
 ): Promise<VerifiableCredential<ReputationCredentialSubject>> {
   const issuerDid = publicKeyToDidKey(publicKey);
   const subject: ReputationCredentialSubject & { id: string } = {
@@ -321,6 +327,9 @@ export async function issueReputationCredential(
     credentialSubject: subject,
     validFrom: now.toISOString(),
     validUntil: new Date(now.getTime() + validForMs).toISOString(),
+    ...(statusEndpoint
+      ? { credentialStatus: { id: statusEndpoint, type: "RevocationList2024" } }
+      : {}),
   };
 
   return signVerifiableCredential(unsignedVC, privateKey, publicKey);
@@ -342,6 +351,7 @@ export async function issueTrustCredential(
   publicKey: Uint8Array,
   subjectDid: string,
   validForMs = ONE_HOUR_MS,
+  statusEndpoint?: string,
 ): Promise<VerifiableCredential<TrustCredentialSubject>> {
   const issuerDid = publicKeyToDidKey(publicKey);
   const subject: TrustCredentialSubject & { id: string } = {
@@ -362,6 +372,9 @@ export async function issueTrustCredential(
     credentialSubject: subject,
     validFrom: now.toISOString(),
     validUntil: new Date(now.getTime() + validForMs).toISOString(),
+    ...(statusEndpoint
+      ? { credentialStatus: { id: statusEndpoint, type: "RevocationList2024" } }
+      : {}),
   };
 
   return signVerifiableCredential(unsignedVC, privateKey, publicKey);

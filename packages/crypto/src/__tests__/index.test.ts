@@ -351,6 +351,7 @@ describe("createSignedToken / verifySignedToken", () => {
       iat: Date.now(),
       exp: Date.now() + 5 * 60 * 1000,
       jti: crypto.randomUUID(),
+      aud: "sync",
     };
     const token = await createSignedToken(payload, kp.privateKey);
     expect(typeof token).toBe("string");
@@ -360,6 +361,38 @@ describe("createSignedToken / verifySignedToken", () => {
     expect(result).not.toBeNull();
     expect(result!.mid).toBe("mote-123");
     expect(result!.did).toBe("device-456");
+    expect(result!.aud).toBe("sync");
+  });
+
+  it("round-trips with audience claim preserved", async () => {
+    const kp = await generateKeypair();
+    const payload: SignedTokenPayload = {
+      mid: "mote-123",
+      did: "device-456",
+      iat: Date.now(),
+      exp: Date.now() + 5 * 60 * 1000,
+      jti: crypto.randomUUID(),
+      aud: "task:submit",
+    };
+    const token = await createSignedToken(payload, kp.privateKey);
+    const result = await verifySignedToken(token, kp.publicKey);
+    expect(result).not.toBeNull();
+    expect(result!.aud).toBe("task:submit");
+  });
+
+  it("round-trips without audience (backward compat)", async () => {
+    const kp = await generateKeypair();
+    const payload: SignedTokenPayload = {
+      mid: "mote-123",
+      did: "device-456",
+      iat: Date.now(),
+      exp: Date.now() + 5 * 60 * 1000,
+      jti: crypto.randomUUID(),
+    };
+    const token = await createSignedToken(payload, kp.privateKey);
+    const result = await verifySignedToken(token, kp.publicKey);
+    expect(result).not.toBeNull();
+    expect(result!.aud).toBeUndefined();
   });
 
   it("rejects expired token", async () => {
@@ -370,6 +403,7 @@ describe("createSignedToken / verifySignedToken", () => {
       iat: Date.now() - 10 * 60 * 1000,
       exp: Date.now() - 1, // Already expired
       jti: crypto.randomUUID(),
+      aud: "sync",
     };
     const token = await createSignedToken(payload, kp.privateKey);
     const result = await verifySignedToken(token, kp.publicKey);
@@ -385,6 +419,7 @@ describe("createSignedToken / verifySignedToken", () => {
       iat: Date.now(),
       exp: Date.now() + 5 * 60 * 1000,
       jti: crypto.randomUUID(),
+      aud: "sync",
     };
     const token = await createSignedToken(payload, kpA.privateKey);
     const result = await verifySignedToken(token, kpB.publicKey);

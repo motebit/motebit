@@ -42,7 +42,7 @@ import {
   type BootstrapConfigStore,
   type BootstrapKeyStore,
 } from "@motebit/core-identity";
-import { createSignedToken, deriveSyncEncryptionKey } from "@motebit/crypto";
+import { createSignedToken, deriveSyncEncryptionKey, secureErase } from "@motebit/crypto";
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";
 import { DeviceCapability } from "@motebit/sdk";
 import { McpClientAdapter } from "@motebit/mcp-client";
@@ -381,6 +381,7 @@ export class SpatialApp {
             iat: Date.now(),
             exp: Date.now() + 5 * 60 * 1000,
             jti: crypto.randomUUID(),
+            aud: "sync",
           },
           privKeyBytes,
         );
@@ -1036,6 +1037,12 @@ export class SpatialApp {
       }
     }
 
+    // Erase private key bytes when disconnecting from relay
+    if (this._privKeyBytes) {
+      secureErase(this._privKeyBytes);
+      this._privKeyBytes = null;
+    }
+
     this.setSyncStatus("disconnected");
   }
 
@@ -1186,6 +1193,12 @@ export class SpatialApp {
 
     // Clean up relay
     void this.disconnectRelay();
+
+    // Erase long-lived private key bytes
+    if (this._privKeyBytes) {
+      secureErase(this._privKeyBytes);
+      this._privKeyBytes = null;
+    }
 
     this.adapter.dispose();
   }

@@ -1104,6 +1104,7 @@ Available commands:
               iat: now,
               exp: now + 5 * 60 * 1000,
               jti: crypto.randomUUID(),
+              aud: "task:submit",
             },
             repl.privateKeyBytes,
           );
@@ -1271,6 +1272,7 @@ Available commands:
               iat: now,
               exp: now + 5 * 60 * 1000,
               jti: crypto.randomUUID(),
+              aud: "proposal",
             },
             repl.privateKeyBytes,
           );
@@ -1383,6 +1385,7 @@ Available commands:
               iat: now,
               exp: now + 5 * 60 * 1000,
               jti: crypto.randomUUID(),
+              aud: "proposal",
             },
             repl.privateKeyBytes,
           );
@@ -1471,6 +1474,7 @@ Available commands:
               iat: now,
               exp: now + 5 * 60 * 1000,
               jti: crypto.randomUUID(),
+              aud: "proposal",
             },
             repl.privateKeyBytes,
           );

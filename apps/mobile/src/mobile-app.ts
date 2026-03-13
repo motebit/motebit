@@ -25,7 +25,7 @@ import {
   HybridProvider,
   DEFAULT_OLLAMA_URL,
 } from "@motebit/ai-core";
-import { createSignedToken, deriveSyncEncryptionKey } from "@motebit/crypto";
+import { createSignedToken, deriveSyncEncryptionKey, secureErase } from "@motebit/crypto";
 import {
   bootstrapIdentity as sharedBootstrapIdentity,
   type BootstrapConfigStore,
@@ -351,23 +351,27 @@ export class MobileApp {
           for (let i = 0; i < privKeyHex.length; i += 2) {
             privKeyBytes[i / 2] = parseInt(privKeyHex.slice(i, i + 2), 16);
           }
-          const identityFileContent = await generateIdentityFile(
-            {
-              motebitId: result.motebitId,
-              ownerId: result.motebitId,
-              publicKeyHex: result.publicKeyHex,
-              devices: [
-                {
-                  device_id: result.deviceId,
-                  name: "Mobile",
-                  public_key: result.publicKeyHex,
-                  registered_at: new Date().toISOString(),
-                },
-              ],
-            },
-            privKeyBytes,
-          );
-          await AsyncStorage.setItem(IDENTITY_FILE_KEY, identityFileContent);
+          try {
+            const identityFileContent = await generateIdentityFile(
+              {
+                motebitId: result.motebitId,
+                ownerId: result.motebitId,
+                publicKeyHex: result.publicKeyHex,
+                devices: [
+                  {
+                    device_id: result.deviceId,
+                    name: "Mobile",
+                    public_key: result.publicKeyHex,
+                    registered_at: new Date().toISOString(),
+                  },
+                ],
+              },
+              privKeyBytes,
+            );
+            await AsyncStorage.setItem(IDENTITY_FILE_KEY, identityFileContent);
+          } finally {
+            secureErase(privKeyBytes);
+          }
         }
       } catch {
         // Non-fatal — identity file generation is best-effort
@@ -1101,43 +1105,48 @@ export class MobileApp {
     return bytes;
   }
 
-  private async createSyncToken(): Promise<string> {
+  private async createSyncToken(aud: string = "sync"): Promise<string> {
     const privKeyBytes = await this._getPrivKeyBytes();
 
-    return createSignedToken(
-      {
-        mid: this.motebitId,
-        did: this.deviceId,
-        iat: Date.now(),
-        exp: Date.now() + 5 * 60 * 1000,
-        jti: crypto.randomUUID(),
-      },
-      privKeyBytes,
-    );
+    try {
+      return await createSignedToken(
+        {
+          mid: this.motebitId,
+          did: this.deviceId,
+          iat: Date.now(),
+          exp: Date.now() + 5 * 60 * 1000,
+          jti: crypto.randomUUID(),
+          aud,
+        },
+        privKeyBytes,
+      );
+    } finally {
+      secureErase(privKeyBytes);
+    }
   }
 
   async initiatePairing(syncUrl: string): Promise<{ pairingCode: string; pairingId: string }> {
-    const token = await this.createSyncToken();
+    const token = await this.createSyncToken("device:auth");
     const client = new PairingClient({ relayUrl: syncUrl });
     const result = await client.initiate(token);
     return { pairingCode: result.pairingCode, pairingId: result.pairingId };
   }
 
   async getPairingSession(syncUrl: string, pairingId: string): Promise<PairingSession> {
-    const token = await this.createSyncToken();
+    const token = await this.createSyncToken("device:auth");
     const client = new PairingClient({ relayUrl: syncUrl });
     return client.getSession(pairingId, token);
   }
 
   async approvePairing(syncUrl: string, pairingId: string): Promise<{ deviceId: string }> {
-    const token = await this.createSyncToken();
+    const token = await this.createSyncToken("device:auth");
     const client = new PairingClient({ relayUrl: syncUrl });
     const result = await client.approve(pairingId, token);
     return { deviceId: result.deviceId };
   }
 
   async denyPairing(syncUrl: string, pairingId: string): Promise<void> {
-    const token = await this.createSyncToken();
+    const token = await this.createSyncToken("device:auth");
     const client = new PairingClient({ relayUrl: syncUrl });
     await client.deny(pairingId, token);
   }
@@ -1213,9 +1222,10 @@ export class MobileApp {
 
     await this.setSyncUrl(url);
 
-    // Derive encryption key once for the sync session
+    // Derive encryption key once for the sync session, then erase raw key bytes
     const privKeyBytes = await this._getPrivKeyBytes();
     this._syncEncKey = await deriveSyncEncryptionKey(privKeyBytes);
+    secureErase(privKeyBytes);
 
     // Create engines (they don't start their own timers — we manage the interval
     // ourselves so we can refresh the auth token each cycle)

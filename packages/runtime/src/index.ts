@@ -605,6 +605,7 @@ export class MotebitRuntime {
   private _signingKeys: { privateKey: Uint8Array; publicKey: Uint8Array } | null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private _issuedCredentials: import("@motebit/crypto").VerifiableCredential<any>[] = [];
+  private _signingKeysErased = false;
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
     this.motebitId = config.motebitId;
@@ -748,7 +749,27 @@ export class MotebitRuntime {
     // Disconnect MCP servers in background
     void Promise.allSettled(this.mcpAdapters.map((a) => a.disconnect()));
     this.renderer.dispose();
+    this.clearSigningKeys();
     this.running = false;
+  }
+
+  /**
+   * Securely erase signing key material from memory.
+   * Called automatically on stop(). Safe to call multiple times.
+   *
+   * Overwrites key bytes with random data then zeros (same as secureErase
+   * from @motebit/crypto) before nulling the reference.
+   */
+  clearSigningKeys(): void {
+    if (this._signingKeys && !this._signingKeysErased) {
+      // Overwrite with random data then zeros (matches secureErase from @motebit/crypto)
+      crypto.getRandomValues(this._signingKeys.privateKey);
+      this._signingKeys.privateKey.fill(0);
+      crypto.getRandomValues(this._signingKeys.publicKey);
+      this._signingKeys.publicKey.fill(0);
+      this._signingKeysErased = true;
+    }
+    this._signingKeys = null;
   }
 
   get isRunning(): boolean {

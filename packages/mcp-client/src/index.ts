@@ -1,5 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { ToolDefinition, ToolResult, ExecutionReceipt } from "@motebit/sdk";
+import { secureErase } from "@motebit/crypto";
 import type { KeySuccessionRecord } from "@motebit/crypto";
 import { InMemoryToolRegistry } from "@motebit/tools";
 
@@ -183,6 +184,10 @@ export class McpClientAdapter {
     await this.client.close();
     this.connected = false;
     this.discoveredTools = [];
+    // Erase caller private key bytes if present
+    if (this.config.callerPrivateKey) {
+      secureErase(this.config.callerPrivateKey);
+    }
   }
 
   private async discoverTools(): Promise<void> {
@@ -275,6 +280,7 @@ export class McpClientAdapter {
           iat: Date.now(),
           exp: Date.now() + 5 * 60 * 1000, // 5 minute expiry
           jti: crypto.randomUUID(),
+          aud: "task:submit",
         },
         this.config.callerPrivateKey,
       );
