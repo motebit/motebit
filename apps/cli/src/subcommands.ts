@@ -151,7 +151,6 @@ export async function handleExport(config: CliConfig): Promise<void> {
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
   const { motebitId } = await bootstrapIdentity(moteDb, fullConfig, passphrase);
-  moteDb.close();
 
   // Reload config (may have been updated by bootstrap)
   const updatedConfig = loadFullConfig();
@@ -159,6 +158,7 @@ export async function handleExport(config: CliConfig): Promise<void> {
   // Decrypt private key
   if (!updatedConfig.cli_encrypted_key) {
     console.error("Error: no encrypted key found in config.");
+    moteDb.close();
     rl.close();
     process.exit(1);
   }
@@ -183,7 +183,7 @@ export async function handleExport(config: CliConfig): Promise<void> {
   }
 
   // Generate the identity file
-  const content = await generateIdentityFile(
+  const identityContent = await generateIdentityFile(
     {
       motebitId,
       ownerId: motebitId,
@@ -193,22 +193,143 @@ export async function handleExport(config: CliConfig): Promise<void> {
     privateKey,
   );
 
-  // Determine output path
-  const outputPath =
+  // Determine output directory
+  const outputDir =
     config.output != null && config.output !== ""
       ? path.resolve(config.output)
-      : path.resolve("motebit.md");
+      : path.resolve("motebit-export");
 
-  fs.writeFileSync(outputPath, content, "utf-8");
-  console.log(`Your agent identity file has been created: ${outputPath}`);
+  fs.mkdirSync(outputDir, { recursive: true });
+
+  // Track what was exported for the summary
+  const exported: string[] = [];
+  const skipped: string[] = [];
+
+  // 1. Write identity file
+  const identityPath = path.join(outputDir, "motebit.md");
+  fs.writeFileSync(identityPath, identityContent, "utf-8");
+  exported.push("identity");
+
+  // 2. Gradient snapshot from local SQLite
+  try {
+    const latestGradient = moteDb.gradientStore.latest(motebitId);
+    if (latestGradient) {
+      const gradientPath = path.join(outputDir, "gradient.json");
+      fs.writeFileSync(gradientPath, JSON.stringify(latestGradient, null, 2), "utf-8");
+      exported.push("gradient snapshot");
+    } else {
+      skipped.push("gradient (no snapshots recorded)");
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    skipped.push(`gradient (${msg})`);
+  }
+
+  // Done with local database
+  moteDb.close();
+
+  // Relay-dependent exports
+  const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
+  const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
+  const headers: Record<string, string> = {};
+  if (syncToken) {
+    headers["Authorization"] = `Bearer ${syncToken}`;
+  }
+  const baseUrl = syncUrl ? syncUrl.replace(/\/$/, "") : null;
+
+  if (!baseUrl) {
+    skipped.push("credentials (no relay URL)");
+    skipped.push("presentation (no relay URL)");
+    skipped.push("budget (no relay URL)");
+  } else {
+    // 3. Credentials
+    const credResult = await fetchRelayJson(
+      `${baseUrl}/api/v1/agents/${motebitId}/credentials`,
+      headers,
+    );
+    if (credResult.ok) {
+      const credBody = credResult.data as {
+        credentials?: Array<Record<string, unknown>>;
+      };
+      const creds = credBody.credentials ?? [];
+      const credPath = path.join(outputDir, "credentials.json");
+      fs.writeFileSync(credPath, JSON.stringify(creds, null, 2), "utf-8");
+      exported.push(`${creds.length} credential${creds.length !== 1 ? "s" : ""}`);
+    } else {
+      skipped.push(`credentials (${credResult.error})`);
+    }
+
+    // 4. Presentation (signed VP bundle)
+    const vpResult = await fetchRelayJson(
+      `${baseUrl}/api/v1/agents/${motebitId}/presentation`,
+      headers,
+      "POST",
+    );
+    if (vpResult.ok) {
+      const vpBody = vpResult.data as {
+        presentation?: Record<string, unknown>;
+        credential_count?: number;
+      };
+      const vpPath = path.join(outputDir, "presentation.json");
+      fs.writeFileSync(vpPath, JSON.stringify(vpBody.presentation ?? vpBody, null, 2), "utf-8");
+      const credCount = vpBody.credential_count ?? 0;
+      exported.push(`presentation (${credCount} credential${credCount !== 1 ? "s" : ""})`);
+    } else {
+      skipped.push(`presentation (${vpResult.error})`);
+    }
+
+    // 5. Budget summary
+    const budgetResult = await fetchRelayJson(`${baseUrl}/agent/${motebitId}/budget`, headers);
+    if (budgetResult.ok) {
+      const budgetPath = path.join(outputDir, "budget.json");
+      fs.writeFileSync(budgetPath, JSON.stringify(budgetResult.data, null, 2), "utf-8");
+      const budgetData = budgetResult.data as {
+        allocations?: Array<Record<string, unknown>>;
+      };
+      const allocCount = budgetData.allocations?.length ?? 0;
+      exported.push(`budget (${allocCount} allocation${allocCount !== 1 ? "s" : ""})`);
+    } else {
+      skipped.push(`budget (${budgetResult.error})`);
+    }
+  }
+
+  // Print summary
+  console.log(`\nExport complete: ${outputDir}\n`);
+  if (exported.length > 0) {
+    console.log(`  Exported: ${exported.join(", ")}`);
+  }
+  if (skipped.length > 0) {
+    console.log(`  Skipped:  ${skipped.join(", ")}`);
+  }
   if (updatedConfig.device_public_key) {
     try {
-      console.log(`DID: ${hexPublicKeyToDidKey(updatedConfig.device_public_key)}`);
+      console.log(`  DID:      ${hexPublicKeyToDidKey(updatedConfig.device_public_key)}`);
     } catch {
       // Non-fatal
     }
   }
+  console.log();
   rl.close();
+}
+
+/** Fetch JSON from relay, returning a typed success/error result. */
+async function fetchRelayJson(
+  url: string,
+  headers: Record<string, string>,
+  method: "GET" | "POST" = "GET",
+): Promise<{ ok: true; data: unknown } | { ok: false; error: string }> {
+  try {
+    const res = await fetch(url, { method, headers });
+    if (!res.ok) {
+      const body = await res.text();
+      return { ok: false, error: `relay returned ${String(res.status)}: ${body.slice(0, 100)}` };
+    }
+    const data: unknown = await res.json();
+    return { ok: true, data };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: msg };
+  }
 }
 
 export async function handleGoalAdd(config: CliConfig): Promise<void> {

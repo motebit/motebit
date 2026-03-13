@@ -107,6 +107,10 @@ async function main(): Promise<void> {
       if (result.did) console.log(`DID:         ${result.did}`);
       console.log(`Public key:  ${fingerprint}`);
       console.log(`Signature:   valid`);
+      // TODO: When verifying an export bundle directory, also verify credential
+      // signatures (each VC proof), presentation integrity (VP proof chain),
+      // and cross-check that credential subject IDs match the identity file's
+      // motebit_id. Currently only verifies the motebit.md identity file.
       process.exit(0);
     } else {
       console.error(`Signature:   invalid`);

@@ -104,7 +104,7 @@ Usage: motebit [command] [options]
 Commands:
   id                        Show your identity (motebit_id, did:key, public key)
   doctor                    Check system readiness (Node, SQLite, config)
-  export [--output <path>]  Export a signed motebit.md (portable identity for daemon mode)
+  export [--output <dir>]   Export identity bundle (motebit.md, credentials, budget, gradient)
   verify <path>             Verify a motebit.md identity file signature
   run [--identity <path>]   Start daemon mode (uses exported motebit.md)
   serve [--identity <path>] Start as MCP server (stdio by default)
