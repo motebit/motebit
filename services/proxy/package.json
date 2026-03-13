@@ -9,6 +9,7 @@
     "build": "next build",
     "start": "next start -p 3003",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
     "clean": "rm -rf .next .turbo *.tsbuildinfo out"
   },
   "dependencies": {

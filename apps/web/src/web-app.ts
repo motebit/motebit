@@ -171,7 +171,7 @@ export class WebApp {
 
     // Migrate legacy localStorage conversations to IDB
     if (needsMigration()) {
-      await this.migrateLegacyConversations(storage);
+      this.migrateLegacyConversations(storage);
     }
 
     // Preload caches for sync access
@@ -264,7 +264,7 @@ export class WebApp {
     localStorage.removeItem(LEGACY_MOTEBIT_ID_KEY);
   }
 
-  private async migrateLegacyConversations(storage: StorageAdapters): Promise<void> {
+  private migrateLegacyConversations(storage: StorageAdapters): void {
     const convStore = storage.conversationStore;
     if (!convStore) {
       markMigrationDone();
@@ -581,7 +581,7 @@ export class WebApp {
     });
   }
 
-  async setMcpServerTrust(name: string, trusted: boolean): Promise<void> {
+  setMcpServerTrust(name: string, trusted: boolean): void {
     const config = this._mcpServers.find((s) => s.name === name);
     if (!config) return;
     config.trusted = trusted;

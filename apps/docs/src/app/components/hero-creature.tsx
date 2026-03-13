@@ -22,7 +22,7 @@ export function HeroCreature() {
         }
       | undefined;
 
-    (async () => {
+    void (async () => {
       try {
         const { ThreeJSAdapter } = await import("@motebit/render-engine");
         if (disposed) return;
@@ -50,7 +50,7 @@ export function HeroCreature() {
         let lastTime = performance.now();
         const startTime = lastTime;
 
-        function loop() {
+        const loop = (): void => {
           if (disposed) return;
           const now = performance.now();
           const delta = (now - lastTime) / 1000;
@@ -72,7 +72,7 @@ export function HeroCreature() {
           });
 
           animId = requestAnimationFrame(loop);
-        }
+        };
         animId = requestAnimationFrame(loop);
       } catch {
         // WebGL unavailable or chunk load failure — canvas stays hidden

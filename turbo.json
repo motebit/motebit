@@ -10,10 +10,12 @@
       "cache": false
     },
     "typecheck": {
-      "dependsOn": ["^build"]
+      "dependsOn": [],
+      "outputs": []
     },
     "lint": {
-      "dependsOn": ["^build"]
+      "dependsOn": [],
+      "outputs": []
     },
     "clean": {
       "cache": false

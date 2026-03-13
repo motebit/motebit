@@ -271,7 +271,7 @@ function serializeValue(value: unknown, level: number): string {
     return "\n" + lines.join("\n");
   }
 
-  return String(value);
+  return typeof value === "symbol" ? value.toString() : `${value as string}`;
 }
 
 function serializeYaml(data: IdentityFileData): string {

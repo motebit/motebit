@@ -21,7 +21,7 @@ function CreatureCanvas({ config }: { config: CreatureConfig }) {
     let disposed = false;
     let animId: number | undefined;
 
-    (async () => {
+    void (async () => {
       const { ThreeJSAdapter } = await import("@motebit/render-engine");
       if (disposed) return;
 

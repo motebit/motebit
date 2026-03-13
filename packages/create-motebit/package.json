@@ -39,6 +39,7 @@
     "build": "tsc -b",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint --parser-options=project:tsconfig.eslint.json src/",
     "clean": "rm -rf dist .turbo *.tsbuildinfo",
     "prepublishOnly": "npm run build"
   },

@@ -200,8 +200,8 @@ export function initVoice(ctx: WebContext, chatAPI: ChatAPI): VoiceAPI {
       if (!isListening || !analyserNode) return;
 
       const t = timestamp / 1000;
-      const w = voiceWaveform!.width;
-      const h = voiceWaveform!.height;
+      const w = voiceWaveform.width;
+      const h = voiceWaveform.height;
       const dpr = window.devicePixelRatio || 1;
 
       ctx2d.clearRect(0, 0, w, h);

@@ -351,7 +351,8 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       const trustBtn = document.createElement("button");
       trustBtn.textContent = server.trusted ? "Untrust" : "Trust";
       trustBtn.addEventListener("click", () => {
-        void ctx.app.setMcpServerTrust(server.name, !server.trusted).then(() => renderMcpServers());
+        ctx.app.setMcpServerTrust(server.name, !server.trusted);
+        renderMcpServers();
       });
       actions.appendChild(trustBtn);
 

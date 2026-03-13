@@ -9,6 +9,7 @@
     "build": "next build",
     "start": "next start -p 3001",
     "typecheck": "fumadocs-mdx && tsc --project tsconfig.typecheck.json --noEmit",
+    "lint": "eslint src/",
     "clean": "rm -rf .next .turbo *.tsbuildinfo out"
   },
   "dependencies": {

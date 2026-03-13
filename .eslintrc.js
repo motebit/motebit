@@ -80,9 +80,9 @@ module.exports = {
       },
     },
     {
-      // CLI is a terminal app — console is the interface.
+      // CLI tools — console is the interface.
       // Workspace deps are devDependencies because tsup bundles them.
-      files: ["apps/cli/src/**/*.ts"],
+      files: ["apps/cli/src/**/*.ts", "packages/create-motebit/src/**/*.ts"],
       rules: {
         "no-console": "off",
         // Matches global disable — see note above

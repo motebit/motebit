@@ -267,7 +267,8 @@ describe("Streaming chat", () => {
     await app.bootstrap();
 
     // Provider that blocks until resolved
-    let resolveStream: (() => void) | null = null;
+    // eslint-disable-next-line @typescript-eslint/no-empty-function
+    let resolveStream: () => void = () => {};
     const mockProvider = {
       generateStream: vi.fn().mockImplementation(async function* () {
         await new Promise<void>((r) => {
@@ -307,7 +308,7 @@ describe("Streaming chat", () => {
     }).rejects.toThrow("Already processing");
 
     // Cleanup: resolve the blocked stream and drain
-    resolveStream?.();
+    resolveStream();
     await firstNext;
     for await (const _ of { [Symbol.asyncIterator]: () => firstIterator }) {
       // drain

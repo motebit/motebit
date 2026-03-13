@@ -273,7 +273,7 @@ export function initSovereignPanels(ctx: WebContext): SovereignPanelsAPI {
   const ledgerList = document.getElementById("ledger-list") as HTMLDivElement;
   const ledgerEmpty = document.getElementById("ledger-empty") as HTMLDivElement;
 
-  async function loadLedger(): Promise<void> {
+  function loadLedger(): void {
     const syncUrl = loadSyncUrl();
     if (!syncUrl) {
       ledgerList.innerHTML = "";
