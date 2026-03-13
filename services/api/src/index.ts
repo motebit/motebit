@@ -110,10 +110,10 @@ import {
 } from "@motebit/crypto";
 /* eslint-enable no-restricted-imports */
 import type { VerifiableCredential, KeySuccessionRecord } from "@motebit/crypto";
-import { rankCandidates, applyPrecisionToMarketConfig, settleOnReceipt } from "@motebit/market";
+import { graphRankCandidates, settleOnReceipt } from "@motebit/market";
 import type { CandidateProfile, TaskRequirements } from "@motebit/market";
-import type { CapabilityPrice, BudgetAllocation } from "@motebit/sdk";
-import { PLATFORM_FEE_RATE } from "@motebit/sdk";
+import type { CapabilityPrice, BudgetAllocation, AgentTrustRecord } from "@motebit/sdk";
+import { PLATFORM_FEE_RATE, AgentTrustLevel, evaluateTrustTransition } from "@motebit/sdk";
 
 function hexToBytes(hex: string): Uint8Array {
   const bytes = new Uint8Array(hex.length / 2);
@@ -2352,6 +2352,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     capabilityFilter?: string,
     maxBudget?: number,
     limit = 20,
+    callerMotebitId?: string,
   ): { profiles: CandidateProfile[]; requirements: TaskRequirements } {
     const now = Date.now();
 
@@ -2403,9 +2404,32 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       const capabilities = JSON.parse(row.capabilities as string) as string[];
       const pricing = JSON.parse(row.pricing as string) as CapabilityPrice[];
 
+      // Fetch caller's trust record for this candidate (enables semiring routing).
+      // Uses raw DB query (sync) to stay in the synchronous .map() context.
+      let trust_record: AgentTrustRecord | null = null;
+      if (callerMotebitId) {
+        const trustRow = moteDb.db
+          .prepare(`SELECT * FROM agent_trust WHERE motebit_id = ? AND remote_motebit_id = ?`)
+          .get(callerMotebitId, mid) as Record<string, unknown> | undefined;
+        if (trustRow) {
+          trust_record = {
+            motebit_id: asMotebitId(trustRow.motebit_id as string),
+            remote_motebit_id: asMotebitId(trustRow.remote_motebit_id as string),
+            trust_level: trustRow.trust_level as string as AgentTrustLevel,
+            public_key: trustRow.public_key as string | undefined,
+            first_seen_at: trustRow.first_seen_at as number,
+            last_seen_at: trustRow.last_seen_at as number,
+            interaction_count: trustRow.interaction_count as number,
+            successful_tasks: (trustRow.successful_tasks as number | null) ?? 0,
+            failed_tasks: (trustRow.failed_tasks as number | null) ?? 0,
+            notes: trustRow.notes as string | undefined,
+          };
+        }
+      }
+
       return {
         motebit_id: asMotebitId(mid),
-        trust_record: null, // Relay has no per-motebit trust context; agents bring their own trust
+        trust_record,
         listing: {
           listing_id: asListingId(row.listing_id as string),
           motebit_id: asMotebitId(mid),
@@ -2515,7 +2539,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     // Phase 1: Scored routing — find best service agents from listings
     if (requiredCaps.length > 0) {
       try {
-        const { profiles, requirements } = buildCandidateProfiles(requiredCaps[0], undefined, 20);
+        const { profiles, requirements } = buildCandidateProfiles(
+          requiredCaps[0],
+          undefined,
+          20,
+          callerMotebitId,
+        );
         // Narrow to candidates matching ALL required capabilities (not just the first)
         const multiCapProfiles =
           requiredCaps.length > 1
@@ -2537,17 +2566,21 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
         if (eligibleProfiles.length > 0) {
           // Apply gradient-informed precision to routing weights when provided
-          const marketConfig =
+          const explorationWeight =
             typeof body.exploration_drive === "number"
-              ? applyPrecisionToMarketConfig(undefined, body.exploration_drive)
+              ? Math.max(0, Math.min(1, body.exploration_drive))
               : undefined;
-          const ranked = rankCandidates(
+          const ranked = graphRankCandidates(
+            asMotebitId(callerMotebitId ?? motebitId),
             eligibleProfiles,
             {
               ...requirements,
               required_capabilities: requiredCaps,
             },
-            marketConfig,
+            {
+              maxCandidates: 10,
+              explorationWeight,
+            },
           );
           const selected = ranked.filter((r) => r.selected && r.composite > 0);
 
@@ -2741,6 +2774,48 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         : receipt.status === "denied"
           ? AgentTaskStatus.Denied
           : AgentTaskStatus.Failed;
+
+    // Update trust record: increment task counts and evaluate level transitions.
+    // This is the feedback loop that feeds the semiring computation graph.
+    {
+      try {
+        const executingAgentId = receipt.motebit_id as string;
+        const taskSucceeded = receipt.status === "completed";
+        const taskFailed = receipt.status === "failed";
+        const now = Date.now();
+
+        const existing = await moteDb.agentTrustStore.getAgentTrust(motebitId, executingAgentId);
+
+        if (existing) {
+          const updated: AgentTrustRecord = {
+            ...existing,
+            last_seen_at: now,
+            interaction_count: existing.interaction_count + 1,
+            successful_tasks: (existing.successful_tasks ?? 0) + (taskSucceeded ? 1 : 0),
+            failed_tasks: (existing.failed_tasks ?? 0) + (taskFailed ? 1 : 0),
+          };
+          const newLevel = evaluateTrustTransition(updated);
+          if (newLevel != null) {
+            updated.trust_level = newLevel;
+          }
+          await moteDb.agentTrustStore.setAgentTrust(updated);
+        } else {
+          // First verified interaction — initialize at FirstContact
+          await moteDb.agentTrustStore.setAgentTrust({
+            motebit_id: asMotebitId(motebitId),
+            remote_motebit_id: asMotebitId(executingAgentId),
+            trust_level: AgentTrustLevel.FirstContact,
+            first_seen_at: now,
+            last_seen_at: now,
+            interaction_count: 1,
+            successful_tasks: taskSucceeded ? 1 : 0,
+            failed_tasks: taskFailed ? 1 : 0,
+          });
+        }
+      } catch {
+        // Trust update is best-effort — don't block receipt delivery
+      }
+    }
 
     // Record latency for routing intelligence
     if (receipt.completed_at && entry.task.submitted_at) {
@@ -3816,11 +3891,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     );
 
     const explorationStr = c.req.query("exploration_drive");
-    const marketConfig =
-      explorationStr != null
-        ? applyPrecisionToMarketConfig(undefined, parseFloat(explorationStr))
-        : undefined;
-    const ranked = rankCandidates(profiles, requirements, marketConfig);
+    const explorationWeight =
+      explorationStr != null ? Math.max(0, Math.min(1, parseFloat(explorationStr))) : undefined;
+    const ranked = graphRankCandidates(
+      asMotebitId("relay"), // public endpoint, no caller identity
+      profiles,
+      requirements,
+      { explorationWeight },
+    );
 
     return c.json({
       candidates: ranked.map((score) => {
