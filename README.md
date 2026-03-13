@@ -125,4 +125,4 @@ The protocol layer is MIT licensed:
 
 The platform implementation is [BSL 1.1](LICENSE) — free to use, source-available, converts to MIT per-version after 4 years.
 
-"Motebit" is a trademark of Daniel Hakim. The MIT License grants rights to the software, not to Motebit trademarks, logos, or branding.
+"Motebit" is a trademark of Daniel Hakim. The MIT License grants rights to the software, not to Motebit trademarks, logos, or branding. See [TRADEMARK.md](TRADEMARK.md) for the full trademark and trade dress policy.
