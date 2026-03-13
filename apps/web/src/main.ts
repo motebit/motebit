@@ -10,6 +10,7 @@ import { initSettings } from "./ui/settings";
 import { initConversations } from "./ui/conversations";
 import { initVoice } from "./ui/voice";
 import { initGatedPanels } from "./ui/gated-panels";
+import { initSovereignPanels } from "./ui/sovereign-panels";
 import { initTheme } from "./ui/theme";
 import { initSlashCommands } from "./ui/slash-commands";
 import { initKeyboard, openShortcutDialog } from "./ui/keyboard";
@@ -85,6 +86,7 @@ initKeyboard({
 });
 
 const gatedPanels = initGatedPanels(ctx);
+const sovereignPanels = initSovereignPanels(ctx);
 
 // === Theme ===
 
@@ -99,10 +101,13 @@ const settingsModal = document.getElementById("settings-modal") as HTMLDivElemen
 const conversationsPanel = document.getElementById("conversations-panel") as HTMLDivElement;
 const memoryPanel = document.getElementById("memory-panel") as HTMLDivElement;
 const goalsPanel = document.getElementById("goals-panel") as HTMLDivElement;
+const sovereignPanel = document.getElementById("sovereign-panel") as HTMLDivElement;
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
-    if (memoryPanel.classList.contains("open") || goalsPanel.classList.contains("open")) {
+    if (sovereignPanel.classList.contains("open")) {
+      sovereignPanels.close();
+    } else if (memoryPanel.classList.contains("open") || goalsPanel.classList.contains("open")) {
       gatedPanels.closeAll();
     } else if (conversationsPanel.classList.contains("open")) {
       conversations.close();
