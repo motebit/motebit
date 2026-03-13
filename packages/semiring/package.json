@@ -1,5 +1,5 @@
 {
-  "name": "@motebit/market",
+  "name": "@motebit/semiring",
   "private": true,
   "version": "0.1.0",
   "license": "BSL-1.1",
@@ -14,8 +14,7 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@motebit/sdk": "workspace:*",
-    "@motebit/semiring": "workspace:*"
+    "@motebit/sdk": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

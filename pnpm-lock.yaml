@@ -761,6 +761,9 @@ importers:
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk
+      '@motebit/semiring':
+        specifier: workspace:*
+        version: link:../semiring
     devDependencies:
       typescript:
         specifier: ^5.6.0
@@ -1009,6 +1012,9 @@ importers:
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk
+      '@motebit/semiring':
+        specifier: workspace:*
+        version: link:../semiring
       '@motebit/state-vector':
         specifier: workspace:*
         version: link:../state-vector
@@ -1024,6 +1030,19 @@ importers:
         version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1)(lightningcss@1.30.2)(terser@5.46.0)
 
   packages/sdk:
+    devDependencies:
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1)(lightningcss@1.30.2)(terser@5.46.0)
+
+  packages/semiring:
+    dependencies:
+      '@motebit/sdk':
+        specifier: workspace:*
+        version: link:../sdk
     devDependencies:
       typescript:
         specifier: ^5.6.0

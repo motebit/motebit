@@ -99,6 +99,7 @@ import {
   summarizeGradientHistory,
   buildPrecisionContext,
 } from "./gradient.js";
+import { AgentGraphManager } from "./agent-graph.js";
 import type {
   GradientSnapshot,
   GradientStoreAdapter,
@@ -167,6 +168,8 @@ export {
   summarizeGradientHistory,
   buildPrecisionContext,
 } from "./gradient.js";
+export { AgentGraphManager } from "./agent-graph.js";
+export type { RouteWeight } from "./agent-graph.js";
 
 // === McpServerConfig (inlined to avoid importing Node-only @motebit/mcp-client) ===
 
@@ -600,6 +603,7 @@ export class MotebitRuntime {
   private agentTrustStore: AgentTrustStoreAdapter | null;
   private serviceListingStore: ServiceListingStoreAdapter | null;
   private latencyStatsStore: LatencyStatsStoreAdapter | null;
+  private agentGraph: AgentGraphManager;
   private _curiosityTargets: CuriosityTarget[] = [];
   private _precision: PrecisionWeights;
   private _signingKeys: { privateKey: Uint8Array; publicKey: Uint8Array } | null;
@@ -701,6 +705,14 @@ export class MotebitRuntime {
     // Market stores
     this.serviceListingStore = adapters.storage.serviceListingStore ?? null;
     this.latencyStatsStore = adapters.storage.latencyStatsStore ?? null;
+
+    // Agent graph — algebraic routing substrate
+    this.agentGraph = new AgentGraphManager(
+      this.motebitId,
+      this.agentTrustStore,
+      this.serviceListingStore,
+      this.latencyStatsStore,
+    );
 
     this.wireLoopDeps();
   }
@@ -1858,6 +1870,15 @@ export class MotebitRuntime {
         }
       } catch {
         // Trust bumping is best-effort — don't break the task
+      }
+    }
+
+    // Update agent graph with delegation receipt edges
+    for (const dr of delegationReceipts) {
+      try {
+        await this.agentGraph.addReceiptEdges(dr);
+      } catch {
+        // Graph update is best-effort
       }
     }
 
@@ -3135,6 +3156,7 @@ export class MotebitRuntime {
         }
       }
       await this.agentTrustStore.setAgentTrust(updated);
+      this.agentGraph.invalidate();
     } else {
       // First interaction — create at FirstContact
       const record: AgentTrustRecord = {
@@ -3148,6 +3170,7 @@ export class MotebitRuntime {
         failed_tasks: taskFailed ? 1 : 0,
       };
       await this.agentTrustStore.setAgentTrust(record);
+      this.agentGraph.invalidate();
     }
   }
 
@@ -3173,6 +3196,7 @@ export class MotebitRuntime {
         notes: motebitType ? `type:${motebitType}` : existing.notes,
       };
       await this.agentTrustStore.setAgentTrust(updated);
+      this.agentGraph.invalidate();
       return updated;
     }
     const record: AgentTrustRecord = {
@@ -3186,6 +3210,7 @@ export class MotebitRuntime {
       notes: motebitType ? `type:${motebitType}` : undefined,
     };
     await this.agentTrustStore.setAgentTrust(record);
+    this.agentGraph.invalidate();
     return record;
   }
 
@@ -3205,6 +3230,12 @@ export class MotebitRuntime {
   async setAgentTrustLevel(remoteMotebitId: string, level: AgentTrustLevel): Promise<void> {
     if (this.agentTrustStore == null) return;
     await this.agentTrustStore.updateTrustLevel(this.motebitId, remoteMotebitId, level);
+    this.agentGraph.invalidate();
+  }
+
+  /** Get the agent network graph manager for routing queries. */
+  getAgentGraph(): AgentGraphManager {
+    return this.agentGraph;
   }
 
   /** Register or update this agent's service listing. */

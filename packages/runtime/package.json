@@ -27,7 +27,8 @@
     "@motebit/crypto": "workspace:*",
     "@motebit/mcp-client": "workspace:*",
     "@motebit/planner": "workspace:*",
-    "@motebit/policy": "workspace:*"
+    "@motebit/policy": "workspace:*",
+    "@motebit/semiring": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

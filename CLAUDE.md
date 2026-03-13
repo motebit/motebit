@@ -65,7 +65,8 @@ packages/
   planner/           PlanEngine: goal decomposition, reflection, plan adjustment
   voice/             Voice pipeline: VAD, STT, TTS adapters
   github-action/     GitHub Action for identity verification
-  market/            Budget allocation (estimateCost, allocateBudget), settlement (settleOnReceipt), reputation scoring
+  market/            Budget allocation (estimateCost, allocateBudget), settlement (settleOnReceipt), reputation scoring, graph-based routing (graphRankCandidates, computeTrustClosure, findTrustedRoute)
+  semiring/          Trust Semiring Algebra — generic semiring computation graph for agent network routing. Semiring<T> interface, concrete semirings (Trust, Cost, Latency, Bottleneck, Reliability, Boolean), product/record combinators, WeightedDigraph<T>, generic traversal (Bellman-Ford, Floyd-Warshall), provenance tracking, agent network bridge
   policy-invariants/ Clamping rules, state bounds validation
 
 spec/
@@ -90,6 +91,7 @@ services/
 - **Budget-gated delegation.** estimateCost (before delegation) → allocateBudget (reserve funds) → settleOnReceipt (deduct actual cost on verified receipt). HTTP 402 if insufficient budget. Settlement only on cryptographically verified receipts.
 - **Precision feedback loop.** selfTrust (derived from gradient metrics) and explorationDrive (inverse of confidence) modulate the system prompt via buildPrecisionContext(). High selfTrust → more autonomous; low selfTrust → more cautious and explicit about uncertainty.
 - **Rate limiting.** 5-tier sliding window per IP on relay API: auth (30/min), read (60/min), write (30/min), public (20/min), expensive (10/min). Applied at route level, not middleware — each endpoint declares its tier.
+- **Semiring computation graph.** Agent network routing is algebraic, not ad-hoc. The `@motebit/semiring` package provides a generic `Semiring<T>` interface with concrete semirings (Trust=max/×, Cost=min/+, Latency=min/+, Reliability=max/×, Boolean=∨/∧, Bottleneck=max/min). One `WeightedDigraph<T>` + one traversal algorithm (generalized Bellman-Ford or Floyd-Warshall) answers "most trusted path," "cheapest pipeline," "reachability," and "all of the above simultaneously" (product semiring) by swapping the semiring. Provenance semiring tracks WHY a route was chosen. The runtime maintains a live `AgentGraphManager` that lazily builds and caches the graph, invalidates on trust changes, and exposes `mostTrustedPath()`, `cheapestPath()`, `rankAgents()`, `trustClosure()`. The market package provides `graphRankCandidates()` for algebraic routing with backward-compatible `RouteScore[]` output. New routing concerns (energy cost, regulatory risk, SLA compliance) require only a new semiring definition — zero new algorithms.
 
 ## Commands
 
