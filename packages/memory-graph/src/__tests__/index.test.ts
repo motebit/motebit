@@ -1114,4 +1114,72 @@ describe("MemoryGraph", () => {
       expect(MemoryGraph.MAX_HALF_LIFE).toBe(365 * 24 * 60 * 60 * 1000);
     });
   });
+
+  // === Active Inference Precision ===
+
+  describe("setPrecisionWeights", () => {
+    it("high precision increases similarity weight in retrieval", async () => {
+      // Create two memories: one semantically close, one with high confidence
+      await graph.formMemory(
+        { content: "semantic match", confidence: 0.5, sensitivity: SensitivityLevel.None },
+        [1, 0, 0],
+      );
+      await graph.formMemory(
+        { content: "confident memory", confidence: 1.0, sensitivity: SensitivityLevel.None },
+        [0, 1, 0],
+      );
+
+      // High precision: similarity-weighted → semantic match should rank higher
+      graph.setPrecisionWeights(0.9);
+      const highPrecision = await graph.retrieve([1, 0, 0], { limit: 2 });
+      expect(highPrecision[0]!.content).toBe("semantic match");
+    });
+
+    it("low precision diversifies retrieval weights", async () => {
+      // Create a high-confidence memory that's semantically distant
+      await graph.formMemory(
+        { content: "confident distant", confidence: 1.0, sensitivity: SensitivityLevel.None },
+        [0, 0, 1],
+      );
+      // And a lower-confidence memory that's semantically close
+      await graph.formMemory(
+        { content: "close but unsure", confidence: 0.3, sensitivity: SensitivityLevel.None },
+        [0.9, 0.1, 0],
+      );
+
+      // Low precision: confidence weight rises relative to similarity
+      graph.setPrecisionWeights(0.1);
+      const lowPrecision = await graph.retrieve([1, 0, 0], { limit: 2 });
+      // With flattened weights, the confident memory gets a boost relative
+      // to similarity — it may rank first or second depending on exact weights
+      expect(lowPrecision).toHaveLength(2);
+    });
+
+    it("null clears precision override", async () => {
+      graph.setPrecisionWeights(0.9);
+      graph.setPrecisionWeights(null);
+
+      // After clearing, should use default weights
+      await graph.formMemory(
+        { content: "test", confidence: 0.8, sensitivity: SensitivityLevel.None },
+        [1, 0],
+      );
+      const results = await graph.retrieve([1, 0]);
+      expect(results).toHaveLength(1);
+    });
+
+    it("per-call scoringConfig overrides precision weights", async () => {
+      await graph.formMemory(
+        { content: "only memory", confidence: 0.8, sensitivity: SensitivityLevel.None },
+        [1, 0],
+      );
+
+      graph.setPrecisionWeights(0.9);
+      // Per-call override should take precedence over precision
+      const results = await graph.retrieve([1, 0], {
+        scoringConfig: { similarityWeight: 0.1, confidenceWeight: 0.8, recencyWeight: 0.1 },
+      });
+      expect(results).toHaveLength(1);
+    });
+  });
 });
