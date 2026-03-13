@@ -306,6 +306,130 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     };
     syncBadge.className = `sync-badge ${syncState.status}`;
     syncBadge.textContent = statusLabels[syncState.status] ?? syncState.status;
+
+    // Populate credentials and budget from relay
+    void populateCredentialsAndBudget(info.motebitId);
+  }
+
+  async function populateCredentialsAndBudget(motebitId: string): Promise<void> {
+    const config = ctx.getConfig();
+    const syncUrl = config?.syncUrl;
+    if (!syncUrl || !motebitId) return;
+
+    const headers: Record<string, string> = {};
+    if (config.syncMasterToken) {
+      headers["Authorization"] = `Bearer ${config.syncMasterToken}`;
+    }
+
+    // Fetch credentials
+    try {
+      const credRes = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/credentials`, { headers });
+      if (credRes.ok) {
+        const data = (await credRes.json()) as {
+          credentials: Array<{
+            credential_id: string;
+            credential_type: string;
+            credential: Record<string, unknown>;
+            issued_at: number;
+          }>;
+        };
+        const creds = data.credentials ?? [];
+        const countEl = document.getElementById("credentials-count") as HTMLElement;
+        countEl.textContent = `${creds.length} credential${creds.length !== 1 ? "s" : ""}`;
+
+        // Type badges
+        const badgesEl = document.getElementById("credentials-type-badges") as HTMLElement;
+        badgesEl.innerHTML = "";
+        const typeCounts: Record<string, number> = {};
+        for (const c of creds) {
+          typeCounts[c.credential_type] = (typeCounts[c.credential_type] ?? 0) + 1;
+        }
+        const typeColors: Record<string, string> = {
+          reputation: "#4caf50",
+          trust: "#ff9800",
+          gradient: "#2196f3",
+          capability: "#9c27b0",
+        };
+        for (const [type, count] of Object.entries(typeCounts)) {
+          const badge = document.createElement("span");
+          const color = typeColors[type] ?? "#616161";
+          badge.style.cssText = `color:${color};font-size:11px;padding:1px 6px;border-radius:3px;border:1px solid ${color}`;
+          badge.textContent = `${type}: ${count}`;
+          badgesEl.appendChild(badge);
+        }
+
+        // Credential list
+        const listEl = document.getElementById("credentials-list") as HTMLElement;
+        listEl.innerHTML = "";
+        for (const c of creds.slice(0, 20)) {
+          const row = document.createElement("div");
+          row.style.cssText =
+            "font-size:11px;padding:4px 0;border-bottom:1px solid var(--border-light);display:flex;justify-content:space-between;align-items:center;";
+          const left = document.createElement("span");
+          left.textContent = c.credential_id.slice(0, 12) + "...";
+          left.style.color = "var(--text-secondary)";
+          const right = document.createElement("span");
+          const color = typeColors[c.credential_type] ?? "#616161";
+          right.style.cssText = `color:${color};font-size:10px;font-weight:600;`;
+          right.textContent = c.credential_type;
+          row.appendChild(left);
+          row.appendChild(right);
+          listEl.appendChild(row);
+        }
+
+        // Enable present button
+        const presentBtn = document.getElementById("credentials-present-btn") as HTMLButtonElement;
+        presentBtn.disabled = creds.length === 0;
+      }
+    } catch {
+      // Credentials fetch failed — leave defaults
+    }
+
+    // Fetch budget
+    try {
+      const budgetRes = await fetch(`${syncUrl}/agent/${motebitId}/budget`, { headers });
+      if (budgetRes.ok) {
+        const data = (await budgetRes.json()) as {
+          summary: { total_locked: number; total_settled: number };
+          allocations: Array<{
+            allocation_id: string;
+            amount_locked: number;
+            status: string;
+            created_at: number;
+            amount_settled?: number;
+            settlement_status?: string;
+          }>;
+        };
+        (document.getElementById("budget-locked") as HTMLElement).textContent = String(
+          data.summary.total_locked,
+        );
+        (document.getElementById("budget-settled") as HTMLElement).textContent = String(
+          data.summary.total_settled,
+        );
+
+        const budgetListEl = document.getElementById("budget-list") as HTMLElement;
+        budgetListEl.innerHTML = "";
+        for (const a of (data.allocations ?? []).slice(0, 15)) {
+          const row = document.createElement("div");
+          row.style.cssText =
+            "font-size:11px;padding:3px 0;border-bottom:1px solid var(--border-light);display:flex;justify-content:space-between;";
+          const left = document.createElement("span");
+          left.textContent = `${a.allocation_id.slice(0, 8)}... ${a.amount_locked}`;
+          left.style.color = "var(--text-secondary)";
+          const right = document.createElement("span");
+          const settled = a.settlement_status === "settled";
+          right.style.color = settled ? "#4caf50" : "#ff9800";
+          right.style.fontSize = "10px";
+          right.style.fontWeight = "600";
+          right.textContent = a.status;
+          row.appendChild(left);
+          row.appendChild(right);
+          budgetListEl.appendChild(row);
+        }
+      }
+    } catch {
+      // Budget fetch failed — leave defaults
+    }
   }
 
   // Copy buttons
@@ -324,6 +448,39 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         });
       }
     });
+  });
+
+  // Present Credentials button
+  document.getElementById("credentials-present-btn")!.addEventListener("click", () => {
+    const config = ctx.getConfig();
+    const syncUrl = config?.syncUrl;
+    const info = ctx.app.getIdentityInfo();
+    if (!syncUrl || !info.motebitId) return;
+    const btn = document.getElementById("credentials-present-btn") as HTMLButtonElement;
+    btn.disabled = true;
+    btn.textContent = "Generating...";
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (config.syncMasterToken) {
+      headers["Authorization"] = `Bearer ${config.syncMasterToken}`;
+    }
+    void fetch(`${syncUrl}/api/v1/agents/${info.motebitId}/presentation`, {
+      method: "POST",
+      headers,
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`${res.status}`);
+        const data = (await res.json()) as { presentation: Record<string, unknown> };
+        const vpEl = document.getElementById("credentials-vp-result") as HTMLElement;
+        vpEl.style.display = "";
+        vpEl.textContent = JSON.stringify(data.presentation, null, 2);
+      })
+      .catch(() => {
+        ctx.showToast("Presentation generation failed");
+      })
+      .finally(() => {
+        btn.disabled = false;
+        btn.textContent = "Present Credentials";
+      });
   });
 
   // Export button

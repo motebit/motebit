@@ -20,6 +20,9 @@ import {
   fetchPlans,
   fetchGradient,
   fetchAgentTrust,
+  fetchCredentials,
+  fetchBudget,
+  generatePresentation,
 } from "./api";
 import type {
   GoalEntry,
@@ -28,6 +31,8 @@ import type {
   PlanEntry,
   GradientSnapshotEntry,
   AgentTrustEntry,
+  CredentialEntry,
+  BudgetAllocationEntry,
 } from "./api";
 import { useStateHistory } from "./hooks/useStateHistory";
 import { ConnectionStatus } from "./components/ConnectionStatus";
@@ -42,6 +47,7 @@ import { DevicesPanel } from "./components/DevicesPanel";
 import { PlansPanel } from "./components/PlansPanel";
 import { GradientPanel } from "./components/GradientPanel";
 import { TrustPanel } from "./components/TrustPanel";
+import { CredentialsPanel } from "./components/CredentialsPanel";
 
 const DEFAULT_STATE: MotebitState = {
   attention: 0,
@@ -68,6 +74,14 @@ export function AdminApp(): React.ReactElement {
   const [gradientCurrent, setGradientCurrent] = useState<GradientSnapshotEntry | null>(null);
   const [gradientHistory, setGradientHistory] = useState<GradientSnapshotEntry[]>([]);
   const [trustRecords, setTrustRecords] = useState<AgentTrustEntry[]>([]);
+  const [credentials, setCredentials] = useState<CredentialEntry[]>([]);
+  const [budgetSummary, setBudgetSummary] = useState<{
+    total_locked: number;
+    total_settled: number;
+  } | null>(null);
+  const [budgetAllocations, setBudgetAllocations] = useState<BudgetAllocationEntry[]>([]);
+  const [presentation, setPresentation] = useState<Record<string, unknown> | null>(null);
+  const [presentationLoading, setPresentationLoading] = useState(false);
   const [connected, setConnected] = useState(false);
   const [activePanel, setActivePanel] = useState<string>("state");
   const maxClockRef = useRef(0);
@@ -89,6 +103,8 @@ export function AdminApp(): React.ReactElement {
           plansRes,
           gradientRes,
           trustRes,
+          credRes,
+          budgetRes,
         ] = await Promise.all([
           fetchState(signal),
           fetchMemory(signal),
@@ -100,6 +116,11 @@ export function AdminApp(): React.ReactElement {
           fetchPlans(signal),
           fetchGradient(signal),
           fetchAgentTrust(signal),
+          fetchCredentials(signal).catch(() => ({ credentials: [] as CredentialEntry[] })),
+          fetchBudget(signal).catch(() => ({
+            summary: null,
+            allocations: [] as BudgetAllocationEntry[],
+          })),
         ]);
 
         setState(stateRes.state);
@@ -114,6 +135,13 @@ export function AdminApp(): React.ReactElement {
         setGradientCurrent(gradientRes.current);
         setGradientHistory(gradientRes.history);
         setTrustRecords(trustRes.records);
+        setCredentials(credRes.credentials);
+        if ("summary" in budgetRes && budgetRes.summary != null) {
+          setBudgetSummary(budgetRes.summary as { total_locked: number; total_settled: number });
+        }
+        if ("allocations" in budgetRes) {
+          setBudgetAllocations(budgetRes.allocations as BudgetAllocationEntry[]);
+        }
 
         if (eventsRes.events.length > 0) {
           setEvents((prev) => {
@@ -173,6 +201,7 @@ export function AdminApp(): React.ReactElement {
       "devices",
       "gradient",
       "trust",
+      "credentials",
     ].map((panel) =>
       React.createElement(
         "button",
@@ -229,6 +258,29 @@ export function AdminApp(): React.ReactElement {
       break;
     case "trust":
       content = React.createElement(TrustPanel, { records: trustRecords });
+      break;
+    case "credentials":
+      content = React.createElement(CredentialsPanel, {
+        credentials,
+        budgetSummary,
+        budgetAllocations,
+        presentation,
+        presentationLoading,
+        onGeneratePresentation: () => {
+          setPresentationLoading(true);
+          setPresentation(null);
+          void generatePresentation()
+            .then((res) => {
+              setPresentation(res.presentation);
+            })
+            .catch(() => {
+              // Presentation generation failed — no action needed
+            })
+            .finally(() => {
+              setPresentationLoading(false);
+            });
+        },
+      });
       break;
     default:
       content = React.createElement(

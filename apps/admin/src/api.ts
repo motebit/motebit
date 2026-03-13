@@ -339,3 +339,70 @@ export interface AgentTrustResponse {
 export function fetchAgentTrust(signal?: AbortSignal): Promise<AgentTrustResponse> {
   return apiFetch<AgentTrustResponse>(`/api/v1/agent-trust/${config.motebitId}`, { signal });
 }
+
+// === Credentials ===
+
+export interface CredentialEntry {
+  credential_id: string;
+  credential_type: string;
+  credential: {
+    "@context"?: string[];
+    type?: string[];
+    issuer?: string | { id: string };
+    credentialSubject?: Record<string, unknown>;
+    issuanceDate?: string;
+    proof?: Record<string, unknown>;
+  };
+  issued_at: number;
+}
+
+export interface CredentialsResponse {
+  motebit_id: string;
+  credentials: CredentialEntry[];
+}
+
+export interface PresentationResponse {
+  motebit_id: string;
+  presentation: Record<string, unknown>;
+}
+
+export function fetchCredentials(signal?: AbortSignal): Promise<CredentialsResponse> {
+  return apiFetch<CredentialsResponse>(`/api/v1/agents/${config.motebitId}/credentials`, {
+    signal,
+  });
+}
+
+export function generatePresentation(type?: string): Promise<PresentationResponse> {
+  const query = type ? `?type=${encodeURIComponent(type)}` : "";
+  return apiFetch<PresentationResponse>(`/api/v1/agents/${config.motebitId}/presentation${query}`, {
+    method: "POST",
+  });
+}
+
+// === Budget ===
+
+export interface BudgetAllocationEntry {
+  allocation_id: string;
+  task_id?: string;
+  amount_locked: number;
+  currency: string;
+  status: string;
+  created_at: number;
+  settlement_id?: string;
+  amount_settled?: number;
+  settlement_status?: string;
+  settled_at?: number;
+}
+
+export interface BudgetResponse {
+  motebit_id: string;
+  summary: {
+    total_locked: number;
+    total_settled: number;
+  };
+  allocations: BudgetAllocationEntry[];
+}
+
+export function fetchBudget(signal?: AbortSignal): Promise<BudgetResponse> {
+  return apiFetch<BudgetResponse>(`/agent/${config.motebitId}/budget`, { signal });
+}

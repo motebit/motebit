@@ -3588,6 +3588,20 @@
           <button class="settings-outline-btn" id="settings-verify-identity" style="flex:1;">Verify…</button>
         </div>
         <div id="verify-result" style="display:none;margin-top:6px;font-size:11px;padding:6px 8px;border-radius:4px;"></div>
+        <div class="card-title" style="margin-top:12px;">Credentials</div>
+        <div id="credentials-count" style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">No credentials</div>
+        <div id="credentials-type-badges" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;"></div>
+        <div id="credentials-list" style="max-height:180px;overflow-y:auto;margin-bottom:8px;"></div>
+        <div style="display:flex;gap:8px;">
+          <button class="settings-outline-btn" id="credentials-present-btn" style="flex:1;" disabled>Present Credentials</button>
+        </div>
+        <div id="credentials-vp-result" style="display:none;margin-top:6px;font-size:10px;padding:6px 8px;border-radius:4px;background:var(--bg-card);max-height:160px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;"></div>
+        <div class="card-title" style="margin-top:12px;">Budget</div>
+        <div id="budget-summary" style="display:flex;gap:12px;margin-bottom:6px;">
+          <div style="font-size:11px;"><span style="color:var(--text-muted);">Locked:</span> <span id="budget-locked">-</span></div>
+          <div style="font-size:11px;"><span style="color:var(--text-muted);">Settled:</span> <span id="budget-settled">-</span></div>
+        </div>
+        <div id="budget-list" style="max-height:120px;overflow-y:auto;"></div>
       </div>
     </div>
     <div class="settings-footer">
