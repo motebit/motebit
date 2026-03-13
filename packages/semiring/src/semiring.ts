@@ -74,6 +74,22 @@ export const ReliabilitySemiring: Semiring<number> = {
   mul: (a, b) => a * b,
 };
 
+/**
+ * (min, +, ∞, 0) — lowest regulatory risk path.
+ * Risk accumulates along delegation chains (additive composition),
+ * parallel alternatives pick the lowest-risk route (min choice).
+ *
+ * Edge weights represent risk scores: 0 = no risk, ∞ = impossible.
+ * Jurisdictional data handling, compliance requirements, audit depth —
+ * all accumulate when one agent delegates to another.
+ */
+export const RegulatoryRiskSemiring: Semiring<number> = {
+  zero: Infinity,
+  one: 0,
+  add: (a, b) => Math.min(a, b),
+  mul: (a, b) => a + b,
+};
+
 /** (∨, ∧, false, true) — can agent A reach agent B? */
 export const BooleanSemiring: Semiring<boolean> = {
   zero: false,

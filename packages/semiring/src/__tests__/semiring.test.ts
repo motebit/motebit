@@ -6,6 +6,7 @@ import {
   BottleneckSemiring,
   ReliabilitySemiring,
   BooleanSemiring,
+  RegulatoryRiskSemiring,
   productSemiring,
   recordSemiring,
   mappedSemiring,
@@ -112,6 +113,10 @@ verifySemiringAxioms("CostSemiring", CostSemiring, costValues, numEq);
 
 const latencyValues = [0, 100, 500, 1000, Infinity];
 verifySemiringAxioms("LatencySemiring", LatencySemiring, latencyValues, numEq);
+
+// RegulatoryRisk: (min, +, ∞, 0) — same algebra as Cost/Latency (tropical)
+const riskValues = [0, 0.5, 1, 5, 10, Infinity];
+verifySemiringAxioms("RegulatoryRiskSemiring", RegulatoryRiskSemiring, riskValues, numEq);
 
 // Bottleneck: (max, min, 0, ∞) — annihilation check needs special care
 // a ⊗ 0 = min(a, 0) = 0 ✓  and  a ⊕ 0 = max(a, 0) = a ✓ (for a >= 0)

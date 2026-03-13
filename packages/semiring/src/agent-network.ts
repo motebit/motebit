@@ -24,6 +24,7 @@ import {
   CostSemiring,
   LatencySemiring,
   ReliabilitySemiring,
+  RegulatoryRiskSemiring,
   recordSemiring,
 } from "./semiring.js";
 import type { Semiring } from "./semiring.js";
@@ -38,14 +39,16 @@ export interface RouteWeight {
   readonly cost: number;
   readonly latency: number;
   readonly reliability: number;
+  readonly regulatory_risk: number;
 }
 
-/** The multi-objective semiring: optimize trust, cost, latency, reliability simultaneously. */
+/** The multi-objective semiring: optimize trust, cost, latency, reliability, regulatory risk simultaneously. */
 export const RouteWeightSemiring: Semiring<RouteWeight> = recordSemiring({
   trust: TrustSemiring,
   cost: CostSemiring,
   latency: LatencySemiring,
   reliability: ReliabilitySemiring,
+  regulatory_risk: RegulatoryRiskSemiring,
 });
 
 /** RouteWeight semiring with provenance tracking. */
@@ -61,6 +64,8 @@ export interface AgentProfile {
   latency_ms: number | null;
   reliability: number | null;
   is_online: boolean;
+  /** Regulatory risk score for this agent. 0 = no risk, higher = more risk. */
+  regulatory_risk?: number;
 }
 
 /**
@@ -92,8 +97,9 @@ export function buildAgentGraph(
     const cost = estimateAgentCost(agent.listing);
     const latency = agent.latency_ms ?? 5000;
     const reliability = agent.reliability ?? 0.5;
+    const regulatory_risk = agent.regulatory_risk ?? 0;
 
-    graph.setEdge(selfId, agent.motebit_id, { trust, cost, latency, reliability });
+    graph.setEdge(selfId, agent.motebit_id, { trust, cost, latency, reliability, regulatory_risk });
   }
 
   return graph;
@@ -125,6 +131,7 @@ export function addDelegationEdges(
       cost: 0, // actual cost tracked separately via budget
       latency: latency || duration,
       reliability,
+      regulatory_risk: 0, // delegation receipts don't carry risk metadata (yet)
     });
 
     // Recurse into sub-delegations
@@ -152,6 +159,21 @@ export function mostTrustedPath(
 }
 
 /**
+ * Find the lowest regulatory risk path from self to a target agent.
+ * Risk accumulates along chains (sum), parallel alternatives pick lowest.
+ */
+export function lowestRiskPath(
+  graph: WeightedDigraph<RouteWeight>,
+  source: string,
+  target: string,
+): { risk: number; path: string[] } | null {
+  const riskGraph = projectGraph(graph, RegulatoryRiskSemiring, (w) => w.regulatory_risk);
+  const result = optimalPathTrace(riskGraph, source, target);
+  if (!result) return null;
+  return { risk: result.value, path: result.path };
+}
+
+/**
  * Find the cheapest pipeline from self to a target agent.
  */
 export function cheapestPath(
@@ -174,11 +196,18 @@ export function cheapestPath(
 export function rankReachableAgents(
   graph: WeightedDigraph<RouteWeight>,
   source: string,
-  weights: { trust: number; cost: number; latency: number; reliability: number } = {
-    trust: 0.35,
-    cost: 0.25,
-    latency: 0.2,
-    reliability: 0.2,
+  weights: {
+    trust: number;
+    cost: number;
+    latency: number;
+    reliability: number;
+    regulatory_risk?: number;
+  } = {
+    trust: 0.3,
+    cost: 0.2,
+    latency: 0.15,
+    reliability: 0.15,
+    regulatory_risk: 0.2,
   },
 ): Array<{ motebit_id: string; score: number; route: RouteWeight }> {
   const paths = optimalPaths(graph, source);
@@ -188,15 +217,17 @@ export function rankReachableAgents(
     if (nodeId === source) continue;
     if (route.trust === 0) continue; // unreachable or blocked
 
-    // Normalize cost and latency to [0,1] where higher is better
+    // Normalize cost, latency, and risk to [0,1] where higher is better
     const costScore = route.cost === Infinity ? 0 : 1 / (1 + route.cost);
     const latencyScore = route.latency === Infinity ? 0 : 1 / (1 + route.latency / 1000);
+    const riskScore = route.regulatory_risk === Infinity ? 0 : 1 / (1 + route.regulatory_risk);
 
     const score =
       route.trust * weights.trust +
       costScore * weights.cost +
       latencyScore * weights.latency +
-      route.reliability * weights.reliability;
+      route.reliability * weights.reliability +
+      riskScore * (weights.regulatory_risk ?? 0);
 
     results.push({ motebit_id: nodeId, score, route });
   }

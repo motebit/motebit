@@ -5,6 +5,7 @@ import {
   buildAgentGraph,
   mostTrustedPath,
   cheapestPath,
+  lowestRiskPath,
   rankReachableAgents,
   projectGraph,
 } from "../agent-network.js";
@@ -106,6 +107,7 @@ describe("mostTrustedPath", () => {
       cost: 0,
       latency: 300,
       reliability: 0.85,
+      regulatory_risk: 0,
     });
 
     const result = mostTrustedPath(graph, self, asMotebitId("hop2"));
@@ -207,11 +209,105 @@ describe("projectGraph — functorial projection", () => {
       cost: 0,
       latency: 300,
       reliability: 0.85,
+      regulatory_risk: 0,
     });
 
     const trustGraph = projectGraph(graph, TrustSemiring, (w) => w.trust);
     const closure = transitiveClosure(trustGraph);
 
     expect(closure.get(self)!.get(asMotebitId("hop2"))).toBeCloseTo(0.72);
+  });
+});
+
+describe("lowestRiskPath — regulatory risk routing", () => {
+  const self = asMotebitId("self");
+
+  it("finds lowest risk direct agent", () => {
+    const agents = [
+      makeAgent("low-risk", AgentTrustLevel.Trusted, self, { regulatory_risk: 0.1 }),
+      makeAgent("high-risk", AgentTrustLevel.Trusted, self, { regulatory_risk: 5.0 }),
+    ];
+
+    const graph = buildAgentGraph(self, agents);
+    const result = lowestRiskPath(graph, self, asMotebitId("low-risk"));
+    expect(result).not.toBeNull();
+    expect(result!.risk).toBeCloseTo(0.1);
+  });
+
+  it("risk accumulates along delegation chains", () => {
+    const agents = [makeAgent("hop1", AgentTrustLevel.Trusted, self, { regulatory_risk: 1.0 })];
+    const graph = buildAgentGraph(self, agents);
+    graph.setEdge(asMotebitId("hop1"), asMotebitId("hop2"), {
+      trust: 0.8,
+      cost: 0,
+      latency: 300,
+      reliability: 0.85,
+      regulatory_risk: 2.0,
+    });
+
+    const result = lowestRiskPath(graph, self, asMotebitId("hop2"));
+    expect(result).not.toBeNull();
+    expect(result!.risk).toBeCloseTo(3.0); // 1.0 + 2.0 (additive composition)
+    expect(result!.path).toEqual([self, asMotebitId("hop1"), asMotebitId("hop2")]);
+  });
+
+  it("picks lowest-risk parallel alternative", () => {
+    const agents = [
+      makeAgent("risky-hop", AgentTrustLevel.Trusted, self, { regulatory_risk: 4.0 }),
+      makeAgent("safe-hop", AgentTrustLevel.Trusted, self, { regulatory_risk: 0.5 }),
+    ];
+    const graph = buildAgentGraph(self, agents);
+
+    // Both reach target, but via different risk paths
+    graph.setEdge(asMotebitId("risky-hop"), asMotebitId("target"), {
+      trust: 0.9,
+      cost: 0,
+      latency: 100,
+      reliability: 0.9,
+      regulatory_risk: 1.0,
+    });
+    graph.setEdge(asMotebitId("safe-hop"), asMotebitId("target"), {
+      trust: 0.9,
+      cost: 0,
+      latency: 100,
+      reliability: 0.9,
+      regulatory_risk: 0.5,
+    });
+
+    const result = lowestRiskPath(graph, self, asMotebitId("target"));
+    expect(result).not.toBeNull();
+    // Via safe-hop: 0.5 + 0.5 = 1.0
+    // Via risky-hop: 4.0 + 1.0 = 5.0
+    // min(1.0, 5.0) = 1.0
+    expect(result!.risk).toBeCloseTo(1.0);
+    expect(result!.path).toEqual([self, asMotebitId("safe-hop"), asMotebitId("target")]);
+  });
+
+  it("ranking penalizes high-risk agents", () => {
+    const agents = [
+      makeAgent("safe", AgentTrustLevel.Trusted, self, { regulatory_risk: 0.1, reliability: 0.9 }),
+      makeAgent("risky", AgentTrustLevel.Trusted, self, {
+        regulatory_risk: 10.0,
+        reliability: 0.9,
+      }),
+    ];
+
+    const graph = buildAgentGraph(self, agents);
+    const ranked = rankReachableAgents(graph, self);
+
+    expect(ranked.length).toBe(2);
+    expect(ranked[0]!.motebit_id).toBe(asMotebitId("safe"));
+    expect(ranked[0]!.route.regulatory_risk).toBeCloseTo(0.1);
+    expect(ranked[1]!.route.regulatory_risk).toBeCloseTo(10.0);
+    expect(ranked[0]!.score).toBeGreaterThan(ranked[1]!.score);
+  });
+
+  it("zero-risk agent is the identity (no additional risk)", () => {
+    const agents = [makeAgent("zero-risk", AgentTrustLevel.Trusted, self, { regulatory_risk: 0 })];
+    const graph = buildAgentGraph(self, agents);
+
+    const result = lowestRiskPath(graph, self, asMotebitId("zero-risk"));
+    expect(result).not.toBeNull();
+    expect(result!.risk).toBe(0); // semiring one = 0, identity
   });
 });

@@ -58,7 +58,15 @@ export function buildRoutingGraph(
     const latency = candidate.latency_stats?.avg_ms ?? 5000;
     const reliability = computeReliability(candidate);
 
-    graph.setEdge(selfId, candidate.motebit_id, { trust, cost, latency, reliability });
+    const regulatory_risk = 0; // default: no risk data in CandidateProfile (populated by relay when available)
+
+    graph.setEdge(selfId, candidate.motebit_id, {
+      trust,
+      cost,
+      latency,
+      reliability,
+      regulatory_risk,
+    });
   }
 
   // Apply peer-to-peer edges from delegation receipt trees
