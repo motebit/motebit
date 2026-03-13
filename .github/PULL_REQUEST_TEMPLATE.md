@@ -17,6 +17,4 @@
 - [ ] `pnpm run test` passes
 - [ ] No breaking changes (or documented below)
 
----
-
-By submitting this pull request, I agree that my contributions are licensed under the same terms as the project.
+- [ ] I have signed the [Contributor License Agreement](https://github.com/motebit/motebit/blob/main/CLA.md) (first-time contributors: comment "I have read the CLA Document and I hereby sign the CLA")

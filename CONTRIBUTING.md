@@ -70,9 +70,15 @@ We're in early development. Large architectural changes or new packages will lik
 - Prefer editing existing files over creating new ones
 - No unnecessary abstractions -- three similar lines is better than a premature helper
 
+## Contributor License Agreement
+
+All contributors must sign our [Contributor License Agreement (CLA)](CLA.md) before their first pull request can be merged. This is a one-time process -- comment on your PR with the signing phrase and you're covered for all future contributions.
+
+The CLA grants Motebit the rights needed to license contributions under our dual-license model. This is standard practice for BSL projects (HashiCorp, Sentry, CockroachDB).
+
 ## License
 
-By submitting a pull request, you agree that your contributions are licensed under the same terms as the project:
+Contributions are licensed under the same terms as the project:
 
-- **Protocol layer** (`spec/`, `packages/verify/`, `packages/create-motebit/`, `packages/sdk/`) -- MIT
+- **Protocol layer** (`spec/`, `packages/verify/`, `packages/create-motebit/`, `packages/sdk/`, `packages/github-action/`) -- MIT
 - **Everything else** -- [BSL 1.1](LICENSE), source-available, converts to MIT per-version after 4 years
