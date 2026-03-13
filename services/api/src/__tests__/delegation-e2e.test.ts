@@ -13,12 +13,25 @@ import type { PlanChunk } from "@motebit/planner";
 import { DeviceCapability, StepStatus, PlanStatus } from "@motebit/sdk";
 import type { ExecutionReceipt, MotebitId, DeviceId, AgentTask } from "@motebit/sdk";
 import type { MotebitLoopDependencies } from "@motebit/ai-core";
+// eslint-disable-next-line no-restricted-imports -- tests need direct crypto
+import { generateKeypair, signExecutionReceipt } from "@motebit/crypto";
+import type { KeyPair } from "@motebit/crypto";
 
 // === Constants ===
 
 const API_TOKEN = "test-token";
 const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
 const MOTEBIT_ID = "test-mote";
+
+// Worker agent identity — generated per test, registered in beforeEach
+let workerKeypair: KeyPair;
+let workerMotebitId: string;
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
 
 // === Helpers ===
 
@@ -32,14 +45,14 @@ function makeMockDeps(steps: Array<Record<string, unknown>>): MotebitLoopDepende
   } as unknown as MotebitLoopDependencies;
 }
 
-function makeReceipt(
+async function makeReceipt(
   taskId: string,
   status: "completed" | "failed" = "completed",
   result = "Task executed successfully",
-): ExecutionReceipt {
-  return {
+): Promise<ExecutionReceipt> {
+  const unsigned = {
     task_id: taskId,
-    motebit_id: MOTEBIT_ID as unknown as MotebitId,
+    motebit_id: workerMotebitId as unknown as MotebitId,
     device_id: "worker-device" as unknown as DeviceId,
     submitted_at: Date.now(),
     completed_at: Date.now(),
@@ -49,8 +62,8 @@ function makeReceipt(
     memories_formed: 0,
     prompt_hash: "abc123",
     result_hash: "def456",
-    signature: "sig-valid",
   };
+  return signExecutionReceipt(unsigned, workerKeypair.privateKey);
 }
 
 /**
@@ -88,6 +101,29 @@ describe("Delegation E2E", () => {
 
   beforeEach(async () => {
     relay = await createSyncRelay({ apiToken: API_TOKEN, enableDeviceAuth: false });
+
+    // Generate a real Ed25519 keypair for the worker agent
+    workerKeypair = await generateKeypair();
+    const pubKeyHex = bytesToHex(workerKeypair.publicKey);
+
+    // Register worker identity + device so relay can verify receipt signatures
+    const idRes = await relay.app.request("/identity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ owner_id: "worker-owner" }),
+    });
+    const idBody = (await idRes.json()) as { motebit_id: string };
+    workerMotebitId = idBody.motebit_id;
+
+    await relay.app.request("/device/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: workerMotebitId,
+        device_name: "Worker",
+        public_key: pubKeyHex,
+      }),
+    });
 
     // Route RelayDelegationAdapter's fetch calls through the in-process Hono relay
     originalFetch = globalThis.fetch;
@@ -177,7 +213,7 @@ describe("Delegation E2E", () => {
     const taskId = taskRequest.task.task_id;
 
     // Worker posts receipt to relay
-    const receipt = makeReceipt(taskId);
+    const receipt = await makeReceipt(taskId);
     const receiptRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task/${taskId}/result`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -295,7 +331,7 @@ describe("Delegation E2E", () => {
     });
 
     // Worker completed while we were "crashed" — receipt already on relay
-    const receipt = makeReceipt(taskId, "completed", "Recovery result");
+    const receipt = await makeReceipt(taskId, "completed", "Recovery result");
     await relay.app.request(`/agent/${MOTEBIT_ID}/task/${taskId}/result`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -432,7 +468,7 @@ describe("Delegation E2E", () => {
     const taskRequest = JSON.parse(taskRequestRaw) as { type: string; task: AgentTask };
     const taskId = taskRequest.task.task_id;
 
-    const receipt = makeReceipt(taskId, "completed", "CLI output: file1.txt file2.txt");
+    const receipt = await makeReceipt(taskId, "completed", "CLI output: file1.txt file2.txt");
     await relay.app.request(`/agent/${MOTEBIT_ID}/task/${taskId}/result`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -509,7 +545,7 @@ describe("Delegation E2E", () => {
     const taskId = taskRequest.task.task_id;
 
     // Worker fails the task
-    const receipt = makeReceipt(taskId, "failed", "Command not found: foobar");
+    const receipt = await makeReceipt(taskId, "failed", "Command not found: foobar");
     await relay.app.request(`/agent/${MOTEBIT_ID}/task/${taskId}/result`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },

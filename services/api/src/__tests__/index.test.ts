@@ -4,7 +4,7 @@ import type { SyncRelay } from "../index.js";
 import { EventType } from "@motebit/sdk";
 import type { EventLogEntry, AgentTask, ExecutionReceipt } from "@motebit/sdk";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
-import { generateKeypair, createSignedToken } from "@motebit/crypto";
+import { generateKeypair, createSignedToken, signExecutionReceipt } from "@motebit/crypto";
 
 // === Helpers ===
 
@@ -853,6 +853,28 @@ describe("Sync Relay — agent protocol", () => {
   });
 
   it("POST /agent/:id/task/:taskId/result stores receipt and extends TTL", async () => {
+    // Create an executing agent identity with a real Ed25519 keypair
+    const execKeypair = await generateKeypair();
+    const execPubKeyHex = bytesToHex(execKeypair.publicKey);
+
+    // Register identity + device so the relay can look up the public key
+    const idRes = await relay.app.request("/identity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ owner_id: "exec-owner" }),
+    });
+    const { motebit_id: execMotebitId } = (await idRes.json()) as { motebit_id: string };
+
+    await relay.app.request("/device/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: execMotebitId,
+        device_name: "Worker",
+        public_key: execPubKeyHex,
+      }),
+    });
+
     // Submit task
     const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
@@ -861,21 +883,21 @@ describe("Sync Relay — agent protocol", () => {
     });
     const { task_id } = (await submitRes.json()) as { task_id: string };
 
-    // Post receipt
-    const receipt: ExecutionReceipt = {
+    // Sign the receipt with the executing agent's private key
+    const unsigned = {
       task_id,
-      motebit_id: MOTEBIT_ID as unknown as import("@motebit/sdk").MotebitId,
-      device_id: "device-1" as unknown as import("@motebit/sdk").DeviceId,
+      motebit_id: execMotebitId as unknown as import("@motebit/sdk").MotebitId,
+      device_id: "worker-device" as unknown as import("@motebit/sdk").DeviceId,
       submitted_at: Date.now(),
       completed_at: Date.now(),
-      status: "completed",
+      status: "completed" as const,
       result: "The answer is 42",
-      tools_used: [],
+      tools_used: [] as string[],
       memories_formed: 0,
       prompt_hash: "abc123",
       result_hash: "def456",
-      signature: "sig789",
     };
+    const receipt = await signExecutionReceipt(unsigned, execKeypair.privateKey);
 
     const resultRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task/${task_id}/result`, {
       method: "POST",
@@ -896,6 +918,93 @@ describe("Sync Relay — agent protocol", () => {
     expect(body.receipt).not.toBeNull();
     expect(body.receipt!.result).toBe("The answer is 42");
     expect(body.receipt!.task_id).toBe(task_id);
+  });
+
+  it("POST /agent/:id/task/:taskId/result rejects forged signature", async () => {
+    // Create executing agent with known key
+    const execKeypair = await generateKeypair();
+    const execPubKeyHex = bytesToHex(execKeypair.publicKey);
+
+    const idRes = await relay.app.request("/identity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ owner_id: "forged-owner" }),
+    });
+    const { motebit_id: execMotebitId } = (await idRes.json()) as { motebit_id: string };
+
+    await relay.app.request("/device/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: execMotebitId,
+        device_name: "Worker",
+        public_key: execPubKeyHex,
+      }),
+    });
+
+    // Submit task
+    const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ prompt: "Task with forged receipt" }),
+    });
+    const { task_id } = (await submitRes.json()) as { task_id: string };
+
+    // Post receipt with garbage signature (key is known but sig is forged)
+    const receipt: ExecutionReceipt = {
+      task_id,
+      motebit_id: execMotebitId as unknown as import("@motebit/sdk").MotebitId,
+      device_id: "worker-device" as unknown as import("@motebit/sdk").DeviceId,
+      submitted_at: Date.now(),
+      completed_at: Date.now(),
+      status: "completed",
+      result: "Forged result",
+      tools_used: [],
+      memories_formed: 0,
+      prompt_hash: "abc123",
+      result_hash: "def456",
+      signature: "forged-signature-value",
+    };
+
+    const resultRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task/${task_id}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(receipt),
+    });
+    expect(resultRes.status).toBe(403);
+  });
+
+  it("POST /agent/:id/task/:taskId/result rejects unknown agent", async () => {
+    // Submit task
+    const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ prompt: "Task from unknown" }),
+    });
+    const { task_id } = (await submitRes.json()) as { task_id: string };
+
+    // Receipt from an agent that never registered — no public key discoverable
+    const receipt: ExecutionReceipt = {
+      task_id,
+      motebit_id: "unknown-agent" as unknown as import("@motebit/sdk").MotebitId,
+      device_id: "device-1" as unknown as import("@motebit/sdk").DeviceId,
+      submitted_at: Date.now(),
+      completed_at: Date.now(),
+      status: "completed",
+      result: "Unknown",
+      tools_used: [],
+      memories_formed: 0,
+      prompt_hash: "abc123",
+      result_hash: "def456",
+      signature: "some-sig",
+    };
+
+    const resultRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task/${task_id}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(receipt),
+    });
+    expect(resultRes.status).toBe(403);
   });
 
   it("POST /agent/:id/task accepts required_capabilities and step_id", async () => {

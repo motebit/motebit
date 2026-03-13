@@ -2119,6 +2119,39 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       });
     }
 
+    // Cryptographic verification: resolve executing agent's public key and verify Ed25519 signature.
+    // Try agent_registry first (service agents), then fall back to device records (personal agents).
+    let pubKeyHex: string | undefined;
+    const regRow = moteDb.db
+      .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+      .get(receipt.motebit_id) as { public_key: string } | undefined;
+    if (regRow?.public_key) {
+      pubKeyHex = regRow.public_key;
+    } else {
+      // Fall back to device-level key lookup — try exact device_id match first,
+      // then any device with a key (covers cross-device delegation where device_id may differ)
+      const devices = await identityManager.listDevices(asMotebitId(receipt.motebit_id as string));
+      const device =
+        (receipt.device_id ? devices.find((d) => d.device_id === receipt.device_id) : undefined) ??
+        devices.find((d) => d.public_key);
+      if (device?.public_key) {
+        pubKeyHex = device.public_key;
+      }
+    }
+
+    if (!pubKeyHex) {
+      throw new HTTPException(403, {
+        message: "Receipt verification failed: no public key found for executing agent",
+      });
+    }
+
+    const receiptValid = await verifyExecutionReceipt(receipt, hexToBytes(pubKeyHex));
+    if (!receiptValid) {
+      throw new HTTPException(403, {
+        message: "Receipt verification failed: invalid Ed25519 signature",
+      });
+    }
+
     entry.receipt = receipt;
     // Extend TTL so recovery polling has a full window after completion
     entry.expiresAt = Math.max(entry.expiresAt, Date.now() + TASK_TTL_MS);
