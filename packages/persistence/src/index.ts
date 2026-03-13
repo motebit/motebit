@@ -14,6 +14,15 @@ import type {
   Plan,
   PlanStep,
   AgentTrustRecord,
+  AgentServiceListing,
+  CapabilityPrice,
+  BudgetAllocation,
+  SettlementRecord,
+  AllocationId,
+  SettlementId,
+  ListingId,
+  GoalId,
+  MotebitId,
 } from "@motebit/sdk";
 import { PlanStatus, StepStatus, AgentTrustLevel } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
@@ -2014,6 +2023,256 @@ export class SqliteAgentTrustStore {
   }
 }
 
+// === Market Stores ===
+
+interface ServiceListingRow {
+  listing_id: string;
+  motebit_id: string;
+  capabilities: string;
+  pricing: string;
+  sla_max_latency_ms: number;
+  sla_availability: number;
+  description: string;
+  updated_at: number;
+}
+
+function rowToServiceListing(row: ServiceListingRow): AgentServiceListing {
+  return {
+    listing_id: row.listing_id as ListingId,
+    motebit_id: row.motebit_id as MotebitId,
+    capabilities: JSON.parse(row.capabilities) as string[],
+    pricing: JSON.parse(row.pricing) as CapabilityPrice[],
+    sla: { max_latency_ms: row.sla_max_latency_ms, availability_guarantee: row.sla_availability },
+    description: row.description,
+    updated_at: row.updated_at,
+  };
+}
+
+export class SqliteServiceListingStore {
+  private stmtGet: PreparedStatement;
+  private stmtSet: PreparedStatement;
+  private stmtList: PreparedStatement;
+  private stmtDelete: PreparedStatement;
+
+  constructor(db: DatabaseDriver) {
+    this.stmtGet = db.prepare(
+      `SELECT * FROM service_listings WHERE motebit_id = ?`,
+    );
+    this.stmtSet = db.prepare(
+      `INSERT OR REPLACE INTO service_listings
+       (listing_id, motebit_id, capabilities, pricing, sla_max_latency_ms, sla_availability, description, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmtList = db.prepare(`SELECT * FROM service_listings ORDER BY updated_at DESC`);
+    this.stmtDelete = db.prepare(`DELETE FROM service_listings WHERE listing_id = ?`);
+  }
+
+  async get(motebitId: string): Promise<AgentServiceListing | null> {
+    const row = this.stmtGet.get(motebitId) as ServiceListingRow | undefined;
+    return row ? rowToServiceListing(row) : null;
+  }
+
+  async set(listing: AgentServiceListing): Promise<void> {
+    this.stmtSet.run(
+      listing.listing_id,
+      listing.motebit_id,
+      JSON.stringify(listing.capabilities),
+      JSON.stringify(listing.pricing),
+      listing.sla.max_latency_ms,
+      listing.sla.availability_guarantee,
+      listing.description,
+      listing.updated_at,
+    );
+  }
+
+  async list(): Promise<AgentServiceListing[]> {
+    const rows = this.stmtList.all() as ServiceListingRow[];
+    return rows.map(rowToServiceListing);
+  }
+
+  async delete(listingId: string): Promise<void> {
+    this.stmtDelete.run(listingId);
+  }
+}
+
+interface BudgetAllocationRow {
+  allocation_id: string;
+  goal_id: string;
+  candidate_motebit_id: string;
+  amount_locked: number;
+  currency: string;
+  created_at: number;
+  status: string;
+}
+
+function rowToBudgetAllocation(row: BudgetAllocationRow): BudgetAllocation {
+  return {
+    allocation_id: row.allocation_id as AllocationId,
+    goal_id: row.goal_id as GoalId,
+    candidate_motebit_id: row.candidate_motebit_id as MotebitId,
+    amount_locked: row.amount_locked,
+    currency: row.currency,
+    created_at: row.created_at,
+    status: row.status as BudgetAllocation["status"],
+  };
+}
+
+export class SqliteBudgetAllocationStore {
+  private stmtGet: PreparedStatement;
+  private stmtCreate: PreparedStatement;
+  private stmtUpdateStatus: PreparedStatement;
+  private stmtListByGoal: PreparedStatement;
+
+  constructor(db: DatabaseDriver) {
+    this.stmtGet = db.prepare(`SELECT * FROM budget_allocations WHERE allocation_id = ?`);
+    this.stmtCreate = db.prepare(
+      `INSERT INTO budget_allocations
+       (allocation_id, goal_id, candidate_motebit_id, amount_locked, currency, created_at, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmtUpdateStatus = db.prepare(
+      `UPDATE budget_allocations SET status = ? WHERE allocation_id = ?`,
+    );
+    this.stmtListByGoal = db.prepare(
+      `SELECT * FROM budget_allocations WHERE goal_id = ? ORDER BY created_at DESC`,
+    );
+  }
+
+  async get(allocationId: string): Promise<BudgetAllocation | null> {
+    const row = this.stmtGet.get(allocationId) as BudgetAllocationRow | undefined;
+    return row ? rowToBudgetAllocation(row) : null;
+  }
+
+  async create(allocation: BudgetAllocation): Promise<void> {
+    this.stmtCreate.run(
+      allocation.allocation_id,
+      allocation.goal_id,
+      allocation.candidate_motebit_id,
+      allocation.amount_locked,
+      allocation.currency,
+      allocation.created_at,
+      allocation.status,
+    );
+  }
+
+  async updateStatus(allocationId: string, status: string): Promise<void> {
+    this.stmtUpdateStatus.run(status, allocationId);
+  }
+
+  async listByGoal(goalId: string): Promise<BudgetAllocation[]> {
+    const rows = this.stmtListByGoal.all(goalId) as BudgetAllocationRow[];
+    return rows.map(rowToBudgetAllocation);
+  }
+}
+
+interface SettlementRow {
+  settlement_id: string;
+  allocation_id: string;
+  receipt_hash: string;
+  ledger_hash: string | null;
+  amount_settled: number;
+  status: string;
+  settled_at: number;
+}
+
+function rowToSettlement(row: SettlementRow): SettlementRecord {
+  return {
+    settlement_id: row.settlement_id as SettlementId,
+    allocation_id: row.allocation_id as AllocationId,
+    receipt_hash: row.receipt_hash,
+    ledger_hash: row.ledger_hash,
+    amount_settled: row.amount_settled,
+    status: row.status as SettlementRecord["status"],
+    settled_at: row.settled_at,
+  };
+}
+
+export class SqliteSettlementStore {
+  private stmtGet: PreparedStatement;
+  private stmtCreate: PreparedStatement;
+  private stmtListByAllocation: PreparedStatement;
+
+  constructor(db: DatabaseDriver) {
+    this.stmtGet = db.prepare(`SELECT * FROM settlements WHERE settlement_id = ?`);
+    this.stmtCreate = db.prepare(
+      `INSERT INTO settlements
+       (settlement_id, allocation_id, receipt_hash, ledger_hash, amount_settled, status, settled_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmtListByAllocation = db.prepare(
+      `SELECT * FROM settlements WHERE allocation_id = ? ORDER BY settled_at DESC`,
+    );
+  }
+
+  async get(settlementId: string): Promise<SettlementRecord | null> {
+    const row = this.stmtGet.get(settlementId) as SettlementRow | undefined;
+    return row ? rowToSettlement(row) : null;
+  }
+
+  async create(settlement: SettlementRecord): Promise<void> {
+    this.stmtCreate.run(
+      settlement.settlement_id,
+      settlement.allocation_id,
+      settlement.receipt_hash,
+      settlement.ledger_hash,
+      settlement.amount_settled,
+      settlement.status,
+      settlement.settled_at,
+    );
+  }
+
+  async listByAllocation(allocationId: string): Promise<SettlementRecord[]> {
+    const rows = this.stmtListByAllocation.all(allocationId) as SettlementRow[];
+    return rows.map(rowToSettlement);
+  }
+}
+
+interface LatencyStatRow {
+  id: number;
+  motebit_id: string;
+  remote_motebit_id: string;
+  latency_ms: number;
+  recorded_at: number;
+}
+
+export class SqliteLatencyStatsStore {
+  private stmtRecord: PreparedStatement;
+  private stmtGetStats: PreparedStatement;
+
+  constructor(db: DatabaseDriver) {
+    this.stmtRecord = db.prepare(
+      `INSERT INTO latency_stats (motebit_id, remote_motebit_id, latency_ms, recorded_at)
+       VALUES (?, ?, ?, ?)`,
+    );
+    this.stmtGetStats = db.prepare(
+      `SELECT latency_ms FROM latency_stats
+       WHERE motebit_id = ? AND remote_motebit_id = ?
+       ORDER BY recorded_at DESC LIMIT ?`,
+    );
+  }
+
+  async record(motebitId: string, remoteMotebitId: string, latencyMs: number): Promise<void> {
+    this.stmtRecord.run(motebitId, remoteMotebitId, latencyMs, Date.now());
+  }
+
+  async getStats(
+    motebitId: string,
+    remoteMotebitId: string,
+    limit = 100,
+  ): Promise<{ avg_ms: number; p95_ms: number; sample_count: number }> {
+    const rows = this.stmtGetStats.all(motebitId, remoteMotebitId, limit) as LatencyStatRow[];
+    if (rows.length === 0) return { avg_ms: 0, p95_ms: 0, sample_count: 0 };
+
+    const values = rows.map((r) => r.latency_ms);
+    const avg_ms = values.reduce((a, b) => a + b, 0) / values.length;
+    const sorted = [...values].sort((a, b) => a - b);
+    const p95Index = Math.min(Math.ceil(sorted.length * 0.95) - 1, sorted.length - 1);
+    const p95_ms = sorted[p95Index]!;
+
+    return { avg_ms, p95_ms, sample_count: values.length };
+  }
+}
+
 // === Factory ===
 
 export interface MotebitDatabase {
@@ -2031,6 +2290,10 @@ export interface MotebitDatabase {
   planStore: SqlitePlanStore;
   gradientStore: SqliteGradientStore;
   agentTrustStore: SqliteAgentTrustStore;
+  serviceListingStore: SqliteServiceListingStore;
+  budgetAllocationStore: SqliteBudgetAllocationStore;
+  settlementStore: SqliteSettlementStore;
+  latencyStatsStore: SqliteLatencyStatsStore;
   close(): void;
 }
 
@@ -2199,6 +2462,53 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     driver.pragma("user_version = 26");
   }
 
+  if (userVersion < 27) {
+    migrateExec(driver, `CREATE TABLE IF NOT EXISTS service_listings (
+      listing_id TEXT PRIMARY KEY,
+      motebit_id TEXT NOT NULL,
+      capabilities TEXT NOT NULL DEFAULT '[]',
+      pricing TEXT NOT NULL DEFAULT '[]',
+      sla_max_latency_ms INTEGER NOT NULL DEFAULT 5000,
+      sla_availability REAL NOT NULL DEFAULT 0.99,
+      description TEXT NOT NULL DEFAULT '',
+      updated_at INTEGER NOT NULL DEFAULT 0
+    )`);
+    migrateExec(driver, "CREATE INDEX IF NOT EXISTS idx_service_listings_motebit ON service_listings(motebit_id)");
+
+    migrateExec(driver, `CREATE TABLE IF NOT EXISTS budget_allocations (
+      allocation_id TEXT PRIMARY KEY,
+      goal_id TEXT NOT NULL,
+      candidate_motebit_id TEXT NOT NULL,
+      amount_locked REAL NOT NULL,
+      currency TEXT NOT NULL DEFAULT 'USD',
+      created_at INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'locked'
+    )`);
+    migrateExec(driver, "CREATE INDEX IF NOT EXISTS idx_budget_allocations_goal ON budget_allocations(goal_id)");
+
+    migrateExec(driver, `CREATE TABLE IF NOT EXISTS settlements (
+      settlement_id TEXT PRIMARY KEY,
+      allocation_id TEXT NOT NULL,
+      receipt_hash TEXT NOT NULL,
+      ledger_hash TEXT,
+      amount_settled REAL NOT NULL,
+      status TEXT NOT NULL,
+      settled_at INTEGER NOT NULL
+    )`);
+    migrateExec(driver, "CREATE INDEX IF NOT EXISTS idx_settlements_allocation ON settlements(allocation_id)");
+
+    migrateExec(driver, `CREATE TABLE IF NOT EXISTS latency_stats (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      motebit_id TEXT NOT NULL,
+      remote_motebit_id TEXT NOT NULL,
+      latency_ms REAL NOT NULL,
+      recorded_at INTEGER NOT NULL
+    )`);
+    migrateExec(driver, "CREATE INDEX IF NOT EXISTS idx_latency_stats_pair ON latency_stats(motebit_id, remote_motebit_id)");
+
+    driver.pragma("user_version = 27");
+  }
+
   const eventStore = new SqliteEventStore(driver);
   const memoryStorage = new SqliteMemoryStorage(driver);
   const identityStorage = new SqliteIdentityStorage(driver);
@@ -2212,6 +2522,10 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   const planStore = new SqlitePlanStore(driver);
   const gradientStore = new SqliteGradientStore(driver);
   const agentTrustStore = new SqliteAgentTrustStore(driver);
+  const serviceListingStore = new SqliteServiceListingStore(driver);
+  const budgetAllocationStore = new SqliteBudgetAllocationStore(driver);
+  const settlementStore = new SqliteSettlementStore(driver);
+  const latencyStatsStore = new SqliteLatencyStatsStore(driver);
 
   return {
     db: driver,
@@ -2228,6 +2542,10 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     planStore,
     gradientStore,
     agentTrustStore,
+    serviceListingStore,
+    budgetAllocationStore,
+    settlementStore,
+    latencyStatsStore,
     close() {
       driver.close();
     },

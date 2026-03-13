@@ -20,6 +20,9 @@ export type GoalId = Brand<string, "GoalId">;
 export type EventId = Brand<string, "EventId">;
 export type ConversationId = Brand<string, "ConversationId">;
 export type PlanId = Brand<string, "PlanId">;
+export type AllocationId = Brand<string, "AllocationId">;
+export type SettlementId = Brand<string, "SettlementId">;
+export type ListingId = Brand<string, "ListingId">;
 
 /** Brand a string as a MotebitId after validation. */
 export function asMotebitId(id: string): MotebitId { return id as MotebitId; }
@@ -35,6 +38,12 @@ export function asEventId(id: string): EventId { return id as EventId; }
 export function asConversationId(id: string): ConversationId { return id as ConversationId; }
 /** Brand a string as a PlanId after validation. */
 export function asPlanId(id: string): PlanId { return id as PlanId; }
+/** Brand a string as an AllocationId after validation. */
+export function asAllocationId(id: string): AllocationId { return id as AllocationId; }
+/** Brand a string as a SettlementId after validation. */
+export function asSettlementId(id: string): SettlementId { return id as SettlementId; }
+/** Brand a string as a ListingId after validation. */
+export function asListingId(id: string): ListingId { return id as ListingId; }
 
 // === Enums ===
 
@@ -709,4 +718,69 @@ export interface AgentCapabilities {
     deny_above: number;
   };
   online_devices: number;
+}
+
+// === Market Types ===
+
+export interface CapabilityPrice {
+  capability: string;
+  unit_cost: number;
+  currency: string;
+  per: "task" | "tool_call" | "token";
+}
+
+export interface AgentServiceListing {
+  listing_id: ListingId;
+  motebit_id: MotebitId;
+  capabilities: string[];
+  pricing: CapabilityPrice[];
+  sla: { max_latency_ms: number; availability_guarantee: number };
+  description: string;
+  updated_at: number;
+}
+
+export interface RouteScore {
+  motebit_id: MotebitId;
+  composite: number;
+  sub_scores: {
+    trust: number;
+    success_rate: number;
+    latency: number;
+    price_efficiency: number;
+    capability_match: number;
+    availability: number;
+  };
+  selected: boolean;
+}
+
+export interface BudgetAllocation {
+  allocation_id: AllocationId;
+  goal_id: GoalId;
+  candidate_motebit_id: MotebitId;
+  amount_locked: number;
+  currency: string;
+  created_at: number;
+  status: "locked" | "settled" | "released" | "disputed";
+}
+
+export interface SettlementRecord {
+  settlement_id: SettlementId;
+  allocation_id: AllocationId;
+  receipt_hash: string;
+  ledger_hash: string | null;
+  amount_settled: number;
+  status: "completed" | "partial" | "refunded";
+  settled_at: number;
+}
+
+export interface MarketConfig {
+  weight_trust: number;
+  weight_success_rate: number;
+  weight_latency: number;
+  weight_price_efficiency: number;
+  weight_capability_match: number;
+  weight_availability: number;
+  latency_norm_k: number;
+  max_candidates: number;
+  settlement_timeout_ms: number;
 }

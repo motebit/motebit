@@ -11,6 +11,9 @@ import type {
   ExecutionStepSummary,
   DelegationReceiptSummary,
   ToolAuditEntry,
+  AgentServiceListing,
+  BudgetAllocation,
+  SettlementRecord,
 } from "@motebit/sdk";
 import { EventType, SensitivityLevel, AgentTrustLevel } from "@motebit/sdk";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
@@ -280,6 +283,31 @@ export interface AgentTrustStoreAdapter {
   ): Promise<void>;
 }
 
+export interface ServiceListingStoreAdapter {
+  get(motebitId: string): Promise<AgentServiceListing | null>;
+  set(listing: AgentServiceListing): Promise<void>;
+  list(): Promise<AgentServiceListing[]>;
+  delete(listingId: string): Promise<void>;
+}
+
+export interface BudgetAllocationStoreAdapter {
+  get(allocationId: string): Promise<BudgetAllocation | null>;
+  create(allocation: BudgetAllocation): Promise<void>;
+  updateStatus(allocationId: string, status: string): Promise<void>;
+  listByGoal(goalId: string): Promise<BudgetAllocation[]>;
+}
+
+export interface SettlementStoreAdapter {
+  get(settlementId: string): Promise<SettlementRecord | null>;
+  create(settlement: SettlementRecord): Promise<void>;
+  listByAllocation(allocationId: string): Promise<SettlementRecord[]>;
+}
+
+export interface LatencyStatsStoreAdapter {
+  record(motebitId: string, remoteMotebitId: string, latencyMs: number): Promise<void>;
+  getStats(motebitId: string, remoteMotebitId: string, limit?: number): Promise<{ avg_ms: number; p95_ms: number; sample_count: number }>;
+}
+
 export interface StorageAdapters {
   eventStore: EventStoreAdapter;
   memoryStorage: MemoryStorageAdapter;
@@ -291,6 +319,10 @@ export interface StorageAdapters {
   planStore?: PlanStoreAdapter;
   gradientStore?: GradientStoreAdapter;
   agentTrustStore?: AgentTrustStoreAdapter;
+  serviceListingStore?: ServiceListingStoreAdapter;
+  budgetAllocationStore?: BudgetAllocationStoreAdapter;
+  settlementStore?: SettlementStoreAdapter;
+  latencyStatsStore?: LatencyStatsStoreAdapter;
 }
 
 export interface PlatformAdapters {
@@ -519,6 +551,8 @@ export class MotebitRuntime {
     toolCallsFailed: 0,
   };
   private agentTrustStore: AgentTrustStoreAdapter | null;
+  private serviceListingStore: ServiceListingStoreAdapter | null;
+  private latencyStatsStore: LatencyStatsStoreAdapter | null;
   private _curiosityTargets: CuriosityTarget[] = [];
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
@@ -608,6 +642,10 @@ export class MotebitRuntime {
 
     // Agent trust
     this.agentTrustStore = adapters.storage.agentTrustStore ?? null;
+
+    // Market stores
+    this.serviceListingStore = adapters.storage.serviceListingStore ?? null;
+    this.latencyStatsStore = adapters.storage.latencyStatsStore ?? null;
 
     this.wireLoopDeps();
   }
@@ -1379,6 +1417,20 @@ export class MotebitRuntime {
         }
       } catch {
         // Trust bumping is best-effort — don't break the task
+      }
+    }
+
+    // Record latency for delegation receipts (best-effort)
+    if (delegationReceipts.length > 0 && this.latencyStatsStore != null) {
+      for (const dr of delegationReceipts) {
+        try {
+          const latency = dr.completed_at - dr.submitted_at;
+          if (latency > 0) {
+            await this.latencyStatsStore.record(this.motebitId, dr.motebit_id, latency);
+          }
+        } catch {
+          // Best-effort latency recording
+        }
       }
     }
 
@@ -2579,5 +2631,24 @@ export class MotebitRuntime {
   async setAgentTrustLevel(remoteMotebitId: string, level: AgentTrustLevel): Promise<void> {
     if (this.agentTrustStore == null) return;
     await this.agentTrustStore.updateTrustLevel(this.motebitId, remoteMotebitId, level);
+  }
+
+  /** Register or update this agent's service listing. */
+  async registerServiceListing(
+    listing: Omit<AgentServiceListing, "listing_id" | "updated_at">,
+  ): Promise<void> {
+    if (this.serviceListingStore == null) return;
+    const full: AgentServiceListing = {
+      ...listing,
+      listing_id: `ls-${crypto.randomUUID()}` as import("@motebit/sdk").ListingId,
+      updated_at: Date.now(),
+    };
+    await this.serviceListingStore.set(full);
+  }
+
+  /** Get this agent's service listing. */
+  async getServiceListing(): Promise<AgentServiceListing | null> {
+    if (this.serviceListingStore == null) return null;
+    return this.serviceListingStore.get(this.motebitId);
   }
 }

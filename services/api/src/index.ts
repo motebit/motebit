@@ -39,6 +39,9 @@
  *   GET  /api/v1/agents/discover?capability=&motebit_id=&limit= — discover agents
  *   GET  /api/v1/agents/:motebitId                     — get specific agent
  *   DELETE /api/v1/agents/deregister                   — remove agent registration
+ *   POST /api/v1/agents/:motebitId/listing              — register/update service listing
+ *   GET  /api/v1/agents/:motebitId/listing              — get service listing
+ *   GET  /api/v1/market/candidates?capability=&max_budget=&limit= — scored candidate list
  *
  * WebSocket protocol:
  *   Client → Server:  { type: "push", events: EventLogEntry[] }
@@ -283,6 +286,30 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
         last_heartbeat INTEGER NOT NULL,
         expires_at    INTEGER NOT NULL
       );
+  `);
+
+  // Create market relay tables (service listings + latency stats for routing)
+  moteDb.db.exec(`
+      CREATE TABLE IF NOT EXISTS relay_service_listings (
+        listing_id    TEXT PRIMARY KEY,
+        motebit_id    TEXT NOT NULL,
+        capabilities  TEXT NOT NULL DEFAULT '[]',
+        pricing       TEXT NOT NULL DEFAULT '[]',
+        sla_max_latency_ms INTEGER NOT NULL DEFAULT 5000,
+        sla_availability REAL NOT NULL DEFAULT 0.99,
+        description   TEXT NOT NULL DEFAULT '',
+        updated_at    INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_relay_listings_motebit ON relay_service_listings(motebit_id);
+
+      CREATE TABLE IF NOT EXISTS relay_latency_stats (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        motebit_id TEXT NOT NULL,
+        remote_motebit_id TEXT NOT NULL,
+        latency_ms REAL NOT NULL,
+        recorded_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_relay_latency_pair ON relay_latency_stats(motebit_id, remote_motebit_id);
   `);
 
   // Track connected WebSocket clients per motebitId with device identity
@@ -1719,6 +1746,23 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
           ? AgentTaskStatus.Denied
           : AgentTaskStatus.Failed;
 
+    // Record latency for routing intelligence
+    if (receipt.completed_at && entry.task.submitted_at) {
+      const elapsed = receipt.completed_at - entry.task.submitted_at;
+      if (elapsed > 0 && receipt.motebit_id) {
+        try {
+          moteDb.db
+            .prepare(
+              `INSERT INTO relay_latency_stats (motebit_id, remote_motebit_id, latency_ms, recorded_at)
+               VALUES (?, ?, ?, ?)`,
+            )
+            .run(motebitId, receipt.motebit_id, elapsed, Date.now());
+        } catch {
+          // Best-effort latency recording
+        }
+      }
+    }
+
     // Fan out task_result to all connected devices
     const peers = connections.get(motebitId);
     if (peers) {
@@ -2015,6 +2059,153 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
     moteDb.db.prepare(`DELETE FROM agent_registry WHERE motebit_id = ?`).run(callerMotebitId);
     return c.json({ ok: true });
+  });
+
+  // === Market Endpoints ===
+
+  // POST /api/v1/agents/:motebitId/listing — register/update service listing
+  app.post("/api/v1/agents/:motebitId/listing", async (c) => {
+    const motebitId = asMotebitId(c.req.param("motebitId"));
+    const body = await c.req.json<{
+      capabilities?: string[];
+      pricing?: Array<{ capability: string; unit_cost: number; currency: string; per: string }>;
+      sla?: { max_latency_ms?: number; availability_guarantee?: number };
+      description?: string;
+    }>();
+
+    const listingId = `ls-${crypto.randomUUID()}`;
+    const now = Date.now();
+
+    moteDb.db
+      .prepare(
+        `INSERT OR REPLACE INTO relay_service_listings
+         (listing_id, motebit_id, capabilities, pricing, sla_max_latency_ms, sla_availability, description, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        listingId,
+        motebitId,
+        JSON.stringify(body.capabilities ?? []),
+        JSON.stringify(body.pricing ?? []),
+        body.sla?.max_latency_ms ?? 5000,
+        body.sla?.availability_guarantee ?? 0.99,
+        body.description ?? "",
+        now,
+      );
+
+    return c.json({ listing_id: listingId, updated_at: now }, 200);
+  });
+
+  // GET /api/v1/agents/:motebitId/listing — get service listing
+  app.get("/api/v1/agents/:motebitId/listing", (c) => {
+    const motebitId = asMotebitId(c.req.param("motebitId"));
+
+    const row = moteDb.db
+      .prepare(`SELECT * FROM relay_service_listings WHERE motebit_id = ?`)
+      .get(motebitId) as Record<string, unknown> | undefined;
+
+    if (!row) {
+      throw new HTTPException(404, { message: "No service listing found" });
+    }
+
+    return c.json({
+      listing_id: row.listing_id,
+      motebit_id: row.motebit_id,
+      capabilities: JSON.parse(row.capabilities as string) as string[],
+      pricing: JSON.parse(row.pricing as string) as unknown[],
+      sla: {
+        max_latency_ms: row.sla_max_latency_ms,
+        availability_guarantee: row.sla_availability,
+      },
+      description: row.description,
+      updated_at: row.updated_at,
+    });
+  });
+
+  // GET /api/v1/market/candidates — scored candidate list for capability query
+  app.get("/api/v1/market/candidates", (c) => {
+    const capability = c.req.query("capability");
+    const maxBudgetStr = c.req.query("max_budget");
+    const limitStr = c.req.query("limit");
+    const limit = Math.min(Math.max(parseInt(limitStr ?? "20", 10) || 20, 1), 100);
+    const maxBudget = maxBudgetStr ? parseFloat(maxBudgetStr) : undefined;
+
+    const now = Date.now();
+
+    // Get all service listings (optionally filtered by capability)
+    let listingRows: Array<Record<string, unknown>>;
+    if (capability) {
+      listingRows = moteDb.db
+        .prepare(
+          `SELECT l.*, r.public_key, r.expires_at
+           FROM relay_service_listings l
+           LEFT JOIN agent_registry r ON l.motebit_id = r.motebit_id
+           WHERE EXISTS (SELECT 1 FROM json_each(l.capabilities) WHERE value = ?)
+           LIMIT ?`,
+        )
+        .all(capability, limit) as Array<Record<string, unknown>>;
+    } else {
+      listingRows = moteDb.db
+        .prepare(
+          `SELECT l.*, r.public_key, r.expires_at
+           FROM relay_service_listings l
+           LEFT JOIN agent_registry r ON l.motebit_id = r.motebit_id
+           LIMIT ?`,
+        )
+        .all(limit) as Array<Record<string, unknown>>;
+    }
+
+    // Build candidate profiles with scoring data
+    const candidates = listingRows.map((row) => {
+      const mid = row.motebit_id as string;
+      const isOnline = (row.expires_at as number | null) != null && (row.expires_at as number) > now;
+
+      // Get trust record from persistence
+      const trustRow = moteDb.agentTrustStore
+        ? (() => {
+            // Look up any trust records for this agent (use first available motebit's trust data)
+            return null; // Trust lookups are per-motebit, relay doesn't have a single owner context
+          })()
+        : null;
+
+      // Get latency stats
+      const latencyRows = moteDb.db
+        .prepare(
+          `SELECT latency_ms FROM relay_latency_stats
+           WHERE remote_motebit_id = ?
+           ORDER BY recorded_at DESC LIMIT 100`,
+        )
+        .all(mid) as Array<{ latency_ms: number }>;
+
+      let latencyStats: { avg_ms: number; p95_ms: number; sample_count: number } | null = null;
+      if (latencyRows.length > 0) {
+        const vals = latencyRows.map((r) => r.latency_ms);
+        const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+        const sorted = [...vals].sort((a, b) => a - b);
+        const p95Idx = Math.min(Math.ceil(sorted.length * 0.95) - 1, sorted.length - 1);
+        latencyStats = { avg_ms: avg, p95_ms: sorted[p95Idx]!, sample_count: vals.length };
+      }
+
+      const capabilities = JSON.parse(row.capabilities as string) as string[];
+      const pricing = JSON.parse(row.pricing as string) as Array<{ capability: string; unit_cost: number; currency: string; per: string }>;
+
+      return {
+        motebit_id: mid,
+        capabilities,
+        pricing,
+        sla: {
+          max_latency_ms: row.sla_max_latency_ms as number,
+          availability_guarantee: row.sla_availability as number,
+        },
+        description: row.description as string,
+        is_online: isOnline,
+        latency_stats: latencyStats,
+        trust_record: trustRow,
+        max_budget: maxBudget,
+      };
+    });
+
+    return c.json({ candidates });
   });
 
   function close(): void {

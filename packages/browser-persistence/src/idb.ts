@@ -5,7 +5,7 @@
  * memory edges, identities, devices, and audit log.
  */
 
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 export function openMotebitDB(dbName = "motebit"): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -92,6 +92,30 @@ export function openMotebitDB(dbName = "motebit"): Promise<IDBDatabase> {
           autoIncrement: true,
         });
         grad.createIndex("motebit_time", ["motebit_id", "timestamp"]);
+      }
+
+      // Service listings
+      if (!db.objectStoreNames.contains("service_listings")) {
+        const listings = db.createObjectStore("service_listings", { keyPath: "listing_id" });
+        listings.createIndex("motebit_id", "motebit_id");
+      }
+
+      // Budget allocations
+      if (!db.objectStoreNames.contains("budget_allocations")) {
+        const allocs = db.createObjectStore("budget_allocations", { keyPath: "allocation_id" });
+        allocs.createIndex("goal_id", "goal_id");
+      }
+
+      // Settlements
+      if (!db.objectStoreNames.contains("settlements")) {
+        const settlements = db.createObjectStore("settlements", { keyPath: "settlement_id" });
+        settlements.createIndex("allocation_id", "allocation_id");
+      }
+
+      // Latency stats
+      if (!db.objectStoreNames.contains("latency_stats")) {
+        const latency = db.createObjectStore("latency_stats", { autoIncrement: true });
+        latency.createIndex("motebit_remote", ["motebit_id", "remote_motebit_id"]);
       }
     };
 

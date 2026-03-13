@@ -85,6 +85,14 @@ interface MotebitServerDeps {
   >;
   identityFileContent?: string;
 
+  /** Returns this agent's service listing (capabilities, pricing, SLA). */
+  getServiceListing?(): Promise<{
+    capabilities: string[];
+    pricing: Array<{ capability: string; unit_cost: number; currency: string; per: string }>;
+    sla: { max_latency_ms: number; availability_guarantee: number };
+    description: string;
+  } | null>;
+
   /** Resolve a caller's public key and trust level by motebit ID. */
   resolveCallerKey?(
     motebitId: string,
@@ -615,6 +623,31 @@ export class McpServerAdapter {
       this.deps.logToolCall("motebit_tools", {}, { ok: true, data: tools });
       return fmt(tools);
     });
+
+    // motebit_service_listing — read-only, returns this agent's service listing
+    if (this.deps.getServiceListing) {
+      const getServiceListing = this.deps.getServiceListing;
+      const listingToolDef = McpServerAdapter.syntheticToolDef(
+        "motebit_service_listing",
+        "Get this agent's service listing (capabilities, pricing, SLA)",
+        RiskLevel.R0_READ,
+      );
+      server.tool(
+        "motebit_service_listing",
+        "Get this agent's service listing (capabilities, pricing, SLA)",
+        async () => {
+          const denied = this.validateSyntheticTool(listingToolDef, {});
+          if (denied) return denied;
+
+          const listing = await getServiceListing();
+          if (!listing) {
+            return fmt({ error: "No service listing configured" });
+          }
+          this.deps.logToolCall("motebit_service_listing", {}, { ok: true, data: listing });
+          return fmt(listing);
+        },
+      );
+    }
   }
 
   // --- Resource Registration ---
