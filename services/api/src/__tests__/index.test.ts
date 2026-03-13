@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 import { EventType } from "@motebit/sdk";
@@ -1029,6 +1029,316 @@ describe("Sync Relay — agent protocol", () => {
     const body = (await pollRes.json()) as { task: AgentTask };
     expect(body.task.required_capabilities).toEqual(["stdio_mcp", "file_system"]);
     expect(body.task.step_id).toBe("step-123");
+  });
+
+  it("budget lock + settlement: full cycle on task with pricing", async () => {
+    // Create a service agent with pricing
+    const serviceKeypair = await generateKeypair();
+    const servicePubHex = bytesToHex(serviceKeypair.publicKey);
+
+    const idRes = await relay.app.request("/identity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ owner_id: "service-owner" }),
+    });
+    const { motebit_id: serviceMotebitId } = (await idRes.json()) as { motebit_id: string };
+
+    // Register device with public key (for receipt verification)
+    const devRes = await relay.app.request("/device/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: serviceMotebitId,
+        device_name: "Service",
+        public_key: servicePubHex,
+      }),
+    });
+    const { device_id: serviceDeviceId } = (await devRes.json()) as { device_id: string };
+
+    // Create a signed token so we can register in the agent registry
+    const serviceToken = await createSignedToken(
+      { mid: serviceMotebitId, did: serviceDeviceId, iat: Date.now(), exp: Date.now() + 300000 },
+      serviceKeypair.privateKey,
+    );
+
+    // Register agent with capabilities
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${serviceToken}`,
+      },
+      body: JSON.stringify({
+        endpoint_url: "http://service.local/mcp",
+        capabilities: ["web_search"],
+      }),
+    });
+
+    // Register service listing with pricing
+    await relay.app.request(`/api/v1/agents/${serviceMotebitId}/listing`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${serviceToken}`,
+      },
+      body: JSON.stringify({
+        capabilities: ["web_search"],
+        pricing: [{ capability: "web_search", unit_cost: 0.05, currency: "USD", per: "task" }],
+      }),
+    });
+
+    // Connect the service agent's device so routing can reach it
+    const serviceWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+    relay.connections.set(serviceMotebitId, [
+      { ws: serviceWs as never, deviceId: serviceDeviceId, capabilities: ["web_search"] },
+    ]);
+
+    // Submit task with max_budget — should trigger budget lock via scored routing
+    const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        prompt: "Search for something",
+        required_capabilities: ["web_search"],
+        max_budget: 1.0,
+        currency: "USD",
+      }),
+    });
+    expect(submitRes.status).toBe(201);
+    const { task_id } = (await submitRes.json()) as { task_id: string };
+
+    // Verify budget was locked
+    const budgetRes = await relay.app.request(`/agent/${MOTEBIT_ID}/budget`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(budgetRes.status).toBe(200);
+    const budget = (await budgetRes.json()) as {
+      summary: { total_locked: number; total_settled: number };
+      allocations: Array<Record<string, unknown>>;
+    };
+    expect(budget.summary.total_locked).toBeGreaterThan(0);
+    expect(budget.allocations.length).toBeGreaterThanOrEqual(1);
+    const alloc = budget.allocations.find((a) => a.task_id === task_id);
+    expect(alloc).toBeDefined();
+    expect(alloc!.status).toBe("locked");
+    expect(alloc!.amount_locked).toBeGreaterThan(0);
+
+    // Service agent completes the task with a signed receipt
+    const unsigned = {
+      task_id,
+      motebit_id: serviceMotebitId as unknown as import("@motebit/sdk").MotebitId,
+      device_id: serviceDeviceId as unknown as import("@motebit/sdk").DeviceId,
+      submitted_at: Date.now(),
+      completed_at: Date.now(),
+      status: "completed" as const,
+      result: "Found 3 results",
+      tools_used: ["web_search"],
+      memories_formed: 0,
+      prompt_hash: "abc",
+      result_hash: "def",
+    };
+    const receipt = await signExecutionReceipt(unsigned, serviceKeypair.privateKey);
+
+    const resultRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task/${task_id}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(receipt),
+    });
+    expect(resultRes.status).toBe(200);
+
+    // Verify settlement occurred
+    const budgetAfter = (await (
+      await relay.app.request(`/agent/${MOTEBIT_ID}/budget`, {
+        method: "GET",
+        headers: AUTH_HEADER,
+      })
+    ).json()) as {
+      summary: { total_locked: number; total_settled: number };
+      allocations: Array<Record<string, unknown>>;
+    };
+    expect(budgetAfter.summary.total_settled).toBeGreaterThan(0);
+    const settledAlloc = budgetAfter.allocations.find((a) => a.task_id === task_id);
+    expect(settledAlloc!.status).toBe("settled");
+    expect(settledAlloc!.settlement_status).toBe("completed");
+    expect(settledAlloc!.amount_settled).toBeGreaterThan(0);
+  });
+
+  it("budget lock rejects underfunded tasks", async () => {
+    // Create and register a service agent with expensive pricing
+    const serviceKeypair = await generateKeypair();
+    const servicePubHex = bytesToHex(serviceKeypair.publicKey);
+
+    const idRes = await relay.app.request("/identity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ owner_id: "expensive-service" }),
+    });
+    const { motebit_id: serviceMotebitId } = (await idRes.json()) as { motebit_id: string };
+
+    const devRes2 = await relay.app.request("/device/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: serviceMotebitId,
+        device_name: "Service",
+        public_key: servicePubHex,
+      }),
+    });
+    const { device_id: expDeviceId } = (await devRes2.json()) as { device_id: string };
+
+    const serviceToken = await createSignedToken(
+      { mid: serviceMotebitId, did: expDeviceId, iat: Date.now(), exp: Date.now() + 300000 },
+      serviceKeypair.privateKey,
+    );
+
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${serviceToken}`,
+      },
+      body: JSON.stringify({
+        endpoint_url: "http://expensive.local/mcp",
+        capabilities: ["code_exec"],
+      }),
+    });
+
+    await relay.app.request(`/api/v1/agents/${serviceMotebitId}/listing`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${serviceToken}`,
+      },
+      body: JSON.stringify({
+        capabilities: ["code_exec"],
+        pricing: [{ capability: "code_exec", unit_cost: 5.0, currency: "USD", per: "task" }],
+      }),
+    });
+
+    const serviceWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+    relay.connections.set(serviceMotebitId, [
+      { ws: serviceWs as never, deviceId: expDeviceId, capabilities: ["code_exec"] },
+    ]);
+
+    // Submit with budget too small for the pricing
+    const res = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        prompt: "Run expensive code",
+        required_capabilities: ["code_exec"],
+        max_budget: 1.0,
+      }),
+    });
+    expect(res.status).toBe(402);
+  });
+
+  it("settlement refunds on failed receipt", async () => {
+    // Create service agent
+    const serviceKeypair = await generateKeypair();
+    const servicePubHex = bytesToHex(serviceKeypair.publicKey);
+
+    const idRes = await relay.app.request("/identity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ owner_id: "refund-service" }),
+    });
+    const { motebit_id: serviceMotebitId } = (await idRes.json()) as { motebit_id: string };
+
+    const devRes3 = await relay.app.request("/device/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: serviceMotebitId,
+        device_name: "Service",
+        public_key: servicePubHex,
+      }),
+    });
+    const { device_id: refDeviceId } = (await devRes3.json()) as { device_id: string };
+
+    const serviceToken = await createSignedToken(
+      { mid: serviceMotebitId, did: refDeviceId, iat: Date.now(), exp: Date.now() + 300000 },
+      serviceKeypair.privateKey,
+    );
+
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${serviceToken}`,
+      },
+      body: JSON.stringify({
+        endpoint_url: "http://refund.local/mcp",
+        capabilities: ["web_search"],
+      }),
+    });
+
+    await relay.app.request(`/api/v1/agents/${serviceMotebitId}/listing`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${serviceToken}`,
+      },
+      body: JSON.stringify({
+        capabilities: ["web_search"],
+        pricing: [{ capability: "web_search", unit_cost: 0.1, currency: "USD", per: "task" }],
+      }),
+    });
+
+    const serviceWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+    relay.connections.set(serviceMotebitId, [
+      { ws: serviceWs as never, deviceId: refDeviceId, capabilities: ["web_search"] },
+    ]);
+
+    // Submit task with budget
+    const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        prompt: "Search that fails",
+        required_capabilities: ["web_search"],
+        max_budget: 1.0,
+      }),
+    });
+    const { task_id } = (await submitRes.json()) as { task_id: string };
+
+    // Service agent fails the task
+    const unsigned = {
+      task_id,
+      motebit_id: serviceMotebitId as unknown as import("@motebit/sdk").MotebitId,
+      device_id: refDeviceId as unknown as import("@motebit/sdk").DeviceId,
+      submitted_at: Date.now(),
+      completed_at: Date.now(),
+      status: "failed" as const,
+      result: "Service unavailable",
+      tools_used: [],
+      memories_formed: 0,
+      prompt_hash: "abc",
+      result_hash: "def",
+    };
+    const receipt = await signExecutionReceipt(unsigned, serviceKeypair.privateKey);
+
+    await relay.app.request(`/agent/${MOTEBIT_ID}/task/${task_id}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(receipt),
+    });
+
+    // Verify refund: allocation released, settlement refunded
+    const budget = (await (
+      await relay.app.request(`/agent/${MOTEBIT_ID}/budget`, {
+        method: "GET",
+        headers: AUTH_HEADER,
+      })
+    ).json()) as {
+      summary: { total_locked: number; total_settled: number };
+      allocations: Array<Record<string, unknown>>;
+    };
+    const refundedAlloc = budget.allocations.find((a) => a.task_id === task_id);
+    expect(refundedAlloc!.status).toBe("released");
+    expect(refundedAlloc!.settlement_status).toBe("refunded");
+    expect(refundedAlloc!.amount_settled).toBe(0);
   });
 
   it("POST/GET /sync/:id/plans pushes and pulls plans", async () => {

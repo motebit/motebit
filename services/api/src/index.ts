@@ -80,6 +80,9 @@ import {
   asNodeId,
   asConversationId,
   asPlanId,
+  asAllocationId,
+  asSettlementId,
+  asGoalId,
 } from "@motebit/sdk";
 import type { AgentTask, MotebitId, NodeId, SyncPlan, SyncPlanStep } from "@motebit/sdk";
 import type { WSContext } from "hono/ws";
@@ -91,9 +94,15 @@ import {
   publicKeyToDidKey,
   issueReputationCredential,
 } from "@motebit/crypto";
-import { rankCandidates, applyPrecisionToMarketConfig } from "@motebit/market";
+import {
+  rankCandidates,
+  applyPrecisionToMarketConfig,
+  estimateCost,
+  allocateBudget,
+  settleOnReceipt,
+} from "@motebit/market";
 import type { CandidateProfile, TaskRequirements } from "@motebit/market";
-import type { CapabilityPrice } from "@motebit/sdk";
+import type { CapabilityPrice, BudgetAllocation } from "@motebit/sdk";
 
 function hexToBytes(hex: string): Uint8Array {
   const bytes = new Uint8Array(hex.length / 2);
@@ -329,6 +338,34 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       CREATE INDEX IF NOT EXISTS idx_relay_latency_pair ON relay_latency_stats(motebit_id, remote_motebit_id);
   `);
 
+  // Budget allocation + settlement ledger tables
+  moteDb.db.exec(`
+      CREATE TABLE IF NOT EXISTS relay_budget_allocations (
+        allocation_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        motebit_id TEXT NOT NULL,
+        candidate_motebit_id TEXT NOT NULL,
+        goal_id TEXT NOT NULL DEFAULT '',
+        amount_locked REAL NOT NULL,
+        currency TEXT NOT NULL DEFAULT 'USD',
+        created_at INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'locked'
+      );
+      CREATE INDEX IF NOT EXISTS idx_relay_budget_motebit ON relay_budget_allocations(motebit_id);
+      CREATE INDEX IF NOT EXISTS idx_relay_budget_task ON relay_budget_allocations(task_id);
+
+      CREATE TABLE IF NOT EXISTS relay_settlements (
+        settlement_id TEXT PRIMARY KEY,
+        allocation_id TEXT NOT NULL,
+        receipt_hash TEXT NOT NULL DEFAULT '',
+        ledger_hash TEXT,
+        amount_settled REAL NOT NULL,
+        status TEXT NOT NULL,
+        settled_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_relay_settlements_alloc ON relay_settlements(allocation_id);
+  `);
+
   // Collaborative plan proposal tables
   moteDb.db.exec(`
       CREATE TABLE IF NOT EXISTS relay_proposals (
@@ -390,7 +427,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   const TASK_TTL_MS = 10 * 60 * 1000; // 10 minutes
   const taskQueue = new Map<
     string,
-    { task: AgentTask; receipt?: ExecutionReceipt; expiresAt: number }
+    { task: AgentTask; receipt?: ExecutionReceipt; expiresAt: number; allocation_id?: string }
   >();
 
   // Periodic cleanup of expired tasks and agent registrations
@@ -2006,6 +2043,56 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
           const selected = ranked.filter((r) => r.selected && r.composite > 0);
 
           if (selected.length > 0) {
+            // Budget lock: if max_budget is set, estimate cost and lock funds before routing.
+            // The top-ranked candidate's pricing determines the locked amount.
+            const topCandidateId = selected[0]!.motebit_id as string;
+            const topProfile = eligibleProfiles.find(
+              (p) => (p.motebit_id as string) === topCandidateId,
+            );
+            if (body.max_budget != null && body.max_budget > 0 && topProfile?.listing?.pricing) {
+              const cost = estimateCost(topProfile.listing.pricing, requiredCaps);
+              if (cost.amount > 0) {
+                const allocationId = asAllocationId(crypto.randomUUID());
+                const allocation = allocateBudget(
+                  {
+                    goal_id: asGoalId(body.step_id ?? taskId),
+                    candidate_motebit_id: topCandidateId as unknown as MotebitId,
+                    estimated_cost: cost.amount,
+                    currency: cost.currency,
+                    risk_factor: 0.1,
+                  },
+                  body.max_budget,
+                  allocationId,
+                );
+                if (!allocation) {
+                  throw new HTTPException(402, {
+                    message: `Insufficient budget: task requires ~${cost.amount} ${cost.currency}, available ${body.max_budget}`,
+                  });
+                }
+                // Persist the budget lock
+                moteDb.db
+                  .prepare(
+                    `INSERT INTO relay_budget_allocations
+                     (allocation_id, task_id, motebit_id, candidate_motebit_id, goal_id, amount_locked, currency, created_at, status)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                  )
+                  .run(
+                    allocation.allocation_id,
+                    taskId,
+                    motebitId,
+                    allocation.candidate_motebit_id,
+                    allocation.goal_id,
+                    allocation.amount_locked,
+                    allocation.currency,
+                    allocation.created_at,
+                    allocation.status,
+                  );
+                // Track allocation on the task entry for settlement on receipt
+                const queueEntry = taskQueue.get(taskId);
+                if (queueEntry) queueEntry.allocation_id = allocation.allocation_id as string;
+              }
+            }
+
             const selectedIds = new Set(selected.map((s) => s.motebit_id as string));
             // Route to connected devices belonging to selected agents
             for (const [peerId, peers] of connections) {
@@ -2017,7 +2104,9 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
             routed = true;
           }
         }
-      } catch {
+      } catch (err) {
+        // Re-throw intentional HTTP errors (e.g. 402 insufficient budget)
+        if (err instanceof HTTPException) throw err;
         // Scoring failed — fall through to broadcast
       }
     }
@@ -2179,6 +2268,65 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       }
     }
 
+    // Settlement: if a budget was locked for this task, settle based on receipt status
+    if (entry.allocation_id) {
+      try {
+        const allocRow = moteDb.db
+          .prepare("SELECT * FROM relay_budget_allocations WHERE allocation_id = ?")
+          .get(entry.allocation_id) as
+          | {
+              allocation_id: string;
+              goal_id: string;
+              candidate_motebit_id: string;
+              amount_locked: number;
+              currency: string;
+              created_at: number;
+              status: string;
+            }
+          | undefined;
+
+        if (allocRow && allocRow.status === "locked") {
+          const allocation: BudgetAllocation = {
+            allocation_id: asAllocationId(allocRow.allocation_id),
+            goal_id: asGoalId(allocRow.goal_id),
+            candidate_motebit_id: allocRow.candidate_motebit_id as MotebitId,
+            amount_locked: allocRow.amount_locked,
+            currency: allocRow.currency,
+            created_at: allocRow.created_at,
+            status: "locked",
+          };
+
+          const settlementId = asSettlementId(crypto.randomUUID());
+          const settlement = settleOnReceipt(allocation, receipt, null, settlementId);
+
+          // Persist settlement record
+          moteDb.db
+            .prepare(
+              `INSERT INTO relay_settlements
+               (settlement_id, allocation_id, receipt_hash, ledger_hash, amount_settled, status, settled_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              settlement.settlement_id,
+              settlement.allocation_id,
+              settlement.receipt_hash,
+              settlement.ledger_hash,
+              settlement.amount_settled,
+              settlement.status,
+              settlement.settled_at,
+            );
+
+          // Update allocation status
+          const newStatus = settlement.status === "refunded" ? "released" : "settled";
+          moteDb.db
+            .prepare("UPDATE relay_budget_allocations SET status = ? WHERE allocation_id = ?")
+            .run(newStatus, entry.allocation_id);
+        }
+      } catch {
+        // Best-effort settlement — don't block receipt delivery on accounting errors
+      }
+    }
+
     // Fan out task_result to all connected devices
     const peers = connections.get(motebitId);
     if (peers) {
@@ -2189,6 +2337,44 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     }
 
     return c.json({ status: entry.task.status });
+  });
+
+  // GET /agent/:motebitId/budget — budget allocations and settlements for this motebit
+  app.get("/agent/:motebitId/budget", async (c) => {
+    const mid = asMotebitId(c.req.param("motebitId"));
+    const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
+
+    const allocations = moteDb.db
+      .prepare(
+        `SELECT a.*, s.settlement_id, s.amount_settled, s.status AS settlement_status, s.settled_at
+         FROM relay_budget_allocations a
+         LEFT JOIN relay_settlements s ON a.allocation_id = s.allocation_id
+         WHERE a.motebit_id = ?
+         ORDER BY a.created_at DESC
+         LIMIT ?`,
+      )
+      .all(mid, limit) as Array<Record<string, unknown>>;
+
+    const totalLocked = moteDb.db
+      .prepare(
+        "SELECT COALESCE(SUM(amount_locked), 0) AS total FROM relay_budget_allocations WHERE motebit_id = ? AND status = 'locked'",
+      )
+      .get(mid) as { total: number };
+
+    const totalSettled = moteDb.db
+      .prepare(
+        "SELECT COALESCE(SUM(amount_settled), 0) AS total FROM relay_settlements s JOIN relay_budget_allocations a ON s.allocation_id = a.allocation_id WHERE a.motebit_id = ?",
+      )
+      .get(mid) as { total: number };
+
+    return c.json({
+      motebit_id: mid,
+      summary: {
+        total_locked: totalLocked.total,
+        total_settled: totalSettled.total,
+      },
+      allocations,
+    });
   });
 
   // GET /agent/:motebitId/capabilities — public (no auth)
