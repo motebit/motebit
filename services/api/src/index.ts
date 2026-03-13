@@ -92,6 +92,7 @@ import {
 } from "@motebit/sdk";
 import type { AgentTask, MotebitId, NodeId, SyncPlan, SyncPlanStep } from "@motebit/sdk";
 import type { WSContext } from "hono/ws";
+/* eslint-disable no-restricted-imports -- Relay service generates its own keypair (not a user surface) */
 import {
   verifySignedToken,
   verifyExecutionReceipt,
@@ -102,6 +103,7 @@ import {
   verifyVerifiableCredential,
   createPresentation,
 } from "@motebit/crypto";
+/* eslint-enable no-restricted-imports */
 import type { VerifiableCredential } from "@motebit/crypto";
 import { rankCandidates, applyPrecisionToMarketConfig, settleOnReceipt } from "@motebit/market";
 import type { CandidateProfile, TaskRequirements } from "@motebit/market";
@@ -668,6 +670,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       const agentId = extractMotebitIdFromPath(c.req.path);
       currentPricing = agentId ? getAgentPricing(agentId) : null;
       if (!currentPricing) return next(); // Free — no x402
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
       return x402Gate(c, next);
     });
   }
@@ -881,7 +884,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
               const peers = connections.get(motebitId);
               if (peers) {
                 const self = peers.find((p) => p.ws === ws);
-                if (self) self.capabilities = msg.capabilities as string[];
+                if (self) self.capabilities = msg.capabilities;
               }
             }
 
@@ -1188,7 +1191,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     const allEvents = await eventStore.query({ motebit_id: motebitId });
     const relevantEvents = allEvents.filter((e) => {
       if (!planEventTypes.includes(e.event_type)) return false;
-      const p = e.payload as Record<string, unknown>;
+      const p = e.payload;
       return p.goal_id === goalId || p.plan_id === plan.plan_id;
     });
 
@@ -1197,9 +1200,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       steps.filter((s) => s.delegation_task_id).map((s) => s.delegation_task_id!),
     );
     const receiptEvents = allEvents.filter((e) => {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-enum-comparison -- EventType string enum values
       if (e.event_type !== "agent_task_completed" && e.event_type !== "agent_task_failed")
         return false;
-      const p = e.payload as Record<string, unknown>;
+      const p = e.payload;
       return delegationTaskIds.has(p.task_id as string);
     });
 
@@ -1211,6 +1215,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     const timeline: TimelineEntry[] = [];
 
     const goalStart = relevantEvents.find(
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-enum-comparison -- EventType string enum values
       (e) => e.event_type === "goal_created" || e.event_type === "goal_executed",
     );
     if (goalStart) {
@@ -1254,7 +1259,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     for (const event of relevantEvents) {
       const mapping = typeFieldMap[event.event_type];
       if (!mapping) continue;
-      const p = event.payload as Record<string, unknown>;
+      const p = event.payload;
       const payload: Record<string, unknown> = {};
       for (const field of mapping.fields) {
         if (p[field] !== undefined) payload[field] = p[field];
@@ -1284,6 +1289,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       }
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-enum-comparison -- EventType string enum values
     const goalEnd = relevantEvents.find((e) => e.event_type === "goal_completed");
     if (goalEnd) {
       timeline.push({
@@ -1313,11 +1319,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         completed_at: s.completed_at,
       };
       if (s.delegation_task_id) {
-        const re = receiptEvents.find(
-          (e) => (e.payload as Record<string, unknown>).task_id === s.delegation_task_id,
-        );
+        const re = receiptEvents.find((e) => e.payload.task_id === s.delegation_task_id);
         const receipt = re
-          ? ((re.payload as Record<string, unknown>).receipt as Record<string, unknown> | undefined)
+          ? (re.payload.receipt as Record<string, unknown> | undefined)
           : undefined;
         summary.delegation = { task_id: s.delegation_task_id, receipt_hash: receipt?.signature };
       }
@@ -1326,7 +1330,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
     // 7. Delegation receipt summaries
     const delegationReceipts = receiptEvents.map((e) => {
-      const p = e.payload as Record<string, unknown>;
+      const p = e.payload;
       const receipt = p.receipt as Record<string, unknown> | undefined;
       return {
         task_id: p.task_id as string,
@@ -2177,6 +2181,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     app.use("/agent/*/task", async (c, next) => {
       // Only apply auth to POST (submit) requests, not to /result sub-routes
       if (c.req.method === "POST" && !c.req.url.includes("/result")) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
         return dualAuth(c, next);
       }
       await next();
@@ -2608,7 +2613,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         const allocation: BudgetAllocation = {
           allocation_id: allocationId,
           goal_id: asGoalId(taskId),
-          candidate_motebit_id: receipt.motebit_id as MotebitId,
+          candidate_motebit_id: receipt.motebit_id,
           amount_locked: grossAmount,
           currency: "USDC",
           created_at: receipt.submitted_at ?? Date.now(),
@@ -2712,7 +2717,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     // delegation_returning         → submitter's spatial app: "your motebit is coming home"
     // delegation_visitor_departing → worker's spatial app:    "the visitor is leaving"
     const receiptStatus = receipt.status === "completed" ? "completed" : "failed";
-    const taskSubmittedBy = entry.submitted_by ?? (entry.task.submitted_by as string | undefined);
+    const taskSubmittedBy = entry.submitted_by ?? entry.task.submitted_by;
     if (taskSubmittedBy) {
       broadcastToMotebit(taskSubmittedBy, {
         type: "delegation_returning",
@@ -2732,6 +2737,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   });
 
   // GET /agent/:motebitId/settlements — settlement history for this agent
+  // eslint-disable-next-line @typescript-eslint/require-await -- Hono handler, sync SQLite
   app.get("/agent/:motebitId/settlements", async (c) => {
     const mid = asMotebitId(c.req.param("motebitId"));
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
@@ -2852,9 +2858,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
     const ledgerId = crypto.randomUUID();
     const now = Date.now();
-    const goalId = body.goal_id as string;
+    const goalId = body.goal_id;
     const planId = typeof body.plan_id === "string" ? body.plan_id : null;
-    const contentHash = body.content_hash as string;
+    const contentHash = body.content_hash;
 
     moteDb.db
       .prepare(
@@ -3230,6 +3236,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         did: agentDid,
         endpoint_url: r.endpoint_url,
         capabilities: JSON.parse(r.capabilities as string) as string[],
+        // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- DB row field is untyped
         metadata: r.metadata ? (JSON.parse(r.metadata as string) as Record<string, unknown>) : null,
       };
     });
@@ -3259,6 +3266,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       public_key: row.public_key,
       endpoint_url: row.endpoint_url,
       capabilities: JSON.parse(row.capabilities as string) as string[],
+      // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- DB row field is untyped
       metadata: row.metadata
         ? (JSON.parse(row.metadata as string) as Record<string, unknown>)
         : null,
@@ -3606,15 +3614,18 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       plan_id: proposal.plan_id,
       initiator_motebit_id: proposal.initiator_motebit_id,
       status: proposal.status,
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/strict-boolean-expressions -- JSON.parse returns any; DB row field is untyped
       plan_snapshot: proposal.plan_snapshot ? JSON.parse(proposal.plan_snapshot as string) : null,
       created_at: proposal.created_at,
       expires_at: proposal.expires_at,
       updated_at: proposal.updated_at,
       participants: participants.map((p) => ({
         motebit_id: p.motebit_id,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- JSON.parse returns any
         assigned_steps: JSON.parse(p.assigned_steps as string),
         response: p.response ?? null,
         responded_at: p.responded_at ?? null,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/strict-boolean-expressions -- JSON.parse returns any; DB row field is untyped
         counter_steps: p.counter_steps ? JSON.parse(p.counter_steps as string) : null,
       })),
     });
@@ -3655,6 +3666,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       )
       .run(
         body.response,
+        // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- request body field may be any
         body.counter_steps ? JSON.stringify(body.counter_steps) : null,
         now,
         body.signature ?? null,
@@ -3811,9 +3823,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     if (!stepProposal) {
       throw new HTTPException(404, { message: "Proposal not found" });
     }
+    // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- .get() returns any
     const isParticipant = moteDb.db
       .prepare("SELECT 1 FROM relay_proposal_participants WHERE proposal_id = ? AND motebit_id = ?")
       .get(proposalId, motebitId);
+    // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- isParticipant is any from .get()
     if (!isParticipant && motebitId !== stepProposal.initiator_motebit_id) {
       throw new HTTPException(403, { message: "Caller is not a participant in this proposal" });
     }
@@ -3830,6 +3844,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         motebitId,
         body.status,
         body.result_summary ?? null,
+        // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- request body field may be any
         body.receipt ? JSON.stringify(body.receipt) : null,
         now,
       );

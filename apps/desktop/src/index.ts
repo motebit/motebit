@@ -2922,14 +2922,15 @@ class TauriPlanSyncStoreAdapter implements PlanSyncStoreAdapter {
     });
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await -- implements async interface
   async prefetch(_since: number): Promise<void> {
     if ("listAllPlans" in this.store && typeof this.store.listAllPlans === "function") {
-      this._plans = (this.store as TauriPlanStore).listAllPlans(this.motebitId);
+      this._plans = this.store.listAllPlans(this.motebitId);
     } else if (
       "listActivePlans" in this.store &&
       typeof this.store.listActivePlans === "function"
     ) {
-      this._plans = this.store.listActivePlans!(this.motebitId);
+      this._plans = this.store.listActivePlans(this.motebitId);
     }
     const allSteps: PlanStep[] = [];
     for (const plan of this._plans) {

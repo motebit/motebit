@@ -98,6 +98,7 @@ const HOMOGLYPH_MAP: Record<string, string> = {
  */
 function normalizeForDetection(text: string): string {
   // 1. Strip zero-width characters
+  // eslint-disable-next-line no-misleading-character-class -- ZWJ/ZWNJ are separate strip targets, not a joined sequence
   let normalized = text.replace(/[\u200B\u200C\u200D\uFEFF\u00AD\u2060\u180E]/g, "");
 
   // 2. NFKD decomposition — maps compatibility characters to their base forms
@@ -118,7 +119,7 @@ function normalizeForDetection(text: string): string {
 
 /** Sanitize a source label: strip special chars, truncate. */
 function sanitizeSource(source: string): string {
-  return source.replace(/[\[\]"\\]/g, "_").slice(0, MAX_SOURCE_LENGTH);
+  return source.replace(/[[\]"\\]/g, "_").slice(0, MAX_SOURCE_LENGTH);
 }
 
 /** Strip boundary markers from content so it can't escape the sandbox. */

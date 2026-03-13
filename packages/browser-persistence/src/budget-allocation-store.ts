@@ -14,10 +14,12 @@ export class IdbBudgetAllocationStore implements BudgetAllocationStoreAdapter {
   async get(allocationId: string): Promise<BudgetAllocation | null> {
     const tx = this.db.transaction("budget_allocations", "readonly");
     const store = tx.objectStore("budget_allocations");
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- IDB .get() returns any
     const result = await idbRequest(store.get(allocationId));
     return (result as BudgetAllocation | undefined) ?? null;
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await -- fire-and-forget IDB put
   async create(allocation: BudgetAllocation): Promise<void> {
     const tx = this.db.transaction("budget_allocations", "readwrite");
     tx.objectStore("budget_allocations").put({ ...allocation });

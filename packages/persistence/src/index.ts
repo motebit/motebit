@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/require-await -- Sync SQLite methods implementing async interfaces */
 import { createRequire } from "node:module";
 import type { DatabaseDriver, PreparedStatement } from "./driver.js";
 export type { DatabaseDriver, PreparedStatement, RunResult } from "./driver.js";
@@ -2641,6 +2642,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
  * Thin wrapper that adapts better-sqlite3's Database to DatabaseDriver.
  * Uses createRequire so better-sqlite3 is loaded lazily (not at module load time).
  */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access -- Dynamic require of better-sqlite3 returns untyped Database */
 class BetterSqliteDriver implements DatabaseDriver {
   readonly driverName = "better-sqlite3";
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2669,6 +2671,7 @@ class BetterSqliteDriver implements DatabaseDriver {
     this.inner.close();
   }
 }
+/* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access */
 
 /**
  * Sync convenience factory — uses better-sqlite3.

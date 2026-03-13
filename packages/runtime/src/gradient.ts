@@ -408,7 +408,7 @@ export function gradientToMarketConfig(
   const base_wa = baseConfig?.weight_availability ?? 0.1;
 
   let wt = base_wt - e * 0.1;
-  let ws = base_ws - e * 0.1;
+  const ws = base_ws - e * 0.1;
   const wl_base = base_wl;
   const wp = base_wp;
   let wc = base_wc + e * 0.1;

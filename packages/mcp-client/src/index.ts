@@ -78,8 +78,8 @@ function wrapMcpResult(data: string, serverName: string, toolName: string): stri
   const escaped = data
     .replace(/\[EXTERNAL_DATA\b/g, "[ESCAPED_DATA")
     .replace(/\[\/EXTERNAL_DATA\]/g, "[/ESCAPED_DATA]");
-  const safeServer = serverName.replace(/[\[\]"\\]/g, "_").slice(0, 50);
-  const safeTool = toolName.replace(/[\[\]"\\]/g, "_").slice(0, 50);
+  const safeServer = serverName.replace(/[[\]"\\]/g, "_").slice(0, 50);
+  const safeTool = toolName.replace(/[[\]"\\]/g, "_").slice(0, 50);
   return `${EXTERNAL_DATA_START}"mcp:${safeServer}:${safeTool}"]\n${escaped}\n${EXTERNAL_DATA_END}`;
 }
 
@@ -353,9 +353,10 @@ export class McpClientAdapter {
         ? wrapMcpResult(textContent, this.config.name, mcpToolName)
         : undefined;
       return {
-        ok: !result.isError,
-        data: wrapped || result.content,
-        error: result.isError ? textContent : undefined,
+        ok: result.isError !== true,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- MCP SDK content type
+        data: wrapped != null ? wrapped : result.content,
+        error: result.isError === true ? textContent : undefined,
         _sanitized: true,
       };
     } catch (err: unknown) {
@@ -442,6 +443,7 @@ export async function connectMcpServers(
       adapters.push(adapter);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line no-console -- connection error logged to stderr
       console.warn(`Failed to connect to MCP server "${config.name}": ${message}`);
     }
   }

@@ -560,6 +560,7 @@ export class SpatialApp {
     });
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await -- implements async interface
   async setMcpServerTrust(name: string, trusted: boolean): Promise<void> {
     const config = this._mcpServers.find((s) => s.name === name);
     if (!config) return;

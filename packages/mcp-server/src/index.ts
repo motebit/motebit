@@ -133,18 +133,16 @@ export function riskToAnnotations(riskHint?: ToolDefinition["riskHint"]): {
   idempotentHint?: boolean;
   destructiveHint?: boolean;
 } {
-  if (!riskHint?.risk && riskHint?.risk !== 0) {
+  if (riskHint?.risk == null) {
     return {};
   }
 
-  const risk = riskHint.risk as number;
+  const risk = riskHint.risk;
 
-  if (risk === 0) {
-    // R0_READ
+  if (risk === RiskLevel.R0_READ) {
     return { readOnlyHint: true, idempotentHint: true };
   }
-  if (risk === 1) {
-    // R1_DRAFT
+  if (risk === RiskLevel.R1_DRAFT) {
     return { idempotentHint: true };
   }
   // R2_WRITE, R3_EXECUTE, R4_MONEY
@@ -456,6 +454,7 @@ export class McpServerAdapter {
     };
 
     if (this.deps.sendMessage) {
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- deps callback
       const sendMessage = this.deps.sendMessage;
       const toolDef = McpServerAdapter.syntheticToolDef(
         "motebit_query",
@@ -478,6 +477,7 @@ export class McpServerAdapter {
     }
 
     if (this.deps.storeMemory) {
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- deps callback
       const storeMemory = this.deps.storeMemory;
       const toolDef = McpServerAdapter.syntheticToolDef(
         "motebit_remember",
@@ -515,6 +515,7 @@ export class McpServerAdapter {
     }
 
     if (this.deps.queryMemories) {
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- deps callback
       const queryMemories = this.deps.queryMemories;
       const toolDef = McpServerAdapter.syntheticToolDef(
         "motebit_recall",
@@ -540,6 +541,7 @@ export class McpServerAdapter {
     }
 
     if (this.deps.handleAgentTask) {
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- deps callback
       const handleAgentTask = this.deps.handleAgentTask;
       const toolDef = McpServerAdapter.syntheticToolDef(
         "motebit_task",
@@ -583,6 +585,7 @@ export class McpServerAdapter {
       "Return this motebit's identity information",
       RiskLevel.R0_READ,
     );
+    // eslint-disable-next-line @typescript-eslint/require-await -- MCP SDK expects async handler
     server.tool("motebit_identity", "Return this motebit's identity information", async () => {
       const denied = this.validateSyntheticTool(identityToolDef, {});
       if (denied) return denied;
@@ -614,6 +617,7 @@ export class McpServerAdapter {
       "List available tools with risk levels",
       RiskLevel.R0_READ,
     );
+    // eslint-disable-next-line @typescript-eslint/require-await -- MCP SDK expects async handler
     server.tool("motebit_tools", "List available tools with risk levels", async () => {
       const denied = this.validateSyntheticTool(toolsToolDef, {});
       if (denied) return denied;
@@ -630,6 +634,7 @@ export class McpServerAdapter {
     // motebit_service_listing — read-only, returns this agent's service listing
     // motebit_credentials — returns a signed Verifiable Presentation
     if (this.deps.getCredentials) {
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- deps callback
       const getCredentials = this.deps.getCredentials;
       const credentialsToolDef = McpServerAdapter.syntheticToolDef(
         "motebit_credentials",
@@ -654,6 +659,7 @@ export class McpServerAdapter {
     }
 
     if (this.deps.getServiceListing) {
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- deps callback
       const getServiceListing = this.deps.getServiceListing;
       const listingToolDef = McpServerAdapter.syntheticToolDef(
         "motebit_service_listing",
@@ -682,6 +688,7 @@ export class McpServerAdapter {
 
   private registerResourcesOn(server: McpServer): void {
     // Identity resource — always exposed
+    // eslint-disable-next-line @typescript-eslint/require-await -- MCP SDK expects async handler
     server.resource("identity", "motebit://identity", async () => ({
       contents: [
         {
@@ -697,6 +704,7 @@ export class McpServerAdapter {
 
     // State resource
     if (this.config.exposeState !== false) {
+      // eslint-disable-next-line @typescript-eslint/require-await -- MCP SDK expects async handler
       server.resource("state", "motebit://state", async () => ({
         contents: [
           {
@@ -854,6 +862,7 @@ export class McpServerAdapter {
     // Session ID → transport mapping for stateful connections
     const transports = new Map<string, StreamableHTTPServerTransport>();
 
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- HTTP handler needs async
     this.httpServer = http.createServer(async (req, res) => {
       const url = new URL(req.url ?? "/", `http://localhost:${port}`);
 

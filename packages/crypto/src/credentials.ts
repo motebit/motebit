@@ -48,7 +48,7 @@ export interface VerifiablePresentation {
   "@context": ["https://www.w3.org/ns/credentials/v2"];
   type: ["VerifiablePresentation"];
   holder: string;
-  verifiableCredential: VerifiableCredential<any>[];
+  verifiableCredential: VerifiableCredential[];
   proof: DataIntegrityProof;
 }
 

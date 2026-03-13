@@ -130,6 +130,7 @@ export function EventsPanel({ events }: { events: EventLogEntry[] }): React.Reac
           h("span", { className: "timestamp" }, new Date(e.timestamp).toISOString()),
           h("span", { className: "event-type" }, e.event_type),
           h("span", { className: "clock" }, `v${e.version_clock}`),
+          // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- payload fields are Record<string, unknown>
           isTaskEvent && e.payload.task_id
             ? h(
                 "span",

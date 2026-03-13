@@ -17,10 +17,12 @@ export class IdbAgentTrustStore implements AgentTrustStoreAdapter {
   ): Promise<AgentTrustRecord | null> {
     const tx = this.db.transaction("agent_trust", "readonly");
     const store = tx.objectStore("agent_trust");
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- IDB .get() returns any
     const result = await idbRequest(store.get([motebitId, remoteMotebitId]));
     return (result as AgentTrustRecord | undefined) ?? null;
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await -- fire-and-forget IDB put
   async setAgentTrust(record: AgentTrustRecord): Promise<void> {
     const tx = this.db.transaction("agent_trust", "readwrite");
     tx.objectStore("agent_trust").put({ ...record });
