@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 import { EventType } from "@motebit/sdk";
-import type { EventLogEntry, AgentTask } from "@motebit/sdk";
+import type { EventLogEntry, AgentTask, ExecutionReceipt } from "@motebit/sdk";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
 import { generateKeypair, createSignedToken } from "@motebit/crypto";
 
@@ -850,6 +850,76 @@ describe("Sync Relay — agent protocol", () => {
     });
 
     expect(res.status).toBe(404);
+  });
+
+  it("POST /agent/:id/task/:taskId/result stores receipt and extends TTL", async () => {
+    // Submit task
+    const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ prompt: "Task with receipt" }),
+    });
+    const { task_id } = (await submitRes.json()) as { task_id: string };
+
+    // Post receipt
+    const receipt: ExecutionReceipt = {
+      task_id,
+      motebit_id: MOTEBIT_ID as unknown as import("@motebit/sdk").MotebitId,
+      device_id: "device-1" as unknown as import("@motebit/sdk").DeviceId,
+      submitted_at: Date.now(),
+      completed_at: Date.now(),
+      status: "completed",
+      result: "The answer is 42",
+      tools_used: [],
+      memories_formed: 0,
+      prompt_hash: "abc123",
+      result_hash: "def456",
+      signature: "sig789",
+    };
+
+    const resultRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task/${task_id}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(receipt),
+    });
+    expect(resultRes.status).toBe(200);
+
+    // Poll — should now have receipt
+    const pollRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task/${task_id}`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(pollRes.status).toBe(200);
+
+    const body = (await pollRes.json()) as { task: AgentTask; receipt: ExecutionReceipt | null };
+    expect(body.task.status).toBe("completed");
+    expect(body.receipt).not.toBeNull();
+    expect(body.receipt!.result).toBe("The answer is 42");
+    expect(body.receipt!.task_id).toBe(task_id);
+  });
+
+  it("POST /agent/:id/task accepts required_capabilities and step_id", async () => {
+    const res = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        prompt: "Run stdio tool",
+        required_capabilities: ["stdio_mcp", "file_system"],
+        step_id: "step-123",
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    const { task_id } = (await res.json()) as { task_id: string };
+
+    // Verify task has capabilities and step_id
+    const pollRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task/${task_id}`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    const body = (await pollRes.json()) as { task: AgentTask };
+    expect(body.task.required_capabilities).toEqual(["stdio_mcp", "file_system"]);
+    expect(body.task.step_id).toBe("step-123");
   });
 
   it("GET /agent/:id/capabilities returns identity info", async () => {

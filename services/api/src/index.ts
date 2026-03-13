@@ -1330,6 +1330,8 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     }
 
     entry.receipt = receipt;
+    // Extend TTL so recovery polling has a full window after completion
+    entry.expiresAt = Math.max(entry.expiresAt, Date.now() + TASK_TTL_MS);
     entry.task.status =
       receipt.status === "completed"
         ? AgentTaskStatus.Completed
