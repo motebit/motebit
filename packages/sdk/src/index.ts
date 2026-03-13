@@ -534,6 +534,51 @@ export interface Plan {
   total_steps: number;
 }
 
+// === Plan Sync ===
+
+/** Plan record for cross-device sync. Mirrors Plan but uses wire-format field names. */
+export interface SyncPlan {
+  plan_id: PlanId;
+  goal_id: GoalId;
+  motebit_id: MotebitId;
+  title: string;
+  status: PlanStatus;
+  created_at: number;
+  updated_at: number;
+  current_step_index: number;
+  total_steps: number;
+}
+
+/** Plan step record for cross-device sync. */
+export interface SyncPlanStep {
+  step_id: string;
+  plan_id: PlanId;
+  motebit_id: MotebitId;
+  ordinal: number;
+  description: string;
+  prompt: string;
+  depends_on: string;          // JSON-serialized string[] for wire format
+  optional: boolean;
+  status: StepStatus;
+  required_capabilities: string | null;  // JSON-serialized DeviceCapability[] | null
+  delegation_task_id: string | null;
+  result_summary: string | null;
+  error_message: string | null;
+  tool_calls_made: number;
+  started_at: number | null;
+  completed_at: number | null;
+  retry_count: number;
+  updated_at: number;
+}
+
+/** Result of a plan sync cycle. */
+export interface PlanSyncResult {
+  plans_pushed: number;
+  plans_pulled: number;
+  steps_pushed: number;
+  steps_pulled: number;
+}
+
 // === Agent Protocol ===
 
 export enum DeviceCapability {

@@ -1704,6 +1704,11 @@ export class SqlitePlanStore {
     return rows.map(rowToPlan);
   }
 
+  listAllPlans(motebitId: string): Plan[] {
+    const rows = this.stmtListPlans.all(motebitId) as PlanRow[];
+    return rows.map(rowToPlan);
+  }
+
   updatePlan(planId: string, updates: Partial<Plan>): void {
     const existing = this.getPlan(planId);
     if (!existing) return;

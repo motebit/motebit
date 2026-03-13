@@ -1241,6 +1241,14 @@ export class TauriPlanStore implements PlanStoreAdapter {
     const steps = this.getStepsForPlan(planId);
     return steps.find((s) => s.status === StepStatus.Pending) ?? null;
   }
+
+  listAllPlans(motebitId: string): Plan[] {
+    const result: Plan[] = [];
+    for (const plan of this.plans.values()) {
+      if (plan.motebit_id === motebitId) result.push({ ...plan });
+    }
+    return result;
+  }
 }
 
 // === TauriGradientStore ===

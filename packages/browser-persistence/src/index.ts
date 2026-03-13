@@ -20,6 +20,7 @@ export { IdbConversationStore } from "./conversation-store.js";
 export { IdbPlanStore } from "./plan-store.js";
 export { IdbAgentTrustStore } from "./agent-trust-store.js";
 export { IdbGradientStore } from "./gradient-store.js";
+export { IdbPlanSyncStore } from "./plan-sync-store.js";
 export type { StateSnapshotAdapter } from "./state-snapshot.js";
 
 export async function createBrowserStorage(): Promise<StorageAdapters> {

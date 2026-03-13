@@ -9,6 +9,7 @@ import {
   createBrowserStorage,
   IdbConversationStore,
   IdbPlanStore,
+  IdbPlanSyncStore,
   IdbGradientStore,
 } from "@motebit/browser-persistence";
 import { McpClientAdapter } from "@motebit/mcp-client";
@@ -21,6 +22,8 @@ import {
   WebSocketEventStoreAdapter,
   EncryptedEventStoreAdapter,
   decryptEventPayload,
+  PlanSyncEngine,
+  HttpPlanSyncAdapter,
   type SyncStatus,
 } from "@motebit/sync-engine";
 import {
@@ -105,6 +108,8 @@ export class WebApp {
   private _wsTokenRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private _wsUnsubOnEvent: (() => void) | null = null;
   private _localEventStore: StorageAdapters["eventStore"] | null = null;
+  private _planStore: IdbPlanStore | null = null;
+  private _planSyncEngine: PlanSyncEngine | null = null;
   private keyStore = new EncryptedKeyStore();
   private mcpAdapters = new Map<string, McpClientAdapter>();
   private _mcpServers: McpServerConfig[] = [];
@@ -172,6 +177,7 @@ export class WebApp {
     const convStore = storage.conversationStore as IdbConversationStore;
     await convStore.preload(this._motebitId);
     const planStore = storage.planStore as IdbPlanStore;
+    this._planStore = planStore;
     await planStore.preload(this._motebitId);
     const gradientStore = storage.gradientStore as IdbGradientStore;
     await gradientStore.preload(this._motebitId);
@@ -789,6 +795,18 @@ export class WebApp {
     this.runtime.startSync();
     this.setSyncStatus("connected");
 
+    // Wire plan sync — push/pull plans to relay for cross-device visibility
+    if (this._planStore) {
+      const planSyncStore = new IdbPlanSyncStore(this._planStore, this._motebitId);
+      this._planSyncEngine = new PlanSyncEngine(planSyncStore, this._motebitId);
+      this._planSyncEngine.connectRemote(
+        new HttpPlanSyncAdapter({ baseUrl: relayUrl, motebitId: this._motebitId, authToken: token ?? undefined }),
+      );
+      // Initial plan sync, then background every 30s
+      void this._planSyncEngine.sync();
+      this._planSyncEngine.start();
+    }
+
     // Recover any delegated steps orphaned by a previous tab close
     void (async () => {
       try {
@@ -863,6 +881,10 @@ export class WebApp {
     if (this._syncUnsubscribe) {
       this._syncUnsubscribe();
       this._syncUnsubscribe = null;
+    }
+    if (this._planSyncEngine) {
+      this._planSyncEngine.stop();
+      this._planSyncEngine = null;
     }
     this.runtime?.sync.stop();
     this.setSyncStatus("disconnected");

@@ -13,10 +13,13 @@ import { saveFullConfig } from "./config.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
 import {
   SqliteConversationSyncStoreAdapter,
+  SqlitePlanSyncStoreAdapter,
 } from "./runtime-factory.js";
 import {
   ConversationSyncEngine,
   HttpConversationSyncAdapter,
+  PlanSyncEngine,
+  HttpPlanSyncAdapter,
 } from "@motebit/sync-engine";
 import { parseInterval } from "./intervals.js";
 
@@ -290,12 +293,30 @@ Available commands:
             console.log(
               `  Messages — pushed: ${convResult.messages_pushed}, pulled: ${convResult.messages_pulled}`,
             );
+            // Plan sync
+            console.log("Syncing plans...");
+            const planSyncAdapter = new SqlitePlanSyncStoreAdapter(repl.moteDb.planStore, repl.motebitId);
+            const planSyncEngine = new PlanSyncEngine(planSyncAdapter, repl.motebitId);
+            planSyncEngine.connectRemote(
+              new HttpPlanSyncAdapter({
+                baseUrl: syncUrl,
+                motebitId: repl.motebitId,
+                authToken: syncToken,
+              }),
+            );
+            const planResult = await planSyncEngine.sync();
+            console.log(
+              `  Plans — pushed: ${planResult.plans_pushed}, pulled: ${planResult.plans_pulled}`,
+            );
+            console.log(
+              `  Steps — pushed: ${planResult.steps_pushed}, pulled: ${planResult.steps_pulled}`,
+            );
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
-            console.error(`Conversation sync failed: ${message}`);
+            console.error(`Sync failed: ${message}`);
           }
         } else {
-          console.log("  Conversation sync: skipped (no sync URL)");
+          console.log("  Sync: skipped (no sync URL)");
         }
       }
       break;

@@ -25,6 +25,18 @@ export type {
   ConversationSyncRemoteAdapter,
   HttpConversationSyncConfig,
 } from "./conversation-sync.js";
+export {
+  PlanSyncEngine,
+  HttpPlanSyncAdapter,
+  InMemoryPlanSyncStore,
+} from "./plan-sync.js";
+export type {
+  PlanSyncConfig,
+  PlanSyncStatus,
+  PlanSyncStoreAdapter,
+  PlanSyncRemoteAdapter,
+  HttpPlanSyncConfig,
+} from "./plan-sync.js";
 
 // === Sync Configuration ===
 

@@ -922,6 +922,126 @@ describe("Sync Relay — agent protocol", () => {
     expect(body.task.step_id).toBe("step-123");
   });
 
+  it("POST/GET /sync/:id/plans pushes and pulls plans", async () => {
+    const plan = {
+      plan_id: "plan-sync-1",
+      goal_id: "goal-1",
+      motebit_id: MOTEBIT_ID,
+      title: "Test plan",
+      status: "active",
+      created_at: 1000,
+      updated_at: 5000,
+      current_step_index: 0,
+      total_steps: 2,
+    };
+
+    const pushRes = await relay.app.request(`/sync/${MOTEBIT_ID}/plans`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ plans: [plan] }),
+    });
+    expect(pushRes.status).toBe(200);
+    const pushBody = (await pushRes.json()) as { accepted: number };
+    expect(pushBody.accepted).toBe(1);
+
+    const pullRes = await relay.app.request(`/sync/${MOTEBIT_ID}/plans?since=0`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(pullRes.status).toBe(200);
+    const pullBody = (await pullRes.json()) as { plans: Array<{ plan_id: string; title: string }> };
+    expect(pullBody.plans).toHaveLength(1);
+    expect(pullBody.plans[0]!.plan_id).toBe("plan-sync-1");
+    expect(pullBody.plans[0]!.title).toBe("Test plan");
+  });
+
+  it("POST/GET /sync/:id/plan-steps pushes and pulls steps", async () => {
+    const step = {
+      step_id: "step-sync-1",
+      plan_id: "plan-sync-1",
+      motebit_id: MOTEBIT_ID,
+      ordinal: 0,
+      description: "Test step",
+      prompt: "Do the thing",
+      depends_on: "[]",
+      optional: false,
+      status: "completed",
+      required_capabilities: null,
+      delegation_task_id: null,
+      result_summary: "Done!",
+      error_message: null,
+      tool_calls_made: 2,
+      started_at: 2000,
+      completed_at: 3000,
+      retry_count: 0,
+      updated_at: 3000,
+    };
+
+    const pushRes = await relay.app.request(`/sync/${MOTEBIT_ID}/plan-steps`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ steps: [step] }),
+    });
+    expect(pushRes.status).toBe(200);
+
+    const pullRes = await relay.app.request(`/sync/${MOTEBIT_ID}/plan-steps?since=0`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(pullRes.status).toBe(200);
+    const pullBody = (await pullRes.json()) as { steps: Array<{ step_id: string; status: string; result_summary: string }> };
+    expect(pullBody.steps).toHaveLength(1);
+    expect(pullBody.steps[0]!.step_id).toBe("step-sync-1");
+    expect(pullBody.steps[0]!.status).toBe("completed");
+    expect(pullBody.steps[0]!.result_summary).toBe("Done!");
+  });
+
+  it("plan sync enforces step status monotonicity on relay", async () => {
+    // First push a completed step
+    const completedStep = {
+      step_id: "step-mono-1",
+      plan_id: "plan-mono-1",
+      motebit_id: MOTEBIT_ID,
+      ordinal: 0,
+      description: "Mono step",
+      prompt: "Do it",
+      depends_on: "[]",
+      optional: false,
+      status: "completed",
+      required_capabilities: null,
+      delegation_task_id: null,
+      result_summary: "Done",
+      error_message: null,
+      tool_calls_made: 1,
+      started_at: 2000,
+      completed_at: 3000,
+      retry_count: 0,
+      updated_at: 3000,
+    };
+
+    await relay.app.request(`/sync/${MOTEBIT_ID}/plan-steps`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ steps: [completedStep] }),
+    });
+
+    // Try to regress status to "running" — should be rejected
+    const runningStep = { ...completedStep, status: "running", updated_at: 4000 };
+    await relay.app.request(`/sync/${MOTEBIT_ID}/plan-steps`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ steps: [runningStep] }),
+    });
+
+    const pullRes = await relay.app.request(`/sync/${MOTEBIT_ID}/plan-steps?since=0`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    const pullBody = (await pullRes.json()) as { steps: Array<{ step_id: string; status: string }> };
+    const monoStep = pullBody.steps.find(s => s.step_id === "step-mono-1");
+    expect(monoStep!.status).toBe("completed"); // NOT regressed to "running"
+  });
+
   it("GET /agent/:id/capabilities returns identity info", async () => {
     // Create identity first
     await relay.app.request("/identity", {

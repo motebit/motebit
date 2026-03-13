@@ -50,6 +50,8 @@ import {
   PairingClient,
   ConversationSyncEngine,
   HttpConversationSyncAdapter,
+  PlanSyncEngine,
+  HttpPlanSyncAdapter,
   HttpEventStoreAdapter,
   WebSocketEventStoreAdapter,
   EncryptedEventStoreAdapter,
@@ -59,9 +61,10 @@ import type {
   PairingSession,
   PairingStatus,
   ConversationSyncStoreAdapter,
+  PlanSyncStoreAdapter,
   SyncStatus,
 } from "@motebit/sync-engine";
-import type { SyncConversation, SyncConversationMessage } from "@motebit/sdk";
+import type { SyncConversation, SyncConversationMessage, SyncPlan, SyncPlanStep, Plan, PlanStep } from "@motebit/sdk";
 import { PlanEngine, InMemoryPlanStore } from "@motebit/planner";
 import type { PlanChunk, PlanStoreAdapter } from "@motebit/planner";
 import { PlanStatus } from "@motebit/sdk";
@@ -2527,6 +2530,18 @@ export class DesktopApp {
 
     try {
       const result = await syncEngine.sync();
+
+      // Plan sync — push/pull plans for cross-device visibility
+      if (this.planStoreRef) {
+        const planSyncAdapter = new TauriPlanSyncStoreAdapter(this.planStoreRef, this.motebitId);
+        await planSyncAdapter.prefetch(0);
+        const planSync = new PlanSyncEngine(planSyncAdapter, this.motebitId);
+        planSync.connectRemote(
+          new HttpPlanSyncAdapter({ baseUrl: syncUrl, motebitId: this.motebitId, authToken }),
+        );
+        await planSync.sync();
+      }
+
       this.emitSyncStatus({
         status: "connected",
         lastSyncAt: Date.now(),
@@ -2774,6 +2789,126 @@ class TauriConversationSyncStoreAdapter implements ConversationSyncStoreAdapter 
       const msgRows = await this.store.getMessagesSince(conv.conversation_id, since);
       this._messages.set(conv.conversation_id, msgRows);
     }
+  }
+}
+
+/**
+ * Bridges TauriPlanStore (async, in-memory cache) to PlanSyncStoreAdapter (sync).
+ * Pre-fetches plans and steps before sync cycle.
+ */
+class TauriPlanSyncStoreAdapter implements PlanSyncStoreAdapter {
+  private _plans: Plan[] = [];
+  private _steps: PlanStep[] = [];
+
+  constructor(
+    private store: TauriPlanStore | PlanStoreAdapter,
+    private motebitId: string,
+  ) {}
+
+  getPlansSince(_motebitId: string, since: number): SyncPlan[] {
+    return this._plans
+      .filter((p) => p.updated_at > since)
+      .map((p) => ({
+        plan_id: p.plan_id,
+        goal_id: p.goal_id,
+        motebit_id: p.motebit_id,
+        title: p.title,
+        status: p.status,
+        created_at: p.created_at,
+        updated_at: p.updated_at,
+        current_step_index: p.current_step_index,
+        total_steps: p.total_steps,
+      }));
+  }
+
+  getStepsSince(_motebitId: string, since: number): SyncPlanStep[] {
+    return this._steps
+      .filter((s) => {
+        const updatedAt = s.completed_at ?? s.started_at ?? 0;
+        return updatedAt > since;
+      })
+      .map((s) => ({
+        step_id: s.step_id,
+        plan_id: s.plan_id,
+        motebit_id: this.motebitId,
+        ordinal: s.ordinal,
+        description: s.description,
+        prompt: s.prompt,
+        depends_on: JSON.stringify(s.depends_on),
+        optional: s.optional,
+        status: s.status,
+        required_capabilities: s.required_capabilities != null
+          ? JSON.stringify(s.required_capabilities) : null,
+        delegation_task_id: s.delegation_task_id ?? null,
+        result_summary: s.result_summary,
+        error_message: s.error_message,
+        tool_calls_made: s.tool_calls_made,
+        started_at: s.started_at,
+        completed_at: s.completed_at,
+        retry_count: s.retry_count,
+        updated_at: s.completed_at ?? s.started_at ?? 0,
+      }));
+  }
+
+  upsertPlan(plan: SyncPlan): void {
+    const existing = this.store.getPlan(plan.plan_id);
+    if (!existing || plan.updated_at >= existing.updated_at) {
+      this.store.savePlan({
+        plan_id: plan.plan_id,
+        goal_id: plan.goal_id,
+        motebit_id: plan.motebit_id,
+        title: plan.title,
+        status: plan.status,
+        created_at: plan.created_at,
+        updated_at: plan.updated_at,
+        current_step_index: plan.current_step_index,
+        total_steps: plan.total_steps,
+      });
+    }
+  }
+
+  upsertStep(step: SyncPlanStep): void {
+    const existing = this.store.getStep(step.step_id);
+    if (existing) {
+      const STATUS_ORDER: Record<string, number> = {
+        pending: 0, running: 1, completed: 2, failed: 2, skipped: 2,
+      };
+      const incomingOrder = STATUS_ORDER[step.status] ?? 0;
+      const existingOrder = STATUS_ORDER[existing.status] ?? 0;
+      if (incomingOrder < existingOrder) return;
+    }
+    this.store.saveStep({
+      step_id: step.step_id,
+      plan_id: step.plan_id,
+      ordinal: step.ordinal,
+      description: step.description,
+      prompt: step.prompt,
+      depends_on: typeof step.depends_on === "string" ? JSON.parse(step.depends_on) as string[] : [],
+      optional: step.optional,
+      status: step.status,
+      required_capabilities: step.required_capabilities != null
+        ? JSON.parse(step.required_capabilities) as PlanStep["required_capabilities"] : undefined,
+      delegation_task_id: step.delegation_task_id ?? undefined,
+      result_summary: step.result_summary,
+      error_message: step.error_message,
+      tool_calls_made: step.tool_calls_made,
+      started_at: step.started_at,
+      completed_at: step.completed_at,
+      retry_count: step.retry_count,
+    });
+  }
+
+  async prefetch(_since: number): Promise<void> {
+    if ("listAllPlans" in this.store && typeof this.store.listAllPlans === "function") {
+      this._plans = (this.store as TauriPlanStore).listAllPlans(this.motebitId);
+    } else if ("listActivePlans" in this.store && typeof this.store.listActivePlans === "function") {
+      this._plans = this.store.listActivePlans!(this.motebitId);
+    }
+    const allSteps: PlanStep[] = [];
+    for (const plan of this._plans) {
+      allSteps.push(...this.store.getStepsForPlan(plan.plan_id));
+    }
+    this._steps = allSteps;
   }
 }
 

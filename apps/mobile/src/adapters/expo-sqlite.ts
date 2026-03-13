@@ -1247,6 +1247,14 @@ export class ExpoPlanStore implements PlanStoreAdapter {
     );
     return row ? rowToPlanStep(row) : null;
   }
+
+  listAllPlans(motebitId: string): Plan[] {
+    const rows = this.db.getAllSync<PlanRow>(
+      "SELECT * FROM plans WHERE motebit_id = ? ORDER BY created_at DESC",
+      [motebitId],
+    );
+    return rows.map(rowToPlan);
+  }
 }
 
 // === ConversationSync Adapter (for SyncEngine) ===

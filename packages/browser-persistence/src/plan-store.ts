@@ -110,4 +110,15 @@ export class IdbPlanStore implements PlanStoreAdapter {
     }
     return result;
   }
+
+  /** List all plans for a motebit (any status). Used by plan sync. */
+  listAllPlans(motebitId: string): Plan[] {
+    const result: Plan[] = [];
+    for (const plan of this._plans.values()) {
+      if (plan.motebit_id === motebitId) {
+        result.push({ ...plan });
+      }
+    }
+    return result;
+  }
 }

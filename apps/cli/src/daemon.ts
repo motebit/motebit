@@ -12,6 +12,8 @@ import { openMotebitDatabase } from "@motebit/persistence";
 import {
   HttpEventStoreAdapter,
   WebSocketEventStoreAdapter,
+  PlanSyncEngine,
+  HttpPlanSyncAdapter,
 } from "@motebit/sync-engine";
 import type { AgentTask } from "@motebit/sdk";
 import { EventType, RiskLevel, SensitivityLevel, AgentTaskStatus, DeviceCapability } from "@motebit/sdk";
@@ -321,6 +323,15 @@ export async function handleRun(config: CliConfig): Promise<void> {
 
     // Also wire sync via the HTTP adapter
     runtime.connectSync(httpAdapter);
+
+    // Plan sync: push/pull plans every 30s for cross-device visibility
+    const { SqlitePlanSyncStoreAdapter } = await import("./runtime-factory.js");
+    const planSyncAdapter = new SqlitePlanSyncStoreAdapter(moteDb.planStore, motebitId);
+    const planSyncEngine = new PlanSyncEngine(planSyncAdapter, motebitId);
+    planSyncEngine.connectRemote(
+      new HttpPlanSyncAdapter({ baseUrl: syncUrl, motebitId, authToken: syncToken }),
+    );
+    planSyncEngine.start();
   }
 
   // Graceful shutdown on SIGINT/SIGTERM with safety timeout
