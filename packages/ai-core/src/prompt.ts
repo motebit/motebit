@@ -222,6 +222,11 @@ export function buildSystemPrompt(
     );
   }
 
+  // Active inference precision context — modulates behavior based on gradient
+  if (contextPack.precisionContext) {
+    sections.push(contextPack.precisionContext);
+  }
+
   // Body awareness — where the motebit IS right now
   if (contextPack.behavior_cues) {
     const bodyLine = formatBodyAwareness(contextPack.behavior_cues);

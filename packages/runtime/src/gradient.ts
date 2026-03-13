@@ -450,6 +450,57 @@ export const NEUTRAL_PRECISION: PrecisionWeights = {
   curiosityModulation: 0.4,
 };
 
+// === Precision Context for System Prompt ===
+
+/**
+ * Pure: PrecisionWeights → system prompt string.
+ *
+ * Translates the agent's active inference posture into natural language
+ * guidance that modulates LLM behavior during conversation. This is the
+ * wire from gradient → system prompt → behavior change → outcome → gradient.
+ *
+ * Three tiers:
+ *   selfTrust < 0.4  → cautious: prefer clarification, verify before acting
+ *   selfTrust > 0.7  → confident: act decisively, use proven methods
+ *   otherwise        → balanced: moderate autonomy
+ *
+ * explorationDrive modulates approach selection independently:
+ *   high (> 0.6) → try different tools/approaches, explore alternatives
+ *   low  (< 0.4) → stick with proven methods, minimize experimentation
+ */
+export function buildPrecisionContext(weights: PrecisionWeights): string {
+  const parts: string[] = [];
+
+  // Self-trust tier
+  if (weights.selfTrust < 0.4) {
+    parts.push(
+      "Your confidence in your own outputs is currently low. Prefer asking clarifying questions over making assumptions. Before executing tools with irreversible effects, verify your understanding with the user. When uncertain, say so — hedging is appropriate right now.",
+    );
+  } else if (weights.selfTrust > 0.7) {
+    parts.push(
+      "Your confidence in your own outputs is high. You can act decisively and trust your reasoning. Execute tool calls confidently when you have sufficient context. Minimize unnecessary clarification questions — your track record supports autonomy.",
+    );
+  } else {
+    parts.push(
+      "Your confidence is moderate. Balance autonomy with verification — ask for clarification on ambiguous requests, but act directly when the intent is clear.",
+    );
+  }
+
+  // Exploration drive
+  if (weights.explorationDrive > 0.6) {
+    parts.push(
+      "Your exploration drive is elevated — your knowledge base may be stale or incomplete. Try different approaches when the first attempt stalls. Consider alternative tools or framings. Ask questions that expand your understanding of the user's domain.",
+    );
+  } else if (weights.explorationDrive < 0.4) {
+    parts.push(
+      "Your exploration drive is low — your knowledge base is well-established. Use proven methods and familiar tools. Stick with approaches that have worked before rather than experimenting.",
+    );
+  }
+
+  if (parts.length === 0) return "";
+  return `[Active Inference Posture] ${parts.join(" ")}`;
+}
+
 // === Self-Model Summary ===
 
 /**

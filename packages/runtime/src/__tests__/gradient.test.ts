@@ -6,6 +6,7 @@ import {
   NEUTRAL_PRECISION,
   InMemoryGradientStore,
   summarizeGradientHistory,
+  buildPrecisionContext,
 } from "../gradient.js";
 import type { GradientSnapshot, BehavioralStats } from "../gradient.js";
 import type { MemoryNode, MemoryEdge, EventLogEntry } from "@motebit/sdk";
@@ -1085,5 +1086,119 @@ describe("gradientToMarketConfig", () => {
     });
     expect(cfg.max_candidates).toBe(5);
     expect(cfg.settlement_timeout_ms).toBe(10_000);
+  });
+});
+
+// ── buildPrecisionContext (system prompt modulation) ──
+
+describe("buildPrecisionContext", () => {
+  it("low selfTrust produces cautious context", () => {
+    const ctx = buildPrecisionContext({
+      selfTrust: 0.2,
+      explorationDrive: 0.8,
+      retrievalPrecision: 0.42,
+      curiosityModulation: 0.7,
+    });
+    expect(ctx).toContain("Active Inference Posture");
+    expect(ctx).toContain("currently low");
+    expect(ctx).toContain("clarifying questions");
+    expect(ctx).toContain("verify");
+  });
+
+  it("high selfTrust produces confident context", () => {
+    const ctx = buildPrecisionContext({
+      selfTrust: 0.85,
+      explorationDrive: 0.15,
+      retrievalPrecision: 0.81,
+      curiosityModulation: 0.15,
+    });
+    expect(ctx).toContain("Active Inference Posture");
+    expect(ctx).toContain("high");
+    expect(ctx).toContain("decisively");
+    expect(ctx).toContain("autonomy");
+  });
+
+  it("moderate selfTrust produces balanced context", () => {
+    const ctx = buildPrecisionContext({
+      selfTrust: 0.55,
+      explorationDrive: 0.45,
+      retrievalPrecision: 0.63,
+      curiosityModulation: 0.4,
+    });
+    expect(ctx).toContain("moderate");
+    expect(ctx).toContain("Balance");
+  });
+
+  it("high explorationDrive encourages trying different approaches", () => {
+    const ctx = buildPrecisionContext({
+      selfTrust: 0.3,
+      explorationDrive: 0.75,
+      retrievalPrecision: 0.48,
+      curiosityModulation: 0.7,
+    });
+    expect(ctx).toContain("exploration drive is elevated");
+    expect(ctx).toContain("different approaches");
+    expect(ctx).toContain("alternative tools");
+  });
+
+  it("low explorationDrive encourages proven methods", () => {
+    const ctx = buildPrecisionContext({
+      selfTrust: 0.8,
+      explorationDrive: 0.2,
+      retrievalPrecision: 0.78,
+      curiosityModulation: 0.2,
+    });
+    expect(ctx).toContain("proven methods");
+    expect(ctx).toContain("familiar tools");
+  });
+
+  it("neutral precision produces non-empty balanced context", () => {
+    const ctx = buildPrecisionContext(NEUTRAL_PRECISION);
+    expect(ctx).toContain("Active Inference Posture");
+    expect(ctx).toContain("moderate");
+  });
+
+  it("returns empty string when no specific tier is triggered", () => {
+    // With selfTrust=0.5 and explorationDrive=0.5, the moderate tier fires but exploration doesn't
+    const ctx = buildPrecisionContext({
+      selfTrust: 0.5,
+      explorationDrive: 0.5,
+      retrievalPrecision: 0.6,
+      curiosityModulation: 0.5,
+    });
+    // selfTrust 0.5 triggers moderate tier, so context should be non-empty
+    expect(ctx).toContain("moderate");
+  });
+
+  it("low selfTrust context differs from high selfTrust context", () => {
+    const low = buildPrecisionContext({
+      selfTrust: 0.2,
+      explorationDrive: 0.8,
+      retrievalPrecision: 0.42,
+      curiosityModulation: 0.7,
+    });
+    const high = buildPrecisionContext({
+      selfTrust: 0.85,
+      explorationDrive: 0.15,
+      retrievalPrecision: 0.81,
+      curiosityModulation: 0.15,
+    });
+    expect(low).not.toBe(high);
+    // Low context should NOT contain "decisively"
+    expect(low).not.toContain("decisively");
+    // High context should NOT contain "clarifying questions"
+    expect(high).not.toContain("clarifying questions");
+  });
+
+  it("explorationDrive modulates independently of selfTrust tier", () => {
+    // Moderate self-trust but high exploration
+    const ctx = buildPrecisionContext({
+      selfTrust: 0.55,
+      explorationDrive: 0.75,
+      retrievalPrecision: 0.63,
+      curiosityModulation: 0.6,
+    });
+    expect(ctx).toContain("moderate"); // from selfTrust
+    expect(ctx).toContain("exploration drive is elevated"); // from explorationDrive
   });
 });

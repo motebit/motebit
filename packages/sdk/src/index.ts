@@ -569,6 +569,8 @@ export interface ContextPack {
   curiosityHints?: Array<{ content: string; daysSinceDiscussed: number }>;
   /** Known agents this motebit has interacted with — trust levels, reputation, interaction history. */
   knownAgents?: AgentTrustRecord[];
+  /** Active inference precision context — modulates agent behavior based on intelligence gradient. */
+  precisionContext?: string;
 }
 
 export type ConversationMessage =

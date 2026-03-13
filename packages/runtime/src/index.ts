@@ -97,6 +97,7 @@ import {
   NEUTRAL_PRECISION,
   InMemoryGradientStore,
   summarizeGradientHistory,
+  buildPrecisionContext,
 } from "./gradient.js";
 import type {
   GradientSnapshot,
@@ -164,6 +165,7 @@ export {
   NEUTRAL_PRECISION,
   InMemoryGradientStore,
   summarizeGradientHistory,
+  buildPrecisionContext,
 } from "./gradient.js";
 
 // === McpServerConfig (inlined to avoid importing Node-only @motebit/mcp-client) ===
@@ -1632,6 +1634,7 @@ export class MotebitRuntime {
     try {
       const trimmed = this.trimHistory();
       const knownAgents = await this.listTrustedAgents();
+      const precisionCtx = buildPrecisionContext(this._precision);
       const result = await runTurn(this.loopDeps, text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
@@ -1639,6 +1642,7 @@ export class MotebitRuntime {
         sessionInfo: this.sessionInfo ?? undefined,
         curiosityHints: this.buildCuriosityHints(),
         knownAgents: knownAgents.length > 0 ? knownAgents : undefined,
+        precisionContext: precisionCtx || undefined,
       });
       this.pushToHistory(text, result.response);
       // Accumulate behavioral stats for the intelligence gradient
@@ -1668,6 +1672,7 @@ export class MotebitRuntime {
     try {
       const trimmed = this.trimHistory();
       const knownAgents = await this.listTrustedAgents();
+      const precisionCtx = buildPrecisionContext(this._precision);
       const stream = runTurnStreaming(this.loopDeps, text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
@@ -1675,6 +1680,7 @@ export class MotebitRuntime {
         sessionInfo: this.sessionInfo ?? undefined,
         curiosityHints: this.buildCuriosityHints(),
         knownAgents: knownAgents.length > 0 ? knownAgents : undefined,
+        precisionContext: precisionCtx || undefined,
       });
       // Session info applies only to the first message after resume
       this.sessionInfo = null;

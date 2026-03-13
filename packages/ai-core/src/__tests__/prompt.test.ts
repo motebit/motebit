@@ -260,4 +260,32 @@ describe("buildSystemPrompt", () => {
     expect(prompt).not.toContain("[Session]");
     expect(prompt).not.toContain("continuing a conversation");
   });
+
+  it("includes precision context when provided", () => {
+    const pack = makeContextPack({
+      precisionContext:
+        "[Active Inference Posture] Your confidence in your own outputs is currently low.",
+    });
+    const prompt = buildSystemPrompt(pack);
+    expect(prompt).toContain("[Active Inference Posture]");
+    expect(prompt).toContain("currently low");
+  });
+
+  it("omits precision context when not provided", () => {
+    const prompt = buildSystemPrompt(makeContextPack());
+    expect(prompt).not.toContain("[Active Inference Posture]");
+  });
+
+  it("precision context appears before body awareness", () => {
+    const pack = makeContextPack({
+      precisionContext: "[Active Inference Posture] Your confidence is moderate.",
+      behavior_cues: makeDefaultCues({ hover_distance: 0.1 }),
+    });
+    const prompt = buildSystemPrompt(pack);
+    const precisionIdx = prompt.indexOf("[Active Inference Posture]");
+    const bodyIdx = prompt.indexOf("[Body]");
+    expect(precisionIdx).toBeGreaterThan(-1);
+    expect(bodyIdx).toBeGreaterThan(-1);
+    expect(precisionIdx).toBeLessThan(bodyIdx);
+  });
 });

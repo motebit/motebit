@@ -181,6 +181,8 @@ export interface TurnOptions {
   curiosityHints?: Array<{ content: string; daysSinceDiscussed: number }>;
   /** Known agents this motebit has interacted with — trust context for the AI. */
   knownAgents?: import("@motebit/sdk").AgentTrustRecord[];
+  /** Active inference precision context string — injected into system prompt to modulate behavior. */
+  precisionContext?: string;
 }
 
 export type AgenticChunk =
@@ -291,6 +293,7 @@ export async function* runTurnStreaming(
       sessionInfo: options?.sessionInfo,
       curiosityHints: iteration === 1 ? options?.curiosityHints : undefined,
       knownAgents: iteration === 1 ? options?.knownAgents : undefined,
+      precisionContext: iteration === 1 ? options?.precisionContext : undefined,
     };
 
     // On continuation turns, the user_message is empty and the conversation
