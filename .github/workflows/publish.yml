@@ -1,9 +1,9 @@
-name: Publish to npm
+name: Publish to npm (manual)
+
+# Manual fallback for publishing. Primary publish flow is release.yml (Changesets).
+# Use this only if Changesets publish fails and you need to re-publish a tagged version.
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       dry-run:
@@ -35,34 +35,29 @@ jobs:
       - name: Build all packages
         run: pnpm build
 
-      - name: Test @motebit/sdk
-        run: pnpm --filter @motebit/sdk test
-
-      - name: Test @motebit/verify
-        run: pnpm --filter @motebit/verify test
-
-      - name: Test create-motebit
-        run: pnpm --filter create-motebit test
-
-      - name: Test motebit CLI
-        run: pnpm --filter motebit test
+      - name: Test published packages
+        run: |
+          pnpm --filter @motebit/sdk test
+          pnpm --filter @motebit/verify test
+          pnpm --filter create-motebit test
+          pnpm --filter motebit test
 
       - name: Publish @motebit/sdk
-        run: pnpm --filter @motebit/sdk publish --no-git-checks --provenance ${{ (github.event_name == 'workflow_dispatch' && inputs.dry-run) && '--dry-run' || '' }}
+        run: pnpm --filter @motebit/sdk publish --no-git-checks --provenance ${{ inputs.dry-run && '--dry-run' || '' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @motebit/verify
-        run: pnpm --filter @motebit/verify publish --no-git-checks --provenance ${{ (github.event_name == 'workflow_dispatch' && inputs.dry-run) && '--dry-run' || '' }}
+        run: pnpm --filter @motebit/verify publish --no-git-checks --provenance ${{ inputs.dry-run && '--dry-run' || '' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish create-motebit
-        run: pnpm --filter create-motebit publish --no-git-checks --provenance ${{ (github.event_name == 'workflow_dispatch' && inputs.dry-run) && '--dry-run' || '' }}
+        run: pnpm --filter create-motebit publish --no-git-checks --provenance ${{ inputs.dry-run && '--dry-run' || '' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish motebit CLI
-        run: pnpm --filter motebit publish --no-git-checks --provenance ${{ (github.event_name == 'workflow_dispatch' && inputs.dry-run) && '--dry-run' || '' }}
+        run: pnpm --filter motebit publish --no-git-checks --provenance ${{ inputs.dry-run && '--dry-run' || '' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

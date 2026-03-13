@@ -51,7 +51,26 @@ pnpm --filter <pkg> test    # Test a single package
 1. Fork the repo and create a branch from `main`
 2. If you've added code, add tests
 3. Ensure `pnpm run typecheck` and `pnpm run test` pass
-4. Submit a pull request with a clear description of what and why
+4. **Add a changeset** describing your changes (see below)
+5. Submit a pull request with a clear description of what and why
+
+### Changesets
+
+We use [Changesets](https://github.com/changesets/changesets) to manage versions and changelogs for published packages. If your PR affects any published package (`@motebit/sdk`, `@motebit/verify`, `create-motebit`, or `motebit`), add a changeset:
+
+```bash
+pnpm changeset
+```
+
+This will prompt you to:
+
+1. Select which packages are affected
+2. Choose a bump type (`patch` for fixes, `minor` for features, `major` for breaking changes)
+3. Write a summary of the change
+
+The tool creates a markdown file in `.changeset/` — commit it with your PR. When we cut a release, all pending changesets are consumed to automatically bump versions and generate changelogs.
+
+**When you don't need a changeset:** internal-only changes (tests, docs, CI, private packages) that don't affect published packages.
 
 ### Commit messages
 

@@ -10,12 +10,21 @@ on:
       - "packages/core-identity/**"
       - "packages/persistence/**"
       - "packages/crypto/**"
+      - "packages/market/**"
+      - "packages/planner/**"
+      - "packages/policy/**"
+      - "Dockerfile"
   workflow_dispatch:
+
+concurrency:
+  group: deploy-relay-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
+    environment: production
 
     steps:
       - uses: actions/checkout@v6
@@ -23,7 +32,6 @@ jobs:
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
       - name: Deploy to Fly.io
-        working-directory: services/api
-        run: flyctl deploy --remote-only
+        run: flyctl deploy --config services/api/fly.toml --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

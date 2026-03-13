@@ -38,11 +38,14 @@ jobs:
           pnpm --filter create-motebit test
           pnpm --filter motebit test
 
+      # When .changeset/ has pending changesets: creates/updates a "Version Packages" PR
+      # When that PR is merged (no changesets left): publishes to npm + creates GitHub releases
       - name: Create release PR or publish
         id: changesets
         uses: changesets/action@v1
         with:
-          publish: pnpm changeset publish
+          version: pnpm version-packages
+          publish: pnpm release
           title: "Version Packages"
           commit: "Version Packages"
         env:
