@@ -5,7 +5,7 @@ import type {
   MarketConfig,
   RouteScore,
 } from "@motebit/sdk";
-import { AgentTrustLevel } from "@motebit/sdk";
+import { AgentTrustLevel, trustLevelToScore } from "@motebit/sdk";
 
 export interface CandidateProfile {
   motebit_id: MotebitId;
@@ -13,6 +13,8 @@ export interface CandidateProfile {
   listing: AgentServiceListing | null;
   latency_stats: { avg_ms: number; p95_ms: number; sample_count: number } | null;
   is_online: boolean;
+  /** Pre-composed chain trust score from delegation receipt tree. When set, overrides trust_record lookup. */
+  chain_trust?: number;
 }
 
 export interface TaskRequirements {
@@ -27,25 +29,12 @@ const DEFAULT_CONFIG: MarketConfig = {
   weight_success_rate: 0.25,
   weight_latency: 0.15,
   weight_price_efficiency: 0.15,
-  weight_capability_match: 0.10,
-  weight_availability: 0.10,
+  weight_capability_match: 0.1,
+  weight_availability: 0.1,
   latency_norm_k: 5000,
   max_candidates: 10,
   settlement_timeout_ms: 30_000,
 };
-
-const TRUST_LEVEL_SCORES: Record<string, number> = {
-  [AgentTrustLevel.Unknown]: 0.1,
-  [AgentTrustLevel.FirstContact]: 0.3,
-  [AgentTrustLevel.Verified]: 0.6,
-  [AgentTrustLevel.Trusted]: 0.9,
-  [AgentTrustLevel.Blocked]: 0.0,
-};
-
-function computeTrust(record: AgentTrustRecord | null): number {
-  if (!record) return 0.1;
-  return TRUST_LEVEL_SCORES[record.trust_level] ?? 0.1;
-}
 
 function computeSuccessRate(record: AgentTrustRecord | null): number {
   if (!record) return 0.5;
@@ -56,10 +45,7 @@ function computeSuccessRate(record: AgentTrustRecord | null): number {
   return s / total;
 }
 
-function computeLatency(
-  stats: { avg_ms: number } | null,
-  k: number,
-): number {
+function computeLatency(stats: { avg_ms: number } | null, k: number): number {
   if (!stats) return 0.5;
   return 1 - stats.avg_ms / (stats.avg_ms + k);
 }
@@ -84,8 +70,8 @@ function computeCapabilityMatch(
 ): number {
   if (requirements.required_capabilities.length === 0) return 1.0;
   if (!listing) return 0.0;
-  const matched = requirements.required_capabilities.filter(
-    (c) => listing.capabilities.includes(c),
+  const matched = requirements.required_capabilities.filter((c) =>
+    listing.capabilities.includes(c),
   ).length;
   if (matched < requirements.required_capabilities.length) return 0.0;
   return matched / requirements.required_capabilities.length;
@@ -99,7 +85,9 @@ export function scoreCandidate(
 ): RouteScore {
   const cfg = { ...DEFAULT_CONFIG, ...config };
 
-  const trust = computeTrust(candidate.trust_record);
+  const trust =
+    candidate.chain_trust ??
+    (candidate.trust_record ? trustLevelToScore(candidate.trust_record.trust_level) : 0.1);
   const success_rate = computeSuccessRate(candidate.trust_record);
   const latency = computeLatency(candidate.latency_stats, cfg.latency_norm_k);
   const price_efficiency = computePriceEfficiency(candidate.listing, requirements);
@@ -109,14 +97,15 @@ export function scoreCandidate(
   // Hard filters: blocked agents and missing capabilities score 0
   const blocked = candidate.trust_record?.trust_level === AgentTrustLevel.Blocked;
 
-  const composite = blocked || capability_match === 0
-    ? 0
-    : trust * cfg.weight_trust
-      + success_rate * cfg.weight_success_rate
-      + latency * cfg.weight_latency
-      + price_efficiency * cfg.weight_price_efficiency
-      + capability_match * cfg.weight_capability_match
-      + availability * cfg.weight_availability;
+  const composite =
+    blocked || capability_match === 0
+      ? 0
+      : trust * cfg.weight_trust +
+        success_rate * cfg.weight_success_rate +
+        latency * cfg.weight_latency +
+        price_efficiency * cfg.weight_price_efficiency +
+        capability_match * cfg.weight_capability_match +
+        availability * cfg.weight_availability;
 
   return {
     motebit_id: candidate.motebit_id,
@@ -148,10 +137,10 @@ export function applyPrecisionToMarketConfig(
   // At e=0 (exploit): no change. At e=1 (explore): ±0.10 shift.
   return {
     ...cfg,
-    weight_trust: cfg.weight_trust - e * 0.10,
-    weight_success_rate: cfg.weight_success_rate - e * 0.10,
-    weight_capability_match: cfg.weight_capability_match + e * 0.10,
-    weight_availability: cfg.weight_availability + e * 0.10,
+    weight_trust: cfg.weight_trust - e * 0.1,
+    weight_success_rate: cfg.weight_success_rate - e * 0.1,
+    weight_capability_match: cfg.weight_capability_match + e * 0.1,
+    weight_availability: cfg.weight_availability + e * 0.1,
     exploration_weight: e,
   };
 }

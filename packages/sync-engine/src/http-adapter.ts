@@ -102,7 +102,8 @@ export class HttpEventStoreAdapter implements EventStoreAdapter {
         await backoffDelay(attempt, this.retryBackoffMs);
       } catch (err: unknown) {
         // Network error (DNS, connection refused, timeout)
-        lastError = err instanceof Error ? err : new Error("Network request failed", { cause: err });
+        lastError =
+          err instanceof Error ? err : new Error("Network request failed", { cause: err });
         if (attempt === this.maxRetries) break;
         await backoffDelay(attempt, this.retryBackoffMs);
       }

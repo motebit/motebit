@@ -20,7 +20,12 @@ function makePlan(id: string, updatedAt: number, status = PlanStatus.Active): Sy
   };
 }
 
-function makeStep(id: string, planId: string, status = StepStatus.Pending, updatedAt = 2000): SyncPlanStep {
+function makeStep(
+  id: string,
+  planId: string,
+  status = StepStatus.Pending,
+  updatedAt = 2000,
+): SyncPlanStep {
   return {
     step_id: `step-${id}`,
     plan_id: `plan-${planId}` as PlanId,
@@ -137,7 +142,10 @@ describe("PlanSyncEngine", () => {
 
     const result = await engine.sync();
     expect(result).toEqual({
-      plans_pushed: 0, plans_pulled: 0, steps_pushed: 0, steps_pulled: 0,
+      plans_pushed: 0,
+      plans_pulled: 0,
+      steps_pushed: 0,
+      steps_pulled: 0,
     });
     expect(engine.getStatus()).toBe("offline");
   });

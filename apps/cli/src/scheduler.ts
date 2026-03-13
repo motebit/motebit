@@ -81,7 +81,7 @@ export class GoalScheduler {
    */
   private ensureMaintenanceGoal(): void {
     const goals = this.goalStore.list(this.motebitId);
-    const existing = goals.find(g => g.prompt.startsWith(GoalScheduler.MAINTENANCE_PREFIX));
+    const existing = goals.find((g) => g.prompt.startsWith(GoalScheduler.MAINTENANCE_PREFIX));
     if (existing) return;
 
     this.goalStore.add({
@@ -381,14 +381,18 @@ export class GoalScheduler {
       const ageDays = Math.round((Date.now() - t.node.created_at) / DAY);
       const lastTouchedDays = Math.round((Date.now() - t.node.last_accessed) / DAY);
       lines.push(`- "${t.node.content}"`);
-      lines.push(`  (learned ${ageDays}d ago, last came up ${lastTouchedDays}d ago — getting fuzzy)`);
+      lines.push(
+        `  (learned ${ageDays}d ago, last came up ${lastTouchedDays}d ago — getting fuzzy)`,
+      );
     }
 
     lines.push("");
     lines.push("Pick 1-2 that seem most worth checking and ask the user naturally.");
-    lines.push("Frame it as your own uncertainty — \"I remember X, is that still the case?\"");
+    lines.push('Frame it as your own uncertainty — "I remember X, is that still the case?"');
     lines.push("Do NOT mention confidence scores, decay, half-life, or maintenance.");
-    lines.push("Do NOT list multiple items — pick the most useful one or two and ask conversationally.");
+    lines.push(
+      "Do NOT list multiple items — pick the most useful one or two and ask conversationally.",
+    );
     lines.push("If the user confirms or corrects, that's all you need. Keep it brief.");
 
     if (outcomes.length > 0) {

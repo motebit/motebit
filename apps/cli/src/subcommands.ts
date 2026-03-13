@@ -6,16 +6,10 @@ import * as path from "node:path";
 import { openMotebitDatabase } from "@motebit/persistence";
 import { EventStore } from "@motebit/event-log";
 import { EventType, RiskLevel } from "@motebit/sdk";
-import {
-  generate as generateIdentityFile,
-} from "@motebit/identity-file";
+import { generate as generateIdentityFile } from "@motebit/identity-file";
 import { hexPublicKeyToDidKey } from "@motebit/crypto";
 import type { CliConfig } from "./args.js";
-import {
-  CONFIG_DIR,
-  loadFullConfig,
-  saveFullConfig,
-} from "./config.js";
+import { CONFIG_DIR, loadFullConfig, saveFullConfig } from "./config.js";
 import {
   fromHex,
   promptPassphrase,

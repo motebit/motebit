@@ -66,21 +66,13 @@ export function TrustPanel({ records }: { records: AgentTrustEntry[] }): React.R
         React.createElement(
           "div",
           { className: "device-meta" },
-          React.createElement(
-            "span",
-            null,
-            `reputation: ${(rep * 100).toFixed(0)}%`,
-          ),
+          React.createElement("span", null, `reputation: ${(rep * 100).toFixed(0)}%`),
           React.createElement(
             "span",
             null,
             total > 0 ? `tasks: ${successful}/${total}` : "tasks: none",
           ),
-          React.createElement(
-            "span",
-            null,
-            `interactions: ${r.interaction_count}`,
-          ),
+          React.createElement("span", null, `interactions: ${r.interaction_count}`),
           React.createElement(
             "span",
             { className: "timestamp" },
@@ -91,9 +83,7 @@ export function TrustPanel({ records }: { records: AgentTrustEntry[] }): React.R
             { className: "timestamp" },
             `last seen ${new Date(r.last_seen_at).toISOString()}`,
           ),
-          r.notes
-            ? React.createElement("span", { className: "timestamp" }, r.notes)
-            : null,
+          r.notes ? React.createElement("span", { className: "timestamp" }, r.notes) : null,
         ),
       );
     }),

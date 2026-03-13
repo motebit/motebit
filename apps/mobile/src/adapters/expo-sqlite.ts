@@ -1112,9 +1112,10 @@ function rowToPlanStep(row: PlanStepRow): PlanStep {
     depends_on: dependsOn,
     optional: row.optional === 1,
     status: row.status as PlanStep["status"],
-    required_capabilities: row.required_capabilities != null
-      ? JSON.parse(row.required_capabilities) as PlanStep["required_capabilities"]
-      : undefined,
+    required_capabilities:
+      row.required_capabilities != null
+        ? (JSON.parse(row.required_capabilities) as PlanStep["required_capabilities"])
+        : undefined,
     delegation_task_id: row.delegation_task_id ?? undefined,
     assigned_motebit_id: row.assigned_motebit_id ?? undefined,
     result_summary: row.result_summary,
@@ -1274,7 +1275,11 @@ export class ExpoPlanStore implements PlanStoreAdapter {
     }
     if (updates.required_capabilities !== undefined) {
       fields.push("required_capabilities = ?");
-      values.push(updates.required_capabilities != null ? JSON.stringify(updates.required_capabilities) : null);
+      values.push(
+        updates.required_capabilities != null
+          ? JSON.stringify(updates.required_capabilities)
+          : null,
+      );
     }
     if (updates.delegation_task_id !== undefined) {
       fields.push("delegation_task_id = ?");
@@ -1527,7 +1532,10 @@ function rowToAgentTrust(row: AgentTrustRow): AgentTrustRecord {
 export class ExpoAgentTrustStore implements AgentTrustStoreAdapter {
   constructor(private db: SQLite.SQLiteDatabase) {}
 
-  async getAgentTrust(motebitId: string, remoteMotebitId: string): Promise<AgentTrustRecord | null> {
+  async getAgentTrust(
+    motebitId: string,
+    remoteMotebitId: string,
+  ): Promise<AgentTrustRecord | null> {
     const row = this.db.getFirstSync<AgentTrustRow>(
       "SELECT * FROM agent_trust WHERE motebit_id = ? AND remote_motebit_id = ?",
       [motebitId, remoteMotebitId],
@@ -1563,7 +1571,11 @@ export class ExpoAgentTrustStore implements AgentTrustStoreAdapter {
     return rows.map(rowToAgentTrust);
   }
 
-  async updateTrustLevel(motebitId: string, remoteMotebitId: string, level: AgentTrustLevel): Promise<void> {
+  async updateTrustLevel(
+    motebitId: string,
+    remoteMotebitId: string,
+    level: AgentTrustLevel,
+  ): Promise<void> {
     this.db.runSync(
       "UPDATE agent_trust SET trust_level = ?, last_seen_at = ? WHERE motebit_id = ? AND remote_motebit_id = ?",
       [level, Date.now(), motebitId, remoteMotebitId],
@@ -1690,10 +1702,10 @@ export class ExpoBudgetAllocationStore {
   }
 
   async updateStatus(allocationId: string, status: string): Promise<void> {
-    this.db.runSync(
-      "UPDATE budget_allocations SET status = ? WHERE allocation_id = ?",
-      [status, allocationId],
-    );
+    this.db.runSync("UPDATE budget_allocations SET status = ? WHERE allocation_id = ?", [
+      status,
+      allocationId,
+    ]);
   }
 
   async listByGoal(goalId: string): Promise<BudgetAllocation[]> {
@@ -2062,12 +2074,16 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
   // Migration 12: add interaction_efficiency and tool_efficiency to gradient_snapshots
   if (userVersion < 12) {
     try {
-      db.execSync("ALTER TABLE gradient_snapshots ADD COLUMN interaction_efficiency REAL NOT NULL DEFAULT 0");
+      db.execSync(
+        "ALTER TABLE gradient_snapshots ADD COLUMN interaction_efficiency REAL NOT NULL DEFAULT 0",
+      );
     } catch {
       // Column may already exist on new DBs
     }
     try {
-      db.execSync("ALTER TABLE gradient_snapshots ADD COLUMN tool_efficiency REAL NOT NULL DEFAULT 0");
+      db.execSync(
+        "ALTER TABLE gradient_snapshots ADD COLUMN tool_efficiency REAL NOT NULL DEFAULT 0",
+      );
     } catch {
       // Column may already exist on new DBs
     }
@@ -2102,7 +2118,9 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
   // Migration 14: add curiosity_pressure to gradient_snapshots
   if (userVersion < 14) {
     try {
-      db.execSync("ALTER TABLE gradient_snapshots ADD COLUMN curiosity_pressure REAL NOT NULL DEFAULT 0");
+      db.execSync(
+        "ALTER TABLE gradient_snapshots ADD COLUMN curiosity_pressure REAL NOT NULL DEFAULT 0",
+      );
     } catch {
       // Column may already exist on new DBs
     }
@@ -2112,17 +2130,27 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
   if (userVersion < 15) {
     try {
       db.execSync("ALTER TABLE plan_steps ADD COLUMN required_capabilities TEXT DEFAULT NULL");
-    } catch { /* Column may already exist on new DBs */ }
+    } catch {
+      /* Column may already exist on new DBs */
+    }
     try {
       db.execSync("ALTER TABLE plan_steps ADD COLUMN delegation_task_id TEXT DEFAULT NULL");
-    } catch { /* Column may already exist on new DBs */ }
+    } catch {
+      /* Column may already exist on new DBs */
+    }
     try {
       db.execSync("ALTER TABLE plan_steps ADD COLUMN updated_at INTEGER DEFAULT 0");
-    } catch { /* Column may already exist on new DBs */ }
-    db.execSync("UPDATE plan_steps SET updated_at = COALESCE(completed_at, started_at, (SELECT created_at FROM plans WHERE plans.plan_id = plan_steps.plan_id)) WHERE updated_at = 0");
+    } catch {
+      /* Column may already exist on new DBs */
+    }
+    db.execSync(
+      "UPDATE plan_steps SET updated_at = COALESCE(completed_at, started_at, (SELECT created_at FROM plans WHERE plans.plan_id = plan_steps.plan_id)) WHERE updated_at = 0",
+    );
     try {
       db.execSync("CREATE INDEX IF NOT EXISTS idx_plan_steps_updated ON plan_steps(updated_at)");
-    } catch { /* Index may already exist */ }
+    } catch {
+      /* Index may already exist */
+    }
     db.execSync("PRAGMA user_version = 15");
   }
 
@@ -2198,13 +2226,19 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
   if (userVersion < 17) {
     try {
       db.execSync("ALTER TABLE plan_steps ADD COLUMN assigned_motebit_id TEXT DEFAULT NULL");
-    } catch { /* Column may already exist on new DBs */ }
+    } catch {
+      /* Column may already exist on new DBs */
+    }
     try {
       db.execSync("ALTER TABLE plans ADD COLUMN proposal_id TEXT DEFAULT NULL");
-    } catch { /* Column may already exist on new DBs */ }
+    } catch {
+      /* Column may already exist on new DBs */
+    }
     try {
       db.execSync("ALTER TABLE plans ADD COLUMN collaborative INTEGER DEFAULT 0");
-    } catch { /* Column may already exist on new DBs */ }
+    } catch {
+      /* Column may already exist on new DBs */
+    }
     db.execSync("PRAGMA user_version = 17");
   }
 

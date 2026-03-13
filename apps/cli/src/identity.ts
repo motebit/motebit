@@ -1,12 +1,7 @@
 // --- Identity bootstrap and key management ---
 
 import * as readline from "node:readline";
-import {
-  deriveKey,
-  encrypt,
-  decrypt,
-  generateSalt,
-} from "@motebit/crypto";
+import { deriveKey, encrypt, decrypt, generateSalt } from "@motebit/crypto";
 import type { EncryptedPayload } from "@motebit/crypto";
 import {
   bootstrapIdentity as sharedBootstrapIdentity,

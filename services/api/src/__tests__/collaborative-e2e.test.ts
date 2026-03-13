@@ -140,7 +140,9 @@ describe("Collaborative Plan Proposals E2E", () => {
     const { json: counterJson } = await postJson(`/api/v1/proposals/${proposalId}/respond`, {
       responder_motebit_id: MOTEBIT_B,
       response: "counter",
-      counter_steps: [{ ordinal: 1, description: "Modified step", reason: "Need different approach" }],
+      counter_steps: [
+        { ordinal: 1, description: "Modified step", reason: "Need different approach" },
+      ],
     });
 
     // Not all responded yet (A hasn't)
@@ -156,7 +158,10 @@ describe("Collaborative Plan Proposals E2E", () => {
 
     const { json: state } = await getJson(`/api/v1/proposals/${proposalId}`);
     expect(state.status).toBe("countered");
-    expect(state.participants.find((p: { motebit_id: string }) => p.motebit_id === MOTEBIT_B).counter_steps).toHaveLength(1);
+    expect(
+      state.participants.find((p: { motebit_id: string }) => p.motebit_id === MOTEBIT_B)
+        .counter_steps,
+    ).toHaveLength(1);
   });
 
   it("rejection flow", async () => {
@@ -167,9 +172,7 @@ describe("Collaborative Plan Proposals E2E", () => {
       proposal_id: proposalId,
       plan_id: planId,
       initiator_motebit_id: MOTEBIT_A,
-      participants: [
-        { motebit_id: MOTEBIT_B, assigned_steps: [0] },
-      ],
+      participants: [{ motebit_id: MOTEBIT_B, assigned_steps: [0] }],
     });
 
     const { json: rejectJson } = await postJson(`/api/v1/proposals/${proposalId}/respond`, {
@@ -190,12 +193,13 @@ describe("Collaborative Plan Proposals E2E", () => {
       proposal_id: proposalId,
       plan_id: planId,
       initiator_motebit_id: MOTEBIT_A,
-      participants: [
-        { motebit_id: MOTEBIT_B, assigned_steps: [0] },
-      ],
+      participants: [{ motebit_id: MOTEBIT_B, assigned_steps: [0] }],
     });
 
-    const { res: withdrawRes, json: withdrawJson } = await postJson(`/api/v1/proposals/${proposalId}/withdraw`, {});
+    const { res: withdrawRes, json: withdrawJson } = await postJson(
+      `/api/v1/proposals/${proposalId}/withdraw`,
+      {},
+    );
     expect(withdrawRes.status).toBe(200);
     expect(withdrawJson.status).toBe("withdrawn");
 
@@ -214,18 +218,20 @@ describe("Collaborative Plan Proposals E2E", () => {
       proposal_id: proposalId,
       plan_id: "plan-list",
       initiator_motebit_id: MOTEBIT_A,
-      participants: [
-        { motebit_id: MOTEBIT_B, assigned_steps: [0] },
-      ],
+      participants: [{ motebit_id: MOTEBIT_B, assigned_steps: [0] }],
     });
 
     // List all for motebit A
     const { json: listA } = await getJson(`/api/v1/proposals?motebit_id=${MOTEBIT_A}`);
     expect(listA.proposals.length).toBeGreaterThanOrEqual(1);
-    expect(listA.proposals.some((p: { proposal_id: string }) => p.proposal_id === proposalId)).toBe(true);
+    expect(listA.proposals.some((p: { proposal_id: string }) => p.proposal_id === proposalId)).toBe(
+      true,
+    );
 
     // List pending (scoped to initiator)
-    const { json: listPending } = await getJson(`/api/v1/proposals?motebit_id=${MOTEBIT_A}&status=pending`);
+    const { json: listPending } = await getJson(
+      `/api/v1/proposals?motebit_id=${MOTEBIT_A}&status=pending`,
+    );
     expect(listPending.proposals.length).toBeGreaterThanOrEqual(1);
   });
 
@@ -237,9 +243,7 @@ describe("Collaborative Plan Proposals E2E", () => {
       proposal_id: proposalId,
       plan_id: "plan-expire",
       initiator_motebit_id: MOTEBIT_A,
-      participants: [
-        { motebit_id: MOTEBIT_B, assigned_steps: [0] },
-      ],
+      participants: [{ motebit_id: MOTEBIT_B, assigned_steps: [0] }],
       expires_in_ms: 1, // expires immediately
     });
 

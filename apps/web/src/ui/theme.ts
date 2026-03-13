@@ -71,7 +71,6 @@ export function initTheme(
     const stored = localStorage.getItem(THEME_KEY);
     if (stored === "light" || stored === "dark" || stored === "system") {
       currentPreference = stored;
-
     }
   } catch {
     // localStorage unavailable
@@ -96,7 +95,7 @@ export function initTheme(
       const pref = (btn as HTMLElement).dataset.theme as ThemePreference;
       if (pref) {
         currentPreference = pref;
-  
+
         applyTheme(pref);
         updateToggleUI();
         persist(pref, isTauri, invoke);

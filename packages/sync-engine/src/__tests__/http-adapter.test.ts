@@ -197,7 +197,9 @@ describe("HttpEventStoreAdapter", () => {
     const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
     // First call: 500, second call: 200
     mockFn
-      .mockResolvedValueOnce(new Response("Server Error", { status: 500, statusText: "Internal Server Error" }))
+      .mockResolvedValueOnce(
+        new Response("Server Error", { status: 500, statusText: "Internal Server Error" }),
+      )
       .mockResolvedValueOnce(new Response(JSON.stringify({ events: [] }), { status: 200 }));
 
     const adapter = new HttpEventStoreAdapter({
@@ -232,7 +234,9 @@ describe("HttpEventStoreAdapter", () => {
 
   it("does not retry on 4xx (non-retryable)", async () => {
     const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
-    mockFn.mockResolvedValueOnce(new Response("Forbidden", { status: 403, statusText: "Forbidden" }));
+    mockFn.mockResolvedValueOnce(
+      new Response("Forbidden", { status: 403, statusText: "Forbidden" }),
+    );
 
     const adapter = new HttpEventStoreAdapter({
       baseUrl: BASE_URL,

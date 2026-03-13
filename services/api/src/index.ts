@@ -73,11 +73,25 @@ import type {
   SyncConversationMessage,
   ExecutionReceipt,
 } from "@motebit/sdk";
-import { AgentTaskStatus, asMotebitId, asListingId, asNodeId, asConversationId, asPlanId } from "@motebit/sdk";
+import {
+  AgentTaskStatus,
+  asMotebitId,
+  asListingId,
+  asNodeId,
+  asConversationId,
+  asPlanId,
+} from "@motebit/sdk";
 import type { AgentTask, MotebitId, NodeId, SyncPlan, SyncPlanStep } from "@motebit/sdk";
 import type { WSContext } from "hono/ws";
-import { verifySignedToken, verifyExecutionReceipt, hexPublicKeyToDidKey } from "@motebit/crypto";
-import { rankCandidates } from "@motebit/market";
+import {
+  verifySignedToken,
+  verifyExecutionReceipt,
+  hexPublicKeyToDidKey,
+  generateKeypair,
+  publicKeyToDidKey,
+  issueReputationCredential,
+} from "@motebit/crypto";
+import { rankCandidates, applyPrecisionToMarketConfig } from "@motebit/market";
 import type { CandidateProfile, TaskRequirements } from "@motebit/market";
 import type { CapabilityPrice } from "@motebit/sdk";
 
@@ -355,13 +369,19 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   // Extend sync tables for collaborative fields (column-exists check pattern)
   try {
     moteDb.db.exec("ALTER TABLE sync_plan_steps ADD COLUMN assigned_motebit_id TEXT DEFAULT NULL");
-  } catch { /* column may already exist */ }
+  } catch {
+    /* column may already exist */
+  }
   try {
     moteDb.db.exec("ALTER TABLE sync_plans ADD COLUMN proposal_id TEXT DEFAULT NULL");
-  } catch { /* column may already exist */ }
+  } catch {
+    /* column may already exist */
+  }
   try {
     moteDb.db.exec("ALTER TABLE sync_plans ADD COLUMN collaborative INTEGER DEFAULT 0");
-  } catch { /* column may already exist */ }
+  } catch {
+    /* column may already exist */
+  }
 
   // Track connected WebSocket clients per motebitId with device identity
   const connections = new Map<string, ConnectedDevice[]>();
@@ -386,9 +406,11 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     stmtClean.run(now);
     // Expire pending proposals past their TTL
     try {
-      moteDb.db.prepare(
-        "UPDATE relay_proposals SET status = 'expired', updated_at = ? WHERE status = 'pending' AND expires_at < ?",
-      ).run(now, now);
+      moteDb.db
+        .prepare(
+          "UPDATE relay_proposals SET status = 'expired', updated_at = ? WHERE status = 'pending' AND expires_at < ?",
+        )
+        .run(now, now);
     } catch {
       // Best-effort cleanup
     }
@@ -513,9 +535,10 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
           // Parse device capabilities from URL query param
           const capsParam = url.searchParams.get("capabilities");
-          const capabilities = capsParam != null && capsParam !== ""
-            ? capsParam.split(",").filter(c => c !== "")
-            : undefined;
+          const capabilities =
+            capsParam != null && capsParam !== ""
+              ? capsParam.split(",").filter((c) => c !== "")
+              : undefined;
 
           if (!connections.has(motebitId)) {
             connections.set(motebitId, []);
@@ -542,7 +565,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
             if (msg.type === "capabilities_announce" && Array.isArray(msg.capabilities)) {
               const peers = connections.get(motebitId);
               if (peers) {
-                const self = peers.find(p => p.ws === ws);
+                const self = peers.find((p) => p.ws === ws);
                 if (self) self.capabilities = msg.capabilities as string[];
               }
             }
@@ -575,9 +598,11 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
                 const requiredCaps = entry.task.required_capabilities ?? [];
                 if (requiredCaps.length > 0) {
                   const claimingPeers = connections.get(motebitId);
-                  const claimingDevice = claimingPeers?.find(p => p.ws === ws);
+                  const claimingDevice = claimingPeers?.find((p) => p.ws === ws);
                   if (claimingDevice?.capabilities) {
-                    const hasAll = requiredCaps.every(c => claimingDevice.capabilities!.includes(c));
+                    const hasAll = requiredCaps.every((c) =>
+                      claimingDevice.capabilities!.includes(c),
+                    );
                     if (!hasAll) {
                       ws.send(
                         JSON.stringify({
@@ -824,12 +849,23 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
     // 2. Query plan lifecycle + delegation events
     const planEventTypes = [
-      "plan_created", "plan_step_started", "plan_step_completed",
-      "plan_step_failed", "plan_step_delegated", "plan_completed",
-      "plan_failed", "goal_created", "goal_executed", "goal_completed",
-      "agent_task_completed", "agent_task_failed",
-      "proposal_created", "proposal_accepted", "proposal_rejected",
-      "proposal_countered", "collaborative_step_completed",
+      "plan_created",
+      "plan_step_started",
+      "plan_step_completed",
+      "plan_step_failed",
+      "plan_step_delegated",
+      "plan_completed",
+      "plan_failed",
+      "goal_created",
+      "goal_executed",
+      "goal_completed",
+      "agent_task_completed",
+      "agent_task_failed",
+      "proposal_created",
+      "proposal_accepted",
+      "proposal_rejected",
+      "proposal_countered",
+      "collaborative_step_completed",
     ];
     const allEvents = await eventStore.query({ motebit_id: motebitId });
     const relevantEvents = allEvents.filter((e) => {
@@ -843,7 +879,8 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       steps.filter((s) => s.delegation_task_id).map((s) => s.delegation_task_id!),
     );
     const receiptEvents = allEvents.filter((e) => {
-      if (e.event_type !== "agent_task_completed" && e.event_type !== "agent_task_failed") return false;
+      if (e.event_type !== "agent_task_completed" && e.event_type !== "agent_task_failed")
+        return false;
       const p = e.payload as Record<string, unknown>;
       return delegationTaskIds.has(p.task_id as string);
     });
@@ -855,24 +892,45 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     type TimelineEntry = { timestamp: number; type: string; payload: Record<string, unknown> };
     const timeline: TimelineEntry[] = [];
 
-    const goalStart = relevantEvents.find((e) => e.event_type === "goal_created" || e.event_type === "goal_executed");
+    const goalStart = relevantEvents.find(
+      (e) => e.event_type === "goal_created" || e.event_type === "goal_executed",
+    );
     if (goalStart) {
-      timeline.push({ timestamp: goalStart.timestamp, type: "goal_started", payload: { goal_id: goalId } });
+      timeline.push({
+        timestamp: goalStart.timestamp,
+        type: "goal_started",
+        payload: { goal_id: goalId },
+      });
     }
 
     const typeFieldMap: Record<string, { mapped: string; fields: string[] }> = {
       plan_created: { mapped: "plan_created", fields: ["plan_id", "title", "total_steps"] },
-      plan_step_started: { mapped: "step_started", fields: ["plan_id", "step_id", "ordinal", "description"] },
-      plan_step_completed: { mapped: "step_completed", fields: ["plan_id", "step_id", "ordinal", "tool_calls_made"] },
-      plan_step_failed: { mapped: "step_failed", fields: ["plan_id", "step_id", "ordinal", "error"] },
-      plan_step_delegated: { mapped: "step_delegated", fields: ["plan_id", "step_id", "ordinal", "task_id"] },
+      plan_step_started: {
+        mapped: "step_started",
+        fields: ["plan_id", "step_id", "ordinal", "description"],
+      },
+      plan_step_completed: {
+        mapped: "step_completed",
+        fields: ["plan_id", "step_id", "ordinal", "tool_calls_made"],
+      },
+      plan_step_failed: {
+        mapped: "step_failed",
+        fields: ["plan_id", "step_id", "ordinal", "error"],
+      },
+      plan_step_delegated: {
+        mapped: "step_delegated",
+        fields: ["plan_id", "step_id", "ordinal", "task_id"],
+      },
       plan_completed: { mapped: "plan_completed", fields: ["plan_id"] },
       plan_failed: { mapped: "plan_failed", fields: ["plan_id", "reason"] },
       proposal_created: { mapped: "proposal_created", fields: ["plan_id", "proposal_id"] },
       proposal_accepted: { mapped: "proposal_accepted", fields: ["plan_id", "proposal_id"] },
       proposal_rejected: { mapped: "proposal_rejected", fields: ["plan_id", "proposal_id"] },
       proposal_countered: { mapped: "proposal_countered", fields: ["plan_id", "proposal_id"] },
-      collaborative_step_completed: { mapped: "collaborative_step_completed", fields: ["plan_id", "step_id"] },
+      collaborative_step_completed: {
+        mapped: "collaborative_step_completed",
+        fields: ["plan_id", "step_id"],
+      },
     };
 
     for (const event of relevantEvents) {
@@ -898,14 +956,23 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
         timeline.push({
           timestamp: entry.timestamp + (entry.result.durationMs ?? 0),
           type: "tool_result",
-          payload: { tool: entry.tool, ok: entry.result.ok, duration_ms: entry.result.durationMs, call_id: entry.callId },
+          payload: {
+            tool: entry.tool,
+            ok: entry.result.ok,
+            duration_ms: entry.result.durationMs,
+            call_id: entry.callId,
+          },
         });
       }
     }
 
     const goalEnd = relevantEvents.find((e) => e.event_type === "goal_completed");
     if (goalEnd) {
-      timeline.push({ timestamp: goalEnd.timestamp, type: "goal_completed", payload: { goal_id: goalId, status: plan.status } });
+      timeline.push({
+        timestamp: goalEnd.timestamp,
+        type: "goal_completed",
+        payload: { goal_id: goalId, status: plan.status },
+      });
     }
 
     timeline.sort((a, b) => a.timestamp - b.timestamp);
@@ -928,8 +995,12 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
         completed_at: s.completed_at,
       };
       if (s.delegation_task_id) {
-        const re = receiptEvents.find((e) => (e.payload as Record<string, unknown>).task_id === s.delegation_task_id);
-        const receipt = re ? (re.payload as Record<string, unknown>).receipt as Record<string, unknown> | undefined : undefined;
+        const re = receiptEvents.find(
+          (e) => (e.payload as Record<string, unknown>).task_id === s.delegation_task_id,
+        );
+        const receipt = re
+          ? ((re.payload as Record<string, unknown>).receipt as Record<string, unknown> | undefined)
+          : undefined;
         summary.delegation = { task_id: s.delegation_task_id, receipt_hash: receipt?.signature };
       }
       return summary;
@@ -952,11 +1023,21 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
     // 8. Content hash (SHA-256 of canonical timeline)
     const canonicalLines = timeline.map((entry) => canonicalJsonApi(entry));
-    const hashBuf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalLines.join("\n")));
-    const contentHash = Array.from(new Uint8Array(hashBuf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+    const hashBuf = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(canonicalLines.join("\n")),
+    );
+    const contentHash = Array.from(new Uint8Array(hashBuf))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
 
     // 9. Status mapping
-    const statusMap: Record<string, string> = { completed: "completed", failed: "failed", paused: "paused", active: "active" };
+    const statusMap: Record<string, string> = {
+      completed: "completed",
+      failed: "failed",
+      paused: "paused",
+      active: "active",
+    };
 
     return c.json({
       spec: "motebit/execution-ledger@1.0",
@@ -1012,6 +1093,70 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       motebit_id: motebitId,
       current: snapshots[0] ?? null,
       history: snapshots,
+    });
+  });
+
+  // --- Credentials: relay-issued reputation VC ---
+  // Relay generates an ephemeral keypair on startup for signing credentials.
+  // In production this should be a persisted relay identity.
+  let relayKeypairPromise: Promise<{ publicKey: Uint8Array; privateKey: Uint8Array }> | null = null;
+  function getRelayKeypair(): Promise<{ publicKey: Uint8Array; privateKey: Uint8Array }> {
+    if (!relayKeypairPromise) {
+      relayKeypairPromise = generateKeypair();
+    }
+    return relayKeypairPromise;
+  }
+
+  app.post("/api/v1/credentials/:motebitId/reputation", async (c) => {
+    const motebitId = asMotebitId(c.req.param("motebitId"));
+
+    // Compute reputation from stored execution receipts
+    const receipts = moteDb.db
+      .prepare(
+        `SELECT * FROM agent_tasks WHERE motebit_id = ? AND status = 'completed' ORDER BY submitted_at DESC LIMIT 1000`,
+      )
+      .all(motebitId) as Array<{
+      status: string;
+      submitted_at: number;
+      wall_clock_ms: number | null;
+    }>;
+
+    if (receipts.length === 0) {
+      return c.json({ error: "No task history for this agent" }, 404);
+    }
+
+    const succeeded = receipts.filter((r) => r.status === "completed").length;
+    const successRate = succeeded / receipts.length;
+    const latencies = receipts.filter((r) => r.wall_clock_ms != null).map((r) => r.wall_clock_ms!);
+    const avgLatency =
+      latencies.length > 0 ? latencies.reduce((a, b) => a + b, 0) / latencies.length : 0;
+
+    // Look up agent's public key for did:key subject
+    const identity = await identityManager.load(motebitId);
+    const devices = identity ? await identityManager.listDevices(motebitId) : [];
+    const agentPubKeyHex = devices[0]?.public_key;
+    const subjectDid = agentPubKeyHex
+      ? hexPublicKeyToDidKey(agentPubKeyHex)
+      : `did:motebit:${motebitId}`;
+
+    const relayKeys = await getRelayKeypair();
+    const vc = await issueReputationCredential(
+      {
+        success_rate: successRate,
+        avg_latency_ms: avgLatency,
+        task_count: receipts.length,
+        trust_score: successRate, // Simple: trust = success rate for now
+        availability: 1.0, // Relay can't measure this yet
+        measured_at: Date.now(),
+      },
+      relayKeys.privateKey,
+      relayKeys.publicKey,
+      subjectDid,
+    );
+
+    return c.json({
+      credential: vc,
+      relay_did: publicKeyToDidKey(relayKeys.publicKey),
     });
   });
 
@@ -1501,7 +1646,11 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   /** Step status ordinal for monotonicity enforcement. */
   const STEP_STATUS_ORDER: Record<string, number> = {
-    pending: 0, running: 1, completed: 2, failed: 2, skipped: 2,
+    pending: 0,
+    running: 1,
+    completed: 2,
+    failed: 2,
+    skipped: 2,
   };
 
   function upsertSyncPlan(plan: SyncPlan): void {
@@ -1657,7 +1806,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       )
       .all(motebitId, since) as SyncPlanStep[];
     // SQLite stores boolean as integer — normalize for wire format
-    const normalized = rows.map(r => ({ ...r, optional: Boolean(r.optional) }));
+    const normalized = rows.map((r) => ({ ...r, optional: Boolean(r.optional) }));
     return c.json({ motebit_id: motebitId, steps: normalized, since });
   });
 
@@ -1722,7 +1871,8 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
     const profiles: CandidateProfile[] = listingRows.map((row) => {
       const mid = row.motebit_id as string;
-      const isOnline = (row.expires_at as number | null) != null && (row.expires_at as number) > now;
+      const isOnline =
+        (row.expires_at as number | null) != null && (row.expires_at as number) > now;
 
       const latencyRows = latencyStmt.all(mid) as Array<{ latency_ms: number }>;
       let latencyStats: { avg_ms: number; p95_ms: number; sample_count: number } | null = null;
@@ -1777,6 +1927,8 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       step_id?: string;
       max_budget?: number;
       currency?: string;
+      /** Optional: requesting agent's exploration drive [0-1] from intelligence gradient. */
+      exploration_drive?: number;
     }>();
 
     if (!body.prompt || typeof body.prompt !== "string" || body.prompt.trim() === "") {
@@ -1794,7 +1946,9 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       wall_clock_ms: body.wall_clock_ms,
       status: AgentTaskStatus.Pending,
       required_capabilities: Array.isArray(body.required_capabilities)
-        ? body.required_capabilities.filter((c): c is string => typeof c === "string") as AgentTask["required_capabilities"]
+        ? (body.required_capabilities.filter(
+            (c): c is string => typeof c === "string",
+          ) as AgentTask["required_capabilities"])
         : undefined,
       step_id: body.step_id,
     };
@@ -1814,18 +1968,28 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
           20,
         );
         // Narrow to candidates matching ALL required capabilities (not just the first)
-        const multiCapProfiles = requiredCaps.length > 1
-          ? profiles.filter((p) =>
-              requiredCaps.every((cap) => p.listing?.capabilities.includes(cap)),
-            )
-          : profiles;
+        const multiCapProfiles =
+          requiredCaps.length > 1
+            ? profiles.filter((p) =>
+                requiredCaps.every((cap) => p.listing?.capabilities.includes(cap)),
+              )
+            : profiles;
 
         if (multiCapProfiles.length > 0) {
-          const ranked = rankCandidates(multiCapProfiles, {
-            ...requirements,
-            required_capabilities: requiredCaps,
-            max_budget: body.max_budget,
-          });
+          // Apply gradient-informed precision to routing weights when provided
+          const marketConfig =
+            typeof body.exploration_drive === "number"
+              ? applyPrecisionToMarketConfig(undefined, body.exploration_drive)
+              : undefined;
+          const ranked = rankCandidates(
+            multiCapProfiles,
+            {
+              ...requirements,
+              required_capabilities: requiredCaps,
+              max_budget: body.max_budget,
+            },
+            marketConfig,
+          );
           const selected = ranked.filter((r) => r.selected && r.composite > 0);
 
           if (selected.length > 0) {
@@ -1851,7 +2015,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       if (peers) {
         for (const peer of peers) {
           if (requiredCaps.length > 0 && peer.capabilities) {
-            const hasAll = requiredCaps.every(c => peer.capabilities!.includes(c));
+            const hasAll = requiredCaps.every((c) => peer.capabilities!.includes(c));
             if (!hasAll) continue;
           }
           peer.ws.send(payload);
@@ -1927,13 +2091,18 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     // Structural validation: require essential receipt fields
     const validStatuses = ["completed", "failed", "denied"];
     if (
-      typeof receipt.task_id !== "string" || receipt.task_id === "" ||
-      typeof receipt.motebit_id !== "string" || receipt.motebit_id === "" ||
-      typeof receipt.signature !== "string" || receipt.signature === "" ||
-      typeof receipt.status !== "string" || !validStatuses.includes(receipt.status)
+      typeof receipt.task_id !== "string" ||
+      receipt.task_id === "" ||
+      typeof receipt.motebit_id !== "string" ||
+      receipt.motebit_id === "" ||
+      typeof receipt.signature !== "string" ||
+      receipt.signature === "" ||
+      typeof receipt.status !== "string" ||
+      !validStatuses.includes(receipt.status)
     ) {
       throw new HTTPException(400, {
-        message: "Invalid receipt: must include non-empty task_id, motebit_id, signature, and valid status",
+        message:
+          "Invalid receipt: must include non-empty task_id, motebit_id, signature, and valid status",
       });
     }
 
@@ -2386,9 +2555,18 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     const limit = Math.min(Math.max(parseInt(limitStr ?? "20", 10) || 20, 1), 100);
     const maxBudget = maxBudgetStr ? parseFloat(maxBudgetStr) : undefined;
 
-    const { profiles, requirements } = buildCandidateProfiles(capability ?? undefined, maxBudget, limit);
+    const { profiles, requirements } = buildCandidateProfiles(
+      capability ?? undefined,
+      maxBudget,
+      limit,
+    );
 
-    const ranked = rankCandidates(profiles, requirements);
+    const explorationStr = c.req.query("exploration_drive");
+    const marketConfig =
+      explorationStr != null
+        ? applyPrecisionToMarketConfig(undefined, parseFloat(explorationStr))
+        : undefined;
+    const ranked = rankCandidates(profiles, requirements, marketConfig);
 
     return c.json({
       candidates: ranked.map((score) => {
@@ -2434,16 +2612,28 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     const now = Date.now();
     const expiresAt = now + (body.expires_in_ms ?? 10 * 60 * 1000); // 10 min default
 
-    moteDb.db.prepare(
-      `INSERT INTO relay_proposals (proposal_id, plan_id, initiator_motebit_id, status, plan_snapshot, created_at, expires_at, updated_at)
+    moteDb.db
+      .prepare(
+        `INSERT INTO relay_proposals (proposal_id, plan_id, initiator_motebit_id, status, plan_snapshot, created_at, expires_at, updated_at)
        VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)`,
-    ).run(body.proposal_id, body.plan_id, initiatorId, JSON.stringify(body.plan_snapshot ?? null), now, expiresAt, now);
+      )
+      .run(
+        body.proposal_id,
+        body.plan_id,
+        initiatorId,
+        JSON.stringify(body.plan_snapshot ?? null),
+        now,
+        expiresAt,
+        now,
+      );
 
     for (const p of body.participants) {
-      moteDb.db.prepare(
-        `INSERT INTO relay_proposal_participants (proposal_id, motebit_id, assigned_steps)
+      moteDb.db
+        .prepare(
+          `INSERT INTO relay_proposal_participants (proposal_id, motebit_id, assigned_steps)
          VALUES (?, ?, ?)`,
-      ).run(body.proposal_id, p.motebit_id, JSON.stringify(p.assigned_steps));
+        )
+        .run(body.proposal_id, p.motebit_id, JSON.stringify(p.assigned_steps));
     }
 
     // Fan out to all participant motebits
@@ -2469,14 +2659,16 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   // GET /api/v1/proposals/:proposalId — get proposal state
   app.get("/api/v1/proposals/:proposalId", (c) => {
     const proposalId = c.req.param("proposalId");
-    const proposal = moteDb.db.prepare("SELECT * FROM relay_proposals WHERE proposal_id = ?").get(proposalId) as Record<string, unknown> | undefined;
+    const proposal = moteDb.db
+      .prepare("SELECT * FROM relay_proposals WHERE proposal_id = ?")
+      .get(proposalId) as Record<string, unknown> | undefined;
     if (!proposal) {
       throw new HTTPException(404, { message: "Proposal not found" });
     }
 
-    const participants = moteDb.db.prepare(
-      "SELECT * FROM relay_proposal_participants WHERE proposal_id = ?",
-    ).all(proposalId) as Array<Record<string, unknown>>;
+    const participants = moteDb.db
+      .prepare("SELECT * FROM relay_proposal_participants WHERE proposal_id = ?")
+      .all(proposalId) as Array<Record<string, unknown>>;
 
     return c.json({
       proposal_id: proposal.proposal_id,
@@ -2513,23 +2705,36 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       throw new HTTPException(400, { message: "Missing required fields" });
     }
 
-    const proposal = moteDb.db.prepare("SELECT * FROM relay_proposals WHERE proposal_id = ?").get(proposalId) as Record<string, unknown> | undefined;
+    const proposal = moteDb.db
+      .prepare("SELECT * FROM relay_proposals WHERE proposal_id = ?")
+      .get(proposalId) as Record<string, unknown> | undefined;
     if (!proposal) {
       throw new HTTPException(404, { message: "Proposal not found" });
     }
     if (proposal.status !== "pending") {
-      throw new HTTPException(409, { message: `Proposal is ${proposal.status as string}, cannot respond` });
+      throw new HTTPException(409, {
+        message: `Proposal is ${proposal.status as string}, cannot respond`,
+      });
     }
 
     const now = Date.now();
-    moteDb.db.prepare(
-      `UPDATE relay_proposal_participants SET response = ?, counter_steps = ?, responded_at = ?, signature = ? WHERE proposal_id = ? AND motebit_id = ?`,
-    ).run(body.response, body.counter_steps ? JSON.stringify(body.counter_steps) : null, now, body.signature ?? null, proposalId, responderId);
+    moteDb.db
+      .prepare(
+        `UPDATE relay_proposal_participants SET response = ?, counter_steps = ?, responded_at = ?, signature = ? WHERE proposal_id = ? AND motebit_id = ?`,
+      )
+      .run(
+        body.response,
+        body.counter_steps ? JSON.stringify(body.counter_steps) : null,
+        now,
+        body.signature ?? null,
+        proposalId,
+        responderId,
+      );
 
     // Check if all participants have responded
-    const allParticipants = moteDb.db.prepare(
-      "SELECT * FROM relay_proposal_participants WHERE proposal_id = ?",
-    ).all(proposalId) as Array<Record<string, unknown>>;
+    const allParticipants = moteDb.db
+      .prepare("SELECT * FROM relay_proposal_participants WHERE proposal_id = ?")
+      .all(proposalId) as Array<Record<string, unknown>>;
 
     const allResponded = allParticipants.every((p) => p.response != null);
     const allAccepted = allParticipants.every((p) => p.response === "accept");
@@ -2542,9 +2747,9 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     else if (anyCountered && allResponded) newStatus = "countered";
 
     if (newStatus !== "pending") {
-      moteDb.db.prepare(
-        "UPDATE relay_proposals SET status = ?, updated_at = ? WHERE proposal_id = ?",
-      ).run(newStatus, now, proposalId);
+      moteDb.db
+        .prepare("UPDATE relay_proposals SET status = ?, updated_at = ? WHERE proposal_id = ?")
+        .run(newStatus, now, proposalId);
     }
 
     // Fan out response to initiator
@@ -2586,7 +2791,9 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   // POST /api/v1/proposals/:proposalId/withdraw — initiator withdraws
   app.post("/api/v1/proposals/:proposalId/withdraw", (c) => {
     const proposalId = c.req.param("proposalId");
-    const proposal = moteDb.db.prepare("SELECT * FROM relay_proposals WHERE proposal_id = ?").get(proposalId) as Record<string, unknown> | undefined;
+    const proposal = moteDb.db
+      .prepare("SELECT * FROM relay_proposals WHERE proposal_id = ?")
+      .get(proposalId) as Record<string, unknown> | undefined;
     if (!proposal) {
       throw new HTTPException(404, { message: "Proposal not found" });
     }
@@ -2595,13 +2802,17 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       throw new HTTPException(403, { message: "Only the initiator can withdraw a proposal" });
     }
     if (proposal.status !== "pending") {
-      throw new HTTPException(409, { message: `Proposal is ${proposal.status as string}, cannot withdraw` });
+      throw new HTTPException(409, {
+        message: `Proposal is ${proposal.status as string}, cannot withdraw`,
+      });
     }
 
     const now = Date.now();
-    moteDb.db.prepare(
-      "UPDATE relay_proposals SET status = 'withdrawn', updated_at = ? WHERE proposal_id = ?",
-    ).run(now, proposalId);
+    moteDb.db
+      .prepare(
+        "UPDATE relay_proposals SET status = 'withdrawn', updated_at = ? WHERE proposal_id = ?",
+      )
+      .run(now, proposalId);
 
     return c.json({ status: "withdrawn" });
   });
@@ -2619,7 +2830,8 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       throw new HTTPException(400, { message: "Missing caller identity" });
     }
 
-    let sql = "SELECT * FROM relay_proposals WHERE (initiator_motebit_id = ? OR proposal_id IN (SELECT proposal_id FROM relay_proposal_participants WHERE motebit_id = ?))";
+    let sql =
+      "SELECT * FROM relay_proposals WHERE (initiator_motebit_id = ? OR proposal_id IN (SELECT proposal_id FROM relay_proposal_participants WHERE motebit_id = ?))";
     const params: unknown[] = [scopeId, scopeId];
 
     if (status) {
@@ -2662,29 +2874,43 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     }
 
     // Verify caller is a participant in this proposal
-    const stepProposal = moteDb.db.prepare("SELECT initiator_motebit_id FROM relay_proposals WHERE proposal_id = ?").get(proposalId) as { initiator_motebit_id: string } | undefined;
+    const stepProposal = moteDb.db
+      .prepare("SELECT initiator_motebit_id FROM relay_proposals WHERE proposal_id = ?")
+      .get(proposalId) as { initiator_motebit_id: string } | undefined;
     if (!stepProposal) {
       throw new HTTPException(404, { message: "Proposal not found" });
     }
-    const isParticipant = moteDb.db.prepare(
-      "SELECT 1 FROM relay_proposal_participants WHERE proposal_id = ? AND motebit_id = ?",
-    ).get(proposalId, motebitId);
+    const isParticipant = moteDb.db
+      .prepare("SELECT 1 FROM relay_proposal_participants WHERE proposal_id = ? AND motebit_id = ?")
+      .get(proposalId, motebitId);
     if (!isParticipant && motebitId !== stepProposal.initiator_motebit_id) {
       throw new HTTPException(403, { message: "Caller is not a participant in this proposal" });
     }
 
     const now = Date.now();
-    moteDb.db.prepare(
-      `INSERT OR REPLACE INTO relay_collaborative_step_results (proposal_id, step_id, motebit_id, status, result_summary, receipt, completed_at)
+    moteDb.db
+      .prepare(
+        `INSERT OR REPLACE INTO relay_collaborative_step_results (proposal_id, step_id, motebit_id, status, result_summary, receipt, completed_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).run(proposalId, body.step_id, motebitId, body.status, body.result_summary ?? null, body.receipt ? JSON.stringify(body.receipt) : null, now);
+      )
+      .run(
+        proposalId,
+        body.step_id,
+        motebitId,
+        body.status,
+        body.result_summary ?? null,
+        body.receipt ? JSON.stringify(body.receipt) : null,
+        now,
+      );
 
     // Fan out step result to all participants
-    const participants = moteDb.db.prepare(
-      "SELECT motebit_id FROM relay_proposal_participants WHERE proposal_id = ?",
-    ).all(proposalId) as Array<{ motebit_id: string }>;
+    const participants = moteDb.db
+      .prepare("SELECT motebit_id FROM relay_proposal_participants WHERE proposal_id = ?")
+      .all(proposalId) as Array<{ motebit_id: string }>;
 
-    const proposal = moteDb.db.prepare("SELECT initiator_motebit_id FROM relay_proposals WHERE proposal_id = ?").get(proposalId) as { initiator_motebit_id: string } | undefined;
+    const proposal = moteDb.db
+      .prepare("SELECT initiator_motebit_id FROM relay_proposals WHERE proposal_id = ?")
+      .get(proposalId) as { initiator_motebit_id: string } | undefined;
 
     const recipientIds = new Set(participants.map((p) => p.motebit_id));
     if (proposal) recipientIds.add(proposal.initiator_motebit_id);

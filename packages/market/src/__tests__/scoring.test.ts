@@ -4,9 +4,7 @@ import type { CandidateProfile, TaskRequirements } from "../scoring.js";
 import { AgentTrustLevel, asMotebitId, asListingId } from "@motebit/sdk";
 import type { AgentTrustRecord, AgentServiceListing } from "@motebit/sdk";
 
-function makeTrustRecord(
-  overrides: Partial<AgentTrustRecord> = {},
-): AgentTrustRecord {
+function makeTrustRecord(overrides: Partial<AgentTrustRecord> = {}): AgentTrustRecord {
   return {
     motebit_id: "local",
     remote_motebit_id: "remote-1",
@@ -20,9 +18,7 @@ function makeTrustRecord(
   };
 }
 
-function makeListing(
-  overrides: Partial<AgentServiceListing> = {},
-): AgentServiceListing {
+function makeListing(overrides: Partial<AgentServiceListing> = {}): AgentServiceListing {
   return {
     listing_id: asListingId("listing-1"),
     motebit_id: asMotebitId("remote-1"),
@@ -35,9 +31,7 @@ function makeListing(
   };
 }
 
-function makeCandidate(
-  overrides: Partial<CandidateProfile> = {},
-): CandidateProfile {
+function makeCandidate(overrides: Partial<CandidateProfile> = {}): CandidateProfile {
   return {
     motebit_id: asMotebitId("remote-1"),
     trust_record: makeTrustRecord(),
@@ -80,27 +74,18 @@ describe("scoreCandidate", () => {
   });
 
   it("uses defaults for null trust record", () => {
-    const score = scoreCandidate(
-      makeCandidate({ trust_record: null }),
-      defaultReqs,
-    );
+    const score = scoreCandidate(makeCandidate({ trust_record: null }), defaultReqs);
     expect(score.sub_scores.trust).toBe(0.1);
     expect(score.sub_scores.success_rate).toBe(0.5);
   });
 
   it("uses defaults for null latency stats", () => {
-    const score = scoreCandidate(
-      makeCandidate({ latency_stats: null }),
-      defaultReqs,
-    );
+    const score = scoreCandidate(makeCandidate({ latency_stats: null }), defaultReqs);
     expect(score.sub_scores.latency).toBe(0.5);
   });
 
   it("scores offline candidates with 0 availability", () => {
-    const score = scoreCandidate(
-      makeCandidate({ is_online: false }),
-      defaultReqs,
-    );
+    const score = scoreCandidate(makeCandidate({ is_online: false }), defaultReqs);
     expect(score.sub_scores.availability).toBe(0.0);
   });
 
@@ -159,10 +144,7 @@ describe("scoreCandidate", () => {
   });
 
   it("returns 0 capability match for null listing with required caps", () => {
-    const score = scoreCandidate(
-      makeCandidate({ listing: null }),
-      defaultReqs,
-    );
+    const score = scoreCandidate(makeCandidate({ listing: null }), defaultReqs);
     expect(score.sub_scores.capability_match).toBe(0);
     expect(score.composite).toBe(0);
   });
@@ -171,8 +153,14 @@ describe("scoreCandidate", () => {
 describe("rankCandidates", () => {
   it("sorts candidates by composite score descending", () => {
     const candidates = [
-      makeCandidate({ motebit_id: asMotebitId("low"), trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Unknown }) }),
-      makeCandidate({ motebit_id: asMotebitId("high"), trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Trusted }) }),
+      makeCandidate({
+        motebit_id: asMotebitId("low"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Unknown }),
+      }),
+      makeCandidate({
+        motebit_id: asMotebitId("high"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Trusted }),
+      }),
       makeCandidate({ motebit_id: asMotebitId("mid") }),
     ];
     const ranked = rankCandidates(candidates, defaultReqs);
@@ -212,8 +200,8 @@ describe("applyPrecisionToMarketConfig", () => {
     const cfg = applyPrecisionToMarketConfig(undefined, 0);
     expect(cfg.weight_trust).toBe(0.25);
     expect(cfg.weight_success_rate).toBe(0.25);
-    expect(cfg.weight_capability_match).toBe(0.10);
-    expect(cfg.weight_availability).toBe(0.10);
+    expect(cfg.weight_capability_match).toBe(0.1);
+    expect(cfg.weight_availability).toBe(0.1);
     expect(cfg.exploration_weight).toBe(0);
   });
 
@@ -221,15 +209,15 @@ describe("applyPrecisionToMarketConfig", () => {
     const cfg = applyPrecisionToMarketConfig(undefined, 1.0);
     expect(cfg.weight_trust).toBeCloseTo(0.15);
     expect(cfg.weight_success_rate).toBeCloseTo(0.15);
-    expect(cfg.weight_capability_match).toBeCloseTo(0.20);
-    expect(cfg.weight_availability).toBeCloseTo(0.20);
+    expect(cfg.weight_capability_match).toBeCloseTo(0.2);
+    expect(cfg.weight_availability).toBeCloseTo(0.2);
     expect(cfg.exploration_weight).toBe(1.0);
   });
 
   it("partial exploration (0.5) shifts weights proportionally", () => {
     const cfg = applyPrecisionToMarketConfig(undefined, 0.5);
-    expect(cfg.weight_trust).toBeCloseTo(0.20);
-    expect(cfg.weight_success_rate).toBeCloseTo(0.20);
+    expect(cfg.weight_trust).toBeCloseTo(0.2);
+    expect(cfg.weight_success_rate).toBeCloseTo(0.2);
     expect(cfg.weight_capability_match).toBeCloseTo(0.15);
     expect(cfg.weight_availability).toBeCloseTo(0.15);
     expect(cfg.exploration_weight).toBe(0.5);

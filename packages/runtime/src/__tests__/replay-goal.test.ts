@@ -59,10 +59,7 @@ describe("MotebitRuntime.replayGoal", () => {
     const planStore = new InMemoryPlanStore();
     const auditSink = new InMemoryAuditSink();
     const adapters = createTestAdapters(planStore, auditSink);
-    const runtime = new MotebitRuntime(
-      { motebitId: MOTEBIT_ID, tickRateHz: 0 },
-      adapters,
-    );
+    const runtime = new MotebitRuntime({ motebitId: MOTEBIT_ID, tickRateHz: 0 }, adapters);
 
     const now = Date.now();
 
@@ -119,14 +116,55 @@ describe("MotebitRuntime.replayGoal", () => {
     const eventStore = adapters.storage.eventStore;
 
     await eventStore.append(makeEvent("ev-1", EventType.GoalCreated, { goal_id: GOAL_ID }, now));
-    await eventStore.append(makeEvent("ev-2", EventType.GoalExecuted, { goal_id: GOAL_ID }, now + 100));
-    await eventStore.append(makeEvent("ev-3", EventType.PlanCreated, { plan_id: PLAN_ID, title: "Test replay plan", total_steps: 2 }, now + 200));
-    await eventStore.append(makeEvent("ev-4", EventType.PlanStepStarted, { plan_id: PLAN_ID, step_id: "step-1", ordinal: 0, description: "Research the topic" }, now + 1000));
-    await eventStore.append(makeEvent("ev-5", EventType.PlanStepCompleted, { plan_id: PLAN_ID, step_id: "step-1", ordinal: 0, tool_calls_made: 1 }, now + 2000));
-    await eventStore.append(makeEvent("ev-6", EventType.PlanStepStarted, { plan_id: PLAN_ID, step_id: "step-2", ordinal: 1, description: "Summarize findings" }, now + 3000));
-    await eventStore.append(makeEvent("ev-7", EventType.PlanStepCompleted, { plan_id: PLAN_ID, step_id: "step-2", ordinal: 1, tool_calls_made: 0 }, now + 4000));
-    await eventStore.append(makeEvent("ev-8", EventType.PlanCompleted, { plan_id: PLAN_ID }, now + 4500));
-    await eventStore.append(makeEvent("ev-9", EventType.GoalCompleted, { goal_id: GOAL_ID }, now + 5000));
+    await eventStore.append(
+      makeEvent("ev-2", EventType.GoalExecuted, { goal_id: GOAL_ID }, now + 100),
+    );
+    await eventStore.append(
+      makeEvent(
+        "ev-3",
+        EventType.PlanCreated,
+        { plan_id: PLAN_ID, title: "Test replay plan", total_steps: 2 },
+        now + 200,
+      ),
+    );
+    await eventStore.append(
+      makeEvent(
+        "ev-4",
+        EventType.PlanStepStarted,
+        { plan_id: PLAN_ID, step_id: "step-1", ordinal: 0, description: "Research the topic" },
+        now + 1000,
+      ),
+    );
+    await eventStore.append(
+      makeEvent(
+        "ev-5",
+        EventType.PlanStepCompleted,
+        { plan_id: PLAN_ID, step_id: "step-1", ordinal: 0, tool_calls_made: 1 },
+        now + 2000,
+      ),
+    );
+    await eventStore.append(
+      makeEvent(
+        "ev-6",
+        EventType.PlanStepStarted,
+        { plan_id: PLAN_ID, step_id: "step-2", ordinal: 1, description: "Summarize findings" },
+        now + 3000,
+      ),
+    );
+    await eventStore.append(
+      makeEvent(
+        "ev-7",
+        EventType.PlanStepCompleted,
+        { plan_id: PLAN_ID, step_id: "step-2", ordinal: 1, tool_calls_made: 0 },
+        now + 4000,
+      ),
+    );
+    await eventStore.append(
+      makeEvent("ev-8", EventType.PlanCompleted, { plan_id: PLAN_ID }, now + 4500),
+    );
+    await eventStore.append(
+      makeEvent("ev-9", EventType.GoalCompleted, { goal_id: GOAL_ID }, now + 5000),
+    );
 
     // --- 3. Add tool audit entries with matching runId ---
     auditSink.append({
@@ -173,7 +211,9 @@ describe("MotebitRuntime.replayGoal", () => {
 
     // Timeline is sorted by timestamp
     for (let i = 1; i < manifest.timeline.length; i++) {
-      expect(manifest.timeline[i]!.timestamp).toBeGreaterThanOrEqual(manifest.timeline[i - 1]!.timestamp);
+      expect(manifest.timeline[i]!.timestamp).toBeGreaterThanOrEqual(
+        manifest.timeline[i - 1]!.timestamp,
+      );
     }
 
     // goal_started comes first, goal_completed comes last

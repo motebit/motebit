@@ -507,10 +507,7 @@ describe("signCollaborativeReceipt / verifyCollaborativeReceipt", () => {
     expect(collaborative.content_hash).toBeTruthy();
     expect(collaborative.initiator_signature).toBeTruthy();
 
-    const result = await verifyCollaborativeReceipt(
-      collaborative,
-      initiatorKp.publicKey,
-    );
+    const result = await verifyCollaborativeReceipt(collaborative, initiatorKp.publicKey);
     expect(result.valid).toBe(true);
   });
 
@@ -586,14 +583,22 @@ describe("signCollaborativeReceipt / verifyCollaborativeReceipt", () => {
     const knownKeys = new Map<string, Uint8Array>();
     knownKeys.set("participant-2", participantKp.publicKey);
 
-    const result1 = await verifyCollaborativeReceipt(collaborative, initiatorKp.publicKey, knownKeys);
+    const result1 = await verifyCollaborativeReceipt(
+      collaborative,
+      initiatorKp.publicKey,
+      knownKeys,
+    );
     expect(result1.valid).toBe(true);
 
     // Verify with wrong participant key
     const wrongKeys = new Map<string, Uint8Array>();
     wrongKeys.set("participant-2", wrongKp.publicKey);
 
-    const result2 = await verifyCollaborativeReceipt(collaborative, initiatorKp.publicKey, wrongKeys);
+    const result2 = await verifyCollaborativeReceipt(
+      collaborative,
+      initiatorKp.publicKey,
+      wrongKeys,
+    );
     expect(result2.valid).toBe(false);
     expect(result2.error).toContain("signature invalid");
   });

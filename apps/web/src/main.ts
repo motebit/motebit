@@ -163,7 +163,8 @@ async function autoInitWebLLM(model: string = DEFAULT_WEBLLM_MODEL): Promise<voi
       if (fill) fill.style.width = `${Math.round(report.progress * 100)}%`;
       if (text) {
         if (report.progress < 1) {
-          text.textContent = report.text.length > 60 ? report.text.slice(0, 57) + "..." : report.text;
+          text.textContent =
+            report.text.length > 60 ? report.text.slice(0, 57) + "..." : report.text;
         } else {
           text.textContent = "Ready";
         }
@@ -178,7 +179,9 @@ async function autoInitWebLLM(model: string = DEFAULT_WEBLLM_MODEL): Promise<voi
     settings.updateConnectPrompt();
   } catch {
     if (heading) heading.textContent = "Give it a voice";
-    if (text) text.textContent = "Connect an AI provider and this little drop of glass will start talking back.";
+    if (text)
+      text.textContent =
+        "Connect an AI provider and this little drop of glass will start talking back.";
     if (btn) btn.style.display = "";
     if (progress) progress.style.display = "none";
   }

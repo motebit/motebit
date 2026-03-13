@@ -169,7 +169,9 @@ Available commands:
       }
 
       console.log("\nMemory Graph:\n");
-      console.log(`  Nodes:      ${live.length} (${sem} semantic, ${epi} episodic, ${pinned} pinned)`);
+      console.log(
+        `  Nodes:      ${live.length} (${sem} semantic, ${epi} episodic, ${pinned} pinned)`,
+      );
       console.log(`  Edges:      ${liveEdges.length}`);
       if (edgeTypes.size > 0) {
         const parts = Array.from(edgeTypes.entries())
@@ -180,17 +182,22 @@ Available commands:
       console.log(`  Avg conf:   ${avgConf.toFixed(2)}`);
       console.log(`  Avg half:   ${Math.round(avgHalfLife / DAY)}d`);
       console.log(`  Compounded: ${compounded} (half-life > 30d)`);
-      console.log(`  Density:    ${live.length > 0 ? (liveEdges.length / live.length).toFixed(2) : "0"} edges/node`);
+      console.log(
+        `  Density:    ${live.length > 0 ? (liveEdges.length / live.length).toFixed(2) : "0"} edges/node`,
+      );
 
       const curiosityTargets = runtime.getCuriosityTargets();
       if (curiosityTargets.length > 0) {
         const topScore = curiosityTargets[0]!.curiosityScore.toFixed(3);
-        console.log(`  Curious:    ${curiosityTargets.length} memories fading (top score: ${topScore})`);
+        console.log(
+          `  Curious:    ${curiosityTargets.length} memories fading (top score: ${topScore})`,
+        );
       }
 
       const gradient = runtime.getGradient();
       if (gradient) {
-        const delta = gradient.delta >= 0 ? `+${gradient.delta.toFixed(4)}` : gradient.delta.toFixed(4);
+        const delta =
+          gradient.delta >= 0 ? `+${gradient.delta.toFixed(4)}` : gradient.delta.toFixed(4);
         console.log(`\n  Gradient:   ${gradient.gradient.toFixed(4)} (${delta})`);
       }
       break;
@@ -295,7 +302,10 @@ Available commands:
             );
             // Plan sync
             console.log("Syncing plans...");
-            const planSyncAdapter = new SqlitePlanSyncStoreAdapter(repl.moteDb.planStore, repl.motebitId);
+            const planSyncAdapter = new SqlitePlanSyncStoreAdapter(
+              repl.moteDb.planStore,
+              repl.motebitId,
+            );
             const planSyncEngine = new PlanSyncEngine(planSyncAdapter, repl.motebitId);
             planSyncEngine.connectRemote(
               new HttpPlanSyncAdapter({
@@ -888,7 +898,7 @@ Available commands:
           const ago = formatTimeAgo(Date.now() - r.last_seen_at);
           const levelColor =
             r.trust_level === AgentTrustLevel.Trusted
-              ? "\x1b[32m"   // green
+              ? "\x1b[32m" // green
               : r.trust_level === AgentTrustLevel.Verified
                 ? "\x1b[33m" // yellow
                 : r.trust_level === AgentTrustLevel.Blocked
@@ -954,7 +964,9 @@ Available commands:
             break;
           }
           await runtime.setAgentTrustLevel(match.remote_motebit_id, trustLevel as AgentTrustLevel);
-          console.log(`Trust level for ${match.remote_motebit_id.slice(0, 12)} set to: ${trustLevel}`);
+          console.log(
+            `Trust level for ${match.remote_motebit_id.slice(0, 12)} set to: ${trustLevel}`,
+          );
         } else if (agentSub === "block") {
           if (!agentArgs) {
             console.log("Usage: /agents block <id>");

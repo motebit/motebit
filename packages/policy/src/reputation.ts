@@ -23,10 +23,7 @@ const MS_PER_DAY = 86_400_000;
 const VOLUME_SATURATION = 50;
 const RECENCY_HALF_LIFE_DAYS = 90;
 
-export function computeReputationScore(
-  record: AgentTrustRecord,
-  now?: number,
-): number {
+export function computeReputationScore(record: AgentTrustRecord, now?: number): number {
   if (record.trust_level === AgentTrustLevel.Blocked) return 0.0;
   if (record.trust_level === AgentTrustLevel.Unknown) return 0.0;
 

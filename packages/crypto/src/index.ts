@@ -226,6 +226,62 @@ export function base58btcEncode(bytes: Uint8Array): string {
 }
 
 /**
+ * Decode a base58btc string back to bytes.
+ */
+export function base58btcDecode(str: string): Uint8Array {
+  // Count leading '1's (zero bytes)
+  let zeros = 0;
+  while (zeros < str.length && str[zeros] === BASE58_ALPHABET[0]) zeros++;
+
+  // Convert from base58
+  let value = 0n;
+  for (let i = 0; i < str.length; i++) {
+    const idx = BASE58_ALPHABET.indexOf(str[i]!);
+    if (idx === -1) throw new Error(`Invalid base58 character: ${str[i]}`);
+    value = value * 58n + BigInt(idx);
+  }
+
+  // Convert bigint to bytes
+  const hex: string[] = [];
+  while (value > 0n) {
+    const byte = Number(value & 0xffn);
+    hex.unshift(byte.toString(16).padStart(2, "0"));
+    value >>= 8n;
+  }
+
+  const dataBytes =
+    hex.length > 0 ? new Uint8Array(hex.map((h) => parseInt(h, 16))) : new Uint8Array(0);
+
+  // Prepend leading zero bytes
+  const result = new Uint8Array(zeros + dataBytes.length);
+  result.set(dataBytes, zeros);
+  return result;
+}
+
+/**
+ * Extract a raw 32-byte Ed25519 public key from a did:key URI.
+ *
+ * Parses `did:key:z<base58btc(0xed01 + publicKey)>`, strips the 2-byte
+ * multicodec prefix, and returns the raw public key bytes.
+ */
+export function didKeyToPublicKey(did: string): Uint8Array {
+  if (!did.startsWith("did:key:z")) {
+    throw new Error("Invalid did:key URI: must start with did:key:z");
+  }
+  const encoded = did.slice("did:key:z".length);
+  const decoded = base58btcDecode(encoded);
+  if (decoded.length !== 34) {
+    throw new Error(
+      `Invalid did:key: expected 34 bytes (2 prefix + 32 key), got ${decoded.length}`,
+    );
+  }
+  if (decoded[0] !== 0xed || decoded[1] !== 0x01) {
+    throw new Error("Invalid did:key: multicodec prefix is not ed25519-pub (0xed01)");
+  }
+  return decoded.slice(2);
+}
+
+/**
  * Convert a hex string to bytes.
  */
 export function hexToBytes(hex: string): Uint8Array {
@@ -391,7 +447,7 @@ export interface SignableReceipt {
  * Deterministic JSON serialization with sorted keys (recursive).
  * Produces identical output regardless of insertion order.
  */
-function canonicalJson(obj: unknown): string {
+export function canonicalJson(obj: unknown): string {
   if (obj === null || obj === undefined) return JSON.stringify(obj);
   if (typeof obj !== "object") return JSON.stringify(obj);
   if (Array.isArray(obj)) {
@@ -734,14 +790,38 @@ export async function verifyCollaborativeReceipt(
       const pr = receipt.participant_receipts[i]!;
       const pubKey = participantKeys.get(pr.motebit_id);
       if (!pubKey) {
-        return { valid: false, error: `Unknown participant key for receipt ${i} (${pr.motebit_id})` };
+        return {
+          valid: false,
+          error: `Unknown participant key for receipt ${i} (${pr.motebit_id})`,
+        };
       }
       const prValid = await verifyExecutionReceipt(pr, pubKey);
       if (!prValid) {
-        return { valid: false, error: `Participant receipt ${i} (${pr.motebit_id}) signature invalid` };
+        return {
+          valid: false,
+          error: `Participant receipt ${i} (${pr.motebit_id}) signature invalid`,
+        };
       }
     }
   }
 
   return { valid: true };
 }
+
+// === Verifiable Credentials ===
+
+export {
+  signVerifiableCredential,
+  verifyVerifiableCredential,
+  signVerifiablePresentation,
+  verifyVerifiablePresentation,
+  issueGradientCredential,
+  issueReputationCredential,
+  issueTrustCredential,
+  createPresentation,
+} from "./credentials.js";
+export type {
+  DataIntegrityProof,
+  VerifiableCredential,
+  VerifiablePresentation,
+} from "./credentials.js";

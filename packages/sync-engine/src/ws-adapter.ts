@@ -38,9 +38,15 @@ export type CustomMessageCallback = (msg: { type: string; [key: string]: unknown
 export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   private ws: WebSocket | null = null;
   private config: Required<
-    Omit<WebSocketAdapterConfig, "authToken" | "capabilities" | "httpFallback" | "localStore" | "onCatchUp">
+    Omit<
+      WebSocketAdapterConfig,
+      "authToken" | "capabilities" | "httpFallback" | "localStore" | "onCatchUp"
+    >
   > &
-    Pick<WebSocketAdapterConfig, "authToken" | "capabilities" | "httpFallback" | "localStore" | "onCatchUp">;
+    Pick<
+      WebSocketAdapterConfig,
+      "authToken" | "capabilities" | "httpFallback" | "localStore" | "onCatchUp"
+    >;
   private onEventCallbacks: Set<EventReceivedCallback> = new Set();
   private onCustomMessageCallbacks: Set<CustomMessageCallback> = new Set();
   private reconnectAttempt = 0;

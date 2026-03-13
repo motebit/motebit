@@ -95,7 +95,7 @@ export function initTheme(
       const pref = (btn as HTMLElement).dataset.theme as ThemePreference;
       if (pref) {
         currentPreference = pref;
-          applyTheme(pref);
+        applyTheme(pref);
         updateToggleUI();
         persist(pref, isTauri, invoke);
       }

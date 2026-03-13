@@ -101,7 +101,9 @@ export function packContext(contextPack: ContextPack): string {
     for (const hint of contextPack.curiosityHints.slice(0, 2)) {
       parts.push(`  - "${hint.content}" (haven't discussed in ${hint.daysSinceDiscussed}d)`);
     }
-    parts.push("  If relevant to what the user is saying, you could check in on these. If not, ignore them.");
+    parts.push(
+      "  If relevant to what the user is saying, you could check in on these. If not, ignore them.",
+    );
   }
 
   // Known agents — trust context so the AI knows its social network
@@ -109,13 +111,17 @@ export function packContext(contextPack: ContextPack): string {
     parts.push("[Agents I Know]");
     for (const agent of contextPack.knownAgents) {
       const tasks = (agent.successful_tasks ?? 0) + (agent.failed_tasks ?? 0);
-      const successRate = tasks > 0 ? ((agent.successful_tasks ?? 0) / tasks * 100).toFixed(0) : "n/a";
+      const successRate =
+        tasks > 0 ? (((agent.successful_tasks ?? 0) / tasks) * 100).toFixed(0) : "n/a";
       const daysSince = Math.floor((Date.now() - agent.last_seen_at) / 86_400_000);
       const timeAgo = daysSince === 0 ? "today" : `${daysSince}d ago`;
-      const id = agent.remote_motebit_id.length > 12
-        ? `${agent.remote_motebit_id.slice(0, 8)}…${agent.remote_motebit_id.slice(-4)}`
-        : agent.remote_motebit_id;
-      parts.push(`  ${id}: ${agent.trust_level} | ${agent.interaction_count} interactions | tasks: ${successRate}% success | last seen ${timeAgo}`);
+      const id =
+        agent.remote_motebit_id.length > 12
+          ? `${agent.remote_motebit_id.slice(0, 8)}…${agent.remote_motebit_id.slice(-4)}`
+          : agent.remote_motebit_id;
+      parts.push(
+        `  ${id}: ${agent.trust_level} | ${agent.interaction_count} interactions | tasks: ${successRate}% success | last seen ${timeAgo}`,
+      );
     }
   }
 
@@ -1083,9 +1089,7 @@ export interface OllamaDetectionResult {
  * Never throws — returns `{ available: false }` on any error.
  * Times out after 2 seconds to avoid blocking startup.
  */
-export async function detectOllama(
-  baseUrl = DEFAULT_OLLAMA_URL,
-): Promise<OllamaDetectionResult> {
+export async function detectOllama(baseUrl = DEFAULT_OLLAMA_URL): Promise<OllamaDetectionResult> {
   const empty: OllamaDetectionResult = { available: false, models: [], url: "", bestModel: "" };
   try {
     const controller = new AbortController();

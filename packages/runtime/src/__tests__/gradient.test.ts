@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { computeGradient, computePrecision, NEUTRAL_PRECISION, InMemoryGradientStore, summarizeGradientHistory } from "../gradient.js";
+import {
+  computeGradient,
+  computePrecision,
+  gradientToMarketConfig,
+  NEUTRAL_PRECISION,
+  InMemoryGradientStore,
+  summarizeGradientHistory,
+} from "../gradient.js";
 import type { GradientSnapshot, BehavioralStats } from "../gradient.js";
 import type { MemoryNode, MemoryEdge, EventLogEntry } from "@motebit/sdk";
 import { EventType, SensitivityLevel, MemoryType, RelationType } from "@motebit/sdk";
@@ -209,16 +216,25 @@ describe("computeGradient", () => {
       toolCallsFailed: 1,
     };
 
-    const result = computeGradient("test-motebit", [node], [edge], events, null, undefined, undefined, behavioral);
+    const result = computeGradient(
+      "test-motebit",
+      [node],
+      [edge],
+      events,
+      null,
+      undefined,
+      undefined,
+      behavioral,
+    );
 
     const expected =
       0.15 * result.knowledge_density +
       0.17 * result.knowledge_quality +
       0.08 * result.graph_connectivity +
-      0.10 * result.temporal_stability +
+      0.1 * result.temporal_stability +
       0.15 * result.retrieval_quality +
       0.12 * result.interaction_efficiency +
-      0.10 * result.tool_efficiency +
+      0.1 * result.tool_efficiency +
       0.13 * result.curiosity_pressure;
 
     expect(result.gradient).toBeCloseTo(expected, 10);
@@ -457,7 +473,7 @@ describe("behavioral metrics", () => {
 
   it("composite score uses all 8 weights that sum to 1.0", () => {
     // Verify default weights sum to 1.0
-    const weights = [0.15, 0.17, 0.08, 0.10, 0.15, 0.12, 0.10, 0.13];
+    const weights = [0.15, 0.17, 0.08, 0.1, 0.15, 0.12, 0.1, 0.13];
     const sum = weights.reduce((a, b) => a + b, 0);
     expect(sum).toBeCloseTo(1.0, 10);
   });
@@ -723,13 +739,27 @@ describe("computePrecision", () => {
       tool_efficiency: gradient,
       curiosity_pressure: gradient,
       stats: {
-        live_nodes: 10, live_edges: 5, semantic_count: 7, episodic_count: 3,
-        pinned_count: 1, avg_confidence: 0.8, avg_half_life: 604800000,
-        consolidation_add: 0, consolidation_update: 0, consolidation_reinforce: 0,
-        consolidation_noop: 0, total_confidence_mass: 8, avg_retrieval_score: 0.7,
-        retrieval_count: 5, avg_iterations_per_turn: 2, total_turns: 5,
-        tool_calls_succeeded: 8, tool_calls_blocked: 1, tool_calls_failed: 1,
-        curiosity_target_count: 3, avg_curiosity_score: 0.5,
+        live_nodes: 10,
+        live_edges: 5,
+        semantic_count: 7,
+        episodic_count: 3,
+        pinned_count: 1,
+        avg_confidence: 0.8,
+        avg_half_life: 604800000,
+        consolidation_add: 0,
+        consolidation_update: 0,
+        consolidation_reinforce: 0,
+        consolidation_noop: 0,
+        total_confidence_mass: 8,
+        avg_retrieval_score: 0.7,
+        retrieval_count: 5,
+        avg_iterations_per_turn: 2,
+        total_turns: 5,
+        tool_calls_succeeded: 8,
+        tool_calls_blocked: 1,
+        tool_calls_failed: 1,
+        curiosity_target_count: 3,
+        avg_curiosity_score: 0.5,
       },
     };
   }
@@ -820,13 +850,27 @@ describe("summarizeGradientHistory", () => {
       tool_efficiency: gradient * 0.95,
       curiosity_pressure: gradient * 0.8,
       stats: {
-        live_nodes: 10, live_edges: 5, semantic_count: 7, episodic_count: 3,
-        pinned_count: 1, avg_confidence: 0.8, avg_half_life: 604800000,
-        consolidation_add: 0, consolidation_update: 0, consolidation_reinforce: 0,
-        consolidation_noop: 0, total_confidence_mass: 8, avg_retrieval_score: 0.7,
-        retrieval_count: 5, avg_iterations_per_turn: 2, total_turns: 5,
-        tool_calls_succeeded: 8, tool_calls_blocked: 1, tool_calls_failed: 1,
-        curiosity_target_count: 3, avg_curiosity_score: 0.5,
+        live_nodes: 10,
+        live_edges: 5,
+        semantic_count: 7,
+        episodic_count: 3,
+        pinned_count: 1,
+        avg_confidence: 0.8,
+        avg_half_life: 604800000,
+        consolidation_add: 0,
+        consolidation_update: 0,
+        consolidation_reinforce: 0,
+        consolidation_noop: 0,
+        total_confidence_mass: 8,
+        avg_retrieval_score: 0.7,
+        retrieval_count: 5,
+        avg_iterations_per_turn: 2,
+        total_turns: 5,
+        tool_calls_succeeded: 8,
+        tool_calls_blocked: 1,
+        tool_calls_failed: 1,
+        curiosity_target_count: 3,
+        avg_curiosity_score: 0.5,
       },
     };
   }
@@ -909,5 +953,137 @@ describe("summarizeGradientHistory", () => {
   it("describes balanced posture for moderate gradient", () => {
     const summary = summarizeGradientHistory([makeSnapshot(0.5)]);
     expect(summary.posture).toContain("Balanced");
+  });
+});
+
+// ── gradientToMarketConfig (closed-loop feedback) ──
+
+describe("gradientToMarketConfig", () => {
+  function makeDetailedSnapshot(overrides: Partial<GradientSnapshot> = {}): GradientSnapshot {
+    return {
+      motebit_id: "test",
+      timestamp: Date.now(),
+      gradient: 0.5,
+      delta: 0,
+      knowledge_density: 0.5,
+      knowledge_density_raw: 0.5,
+      knowledge_quality: 0.5,
+      graph_connectivity: 0.5,
+      graph_connectivity_raw: 0.5,
+      temporal_stability: 0.5,
+      retrieval_quality: 0.5,
+      interaction_efficiency: 0.5,
+      tool_efficiency: 0.5,
+      curiosity_pressure: 0.5,
+      stats: {
+        live_nodes: 10,
+        live_edges: 5,
+        semantic_count: 7,
+        episodic_count: 3,
+        pinned_count: 1,
+        avg_confidence: 0.8,
+        avg_half_life: 604800000,
+        consolidation_add: 0,
+        consolidation_update: 0,
+        consolidation_reinforce: 0,
+        consolidation_noop: 0,
+        total_confidence_mass: 8,
+        avg_retrieval_score: 0.7,
+        retrieval_count: 5,
+        avg_iterations_per_turn: 2,
+        total_turns: 5,
+        tool_calls_succeeded: 8,
+        tool_calls_blocked: 1,
+        tool_calls_failed: 1,
+        curiosity_target_count: 3,
+        avg_curiosity_score: 0.5,
+      },
+      ...overrides,
+    };
+  }
+
+  it("returns all market config weights", () => {
+    const cfg = gradientToMarketConfig(makeDetailedSnapshot());
+    expect(cfg.weight_trust).toBeDefined();
+    expect(cfg.weight_success_rate).toBeDefined();
+    expect(cfg.weight_latency).toBeDefined();
+    expect(cfg.weight_price_efficiency).toBeDefined();
+    expect(cfg.weight_capability_match).toBeDefined();
+    expect(cfg.weight_availability).toBeDefined();
+    expect(cfg.exploration_weight).toBeDefined();
+  });
+
+  it("high gradient (exploit) keeps trust/success_rate weights high", () => {
+    const cfg = gradientToMarketConfig(makeDetailedSnapshot({ gradient: 0.9 }));
+    // High gradient → high self-trust → low exploration → weights near defaults
+    expect(cfg.weight_trust!).toBeGreaterThan(0.2);
+    expect(cfg.weight_success_rate!).toBeGreaterThan(0.2);
+    expect(cfg.exploration_weight!).toBeLessThan(0.3);
+  });
+
+  it("low gradient (explore) shifts weight toward availability/capability", () => {
+    const cfg = gradientToMarketConfig(makeDetailedSnapshot({ gradient: 0.1 }));
+    // Low gradient → low self-trust → high exploration
+    expect(cfg.weight_availability!).toBeGreaterThan(0.1);
+    expect(cfg.weight_capability_match!).toBeGreaterThan(0.1);
+    expect(cfg.exploration_weight!).toBeGreaterThan(0.7);
+  });
+
+  it("low tool_efficiency boosts weight_trust", () => {
+    const baseline = gradientToMarketConfig(makeDetailedSnapshot({ tool_efficiency: 0.8 }));
+    const weak = gradientToMarketConfig(makeDetailedSnapshot({ tool_efficiency: 0.1 }));
+    // Low tool efficiency → prefer trusted agents
+    expect(weak.weight_trust!).toBeGreaterThan(baseline.weight_trust!);
+  });
+
+  it("low retrieval_quality boosts weight_capability_match", () => {
+    const baseline = gradientToMarketConfig(makeDetailedSnapshot({ retrieval_quality: 0.8 }));
+    const weak = gradientToMarketConfig(makeDetailedSnapshot({ retrieval_quality: 0.1 }));
+    expect(weak.weight_capability_match!).toBeGreaterThan(baseline.weight_capability_match!);
+  });
+
+  it("low interaction_efficiency boosts weight_latency", () => {
+    const baseline = gradientToMarketConfig(makeDetailedSnapshot({ interaction_efficiency: 0.8 }));
+    const weak = gradientToMarketConfig(makeDetailedSnapshot({ interaction_efficiency: 0.1 }));
+    expect(weak.weight_latency!).toBeGreaterThan(baseline.weight_latency!);
+  });
+
+  it("metric-specific shifts are bounded (max 0.05 each)", () => {
+    // Worst case: all metrics at 0
+    const worst = gradientToMarketConfig(
+      makeDetailedSnapshot({
+        tool_efficiency: 0,
+        retrieval_quality: 0,
+        interaction_efficiency: 0,
+      }),
+    );
+    const neutral = gradientToMarketConfig(
+      makeDetailedSnapshot({
+        tool_efficiency: 0.5,
+        retrieval_quality: 0.5,
+        interaction_efficiency: 0.5,
+      }),
+    );
+    // Each metric shift is ≤0.05
+    expect(worst.weight_trust! - neutral.weight_trust!).toBeLessThanOrEqual(0.05 + 1e-10);
+    expect(worst.weight_capability_match! - neutral.weight_capability_match!).toBeLessThanOrEqual(
+      0.05 + 1e-10,
+    );
+    expect(worst.weight_latency! - neutral.weight_latency!).toBeLessThanOrEqual(0.05 + 1e-10);
+  });
+
+  it("declining gradient increases exploration", () => {
+    const stable = gradientToMarketConfig(makeDetailedSnapshot({ gradient: 0.4, delta: 0 }));
+    const declining = gradientToMarketConfig(makeDetailedSnapshot({ gradient: 0.4, delta: -0.1 }));
+    expect(declining.exploration_weight!).toBeGreaterThan(stable.exploration_weight!);
+  });
+
+  it("respects base config overrides", () => {
+    const cfg = gradientToMarketConfig(makeDetailedSnapshot(), {
+      max_candidates: 5,
+      settlement_timeout_ms: 10_000,
+    });
+    expect(cfg.max_candidates).toBe(5);
+    expect(cfg.settlement_timeout_ms).toBe(10_000);
   });
 });

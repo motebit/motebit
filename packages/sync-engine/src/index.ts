@@ -25,11 +25,7 @@ export type {
   ConversationSyncRemoteAdapter,
   HttpConversationSyncConfig,
 } from "./conversation-sync.js";
-export {
-  PlanSyncEngine,
-  HttpPlanSyncAdapter,
-  InMemoryPlanSyncStore,
-} from "./plan-sync.js";
+export { PlanSyncEngine, HttpPlanSyncAdapter, InMemoryPlanSyncStore } from "./plan-sync.js";
 export type {
   PlanSyncConfig,
   PlanSyncStatus,

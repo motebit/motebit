@@ -22,7 +22,10 @@ function hexToDidKey(hex: string): string {
   let v = 0n;
   for (let i = 0; i < bytes.length; i++) v = v * 256n + BigInt(bytes[i]!);
   let r = "";
-  while (v > 0n) { r = B58[Number(v % 58n)]! + r; v /= 58n; }
+  while (v > 0n) {
+    r = B58[Number(v % 58n)]! + r;
+    v /= 58n;
+  }
   return `did:key:z${B58[0]!.repeat(zeros)}${r}`;
 }
 

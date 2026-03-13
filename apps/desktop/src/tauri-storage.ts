@@ -1076,9 +1076,10 @@ function rowToPlanStep(row: PlanStepRow): PlanStep {
     depends_on: JSON.parse(row.depends_on) as string[],
     optional: row.optional === 1,
     status: row.status as StepStatus,
-    required_capabilities: row.required_capabilities != null
-      ? JSON.parse(row.required_capabilities) as PlanStep["required_capabilities"]
-      : undefined,
+    required_capabilities:
+      row.required_capabilities != null
+        ? (JSON.parse(row.required_capabilities) as PlanStep["required_capabilities"])
+        : undefined,
     delegation_task_id: row.delegation_task_id ?? undefined,
     result_summary: row.result_summary,
     error_message: row.error_message,
@@ -1405,7 +1406,10 @@ function rowToAgentTrust(row: AgentTrustRow): AgentTrustRecord {
 export class TauriAgentTrustStore implements AgentTrustStoreAdapter {
   constructor(private invoke: InvokeFn) {}
 
-  async getAgentTrust(motebitId: string, remoteMotebitId: string): Promise<AgentTrustRecord | null> {
+  async getAgentTrust(
+    motebitId: string,
+    remoteMotebitId: string,
+  ): Promise<AgentTrustRecord | null> {
     const rows = await dbQuery<AgentTrustRow>(
       this.invoke,
       "SELECT * FROM agent_trust WHERE motebit_id = ? AND remote_motebit_id = ?",
@@ -1445,7 +1449,11 @@ export class TauriAgentTrustStore implements AgentTrustStoreAdapter {
     return rows.map(rowToAgentTrust);
   }
 
-  async updateTrustLevel(motebitId: string, remoteMotebitId: string, level: AgentTrustLevel): Promise<void> {
+  async updateTrustLevel(
+    motebitId: string,
+    remoteMotebitId: string,
+    level: AgentTrustLevel,
+  ): Promise<void> {
     await dbExecute(
       this.invoke,
       "UPDATE agent_trust SET trust_level = ?, last_seen_at = ? WHERE motebit_id = ? AND remote_motebit_id = ?",

@@ -82,9 +82,9 @@ function generateUUIDv7(): string {
   bytes[3] = (now / 2 ** 16) & 0xff;
   bytes[4] = (now / 2 ** 8) & 0xff;
   bytes[5] = now & 0xff;
-  bytes[6] = (0x70 | (rand[0]! & 0x0f)); // version 7
+  bytes[6] = 0x70 | (rand[0]! & 0x0f); // version 7
   bytes[7] = rand[1]!;
-  bytes[8] = (0x80 | (rand[2]! & 0x3f)); // variant 10
+  bytes[8] = 0x80 | (rand[2]! & 0x3f); // variant 10
   bytes[9] = rand[3]!;
   bytes[10] = rand[4]!;
   bytes[11] = rand[5]!;

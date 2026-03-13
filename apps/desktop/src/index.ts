@@ -64,7 +64,14 @@ import type {
   PlanSyncStoreAdapter,
   SyncStatus,
 } from "@motebit/sync-engine";
-import type { SyncConversation, SyncConversationMessage, SyncPlan, SyncPlanStep, Plan, PlanStep } from "@motebit/sdk";
+import type {
+  SyncConversation,
+  SyncConversationMessage,
+  SyncPlan,
+  SyncPlanStep,
+  Plan,
+  PlanStep,
+} from "@motebit/sdk";
 import { PlanEngine, InMemoryPlanStore } from "@motebit/planner";
 import type { PlanChunk, PlanStoreAdapter } from "@motebit/planner";
 import { PlanStatus } from "@motebit/sdk";
@@ -240,7 +247,13 @@ class TauriToolAuditSink implements AuditLogSink {
     return [];
   }
 
-  queryStatsSince(_afterTimestamp: number): { distinctTurns: number; totalToolCalls: number; succeeded: number; blocked: number; failed: number } {
+  queryStatsSince(_afterTimestamp: number): {
+    distinctTurns: number;
+    totalToolCalls: number;
+    succeeded: number;
+    blocked: number;
+    failed: number;
+  } {
     // Sync interface — return empty. Desktop gradient computation falls back
     // to the in-memory behavioral stats accumulator.
     return { distinctTurns: 0, totalToolCalls: 0, succeeded: 0, blocked: 0, failed: 0 };
@@ -2836,8 +2849,8 @@ class TauriPlanSyncStoreAdapter implements PlanSyncStoreAdapter {
         depends_on: JSON.stringify(s.depends_on),
         optional: s.optional,
         status: s.status,
-        required_capabilities: s.required_capabilities != null
-          ? JSON.stringify(s.required_capabilities) : null,
+        required_capabilities:
+          s.required_capabilities != null ? JSON.stringify(s.required_capabilities) : null,
         delegation_task_id: s.delegation_task_id ?? null,
         assigned_motebit_id: s.assigned_motebit_id ?? null,
         result_summary: s.result_summary,
@@ -2873,7 +2886,11 @@ class TauriPlanSyncStoreAdapter implements PlanSyncStoreAdapter {
     const existing = this.store.getStep(step.step_id);
     if (existing) {
       const STATUS_ORDER: Record<string, number> = {
-        pending: 0, running: 1, completed: 2, failed: 2, skipped: 2,
+        pending: 0,
+        running: 1,
+        completed: 2,
+        failed: 2,
+        skipped: 2,
       };
       const incomingOrder = STATUS_ORDER[step.status] ?? 0;
       const existingOrder = STATUS_ORDER[existing.status] ?? 0;
@@ -2885,11 +2902,14 @@ class TauriPlanSyncStoreAdapter implements PlanSyncStoreAdapter {
       ordinal: step.ordinal,
       description: step.description,
       prompt: step.prompt,
-      depends_on: typeof step.depends_on === "string" ? JSON.parse(step.depends_on) as string[] : [],
+      depends_on:
+        typeof step.depends_on === "string" ? (JSON.parse(step.depends_on) as string[]) : [],
       optional: step.optional,
       status: step.status,
-      required_capabilities: step.required_capabilities != null
-        ? JSON.parse(step.required_capabilities) as PlanStep["required_capabilities"] : undefined,
+      required_capabilities:
+        step.required_capabilities != null
+          ? (JSON.parse(step.required_capabilities) as PlanStep["required_capabilities"])
+          : undefined,
       delegation_task_id: step.delegation_task_id ?? undefined,
       assigned_motebit_id: step.assigned_motebit_id ?? undefined,
       result_summary: step.result_summary,
@@ -2905,7 +2925,10 @@ class TauriPlanSyncStoreAdapter implements PlanSyncStoreAdapter {
   async prefetch(_since: number): Promise<void> {
     if ("listAllPlans" in this.store && typeof this.store.listAllPlans === "function") {
       this._plans = (this.store as TauriPlanStore).listAllPlans(this.motebitId);
-    } else if ("listActivePlans" in this.store && typeof this.store.listActivePlans === "function") {
+    } else if (
+      "listActivePlans" in this.store &&
+      typeof this.store.listActivePlans === "function"
+    ) {
       this._plans = this.store.listActivePlans!(this.motebitId);
     }
     const allSteps: PlanStep[] = [];

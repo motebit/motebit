@@ -6,3 +6,14 @@ export { computeServiceReputation } from "./reputation.js";
 export type { ReputationSnapshot } from "./reputation.js";
 export { settleOnReceipt, InMemorySettlementAdapter } from "./settlement.js";
 export type { SettlementAdapter } from "./settlement.js";
+export {
+  trustAdd,
+  trustMultiply,
+  composeTrustChain,
+  joinParallelRoutes,
+  composeDelegationTrust,
+  trustLevelToScore,
+  TRUST_ZERO,
+  TRUST_ONE,
+  TRUST_LEVEL_SCORES,
+} from "@motebit/sdk";

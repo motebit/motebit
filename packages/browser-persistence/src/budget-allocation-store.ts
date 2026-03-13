@@ -26,9 +26,7 @@ export class IdbBudgetAllocationStore implements BudgetAllocationStoreAdapter {
   async updateStatus(allocationId: string, status: string): Promise<void> {
     const tx = this.db.transaction("budget_allocations", "readwrite");
     const store = tx.objectStore("budget_allocations");
-    const existing = (await idbRequest(
-      store.get(allocationId),
-    )) as BudgetAllocation | undefined;
+    const existing = (await idbRequest(store.get(allocationId))) as BudgetAllocation | undefined;
     if (!existing) return;
     existing.status = status as BudgetAllocation["status"];
     store.put(existing);

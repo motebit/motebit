@@ -20,9 +20,7 @@ export class IdbPlanSyncStore {
   getPlansSince(_motebitId: string, since: number): SyncPlan[] {
     // Access the cache via the public API — list all plans, filter by updated_at
     const allPlans = this.planStore.listAllPlans(this.motebitId);
-    return allPlans
-      .filter((p) => p.updated_at > since)
-      .map(planToSync);
+    return allPlans.filter((p) => p.updated_at > since).map(planToSync);
   }
 
   getStepsSince(_motebitId: string, since: number): SyncPlanStep[] {
@@ -70,7 +68,11 @@ export class IdbPlanSyncStore {
 }
 
 const STEP_STATUS_ORDER: Record<string, number> = {
-  pending: 0, running: 1, completed: 2, failed: 2, skipped: 2,
+  pending: 0,
+  running: 1,
+  completed: 2,
+  failed: 2,
+  skipped: 2,
 };
 
 function planToSync(plan: Plan): SyncPlan {
@@ -100,8 +102,8 @@ function stepToSync(step: PlanStep, motebitId: string, updatedAt: number): SyncP
     depends_on: JSON.stringify(step.depends_on),
     optional: step.optional,
     status: step.status,
-    required_capabilities: step.required_capabilities != null
-      ? JSON.stringify(step.required_capabilities) : null,
+    required_capabilities:
+      step.required_capabilities != null ? JSON.stringify(step.required_capabilities) : null,
     delegation_task_id: step.delegation_task_id ?? null,
     assigned_motebit_id: step.assigned_motebit_id ?? null,
     result_summary: step.result_summary,
@@ -137,11 +139,13 @@ function syncToStep(s: SyncPlanStep): PlanStep {
     ordinal: s.ordinal,
     description: s.description,
     prompt: s.prompt,
-    depends_on: typeof s.depends_on === "string" ? JSON.parse(s.depends_on) as string[] : [],
+    depends_on: typeof s.depends_on === "string" ? (JSON.parse(s.depends_on) as string[]) : [],
     optional: s.optional,
     status: s.status,
-    required_capabilities: s.required_capabilities != null
-      ? JSON.parse(s.required_capabilities) as PlanStep["required_capabilities"] : undefined,
+    required_capabilities:
+      s.required_capabilities != null
+        ? (JSON.parse(s.required_capabilities) as PlanStep["required_capabilities"])
+        : undefined,
     delegation_task_id: s.delegation_task_id ?? undefined,
     assigned_motebit_id: s.assigned_motebit_id ?? undefined,
     result_summary: s.result_summary,

@@ -18,7 +18,13 @@
  */
 
 import { MemoryType } from "@motebit/sdk";
-import type { MemoryNode, MemoryEdge, EventLogEntry, PrecisionWeights } from "@motebit/sdk";
+import type {
+  MemoryNode,
+  MemoryEdge,
+  EventLogEntry,
+  PrecisionWeights,
+  MarketConfig,
+} from "@motebit/sdk";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 
 /** Must match MAX_TOOL_ITERATIONS in @motebit/ai-core loop.ts */
@@ -107,10 +113,10 @@ const DEFAULT_CONFIG: GradientConfig = {
   weight_kd: 0.15,
   weight_kq: 0.17,
   weight_gc: 0.08,
-  weight_ts: 0.10,
+  weight_ts: 0.1,
   weight_rq: 0.15,
   weight_ie: 0.12,
-  weight_te: 0.10,
+  weight_te: 0.1,
   weight_cp: 0.13,
   kd_norm_k: 50,
   gc_norm_k: 2,
@@ -342,7 +348,7 @@ export function computeGradient(
  */
 export function computePrecision(snapshot: GradientSnapshot): PrecisionWeights {
   const g = snapshot.gradient; // [0, 1]
-  const d = snapshot.delta;    // negative = declining
+  const d = snapshot.delta; // negative = declining
 
   // Sigmoid: selfTrust = 1 / (1 + e^(-k*(g - 0.5)))
   // k=6 gives useful dynamic range: g=0.2→0.12, g=0.5→0.50, g=0.8→0.88
@@ -352,7 +358,7 @@ export function computePrecision(snapshot: GradientSnapshot): PrecisionWeights {
   // Exploration is the complement, boosted when gradient is declining
   // A declining gradient (negative delta) increases exploration urgency
   const declinePenalty = d < 0 ? Math.min(Math.abs(d) * 2, 0.3) : 0;
-  const explorationDrive = Math.min(1, (1 - selfTrust) + declinePenalty);
+  const explorationDrive = Math.min(1, 1 - selfTrust + declinePenalty);
 
   // Retrieval precision: when self-trust is high, lean on similarity (semantic precision).
   // When low, flatten weights to diversify what gets retrieved.
@@ -365,6 +371,75 @@ export function computePrecision(snapshot: GradientSnapshot): PrecisionWeights {
   const curiosityModulation = Math.min(0.8, explorationDrive);
 
   return { selfTrust, explorationDrive, retrievalPrecision, curiosityModulation };
+}
+
+/**
+ * Pure: GradientSnapshot → Partial<MarketConfig>.
+ *
+ * Closes the feedback loop: gradient measures agent quality, this function
+ * translates that measurement into routing weights for delegation.
+ *
+ * Two layers of adjustment:
+ * 1. Global exploration/exploitation from precision weights
+ *    (shifts weight between trust/success_rate and availability/capability)
+ * 2. Metric-specific corrections:
+ *    - Low tool_efficiency → boost weight_trust (prefer agents with proven track records)
+ *    - Low retrieval_quality → boost weight_capability_match (need exact capability matches)
+ *    - Low interaction_efficiency → boost weight_latency (compensate with faster agents)
+ *
+ * The metric-specific shifts are small (±0.05 max) and additive on top of the
+ * global exploration shift. They nudge, they don't dominate.
+ */
+export function gradientToMarketConfig(
+  snapshot: GradientSnapshot,
+  baseConfig?: Partial<MarketConfig>,
+): Partial<MarketConfig> {
+  const precision = computePrecision(snapshot);
+  const e = Math.max(0, Math.min(1, precision.explorationDrive));
+
+  // Layer 1: global exploration/exploitation shift
+  // Same math as applyPrecisionToMarketConfig (inlined to avoid circular dep)
+  // At e=0 (exploit): no change. At e=1 (explore): ±0.10 shift.
+  const base_wt = baseConfig?.weight_trust ?? 0.25;
+  const base_ws = baseConfig?.weight_success_rate ?? 0.25;
+  const base_wl = baseConfig?.weight_latency ?? 0.15;
+  const base_wp = baseConfig?.weight_price_efficiency ?? 0.15;
+  const base_wc = baseConfig?.weight_capability_match ?? 0.1;
+  const base_wa = baseConfig?.weight_availability ?? 0.1;
+
+  let wt = base_wt - e * 0.1;
+  let ws = base_ws - e * 0.1;
+  const wl_base = base_wl;
+  const wp = base_wp;
+  let wc = base_wc + e * 0.1;
+  const wa = base_wa + e * 0.1;
+
+  // Layer 2: metric-specific corrections (±0.05 max each)
+  // Deficit-driven: only activate when a metric is weak (below 0.4)
+  const MAX_METRIC_SHIFT = 0.05;
+
+  // Low tool efficiency → prefer trusted agents (they succeed more often)
+  const teDeficit = Math.max(0, 0.4 - snapshot.tool_efficiency);
+  wt += (teDeficit / 0.4) * MAX_METRIC_SHIFT;
+
+  // Low retrieval quality → demand exact capability matches
+  const rqDeficit = Math.max(0, 0.4 - snapshot.retrieval_quality);
+  wc += (rqDeficit / 0.4) * MAX_METRIC_SHIFT;
+
+  // Low interaction efficiency → prefer fast agents
+  const ieDeficit = Math.max(0, 0.4 - snapshot.interaction_efficiency);
+  const wl = wl_base + (ieDeficit / 0.4) * MAX_METRIC_SHIFT;
+
+  return {
+    ...baseConfig,
+    weight_trust: wt,
+    weight_success_rate: ws,
+    weight_latency: wl,
+    weight_price_efficiency: wp,
+    weight_capability_match: wc,
+    weight_availability: wa,
+    exploration_weight: e,
+  };
 }
 
 /** Default precision when no gradient has been computed yet (neutral). */
@@ -382,10 +457,17 @@ export const NEUTRAL_PRECISION: PrecisionWeights = {
  * Maps sub-metric keys to human-readable labels and thresholds.
  */
 interface MetricDescriptor {
-  key: keyof Pick<GradientSnapshot,
-    "knowledge_density" | "knowledge_quality" | "graph_connectivity" |
-    "temporal_stability" | "retrieval_quality" | "interaction_efficiency" |
-    "tool_efficiency" | "curiosity_pressure">;
+  key: keyof Pick<
+    GradientSnapshot,
+    | "knowledge_density"
+    | "knowledge_quality"
+    | "graph_connectivity"
+    | "temporal_stability"
+    | "retrieval_quality"
+    | "interaction_efficiency"
+    | "tool_efficiency"
+    | "curiosity_pressure"
+  >;
   label: string;
   /** Below this value the metric is "weak" */
   lowThreshold: number;
@@ -400,7 +482,7 @@ const METRIC_DESCRIPTORS: MetricDescriptor[] = [
     key: "knowledge_density",
     label: "Knowledge density",
     lowThreshold: 0.25,
-    highThreshold: 0.60,
+    highThreshold: 0.6,
     assessment: [
       "accumulated a rich knowledge base",
       "knowledge base is still sparse — more experience needed",
@@ -409,7 +491,7 @@ const METRIC_DESCRIPTORS: MetricDescriptor[] = [
   {
     key: "knowledge_quality",
     label: "Knowledge quality",
-    lowThreshold: 0.30,
+    lowThreshold: 0.3,
     highThreshold: 0.65,
     assessment: [
       "memories are being reinforced and refined through use",
@@ -420,7 +502,7 @@ const METRIC_DESCRIPTORS: MetricDescriptor[] = [
     key: "graph_connectivity",
     label: "Graph connectivity",
     lowThreshold: 0.15,
-    highThreshold: 0.40,
+    highThreshold: 0.4,
     assessment: [
       "memories are well-connected — ideas relate to each other",
       "memory graph is fragmented — few connections between concepts",
@@ -429,8 +511,8 @@ const METRIC_DESCRIPTORS: MetricDescriptor[] = [
   {
     key: "temporal_stability",
     label: "Temporal stability",
-    lowThreshold: 0.30,
-    highThreshold: 0.60,
+    lowThreshold: 0.3,
+    highThreshold: 0.6,
     assessment: [
       "long-lived semantic memories dominate — knowledge persists",
       "memories are predominantly short-lived or episodic",
@@ -439,7 +521,7 @@ const METRIC_DESCRIPTORS: MetricDescriptor[] = [
   {
     key: "retrieval_quality",
     label: "Retrieval quality",
-    lowThreshold: 0.30,
+    lowThreshold: 0.3,
     highThreshold: 0.65,
     assessment: [
       "retrieving relevant memories with high fidelity",
@@ -449,7 +531,7 @@ const METRIC_DESCRIPTORS: MetricDescriptor[] = [
   {
     key: "interaction_efficiency",
     label: "Interaction efficiency",
-    lowThreshold: 0.40,
+    lowThreshold: 0.4,
     highThreshold: 0.75,
     assessment: [
       "completing tasks with few iterations — efficient problem-solving",
@@ -459,17 +541,14 @@ const METRIC_DESCRIPTORS: MetricDescriptor[] = [
   {
     key: "tool_efficiency",
     label: "Tool efficiency",
-    lowThreshold: 0.50,
+    lowThreshold: 0.5,
     highThreshold: 0.85,
-    assessment: [
-      "tool calls succeed consistently",
-      "tool calls are frequently blocked or failing",
-    ],
+    assessment: ["tool calls succeed consistently", "tool calls are frequently blocked or failing"],
   },
   {
     key: "curiosity_pressure",
     label: "Curiosity pressure",
-    lowThreshold: 0.30,
+    lowThreshold: 0.3,
     highThreshold: 0.65,
     assessment: [
       "knowledge base is well-maintained — low decay pressure",
@@ -587,11 +666,12 @@ function narrateTrajectory(snapshots: GradientSnapshot[]): string {
   const direction = totalDelta > 0 ? "rising" : "declining";
   const rate = Math.abs(totalDelta);
   const pace = rate > 0.15 ? "rapidly" : rate > 0.05 ? "steadily" : "gradually";
-  const consistencyNote = consistency > 0.8
-    ? "consistently"
-    : consistency > 0.5
-      ? "with some fluctuation"
-      : "with significant volatility";
+  const consistencyNote =
+    consistency > 0.8
+      ? "consistently"
+      : consistency > 0.5
+        ? "with some fluctuation"
+        : "with significant volatility";
 
   return `Gradient ${pace} ${direction} from ${(oldest.gradient * 100).toFixed(1)}% to ${(latest.gradient * 100).toFixed(1)}% over ${snapshots.length} measurements (${formatDuration(spanHours)}), ${consistencyNote}. ${totalDelta > 0 ? "The agent is accumulating better models of its niche." : "Model evidence is eroding — the agent should explore and rebuild."}`;
 }

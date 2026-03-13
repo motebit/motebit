@@ -26,27 +26,49 @@ export type ListingId = Brand<string, "ListingId">;
 export type ProposalId = Brand<string, "ProposalId">;
 
 /** Brand a string as a MotebitId after validation. */
-export function asMotebitId(id: string): MotebitId { return id as MotebitId; }
+export function asMotebitId(id: string): MotebitId {
+  return id as MotebitId;
+}
 /** Brand a string as a DeviceId after validation. */
-export function asDeviceId(id: string): DeviceId { return id as DeviceId; }
+export function asDeviceId(id: string): DeviceId {
+  return id as DeviceId;
+}
 /** Brand a string as a NodeId after validation. */
-export function asNodeId(id: string): NodeId { return id as NodeId; }
+export function asNodeId(id: string): NodeId {
+  return id as NodeId;
+}
 /** Brand a string as a GoalId after validation. */
-export function asGoalId(id: string): GoalId { return id as GoalId; }
+export function asGoalId(id: string): GoalId {
+  return id as GoalId;
+}
 /** Brand a string as an EventId after validation. */
-export function asEventId(id: string): EventId { return id as EventId; }
+export function asEventId(id: string): EventId {
+  return id as EventId;
+}
 /** Brand a string as a ConversationId after validation. */
-export function asConversationId(id: string): ConversationId { return id as ConversationId; }
+export function asConversationId(id: string): ConversationId {
+  return id as ConversationId;
+}
 /** Brand a string as a PlanId after validation. */
-export function asPlanId(id: string): PlanId { return id as PlanId; }
+export function asPlanId(id: string): PlanId {
+  return id as PlanId;
+}
 /** Brand a string as an AllocationId after validation. */
-export function asAllocationId(id: string): AllocationId { return id as AllocationId; }
+export function asAllocationId(id: string): AllocationId {
+  return id as AllocationId;
+}
 /** Brand a string as a SettlementId after validation. */
-export function asSettlementId(id: string): SettlementId { return id as SettlementId; }
+export function asSettlementId(id: string): SettlementId {
+  return id as SettlementId;
+}
 /** Brand a string as a ListingId after validation. */
-export function asListingId(id: string): ListingId { return id as ListingId; }
+export function asListingId(id: string): ListingId {
+  return id as ListingId;
+}
 /** Brand a string as a ProposalId after validation. */
-export function asProposalId(id: string): ProposalId { return id as ProposalId; }
+export function asProposalId(id: string): ProposalId {
+  return id as ProposalId;
+}
 
 // === Enums ===
 
@@ -104,6 +126,82 @@ export interface AgentTrustRecord {
   notes?: string;
 }
 
+// ── Trust Semiring Algebra ──────────────────────────────────────────
+// (TrustScores, max, ×, 0, 1) — standard algebraic path problem.
+// Multiplicative discount for serial chains, max for parallel paths.
+
+/** Canonical AgentTrustLevel → [0,1] mapping (single source of truth). */
+export const TRUST_LEVEL_SCORES: Record<string, number> = {
+  [AgentTrustLevel.Unknown]: 0.1,
+  [AgentTrustLevel.FirstContact]: 0.3,
+  [AgentTrustLevel.Verified]: 0.6,
+  [AgentTrustLevel.Trusted]: 0.9,
+  [AgentTrustLevel.Blocked]: 0.0,
+};
+
+/** Convert a trust level to its numeric score. */
+export function trustLevelToScore(level: AgentTrustLevel | string): number {
+  return TRUST_LEVEL_SCORES[level] ?? 0.1;
+}
+
+/** Semiring zero — annihilator for ⊗, identity for ⊕. */
+export const TRUST_ZERO = 0;
+
+/** Semiring one — identity for ⊗. */
+export const TRUST_ONE = 1;
+
+/** ⊕: parallel paths — pick the best route. */
+export function trustAdd(a: number, b: number): number {
+  return Math.max(a, b);
+}
+
+/** ⊗: serial chain — discount per hop. */
+export function trustMultiply(a: number, b: number): number {
+  return a * b;
+}
+
+/** Fold a chain of trust scores with ⊗. Empty chain → 1.0 (identity). */
+export function composeTrustChain(scores: number[]): number {
+  return scores.reduce(trustMultiply, TRUST_ONE);
+}
+
+/** Fold parallel route scores with ⊕. No routes → 0.0 (identity). */
+export function joinParallelRoutes(scores: number[]): number {
+  return scores.reduce(trustAdd, TRUST_ZERO);
+}
+
+/** Structural type for recursive delegation receipt walking. */
+export interface DelegationReceiptLike {
+  motebit_id: string;
+  delegation_receipts?: DelegationReceiptLike[];
+}
+
+/**
+ * Compose trust through a delegation receipt tree.
+ *
+ * Walks `receipt.delegation_receipts` recursively:
+ * - Each sub-delegation: directTrust ⊗ getTrust(sub.motebit_id)
+ * - Parallel branches joined with ⊕ (best route wins)
+ * - No sub-delegations → returns directTrust unchanged.
+ */
+export function composeDelegationTrust(
+  directTrust: number,
+  receipt: DelegationReceiptLike,
+  getTrust: (motebitId: string) => number,
+): number {
+  const subs = receipt.delegation_receipts;
+  if (!subs || subs.length === 0) return directTrust;
+
+  const branchScores = subs.map((sub) => {
+    const subTrust = getTrust(sub.motebit_id);
+    const chainScore = trustMultiply(directTrust, subTrust);
+    // Recurse: sub may have its own delegation_receipts
+    return composeDelegationTrust(chainScore, sub, getTrust);
+  });
+
+  return joinParallelRoutes(branchScores);
+}
+
 export enum SensitivityLevel {
   None = "none",
   Personal = "personal",
@@ -155,6 +253,7 @@ export enum EventType {
   ProposalRejected = "proposal_rejected",
   ProposalCountered = "proposal_countered",
   CollaborativeStepCompleted = "collaborative_step_completed",
+  ChainTrustComputed = "chain_trust_computed",
 }
 
 export enum RelationType {
@@ -586,7 +685,7 @@ export interface SyncPlan {
   current_step_index: number;
   total_steps: number;
   proposal_id: string | null;
-  collaborative: number;  // 0 | 1 for SQLite wire
+  collaborative: number; // 0 | 1 for SQLite wire
 }
 
 /** Plan step record for cross-device sync. */
@@ -597,10 +696,10 @@ export interface SyncPlanStep {
   ordinal: number;
   description: string;
   prompt: string;
-  depends_on: string;          // JSON-serialized string[] for wire format
+  depends_on: string; // JSON-serialized string[] for wire format
   optional: boolean;
   status: StepStatus;
-  required_capabilities: string | null;  // JSON-serialized DeviceCapability[] | null
+  required_capabilities: string | null; // JSON-serialized DeviceCapability[] | null
   delegation_task_id: string | null;
   assigned_motebit_id: string | null;
   result_summary: string | null;
@@ -823,7 +922,7 @@ export interface CollaborativePlanProposal {
 
 export interface ProposalParticipant {
   motebit_id: MotebitId;
-  assigned_steps: number[];  // step ordinals
+  assigned_steps: number[]; // step ordinals
   response: ProposalResponseType | null;
   responded_at: number | null;
   counter_steps?: ProposalStepCounter[];
@@ -879,6 +978,49 @@ export interface MarketConfig {
  * High gradient → high self-trust → exploit known-good routes, trust memory.
  * Low gradient → low self-trust → explore, diversify, question memory.
  */
+// === Verifiable Credential Subject Types ===
+
+export const VC_TYPE_GRADIENT = "AgentGradientCredential";
+export const VC_TYPE_REPUTATION = "AgentReputationCredential";
+export const VC_TYPE_TRUST = "AgentTrustCredential";
+
+export interface GradientCredentialSubject {
+  id: string;
+  gradient: number;
+  knowledge_density: number;
+  knowledge_quality: number;
+  graph_connectivity: number;
+  temporal_stability: number;
+  retrieval_quality: number;
+  interaction_efficiency: number;
+  tool_efficiency: number;
+  curiosity_pressure: number;
+  measured_at: number;
+}
+
+export interface ReputationCredentialSubject {
+  id: string;
+  success_rate: number;
+  avg_latency_ms: number;
+  task_count: number;
+  trust_score: number;
+  availability: number;
+  sample_size: number;
+  measured_at: number;
+}
+
+export interface TrustCredentialSubject {
+  id: string;
+  trust_level: string;
+  interaction_count: number;
+  successful_tasks: number;
+  failed_tasks: number;
+  first_seen_at: number;
+  last_seen_at: number;
+}
+
+// === Active Inference Precision ===
+
 export interface PrecisionWeights {
   /** Overall self-trust [0-1]. Sigmoid of composite gradient. */
   selfTrust: number;

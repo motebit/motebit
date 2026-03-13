@@ -92,7 +92,8 @@ describe("Delegation E2E", () => {
     // Route RelayDelegationAdapter's fetch calls through the in-process Hono relay
     originalFetch = globalThis.fetch;
     vi.stubGlobal("fetch", (input: string | Request | URL, init?: RequestInit) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       // Strip the fake origin, keep the path
       const path = url.replace("http://relay", "");
       return relay.app.request(path, init);
@@ -114,7 +115,11 @@ describe("Delegation E2E", () => {
     // Inject both devices into relay's connection map
     relay.connections.set(MOTEBIT_ID, [
       { ws: dispatcher.ws as never, deviceId: "dispatcher-device", capabilities: ["http_mcp"] },
-      { ws: workerWs as never, deviceId: "worker-device", capabilities: ["stdio_mcp", "http_mcp", "file_system"] },
+      {
+        ws: workerWs as never,
+        deviceId: "worker-device",
+        capabilities: ["stdio_mcp", "http_mcp", "file_system"],
+      },
     ]);
 
     const adapter = new RelayDelegationAdapter({
@@ -133,9 +138,18 @@ describe("Delegation E2E", () => {
 
     // Plan with one step requiring stdio_mcp (must be delegated)
     const deps = makeMockDeps([
-      { description: "Run CLI command", prompt: "Execute shell command to list files", required_capabilities: ["stdio_mcp"] },
+      {
+        description: "Run CLI command",
+        prompt: "Execute shell command to list files",
+        required_capabilities: ["stdio_mcp"],
+      },
     ]);
-    const { plan } = await engine.createPlan("goal-e2e", MOTEBIT_ID, { goalPrompt: "list files" }, deps);
+    const { plan } = await engine.createPlan(
+      "goal-e2e",
+      MOTEBIT_ID,
+      { goalPrompt: "list files" },
+      deps,
+    );
 
     // Run executePlan concurrently with worker simulation
     const executePromise = (async () => {
@@ -147,9 +161,12 @@ describe("Delegation E2E", () => {
     })();
 
     // Wait for the POST to complete and task_request to reach the worker
-    await vi.waitFor(() => {
-      expect(workerWs.send).toHaveBeenCalled();
-    }, { timeout: 2000 });
+    await vi.waitFor(
+      () => {
+        expect(workerWs.send).toHaveBeenCalled();
+      },
+      { timeout: 2000 },
+    );
 
     // Worker received task_request
     const taskRequestRaw = workerWs.send.mock.calls[0]![0] as string;
@@ -172,7 +189,7 @@ describe("Delegation E2E", () => {
     const chunks = await executePromise;
 
     // Verify the full chunk sequence
-    const types = chunks.map(c => c.type);
+    const types = chunks.map((c) => c.type);
     expect(types).toContain("plan_created");
     expect(types).toContain("step_started");
     expect(types).toContain("step_delegated");
@@ -216,7 +233,10 @@ describe("Delegation E2E", () => {
     expect(deviceA.send).not.toHaveBeenCalled();
     expect(deviceB.send).toHaveBeenCalledOnce();
 
-    const msg = JSON.parse(deviceB.send.mock.calls[0]![0] as string) as { type: string; task: AgentTask };
+    const msg = JSON.parse(deviceB.send.mock.calls[0]![0] as string) as {
+      type: string;
+      task: AgentTask;
+    };
     expect(msg.type).toBe("task_request");
     expect(msg.task.required_capabilities).toContain("stdio_mcp");
   });
@@ -240,9 +260,18 @@ describe("Delegation E2E", () => {
 
     // Create a plan and manually set up an orphaned Running step (simulating crash mid-delegation)
     const deps = makeMockDeps([
-      { description: "Remote task", prompt: "do remote thing", required_capabilities: ["file_system"] },
+      {
+        description: "Remote task",
+        prompt: "do remote thing",
+        required_capabilities: ["file_system"],
+      },
     ]);
-    const { plan } = await engine.createPlan("goal-recovery", MOTEBIT_ID, { goalPrompt: "test" }, deps);
+    const { plan } = await engine.createPlan(
+      "goal-recovery",
+      MOTEBIT_ID,
+      { goalPrompt: "test" },
+      deps,
+    );
     const steps = store.getStepsForPlan(plan.plan_id);
     const stepId = steps[0]!.step_id;
 
@@ -279,8 +308,8 @@ describe("Delegation E2E", () => {
       recoveryChunks.push(chunk);
     }
 
-    expect(recoveryChunks.filter(c => c.type === "step_delegated")).toHaveLength(1);
-    expect(recoveryChunks.filter(c => c.type === "step_completed")).toHaveLength(1);
+    expect(recoveryChunks.filter((c) => c.type === "step_delegated")).toHaveLength(1);
+    expect(recoveryChunks.filter((c) => c.type === "step_completed")).toHaveLength(1);
 
     // Step should be Completed in store
     const updatedStep = store.getStep(stepId)!;
@@ -314,14 +343,19 @@ describe("Delegation E2E", () => {
     const deps = makeMockDeps([
       { description: "Stdio step", prompt: "do stdio thing", required_capabilities: ["stdio_mcp"] },
     ]);
-    const { plan } = await engine.createPlan("goal-timeout", MOTEBIT_ID, { goalPrompt: "test" }, deps);
+    const { plan } = await engine.createPlan(
+      "goal-timeout",
+      MOTEBIT_ID,
+      { goalPrompt: "test" },
+      deps,
+    );
 
     const chunks: PlanChunk[] = [];
     for await (const chunk of engine.executePlan(plan.plan_id, deps)) {
       chunks.push(chunk);
     }
 
-    const types = chunks.map(c => c.type);
+    const types = chunks.map((c) => c.type);
     expect(types).toContain("step_started");
     expect(types).toContain("step_failed");
     expect(types).toContain("plan_failed");
@@ -361,7 +395,12 @@ describe("Delegation E2E", () => {
       { description: "Web search", prompt: "Search for information" },
       { description: "Run CLI", prompt: "Execute command", required_capabilities: ["stdio_mcp"] },
     ]);
-    const { plan } = await engine.createPlan("goal-mixed", MOTEBIT_ID, { goalPrompt: "test" }, deps);
+    const { plan } = await engine.createPlan(
+      "goal-mixed",
+      MOTEBIT_ID,
+      { goalPrompt: "test" },
+      deps,
+    );
 
     // Pre-mark step 1 as completed (simulating local execution already done)
     const steps = store.getStepsForPlan(plan.plan_id);
@@ -381,9 +420,12 @@ describe("Delegation E2E", () => {
     })();
 
     // Wait for worker to receive task_request (step 2 delegation)
-    await vi.waitFor(() => {
-      expect(workerWs.send).toHaveBeenCalled();
-    }, { timeout: 2000 });
+    await vi.waitFor(
+      () => {
+        expect(workerWs.send).toHaveBeenCalled();
+      },
+      { timeout: 2000 },
+    );
 
     // Worker handles the delegated step
     const taskRequestRaw = workerWs.send.mock.calls[0]![0] as string;
@@ -398,7 +440,7 @@ describe("Delegation E2E", () => {
     });
 
     const chunks = await executePromise;
-    const types = chunks.map(c => c.type);
+    const types = chunks.map((c) => c.type);
 
     // Step 2 should have been delegated
     expect(types).toContain("step_delegated");
@@ -406,13 +448,13 @@ describe("Delegation E2E", () => {
 
     // Verify step 2 completed via delegation
     const updatedSteps = store.getStepsForPlan(plan.plan_id);
-    const delegatedStep = updatedSteps.find(s => s.description === "Run CLI");
+    const delegatedStep = updatedSteps.find((s) => s.description === "Run CLI");
     expect(delegatedStep!.status).toBe(StepStatus.Completed);
     expect(delegatedStep!.delegation_task_id).toBe(taskId);
     expect(delegatedStep!.result_summary).toBe("CLI output: file1.txt file2.txt");
 
     // Step 1 should still be completed (not re-executed)
-    const localStep = updatedSteps.find(s => s.description === "Web search");
+    const localStep = updatedSteps.find((s) => s.description === "Web search");
     expect(localStep!.status).toBe(StepStatus.Completed);
     expect(localStep!.result_summary).toBe("Found 3 results");
   });
@@ -454,9 +496,12 @@ describe("Delegation E2E", () => {
       return chunks;
     })();
 
-    await vi.waitFor(() => {
-      expect(workerWs.send).toHaveBeenCalled();
-    }, { timeout: 2000 });
+    await vi.waitFor(
+      () => {
+        expect(workerWs.send).toHaveBeenCalled();
+      },
+      { timeout: 2000 },
+    );
 
     const taskRequestRaw = workerWs.send.mock.calls[0]![0] as string;
     const taskRequest = JSON.parse(taskRequestRaw) as { type: string; task: AgentTask };
@@ -471,7 +516,7 @@ describe("Delegation E2E", () => {
     });
 
     const chunks = await executePromise;
-    const types = chunks.map(c => c.type);
+    const types = chunks.map((c) => c.type);
 
     expect(types).toContain("step_started");
     expect(types).toContain("step_failed");

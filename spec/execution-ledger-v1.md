@@ -27,20 +27,20 @@ The ledger proves which tools were called, what delegations occurred, what the o
 
 A ledger is a JSON object with the following top-level fields:
 
-| Field                  | Type                      | Required | Description                                                          |
-| ---------------------- | ------------------------- | -------- | -------------------------------------------------------------------- |
-| `spec`                 | string                    | yes      | MUST be `"motebit/execution-ledger@1.0"` for this version.          |
-| `motebit_id`           | string                    | yes      | The agent that executed the goal.                                    |
-| `goal_id`              | string                    | yes      | The goal that was executed.                                          |
-| `plan_id`              | string                    | yes      | The plan used for execution.                                         |
-| `started_at`           | number                    | yes      | Epoch milliseconds when execution began.                             |
-| `completed_at`         | number                    | yes      | Epoch milliseconds when execution ended.                             |
-| `status`               | string                    | yes      | One of: `"completed"`, `"failed"`, `"paused"`, `"active"`.          |
-| `timeline`             | ExecutionTimelineEntry[]  | yes      | Ordered sequence of execution events (§3).                           |
-| `steps`                | StepSummary[]             | yes      | Per-step summaries (§4).                                             |
-| `delegation_receipts`  | DelegationReceiptSummary[] | yes     | Receipt metadata from delegated steps (§4.1). MAY be empty.         |
-| `content_hash`         | string                    | yes      | SHA-256 hex digest of canonical timeline bytes (§5).                 |
-| `signature`            | string                    | no       | Base64url Ed25519 signature of the content hash bytes (§6). Required for signed ledgers, omitted for relay-reconstructed ledgers (relay does not hold the agent's private key). |
+| Field                 | Type                       | Required | Description                                                                                                                                                                     |
+| --------------------- | -------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spec`                | string                     | yes      | MUST be `"motebit/execution-ledger@1.0"` for this version.                                                                                                                      |
+| `motebit_id`          | string                     | yes      | The agent that executed the goal.                                                                                                                                               |
+| `goal_id`             | string                     | yes      | The goal that was executed.                                                                                                                                                     |
+| `plan_id`             | string                     | yes      | The plan used for execution.                                                                                                                                                    |
+| `started_at`          | number                     | yes      | Epoch milliseconds when execution began.                                                                                                                                        |
+| `completed_at`        | number                     | yes      | Epoch milliseconds when execution ended.                                                                                                                                        |
+| `status`              | string                     | yes      | One of: `"completed"`, `"failed"`, `"paused"`, `"active"`.                                                                                                                      |
+| `timeline`            | ExecutionTimelineEntry[]   | yes      | Ordered sequence of execution events (§3).                                                                                                                                      |
+| `steps`               | StepSummary[]              | yes      | Per-step summaries (§4).                                                                                                                                                        |
+| `delegation_receipts` | DelegationReceiptSummary[] | yes      | Receipt metadata from delegated steps (§4.1). MAY be empty.                                                                                                                     |
+| `content_hash`        | string                     | yes      | SHA-256 hex digest of canonical timeline bytes (§5).                                                                                                                            |
+| `signature`           | string                     | no       | Base64url Ed25519 signature of the content hash bytes (§6). Required for signed ledgers, omitted for relay-reconstructed ledgers (relay does not hold the agent's private key). |
 
 ---
 
@@ -48,29 +48,29 @@ A ledger is a JSON object with the following top-level fields:
 
 Each timeline entry is a JSON object with three fields:
 
-| Field       | Type   | Description                              |
-| ----------- | ------ | ---------------------------------------- |
+| Field       | Type   | Description                                 |
+| ----------- | ------ | ------------------------------------------- |
 | `timestamp` | number | Epoch milliseconds when the event occurred. |
-| `type`      | string | Event type identifier (see below).       |
-| `payload`   | object | Type-specific data.                      |
+| `type`      | string | Event type identifier (see below).          |
+| `payload`   | object | Type-specific data.                         |
 
 Entries MUST be ordered by `timestamp` (ascending). Entries with equal timestamps MUST preserve insertion order.
 
 ### 3.1 — Event Types
 
-| Type              | Payload Fields                                    | Description                              |
-| ----------------- | ------------------------------------------------- | ---------------------------------------- |
-| `goal_started`    | `goal_id`                                         | Goal execution begins.                   |
-| `plan_created`    | `plan_id`, `title`, `total_steps`                 | Plan was generated for the goal.         |
-| `step_started`    | `plan_id`, `step_id`, `ordinal`, `description`    | A plan step begins execution.            |
-| `tool_invoked`    | `tool`, `args_hash`, `call_id`                    | A tool was called. `args_hash` is SHA-256 hex of canonical JSON args. `call_id` links to tool audit. |
-| `tool_result`     | `tool`, `ok`, `duration_ms`, `call_id`            | Tool returned. `ok` is boolean.          |
-| `step_completed`  | `plan_id`, `step_id`, `ordinal`, `tool_calls_made`| Step finished successfully.              |
-| `step_failed`     | `plan_id`, `step_id`, `ordinal`, `error`          | Step finished with an error.             |
-| `step_delegated`  | `plan_id`, `step_id`, `ordinal`, `task_id`        | Step was delegated to another agent.     |
-| `plan_completed`  | `plan_id`                                         | All steps completed.                     |
-| `plan_failed`     | `plan_id`, `reason`                               | Plan execution failed.                   |
-| `goal_completed`  | `goal_id`, `status`                               | Goal execution ended.                    |
+| Type             | Payload Fields                                     | Description                                                                                          |
+| ---------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `goal_started`   | `goal_id`                                          | Goal execution begins.                                                                               |
+| `plan_created`   | `plan_id`, `title`, `total_steps`                  | Plan was generated for the goal.                                                                     |
+| `step_started`   | `plan_id`, `step_id`, `ordinal`, `description`     | A plan step begins execution.                                                                        |
+| `tool_invoked`   | `tool`, `args_hash`, `call_id`                     | A tool was called. `args_hash` is SHA-256 hex of canonical JSON args. `call_id` links to tool audit. |
+| `tool_result`    | `tool`, `ok`, `duration_ms`, `call_id`             | Tool returned. `ok` is boolean.                                                                      |
+| `step_completed` | `plan_id`, `step_id`, `ordinal`, `tool_calls_made` | Step finished successfully.                                                                          |
+| `step_failed`    | `plan_id`, `step_id`, `ordinal`, `error`           | Step finished with an error.                                                                         |
+| `step_delegated` | `plan_id`, `step_id`, `ordinal`, `task_id`         | Step was delegated to another agent.                                                                 |
+| `plan_completed` | `plan_id`                                          | All steps completed.                                                                                 |
+| `plan_failed`    | `plan_id`, `reason`                                | Plan execution failed.                                                                               |
+| `goal_completed` | `goal_id`, `status`                                | Goal execution ended.                                                                                |
 
 All payload field values are strings unless otherwise noted. `ok` is boolean. `total_steps`, `ordinal`, `tool_calls_made`, and `duration_ms` are numbers.
 
@@ -80,40 +80,40 @@ All payload field values are strings unless otherwise noted. `ok` is boolean. `t
 
 The `steps` array contains one entry per plan step. Each entry is a JSON object:
 
-| Field         | Type     | Required | Description                                            |
-| ------------- | -------- | -------- | ------------------------------------------------------ |
-| `step_id`     | string   | yes      | Unique step identifier.                                |
-| `ordinal`     | number   | yes      | Step position in the plan (0-indexed).                 |
-| `description` | string   | yes      | Human-readable step description.                       |
-| `status`      | string   | yes      | One of: `"completed"`, `"failed"`, `"delegated"`.      |
-| `tools_used`  | string[] | yes      | Distinct tool names invoked during this step.          |
-| `tool_calls`  | number   | yes      | Total number of tool invocations in this step.         |
-| `started_at`  | number   | yes      | Epoch milliseconds.                                    |
-| `completed_at`| number   | yes      | Epoch milliseconds.                                    |
-| `delegation`  | object   | no       | Present only for delegated steps. See §4.1.            |
+| Field          | Type     | Required | Description                                       |
+| -------------- | -------- | -------- | ------------------------------------------------- |
+| `step_id`      | string   | yes      | Unique step identifier.                           |
+| `ordinal`      | number   | yes      | Step position in the plan (0-indexed).            |
+| `description`  | string   | yes      | Human-readable step description.                  |
+| `status`       | string   | yes      | One of: `"completed"`, `"failed"`, `"delegated"`. |
+| `tools_used`   | string[] | yes      | Distinct tool names invoked during this step.     |
+| `tool_calls`   | number   | yes      | Total number of tool invocations in this step.    |
+| `started_at`   | number   | yes      | Epoch milliseconds.                               |
+| `completed_at` | number   | yes      | Epoch milliseconds.                               |
+| `delegation`   | object   | no       | Present only for delegated steps. See §4.1.       |
 
 ### 4.1 — Delegation Field
 
 When a step is delegated, the `delegation` object contains:
 
-| Field          | Type   | Description                                                          |
-| -------------- | ------ | -------------------------------------------------------------------- |
-| `task_id`      | string | The task identifier sent to the delegated agent.                     |
-| `receipt_hash` | string | SHA-256 hex of the delegated agent's execution ledger content hash.  |
+| Field          | Type   | Description                                                         |
+| -------------- | ------ | ------------------------------------------------------------------- |
+| `task_id`      | string | The task identifier sent to the delegated agent.                    |
+| `receipt_hash` | string | SHA-256 hex of the delegated agent's execution ledger content hash. |
 
 ### 4.2 — Delegation Receipt Summary
 
 The top-level `delegation_receipts` array contains metadata for each delegated task. Full signed receipts are edge artifacts held by the delegating agent or relay — the ledger includes summaries for audit linkage.
 
-| Field              | Type     | Description                                              |
-| ------------------ | -------- | -------------------------------------------------------- |
-| `task_id`          | string   | The task identifier.                                     |
-| `motebit_id`       | string   | The delegated agent's motebit_id.                        |
-| `device_id`        | string   | The device that executed the task.                       |
-| `status`           | string   | Task outcome: `"completed"`, `"failed"`, `"denied"`.     |
-| `completed_at`     | number   | Epoch milliseconds when the task completed.              |
-| `tools_used`       | string[] | Tools the delegated agent invoked.                       |
-| `signature_prefix` | string   | First 16 characters of the receipt's Ed25519 signature.  |
+| Field              | Type     | Description                                             |
+| ------------------ | -------- | ------------------------------------------------------- |
+| `task_id`          | string   | The task identifier.                                    |
+| `motebit_id`       | string   | The delegated agent's motebit_id.                       |
+| `device_id`        | string   | The device that executed the task.                      |
+| `status`           | string   | Task outcome: `"completed"`, `"failed"`, `"denied"`.    |
+| `completed_at`     | number   | Epoch milliseconds when the task completed.             |
+| `tools_used`       | string[] | Tools the delegated agent invoked.                      |
+| `signature_prefix` | string   | First 16 characters of the receipt's Ed25519 signature. |
 
 ---
 
@@ -196,7 +196,7 @@ Delegation verification is recursive. A ledger is fully verified when all nested
 ## 8. Privacy Considerations
 
 - **Tool arguments are hashed.** The `args_hash` field records the SHA-256 of canonical JSON arguments. This allows a party who knows the original arguments to verify they match, without exposing arguments to parties who do not.
-- **Result content is excluded.** Only `ok` (boolean) and `duration_ms` are recorded. The ledger proves *what happened*, not *what was said*.
+- **Result content is excluded.** Only `ok` (boolean) and `duration_ms` are recorded. The ledger proves _what happened_, not _what was said_.
 - **Prompts are excluded.** The `goal_started` event records the `goal_id` but not the prompt text. Goal prompts may contain sensitive user instructions; they are available through the goal store, not the ledger.
 
 ---
@@ -217,7 +217,7 @@ This creates a verifiable chain: the parent ledger references delegated executio
 
 ### 10.1 — Ordering Guarantees
 
-Timestamps are agent-reported and not externally attested. A malicious agent can fabricate timestamps. The ledger guarantees the agent *claims* events occurred in this order — it does not guarantee the timestamps are accurate. Applications requiring trusted timestamps SHOULD use an external timestamping authority.
+Timestamps are agent-reported and not externally attested. A malicious agent can fabricate timestamps. The ledger guarantees the agent _claims_ events occurred in this order — it does not guarantee the timestamps are accurate. Applications requiring trusted timestamps SHOULD use an external timestamping authority.
 
 ### 10.2 — Completeness
 
@@ -229,14 +229,14 @@ The `args_hash` construction is one-way under SHA-256. However, tool arguments w
 
 ### 10.4 — Threat Model
 
-| Threat                        | Mitigation                                                          | Residual Risk                           |
-| ----------------------------- | ------------------------------------------------------------------- | --------------------------------------- |
-| **Timeline tampering**        | SHA-256 content hash + Ed25519 signature; any edit invalidates      | None — cryptographic guarantee          |
-| **Event omission**            | Not mitigated cryptographically                                     | Trust in agent required                 |
-| **Timestamp fabrication**     | Not mitigated; timestamps are self-reported                         | External timestamping if needed         |
-| **Delegation forgery**        | Each delegated ledger is independently signed by the delegated agent| Delegated agent's key must be trusted   |
-| **Argument recovery**         | Arguments hashed, not included                                      | Low-entropy args may be brute-forced    |
-| **Replay**                    | `goal_id` + `started_at` provide uniqueness; applications define policy | Verifier must enforce uniqueness     |
+| Threat                    | Mitigation                                                              | Residual Risk                         |
+| ------------------------- | ----------------------------------------------------------------------- | ------------------------------------- |
+| **Timeline tampering**    | SHA-256 content hash + Ed25519 signature; any edit invalidates          | None — cryptographic guarantee        |
+| **Event omission**        | Not mitigated cryptographically                                         | Trust in agent required               |
+| **Timestamp fabrication** | Not mitigated; timestamps are self-reported                             | External timestamping if needed       |
+| **Delegation forgery**    | Each delegated ledger is independently signed by the delegated agent    | Delegated agent's key must be trusted |
+| **Argument recovery**     | Arguments hashed, not included                                          | Low-entropy args may be brute-forced  |
+| **Replay**                | `goal_id` + `started_at` provide uniqueness; applications define policy | Verifier must enforce uniqueness      |
 
 ---
 

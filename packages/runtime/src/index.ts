@@ -81,13 +81,29 @@ type McpClientAdapter = {
   getTools?(): import("@motebit/sdk").ToolDefinition[];
 };
 import { PlanEngine, InMemoryPlanStore } from "@motebit/planner";
-import type { PlanChunk, StepDelegationAdapter, CollaborativeDelegationAdapter } from "@motebit/planner";
+import type {
+  PlanChunk,
+  StepDelegationAdapter,
+  CollaborativeDelegationAdapter,
+} from "@motebit/planner";
 import type { PlanStoreAdapter } from "@motebit/planner";
 import type { DeviceCapability } from "@motebit/sdk";
 import { PolicyGate, MemoryGovernor, MemoryClass } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
-import { computeGradient, computePrecision, NEUTRAL_PRECISION, InMemoryGradientStore, summarizeGradientHistory } from "./gradient.js";
-import type { GradientSnapshot, GradientStoreAdapter, BehavioralStats, SelfModelSummary } from "./gradient.js";
+import {
+  computeGradient,
+  computePrecision,
+  gradientToMarketConfig,
+  NEUTRAL_PRECISION,
+  InMemoryGradientStore,
+  summarizeGradientHistory,
+} from "./gradient.js";
+import type {
+  GradientSnapshot,
+  GradientStoreAdapter,
+  BehavioralStats,
+  SelfModelSummary,
+} from "./gradient.js";
 
 // Re-export key types for consumers
 export type {
@@ -120,13 +136,35 @@ export type {
 export type { RenderSpec } from "@motebit/sdk";
 export { PolicyGate } from "@motebit/policy";
 export type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
-export type { GoalExecutionManifest, ExecutionTimelineEntry, ExecutionStepSummary, DelegationReceiptSummary } from "@motebit/sdk";
-export type { PlanChunk, StepDelegationAdapter, CollaborativeDelegationAdapter } from "@motebit/planner";
+export type {
+  GoalExecutionManifest,
+  ExecutionTimelineEntry,
+  ExecutionStepSummary,
+  DelegationReceiptSummary,
+} from "@motebit/sdk";
+export type {
+  PlanChunk,
+  StepDelegationAdapter,
+  CollaborativeDelegationAdapter,
+} from "@motebit/planner";
 export type { PlanStoreAdapter } from "@motebit/planner";
 export { RelayDelegationAdapter } from "@motebit/planner";
 export type { RelayDelegationConfig } from "@motebit/planner";
-export type { GradientSnapshot, GradientStoreAdapter, GradientConfig, BehavioralStats, SelfModelSummary } from "./gradient.js";
-export { computeGradient, computePrecision, NEUTRAL_PRECISION, InMemoryGradientStore, summarizeGradientHistory } from "./gradient.js";
+export type {
+  GradientSnapshot,
+  GradientStoreAdapter,
+  GradientConfig,
+  BehavioralStats,
+  SelfModelSummary,
+} from "./gradient.js";
+export {
+  computeGradient,
+  computePrecision,
+  gradientToMarketConfig,
+  NEUTRAL_PRECISION,
+  InMemoryGradientStore,
+  summarizeGradientHistory,
+} from "./gradient.js";
 
 // === McpServerConfig (inlined to avoid importing Node-only @motebit/mcp-client) ===
 
@@ -306,7 +344,11 @@ export interface SettlementStoreAdapter {
 
 export interface LatencyStatsStoreAdapter {
   record(motebitId: string, remoteMotebitId: string, latencyMs: number): Promise<void>;
-  getStats(motebitId: string, remoteMotebitId: string, limit?: number): Promise<{ avg_ms: number; p95_ms: number; sample_count: number }>;
+  getStats(
+    motebitId: string,
+    remoteMotebitId: string,
+    limit?: number,
+  ): Promise<{ avg_ms: number; p95_ms: number; sample_count: number }>;
 }
 
 export interface StorageAdapters {
@@ -778,7 +820,12 @@ export class MotebitRuntime {
       this.loopDeps,
     );
 
-    for await (const chunk of this.planEngine.executePlan(plan.plan_id, this.loopDeps, undefined, runId)) {
+    for await (const chunk of this.planEngine.executePlan(
+      plan.plan_id,
+      this.loopDeps,
+      undefined,
+      runId,
+    )) {
       this._logPlanChunkEvent(chunk, goalId);
       yield chunk;
     }
@@ -804,7 +851,10 @@ export class MotebitRuntime {
    */
   async *recoverDelegatedSteps(): AsyncGenerator<PlanChunk> {
     if (!this.loopDeps) return;
-    for await (const chunk of this.planEngine.recoverDelegatedSteps(this.motebitId, this.loopDeps)) {
+    for await (const chunk of this.planEngine.recoverDelegatedSteps(
+      this.motebitId,
+      this.loopDeps,
+    )) {
       this._logPlanChunkEvent(chunk);
       yield chunk;
     }
@@ -821,23 +871,47 @@ export class MotebitRuntime {
     switch (chunk.type) {
       case "plan_created":
         eventType = EventType.PlanCreated;
-        payload = { plan_id: chunk.plan.plan_id, title: chunk.plan.title, total_steps: chunk.steps.length };
+        payload = {
+          plan_id: chunk.plan.plan_id,
+          title: chunk.plan.title,
+          total_steps: chunk.steps.length,
+        };
         break;
       case "step_started":
         eventType = EventType.PlanStepStarted;
-        payload = { plan_id: chunk.step.plan_id, step_id: chunk.step.step_id, ordinal: chunk.step.ordinal, description: chunk.step.description };
+        payload = {
+          plan_id: chunk.step.plan_id,
+          step_id: chunk.step.step_id,
+          ordinal: chunk.step.ordinal,
+          description: chunk.step.description,
+        };
         break;
       case "step_completed":
         eventType = EventType.PlanStepCompleted;
-        payload = { plan_id: chunk.step.plan_id, step_id: chunk.step.step_id, ordinal: chunk.step.ordinal, tool_calls_made: chunk.step.tool_calls_made };
+        payload = {
+          plan_id: chunk.step.plan_id,
+          step_id: chunk.step.step_id,
+          ordinal: chunk.step.ordinal,
+          tool_calls_made: chunk.step.tool_calls_made,
+        };
         break;
       case "step_failed":
         eventType = EventType.PlanStepFailed;
-        payload = { plan_id: chunk.step.plan_id, step_id: chunk.step.step_id, ordinal: chunk.step.ordinal, error: chunk.error };
+        payload = {
+          plan_id: chunk.step.plan_id,
+          step_id: chunk.step.step_id,
+          ordinal: chunk.step.ordinal,
+          error: chunk.error,
+        };
         break;
       case "step_delegated":
         eventType = EventType.PlanStepDelegated;
-        payload = { plan_id: chunk.step.plan_id, step_id: chunk.step.step_id, ordinal: chunk.step.ordinal, task_id: chunk.task_id };
+        payload = {
+          plan_id: chunk.step.plan_id,
+          step_id: chunk.step.step_id,
+          ordinal: chunk.step.ordinal,
+          task_id: chunk.task_id,
+        };
         break;
       case "plan_completed":
         eventType = EventType.PlanCompleted;
@@ -890,12 +964,23 @@ export class MotebitRuntime {
 
     // 2. Query plan lifecycle events + delegation task events
     const planEventTypes = [
-      EventType.PlanCreated, EventType.PlanStepStarted, EventType.PlanStepCompleted,
-      EventType.PlanStepFailed, EventType.PlanStepDelegated, EventType.PlanCompleted,
-      EventType.PlanFailed, EventType.GoalCreated, EventType.GoalExecuted,
-      EventType.GoalCompleted, EventType.AgentTaskCompleted, EventType.AgentTaskFailed,
-      EventType.ProposalCreated, EventType.ProposalAccepted, EventType.ProposalRejected,
-      EventType.ProposalCountered, EventType.CollaborativeStepCompleted,
+      EventType.PlanCreated,
+      EventType.PlanStepStarted,
+      EventType.PlanStepCompleted,
+      EventType.PlanStepFailed,
+      EventType.PlanStepDelegated,
+      EventType.PlanCompleted,
+      EventType.PlanFailed,
+      EventType.GoalCreated,
+      EventType.GoalExecuted,
+      EventType.GoalCompleted,
+      EventType.AgentTaskCompleted,
+      EventType.AgentTaskFailed,
+      EventType.ProposalCreated,
+      EventType.ProposalAccepted,
+      EventType.ProposalRejected,
+      EventType.ProposalCountered,
+      EventType.CollaborativeStepCompleted,
     ];
     const events = await this.events.query({
       motebit_id: this.motebitId,
@@ -913,7 +998,11 @@ export class MotebitRuntime {
       steps.filter((s) => s.delegation_task_id).map((s) => s.delegation_task_id!),
     );
     const receiptEvents = events.filter((e) => {
-      if (e.event_type !== EventType.AgentTaskCompleted && e.event_type !== EventType.AgentTaskFailed) return false;
+      if (
+        e.event_type !== EventType.AgentTaskCompleted &&
+        e.event_type !== EventType.AgentTaskFailed
+      )
+        return false;
       const p = e.payload as Record<string, unknown>;
       return delegationTaskIds.has(p.task_id as string);
     });
@@ -932,7 +1021,11 @@ export class MotebitRuntime {
       (e) => e.event_type === EventType.GoalCreated || e.event_type === EventType.GoalExecuted,
     );
     if (goalStartEvent) {
-      timeline.push({ timestamp: goalStartEvent.timestamp, type: "goal_started", payload: { goal_id: goalId } });
+      timeline.push({
+        timestamp: goalStartEvent.timestamp,
+        type: "goal_started",
+        payload: { goal_id: goalId },
+      });
     }
 
     // Plan lifecycle events — only emit recognized fields (no raw payload leak)
@@ -940,40 +1033,103 @@ export class MotebitRuntime {
       const p = event.payload as Record<string, unknown>;
       switch (event.event_type) {
         case EventType.PlanCreated:
-          timeline.push({ timestamp: event.timestamp, type: "plan_created", payload: { plan_id: p.plan_id, title: p.title, total_steps: p.total_steps } });
+          timeline.push({
+            timestamp: event.timestamp,
+            type: "plan_created",
+            payload: { plan_id: p.plan_id, title: p.title, total_steps: p.total_steps },
+          });
           break;
         case EventType.PlanStepStarted:
-          timeline.push({ timestamp: event.timestamp, type: "step_started", payload: { plan_id: p.plan_id, step_id: p.step_id, ordinal: p.ordinal, description: p.description } });
+          timeline.push({
+            timestamp: event.timestamp,
+            type: "step_started",
+            payload: {
+              plan_id: p.plan_id,
+              step_id: p.step_id,
+              ordinal: p.ordinal,
+              description: p.description,
+            },
+          });
           break;
         case EventType.PlanStepCompleted:
-          timeline.push({ timestamp: event.timestamp, type: "step_completed", payload: { plan_id: p.plan_id, step_id: p.step_id, ordinal: p.ordinal, tool_calls_made: p.tool_calls_made } });
+          timeline.push({
+            timestamp: event.timestamp,
+            type: "step_completed",
+            payload: {
+              plan_id: p.plan_id,
+              step_id: p.step_id,
+              ordinal: p.ordinal,
+              tool_calls_made: p.tool_calls_made,
+            },
+          });
           break;
         case EventType.PlanStepFailed:
-          timeline.push({ timestamp: event.timestamp, type: "step_failed", payload: { plan_id: p.plan_id, step_id: p.step_id, ordinal: p.ordinal, error: p.error } });
+          timeline.push({
+            timestamp: event.timestamp,
+            type: "step_failed",
+            payload: { plan_id: p.plan_id, step_id: p.step_id, ordinal: p.ordinal, error: p.error },
+          });
           break;
         case EventType.PlanStepDelegated:
-          timeline.push({ timestamp: event.timestamp, type: "step_delegated", payload: { plan_id: p.plan_id, step_id: p.step_id, ordinal: p.ordinal, task_id: p.task_id } });
+          timeline.push({
+            timestamp: event.timestamp,
+            type: "step_delegated",
+            payload: {
+              plan_id: p.plan_id,
+              step_id: p.step_id,
+              ordinal: p.ordinal,
+              task_id: p.task_id,
+            },
+          });
           break;
         case EventType.PlanCompleted:
-          timeline.push({ timestamp: event.timestamp, type: "plan_completed", payload: { plan_id: p.plan_id } });
+          timeline.push({
+            timestamp: event.timestamp,
+            type: "plan_completed",
+            payload: { plan_id: p.plan_id },
+          });
           break;
         case EventType.PlanFailed:
-          timeline.push({ timestamp: event.timestamp, type: "plan_failed", payload: { plan_id: p.plan_id, reason: p.reason } });
+          timeline.push({
+            timestamp: event.timestamp,
+            type: "plan_failed",
+            payload: { plan_id: p.plan_id, reason: p.reason },
+          });
           break;
         case EventType.ProposalCreated:
-          timeline.push({ timestamp: event.timestamp, type: "proposal_created", payload: { plan_id: p.plan_id, proposal_id: p.proposal_id } });
+          timeline.push({
+            timestamp: event.timestamp,
+            type: "proposal_created",
+            payload: { plan_id: p.plan_id, proposal_id: p.proposal_id },
+          });
           break;
         case EventType.ProposalAccepted:
-          timeline.push({ timestamp: event.timestamp, type: "proposal_accepted", payload: { plan_id: p.plan_id, proposal_id: p.proposal_id } });
+          timeline.push({
+            timestamp: event.timestamp,
+            type: "proposal_accepted",
+            payload: { plan_id: p.plan_id, proposal_id: p.proposal_id },
+          });
           break;
         case EventType.ProposalRejected:
-          timeline.push({ timestamp: event.timestamp, type: "proposal_rejected", payload: { plan_id: p.plan_id, proposal_id: p.proposal_id } });
+          timeline.push({
+            timestamp: event.timestamp,
+            type: "proposal_rejected",
+            payload: { plan_id: p.plan_id, proposal_id: p.proposal_id },
+          });
           break;
         case EventType.ProposalCountered:
-          timeline.push({ timestamp: event.timestamp, type: "proposal_countered", payload: { plan_id: p.plan_id, proposal_id: p.proposal_id } });
+          timeline.push({
+            timestamp: event.timestamp,
+            type: "proposal_countered",
+            payload: { plan_id: p.plan_id, proposal_id: p.proposal_id },
+          });
           break;
         case EventType.CollaborativeStepCompleted:
-          timeline.push({ timestamp: event.timestamp, type: "collaborative_step_completed", payload: { plan_id: p.plan_id, step_id: p.step_id } });
+          timeline.push({
+            timestamp: event.timestamp,
+            type: "collaborative_step_completed",
+            payload: { plan_id: p.plan_id, step_id: p.step_id },
+          });
           break;
       }
     }
@@ -996,7 +1152,12 @@ export class MotebitRuntime {
         timeline.push({
           timestamp: entry.timestamp + (entry.result.durationMs ?? 0),
           type: "tool_result",
-          payload: { tool: entry.tool, ok: entry.result.ok, duration_ms: entry.result.durationMs, call_id: entry.callId },
+          payload: {
+            tool: entry.tool,
+            ok: entry.result.ok,
+            duration_ms: entry.result.durationMs,
+            call_id: entry.callId,
+          },
         });
       }
     }
@@ -1004,7 +1165,11 @@ export class MotebitRuntime {
     // Goal completion
     const goalEndEvent = relevantEvents.find((e) => e.event_type === EventType.GoalCompleted);
     if (goalEndEvent) {
-      timeline.push({ timestamp: goalEndEvent.timestamp, type: "goal_completed", payload: { goal_id: goalId, status: plan.status } });
+      timeline.push({
+        timestamp: goalEndEvent.timestamp,
+        type: "goal_completed",
+        payload: { goal_id: goalId, status: plan.status },
+      });
     }
 
     // Sort by timestamp, stable (preserving insertion order for same-timestamp entries)
@@ -1115,7 +1280,9 @@ export class MotebitRuntime {
 
   private async _hashString(data: string): Promise<string> {
     const hashBuf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(data));
-    return Array.from(new Uint8Array(hashBuf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+    return Array.from(new Uint8Array(hashBuf))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
   }
 
   get isOperatorMode(): boolean {
@@ -1272,11 +1439,13 @@ export class MotebitRuntime {
   }
 
   /** Convert curiosity targets to lightweight hints for the context pack. */
-  private buildCuriosityHints(): Array<{ content: string; daysSinceDiscussed: number }> | undefined {
+  private buildCuriosityHints():
+    | Array<{ content: string; daysSinceDiscussed: number }>
+    | undefined {
     if (this._curiosityTargets.length === 0) return undefined;
     const DAY = 86_400_000;
     const now = Date.now();
-    return this._curiosityTargets.slice(0, 2).map(t => ({
+    return this._curiosityTargets.slice(0, 2).map((t) => ({
       content: t.node.content,
       daysSinceDiscussed: Math.round((now - t.node.last_accessed) / DAY),
     }));
@@ -1418,6 +1587,25 @@ export class MotebitRuntime {
     if (delegationReceipts.length > 0 && this.agentTrustStore != null) {
       try {
         const { verifyExecutionReceipt } = await import("@motebit/crypto");
+        const { composeDelegationTrust, trustLevelToScore, AgentTrustLevel } =
+          await import("@motebit/sdk");
+
+        // Pre-fetch trust scores for all agents in receipt trees into a sync map
+        const collectIds = (r: ExecutionReceipt): string[] => {
+          const ids = [r.motebit_id];
+          for (const sub of r.delegation_receipts ?? []) ids.push(...collectIds(sub));
+          return ids;
+        };
+        const allIds = [...new Set(delegationReceipts.flatMap(collectIds))];
+        const trustMap = new Map<string, number>();
+        for (const id of allIds) {
+          const rec = await this.agentTrustStore.getAgentTrust(this.motebitId, id);
+          trustMap.set(
+            id,
+            rec ? trustLevelToScore(rec.trust_level) : trustLevelToScore(AgentTrustLevel.Unknown),
+          );
+        }
+
         for (const dr of delegationReceipts) {
           // Look up stored public key for the delegatee
           const trustRecord = await this.agentTrustStore.getAgentTrust(
@@ -1438,6 +1626,36 @@ export class MotebitRuntime {
           } else {
             // No stored key — record as unverified first contact
             await this.bumpTrustFromReceipt(dr, true);
+          }
+
+          // Compose chain trust through delegation tree (best-effort)
+          const directTrust =
+            trustMap.get(dr.motebit_id) ?? trustLevelToScore(AgentTrustLevel.Unknown);
+          const chainTrust = composeDelegationTrust(
+            directTrust,
+            dr,
+            (id: string) => trustMap.get(id) ?? trustLevelToScore(AgentTrustLevel.Unknown),
+          );
+
+          // Emit chain trust event for gradient/audit consumption
+          try {
+            const clock = await this.events.getLatestClock(this.motebitId);
+            await this.events.append({
+              event_id: crypto.randomUUID(),
+              motebit_id: this.motebitId,
+              timestamp: Date.now(),
+              event_type: EventType.ChainTrustComputed,
+              payload: {
+                delegatee: dr.motebit_id,
+                direct_trust: directTrust,
+                chain_trust: chainTrust,
+                delegation_depth: (dr.delegation_receipts ?? []).length,
+              },
+              version_clock: clock + 1,
+              tombstoned: false,
+            });
+          } catch {
+            // Event emission is best-effort
           }
         }
       } catch {
@@ -2208,7 +2426,7 @@ export class MotebitRuntime {
 
       // Compute curiosity targets — decaying high-value memories worth asking about
       this._curiosityTargets = findCuriosityTargets(
-        nodes.filter(n => !n.tombstoned && !n.pinned),
+        nodes.filter((n) => !n.tombstoned && !n.pinned),
       );
 
       // Log housekeeping run
@@ -2347,6 +2565,13 @@ export class MotebitRuntime {
     return this.gradientStore.list(this.motebitId, limit);
   }
 
+  /** Get gradient-informed market config for delegation routing. Returns undefined if no gradient computed yet. */
+  getMarketConfig(): Partial<import("@motebit/sdk").MarketConfig> | undefined {
+    const snapshot = this.gradientStore.latest(this.motebitId);
+    if (!snapshot) return undefined;
+    return gradientToMarketConfig(snapshot);
+  }
+
   /** Self-model: the agent narrates its own trajectory from gradient history. */
   getGradientSummary(limit = 20): SelfModelSummary {
     const history = this.gradientStore.list(this.motebitId, limit);
@@ -2447,6 +2672,26 @@ export class MotebitRuntime {
     this.memory.setPrecisionWeights(this._precision.retrievalPrecision);
 
     return snapshot;
+  }
+
+  /**
+   * Issue a W3C Verifiable Credential containing this agent's current gradient.
+   * Returns null if no gradient has been computed or no private key is available.
+   */
+  async issueGradientCredential(
+    privateKey: Uint8Array,
+    publicKey: Uint8Array,
+  ): Promise<
+    | import("@motebit/crypto").VerifiableCredential<
+        import("@motebit/sdk").GradientCredentialSubject
+      >
+    | null
+  > {
+    const snapshot = this.gradientStore.latest(this.motebitId);
+    if (!snapshot) return null;
+
+    const { issueGradientCredential: issue } = await import("@motebit/crypto");
+    return issue(snapshot, privateKey, publicKey);
   }
 
   private wireLoopDeps(): void {

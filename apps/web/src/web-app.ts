@@ -499,7 +499,9 @@ export class WebApp {
 
   async addMcpServer(config: McpServerConfig): Promise<void> {
     if (config.transport !== "http") {
-      throw new Error("Web only supports HTTP MCP servers. Use the desktop or CLI app for stdio servers.");
+      throw new Error(
+        "Web only supports HTTP MCP servers. Use the desktop or CLI app for stdio servers.",
+      );
     }
     if (config.url == null || config.url === "") {
       throw new Error("HTTP MCP server requires a url");
@@ -761,6 +763,7 @@ export class WebApp {
       authToken: token ?? undefined,
       sendRaw: (data: string) => wsAdapter.sendRaw(data),
       onCustomMessage: (cb) => wsAdapter.onCustomMessage(cb),
+      getExplorationDrive: () => this.runtime?.getPrecision().explorationDrive,
     });
     this.runtime.setDelegationAdapter(delegationAdapter);
 
@@ -800,7 +803,11 @@ export class WebApp {
       const planSyncStore = new IdbPlanSyncStore(this._planStore, this._motebitId);
       this._planSyncEngine = new PlanSyncEngine(planSyncStore, this._motebitId);
       this._planSyncEngine.connectRemote(
-        new HttpPlanSyncAdapter({ baseUrl: relayUrl, motebitId: this._motebitId, authToken: token ?? undefined }),
+        new HttpPlanSyncAdapter({
+          baseUrl: relayUrl,
+          motebitId: this._motebitId,
+          authToken: token ?? undefined,
+        }),
       );
       // Initial plan sync, then background every 30s
       void this._planSyncEngine.sync();
@@ -842,6 +849,7 @@ export class WebApp {
             authToken: freshToken ?? undefined,
             sendRaw: (data: string) => freshWs.sendRaw(data),
             onCustomMessage: (cb) => freshWs.onCustomMessage(cb),
+            getExplorationDrive: () => this.runtime?.getPrecision().explorationDrive,
           });
           this.runtime?.setDelegationAdapter(freshDelegation);
 

@@ -923,13 +923,15 @@ export class SqliteToolAuditSink implements AuditLogSink {
   }
 
   queryStatsSince(afterTimestamp: number): AuditStatsSince {
-    const row = this.stmtStatsSince.get(afterTimestamp) as {
-      distinct_turns: number;
-      total: number;
-      blocked: number;
-      succeeded: number;
-      failed: number;
-    } | undefined;
+    const row = this.stmtStatsSince.get(afterTimestamp) as
+      | {
+          distinct_turns: number;
+          total: number;
+          blocked: number;
+          succeeded: number;
+          failed: number;
+        }
+      | undefined;
     if (!row) {
       return { distinctTurns: 0, totalToolCalls: 0, succeeded: 0, blocked: 0, failed: 0 };
     }
@@ -1639,9 +1641,10 @@ function rowToPlanStep(row: PlanStepRow): PlanStep {
     prompt: row.prompt,
     depends_on: JSON.parse(row.depends_on) as string[],
     optional: row.optional === 1,
-    required_capabilities: row.required_capabilities != null
-      ? JSON.parse(row.required_capabilities) as PlanStep["required_capabilities"]
-      : undefined,
+    required_capabilities:
+      row.required_capabilities != null
+        ? (JSON.parse(row.required_capabilities) as PlanStep["required_capabilities"])
+        : undefined,
     delegation_task_id: row.delegation_task_id ?? undefined,
     assigned_motebit_id: row.assigned_motebit_id ?? undefined,
     status: row.status as StepStatus,
@@ -2067,9 +2070,7 @@ export class SqliteServiceListingStore {
   private stmtDelete: PreparedStatement;
 
   constructor(db: DatabaseDriver) {
-    this.stmtGet = db.prepare(
-      `SELECT * FROM service_listings WHERE motebit_id = ?`,
-    );
+    this.stmtGet = db.prepare(`SELECT * FROM service_listings WHERE motebit_id = ?`);
     this.stmtSet = db.prepare(
       `INSERT OR REPLACE INTO service_listings
        (listing_id, motebit_id, capabilities, pricing, sla_max_latency_ms, sla_availability, description, updated_at)
@@ -2340,7 +2341,10 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   }
 
   if (userVersion < 2) {
-    migrateExec(driver, "ALTER TABLE state_snapshots ADD COLUMN version_clock INTEGER NOT NULL DEFAULT 0");
+    migrateExec(
+      driver,
+      "ALTER TABLE state_snapshots ADD COLUMN version_clock INTEGER NOT NULL DEFAULT 0",
+    );
     driver.pragma("user_version = 2");
   }
 
@@ -2357,7 +2361,10 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     migrateExec(driver, "ALTER TABLE goals ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
     migrateExec(driver, "ALTER TABLE goals ADD COLUMN parent_goal_id TEXT");
     migrateExec(driver, "ALTER TABLE goals ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 3");
-    migrateExec(driver, "ALTER TABLE goals ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0");
+    migrateExec(
+      driver,
+      "ALTER TABLE goals ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0",
+    );
     driver.pragma("user_version = 5");
   }
 
@@ -2427,7 +2434,10 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   }
 
   if (userVersion < 18) {
-    migrateExec(driver, "ALTER TABLE gradient_snapshots ADD COLUMN retrieval_quality REAL NOT NULL DEFAULT 0");
+    migrateExec(
+      driver,
+      "ALTER TABLE gradient_snapshots ADD COLUMN retrieval_quality REAL NOT NULL DEFAULT 0",
+    );
     driver.pragma("user_version = 18");
   }
 
@@ -2436,14 +2446,26 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   }
 
   if (userVersion < 20) {
-    migrateExec(driver, "ALTER TABLE gradient_snapshots ADD COLUMN interaction_efficiency REAL NOT NULL DEFAULT 0");
-    migrateExec(driver, "ALTER TABLE gradient_snapshots ADD COLUMN tool_efficiency REAL NOT NULL DEFAULT 0");
+    migrateExec(
+      driver,
+      "ALTER TABLE gradient_snapshots ADD COLUMN interaction_efficiency REAL NOT NULL DEFAULT 0",
+    );
+    migrateExec(
+      driver,
+      "ALTER TABLE gradient_snapshots ADD COLUMN tool_efficiency REAL NOT NULL DEFAULT 0",
+    );
     driver.pragma("user_version = 20");
   }
 
   if (userVersion < 21) {
-    migrateExec(driver, "ALTER TABLE agent_trust ADD COLUMN successful_tasks INTEGER NOT NULL DEFAULT 0");
-    migrateExec(driver, "ALTER TABLE agent_trust ADD COLUMN failed_tasks INTEGER NOT NULL DEFAULT 0");
+    migrateExec(
+      driver,
+      "ALTER TABLE agent_trust ADD COLUMN successful_tasks INTEGER NOT NULL DEFAULT 0",
+    );
+    migrateExec(
+      driver,
+      "ALTER TABLE agent_trust ADD COLUMN failed_tasks INTEGER NOT NULL DEFAULT 0",
+    );
     driver.pragma("user_version = 21");
   }
 
@@ -2453,12 +2475,18 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   }
 
   if (userVersion < 23) {
-    migrateExec(driver, "ALTER TABLE gradient_snapshots ADD COLUMN curiosity_pressure REAL NOT NULL DEFAULT 0");
+    migrateExec(
+      driver,
+      "ALTER TABLE gradient_snapshots ADD COLUMN curiosity_pressure REAL NOT NULL DEFAULT 0",
+    );
     driver.pragma("user_version = 23");
   }
 
   if (userVersion < 24) {
-    migrateExec(driver, "ALTER TABLE plan_steps ADD COLUMN required_capabilities TEXT DEFAULT NULL");
+    migrateExec(
+      driver,
+      "ALTER TABLE plan_steps ADD COLUMN required_capabilities TEXT DEFAULT NULL",
+    );
     driver.pragma("user_version = 24");
   }
 
@@ -2469,13 +2497,21 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
 
   if (userVersion < 26) {
     migrateExec(driver, "ALTER TABLE plan_steps ADD COLUMN updated_at INTEGER DEFAULT 0");
-    migrateExec(driver, "UPDATE plan_steps SET updated_at = COALESCE(completed_at, started_at, (SELECT created_at FROM plans WHERE plans.plan_id = plan_steps.plan_id))");
-    migrateExec(driver, "CREATE INDEX IF NOT EXISTS idx_plan_steps_updated ON plan_steps(updated_at)");
+    migrateExec(
+      driver,
+      "UPDATE plan_steps SET updated_at = COALESCE(completed_at, started_at, (SELECT created_at FROM plans WHERE plans.plan_id = plan_steps.plan_id))",
+    );
+    migrateExec(
+      driver,
+      "CREATE INDEX IF NOT EXISTS idx_plan_steps_updated ON plan_steps(updated_at)",
+    );
     driver.pragma("user_version = 26");
   }
 
   if (userVersion < 27) {
-    migrateExec(driver, `CREATE TABLE IF NOT EXISTS service_listings (
+    migrateExec(
+      driver,
+      `CREATE TABLE IF NOT EXISTS service_listings (
       listing_id TEXT PRIMARY KEY,
       motebit_id TEXT NOT NULL,
       capabilities TEXT NOT NULL DEFAULT '[]',
@@ -2484,10 +2520,16 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
       sla_availability REAL NOT NULL DEFAULT 0.99,
       description TEXT NOT NULL DEFAULT '',
       updated_at INTEGER NOT NULL DEFAULT 0
-    )`);
-    migrateExec(driver, "CREATE INDEX IF NOT EXISTS idx_service_listings_motebit ON service_listings(motebit_id)");
+    )`,
+    );
+    migrateExec(
+      driver,
+      "CREATE INDEX IF NOT EXISTS idx_service_listings_motebit ON service_listings(motebit_id)",
+    );
 
-    migrateExec(driver, `CREATE TABLE IF NOT EXISTS budget_allocations (
+    migrateExec(
+      driver,
+      `CREATE TABLE IF NOT EXISTS budget_allocations (
       allocation_id TEXT PRIMARY KEY,
       goal_id TEXT NOT NULL,
       candidate_motebit_id TEXT NOT NULL,
@@ -2495,10 +2537,16 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
       currency TEXT NOT NULL DEFAULT 'USD',
       created_at INTEGER NOT NULL,
       status TEXT NOT NULL DEFAULT 'locked'
-    )`);
-    migrateExec(driver, "CREATE INDEX IF NOT EXISTS idx_budget_allocations_goal ON budget_allocations(goal_id)");
+    )`,
+    );
+    migrateExec(
+      driver,
+      "CREATE INDEX IF NOT EXISTS idx_budget_allocations_goal ON budget_allocations(goal_id)",
+    );
 
-    migrateExec(driver, `CREATE TABLE IF NOT EXISTS settlements (
+    migrateExec(
+      driver,
+      `CREATE TABLE IF NOT EXISTS settlements (
       settlement_id TEXT PRIMARY KEY,
       allocation_id TEXT NOT NULL,
       receipt_hash TEXT NOT NULL,
@@ -2506,17 +2554,27 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
       amount_settled REAL NOT NULL,
       status TEXT NOT NULL,
       settled_at INTEGER NOT NULL
-    )`);
-    migrateExec(driver, "CREATE INDEX IF NOT EXISTS idx_settlements_allocation ON settlements(allocation_id)");
+    )`,
+    );
+    migrateExec(
+      driver,
+      "CREATE INDEX IF NOT EXISTS idx_settlements_allocation ON settlements(allocation_id)",
+    );
 
-    migrateExec(driver, `CREATE TABLE IF NOT EXISTS latency_stats (
+    migrateExec(
+      driver,
+      `CREATE TABLE IF NOT EXISTS latency_stats (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       motebit_id TEXT NOT NULL,
       remote_motebit_id TEXT NOT NULL,
       latency_ms REAL NOT NULL,
       recorded_at INTEGER NOT NULL
-    )`);
-    migrateExec(driver, "CREATE INDEX IF NOT EXISTS idx_latency_stats_pair ON latency_stats(motebit_id, remote_motebit_id)");
+    )`,
+    );
+    migrateExec(
+      driver,
+      "CREATE INDEX IF NOT EXISTS idx_latency_stats_pair ON latency_stats(motebit_id, remote_motebit_id)",
+    );
 
     driver.pragma("user_version = 27");
   }

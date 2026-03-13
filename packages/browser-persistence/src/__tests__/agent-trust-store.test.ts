@@ -8,7 +8,10 @@ describe("IdbAgentTrustStore", () => {
   let store: IdbAgentTrustStore;
   const motebitId = "m-local" as MotebitId;
 
-  function makeRecord(remoteMotebitId: string, overrides: Partial<AgentTrustRecord> = {}): AgentTrustRecord {
+  function makeRecord(
+    remoteMotebitId: string,
+    overrides: Partial<AgentTrustRecord> = {},
+  ): AgentTrustRecord {
     return {
       motebit_id: motebitId,
       remote_motebit_id: remoteMotebitId as MotebitId,

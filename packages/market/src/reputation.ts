@@ -1,9 +1,5 @@
-import type {
-  AgentTrustRecord,
-  ExecutionReceipt,
-  MotebitId,
-} from "@motebit/sdk";
-import { AgentTrustLevel } from "@motebit/sdk";
+import type { AgentTrustRecord, ExecutionReceipt, MotebitId } from "@motebit/sdk";
+import { trustLevelToScore } from "@motebit/sdk";
 
 export interface ReputationSnapshot {
   motebit_id: MotebitId;
@@ -18,14 +14,6 @@ export interface ReputationSnapshot {
   };
   sample_size: number;
 }
-
-const TRUST_LEVEL_NUMERIC: Record<string, number> = {
-  [AgentTrustLevel.Unknown]: 0.1,
-  [AgentTrustLevel.FirstContact]: 0.3,
-  [AgentTrustLevel.Verified]: 0.6,
-  [AgentTrustLevel.Trusted]: 0.9,
-  [AgentTrustLevel.Blocked]: 0.0,
-};
 
 const DEFAULT_TIME_WINDOW_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
@@ -44,14 +32,18 @@ export function computeServiceReputation(
   const recent = receipts.filter((r) => r.completed_at >= cutoff);
 
   if (recent.length === 0) {
-    const trustScore = trustRecord
-      ? (TRUST_LEVEL_NUMERIC[trustRecord.trust_level] ?? 0.1)
-      : 0.1;
+    const trustScore = trustRecord ? trustLevelToScore(trustRecord.trust_level) : 0.1;
     return {
       motebit_id: motebitId,
       timestamp: now,
       composite: trustScore * 0.3,
-      sub_scores: { reliability: 0.5, speed: 0.5, trust_level: trustScore, consistency: 0.5, recency: 0.0 },
+      sub_scores: {
+        reliability: 0.5,
+        speed: 0.5,
+        trust_level: trustScore,
+        consistency: 0.5,
+        recency: 0.0,
+      },
       sample_size: 0,
     };
   }
@@ -64,15 +56,12 @@ export function computeServiceReputation(
   const durations = recent
     .filter((r) => r.completed_at > r.submitted_at)
     .map((r) => r.completed_at - r.submitted_at);
-  const avgDuration = durations.length > 0
-    ? durations.reduce((a, b) => a + b, 0) / durations.length
-    : 10_000;
+  const avgDuration =
+    durations.length > 0 ? durations.reduce((a, b) => a + b, 0) / durations.length : 10_000;
   const speed = 1 - avgDuration / (avgDuration + 5000);
 
   // Trust level
-  const trust_level = trustRecord
-    ? (TRUST_LEVEL_NUMERIC[trustRecord.trust_level] ?? 0.1)
-    : 0.1;
+  const trust_level = trustRecord ? trustLevelToScore(trustRecord.trust_level) : 0.1;
 
   // Consistency: low stddev in duration = high consistency
   let consistency = 0.5;
@@ -90,11 +79,7 @@ export function computeServiceReputation(
   const recency = Math.exp(-age / (7 * 24 * 60 * 60 * 1000)); // 7-day half-life
 
   const composite =
-    reliability * 0.30
-    + speed * 0.20
-    + trust_level * 0.20
-    + consistency * 0.15
-    + recency * 0.15;
+    reliability * 0.3 + speed * 0.2 + trust_level * 0.2 + consistency * 0.15 + recency * 0.15;
 
   return {
     motebit_id: motebitId,

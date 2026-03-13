@@ -155,6 +155,7 @@ Motebit is calm software. Do not confirm what the user can already see.
 ## Conventions
 
 ### Code structure
+
 - All packages export from `src/index.ts`
 - Tests live in `src/__tests__/` using vitest
 - CSS is inline in HTML files (desktop, admin), not separate stylesheets

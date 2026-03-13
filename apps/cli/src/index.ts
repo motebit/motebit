@@ -24,11 +24,7 @@ import {
   openMotebitDatabase,
 } from "./runtime-factory.js";
 import { consumeStream } from "./stream.js";
-import {
-  isSlashCommand,
-  parseSlashCommand,
-  handleSlashCommand,
-} from "./slash-commands.js";
+import { isSlashCommand, parseSlashCommand, handleSlashCommand } from "./slash-commands.js";
 import type { ReplContext } from "./slash-commands.js";
 import {
   handleDoctor,

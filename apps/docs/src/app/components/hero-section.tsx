@@ -31,8 +31,7 @@ export function HeroSection() {
               A droplet of intelligence under surface tension.
             </h1>
             <p className="mt-5 text-[clamp(0.9rem,1.6vw,1.1rem)] text-zinc-500 dark:text-zinc-400 leading-relaxed">
-              You own the identity. The intelligence is pluggable.
-              The body is yours.
+              You own the identity. The intelligence is pluggable. The body is yours.
             </p>
             <div className="mt-8 flex gap-3 hero-enter-buttons">
               <Link

@@ -2,11 +2,11 @@
 
 ## Account Architecture
 
-| Account | Handle | Role | Audience | Tone |
-|---------|--------|------|----------|------|
-| **Motebit** | @motebitHQ | Primary brand. Product vision, launches, partnerships, thesis posts. | Everyone: founders, investors, AI builders, curious public | Confident, clear, minimal. The adult in the room. |
-| **motebits** | @motebits | Ecosystem & community. Retweets builders, shares use cases, memes, culture. | Community, early adopters, people who discover motebit organically | Warm, playful, the creature's voice. |
-| **motebitDev** | @motebitDev | Developer relations. Changelogs, tutorials, code snippets, SDK updates, shipping threads. | Developers, open-source contributors, technical audience | Direct, technical, ships-in-public energy. |
+| Account        | Handle      | Role                                                                                      | Audience                                                           | Tone                                              |
+| -------------- | ----------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------- |
+| **Motebit**    | @motebitHQ  | Primary brand. Product vision, launches, partnerships, thesis posts.                      | Everyone: founders, investors, AI builders, curious public         | Confident, clear, minimal. The adult in the room. |
+| **motebits**   | @motebits   | Ecosystem & community. Retweets builders, shares use cases, memes, culture.               | Community, early adopters, people who discover motebit organically | Warm, playful, the creature's voice.              |
+| **motebitDev** | @motebitDev | Developer relations. Changelogs, tutorials, code snippets, SDK updates, shipping threads. | Developers, open-source contributors, technical audience           | Direct, technical, ships-in-public energy.        |
 
 ### Why @motebitDev (not @motebitdev)
 
@@ -62,15 +62,15 @@ One account trying to serve investors, developers, and casual users dilutes ever
 
 ### Content Calendar (Weekly Rhythm)
 
-| Day | @motebitHQ | @motebits | @motebitDev |
-|-----|-----------|-----------|-------------|
-| Mon | Thesis thread or take | Retweet @motebitHQ, add creature reaction | Changelog / what shipped last week |
-| Tue | — | Community spotlight or meme | Code snippet or tutorial |
-| Wed | Industry take (react to AI news) | — | Architecture deep-dive thread |
-| Thu | — | Creature video or visual | — |
-| Fri | Vision post or milestone | Retweet + ecosystem roundup | PR merged, open issues, contributor shoutout |
-| Sat | — | — | — |
-| Sun | — | — | — |
+| Day | @motebitHQ                       | @motebits                                 | @motebitDev                                  |
+| --- | -------------------------------- | ----------------------------------------- | -------------------------------------------- |
+| Mon | Thesis thread or take            | Retweet @motebitHQ, add creature reaction | Changelog / what shipped last week           |
+| Tue | —                                | Community spotlight or meme               | Code snippet or tutorial                     |
+| Wed | Industry take (react to AI news) | —                                         | Architecture deep-dive thread                |
+| Thu | —                                | Creature video or visual                  | —                                            |
+| Fri | Vision post or milestone         | Retweet + ecosystem roundup               | PR merged, open issues, contributor shoutout |
+| Sat | —                                | —                                         | —                                            |
+| Sun | —                                | —                                         | —                                            |
 
 **Minimum cadence:** @motebitHQ 3x/week, @motebits 4x/week, @motebitDev 3x/week. Quality over volume. One great thread beats five forgettable tweets.
 
@@ -187,15 +187,15 @@ The goal is to establish what motebit believes before showing what it does.
 
 ## Metrics to Track
 
-| Metric | Target (3 months) | Why it matters |
-|--------|-------------------|----------------|
-| @motebitHQ followers | 500-1,000 | Brand awareness |
-| @motebitDev followers | 200-500 | Developer interest |
-| Thread impressions | 10K+ per thesis thread | Reach |
-| Profile visits | 100+/week | Curiosity signal |
-| Link clicks to motebit.com | 50+/week | Conversion intent |
-| npm create motebit installs | Track weekly | Developer adoption |
-| GitHub stars | Track weekly | Builder interest |
+| Metric                      | Target (3 months)      | Why it matters     |
+| --------------------------- | ---------------------- | ------------------ |
+| @motebitHQ followers        | 500-1,000              | Brand awareness    |
+| @motebitDev followers       | 200-500                | Developer interest |
+| Thread impressions          | 10K+ per thesis thread | Reach              |
+| Profile visits              | 100+/week              | Curiosity signal   |
+| Link clicks to motebit.com  | 50+/week               | Conversion intent  |
+| npm create motebit installs | Track weekly           | Developer adoption |
+| GitHub stars                | Track weekly           | Builder interest   |
 
 Followers are vanity. The real metric is: **how many people visit motebit.com and try it.** Optimize for link clicks and GitHub stars, not follower count.
 
@@ -218,6 +218,7 @@ These are the foundational threads. They define the narrative. Post them in orde
 ---
 
 ### Thread 0 — The Manifesto (pin this)
+
 **Account:** @motebitHQ
 
 > Every AI product today owns the intelligence and rents you a session.
@@ -269,6 +270,7 @@ These are the foundational threads. They define the narrative. Post them in orde
 ---
 
 ### Thread 1 — The Problem
+
 **Account:** @motebitHQ
 
 > Ask yourself three questions about your AI agent:
@@ -308,6 +310,7 @@ These are the foundational threads. They define the narrative. Post them in orde
 ---
 
 ### Thread 2 — The Architecture
+
 **Account:** @motebitDev
 
 > How motebit works, technically. A thread for builders. 🧵
@@ -361,6 +364,7 @@ These are the foundational threads. They define the narrative. Post them in orde
 ---
 
 ### Thread 3 — The Creature
+
 **Account:** @motebits
 
 > [15-sec video: creature breathing, blinking, light refracting through glass]
@@ -392,6 +396,7 @@ These are the foundational threads. They define the narrative. Post them in orde
 ---
 
 ### Thread 4 — Why Not Just Use [X]?
+
 **Account:** @motebitHQ
 
 > "Why not just use OpenAI Assistants?"
@@ -435,6 +440,7 @@ These are the foundational threads. They define the narrative. Post them in orde
 ---
 
 ### Thread 5 — The Sovereignty Thesis
+
 **Account:** @motebitHQ
 
 > Three things no one else is building together:
@@ -478,6 +484,7 @@ These are the foundational threads. They define the narrative. Post them in orde
 ---
 
 ### Thread 6 — The Demo
+
 **Account:** @motebitHQ (cross-post key clips to @motebitDev)
 
 > [screen recording: full flow]
@@ -511,6 +518,7 @@ These are the foundational threads. They define the narrative. Post them in orde
 ---
 
 ### Thread 7 — For Builders
+
 **Account:** @motebitDev
 
 > If you're building agents, here's what motebit gives you that your current stack doesn't:

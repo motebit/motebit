@@ -708,7 +708,9 @@ describe("publicKeyToDidKey", () => {
 describe("hexPublicKeyToDidKey", () => {
   it("converts hex public key to did:key", async () => {
     const kp = await generateKeypair();
-    const hex = Array.from(kp.publicKey).map(b => b.toString(16).padStart(2, "0")).join("");
+    const hex = Array.from(kp.publicKey)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
     const didFromHex = hexPublicKeyToDidKey(hex);
     const didFromBytes = publicKeyToDidKey(kp.publicKey);
     expect(didFromHex).toBe(didFromBytes);

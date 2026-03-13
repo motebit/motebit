@@ -6,10 +6,7 @@ const DAILY_LIMIT = 5;
 const MAX_BODY_SIZE = 100_000; // 100KB
 const MAX_MESSAGE_LENGTH = 10_000;
 const MAX_MESSAGES = 50;
-const MODEL_ALLOWLIST = [
-  "claude-haiku-4-5-20251001",
-  "claude-sonnet-4-20250514",
-];
+const MODEL_ALLOWLIST = ["claude-haiku-4-5-20251001", "claude-sonnet-4-20250514"];
 
 const ALLOWED_ORIGINS = new Set([
   "https://motebit.com",
@@ -37,9 +34,7 @@ function getClientIP(request: Request): string {
   );
 }
 
-async function checkRateLimit(
-  ip: string,
-): Promise<{ allowed: boolean; remaining: number }> {
+async function checkRateLimit(ip: string): Promise<{ allowed: boolean; remaining: number }> {
   const today = new Date().toISOString().slice(0, 10);
   const key = `proxy:${ip}:${today}`;
   const count = await kv.incr(key);
@@ -107,20 +102,20 @@ export async function POST(request: Request): Promise<Response> {
   // Parse and validate body
   const contentLength = request.headers.get("content-length");
   if (contentLength && parseInt(contentLength, 10) > MAX_BODY_SIZE) {
-    return new Response(
-      JSON.stringify({ error: "request_too_large" }),
-      { status: 413, headers: { ...cors, "Content-Type": "application/json" } },
-    );
+    return new Response(JSON.stringify({ error: "request_too_large" }), {
+      status: 413,
+      headers: { ...cors, "Content-Type": "application/json" },
+    });
   }
 
   let body: Record<string, unknown>;
   try {
     body = (await request.json()) as Record<string, unknown>;
   } catch {
-    return new Response(
-      JSON.stringify({ error: "invalid_json" }),
-      { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
-    );
+    return new Response(JSON.stringify({ error: "invalid_json" }), {
+      status: 400,
+      headers: { ...cors, "Content-Type": "application/json" },
+    });
   }
 
   // Validate model
@@ -138,10 +133,10 @@ export async function POST(request: Request): Promise<Response> {
   // Validate messages
   const messages = body.messages as Array<{ role: string; content: string }> | undefined;
   if (!Array.isArray(messages) || messages.length === 0) {
-    return new Response(
-      JSON.stringify({ error: "invalid_messages" }),
-      { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
-    );
+    return new Response(JSON.stringify({ error: "invalid_messages" }), {
+      status: 400,
+      headers: { ...cors, "Content-Type": "application/json" },
+    });
   }
   if (messages.length > MAX_MESSAGES) {
     return new Response(
@@ -151,10 +146,10 @@ export async function POST(request: Request): Promise<Response> {
   }
   for (const msg of messages) {
     if (typeof msg.content === "string" && msg.content.length > MAX_MESSAGE_LENGTH) {
-      return new Response(
-        JSON.stringify({ error: "message_too_long" }),
-        { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
-      );
+      return new Response(JSON.stringify({ error: "message_too_long" }), {
+        status: 400,
+        headers: { ...cors, "Content-Type": "application/json" },
+      });
     }
   }
 

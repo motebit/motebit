@@ -52,7 +52,7 @@ const result = await verify(readFileSync("motebit.md", "utf-8"));
 
 if (result.valid) {
   console.log(result.identity.motebit_id);
-  console.log(result.did);  // W3C did:key
+  console.log(result.did); // W3C did:key
   console.log(result.identity.governance.trust_mode);
 }
 ```

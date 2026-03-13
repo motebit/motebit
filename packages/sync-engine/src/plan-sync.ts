@@ -1,8 +1,4 @@
-import type {
-  SyncPlan,
-  SyncPlanStep,
-  PlanSyncResult,
-} from "@motebit/sdk";
+import type { SyncPlan, SyncPlanStep, PlanSyncResult } from "@motebit/sdk";
 
 // === Plan Sync Store Adapter ===
 
@@ -266,7 +262,10 @@ export class PlanSyncEngine {
       }
 
       // Pull remote plans updated since last sync
-      const remotePlans = await this.remoteAdapter.pullPlans(this.motebitId, this.lastSyncTimestamp);
+      const remotePlans = await this.remoteAdapter.pullPlans(
+        this.motebitId,
+        this.lastSyncTimestamp,
+      );
       let plansPulled = 0;
       for (const plan of remotePlans) {
         this.localStore.upsertPlan(plan);
@@ -274,7 +273,10 @@ export class PlanSyncEngine {
       }
 
       // Pull remote steps updated since last sync
-      const remoteSteps = await this.remoteAdapter.pullSteps(this.motebitId, this.lastSyncTimestamp);
+      const remoteSteps = await this.remoteAdapter.pullSteps(
+        this.motebitId,
+        this.lastSyncTimestamp,
+      );
       let stepsPulled = 0;
       for (const step of remoteSteps) {
         this.localStore.upsertStep(step);

@@ -1,11 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { settleOnReceipt, InMemorySettlementAdapter } from "../settlement.js";
-import {
-  asAllocationId,
-  asGoalId,
-  asMotebitId,
-  asSettlementId,
-} from "@motebit/sdk";
+import { asAllocationId, asGoalId, asMotebitId, asSettlementId } from "@motebit/sdk";
 import type { BudgetAllocation, ExecutionReceipt, GoalExecutionManifest } from "@motebit/sdk";
 
 function makeAllocation(overrides: Partial<BudgetAllocation> = {}): BudgetAllocation {
@@ -39,9 +34,7 @@ function makeReceipt(overrides: Partial<ExecutionReceipt> = {}): ExecutionReceip
   };
 }
 
-function makeLedger(
-  steps: Array<{ status: string }>,
-): GoalExecutionManifest {
+function makeLedger(steps: Array<{ status: string }>): GoalExecutionManifest {
   return {
     spec: "motebit/execution-ledger@1.0",
     goal_id: "goal-1",
@@ -77,23 +70,13 @@ describe("settleOnReceipt", () => {
   });
 
   it("refund for failed receipt", () => {
-    const result = settleOnReceipt(
-      makeAllocation(),
-      makeReceipt({ status: "failed" }),
-      null,
-      SID,
-    );
+    const result = settleOnReceipt(makeAllocation(), makeReceipt({ status: "failed" }), null, SID);
     expect(result.status).toBe("refunded");
     expect(result.amount_settled).toBe(0);
   });
 
   it("refund for denied receipt", () => {
-    const result = settleOnReceipt(
-      makeAllocation(),
-      makeReceipt({ status: "denied" }),
-      null,
-      SID,
-    );
+    const result = settleOnReceipt(makeAllocation(), makeReceipt({ status: "denied" }), null, SID);
     expect(result.status).toBe("refunded");
     expect(result.amount_settled).toBe(0);
   });
@@ -112,10 +95,7 @@ describe("settleOnReceipt", () => {
   });
 
   it("full settlement when all ledger steps completed", () => {
-    const ledger = makeLedger([
-      { status: "completed" },
-      { status: "completed" },
-    ]);
+    const ledger = makeLedger([{ status: "completed" }, { status: "completed" }]);
     const result = settleOnReceipt(makeAllocation(), makeReceipt(), ledger, SID);
     expect(result.status).toBe("completed");
     expect(result.amount_settled).toBe(1.0);

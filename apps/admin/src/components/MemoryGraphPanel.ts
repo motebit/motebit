@@ -202,7 +202,11 @@ export function MemoryGraphPanel({
     { className: "panel" },
     h("h2", null, "Memory Graph"),
     svg,
-    h("div", { className: "count" }, `${memories.length} nodes, ${edges.length} edges, ${memories.filter((m) => m.half_life > DEFAULT_HALF_LIFE).length} compounded`),
+    h(
+      "div",
+      { className: "count" },
+      `${memories.length} nodes, ${edges.length} edges, ${memories.filter((m) => m.half_life > DEFAULT_HALF_LIFE).length} compounded`,
+    ),
     ...memoryList,
   );
 }

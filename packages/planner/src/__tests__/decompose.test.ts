@@ -119,7 +119,11 @@ describe("parseDecompositionResponse", () => {
       title: "Capability plan",
       steps: [
         { description: "Web step", prompt: "Do web thing" },
-        { description: "CLI step", prompt: "Do CLI thing", required_capabilities: ["stdio_mcp", "file_system"] },
+        {
+          description: "CLI step",
+          prompt: "Do CLI thing",
+          required_capabilities: ["stdio_mcp", "file_system"],
+        },
         { description: "Simple step", prompt: "Do simple thing", required_capabilities: [] },
       ],
     });
@@ -135,7 +139,11 @@ describe("parseDecompositionResponse", () => {
     const json = JSON.stringify({
       title: "Plan",
       steps: [
-        { description: "Step", prompt: "Do it", required_capabilities: ["stdio_mcp", 42, null, "file_system"] },
+        {
+          description: "Step",
+          prompt: "Do it",
+          required_capabilities: ["stdio_mcp", 42, null, "file_system"],
+        },
       ],
     });
 

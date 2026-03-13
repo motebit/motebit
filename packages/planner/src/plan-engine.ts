@@ -107,7 +107,7 @@ export class PlanEngine {
         prompt: rawStep.prompt,
         depends_on: i > 0 ? [plan.plan_id + ":" + (i - 1)] : [],
         optional: rawStep.optional ?? false,
-        required_capabilities: rawStep.required_capabilities?.map(c => c as DeviceCapability),
+        required_capabilities: rawStep.required_capabilities?.map((c) => c as DeviceCapability),
         status: StepStatus.Pending,
         result_summary: null,
         error_message: null,
@@ -196,7 +196,10 @@ export class PlanEngine {
         // Check dependencies
         if (!this.areDependenciesMet(step)) {
           if (step.optional) {
-            this.store.updateStep(step.step_id, { status: StepStatus.Skipped, updated_at: Date.now() });
+            this.store.updateStep(step.step_id, {
+              status: StepStatus.Skipped,
+              updated_at: Date.now(),
+            });
             continue;
           }
           // Required step with unmet deps — fail plan
@@ -209,7 +212,7 @@ export class PlanEngine {
         // Check if step requires capabilities we don't have locally
         const localCaps = this.config.localCapabilities ?? [];
         const requiredCaps = step.required_capabilities ?? [];
-        const missingCaps = requiredCaps.filter(c => !localCaps.includes(c));
+        const missingCaps = requiredCaps.filter((c) => !localCaps.includes(c));
 
         if (missingCaps.length > 0) {
           const delegationAdapter = this.config.delegationAdapter;
@@ -226,17 +229,31 @@ export class PlanEngine {
             yield { type: "step_failed", step: failedStep, error: failedStep.error_message! };
 
             if (!step.optional) {
-              this.failPlan(plan, `Required step ${step.ordinal + 1} requires [${capsStr}] not available locally`);
-              yield { type: "plan_failed", plan: this.store.getPlan(plan.plan_id)!, reason: failedStep.error_message! };
+              this.failPlan(
+                plan,
+                `Required step ${step.ordinal + 1} requires [${capsStr}] not available locally`,
+              );
+              yield {
+                type: "plan_failed",
+                plan: this.store.getPlan(plan.plan_id)!,
+                reason: failedStep.error_message!,
+              };
               return;
             }
-            this.store.updateStep(step.step_id, { status: StepStatus.Skipped, updated_at: Date.now() });
+            this.store.updateStep(step.step_id, {
+              status: StepStatus.Skipped,
+              updated_at: Date.now(),
+            });
             continue;
           }
 
           // Delegate step to a capable device
           const startedAt = Date.now();
-          this.store.updateStep(step.step_id, { status: StepStatus.Running, started_at: startedAt, updated_at: startedAt });
+          this.store.updateStep(step.step_id, {
+            status: StepStatus.Running,
+            started_at: startedAt,
+            updated_at: startedAt,
+          });
           this.store.updatePlan(plan.plan_id, { current_step_index: i, updated_at: startedAt });
           const updatedStep = this.store.getStep(step.step_id)!;
           yield { type: "step_started", step: updatedStep };
@@ -248,7 +265,10 @@ export class PlanEngine {
               timeoutMs,
               (taskId) => {
                 // Persist task_id immediately so recovery can find it if we crash/close
-                this.store.updateStep(step.step_id, { delegation_task_id: taskId, updated_at: Date.now() });
+                this.store.updateStep(step.step_id, {
+                  delegation_task_id: taskId,
+                  updated_at: Date.now(),
+                });
               },
             );
 
@@ -262,7 +282,11 @@ export class PlanEngine {
             completedResults.push(`[Step ${step.ordinal + 1}: ${step.description}]\n${summary}`);
 
             const completedStep = this.store.getStep(step.step_id)!;
-            yield { type: "step_delegated", step: completedStep, task_id: delegationResult.task_id };
+            yield {
+              type: "step_delegated",
+              step: completedStep,
+              task_id: delegationResult.task_id,
+            };
             yield { type: "step_completed", step: completedStep };
           } catch (err: unknown) {
             const errMsg = err instanceof Error ? err.message : String(err);
@@ -277,10 +301,17 @@ export class PlanEngine {
 
             if (!step.optional) {
               this.failPlan(plan, `Delegated step ${step.ordinal + 1} failed: ${errMsg}`);
-              yield { type: "plan_failed", plan: this.store.getPlan(plan.plan_id)!, reason: errMsg };
+              yield {
+                type: "plan_failed",
+                plan: this.store.getPlan(plan.plan_id)!,
+                reason: errMsg,
+              };
               return;
             }
-            this.store.updateStep(step.step_id, { status: StepStatus.Skipped, updated_at: Date.now() });
+            this.store.updateStep(step.step_id, {
+              status: StepStatus.Skipped,
+              updated_at: Date.now(),
+            });
           }
           continue;
         }
@@ -401,7 +432,10 @@ export class PlanEngine {
           }
 
           // Optional step failed — skip and continue
-          this.store.updateStep(step.step_id, { status: StepStatus.Skipped, updated_at: Date.now() });
+          this.store.updateStep(step.step_id, {
+            status: StepStatus.Skipped,
+            updated_at: Date.now(),
+          });
         }
       }
 
@@ -564,7 +598,11 @@ export class PlanEngine {
               result_summary: summary || null,
               updated_at: Date.now(),
             });
-            yield { type: "step_delegated", step: this.store.getStep(step.step_id)!, task_id: result.task_id };
+            yield {
+              type: "step_delegated",
+              step: this.store.getStep(step.step_id)!,
+              task_id: result.task_id,
+            };
             yield { type: "step_completed", step: this.store.getStep(step.step_id)! };
           } else {
             this.store.updateStep(step.step_id, {
@@ -584,12 +622,16 @@ export class PlanEngine {
       if (recoveredAny) {
         // Check if the plan can continue — resume from where it left off
         const updatedSteps = this.store.getStepsForPlan(plan.plan_id);
-        const hasRunning = updatedSteps.some(s => s.status === StepStatus.Running);
-        const hasFailed = updatedSteps.some(s => s.status === StepStatus.Failed && !s.optional);
+        const hasRunning = updatedSteps.some((s) => s.status === StepStatus.Running);
+        const hasFailed = updatedSteps.some((s) => s.status === StepStatus.Failed && !s.optional);
 
         if (hasFailed) {
           this.failPlan(plan, "Recovered delegated step failed");
-          yield { type: "plan_failed", plan: this.store.getPlan(plan.plan_id)!, reason: "Recovered delegated step failed" };
+          yield {
+            type: "plan_failed",
+            plan: this.store.getPlan(plan.plan_id)!,
+            reason: "Recovered delegated step failed",
+          };
         } else if (!hasRunning) {
           // No more running steps — resume plan execution for remaining pending steps
           yield* this.resumePlan(plan.plan_id, deps);

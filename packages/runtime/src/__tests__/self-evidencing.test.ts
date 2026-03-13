@@ -26,7 +26,6 @@ import {
   InMemoryGradientStore,
 } from "../gradient.js";
 
-
 // === Helpers ===
 
 const MOTEBIT_ID = "thesis-agent";
@@ -37,7 +36,7 @@ function makeEmbedding(seed: number, dims = 64): number[] {
   const emb: number[] = [];
   let x = seed;
   for (let i = 0; i < dims; i++) {
-    x = ((x * 1103515245 + 12345) & 0x7fffffff);
+    x = (x * 1103515245 + 12345) & 0x7fffffff;
     emb.push((x / 0x7fffffff) * 2 - 1);
   }
   // Normalize to unit vector
@@ -138,7 +137,10 @@ describe("Self-Evidencing Loop", () => {
     const curiosityPressure = { avgScore: 0.3, count: 5 }; // low pressure = healthy
 
     const phase2 = computeGradient(
-      MOTEBIT_ID, nodes, edges, events,
+      MOTEBIT_ID,
+      nodes,
+      edges,
+      events,
       phase1.gradient,
       undefined,
       retrievalStats,
@@ -167,11 +169,11 @@ describe("Self-Evidencing Loop", () => {
 
     // Low precision (phase 1): similarity weight lower, more diversified
     const lowPrecision = precision1.retrievalPrecision;
-    const lowSimWeight = 0.35 + Math.max(0, Math.min(1, lowPrecision)) * 0.30;
+    const lowSimWeight = 0.35 + Math.max(0, Math.min(1, lowPrecision)) * 0.3;
 
     // High precision (phase 2): similarity weight higher, more focused
     const highPrecision = precision2.retrievalPrecision;
-    const highSimWeight = 0.35 + Math.max(0, Math.min(1, highPrecision)) * 0.30;
+    const highSimWeight = 0.35 + Math.max(0, Math.min(1, highPrecision)) * 0.3;
 
     expect(highSimWeight).toBeGreaterThan(lowSimWeight);
 
@@ -180,7 +182,10 @@ describe("Self-Evidencing Loop", () => {
     // tighter precision means better semantic matching.
 
     const phase3 = computeGradient(
-      MOTEBIT_ID, nodes, edges, events,
+      MOTEBIT_ID,
+      nodes,
+      edges,
+      events,
       phase2.gradient,
       undefined,
       { avgScore: 0.82, count: 50 }, // improved retrieval
@@ -236,19 +241,25 @@ describe("Self-Evidencing Loop", () => {
     const gradientStore = new InMemoryGradientStore();
 
     // Phase 1: Agent was doing well
-    const nodes = Array.from({ length: 15 }, (_, i) =>
-      makeNode(`d${i}`, i + 100, 0.75),
-    );
-    const goodEvents = Array.from({ length: 10 }, () =>
-      makeConsolidationEvent("REINFORCE"),
-    );
+    const nodes = Array.from({ length: 15 }, (_, i) => makeNode(`d${i}`, i + 100, 0.75));
+    const goodEvents = Array.from({ length: 10 }, () => makeConsolidationEvent("REINFORCE"));
 
     const now = Date.now();
     const phase1 = computeGradient(
-      MOTEBIT_ID, nodes, [], goodEvents, null,
+      MOTEBIT_ID,
+      nodes,
+      [],
+      goodEvents,
+      null,
       undefined,
       { avgScore: 0.75, count: 20 },
-      { turnCount: 10, totalIterations: 15, toolCallsSucceeded: 20, toolCallsBlocked: 0, toolCallsFailed: 0 },
+      {
+        turnCount: 10,
+        totalIterations: 15,
+        toolCallsSucceeded: 20,
+        toolCallsBlocked: 0,
+        toolCallsFailed: 0,
+      },
       { avgScore: 0.2, count: 3 },
     );
     phase1.timestamp = now - 3600000; // 1 hour ago
@@ -256,10 +267,20 @@ describe("Self-Evidencing Loop", () => {
 
     // Phase 2: Things are deteriorating — lower retrieval, more failures
     const phase2 = computeGradient(
-      MOTEBIT_ID, nodes, [], goodEvents, phase1.gradient,
+      MOTEBIT_ID,
+      nodes,
+      [],
+      goodEvents,
+      phase1.gradient,
       undefined,
       { avgScore: 0.35, count: 20 }, // retrieval quality dropped
-      { turnCount: 10, totalIterations: 40, toolCallsSucceeded: 8, toolCallsBlocked: 5, toolCallsFailed: 7 },
+      {
+        turnCount: 10,
+        totalIterations: 40,
+        toolCallsSucceeded: 8,
+        toolCallsBlocked: 5,
+        toolCallsFailed: 7,
+      },
       { avgScore: 1.5, count: 8 }, // high curiosity pressure = knowledge decaying
     );
     phase2.timestamp = now; // now (most recent)
@@ -281,10 +302,10 @@ describe("Self-Evidencing Loop", () => {
     // Retrieval weight distribution diversifies
     const t1 = Math.max(0, Math.min(1, precision1.retrievalPrecision));
     const t2 = Math.max(0, Math.min(1, precision2.retrievalPrecision));
-    const simWeight1 = 0.35 + t1 * 0.30;
-    const simWeight2 = 0.35 + t2 * 0.30;
-    const recWeight1 = 0.30 - t1 * 0.20;
-    const recWeight2 = 0.30 - t2 * 0.20;
+    const simWeight1 = 0.35 + t1 * 0.3;
+    const simWeight2 = 0.35 + t2 * 0.3;
+    const recWeight1 = 0.3 - t1 * 0.2;
+    const recWeight2 = 0.3 - t2 * 0.2;
 
     // Similarity weight drops, recency weight rises — diversification
     expect(simWeight2).toBeLessThan(simWeight1);
@@ -307,8 +328,8 @@ describe("Self-Evidencing Loop", () => {
 
     // Store 3 memories with known embeddings
     const queryEmb = makeEmbedding(42);
-    const closeEmb = makeEmbedding(43);  // should be somewhat similar to 42
-    const farEmb = makeEmbedding(999);   // should be less similar
+    const closeEmb = makeEmbedding(43); // should be somewhat similar to 42
+    const farEmb = makeEmbedding(999); // should be less similar
 
     const closeNode = makeNode("close", 43, 0.5); // lower confidence
     closeNode.embedding = closeEmb;
@@ -353,8 +374,8 @@ describe("Self-Evidencing Loop", () => {
 
       // At minimum, verify that the scores used are different
       // (the weight distributions are mathematically different)
-      const highSimWeight = 0.35 + 0.9 * 0.30;  // 0.62
-      const lowSimWeight = 0.35 + 0.1 * 0.30;   // 0.38
+      const highSimWeight = 0.35 + 0.9 * 0.3; // 0.62
+      const lowSimWeight = 0.35 + 0.1 * 0.3; // 0.38
       expect(highSimWeight).not.toBe(lowSimWeight);
 
       // If the ordering differs, the loop is fully proven end-to-end

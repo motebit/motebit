@@ -3,7 +3,13 @@ import { PlanEngine } from "../plan-engine.js";
 import { InMemoryPlanStore } from "../types.js";
 import type { StepDelegationAdapter } from "../plan-engine.js";
 import { DeviceCapability, StepStatus } from "@motebit/sdk";
-import type { DelegatedStepResult, PlanStep, ExecutionReceipt, MotebitId, DeviceId } from "@motebit/sdk";
+import type {
+  DelegatedStepResult,
+  PlanStep,
+  ExecutionReceipt,
+  MotebitId,
+  DeviceId,
+} from "@motebit/sdk";
 import type { MotebitLoopDependencies } from "@motebit/ai-core";
 
 function makeMockDeps(steps: Array<Record<string, unknown>>): MotebitLoopDependencies {
@@ -16,7 +22,10 @@ function makeMockDeps(steps: Array<Record<string, unknown>>): MotebitLoopDepende
   } as unknown as MotebitLoopDependencies;
 }
 
-function makeReceipt(taskId: string, status: "completed" | "failed" = "completed"): ExecutionReceipt {
+function makeReceipt(
+  taskId: string,
+  status: "completed" | "failed" = "completed",
+): ExecutionReceipt {
   return {
     task_id: taskId,
     motebit_id: "test-mote" as MotebitId,
@@ -64,12 +73,12 @@ describe("PlanEngine delegation", () => {
     }
 
     expect(mockAdapter.delegateStep).toHaveBeenCalledOnce();
-    const delegatedChunks = chunks.filter(c => c.type === "step_delegated");
+    const delegatedChunks = chunks.filter((c) => c.type === "step_delegated");
     expect(delegatedChunks).toHaveLength(1);
     expect((delegatedChunks[0] as unknown as { task_id: string }).task_id).toBe("delegated-task-1");
 
     // Plan should complete
-    const completedChunks = chunks.filter(c => c.type === "plan_completed");
+    const completedChunks = chunks.filter((c) => c.type === "plan_completed");
     expect(completedChunks).toHaveLength(1);
   });
 
@@ -98,7 +107,7 @@ describe("PlanEngine delegation", () => {
     }
 
     expect(mockAdapter.delegateStep).not.toHaveBeenCalled();
-    expect(chunks.filter(c => c.type === "step_delegated")).toHaveLength(0);
+    expect(chunks.filter((c) => c.type === "step_delegated")).toHaveLength(0);
   });
 
   it("fails step when no delegation adapter and caps are insufficient", async () => {
@@ -118,11 +127,11 @@ describe("PlanEngine delegation", () => {
       chunks.push(chunk);
     }
 
-    const failedSteps = chunks.filter(c => c.type === "step_failed");
+    const failedSteps = chunks.filter((c) => c.type === "step_failed");
     expect(failedSteps).toHaveLength(1);
     expect(failedSteps[0]!.error).toContain("stdio_mcp");
 
-    const planFailed = chunks.filter(c => c.type === "plan_failed");
+    const planFailed = chunks.filter((c) => c.type === "plan_failed");
     expect(planFailed).toHaveLength(1);
   });
 
@@ -147,11 +156,11 @@ describe("PlanEngine delegation", () => {
       chunks.push(chunk);
     }
 
-    const failedSteps = chunks.filter(c => c.type === "step_failed");
+    const failedSteps = chunks.filter((c) => c.type === "step_failed");
     expect(failedSteps).toHaveLength(1);
     expect(failedSteps[0]!.error).toContain("timed out");
 
-    const planFailed = chunks.filter(c => c.type === "plan_failed");
+    const planFailed = chunks.filter((c) => c.type === "plan_failed");
     expect(planFailed).toHaveLength(1);
   });
 
@@ -168,7 +177,12 @@ describe("PlanEngine delegation", () => {
 
     // Only step is optional and requires delegation
     const deps = makeMockDeps([
-      { description: "Optional stdio step", prompt: "do stdio thing", required_capabilities: ["stdio_mcp"], optional: true },
+      {
+        description: "Optional stdio step",
+        prompt: "do stdio thing",
+        required_capabilities: ["stdio_mcp"],
+        optional: true,
+      },
     ]);
 
     const { plan } = await engine.createPlan("goal-1", "test-mote", { goalPrompt: "test" }, deps);
@@ -179,22 +193,25 @@ describe("PlanEngine delegation", () => {
     }
 
     // Delegation failed but plan should still complete (step is optional)
-    const failedSteps = chunks.filter(c => c.type === "step_failed");
+    const failedSteps = chunks.filter((c) => c.type === "step_failed");
     expect(failedSteps).toHaveLength(1);
 
-    const planCompleted = chunks.filter(c => c.type === "plan_completed");
+    const planCompleted = chunks.filter((c) => c.type === "plan_completed");
     expect(planCompleted).toHaveLength(1);
   });
 
   it("step_delegated chunk is yielded with correct data", async () => {
     const store = new InMemoryPlanStore();
     const mockAdapter: StepDelegationAdapter = {
-      delegateStep: vi.fn().mockImplementation(async (step: PlanStep) => ({
-        step_id: step.step_id,
-        task_id: "task-abc",
-        receipt: makeReceipt("task-abc"),
-        result_text: "Result from delegation",
-      } satisfies DelegatedStepResult)),
+      delegateStep: vi.fn().mockImplementation(
+        async (step: PlanStep) =>
+          ({
+            step_id: step.step_id,
+            task_id: "task-abc",
+            receipt: makeReceipt("task-abc"),
+            result_text: "Result from delegation",
+          }) satisfies DelegatedStepResult,
+      ),
     };
 
     const engine = new PlanEngine(store, {
@@ -203,7 +220,11 @@ describe("PlanEngine delegation", () => {
     });
 
     const deps = makeMockDeps([
-      { description: "Remote step", prompt: "do remote thing", required_capabilities: ["file_system"] },
+      {
+        description: "Remote step",
+        prompt: "do remote thing",
+        required_capabilities: ["file_system"],
+      },
     ]);
     const { plan } = await engine.createPlan("goal-1", "test-mote", { goalPrompt: "test" }, deps);
 
@@ -212,7 +233,7 @@ describe("PlanEngine delegation", () => {
       chunks.push(chunk);
     }
 
-    const delegated = chunks.filter(c => c.type === "step_delegated");
+    const delegated = chunks.filter((c) => c.type === "step_delegated");
     expect(delegated).toHaveLength(1);
     expect((delegated[0] as unknown as { task_id: string }).task_id).toBe("task-abc");
 
@@ -234,16 +255,20 @@ describe("PlanEngine delegation", () => {
   it("delegation persists task_id via onTaskSubmitted callback", async () => {
     const store = new InMemoryPlanStore();
     const mockAdapter: StepDelegationAdapter = {
-      delegateStep: vi.fn().mockImplementation(async (step: PlanStep, _timeout: number, onTaskSubmitted?: (taskId: string) => void) => {
-        // Simulate relay returning task_id
-        onTaskSubmitted?.("relay-task-42");
-        return {
-          step_id: step.step_id,
-          task_id: "relay-task-42",
-          receipt: makeReceipt("relay-task-42"),
-          result_text: "Done",
-        } satisfies DelegatedStepResult;
-      }),
+      delegateStep: vi
+        .fn()
+        .mockImplementation(
+          async (step: PlanStep, _timeout: number, onTaskSubmitted?: (taskId: string) => void) => {
+            // Simulate relay returning task_id
+            onTaskSubmitted?.("relay-task-42");
+            return {
+              step_id: step.step_id,
+              task_id: "relay-task-42",
+              receipt: makeReceipt("relay-task-42"),
+              result_text: "Done",
+            } satisfies DelegatedStepResult;
+          },
+        ),
     };
 
     const engine = new PlanEngine(store, {
@@ -304,8 +329,8 @@ describe("PlanEngine recovery", () => {
     }
 
     expect(mockAdapter.pollTaskResult).toHaveBeenCalledWith("task-orphan", steps[0]!.step_id);
-    expect(chunks.filter(c => c.type === "step_delegated")).toHaveLength(1);
-    expect(chunks.filter(c => c.type === "step_completed")).toHaveLength(1);
+    expect(chunks.filter((c) => c.type === "step_delegated")).toHaveLength(1);
+    expect(chunks.filter((c) => c.type === "step_completed")).toHaveLength(1);
 
     // Step should be Completed in store
     const updatedStep = store.getStep(steps[0]!.step_id);
@@ -345,8 +370,8 @@ describe("PlanEngine recovery", () => {
       chunks.push(chunk);
     }
 
-    expect(chunks.filter(c => c.type === "step_failed")).toHaveLength(1);
-    expect(chunks.filter(c => c.type === "plan_failed")).toHaveLength(1);
+    expect(chunks.filter((c) => c.type === "step_failed")).toHaveLength(1);
+    expect(chunks.filter((c) => c.type === "plan_failed")).toHaveLength(1);
 
     const updatedStep = store.getStep(steps[0]!.step_id);
     expect(updatedStep!.status).toBe(StepStatus.Failed);

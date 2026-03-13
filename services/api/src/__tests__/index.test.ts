@@ -989,7 +989,9 @@ describe("Sync Relay — agent protocol", () => {
       headers: AUTH_HEADER,
     });
     expect(pullRes.status).toBe(200);
-    const pullBody = (await pullRes.json()) as { steps: Array<{ step_id: string; status: string; result_summary: string }> };
+    const pullBody = (await pullRes.json()) as {
+      steps: Array<{ step_id: string; status: string; result_summary: string }>;
+    };
     expect(pullBody.steps).toHaveLength(1);
     expect(pullBody.steps[0]!.step_id).toBe("step-sync-1");
     expect(pullBody.steps[0]!.status).toBe("completed");
@@ -1037,8 +1039,10 @@ describe("Sync Relay — agent protocol", () => {
       method: "GET",
       headers: AUTH_HEADER,
     });
-    const pullBody = (await pullRes.json()) as { steps: Array<{ step_id: string; status: string }> };
-    const monoStep = pullBody.steps.find(s => s.step_id === "step-mono-1");
+    const pullBody = (await pullRes.json()) as {
+      steps: Array<{ step_id: string; status: string }>;
+    };
+    const monoStep = pullBody.steps.find((s) => s.step_id === "step-mono-1");
     expect(monoStep!.status).toBe("completed"); // NOT regressed to "running"
   });
 

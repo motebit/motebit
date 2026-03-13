@@ -25,13 +25,21 @@ describe("allocateBudget", () => {
 
   it("caps lock amount at available funds when sufficient", () => {
     // estimated_cost=4, risk-adjusted=4.8, but only 4.5 available → caps at 4.5 (>= 4)
-    const result = allocateBudget(makeRequest({ estimated_cost: 4 }), 4.5, asAllocationId("alloc-2"));
+    const result = allocateBudget(
+      makeRequest({ estimated_cost: 4 }),
+      4.5,
+      asAllocationId("alloc-2"),
+    );
     expect(result).not.toBeNull();
     expect(result!.amount_locked).toBe(4.5);
   });
 
   it("returns null when insufficient funds", () => {
-    const result = allocateBudget(makeRequest({ estimated_cost: 10 }), 5.0, asAllocationId("alloc-3"));
+    const result = allocateBudget(
+      makeRequest({ estimated_cost: 10 }),
+      5.0,
+      asAllocationId("alloc-3"),
+    );
     expect(result).toBeNull();
   });
 
@@ -46,21 +54,13 @@ describe("allocateBudget", () => {
   });
 
   it("applies zero risk factor", () => {
-    const result = allocateBudget(
-      makeRequest({ risk_factor: 0 }),
-      5.0,
-      asAllocationId("alloc-5"),
-    );
+    const result = allocateBudget(makeRequest({ risk_factor: 0 }), 5.0, asAllocationId("alloc-5"));
     expect(result).not.toBeNull();
     expect(result!.amount_locked).toBe(1.0);
   });
 
   it("succeeds when available exactly equals estimated cost", () => {
-    const result = allocateBudget(
-      makeRequest({ risk_factor: 0 }),
-      1.0,
-      asAllocationId("alloc-6"),
-    );
+    const result = allocateBudget(makeRequest({ risk_factor: 0 }), 1.0, asAllocationId("alloc-6"));
     expect(result).not.toBeNull();
     expect(result!.amount_locked).toBe(1.0);
   });

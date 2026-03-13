@@ -93,6 +93,9 @@ interface MotebitServerDeps {
     description: string;
   } | null>;
 
+  /** Returns a signed Verifiable Presentation with agent credentials. */
+  getCredentials?(): Promise<Record<string, unknown> | null>;
+
   /** Resolve a caller's public key and trust level by motebit ID. */
   resolveCallerKey?(
     motebitId: string,
@@ -625,6 +628,31 @@ export class McpServerAdapter {
     });
 
     // motebit_service_listing — read-only, returns this agent's service listing
+    // motebit_credentials — returns a signed Verifiable Presentation
+    if (this.deps.getCredentials) {
+      const getCredentials = this.deps.getCredentials;
+      const credentialsToolDef = McpServerAdapter.syntheticToolDef(
+        "motebit_credentials",
+        "Get this agent's signed verifiable credentials (gradient, reputation)",
+        RiskLevel.R0_READ,
+      );
+      server.tool(
+        "motebit_credentials",
+        "Get this agent's signed verifiable credentials (gradient, reputation)",
+        async () => {
+          const denied = this.validateSyntheticTool(credentialsToolDef, {});
+          if (denied) return denied;
+
+          const vp = await getCredentials();
+          if (!vp) {
+            return fmt({ error: "No credentials available" });
+          }
+          this.deps.logToolCall("motebit_credentials", {}, { ok: true, data: vp });
+          return fmt(vp);
+        },
+      );
+    }
+
     if (this.deps.getServiceListing) {
       const getServiceListing = this.deps.getServiceListing;
       const listingToolDef = McpServerAdapter.syntheticToolDef(

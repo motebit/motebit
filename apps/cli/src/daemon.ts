@@ -16,15 +16,15 @@ import {
   HttpPlanSyncAdapter,
 } from "@motebit/sync-engine";
 import type { AgentTask } from "@motebit/sdk";
-import { EventType, RiskLevel, SensitivityLevel, AgentTaskStatus, DeviceCapability } from "@motebit/sdk";
 import {
-  createSignedToken,
-  verifySignedToken,
-} from "@motebit/crypto";
-import {
-  verify as verifyIdentityFile,
-  governanceToPolicyConfig,
-} from "@motebit/identity-file";
+  EventType,
+  RiskLevel,
+  SensitivityLevel,
+  AgentTaskStatus,
+  DeviceCapability,
+} from "@motebit/sdk";
+import { createSignedToken, verifySignedToken } from "@motebit/crypto";
+import { verify as verifyIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
 import { McpServerAdapter } from "@motebit/mcp-server";
 import type {
   MotebitServerDeps,
@@ -33,16 +33,9 @@ import type {
 import { PlanEngine } from "@motebit/planner";
 import { GoalScheduler } from "./scheduler.js";
 import type { CliConfig } from "./args.js";
-import {
-  loadFullConfig,
-  extractPersonality,
-} from "./config.js";
+import { loadFullConfig, extractPersonality } from "./config.js";
 import { fromHex, decryptPrivateKey } from "./identity.js";
-import {
-  getDbPath,
-  createProvider,
-  buildToolRegistry,
-} from "./runtime-factory.js";
+import { getDbPath, createProvider, buildToolRegistry } from "./runtime-factory.js";
 
 export async function handleRun(config: CliConfig): Promise<void> {
   const identityPath =
@@ -265,7 +258,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
           // Check if we have the required capabilities
           const requiredCaps = task.required_capabilities ?? [];
           if (requiredCaps.length > 0) {
-            const missingCaps = requiredCaps.filter(c => !cliCapabilities.includes(c));
+            const missingCaps = requiredCaps.filter((c) => !cliCapabilities.includes(c));
             if (missingCaps.length > 0) {
               console.log(
                 `\nAgent task ${task.task_id.slice(0, 8)}... skipped (missing: ${missingCaps.join(", ")})`,
@@ -649,7 +642,9 @@ export async function handleServe(config: CliConfig): Promise<void> {
     log(`MCP server running (stdio). ${toolCount} tools exposed.`);
     log(`Policy: ${config.operator ? "operator" : "ambient"} mode.`);
   } else {
-    log(`MCP server running on http://localhost:${port} (StreamableHTTP). ${toolCount} tools exposed.`);
+    log(
+      `MCP server running on http://localhost:${port} (StreamableHTTP). ${toolCount} tools exposed.`,
+    );
     log(`Policy: ${config.operator ? "operator" : "ambient"} mode.`);
   }
 

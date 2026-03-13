@@ -320,9 +320,9 @@ export class MemoryGraph {
     // Low precision:  similarity=0.35, confidence=0.35, recency=0.30 (diversify, weight recency)
     const t = Math.max(0, Math.min(1, retrievalPrecision));
     this._precisionOverride = {
-      similarityWeight: 0.35 + t * 0.30,   // 0.35 → 0.65
-      confidenceWeight: 0.35 - t * 0.10,   // 0.35 → 0.25
-      recencyWeight:    0.30 - t * 0.20,   // 0.30 → 0.10
+      similarityWeight: 0.35 + t * 0.3, // 0.35 → 0.65
+      confidenceWeight: 0.35 - t * 0.1, // 0.35 → 0.25
+      recencyWeight: 0.3 - t * 0.2, // 0.30 → 0.10
     };
   }
 

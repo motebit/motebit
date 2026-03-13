@@ -1,4 +1,10 @@
-import type { PlanStep, DelegatedStepResult, ExecutionReceipt, CollaborativePlanProposal, ProposalResponse } from "@motebit/sdk";
+import type {
+  PlanStep,
+  DelegatedStepResult,
+  ExecutionReceipt,
+  CollaborativePlanProposal,
+  ProposalResponse,
+} from "@motebit/sdk";
 import type { StepDelegationAdapter } from "./plan-engine.js";
 
 export interface StepResult {
@@ -20,6 +26,8 @@ export interface RelayDelegationConfig {
   authToken?: string;
   sendRaw: (data: string) => void;
   onCustomMessage: (cb: (msg: { type: string; [key: string]: unknown }) => void) => () => void;
+  /** Optional: returns agent's current exploration drive [0-1] from intelligence gradient, passed to relay for routing. */
+  getExplorationDrive?: () => number | undefined;
 }
 
 export class RelayDelegationAdapter implements StepDelegationAdapter {
@@ -48,6 +56,7 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
         submitted_by: "plan_engine",
         required_capabilities: step.required_capabilities,
         step_id: step.step_id,
+        exploration_drive: this.config.getExplorationDrive?.(),
       }),
     });
 
@@ -65,7 +74,9 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
     return new Promise<DelegatedStepResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         unsubscribe();
-        reject(new Error(`Delegation timed out after ${timeoutMs}ms for step "${step.description}"`));
+        reject(
+          new Error(`Delegation timed out after ${timeoutMs}ms for step "${step.description}"`),
+        );
       }, timeoutMs);
 
       const unsubscribe = onCustomMessage((msg) => {
@@ -105,7 +116,10 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
 
       if (!resp.ok) return null; // Task not found (expired) or auth error
 
-      const data = (await resp.json()) as { task: { status: string }; receipt: ExecutionReceipt | null };
+      const data = (await resp.json()) as {
+        task: { status: string };
+        receipt: ExecutionReceipt | null;
+      };
 
       if (data.receipt == null) return null; // Task still pending/running
 

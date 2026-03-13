@@ -66,7 +66,9 @@ export function buildDecompositionPrompt(ctx: DecompositionContext): string {
   if (ctx.localCapabilities && ctx.localCapabilities.length > 0) {
     parts.push("");
     parts.push(`Local device capabilities: ${ctx.localCapabilities.join(", ")}`);
-    parts.push("Steps requiring capabilities NOT in this list will be delegated to another device.");
+    parts.push(
+      "Steps requiring capabilities NOT in this list will be delegated to another device.",
+    );
   }
 
   if (ctx.relevantMemories && ctx.relevantMemories.length > 0) {
