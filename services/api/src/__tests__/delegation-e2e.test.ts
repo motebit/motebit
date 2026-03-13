@@ -475,6 +475,7 @@ describe("Delegation E2E", () => {
       authToken: API_TOKEN,
       sendRaw: () => {},
       onCustomMessage: dispatcher.onCustomMessage,
+      maxDelegationRetries: 0, // No retries — test verifies single failure propagation
     });
 
     const engine = new PlanEngine(store, {

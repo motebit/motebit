@@ -28,6 +28,15 @@ export interface RelayDelegationConfig {
   onCustomMessage: (cb: (msg: { type: string; [key: string]: unknown }) => void) => () => void;
   /** Optional: returns agent's current exploration drive [0-1] from intelligence gradient, passed to relay for routing. */
   getExplorationDrive?: () => number | undefined;
+  /** Max retry attempts on delegation failure (default 2, so up to 3 total attempts). */
+  maxDelegationRetries?: number;
+  /** Called on each failed delegation attempt — lets the caller record failures for trust demotion. */
+  onDelegationFailure?: (
+    step: PlanStep,
+    attempt: number,
+    error: string,
+    failedAgentId?: string,
+  ) => void;
 }
 
 export class RelayDelegationAdapter implements StepDelegationAdapter {
@@ -46,18 +55,68 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
     timeoutMs: number,
     onTaskSubmitted?: (taskId: string) => void,
   ): Promise<DelegatedStepResult> {
+    const maxRetries = this.config.maxDelegationRetries ?? 2;
+    const excludeAgents: string[] = [];
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const result = await this.attemptDelegation(
+          step,
+          timeoutMs,
+          excludeAgents,
+          // Only call onTaskSubmitted for the first attempt (task_id tracking)
+          attempt === 0 ? onTaskSubmitted : undefined,
+        );
+        return result;
+      } catch (err: unknown) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        const failedAgentId = this.extractFailedAgentId(lastError);
+
+        // Record the failure for trust demotion
+        this.config.onDelegationFailure?.(step, attempt, lastError.message, failedAgentId);
+
+        // Exclude the failed agent from next attempt
+        if (failedAgentId) {
+          excludeAgents.push(failedAgentId);
+        }
+
+        // Don't retry non-retryable errors (submission failures, not timeouts)
+        if (lastError.message.includes("Relay task submission failed")) {
+          break;
+        }
+      }
+    }
+
+    throw new Error(
+      `Delegation failed after ${Math.min(excludeAgents.length, maxRetries) + 1} attempt(s) for step "${step.description}": ${lastError?.message ?? "unknown error"}`,
+      { cause: lastError },
+    );
+  }
+
+  private async attemptDelegation(
+    step: PlanStep,
+    timeoutMs: number,
+    excludeAgents: string[],
+    onTaskSubmitted?: (taskId: string) => void,
+  ): Promise<DelegatedStepResult> {
     const { syncUrl, motebitId, onCustomMessage } = this.config;
+
+    const body: Record<string, unknown> = {
+      prompt: step.prompt,
+      submitted_by: "plan_engine",
+      required_capabilities: step.required_capabilities,
+      step_id: step.step_id,
+      exploration_drive: this.config.getExplorationDrive?.(),
+    };
+    if (excludeAgents.length > 0) {
+      body.exclude_agents = excludeAgents;
+    }
 
     const resp = await fetch(`${syncUrl}/agent/${motebitId}/task`, {
       method: "POST",
       headers: this.buildHeaders(),
-      body: JSON.stringify({
-        prompt: step.prompt,
-        submitted_by: "plan_engine",
-        required_capabilities: step.required_capabilities,
-        step_id: step.step_id,
-        exploration_drive: this.config.getExplorationDrive?.(),
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!resp.ok) {
@@ -100,10 +159,18 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
             result_text: receipt.result,
           });
         } else {
-          reject(new Error(`Delegated step ${receipt.status}: ${receipt.result}`));
+          // Attach the failed agent's ID to the error for exclusion
+          const err = new Error(`Delegated step ${receipt.status}: ${receipt.result}`);
+          (err as DelegationError).failedAgentId = receipt.motebit_id;
+          reject(err);
         }
       });
     });
+  }
+
+  /** Extract the failed agent ID from an error if available. */
+  private extractFailedAgentId(err: Error): string | undefined {
+    return (err as DelegationError).failedAgentId;
   }
 
   async pollTaskResult(taskId: string, stepId: string): Promise<DelegatedStepResult | null> {
@@ -133,4 +200,9 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
       return null; // Network error — caller should retry later
     }
   }
+}
+
+/** Internal error type carrying the failed agent's ID for exclusion. */
+interface DelegationError extends Error {
+  failedAgentId?: string;
 }

@@ -1929,6 +1929,8 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       currency?: string;
       /** Optional: requesting agent's exploration drive [0-1] from intelligence gradient. */
       exploration_drive?: number;
+      /** Optional: agent IDs to exclude from routing (failed on previous attempts). */
+      exclude_agents?: string[];
     }>();
 
     if (!body.prompt || typeof body.prompt !== "string" || body.prompt.trim() === "") {
@@ -1975,14 +1977,25 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
               )
             : profiles;
 
-        if (multiCapProfiles.length > 0) {
+        // Filter out excluded agents (failed on previous delegation attempts)
+        const excludeSet = new Set(
+          Array.isArray(body.exclude_agents)
+            ? body.exclude_agents.filter((a): a is string => typeof a === "string")
+            : [],
+        );
+        const eligibleProfiles =
+          excludeSet.size > 0
+            ? multiCapProfiles.filter((p) => !excludeSet.has(p.motebit_id as string))
+            : multiCapProfiles;
+
+        if (eligibleProfiles.length > 0) {
           // Apply gradient-informed precision to routing weights when provided
           const marketConfig =
             typeof body.exploration_drive === "number"
               ? applyPrecisionToMarketConfig(undefined, body.exploration_drive)
               : undefined;
           const ranked = rankCandidates(
-            multiCapProfiles,
+            eligibleProfiles,
             {
               ...requirements,
               required_capabilities: requiredCaps,

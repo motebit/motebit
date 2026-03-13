@@ -432,3 +432,251 @@ describe("PlanEngine recovery", () => {
     expect(chunks).toHaveLength(0);
   });
 });
+
+// ── RelayDelegationAdapter retry with failover ──
+
+import { RelayDelegationAdapter } from "../delegation-adapter.js";
+
+describe("RelayDelegationAdapter retry with failover", () => {
+  function makeStep(overrides: Partial<PlanStep> = {}): PlanStep {
+    return {
+      step_id: "step-1",
+      plan_id: "plan-1" as import("@motebit/sdk").PlanId,
+      ordinal: 0,
+      description: "Test step",
+      prompt: "Do the thing",
+      depends_on: [],
+      optional: false,
+      status: StepStatus.Pending,
+      required_capabilities: [DeviceCapability.HttpMcp],
+      result_summary: null,
+      error_message: null,
+      tool_calls_made: 0,
+      started_at: null,
+      completed_at: null,
+      retry_count: 0,
+      updated_at: Date.now(),
+      ...overrides,
+    };
+  }
+
+  it("succeeds on first attempt without retry", async () => {
+    let fetchCount = 0;
+    const mockFetch = vi.fn().mockImplementation(async () => {
+      fetchCount++;
+      return new Response(JSON.stringify({ task_id: "task-1" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", mockFetch);
+
+    const receipt = makeReceipt("task-1");
+    const adapter = new RelayDelegationAdapter({
+      syncUrl: "http://localhost:3000",
+      motebitId: "test-mote",
+      sendRaw: vi.fn(),
+      onCustomMessage: (cb) => {
+        // Simulate immediate success
+        setTimeout(() => {
+          cb({ type: "task_result", task_id: "task-1", receipt });
+        }, 10);
+        return () => {};
+      },
+    });
+
+    const result = await adapter.delegateStep(makeStep(), 5000);
+    expect(result.task_id).toBe("task-1");
+    expect(result.receipt.status).toBe("completed");
+    expect(fetchCount).toBe(1);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("retries on failure and excludes failed agent", async () => {
+    let fetchCount = 0;
+    const fetchBodies: unknown[] = [];
+    const mockFetch = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
+      fetchCount++;
+      fetchBodies.push(JSON.parse(init.body as string));
+      return new Response(JSON.stringify({ task_id: `task-${fetchCount}` }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", mockFetch);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let messageCallback: any = null;
+    const failedReceipt: ExecutionReceipt = {
+      ...makeReceipt("task-1", "failed"),
+      motebit_id: "agent-bad" as MotebitId,
+      result: "Service error",
+    };
+    const successReceipt = makeReceipt("task-2");
+
+    const adapter = new RelayDelegationAdapter({
+      syncUrl: "http://localhost:3000",
+      motebitId: "test-mote",
+      sendRaw: vi.fn(),
+      onCustomMessage: (cb) => {
+        messageCallback = cb;
+        return () => {
+          messageCallback = null;
+        };
+      },
+      maxDelegationRetries: 2,
+    });
+
+    const resultPromise = adapter.delegateStep(makeStep(), 5000);
+
+    // Wait for first attempt to register
+    await new Promise((r) => setTimeout(r, 20));
+    // First attempt fails
+    messageCallback?.({ type: "task_result", task_id: "task-1", receipt: failedReceipt });
+
+    // Wait for retry
+    await new Promise((r) => setTimeout(r, 20));
+    // Second attempt succeeds
+    messageCallback?.({ type: "task_result", task_id: "task-2", receipt: successReceipt });
+
+    const result = await resultPromise;
+    expect(result.task_id).toBe("task-2");
+    expect(fetchCount).toBe(2);
+
+    // Second attempt should include exclude_agents
+    const secondBody = fetchBodies[1] as { exclude_agents?: string[] };
+    expect(secondBody.exclude_agents).toEqual(["agent-bad"]);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("calls onDelegationFailure on each failed attempt", async () => {
+    let fetchCount = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async () => {
+        fetchCount++;
+        return new Response(JSON.stringify({ task_id: `task-${fetchCount}` }), { status: 200 });
+      }),
+    );
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let messageCallback: any = null;
+    const failures: Array<{ attempt: number; error: string; agentId?: string }> = [];
+
+    const adapter = new RelayDelegationAdapter({
+      syncUrl: "http://localhost:3000",
+      motebitId: "test-mote",
+      sendRaw: vi.fn(),
+      onCustomMessage: (cb) => {
+        messageCallback = cb;
+        return () => {
+          messageCallback = null;
+        };
+      },
+      maxDelegationRetries: 1,
+      onDelegationFailure: (_step, attempt, error, agentId) => {
+        failures.push({ attempt, error, agentId });
+      },
+    });
+
+    const failedReceipt: ExecutionReceipt = {
+      ...makeReceipt("task-1", "failed"),
+      motebit_id: "agent-a" as MotebitId,
+      result: "Oops",
+    };
+    const successReceipt = makeReceipt("task-2");
+
+    const resultPromise = adapter.delegateStep(makeStep(), 5000);
+
+    await new Promise((r) => setTimeout(r, 20));
+    messageCallback?.({ type: "task_result", task_id: "task-1", receipt: failedReceipt });
+
+    await new Promise((r) => setTimeout(r, 20));
+    messageCallback?.({ type: "task_result", task_id: "task-2", receipt: successReceipt });
+
+    await resultPromise;
+
+    expect(failures).toHaveLength(1);
+    expect(failures[0]!.attempt).toBe(0);
+    expect(failures[0]!.agentId).toBe("agent-a");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("fails after exhausting all retries", async () => {
+    let fetchCount = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async () => {
+        fetchCount++;
+        return new Response(JSON.stringify({ task_id: `task-${fetchCount}` }), { status: 200 });
+      }),
+    );
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let messageCallback: any = null;
+
+    const adapter = new RelayDelegationAdapter({
+      syncUrl: "http://localhost:3000",
+      motebitId: "test-mote",
+      sendRaw: vi.fn(),
+      onCustomMessage: (cb) => {
+        messageCallback = cb;
+        return () => {
+          messageCallback = null;
+        };
+      },
+      maxDelegationRetries: 1, // 2 total attempts
+    });
+
+    const makeFailReceipt = (taskId: string, agentId: string) => ({
+      ...makeReceipt(taskId, "failed"),
+      motebit_id: agentId as MotebitId,
+      result: "Error",
+    });
+
+    const resultPromise = adapter.delegateStep(makeStep(), 5000);
+
+    await new Promise((r) => setTimeout(r, 20));
+    messageCallback?.({
+      type: "task_result",
+      task_id: "task-1",
+      receipt: makeFailReceipt("task-1", "agent-a"),
+    });
+
+    await new Promise((r) => setTimeout(r, 20));
+    messageCallback?.({
+      type: "task_result",
+      task_id: "task-2",
+      receipt: makeFailReceipt("task-2", "agent-b"),
+    });
+
+    await expect(resultPromise).rejects.toThrow(/failed after 2 attempt/);
+    expect(fetchCount).toBe(2);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("does not retry on submission failure (non-retryable)", async () => {
+    let fetchCount = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async () => {
+        fetchCount++;
+        return new Response("Internal Server Error", { status: 500 });
+      }),
+    );
+
+    const adapter = new RelayDelegationAdapter({
+      syncUrl: "http://localhost:3000",
+      motebitId: "test-mote",
+      sendRaw: vi.fn(),
+      onCustomMessage: () => () => {},
+      maxDelegationRetries: 2,
+    });
+
+    await expect(adapter.delegateStep(makeStep(), 5000)).rejects.toThrow(
+      /Relay task submission failed/,
+    );
+    // Should NOT retry — submission failures are not retryable
+    expect(fetchCount).toBe(1);
+
+    vi.unstubAllGlobals();
+  });
+});
