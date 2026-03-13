@@ -954,6 +954,8 @@ export interface AgentServiceListing {
   pricing: CapabilityPrice[];
   sla: { max_latency_ms: number; availability_guarantee: number };
   description: string;
+  /** Wallet address for x402 on-chain payment settlement (e.g. "0x..." for EVM). */
+  pay_to_address?: string;
   updated_at: number;
 }
 
@@ -981,12 +983,28 @@ export interface BudgetAllocation {
   status: "locked" | "settled" | "released" | "disputed";
 }
 
+/**
+ * The relay's settlement fee rate (5%).
+ * Applied to every completed or partial settlement that flows through the relay.
+ * This is the Stripe model: the relay proves the work happened, takes its cut.
+ */
+export const PLATFORM_FEE_RATE = 0.05;
+
 export interface SettlementRecord {
   settlement_id: SettlementId;
   allocation_id: AllocationId;
   receipt_hash: string;
   ledger_hash: string | null;
+  /** Amount paid to the executing agent (after platform fee deduction). */
   amount_settled: number;
+  /** Platform fee extracted by the relay. */
+  platform_fee: number;
+  /** Fee rate applied (e.g. 0.05 = 5%). Recorded per-settlement for auditability. */
+  platform_fee_rate: number;
+  /** x402 payment transaction hash (when paid on-chain). */
+  x402_tx_hash?: string;
+  /** x402 network used for payment (CAIP-2 identifier). */
+  x402_network?: string;
   status: "completed" | "partial" | "refunded";
   settled_at: number;
 }

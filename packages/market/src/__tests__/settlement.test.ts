@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { settleOnReceipt, InMemorySettlementAdapter } from "../settlement.js";
-import { asAllocationId, asGoalId, asMotebitId, asSettlementId } from "@motebit/sdk";
+import { settleOnReceipt } from "../settlement.js";
+import {
+  asAllocationId,
+  asGoalId,
+  asMotebitId,
+  asSettlementId,
+  PLATFORM_FEE_RATE,
+} from "@motebit/sdk";
 import type { BudgetAllocation, ExecutionReceipt, GoalExecutionManifest } from "@motebit/sdk";
 
 function makeAllocation(overrides: Partial<BudgetAllocation> = {}): BudgetAllocation {
@@ -62,26 +68,37 @@ function makeLedger(steps: Array<{ status: string }>): GoalExecutionManifest {
 const SID = asSettlementId("settle-1");
 
 describe("settleOnReceipt", () => {
-  it("full settlement for completed receipt", () => {
+  it("full settlement extracts 5% platform fee", () => {
     const result = settleOnReceipt(makeAllocation(), makeReceipt(), null, SID);
     expect(result.status).toBe("completed");
-    expect(result.amount_settled).toBe(1.0);
+    expect(result.platform_fee_rate).toBe(PLATFORM_FEE_RATE);
+    expect(result.platform_fee).toBe(0.05); // 5% of $1.00
+    expect(result.amount_settled).toBe(0.95); // $1.00 - $0.05
     expect(result.settlement_id).toBe("settle-1");
   });
 
-  it("refund for failed receipt", () => {
+  it("fee + net = gross (no money lost)", () => {
+    const alloc = makeAllocation({ amount_locked: 100.0 });
+    const result = settleOnReceipt(alloc, makeReceipt(), null, SID);
+    expect(result.platform_fee + result.amount_settled).toBe(100.0);
+  });
+
+  it("refund for failed receipt — zero fee", () => {
     const result = settleOnReceipt(makeAllocation(), makeReceipt({ status: "failed" }), null, SID);
     expect(result.status).toBe("refunded");
     expect(result.amount_settled).toBe(0);
+    expect(result.platform_fee).toBe(0);
+    expect(result.platform_fee_rate).toBe(PLATFORM_FEE_RATE);
   });
 
-  it("refund for denied receipt", () => {
+  it("refund for denied receipt — zero fee", () => {
     const result = settleOnReceipt(makeAllocation(), makeReceipt({ status: "denied" }), null, SID);
     expect(result.status).toBe("refunded");
     expect(result.amount_settled).toBe(0);
+    expect(result.platform_fee).toBe(0);
   });
 
-  it("proportional settlement for partial ledger completion", () => {
+  it("proportional settlement for partial ledger — fee on partial amount", () => {
     const ledger = makeLedger([
       { status: "completed" },
       { status: "completed" },
@@ -90,7 +107,11 @@ describe("settleOnReceipt", () => {
     ]);
     const result = settleOnReceipt(makeAllocation(), makeReceipt(), ledger, SID);
     expect(result.status).toBe("partial");
-    expect(result.amount_settled).toBe(0.5);
+    // Gross = $1.00 * 2/4 = $0.50
+    // Fee = $0.50 * 0.05 = $0.025 (USDC 6-decimal precision preserves this)
+    expect(result.platform_fee).toBe(0.025);
+    // Net = $0.50 - $0.025 = $0.475
+    expect(result.amount_settled).toBe(0.475);
     expect(result.ledger_hash).toBe("ledger-hash-1");
   });
 
@@ -98,41 +119,46 @@ describe("settleOnReceipt", () => {
     const ledger = makeLedger([{ status: "completed" }, { status: "completed" }]);
     const result = settleOnReceipt(makeAllocation(), makeReceipt(), ledger, SID);
     expect(result.status).toBe("completed");
-    expect(result.amount_settled).toBe(1.0);
+    expect(result.platform_fee).toBe(0.05);
+    expect(result.amount_settled).toBe(0.95);
   });
 
   it("full settlement when no ledger provided", () => {
     const result = settleOnReceipt(makeAllocation(), makeReceipt(), null, SID);
     expect(result.status).toBe("completed");
-  });
-});
-
-describe("InMemorySettlementAdapter", () => {
-  it("locks an allocation", async () => {
-    const adapter = new InMemorySettlementAdapter();
-    const success = await adapter.lock(makeAllocation());
-    expect(success).toBe(true);
-    expect(adapter.isLocked("alloc-1")).toBe(true);
+    expect(result.platform_fee).toBe(0.05);
   });
 
-  it("rejects duplicate lock", async () => {
-    const adapter = new InMemorySettlementAdapter();
-    await adapter.lock(makeAllocation());
-    const duplicate = await adapter.lock(makeAllocation());
-    expect(duplicate).toBe(false);
+  it("custom fee rate override", () => {
+    const result = settleOnReceipt(makeAllocation(), makeReceipt(), null, SID, 0.03);
+    expect(result.platform_fee_rate).toBe(0.03);
+    expect(result.platform_fee).toBe(0.03); // 3% of $1.00
+    expect(result.amount_settled).toBe(0.97);
   });
 
-  it("releases a lock", async () => {
-    const adapter = new InMemorySettlementAdapter();
-    await adapter.lock(makeAllocation());
-    await adapter.release("settle-1", 1.0);
-    expect(adapter.isLocked("alloc-1")).toBe(false);
+  it("zero fee rate (fee waiver)", () => {
+    const result = settleOnReceipt(makeAllocation(), makeReceipt(), null, SID, 0);
+    expect(result.platform_fee_rate).toBe(0);
+    expect(result.platform_fee).toBe(0);
+    expect(result.amount_settled).toBe(1.0);
   });
 
-  it("refunds by deleting lock", async () => {
-    const adapter = new InMemorySettlementAdapter();
-    await adapter.lock(makeAllocation());
-    await adapter.refund("alloc-1");
-    expect(adapter.size).toBe(0);
+  it("micropayment — sub-cent amounts survive rounding", () => {
+    const alloc = makeAllocation({ amount_locked: 0.001 }); // $0.001 task
+    const result = settleOnReceipt(alloc, makeReceipt(), null, SID);
+    // Fee: $0.001 * 0.05 = $0.00005 — would be $0.00 at 2-decimal precision
+    expect(result.platform_fee).toBe(0.00005);
+    expect(result.amount_settled).toBe(0.00095);
+    expect(result.platform_fee + result.amount_settled).toBeCloseTo(0.001, 6);
+  });
+
+  it("large amount — fee rounds to USDC precision correctly", () => {
+    const alloc = makeAllocation({ amount_locked: 4999.99 });
+    const result = settleOnReceipt(alloc, makeReceipt(), null, SID);
+    // Fee: 4999.99 * 0.05 = 249.9995 (6-decimal precision)
+    expect(result.platform_fee).toBe(249.9995);
+    expect(result.amount_settled).toBe(4749.9905);
+    // Invariant: fee + net = gross
+    expect(result.platform_fee + result.amount_settled).toBeCloseTo(4999.99, 6);
   });
 });

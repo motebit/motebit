@@ -10,7 +10,15 @@ const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
 const MOTEBIT_ID = "test-mote";
 
 async function createTestRelay(): Promise<SyncRelay> {
-  return createSyncRelay({ apiToken: API_TOKEN, enableDeviceAuth: false });
+  return createSyncRelay({
+    apiToken: API_TOKEN,
+    enableDeviceAuth: false,
+    x402: {
+      payToAddress: "0x0000000000000000000000000000000000000000",
+      network: "eip155:84532",
+      testnet: true,
+    },
+  });
 }
 
 function makeConversation(

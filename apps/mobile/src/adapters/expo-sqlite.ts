@@ -1725,6 +1725,8 @@ interface SettlementRow {
   receipt_hash: string;
   ledger_hash: string | null;
   amount_settled: number;
+  platform_fee: number;
+  platform_fee_rate: number;
   status: string;
   settled_at: number;
 }
@@ -1736,6 +1738,8 @@ function rowToSettlement(row: SettlementRow): SettlementRecord {
     receipt_hash: row.receipt_hash,
     ledger_hash: row.ledger_hash,
     amount_settled: row.amount_settled,
+    platform_fee: row.platform_fee,
+    platform_fee_rate: row.platform_fee_rate,
     status: row.status as SettlementRecord["status"],
     settled_at: row.settled_at,
   };
@@ -1755,14 +1759,16 @@ export class ExpoSettlementStore {
   async create(settlement: SettlementRecord): Promise<void> {
     this.db.runSync(
       `INSERT INTO settlements
-       (settlement_id, allocation_id, receipt_hash, ledger_hash, amount_settled, status, settled_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (settlement_id, allocation_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         settlement.settlement_id,
         settlement.allocation_id,
         settlement.receipt_hash,
         settlement.ledger_hash,
         settlement.amount_settled,
+        settlement.platform_fee,
+        settlement.platform_fee_rate,
         settlement.status,
         settlement.settled_at,
       ],
@@ -2197,6 +2203,8 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
           receipt_hash TEXT NOT NULL,
           ledger_hash TEXT,
           amount_settled REAL NOT NULL,
+          platform_fee REAL NOT NULL DEFAULT 0,
+          platform_fee_rate REAL NOT NULL DEFAULT 0.05,
           status TEXT NOT NULL,
           settled_at INTEGER NOT NULL
         );

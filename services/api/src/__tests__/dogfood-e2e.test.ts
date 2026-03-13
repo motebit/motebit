@@ -123,6 +123,11 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
       apiToken: RELAY_MASTER_TOKEN,
       enableDeviceAuth: true,
       verifyDeviceSignature: true,
+      x402: {
+        payToAddress: "0x0000000000000000000000000000000000000000",
+        network: "eip155:84532",
+        testnet: true,
+      },
     });
 
     keypairA = await generateKeypair();
@@ -528,14 +533,15 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
   });
 
   // =========================================================================
-  // 12. Budget lock + settlement with a priced service listing
+  // 12. x402 settlement audit — receipt creates settlement record with platform fee
   // =========================================================================
 
-  it("17. Budget lock + settlement: Agent B has a priced listing, A submits with max_budget", async () => {
+  it("17. Settlement audit: priced listing + receipt → settlement record with 5% fee", async () => {
     const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
     const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
 
-    // B registers a priced service listing
+    // B registers a priced service listing (no pay_to_address → bypasses x402 gate,
+    // but settlement audit still runs from pricing lookup on receipt delivery)
     const listingRes = await relay.app.request(`/api/v1/agents/${motebitIdB}/listing`, {
       method: "POST",
       headers: {
@@ -544,7 +550,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
       },
       body: JSON.stringify({
         capabilities: ["web_search"],
-        pricing: [{ capability: "web_search", unit_cost: 0.02, currency: "USD", per: "task" }],
+        pricing: [{ capability: "web_search", unit_cost: 1.0, currency: "USD", per: "task" }],
         sla: { max_latency_ms: 2000, availability_guarantee: 0.99 },
         description: "Agent B — dogfood web search service",
       }),
@@ -557,7 +563,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
       { ws: bWs as never, deviceId: relayDeviceIdB, capabilities: ["web_search"] },
     ]);
 
-    // A submits task with max_budget — relay locks funds for B's estimated cost
+    // A submits task — x402 handles payment at HTTP layer, no max_budget needed
     const taskRes = await relay.app.request(`/agent/${motebitIdB}/task`, {
       method: "POST",
       headers: {
@@ -568,53 +574,48 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
         prompt: "Search the web for motebit architecture",
         submitted_by: motebitIdA,
         required_capabilities: ["web_search"],
-        max_budget: 1.0,
       }),
     });
     expect(taskRes.status).toBe(201);
-    const { task_id: budgetTaskId } = (await taskRes.json()) as { task_id: string };
+    const { task_id: settlementTaskId } = (await taskRes.json()) as { task_id: string };
 
-    // Budget is tracked by the `:motebitId` URL param on task submission — B's address was used,
-    // so budget allocations are keyed to motebitIdB. A is the requester, B owns the ledger entry.
-    const budgetBeforeRes = await relay.app.request(`/agent/${motebitIdB}/budget`, {
-      headers: { Authorization: `Bearer ${RELAY_MASTER_TOKEN}` },
-    });
-    expect(budgetBeforeRes.status).toBe(200);
-    const budgetBefore = (await budgetBeforeRes.json()) as {
-      summary: { total_locked: number; total_settled: number };
-      allocations: Array<Record<string, unknown>>;
-    };
-    expect(budgetBefore.summary.total_locked).toBeGreaterThan(0);
-    expect(budgetBefore.allocations.some((a) => a.task_id === budgetTaskId)).toBe(true);
-
-    // B posts successful receipt → relay settles the locked funds
-    const receipt = await makeReceipt(budgetTaskId, motebitIdB, relayDeviceIdB, keypairB);
-    const resultRes = await relay.app.request(`/agent/${motebitIdB}/task/${budgetTaskId}/result`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${tokenB}`,
-        "Content-Type": "application/json",
+    // B posts successful receipt → relay creates settlement audit record
+    const receipt = await makeReceipt(settlementTaskId, motebitIdB, relayDeviceIdB, keypairB);
+    const resultRes = await relay.app.request(
+      `/agent/${motebitIdB}/task/${settlementTaskId}/result`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${tokenB}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(receipt),
       },
-      body: JSON.stringify(receipt),
-    });
+    );
     expect(resultRes.status).toBe(200);
 
-    // Budget after receipt: locked → settled
-    const budgetAfterRes = await relay.app.request(`/agent/${motebitIdB}/budget`, {
+    // Settlement audit: verify the relay recorded the settlement with platform fee
+    const settlementsRes = await relay.app.request(`/agent/${motebitIdB}/settlements`, {
       headers: { Authorization: `Bearer ${RELAY_MASTER_TOKEN}` },
     });
-    expect(budgetAfterRes.status).toBe(200);
-    const budgetAfter = (await budgetAfterRes.json()) as {
-      summary: { total_locked: number; total_settled: number };
-      allocations: Array<Record<string, unknown>>;
+    expect(settlementsRes.status).toBe(200);
+    const data = (await settlementsRes.json()) as {
+      summary: { total_settled: number; total_platform_fees: number; settlement_count: number };
+      settlements: Array<Record<string, unknown>>;
     };
-    expect(budgetAfter.summary.total_locked).toBe(0);
-    expect(budgetAfter.summary.total_settled).toBeGreaterThan(0);
+    expect(data.summary.settlement_count).toBeGreaterThan(0);
+    expect(data.summary.total_settled).toBeGreaterThan(0);
+    expect(data.summary.total_platform_fees).toBeGreaterThan(0);
 
-    const settledAlloc = budgetAfter.allocations.find(
-      (a) => a.task_id === budgetTaskId && a.settlement_id != null,
-    );
-    expect(settledAlloc).toBeDefined();
+    // Verify individual settlement record
+    const settlement = data.settlements.find((s) => s.allocation_id === `x402-${settlementTaskId}`);
+    expect(settlement).toBeDefined();
+    // Gross = unit_cost / (1 - 0.05) = $1.052632 (what x402 charges the caller).
+    // Fee = gross * 0.05 = ~$0.052632 → agent receives ~$1.00 (their listed price).
+    expect(settlement!.platform_fee).toBeCloseTo(0.052632, 4);
+    expect(settlement!.platform_fee_rate).toBe(0.05);
+    expect(settlement!.amount_settled).toBeCloseTo(1.0, 4);
+    expect(settlement!.status).toBe("completed");
   });
 
   // =========================================================================
@@ -1045,5 +1046,252 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
     const candidateB = body.candidates.find((c) => c.motebit_id === motebitIdB);
     expect(candidateB).toBeDefined();
     expect(typeof candidateB!.composite).toBe("number");
+  });
+});
+
+// =========================================================================
+// x402 Payment Gate — isolated test with its own relay to avoid cascade
+// =========================================================================
+
+describe("x402 Payment Gate", () => {
+  let relay: SyncRelay;
+  let keypairA: KeyPair;
+  let keypairB: KeyPair;
+  let motebitIdA: string;
+  let motebitIdB: string;
+  let relayDeviceIdA: string;
+  let relayDeviceIdB: string;
+  const MASTER_TOKEN = "x402-test-token";
+
+  beforeAll(async () => {
+    relay = await createSyncRelay({
+      dbPath: ":memory:",
+      apiToken: MASTER_TOKEN,
+      enableDeviceAuth: true,
+      verifyDeviceSignature: true,
+      x402: {
+        payToAddress: "0x0000000000000000000000000000000000000000",
+        network: "eip155:84532",
+        testnet: true,
+      },
+    });
+
+    keypairA = await generateKeypair();
+    keypairB = await generateKeypair();
+
+    const pubKeyHexA = bytesToHex(keypairA.publicKey);
+    const pubKeyHexB = bytesToHex(keypairB.publicKey);
+
+    // Bootstrap both agents
+    const resA = await relay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        motebit_id: crypto.randomUUID(),
+        device_id: crypto.randomUUID(),
+        public_key: pubKeyHexA,
+      }),
+    });
+    const bodyA = (await resA.json()) as { motebit_id: string; device_id: string };
+    motebitIdA = bodyA.motebit_id;
+    relayDeviceIdA = bodyA.device_id;
+
+    const resB = await relay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        motebit_id: crypto.randomUUID(),
+        device_id: crypto.randomUUID(),
+        public_key: pubKeyHexB,
+      }),
+    });
+    const bodyB = (await resB.json()) as { motebit_id: string; device_id: string };
+    motebitIdB = bodyB.motebit_id;
+    relayDeviceIdB = bodyB.device_id;
+  });
+
+  afterAll(() => {
+    relay.close();
+  });
+
+  it("priced agent with pay_to_address returns 402 to unpaid caller", async () => {
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+
+    // B registers a priced listing WITH pay_to_address → triggers x402 gate
+    const listingRes = await relay.app.request(`/api/v1/agents/${motebitIdB}/listing`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenB}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        capabilities: ["web_search"],
+        pricing: [{ capability: "web_search", unit_cost: 0.5, currency: "USD", per: "task" }],
+        sla: { max_latency_ms: 2000, availability_guarantee: 0.99 },
+        description: "Priced agent for x402 gate test",
+        pay_to_address: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+      }),
+    });
+    expect(listingRes.status).toBe(200);
+
+    // A submits task WITHOUT x402 payment header → should get 402
+    const taskRes = await relay.app.request(`/agent/${motebitIdB}/task`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenA}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt: "This should require payment",
+        submitted_by: motebitIdA,
+        required_capabilities: ["web_search"],
+      }),
+    });
+
+    expect(taskRes.status).toBe(402);
+    const body = (await taskRes.json()) as {
+      error?: string;
+      estimated_cost?: number;
+      platform_fee_rate?: number;
+    };
+    expect(body.error).toBe("payment_required");
+    expect(body.estimated_cost).toBe(0.5);
+    expect(body.platform_fee_rate).toBe(0.05);
+  });
+
+  it("free agent (no pay_to_address) bypasses x402 gate", async () => {
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+
+    // B updates listing WITHOUT pay_to_address → x402 gate should not apply
+    const listingRes = await relay.app.request(`/api/v1/agents/${motebitIdB}/listing`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenB}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        capabilities: ["web_search"],
+        pricing: [{ capability: "web_search", unit_cost: 0.5, currency: "USD", per: "task" }],
+        sla: { max_latency_ms: 2000, availability_guarantee: 0.99 },
+        description: "Free agent — no pay_to_address",
+        // No pay_to_address → getAgentPricing returns null → bypass x402
+      }),
+    });
+    expect(listingRes.status).toBe(200);
+
+    // Connect B so task can route
+    const bWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+    relay.connections.set(motebitIdB, [
+      { ws: bWs as never, deviceId: relayDeviceIdB, capabilities: ["web_search"] },
+    ]);
+
+    // A submits task — should succeed without payment
+    const taskRes = await relay.app.request(`/agent/${motebitIdB}/task`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenA}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt: "This should be free",
+        submitted_by: motebitIdA,
+        required_capabilities: ["web_search"],
+      }),
+    });
+    expect(taskRes.status).toBe(201);
+
+    relay.connections.delete(motebitIdB);
+  });
+
+  it("price snapshot is captured at submission time", async () => {
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+
+    // B registers a priced listing (no pay_to_address so task goes through free,
+    // but price_snapshot should still be recorded for settlement audit)
+    await relay.app.request(`/api/v1/agents/${motebitIdB}/listing`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenB}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        capabilities: ["web_search"],
+        pricing: [{ capability: "web_search", unit_cost: 2.0, currency: "USD", per: "task" }],
+        sla: { max_latency_ms: 2000, availability_guarantee: 0.99 },
+        description: "Price snapshot test agent",
+        // No pay_to_address → bypasses x402 gate
+      }),
+    });
+
+    // Connect B
+    const bWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+    relay.connections.set(motebitIdB, [
+      { ws: bWs as never, deviceId: relayDeviceIdB, capabilities: ["web_search"] },
+    ]);
+
+    // A submits task at $2.00 price
+    const taskRes = await relay.app.request(`/agent/${motebitIdB}/task`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenA}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt: "Price snapshot test",
+        submitted_by: motebitIdA,
+        required_capabilities: ["web_search"],
+      }),
+    });
+    expect(taskRes.status).toBe(201);
+    const { task_id: snapshotTaskId } = (await taskRes.json()) as { task_id: string };
+
+    // Agent B changes price to $5.00 AFTER task submission
+    await relay.app.request(`/api/v1/agents/${motebitIdB}/listing`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenB}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        capabilities: ["web_search"],
+        pricing: [{ capability: "web_search", unit_cost: 5.0, currency: "USD", per: "task" }],
+        sla: { max_latency_ms: 2000, availability_guarantee: 0.99 },
+        description: "Price changed after submission",
+      }),
+    });
+
+    // B posts receipt → settlement should use the ORIGINAL $2.00 price, not $5.00
+    const receipt = await makeReceipt(snapshotTaskId, motebitIdB, relayDeviceIdB, keypairB);
+    await relay.app.request(`/agent/${motebitIdB}/task/${snapshotTaskId}/result`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenB}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(receipt),
+    });
+
+    // Check settlement record uses snapshot price
+    const settlementsRes = await relay.app.request(`/agent/${motebitIdB}/settlements`, {
+      headers: { Authorization: `Bearer ${MASTER_TOKEN}` },
+    });
+    expect(settlementsRes.status).toBe(200);
+    const data = (await settlementsRes.json()) as {
+      settlements: Array<{ allocation_id: string; amount_settled: number; platform_fee: number }>;
+    };
+
+    const settlement = data.settlements.find((s) => s.allocation_id === `x402-${snapshotTaskId}`);
+    expect(settlement).toBeDefined();
+    // Gross = $2.00 / (1 - 0.05) = ~$2.105263 (what x402 charged)
+    // Fee = gross * 0.05 = ~$0.105263
+    // Net = gross - fee = ~$2.0 (agent gets their unit_cost back)
+    // The key assertion: settlement is based on $2.00 snapshot, NOT current $5.00
+    expect(settlement!.amount_settled).toBeCloseTo(2.0, 1); // Would be ~$5.0 if using $5.00
+    expect(settlement!.platform_fee).toBeCloseTo(0.105263, 4); // Would be ~$0.263 if using $5.00
+
+    relay.connections.delete(motebitIdB);
   });
 });

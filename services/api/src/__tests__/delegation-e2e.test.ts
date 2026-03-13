@@ -100,7 +100,15 @@ describe("Delegation E2E", () => {
   let originalFetch: typeof globalThis.fetch;
 
   beforeEach(async () => {
-    relay = await createSyncRelay({ apiToken: API_TOKEN, enableDeviceAuth: false });
+    relay = await createSyncRelay({
+      apiToken: API_TOKEN,
+      enableDeviceAuth: false,
+      x402: {
+        payToAddress: "0x0000000000000000000000000000000000000000",
+        network: "eip155:84532",
+        testnet: true,
+      },
+    });
 
     // Generate a real Ed25519 keypair for the worker agent
     workerKeypair = await generateKeypair();
@@ -892,9 +900,9 @@ describe("Delegation E2E", () => {
     expect(body.error).toContain("does not match");
   });
 
-  // === Budget Verification in Delegation Flow ===
+  // === Settlement Verification in Delegation Flow ===
 
-  it("budget lock + settlement on delegation with priced service listing", async () => {
+  it("settlement audit on delegation with priced service listing", async () => {
     // Register the worker agent with a service listing that includes pricing
     await relay.app.request("/api/v1/agents/register", {
       method: "POST",
@@ -906,15 +914,15 @@ describe("Delegation E2E", () => {
       }),
     });
 
-    // Create a service listing with pricing for stdio_mcp
+    // Create a service listing with pricing for stdio_mcp ($1.00 — large enough for 5% fee)
     await relay.app.request(`/api/v1/agents/${workerMotebitId}/listing`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({
         capabilities: ["stdio_mcp"],
-        pricing: [{ capability: "stdio_mcp", unit_cost: 0.05, currency: "USD", per: "task" }],
+        pricing: [{ capability: "stdio_mcp", unit_cost: 1.0, currency: "USD", per: "task" }],
         sla: { max_latency_ms: 3000, availability_guarantee: 0.99 },
-        description: "Worker agent for budget test",
+        description: "Worker agent for settlement test",
       }),
     });
 
@@ -924,29 +932,17 @@ describe("Delegation E2E", () => {
       { ws: workerWs as never, deviceId: "worker-device", capabilities: ["stdio_mcp"] },
     ]);
 
-    // Submit task with max_budget — this should trigger budget lock
+    // Submit task — x402 handles payment at HTTP layer
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({
-        prompt: "Budget test task",
+        prompt: "Settlement test task",
         required_capabilities: ["stdio_mcp"],
-        max_budget: 1.0,
       }),
     });
     expect(taskRes.status).toBe(201);
     const { task_id: taskId } = (await taskRes.json()) as { task_id: string };
-
-    // Check budget BEFORE receipt — should show locked funds
-    const budgetBeforeRes = await relay.app.request(`/agent/${MOTEBIT_ID}/budget`, {
-      headers: AUTH_HEADER,
-    });
-    expect(budgetBeforeRes.status).toBe(200);
-    const budgetBefore = (await budgetBeforeRes.json()) as {
-      summary: { total_locked: number; total_settled: number };
-      allocations: Array<Record<string, unknown>>;
-    };
-    expect(budgetBefore.summary.total_locked).toBeGreaterThan(0);
 
     // Worker posts successful receipt
     const receipt = await makeReceipt(taskId);
@@ -957,20 +953,21 @@ describe("Delegation E2E", () => {
     });
     expect(receiptRes.status).toBe(200);
 
-    // Check budget AFTER receipt — should show settlement
-    const budgetAfterRes = await relay.app.request(`/agent/${MOTEBIT_ID}/budget`, {
+    // Verify settlement via /settlements endpoint
+    const settleRes = await relay.app.request(`/agent/${MOTEBIT_ID}/settlements`, {
       headers: AUTH_HEADER,
     });
-    expect(budgetAfterRes.status).toBe(200);
-    const budgetAfter = (await budgetAfterRes.json()) as {
-      summary: { total_locked: number; total_settled: number };
-      allocations: Array<Record<string, unknown>>;
+    expect(settleRes.status).toBe(200);
+    const settleBody = (await settleRes.json()) as {
+      summary: { total_settled: number; total_platform_fees: number; settlement_count: number };
+      settlements: Array<Record<string, unknown>>;
     };
-    // After settlement, locked amount should decrease (allocation moved from locked to settled)
-    expect(budgetAfter.summary.total_locked).toBe(0);
-    expect(budgetAfter.summary.total_settled).toBeGreaterThan(0);
-    // At least one allocation should show settlement info
-    const settledAlloc = budgetAfter.allocations.find((a) => a.settlement_id != null);
-    expect(settledAlloc).toBeDefined();
+    expect(settleBody.summary.settlement_count).toBeGreaterThanOrEqual(1);
+    const s = settleBody.settlements.find((r) => r.allocation_id === `x402-${taskId}`);
+    expect(s).toBeDefined();
+    expect(s!.status).toBe("completed");
+    // Gross = $1.00 / (1 - 0.05) = ~$1.052632. Fee = gross * 0.05 = ~$0.052632. Net = ~$1.00.
+    expect(s!.platform_fee).toBeCloseTo(0.052632, 4);
+    expect(s!.amount_settled).toBeCloseTo(1.0, 4);
   });
 });

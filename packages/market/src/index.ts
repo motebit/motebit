@@ -4,8 +4,7 @@ export { allocateBudget, estimateCost } from "./budget.js";
 export type { AllocationRequest } from "./budget.js";
 export { computeServiceReputation } from "./reputation.js";
 export type { ReputationSnapshot } from "./reputation.js";
-export { settleOnReceipt, InMemorySettlementAdapter } from "./settlement.js";
-export type { SettlementAdapter } from "./settlement.js";
+export { settleOnReceipt } from "./settlement.js";
 export {
   trustAdd,
   trustMultiply,
@@ -18,5 +17,6 @@ export {
   TRUST_LEVEL_SCORES,
   evaluateTrustTransition,
   DEFAULT_TRUST_THRESHOLDS,
+  PLATFORM_FEE_RATE,
 } from "@motebit/sdk";
 export type { TrustTransitionThresholds } from "@motebit/sdk";

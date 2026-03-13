@@ -22,7 +22,15 @@ async function createTestRelay(overrides?: {
   enableDeviceAuth?: boolean;
   verifyDeviceSignature?: boolean;
 }): Promise<SyncRelay> {
-  return createSyncRelay({ apiToken: API_TOKEN, ...overrides });
+  return createSyncRelay({
+    apiToken: API_TOKEN,
+    x402: {
+      payToAddress: "0x0000000000000000000000000000000000000000",
+      network: "eip155:84532",
+      testnet: true,
+    },
+    ...overrides,
+  });
 }
 
 function makeEvent(motebitId: string, clock: number): EventLogEntry {
@@ -1031,7 +1039,7 @@ describe("Sync Relay — agent protocol", () => {
     expect(body.task.step_id).toBe("step-123");
   });
 
-  it("budget lock + settlement: full cycle on task with pricing", async () => {
+  it("settlement audit: priced listing + receipt → settlement with 5% fee", async () => {
     // Create a service agent with pricing
     const serviceKeypair = await generateKeypair();
     const servicePubHex = bytesToHex(serviceKeypair.publicKey);
@@ -1043,7 +1051,6 @@ describe("Sync Relay — agent protocol", () => {
     });
     const { motebit_id: serviceMotebitId } = (await idRes.json()) as { motebit_id: string };
 
-    // Register device with public key (for receipt verification)
     const devRes = await relay.app.request("/device/register", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -1055,13 +1062,11 @@ describe("Sync Relay — agent protocol", () => {
     });
     const { device_id: serviceDeviceId } = (await devRes.json()) as { device_id: string };
 
-    // Create a signed token so we can register in the agent registry
     const serviceToken = await createSignedToken(
       { mid: serviceMotebitId, did: serviceDeviceId, iat: Date.now(), exp: Date.now() + 300000 },
       serviceKeypair.privateKey,
     );
 
-    // Register agent with capabilities
     await relay.app.request("/api/v1/agents/register", {
       method: "POST",
       headers: {
@@ -1074,7 +1079,7 @@ describe("Sync Relay — agent protocol", () => {
       }),
     });
 
-    // Register service listing with pricing
+    // $1.00 listing — large enough for 5% fee to survive rounding
     await relay.app.request(`/api/v1/agents/${serviceMotebitId}/listing`, {
       method: "POST",
       headers: {
@@ -1083,46 +1088,26 @@ describe("Sync Relay — agent protocol", () => {
       },
       body: JSON.stringify({
         capabilities: ["web_search"],
-        pricing: [{ capability: "web_search", unit_cost: 0.05, currency: "USD", per: "task" }],
+        pricing: [{ capability: "web_search", unit_cost: 1.0, currency: "USD", per: "task" }],
       }),
     });
 
-    // Connect the service agent's device so routing can reach it
     const serviceWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
     relay.connections.set(serviceMotebitId, [
       { ws: serviceWs as never, deviceId: serviceDeviceId, capabilities: ["web_search"] },
     ]);
 
-    // Submit task with max_budget — should trigger budget lock via scored routing
+    // Submit task — x402 handles payment at HTTP layer, no max_budget needed
     const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({
         prompt: "Search for something",
         required_capabilities: ["web_search"],
-        max_budget: 1.0,
-        currency: "USD",
       }),
     });
     expect(submitRes.status).toBe(201);
     const { task_id } = (await submitRes.json()) as { task_id: string };
-
-    // Verify budget was locked
-    const budgetRes = await relay.app.request(`/agent/${MOTEBIT_ID}/budget`, {
-      method: "GET",
-      headers: AUTH_HEADER,
-    });
-    expect(budgetRes.status).toBe(200);
-    const budget = (await budgetRes.json()) as {
-      summary: { total_locked: number; total_settled: number };
-      allocations: Array<Record<string, unknown>>;
-    };
-    expect(budget.summary.total_locked).toBeGreaterThan(0);
-    expect(budget.allocations.length).toBeGreaterThanOrEqual(1);
-    const alloc = budget.allocations.find((a) => a.task_id === task_id);
-    expect(alloc).toBeDefined();
-    expect(alloc!.status).toBe("locked");
-    expect(alloc!.amount_locked).toBeGreaterThan(0);
 
     // Service agent completes the task with a signed receipt
     const unsigned = {
@@ -1147,25 +1132,27 @@ describe("Sync Relay — agent protocol", () => {
     });
     expect(resultRes.status).toBe(200);
 
-    // Verify settlement occurred
-    const budgetAfter = (await (
-      await relay.app.request(`/agent/${MOTEBIT_ID}/budget`, {
-        method: "GET",
-        headers: AUTH_HEADER,
-      })
-    ).json()) as {
-      summary: { total_locked: number; total_settled: number };
-      allocations: Array<Record<string, unknown>>;
+    // Verify settlement via /settlements endpoint
+    const settleRes = await relay.app.request(`/agent/${MOTEBIT_ID}/settlements`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(settleRes.status).toBe(200);
+    const settleBody = (await settleRes.json()) as {
+      summary: { total_settled: number; total_platform_fees: number; settlement_count: number };
+      settlements: Array<Record<string, unknown>>;
     };
-    expect(budgetAfter.summary.total_settled).toBeGreaterThan(0);
-    const settledAlloc = budgetAfter.allocations.find((a) => a.task_id === task_id);
-    expect(settledAlloc!.status).toBe("settled");
-    expect(settledAlloc!.settlement_status).toBe("completed");
-    expect(settledAlloc!.amount_settled).toBeGreaterThan(0);
+    expect(settleBody.summary.settlement_count).toBeGreaterThanOrEqual(1);
+    const s = settleBody.settlements.find((r) => r.allocation_id === `x402-${task_id}`);
+    expect(s).toBeDefined();
+    expect(s!.status).toBe("completed");
+    // Gross = $1.00 / (1 - 0.05) = ~$1.052632. Fee = gross * 0.05 = ~$0.052632. Net = ~$1.00.
+    expect(s!.platform_fee).toBeCloseTo(0.052632, 4);
+    expect(s!.amount_settled).toBeCloseTo(1.0, 4);
   });
 
-  it("budget lock rejects underfunded tasks", async () => {
-    // Create and register a service agent with expensive pricing
+  it("priced task without x402 payment returns 402", async () => {
+    // Create a priced agent with pay_to_address so x402 gate kicks in
     const serviceKeypair = await generateKeypair();
     const servicePubHex = bytesToHex(serviceKeypair.publicKey);
 
@@ -1213,6 +1200,7 @@ describe("Sync Relay — agent protocol", () => {
       body: JSON.stringify({
         capabilities: ["code_exec"],
         pricing: [{ capability: "code_exec", unit_cost: 5.0, currency: "USD", per: "task" }],
+        pay_to_address: "0x1234567890abcdef1234567890abcdef12345678",
       }),
     });
 
@@ -1221,20 +1209,19 @@ describe("Sync Relay — agent protocol", () => {
       { ws: serviceWs as never, deviceId: expDeviceId, capabilities: ["code_exec"] },
     ]);
 
-    // Submit with budget too small for the pricing
-    const res = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+    // Submit without x402 payment header — should get 402
+    const res = await relay.app.request(`/agent/${serviceMotebitId}/task`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({
         prompt: "Run expensive code",
         required_capabilities: ["code_exec"],
-        max_budget: 1.0,
       }),
     });
     expect(res.status).toBe(402);
   });
 
-  it("settlement refunds on failed receipt", async () => {
+  it("settlement audit: failed receipt → refund with zero fee", async () => {
     // Create service agent
     const serviceKeypair = await generateKeypair();
     const servicePubHex = bytesToHex(serviceKeypair.publicKey);
@@ -1282,7 +1269,7 @@ describe("Sync Relay — agent protocol", () => {
       },
       body: JSON.stringify({
         capabilities: ["web_search"],
-        pricing: [{ capability: "web_search", unit_cost: 0.1, currency: "USD", per: "task" }],
+        pricing: [{ capability: "web_search", unit_cost: 1.0, currency: "USD", per: "task" }],
       }),
     });
 
@@ -1291,14 +1278,13 @@ describe("Sync Relay — agent protocol", () => {
       { ws: serviceWs as never, deviceId: refDeviceId, capabilities: ["web_search"] },
     ]);
 
-    // Submit task with budget
+    // Submit task
     const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({
         prompt: "Search that fails",
         required_capabilities: ["web_search"],
-        max_budget: 1.0,
       }),
     });
     const { task_id } = (await submitRes.json()) as { task_id: string };
@@ -1325,20 +1311,21 @@ describe("Sync Relay — agent protocol", () => {
       body: JSON.stringify(receipt),
     });
 
-    // Verify refund: allocation released, settlement refunded
-    const budget = (await (
-      await relay.app.request(`/agent/${MOTEBIT_ID}/budget`, {
-        method: "GET",
-        headers: AUTH_HEADER,
-      })
-    ).json()) as {
-      summary: { total_locked: number; total_settled: number };
-      allocations: Array<Record<string, unknown>>;
+    // Verify refund via /settlements endpoint
+    const settleRes = await relay.app.request(`/agent/${MOTEBIT_ID}/settlements`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(settleRes.status).toBe(200);
+    const settleBody = (await settleRes.json()) as {
+      summary: { total_settled: number; total_platform_fees: number };
+      settlements: Array<Record<string, unknown>>;
     };
-    const refundedAlloc = budget.allocations.find((a) => a.task_id === task_id);
-    expect(refundedAlloc!.status).toBe("released");
-    expect(refundedAlloc!.settlement_status).toBe("refunded");
-    expect(refundedAlloc!.amount_settled).toBe(0);
+    const refunded = settleBody.settlements.find((r) => r.allocation_id === `x402-${task_id}`);
+    expect(refunded).toBeDefined();
+    expect(refunded!.status).toBe("refunded");
+    expect(refunded!.amount_settled).toBe(0);
+    expect(refunded!.platform_fee).toBe(0);
   });
 
   it("POST/GET /sync/:id/plans pushes and pulls plans", async () => {
@@ -2402,7 +2389,14 @@ describe("Sync Relay — bootstrap endpoint", () => {
   let relay: SyncRelay;
 
   beforeEach(async () => {
-    relay = await createSyncRelay({ apiToken: API_TOKEN });
+    relay = await createSyncRelay({
+      apiToken: API_TOKEN,
+      x402: {
+        payToAddress: "0x0000000000000000000000000000000000000000",
+        network: "eip155:84532",
+        testnet: true,
+      },
+    });
   });
 
   afterEach(() => {

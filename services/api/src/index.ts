@@ -46,7 +46,7 @@
  *   POST /agent/:motebitId/ledger                       — submit signed execution ledger
  *   GET  /agent/:motebitId/ledger/:goalId               — retrieve signed execution ledger
  *   POST /api/v1/credentials/verify                        — verify a VerifiableCredential (public)
- *   GET  /api/v1/market/candidates?capability=&max_budget=&limit= — scored candidate list
+ *   GET  /api/v1/market/candidates?capability=&max_budget=&limit= — scored candidate list (max_budget filters, x402 handles payment)
  *   POST /api/v1/agents/bootstrap                       — register identity + device in one unauthenticated call (rate-limited)
  *
  * WebSocket protocol:
@@ -103,15 +103,10 @@ import {
   createPresentation,
 } from "@motebit/crypto";
 import type { VerifiableCredential } from "@motebit/crypto";
-import {
-  rankCandidates,
-  applyPrecisionToMarketConfig,
-  estimateCost,
-  allocateBudget,
-  settleOnReceipt,
-} from "@motebit/market";
+import { rankCandidates, applyPrecisionToMarketConfig, settleOnReceipt } from "@motebit/market";
 import type { CandidateProfile, TaskRequirements } from "@motebit/market";
 import type { CapabilityPrice, BudgetAllocation } from "@motebit/sdk";
+import { PLATFORM_FEE_RATE } from "@motebit/sdk";
 
 function hexToBytes(hex: string): Uint8Array {
   const bytes = new Uint8Array(hex.length / 2);
@@ -170,12 +165,26 @@ function canonicalJsonApi(obj: unknown): string {
 
 // === Config ===
 
+/** x402 payment configuration — the relay's settlement layer. */
+export interface X402Config {
+  /** Relay operator's wallet address — receives platform fees. */
+  payToAddress: string;
+  /** CAIP-2 network identifier (e.g. "eip155:8453" for Base mainnet, "eip155:84532" for Base Sepolia). */
+  network: string;
+  /** x402 facilitator URL. Default: "https://x402.org/facilitator" (testnet). */
+  facilitatorUrl?: string;
+  /** Whether this is testnet. Default: true. */
+  testnet?: boolean;
+}
+
 export interface SyncRelayConfig {
   dbPath?: string;
   apiToken?: string; // Legacy single token (still supported as admin/master token)
   corsOrigin?: string;
   enableDeviceAuth?: boolean; // When true, validates per-device tokens (default: true)
   verifyDeviceSignature?: boolean; // When true, uses Ed25519 signed token verification (default: true)
+  /** x402 on-chain payment for task submission. Required in production. */
+  x402: X402Config;
 }
 
 export interface ConnectedDevice {
@@ -245,13 +254,14 @@ function generatePairingCode(): string {
     .join("");
 }
 
-export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<SyncRelay> {
+export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRelay> {
   const {
     dbPath = ":memory:",
     apiToken,
     corsOrigin = "*",
     enableDeviceAuth = true,
     verifyDeviceSignature = true,
+    x402: x402Config,
   } = config;
 
   const moteDb: MotebitDatabase = await openMotebitDatabase(dbPath);
@@ -371,6 +381,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
         sla_max_latency_ms INTEGER NOT NULL DEFAULT 5000,
         sla_availability REAL NOT NULL DEFAULT 0.99,
         description   TEXT NOT NULL DEFAULT '',
+        pay_to_address TEXT,
         updated_at    INTEGER NOT NULL DEFAULT 0
       );
       CREATE INDEX IF NOT EXISTS idx_relay_listings_motebit ON relay_service_listings(motebit_id);
@@ -385,32 +396,22 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       CREATE INDEX IF NOT EXISTS idx_relay_latency_pair ON relay_latency_stats(motebit_id, remote_motebit_id);
   `);
 
-  // Budget allocation + settlement ledger tables
+  // Settlement ledger — x402 handles payment, this is the relay's accounting record
   moteDb.db.exec(`
-      CREATE TABLE IF NOT EXISTS relay_budget_allocations (
-        allocation_id TEXT PRIMARY KEY,
-        task_id TEXT NOT NULL,
-        motebit_id TEXT NOT NULL,
-        candidate_motebit_id TEXT NOT NULL,
-        goal_id TEXT NOT NULL DEFAULT '',
-        amount_locked REAL NOT NULL,
-        currency TEXT NOT NULL DEFAULT 'USD',
-        created_at INTEGER NOT NULL,
-        status TEXT NOT NULL DEFAULT 'locked'
-      );
-      CREATE INDEX IF NOT EXISTS idx_relay_budget_motebit ON relay_budget_allocations(motebit_id);
-      CREATE INDEX IF NOT EXISTS idx_relay_budget_task ON relay_budget_allocations(task_id);
-
       CREATE TABLE IF NOT EXISTS relay_settlements (
         settlement_id TEXT PRIMARY KEY,
         allocation_id TEXT NOT NULL,
+        motebit_id TEXT NOT NULL DEFAULT '',
         receipt_hash TEXT NOT NULL DEFAULT '',
         ledger_hash TEXT,
         amount_settled REAL NOT NULL,
+        platform_fee REAL NOT NULL DEFAULT 0,
+        platform_fee_rate REAL NOT NULL DEFAULT 0.05,
         status TEXT NOT NULL,
         settled_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_relay_settlements_alloc ON relay_settlements(allocation_id);
+      CREATE INDEX IF NOT EXISTS idx_relay_settlements_motebit ON relay_settlements(motebit_id);
   `);
 
   // Collaborative plan proposal tables
@@ -498,7 +499,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   // Track connected WebSocket clients per motebitId with device identity
   const connections = new Map<string, ConnectedDevice[]>();
 
-  // In-memory agent task queue: task_id → { task, receipt?, expiresAt, submitted_by? }
+  // In-memory agent task queue: task_id → { task, receipt?, expiresAt, submitted_by?, price_snapshot? }
   const TASK_TTL_MS = 10 * 60 * 1000; // 10 minutes
   const taskQueue = new Map<
     string,
@@ -506,8 +507,9 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       task: AgentTask;
       receipt?: ExecutionReceipt;
       expiresAt: number;
-      allocation_id?: string;
       submitted_by?: string;
+      /** Gross amount x402 charged at submission time (from listing price). */
+      price_snapshot?: number;
     }
   >();
 
@@ -553,6 +555,122 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   // --- Middleware ---
   app.use("*", secureHeaders());
   app.use("*", cors({ origin: corsOrigin }));
+
+  // --- x402 Payment Layer ---
+  // Task submission requires on-chain USDC payment via x402 when the agent has
+  // a priced service listing. Free agents (no listing or zero cost) pass through.
+  // The relay takes PLATFORM_FEE_RATE on every paid settlement.
+
+  // Helper: extract motebitId from task URL path
+  function extractMotebitIdFromPath(path: string): string | null {
+    const match = path.match(/\/agent\/([^/]+)\/task/);
+    return match ? match[1]! : null;
+  }
+
+  // Helper: look up agent's listing price (unit cost sum from pricing array).
+  // Returns the cost regardless of pay_to_address — used for price snapshots.
+  function getListingUnitCost(agentId: string): number {
+    const row = moteDb.db
+      .prepare(
+        "SELECT pricing FROM relay_service_listings WHERE motebit_id = ? ORDER BY updated_at DESC LIMIT 1",
+      )
+      .get(agentId) as { pricing: string } | undefined;
+    if (!row) return 0;
+    try {
+      const pricing = JSON.parse(row.pricing) as CapabilityPrice[];
+      return pricing.reduce((sum, p) => sum + (p.unit_cost ?? 0), 0);
+    } catch {
+      return 0;
+    }
+  }
+
+  // Helper: look up agent pricing for x402 gate (requires pay_to_address AND positive price).
+  function getAgentPricing(agentId: string): { unitCost: number; payTo: string } | null {
+    const row = moteDb.db
+      .prepare(
+        "SELECT pricing, pay_to_address FROM relay_service_listings WHERE motebit_id = ? ORDER BY updated_at DESC LIMIT 1",
+      )
+      .get(agentId) as { pricing: string; pay_to_address: string | null } | undefined;
+    if (!row || !row.pay_to_address) return null;
+    try {
+      const pricing = JSON.parse(row.pricing) as CapabilityPrice[];
+      const totalCost = pricing.reduce((sum, p) => sum + (p.unit_cost ?? 0), 0);
+      if (totalCost <= 0) return null;
+      return { unitCost: totalCost, payTo: row.pay_to_address };
+    } catch {
+      return null;
+    }
+  }
+
+  {
+    const { paymentMiddleware, x402ResourceServer } = await import("@x402/hono");
+    const { ExactEvmScheme } = await import("@x402/evm/exact/server");
+    const { HTTPFacilitatorClient } = await import("@x402/core/server");
+
+    const facilitatorClient = new HTTPFacilitatorClient({
+      url: x402Config.facilitatorUrl ?? "https://x402.org/facilitator",
+    });
+
+    const network = x402Config.network as `${string}:${string}`;
+    const resourceServer = new x402ResourceServer(facilitatorClient).register(
+      network,
+      new ExactEvmScheme(),
+    );
+
+    // Single DB lookup per request. The wrapper sets currentPricing before
+    // calling x402Gate; the price/payTo callbacks read it synchronously within
+    // the same tick (x402 resolves route config before any await). Safe in
+    // Node's single-threaded model — no interleaving between set and read.
+    let currentPricing: { unitCost: number; payTo: string } | null = null;
+
+    const x402Gate = paymentMiddleware(
+      {
+        "POST /agent/*/task": {
+          accepts: {
+            scheme: "exact",
+            network,
+            price: () => {
+              if (!currentPricing) return "$0";
+              const gross = currentPricing.unitCost / (1 - PLATFORM_FEE_RATE);
+              return `$${gross.toFixed(6)}`;
+            },
+            payTo: () => {
+              return currentPricing?.payTo ?? x402Config.payToAddress;
+            },
+          },
+          description: "Submit a task to a motebit agent",
+          mimeType: "application/json",
+          unpaidResponseBody: (ctx) => {
+            const agentId = extractMotebitIdFromPath(ctx.path);
+            return {
+              contentType: "application/json",
+              body: {
+                error: "payment_required",
+                message: "Task submission requires USDC payment via x402",
+                agent: agentId,
+                estimated_cost: currentPricing?.unitCost ?? 0,
+                platform_fee_rate: PLATFORM_FEE_RATE,
+                network: x402Config.network,
+              },
+            };
+          },
+        },
+      },
+      resourceServer,
+      { testnet: x402Config.testnet ?? true },
+    );
+
+    // Wrap x402: single getAgentPricing() call per request.
+    // Free tasks (no listing / zero price) bypass payment gate entirely.
+    app.use("*", async (c, next) => {
+      const isTaskPost = c.req.method === "POST" && /\/agent\/[^/]+\/task/.test(c.req.path);
+      if (!isTaskPost) return next();
+      const agentId = extractMotebitIdFromPath(c.req.path);
+      currentPricing = agentId ? getAgentPricing(agentId) : null;
+      if (!currentPricing) return next(); // Free — no x402
+      return x402Gate(c, next);
+    });
+  }
 
   // --- Rate Limiting ---
 
@@ -607,7 +725,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   app.use("/api/v1/agents/:motebitId/credentials", rateLimitMiddleware(readLimiter));
   app.use("/api/v1/agents/:motebitId/listing", rateLimitMiddleware(readLimiter));
   app.use("/agent/:motebitId/capabilities", rateLimitMiddleware(readLimiter));
-  app.use("/agent/:motebitId/budget", rateLimitMiddleware(readLimiter));
+  app.use("/agent/:motebitId/settlements", rateLimitMiddleware(readLimiter));
 
   // Write endpoints: task submission, result, ledger (30 req/min)
   app.use("/agent/:motebitId/task", rateLimitMiddleware(writeLimiter));
@@ -1310,26 +1428,33 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   app.post("/api/v1/credentials/:motebitId/reputation", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
 
-    // Compute reputation from stored execution receipts
-    const receipts = moteDb.db
+    // Compute reputation from settlement records and latency stats
+    const settlements = moteDb.db
       .prepare(
-        `SELECT * FROM agent_tasks WHERE motebit_id = ? AND status = 'completed' ORDER BY submitted_at DESC LIMIT 1000`,
+        `SELECT status, settled_at FROM relay_settlements
+         WHERE motebit_id = ?
+         ORDER BY settled_at DESC LIMIT 1000`,
       )
       .all(motebitId) as Array<{
       status: string;
-      submitted_at: number;
-      wall_clock_ms: number | null;
+      settled_at: number;
     }>;
 
-    if (receipts.length === 0) {
+    if (settlements.length === 0) {
       return c.json({ error: "No task history for this agent" }, 404);
     }
 
-    const succeeded = receipts.filter((r) => r.status === "completed").length;
-    const successRate = succeeded / receipts.length;
-    const latencies = receipts.filter((r) => r.wall_clock_ms != null).map((r) => r.wall_clock_ms!);
+    const succeeded = settlements.filter((r) => r.status === "completed").length;
+    const successRate = succeeded / settlements.length;
+    const latencies = moteDb.db
+      .prepare(
+        `SELECT latency_ms FROM relay_latency_stats
+         WHERE remote_motebit_id = ?
+         ORDER BY recorded_at DESC LIMIT 1000`,
+      )
+      .all(motebitId) as Array<{ latency_ms: number }>;
     const avgLatency =
-      latencies.length > 0 ? latencies.reduce((a, b) => a + b, 0) / latencies.length : 0;
+      latencies.length > 0 ? latencies.reduce((a, b) => a + b.latency_ms, 0) / latencies.length : 0;
 
     // Look up agent's public key for did:key subject
     const identity = await identityManager.load(motebitId);
@@ -1344,7 +1469,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       {
         success_rate: successRate,
         avg_latency_ms: avgLatency,
-        task_count: receipts.length,
+        task_count: settlements.length,
         trust_score: successRate, // Simple: trust = success rate for now
         availability: 1.0, // Relay can't measure this yet
         measured_at: Date.now(),
@@ -2057,9 +2182,10 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       await next();
     });
 
-    // Auth middleware for ledger routes — master token required
+    // Auth middleware for ledger and settlement routes — master token required
     app.use("/agent/*/ledger", bearerAuth({ token: apiToken }));
     app.use("/agent/*/ledger/*", bearerAuth({ token: apiToken }));
+    app.use("/agent/*/settlements", bearerAuth({ token: apiToken }));
   }
 
   // --- Shared: build CandidateProfile[] from relay DB ---
@@ -2175,8 +2301,6 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       wall_clock_ms?: number;
       required_capabilities?: string[];
       step_id?: string;
-      max_budget?: number;
-      currency?: string;
       /** Optional: requesting agent's exploration drive [0-1] from intelligence gradient. */
       exploration_drive?: number;
       /** Optional: agent IDs to exclude from routing (failed on previous attempts). */
@@ -2210,7 +2334,21 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
     const submittedBy = callerMotebitId ?? body.submitted_by;
 
-    taskQueue.set(taskId, { task, expiresAt: now + TASK_TTL_MS, submitted_by: submittedBy });
+    // Snapshot the listing price at submission time so the settlement audit
+    // matches what x402 actually charged. If the agent updates pricing between
+    // submission and receipt delivery, the snapshot ensures consistency.
+    const unitCostAtSubmission = getListingUnitCost(motebitId);
+    const priceSnapshot =
+      unitCostAtSubmission > 0
+        ? unitCostAtSubmission / (1 - PLATFORM_FEE_RATE) // gross = what x402 charged (unit_cost + platform fee)
+        : undefined;
+
+    taskQueue.set(taskId, {
+      task,
+      expiresAt: now + TASK_TTL_MS,
+      submitted_by: submittedBy,
+      price_snapshot: priceSnapshot,
+    });
 
     const requiredCaps = task.required_capabilities ?? [];
     const payload = JSON.stringify({ type: "task_request", task });
@@ -2219,11 +2357,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     // Phase 1: Scored routing — find best service agents from listings
     if (requiredCaps.length > 0) {
       try {
-        const { profiles, requirements } = buildCandidateProfiles(
-          requiredCaps[0],
-          body.max_budget,
-          20,
-        );
+        const { profiles, requirements } = buildCandidateProfiles(requiredCaps[0], undefined, 20);
         // Narrow to candidates matching ALL required capabilities (not just the first)
         const multiCapProfiles =
           requiredCaps.length > 1
@@ -2254,63 +2388,12 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
             {
               ...requirements,
               required_capabilities: requiredCaps,
-              max_budget: body.max_budget,
             },
             marketConfig,
           );
           const selected = ranked.filter((r) => r.selected && r.composite > 0);
 
           if (selected.length > 0) {
-            // Budget lock: if max_budget is set, estimate cost and lock funds before routing.
-            // The top-ranked candidate's pricing determines the locked amount.
-            const topCandidateId = selected[0]!.motebit_id as string;
-            const topProfile = eligibleProfiles.find(
-              (p) => (p.motebit_id as string) === topCandidateId,
-            );
-            if (body.max_budget != null && body.max_budget > 0 && topProfile?.listing?.pricing) {
-              const cost = estimateCost(topProfile.listing.pricing, requiredCaps);
-              if (cost.amount > 0) {
-                const allocationId = asAllocationId(crypto.randomUUID());
-                const allocation = allocateBudget(
-                  {
-                    goal_id: asGoalId(body.step_id ?? taskId),
-                    candidate_motebit_id: topCandidateId as unknown as MotebitId,
-                    estimated_cost: cost.amount,
-                    currency: cost.currency,
-                    risk_factor: 0.1,
-                  },
-                  body.max_budget,
-                  allocationId,
-                );
-                if (!allocation) {
-                  throw new HTTPException(402, {
-                    message: `Insufficient budget: task requires ~${cost.amount} ${cost.currency}, available ${body.max_budget}`,
-                  });
-                }
-                // Persist the budget lock
-                moteDb.db
-                  .prepare(
-                    `INSERT INTO relay_budget_allocations
-                     (allocation_id, task_id, motebit_id, candidate_motebit_id, goal_id, amount_locked, currency, created_at, status)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                  )
-                  .run(
-                    allocation.allocation_id,
-                    taskId,
-                    motebitId,
-                    allocation.candidate_motebit_id,
-                    allocation.goal_id,
-                    allocation.amount_locked,
-                    allocation.currency,
-                    allocation.created_at,
-                    allocation.status,
-                  );
-                // Track allocation on the task entry for settlement on receipt
-                const queueEntry = taskQueue.get(taskId);
-                if (queueEntry) queueEntry.allocation_id = allocation.allocation_id as string;
-              }
-            }
-
             const selectedIds = new Set(selected.map((s) => s.motebit_id as string));
             // Route to connected devices belonging to selected agents
             for (const [peerId, peers] of connections) {
@@ -2504,62 +2587,56 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       }
     }
 
-    // Settlement: if a budget was locked for this task, settle based on receipt status
-    if (entry.allocation_id) {
+    // Settlement audit: record the receipt settlement with platform fee.
+    // x402 handles the actual on-chain money movement; this is the relay's ledger.
+    //
+    // Uses the price_snapshot captured at task submission time so the relay's
+    // accounting matches what x402 actually charged. If the agent changed pricing
+    // between submission and receipt delivery, we settle at the original price.
+    {
       try {
-        const allocRow = moteDb.db
-          .prepare("SELECT * FROM relay_budget_allocations WHERE allocation_id = ?")
-          .get(entry.allocation_id) as
-          | {
-              allocation_id: string;
-              goal_id: string;
-              candidate_motebit_id: string;
-              amount_locked: number;
-              currency: string;
-              created_at: number;
-              status: string;
-            }
-          | undefined;
+        // Gross amount = what x402 charged the caller (unit_cost + platform fee).
+        // Prefers the snapshot captured at submission time; falls back to current
+        // listing price for tasks submitted before snapshotting was deployed.
+        const fallbackUnitCost = getListingUnitCost(receipt.motebit_id as string);
+        const grossAmount =
+          entry.price_snapshot ??
+          (fallbackUnitCost > 0 ? fallbackUnitCost / (1 - PLATFORM_FEE_RATE) : 0);
 
-        if (allocRow && allocRow.status === "locked") {
-          const allocation: BudgetAllocation = {
-            allocation_id: asAllocationId(allocRow.allocation_id),
-            goal_id: asGoalId(allocRow.goal_id),
-            candidate_motebit_id: allocRow.candidate_motebit_id as MotebitId,
-            amount_locked: allocRow.amount_locked,
-            currency: allocRow.currency,
-            created_at: allocRow.created_at,
-            status: "locked",
-          };
+        const settlementId = asSettlementId(crypto.randomUUID());
+        const allocationId = asAllocationId(`x402-${taskId}`);
+        const allocation: BudgetAllocation = {
+          allocation_id: allocationId,
+          goal_id: asGoalId(taskId),
+          candidate_motebit_id: receipt.motebit_id as MotebitId,
+          amount_locked: grossAmount,
+          currency: "USDC",
+          created_at: receipt.submitted_at ?? Date.now(),
+          status: "settled",
+        };
 
-          const settlementId = asSettlementId(crypto.randomUUID());
-          const settlement = settleOnReceipt(allocation, receipt, null, settlementId);
+        const settlement = settleOnReceipt(allocation, receipt, null, settlementId);
 
-          // Persist settlement record
-          moteDb.db
-            .prepare(
-              `INSERT INTO relay_settlements
-               (settlement_id, allocation_id, receipt_hash, ledger_hash, amount_settled, status, settled_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            )
-            .run(
-              settlement.settlement_id,
-              settlement.allocation_id,
-              settlement.receipt_hash,
-              settlement.ledger_hash,
-              settlement.amount_settled,
-              settlement.status,
-              settlement.settled_at,
-            );
-
-          // Update allocation status
-          const newStatus = settlement.status === "refunded" ? "released" : "settled";
-          moteDb.db
-            .prepare("UPDATE relay_budget_allocations SET status = ? WHERE allocation_id = ?")
-            .run(newStatus, entry.allocation_id);
-        }
+        moteDb.db
+          .prepare(
+            `INSERT INTO relay_settlements
+             (settlement_id, allocation_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            settlement.settlement_id,
+            settlement.allocation_id,
+            motebitId,
+            settlement.receipt_hash,
+            settlement.ledger_hash,
+            settlement.amount_settled,
+            settlement.platform_fee,
+            settlement.platform_fee_rate,
+            settlement.status,
+            settlement.settled_at,
+          );
       } catch {
-        // Best-effort settlement — don't block receipt delivery on accounting errors
+        // Best-effort settlement audit — don't block receipt delivery on accounting errors
       }
     }
 
@@ -2654,41 +2731,35 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     return c.json({ status: entry.task.status, credential_id });
   });
 
-  // GET /agent/:motebitId/budget — budget allocations and settlements for this motebit
-  app.get("/agent/:motebitId/budget", async (c) => {
+  // GET /agent/:motebitId/settlements — settlement history for this agent
+  app.get("/agent/:motebitId/settlements", async (c) => {
     const mid = asMotebitId(c.req.param("motebitId"));
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
 
-    const allocations = moteDb.db
+    const settlements = moteDb.db
       .prepare(
-        `SELECT a.*, s.settlement_id, s.amount_settled, s.status AS settlement_status, s.settled_at
-         FROM relay_budget_allocations a
-         LEFT JOIN relay_settlements s ON a.allocation_id = s.allocation_id
-         WHERE a.motebit_id = ?
-         ORDER BY a.created_at DESC
+        `SELECT * FROM relay_settlements
+         WHERE motebit_id = ?
+         ORDER BY settled_at DESC
          LIMIT ?`,
       )
       .all(mid, limit) as Array<Record<string, unknown>>;
 
-    const totalLocked = moteDb.db
+    const totals = moteDb.db
       .prepare(
-        "SELECT COALESCE(SUM(amount_locked), 0) AS total FROM relay_budget_allocations WHERE motebit_id = ? AND status = 'locked'",
+        `SELECT
+           COALESCE(SUM(amount_settled), 0) AS total_settled,
+           COALESCE(SUM(platform_fee), 0) AS total_platform_fees,
+           COUNT(*) AS settlement_count
+         FROM relay_settlements
+         WHERE motebit_id = ?`,
       )
-      .get(mid) as { total: number };
-
-    const totalSettled = moteDb.db
-      .prepare(
-        "SELECT COALESCE(SUM(amount_settled), 0) AS total FROM relay_settlements s JOIN relay_budget_allocations a ON s.allocation_id = a.allocation_id WHERE a.motebit_id = ?",
-      )
-      .get(mid) as { total: number };
+      .get(mid) as { total_settled: number; total_platform_fees: number; settlement_count: number };
 
     return c.json({
       motebit_id: mid,
-      summary: {
-        total_locked: totalLocked.total,
-        total_settled: totalSettled.total,
-      },
-      allocations,
+      summary: totals,
+      settlements,
     });
   });
 
@@ -3219,16 +3290,23 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       pricing?: Array<{ capability: string; unit_cost: number; currency: string; per: string }>;
       sla?: { max_latency_ms?: number; availability_guarantee?: number };
       description?: string;
+      /** Wallet address for x402 payment settlement (e.g. "0x..." for EVM). */
+      pay_to_address?: string;
     }>();
 
-    const listingId = `ls-${crypto.randomUUID()}`;
     const now = Date.now();
 
+    // One listing per agent — delete any existing listing before insert.
+    // This prevents duplicate rows (listing_id is always fresh UUID, so
+    // INSERT OR REPLACE on PK would accumulate rows per agent).
+    moteDb.db.prepare("DELETE FROM relay_service_listings WHERE motebit_id = ?").run(motebitId);
+
+    const listingId = asListingId(`ls-${crypto.randomUUID()}`);
     moteDb.db
       .prepare(
-        `INSERT OR REPLACE INTO relay_service_listings
-         (listing_id, motebit_id, capabilities, pricing, sla_max_latency_ms, sla_availability, description, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO relay_service_listings
+         (listing_id, motebit_id, capabilities, pricing, sla_max_latency_ms, sla_availability, description, pay_to_address, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         listingId,
@@ -3238,6 +3316,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
         body.sla?.max_latency_ms ?? 5000,
         body.sla?.availability_guarantee ?? 0.99,
         body.description ?? "",
+        body.pay_to_address ?? null,
         now,
       );
 
@@ -3342,6 +3421,60 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       },
       description: row.description,
       updated_at: row.updated_at,
+    });
+  });
+
+  // GET /api/v1/market/revenue — platform settlement fee revenue (authenticated)
+  app.get("/api/v1/market/revenue", (c) => {
+    const days = Math.min(parseInt(c.req.query("days") ?? "30", 10) || 30, 365);
+    const since = Date.now() - days * 86_400_000;
+
+    const totals = moteDb.db
+      .prepare(
+        `SELECT
+           COUNT(*) AS settlement_count,
+           COALESCE(SUM(amount_settled), 0) AS total_settled,
+           COALESCE(SUM(platform_fee), 0) AS total_platform_fees,
+           COALESCE(SUM(amount_settled + platform_fee), 0) AS total_gross_volume
+         FROM relay_settlements
+         WHERE settled_at >= ?`,
+      )
+      .get(since) as {
+      settlement_count: number;
+      total_settled: number;
+      total_platform_fees: number;
+      total_gross_volume: number;
+    };
+
+    // Daily breakdown for charting
+    const daily = moteDb.db
+      .prepare(
+        `SELECT
+           (settled_at / 86400000) AS day_epoch,
+           COUNT(*) AS count,
+           COALESCE(SUM(platform_fee), 0) AS fees,
+           COALESCE(SUM(amount_settled + platform_fee), 0) AS volume
+         FROM relay_settlements
+         WHERE settled_at >= ?
+         GROUP BY day_epoch
+         ORDER BY day_epoch`,
+      )
+      .all(since) as Array<{
+      day_epoch: number;
+      count: number;
+      fees: number;
+      volume: number;
+    }>;
+
+    return c.json({
+      period_days: days,
+      ...totals,
+      daily: daily.map((d) => ({
+        date: new Date(d.day_epoch * 86_400_000).toISOString().slice(0, 10),
+        settlement_count: d.count,
+        platform_fees: d.fees,
+        gross_volume: d.volume,
+      })),
     });
   });
 
@@ -3766,11 +3899,23 @@ if (process.env.VITEST != null) {
     );
     process.exit(1);
   }
+  // x402 payment layer: required — every task settlement flows through x402
+  if (!process.env.X402_PAY_TO_ADDRESS) {
+    throw new Error("X402_PAY_TO_ADDRESS is required. Set it to the platform USDC wallet address.");
+  }
+  const x402Env: X402Config = {
+    payToAddress: process.env.X402_PAY_TO_ADDRESS,
+    network: process.env.X402_NETWORK ?? "eip155:84532",
+    facilitatorUrl: process.env.X402_FACILITATOR_URL,
+    testnet: process.env.X402_TESTNET !== "false",
+  };
+
   const relay = await createSyncRelay({
     dbPath: process.env.MOTEBIT_DB_PATH,
     apiToken: process.env.MOTEBIT_API_TOKEN,
     corsOrigin: process.env.MOTEBIT_CORS_ORIGIN,
     enableDeviceAuth: process.env.MOTEBIT_ENABLE_DEVICE_AUTH !== "false",
+    x402: x402Env,
   });
   app = relay.app;
 

@@ -1,3 +1,4 @@
+import { PLATFORM_FEE_RATE } from "@motebit/sdk";
 import type {
   BudgetAllocation,
   ExecutionReceipt,
@@ -6,23 +7,34 @@ import type {
   SettlementRecord,
 } from "@motebit/sdk";
 
-export interface SettlementAdapter {
-  lock(allocation: BudgetAllocation): Promise<boolean>;
-  release(settlementId: string, amount: number): Promise<void>;
-  refund(allocationId: string): Promise<void>;
+/**
+ * Round to 6 decimal places (USDC precision). USDC has 6 on-chain decimals;
+ * rounding to 2 would kill micropayments (e.g. $0.001 × 5% = $0.00005 → $0.00).
+ * Always round half-up so the platform never under-charges due to floating point.
+ */
+function microRound(n: number): number {
+  return Math.round(n * 1_000_000) / 1_000_000;
 }
 
 /**
  * Pure: allocation + verified receipt + ledger → SettlementRecord
- * Completed receipt → full settlement
- * Failed/denied → refund
- * Partial (some steps failed in ledger) → proportional
+ *
+ * The relay extracts a platform fee (PLATFORM_FEE_RATE) from every
+ * completed or partial settlement. Refunds pay zero fee.
+ *
+ * Completed receipt → full settlement minus fee
+ * Failed/denied → refund (zero fee)
+ * Partial (some steps failed in ledger) → proportional minus fee
+ *
+ * An optional feeRate override allows custom fee tiers (e.g. early adopter
+ * discounts, enterprise rates). Defaults to PLATFORM_FEE_RATE (5%).
  */
 export function settleOnReceipt(
   allocation: BudgetAllocation,
   receipt: ExecutionReceipt,
   ledger: GoalExecutionManifest | null,
   settlementId: SettlementId,
+  feeRate: number = PLATFORM_FEE_RATE,
 ): SettlementRecord {
   const receiptHash = receipt.result_hash ?? "";
 
@@ -33,75 +45,39 @@ export function settleOnReceipt(
       receipt_hash: receiptHash,
       ledger_hash: ledger?.content_hash ?? null,
       amount_settled: 0,
+      platform_fee: 0,
+      platform_fee_rate: feeRate,
       status: "refunded",
       settled_at: Date.now(),
     };
   }
 
+  // Compute gross amount (before fee)
+  let gross = allocation.amount_locked;
+
   // Check for partial completion via ledger
+  let status: SettlementRecord["status"] = "completed";
   if (ledger && ledger.steps.length > 0) {
     const total = ledger.steps.length;
     const completed = ledger.steps.filter((s) => s.status === "completed").length;
     if (completed < total && completed > 0) {
-      const proportion = completed / total;
-      return {
-        settlement_id: settlementId,
-        allocation_id: allocation.allocation_id,
-        receipt_hash: receiptHash,
-        ledger_hash: ledger.content_hash,
-        amount_settled: Math.round(allocation.amount_locked * proportion * 100) / 100,
-        status: "partial",
-        settled_at: Date.now(),
-      };
+      gross = allocation.amount_locked * (completed / total);
+      status = "partial";
     }
   }
 
-  // Full settlement
+  const fee = microRound(gross * feeRate);
+  const net = microRound(gross - fee);
+
   return {
     settlement_id: settlementId,
     allocation_id: allocation.allocation_id,
     receipt_hash: receiptHash,
     ledger_hash: ledger?.content_hash ?? null,
-    amount_settled: allocation.amount_locked,
-    status: "completed",
+    amount_settled: net,
+    platform_fee: fee,
+    platform_fee_rate: feeRate,
+    status,
     settled_at: Date.now(),
   };
-}
-
-/** In-memory settlement adapter for testing and local development */
-export class InMemorySettlementAdapter implements SettlementAdapter {
-  private locks = new Map<string, { amount: number; released: boolean }>();
-
-  async lock(allocation: BudgetAllocation): Promise<boolean> {
-    if (this.locks.has(allocation.allocation_id)) return false;
-    this.locks.set(allocation.allocation_id, {
-      amount: allocation.amount_locked,
-      released: false,
-    });
-    return true;
-  }
-
-  async release(_settlementId: string, _amount: number): Promise<void> {
-    for (const [, lock] of this.locks) {
-      if (!lock.released) {
-        lock.released = true;
-        return;
-      }
-    }
-  }
-
-  async refund(allocationId: string): Promise<void> {
-    this.locks.delete(allocationId);
-  }
-
-  /** Test helper: check if an allocation is locked */
-  isLocked(allocationId: string): boolean {
-    const lock = this.locks.get(allocationId);
-    return lock != null && !lock.released;
-  }
-
-  /** Test helper: get lock count */
-  get size(): number {
-    return this.locks.size;
-  }
 }

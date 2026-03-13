@@ -19,6 +19,11 @@ describe("Collaborative Plan Proposals E2E", () => {
       dbPath: ":memory:",
       apiToken: MASTER_TOKEN,
       enableDeviceAuth: false,
+      x402: {
+        payToAddress: "0x0000000000000000000000000000000000000000",
+        network: "eip155:84532",
+        testnet: true,
+      },
     });
   });
 
