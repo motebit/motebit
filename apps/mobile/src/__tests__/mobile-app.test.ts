@@ -569,14 +569,14 @@ describe("MobileApp.governanceStatus", () => {
 });
 
 // ---------------------------------------------------------------------------
-// MobileApp.generateTitleInBackground
+// MobileApp.autoTitle
 // ---------------------------------------------------------------------------
 
-describe("MobileApp.generateTitleInBackground", () => {
+describe("MobileApp.autoTitle", () => {
   it("does nothing before initAI", () => {
     const app = new MobileApp();
     // Should not throw
-    app.generateTitleInBackground();
+    app.autoTitle();
     app.stop();
   });
 });

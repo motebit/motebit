@@ -906,7 +906,7 @@ export function App(): React.ReactElement {
     try {
       await consumeStream(a.sendMessageStreaming(text));
       // Auto-title after streaming completes
-      a.generateTitleInBackground();
+      a.autoTitle();
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
       addSystemMessage(`[Error: ${errMsg}]`);

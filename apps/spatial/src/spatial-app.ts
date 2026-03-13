@@ -14,27 +14,22 @@
  * Presence state machine drives the creature's body language through the
  * existing pipeline: StateVector → BehaviorEngine → RenderEngine.
  *
- * Physical travel model (event-driven, not polling-driven):
- * - When your motebit delegates, it LEAVES your body. A ghost remains.
- * - Another person's motebit ARRIVES in your space as a visitor.
- * - When done, your motebit RETURNS carrying the receipt.
- * - Trust is the gatekeeper — blocked agents are invisible, unknown agents
- *   are distant and faint, trusted agents appear close and bright.
- *
  * Relay integration (best-effort, gated behind showNetwork setting):
  * - Registers identity on bootstrap via POST /api/v1/agents/bootstrap
  * - Registers in agent discovery via POST /api/v1/agents/register
  * - Maintains heartbeat every 5 minutes
- * - Listens for spatial presence events via WS: delegation_departed,
- *   delegation_arrived, delegation_returning, delegation_visitor_departing
+ * - Encrypted WebSocket event sync (same as desktop/mobile/web)
+ * - HTTP plan sync for cross-device goal visibility
+ * - Token refresh every 4.5 minutes (tokens expire at 5 min)
  */
 
 import { MotebitRuntime } from "@motebit/runtime";
 import { RelayDelegationAdapter } from "@motebit/runtime";
-import { createBrowserStorage, IdbAgentTrustStore } from "@motebit/browser-persistence";
+import { createBrowserStorage } from "@motebit/browser-persistence";
 import type { StreamChunk, KeyringAdapter, StorageAdapters } from "@motebit/runtime";
+import type { PlanChunk, ConversationMessage } from "@motebit/runtime";
 import { WebXRThreeJSAdapter } from "@motebit/render-engine";
-import { trustLevelToScore, AgentTrustLevel } from "@motebit/sdk";
+import type { InteriorColor } from "@motebit/render-engine";
 import {
   CloudProvider,
   OllamaProvider,
@@ -47,8 +42,27 @@ import {
   type BootstrapConfigStore,
   type BootstrapKeyStore,
 } from "@motebit/core-identity";
-import { createSignedToken } from "@motebit/crypto";
+import { createSignedToken, deriveSyncEncryptionKey } from "@motebit/crypto";
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";
+import { DeviceCapability } from "@motebit/sdk";
+import { McpClientAdapter } from "@motebit/mcp-client";
+import type { McpServerConfig } from "@motebit/mcp-client";
+import { InMemoryToolRegistry } from "@motebit/tools/web-safe";
+import {
+  IdbConversationStore,
+  IdbPlanStore,
+  IdbPlanSyncStore,
+  IdbGradientStore,
+} from "@motebit/browser-persistence";
+import {
+  HttpEventStoreAdapter,
+  WebSocketEventStoreAdapter,
+  EncryptedEventStoreAdapter,
+  decryptEventPayload,
+  PlanSyncEngine,
+  HttpPlanSyncAdapter,
+  type SyncStatus,
+} from "@motebit/sync-engine";
 import { OrbitalDynamics, estimateBodyAnchors, getAnchorForReference } from "./index";
 import { SpatialVoicePipeline, type VoicePipelineConfig } from "./voice-pipeline";
 import { GestureRecognizer } from "./gestures";
@@ -95,36 +109,56 @@ const PRESENCE_MAP: Record<PresenceState, PresenceMapping> = {
   processing: { social_distance: 0.15, attention: 0.85, processing: 0.95 },
 };
 
-// === Visitor Record ===
-
-/** A visitor currently in your space (trust-admitted). */
-export interface VisitorRecord {
-  motebitId: string;
-  trustScore: number;
-  /** Task the visitor arrived with, if known. */
-  taskDescription?: string;
-}
-
-// === Delegation Presence ===
-
-/**
- * Physical travel state of your own motebit:
- *   home → away (delegated, ghost visible) → home (returned with receipt)
- */
-export type DelegationPresence = "home" | "away";
-
 // === Constants ===
 
 const DEFAULT_RELAY_URL = "https://motebit-sync.fly.dev";
 const HEARTBEAT_INTERVAL_MS = 5 * 60_000; // 5 minutes
 
-// === Spatial WS message shape ===
+// === Interior Color ===
 
-interface SpatialWsMessage {
-  type: string;
-  source_motebit_id?: string;
-  target_motebit_id?: string;
-  task_description?: string;
+export const COLOR_PRESETS: Record<string, InteriorColor> = {
+  moonlight: { tint: [0.95, 0.95, 1.0], glow: [0.8, 0.85, 1.0] },
+  amber: { tint: [1.0, 0.85, 0.6], glow: [0.9, 0.7, 0.3] },
+  rose: { tint: [1.0, 0.82, 0.88], glow: [0.9, 0.5, 0.6] },
+  violet: { tint: [0.88, 0.8, 1.0], glow: [0.6, 0.4, 0.9] },
+  cyan: { tint: [0.8, 0.95, 1.0], glow: [0.3, 0.8, 0.9] },
+  ember: { tint: [1.0, 0.75, 0.65], glow: [0.9, 0.35, 0.2] },
+  sage: { tint: [0.82, 0.95, 0.85], glow: [0.4, 0.75, 0.5] },
+};
+
+export function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  let r = 0,
+    g = 0,
+    b = 0;
+  if (h < 60) {
+    r = c;
+    g = x;
+  } else if (h < 120) {
+    r = x;
+    g = c;
+  } else if (h < 180) {
+    g = c;
+    b = x;
+  } else if (h < 240) {
+    g = x;
+    b = c;
+  } else if (h < 300) {
+    r = x;
+    b = c;
+  } else {
+    r = c;
+    b = x;
+  }
+  return [r + m, g + m, b + m];
+}
+
+export function deriveInteriorColor(hue: number, saturation: number): InteriorColor {
+  const tint = hslToRgb(hue, saturation * 0.9, 0.92 - saturation * 0.12);
+  const glow = hslToRgb(hue, saturation * 0.8 + 0.2, 0.72 - saturation * 0.17);
+  return { tint, glow };
 }
 
 // === SpatialApp ===
@@ -138,7 +172,6 @@ export class SpatialApp {
 
   private runtime: MotebitRuntime | null = null;
   private storage: StorageAdapters | null = null;
-  private agentTrustStore: IdbAgentTrustStore | null = null;
   private keyring: KeyringAdapter;
   private keyStore = new EncryptedKeyStore();
   private latestCues: BehaviorCues = {
@@ -159,17 +192,32 @@ export class SpatialApp {
     showNetwork: true,
   };
 
-  // Relay state
+  // Relay + sync state
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private relayAuthToken: string | null = null;
   private tokenFactory: (() => Promise<string>) | null = null;
-  private _ws: WebSocket | null = null;
+  private _privKeyBytes: Uint8Array | null = null;
+  private _wsAdapter: WebSocketEventStoreAdapter | null = null;
+  private _wsTokenRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  private _wsUnsubOnEvent: (() => void) | null = null;
+  private _syncUnsubscribe: (() => void) | null = null;
+  private _planStore: IdbPlanStore | null = null;
+  private _planSyncEngine: PlanSyncEngine | null = null;
+  private _syncStatus:
+    | "offline"
+    | "connecting"
+    | "connected"
+    | "syncing"
+    | "error"
+    | "disconnected" = "offline";
+  private _syncStatusListeners = new Set<(status: string) => void>();
 
-  // Physical travel state
-  private _delegationPresence: DelegationPresence = "home";
-  private _delegationTarget: string | null = null;
-  /** Visitors currently in your space, keyed by their motebitId. */
-  private _visitors = new Map<string, VisitorRecord>();
+  // MCP servers
+  private mcpAdapters = new Map<string, McpClientAdapter>();
+  private _mcpServers: McpServerConfig[] = [];
+
+  // Interior color
+  private _interiorColor: InteriorColor | null = null;
 
   motebitId = "spatial-local";
   deviceId = "spatial-local";
@@ -257,20 +305,6 @@ export class SpatialApp {
     );
   }
 
-  // === Delegation Presence ===
-
-  get delegationPresence(): DelegationPresence {
-    return this._delegationPresence;
-  }
-
-  get delegationTarget(): string | null {
-    return this._delegationTarget;
-  }
-
-  get visitors(): ReadonlyMap<string, VisitorRecord> {
-    return this._visitors;
-  }
-
   // === Lifecycle ===
 
   /** Initialize the WebXR adapter with the canvas. */
@@ -306,13 +340,6 @@ export class SpatialApp {
     const storage = await createBrowserStorage();
     this.storage = storage;
 
-    // Grab the IDB instance for agent trust lookups
-    const agentTrustStore = (storage as unknown as { agentTrustStore?: IdbAgentTrustStore })
-      .agentTrustStore;
-    if (agentTrustStore) {
-      this.agentTrustStore = agentTrustStore;
-    }
-
     const result = await sharedBootstrapIdentity({
       surfaceName: "Spatial",
       identityStorage: storage.identityStorage,
@@ -325,6 +352,17 @@ export class SpatialApp {
     this.deviceId = result.deviceId;
     this.publicKey = result.publicKeyHex;
 
+    // Preload caches for sync access
+    const convStore = storage.conversationStore as IdbConversationStore;
+    await convStore.preload(this.motebitId);
+    const planStore = storage.planStore as IdbPlanStore;
+    await planStore.preload(this.motebitId);
+    const gradientStore = storage.gradientStore as IdbGradientStore;
+    await gradientStore.preload(this.motebitId);
+
+    // Store plan store reference for sync
+    this._planStore = planStore;
+
     // Build a token factory for the relay (refreshes on each call — 5-min expiry)
     const privateKeyHex = await this.keyStore.loadPrivateKey();
     if (privateKeyHex != null && privateKeyHex !== "") {
@@ -332,6 +370,7 @@ export class SpatialApp {
       for (let i = 0; i < privateKeyHex.length; i += 2) {
         privKeyBytes[i / 2] = parseInt(privateKeyHex.slice(i, i + 2), 16);
       }
+      this._privKeyBytes = privKeyBytes;
       const motebitId = this.motebitId;
       const deviceId = this.deviceId;
       this.tokenFactory = async (): Promise<string> => {
@@ -384,6 +423,9 @@ export class SpatialApp {
       { storage, renderer: this.adapter, ai: provider, keyring: this.keyring },
     );
 
+    // Spatial surface: HTTP MCP only (no stdio, no filesystem)
+    this.runtime.setLocalCapabilities([DeviceCapability.HttpMcp]);
+
     // Subscribe to state changes — feed attention level for orbital dynamics
     this.unsubscribeState = this.runtime.subscribe((state: MotebitState) => {
       this.attentionLevel = state.attention;
@@ -394,6 +436,9 @@ export class SpatialApp {
     // Wire heartbeat to runtime
     this.heartbeat.setRuntime(this.runtime);
     this.heartbeat.start();
+
+    // Reconnect saved MCP servers (best-effort, non-blocking)
+    void this.reconnectMcpServers();
 
     return true;
   }
@@ -421,11 +466,262 @@ export class SpatialApp {
     return { ...this.networkSettings };
   }
 
-  // === Relay Integration ===
+  // === Interior Color ===
+
+  setInteriorColor(presetName: string): void {
+    const preset = COLOR_PRESETS[presetName];
+    if (!preset) return;
+    this._interiorColor = preset;
+    this.adapter.setInteriorColor(preset);
+  }
+
+  setInteriorColorDirect(color: InteriorColor): void {
+    this._interiorColor = color;
+    this.adapter.setInteriorColor(color);
+  }
+
+  getInteriorColor(): InteriorColor | null {
+    return this._interiorColor;
+  }
+
+  // === MCP Management ===
+
+  async addMcpServer(config: McpServerConfig): Promise<void> {
+    if (config.transport !== "http") {
+      throw new Error(
+        "Spatial only supports HTTP MCP servers. Use the desktop or CLI app for stdio servers.",
+      );
+    }
+    if (config.url == null || config.url === "") {
+      throw new Error("HTTP MCP server requires a url");
+    }
+
+    const adapter = new McpClientAdapter(config);
+    await adapter.connect();
+
+    // Manifest pinning: pin hash on first connect, revoke trust on mismatch
+    const manifestResult = await adapter.checkManifest(
+      config.toolManifestHash,
+      config.pinnedToolNames,
+    );
+    if (!manifestResult.ok) {
+      config.trusted = false;
+    }
+    config.toolManifestHash = manifestResult.hash;
+    config.pinnedToolNames = manifestResult.toolNames;
+
+    // Persist motebit public key if newly pinned during connect
+    if (adapter.isMotebit && adapter.verifiedIdentity?.verified) {
+      const pinnedKey = adapter.serverConfig.motebitPublicKey;
+      if (pinnedKey && !config.motebitPublicKey) {
+        config.motebitPublicKey = pinnedKey;
+      }
+    }
+
+    this.registerMcpTools(adapter, config);
+
+    this.mcpAdapters.set(config.name, adapter);
+    this._mcpServers = this._mcpServers.filter((s) => s.name !== config.name);
+    this._mcpServers.push(config);
+    this.persistMcpServers();
+  }
+
+  async removeMcpServer(name: string): Promise<void> {
+    const adapter = this.mcpAdapters.get(name);
+    if (adapter) {
+      await adapter.disconnect();
+      this.mcpAdapters.delete(name);
+    }
+    if (this.runtime) {
+      this.runtime.unregisterExternalTools(`mcp:${name}`);
+    }
+    this._mcpServers = this._mcpServers.filter((s) => s.name !== name);
+    this.persistMcpServers();
+  }
+
+  getMcpServers(): Array<{
+    name: string;
+    url: string;
+    connected: boolean;
+    toolCount: number;
+    trusted: boolean;
+    motebit: boolean;
+  }> {
+    return this._mcpServers.map((config) => {
+      const adapter = this.mcpAdapters.get(config.name);
+      return {
+        name: config.name,
+        url: config.url ?? "",
+        connected: adapter?.isConnected ?? false,
+        toolCount: adapter?.getTools().length ?? 0,
+        trusted: config.trusted ?? false,
+        motebit: config.motebit ?? false,
+      };
+    });
+  }
+
+  async setMcpServerTrust(name: string, trusted: boolean): Promise<void> {
+    const config = this._mcpServers.find((s) => s.name === name);
+    if (!config) return;
+    config.trusted = trusted;
+
+    const adapter = this.mcpAdapters.get(name);
+    if (adapter && this.runtime) {
+      this.runtime.unregisterExternalTools(`mcp:${name}`);
+      this.registerMcpTools(adapter, config);
+    }
+
+    this.persistMcpServers();
+  }
+
+  private registerMcpTools(adapter: McpClientAdapter, config: McpServerConfig): void {
+    const tempRegistry = new InMemoryToolRegistry();
+    for (const mcpTool of adapter.getTools()) {
+      const def = {
+        name: mcpTool.name,
+        description: `[${config.name}] ${mcpTool.description ?? mcpTool.name}`,
+        inputSchema: mcpTool.inputSchema ?? { type: "object", properties: {} },
+        ...(config.trusted === true ? {} : { requiresApproval: true as const }),
+      };
+      tempRegistry.register(def, (args: Record<string, unknown>) =>
+        adapter.executeTool(mcpTool.name, args),
+      );
+    }
+    if (this.runtime) {
+      this.runtime.registerExternalTools(`mcp:${config.name}`, tempRegistry);
+    }
+  }
+
+  private async reconnectMcpServers(): Promise<void> {
+    const raw = localStorage.getItem("motebit:mcp_servers");
+    if (raw == null || raw === "") return;
+    try {
+      const configs = JSON.parse(raw) as McpServerConfig[];
+      this._mcpServers = configs;
+      let changed = false;
+      for (const config of configs) {
+        try {
+          const adapter = new McpClientAdapter(config);
+          await adapter.connect();
+
+          const manifestResult = await adapter.checkManifest(
+            config.toolManifestHash,
+            config.pinnedToolNames,
+          );
+          if (!manifestResult.ok) {
+            config.trusted = false;
+          }
+          config.toolManifestHash = manifestResult.hash;
+          config.pinnedToolNames = manifestResult.toolNames;
+
+          if (adapter.isMotebit && adapter.verifiedIdentity?.verified) {
+            const pinnedKey = adapter.serverConfig.motebitPublicKey;
+            if (pinnedKey && !config.motebitPublicKey) {
+              config.motebitPublicKey = pinnedKey;
+            }
+          }
+
+          this.registerMcpTools(adapter, config);
+          this.mcpAdapters.set(config.name, adapter);
+          changed = true;
+        } catch {
+          // Non-fatal — server may be offline
+        }
+      }
+      if (changed) {
+        this.persistMcpServers();
+      }
+    } catch {
+      // Non-fatal — corrupted localStorage
+    }
+  }
+
+  private persistMcpServers(): void {
+    localStorage.setItem("motebit:mcp_servers", JSON.stringify(this._mcpServers));
+  }
+
+  // === Conversation Management ===
+
+  get activeConversationId(): string | null {
+    return this.runtime?.getConversationId() ?? null;
+  }
+
+  getConversationHistory(): ConversationMessage[] {
+    return this.runtime?.getConversationHistory() ?? [];
+  }
+
+  resetConversation(): void {
+    this.runtime?.resetConversation();
+  }
+
+  loadConversationById(id: string): ConversationMessage[] {
+    if (!this.runtime) return [];
+    this.runtime.loadConversation(id);
+    return this.runtime.getConversationHistory();
+  }
+
+  listConversations(): Array<{
+    conversationId: string;
+    startedAt: number;
+    lastActiveAt: number;
+    title: string | null;
+    messageCount: number;
+  }> {
+    return this.runtime?.listConversations() ?? [];
+  }
+
+  async autoTitle(): Promise<string | null> {
+    return this.runtime?.autoTitle() ?? null;
+  }
+
+  async summarize(): Promise<string | null> {
+    return this.runtime?.summarizeCurrentConversation() ?? null;
+  }
+
+  async housekeeping(): Promise<void> {
+    await this.runtime?.housekeeping();
+  }
+
+  // === Goals (one-shot) ===
+
+  async *executeGoal(goalId: string, prompt: string): AsyncGenerator<PlanChunk> {
+    if (!this.runtime) throw new Error("Runtime not initialized");
+    if (!this.runtime.isAIReady) throw new Error("No provider connected");
+
+    yield* this.runtime.executePlan(goalId, prompt);
+  }
+
+  async *resumeGoal(planId: string): AsyncGenerator<PlanChunk> {
+    if (!this.runtime) throw new Error("Runtime not initialized");
+    if (!this.runtime.isAIReady) throw new Error("No provider connected");
+
+    yield* this.runtime.resumePlan(planId);
+  }
+
+  // === Sync Status ===
+
+  get syncStatus(): string {
+    return this._syncStatus;
+  }
+
+  onSyncStatusChange(cb: (status: string) => void): () => void {
+    this._syncStatusListeners.add(cb);
+    return () => {
+      this._syncStatusListeners.delete(cb);
+    };
+  }
+
+  private setSyncStatus(status: typeof this._syncStatus): void {
+    this._syncStatus = status;
+    for (const cb of this._syncStatusListeners) cb(status);
+  }
+
+  // === Relay Integration + Multi-Device Sync ===
 
   /**
    * Connect to the relay: bootstrap identity, register for discovery, start heartbeat,
-   * wire RelayDelegationAdapter on the runtime, and open a WS for spatial presence events.
+   * open encrypted WebSocket for real-time event sync, wire delegation adapter through
+   * the WebSocket, and start plan sync.
    *
    * Best-effort — any relay error is swallowed; the app works offline.
    * Must be called after bootstrap() and initAI().
@@ -433,6 +729,8 @@ export class SpatialApp {
   async connectRelay(): Promise<void> {
     const { relayUrl, showNetwork } = this.networkSettings;
     if (relayUrl === "" || !showNetwork) return;
+
+    this.setSyncStatus("connecting");
 
     // Mint an initial token
     let authToken: string | null = null;
@@ -460,7 +758,7 @@ export class SpatialApp {
         }),
       });
     } catch {
-      // Best-effort — relay may not support this endpoint
+      // Best-effort
     }
 
     // 2. Register capabilities for discovery
@@ -482,7 +780,6 @@ export class SpatialApp {
       });
 
       if (regResp.ok) {
-        // Heartbeat every 5 minutes to keep the registry entry alive
         this.heartbeatTimer = setInterval(() => {
           void (async () => {
             try {
@@ -503,44 +800,221 @@ export class SpatialApp {
       // Best-effort registration
     }
 
-    // 3. Wire RelayDelegationAdapter on the runtime for outbound delegation.
-    // WS events are the source of truth for departure/return animation — the adapter
-    // handles the actual task submission via HTTP.
-    if (this.runtime && this.tokenFactory) {
+    // 3. Real-time event sync via encrypted WebSocket
+    if (this.runtime && authToken && this._privKeyBytes) {
+      try {
+        const encKey = await deriveSyncEncryptionKey(this._privKeyBytes);
+        const localEventStore = this.storage?.eventStore ?? null;
+
+        // HTTP fallback adapter (for initial sync / offline recovery)
+        const httpAdapter = new HttpEventStoreAdapter({
+          baseUrl: relayUrl,
+          motebitId: this.motebitId,
+          authToken,
+        });
+        const encryptedHttp = new EncryptedEventStoreAdapter({ inner: httpAdapter, key: encKey });
+
+        // WebSocket adapter (real-time)
+        const wsUrl =
+          relayUrl.replace(/^https?/, (m) => (m === "https" ? "wss" : "ws")) +
+          "/ws/sync/" +
+          this.motebitId;
+
+        const wsAdapter = new WebSocketEventStoreAdapter({
+          url: wsUrl,
+          motebitId: this.motebitId,
+          authToken,
+          capabilities: [DeviceCapability.HttpMcp],
+          httpFallback: encryptedHttp,
+          localStore: localEventStore ?? undefined,
+        });
+        this._wsAdapter = wsAdapter;
+
+        // Wire delegation through the WebSocket (not no-op)
+        const delegationAdapter = new RelayDelegationAdapter({
+          syncUrl: relayUrl,
+          motebitId: this.motebitId,
+          authToken: authToken ?? undefined,
+          sendRaw: (data: string) => wsAdapter.sendRaw(data),
+          onCustomMessage: (cb) => wsAdapter.onCustomMessage(cb),
+          getExplorationDrive: () => this.runtime?.getPrecision().explorationDrive,
+        });
+        this.runtime.setDelegationAdapter(delegationAdapter);
+
+        const encryptedWs = new EncryptedEventStoreAdapter({ inner: wsAdapter, key: encKey });
+
+        // Inbound real-time events: decrypt and write to local store
+        this._wsUnsubOnEvent = wsAdapter.onEvent((raw) => {
+          void (async () => {
+            if (!localEventStore) return;
+            const dec = await decryptEventPayload(raw, encKey);
+            await localEventStore.append(dec);
+          })();
+        });
+
+        this.runtime.connectSync(encryptedWs);
+        wsAdapter.connect();
+
+        // Subscribe to sync engine status
+        if (this._syncUnsubscribe) this._syncUnsubscribe();
+        this._syncUnsubscribe = this.runtime.sync.onStatusChange((engineStatus: SyncStatus) => {
+          if (engineStatus === "syncing") this.setSyncStatus("syncing");
+          else if (engineStatus === "idle") this.setSyncStatus("connected");
+          else if (engineStatus === "error") this.setSyncStatus("error");
+          else if (engineStatus === "offline") this.setSyncStatus("disconnected");
+        });
+
+        this.runtime.startSync();
+        this.setSyncStatus("connected");
+
+        // 4. Plan sync — push/pull plans to relay for cross-device visibility
+        if (this._planStore) {
+          const planSyncStore = new IdbPlanSyncStore(this._planStore, this.motebitId);
+          this._planSyncEngine = new PlanSyncEngine(planSyncStore, this.motebitId);
+          this._planSyncEngine.connectRemote(
+            new HttpPlanSyncAdapter({
+              baseUrl: relayUrl,
+              motebitId: this.motebitId,
+              authToken: authToken ?? undefined,
+            }),
+          );
+          void this._planSyncEngine.sync();
+          this._planSyncEngine.start();
+        }
+
+        // 5. Recover orphaned delegated steps from a previous session
+        void (async () => {
+          try {
+            for await (const _chunk of this.runtime!.recoverDelegatedSteps()) {
+              // Consumed — plan store updates propagate to UI
+            }
+          } catch {
+            // Best-effort
+          }
+        })();
+
+        // 6. Token refresh every 4.5 min — rebuild WS with fresh auth
+        this._wsTokenRefreshTimer = setInterval(() => {
+          void (async () => {
+            try {
+              if (!this._wsAdapter || !this.tokenFactory || !this._privKeyBytes) return;
+              this._wsAdapter.disconnect();
+
+              const freshToken = await this.tokenFactory();
+              const freshEncKey = await deriveSyncEncryptionKey(this._privKeyBytes);
+
+              const freshWs = new WebSocketEventStoreAdapter({
+                url: wsUrl,
+                motebitId: this.motebitId,
+                authToken: freshToken,
+                capabilities: [DeviceCapability.HttpMcp],
+                httpFallback: encryptedHttp,
+                localStore: localEventStore ?? undefined,
+              });
+
+              // Re-wire delegation with fresh WS
+              const freshDelegation = new RelayDelegationAdapter({
+                syncUrl: relayUrl,
+                motebitId: this.motebitId,
+                authToken: freshToken ?? undefined,
+                sendRaw: (data: string) => freshWs.sendRaw(data),
+                onCustomMessage: (cb) => freshWs.onCustomMessage(cb),
+                getExplorationDrive: () => this.runtime?.getPrecision().explorationDrive,
+              });
+              this.runtime?.setDelegationAdapter(freshDelegation);
+
+              if (this._wsUnsubOnEvent) this._wsUnsubOnEvent();
+              this._wsUnsubOnEvent = freshWs.onEvent((raw) => {
+                void (async () => {
+                  if (!localEventStore) return;
+                  const dec = await decryptEventPayload(raw, freshEncKey);
+                  await localEventStore.append(dec);
+                })();
+              });
+
+              const freshEncrypted = new EncryptedEventStoreAdapter({
+                inner: freshWs,
+                key: freshEncKey,
+              });
+              this.runtime?.connectSync(freshEncrypted);
+              freshWs.connect();
+              this._wsAdapter = freshWs;
+            } catch {
+              // Token refresh failed — WS will retry on reconnect
+            }
+          })();
+        }, 4.5 * 60_000);
+      } catch {
+        // Sync setup failed — fall back to delegation-only
+        this.setSyncStatus("error");
+        if (this.runtime && this.tokenFactory) {
+          const tokenFactory = this.tokenFactory;
+          const inner = new RelayDelegationAdapter({
+            syncUrl: relayUrl,
+            motebitId: this.motebitId,
+            authToken: tokenFactory,
+            sendRaw: () => {},
+            onCustomMessage: () => () => {},
+            getExplorationDrive: () => this.runtime?.getPrecision().explorationDrive,
+          });
+          this.runtime.setDelegationAdapter(inner);
+        }
+      }
+    } else if (this.runtime && this.tokenFactory) {
+      // No private key bytes — delegation only (no encrypted sync)
       const tokenFactory = this.tokenFactory;
-      const motebitId = this.motebitId;
       const inner = new RelayDelegationAdapter({
         syncUrl: relayUrl,
-        motebitId,
+        motebitId: this.motebitId,
         authToken: tokenFactory,
         sendRaw: () => {},
         onCustomMessage: () => () => {},
         getExplorationDrive: () => this.runtime?.getPrecision().explorationDrive,
-        onDelegationFailure: () => {},
       });
       this.runtime.setDelegationAdapter(inner);
+      this.setSyncStatus("disconnected");
     }
-
-    // 4. Open WebSocket for spatial presence events.
-    // All visualization is event-driven — this replaces the old discovery polling loop.
-    this._openPresenceWs(relayUrl, authToken);
   }
 
   /**
-   * Disconnect from the relay and clean up visitors.
-   * Best-effort deregistration.
+   * Disconnect from the relay: stop sync, close WebSocket, deregister.
    */
   async disconnectRelay(): Promise<void> {
-    // Stop timers
+    // Stop token refresh
+    if (this._wsTokenRefreshTimer) {
+      clearInterval(this._wsTokenRefreshTimer);
+      this._wsTokenRefreshTimer = null;
+    }
+
+    // Stop plan sync
+    if (this._planSyncEngine) {
+      this._planSyncEngine.stop();
+      this._planSyncEngine = null;
+    }
+
+    // Unsubscribe event listeners
+    if (this._wsUnsubOnEvent) {
+      this._wsUnsubOnEvent();
+      this._wsUnsubOnEvent = null;
+    }
+    if (this._syncUnsubscribe) {
+      this._syncUnsubscribe();
+      this._syncUnsubscribe = null;
+    }
+
+    // Close WebSocket
+    if (this._wsAdapter) {
+      this._wsAdapter.disconnect();
+      this._wsAdapter = null;
+    }
+
+    // Stop sync engine
+    this.runtime?.sync.stop();
+
+    // Stop heartbeat
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
-    }
-
-    // Close WS
-    if (this._ws) {
-      this._ws.close();
-      this._ws = null;
     }
 
     // Best-effort deregistration
@@ -555,147 +1029,7 @@ export class SpatialApp {
       }
     }
 
-    // Depart all visitors cleanly
-    for (const id of this._visitors.keys()) {
-      this.adapter.departVisitor(id);
-    }
-    this._visitors.clear();
-  }
-
-  // === Spatial Presence WebSocket ===
-
-  /**
-   * Open a WebSocket connection to the relay for spatial presence events.
-   * Handles: delegation_departed, delegation_arrived, delegation_returning,
-   * delegation_visitor_departing.
-   *
-   * Best-effort — closed on relay disconnect, no automatic reconnect (the app
-   * works fine without it; delegation still executes via HTTP).
-   */
-  private _openPresenceWs(relayUrl: string, authToken: string | null): void {
-    if (typeof WebSocket === "undefined") return;
-
-    // Convert http(s) to ws(s)
-    const wsUrl = relayUrl.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://");
-
-    const url = authToken
-      ? `${wsUrl}/api/v1/ws?token=${encodeURIComponent(authToken)}`
-      : `${wsUrl}/api/v1/ws`;
-
-    let ws: WebSocket;
-    try {
-      ws = new WebSocket(url);
-    } catch {
-      return; // Best-effort
-    }
-
-    ws.onmessage = (event) => {
-      let msg: SpatialWsMessage;
-      try {
-        msg = JSON.parse(event.data as string) as SpatialWsMessage;
-      } catch {
-        return;
-      }
-      void this._handlePresenceEvent(msg);
-    };
-
-    ws.onerror = () => {
-      /* best-effort */
-    };
-    ws.onclose = () => {
-      if (this._ws === ws) this._ws = null;
-    };
-
-    this._ws = ws;
-  }
-
-  /**
-   * Handle incoming spatial presence events from the relay WS.
-   * All visualization is event-driven — no polling.
-   */
-  async _handlePresenceEvent(msg: SpatialWsMessage): Promise<void> {
-    switch (msg.type) {
-      case "delegation_departed": {
-        // YOUR motebit just left to do work somewhere else.
-        // A ghost remains at the original position.
-        this._delegationPresence = "away";
-        this._delegationTarget = msg.target_motebit_id ?? null;
-        this.adapter.departCreature({ direction: { x: 0, y: 0, z: -1 } });
-        break;
-      }
-
-      case "delegation_arrived": {
-        // Someone ELSE's motebit just arrived in YOUR space, carrying a task.
-        // Trust is the admission gate — blocked agents are never rendered.
-        if (!msg.source_motebit_id) break;
-        const sourceId = msg.source_motebit_id;
-
-        const trustScore = await this._lookupTrustScore(sourceId);
-
-        // Blocked (0.0) → invisible. Your space is sacred.
-        if (trustScore === 0.0) break;
-
-        const record: VisitorRecord = {
-          motebitId: sourceId,
-          trustScore,
-          taskDescription: msg.task_description,
-        };
-        this._visitors.set(sourceId, record);
-
-        this.adapter.arriveVisitor(sourceId, {
-          motebitId: sourceId,
-          trustScore,
-          // Direction derived from trust: trusted closer (front), unknown from the side
-          direction: this._trustToArrivalDirection(trustScore),
-        });
-        break;
-      }
-
-      case "delegation_returning": {
-        // YOUR motebit is coming back with results.
-        this._delegationPresence = "home";
-        this._delegationTarget = null;
-        this.adapter.returnCreature({ fromDirection: { x: 0, y: 0, z: -1 } });
-        break;
-      }
-
-      case "delegation_visitor_departing": {
-        // A visitor in YOUR space is leaving (work complete).
-        if (!msg.source_motebit_id) break;
-        const visitorId = msg.source_motebit_id;
-        this._visitors.delete(visitorId);
-        this.adapter.departVisitor(visitorId);
-        break;
-      }
-
-      default:
-        break;
-    }
-  }
-
-  /**
-   * Map a trust score to an arrival direction unit vector.
-   * Trusted (0.9+) → arrives from front (toward you — a welcome friend)
-   * Verified (0.6–0.9) → slight angle
-   * Unknown (0.1) → from the side, maximum distance
-   */
-  private _trustToArrivalDirection(trustScore: number): { x: number; y: number; z: number } {
-    if (trustScore >= 0.9) return { x: 0, y: 0, z: -1 }; // front — welcome
-    if (trustScore >= 0.6) return { x: -0.5, y: 0, z: -0.866 }; // 30° off-axis
-    if (trustScore >= 0.3) return { x: -0.866, y: 0, z: -0.5 }; // 60° off-axis
-    return { x: -1, y: 0, z: 0 }; // side — keep distance
-  }
-
-  async _lookupTrustScore(remoteMotebitId: string): Promise<number> {
-    if (!this.agentTrustStore) return trustLevelToScore(AgentTrustLevel.Unknown);
-
-    try {
-      const record = await this.agentTrustStore.getAgentTrust(this.motebitId, remoteMotebitId);
-      if (record == null) return trustLevelToScore(AgentTrustLevel.Unknown);
-      return trustLevelToScore(record.trust_level);
-    } catch {
-      return trustLevelToScore(AgentTrustLevel.Unknown);
-    }
+    this.setSyncStatus("disconnected");
   }
 
   // === Messaging ===
@@ -729,6 +1063,11 @@ export class SpatialApp {
 
     // Speak the response (strips tags internally)
     await this.voicePipeline.speak(accumulated);
+
+    // Background housekeeping (memory decay, gradient computation)
+    void this.runtime.housekeeping();
+    void this.runtime.autoTitle();
+
     return accumulated;
   }
 
@@ -831,6 +1170,12 @@ export class SpatialApp {
     this.gestures.reset();
     this.unsubscribeState?.();
     this.runtime?.stop();
+
+    // Clean up MCP adapters
+    for (const adapter of this.mcpAdapters.values()) {
+      void adapter.disconnect();
+    }
+    this.mcpAdapters.clear();
 
     // Clean up relay
     void this.disconnectRelay();

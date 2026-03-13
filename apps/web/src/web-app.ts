@@ -114,6 +114,7 @@ export class WebApp {
   private mcpAdapters = new Map<string, McpClientAdapter>();
   private _mcpServers: McpServerConfig[] = [];
   private cuesTickInterval: ReturnType<typeof setInterval> | null = null;
+  private housekeepingInterval: ReturnType<typeof setInterval> | null = null;
   private idleCues: BehaviorCues = {
     hover_distance: 0.4,
     drift_amplitude: 0.02,
@@ -206,6 +207,11 @@ export class WebApp {
         this.runtime.pushStateUpdate(cursorUpdates);
       }
     }, 33);
+
+    // Periodic housekeeping (memory decay, gradient computation)
+    this.housekeepingInterval = setInterval(() => {
+      void this.housekeeping();
+    }, 10 * 60_000);
 
     // Reconnect saved MCP servers
     void this.reconnectMcpServers();
@@ -322,6 +328,10 @@ export class WebApp {
     if (this.cuesTickInterval) {
       clearInterval(this.cuesTickInterval);
       this.cuesTickInterval = null;
+    }
+    if (this.housekeepingInterval) {
+      clearInterval(this.housekeepingInterval);
+      this.housekeepingInterval = null;
     }
     this.runtime?.stop();
     this.renderer.dispose();

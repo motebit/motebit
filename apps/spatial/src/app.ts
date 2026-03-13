@@ -6,12 +6,12 @@
  * intelligence, memory, identity, and ambient voice interaction — the same
  * sovereign runtime that powers the desktop app, with browser-native substitutions.
  *
- * Physical travel model: your motebit physically departs when delegating and
- * returns with proof. Visitors arrive from the network and leave when done.
- * All presence visualization is event-driven via the relay WS, not polling.
+ * Conversation history persists across sessions via IndexedDB.
+ * MCP HTTP servers can be added for remote tool/agent access.
+ * Goals execute one-shot via PlanEngine.
  */
 
-import { SpatialApp } from "./spatial-app";
+import { SpatialApp, COLOR_PRESETS, deriveInteriorColor } from "./spatial-app";
 import type { SpatialAIConfig } from "./spatial-app";
 import { WebXRThreeJSAdapter } from "@motebit/render-engine";
 import { SpatialVoicePipeline } from "./voice-pipeline";
@@ -44,18 +44,24 @@ const proactiveToggle = document.getElementById("proactive-toggle") as HTMLInput
 const relayUrlInput = document.getElementById("relay-url-input") as HTMLInputElement | null;
 const showNetworkToggle = document.getElementById("show-network-toggle") as HTMLInputElement | null;
 
+// MCP elements
+const mcpServerList = document.getElementById("mcp-server-list") as HTMLDivElement | null;
+const mcpAddName = document.getElementById("mcp-add-name") as HTMLInputElement | null;
+const mcpAddUrl = document.getElementById("mcp-add-url") as HTMLInputElement | null;
+const mcpAddMotebit = document.getElementById("mcp-add-motebit") as HTMLInputElement | null;
+const mcpAddBtn = document.getElementById("mcp-add-btn") as HTMLButtonElement | null;
+
+// Color picker elements
+const colorSwatches = document.getElementById("color-swatches") as HTMLDivElement | null;
+const customColorPicker = document.getElementById("custom-color-picker") as HTMLDivElement | null;
+const hueSlider = document.getElementById("hue-slider") as HTMLInputElement | null;
+const satSlider = document.getElementById("sat-slider") as HTMLInputElement | null;
+
 // Voice indicator
 const voiceIndicator = document.getElementById("voice-indicator") as HTMLElement;
 
-// Gaze overlay — shown when looking at a visitor or the ghost
+// Gaze overlay (reserved for future presence visualization)
 const gazeOverlay = document.getElementById("gaze-overlay") as HTMLElement | null;
-const gazeAgentId = document.getElementById("gaze-agent-id") as HTMLElement | null;
-const gazeAgentTrust = document.getElementById("gaze-agent-trust") as HTMLElement | null;
-const gazeAgentCaps = document.getElementById("gaze-agent-caps") as HTMLElement | null;
-
-// Delegation active indicator — amber pulse when your motebit is away
-const delegationIndicator = document.getElementById("delegation-indicator") as HTMLElement | null;
-const delegationLabel = document.getElementById("delegation-label") as HTMLElement | null;
 
 // === State ===
 
@@ -64,8 +70,6 @@ let lastTime = 0;
 
 // Gaze attention state
 let lastGazeHit = false;
-// Gaze target (visitor id or "ghost")
-let gazedTarget: string | null = null;
 
 // === Settings persistence ===
 
@@ -80,6 +84,9 @@ interface SpatialSettings {
   proactiveEnabled: boolean;
   relayUrl: string;
   showNetwork: boolean;
+  colorPreset: string;
+  customHue: number;
+  customSaturation: number;
 }
 
 function loadSettings(): SpatialSettings {
@@ -98,6 +105,9 @@ function loadSettings(): SpatialSettings {
         proactiveEnabled: parsed.proactiveEnabled ?? true,
         relayUrl: parsed.relayUrl ?? "https://motebit-sync.fly.dev",
         showNetwork: parsed.showNetwork ?? true,
+        colorPreset: parsed.colorPreset ?? "moonlight",
+        customHue: parsed.customHue ?? 220,
+        customSaturation: parsed.customSaturation ?? 0.7,
       };
     }
   } catch {
@@ -114,6 +124,9 @@ function loadSettings(): SpatialSettings {
     proactiveEnabled: true,
     relayUrl: "https://motebit-sync.fly.dev",
     showNetwork: true,
+    colorPreset: "moonlight",
+    customHue: 220,
+    customSaturation: 0.7,
   };
 }
 
@@ -150,6 +163,7 @@ async function init(): Promise<void> {
   if (relayUrlInput) relayUrlInput.value = settings.relayUrl;
   if (showNetworkToggle) showNetworkToggle.checked = settings.showNetwork;
   updateProviderUI(settings.provider);
+  buildColorSwatches(settings);
 
   // Apply network settings (best-effort relay — does not block boot)
   app.setNetworkSettings({ relayUrl: settings.relayUrl, showNetwork: settings.showNetwork });
@@ -159,7 +173,8 @@ async function init(): Promise<void> {
     settingsOverlay.classList.add("hidden");
     void initVoiceIfEnabled(settings);
     // Connect to relay after AI init — best-effort, non-blocking
-    void app.connectRelay();
+    void app.connectRelay().then(() => void loadCredentials());
+    renderMcpServers();
     showMainOverlay();
   } else {
     // Show settings overlay first
@@ -225,6 +240,156 @@ function updateProviderUI(provider: string): void {
   }
 }
 
+// === Soul Color Picker ===
+
+let activeColorPreset = "moonlight";
+
+function swatchGradient(tint: [number, number, number], glow: [number, number, number]): string {
+  const tr = Math.round(tint[0] * 200),
+    tg = Math.round(tint[1] * 200),
+    tb = Math.round(tint[2] * 200);
+  const gr = Math.round(glow[0] * 255),
+    gg = Math.round(glow[1] * 255),
+    gb = Math.round(glow[2] * 255);
+  return `radial-gradient(circle at 40% 40%, rgba(${gr},${gg},${gb},0.6), rgba(${tr},${tg},${tb},0.8))`;
+}
+
+function buildColorSwatches(settings: SpatialSettings): void {
+  if (!colorSwatches) return;
+  colorSwatches.innerHTML = "";
+  activeColorPreset = settings.colorPreset;
+
+  // Preset swatches
+  for (const [name, color] of Object.entries(COLOR_PRESETS)) {
+    const swatch = document.createElement("div");
+    swatch.className = `color-swatch${name === activeColorPreset ? " active" : ""}`;
+    swatch.style.background = swatchGradient(color.tint, color.glow);
+    swatch.title = name;
+    swatch.addEventListener("click", () => {
+      activeColorPreset = name;
+      app.setInteriorColor(name);
+      if (customColorPicker) customColorPicker.style.display = "none";
+      // Update active states
+      colorSwatches
+        .querySelectorAll(".color-swatch")
+        .forEach((el) => el.classList.remove("active"));
+      swatch.classList.add("active");
+    });
+    colorSwatches.appendChild(swatch);
+  }
+
+  // Custom swatch
+  const custom = document.createElement("div");
+  custom.className = `color-swatch custom-swatch${activeColorPreset === "custom" ? " active" : ""}`;
+  custom.title = "custom";
+  custom.addEventListener("click", () => {
+    activeColorPreset = "custom";
+    if (customColorPicker) customColorPicker.style.display = "block";
+    colorSwatches.querySelectorAll(".color-swatch").forEach((el) => el.classList.remove("active"));
+    custom.classList.add("active");
+    applyCustomColor();
+  });
+  colorSwatches.appendChild(custom);
+
+  // Apply saved color
+  if (settings.colorPreset === "custom") {
+    if (customColorPicker) customColorPicker.style.display = "block";
+    if (hueSlider) hueSlider.value = String(settings.customHue);
+    if (satSlider) satSlider.value = String(Math.round(settings.customSaturation * 100));
+    applyCustomColor();
+  } else {
+    app.setInteriorColor(settings.colorPreset);
+  }
+}
+
+function applyCustomColor(): void {
+  const hue = hueSlider ? parseFloat(hueSlider.value) : 220;
+  const sat = satSlider ? parseFloat(satSlider.value) / 100 : 0.7;
+  app.setInteriorColorDirect(deriveInteriorColor(hue, sat));
+}
+
+hueSlider?.addEventListener("input", applyCustomColor);
+satSlider?.addEventListener("input", applyCustomColor);
+
+// === MCP Server Management ===
+
+function renderMcpServers(): void {
+  if (!mcpServerList) return;
+  const servers = app.getMcpServers();
+  mcpServerList.innerHTML = "";
+  for (const server of servers) {
+    const item = document.createElement("div");
+    item.className = "mcp-server-item";
+
+    const dot = document.createElement("span");
+    dot.className = `mcp-server-dot ${server.connected ? "connected" : "disconnected"}`;
+
+    const name = document.createElement("span");
+    name.className = "mcp-server-name";
+    name.textContent = server.name;
+
+    const tools = document.createElement("span");
+    tools.className = "mcp-server-tools";
+    tools.textContent = `${server.toolCount} tools`;
+
+    const actions = document.createElement("span");
+    actions.className = "mcp-server-actions";
+
+    const trustBtn = document.createElement("button");
+    trustBtn.textContent = server.trusted ? "Untrust" : "Trust";
+    trustBtn.addEventListener("click", () => {
+      void app.setMcpServerTrust(server.name, !server.trusted).then(() => renderMcpServers());
+    });
+
+    const removeBtn = document.createElement("button");
+    removeBtn.textContent = "Remove";
+    removeBtn.addEventListener("click", () => {
+      void app.removeMcpServer(server.name).then(() => renderMcpServers());
+    });
+
+    actions.appendChild(trustBtn);
+    actions.appendChild(removeBtn);
+    item.appendChild(dot);
+    item.appendChild(name);
+    item.appendChild(tools);
+    item.appendChild(actions);
+    mcpServerList.appendChild(item);
+  }
+}
+
+mcpAddBtn?.addEventListener("click", () => {
+  const name = mcpAddName?.value.trim() ?? "";
+  const url = mcpAddUrl?.value.trim() ?? "";
+  if (!name || !url) return;
+  if (mcpAddBtn) {
+    mcpAddBtn.disabled = true;
+    mcpAddBtn.textContent = "Connecting...";
+  }
+  void app
+    .addMcpServer({
+      name,
+      transport: "http" as const,
+      url,
+      motebit: mcpAddMotebit?.checked ?? false,
+    })
+    .then(() => {
+      if (mcpAddName) mcpAddName.value = "";
+      if (mcpAddUrl) mcpAddUrl.value = "";
+      if (mcpAddMotebit) mcpAddMotebit.checked = false;
+      renderMcpServers();
+    })
+    .catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      statusEl.textContent = `MCP failed: ${msg}`;
+    })
+    .finally(() => {
+      if (mcpAddBtn) {
+        mcpAddBtn.disabled = false;
+        mcpAddBtn.textContent = "Add";
+      }
+    });
+});
+
 settingsSave?.addEventListener(
   "click",
   (e) =>
@@ -241,6 +406,9 @@ settingsSave?.addEventListener(
         proactiveEnabled: proactiveToggle?.checked ?? true,
         relayUrl: relayUrlInput?.value.trim() ?? "https://motebit-sync.fly.dev",
         showNetwork: showNetworkToggle?.checked ?? true,
+        colorPreset: activeColorPreset,
+        customHue: hueSlider ? parseFloat(hueSlider.value) : 220,
+        customSaturation: satSlider ? parseFloat(satSlider.value) / 100 : 0.7,
       };
       saveSettings(settings);
 
@@ -254,7 +422,8 @@ settingsSave?.addEventListener(
       }
 
       void initVoiceIfEnabled(settings);
-      void app.connectRelay();
+      void app.connectRelay().then(() => void loadCredentials());
+      renderMcpServers();
       settingsOverlay.classList.add("hidden");
       showMainOverlay();
     })(e),
@@ -433,169 +602,67 @@ function updateGazeAttention(
   lastGazeHit = gazeHit;
 }
 
-// === Visitor + Ghost Gaze Overlay ===
+// === Gaze & Delegation Overlays (reserved for future presence visualization) ===
 
-/**
- * Check if user is looking at a visitor or the ghost (when away).
- * Shows a floating label with the appropriate info.
- *
- * Visitors hover at trust-derived distances around the user.
- * The ghost is at the original creature orbit position.
- */
 function updatePresenceGaze(
-  camera: {
+  _camera: {
     matrixWorld: { elements: ArrayLike<number> };
     position: { x: number; y: number; z: number };
   },
-  headPos: [number, number, number],
-): void {
-  if (!app.networkConfig.showNetwork) {
-    if (gazedTarget !== null) {
-      gazedTarget = null;
-      hideGazeOverlay();
-    }
-    return;
-  }
-
-  const m = camera.matrixWorld.elements;
-  const fwdX = -m[8]!;
-  const fwdY = -m[9]!;
-  const fwdZ = -m[10]!;
-
-  const [cx, cy, cz] = headPos;
-
-  let closestTarget: string | null = null;
-  let closestDist = Infinity;
-
-  // Check visitors — positioned at trust-derived distances
-  const visitors = Array.from(app.visitors.values());
-  const total = visitors.length;
-  for (let i = 0; i < total; i++) {
-    const visitor = visitors[i]!;
-    const REMOTE_MAX = 2.0;
-    const REMOTE_MIN = 0.4;
-    const dist = REMOTE_MAX - visitor.trustScore * (REMOTE_MAX - REMOTE_MIN);
-    const angle = (i / Math.max(total, 1)) * Math.PI * 2;
-    const rx = cx + Math.cos(angle) * dist;
-    const ry = cy - 0.35; // ~shoulder height
-    const rz = cz + Math.sin(angle) * dist;
-
-    const dx = rx - cx;
-    const dy = ry - cy;
-    const dz = rz - cz;
-
-    const proj = dx * fwdX + dy * fwdY + dz * fwdZ;
-    if (proj <= 0) continue;
-
-    const perpX = dx - proj * fwdX;
-    const perpY = dy - proj * fwdY;
-    const perpZ = dz - proj * fwdZ;
-    const perpDist = Math.sqrt(perpX * perpX + perpY * perpY + perpZ * perpZ);
-
-    if (perpDist < 0.3 && perpDist < closestDist) {
-      closestDist = perpDist;
-      closestTarget = visitor.motebitId;
-    }
-  }
-
-  // Check ghost — when the creature is away, a ghost hovers at orbit position
-  if (app.delegationPresence === "away" && closestTarget === null) {
-    const state = app.dynamics.getState();
-    const anchorX = cx + 0.2;
-    const anchorY = cy - 0.35;
-    const anchorZ = cz - 0.05;
-    const ghostX = anchorX + Math.cos(state.angle) * state.radius;
-    const ghostY = anchorY;
-    const ghostZ = anchorZ + Math.sin(state.angle) * state.radius;
-
-    const dx = ghostX - cx;
-    const dy = ghostY - cy;
-    const dz = ghostZ - cz;
-    const proj = dx * fwdX + dy * fwdY + dz * fwdZ;
-    if (proj > 0) {
-      const perpX = dx - proj * fwdX;
-      const perpY = dy - proj * fwdY;
-      const perpZ = dz - proj * fwdZ;
-      const perpDist = Math.sqrt(perpX * perpX + perpY * perpY + perpZ * perpZ);
-      if (perpDist < 0.25) {
-        closestTarget = "ghost";
-        closestDist = perpDist;
-      }
-    }
-  }
-
-  if (closestTarget !== null) {
-    if (closestTarget !== gazedTarget) {
-      gazedTarget = closestTarget;
-      if (closestTarget === "ghost") {
-        showGhostOverlay();
-      } else {
-        const visitor = app.visitors.get(closestTarget);
-        if (visitor)
-          showVisitorOverlay(visitor.motebitId, visitor.trustScore, visitor.taskDescription);
-      }
-    }
-  } else {
-    if (gazedTarget !== null) {
-      gazedTarget = null;
-      hideGazeOverlay();
-    }
-  }
-}
-
-function showVisitorOverlay(motebitId: string, trustScore: number, task?: string): void {
-  if (!gazeOverlay) return;
-  if (gazeAgentId) gazeAgentId.textContent = `Visitor: ${motebitId.slice(0, 12)}…`;
-  if (gazeAgentTrust) gazeAgentTrust.textContent = `Trust: ${Math.round(trustScore * 100)}%`;
-  if (gazeAgentCaps) {
-    gazeAgentCaps.textContent = task != null && task !== "" ? `Task: ${task}` : "Carrying a task";
-  }
-  gazeOverlay.classList.remove("hidden");
-}
-
-function showGhostOverlay(): void {
-  if (!gazeOverlay) return;
-  const target = app.delegationTarget;
-  if (gazeAgentId) gazeAgentId.textContent = "Your agent is away";
-  if (gazeAgentTrust) {
-    gazeAgentTrust.textContent =
-      target != null ? `Delegated to ${target.slice(0, 12)}…` : "On a delegation";
-  }
-  if (gazeAgentCaps) gazeAgentCaps.textContent = "Will return with proof";
-  gazeOverlay.classList.remove("hidden");
-}
+  _headPos: [number, number, number],
+): void {}
 
 function hideGazeOverlay(): void {
   gazeOverlay?.classList.add("hidden");
 }
 
-// === Delegation Active Indicator ===
+function updateDelegationIndicator(): void {}
 
-/**
- * Update the amber delegation indicator.
- * Shows when your motebit is away on a task. Silent state change — no toast.
- */
-function updateDelegationIndicator(): void {
-  if (!delegationIndicator) return;
-  const isAway = app.delegationPresence === "away";
-  if (isAway) {
-    delegationIndicator.classList.remove("hidden");
-    // rAF deferred so CSS transition fires
-    requestAnimationFrame(() => {
-      delegationIndicator?.classList.add("active");
-    });
-    if (delegationLabel) {
-      const target = app.delegationTarget;
-      delegationLabel.textContent = target != null ? `away · ${target.slice(0, 8)}` : "away";
+// === Credentials ===
+
+async function loadCredentials(): Promise<void> {
+  const countEl = document.getElementById("spatial-credentials-count");
+  const listEl = document.getElementById("spatial-credentials-list");
+  if (!countEl || !listEl) return;
+
+  const settings = loadSettings();
+  if (!settings.relayUrl || !settings.showNetwork) return;
+
+  try {
+    const resp = await fetch(`${settings.relayUrl}/api/v1/agents/${app.motebitId}/credentials`);
+    if (!resp.ok) return;
+    const data = (await resp.json()) as {
+      credentials?: Array<{
+        credential_type: string;
+        credential: { issuer?: string | { id?: string }; issuanceDate?: string };
+        issued_at: number;
+      }>;
+    };
+    const creds = data.credentials ?? [];
+    countEl.textContent = `${creds.length} credential${creds.length !== 1 ? "s" : ""}`;
+    listEl.innerHTML = "";
+    for (const cred of creds) {
+      const item = document.createElement("div");
+      item.style.cssText =
+        "font-size:12px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.06);display:flex;justify-content:space-between;";
+      const typeName = (cred.credential_type || "unknown")
+        .replace("Agent", "")
+        .replace("Credential", "");
+      const dateStr = cred.credential.issuanceDate
+        ? new Date(cred.credential.issuanceDate).toLocaleDateString()
+        : new Date(cred.issued_at).toLocaleDateString();
+      const typeSpan = document.createElement("span");
+      typeSpan.style.opacity = "0.7";
+      typeSpan.textContent = typeName;
+      const dateSpan = document.createElement("span");
+      dateSpan.style.cssText = "opacity:0.35;font-size:11px;";
+      dateSpan.textContent = dateStr;
+      item.appendChild(typeSpan);
+      item.appendChild(dateSpan);
+      listEl.appendChild(item);
     }
-  } else {
-    delegationIndicator.classList.remove("active");
-    // Hide after fade-out transition (400ms)
-    setTimeout(() => {
-      if (app.delegationPresence !== "away") {
-        delegationIndicator?.classList.add("hidden");
-      }
-    }, 450);
+  } catch {
+    // Best-effort — relay may be offline
   }
 }
 

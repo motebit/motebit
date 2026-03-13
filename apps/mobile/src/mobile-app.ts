@@ -84,11 +84,7 @@ import {
   parse as parseIdentityFile,
   governanceToPolicyConfig,
 } from "@motebit/identity-file";
-import {
-  createExpoStorage,
-  ExpoGoalStore,
-  ExpoSqliteConversationStore,
-} from "./adapters/expo-sqlite";
+import { createExpoStorage, ExpoGoalStore } from "./adapters/expo-sqlite";
 import type { ExpoStorageResult } from "./adapters/expo-sqlite";
 import { ExpoGLAdapter } from "./adapters/expo-gl";
 import { SecureStoreAdapter } from "./adapters/secure-store";
@@ -954,41 +950,12 @@ export class MobileApp {
 
   // === Auto-Titling ===
 
-  private _autoTitlePending = false;
-
   /**
-   * Generate a title for the current conversation if it has enough messages
-   * and no title yet. Uses first 7 words of first user message (heuristic).
+   * Auto-generate a conversation title via AI (runtime.autoTitle),
+   * with heuristic fallback. Fire-and-forget — matches web/spatial pattern.
    */
-  generateTitleInBackground(): void {
-    if (this._autoTitlePending || !this.runtime || !this.storage) return;
-
-    const conversationId = this.runtime.getConversationId();
-    if (conversationId == null || conversationId === "") return;
-
-    const convStore = this.storage.conversationStore as ExpoSqliteConversationStore;
-    const count = convStore.getMessageCount(conversationId);
-    if (count < 4) return;
-
-    // Check if title already set
-    const conversations = convStore.listConversations(this.motebitId, 1);
-    const current = conversations.find((c) => c.conversationId === conversationId);
-    if (current?.title != null && current.title !== "") return;
-
-    this._autoTitlePending = true;
-
-    const history = this.runtime.getConversationHistory();
-    const firstUserMsg = history.find((m) => m.role === "user");
-    if (firstUserMsg) {
-      const words = firstUserMsg.content.split(/\s+/).slice(0, 7);
-      let title = words.join(" ");
-      if (firstUserMsg.content.split(/\s+/).length > 7) {
-        title += "...";
-      }
-      convStore.updateTitle(conversationId, title);
-    }
-
-    this._autoTitlePending = false;
+  autoTitle(): void {
+    void this.runtime?.autoTitle();
   }
 
   /** Manually trigger conversation summarization. */

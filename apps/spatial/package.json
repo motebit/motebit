@@ -23,6 +23,9 @@
     "@motebit/crypto": "workspace:*",
     "@motebit/core-identity": "workspace:*",
     "@motebit/browser-persistence": "workspace:*",
+    "@motebit/mcp-client": "workspace:*",
+    "@motebit/tools": "workspace:*",
+    "@motebit/sync-engine": "workspace:*",
     "@motebit/voice": "workspace:*",
     "@ricky0123/vad-web": "^0.0.22"
   },
