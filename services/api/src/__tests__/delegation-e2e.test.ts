@@ -563,4 +563,411 @@ describe("Delegation E2E", () => {
     const steps = store.getStepsForPlan(plan.plan_id);
     expect(steps[0]!.status).toBe(StepStatus.Failed);
   });
+
+  // === Credential Issuance & Verification ===
+
+  it("credential issued on successful receipt delivery", async () => {
+    // Register the worker agent in the agent registry so the relay can resolve its DID
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: workerMotebitId,
+        endpoint_url: "http://localhost:9999/mcp",
+        capabilities: ["stdio_mcp"],
+      }),
+    });
+
+    // Submit a task and post a successful receipt so the relay issues a credential
+    const workerWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+    relay.connections.set(MOTEBIT_ID, [
+      { ws: workerWs as never, deviceId: "worker-device", capabilities: ["stdio_mcp"] },
+    ]);
+
+    const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        prompt: "Run credential test",
+        required_capabilities: ["stdio_mcp"],
+      }),
+    });
+    expect(taskRes.status).toBe(201);
+    const { task_id: taskId } = (await taskRes.json()) as { task_id: string };
+
+    const receipt = await makeReceipt(taskId);
+    const receiptRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task/${taskId}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(receipt),
+    });
+    expect(receiptRes.status).toBe(200);
+    const receiptBody = (await receiptRes.json()) as {
+      status: string;
+      credential_id: string | null;
+    };
+    expect(receiptBody.credential_id).toBeTruthy();
+
+    // GET credentials for the worker agent
+    const credsRes = await relay.app.request(`/api/v1/agents/${workerMotebitId}/credentials`, {
+      headers: AUTH_HEADER,
+    });
+    expect(credsRes.status).toBe(200);
+    const credsBody = (await credsRes.json()) as {
+      motebit_id: string;
+      credentials: Array<{
+        credential_id: string;
+        credential_type: string;
+        credential: { type: string[]; credentialSubject: { id: string } };
+      }>;
+    };
+
+    expect(credsBody.credentials.length).toBeGreaterThanOrEqual(1);
+    const repCred = credsBody.credentials.find(
+      (c) => c.credential_type === "AgentReputationCredential",
+    );
+    expect(repCred).toBeDefined();
+    expect(repCred!.credential.type).toContain("AgentReputationCredential");
+    // Subject should reference the executing agent via did:key or did:motebit
+    expect(repCred!.credential.credentialSubject.id).toBeTruthy();
+  });
+
+  it("presentation bundles credentials into signed VP", async () => {
+    // Set up: register worker, submit task, post receipt to get a credential issued
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: workerMotebitId,
+        endpoint_url: "http://localhost:9999/mcp",
+        capabilities: ["stdio_mcp"],
+      }),
+    });
+
+    const workerWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+    relay.connections.set(MOTEBIT_ID, [
+      { ws: workerWs as never, deviceId: "worker-device", capabilities: ["stdio_mcp"] },
+    ]);
+
+    const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ prompt: "VP test", required_capabilities: ["stdio_mcp"] }),
+    });
+    const { task_id: taskId } = (await taskRes.json()) as { task_id: string };
+    const receipt = await makeReceipt(taskId);
+    await relay.app.request(`/agent/${MOTEBIT_ID}/task/${taskId}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(receipt),
+    });
+
+    // Request a VerifiablePresentation for the worker agent
+    const vpRes = await relay.app.request(`/api/v1/agents/${workerMotebitId}/presentation`, {
+      method: "POST",
+      headers: AUTH_HEADER,
+    });
+    expect(vpRes.status).toBe(200);
+    const vpBody = (await vpRes.json()) as {
+      presentation: {
+        "@context": string[];
+        type: string[];
+        holder: string;
+        verifiableCredential: Array<{ type: string[] }>;
+        proof: { type: string };
+      };
+      credential_count: number;
+      relay_did: string;
+    };
+
+    expect(vpBody.presentation.type).toContain("VerifiablePresentation");
+    expect(vpBody.presentation.verifiableCredential.length).toBeGreaterThanOrEqual(1);
+    expect(vpBody.credential_count).toBeGreaterThanOrEqual(1);
+    expect(vpBody.relay_did).toMatch(/^did:key:/);
+    // The VP should include the reputation credential
+    const hasRepCred = vpBody.presentation.verifiableCredential.some((vc) =>
+      vc.type.includes("AgentReputationCredential"),
+    );
+    expect(hasRepCred).toBe(true);
+  });
+
+  it("credential verification via public endpoint", async () => {
+    // Set up: register worker, submit task, post receipt
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: workerMotebitId,
+        endpoint_url: "http://localhost:9999/mcp",
+        capabilities: ["stdio_mcp"],
+      }),
+    });
+
+    const workerWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+    relay.connections.set(MOTEBIT_ID, [
+      { ws: workerWs as never, deviceId: "worker-device", capabilities: ["stdio_mcp"] },
+    ]);
+
+    const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ prompt: "Verify test", required_capabilities: ["stdio_mcp"] }),
+    });
+    const { task_id: taskId } = (await taskRes.json()) as { task_id: string };
+    const receipt = await makeReceipt(taskId);
+    await relay.app.request(`/agent/${MOTEBIT_ID}/task/${taskId}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(receipt),
+    });
+
+    // Fetch the credential
+    const credsRes = await relay.app.request(`/api/v1/agents/${workerMotebitId}/credentials`, {
+      headers: AUTH_HEADER,
+    });
+    const credsBody = (await credsRes.json()) as {
+      credentials: Array<{ credential: Record<string, unknown> }>;
+    };
+    expect(credsBody.credentials.length).toBeGreaterThanOrEqual(1);
+    const credential = credsBody.credentials[0]!.credential;
+
+    // Verify the credential via the public endpoint (no auth required)
+    const verifyRes = await relay.app.request("/api/v1/credentials/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(credential),
+    });
+    expect(verifyRes.status).toBe(200);
+    const verifyBody = (await verifyRes.json()) as {
+      valid: boolean;
+      issuer: string;
+      subject: string;
+    };
+    expect(verifyBody.valid).toBe(true);
+    expect(verifyBody.issuer).toMatch(/^did:key:/);
+    expect(verifyBody.subject).toBeTruthy();
+  });
+
+  // === Execution Ledger Round-Trip ===
+
+  it("execution ledger: POST and GET round-trip", async () => {
+    const goalId = "goal-ledger-test";
+    const planId = "plan-ledger-test";
+    const now = Date.now();
+
+    const timeline = [
+      { timestamp: now, type: "goal_started", payload: { goal_id: goalId } },
+      {
+        timestamp: now + 10,
+        type: "plan_created",
+        payload: { plan_id: planId, title: "Ledger Test Plan", total_steps: 1 },
+      },
+      {
+        timestamp: now + 20,
+        type: "step_started",
+        payload: { plan_id: planId, step_id: "step-1", ordinal: 0, description: "Run task" },
+      },
+      {
+        timestamp: now + 30,
+        type: "step_completed",
+        payload: { plan_id: planId, step_id: "step-1", ordinal: 0, tool_calls_made: 2 },
+      },
+      { timestamp: now + 40, type: "plan_completed", payload: { plan_id: planId } },
+      {
+        timestamp: now + 50,
+        type: "goal_completed",
+        payload: { goal_id: goalId, status: "completed" },
+      },
+    ];
+
+    // Compute content_hash per spec §5: canonical JSON per entry, joined by \n, SHA-256
+    function canonicalJson(obj: unknown): string {
+      if (obj === null || obj === undefined) return JSON.stringify(obj);
+      if (typeof obj !== "object") return JSON.stringify(obj);
+      if (Array.isArray(obj)) {
+        return "[" + obj.map((item) => canonicalJson(item)).join(",") + "]";
+      }
+      const sorted = Object.keys(obj as Record<string, unknown>).sort();
+      const entries = sorted.map(
+        (key) => JSON.stringify(key) + ":" + canonicalJson((obj as Record<string, unknown>)[key]),
+      );
+      return "{" + entries.join(",") + "}";
+    }
+
+    const canonicalEntries = timeline.map((e) => canonicalJson(e));
+    const joined = canonicalEntries.join("\n");
+    const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(joined));
+    const contentHash = Array.from(new Uint8Array(hashBuffer))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+
+    const ledger = {
+      spec: "motebit/execution-ledger@1.0",
+      motebit_id: MOTEBIT_ID,
+      goal_id: goalId,
+      plan_id: planId,
+      started_at: now,
+      completed_at: now + 50,
+      status: "completed",
+      timeline,
+      steps: [
+        {
+          step_id: "step-1",
+          ordinal: 0,
+          description: "Run task",
+          status: "completed",
+          tools_used: ["shell_exec", "read_file"],
+          tool_calls: 2,
+          started_at: now + 20,
+          completed_at: now + 30,
+        },
+      ],
+      delegation_receipts: [],
+      content_hash: contentHash,
+    };
+
+    // POST ledger
+    const postRes = await relay.app.request(`/agent/${MOTEBIT_ID}/ledger`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(ledger),
+    });
+    expect(postRes.status).toBe(201);
+    const postBody = (await postRes.json()) as { ledger_id: string; content_hash: string };
+    expect(postBody.ledger_id).toBeTruthy();
+    expect(postBody.content_hash).toBe(contentHash);
+
+    // GET ledger back
+    const getRes = await relay.app.request(`/agent/${MOTEBIT_ID}/ledger/${goalId}`, {
+      headers: AUTH_HEADER,
+    });
+    expect(getRes.status).toBe(200);
+    const retrieved = (await getRes.json()) as Record<string, unknown>;
+
+    expect(retrieved.spec).toBe("motebit/execution-ledger@1.0");
+    expect(retrieved.motebit_id).toBe(MOTEBIT_ID);
+    expect(retrieved.goal_id).toBe(goalId);
+    expect(retrieved.plan_id).toBe(planId);
+    expect(retrieved.content_hash).toBe(contentHash);
+    expect(retrieved.status).toBe("completed");
+    expect(Array.isArray(retrieved.timeline)).toBe(true);
+    expect((retrieved.timeline as unknown[]).length).toBe(6);
+    expect(Array.isArray(retrieved.steps)).toBe(true);
+    expect((retrieved.steps as unknown[]).length).toBe(1);
+    expect(Array.isArray(retrieved.delegation_receipts)).toBe(true);
+  });
+
+  it("execution ledger: rejects invalid spec version", async () => {
+    const res = await relay.app.request(`/agent/${MOTEBIT_ID}/ledger`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        spec: "motebit/execution-ledger@2.0",
+        motebit_id: MOTEBIT_ID,
+        goal_id: "goal-bad",
+        content_hash: "abc123",
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain("execution-ledger@1.0");
+  });
+
+  it("execution ledger: rejects motebit_id mismatch", async () => {
+    const res = await relay.app.request(`/agent/${MOTEBIT_ID}/ledger`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        spec: "motebit/execution-ledger@1.0",
+        motebit_id: "wrong-motebit",
+        goal_id: "goal-bad",
+        content_hash: "abc123",
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain("does not match");
+  });
+
+  // === Budget Verification in Delegation Flow ===
+
+  it("budget lock + settlement on delegation with priced service listing", async () => {
+    // Register the worker agent with a service listing that includes pricing
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: workerMotebitId,
+        endpoint_url: "http://localhost:9999/mcp",
+        capabilities: ["stdio_mcp"],
+      }),
+    });
+
+    // Create a service listing with pricing for stdio_mcp
+    await relay.app.request(`/api/v1/agents/${workerMotebitId}/listing`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        capabilities: ["stdio_mcp"],
+        pricing: [{ capability: "stdio_mcp", unit_cost: 0.05, currency: "USD", per: "task" }],
+        sla: { max_latency_ms: 3000, availability_guarantee: 0.99 },
+        description: "Worker agent for budget test",
+      }),
+    });
+
+    // Connect worker device to relay
+    const workerWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+    relay.connections.set(workerMotebitId, [
+      { ws: workerWs as never, deviceId: "worker-device", capabilities: ["stdio_mcp"] },
+    ]);
+
+    // Submit task with max_budget — this should trigger budget lock
+    const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        prompt: "Budget test task",
+        required_capabilities: ["stdio_mcp"],
+        max_budget: 1.0,
+      }),
+    });
+    expect(taskRes.status).toBe(201);
+    const { task_id: taskId } = (await taskRes.json()) as { task_id: string };
+
+    // Check budget BEFORE receipt — should show locked funds
+    const budgetBeforeRes = await relay.app.request(`/agent/${MOTEBIT_ID}/budget`, {
+      headers: AUTH_HEADER,
+    });
+    expect(budgetBeforeRes.status).toBe(200);
+    const budgetBefore = (await budgetBeforeRes.json()) as {
+      summary: { total_locked: number; total_settled: number };
+      allocations: Array<Record<string, unknown>>;
+    };
+    expect(budgetBefore.summary.total_locked).toBeGreaterThan(0);
+
+    // Worker posts successful receipt
+    const receipt = await makeReceipt(taskId);
+    const receiptRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task/${taskId}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(receipt),
+    });
+    expect(receiptRes.status).toBe(200);
+
+    // Check budget AFTER receipt — should show settlement
+    const budgetAfterRes = await relay.app.request(`/agent/${MOTEBIT_ID}/budget`, {
+      headers: AUTH_HEADER,
+    });
+    expect(budgetAfterRes.status).toBe(200);
+    const budgetAfter = (await budgetAfterRes.json()) as {
+      summary: { total_locked: number; total_settled: number };
+      allocations: Array<Record<string, unknown>>;
+    };
+    // After settlement, locked amount should decrease (allocation moved from locked to settled)
+    expect(budgetAfter.summary.total_locked).toBe(0);
+    expect(budgetAfter.summary.total_settled).toBeGreaterThan(0);
+    // At least one allocation should show settlement info
+    const settledAlloc = budgetAfter.allocations.find((a) => a.settlement_id != null);
+    expect(settledAlloc).toBeDefined();
+  });
 });
