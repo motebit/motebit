@@ -311,10 +311,16 @@ describe("ThreeJSAdapter (headless)", () => {
     await adapter.init(null);
     const audio: AudioReactivity = { rms: 0.5, low: 0.3, mid: 0.4, high: 0.2 };
     adapter.setAudioReactivity(audio);
-    expect((adapter as unknown as { audio: AudioReactivity | null }).audio).toBe(audio);
+    expect(
+      (adapter as unknown as { creatureState: { audio: AudioReactivity | null } }).creatureState
+        .audio,
+    ).toBe(audio);
 
     adapter.setAudioReactivity(null);
-    expect((adapter as unknown as { audio: AudioReactivity | null }).audio).toBeNull();
+    expect(
+      (adapter as unknown as { creatureState: { audio: AudioReactivity | null } }).creatureState
+        .audio,
+    ).toBeNull();
   });
 
   it("setBackground is safe without scene", () => {
@@ -507,8 +513,11 @@ describe("WebXRThreeJSAdapter", () => {
 
   it("setCreatureWorldPosition stores base position", () => {
     adapter.setCreatureWorldPosition(1, -0.5, -1);
-    const bp = (adapter as unknown as { basePosition: { x: number; y: number; z: number } })
-      .basePosition;
+    const bp = (
+      adapter as unknown as {
+        creatureState: { basePosition: { x: number; y: number; z: number } };
+      }
+    ).creatureState.basePosition;
     expect(bp).toEqual({ x: 1, y: -0.5, z: -1 });
   });
 
@@ -548,10 +557,16 @@ describe("WebXRThreeJSAdapter", () => {
     await adapter.init(null);
     const audio: AudioReactivity = { rms: 0.5, low: 0.3, mid: 0.4, high: 0.2 };
     adapter.setAudioReactivity(audio);
-    expect((adapter as unknown as { audio: AudioReactivity | null }).audio).toBe(audio);
+    expect(
+      (adapter as unknown as { creatureState: { audio: AudioReactivity | null } }).creatureState
+        .audio,
+    ).toBe(audio);
 
     adapter.setAudioReactivity(null);
-    expect((adapter as unknown as { audio: AudioReactivity | null }).audio).toBeNull();
+    expect(
+      (adapter as unknown as { creatureState: { audio: AudioReactivity | null } }).creatureState
+        .audio,
+    ).toBeNull();
   });
 
   it("resize is safe headless", async () => {
