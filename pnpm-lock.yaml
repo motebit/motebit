@@ -512,6 +512,12 @@ importers:
       '@motebit/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto
+      '@motebit/mcp-client':
+        specifier: workspace:*
+        version: link:../../packages/mcp-client
+      '@motebit/planner':
+        specifier: workspace:*
+        version: link:../../packages/planner
       '@motebit/policy-invariants':
         specifier: workspace:*
         version: link:../../packages/policy-invariants
@@ -599,6 +605,9 @@ importers:
       '@motebit/memory-graph':
         specifier: workspace:*
         version: link:../memory-graph
+      '@motebit/planner':
+        specifier: workspace:*
+        version: link:../planner
       '@motebit/privacy-layer':
         specifier: workspace:*
         version: link:../privacy-layer

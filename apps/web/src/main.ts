@@ -69,6 +69,7 @@ initSlashCommands(chatAPI, ctx, {
   openConversations: () => conversations.open(),
   openShortcuts: () => openShortcutDialog(),
   openMemory: () => gatedPanels.openMemory(),
+  openGoals: () => gatedPanels.openGoals(),
 });
 
 const chatInput = document.getElementById("chat-input") as HTMLInputElement;

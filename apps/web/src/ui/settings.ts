@@ -180,6 +180,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     colorPicker.buildColorSwatches();
     settingsBackdrop.classList.add("open");
     settingsModal.classList.add("open");
+    renderMcpServers();
 
     // Pre-fill from current provider config
     const config = ctx.getConfig();
@@ -314,6 +315,90 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       ctx.showToast(`WebLLM failed: ${msg}`);
     }
   }
+
+  // === MCP Server Management ===
+
+  const mcpServerList = document.getElementById("mcp-server-list") as HTMLDivElement;
+  const mcpAddName = document.getElementById("mcp-add-name") as HTMLInputElement;
+  const mcpAddUrl = document.getElementById("mcp-add-url") as HTMLInputElement;
+  const mcpAddMotebit = document.getElementById("mcp-add-motebit") as HTMLInputElement;
+  const mcpAddBtn = document.getElementById("mcp-add-btn") as HTMLButtonElement;
+
+  function renderMcpServers(): void {
+    const servers = ctx.app.getMcpServers();
+    mcpServerList.innerHTML = "";
+    for (const server of servers) {
+      const item = document.createElement("div");
+      item.className = "mcp-server-item";
+
+      const dot = document.createElement("span");
+      dot.className = `mcp-server-dot ${server.connected ? "connected" : "disconnected"}`;
+      item.appendChild(dot);
+
+      const name = document.createElement("span");
+      name.className = "mcp-server-name";
+      name.textContent = server.name;
+      item.appendChild(name);
+
+      const tools = document.createElement("span");
+      tools.className = "mcp-server-tools";
+      tools.textContent = `${server.toolCount} tools`;
+      item.appendChild(tools);
+
+      const actions = document.createElement("div");
+      actions.className = "mcp-server-actions";
+
+      const trustBtn = document.createElement("button");
+      trustBtn.textContent = server.trusted ? "Untrust" : "Trust";
+      trustBtn.addEventListener("click", () => {
+        void ctx.app.setMcpServerTrust(server.name, !server.trusted).then(() => renderMcpServers());
+      });
+      actions.appendChild(trustBtn);
+
+      const removeBtn = document.createElement("button");
+      removeBtn.textContent = "Remove";
+      removeBtn.addEventListener("click", () => {
+        void ctx.app.removeMcpServer(server.name).then(() => renderMcpServers());
+      });
+      actions.appendChild(removeBtn);
+
+      item.appendChild(actions);
+      mcpServerList.appendChild(item);
+    }
+  }
+
+  mcpAddBtn.addEventListener("click", () => {
+    const name = mcpAddName.value.trim();
+    const url = mcpAddUrl.value.trim();
+    if (!name || !url) {
+      ctx.showToast("Name and URL are required");
+      return;
+    }
+    mcpAddBtn.disabled = true;
+    mcpAddBtn.textContent = "Connecting...";
+    void ctx.app
+      .addMcpServer({
+        name,
+        transport: "http",
+        url,
+        motebit: mcpAddMotebit.checked,
+      })
+      .then(() => {
+        mcpAddName.value = "";
+        mcpAddUrl.value = "";
+        mcpAddMotebit.checked = false;
+        renderMcpServers();
+        ctx.showToast(`Connected to ${name}`);
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.showToast(`MCP failed: ${msg}`);
+      })
+      .finally(() => {
+        mcpAddBtn.disabled = false;
+        mcpAddBtn.textContent = "Add";
+      });
+  });
 
   // === Escape key ===
 

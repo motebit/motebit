@@ -1,10 +1,18 @@
 import { MotebitRuntime } from "@motebit/runtime";
-import type { StreamChunk, StorageAdapters } from "@motebit/runtime";
+import type { StreamChunk, StorageAdapters, PlanChunk } from "@motebit/runtime";
 import type { ConversationMessage, BehaviorCues, EventType } from "@motebit/sdk";
 import { ThreeJSAdapter } from "@motebit/render-engine";
 import type { AudioReactivity } from "@motebit/render-engine";
 import type { StreamingProvider } from "@motebit/ai-core/browser";
-import { createBrowserStorage, IdbConversationStore } from "@motebit/browser-persistence";
+import {
+  createBrowserStorage,
+  IdbConversationStore,
+  IdbPlanStore,
+  IdbGradientStore,
+} from "@motebit/browser-persistence";
+import { McpClientAdapter } from "@motebit/mcp-client";
+import type { McpServerConfig } from "@motebit/mcp-client";
+import { InMemoryToolRegistry } from "@motebit/tools/web-safe";
 import { bootstrapIdentity, type BootstrapConfigStore } from "@motebit/core-identity";
 import { createSignedToken, deriveSyncEncryptionKey } from "@motebit/crypto";
 import {
@@ -97,6 +105,8 @@ export class WebApp {
   private _wsUnsubOnEvent: (() => void) | null = null;
   private _localEventStore: StorageAdapters["eventStore"] | null = null;
   private keyStore = new EncryptedKeyStore();
+  private mcpAdapters = new Map<string, McpClientAdapter>();
+  private _mcpServers: McpServerConfig[] = [];
   private cuesTickInterval: ReturnType<typeof setInterval> | null = null;
   private idleCues: BehaviorCues = {
     hover_distance: 0.4,
@@ -157,9 +167,13 @@ export class WebApp {
       await this.migrateLegacyConversations(storage);
     }
 
-    // Preload conversation cache for sync access
+    // Preload caches for sync access
     const convStore = storage.conversationStore as IdbConversationStore;
     await convStore.preload(this._motebitId);
+    const planStore = storage.planStore as IdbPlanStore;
+    await planStore.preload(this._motebitId);
+    const gradientStore = storage.gradientStore as IdbGradientStore;
+    await gradientStore.preload(this._motebitId);
 
     // Create runtime — no AI provider yet, will be set via connectProvider()
     const keyring = new LocalStorageKeyringAdapter();
@@ -182,6 +196,9 @@ export class WebApp {
         this.runtime.pushStateUpdate(cursorUpdates);
       }
     }, 33);
+
+    // Reconnect saved MCP servers
+    void this.reconnectMcpServers();
   }
 
   /**
@@ -466,6 +483,176 @@ export class WebApp {
 
   get publicKeyHex(): string {
     return this._publicKeyHex;
+  }
+
+  // === MCP Management ===
+
+  async addMcpServer(config: McpServerConfig): Promise<void> {
+    if (config.transport !== "http") {
+      throw new Error("Web only supports HTTP MCP servers. Use the desktop or CLI app for stdio servers.");
+    }
+    if (config.url == null || config.url === "") {
+      throw new Error("HTTP MCP server requires a url");
+    }
+
+    const adapter = new McpClientAdapter(config);
+    await adapter.connect();
+
+    // Manifest pinning: pin hash on first connect, revoke trust on mismatch
+    const manifestResult = await adapter.checkManifest(
+      config.toolManifestHash,
+      config.pinnedToolNames,
+    );
+    if (!manifestResult.ok) {
+      config.trusted = false;
+    }
+    config.toolManifestHash = manifestResult.hash;
+    config.pinnedToolNames = manifestResult.toolNames;
+
+    // Persist motebit public key if newly pinned during connect
+    if (adapter.isMotebit && adapter.verifiedIdentity?.verified) {
+      const pinnedKey = adapter.serverConfig.motebitPublicKey;
+      if (pinnedKey && !config.motebitPublicKey) {
+        config.motebitPublicKey = pinnedKey;
+      }
+    }
+
+    this.registerMcpTools(adapter, config);
+
+    this.mcpAdapters.set(config.name, adapter);
+    this._mcpServers = this._mcpServers.filter((s) => s.name !== config.name);
+    this._mcpServers.push(config);
+    this.persistMcpServers();
+  }
+
+  async removeMcpServer(name: string): Promise<void> {
+    const adapter = this.mcpAdapters.get(name);
+    if (adapter) {
+      await adapter.disconnect();
+      this.mcpAdapters.delete(name);
+    }
+    if (this.runtime) {
+      this.runtime.unregisterExternalTools(`mcp:${name}`);
+    }
+    this._mcpServers = this._mcpServers.filter((s) => s.name !== name);
+    this.persistMcpServers();
+  }
+
+  getMcpServers(): Array<{
+    name: string;
+    url: string;
+    connected: boolean;
+    toolCount: number;
+    trusted: boolean;
+    motebit: boolean;
+  }> {
+    return this._mcpServers.map((config) => {
+      const adapter = this.mcpAdapters.get(config.name);
+      return {
+        name: config.name,
+        url: config.url ?? "",
+        connected: adapter?.isConnected ?? false,
+        toolCount: adapter?.getTools().length ?? 0,
+        trusted: config.trusted ?? false,
+        motebit: config.motebit ?? false,
+      };
+    });
+  }
+
+  async setMcpServerTrust(name: string, trusted: boolean): Promise<void> {
+    const config = this._mcpServers.find((s) => s.name === name);
+    if (!config) return;
+    config.trusted = trusted;
+
+    const adapter = this.mcpAdapters.get(name);
+    if (adapter && this.runtime) {
+      this.runtime.unregisterExternalTools(`mcp:${name}`);
+      this.registerMcpTools(adapter, config);
+    }
+
+    this.persistMcpServers();
+  }
+
+  private registerMcpTools(adapter: McpClientAdapter, config: McpServerConfig): void {
+    const tempRegistry = new InMemoryToolRegistry();
+    for (const mcpTool of adapter.getTools()) {
+      const def = {
+        name: mcpTool.name,
+        description: `[${config.name}] ${mcpTool.description ?? mcpTool.name}`,
+        inputSchema: mcpTool.inputSchema ?? { type: "object", properties: {} },
+        ...(config.trusted === true ? {} : { requiresApproval: true as const }),
+      };
+      tempRegistry.register(def, (args: Record<string, unknown>) =>
+        adapter.executeTool(mcpTool.name, args),
+      );
+    }
+    if (this.runtime) {
+      this.runtime.registerExternalTools(`mcp:${config.name}`, tempRegistry);
+    }
+  }
+
+  private async reconnectMcpServers(): Promise<void> {
+    const raw = localStorage.getItem("motebit:mcp_servers");
+    if (raw == null || raw === "") return;
+    try {
+      const configs = JSON.parse(raw) as McpServerConfig[];
+      this._mcpServers = configs;
+      let changed = false;
+      for (const config of configs) {
+        try {
+          const adapter = new McpClientAdapter(config);
+          await adapter.connect();
+
+          const manifestResult = await adapter.checkManifest(
+            config.toolManifestHash,
+            config.pinnedToolNames,
+          );
+          if (!manifestResult.ok) {
+            config.trusted = false;
+          }
+          config.toolManifestHash = manifestResult.hash;
+          config.pinnedToolNames = manifestResult.toolNames;
+
+          if (adapter.isMotebit && adapter.verifiedIdentity?.verified) {
+            const pinnedKey = adapter.serverConfig.motebitPublicKey;
+            if (pinnedKey && !config.motebitPublicKey) {
+              config.motebitPublicKey = pinnedKey;
+            }
+          }
+
+          this.registerMcpTools(adapter, config);
+          this.mcpAdapters.set(config.name, adapter);
+          changed = true;
+        } catch {
+          // Non-fatal — server may be offline
+        }
+      }
+      if (changed) {
+        this.persistMcpServers();
+      }
+    } catch {
+      // Non-fatal — corrupted localStorage
+    }
+  }
+
+  private persistMcpServers(): void {
+    localStorage.setItem("motebit:mcp_servers", JSON.stringify(this._mcpServers));
+  }
+
+  // === Goals (one-shot, user-triggered) ===
+
+  async *executeGoal(goalId: string, prompt: string): AsyncGenerator<PlanChunk> {
+    if (!this.runtime) throw new Error("Runtime not initialized");
+    if (!this.runtime.isAIReady) throw new Error("No provider connected");
+
+    yield* this.runtime.executePlan(goalId, prompt);
+  }
+
+  async *resumeGoal(planId: string): AsyncGenerator<PlanChunk> {
+    if (!this.runtime) throw new Error("Runtime not initialized");
+    if (!this.runtime.isAIReady) throw new Error("No provider connected");
+
+    yield* this.runtime.resumePlan(planId);
   }
 
   // === Sync ===

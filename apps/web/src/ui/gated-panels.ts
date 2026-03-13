@@ -1,15 +1,40 @@
 // === Gated HUD Panels ===
 // Memory panel is functional (IDB-backed via runtime).
 // Sync popup is functional (connects to relay via signed tokens).
-// Goals remains locked — requires operator console.
+// Goals panel is functional (one-shot plan execution, IDB-backed).
 
 import type { WebContext } from "../types";
 import type { WebSyncStatus } from "../web-app";
 import { saveSyncUrl, loadSyncUrl, clearSyncUrl } from "../storage";
+import type { PlanChunk } from "@motebit/runtime";
 
 export interface GatedPanelsAPI {
   openMemory(): void;
+  openGoals(): void;
   closeAll(): void;
+}
+
+interface WebGoal {
+  goal_id: string;
+  prompt: string;
+  status: "pending" | "running" | "completed" | "failed";
+  created_at: number;
+}
+
+const GOALS_STORAGE_KEY = "motebit:goals";
+
+function loadGoals(): WebGoal[] {
+  try {
+    const raw = localStorage.getItem(GOALS_STORAGE_KEY);
+    if (raw) return JSON.parse(raw) as WebGoal[];
+  } catch {
+    // corrupted
+  }
+  return [];
+}
+
+function saveGoals(goals: WebGoal[]): void {
+  localStorage.setItem(GOALS_STORAGE_KEY, JSON.stringify(goals));
 }
 
 function formatTimeAgo(timestamp: number): string {
@@ -33,6 +58,8 @@ const SYNC_STATUS_LABELS: Record<WebSyncStatus, string> = {
 };
 
 export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
+  let goals = loadGoals();
+
   // === Memory Panel (functional) ===
   const memoryPanel = document.getElementById("memory-panel") as HTMLDivElement;
   const memoryBackdrop = document.getElementById("memory-backdrop") as HTMLDivElement;
@@ -105,12 +132,164 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   document.getElementById("memory-close-btn")!.addEventListener("click", closeMemory);
   memoryBackdrop.addEventListener("click", closeMemory);
 
-  // === Goals Panel (locked) ===
+  // === Goals Panel (functional) ===
   const goalsPanel = document.getElementById("goals-panel") as HTMLDivElement;
   const goalsBackdrop = document.getElementById("goals-backdrop") as HTMLDivElement;
+  const goalList = document.getElementById("goal-list") as HTMLDivElement;
+  const goalEmpty = document.getElementById("goal-empty") as HTMLDivElement;
+  const goalPromptInput = document.getElementById("goal-prompt") as HTMLTextAreaElement;
+  const goalAddBtn = document.getElementById("goal-add-btn") as HTMLButtonElement;
+
+  function renderGoals(): void {
+    goalList.innerHTML = "";
+    if (goals.length === 0) {
+      goalEmpty.style.display = "block";
+      return;
+    }
+    goalEmpty.style.display = "none";
+
+    for (const goal of goals) {
+      const item = document.createElement("div");
+      item.className = "goal-item";
+
+      const header = document.createElement("div");
+      header.className = "goal-item-header";
+
+      const dot = document.createElement("span");
+      dot.className = `goal-status-dot ${goal.status}`;
+      header.appendChild(dot);
+
+      const text = document.createElement("span");
+      text.className = "goal-prompt-text";
+      text.textContent = goal.prompt;
+      text.title = goal.prompt;
+      header.appendChild(text);
+
+      const actions = document.createElement("div");
+      actions.className = "goal-actions";
+
+      if (goal.status === "pending") {
+        const execBtn = document.createElement("button");
+        execBtn.textContent = "Execute";
+        execBtn.addEventListener("click", () => void executeGoal(goal));
+        actions.appendChild(execBtn);
+      }
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.textContent = "Delete";
+      deleteBtn.addEventListener("click", () => {
+        goals = goals.filter((g) => g.goal_id !== goal.goal_id);
+        saveGoals(goals);
+        renderGoals();
+      });
+      actions.appendChild(deleteBtn);
+
+      header.appendChild(actions);
+      item.appendChild(header);
+
+      // Step progress area
+      const stepsEl = document.createElement("div");
+      stepsEl.className = "goal-steps";
+      stepsEl.id = `goal-steps-${goal.goal_id}`;
+      item.appendChild(stepsEl);
+
+      goalList.appendChild(item);
+    }
+  }
+
+  async function executeGoal(goal: WebGoal): Promise<void> {
+    if (!ctx.app.isProviderConnected) {
+      ctx.showToast("Connect an AI provider first");
+      return;
+    }
+
+    goal.status = "running";
+    saveGoals(goals);
+    renderGoals();
+
+    const goalsBtn = document.getElementById("goals-btn");
+    goalsBtn?.classList.add("executing");
+
+    const stepsEl = document.getElementById(`goal-steps-${goal.goal_id}`);
+
+    try {
+      const gen: AsyncGenerator<PlanChunk> = ctx.app.executeGoal(goal.goal_id, goal.prompt);
+      for await (const chunk of gen) {
+        if (stepsEl) {
+          renderPlanChunk(stepsEl, chunk);
+        }
+      }
+      goal.status = "completed";
+    } catch (err: unknown) {
+      goal.status = "failed";
+      const msg = err instanceof Error ? err.message : String(err);
+      if (stepsEl) {
+        const errEl = document.createElement("div");
+        errEl.className = "goal-step failed";
+        errEl.textContent = `Error: ${msg}`;
+        stepsEl.appendChild(errEl);
+      }
+    } finally {
+      goalsBtn?.classList.remove("executing");
+      saveGoals(goals);
+      renderGoals();
+    }
+  }
+
+  function renderPlanChunk(container: HTMLElement, chunk: PlanChunk): void {
+    const el = document.createElement("div");
+    el.className = "goal-step";
+
+    switch (chunk.type) {
+      case "plan_created":
+        el.textContent = `Plan: ${chunk.plan.title} (${chunk.plan.total_steps} steps)`;
+        break;
+      case "step_started":
+        el.className = "goal-step running";
+        el.textContent = `Running: ${chunk.step.description}`;
+        break;
+      case "step_completed":
+        el.className = "goal-step completed";
+        el.textContent = `Done: ${chunk.step.description}`;
+        break;
+      case "step_failed":
+        el.className = "goal-step failed";
+        el.textContent = `Failed: ${chunk.step.description}`;
+        break;
+      case "plan_completed":
+        el.className = "goal-step completed";
+        el.textContent = "Plan completed";
+        break;
+      case "plan_failed":
+        el.className = "goal-step failed";
+        el.textContent = `Plan failed: ${chunk.reason}`;
+        break;
+      default:
+        return; // skip text chunks in step view
+    }
+    container.appendChild(el);
+  }
+
+  goalAddBtn.addEventListener("click", () => {
+    const prompt = goalPromptInput.value.trim();
+    if (!prompt) return;
+
+    const goal: WebGoal = {
+      goal_id: crypto.randomUUID(),
+      prompt,
+      status: "pending",
+      created_at: Date.now(),
+    };
+    goals.unshift(goal);
+    saveGoals(goals);
+    goalPromptInput.value = "";
+    renderGoals();
+  });
 
   function openGoals(): void {
     closeAll();
+    goals = loadGoals(); // Refresh from storage
+    renderGoals();
     goalsPanel.classList.add("open");
     goalsBackdrop.classList.add("open");
   }
@@ -215,5 +394,5 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     syncPopup.classList.remove("open");
   }
 
-  return { openMemory, closeAll };
+  return { openMemory, openGoals, closeAll };
 }

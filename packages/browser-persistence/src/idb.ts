@@ -5,7 +5,7 @@
  * memory edges, identities, devices, and audit log.
  */
 
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 export function openMotebitDB(dbName = "motebit"): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -63,6 +63,35 @@ export function openMotebitDB(dbName = "motebit"): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains("conversation_messages")) {
         const msgs = db.createObjectStore("conversation_messages", { keyPath: "messageId" });
         msgs.createIndex("conversation_id", "conversationId");
+      }
+
+      // Plans
+      if (!db.objectStoreNames.contains("plans")) {
+        const plans = db.createObjectStore("plans", { keyPath: "plan_id" });
+        plans.createIndex("goal_id", "goal_id");
+        plans.createIndex("motebit_id", "motebit_id");
+      }
+
+      // Plan steps
+      if (!db.objectStoreNames.contains("plan_steps")) {
+        const steps = db.createObjectStore("plan_steps", { keyPath: "step_id" });
+        steps.createIndex("plan_id", "plan_id");
+      }
+
+      // Agent trust
+      if (!db.objectStoreNames.contains("agent_trust")) {
+        const trust = db.createObjectStore("agent_trust", {
+          keyPath: ["motebit_id", "remote_motebit_id"],
+        });
+        trust.createIndex("motebit_id", "motebit_id");
+      }
+
+      // Gradient snapshots
+      if (!db.objectStoreNames.contains("gradient_snapshots")) {
+        const grad = db.createObjectStore("gradient_snapshots", {
+          autoIncrement: true,
+        });
+        grad.createIndex("motebit_time", ["motebit_id", "timestamp"]);
       }
     };
 

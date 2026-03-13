@@ -15,6 +15,9 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "settings", description: "Open settings" },
   { name: "conversations", description: "Browse conversations" },
   { name: "memories", description: "Browse memories" },
+  { name: "goals", description: "Browse goals" },
+  { name: "goal", description: "Quick-add a goal" },
+  { name: "mcp", description: "MCP server management" },
   { name: "state", description: "Show state vector" },
   { name: "tools", description: "List registered tools" },
   { name: "summarize", description: "Summarize conversation" },
@@ -37,6 +40,7 @@ export interface SlashCommandsCallbacks {
   openConversations(): void;
   openShortcuts(): void;
   openMemory(): void;
+  openGoals(): void;
 }
 
 export function initSlashCommands(
@@ -125,6 +129,32 @@ export function initSlashCommands(
         chatInput.value = "";
         callbacks.openMemory();
         break;
+      case "goals":
+        chatInput.value = "";
+        callbacks.openGoals();
+        break;
+      case "goal": {
+        // "/goal <prompt>" — quick-add a goal without opening the panel
+        // The full input was already consumed by autocomplete selection,
+        // so this just opens the goals panel for the user to type there.
+        chatInput.value = "";
+        callbacks.openGoals();
+        break;
+      }
+      case "mcp": {
+        chatInput.value = "";
+        const servers = ctx.app.getMcpServers();
+        if (servers.length === 0) {
+          addMessage("system", "No MCP servers connected. Use Settings to add one.");
+        } else {
+          const lines = servers.map(
+            (s) =>
+              `${s.connected ? "●" : "○"} ${s.name} — ${s.url} (${s.toolCount} tools${s.trusted ? ", trusted" : ""})`,
+          );
+          addMessage("system", `MCP servers:\n${lines.join("\n")}`);
+        }
+        break;
+      }
       case "state": {
         chatInput.value = "";
         const runtime = ctx.app.getRuntime();

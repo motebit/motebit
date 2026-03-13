@@ -21,3 +21,5 @@ export {
   completeGoalDefinition,
   reportProgressDefinition,
 } from "./builtins/goal-tools.js";
+export { InMemoryToolRegistry } from "./registry.js";
+export type { ToolDefinition, ToolResult, ToolHandler, ToolRegistry } from "@motebit/sdk";

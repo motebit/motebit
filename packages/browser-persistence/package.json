@@ -18,7 +18,8 @@
     "@motebit/event-log": "workspace:*",
     "@motebit/memory-graph": "workspace:*",
     "@motebit/core-identity": "workspace:*",
-    "@motebit/privacy-layer": "workspace:*"
+    "@motebit/privacy-layer": "workspace:*",
+    "@motebit/planner": "workspace:*"
   },
   "devDependencies": {
     "@motebit/runtime": "workspace:*",
