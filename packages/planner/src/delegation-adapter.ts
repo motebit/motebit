@@ -12,18 +12,24 @@ export interface RelayDelegationConfig {
 export class RelayDelegationAdapter implements StepDelegationAdapter {
   constructor(private config: RelayDelegationConfig) {}
 
-  async delegateStep(step: PlanStep, timeoutMs: number): Promise<DelegatedStepResult> {
-    const { syncUrl, motebitId, authToken, onCustomMessage } = this.config;
-
-    // Submit task to relay
+  private buildHeaders(): Record<string, string> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (authToken != null && authToken !== "") {
-      headers["Authorization"] = `Bearer ${authToken}`;
+    if (this.config.authToken != null && this.config.authToken !== "") {
+      headers["Authorization"] = `Bearer ${this.config.authToken}`;
     }
+    return headers;
+  }
+
+  async delegateStep(
+    step: PlanStep,
+    timeoutMs: number,
+    onTaskSubmitted?: (taskId: string) => void,
+  ): Promise<DelegatedStepResult> {
+    const { syncUrl, motebitId, onCustomMessage } = this.config;
 
     const resp = await fetch(`${syncUrl}/agent/${motebitId}/task`, {
       method: "POST",
-      headers,
+      headers: this.buildHeaders(),
       body: JSON.stringify({
         prompt: step.prompt,
         submitted_by: "plan_engine",
@@ -38,6 +44,9 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
     }
 
     const { task_id } = (await resp.json()) as { task_id: string };
+
+    // Persist task_id immediately so recovery can find it if we crash/close
+    onTaskSubmitted?.(task_id);
 
     // Wait for task_result via WebSocket
     return new Promise<DelegatedStepResult>((resolve, reject) => {
@@ -71,5 +80,30 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
         }
       });
     });
+  }
+
+  async pollTaskResult(taskId: string, stepId: string): Promise<DelegatedStepResult | null> {
+    const { syncUrl, motebitId } = this.config;
+
+    try {
+      const resp = await fetch(`${syncUrl}/agent/${motebitId}/task/${taskId}`, {
+        headers: this.buildHeaders(),
+      });
+
+      if (!resp.ok) return null; // Task not found (expired) or auth error
+
+      const data = (await resp.json()) as { task: { status: string }; receipt: ExecutionReceipt | null };
+
+      if (data.receipt == null) return null; // Task still pending/running
+
+      return {
+        step_id: stepId,
+        task_id: taskId,
+        receipt: data.receipt,
+        result_text: data.receipt.result,
+      };
+    } catch {
+      return null; // Network error — caller should retry later
+    }
   }
 }

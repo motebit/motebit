@@ -723,6 +723,15 @@ export class MotebitRuntime {
     yield* this.planEngine.resumePlan(planId, this.loopDeps, undefined, runId);
   }
 
+  /**
+   * Recover delegated steps that were orphaned (e.g. tab closed during delegation).
+   * Polls relay for results and resumes plans where possible.
+   */
+  async *recoverDelegatedSteps(): AsyncGenerator<PlanChunk> {
+    if (!this.loopDeps) return;
+    yield* this.planEngine.recoverDelegatedSteps(this.motebitId, this.loopDeps);
+  }
+
   get isOperatorMode(): boolean {
     return this.policy.operatorMode;
   }

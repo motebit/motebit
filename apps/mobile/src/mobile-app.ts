@@ -1395,6 +1395,19 @@ export class MobileApp {
 
         this.syncEngine.connectRemote(encryptedWs);
         wsAdapter.connect();
+
+        // Recover any delegated steps orphaned by a previous app close
+        if (this.runtime) {
+          void (async () => {
+            try {
+              for await (const _chunk of this.runtime!.recoverDelegatedSteps()) {
+                // Chunks consumed — state changes propagate through plan store
+              }
+            } catch {
+              // Recovery is best-effort
+            }
+          })();
+        }
       } else {
         // Fallback: no encryption key available
         this.syncEngine.connectRemote(httpAdapter);

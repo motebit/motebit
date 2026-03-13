@@ -1,4 +1,4 @@
-import { StepStatus } from "@motebit/sdk";
+import { StepStatus, PlanStatus } from "@motebit/sdk";
 import type { Plan, PlanStep } from "@motebit/sdk";
 
 export interface PlanStoreAdapter {
@@ -11,6 +11,8 @@ export interface PlanStoreAdapter {
   getStepsForPlan(planId: string): PlanStep[];
   updateStep(stepId: string, updates: Partial<PlanStep>): void;
   getNextPendingStep(planId: string): PlanStep | null;
+  /** List all active plans for a motebit. Optional — returns [] if not implemented. */
+  listActivePlans?(motebitId: string): Plan[];
 }
 
 export class InMemoryPlanStore implements PlanStoreAdapter {
@@ -65,5 +67,15 @@ export class InMemoryPlanStore implements PlanStoreAdapter {
   getNextPendingStep(planId: string): PlanStep | null {
     const steps = this.getStepsForPlan(planId);
     return steps.find((s) => s.status === StepStatus.Pending) ?? null;
+  }
+
+  listActivePlans(motebitId: string): Plan[] {
+    const result: Plan[] = [];
+    for (const plan of this.plans.values()) {
+      if (plan.motebit_id === motebitId && plan.status === PlanStatus.Active) {
+        result.push({ ...plan });
+      }
+    }
+    return result;
   }
 }

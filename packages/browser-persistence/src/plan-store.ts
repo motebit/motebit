@@ -1,6 +1,6 @@
 import type { PlanStoreAdapter } from "@motebit/planner";
 import type { Plan, PlanStep } from "@motebit/sdk";
-import { StepStatus } from "@motebit/sdk";
+import { StepStatus, PlanStatus } from "@motebit/sdk";
 import { idbRequest } from "./idb.js";
 
 /**
@@ -99,5 +99,15 @@ export class IdbPlanStore implements PlanStoreAdapter {
   getNextPendingStep(planId: string): PlanStep | null {
     const steps = this.getStepsForPlan(planId);
     return steps.find((s) => s.status === StepStatus.Pending) ?? null;
+  }
+
+  listActivePlans(motebitId: string): Plan[] {
+    const result: Plan[] = [];
+    for (const plan of this._plans.values()) {
+      if (plan.motebit_id === motebitId && plan.status === PlanStatus.Active) {
+        result.push({ ...plan });
+      }
+    }
+    return result;
   }
 }

@@ -23,7 +23,13 @@ export type PlanChunk =
   | { type: "step_delegated"; step: PlanStep; task_id: string };
 
 export interface StepDelegationAdapter {
-  delegateStep(step: PlanStep, timeoutMs: number): Promise<DelegatedStepResult>;
+  delegateStep(
+    step: PlanStep,
+    timeoutMs: number,
+    onTaskSubmitted?: (taskId: string) => void,
+  ): Promise<DelegatedStepResult>;
+  /** Poll relay for a previously-submitted task's result. Returns null if task not found or still pending. */
+  pollTaskResult?(taskId: string, stepId: string): Promise<DelegatedStepResult | null>;
 }
 
 export interface PlanEngineConfig {
@@ -222,7 +228,14 @@ export class PlanEngine {
 
           try {
             const timeoutMs = this.config.delegationTimeoutMs ?? 300_000;
-            const delegationResult = await delegationAdapter.delegateStep(updatedStep, timeoutMs);
+            const delegationResult = await delegationAdapter.delegateStep(
+              updatedStep,
+              timeoutMs,
+              (taskId) => {
+                // Persist task_id immediately so recovery can find it if we crash/close
+                this.store.updateStep(step.step_id, { delegation_task_id: taskId });
+              },
+            );
 
             const summary = delegationResult.result_text.slice(0, 2000);
             this.store.updateStep(step.step_id, {
@@ -492,6 +505,75 @@ export class PlanEngine {
       }
     }
     return true;
+  }
+
+  /**
+   * Recover delegated steps that were orphaned (e.g. tab closed during delegation).
+   * Scans active plans for Running steps with a delegation_task_id, polls the relay
+   * for their results, and resumes the plan if all delegations are resolved.
+   */
+  async *recoverDelegatedSteps(
+    motebitId: string,
+    deps: MotebitLoopDependencies,
+  ): AsyncGenerator<PlanChunk> {
+    const adapter = this.config.delegationAdapter;
+    if (!adapter?.pollTaskResult) return;
+    if (!this.store.listActivePlans) return;
+
+    const activePlans = this.store.listActivePlans(motebitId);
+
+    for (const plan of activePlans) {
+      const steps = this.store.getStepsForPlan(plan.plan_id);
+      let recoveredAny = false;
+
+      for (const step of steps) {
+        if (step.status !== StepStatus.Running) continue;
+        if (step.delegation_task_id == null || step.delegation_task_id === "") continue;
+
+        // This step was delegated but we lost the listener — poll relay
+        const result = await adapter.pollTaskResult(step.delegation_task_id, step.step_id);
+
+        if (result != null) {
+          // Task completed (or failed) while we were away
+          const summary = result.result_text.slice(0, 2000);
+
+          if (result.receipt.status === "completed") {
+            this.store.updateStep(step.step_id, {
+              status: StepStatus.Completed,
+              completed_at: Date.now(),
+              result_summary: summary || null,
+            });
+            yield { type: "step_delegated", step: this.store.getStep(step.step_id)!, task_id: result.task_id };
+            yield { type: "step_completed", step: this.store.getStep(step.step_id)! };
+          } else {
+            this.store.updateStep(step.step_id, {
+              status: StepStatus.Failed,
+              completed_at: Date.now(),
+              error_message: `Delegated step ${result.receipt.status}: ${summary}`,
+            });
+            yield { type: "step_failed", step: this.store.getStep(step.step_id)!, error: summary };
+          }
+          recoveredAny = true;
+        }
+        // If null, task not found on relay (expired or never submitted) — leave as Running,
+        // will be cleaned up by the caller or a future housekeeping pass
+      }
+
+      if (recoveredAny) {
+        // Check if the plan can continue — resume from where it left off
+        const updatedSteps = this.store.getStepsForPlan(plan.plan_id);
+        const hasRunning = updatedSteps.some(s => s.status === StepStatus.Running);
+        const hasFailed = updatedSteps.some(s => s.status === StepStatus.Failed && !s.optional);
+
+        if (hasFailed) {
+          this.failPlan(plan, "Recovered delegated step failed");
+          yield { type: "plan_failed", plan: this.store.getPlan(plan.plan_id)!, reason: "Recovered delegated step failed" };
+        } else if (!hasRunning) {
+          // No more running steps — resume plan execution for remaining pending steps
+          yield* this.resumePlan(plan.plan_id, deps);
+        }
+      }
+    }
   }
 
   private failPlan(plan: Plan, _reason: string): void {

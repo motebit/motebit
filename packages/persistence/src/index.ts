@@ -1603,6 +1603,7 @@ interface PlanStepRow {
   completed_at: number | null;
   retry_count: number;
   required_capabilities: string | null;
+  delegation_task_id: string | null;
 }
 
 function rowToPlanStep(row: PlanStepRow): PlanStep {
@@ -1617,6 +1618,7 @@ function rowToPlanStep(row: PlanStepRow): PlanStep {
     required_capabilities: row.required_capabilities != null
       ? JSON.parse(row.required_capabilities) as PlanStep["required_capabilities"]
       : undefined,
+    delegation_task_id: row.delegation_task_id ?? undefined,
     status: row.status as StepStatus,
     result_summary: row.result_summary,
     error_message: row.error_message,
@@ -1632,6 +1634,7 @@ export class SqlitePlanStore {
   private stmtGetPlan: PreparedStatement;
   private stmtGetPlanForGoal: PreparedStatement;
   private stmtListPlans: PreparedStatement;
+  private stmtListActivePlans: PreparedStatement;
   private stmtSaveStep: PreparedStatement;
   private stmtGetStep: PreparedStatement;
   private stmtGetStepsForPlan: PreparedStatement;
@@ -1649,9 +1652,12 @@ export class SqlitePlanStore {
     this.stmtListPlans = db.prepare(
       `SELECT * FROM plans WHERE motebit_id = ? ORDER BY created_at DESC`,
     );
+    this.stmtListActivePlans = db.prepare(
+      `SELECT * FROM plans WHERE motebit_id = ? AND status = 'active' ORDER BY created_at DESC`,
+    );
     this.stmtSaveStep = db.prepare(
-      `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count, required_capabilities)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count, required_capabilities, delegation_task_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtGetStep = db.prepare(`SELECT * FROM plan_steps WHERE step_id = ?`);
     this.stmtGetStepsForPlan = db.prepare(
@@ -1693,6 +1699,11 @@ export class SqlitePlanStore {
     return rows.map(rowToPlan);
   }
 
+  listActivePlans(motebitId: string): Plan[] {
+    const rows = this.stmtListActivePlans.all(motebitId) as PlanRow[];
+    return rows.map(rowToPlan);
+  }
+
   updatePlan(planId: string, updates: Partial<Plan>): void {
     const existing = this.getPlan(planId);
     if (!existing) return;
@@ -1727,6 +1738,7 @@ export class SqlitePlanStore {
       step.completed_at,
       step.retry_count,
       step.required_capabilities != null ? JSON.stringify(step.required_capabilities) : null,
+      step.delegation_task_id ?? null,
     );
   }
 
@@ -1761,6 +1773,7 @@ export class SqlitePlanStore {
       merged.completed_at,
       merged.retry_count,
       merged.required_capabilities != null ? JSON.stringify(merged.required_capabilities) : null,
+      merged.delegation_task_id ?? null,
     );
   }
 
@@ -2145,6 +2158,11 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   if (userVersion < 24) {
     migrateExec(driver, "ALTER TABLE plan_steps ADD COLUMN required_capabilities TEXT DEFAULT NULL");
     driver.pragma("user_version = 24");
+  }
+
+  if (userVersion < 25) {
+    migrateExec(driver, "ALTER TABLE plan_steps ADD COLUMN delegation_task_id TEXT DEFAULT NULL");
+    driver.pragma("user_version = 25");
   }
 
   const eventStore = new SqliteEventStore(driver);

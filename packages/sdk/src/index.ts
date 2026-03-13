@@ -512,6 +512,8 @@ export interface PlanStep {
   optional: boolean;
   status: StepStatus;
   required_capabilities?: DeviceCapability[];
+  /** Task ID assigned by the relay when this step was delegated to a remote device. */
+  delegation_task_id?: string;
   result_summary: string | null;
   error_message: string | null;
   tool_calls_made: number;

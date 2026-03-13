@@ -230,4 +230,180 @@ describe("PlanEngine delegation", () => {
     engine.setDelegationAdapter({ delegateStep: vi.fn() });
     engine.setDelegationAdapter(undefined);
   });
+
+  it("delegation persists task_id via onTaskSubmitted callback", async () => {
+    const store = new InMemoryPlanStore();
+    const mockAdapter: StepDelegationAdapter = {
+      delegateStep: vi.fn().mockImplementation(async (step: PlanStep, _timeout: number, onTaskSubmitted?: (taskId: string) => void) => {
+        // Simulate relay returning task_id
+        onTaskSubmitted?.("relay-task-42");
+        return {
+          step_id: step.step_id,
+          task_id: "relay-task-42",
+          receipt: makeReceipt("relay-task-42"),
+          result_text: "Done",
+        } satisfies DelegatedStepResult;
+      }),
+    };
+
+    const engine = new PlanEngine(store, {
+      localCapabilities: [],
+      delegationAdapter: mockAdapter,
+    });
+
+    const deps = makeMockDeps([
+      { description: "Remote step", prompt: "do it", required_capabilities: ["file_system"] },
+    ]);
+    const { plan } = await engine.createPlan("goal-1", "test-mote", { goalPrompt: "test" }, deps);
+
+    for await (const _chunk of engine.executePlan(plan.plan_id, deps)) {
+      // consume
+    }
+
+    // The step should have delegation_task_id persisted (even though it's now completed)
+    const steps = store.getStepsForPlan(plan.plan_id);
+    expect(steps[0]!.delegation_task_id).toBe("relay-task-42");
+  });
+});
+
+describe("PlanEngine recovery", () => {
+  it("recoverDelegatedSteps resolves orphaned completed step", async () => {
+    const store = new InMemoryPlanStore();
+    const mockAdapter: StepDelegationAdapter = {
+      delegateStep: vi.fn(),
+      pollTaskResult: vi.fn().mockResolvedValue({
+        step_id: "step-1",
+        task_id: "task-orphan",
+        receipt: makeReceipt("task-orphan"),
+        result_text: "Completed while tab was closed",
+      } satisfies DelegatedStepResult),
+    };
+
+    const engine = new PlanEngine(store, {
+      localCapabilities: [],
+      delegationAdapter: mockAdapter,
+    });
+
+    // Manually create a plan with a Running step that has delegation_task_id
+    // (simulates state after tab close during delegation)
+    const deps = makeMockDeps([
+      { description: "Remote step", prompt: "do it", required_capabilities: ["file_system"] },
+    ]);
+    const { plan } = await engine.createPlan("goal-1", "test-mote", { goalPrompt: "test" }, deps);
+
+    // Manually set step to Running with delegation_task_id (simulating mid-delegation crash)
+    const steps = store.getStepsForPlan(plan.plan_id);
+    store.updateStep(steps[0]!.step_id, {
+      status: StepStatus.Running,
+      delegation_task_id: "task-orphan",
+    });
+
+    const chunks: Array<{ type: string }> = [];
+    for await (const chunk of engine.recoverDelegatedSteps("test-mote", deps)) {
+      chunks.push(chunk);
+    }
+
+    expect(mockAdapter.pollTaskResult).toHaveBeenCalledWith("task-orphan", steps[0]!.step_id);
+    expect(chunks.filter(c => c.type === "step_delegated")).toHaveLength(1);
+    expect(chunks.filter(c => c.type === "step_completed")).toHaveLength(1);
+
+    // Step should be Completed in store
+    const updatedStep = store.getStep(steps[0]!.step_id);
+    expect(updatedStep!.status).toBe(StepStatus.Completed);
+  });
+
+  it("recoverDelegatedSteps handles failed receipt", async () => {
+    const store = new InMemoryPlanStore();
+    const mockAdapter: StepDelegationAdapter = {
+      delegateStep: vi.fn(),
+      pollTaskResult: vi.fn().mockResolvedValue({
+        step_id: "step-1",
+        task_id: "task-fail",
+        receipt: makeReceipt("task-fail", "failed"),
+        result_text: "Task crashed",
+      } satisfies DelegatedStepResult),
+    };
+
+    const engine = new PlanEngine(store, {
+      localCapabilities: [],
+      delegationAdapter: mockAdapter,
+    });
+
+    const deps = makeMockDeps([
+      { description: "Remote step", prompt: "do it", required_capabilities: ["file_system"] },
+    ]);
+    const { plan } = await engine.createPlan("goal-1", "test-mote", { goalPrompt: "test" }, deps);
+
+    const steps = store.getStepsForPlan(plan.plan_id);
+    store.updateStep(steps[0]!.step_id, {
+      status: StepStatus.Running,
+      delegation_task_id: "task-fail",
+    });
+
+    const chunks: Array<{ type: string }> = [];
+    for await (const chunk of engine.recoverDelegatedSteps("test-mote", deps)) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.filter(c => c.type === "step_failed")).toHaveLength(1);
+    expect(chunks.filter(c => c.type === "plan_failed")).toHaveLength(1);
+
+    const updatedStep = store.getStep(steps[0]!.step_id);
+    expect(updatedStep!.status).toBe(StepStatus.Failed);
+  });
+
+  it("recoverDelegatedSteps skips steps without delegation_task_id", async () => {
+    const store = new InMemoryPlanStore();
+    const mockAdapter: StepDelegationAdapter = {
+      delegateStep: vi.fn(),
+      pollTaskResult: vi.fn(),
+    };
+
+    const engine = new PlanEngine(store, {
+      localCapabilities: [],
+      delegationAdapter: mockAdapter,
+    });
+
+    const deps = makeMockDeps([
+      { description: "Local step", prompt: "do it", required_capabilities: ["file_system"] },
+    ]);
+    const { plan } = await engine.createPlan("goal-1", "test-mote", { goalPrompt: "test" }, deps);
+
+    // Step is Running but has no delegation_task_id — it was a local execution, not delegated
+    const steps = store.getStepsForPlan(plan.plan_id);
+    store.updateStep(steps[0]!.step_id, { status: StepStatus.Running });
+
+    const chunks: Array<{ type: string }> = [];
+    for await (const chunk of engine.recoverDelegatedSteps("test-mote", deps)) {
+      chunks.push(chunk);
+    }
+
+    expect(mockAdapter.pollTaskResult).not.toHaveBeenCalled();
+    expect(chunks).toHaveLength(0);
+  });
+
+  it("recoverDelegatedSteps is no-op when adapter lacks pollTaskResult", async () => {
+    const store = new InMemoryPlanStore();
+    const mockAdapter: StepDelegationAdapter = {
+      delegateStep: vi.fn(),
+      // No pollTaskResult
+    };
+
+    const engine = new PlanEngine(store, {
+      localCapabilities: [],
+      delegationAdapter: mockAdapter,
+    });
+
+    const deps = makeMockDeps([
+      { description: "Remote step", prompt: "do it", required_capabilities: ["file_system"] },
+    ]);
+    await engine.createPlan("goal-1", "test-mote", { goalPrompt: "test" }, deps);
+
+    const chunks: Array<{ type: string }> = [];
+    for await (const chunk of engine.recoverDelegatedSteps("test-mote", deps)) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toHaveLength(0);
+  });
 });

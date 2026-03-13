@@ -789,6 +789,17 @@ export class WebApp {
     this.runtime.startSync();
     this.setSyncStatus("connected");
 
+    // Recover any delegated steps orphaned by a previous tab close
+    void (async () => {
+      try {
+        for await (const _chunk of this.runtime!.recoverDelegatedSteps()) {
+          // Chunks consumed — UI will pick up state changes from the plan store
+        }
+      } catch {
+        // Recovery is best-effort — don't break sync startup
+      }
+    })();
+
     // Token refresh every 4.5 min
     this._wsTokenRefreshTimer = setInterval(() => {
       void (async () => {
