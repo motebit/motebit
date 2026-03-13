@@ -1496,6 +1496,7 @@ export async function handleRegister(config: CliConfig): Promise<void> {
           did: deviceId,
           iat: Date.now(),
           exp: Date.now() + 5 * 60 * 1000,
+          jti: crypto.randomUUID(),
         },
         privateKeyBytes,
       );

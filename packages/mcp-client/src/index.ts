@@ -1,5 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { ToolDefinition, ToolResult, ExecutionReceipt } from "@motebit/sdk";
+import type { KeySuccessionRecord } from "@motebit/crypto";
 import { InMemoryToolRegistry } from "@motebit/tools";
 
 export {
@@ -108,6 +109,9 @@ function stripIdentityTag(text: string): string {
   return text.replace(/\n?\[motebit:[^\]]*\]\s*$/, "");
 }
 
+/** 24-hour grace period for accepting the previous key after rotation. */
+const KEY_GRACE_PERIOD_MS = 24 * 60 * 60 * 1000;
+
 export class McpClientAdapter {
   private client: Client;
   private config: McpServerConfig;
@@ -115,6 +119,8 @@ export class McpClientAdapter {
   private discoveredTools: ToolDefinition[] = [];
   private _delegationReceipts: ExecutionReceipt[] = [];
   private _verifiedIdentity: MotebitIdentityResult | null = null;
+  private _previousPublicKey?: string;
+  private _previousKeySupersededAt?: number;
 
   constructor(config: McpServerConfig) {
     this.config = config;
@@ -213,13 +219,21 @@ export class McpClientAdapter {
         );
       }
 
-      // Key pinning: verify or pin
+      // Key pinning: verify or pin (with grace period for rotated keys)
       if (this.config.motebitPublicKey) {
         if (this.config.motebitPublicKey !== parsed.public_key) {
-          await this.disconnect();
-          throw new Error(
-            `MCP server "${this.config.name}": motebit public key mismatch (expected ${this.config.motebitPublicKey.slice(0, 16)}..., got ${parsed.public_key.slice(0, 16)}...)`,
-          );
+          // Check if the previous key matches and we're within the grace period
+          const withinGrace =
+            this._previousPublicKey === parsed.public_key &&
+            this._previousKeySupersededAt !== undefined &&
+            Date.now() - this._previousKeySupersededAt < KEY_GRACE_PERIOD_MS;
+
+          if (!withinGrace) {
+            await this.disconnect();
+            throw new Error(
+              `MCP server "${this.config.name}": motebit public key mismatch (expected ${this.config.motebitPublicKey.slice(0, 16)}..., got ${parsed.public_key.slice(0, 16)}...)`,
+            );
+          }
         }
       } else {
         // Pin on first connect
@@ -260,6 +274,7 @@ export class McpClientAdapter {
           did: this.config.callerDeviceId,
           iat: Date.now(),
           exp: Date.now() + 5 * 60 * 1000, // 5 minute expiry
+          jti: crypto.randomUUID(),
         },
         this.config.callerPrivateKey,
       );
@@ -425,6 +440,44 @@ export class McpClientAdapter {
   /** Access to the server config (for reading pinned keys after connect). */
   get serverConfig(): McpServerConfig {
     return this.config;
+  }
+
+  /** Previous public key (available during the 24-hour grace period after rotation). */
+  get previousPublicKey(): string | undefined {
+    return this._previousPublicKey;
+  }
+
+  /** Timestamp when the previous key was superseded. */
+  get previousKeySupersededAt(): number | undefined {
+    return this._previousKeySupersededAt;
+  }
+
+  /**
+   * Accept a key rotation by verifying the succession record and updating the pinned key.
+   * The old key is kept as `previousPublicKey` with a 24-hour grace period.
+   * Returns true if the rotation was accepted, false if the succession record is invalid.
+   */
+  async acceptKeyRotation(successionRecord: KeySuccessionRecord): Promise<boolean> {
+    const { verifyKeySuccession } = await import("@motebit/crypto");
+    const valid = await verifyKeySuccession(successionRecord);
+    if (!valid) return false;
+
+    // Verify the old key in the succession matches our currently pinned key
+    if (
+      this.config.motebitPublicKey &&
+      this.config.motebitPublicKey !== successionRecord.old_public_key
+    ) {
+      return false;
+    }
+
+    // Store the old key for grace period
+    this._previousPublicKey = this.config.motebitPublicKey;
+    this._previousKeySupersededAt = Date.now();
+
+    // Update to the new key
+    this.config.motebitPublicKey = successionRecord.new_public_key;
+
+    return true;
   }
 }
 

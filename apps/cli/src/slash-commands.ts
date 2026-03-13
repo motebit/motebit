@@ -1098,7 +1098,13 @@ Available commands:
         try {
           const now = Date.now();
           const signedToken = await createSignedToken(
-            { mid: repl.motebitId, did: repl.deviceId, iat: now, exp: now + 5 * 60 * 1000 },
+            {
+              mid: repl.motebitId,
+              did: repl.deviceId,
+              iat: now,
+              exp: now + 5 * 60 * 1000,
+              jti: crypto.randomUUID(),
+            },
             repl.privateKeyBytes,
           );
           authHeader = `Bearer ${signedToken}`;
@@ -1259,7 +1265,13 @@ Available commands:
         try {
           const now = Date.now();
           const signedToken = await createSignedToken(
-            { mid: repl.motebitId, did: repl.deviceId, iat: now, exp: now + 5 * 60 * 1000 },
+            {
+              mid: repl.motebitId,
+              did: repl.deviceId,
+              iat: now,
+              exp: now + 5 * 60 * 1000,
+              jti: crypto.randomUUID(),
+            },
             repl.privateKeyBytes,
           );
           proposeAuthHeader = `Bearer ${signedToken}`;
@@ -1365,7 +1377,13 @@ Available commands:
         try {
           const now = Date.now();
           const signedToken = await createSignedToken(
-            { mid: repl.motebitId, did: repl.deviceId, iat: now, exp: now + 5 * 60 * 1000 },
+            {
+              mid: repl.motebitId,
+              did: repl.deviceId,
+              iat: now,
+              exp: now + 5 * 60 * 1000,
+              jti: crypto.randomUUID(),
+            },
             repl.privateKeyBytes,
           );
           proposalsAuthHeader = `Bearer ${signedToken}`;
@@ -1447,7 +1465,13 @@ Available commands:
         try {
           const now = Date.now();
           const signedToken = await createSignedToken(
-            { mid: repl.motebitId, did: repl.deviceId, iat: now, exp: now + 5 * 60 * 1000 },
+            {
+              mid: repl.motebitId,
+              did: repl.deviceId,
+              iat: now,
+              exp: now + 5 * 60 * 1000,
+              jti: crypto.randomUUID(),
+            },
             repl.privateKeyBytes,
           );
           proposalAuthHeader = `Bearer ${signedToken}`;

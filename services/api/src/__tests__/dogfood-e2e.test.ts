@@ -53,7 +53,13 @@ async function makeSignedToken(
 ): Promise<string> {
   const now = Date.now();
   return createSignedToken(
-    { mid: motebitId, did: relayDeviceId, iat: now, exp: now + 5 * 60 * 1000 },
+    {
+      mid: motebitId,
+      did: relayDeviceId,
+      iat: now,
+      exp: now + 5 * 60 * 1000,
+      jti: crypto.randomUUID(),
+    },
     keypair.privateKey,
   );
 }

@@ -102,9 +102,10 @@ import {
   issueReputationCredential,
   verifyVerifiableCredential,
   createPresentation,
+  verifyKeySuccession,
 } from "@motebit/crypto";
 /* eslint-enable no-restricted-imports */
-import type { VerifiableCredential } from "@motebit/crypto";
+import type { VerifiableCredential, KeySuccessionRecord } from "@motebit/crypto";
 import { rankCandidates, applyPrecisionToMarketConfig, settleOnReceipt } from "@motebit/market";
 import type { CandidateProfile, TaskRequirements } from "@motebit/market";
 import type { CapabilityPrice, BudgetAllocation } from "@motebit/sdk";
@@ -402,7 +403,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   moteDb.db.exec(`
       CREATE TABLE IF NOT EXISTS relay_settlements (
         settlement_id TEXT PRIMARY KEY,
-        allocation_id TEXT NOT NULL,
+        allocation_id TEXT NOT NULL UNIQUE,
         motebit_id TEXT NOT NULL DEFAULT '',
         receipt_hash TEXT NOT NULL DEFAULT '',
         ledger_hash TEXT,
@@ -479,6 +480,22 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       );
       CREATE INDEX IF NOT EXISTS idx_relay_ledgers_motebit ON relay_execution_ledgers(motebit_id);
       CREATE INDEX IF NOT EXISTS idx_relay_ledgers_goal ON relay_execution_ledgers(goal_id);
+  `);
+
+  // Key succession records (key rotation history)
+  moteDb.db.exec(`
+      CREATE TABLE IF NOT EXISTS relay_key_successions (
+        id INTEGER PRIMARY KEY,
+        motebit_id TEXT NOT NULL,
+        old_public_key TEXT NOT NULL,
+        new_public_key TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        reason TEXT,
+        old_key_signature TEXT NOT NULL,
+        new_key_signature TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_relay_key_successions_motebit ON relay_key_successions(motebit_id);
   `);
 
   // Extend sync tables for collaborative fields (column-exists check pattern)
@@ -943,12 +960,24 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
             }
 
             if (msg.type === "push" && Array.isArray(msg.events)) {
+              let wsAccepted = 0;
               for (const entry of msg.events) {
+                // Receipt idempotency: skip events with duplicate receipt signatures
+                const receipt = entry.payload?.receipt as Record<string, unknown> | undefined;
+                if (receipt && typeof receipt.signature === "string" && receipt.signature !== "") {
+                  const existing = await eventStore.query({ motebit_id: entry.motebit_id });
+                  const isDuplicate = existing.some((e) => {
+                    const r = e.payload?.receipt as Record<string, unknown> | undefined;
+                    return r && r.signature === receipt.signature;
+                  });
+                  if (isDuplicate) continue;
+                }
                 await eventStore.append(entry);
+                wsAccepted++;
               }
 
               // Acknowledge
-              ws.send(JSON.stringify({ type: "ack", accepted: msg.events.length }));
+              ws.send(JSON.stringify({ type: "ack", accepted: wsAccepted }));
 
               // Fan out to other connected clients for the same motebitId
               const peers = connections.get(motebitId);
@@ -1031,8 +1060,24 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         message: "Missing or invalid 'events' field (must be array)",
       });
     }
+    let accepted = 0;
+    let duplicates = 0;
     for (const event of body.events) {
+      // Receipt idempotency: if this event carries a receipt, check for replay
+      const receipt = event.payload?.receipt as Record<string, unknown> | undefined;
+      if (receipt && typeof receipt.signature === "string" && receipt.signature !== "") {
+        const existing = await eventStore.query({ motebit_id: event.motebit_id });
+        const isDuplicate = existing.some((e) => {
+          const r = e.payload?.receipt as Record<string, unknown> | undefined;
+          return r && r.signature === receipt.signature;
+        });
+        if (isDuplicate) {
+          duplicates++;
+          continue;
+        }
+      }
       await eventStore.append(event);
+      accepted++;
     }
 
     // Fan out to WebSocket clients, skipping the sender device
@@ -1049,7 +1094,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       }
     }
 
-    return c.json({ motebit_id: motebitId, accepted: body.events.length });
+    if (duplicates > 0 && accepted === 0) {
+      return c.json({ motebit_id: motebitId, accepted: 0, duplicate: true });
+    }
+    return c.json({ motebit_id: motebitId, accepted, duplicates });
   });
 
   // --- Sync: pull events (HTTP fallback) ---
@@ -3282,6 +3330,53 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
     moteDb.db.prepare(`DELETE FROM agent_registry WHERE motebit_id = ?`).run(callerMotebitId);
     return c.json({ ok: true });
+  });
+
+  // POST /api/v1/agents/:motebitId/rotate-key — submit a key succession record
+  app.post("/api/v1/agents/:motebitId/rotate-key", async (c) => {
+    const motebitId = c.req.param("motebitId");
+
+    const body = await c.req.json<KeySuccessionRecord>();
+
+    // Validate required fields
+    if (
+      !body.old_public_key ||
+      !body.new_public_key ||
+      !body.timestamp ||
+      !body.old_key_signature ||
+      !body.new_key_signature
+    ) {
+      throw new HTTPException(400, { message: "Missing required fields in key succession record" });
+    }
+
+    // Verify both signatures
+    const valid = await verifyKeySuccession(body);
+    if (!valid) {
+      throw new HTTPException(400, { message: "Invalid key succession signatures" });
+    }
+
+    // Store the succession record
+    moteDb.db
+      .prepare(
+        `INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        motebitId,
+        body.old_public_key,
+        body.new_public_key,
+        body.timestamp,
+        body.reason ?? null,
+        body.old_key_signature,
+        body.new_key_signature,
+      );
+
+    // Update the agent registry's public key if the agent is registered
+    moteDb.db
+      .prepare(`UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?`)
+      .run(body.new_public_key, motebitId);
+
+    return c.json({ ok: true, motebit_id: motebitId });
   });
 
   // === Market Endpoints ===

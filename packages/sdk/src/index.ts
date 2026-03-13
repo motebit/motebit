@@ -336,6 +336,7 @@ export enum EventType {
   CollaborativeStepCompleted = "collaborative_step_completed",
   ChainTrustComputed = "chain_trust_computed",
   TrustLevelChanged = "trust_level_changed",
+  KeyRotated = "key_rotated",
 }
 
 export enum RelationType {
@@ -850,6 +851,8 @@ export interface ExecutionReceipt {
   prompt_hash: string;
   result_hash: string;
   delegation_receipts?: ExecutionReceipt[];
+  /** Scope from the delegation token that authorized this execution, if any. */
+  delegated_scope?: string;
   signature: string;
 }
 

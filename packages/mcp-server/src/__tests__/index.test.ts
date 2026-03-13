@@ -1552,3 +1552,190 @@ describe("McpServerAdapter — mutual authentication", () => {
     expect(validateTool).toHaveBeenCalledWith(tool, { y: 42 }, undefined);
   });
 });
+
+// ============================================================
+// McpServerAdapter — motebit_task scope enforcement
+// ============================================================
+
+describe("McpServerAdapter — motebit_task scope enforcement", () => {
+  // Helper: create a real signed delegation token for testing
+  async function createDelegationToken(scope: string): Promise<string> {
+    const { generateKeypair, signDelegation, toBase64Url } = await import("@motebit/crypto");
+
+    const delegatorKp = await generateKeypair();
+    const delegateKp = await generateKeypair();
+
+    const token = await signDelegation(
+      {
+        delegator_id: "mote-delegator",
+        delegator_public_key: toBase64Url(delegatorKp.publicKey),
+        delegate_id: "mote-delegate",
+        delegate_public_key: toBase64Url(delegateKp.publicKey),
+        scope,
+        issued_at: Date.now(),
+        expires_at: Date.now() + 3600_000,
+      },
+      delegatorKp.privateKey,
+    );
+
+    return JSON.stringify(token);
+  }
+
+  it("motebit_task succeeds when required_capabilities are within delegated scope", async () => {
+    const mockReceipt = { task_id: "t1", status: "completed", result: "done" };
+    const handleAgentTask = async function* () {
+      yield { type: "task_result" as const, receipt: mockReceipt };
+    };
+    const deps = makeDeps({ handleAgentTask });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const tokenJson = await createDelegationToken("web_search,read_url");
+    const handler = registrations.tools.get("motebit_task")!.handler;
+    const result = (await handler({
+      prompt: "search for something",
+      delegation_token: tokenJson,
+      required_capabilities: ["web_search"],
+    })) as { content: Array<{ text: string }>; isError?: boolean };
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0]!.text).toContain("t1");
+    expect(result.content[0]!.text).toContain("completed");
+  });
+
+  it("motebit_task fails when required_capabilities are outside delegated scope", async () => {
+    const handleAgentTask = async function* () {
+      yield { type: "text" as const, text: "should not reach here" };
+    };
+    const deps = makeDeps({ handleAgentTask });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const tokenJson = await createDelegationToken("web_search");
+    const handler = registrations.tools.get("motebit_task")!.handler;
+    const result = (await handler({
+      prompt: "read a URL",
+      delegation_token: tokenJson,
+      required_capabilities: ["read_url"],
+    })) as { content: Array<{ text: string }>; isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("read_url");
+    expect(result.content[0]!.text).toContain("not within delegated scope");
+  });
+
+  it("motebit_task succeeds with wildcard scope delegation", async () => {
+    const mockReceipt = { task_id: "t2", status: "completed", result: "ok" };
+    const handleAgentTask = async function* () {
+      yield { type: "task_result" as const, receipt: mockReceipt };
+    };
+    const deps = makeDeps({ handleAgentTask });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const tokenJson = await createDelegationToken("*");
+    const handler = registrations.tools.get("motebit_task")!.handler;
+    const result = (await handler({
+      prompt: "do anything",
+      delegation_token: tokenJson,
+      required_capabilities: ["web_search", "read_url", "execute_code"],
+    })) as { content: Array<{ text: string }>; isError?: boolean };
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0]!.text).toContain("t2");
+  });
+
+  it("motebit_task rejects invalid delegation token JSON", async () => {
+    const handleAgentTask = async function* () {
+      yield { type: "text" as const, text: "nope" };
+    };
+    const deps = makeDeps({ handleAgentTask });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const handler = registrations.tools.get("motebit_task")!.handler;
+    const result = (await handler({
+      prompt: "test",
+      delegation_token: "not valid json {{{",
+    })) as { content: Array<{ text: string }>; isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("not valid JSON");
+  });
+
+  it("motebit_task rejects delegation token with invalid signature", async () => {
+    const handleAgentTask = async function* () {
+      yield { type: "text" as const, text: "nope" };
+    };
+    const deps = makeDeps({ handleAgentTask });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    // Create a valid token then tamper with the scope to invalidate signature
+    const { generateKeypair, signDelegation, toBase64Url } = await import("@motebit/crypto");
+    const kp1 = await generateKeypair();
+    const kp2 = await generateKeypair();
+    const token = await signDelegation(
+      {
+        delegator_id: "a",
+        delegator_public_key: toBase64Url(kp1.publicKey),
+        delegate_id: "b",
+        delegate_public_key: toBase64Url(kp2.publicKey),
+        scope: "web_search",
+        issued_at: Date.now(),
+        expires_at: Date.now() + 3600_000,
+      },
+      kp1.privateKey,
+    );
+    // Tamper with scope
+    const tampered = { ...token, scope: "TAMPERED" };
+
+    const handler = registrations.tools.get("motebit_task")!.handler;
+    const result = (await handler({
+      prompt: "test",
+      delegation_token: JSON.stringify(tampered),
+    })) as { content: Array<{ text: string }>; isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("invalid signature");
+  });
+
+  it("motebit_task includes delegated_scope in receipt when delegation token provided", async () => {
+    const mockReceipt = { task_id: "t3", status: "completed", result: "scoped" };
+    const handleAgentTask = async function* () {
+      yield { type: "task_result" as const, receipt: mockReceipt };
+    };
+    const deps = makeDeps({ handleAgentTask });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const tokenJson = await createDelegationToken("web_search,read_url");
+    const handler = registrations.tools.get("motebit_task")!.handler;
+    const result = (await handler({
+      prompt: "do something scoped",
+      delegation_token: tokenJson,
+    })) as { content: Array<{ text: string }> };
+
+    expect(result.content[0]!.text).toContain("web_search,read_url");
+    expect(result.content[0]!.text).toContain("delegated_scope");
+  });
+
+  it("motebit_task works normally without delegation token (backward compat)", async () => {
+    const mockReceipt = { task_id: "t4", status: "completed", result: "no scope" };
+    const handleAgentTask = async function* () {
+      yield { type: "task_result" as const, receipt: mockReceipt };
+    };
+    const deps = makeDeps({ handleAgentTask });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const handler = registrations.tools.get("motebit_task")!.handler;
+    const result = (await handler({
+      prompt: "do something",
+    })) as { content: Array<{ text: string }>; isError?: boolean };
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0]!.text).toContain("t4");
+    expect(result.content[0]!.text).not.toContain("delegated_scope");
+  });
+});

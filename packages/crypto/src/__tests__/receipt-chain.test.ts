@@ -9,6 +9,8 @@ import {
   verifyDelegationChain,
   signCollaborativeReceipt,
   verifyCollaborativeReceipt,
+  parseScopeSet,
+  isScopeNarrowed,
   toBase64Url,
   hash,
   type SignableReceipt,
@@ -266,7 +268,7 @@ describe("verifyDelegationChain", () => {
       kpB,
       "mote-alice",
       "mote-service-b",
-      "web_search",
+      "web_search,read_url",
     );
     const delegation2 = await makeDelegation(
       kpB,
@@ -412,7 +414,7 @@ describe("end-to-end: delegation chain with receipt sequence", () => {
         delegator_public_key: toBase64Url(kpAlice.publicKey),
         delegate_id: "mote-service-b",
         delegate_public_key: toBase64Url(kpB.publicKey),
-        scope: "research",
+        scope: "research,read_url",
         issued_at: Date.now(),
         expires_at: Date.now() + 3600_000,
       },
@@ -601,5 +603,202 @@ describe("signCollaborativeReceipt / verifyCollaborativeReceipt", () => {
     );
     expect(result2.valid).toBe(false);
     expect(result2.error).toContain("signature invalid");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseScopeSet
+// ---------------------------------------------------------------------------
+
+describe("parseScopeSet", () => {
+  it("parses comma-separated capabilities", () => {
+    const result = parseScopeSet("web_search,read_url");
+    expect(result).toEqual(new Set(["web_search", "read_url"]));
+  });
+
+  it("handles wildcard", () => {
+    const result = parseScopeSet("*");
+    expect(result).toEqual(new Set(["*"]));
+  });
+
+  it("trims whitespace", () => {
+    const result = parseScopeSet(" web_search , read_url ");
+    expect(result).toEqual(new Set(["web_search", "read_url"]));
+  });
+
+  it("handles single capability", () => {
+    const result = parseScopeSet("web_search");
+    expect(result).toEqual(new Set(["web_search"]));
+  });
+
+  it("filters out empty strings from trailing commas", () => {
+    const result = parseScopeSet("web_search,,read_url,");
+    expect(result).toEqual(new Set(["web_search", "read_url"]));
+  });
+
+  it("handles empty string", () => {
+    const result = parseScopeSet("");
+    expect(result).toEqual(new Set());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isScopeNarrowed
+// ---------------------------------------------------------------------------
+
+describe("isScopeNarrowed", () => {
+  it("wildcard parent allows any child", () => {
+    expect(isScopeNarrowed("*", "web_search")).toBe(true);
+    expect(isScopeNarrowed("*", "web_search,read_url")).toBe(true);
+    expect(isScopeNarrowed("*", "*")).toBe(true);
+  });
+
+  it("child wildcard requires parent wildcard", () => {
+    expect(isScopeNarrowed("web_search,read_url", "*")).toBe(false);
+    expect(isScopeNarrowed("web_search", "*")).toBe(false);
+  });
+
+  it("proper subset is valid", () => {
+    expect(isScopeNarrowed("web_search,read_url,summarize", "web_search,read_url")).toBe(true);
+    expect(isScopeNarrowed("web_search,read_url", "web_search")).toBe(true);
+  });
+
+  it("equal sets are valid", () => {
+    expect(isScopeNarrowed("web_search,read_url", "web_search,read_url")).toBe(true);
+    expect(isScopeNarrowed("web_search", "web_search")).toBe(true);
+  });
+
+  it("superset child is invalid (scope widening)", () => {
+    expect(isScopeNarrowed("web_search", "web_search,read_url")).toBe(false);
+  });
+
+  it("disjoint child is invalid", () => {
+    expect(isScopeNarrowed("web_search", "read_url")).toBe(false);
+  });
+
+  it("partially overlapping child is invalid if not subset", () => {
+    expect(isScopeNarrowed("web_search,read_url", "web_search,execute_code")).toBe(false);
+  });
+
+  it("empty child is always valid (no capabilities requested)", () => {
+    expect(isScopeNarrowed("web_search", "")).toBe(true);
+    expect(isScopeNarrowed("*", "")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verifyDelegationChain — scope narrowing enforcement
+// ---------------------------------------------------------------------------
+
+describe("verifyDelegationChain — scope narrowing", () => {
+  async function makeDelegation(
+    delegatorKp: { publicKey: Uint8Array; privateKey: Uint8Array },
+    delegateKp: { publicKey: Uint8Array; privateKey: Uint8Array },
+    delegatorId: string,
+    delegateId: string,
+    scope: string = "web_search",
+  ): Promise<DelegationToken> {
+    const body: Omit<DelegationToken, "signature"> = {
+      delegator_id: delegatorId,
+      delegator_public_key: toBase64Url(delegatorKp.publicKey),
+      delegate_id: delegateId,
+      delegate_public_key: toBase64Url(delegateKp.publicKey),
+      scope,
+      issued_at: Date.now(),
+      expires_at: Date.now() + 3600_000,
+    };
+    return signDelegation(body, delegatorKp.privateKey);
+  }
+
+  it("valid narrowing: parent=web_search,read_url child=web_search", async () => {
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    const kpC = await generateKeypair();
+
+    const d1 = await makeDelegation(kpA, kpB, "a", "b", "web_search,read_url");
+    const d2 = await makeDelegation(kpB, kpC, "b", "c", "web_search");
+
+    const result = await verifyDelegationChain([d1, d2]);
+    expect(result.valid).toBe(true);
+  });
+
+  it("valid narrowing: parent=* child=web_search", async () => {
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    const kpC = await generateKeypair();
+
+    const d1 = await makeDelegation(kpA, kpB, "a", "b", "*");
+    const d2 = await makeDelegation(kpB, kpC, "b", "c", "web_search");
+
+    const result = await verifyDelegationChain([d1, d2]);
+    expect(result.valid).toBe(true);
+  });
+
+  it("invalid widening: parent=web_search child=web_search,read_url", async () => {
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    const kpC = await generateKeypair();
+
+    const d1 = await makeDelegation(kpA, kpB, "a", "b", "web_search");
+    const d2 = await makeDelegation(kpB, kpC, "b", "c", "web_search,read_url");
+
+    const result = await verifyDelegationChain([d1, d2]);
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("widens scope");
+  });
+
+  it("invalid widening: parent=web_search child=*", async () => {
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    const kpC = await generateKeypair();
+
+    const d1 = await makeDelegation(kpA, kpB, "a", "b", "web_search");
+    const d2 = await makeDelegation(kpB, kpC, "b", "c", "*");
+
+    const result = await verifyDelegationChain([d1, d2]);
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("widens scope");
+  });
+
+  it("three-hop narrowing: * -> web_search,read_url -> read_url", async () => {
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    const kpC = await generateKeypair();
+    const kpD = await generateKeypair();
+
+    const d1 = await makeDelegation(kpA, kpB, "a", "b", "*");
+    const d2 = await makeDelegation(kpB, kpC, "b", "c", "web_search,read_url");
+    const d3 = await makeDelegation(kpC, kpD, "c", "d", "read_url");
+
+    const result = await verifyDelegationChain([d1, d2, d3]);
+    expect(result.valid).toBe(true);
+  });
+
+  it("three-hop with widening at hop 3 fails", async () => {
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    const kpC = await generateKeypair();
+    const kpD = await generateKeypair();
+
+    const d1 = await makeDelegation(kpA, kpB, "a", "b", "*");
+    const d2 = await makeDelegation(kpB, kpC, "b", "c", "read_url");
+    const d3 = await makeDelegation(kpC, kpD, "c", "d", "read_url,web_search");
+
+    const result = await verifyDelegationChain([d1, d2, d3]);
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("Delegation 2");
+    expect(result.error).toContain("widens scope");
+  });
+
+  it("equal scope at each hop is valid", async () => {
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    const kpC = await generateKeypair();
+
+    const d1 = await makeDelegation(kpA, kpB, "a", "b", "web_search");
+    const d2 = await makeDelegation(kpB, kpC, "b", "c", "web_search");
+
+    const result = await verifyDelegationChain([d1, d2]);
+    expect(result.valid).toBe(true);
   });
 });

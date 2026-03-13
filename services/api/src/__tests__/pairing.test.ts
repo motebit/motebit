@@ -67,6 +67,7 @@ async function setupIdentityAndDevice(relay: SyncRelay): Promise<{
       did: device.device_id,
       iat: Date.now(),
       exp: Date.now() + 5 * 60 * 1000,
+      jti: crypto.randomUUID(),
     },
     keypair.privateKey,
   );

@@ -1395,3 +1395,116 @@ describe("McpClientAdapter — motebitType", () => {
     expect(adapter.verifiedIdentity?.motebit_id).toBe("mote-typed");
   });
 });
+
+// ============================================================
+// Key rotation grace period
+// ============================================================
+
+describe("McpClientAdapter — key rotation grace period", () => {
+  it("acceptKeyRotation() updates pinned key and stores previous key", async () => {
+    const adapter = new McpClientAdapter(httpConfig({ motebitPublicKey: "aa".repeat(32) }));
+
+    // Mock verifyKeySuccession to return true
+    vi.doMock("@motebit/crypto", () => ({
+      createSignedToken: vi.fn().mockResolvedValue("mock-signed-token"),
+      verifyKeySuccession: vi.fn().mockResolvedValue(true),
+    }));
+
+    const result = await adapter.acceptKeyRotation({
+      old_public_key: "aa".repeat(32),
+      new_public_key: "bb".repeat(32),
+      timestamp: Date.now(),
+      old_key_signature: "cc".repeat(64),
+      new_key_signature: "dd".repeat(64),
+    });
+
+    expect(result).toBe(true);
+    expect(adapter.serverConfig.motebitPublicKey).toBe("bb".repeat(32));
+    expect(adapter.previousPublicKey).toBe("aa".repeat(32));
+    expect(adapter.previousKeySupersededAt).toBeTypeOf("number");
+  });
+
+  it("acceptKeyRotation() rejects if old key does not match pinned key", async () => {
+    const adapter = new McpClientAdapter(httpConfig({ motebitPublicKey: "aa".repeat(32) }));
+
+    vi.doMock("@motebit/crypto", () => ({
+      createSignedToken: vi.fn().mockResolvedValue("mock-signed-token"),
+      verifyKeySuccession: vi.fn().mockResolvedValue(true),
+    }));
+
+    const result = await adapter.acceptKeyRotation({
+      old_public_key: "ff".repeat(32), // does not match pinned key
+      new_public_key: "bb".repeat(32),
+      timestamp: Date.now(),
+      old_key_signature: "cc".repeat(64),
+      new_key_signature: "dd".repeat(64),
+    });
+
+    expect(result).toBe(false);
+    // Key should not have changed
+    expect(adapter.serverConfig.motebitPublicKey).toBe("aa".repeat(32));
+  });
+
+  it("identity verification accepts previous key within grace period", async () => {
+    mockListTools.mockResolvedValue(mcpToolsResponse([]));
+    mockCallTool.mockResolvedValue({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            motebit_id: "mote-rotated",
+            public_key: "aa".repeat(32), // old key
+          }),
+        },
+      ],
+    });
+
+    const adapter = new McpClientAdapter(
+      httpConfig({
+        name: "rotated-srv",
+        motebit: true,
+        motebitPublicKey: "bb".repeat(32), // new pinned key
+      } as Partial<McpServerConfig>),
+    );
+
+    // Set up grace period state (old key is "aa", superseded recently)
+    (adapter as unknown as Record<string, unknown>)._previousPublicKey = "aa".repeat(32);
+    (adapter as unknown as Record<string, unknown>)._previousKeySupersededAt = Date.now();
+
+    await adapter.connect();
+
+    // Should succeed because old key is within grace period
+    expect(adapter.isConnected).toBe(true);
+    expect(adapter.verifiedIdentity?.verified).toBe(true);
+  });
+
+  it("identity verification rejects previous key outside grace period", async () => {
+    mockListTools.mockResolvedValue(mcpToolsResponse([]));
+    mockCallTool.mockResolvedValue({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            motebit_id: "mote-expired",
+            public_key: "aa".repeat(32), // old key
+          }),
+        },
+      ],
+    });
+
+    const adapter = new McpClientAdapter(
+      httpConfig({
+        name: "expired-srv",
+        motebit: true,
+        motebitPublicKey: "bb".repeat(32), // new pinned key
+      } as Partial<McpServerConfig>),
+    );
+
+    // Set up expired grace period (25 hours ago)
+    (adapter as unknown as Record<string, unknown>)._previousPublicKey = "aa".repeat(32);
+    (adapter as unknown as Record<string, unknown>)._previousKeySupersededAt =
+      Date.now() - 25 * 60 * 60 * 1000;
+
+    await expect(adapter.connect()).rejects.toThrow("public key mismatch");
+  });
+});

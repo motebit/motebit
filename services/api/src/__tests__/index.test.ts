@@ -452,7 +452,13 @@ describe("Sync Relay — signed token auth", () => {
     const { motebitId, deviceId } = await createIdentityAndDevice(pubKeyHex);
 
     const token = await createSignedToken(
-      { mid: motebitId, did: deviceId, iat: Date.now(), exp: Date.now() + 5 * 60 * 1000 },
+      {
+        mid: motebitId,
+        did: deviceId,
+        iat: Date.now(),
+        exp: Date.now() + 5 * 60 * 1000,
+        jti: crypto.randomUUID(),
+      },
       keypair.privateKey,
     );
 
@@ -469,7 +475,13 @@ describe("Sync Relay — signed token auth", () => {
     const { motebitId, deviceId } = await createIdentityAndDevice(pubKeyHex);
 
     const token = await createSignedToken(
-      { mid: motebitId, did: deviceId, iat: Date.now() - 10 * 60 * 1000, exp: Date.now() - 1 },
+      {
+        mid: motebitId,
+        did: deviceId,
+        iat: Date.now() - 10 * 60 * 1000,
+        exp: Date.now() - 1,
+        jti: crypto.randomUUID(),
+      },
       keypair.privateKey,
     );
 
@@ -488,7 +500,13 @@ describe("Sync Relay — signed token auth", () => {
 
     // Sign with keypairB's private key, but device has keypairA's public key
     const token = await createSignedToken(
-      { mid: motebitId, did: deviceId, iat: Date.now(), exp: Date.now() + 5 * 60 * 1000 },
+      {
+        mid: motebitId,
+        did: deviceId,
+        iat: Date.now(),
+        exp: Date.now() + 5 * 60 * 1000,
+        jti: crypto.randomUUID(),
+      },
       keypairB.privateKey,
     );
 
@@ -514,7 +532,13 @@ describe("Sync Relay — signed token auth", () => {
 
     // Token claims motebitIdA, but we request against otherIdentity
     const token = await createSignedToken(
-      { mid: motebitIdA, did: deviceId, iat: Date.now(), exp: Date.now() + 5 * 60 * 1000 },
+      {
+        mid: motebitIdA,
+        did: deviceId,
+        iat: Date.now(),
+        exp: Date.now() + 5 * 60 * 1000,
+        jti: crypto.randomUUID(),
+      },
       keypair.privateKey,
     );
 
@@ -1063,7 +1087,13 @@ describe("Sync Relay — agent protocol", () => {
     const { device_id: serviceDeviceId } = (await devRes.json()) as { device_id: string };
 
     const serviceToken = await createSignedToken(
-      { mid: serviceMotebitId, did: serviceDeviceId, iat: Date.now(), exp: Date.now() + 300000 },
+      {
+        mid: serviceMotebitId,
+        did: serviceDeviceId,
+        iat: Date.now(),
+        exp: Date.now() + 300000,
+        jti: crypto.randomUUID(),
+      },
       serviceKeypair.privateKey,
     );
 
@@ -1175,7 +1205,13 @@ describe("Sync Relay — agent protocol", () => {
     const { device_id: expDeviceId } = (await devRes2.json()) as { device_id: string };
 
     const serviceToken = await createSignedToken(
-      { mid: serviceMotebitId, did: expDeviceId, iat: Date.now(), exp: Date.now() + 300000 },
+      {
+        mid: serviceMotebitId,
+        did: expDeviceId,
+        iat: Date.now(),
+        exp: Date.now() + 300000,
+        jti: crypto.randomUUID(),
+      },
       serviceKeypair.privateKey,
     );
 
@@ -1245,7 +1281,13 @@ describe("Sync Relay — agent protocol", () => {
     const { device_id: refDeviceId } = (await devRes3.json()) as { device_id: string };
 
     const serviceToken = await createSignedToken(
-      { mid: serviceMotebitId, did: refDeviceId, iat: Date.now(), exp: Date.now() + 300000 },
+      {
+        mid: serviceMotebitId,
+        did: refDeviceId,
+        iat: Date.now(),
+        exp: Date.now() + 300000,
+        jti: crypto.randomUUID(),
+      },
       serviceKeypair.privateKey,
     );
 
@@ -1748,6 +1790,7 @@ describe("Sync Relay — agent discovery registry", () => {
         did: device.device_id,
         iat: Date.now(),
         exp: Date.now() + 5 * 60 * 1000,
+        jti: crypto.randomUUID(),
       },
       keypair.privateKey,
     );
@@ -2508,7 +2551,13 @@ describe("Sync Relay — bootstrap endpoint", () => {
 
     // Agent A creates a signed token
     const tokenA = await createSignedToken(
-      { mid: motebitIdA, did: deviceIdA, iat: Date.now(), exp: Date.now() + 5 * 60 * 1000 },
+      {
+        mid: motebitIdA,
+        did: deviceIdA,
+        iat: Date.now(),
+        exp: Date.now() + 5 * 60 * 1000,
+        jti: crypto.randomUUID(),
+      },
       keypairA.privateKey,
     );
 
@@ -2535,5 +2584,75 @@ describe("Sync Relay — bootstrap endpoint", () => {
     const taskBody = (await taskRes.json()) as { task_id: string; status: string };
     expect(taskBody.task_id).toBeTypeOf("string");
     expect(taskBody.status).toBe("pending");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Key Rotation Endpoint
+// ---------------------------------------------------------------------------
+
+describe("POST /api/v1/agents/:motebitId/rotate-key", () => {
+  let relay: SyncRelay;
+
+  beforeEach(async () => {
+    relay = await createTestRelay({ enableDeviceAuth: false });
+  });
+
+  afterEach(() => {
+    relay.close();
+  });
+
+  it("accepts a valid key succession record", async () => {
+    const { signKeySuccession } = await import("@motebit/crypto");
+    const oldKp = await generateKeypair();
+    const newKp = await generateKeypair();
+
+    const record = await signKeySuccession(
+      oldKp.privateKey,
+      newKp.privateKey,
+      newKp.publicKey,
+      oldKp.publicKey,
+      "routine rotation",
+    );
+
+    const res = await relay.app.request("/api/v1/agents/test-mote/rotate-key", {
+      method: "POST",
+      headers: { ...AUTH_HEADER, "Content-Type": "application/json" },
+      body: JSON.stringify(record),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; motebit_id: string };
+    expect(body.ok).toBe(true);
+    expect(body.motebit_id).toBe("test-mote");
+  });
+
+  it("rejects a record with invalid signatures", async () => {
+    const record = {
+      old_public_key: "aa".repeat(32),
+      new_public_key: "bb".repeat(32),
+      timestamp: Date.now(),
+      reason: "bad rotation",
+      old_key_signature: "cc".repeat(64),
+      new_key_signature: "dd".repeat(64),
+    };
+
+    const res = await relay.app.request("/api/v1/agents/test-mote/rotate-key", {
+      method: "POST",
+      headers: { ...AUTH_HEADER, "Content-Type": "application/json" },
+      body: JSON.stringify(record),
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a record missing required fields", async () => {
+    const res = await relay.app.request("/api/v1/agents/test-mote/rotate-key", {
+      method: "POST",
+      headers: { ...AUTH_HEADER, "Content-Type": "application/json" },
+      body: JSON.stringify({ old_public_key: "abc" }),
+    });
+
+    expect(res.status).toBe(400);
   });
 });

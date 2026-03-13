@@ -280,4 +280,66 @@ describe("IdentityManager", () => {
     const result = await manager.validateDeviceToken("unknown-token", "any-id");
     expect(result).toBeNull();
   });
+
+  // --- Key rotation ---
+
+  it("rotateKey() updates the device's public key", async () => {
+    const identity = await manager.create("owner-1");
+    const device = await manager.registerDevice(identity.motebit_id, "Laptop", "oldkey");
+
+    await manager.rotateKey("newkey", device.device_id);
+
+    const loaded = await manager.loadDeviceById(device.device_id, identity.motebit_id);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.public_key).toBe("newkey");
+  });
+
+  it("rotateKey() logs a key rotation event", async () => {
+    const identity = await manager.create("owner-1");
+    const device = await manager.registerDevice(identity.motebit_id, "Laptop", "oldkey");
+
+    await manager.rotateKey("newkey", device.device_id);
+
+    const events = await eventStore.query({ motebit_id: identity.motebit_id });
+    // First event is identity_created, second is key_rotated
+    const rotateEvent = events.find(
+      (e) => (e.payload as Record<string, unknown>).action === "key_rotated",
+    );
+    expect(rotateEvent).toBeDefined();
+    expect((rotateEvent!.payload as Record<string, unknown>).new_public_key).toBe("newkey");
+  });
+
+  it("rotateKey() throws for unknown device", async () => {
+    await expect(manager.rotateKey("newkey", "nonexistent")).rejects.toThrow("Device not found");
+  });
+
+  it("updateDevicePublicKey() updates the key on a specific device", async () => {
+    const identity = await manager.create("owner-1");
+    const device = await manager.registerDevice(identity.motebit_id, "Phone", "origkey");
+
+    await manager.updateDevicePublicKey(device.device_id, "updatedkey");
+
+    const loaded = await manager.loadDeviceById(device.device_id, identity.motebit_id);
+    expect(loaded!.public_key).toBe("updatedkey");
+  });
+
+  it("updateDevicePublicKey() throws for unknown device", async () => {
+    await expect(manager.updateDevicePublicKey("nonexistent", "key")).rejects.toThrow(
+      "Device not found",
+    );
+  });
+
+  it("updateDevicePublicKey() logs a public_key_updated event", async () => {
+    const identity = await manager.create("owner-1");
+    const device = await manager.registerDevice(identity.motebit_id, "Phone", "origkey");
+
+    await manager.updateDevicePublicKey(device.device_id, "updatedkey");
+
+    const events = await eventStore.query({ motebit_id: identity.motebit_id });
+    const updateEvent = events.find(
+      (e) => (e.payload as Record<string, unknown>).action === "public_key_updated",
+    );
+    expect(updateEvent).toBeDefined();
+    expect((updateEvent!.payload as Record<string, unknown>).new_public_key).toBe("updatedkey");
+  });
 });

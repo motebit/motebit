@@ -103,6 +103,21 @@ describe("InMemoryEventStore", () => {
     expect(clock).toBe(7);
   });
 
+  it("deduplicates events by event_id", async () => {
+    const event = makeEvent({ event_id: "dup-1", version_clock: 1 });
+    await store.append(event);
+    await store.append(event); // same event_id
+    const results = await store.query({});
+    expect(results).toHaveLength(1);
+  });
+
+  it("allows distinct event_ids", async () => {
+    await store.append(makeEvent({ event_id: "a", version_clock: 1 }));
+    await store.append(makeEvent({ event_id: "b", version_clock: 2 }));
+    const results = await store.query({});
+    expect(results).toHaveLength(2);
+  });
+
   it("tombstone marks the event", async () => {
     const event = makeEvent({ event_id: "e1", motebit_id: "m1" });
     await store.append(event);

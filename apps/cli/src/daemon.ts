@@ -218,6 +218,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
             did: fullConfig.device_id,
             iat: Date.now(),
             exp: Date.now() + 5 * 60 * 1000,
+            jti: crypto.randomUUID(),
           },
           privKeyBytes,
         );
@@ -361,6 +362,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
               did: fullConfig.device_id,
               iat: Date.now(),
               exp: Date.now() + 5 * 60 * 1000,
+              jti: crypto.randomUUID(),
             },
             privateKeyForDelegation,
           );

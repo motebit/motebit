@@ -1105,7 +1105,13 @@ export class MobileApp {
     const privKeyBytes = await this._getPrivKeyBytes();
 
     return createSignedToken(
-      { mid: this.motebitId, did: this.deviceId, iat: Date.now(), exp: Date.now() + 5 * 60 * 1000 },
+      {
+        mid: this.motebitId,
+        did: this.deviceId,
+        iat: Date.now(),
+        exp: Date.now() + 5 * 60 * 1000,
+        jti: crypto.randomUUID(),
+      },
       privKeyBytes,
     );
   }

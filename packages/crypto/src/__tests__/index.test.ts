@@ -18,6 +18,8 @@ import {
   signExecutionReceipt,
   verifyExecutionReceipt,
   verifyReceiptChain,
+  signKeySuccession,
+  verifyKeySuccession,
   type SignedTokenPayload,
   type SignableReceipt,
   type KnownKeys,
@@ -348,6 +350,7 @@ describe("createSignedToken / verifySignedToken", () => {
       did: "device-456",
       iat: Date.now(),
       exp: Date.now() + 5 * 60 * 1000,
+      jti: crypto.randomUUID(),
     };
     const token = await createSignedToken(payload, kp.privateKey);
     expect(typeof token).toBe("string");
@@ -366,6 +369,7 @@ describe("createSignedToken / verifySignedToken", () => {
       did: "device-456",
       iat: Date.now() - 10 * 60 * 1000,
       exp: Date.now() - 1, // Already expired
+      jti: crypto.randomUUID(),
     };
     const token = await createSignedToken(payload, kp.privateKey);
     const result = await verifySignedToken(token, kp.publicKey);
@@ -380,6 +384,7 @@ describe("createSignedToken / verifySignedToken", () => {
       did: "device-456",
       iat: Date.now(),
       exp: Date.now() + 5 * 60 * 1000,
+      jti: crypto.randomUUID(),
     };
     const token = await createSignedToken(payload, kpA.privateKey);
     const result = await verifySignedToken(token, kpB.publicKey);
@@ -389,6 +394,20 @@ describe("createSignedToken / verifySignedToken", () => {
   it("rejects malformed token (no dot)", async () => {
     const kp = await generateKeypair();
     const result = await verifySignedToken("nodothere", kp.publicKey);
+    expect(result).toBeNull();
+  });
+
+  it("rejects token without jti (replay attack protection)", async () => {
+    const kp = await generateKeypair();
+    const payload: SignedTokenPayload = {
+      mid: "mote-123",
+      did: "device-456",
+      iat: Date.now(),
+      exp: Date.now() + 5 * 60 * 1000,
+      // no jti — should be rejected
+    };
+    const token = await createSignedToken(payload, kp.privateKey);
+    const result = await verifySignedToken(token, kp.publicKey);
     expect(result).toBeNull();
   });
 });
@@ -714,5 +733,132 @@ describe("hexPublicKeyToDidKey", () => {
     const didFromHex = hexPublicKeyToDidKey(hex);
     const didFromBytes = publicKeyToDidKey(kp.publicKey);
     expect(didFromHex).toBe(didFromBytes);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// signKeySuccession / verifyKeySuccession
+// ---------------------------------------------------------------------------
+
+describe("signKeySuccession", () => {
+  it("creates a valid succession record signed by both keys", async () => {
+    const oldKp = await generateKeypair();
+    const newKp = await generateKeypair();
+
+    const record = await signKeySuccession(
+      oldKp.privateKey,
+      newKp.privateKey,
+      newKp.publicKey,
+      oldKp.publicKey,
+      "routine rotation",
+    );
+
+    expect(record.old_public_key).toHaveLength(64);
+    expect(record.new_public_key).toHaveLength(64);
+    expect(record.old_key_signature).toHaveLength(128);
+    expect(record.new_key_signature).toHaveLength(128);
+    expect(record.reason).toBe("routine rotation");
+    expect(record.timestamp).toBeTypeOf("number");
+  });
+
+  it("creates a record without reason", async () => {
+    const oldKp = await generateKeypair();
+    const newKp = await generateKeypair();
+
+    const record = await signKeySuccession(
+      oldKp.privateKey,
+      newKp.privateKey,
+      newKp.publicKey,
+      oldKp.publicKey,
+    );
+
+    expect(record.reason).toBeUndefined();
+    const valid = await verifyKeySuccession(record);
+    expect(valid).toBe(true);
+  });
+});
+
+describe("verifyKeySuccession", () => {
+  it("verifies a valid succession record", async () => {
+    const oldKp = await generateKeypair();
+    const newKp = await generateKeypair();
+
+    const record = await signKeySuccession(
+      oldKp.privateKey,
+      newKp.privateKey,
+      newKp.publicKey,
+      oldKp.publicKey,
+      "compromise",
+    );
+
+    const valid = await verifyKeySuccession(record);
+    expect(valid).toBe(true);
+  });
+
+  it("rejects a record with tampered new_public_key", async () => {
+    const oldKp = await generateKeypair();
+    const newKp = await generateKeypair();
+
+    const record = await signKeySuccession(
+      oldKp.privateKey,
+      newKp.privateKey,
+      newKp.publicKey,
+      oldKp.publicKey,
+    );
+
+    // Tamper with the new public key
+    record.new_public_key = "ff".repeat(32);
+    const valid = await verifyKeySuccession(record);
+    expect(valid).toBe(false);
+  });
+
+  it("rejects a record with tampered old_key_signature", async () => {
+    const oldKp = await generateKeypair();
+    const newKp = await generateKeypair();
+
+    const record = await signKeySuccession(
+      oldKp.privateKey,
+      newKp.privateKey,
+      newKp.publicKey,
+      oldKp.publicKey,
+    );
+
+    // Tamper with old key signature
+    record.old_key_signature = "aa".repeat(64);
+    const valid = await verifyKeySuccession(record);
+    expect(valid).toBe(false);
+  });
+
+  it("rejects a record with tampered new_key_signature", async () => {
+    const oldKp = await generateKeypair();
+    const newKp = await generateKeypair();
+
+    const record = await signKeySuccession(
+      oldKp.privateKey,
+      newKp.privateKey,
+      newKp.publicKey,
+      oldKp.publicKey,
+    );
+
+    // Tamper with new key signature
+    record.new_key_signature = "bb".repeat(64);
+    const valid = await verifyKeySuccession(record);
+    expect(valid).toBe(false);
+  });
+
+  it("rejects a record with tampered timestamp", async () => {
+    const oldKp = await generateKeypair();
+    const newKp = await generateKeypair();
+
+    const record = await signKeySuccession(
+      oldKp.privateKey,
+      newKp.privateKey,
+      newKp.publicKey,
+      oldKp.publicKey,
+    );
+
+    record.timestamp = record.timestamp + 1;
+    const valid = await verifyKeySuccession(record);
+    expect(valid).toBe(false);
   });
 });

@@ -375,7 +375,13 @@ export class SpatialApp {
       const deviceId = this.deviceId;
       this.tokenFactory = async (): Promise<string> => {
         return createSignedToken(
-          { mid: motebitId, did: deviceId, iat: Date.now(), exp: Date.now() + 5 * 60 * 1000 },
+          {
+            mid: motebitId,
+            did: deviceId,
+            iat: Date.now(),
+            exp: Date.now() + 5 * 60 * 1000,
+            jti: crypto.randomUUID(),
+          },
           privKeyBytes,
         );
       };

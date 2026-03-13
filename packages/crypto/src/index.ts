@@ -23,6 +23,8 @@ export interface SignedTokenPayload {
   did: string;
   iat: number;
   exp: number;
+  /** Unique token nonce (JWT ID) — prevents replay attacks. Required for verification. */
+  jti?: string;
 }
 
 export interface EncryptedPayload {
@@ -418,6 +420,9 @@ export async function verifySignedToken(
 
   if (payload.exp <= Date.now()) return null;
 
+  // Reject tokens without a unique nonce (jti) — prevents replay attacks
+  if (!payload.jti) return null;
+
   return payload;
 }
 
@@ -648,6 +653,13 @@ export async function verifyDelegationChain(
           error: `Chain break at ${i}: delegate_public_key mismatch`,
         };
       }
+      // Scope narrowing: each delegation must not widen scope beyond its parent
+      if (!isScopeNarrowed(prev.scope, delegation.scope)) {
+        return {
+          valid: false,
+          error: `Delegation ${i} widens scope: parent="${prev.scope}", child="${delegation.scope}"`,
+        };
+      }
     }
   }
 
@@ -806,6 +818,154 @@ export async function verifyCollaborativeReceipt(
   }
 
   return { valid: true };
+}
+
+// === Scope Utilities (Capability Attenuation) ===
+
+/**
+ * Parse a comma-separated scope string into a Set.
+ * `"*"` is the wildcard meaning "all capabilities".
+ * Trims whitespace from each element.
+ */
+export function parseScopeSet(scope: string): Set<string> {
+  if (scope === "*") return new Set(["*"]);
+  return new Set(
+    scope
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0),
+  );
+}
+
+/**
+ * Returns true if `childScope` is a proper subset of (or equal to) `parentScope`.
+ *
+ * Rules:
+ * - If parentScope is `"*"`, any childScope is valid (wildcard grants all).
+ * - If childScope is `"*"`, it's only valid if parentScope is also `"*"`.
+ * - Otherwise, every capability in childScope must appear in parentScope.
+ */
+export function isScopeNarrowed(parentScope: string, childScope: string): boolean {
+  const parent = parseScopeSet(parentScope);
+  const child = parseScopeSet(childScope);
+
+  // Wildcard parent allows anything
+  if (parent.has("*")) return true;
+
+  // Child requests wildcard but parent is not wildcard — scope widening
+  if (child.has("*")) return false;
+
+  // Every capability in child must exist in parent
+  for (const cap of child) {
+    if (!parent.has(cap)) return false;
+  }
+  return true;
+}
+
+// === Key Succession (Rotation) ===
+
+/**
+ * A key succession record proving that one Ed25519 key has been replaced by another.
+ * Both the old and new keys sign the record, creating a cryptographic chain of custody.
+ */
+export interface KeySuccessionRecord {
+  old_public_key: string; // hex
+  new_public_key: string; // hex
+  timestamp: number;
+  reason?: string;
+  old_key_signature: string; // hex, old key signs the canonical payload
+  new_key_signature: string; // hex, new key signs the canonical payload
+}
+
+/**
+ * Build the canonical payload for key succession signing.
+ * Includes old_public_key, new_public_key, timestamp, and reason (if present).
+ */
+function keySuccessionPayload(
+  oldPublicKeyHex: string,
+  newPublicKeyHex: string,
+  timestamp: number,
+  reason?: string,
+): string {
+  const obj: Record<string, unknown> = {
+    old_public_key: oldPublicKeyHex,
+    new_public_key: newPublicKeyHex,
+    timestamp,
+  };
+  if (reason !== undefined) {
+    obj.reason = reason;
+  }
+  return canonicalJson(obj);
+}
+
+/**
+ * Create a key succession record signed by both the old and new keys.
+ * This proves the old key holder authorized the rotation to the new key,
+ * and the new key holder acknowledges the succession.
+ */
+export async function signKeySuccession(
+  oldPrivateKey: Uint8Array,
+  newPrivateKey: Uint8Array,
+  newPublicKey: Uint8Array,
+  oldPublicKey: Uint8Array,
+  reason?: string,
+): Promise<KeySuccessionRecord> {
+  const timestamp = Date.now();
+  const oldPublicKeyHex = Array.from(oldPublicKey)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  const newPublicKeyHex = Array.from(newPublicKey)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+
+  const payload = keySuccessionPayload(oldPublicKeyHex, newPublicKeyHex, timestamp, reason);
+  const message = new TextEncoder().encode(payload);
+
+  const oldSig = await sign(message, oldPrivateKey);
+  const newSig = await sign(message, newPrivateKey);
+
+  const oldSigHex = Array.from(oldSig)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  const newSigHex = Array.from(newSig)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+
+  return {
+    old_public_key: oldPublicKeyHex,
+    new_public_key: newPublicKeyHex,
+    timestamp,
+    ...(reason !== undefined ? { reason } : {}),
+    old_key_signature: oldSigHex,
+    new_key_signature: newSigHex,
+  };
+}
+
+/**
+ * Verify a key succession record by checking both signatures against the canonical payload.
+ */
+export async function verifyKeySuccession(record: KeySuccessionRecord): Promise<boolean> {
+  const payload = keySuccessionPayload(
+    record.old_public_key,
+    record.new_public_key,
+    record.timestamp,
+    record.reason,
+  );
+  const message = new TextEncoder().encode(payload);
+
+  try {
+    const oldPubKey = hexToBytes(record.old_public_key);
+    const newPubKey = hexToBytes(record.new_public_key);
+    const oldSig = hexToBytes(record.old_key_signature);
+    const newSig = hexToBytes(record.new_key_signature);
+
+    const oldValid = await verify(oldSig, message, oldPubKey);
+    const newValid = await verify(newSig, message, newPubKey);
+
+    return oldValid && newValid;
+  } catch {
+    return false;
+  }
 }
 
 // === Verifiable Credentials ===

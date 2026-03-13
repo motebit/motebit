@@ -26,8 +26,14 @@ export interface EventStoreAdapter {
 
 export class InMemoryEventStore implements EventStoreAdapter {
   private events: EventLogEntry[] = [];
+  private seenIds = new Set<string>();
 
   append(entry: EventLogEntry): Promise<void> {
+    // Deduplicate on event_id — prevents replay attacks
+    if (this.seenIds.has(entry.event_id)) {
+      return Promise.resolve();
+    }
+    this.seenIds.add(entry.event_id);
     // Event log is append-only — no updates, no deletes
     this.events.push({ ...entry });
     return Promise.resolve();

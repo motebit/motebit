@@ -5,7 +5,8 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { AgentTrustLevel, RiskLevel } from "@motebit/sdk";
 import type { ToolDefinition, ToolResult, PolicyDecision } from "@motebit/sdk";
-import { hexPublicKeyToDidKey } from "@motebit/crypto";
+import { hexPublicKeyToDidKey, verifyDelegation, parseScopeSet } from "@motebit/crypto";
+import type { DelegationToken } from "@motebit/crypto";
 
 // Re-export for consumers
 export type { MotebitServerDeps, McpServerConfig };
@@ -551,10 +552,81 @@ export class McpServerAdapter {
       server.tool(
         "motebit_task",
         "Submit an autonomous task — returns a signed ExecutionReceipt",
-        { prompt: z.string().describe("The task prompt for the agent to execute") },
-        async (args: { prompt: string }) => {
+        {
+          prompt: z.string().describe("The task prompt for the agent to execute"),
+          delegation_token: z
+            .string()
+            .optional()
+            .describe(
+              "Signed delegation token (JSON) authorizing this task within a specific scope",
+            ),
+          required_capabilities: z
+            .unknown()
+            .optional()
+            .describe('Array of capability names required for this task (e.g. ["web_search"])'),
+        },
+        async (args: {
+          prompt: string;
+          delegation_token?: string;
+          required_capabilities?: unknown;
+        }) => {
           const denied = this.validateSyntheticTool(toolDef, args);
           if (denied) return denied;
+
+          // Parse and verify delegation token for scope enforcement
+          let delegatedScope: string | undefined;
+          if (args.delegation_token) {
+            let token: DelegationToken;
+            try {
+              token = JSON.parse(args.delegation_token) as DelegationToken;
+            } catch {
+              return {
+                content: [
+                  {
+                    type: "text" as const,
+                    text: "Denied: delegation_token is not valid JSON",
+                  },
+                ],
+                isError: true,
+              };
+            }
+
+            const sigValid = await verifyDelegation(token);
+            if (!sigValid) {
+              return {
+                content: [
+                  {
+                    type: "text" as const,
+                    text: "Denied: delegation token has invalid signature",
+                  },
+                ],
+                isError: true,
+              };
+            }
+
+            delegatedScope = token.scope;
+            const scopeSet = parseScopeSet(token.scope);
+
+            // Check required_capabilities against delegated scope
+            if (args.required_capabilities && Array.isArray(args.required_capabilities)) {
+              const required = args.required_capabilities as string[];
+              if (!scopeSet.has("*")) {
+                for (const cap of required) {
+                  if (!scopeSet.has(cap)) {
+                    return {
+                      content: [
+                        {
+                          type: "text" as const,
+                          text: `Denied: capability "${cap}" is not within delegated scope "${token.scope}"`,
+                        },
+                      ],
+                      isError: true,
+                    };
+                  }
+                }
+              }
+            }
+          }
 
           let receipt: Record<string, unknown> | undefined;
           let responseText = "";
@@ -569,6 +641,10 @@ export class McpServerAdapter {
           }
 
           if (receipt) {
+            // Include delegated_scope in receipt if delegation token was provided
+            if (delegatedScope) {
+              receipt.delegated_scope = delegatedScope;
+            }
             this.deps.logToolCall("motebit_task", args, { ok: true, data: receipt });
             return fmt(receipt);
           }

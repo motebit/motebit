@@ -248,6 +248,70 @@ export class IdentityManager {
   async listDevices(motebitId: string): Promise<DeviceRegistration[]> {
     return this.deviceStore.listDevices(motebitId);
   }
+
+  /**
+   * Rotate the identity's primary public key.
+   * Updates the public key on the specified device (or all devices for the identity)
+   * and logs a key rotation event.
+   */
+  async rotateKey(newPublicKeyHex: string, newDeviceId?: string): Promise<void> {
+    if (newDeviceId) {
+      const device = await this.deviceStore.loadDevice(newDeviceId);
+      if (!device) {
+        throw new Error(`Device not found: ${newDeviceId}`);
+      }
+
+      const updated: DeviceRegistration = { ...device, public_key: newPublicKeyHex };
+      await this.deviceStore.saveDevice(updated);
+
+      // Log the rotation event
+      const clock = await this.eventStore.getLatestClock(device.motebit_id);
+      const event: EventLogEntry = {
+        event_id: generateUUIDv7(),
+        motebit_id: device.motebit_id,
+        timestamp: Date.now(),
+        event_type: EventType.KeyRotated,
+        payload: {
+          device_id: device.device_id,
+          action: "key_rotated",
+          new_public_key: newPublicKeyHex,
+        },
+        version_clock: clock + 1,
+        tombstoned: false,
+      };
+      await this.eventStore.append(event);
+    }
+  }
+
+  /**
+   * Update a specific device's public key.
+   */
+  async updateDevicePublicKey(deviceId: string, newPublicKeyHex: string): Promise<void> {
+    const device = await this.deviceStore.loadDevice(deviceId);
+    if (!device) {
+      throw new Error(`Device not found: ${deviceId}`);
+    }
+
+    const updated: DeviceRegistration = { ...device, public_key: newPublicKeyHex };
+    await this.deviceStore.saveDevice(updated);
+
+    // Log the update event
+    const clock = await this.eventStore.getLatestClock(device.motebit_id);
+    const event: EventLogEntry = {
+      event_id: generateUUIDv7(),
+      motebit_id: device.motebit_id,
+      timestamp: Date.now(),
+      event_type: EventType.KeyRotated,
+      payload: {
+        device_id: deviceId,
+        action: "public_key_updated",
+        new_public_key: newPublicKeyHex,
+      },
+      version_clock: clock + 1,
+      tombstoned: false,
+    };
+    await this.eventStore.append(event);
+  }
 }
 
 // === Bootstrap: shared identity bootstrap protocol ===
