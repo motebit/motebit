@@ -828,6 +828,8 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       "plan_step_failed", "plan_step_delegated", "plan_completed",
       "plan_failed", "goal_created", "goal_executed", "goal_completed",
       "agent_task_completed", "agent_task_failed",
+      "proposal_created", "proposal_accepted", "proposal_rejected",
+      "proposal_countered", "collaborative_step_completed",
     ];
     const allEvents = await eventStore.query({ motebit_id: motebitId });
     const relevantEvents = allEvents.filter((e) => {
@@ -866,6 +868,11 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       plan_step_delegated: { mapped: "step_delegated", fields: ["plan_id", "step_id", "ordinal", "task_id"] },
       plan_completed: { mapped: "plan_completed", fields: ["plan_id"] },
       plan_failed: { mapped: "plan_failed", fields: ["plan_id", "reason"] },
+      proposal_created: { mapped: "proposal_created", fields: ["plan_id", "proposal_id"] },
+      proposal_accepted: { mapped: "proposal_accepted", fields: ["plan_id", "proposal_id"] },
+      proposal_rejected: { mapped: "proposal_rejected", fields: ["plan_id", "proposal_id"] },
+      proposal_countered: { mapped: "proposal_countered", fields: ["plan_id", "proposal_id"] },
+      collaborative_step_completed: { mapped: "collaborative_step_completed", fields: ["plan_id", "step_id"] },
     };
 
     for (const event of relevantEvents) {
@@ -2311,6 +2318,10 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   // POST /api/v1/agents/:motebitId/listing — register/update service listing
   app.post("/api/v1/agents/:motebitId/listing", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    if (callerMotebitId && callerMotebitId !== motebitId) {
+      throw new HTTPException(403, { message: "Cannot modify another agent's listing" });
+    }
     const body = await c.req.json<{
       capabilities?: string[];
       pricing?: Array<{ capability: string; unit_cost: number; currency: string; per: string }>;
@@ -2579,6 +2590,10 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     if (!proposal) {
       throw new HTTPException(404, { message: "Proposal not found" });
     }
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    if (callerMotebitId && callerMotebitId !== proposal.initiator_motebit_id) {
+      throw new HTTPException(403, { message: "Only the initiator can withdraw a proposal" });
+    }
     if (proposal.status !== "pending") {
       throw new HTTPException(409, { message: `Proposal is ${proposal.status as string}, cannot withdraw` });
     }
@@ -2593,18 +2608,20 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // GET /api/v1/proposals — list proposals
   app.get("/api/v1/proposals", (c) => {
-    const motebitId = c.req.query("motebit_id");
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
     const status = c.req.query("status");
     const limitStr = c.req.query("limit");
     const limit = Math.min(Math.max(parseInt(limitStr ?? "50", 10) || 50, 1), 200);
 
-    let sql = "SELECT * FROM relay_proposals WHERE 1=1";
-    const params: unknown[] = [];
-
-    if (motebitId) {
-      sql += " AND (initiator_motebit_id = ? OR proposal_id IN (SELECT proposal_id FROM relay_proposal_participants WHERE motebit_id = ?))";
-      params.push(motebitId, motebitId);
+    // Always scope to caller's proposals (initiator or participant)
+    const scopeId = callerMotebitId ?? c.req.query("motebit_id");
+    if (!scopeId) {
+      throw new HTTPException(400, { message: "Missing caller identity" });
     }
+
+    let sql = "SELECT * FROM relay_proposals WHERE (initiator_motebit_id = ? OR proposal_id IN (SELECT proposal_id FROM relay_proposal_participants WHERE motebit_id = ?))";
+    const params: unknown[] = [scopeId, scopeId];
+
     if (status) {
       sql += " AND status = ?";
       params.push(status);
@@ -2642,6 +2659,18 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     const motebitId = callerMotebitId ?? body.motebit_id;
     if (!motebitId || !body.step_id || !body.status) {
       throw new HTTPException(400, { message: "Missing required fields" });
+    }
+
+    // Verify caller is a participant in this proposal
+    const stepProposal = moteDb.db.prepare("SELECT initiator_motebit_id FROM relay_proposals WHERE proposal_id = ?").get(proposalId) as { initiator_motebit_id: string } | undefined;
+    if (!stepProposal) {
+      throw new HTTPException(404, { message: "Proposal not found" });
+    }
+    const isParticipant = moteDb.db.prepare(
+      "SELECT 1 FROM relay_proposal_participants WHERE proposal_id = ? AND motebit_id = ?",
+    ).get(proposalId, motebitId);
+    if (!isParticipant && motebitId !== stepProposal.initiator_motebit_id) {
+      throw new HTTPException(403, { message: "Caller is not a participant in this proposal" });
     }
 
     const now = Date.now();

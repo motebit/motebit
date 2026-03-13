@@ -165,7 +165,7 @@ export function formatResult(result: ToolResult, motebitId: string, publicKeyHex
 
 // === Privacy filter for memories ===
 
-const EXCLUDED_SENSITIVITIES = new Set<string>(["medical", "financial", "secret"]);
+const EXCLUDED_SENSITIVITIES = new Set<string>(["personal", "medical", "financial", "secret"]);
 
 export function filterMemories(
   memories: Array<{

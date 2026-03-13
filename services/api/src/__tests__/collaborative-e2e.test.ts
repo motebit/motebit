@@ -224,8 +224,8 @@ describe("Collaborative Plan Proposals E2E", () => {
     expect(listA.proposals.length).toBeGreaterThanOrEqual(1);
     expect(listA.proposals.some((p: { proposal_id: string }) => p.proposal_id === proposalId)).toBe(true);
 
-    // List pending
-    const { json: listPending } = await getJson(`/api/v1/proposals?status=pending`);
+    // List pending (scoped to initiator)
+    const { json: listPending } = await getJson(`/api/v1/proposals?motebit_id=${MOTEBIT_A}&status=pending`);
     expect(listPending.proposals.length).toBeGreaterThanOrEqual(1);
   });
 

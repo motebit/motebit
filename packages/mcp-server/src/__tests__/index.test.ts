@@ -201,7 +201,7 @@ describe("formatResult", () => {
 });
 
 describe("filterMemories", () => {
-  it("excludes medical, financial, and secret sensitivities", () => {
+  it("excludes personal, medical, financial, and secret sensitivities", () => {
     const memories = [
       { content: "a", confidence: 0.9, sensitivity: "none", created_at: 1 },
       { content: "b", confidence: 0.8, sensitivity: "medical", created_at: 2 },
@@ -210,8 +210,8 @@ describe("filterMemories", () => {
       { content: "e", confidence: 0.5, sensitivity: "personal", created_at: 5 },
     ];
     const result = filterMemories(memories, 50);
-    expect(result).toHaveLength(2);
-    expect(result.map((m) => m.content)).toEqual(["a", "e"]);
+    expect(result).toHaveLength(1);
+    expect(result.map((m) => m.content)).toEqual(["a"]);
   });
 
   it("caps at the specified limit", () => {
@@ -702,7 +702,7 @@ describe("McpServerAdapter — resources", () => {
       getMemories: async () => [
         { content: "public", confidence: 0.9, sensitivity: "none", created_at: 1 },
         { content: "private", confidence: 0.8, sensitivity: "medical", created_at: 2 },
-        { content: "also-public", confidence: 0.7, sensitivity: "personal", created_at: 3 },
+        { content: "also-private", confidence: 0.7, sensitivity: "personal", created_at: 3 },
       ],
     });
     const adapter = new McpServerAdapter(makeConfig(), deps);
@@ -712,9 +712,8 @@ describe("McpServerAdapter — resources", () => {
     const result = (await handler()) as { contents: Array<{ text: string }> };
 
     const parsed = JSON.parse(result.contents[0]!.text) as Array<Record<string, unknown>>;
-    expect(parsed).toHaveLength(2);
+    expect(parsed).toHaveLength(1);
     expect(parsed[0]!.content).toBe("public");
-    expect(parsed[1]!.content).toBe("also-public");
     // sensitivity field should be stripped
     expect(parsed[0]).not.toHaveProperty("sensitivity");
   });
@@ -1065,7 +1064,7 @@ describe("McpServerAdapter — synthetic tool execution", () => {
     expect(storeMemory).not.toHaveBeenCalled();
   });
 
-  it("motebit_remember allows personal sensitivity", async () => {
+  it("motebit_remember rejects personal sensitivity from external callers", async () => {
     const storeMemory = vi.fn(async () => ({ node_id: "ok-1" }));
     const deps = makeDeps({ storeMemory });
     const adapter = new McpServerAdapter(makeConfig(), deps);
@@ -1077,9 +1076,8 @@ describe("McpServerAdapter — synthetic tool execution", () => {
       isError?: boolean;
     };
 
-    expect(result.isError).toBeUndefined();
-    expect(storeMemory).toHaveBeenCalledWith("test", "personal");
-    expect(result.content[0]!.text).toContain("ok-1");
+    expect(result.isError).toBe(true);
+    expect(storeMemory).not.toHaveBeenCalled();
   });
 
   it("motebit_recall returns query results", async () => {

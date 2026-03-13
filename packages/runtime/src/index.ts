@@ -891,6 +891,8 @@ export class MotebitRuntime {
       EventType.PlanStepFailed, EventType.PlanStepDelegated, EventType.PlanCompleted,
       EventType.PlanFailed, EventType.GoalCreated, EventType.GoalExecuted,
       EventType.GoalCompleted, EventType.AgentTaskCompleted, EventType.AgentTaskFailed,
+      EventType.ProposalCreated, EventType.ProposalAccepted, EventType.ProposalRejected,
+      EventType.ProposalCountered, EventType.CollaborativeStepCompleted,
     ];
     const events = await this.events.query({
       motebit_id: this.motebitId,
@@ -954,6 +956,21 @@ export class MotebitRuntime {
           break;
         case EventType.PlanFailed:
           timeline.push({ timestamp: event.timestamp, type: "plan_failed", payload: { plan_id: p.plan_id, reason: p.reason } });
+          break;
+        case EventType.ProposalCreated:
+          timeline.push({ timestamp: event.timestamp, type: "proposal_created", payload: { plan_id: p.plan_id, proposal_id: p.proposal_id } });
+          break;
+        case EventType.ProposalAccepted:
+          timeline.push({ timestamp: event.timestamp, type: "proposal_accepted", payload: { plan_id: p.plan_id, proposal_id: p.proposal_id } });
+          break;
+        case EventType.ProposalRejected:
+          timeline.push({ timestamp: event.timestamp, type: "proposal_rejected", payload: { plan_id: p.plan_id, proposal_id: p.proposal_id } });
+          break;
+        case EventType.ProposalCountered:
+          timeline.push({ timestamp: event.timestamp, type: "proposal_countered", payload: { plan_id: p.plan_id, proposal_id: p.proposal_id } });
+          break;
+        case EventType.CollaborativeStepCompleted:
+          timeline.push({ timestamp: event.timestamp, type: "collaborative_step_completed", payload: { plan_id: p.plan_id, step_id: p.step_id } });
           break;
       }
     }

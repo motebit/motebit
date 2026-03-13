@@ -690,7 +690,12 @@ export type ExecutionTimelineType =
   | "step_delegated"
   | "plan_completed"
   | "plan_failed"
-  | "goal_completed";
+  | "goal_completed"
+  | "proposal_created"
+  | "proposal_accepted"
+  | "proposal_rejected"
+  | "proposal_countered"
+  | "collaborative_step_completed";
 
 export interface ExecutionTimelineEntry {
   timestamp: number;
