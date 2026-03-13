@@ -1,11 +1,8 @@
 import * as readline from "node:readline";
-import * as path from "node:path";
-import * as fs from "node:fs";
 import { DEFAULT_CONFIG } from "@motebit/ai-core";
 import type { MotebitPersonalityConfig } from "@motebit/ai-core";
 import { deriveSyncEncryptionKey } from "@motebit/crypto";
 import { connectMcpServers } from "@motebit/mcp-client";
-import { verify as verifyIdentityFile } from "@motebit/identity-file";
 import { formatBodyAwareness } from "@motebit/ai-core";
 import { parseCliArgs, printHelp, printVersion, printBanner, trimHistory } from "./args.js";
 import type { CliConfig } from "./args.js";
@@ -29,6 +26,7 @@ import type { ReplContext } from "./slash-commands.js";
 import {
   handleDoctor,
   handleExport,
+  handleVerify,
   handleGoalAdd,
   handleGoalList,
   handleGoalOutcomes,
@@ -91,33 +89,8 @@ async function main(): Promise<void> {
       console.error("Usage: motebit verify <path>");
       process.exit(1);
     }
-    const resolved = path.resolve(filePath);
-    let content: string;
-    try {
-      content = fs.readFileSync(resolved, "utf-8");
-    } catch {
-      console.error(`Error: cannot read file: ${resolved}`);
-      process.exit(1);
-    }
-    const result = await verifyIdentityFile(content);
-    if (result.valid && result.identity) {
-      const pubKey = result.identity.identity.public_key;
-      const fingerprint = pubKey.slice(0, 16) + "...";
-      console.log(`Identity:    ${result.identity.motebit_id}`);
-      if (result.did) console.log(`DID:         ${result.did}`);
-      console.log(`Public key:  ${fingerprint}`);
-      console.log(`Signature:   valid`);
-      // TODO: When verifying an export bundle directory, also verify credential
-      // signatures (each VC proof), presentation integrity (VP proof chain),
-      // and cross-check that credential subject IDs match the identity file's
-      // motebit_id. Currently only verifies the motebit.md identity file.
-      process.exit(0);
-    } else {
-      console.error(`Signature:   invalid`);
-      if (result.error != null && result.error !== "")
-        console.error(`Error:       ${result.error}`);
-      process.exit(1);
-    }
+    await handleVerify(filePath);
+    return;
   }
 
   if (subcommand === "id") {
