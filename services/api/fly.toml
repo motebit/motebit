@@ -24,12 +24,12 @@ kill_timeout = 5
     soft_limit = 200
 
   [[http_service.checks]]
-    interval = 15000
+    interval = "15s"
     grace_period = "5s"
     method = "GET"
     path = "/health"
     protocol = "http"
-    timeout = 2000
+    timeout = "2s"
 
 [mounts]
   source = "motebit_data"
