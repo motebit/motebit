@@ -419,6 +419,8 @@ export interface RuntimeConfig {
   taskRouter?: TaskRouterConfig;
   /** Enable episodic memory consolidation during housekeeping. Default false. */
   episodicConsolidation?: boolean;
+  /** Ed25519 signing keys for issuing verifiable credentials (gradient, trust). */
+  signingKeys?: { privateKey: Uint8Array; publicKey: Uint8Array };
 }
 
 // === Stream Chunk ===
@@ -598,6 +600,9 @@ export class MotebitRuntime {
   private latencyStatsStore: LatencyStatsStoreAdapter | null;
   private _curiosityTargets: CuriosityTarget[] = [];
   private _precision: PrecisionWeights;
+  private _signingKeys: { privateKey: Uint8Array; publicKey: Uint8Array } | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private _issuedCredentials: import("@motebit/crypto").VerifiableCredential<any>[] = [];
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
     this.motebitId = config.motebitId;
@@ -609,6 +614,7 @@ export class MotebitRuntime {
     this.taskRouter = config.taskRouter ? new TaskRouter(config.taskRouter) : null;
     this.episodicConsolidation = config.episodicConsolidation ?? false;
     this._precision = NEUTRAL_PRECISION;
+    this._signingKeys = config.signingKeys ?? null;
     this.renderer = adapters.renderer;
     this.provider = adapters.ai ?? null;
     this.stateSnapshot = adapters.storage.stateSnapshot;
@@ -2824,6 +2830,19 @@ export class MotebitRuntime {
 
     this.gradientStore.save(snapshot);
 
+    // Issue gradient credential (best-effort)
+    if (this._signingKeys) {
+      try {
+        const vc = await this.issueGradientCredential(
+          this._signingKeys.privateKey,
+          this._signingKeys.publicKey,
+        );
+        if (vc) this._issuedCredentials.push(vc);
+      } catch {
+        // Credential issuance is best-effort — don't break gradient computation
+      }
+    }
+
     // === Active inference precision feedback ===
     // Compute precision from the gradient and feed it back into subsystems.
     // This closes the loop: model evidence (gradient) → confidence (precision) →
@@ -2857,6 +2876,22 @@ export class MotebitRuntime {
 
     const { issueGradientCredential: issue } = await import("@motebit/crypto");
     return issue(snapshot, privateKey, publicKey);
+  }
+
+  /**
+   * Return all verifiable credentials issued by this runtime (gradient + trust).
+   * Credentials accumulate in memory; consumers can read and clear as needed.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  getIssuedCredentials(): import("@motebit/crypto").VerifiableCredential<any>[] {
+    return [...this._issuedCredentials];
+  }
+
+  /**
+   * Clear the in-memory credential cache (e.g. after persisting or presenting them).
+   */
+  clearIssuedCredentials(): void {
+    this._issuedCredentials = [];
   }
 
   private wireLoopDeps(): void {
@@ -3040,6 +3075,36 @@ export class MotebitRuntime {
           });
         } catch {
           // Event emission is best-effort
+        }
+        // Issue trust credential for the transition (best-effort)
+        if (this._signingKeys) {
+          try {
+            const { issueTrustCredential, hexPublicKeyToDidKey } = await import("@motebit/crypto");
+            let subjectDid = `did:motebit:${remoteMotebitId}`;
+            if (updated.public_key) {
+              try {
+                subjectDid = hexPublicKeyToDidKey(updated.public_key);
+              } catch {
+                // public_key may not be hex — fall back to did:motebit
+              }
+            }
+            const vc = await issueTrustCredential(
+              {
+                trust_level: updated.trust_level,
+                interaction_count: updated.interaction_count,
+                successful_tasks: updated.successful_tasks,
+                failed_tasks: updated.failed_tasks,
+                first_seen_at: updated.first_seen_at,
+                last_seen_at: updated.last_seen_at,
+              },
+              this._signingKeys.privateKey,
+              this._signingKeys.publicKey,
+              subjectDid,
+            );
+            this._issuedCredentials.push(vc);
+          } catch {
+            // Credential issuance is best-effort
+          }
         }
       }
       await this.agentTrustStore.setAgentTrust(updated);
