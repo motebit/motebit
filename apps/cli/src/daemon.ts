@@ -30,7 +30,7 @@ import type {
   MotebitServerDeps,
   McpServerConfig as McpServerAdapterConfig,
 } from "@motebit/mcp-server";
-import { PlanEngine } from "@motebit/planner";
+import { PlanEngine, RelayDelegationAdapter } from "@motebit/planner";
 import { GoalScheduler } from "./scheduler.js";
 import type { CliConfig } from "./args.js";
 import { loadFullConfig, extractPersonality } from "./config.js";
@@ -181,6 +181,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
   const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
   const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
   let wsAdapter: WebSocketEventStoreAdapter | null = null;
+  let daemonHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
 
   if (syncUrl != null && syncUrl !== "") {
     // Derive private key for signing execution receipts
@@ -314,6 +315,87 @@ export async function handleRun(config: CliConfig): Promise<void> {
 
     wsAdapter.connect();
 
+    // Wire RelayDelegationAdapter so PlanEngine can delegate steps to other motebits.
+    // Use a token factory to mint fresh signed tokens for long-lived daemons (5-min expiry).
+    if (privKeyBytes) {
+      const privateKeyForDelegation = privKeyBytes;
+      const tokenFactory = async (): Promise<string> => {
+        if (!fullConfig.device_id) return syncToken ?? "";
+        try {
+          return await createSignedToken(
+            {
+              mid: motebitId,
+              did: fullConfig.device_id,
+              iat: Date.now(),
+              exp: Date.now() + 5 * 60 * 1000,
+            },
+            privateKeyForDelegation,
+          );
+        } catch {
+          return syncToken ?? "";
+        }
+      };
+
+      const delegationAdapter = new RelayDelegationAdapter({
+        syncUrl,
+        motebitId,
+        authToken: tokenFactory,
+        sendRaw: (data: string) => wsAdapter!.sendRaw(data),
+        onCustomMessage: (cb) => wsAdapter!.onCustomMessage(cb),
+        getExplorationDrive: () => runtime.getPrecision().explorationDrive,
+        onDelegationFailure: (step, _attempt, error, failedAgentId) => {
+          console.warn(
+            `Delegation failed for step "${step.description}"${failedAgentId ? ` (agent: ${failedAgentId.slice(0, 8)}...)` : ""}: ${error}`,
+          );
+        },
+      });
+      runtime.setDelegationAdapter(delegationAdapter);
+      console.log("Delegation: enabled (RelayDelegationAdapter wired)");
+    }
+
+    // Register with agent discovery registry so other motebits can find this daemon.
+    try {
+      const toolNames = runtime
+        .getToolRegistry()
+        .list()
+        .map((t) => t.name);
+
+      const regHeaders: Record<string, string> = { "Content-Type": "application/json" };
+      if (syncToken) regHeaders["Authorization"] = `Bearer ${syncToken}`;
+
+      const regResp = await fetch(`${syncUrl}/api/v1/agents/register`, {
+        method: "POST",
+        headers: regHeaders,
+        body: JSON.stringify({
+          motebit_id: motebitId,
+          endpoint_url: syncUrl,
+          capabilities: toolNames,
+          metadata: { name: `daemon-${motebitId.slice(0, 8)}`, transport: "ws" },
+        }),
+      });
+
+      if (regResp.ok) {
+        console.log(`Discovery: registered with relay (${toolNames.length} tools)`);
+        // Heartbeat every 5 minutes to keep the registry entry alive
+        daemonHeartbeatTimer = setInterval(
+          () => {
+            void fetch(`${syncUrl}/api/v1/agents/heartbeat`, {
+              method: "POST",
+              headers: regHeaders,
+            }).catch(() => {
+              // Best-effort heartbeat
+            });
+          },
+          5 * 60 * 1000,
+        );
+      } else {
+        console.log(`Discovery: registry registration returned ${regResp.status} (skipping)`);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.log(`Discovery: registry registration failed (${msg}) — continuing`);
+    }
+
     // Also wire sync via the HTTP adapter
     runtime.connectSync(httpAdapter);
 
@@ -333,6 +415,16 @@ export async function handleRun(config: CliConfig): Promise<void> {
     const forceExit = setTimeout(() => process.exit(1), 5_000);
     if (typeof forceExit.unref === "function") forceExit.unref(); // Don't block event loop
     try {
+      if (daemonHeartbeatTimer !== undefined) clearInterval(daemonHeartbeatTimer);
+      // Best-effort deregistration from agent discovery registry
+      if (syncUrl) {
+        const deregHeaders: Record<string, string> = {};
+        if (syncToken) deregHeaders["Authorization"] = `Bearer ${syncToken}`;
+        void fetch(`${syncUrl}/api/v1/agents/deregister`, {
+          method: "DELETE",
+          headers: deregHeaders,
+        }).catch(() => {});
+      }
       scheduler.stop();
       wsAdapter?.disconnect();
       runtime.stop();

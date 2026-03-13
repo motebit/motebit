@@ -39,6 +39,7 @@ import {
   handleId,
   handleLedger,
   handleCredentials,
+  handleRegister,
 } from "./subcommands.js";
 import { handleRun, handleServe } from "./daemon.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
@@ -105,6 +106,11 @@ async function main(): Promise<void> {
 
   if (subcommand === "export") {
     await handleExport(config);
+    return;
+  }
+
+  if (subcommand === "register") {
+    await handleRegister(config);
     return;
   }
 

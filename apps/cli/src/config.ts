@@ -34,6 +34,8 @@ export interface FullConfig {
   mcp_servers?: McpServerConfig[];
   // Trusted MCP server names (tools don't require approval)
   mcp_trusted_servers?: string[];
+  // Sync relay URL saved by `motebit register`
+  sync_url?: string;
 }
 
 export function loadFullConfig(): FullConfig {

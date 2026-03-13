@@ -14,6 +14,7 @@ import {
   hexPublicKeyToDidKey,
   verifyVerifiableCredential,
   verifyVerifiablePresentation,
+  createSignedToken,
 } from "@motebit/crypto";
 import type { VerifiableCredential, VerifiablePresentation } from "@motebit/crypto";
 import type { CliConfig } from "./args.js";
@@ -1388,4 +1389,139 @@ async function verifyBundle(dirPath: string): Promise<void> {
   }
   console.log();
   process.exit(passed ? 0 : 1);
+}
+
+const DEFAULT_SYNC_URL = "https://motebit-sync.fly.dev";
+
+/**
+ * `motebit register [--sync-url <url>]`
+ *
+ * Registers this identity with the relay so other motebits can discover and
+ * delegate to it.  Saves the sync URL to ~/.motebit/config.json for future
+ * use by daemon and REPL modes.
+ */
+export async function handleRegister(config: CliConfig): Promise<void> {
+  const syncUrl = (config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? DEFAULT_SYNC_URL).replace(
+    /\/+$/,
+    "",
+  );
+
+  const fullConfig = loadFullConfig();
+
+  // Require identity to exist (user must have launched the REPL at least once)
+  const motebitId = fullConfig.motebit_id;
+  const deviceId = fullConfig.device_id;
+  const publicKeyHex = fullConfig.device_public_key;
+
+  if (motebitId == null || motebitId === "") {
+    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
+    process.exit(1);
+  }
+  if (deviceId == null || deviceId === "") {
+    console.error("Error: no device_id found in config. Run `motebit` first.");
+    process.exit(1);
+  }
+  if (publicKeyHex == null || publicKeyHex === "") {
+    console.error("Error: no public key found in config. Run `motebit` first.");
+    process.exit(1);
+  }
+
+  // Optionally decrypt private key so we can verify the registration with a signed token
+  let privateKeyBytes: Uint8Array | undefined;
+  if (fullConfig.cli_encrypted_key) {
+    try {
+      const envPassphrase = process.env["MOTEBIT_PASSPHRASE"];
+      let passphrase: string;
+      if (envPassphrase != null && envPassphrase !== "") {
+        passphrase = envPassphrase;
+      } else {
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        passphrase = await new Promise<string>((resolve) => {
+          rl.question("Passphrase (to sign registration): ", (answer) => {
+            rl.close();
+            resolve(answer);
+          });
+        });
+      }
+      const pkHex = await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
+      privateKeyBytes = fromHex(pkHex);
+    } catch {
+      console.warn("Warning: could not decrypt private key — registration proceeds unsigned");
+    }
+  }
+
+  // Step 1: Register device (public key binding) with the relay
+  const registerBody: Record<string, string> = {
+    motebit_id: motebitId,
+    device_name: deviceId,
+    public_key: publicKeyHex,
+  };
+
+  let registerResp: Response;
+  try {
+    registerResp = await fetch(`${syncUrl}/device/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(registerBody),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`Error: could not reach relay at ${syncUrl}: ${msg}`);
+    process.exit(1);
+  }
+
+  // 404 means the relay has no record of this identity yet — that's expected for a
+  // fresh registration before any sync events have been pushed.  Treat it as a soft
+  // failure and continue so the operator can still set up the sync URL locally.
+  if (!registerResp.ok && registerResp.status !== 404) {
+    const text = await registerResp.text();
+    console.error(
+      `Error: relay registration failed (${registerResp.status}): ${text.slice(0, 200)}`,
+    );
+    process.exit(1);
+  }
+
+  const registered = registerResp.ok;
+
+  // Step 2: Verify registration succeeded by minting a signed token and calling /health
+  if (registered && privateKeyBytes) {
+    try {
+      const token = await createSignedToken(
+        {
+          mid: motebitId,
+          did: deviceId,
+          iat: Date.now(),
+          exp: Date.now() + 5 * 60 * 1000,
+        },
+        privateKeyBytes,
+      );
+
+      const healthResp = await fetch(`${syncUrl}/health`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!healthResp.ok) {
+        console.warn(`Warning: relay health check returned ${healthResp.status} — continuing`);
+      }
+    } catch {
+      // Best-effort verification — don't fail the command
+    }
+  }
+
+  // Step 3: Save sync URL to config if not already set
+  if (fullConfig.sync_url == null || fullConfig.sync_url === "") {
+    fullConfig.sync_url = syncUrl;
+    saveFullConfig(fullConfig);
+    console.log(`Saved sync URL: ${syncUrl}`);
+  }
+
+  if (registered) {
+    console.log(`Registered ${motebitId.slice(0, 8)}... with relay at ${syncUrl}`);
+  } else {
+    // 404: relay doesn't have this identity yet (first ever sync)
+    console.log(
+      `Identity ${motebitId.slice(0, 8)}... not yet on relay — sync URL saved to config.`,
+    );
+    console.log(`Run the REPL with --sync-url ${syncUrl} to push your events, then re-register.`);
+  }
 }

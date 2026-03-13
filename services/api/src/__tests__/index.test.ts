@@ -2395,3 +2395,151 @@ describe("Rate Limiting", () => {
     expect(res2.headers.get("X-RateLimit-Reset")).toBeTruthy();
   });
 });
+
+// === Bootstrap Endpoint Tests ===
+
+describe("Sync Relay — bootstrap endpoint", () => {
+  let relay: SyncRelay;
+
+  beforeEach(async () => {
+    relay = await createSyncRelay({ apiToken: API_TOKEN });
+  });
+
+  afterEach(() => {
+    relay.close();
+  });
+
+  it("POST /api/v1/agents/bootstrap registers a new agent without master token", async () => {
+    const keypair = await generateKeypair();
+    const pubKeyHex = bytesToHex(keypair.publicKey);
+    const motebitId = `bootstrap-mote-${crypto.randomUUID()}`;
+
+    const res = await relay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" }, // no Authorization header
+      body: JSON.stringify({ motebit_id: motebitId, public_key: pubKeyHex }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      motebit_id: string;
+      device_id: string;
+      registered: boolean;
+    };
+    expect(body.motebit_id).toBe(motebitId);
+    expect(body.device_id).toBeTypeOf("string");
+    expect(body.registered).toBe(true);
+  });
+
+  it("POST /api/v1/agents/bootstrap is idempotent for same key", async () => {
+    const keypair = await generateKeypair();
+    const pubKeyHex = bytesToHex(keypair.publicKey);
+    const motebitId = `bootstrap-idem-${crypto.randomUUID()}`;
+
+    // First call — creates
+    const res1 = await relay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ motebit_id: motebitId, public_key: pubKeyHex }),
+    });
+    expect(res1.status).toBe(201);
+
+    // Second call — idempotent re-registration with same key
+    const res2 = await relay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ motebit_id: motebitId, public_key: pubKeyHex }),
+    });
+    expect(res2.status).toBe(200);
+    const body2 = (await res2.json()) as { motebit_id: string; registered: boolean };
+    expect(body2.motebit_id).toBe(motebitId);
+    expect(body2.registered).toBe(false); // already existed
+  });
+
+  it("POST /api/v1/agents/bootstrap rejects hijack attempt with different key", async () => {
+    const keypairA = await generateKeypair();
+    const keypairB = await generateKeypair();
+    const motebitId = `bootstrap-hijack-${crypto.randomUUID()}`;
+
+    // Register with keypair A
+    const res1 = await relay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ motebit_id: motebitId, public_key: bytesToHex(keypairA.publicKey) }),
+    });
+    expect(res1.status).toBe(201);
+
+    // Try to re-register with keypair B (different key = hijack attempt)
+    const res2 = await relay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ motebit_id: motebitId, public_key: bytesToHex(keypairB.publicKey) }),
+    });
+    expect(res2.status).toBe(409);
+    const body2 = (await res2.json()) as { error: string };
+    expect(body2.error).toContain("different public key");
+  });
+
+  it("POST /api/v1/agents/bootstrap returns 400 for missing motebit_id", async () => {
+    const keypair = await generateKeypair();
+    const res = await relay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ public_key: bytesToHex(keypair.publicKey) }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /api/v1/agents/bootstrap returns 400 for invalid public key", async () => {
+    const res = await relay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ motebit_id: "some-id", public_key: "not-hex" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("bootstrapped agent can authenticate with signed token for task submission", async () => {
+    // Agent A bootstraps itself
+    const keypairA = await generateKeypair();
+    const motebitIdA = `agent-a-${crypto.randomUUID()}`;
+
+    const bootstrapRes = await relay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ motebit_id: motebitIdA, public_key: bytesToHex(keypairA.publicKey) }),
+    });
+    expect(bootstrapRes.status).toBe(201);
+    const { device_id: deviceIdA } = (await bootstrapRes.json()) as { device_id: string };
+
+    // Agent A creates a signed token
+    const tokenA = await createSignedToken(
+      { mid: motebitIdA, did: deviceIdA, iat: Date.now(), exp: Date.now() + 5 * 60 * 1000 },
+      keypairA.privateKey,
+    );
+
+    // Agent A bootstraps agent B's identity separately (B is the task target)
+    const keypairB = await generateKeypair();
+    const motebitIdB = `agent-b-${crypto.randomUUID()}`;
+    await relay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ motebit_id: motebitIdB, public_key: bytesToHex(keypairB.publicKey) }),
+    });
+
+    // Agent A submits a task targeting agent B using its signed token (not master token)
+    const taskRes = await relay.app.request(`/agent/${motebitIdB}/task`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${tokenA}`,
+      },
+      body: JSON.stringify({ prompt: "Agent A delegates to Agent B" }),
+    });
+
+    expect(taskRes.status).toBe(201);
+    const taskBody = (await taskRes.json()) as { task_id: string; status: string };
+    expect(taskBody.task_id).toBeTypeOf("string");
+    expect(taskBody.status).toBe("pending");
+  });
+});

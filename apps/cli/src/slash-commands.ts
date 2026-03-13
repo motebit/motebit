@@ -6,7 +6,9 @@ import type { MotebitDatabase } from "@motebit/persistence";
 import { McpClientAdapter, type McpServerConfig } from "@motebit/mcp-client";
 import { InMemoryToolRegistry } from "@motebit/tools";
 import { AgentTrustLevel } from "@motebit/sdk";
+import type { ExecutionReceipt } from "@motebit/sdk";
 import { computeReputationScore } from "@motebit/policy";
+import { createSignedToken, verifyExecutionReceipt, hexToBytes } from "@motebit/crypto";
 import type { CliConfig } from "./args.js";
 import type { FullConfig } from "./config.js";
 import { saveFullConfig } from "./config.js";
@@ -98,6 +100,7 @@ Available commands:
   /agents block <id> Shorthand for setting Blocked
   /discover [cap]    Discover agents on the relay (optional capability filter)
   /discover dom.com  Discover motebit at domain via DNS/well-known
+  /delegate <id> <prompt>  Delegate a task to another motebit via the relay
   /operator          Show operator mode status
   quit, exit         Exit
 `.trim(),
@@ -1002,6 +1005,195 @@ Available commands:
             console.log("Usage: /agents [info <id>|trust <id> <level>|block <id>]");
           }
         }
+      }
+      break;
+    }
+
+    case "delegate": {
+      if (!repl) {
+        console.log("Delegate not available in this context.");
+        break;
+      }
+      // Parse: /delegate <motebit-id-or-prefix> <prompt>
+      const delegateSpaceIdx = args.indexOf(" ");
+      if (delegateSpaceIdx === -1 || !args.trim()) {
+        console.log("Usage: /delegate <motebit-id-or-prefix> <prompt>");
+        break;
+      }
+      const rawTargetId = args.slice(0, delegateSpaceIdx).trim();
+      const delegatePrompt = args.slice(delegateSpaceIdx + 1).trim();
+      if (!rawTargetId || !delegatePrompt) {
+        console.log("Usage: /delegate <motebit-id-or-prefix> <prompt>");
+        break;
+      }
+
+      const syncUrl =
+        config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? "https://motebit-sync.fly.dev";
+
+      // Resolve prefix to full motebit ID if needed (UUID is 36 chars)
+      let targetMotebitId = rawTargetId;
+      const UUID_LENGTH = 36;
+      if (rawTargetId.length < UUID_LENGTH) {
+        try {
+          const token = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+          const discoverHeaders: Record<string, string> = {};
+          if (token) discoverHeaders["Authorization"] = `Bearer ${token}`;
+          const discoverResp = await fetch(`${syncUrl}/api/v1/agents/discover`, {
+            headers: discoverHeaders,
+          });
+          if (!discoverResp.ok) {
+            console.log(
+              `Failed to resolve agent prefix: ${discoverResp.status} ${discoverResp.statusText}`,
+            );
+            break;
+          }
+          const discoverData = (await discoverResp.json()) as {
+            agents: Array<{ motebit_id: string }>;
+          };
+          const matchedAgent = discoverData.agents.find((a) =>
+            a.motebit_id.startsWith(rawTargetId),
+          );
+          if (!matchedAgent) {
+            console.log(
+              `No agent found matching prefix "${rawTargetId}". Use /discover to list agents.`,
+            );
+            break;
+          }
+          targetMotebitId = matchedAgent.motebit_id;
+          console.log(`Resolved: ${rawTargetId} → ${targetMotebitId.slice(0, 12)}...`);
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.log(`Agent resolution failed: ${message}`);
+          break;
+        }
+      }
+
+      // Build a signed device token (5-min expiry)
+      let authHeader: string | undefined;
+      if (repl.privateKeyBytes && repl.deviceId) {
+        try {
+          const now = Date.now();
+          const signedToken = await createSignedToken(
+            { mid: repl.motebitId, did: repl.deviceId, iat: now, exp: now + 5 * 60 * 1000 },
+            repl.privateKeyBytes,
+          );
+          authHeader = `Bearer ${signedToken}`;
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.log(`Failed to create signed token: ${message}`);
+          break;
+        }
+      } else {
+        // Fall back to static sync token
+        const syncToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+        if (syncToken) authHeader = `Bearer ${syncToken}`;
+      }
+
+      const delegateHeaders: Record<string, string> = { "Content-Type": "application/json" };
+      if (authHeader) delegateHeaders["Authorization"] = authHeader;
+
+      // Submit the task
+      let taskId: string;
+      try {
+        console.log(`Delegating to ${targetMotebitId.slice(0, 12)}...`);
+        const submitResp = await fetch(`${syncUrl}/agent/${targetMotebitId}/task`, {
+          method: "POST",
+          headers: delegateHeaders,
+          body: JSON.stringify({ prompt: delegatePrompt, submitted_by: repl.motebitId }),
+        });
+        if (!submitResp.ok) {
+          const text = await submitResp.text();
+          console.log(`Task submission failed (${submitResp.status}): ${text}`);
+          break;
+        }
+        const submitData = (await submitResp.json()) as { task_id: string };
+        taskId = submitData.task_id;
+        console.log(`Task submitted: ${taskId.slice(0, 12)}...`);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.log(`Task submission error: ${message}`);
+        break;
+      }
+
+      // Poll for result (max 60s, 2s intervals)
+      const POLL_INTERVAL_MS = 2000;
+      const MAX_POLLS = 30;
+      let receipt: ExecutionReceipt | null = null;
+      let agentId: string | undefined;
+
+      for (let poll = 0; poll < MAX_POLLS; poll++) {
+        await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+        try {
+          const pollResp = await fetch(`${syncUrl}/agent/${targetMotebitId}/task/${taskId}`, {
+            headers: delegateHeaders,
+          });
+          if (!pollResp.ok) {
+            // Task may not be ready yet — keep polling
+            continue;
+          }
+          const pollData = (await pollResp.json()) as {
+            task: { status: string };
+            receipt: ExecutionReceipt | null;
+          };
+          if (pollData.receipt != null) {
+            receipt = pollData.receipt;
+            agentId = receipt.motebit_id;
+            break;
+          }
+          // Still pending/running
+          if (poll === 0) process.stdout.write("Waiting");
+          else process.stdout.write(".");
+        } catch {
+          // Network hiccup — keep polling
+        }
+      }
+      if (receipt === null) {
+        console.log("\nTask timed out after 60s. The agent may still be running.");
+        break;
+      }
+      console.log(); // newline after dots
+
+      // Verify the receipt signature if we have the agent's public key
+      let receiptVerified = false;
+      const agentRecords = await runtime.listTrustedAgents();
+      const agentRecord = agentRecords.find((r) => r.remote_motebit_id === targetMotebitId);
+      if (agentRecord?.public_key) {
+        try {
+          const pubKeyBytes = hexToBytes(agentRecord.public_key);
+          receiptVerified = await verifyExecutionReceipt(
+            receipt as Parameters<typeof verifyExecutionReceipt>[0],
+            pubKeyBytes,
+          );
+        } catch {
+          receiptVerified = false;
+        }
+      }
+
+      // Bump trust on verified receipt
+      const prevLevel = agentRecord?.trust_level ?? AgentTrustLevel.FirstContact;
+      let newLevel = prevLevel;
+      try {
+        await runtime.bumpTrustFromReceipt(receipt, receiptVerified);
+        const updatedRecords = await runtime.listTrustedAgents();
+        const updated = updatedRecords.find((r) => r.remote_motebit_id === targetMotebitId);
+        newLevel = updated?.trust_level ?? prevLevel;
+      } catch {
+        // Best effort — trust bump is non-critical
+      }
+
+      // Display result
+      const statusIcon = receipt.status === "completed" ? "\u2713" : "\u2717";
+      console.log(
+        `${statusIcon} Task ${receipt.status} by ${(agentId ?? targetMotebitId).slice(0, 12)}...`,
+      );
+      if (receipt.result) {
+        console.log(`Result: ${receipt.result}`);
+      }
+      console.log(`Receipt: ${receiptVerified ? "verified" : "unverified"} (Ed25519)`);
+      if (prevLevel !== newLevel) {
+        console.log(`Trust: ${prevLevel} \u2192 ${newLevel}`);
+      } else {
+        console.log(`Trust: ${prevLevel}`);
       }
       break;
     }

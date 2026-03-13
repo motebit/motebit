@@ -23,7 +23,11 @@ export interface CollaborativeDelegationAdapter {
 export interface RelayDelegationConfig {
   syncUrl: string;
   motebitId: string;
-  authToken?: string;
+  /**
+   * Static auth token or an async factory that mints fresh tokens.
+   * Use a factory for long-running daemons to avoid 5-minute expiry.
+   */
+  authToken?: string | (() => Promise<string>);
   sendRaw: (data: string) => void;
   onCustomMessage: (cb: (msg: { type: string; [key: string]: unknown }) => void) => () => void;
   /** Optional: returns agent's current exploration drive [0-1] from intelligence gradient, passed to relay for routing. */
@@ -42,10 +46,12 @@ export interface RelayDelegationConfig {
 export class RelayDelegationAdapter implements StepDelegationAdapter {
   constructor(private config: RelayDelegationConfig) {}
 
-  private buildHeaders(): Record<string, string> {
+  private async buildHeaders(): Promise<Record<string, string>> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (this.config.authToken != null && this.config.authToken !== "") {
-      headers["Authorization"] = `Bearer ${this.config.authToken}`;
+    const { authToken } = this.config;
+    if (authToken != null && authToken !== "") {
+      const token = typeof authToken === "function" ? await authToken() : authToken;
+      if (token !== "") headers["Authorization"] = `Bearer ${token}`;
     }
     return headers;
   }
@@ -115,7 +121,7 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
 
     const resp = await fetch(`${syncUrl}/agent/${motebitId}/task`, {
       method: "POST",
-      headers: this.buildHeaders(),
+      headers: await this.buildHeaders(),
       body: JSON.stringify(body),
     });
 
@@ -178,7 +184,7 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
 
     try {
       const resp = await fetch(`${syncUrl}/agent/${motebitId}/task/${taskId}`, {
-        headers: this.buildHeaders(),
+        headers: await this.buildHeaders(),
       });
 
       if (!resp.ok) return null; // Task not found (expired) or auth error

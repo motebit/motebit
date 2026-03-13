@@ -47,6 +47,7 @@
  *   GET  /agent/:motebitId/ledger/:goalId               — retrieve signed execution ledger
  *   POST /api/v1/credentials/verify                        — verify a VerifiableCredential (public)
  *   GET  /api/v1/market/candidates?capability=&max_budget=&limit= — scored candidate list
+ *   POST /api/v1/agents/bootstrap                       — register identity + device in one unauthenticated call (rate-limited)
  *
  * WebSocket protocol:
  *   Client → Server:  { type: "push", events: EventLogEntry[] }
@@ -610,8 +611,9 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   // Public endpoints: credential verification (20 req/min)
   app.use("/api/v1/credentials/verify", rateLimitMiddleware(publicLimiter));
 
-  // Expensive endpoints: presentation bundling (10 req/min)
+  // Expensive endpoints: presentation bundling, bootstrap (10 req/min)
   app.use("/api/v1/agents/:motebitId/presentation", rateLimitMiddleware(expensiveLimiter));
+  app.use("/api/v1/agents/bootstrap", rateLimitMiddleware(expensiveLimiter));
 
   if (apiToken != null && apiToken !== "") {
     app.use("/identity/*", bearerAuth({ token: apiToken }));
@@ -2004,19 +2006,47 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // === Agent Protocol Endpoints ===
 
-  // POST /agent/:motebitId/task — submit a task (master token auth)
+  /**
+   * dualAuth — accepts either the master API token OR a valid Ed25519 signed device token.
+   * Used by task submission so agents can delegate to each other without knowing the master token.
+   * Sets c.set("callerMotebitId") on the context when a signed device token is used.
+   */
+  async function dualAuth(
+    c: Parameters<Parameters<typeof app.use>[1]>[0],
+    next: () => Promise<void>,
+  ): Promise<Response | void> {
+    const authHeader = c.req.header("authorization");
+    if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+      throw new HTTPException(401, { message: "Missing authorization" });
+    }
+    const token = authHeader.slice(7);
+
+    // Master token bypass
+    if (apiToken != null && apiToken !== "" && token === apiToken) {
+      await next();
+      return;
+    }
+
+    // Signed device token path
+    const claims = parseTokenPayloadUnsafe(token);
+    if (!claims?.mid) {
+      throw new HTTPException(401, { message: "Invalid token" });
+    }
+    const valid = await verifySignedTokenForDevice(token, claims.mid, identityManager);
+    if (!valid) {
+      throw new HTTPException(401, { message: "Token verification failed" });
+    }
+
+    c.set("callerMotebitId" as never, claims.mid as never);
+    await next();
+  }
+
+  // POST /agent/:motebitId/task — submit a task (master token or signed device token)
   if (apiToken != null && apiToken !== "") {
     app.use("/agent/*/task", async (c, next) => {
-      // Only apply master token auth to POST (submit) requests
+      // Only apply auth to POST (submit) requests, not to /result sub-routes
       if (c.req.method === "POST" && !c.req.url.includes("/result")) {
-        const authHeader = c.req.header("authorization");
-        if (
-          authHeader == null ||
-          !authHeader.startsWith("Bearer ") ||
-          authHeader.slice(7) !== apiToken
-        ) {
-          throw new HTTPException(401, { message: "Master token required" });
-        }
+        return dualAuth(c, next);
       }
       await next();
     });
@@ -2753,6 +2783,12 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
   // Auth middleware for agent registry routes
   app.use("/api/v1/agents/*", async (c, next) => {
+    // Bootstrap is unauthenticated — handled by its own rate limiter
+    if (c.req.path === "/api/v1/agents/bootstrap") {
+      await next();
+      return;
+    }
+
     const authHeader = c.req.header("authorization");
     if (authHeader == null || !authHeader.startsWith("Bearer ")) {
       throw new HTTPException(401, { message: "Missing auth token" });
@@ -2778,6 +2814,81 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     // Store caller identity for route handlers
     c.set("callerMotebitId" as never, claims.mid as never);
     await next();
+  });
+
+  // POST /api/v1/agents/bootstrap — unauthenticated (rate-limited) one-call identity + device registration
+  // Allows a CLI motebit to register with the relay without a master token.
+  // Idempotent for same motebit_id + same public_key. Rejects attempts to re-register with a different key.
+  app.post("/api/v1/agents/bootstrap", async (c) => {
+    const body = await c.req.json<{
+      motebit_id: string;
+      device_id?: string;
+      public_key: string;
+    }>();
+
+    if (!body.motebit_id || typeof body.motebit_id !== "string" || body.motebit_id.trim() === "") {
+      throw new HTTPException(400, { message: "Missing or empty 'motebit_id' field" });
+    }
+    if (!body.public_key || typeof body.public_key !== "string") {
+      throw new HTTPException(400, { message: "Missing 'public_key' field" });
+    }
+    if (!/^[0-9a-f]{64}$/i.test(body.public_key)) {
+      throw new HTTPException(400, {
+        message: "Invalid 'public_key' — must be 64-char hex string (32 bytes Ed25519 public key)",
+      });
+    }
+
+    const motebitId = body.motebit_id.trim();
+
+    // Check if identity already exists
+    const existing = await identityManager.load(motebitId);
+    if (existing) {
+      // Identity exists — check for public key conflict (hijack prevention)
+      const devices = await identityManager.listDevices(motebitId);
+      const existingKey = devices.find((d) => d.public_key)?.public_key;
+      if (existingKey && existingKey.toLowerCase() !== body.public_key.toLowerCase()) {
+        throw new HTTPException(409, {
+          message:
+            "Identity already registered with a different public key — re-registration rejected",
+        });
+      }
+      // Same key (or no key yet) — idempotent: register/refresh device and return
+      const device = await identityManager.registerDevice(
+        motebitId,
+        body.device_id ?? "bootstrap-device",
+        body.public_key,
+      );
+      return c.json(
+        {
+          motebit_id: motebitId,
+          device_id: device.device_id,
+          registered: false, // identity already existed
+        },
+        200,
+      );
+    }
+
+    // New identity — save directly with the caller-provided motebit_id (self-sovereign: no server-assigned UUID)
+    await moteDb.identityStorage.save({
+      motebit_id: motebitId,
+      owner_id: motebitId, // Self-sovereign: the agent is its own owner
+      created_at: Date.now(),
+      version_clock: 0,
+    });
+    const device = await identityManager.registerDevice(
+      motebitId,
+      body.device_id ?? "bootstrap-device",
+      body.public_key,
+    );
+
+    return c.json(
+      {
+        motebit_id: motebitId,
+        device_id: device.device_id,
+        registered: true,
+      },
+      201,
+    );
   });
 
   // Auth middleware for proposal routes

@@ -106,6 +106,7 @@ Commands:
   doctor                    Check system readiness (Node, SQLite, config)
   export [--output <dir>]   Export identity bundle (motebit.md, credentials, budget, gradient)
   verify <path>             Verify a motebit.md identity file signature
+  register [--sync-url <url>]  Register this identity with the relay (enables discovery)
   run [--identity <path>]   Start daemon mode (uses exported motebit.md)
   serve [--identity <path>] Start as MCP server (stdio by default)
     --serve-transport <mode>  Transport: "stdio" (default) or "http"
