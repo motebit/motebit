@@ -14,6 +14,7 @@ import type {
   AgentServiceListing,
   BudgetAllocation,
   SettlementRecord,
+  PrecisionWeights,
 } from "@motebit/sdk";
 import { EventType, SensitivityLevel, AgentTrustLevel } from "@motebit/sdk";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
@@ -85,7 +86,7 @@ import type { PlanStoreAdapter } from "@motebit/planner";
 import type { DeviceCapability } from "@motebit/sdk";
 import { PolicyGate, MemoryGovernor, MemoryClass } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
-import { computeGradient, InMemoryGradientStore } from "./gradient.js";
+import { computeGradient, computePrecision, NEUTRAL_PRECISION, InMemoryGradientStore } from "./gradient.js";
 import type { GradientSnapshot, GradientStoreAdapter, BehavioralStats } from "./gradient.js";
 
 // Re-export key types for consumers
@@ -125,7 +126,7 @@ export type { PlanStoreAdapter } from "@motebit/planner";
 export { RelayDelegationAdapter } from "@motebit/planner";
 export type { RelayDelegationConfig } from "@motebit/planner";
 export type { GradientSnapshot, GradientStoreAdapter, GradientConfig, BehavioralStats } from "./gradient.js";
-export { computeGradient, InMemoryGradientStore } from "./gradient.js";
+export { computeGradient, computePrecision, NEUTRAL_PRECISION, InMemoryGradientStore } from "./gradient.js";
 
 // === McpServerConfig (inlined to avoid importing Node-only @motebit/mcp-client) ===
 
@@ -554,6 +555,7 @@ export class MotebitRuntime {
   private serviceListingStore: ServiceListingStoreAdapter | null;
   private latencyStatsStore: LatencyStatsStoreAdapter | null;
   private _curiosityTargets: CuriosityTarget[] = [];
+  private _precision: PrecisionWeights;
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
     this.motebitId = config.motebitId;
@@ -564,6 +566,7 @@ export class MotebitRuntime {
     this.approvalTimeoutMs = config.approvalTimeoutMs ?? 600_000; // 10 min default
     this.taskRouter = config.taskRouter ? new TaskRouter(config.taskRouter) : null;
     this.episodicConsolidation = config.episodicConsolidation ?? false;
+    this._precision = NEUTRAL_PRECISION;
     this.renderer = adapters.renderer;
     this.provider = adapters.ai ?? null;
     this.stateSnapshot = adapters.storage.stateSnapshot;
@@ -2334,6 +2337,11 @@ export class MotebitRuntime {
     return this.gradientStore.latest(this.motebitId);
   }
 
+  /** Get current active inference precision weights. */
+  getPrecision(): PrecisionWeights {
+    return this._precision;
+  }
+
   /** Get gradient history (most recent first). */
   getGradientHistory(limit?: number): GradientSnapshot[] {
     return this.gradientStore.list(this.motebitId, limit);
@@ -2419,6 +2427,19 @@ export class MotebitRuntime {
     );
 
     this.gradientStore.save(snapshot);
+
+    // === Active inference precision feedback ===
+    // Compute precision from the gradient and feed it back into subsystems.
+    // This closes the loop: model evidence (gradient) → confidence (precision) →
+    // action selection (curiosity, retrieval, routing).
+    this._precision = computePrecision(snapshot);
+
+    // Feed curiosity back into state vector (EMA-smoothed on next tick)
+    this.state.pushUpdate({ curiosity: this._precision.curiosityModulation });
+
+    // Feed retrieval precision to memory graph (modulates scoring weights)
+    this.memory.setPrecisionWeights(this._precision.retrievalPrecision);
+
     return snapshot;
   }
 

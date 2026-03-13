@@ -18,7 +18,7 @@
  */
 
 import { MemoryType } from "@motebit/sdk";
-import type { MemoryNode, MemoryEdge, EventLogEntry } from "@motebit/sdk";
+import type { MemoryNode, MemoryEdge, EventLogEntry, PrecisionWeights } from "@motebit/sdk";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 
 /** Must match MAX_TOOL_ITERATIONS in @motebit/ai-core loop.ts */
@@ -324,6 +324,56 @@ export function computeGradient(
     },
   };
 }
+
+// === Active Inference Precision ===
+
+/**
+ * Pure: GradientSnapshot → PrecisionWeights.
+ *
+ * Maps the intelligence gradient into precision weights that modulate
+ * the agent's epistemic/pragmatic balance. This is the feedback wire
+ * from model evidence (gradient) to action selection (curiosity, routing,
+ * memory retrieval).
+ *
+ * The sigmoid center (0.5) means: a gradient of 0.5 yields neutral precision.
+ * Below 0.5 the agent becomes increasingly exploratory.
+ * Above 0.5 the agent becomes increasingly exploitative.
+ * The steepness (k=6) keeps precision responsive without being twitchy.
+ */
+export function computePrecision(snapshot: GradientSnapshot): PrecisionWeights {
+  const g = snapshot.gradient; // [0, 1]
+  const d = snapshot.delta;    // negative = declining
+
+  // Sigmoid: selfTrust = 1 / (1 + e^(-k*(g - 0.5)))
+  // k=6 gives useful dynamic range: g=0.2→0.12, g=0.5→0.50, g=0.8→0.88
+  const k = 6;
+  const selfTrust = 1 / (1 + Math.exp(-k * (g - 0.5)));
+
+  // Exploration is the complement, boosted when gradient is declining
+  // A declining gradient (negative delta) increases exploration urgency
+  const declinePenalty = d < 0 ? Math.min(Math.abs(d) * 2, 0.3) : 0;
+  const explorationDrive = Math.min(1, (1 - selfTrust) + declinePenalty);
+
+  // Retrieval precision: when self-trust is high, lean on similarity (semantic precision).
+  // When low, flatten weights to diversify what gets retrieved.
+  // Range: 0.3 (low trust, diversified) to 0.9 (high trust, precise)
+  const retrievalPrecision = 0.3 + selfTrust * 0.6;
+
+  // Curiosity modulation: fed back into state vector curiosity field.
+  // High exploration drive = high curiosity. Capped at 0.8 so the agent
+  // never becomes purely curiosity-driven (always some pragmatic residual).
+  const curiosityModulation = Math.min(0.8, explorationDrive);
+
+  return { selfTrust, explorationDrive, retrievalPrecision, curiosityModulation };
+}
+
+/** Default precision when no gradient has been computed yet (neutral). */
+export const NEUTRAL_PRECISION: PrecisionWeights = {
+  selfTrust: 0.5,
+  explorationDrive: 0.5,
+  retrievalPrecision: 0.6,
+  curiosityModulation: 0.4,
+};
 
 // === In-Memory Store (for tests) ===
 

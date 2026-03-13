@@ -1,4 +1,4 @@
-export { scoreCandidate, rankCandidates } from "./scoring.js";
+export { scoreCandidate, rankCandidates, applyPrecisionToMarketConfig } from "./scoring.js";
 export type { CandidateProfile, TaskRequirements } from "./scoring.js";
 export { allocateBudget, estimateCost } from "./budget.js";
 export type { AllocationRequest } from "./budget.js";

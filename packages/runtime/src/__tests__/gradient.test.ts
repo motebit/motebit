@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeGradient, InMemoryGradientStore } from "../gradient.js";
+import { computeGradient, computePrecision, NEUTRAL_PRECISION, InMemoryGradientStore } from "../gradient.js";
 import type { GradientSnapshot, BehavioralStats } from "../gradient.js";
 import type { MemoryNode, MemoryEdge, EventLogEntry } from "@motebit/sdk";
 import { EventType, SensitivityLevel, MemoryType, RelationType } from "@motebit/sdk";
@@ -700,5 +700,102 @@ describe("InMemoryGradientStore", () => {
     expect(store.list("a")).toHaveLength(2);
     expect(store.list("b")).toHaveLength(1);
     expect(store.list("c")).toHaveLength(0);
+  });
+});
+
+// === Active Inference Precision Tests ===
+
+describe("computePrecision", () => {
+  function makeSnapshot(gradient: number, delta = 0): GradientSnapshot {
+    return {
+      motebit_id: "test",
+      timestamp: Date.now(),
+      gradient,
+      delta,
+      knowledge_density: gradient,
+      knowledge_density_raw: gradient,
+      knowledge_quality: gradient,
+      graph_connectivity: gradient,
+      graph_connectivity_raw: gradient,
+      temporal_stability: gradient,
+      retrieval_quality: gradient,
+      interaction_efficiency: gradient,
+      tool_efficiency: gradient,
+      curiosity_pressure: gradient,
+      stats: {
+        live_nodes: 10, live_edges: 5, semantic_count: 7, episodic_count: 3,
+        pinned_count: 1, avg_confidence: 0.8, avg_half_life: 604800000,
+        consolidation_add: 0, consolidation_update: 0, consolidation_reinforce: 0,
+        consolidation_noop: 0, total_confidence_mass: 8, avg_retrieval_score: 0.7,
+        retrieval_count: 5, avg_iterations_per_turn: 2, total_turns: 5,
+        tool_calls_succeeded: 8, tool_calls_blocked: 1, tool_calls_failed: 1,
+        curiosity_target_count: 3, avg_curiosity_score: 0.5,
+      },
+    };
+  }
+
+  it("neutral gradient (0.5) yields balanced precision", () => {
+    const p = computePrecision(makeSnapshot(0.5));
+    expect(p.selfTrust).toBeCloseTo(0.5, 1);
+    expect(p.explorationDrive).toBeCloseTo(0.5, 1);
+    expect(p.retrievalPrecision).toBeCloseTo(0.6, 1);
+    expect(p.curiosityModulation).toBeLessThanOrEqual(0.8);
+  });
+
+  it("high gradient (0.8) yields high self-trust, low exploration", () => {
+    const p = computePrecision(makeSnapshot(0.8));
+    expect(p.selfTrust).toBeGreaterThan(0.7);
+    expect(p.explorationDrive).toBeLessThan(0.3);
+    expect(p.retrievalPrecision).toBeGreaterThan(0.7);
+    expect(p.curiosityModulation).toBeLessThan(0.3);
+  });
+
+  it("low gradient (0.2) yields low self-trust, high exploration", () => {
+    const p = computePrecision(makeSnapshot(0.2));
+    expect(p.selfTrust).toBeLessThan(0.3);
+    expect(p.explorationDrive).toBeGreaterThan(0.7);
+    expect(p.retrievalPrecision).toBeLessThan(0.5);
+    expect(p.curiosityModulation).toBeGreaterThan(0.5);
+  });
+
+  it("declining gradient boosts exploration via decline penalty", () => {
+    const stable = computePrecision(makeSnapshot(0.4, 0));
+    const declining = computePrecision(makeSnapshot(0.4, -0.1));
+    expect(declining.explorationDrive).toBeGreaterThan(stable.explorationDrive);
+    expect(declining.curiosityModulation).toBeGreaterThan(stable.curiosityModulation);
+  });
+
+  it("rising gradient does not add decline penalty", () => {
+    const stable = computePrecision(makeSnapshot(0.6, 0));
+    const rising = computePrecision(makeSnapshot(0.6, 0.1));
+    expect(rising.explorationDrive).toBeCloseTo(stable.explorationDrive, 5);
+  });
+
+  it("curiosityModulation is capped at 0.8", () => {
+    const p = computePrecision(makeSnapshot(0.0, -0.5));
+    expect(p.curiosityModulation).toBeLessThanOrEqual(0.8);
+  });
+
+  it("all precision values are in [0, 1]", () => {
+    for (const g of [0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0]) {
+      for (const d of [-0.5, -0.1, 0, 0.1, 0.5]) {
+        const p = computePrecision(makeSnapshot(g, d));
+        expect(p.selfTrust).toBeGreaterThanOrEqual(0);
+        expect(p.selfTrust).toBeLessThanOrEqual(1);
+        expect(p.explorationDrive).toBeGreaterThanOrEqual(0);
+        expect(p.explorationDrive).toBeLessThanOrEqual(1);
+        expect(p.retrievalPrecision).toBeGreaterThanOrEqual(0);
+        expect(p.retrievalPrecision).toBeLessThanOrEqual(1);
+        expect(p.curiosityModulation).toBeGreaterThanOrEqual(0);
+        expect(p.curiosityModulation).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  it("NEUTRAL_PRECISION has balanced values", () => {
+    expect(NEUTRAL_PRECISION.selfTrust).toBe(0.5);
+    expect(NEUTRAL_PRECISION.explorationDrive).toBe(0.5);
+    expect(NEUTRAL_PRECISION.retrievalPrecision).toBe(0.6);
+    expect(NEUTRAL_PRECISION.curiosityModulation).toBe(0.4);
   });
 });

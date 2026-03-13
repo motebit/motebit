@@ -126,6 +126,36 @@ export function scoreCandidate(
   };
 }
 
+/**
+ * Pure: apply active inference precision to market config.
+ *
+ * When explorationDrive is high (low self-trust), the agent diversifies:
+ * - Lowers trust/success_rate weight (less reliance on known reputation)
+ * - Raises availability/capability weight (more willingness to try new agents)
+ * - Adds epsilon-greedy noise via exploration_weight
+ *
+ * When explorationDrive is low (high self-trust), weights stay near defaults:
+ * exploit known-good routes.
+ */
+export function applyPrecisionToMarketConfig(
+  base: Partial<MarketConfig> | undefined,
+  explorationDrive: number,
+): Partial<MarketConfig> {
+  const cfg = { ...DEFAULT_CONFIG, ...base };
+  const e = Math.max(0, Math.min(1, explorationDrive));
+
+  // Shift weight from trust/success_rate toward availability/capability
+  // At e=0 (exploit): no change. At e=1 (explore): ±0.10 shift.
+  return {
+    ...cfg,
+    weight_trust: cfg.weight_trust - e * 0.10,
+    weight_success_rate: cfg.weight_success_rate - e * 0.10,
+    weight_capability_match: cfg.weight_capability_match + e * 0.10,
+    weight_availability: cfg.weight_availability + e * 0.10,
+    exploration_weight: e,
+  };
+}
+
 /** Pure: (candidates[], requirements, config?) → sorted RouteScore[] with top N selected */
 export function rankCandidates(
   candidates: CandidateProfile[],
@@ -135,6 +165,28 @@ export function rankCandidates(
   const cfg = { ...DEFAULT_CONFIG, ...config };
   const scores = candidates.map((c) => scoreCandidate(c, requirements, cfg));
   scores.sort((a, b) => b.composite - a.composite);
+
+  // Epsilon-greedy exploration: when exploration_weight > 0, occasionally
+  // promote a non-top candidate into the selection to reduce uncertainty
+  // about agents the system hasn't tried recently.
+  const epsilon = cfg.exploration_weight ?? 0;
+  if (epsilon > 0 && scores.length > 1) {
+    // Deterministic shuffle seed from scores to keep pure (no Math.random)
+    // Use the fractional part of the top score's composite as a pseudo-random probe
+    const probe = (scores[0]!.composite * 1000) % 1;
+    if (probe < epsilon) {
+      // Swap a non-top candidate into position 1 (promote exploration)
+      const explorationIdx = Math.min(
+        1 + Math.floor(probe * (scores.length - 1)),
+        scores.length - 1,
+      );
+      if (explorationIdx > 1 && scores[explorationIdx]!.composite > 0) {
+        const temp = scores[1]!;
+        scores[1] = scores[explorationIdx]!;
+        scores[explorationIdx] = temp;
+      }
+    }
+  }
 
   // Mark top N as selected (skip zero-scored)
   let selected = 0;

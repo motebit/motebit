@@ -289,6 +289,7 @@ export class InMemoryMemoryStorage implements MemoryStorageAdapter {
 export class MemoryGraph {
   private scoringConfig: ScoringConfig;
   private _retrievalScores: number[] = [];
+  private _precisionOverride: Partial<ScoringConfig> | null = null;
 
   constructor(
     private storage: MemoryStorageAdapter,
@@ -297,6 +298,32 @@ export class MemoryGraph {
     scoringConfig?: Partial<ScoringConfig>,
   ) {
     this.scoringConfig = { ...DEFAULT_SCORING_CONFIG, ...scoringConfig };
+  }
+
+  /**
+   * Apply precision-weighted scoring overrides from the intelligence gradient.
+   *
+   * When retrievalPrecision is high (agent trusts its model), similarity weight
+   * increases — the agent relies on semantic precision for retrieval.
+   * When retrievalPrecision is low (agent doubts itself), weights flatten
+   * toward equal distribution — the agent diversifies what it retrieves.
+   *
+   * Pass null to clear the override and return to default weights.
+   */
+  setPrecisionWeights(retrievalPrecision: number | null): void {
+    if (retrievalPrecision === null) {
+      this._precisionOverride = null;
+      return;
+    }
+    // Map retrievalPrecision [0.3, 0.9] to weight distribution:
+    // High precision: similarity=0.65, confidence=0.25, recency=0.10 (trust semantic match)
+    // Low precision:  similarity=0.35, confidence=0.35, recency=0.30 (diversify, weight recency)
+    const t = Math.max(0, Math.min(1, retrievalPrecision));
+    this._precisionOverride = {
+      similarityWeight: 0.35 + t * 0.30,   // 0.35 → 0.65
+      confidenceWeight: 0.35 - t * 0.10,   // 0.35 → 0.25
+      recencyWeight:    0.30 - t * 0.20,   // 0.30 → 0.10
+    };
   }
 
   /**
@@ -563,8 +590,11 @@ export class MemoryGraph {
       strengthenCoRetrieved = false,
     } = options;
 
-    // Merge per-call overrides with instance config
-    const config = perCallConfig ? { ...this.scoringConfig, ...perCallConfig } : this.scoringConfig;
+    // Merge: precision override (gradient feedback) → per-call overrides → instance config
+    const baseConfig = this._precisionOverride
+      ? { ...this.scoringConfig, ...this._precisionOverride }
+      : this.scoringConfig;
+    const config = perCallConfig ? { ...baseConfig, ...perCallConfig } : baseConfig;
     const weights = normalizeWeights(
       config.similarityWeight,
       config.confidenceWeight,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { scoreCandidate, rankCandidates } from "../scoring.js";
+import { scoreCandidate, rankCandidates, applyPrecisionToMarketConfig } from "../scoring.js";
 import type { CandidateProfile, TaskRequirements } from "../scoring.js";
 import { AgentTrustLevel, asMotebitId, asListingId } from "@motebit/sdk";
 import type { AgentTrustRecord, AgentServiceListing } from "@motebit/sdk";
@@ -202,5 +202,42 @@ describe("rankCandidates", () => {
   it("handles empty candidates list", () => {
     const ranked = rankCandidates([], defaultReqs);
     expect(ranked).toEqual([]);
+  });
+});
+
+// === Active Inference Precision ===
+
+describe("applyPrecisionToMarketConfig", () => {
+  it("zero exploration leaves weights near defaults", () => {
+    const cfg = applyPrecisionToMarketConfig(undefined, 0);
+    expect(cfg.weight_trust).toBe(0.25);
+    expect(cfg.weight_success_rate).toBe(0.25);
+    expect(cfg.weight_capability_match).toBe(0.10);
+    expect(cfg.weight_availability).toBe(0.10);
+    expect(cfg.exploration_weight).toBe(0);
+  });
+
+  it("full exploration shifts weights from trust to capability/availability", () => {
+    const cfg = applyPrecisionToMarketConfig(undefined, 1.0);
+    expect(cfg.weight_trust).toBeCloseTo(0.15);
+    expect(cfg.weight_success_rate).toBeCloseTo(0.15);
+    expect(cfg.weight_capability_match).toBeCloseTo(0.20);
+    expect(cfg.weight_availability).toBeCloseTo(0.20);
+    expect(cfg.exploration_weight).toBe(1.0);
+  });
+
+  it("partial exploration (0.5) shifts weights proportionally", () => {
+    const cfg = applyPrecisionToMarketConfig(undefined, 0.5);
+    expect(cfg.weight_trust).toBeCloseTo(0.20);
+    expect(cfg.weight_success_rate).toBeCloseTo(0.20);
+    expect(cfg.weight_capability_match).toBeCloseTo(0.15);
+    expect(cfg.weight_availability).toBeCloseTo(0.15);
+    expect(cfg.exploration_weight).toBe(0.5);
+  });
+
+  it("clamps exploration to [0, 1]", () => {
+    const cfg = applyPrecisionToMarketConfig(undefined, 2.0);
+    expect(cfg.exploration_weight).toBe(1.0);
+    expect(cfg.weight_trust).toBeCloseTo(0.15);
   });
 });

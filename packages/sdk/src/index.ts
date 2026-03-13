@@ -862,4 +862,30 @@ export interface MarketConfig {
   latency_norm_k: number;
   max_candidates: number;
   settlement_timeout_ms: number;
+  /** Exploration weight [0-1]: 0 = pure exploitation, 1 = pure exploration. Default 0. */
+  exploration_weight?: number;
+}
+
+// === Active Inference Precision ===
+
+/**
+ * Precision weights derived from the intelligence gradient.
+ *
+ * In active inference, precision modulates the balance between epistemic value
+ * (exploration/curiosity) and pragmatic value (exploitation/reputation).
+ * The gradient measures model evidence; precision is the agent's confidence
+ * in its own generative model.
+ *
+ * High gradient → high self-trust → exploit known-good routes, trust memory.
+ * Low gradient → low self-trust → explore, diversify, question memory.
+ */
+export interface PrecisionWeights {
+  /** Overall self-trust [0-1]. Sigmoid of composite gradient. */
+  selfTrust: number;
+  /** Exploration drive [0-1]. Inverse of self-trust, modulated by gradient delta. */
+  explorationDrive: number;
+  /** Memory retrieval precision [0-1]. High = trust similarity, low = diversify. */
+  retrievalPrecision: number;
+  /** Curiosity modulation [0-1]. Fed back into state vector curiosity field. */
+  curiosityModulation: number;
 }
