@@ -667,3 +667,199 @@ export function handleId(): void {
   console.log(`  config       ${CONFIG_DIR}/config.json`);
   console.log();
 }
+
+// ---------------------------------------------------------------------------
+// motebit ledger <goalId> — fetch and display a signed execution ledger
+// ---------------------------------------------------------------------------
+
+export async function handleLedger(config: CliConfig): Promise<void> {
+  const goalId = config.positionals[1];
+  if (goalId == null || goalId === "") {
+    console.error("Usage: motebit ledger <goal_id> [--json]");
+    process.exit(1);
+  }
+
+  const fullConfig = loadFullConfig();
+  const motebitId = fullConfig.motebit_id;
+  if (motebitId == null || motebitId === "") {
+    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
+    process.exit(1);
+  }
+
+  const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
+  const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
+  if (syncUrl == null || syncUrl === "") {
+    console.error(
+      "Error: --sync-url or MOTEBIT_SYNC_URL is required to fetch ledger from the relay.",
+    );
+    process.exit(1);
+  }
+
+  const url = `${syncUrl.replace(/\/$/, "")}/agent/${motebitId}/ledger/${goalId}`;
+  const headers: Record<string, string> = {};
+  if (syncToken) {
+    headers["Authorization"] = `Bearer ${syncToken}`;
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(url, { headers });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`Error: failed to reach relay: ${msg}`);
+    process.exit(1);
+  }
+
+  if (!res.ok) {
+    const body = await res.text();
+    console.error(`Error: relay returned ${res.status}: ${body}`);
+    process.exit(1);
+  }
+
+  const manifest = (await res.json()) as Record<string, unknown>;
+
+  if (config.json) {
+    console.log(JSON.stringify(manifest, null, 2));
+    return;
+  }
+
+  // Display formatted summary
+  const timeline = Array.isArray(manifest.timeline) ? manifest.timeline : [];
+  console.log();
+  console.log(`  Execution Ledger`);
+  console.log(`  ${"─".repeat(50)}`);
+  console.log(`  goal_id        ${manifest.goal_id}`);
+  console.log(`  plan_id        ${manifest.plan_id ?? "—"}`);
+  console.log(`  status         ${manifest.status}`);
+  console.log(
+    `  started_at     ${manifest.started_at ? new Date(manifest.started_at as number).toISOString() : "—"}`,
+  );
+  console.log(
+    `  completed_at   ${manifest.completed_at ? new Date(manifest.completed_at as number).toISOString() : "—"}`,
+  );
+  console.log(`  timeline       ${timeline.length} events`);
+  console.log(
+    `  content_hash   ${typeof manifest.content_hash === "string" ? manifest.content_hash.slice(0, 16) + "..." : "—"}`,
+  );
+
+  if (typeof manifest.signature === "string" && manifest.signature !== "") {
+    console.log(`  signature      ${manifest.signature.slice(0, 16)}...`);
+  } else {
+    console.log(`  signature      (unsigned — relay-reconstructed)`);
+  }
+  console.log();
+}
+
+// ---------------------------------------------------------------------------
+// motebit credentials — fetch and display credentials from the relay
+// ---------------------------------------------------------------------------
+
+export async function handleCredentials(config: CliConfig): Promise<void> {
+  const fullConfig = loadFullConfig();
+  const motebitId = fullConfig.motebit_id;
+  if (motebitId == null || motebitId === "") {
+    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
+    process.exit(1);
+  }
+
+  const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
+  const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
+  if (syncUrl == null || syncUrl === "") {
+    console.error(
+      "Error: --sync-url or MOTEBIT_SYNC_URL is required to fetch credentials from the relay.",
+    );
+    process.exit(1);
+  }
+
+  const headers: Record<string, string> = {};
+  if (syncToken) {
+    headers["Authorization"] = `Bearer ${syncToken}`;
+  }
+
+  // If --presentation, fetch a bundled VP
+  if (config.presentation) {
+    const url = `${syncUrl.replace(/\/$/, "")}/api/v1/agents/${motebitId}/presentation`;
+    let res: Response;
+    try {
+      res = await fetch(url, { method: "POST", headers });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`Error: failed to reach relay: ${msg}`);
+      process.exit(1);
+    }
+
+    if (!res.ok) {
+      const body = await res.text();
+      console.error(`Error: relay returned ${res.status}: ${body}`);
+      process.exit(1);
+    }
+
+    const vpBody = (await res.json()) as {
+      presentation: Record<string, unknown>;
+      credential_count: number;
+      relay_did: string;
+    };
+
+    if (config.json) {
+      console.log(JSON.stringify(vpBody, null, 2));
+    } else {
+      console.log();
+      console.log(`  Verifiable Presentation`);
+      console.log(`  ${"─".repeat(50)}`);
+      console.log(`  holder          ${(vpBody.presentation.holder as string) ?? "—"}`);
+      console.log(`  credentials     ${vpBody.credential_count}`);
+      console.log(`  relay_did       ${vpBody.relay_did}`);
+      console.log();
+    }
+    return;
+  }
+
+  // Default: list credentials
+  const url = `${syncUrl.replace(/\/$/, "")}/api/v1/agents/${motebitId}/credentials`;
+  let res: Response;
+  try {
+    res = await fetch(url, { headers });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`Error: failed to reach relay: ${msg}`);
+    process.exit(1);
+  }
+
+  if (!res.ok) {
+    const body = await res.text();
+    console.error(`Error: relay returned ${res.status}: ${body}`);
+    process.exit(1);
+  }
+
+  const credBody = (await res.json()) as {
+    motebit_id: string;
+    credentials: Array<{
+      credential_id: string;
+      credential_type: string;
+      credential: { issuer: string; credentialSubject: { id: string }; validFrom: string };
+      issued_at: number;
+    }>;
+  };
+
+  if (config.json) {
+    console.log(JSON.stringify(credBody, null, 2));
+    return;
+  }
+
+  if (credBody.credentials.length === 0) {
+    console.log("No credentials found.");
+    return;
+  }
+
+  console.log(`\nCredentials (${credBody.credentials.length}):\n`);
+  console.log("  ID        Type                         Issuer           Issued At");
+  console.log("  " + "-".repeat(80));
+  for (const cred of credBody.credentials) {
+    const id = cred.credential_id.slice(0, 8);
+    const type = cred.credential_type.slice(0, 28).padEnd(28);
+    const issuer = cred.credential.issuer.slice(0, 16);
+    const issuedAt = new Date(cred.issued_at).toISOString().slice(0, 19);
+    console.log(`  ${id}  ${type} ${issuer} ${issuedAt}`);
+  }
+  console.log();
+}

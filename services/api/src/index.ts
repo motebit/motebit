@@ -42,6 +42,9 @@
  *   POST /api/v1/agents/:motebitId/listing              — register/update service listing
  *   GET  /api/v1/agents/:motebitId/listing              — get service listing
  *   GET  /api/v1/agents/:motebitId/credentials?type=&limit=  — credentials issued to agent
+ *   POST /api/v1/agents/:motebitId/presentation?type=  — bundle credentials into signed VP
+ *   POST /agent/:motebitId/ledger                       — submit signed execution ledger
+ *   GET  /agent/:motebitId/ledger/:goalId               — retrieve signed execution ledger
  *   POST /api/v1/credentials/verify                        — verify a VerifiableCredential (public)
  *   GET  /api/v1/market/candidates?capability=&max_budget=&limit= — scored candidate list
  *
@@ -96,6 +99,7 @@ import {
   publicKeyToDidKey,
   issueReputationCredential,
   verifyVerifiableCredential,
+  createPresentation,
 } from "@motebit/crypto";
 import type { VerifiableCredential } from "@motebit/crypto";
 import {
@@ -418,6 +422,21 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
         issued_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_relay_creds_subject ON relay_credentials(subject_motebit_id);
+  `);
+
+  // Signed execution ledger storage (agents submit signed manifests)
+  moteDb.db.exec(`
+      CREATE TABLE IF NOT EXISTS relay_execution_ledgers (
+        ledger_id TEXT PRIMARY KEY,
+        motebit_id TEXT NOT NULL,
+        goal_id TEXT NOT NULL,
+        plan_id TEXT,
+        manifest_json TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_relay_ledgers_motebit ON relay_execution_ledgers(motebit_id);
+      CREATE INDEX IF NOT EXISTS idx_relay_ledgers_goal ON relay_execution_ledgers(goal_id);
   `);
 
   // Extend sync tables for collaborative fields (column-exists check pattern)
@@ -1885,6 +1904,10 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       }
       await next();
     });
+
+    // Auth middleware for ledger routes — master token required
+    app.use("/agent/*/ledger", bearerAuth({ token: apiToken }));
+    app.use("/agent/*/ledger/*", bearerAuth({ token: apiToken }));
   }
 
   // --- Shared: build CandidateProfile[] from relay DB ---
@@ -2515,6 +2538,69 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     return c.json({ valid });
   });
 
+  // === Execution Ledger: submit and retrieve signed manifests ===
+
+  // POST /agent/:motebitId/ledger — submit a signed execution ledger
+  app.post("/agent/:motebitId/ledger", async (c) => {
+    const motebitId = asMotebitId(c.req.param("motebitId"));
+    let body: Record<string, unknown>;
+    try {
+      body = await c.req.json<Record<string, unknown>>();
+    } catch {
+      throw new HTTPException(400, { message: "Invalid JSON body" });
+    }
+
+    // Validate required fields from the execution ledger spec
+    if (body.spec !== "motebit/execution-ledger@1.0") {
+      throw new HTTPException(400, {
+        message: "Invalid spec: must be motebit/execution-ledger@1.0",
+      });
+    }
+    if (body.motebit_id !== motebitId) {
+      throw new HTTPException(400, { message: "motebit_id in body does not match URL" });
+    }
+    if (typeof body.goal_id !== "string" || body.goal_id === "") {
+      throw new HTTPException(400, { message: "Missing or invalid goal_id" });
+    }
+    if (typeof body.content_hash !== "string" || body.content_hash === "") {
+      throw new HTTPException(400, { message: "Missing or invalid content_hash" });
+    }
+
+    const ledgerId = crypto.randomUUID();
+    const now = Date.now();
+    const goalId = body.goal_id as string;
+    const planId = typeof body.plan_id === "string" ? body.plan_id : null;
+    const contentHash = body.content_hash as string;
+
+    moteDb.db
+      .prepare(
+        `INSERT OR REPLACE INTO relay_execution_ledgers
+         (ledger_id, motebit_id, goal_id, plan_id, manifest_json, content_hash, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(ledgerId, motebitId, goalId, planId, JSON.stringify(body), contentHash, now);
+
+    return c.json({ ledger_id: ledgerId, content_hash: contentHash, created_at: now }, 201);
+  });
+
+  // GET /agent/:motebitId/ledger/:goalId — retrieve signed execution ledger
+  app.get("/agent/:motebitId/ledger/:goalId", (c) => {
+    const motebitId = asMotebitId(c.req.param("motebitId"));
+    const goalId = c.req.param("goalId");
+
+    const row = moteDb.db
+      .prepare(
+        `SELECT manifest_json FROM relay_execution_ledgers WHERE motebit_id = ? AND goal_id = ? ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(motebitId, goalId) as { manifest_json: string } | undefined;
+
+    if (!row) {
+      throw new HTTPException(404, { message: "No execution ledger found for this goal" });
+    }
+
+    return c.json(JSON.parse(row.manifest_json) as Record<string, unknown>);
+  });
+
   // === Credential Verification (public, no auth) ===
 
   app.post("/api/v1/credentials/verify", async (c) => {
@@ -2898,6 +2984,45 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     }));
 
     return c.json({ motebit_id: mid, credentials });
+  });
+
+  // POST /api/v1/agents/:motebitId/presentation — bundle credentials into a signed VP
+  app.post("/api/v1/agents/:motebitId/presentation", async (c) => {
+    const mid = asMotebitId(c.req.param("motebitId"));
+    const typeFilter = c.req.query("type");
+    const limit = Math.min(parseInt(c.req.query("limit") ?? "100", 10) || 100, 500);
+
+    let rows: Array<{
+      credential_json: string;
+    }>;
+    if (typeFilter) {
+      rows = moteDb.db
+        .prepare(
+          "SELECT credential_json FROM relay_credentials WHERE subject_motebit_id = ? AND credential_type = ? ORDER BY issued_at DESC LIMIT ?",
+        )
+        .all(mid, typeFilter, limit) as typeof rows;
+    } else {
+      rows = moteDb.db
+        .prepare(
+          "SELECT credential_json FROM relay_credentials WHERE subject_motebit_id = ? ORDER BY issued_at DESC LIMIT ?",
+        )
+        .all(mid, limit) as typeof rows;
+    }
+
+    if (rows.length === 0) {
+      throw new HTTPException(404, { message: "No credentials found for this agent" });
+    }
+
+    const credentials = rows.map((r) => JSON.parse(r.credential_json) as VerifiableCredential);
+
+    const relayKeys = await getRelayKeypair();
+    const vp = await createPresentation(credentials, relayKeys.privateKey, relayKeys.publicKey);
+
+    return c.json({
+      presentation: vp,
+      credential_count: credentials.length,
+      relay_did: publicKeyToDidKey(relayKeys.publicKey),
+    });
   });
 
   // GET /api/v1/agents/:motebitId/listing — get service listing

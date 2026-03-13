@@ -1996,3 +1996,211 @@ describe("Sync Relay — agent discovery registry", () => {
     expect(body.agents[0]!.motebit_id).toBe(motebitId);
   });
 });
+
+// === Execution Ledger Tests ===
+
+describe("Sync Relay — execution ledger", () => {
+  let relay: SyncRelay;
+
+  beforeEach(async () => {
+    relay = await createTestRelay({ enableDeviceAuth: false });
+  });
+
+  afterEach(() => {
+    relay.close();
+  });
+
+  it("POST ledger → GET ledger round-trip", async () => {
+    const goalId = crypto.randomUUID();
+    const planId = crypto.randomUUID();
+    const manifest = {
+      spec: "motebit/execution-ledger@1.0",
+      motebit_id: MOTEBIT_ID,
+      goal_id: goalId,
+      plan_id: planId,
+      started_at: Date.now() - 1000,
+      completed_at: Date.now(),
+      status: "completed",
+      timeline: [
+        { timestamp: Date.now() - 1000, type: "goal_started", payload: { goal_id: goalId } },
+        {
+          timestamp: Date.now(),
+          type: "goal_completed",
+          payload: { goal_id: goalId, status: "completed" },
+        },
+      ],
+      steps: [],
+      delegation_receipts: [],
+      content_hash: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+    };
+
+    // Submit
+    const postRes = await relay.app.request(`/agent/${MOTEBIT_ID}/ledger`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(manifest),
+    });
+    expect(postRes.status).toBe(201);
+    const postBody = (await postRes.json()) as { ledger_id: string; content_hash: string };
+    expect(postBody.ledger_id).toBeTypeOf("string");
+    expect(postBody.content_hash).toBe(manifest.content_hash);
+
+    // Retrieve
+    const getRes = await relay.app.request(`/agent/${MOTEBIT_ID}/ledger/${goalId}`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(getRes.status).toBe(200);
+    const getBody = (await getRes.json()) as Record<string, unknown>;
+    expect(getBody.spec).toBe("motebit/execution-ledger@1.0");
+    expect(getBody.goal_id).toBe(goalId);
+    expect(getBody.plan_id).toBe(planId);
+    expect(getBody.content_hash).toBe(manifest.content_hash);
+    expect(getBody.status).toBe("completed");
+    expect(Array.isArray(getBody.timeline)).toBe(true);
+    expect((getBody.timeline as unknown[]).length).toBe(2);
+  });
+
+  it("GET ledger returns 404 for unknown goal", async () => {
+    const res = await relay.app.request(`/agent/${MOTEBIT_ID}/ledger/nonexistent-goal`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("POST ledger rejects invalid spec", async () => {
+    const res = await relay.app.request(`/agent/${MOTEBIT_ID}/ledger`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        spec: "wrong-spec",
+        motebit_id: MOTEBIT_ID,
+        goal_id: "g1",
+        content_hash: "abc",
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST ledger rejects motebit_id mismatch", async () => {
+    const res = await relay.app.request(`/agent/${MOTEBIT_ID}/ledger`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        spec: "motebit/execution-ledger@1.0",
+        motebit_id: "wrong-id",
+        goal_id: "g1",
+        content_hash: "abc",
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+// === Credential Presentation Tests ===
+
+describe("Sync Relay — credential presentation", () => {
+  let relay: SyncRelay;
+
+  beforeEach(async () => {
+    relay = await createTestRelay({ enableDeviceAuth: false });
+  });
+
+  afterEach(() => {
+    relay.close();
+  });
+
+  it("GET presentation bundles credentials from verified receipts", async () => {
+    // Create executing agent with real Ed25519 keypair
+    const execKeypair = await generateKeypair();
+    const execPubKeyHex = bytesToHex(execKeypair.publicKey);
+
+    const idRes = await relay.app.request("/identity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ owner_id: "vp-agent" }),
+    });
+    const { motebit_id: execMotebitId } = (await idRes.json()) as { motebit_id: string };
+
+    await relay.app.request("/device/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: execMotebitId,
+        device_name: "Worker",
+        public_key: execPubKeyHex,
+      }),
+    });
+
+    // Submit and complete a task to trigger credential issuance
+    const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ prompt: "VP test" }),
+    });
+    const { task_id } = (await submitRes.json()) as { task_id: string };
+
+    const unsigned = {
+      task_id,
+      motebit_id: execMotebitId as unknown as import("@motebit/sdk").MotebitId,
+      device_id: "worker-device" as unknown as import("@motebit/sdk").DeviceId,
+      submitted_at: Date.now(),
+      completed_at: Date.now() + 100,
+      status: "completed" as const,
+      result: "Done",
+      tools_used: [] as string[],
+      memories_formed: 0,
+      prompt_hash: "abc",
+      result_hash: "def",
+    };
+    const receipt = await signExecutionReceipt(unsigned, execKeypair.privateKey);
+
+    await relay.app.request(`/agent/${MOTEBIT_ID}/task/${task_id}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(receipt),
+    });
+
+    // Fetch presentation
+    const vpRes = await relay.app.request(`/api/v1/agents/${execMotebitId}/presentation`, {
+      method: "POST",
+      headers: AUTH_HEADER,
+    });
+    expect(vpRes.status).toBe(200);
+
+    const vpBody = (await vpRes.json()) as {
+      presentation: {
+        "@context": string[];
+        type: string[];
+        holder: string;
+        verifiableCredential: Array<{ type: string[]; issuer: string }>;
+        proof: { type: string; cryptosuite: string; proofValue: string };
+      };
+      credential_count: number;
+      relay_did: string;
+    };
+
+    expect(vpBody.credential_count).toBeGreaterThanOrEqual(1);
+    expect(vpBody.relay_did).toMatch(/^did:key:/);
+    expect(vpBody.presentation.type).toContain("VerifiablePresentation");
+    expect(vpBody.presentation.holder).toMatch(/^did:key:/);
+    expect(vpBody.presentation.verifiableCredential.length).toBeGreaterThanOrEqual(1);
+    expect(vpBody.presentation.proof.type).toBe("DataIntegrityProof");
+    expect(vpBody.presentation.proof.cryptosuite).toBe("eddsa-jcs-2022");
+    expect(vpBody.presentation.proof.proofValue).toMatch(/^z/);
+
+    // The contained credential should be a reputation credential
+    const cred = vpBody.presentation.verifiableCredential[0]!;
+    expect(cred.type).toContain("AgentReputationCredential");
+    expect(cred.issuer).toBe(vpBody.relay_did);
+  });
+
+  it("GET presentation returns 404 when no credentials exist", async () => {
+    const vpRes = await relay.app.request(`/api/v1/agents/no-creds-agent/presentation`, {
+      method: "POST",
+      headers: AUTH_HEADER,
+    });
+    expect(vpRes.status).toBe(404);
+  });
+});

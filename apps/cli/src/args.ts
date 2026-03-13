@@ -21,6 +21,8 @@ export interface CliConfig {
   reason: string | undefined;
   serveTransport: string | undefined;
   servePort: string | undefined;
+  json: boolean;
+  presentation: boolean;
   version: boolean;
   help: boolean;
   positionals: string[];
@@ -48,6 +50,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       reason: { type: "string" },
       "serve-transport": { type: "string" },
       "serve-port": { type: "string" },
+      json: { type: "boolean", default: false },
+      presentation: { type: "boolean", default: false },
       version: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -84,6 +88,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     reason: values.reason,
     serveTransport: values["serve-transport"],
     servePort: values["serve-port"],
+    json: values.json,
+    presentation: values.presentation,
     version: values.version,
     help: values.help,
     positionals,
@@ -111,6 +117,8 @@ Commands:
   goal remove <goal_id>     Remove a scheduled goal
   goal pause <goal_id>      Pause a scheduled goal
   goal resume <goal_id>     Resume a paused goal
+  ledger <goal_id>          Show execution ledger for a goal [--json]
+  credentials               List credentials from relay [--presentation]
   approvals list            List approval queue items
   approvals show <id>       Show approval detail
   approvals approve <id>    Approve a pending tool call

@@ -39,6 +39,8 @@ import {
   handleApprovalApprove,
   handleApprovalDeny,
   handleId,
+  handleLedger,
+  handleCredentials,
 } from "./subcommands.js";
 import { handleRun, handleServe } from "./daemon.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
@@ -153,6 +155,16 @@ async function main(): Promise<void> {
       console.error("Usage: motebit approvals [list|show|approve|deny]");
       process.exit(1);
     }
+    return;
+  }
+
+  if (subcommand === "ledger") {
+    await handleLedger(config);
+    return;
+  }
+
+  if (subcommand === "credentials") {
+    await handleCredentials(config);
     return;
   }
 
