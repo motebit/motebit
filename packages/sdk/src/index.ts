@@ -170,6 +170,87 @@ export function joinParallelRoutes(scores: number[]): number {
   return scores.reduce(trustAdd, TRUST_ZERO);
 }
 
+// ── Trust Level Transitions (reputation state machine) ────────────
+
+/** Thresholds for automatic trust level promotion/demotion. */
+export interface TrustTransitionThresholds {
+  /** Min successful tasks for FirstContact → Verified (default 5) */
+  promoteToVerified_minTasks: number;
+  /** Min success rate for FirstContact → Verified (default 0.8) */
+  promoteToVerified_minRate: number;
+  /** Min successful tasks for Verified → Trusted (default 20) */
+  promoteToTrusted_minTasks: number;
+  /** Min success rate for Verified → Trusted (default 0.9) */
+  promoteToTrusted_minRate: number;
+  /** Success rate below this triggers demotion (default 0.5) */
+  demote_belowRate: number;
+  /** Min total tasks before demotion can trigger (default 3) */
+  demote_minTasks: number;
+}
+
+export const DEFAULT_TRUST_THRESHOLDS: TrustTransitionThresholds = {
+  promoteToVerified_minTasks: 5,
+  promoteToVerified_minRate: 0.8,
+  promoteToTrusted_minTasks: 20,
+  promoteToTrusted_minRate: 0.9,
+  demote_belowRate: 0.5,
+  demote_minTasks: 3,
+};
+
+/**
+ * Pure: evaluate whether a trust record should transition levels.
+ *
+ * Promotion: sustained evidence of success (asymmetric — harder to earn).
+ * Demotion: success rate dropping below threshold (faster — protect the network).
+ * Blocked is never auto-assigned or auto-removed (security decision).
+ *
+ * Returns the new level, or null if no transition.
+ */
+export function evaluateTrustTransition(
+  record: AgentTrustRecord,
+  thresholds?: Partial<TrustTransitionThresholds>,
+): AgentTrustLevel | null {
+  const t = { ...DEFAULT_TRUST_THRESHOLDS, ...thresholds };
+  const level = record.trust_level;
+  const succeeded = record.successful_tasks ?? 0;
+  const failed = record.failed_tasks ?? 0;
+  const total = succeeded + failed;
+
+  // Blocked is manual-only — never auto-transition in or out
+  if (level === AgentTrustLevel.Blocked) return null;
+
+  const rate = total > 0 ? succeeded / total : 1;
+
+  // Check demotion first (fail-fast, protect the network)
+  if (total >= t.demote_minTasks && rate < t.demote_belowRate) {
+    if (level === AgentTrustLevel.Trusted) return AgentTrustLevel.Verified;
+    if (level === AgentTrustLevel.Verified) return AgentTrustLevel.FirstContact;
+    // FirstContact and Unknown can't demote further (Blocked is manual)
+    return null;
+  }
+
+  // Check promotion (asymmetric — higher bar)
+  if (level === AgentTrustLevel.Unknown && total >= 1) {
+    return AgentTrustLevel.FirstContact;
+  }
+  if (
+    level === AgentTrustLevel.FirstContact &&
+    succeeded >= t.promoteToVerified_minTasks &&
+    rate >= t.promoteToVerified_minRate
+  ) {
+    return AgentTrustLevel.Verified;
+  }
+  if (
+    level === AgentTrustLevel.Verified &&
+    succeeded >= t.promoteToTrusted_minTasks &&
+    rate >= t.promoteToTrusted_minRate
+  ) {
+    return AgentTrustLevel.Trusted;
+  }
+
+  return null;
+}
+
 /** Structural type for recursive delegation receipt walking. */
 export interface DelegationReceiptLike {
   motebit_id: string;
@@ -254,6 +335,7 @@ export enum EventType {
   ProposalCountered = "proposal_countered",
   CollaborativeStepCompleted = "collaborative_step_completed",
   ChainTrustComputed = "chain_trust_computed",
+  TrustLevelChanged = "trust_level_changed",
 }
 
 export enum RelationType {

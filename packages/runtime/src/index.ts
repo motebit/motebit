@@ -2849,11 +2849,34 @@ export class MotebitRuntime {
         successful_tasks: (existing.successful_tasks ?? 0) + (taskSucceeded ? 1 : 0),
         failed_tasks: (existing.failed_tasks ?? 0) + (taskFailed ? 1 : 0),
       };
-      // Auto-promote FirstContact → Verified after 5 verified interactions
-      if (existing.trust_level === AgentTrustLevel.FirstContact && updated.interaction_count >= 5) {
-        updated.trust_level = AgentTrustLevel.Verified;
+      // Evaluate trust level transition (promotion or demotion)
+      const { evaluateTrustTransition } = await import("@motebit/sdk");
+      const newLevel = evaluateTrustTransition(updated);
+      if (newLevel != null) {
+        const previousLevel = updated.trust_level;
+        updated.trust_level = newLevel;
+        // Emit trust transition event for audit trail
+        try {
+          const clock = await this.events.getLatestClock(this.motebitId);
+          await this.events.append({
+            event_id: crypto.randomUUID(),
+            motebit_id: this.motebitId,
+            timestamp: now,
+            event_type: EventType.TrustLevelChanged,
+            payload: {
+              remote_motebit_id: remoteMotebitId,
+              previous_level: previousLevel,
+              new_level: newLevel,
+              successful_tasks: updated.successful_tasks,
+              failed_tasks: updated.failed_tasks,
+            },
+            version_clock: clock + 1,
+            tombstoned: false,
+          });
+        } catch {
+          // Event emission is best-effort
+        }
       }
-      // Never auto-promote beyond Verified
       await this.agentTrustStore.setAgentTrust(updated);
     } else {
       // First interaction — create at FirstContact

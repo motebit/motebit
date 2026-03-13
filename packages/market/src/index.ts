@@ -16,4 +16,7 @@ export {
   TRUST_ZERO,
   TRUST_ONE,
   TRUST_LEVEL_SCORES,
+  evaluateTrustTransition,
+  DEFAULT_TRUST_THRESHOLDS,
 } from "@motebit/sdk";
+export type { TrustTransitionThresholds } from "@motebit/sdk";

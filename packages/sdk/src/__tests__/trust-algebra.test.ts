@@ -10,7 +10,11 @@ import {
   composeTrustChain,
   joinParallelRoutes,
   composeDelegationTrust,
+  evaluateTrustTransition,
+  DEFAULT_TRUST_THRESHOLDS,
   type DelegationReceiptLike,
+  type AgentTrustRecord,
+  type MotebitId,
 } from "../index.js";
 
 describe("Trust Semiring Algebra", () => {
@@ -184,6 +188,173 @@ describe("Trust Semiring Algebra", () => {
         ],
       };
       expect(composeDelegationTrust(0.9, receipt, getTrust)).toBeCloseTo(0.486);
+    });
+  });
+});
+
+// ── Trust Level Transitions ──
+
+describe("evaluateTrustTransition", () => {
+  function makeRecord(level: AgentTrustLevel, succeeded: number, failed: number): AgentTrustRecord {
+    return {
+      motebit_id: "self" as MotebitId,
+      remote_motebit_id: "remote" as MotebitId,
+      trust_level: level,
+      first_seen_at: Date.now() - 100000,
+      last_seen_at: Date.now(),
+      interaction_count: succeeded + failed,
+      successful_tasks: succeeded,
+      failed_tasks: failed,
+    };
+  }
+
+  // ── Promotion paths ──
+
+  describe("promotion", () => {
+    it("Unknown → FirstContact after any interaction", () => {
+      const r = makeRecord(AgentTrustLevel.Unknown, 1, 0);
+      expect(evaluateTrustTransition(r)).toBe(AgentTrustLevel.FirstContact);
+    });
+
+    it("Unknown stays if no tasks", () => {
+      const r = makeRecord(AgentTrustLevel.Unknown, 0, 0);
+      expect(evaluateTrustTransition(r)).toBeNull();
+    });
+
+    it("FirstContact → Verified at 5 successes, ≥80% rate", () => {
+      const r = makeRecord(AgentTrustLevel.FirstContact, 5, 1);
+      expect(evaluateTrustTransition(r)).toBe(AgentTrustLevel.Verified);
+    });
+
+    it("FirstContact stays at 4 successes (not enough)", () => {
+      const r = makeRecord(AgentTrustLevel.FirstContact, 4, 0);
+      expect(evaluateTrustTransition(r)).toBeNull();
+    });
+
+    it("FirstContact stays at 5 successes but low rate", () => {
+      // 5 success, 5 failed = 50% rate, below 80% threshold
+      const r = makeRecord(AgentTrustLevel.FirstContact, 5, 5);
+      // Actually 50% < 50% demotion threshold triggers demotion check,
+      // but FirstContact can't demote further, so null
+      expect(evaluateTrustTransition(r)).toBeNull();
+    });
+
+    it("Verified → Trusted at 20 successes, ≥90% rate", () => {
+      const r = makeRecord(AgentTrustLevel.Verified, 20, 1);
+      expect(evaluateTrustTransition(r)).toBe(AgentTrustLevel.Trusted);
+    });
+
+    it("Verified stays at 19 successes", () => {
+      const r = makeRecord(AgentTrustLevel.Verified, 19, 0);
+      expect(evaluateTrustTransition(r)).toBeNull();
+    });
+
+    it("Verified stays at 20 successes but 85% rate (below 90%)", () => {
+      const r = makeRecord(AgentTrustLevel.Verified, 20, 4); // 83%
+      expect(evaluateTrustTransition(r)).toBeNull();
+    });
+
+    it("Trusted stays (no further promotion)", () => {
+      const r = makeRecord(AgentTrustLevel.Trusted, 100, 2);
+      expect(evaluateTrustTransition(r)).toBeNull();
+    });
+  });
+
+  // ── Demotion paths ──
+
+  describe("demotion", () => {
+    it("Trusted → Verified when rate drops below 50%", () => {
+      const r = makeRecord(AgentTrustLevel.Trusted, 1, 3); // 25%
+      expect(evaluateTrustTransition(r)).toBe(AgentTrustLevel.Verified);
+    });
+
+    it("Verified → FirstContact when rate drops below 50%", () => {
+      const r = makeRecord(AgentTrustLevel.Verified, 1, 3); // 25%
+      expect(evaluateTrustTransition(r)).toBe(AgentTrustLevel.FirstContact);
+    });
+
+    it("FirstContact does not demote (Blocked is manual)", () => {
+      const r = makeRecord(AgentTrustLevel.FirstContact, 0, 5); // 0%
+      expect(evaluateTrustTransition(r)).toBeNull();
+    });
+
+    it("demotion requires minimum tasks (no knee-jerk)", () => {
+      // 1 failure out of 2 = 50% but only 2 tasks, below min of 3
+      const r = makeRecord(AgentTrustLevel.Trusted, 1, 1);
+      expect(evaluateTrustTransition(r)).toBeNull();
+    });
+
+    it("demotion at exactly min tasks", () => {
+      const r = makeRecord(AgentTrustLevel.Trusted, 1, 2); // 33%, 3 tasks
+      expect(evaluateTrustTransition(r)).toBe(AgentTrustLevel.Verified);
+    });
+  });
+
+  // ── Blocked is manual ──
+
+  describe("Blocked is manual-only", () => {
+    it("Blocked never auto-transitions", () => {
+      // Even with perfect record
+      const r = makeRecord(AgentTrustLevel.Blocked, 100, 0);
+      expect(evaluateTrustTransition(r)).toBeNull();
+    });
+
+    it("is never auto-assigned by evaluateTrustTransition", () => {
+      // Worst possible record at any non-blocked level
+      for (const level of [
+        AgentTrustLevel.Unknown,
+        AgentTrustLevel.FirstContact,
+        AgentTrustLevel.Verified,
+        AgentTrustLevel.Trusted,
+      ]) {
+        const r = makeRecord(level, 0, 100);
+        const result = evaluateTrustTransition(r);
+        expect(result).not.toBe(AgentTrustLevel.Blocked);
+      }
+    });
+  });
+
+  // ── Hysteresis ──
+
+  describe("hysteresis", () => {
+    it("agent near promotion threshold doesn't oscillate", () => {
+      // 5 successes, 1 failure = 83% rate, just above 80% → promotes
+      const r1 = makeRecord(AgentTrustLevel.FirstContact, 5, 1);
+      expect(evaluateTrustTransition(r1)).toBe(AgentTrustLevel.Verified);
+
+      // Now at Verified with same counts — not enough for Trusted promotion,
+      // rate 83% is above 50% demotion threshold → stays
+      const r2 = makeRecord(AgentTrustLevel.Verified, 5, 1);
+      expect(evaluateTrustTransition(r2)).toBeNull();
+    });
+
+    it("promotion and demotion thresholds don't overlap", () => {
+      // Promotion to Verified requires ≥80% success rate
+      // Demotion from Verified requires <50% success rate
+      // Gap of 30% prevents oscillation
+      expect(DEFAULT_TRUST_THRESHOLDS.promoteToVerified_minRate).toBeGreaterThan(
+        DEFAULT_TRUST_THRESHOLDS.demote_belowRate,
+      );
+    });
+  });
+
+  // ── Custom thresholds ──
+
+  describe("custom thresholds", () => {
+    it("stricter promotion thresholds", () => {
+      const r = makeRecord(AgentTrustLevel.FirstContact, 5, 0);
+      // Default promotes at 5
+      expect(evaluateTrustTransition(r)).toBe(AgentTrustLevel.Verified);
+      // Stricter: require 10
+      expect(evaluateTrustTransition(r, { promoteToVerified_minTasks: 10 })).toBeNull();
+    });
+
+    it("looser demotion threshold", () => {
+      const r = makeRecord(AgentTrustLevel.Trusted, 2, 2); // 50%
+      // Default: 50% is not below 50%, no demotion
+      expect(evaluateTrustTransition(r)).toBeNull();
+      // Looser: demote below 60%
+      expect(evaluateTrustTransition(r, { demote_belowRate: 0.6 })).toBe(AgentTrustLevel.Verified);
     });
   });
 });
