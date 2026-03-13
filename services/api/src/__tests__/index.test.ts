@@ -2204,3 +2204,194 @@ describe("Sync Relay — credential presentation", () => {
     expect(vpRes.status).toBe(404);
   });
 });
+
+// === Rate Limiting Tests ===
+
+describe("Rate Limiting", () => {
+  let relay: SyncRelay;
+
+  beforeEach(async () => {
+    relay = await createTestRelay({ enableDeviceAuth: false });
+  });
+
+  afterEach(() => {
+    relay.close();
+  });
+
+  it("requests within limit succeed with rate limit headers", async () => {
+    // credential verify is public (20 req/min) — send a valid request
+    const res = await relay.app.request("/api/v1/credentials/verify", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-forwarded-for": "10.0.0.1",
+      },
+      body: JSON.stringify({
+        "@context": ["https://www.w3.org/2018/credentials/v1"],
+        type: ["VerifiableCredential"],
+        issuer: "did:key:test",
+        credentialSubject: { id: "did:key:test" },
+        proof: { type: "Ed25519Signature2020" },
+      }),
+    });
+
+    // The request itself may return 200 or an error from the endpoint logic,
+    // but it should NOT be 429 (rate limited) on the first request
+    expect(res.status).not.toBe(429);
+    expect(res.headers.get("X-RateLimit-Remaining")).toBeTruthy();
+    expect(res.headers.get("X-RateLimit-Reset")).toBeTruthy();
+  });
+
+  it("requests exceeding limit get 429", async () => {
+    const ip = "10.0.0.50";
+    // Public limiter allows 20 req/min — send 21 requests
+    for (let i = 0; i < 20; i++) {
+      const res = await relay.app.request("/api/v1/credentials/verify", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-forwarded-for": ip,
+        },
+        body: JSON.stringify({
+          "@context": ["https://www.w3.org/2018/credentials/v1"],
+          type: ["VerifiableCredential"],
+          issuer: "did:key:test",
+          credentialSubject: { id: "did:key:test" },
+          proof: { type: "Ed25519Signature2020" },
+        }),
+      });
+      expect(res.status).not.toBe(429);
+    }
+
+    // 21st request should be rate limited
+    const blocked = await relay.app.request("/api/v1/credentials/verify", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-forwarded-for": ip,
+      },
+      body: JSON.stringify({
+        "@context": ["https://www.w3.org/2018/credentials/v1"],
+        type: ["VerifiableCredential"],
+        issuer: "did:key:test",
+        credentialSubject: { id: "did:key:test" },
+        proof: { type: "Ed25519Signature2020" },
+      }),
+    });
+
+    expect(blocked.status).toBe(429);
+    const body = (await blocked.json()) as { error: string; retry_after: number };
+    expect(body.error).toBe("Rate limit exceeded");
+    expect(body.retry_after).toBeTypeOf("number");
+    expect(blocked.headers.get("Retry-After")).toBeTruthy();
+    expect(blocked.headers.get("X-RateLimit-Remaining")).toBe("0");
+  });
+
+  it("different IPs have independent limits", async () => {
+    // Exhaust the limit for IP-A
+    for (let i = 0; i < 20; i++) {
+      await relay.app.request("/api/v1/credentials/verify", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-forwarded-for": "10.0.0.100",
+        },
+        body: JSON.stringify({
+          "@context": ["https://www.w3.org/2018/credentials/v1"],
+          type: ["VerifiableCredential"],
+          issuer: "did:key:test",
+          credentialSubject: { id: "did:key:test" },
+          proof: { type: "Ed25519Signature2020" },
+        }),
+      });
+    }
+
+    // IP-A should be blocked
+    const blockedA = await relay.app.request("/api/v1/credentials/verify", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-forwarded-for": "10.0.0.100",
+      },
+      body: JSON.stringify({
+        "@context": ["https://www.w3.org/2018/credentials/v1"],
+        type: ["VerifiableCredential"],
+        issuer: "did:key:test",
+        credentialSubject: { id: "did:key:test" },
+        proof: { type: "Ed25519Signature2020" },
+      }),
+    });
+    expect(blockedA.status).toBe(429);
+
+    // IP-B should NOT be blocked
+    const allowedB = await relay.app.request("/api/v1/credentials/verify", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-forwarded-for": "10.0.0.200",
+      },
+      body: JSON.stringify({
+        "@context": ["https://www.w3.org/2018/credentials/v1"],
+        type: ["VerifiableCredential"],
+        issuer: "did:key:test",
+        credentialSubject: { id: "did:key:test" },
+        proof: { type: "Ed25519Signature2020" },
+      }),
+    });
+    expect(allowedB.status).not.toBe(429);
+  });
+
+  it("master token bypasses rate limiting", async () => {
+    // Exhaust the limit for an IP using unauthenticated requests
+    for (let i = 0; i < 20; i++) {
+      await relay.app.request("/api/v1/credentials/verify", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-forwarded-for": "10.0.0.250",
+        },
+        body: JSON.stringify({
+          "@context": ["https://www.w3.org/2018/credentials/v1"],
+          type: ["VerifiableCredential"],
+          issuer: "did:key:test",
+          credentialSubject: { id: "did:key:test" },
+          proof: { type: "Ed25519Signature2020" },
+        }),
+      });
+    }
+
+    // Same IP but with master token should bypass rate limiting
+    const res = await relay.app.request("/api/v1/credentials/verify", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-forwarded-for": "10.0.0.250",
+        ...AUTH_HEADER,
+      },
+      body: JSON.stringify({
+        "@context": ["https://www.w3.org/2018/credentials/v1"],
+        type: ["VerifiableCredential"],
+        issuer: "did:key:test",
+        credentialSubject: { id: "did:key:test" },
+        proof: { type: "Ed25519Signature2020" },
+      }),
+    });
+    expect(res.status).not.toBe(429);
+  });
+
+  it("rate limit headers are present on agent discovery", async () => {
+    // Use a non-master-token request to verify rate limit headers are set
+    const res2 = await relay.app.request("/api/v1/agents/discover?capability=web_search", {
+      method: "GET",
+      headers: {
+        Authorization: "Bearer some-signed-token",
+        "x-forwarded-for": "10.0.0.3",
+      },
+    });
+
+    // Will be 401 (auth fails) but rate limit headers should still be present
+    // because rate limiting runs before auth
+    expect(res2.headers.get("X-RateLimit-Remaining")).toBeTruthy();
+    expect(res2.headers.get("X-RateLimit-Reset")).toBeTruthy();
+  });
+});

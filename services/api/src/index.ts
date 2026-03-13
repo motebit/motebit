@@ -190,6 +190,44 @@ export interface SyncRelay {
   connections: Map<string, ConnectedDevice[]>;
 }
 
+// === Rate Limiter ===
+
+class RateLimiter {
+  private windows: Map<string, { count: number; resetAt: number }> = new Map();
+
+  constructor(
+    private maxRequests: number,
+    private windowMs: number,
+  ) {}
+
+  check(key: string): { allowed: boolean; remaining: number; resetAt: number } {
+    const now = Date.now();
+    const entry = this.windows.get(key);
+
+    if (!entry || entry.resetAt <= now) {
+      // New window
+      const resetAt = now + this.windowMs;
+      this.windows.set(key, { count: 1, resetAt });
+      return { allowed: true, remaining: this.maxRequests - 1, resetAt };
+    }
+
+    entry.count++;
+    const allowed = entry.count <= this.maxRequests;
+    const remaining = Math.max(0, this.maxRequests - entry.count);
+    return { allowed, remaining, resetAt: entry.resetAt };
+  }
+
+  /** Remove expired entries to prevent memory growth. */
+  cleanup(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.windows) {
+      if (entry.resetAt <= now) {
+        this.windows.delete(key);
+      }
+    }
+  }
+}
+
 // === Factory ===
 
 // === Pairing Code Generator ===
@@ -477,6 +515,10 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     // Clean expired agent registrations
     const stmtClean = moteDb.db.prepare("DELETE FROM agent_registry WHERE expires_at < ?");
     stmtClean.run(now);
+    // Clean expired rate limit entries
+    for (const limiter of allLimiters) {
+      limiter.cleanup();
+    }
     // Expire pending proposals past their TTL
     try {
       moteDb.db
@@ -489,6 +531,14 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     }
   }, 60_000);
 
+  // Rate limiter instances per endpoint category (per-relay for test isolation)
+  const authLimiter = new RateLimiter(30, 60_000); // 30 req/min
+  const readLimiter = new RateLimiter(60, 60_000); // 60 req/min
+  const writeLimiter = new RateLimiter(30, 60_000); // 30 req/min
+  const publicLimiter = new RateLimiter(20, 60_000); // 20 req/min
+  const expensiveLimiter = new RateLimiter(10, 60_000); // 10 req/min
+  const allLimiters = [authLimiter, readLimiter, writeLimiter, publicLimiter, expensiveLimiter];
+
   const app = new Hono();
   // eslint-disable-next-line @typescript-eslint/unbound-method -- hono utility functions, not bound methods
   const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
@@ -496,6 +546,72 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   // --- Middleware ---
   app.use("*", secureHeaders());
   app.use("*", cors({ origin: corsOrigin }));
+
+  // --- Rate Limiting ---
+
+  function getClientIp(c: { req: { header: (name: string) => string | undefined } }): string {
+    return (
+      c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ??
+      c.req.header("x-real-ip") ??
+      "unknown"
+    );
+  }
+
+  function isMasterToken(c: { req: { header: (name: string) => string | undefined } }): boolean {
+    if (apiToken == null || apiToken === "") return false;
+    const authHeader = c.req.header("authorization");
+    return authHeader != null && authHeader === `Bearer ${apiToken}`;
+  }
+
+  function rateLimitMiddleware(limiter: RateLimiter) {
+    return async (
+      c: Parameters<Parameters<typeof app.use>[1]>[0],
+      next: () => Promise<void>,
+    ): Promise<Response | void> => {
+      // Master token bypasses rate limiting
+      if (isMasterToken(c)) {
+        await next();
+        return;
+      }
+
+      const ip = getClientIp(c);
+      const { allowed, remaining, resetAt } = limiter.check(ip);
+      const retryAfterSeconds = Math.ceil((resetAt - Date.now()) / 1000);
+
+      c.header("X-RateLimit-Remaining", String(remaining));
+      c.header("X-RateLimit-Reset", String(Math.ceil(resetAt / 1000)));
+
+      if (!allowed) {
+        c.header("Retry-After", String(retryAfterSeconds));
+        return c.json({ error: "Rate limit exceeded", retry_after: retryAfterSeconds }, 429);
+      }
+
+      await next();
+    };
+  }
+
+  // Auth endpoints: register, heartbeat (30 req/min)
+  app.use("/api/v1/agents/register", rateLimitMiddleware(authLimiter));
+  app.use("/api/v1/agents/heartbeat", rateLimitMiddleware(authLimiter));
+  app.use("/api/v1/agents/deregister", rateLimitMiddleware(authLimiter));
+
+  // Read endpoints: discover, credentials, capabilities, listings (60 req/min)
+  app.use("/api/v1/agents/discover", rateLimitMiddleware(readLimiter));
+  app.use("/api/v1/agents/:motebitId/credentials", rateLimitMiddleware(readLimiter));
+  app.use("/api/v1/agents/:motebitId/listing", rateLimitMiddleware(readLimiter));
+  app.use("/agent/:motebitId/capabilities", rateLimitMiddleware(readLimiter));
+  app.use("/agent/:motebitId/budget", rateLimitMiddleware(readLimiter));
+
+  // Write endpoints: task submission, result, ledger (30 req/min)
+  app.use("/agent/:motebitId/task", rateLimitMiddleware(writeLimiter));
+  app.use("/agent/:motebitId/task/:taskId/result", rateLimitMiddleware(writeLimiter));
+  app.use("/agent/:motebitId/ledger", rateLimitMiddleware(writeLimiter));
+
+  // Public endpoints: credential verification (20 req/min)
+  app.use("/api/v1/credentials/verify", rateLimitMiddleware(publicLimiter));
+
+  // Expensive endpoints: presentation bundling (10 req/min)
+  app.use("/api/v1/agents/:motebitId/presentation", rateLimitMiddleware(expensiveLimiter));
 
   if (apiToken != null && apiToken !== "") {
     app.use("/identity/*", bearerAuth({ token: apiToken }));
