@@ -1501,6 +1501,216 @@ describe("Sync Relay — agent protocol", () => {
 
     expect(res.status).toBe(404);
   });
+
+  it("verified receipt delivery issues a reputation credential", async () => {
+    // Create executing agent with real Ed25519 keypair
+    const execKeypair = await generateKeypair();
+    const execPubKeyHex = bytesToHex(execKeypair.publicKey);
+
+    const idRes = await relay.app.request("/identity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ owner_id: "cred-agent" }),
+    });
+    const { motebit_id: execMotebitId } = (await idRes.json()) as { motebit_id: string };
+
+    await relay.app.request("/device/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: execMotebitId,
+        device_name: "Worker",
+        public_key: execPubKeyHex,
+      }),
+    });
+
+    // Submit and complete a task with a signed receipt
+    const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ prompt: "Credential test" }),
+    });
+    const { task_id } = (await submitRes.json()) as { task_id: string };
+
+    const unsigned = {
+      task_id,
+      motebit_id: execMotebitId as unknown as import("@motebit/sdk").MotebitId,
+      device_id: "worker-device" as unknown as import("@motebit/sdk").DeviceId,
+      submitted_at: Date.now(),
+      completed_at: Date.now() + 100,
+      status: "completed" as const,
+      result: "Done",
+      tools_used: [] as string[],
+      memories_formed: 0,
+      prompt_hash: "abc",
+      result_hash: "def",
+    };
+    const receipt = await signExecutionReceipt(unsigned, execKeypair.privateKey);
+
+    const resultRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task/${task_id}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(receipt),
+    });
+    expect(resultRes.status).toBe(200);
+
+    const resultBody = (await resultRes.json()) as { status: string; credential_id: string | null };
+    expect(resultBody.credential_id).toBeTypeOf("string");
+    expect(resultBody.credential_id).not.toBeNull();
+  });
+
+  it("GET /api/v1/agents/:motebitId/credentials returns issued credentials", async () => {
+    // Create executing agent and complete a task to trigger credential issuance
+    const execKeypair = await generateKeypair();
+    const execPubKeyHex = bytesToHex(execKeypair.publicKey);
+
+    const idRes = await relay.app.request("/identity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ owner_id: "cred-list-agent" }),
+    });
+    const { motebit_id: execMotebitId } = (await idRes.json()) as { motebit_id: string };
+
+    await relay.app.request("/device/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: execMotebitId,
+        device_name: "Worker",
+        public_key: execPubKeyHex,
+      }),
+    });
+
+    const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ prompt: "List creds test" }),
+    });
+    const { task_id } = (await submitRes.json()) as { task_id: string };
+
+    const unsigned = {
+      task_id,
+      motebit_id: execMotebitId as unknown as import("@motebit/sdk").MotebitId,
+      device_id: "worker-device" as unknown as import("@motebit/sdk").DeviceId,
+      submitted_at: Date.now(),
+      completed_at: Date.now() + 50,
+      status: "completed" as const,
+      result: "Result",
+      tools_used: [] as string[],
+      memories_formed: 0,
+      prompt_hash: "abc",
+      result_hash: "def",
+    };
+    const signedReceipt = await signExecutionReceipt(unsigned, execKeypair.privateKey);
+
+    await relay.app.request(`/agent/${MOTEBIT_ID}/task/${task_id}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(signedReceipt),
+    });
+
+    // Fetch credentials for the executing agent
+    const credRes = await relay.app.request(`/api/v1/agents/${execMotebitId}/credentials`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(credRes.status).toBe(200);
+
+    const credBody = (await credRes.json()) as {
+      motebit_id: string;
+      credentials: Array<{
+        credential_id: string;
+        credential_type: string;
+        credential: { type: string[]; issuer: string; credentialSubject: { id: string } };
+        issued_at: number;
+      }>;
+    };
+    expect(credBody.motebit_id).toBe(execMotebitId);
+    expect(credBody.credentials.length).toBeGreaterThanOrEqual(1);
+    const cred = credBody.credentials[0]!;
+    expect(cred.credential_type).toBe("AgentReputationCredential");
+    expect(cred.credential.type).toContain("AgentReputationCredential");
+    expect(cred.credential.issuer).toMatch(/^did:key:/);
+  });
+
+  it("POST /api/v1/credentials/verify validates a credential", async () => {
+    // Create an agent, complete a task, get a credential, then verify it
+    const execKeypair = await generateKeypair();
+    const execPubKeyHex = bytesToHex(execKeypair.publicKey);
+
+    const idRes = await relay.app.request("/identity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ owner_id: "cred-verify-agent" }),
+    });
+    const { motebit_id: execMotebitId } = (await idRes.json()) as { motebit_id: string };
+
+    await relay.app.request("/device/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: execMotebitId,
+        device_name: "Worker",
+        public_key: execPubKeyHex,
+      }),
+    });
+
+    const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ prompt: "Verify cred test" }),
+    });
+    const { task_id } = (await submitRes.json()) as { task_id: string };
+
+    const unsigned = {
+      task_id,
+      motebit_id: execMotebitId as unknown as import("@motebit/sdk").MotebitId,
+      device_id: "worker-device" as unknown as import("@motebit/sdk").DeviceId,
+      submitted_at: Date.now(),
+      completed_at: Date.now() + 75,
+      status: "completed" as const,
+      result: "Verified",
+      tools_used: [] as string[],
+      memories_formed: 0,
+      prompt_hash: "abc",
+      result_hash: "def",
+    };
+    const signedReceipt = await signExecutionReceipt(unsigned, execKeypair.privateKey);
+
+    await relay.app.request(`/agent/${MOTEBIT_ID}/task/${task_id}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(signedReceipt),
+    });
+
+    // Fetch the credential
+    const credRes = await relay.app.request(`/api/v1/agents/${execMotebitId}/credentials`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    const credBody = (await credRes.json()) as {
+      credentials: Array<{ credential: Record<string, unknown> }>;
+    };
+    expect(credBody.credentials.length).toBeGreaterThanOrEqual(1);
+    const vc = credBody.credentials[0]!.credential;
+
+    // Verify the credential via public endpoint (no auth)
+    const verifyRes = await relay.app.request("/api/v1/credentials/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(vc),
+    });
+    expect(verifyRes.status).toBe(200);
+
+    const verifyBody = (await verifyRes.json()) as {
+      valid: boolean;
+      issuer: string;
+      subject: string;
+    };
+    expect(verifyBody.valid).toBe(true);
+    expect(verifyBody.issuer).toMatch(/^did:key:/);
+    expect(verifyBody.subject).toMatch(/^did:key:/);
+  });
 });
 
 // === Agent Discovery Registry Tests ===

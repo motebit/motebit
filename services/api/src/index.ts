@@ -41,6 +41,8 @@
  *   DELETE /api/v1/agents/deregister                   — remove agent registration
  *   POST /api/v1/agents/:motebitId/listing              — register/update service listing
  *   GET  /api/v1/agents/:motebitId/listing              — get service listing
+ *   GET  /api/v1/agents/:motebitId/credentials?type=&limit=  — credentials issued to agent
+ *   POST /api/v1/credentials/verify                        — verify a VerifiableCredential (public)
  *   GET  /api/v1/market/candidates?capability=&max_budget=&limit= — scored candidate list
  *
  * WebSocket protocol:
@@ -93,7 +95,9 @@ import {
   generateKeypair,
   publicKeyToDidKey,
   issueReputationCredential,
+  verifyVerifiableCredential,
 } from "@motebit/crypto";
+import type { VerifiableCredential } from "@motebit/crypto";
 import {
   rankCandidates,
   applyPrecisionToMarketConfig,
@@ -401,6 +405,19 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
         completed_at INTEGER NOT NULL,
         PRIMARY KEY (proposal_id, step_id)
       );
+  `);
+
+  // Verifiable credential storage
+  moteDb.db.exec(`
+      CREATE TABLE IF NOT EXISTS relay_credentials (
+        credential_id TEXT PRIMARY KEY,
+        subject_motebit_id TEXT NOT NULL,
+        issuer_did TEXT NOT NULL,
+        credential_type TEXT NOT NULL,
+        credential_json TEXT NOT NULL,
+        issued_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_relay_creds_subject ON relay_credentials(subject_motebit_id);
   `);
 
   // Extend sync tables for collaborative fields (column-exists check pattern)
@@ -823,7 +840,10 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   if (apiToken != null && apiToken !== "") {
     // Agent registry routes use their own auth middleware (supports device tokens)
     app.use("/api/v1/*", async (c, next) => {
-      if (c.req.path.startsWith("/api/v1/agents")) {
+      if (
+        c.req.path.startsWith("/api/v1/agents") ||
+        c.req.path.startsWith("/api/v1/credentials/verify")
+      ) {
         await next();
         return;
       }
@@ -2327,6 +2347,65 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       }
     }
 
+    // Issue a reputation credential for the executing agent on successful receipt
+    let credential_id: string | null = null;
+    if (receipt.status === "completed") {
+      try {
+        // Compute agent reputation stats from latency records + receipt data
+        const latencyRows = moteDb.db
+          .prepare(
+            "SELECT latency_ms FROM relay_latency_stats WHERE remote_motebit_id = ? ORDER BY recorded_at DESC LIMIT 100",
+          )
+          .all(receipt.motebit_id as string) as Array<{ latency_ms: number }>;
+        const avgLatency =
+          latencyRows.length > 0
+            ? latencyRows.reduce((a, r) => a + r.latency_ms, 0) / latencyRows.length
+            : receipt.completed_at && receipt.submitted_at
+              ? receipt.completed_at - receipt.submitted_at
+              : 0;
+
+        // Derive subject DID from the executing agent's public key
+        const subjectDid = pubKeyHex
+          ? hexPublicKeyToDidKey(pubKeyHex)
+          : `did:motebit:${receipt.motebit_id as string}`;
+
+        const relayKeys = await getRelayKeypair();
+        const vc = await issueReputationCredential(
+          {
+            success_rate: 1.0, // This receipt succeeded
+            avg_latency_ms: avgLatency,
+            task_count: latencyRows.length + 1,
+            trust_score: 1.0,
+            availability: 1.0,
+            measured_at: Date.now(),
+          },
+          relayKeys.privateKey,
+          relayKeys.publicKey,
+          subjectDid,
+        );
+
+        // Store the credential
+        credential_id = crypto.randomUUID();
+        const credentialType =
+          vc.type.find((t) => t !== "VerifiableCredential") ?? "VerifiableCredential";
+        moteDb.db
+          .prepare(
+            `INSERT INTO relay_credentials (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            credential_id,
+            receipt.motebit_id as string,
+            vc.issuer,
+            credentialType,
+            JSON.stringify(vc),
+            Date.now(),
+          );
+      } catch {
+        // Best-effort credential issuance — don't block receipt delivery
+      }
+    }
+
     // Fan out task_result to all connected devices
     const peers = connections.get(motebitId);
     if (peers) {
@@ -2336,7 +2415,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       }
     }
 
-    return c.json({ status: entry.task.status });
+    return c.json({ status: entry.task.status, credential_id });
   });
 
   // GET /agent/:motebitId/budget — budget allocations and settlements for this motebit
@@ -2434,6 +2513,38 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     const pubKeyBytes = hexToBytes(device.public_key);
     const valid = await verifyExecutionReceipt(receipt, pubKeyBytes);
     return c.json({ valid });
+  });
+
+  // === Credential Verification (public, no auth) ===
+
+  app.post("/api/v1/credentials/verify", async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      throw new HTTPException(400, { message: "Invalid JSON body" });
+    }
+    const vc = body as VerifiableCredential;
+    if (
+      !vc ||
+      !Array.isArray(vc["@context"]) ||
+      !Array.isArray(vc.type) ||
+      !vc.issuer ||
+      !vc.credentialSubject ||
+      !vc.proof
+    ) {
+      throw new HTTPException(400, {
+        message:
+          "Invalid credential: missing required fields (@context, type, issuer, credentialSubject, proof)",
+      });
+    }
+
+    const valid = await verifyVerifiableCredential(vc);
+    return c.json({
+      valid,
+      issuer: vc.issuer,
+      subject: vc.credentialSubject.id,
+    });
   });
 
   // === Agent Discovery Registry ===
@@ -2751,6 +2862,42 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       );
 
     return c.json({ listing_id: listingId, updated_at: now }, 200);
+  });
+
+  // GET /api/v1/agents/:motebitId/credentials — list credentials issued to/by agent
+  app.get("/api/v1/agents/:motebitId/credentials", (c) => {
+    const mid = asMotebitId(c.req.param("motebitId"));
+    const typeFilter = c.req.query("type");
+    const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
+
+    let rows: Array<{
+      credential_id: string;
+      credential_type: string;
+      credential_json: string;
+      issued_at: number;
+    }>;
+    if (typeFilter) {
+      rows = moteDb.db
+        .prepare(
+          "SELECT credential_id, credential_type, credential_json, issued_at FROM relay_credentials WHERE subject_motebit_id = ? AND credential_type = ? ORDER BY issued_at DESC LIMIT ?",
+        )
+        .all(mid, typeFilter, limit) as typeof rows;
+    } else {
+      rows = moteDb.db
+        .prepare(
+          "SELECT credential_id, credential_type, credential_json, issued_at FROM relay_credentials WHERE subject_motebit_id = ? ORDER BY issued_at DESC LIMIT ?",
+        )
+        .all(mid, limit) as typeof rows;
+    }
+
+    const credentials = rows.map((r) => ({
+      credential_id: r.credential_id,
+      credential_type: r.credential_type,
+      credential: JSON.parse(r.credential_json) as VerifiableCredential,
+      issued_at: r.issued_at,
+    }));
+
+    return c.json({ motebit_id: mid, credentials });
   });
 
   // GET /api/v1/agents/:motebitId/listing — get service listing
