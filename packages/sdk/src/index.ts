@@ -115,6 +115,7 @@ export enum EventType {
   PlanStepCompleted = "plan_step_completed",
   PlanStepFailed = "plan_step_failed",
   PlanCompleted = "plan_completed",
+  PlanStepDelegated = "plan_step_delegated",
   PlanFailed = "plan_failed",
   HousekeepingRun = "housekeeping_run",
   ReflectionCompleted = "reflection_completed",
@@ -520,6 +521,7 @@ export interface PlanStep {
   started_at: number | null;
   completed_at: number | null;
   retry_count: number;
+  updated_at: number;
 }
 
 export interface Plan {

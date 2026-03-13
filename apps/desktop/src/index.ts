@@ -2823,10 +2823,7 @@ class TauriPlanSyncStoreAdapter implements PlanSyncStoreAdapter {
 
   getStepsSince(_motebitId: string, since: number): SyncPlanStep[] {
     return this._steps
-      .filter((s) => {
-        const updatedAt = s.completed_at ?? s.started_at ?? 0;
-        return updatedAt > since;
-      })
+      .filter((s) => s.updated_at > since)
       .map((s) => ({
         step_id: s.step_id,
         plan_id: s.plan_id,
@@ -2846,7 +2843,7 @@ class TauriPlanSyncStoreAdapter implements PlanSyncStoreAdapter {
         started_at: s.started_at,
         completed_at: s.completed_at,
         retry_count: s.retry_count,
-        updated_at: s.completed_at ?? s.started_at ?? 0,
+        updated_at: s.updated_at,
       }));
   }
 
@@ -2895,6 +2892,7 @@ class TauriPlanSyncStoreAdapter implements PlanSyncStoreAdapter {
       started_at: step.started_at,
       completed_at: step.completed_at,
       retry_count: step.retry_count,
+      updated_at: step.updated_at,
     });
   }
 

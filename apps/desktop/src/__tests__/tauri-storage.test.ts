@@ -80,9 +80,13 @@ CREATE TABLE IF NOT EXISTS plan_steps (
   started_at INTEGER,
   completed_at INTEGER,
   retry_count INTEGER NOT NULL DEFAULT 0,
+  required_capabilities TEXT DEFAULT NULL,
+  delegation_task_id TEXT DEFAULT NULL,
+  updated_at INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY (plan_id) REFERENCES plans(plan_id)
 );
 CREATE INDEX IF NOT EXISTS idx_plan_steps_plan ON plan_steps (plan_id, ordinal ASC);
+CREATE INDEX IF NOT EXISTS idx_plan_steps_updated ON plan_steps (updated_at);
 `;
 
 /**
@@ -471,6 +475,7 @@ describe("TauriPlanStore", () => {
     started_at: null,
     completed_at: null,
     retry_count: 0,
+    updated_at: Date.now(),
   });
 
   it("savePlan + getPlan round-trip", () => {

@@ -1832,7 +1832,7 @@ export class MobileApp {
  */
 class ExpoPlanSyncStoreAdapter implements PlanSyncStoreAdapter {
   constructor(
-    private store: { getPlan(id: string): Plan | null; getStep(id: string): PlanStep | null; getStepsForPlan(planId: string): PlanStep[]; savePlan(plan: Plan): void; saveStep(step: PlanStep): void; listAllPlans?(motebitId: string): Plan[]; listActivePlans?(motebitId: string): Plan[] },
+    private store: { getPlan(id: string): Plan | null; getStep(id: string): PlanStep | null; getStepsForPlan(planId: string): PlanStep[]; savePlan(plan: Plan): void; saveStep(step: PlanStep): void; listAllPlans?(motebitId: string): Plan[]; listActivePlans?(motebitId: string): Plan[]; listStepsSince?(motebitId: string, since: number): PlanStep[] },
     private motebitId: string,
   ) {}
 
@@ -1844,28 +1844,17 @@ class ExpoPlanSyncStoreAdapter implements PlanSyncStoreAdapter {
   }
 
   getStepsSince(_motebitId: string, since: number): SyncPlanStep[] {
-    const plans = this.store.listAllPlans?.(this.motebitId) ?? this.store.listActivePlans?.(this.motebitId) ?? [];
-    const result: SyncPlanStep[] = [];
-    for (const plan of plans) {
-      if (plan.updated_at <= since) continue;
-      const steps = this.store.getStepsForPlan(plan.plan_id);
-      for (const s of steps) {
-        const updatedAt = s.completed_at ?? s.started_at ?? plan.created_at;
-        if (updatedAt > since) {
-          result.push({
-            step_id: s.step_id, plan_id: s.plan_id, motebit_id: this.motebitId,
-            ordinal: s.ordinal, description: s.description, prompt: s.prompt,
-            depends_on: JSON.stringify(s.depends_on), optional: s.optional, status: s.status,
-            required_capabilities: s.required_capabilities != null ? JSON.stringify(s.required_capabilities) : null,
-            delegation_task_id: s.delegation_task_id ?? null,
-            result_summary: s.result_summary, error_message: s.error_message,
-            tool_calls_made: s.tool_calls_made, started_at: s.started_at,
-            completed_at: s.completed_at, retry_count: s.retry_count, updated_at: updatedAt,
-          });
-        }
-      }
-    }
-    return result;
+    const steps = this.store.listStepsSince?.(this.motebitId, since) ?? [];
+    return steps.map((s) => ({
+      step_id: s.step_id, plan_id: s.plan_id, motebit_id: this.motebitId,
+      ordinal: s.ordinal, description: s.description, prompt: s.prompt,
+      depends_on: JSON.stringify(s.depends_on), optional: s.optional, status: s.status,
+      required_capabilities: s.required_capabilities != null ? JSON.stringify(s.required_capabilities) : null,
+      delegation_task_id: s.delegation_task_id ?? null,
+      result_summary: s.result_summary, error_message: s.error_message,
+      tool_calls_made: s.tool_calls_made, started_at: s.started_at,
+      completed_at: s.completed_at, retry_count: s.retry_count, updated_at: s.updated_at,
+    }));
   }
 
   upsertPlan(plan: SyncPlan): void {
@@ -1891,6 +1880,7 @@ class ExpoPlanSyncStoreAdapter implements PlanSyncStoreAdapter {
       result_summary: step.result_summary, error_message: step.error_message,
       tool_calls_made: step.tool_calls_made, started_at: step.started_at,
       completed_at: step.completed_at, retry_count: step.retry_count,
+      updated_at: step.updated_at,
     });
   }
 }

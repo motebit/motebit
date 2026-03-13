@@ -1047,6 +1047,9 @@ interface PlanStepRow {
   started_at: number | null;
   completed_at: number | null;
   retry_count: number;
+  required_capabilities: string | null;
+  delegation_task_id: string | null;
+  updated_at: number;
 }
 
 function rowToPlan(row: PlanRow): Plan {
@@ -1073,12 +1076,17 @@ function rowToPlanStep(row: PlanStepRow): PlanStep {
     depends_on: JSON.parse(row.depends_on) as string[],
     optional: row.optional === 1,
     status: row.status as StepStatus,
+    required_capabilities: row.required_capabilities != null
+      ? JSON.parse(row.required_capabilities) as PlanStep["required_capabilities"]
+      : undefined,
+    delegation_task_id: row.delegation_task_id ?? undefined,
     result_summary: row.result_summary,
     error_message: row.error_message,
     tool_calls_made: row.tool_calls_made,
     started_at: row.started_at,
     completed_at: row.completed_at,
     retry_count: row.retry_count,
+    updated_at: row.updated_at,
   };
 }
 
@@ -1175,8 +1183,8 @@ export class TauriPlanStore implements PlanStoreAdapter {
     this.steps.set(step.step_id, { ...step });
     void dbExecute(
       this.invoke,
-      `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count, required_capabilities, delegation_task_id, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         step.step_id,
         step.plan_id,
@@ -1192,6 +1200,9 @@ export class TauriPlanStore implements PlanStoreAdapter {
         step.started_at,
         step.completed_at,
         step.retry_count,
+        step.required_capabilities != null ? JSON.stringify(step.required_capabilities) : null,
+        step.delegation_task_id ?? null,
+        step.updated_at,
       ],
     );
   }
@@ -1216,8 +1227,8 @@ export class TauriPlanStore implements PlanStoreAdapter {
     this.steps.set(stepId, merged);
     void dbExecute(
       this.invoke,
-      `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count, required_capabilities, delegation_task_id, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         merged.step_id,
         merged.plan_id,
@@ -1233,6 +1244,9 @@ export class TauriPlanStore implements PlanStoreAdapter {
         merged.started_at,
         merged.completed_at,
         merged.retry_count,
+        merged.required_capabilities != null ? JSON.stringify(merged.required_capabilities) : null,
+        merged.delegation_task_id ?? null,
+        merged.updated_at,
       ],
     );
   }

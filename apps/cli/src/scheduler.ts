@@ -720,11 +720,6 @@ export class GoalScheduler {
       switch (chunk.type) {
         case "plan_created":
           console.log(`[plan] created: "${chunk.plan.title}" (${chunk.steps.length} steps)`);
-          void this.logGoalEvent(EventType.PlanCreated, goalId, {
-            plan_id: chunk.plan.plan_id,
-            title: chunk.plan.title,
-            total_steps: chunk.steps.length,
-          });
           break;
 
         case "plan_truncated":
@@ -733,12 +728,6 @@ export class GoalScheduler {
 
         case "step_started":
           console.log(`[plan] step ${chunk.step.ordinal + 1}: ${chunk.step.description}`);
-          void this.logGoalEvent(EventType.PlanStepStarted, goalId, {
-            plan_id: chunk.step.plan_id,
-            step_id: chunk.step.step_id,
-            ordinal: chunk.step.ordinal,
-            description: chunk.step.description,
-          });
           break;
 
         case "step_chunk":
@@ -767,22 +756,10 @@ export class GoalScheduler {
 
         case "step_completed":
           console.log(`\n  [step ${chunk.step.ordinal + 1} complete]`);
-          void this.logGoalEvent(EventType.PlanStepCompleted, goalId, {
-            plan_id: chunk.step.plan_id,
-            step_id: chunk.step.step_id,
-            ordinal: chunk.step.ordinal,
-            tool_calls_made: chunk.step.tool_calls_made,
-          });
           break;
 
         case "step_failed":
           console.error(`\n  [step ${chunk.step.ordinal + 1} failed: ${chunk.error}]`);
-          void this.logGoalEvent(EventType.PlanStepFailed, goalId, {
-            plan_id: chunk.step.plan_id,
-            step_id: chunk.step.step_id,
-            ordinal: chunk.step.ordinal,
-            error: chunk.error,
-          });
           break;
 
         case "approval_request": {
@@ -826,17 +803,10 @@ export class GoalScheduler {
 
         case "plan_completed":
           console.log(`[plan] completed: ${chunk.plan.title}`);
-          void this.logGoalEvent(EventType.PlanCompleted, goalId, {
-            plan_id: chunk.plan.plan_id,
-          });
           break;
 
         case "plan_failed":
           console.error(`[plan] failed: ${chunk.reason}`);
-          void this.logGoalEvent(EventType.PlanFailed, goalId, {
-            plan_id: chunk.plan.plan_id,
-            reason: chunk.reason,
-          });
           break;
 
         case "reflection": {

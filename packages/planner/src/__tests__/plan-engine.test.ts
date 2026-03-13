@@ -193,6 +193,7 @@ describe("PlanEngine", () => {
       started_at: null,
       completed_at: null,
       retry_count: 0,
+      updated_at: Date.now(),
     });
 
     let callCount = 0;
@@ -245,6 +246,7 @@ describe("PlanEngine", () => {
       started_at: null,
       completed_at: null,
       retry_count: 0,
+      updated_at: Date.now(),
     });
 
     store.saveStep({
@@ -262,6 +264,7 @@ describe("PlanEngine", () => {
       started_at: null,
       completed_at: null,
       retry_count: 0,
+      updated_at: Date.now(),
     });
 
     let callCount = 0;
@@ -334,6 +337,7 @@ describe("PlanEngine", () => {
       started_at: Date.now() - 1000,
       completed_at: Date.now() - 500,
       retry_count: 0,
+      updated_at: Date.now(),
     });
 
     store.saveStep({
@@ -351,6 +355,7 @@ describe("PlanEngine", () => {
       started_at: null,
       completed_at: null,
       retry_count: 0,
+      updated_at: Date.now(),
     });
 
     const chunks = await collectChunks(engine.resumePlan(plan.plan_id, deps));
@@ -396,6 +401,7 @@ describe("PlanEngine", () => {
       started_at: null,
       completed_at: null,
       retry_count: 0,
+      updated_at: Date.now(),
     });
 
     expect(engine.isExecuting).toBe(false);
@@ -704,6 +710,7 @@ describe("PlanEngine", () => {
         started_at: null,
         completed_at: null,
         retry_count: 0,
+        updated_at: Date.now(),
       });
 
       mockRunTurnStreaming.mockImplementation(async function* () {
@@ -754,6 +761,7 @@ describe("PlanEngine", () => {
         started_at: null,
         completed_at: null,
         retry_count: 0,
+        updated_at: Date.now(),
       });
 
       mockRunTurnStreaming.mockImplementation(async function* () {

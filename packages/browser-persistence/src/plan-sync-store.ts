@@ -26,17 +26,14 @@ export class IdbPlanSyncStore {
   }
 
   getStepsSince(_motebitId: string, since: number): SyncPlanStep[] {
-    // Get all plans changed since last sync, then get their steps
-    const changedPlans = this.planStore.listAllPlans(this.motebitId)
-      .filter((p) => p.updated_at > since);
-
+    // Filter steps directly on updated_at instead of O(P×S) plan scan
+    const allPlans = this.planStore.listAllPlans(this.motebitId);
     const result: SyncPlanStep[] = [];
-    for (const plan of changedPlans) {
+    for (const plan of allPlans) {
       const steps = this.planStore.getStepsForPlan(plan.plan_id);
       for (const step of steps) {
-        const stepUpdatedAt = step.completed_at ?? step.started_at ?? plan.created_at;
-        if (stepUpdatedAt > since) {
-          result.push(stepToSync(step, this.motebitId, stepUpdatedAt));
+        if (step.updated_at > since) {
+          result.push(stepToSync(step, this.motebitId, step.updated_at));
         }
       }
     }
@@ -66,8 +63,7 @@ export class IdbPlanSyncStore {
     const existingOrder = STEP_STATUS_ORDER[existing.status] ?? 0;
     if (incomingOrder < existingOrder) return;
     if (incomingOrder === existingOrder) {
-      const existingUpdatedAt = existing.completed_at ?? existing.started_at ?? 0;
-      if (step.updated_at < existingUpdatedAt) return;
+      if (step.updated_at < existing.updated_at) return;
     }
     this.planStore.updateStep(step.step_id, syncToStep(step));
   }
@@ -148,5 +144,6 @@ function syncToStep(s: SyncPlanStep): PlanStep {
     started_at: s.started_at,
     completed_at: s.completed_at,
     retry_count: s.retry_count,
+    updated_at: s.updated_at,
   };
 }

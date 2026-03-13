@@ -1063,6 +1063,9 @@ interface PlanStepRow {
   started_at: number | null;
   completed_at: number | null;
   retry_count: number;
+  required_capabilities: string | null;
+  delegation_task_id: string | null;
+  updated_at: number;
 }
 
 function rowToPlan(row: PlanRow): Plan {
@@ -1095,12 +1098,17 @@ function rowToPlanStep(row: PlanStepRow): PlanStep {
     depends_on: dependsOn,
     optional: row.optional === 1,
     status: row.status as PlanStep["status"],
+    required_capabilities: row.required_capabilities != null
+      ? JSON.parse(row.required_capabilities) as PlanStep["required_capabilities"]
+      : undefined,
+    delegation_task_id: row.delegation_task_id ?? undefined,
     result_summary: row.result_summary,
     error_message: row.error_message,
     tool_calls_made: row.tool_calls_made,
     started_at: row.started_at,
     completed_at: row.completed_at,
     retry_count: row.retry_count,
+    updated_at: row.updated_at,
   };
 }
 
@@ -1168,8 +1176,8 @@ export class ExpoPlanStore implements PlanStoreAdapter {
 
   saveStep(step: PlanStep): void {
     this.db.runSync(
-      `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count, required_capabilities, delegation_task_id, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         step.step_id,
         step.plan_id,
@@ -1185,6 +1193,9 @@ export class ExpoPlanStore implements PlanStoreAdapter {
         step.started_at,
         step.completed_at,
         step.retry_count,
+        step.required_capabilities != null ? JSON.stringify(step.required_capabilities) : null,
+        step.delegation_task_id ?? null,
+        step.updated_at,
       ],
     );
   }
@@ -1235,6 +1246,18 @@ export class ExpoPlanStore implements PlanStoreAdapter {
       fields.push("retry_count = ?");
       values.push(updates.retry_count);
     }
+    if (updates.required_capabilities !== undefined) {
+      fields.push("required_capabilities = ?");
+      values.push(updates.required_capabilities != null ? JSON.stringify(updates.required_capabilities) : null);
+    }
+    if (updates.delegation_task_id !== undefined) {
+      fields.push("delegation_task_id = ?");
+      values.push(updates.delegation_task_id ?? null);
+    }
+    if (updates.updated_at !== undefined) {
+      fields.push("updated_at = ?");
+      values.push(updates.updated_at);
+    }
     if (fields.length === 0) return;
     values.push(stepId);
     this.db.runSync(`UPDATE plan_steps SET ${fields.join(", ")} WHERE step_id = ?`, values);
@@ -1254,6 +1277,14 @@ export class ExpoPlanStore implements PlanStoreAdapter {
       [motebitId],
     );
     return rows.map(rowToPlan);
+  }
+
+  listStepsSince(motebitId: string, since: number): PlanStep[] {
+    const rows = this.db.getAllSync<PlanStepRow>(
+      `SELECT ps.* FROM plan_steps ps JOIN plans p ON ps.plan_id = p.plan_id WHERE p.motebit_id = ? AND ps.updated_at > ?`,
+      [motebitId, since],
+    );
+    return rows.map(rowToPlanStep);
   }
 }
 
@@ -1806,6 +1837,23 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
       // Column may already exist on new DBs
     }
     db.execSync("PRAGMA user_version = 14");
+  }
+
+  if (userVersion < 15) {
+    try {
+      db.execSync("ALTER TABLE plan_steps ADD COLUMN required_capabilities TEXT DEFAULT NULL");
+    } catch { /* Column may already exist on new DBs */ }
+    try {
+      db.execSync("ALTER TABLE plan_steps ADD COLUMN delegation_task_id TEXT DEFAULT NULL");
+    } catch { /* Column may already exist on new DBs */ }
+    try {
+      db.execSync("ALTER TABLE plan_steps ADD COLUMN updated_at INTEGER DEFAULT 0");
+    } catch { /* Column may already exist on new DBs */ }
+    db.execSync("UPDATE plan_steps SET updated_at = COALESCE(completed_at, started_at, (SELECT created_at FROM plans WHERE plans.plan_id = plan_steps.plan_id)) WHERE updated_at = 0");
+    try {
+      db.execSync("CREATE INDEX IF NOT EXISTS idx_plan_steps_updated ON plan_steps(updated_at)");
+    } catch { /* Index may already exist */ }
+    db.execSync("PRAGMA user_version = 15");
   }
 
   return {

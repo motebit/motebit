@@ -41,6 +41,7 @@ describe("SqlitePlanStore", () => {
       started_at: null,
       completed_at: null,
       retry_count: 0,
+      updated_at: Date.now(),
       ...overrides,
     };
   }

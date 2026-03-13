@@ -282,6 +282,7 @@ describe("MotebitRuntime.resumePlan", () => {
       started_at: Date.now() - 1000,
       completed_at: Date.now() - 500,
       retry_count: 0,
+      updated_at: Date.now(),
     });
 
     planStore.saveStep({
@@ -299,6 +300,7 @@ describe("MotebitRuntime.resumePlan", () => {
       started_at: null,
       completed_at: null,
       retry_count: 0,
+      updated_at: Date.now(),
     });
 
     setupStreamMock(["step 2 result"]);

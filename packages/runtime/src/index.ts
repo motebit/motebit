@@ -711,7 +711,10 @@ export class MotebitRuntime {
       this.loopDeps,
     );
 
-    yield* this.planEngine.executePlan(plan.plan_id, this.loopDeps, undefined, runId);
+    for await (const chunk of this.planEngine.executePlan(plan.plan_id, this.loopDeps, undefined, runId)) {
+      this._logPlanChunkEvent(chunk, goalId);
+      yield chunk;
+    }
   }
 
   /**
@@ -720,7 +723,12 @@ export class MotebitRuntime {
    */
   async *resumePlan(planId: string, runId?: string): AsyncGenerator<PlanChunk> {
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
-    yield* this.planEngine.resumePlan(planId, this.loopDeps, undefined, runId);
+    const plan = this.planStore.getPlan(planId);
+    const goalId = plan?.goal_id;
+    for await (const chunk of this.planEngine.resumePlan(planId, this.loopDeps, undefined, runId)) {
+      this._logPlanChunkEvent(chunk, goalId);
+      yield chunk;
+    }
   }
 
   /**
@@ -729,7 +737,73 @@ export class MotebitRuntime {
    */
   async *recoverDelegatedSteps(): AsyncGenerator<PlanChunk> {
     if (!this.loopDeps) return;
-    yield* this.planEngine.recoverDelegatedSteps(this.motebitId, this.loopDeps);
+    for await (const chunk of this.planEngine.recoverDelegatedSteps(this.motebitId, this.loopDeps)) {
+      this._logPlanChunkEvent(chunk);
+      yield chunk;
+    }
+  }
+
+  /**
+   * Log plan lifecycle events centrally so all consumers (CLI, desktop, mobile, web)
+   * get audit history without duplicating event-logging logic.
+   */
+  private _logPlanChunkEvent(chunk: PlanChunk, goalId?: string): void {
+    let eventType: EventType | undefined;
+    let payload: Record<string, unknown> | undefined;
+
+    switch (chunk.type) {
+      case "plan_created":
+        eventType = EventType.PlanCreated;
+        payload = { plan_id: chunk.plan.plan_id, title: chunk.plan.title, total_steps: chunk.steps.length };
+        break;
+      case "step_started":
+        eventType = EventType.PlanStepStarted;
+        payload = { plan_id: chunk.step.plan_id, step_id: chunk.step.step_id, ordinal: chunk.step.ordinal, description: chunk.step.description };
+        break;
+      case "step_completed":
+        eventType = EventType.PlanStepCompleted;
+        payload = { plan_id: chunk.step.plan_id, step_id: chunk.step.step_id, ordinal: chunk.step.ordinal, tool_calls_made: chunk.step.tool_calls_made };
+        break;
+      case "step_failed":
+        eventType = EventType.PlanStepFailed;
+        payload = { plan_id: chunk.step.plan_id, step_id: chunk.step.step_id, ordinal: chunk.step.ordinal, error: chunk.error };
+        break;
+      case "step_delegated":
+        eventType = EventType.PlanStepDelegated;
+        payload = { plan_id: chunk.step.plan_id, step_id: chunk.step.step_id, ordinal: chunk.step.ordinal, task_id: chunk.task_id };
+        break;
+      case "plan_completed":
+        eventType = EventType.PlanCompleted;
+        payload = { plan_id: chunk.plan.plan_id };
+        break;
+      case "plan_failed":
+        eventType = EventType.PlanFailed;
+        payload = { plan_id: chunk.plan.plan_id, reason: chunk.reason };
+        break;
+      default:
+        return; // step_chunk, approval_request, reflection, plan_retrying, plan_truncated — handled by consumers
+    }
+
+    if (goalId != null) {
+      payload.goal_id = goalId;
+    }
+
+    void (async () => {
+      try {
+        const clock = await this.events.getLatestClock(this.motebitId);
+        await this.events.append({
+          event_id: crypto.randomUUID(),
+          motebit_id: this.motebitId,
+          timestamp: Date.now(),
+          event_type: eventType!,
+          payload,
+          version_clock: clock + 1,
+          tombstoned: false,
+        });
+      } catch {
+        // Fire-and-forget — consistent with existing event logging patterns
+      }
+    })();
   }
 
   get isOperatorMode(): boolean {

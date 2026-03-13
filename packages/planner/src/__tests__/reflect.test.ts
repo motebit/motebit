@@ -53,6 +53,7 @@ function makeStep(overrides?: Partial<PlanStep>): PlanStep {
     started_at: Date.now() - 4000,
     completed_at: Date.now() - 2000,
     retry_count: 0,
+    updated_at: Date.now(),
     ...overrides,
   };
 }

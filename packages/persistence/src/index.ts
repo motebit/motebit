@@ -1604,6 +1604,7 @@ interface PlanStepRow {
   retry_count: number;
   required_capabilities: string | null;
   delegation_task_id: string | null;
+  updated_at: number;
 }
 
 function rowToPlanStep(row: PlanStepRow): PlanStep {
@@ -1626,6 +1627,7 @@ function rowToPlanStep(row: PlanStepRow): PlanStep {
     started_at: row.started_at,
     completed_at: row.completed_at,
     retry_count: row.retry_count,
+    updated_at: row.updated_at,
   };
 }
 
@@ -1639,6 +1641,7 @@ export class SqlitePlanStore {
   private stmtGetStep: PreparedStatement;
   private stmtGetStepsForPlan: PreparedStatement;
   private stmtGetNextPending: PreparedStatement;
+  private stmtListStepsSince: PreparedStatement;
 
   constructor(db: DatabaseDriver) {
     this.stmtSavePlan = db.prepare(
@@ -1656,8 +1659,8 @@ export class SqlitePlanStore {
       `SELECT * FROM plans WHERE motebit_id = ? AND status = 'active' ORDER BY created_at DESC`,
     );
     this.stmtSaveStep = db.prepare(
-      `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count, required_capabilities, delegation_task_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count, required_capabilities, delegation_task_id, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtGetStep = db.prepare(`SELECT * FROM plan_steps WHERE step_id = ?`);
     this.stmtGetStepsForPlan = db.prepare(
@@ -1665,6 +1668,9 @@ export class SqlitePlanStore {
     );
     this.stmtGetNextPending = db.prepare(
       `SELECT * FROM plan_steps WHERE plan_id = ? AND status = 'pending' ORDER BY ordinal ASC LIMIT 1`,
+    );
+    this.stmtListStepsSince = db.prepare(
+      `SELECT ps.* FROM plan_steps ps JOIN plans p ON ps.plan_id = p.plan_id WHERE p.motebit_id = ? AND ps.updated_at > ?`,
     );
   }
 
@@ -1744,6 +1750,7 @@ export class SqlitePlanStore {
       step.retry_count,
       step.required_capabilities != null ? JSON.stringify(step.required_capabilities) : null,
       step.delegation_task_id ?? null,
+      step.updated_at,
     );
   }
 
@@ -1779,6 +1786,7 @@ export class SqlitePlanStore {
       merged.retry_count,
       merged.required_capabilities != null ? JSON.stringify(merged.required_capabilities) : null,
       merged.delegation_task_id ?? null,
+      merged.updated_at,
     );
   }
 
@@ -1786,6 +1794,11 @@ export class SqlitePlanStore {
     const row = this.stmtGetNextPending.get(planId) as PlanStepRow | undefined;
     if (row === undefined) return null;
     return rowToPlanStep(row);
+  }
+
+  listStepsSince(motebitId: string, since: number): PlanStep[] {
+    const rows = this.stmtListStepsSince.all(motebitId, since) as PlanStepRow[];
+    return rows.map(rowToPlanStep);
   }
 }
 
@@ -2168,6 +2181,13 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   if (userVersion < 25) {
     migrateExec(driver, "ALTER TABLE plan_steps ADD COLUMN delegation_task_id TEXT DEFAULT NULL");
     driver.pragma("user_version = 25");
+  }
+
+  if (userVersion < 26) {
+    migrateExec(driver, "ALTER TABLE plan_steps ADD COLUMN updated_at INTEGER DEFAULT 0");
+    migrateExec(driver, "UPDATE plan_steps SET updated_at = COALESCE(completed_at, started_at, (SELECT created_at FROM plans WHERE plans.plan_id = plan_steps.plan_id))");
+    migrateExec(driver, "CREATE INDEX IF NOT EXISTS idx_plan_steps_updated ON plan_steps(updated_at)");
+    driver.pragma("user_version = 26");
   }
 
   const eventStore = new SqliteEventStore(driver);
