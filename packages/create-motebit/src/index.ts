@@ -375,6 +375,26 @@ async function guidedScaffold(
   console.log(`  Full agent:  ${cyan("npm install -g motebit")}`);
   console.log(`  Learn more:  ${dim("https://docs.motebit.com")}`);
   console.log();
+  console.log(`  ${bold("What your agent can do:")}`);
+  console.log();
+  console.log(
+    `    ${dim("Credentials")}   Earns verifiable credentials (gradient, reputation, trust)`,
+  );
+  console.log(`    ${dim("Delegation")}    Submits tasks to other agents with signed receipts`);
+  console.log(`    ${dim("Ledger")}        Signed execution audit trail for every goal`);
+  console.log(`    ${dim("Budget")}        Economic layer for delegated task settlement`);
+  console.log();
+  console.log(`  ${bold("Useful commands:")}`);
+  console.log();
+  console.log(`    motebit credentials                ${dim("# View earned credentials")}`);
+  console.log(
+    `    motebit credentials --presentation  ${dim("# Generate verifiable presentation")}`,
+  );
+  console.log(
+    `    motebit export                     ${dim("# Export full bundle (identity, credentials, budget, gradient)")}`,
+  );
+  console.log(`    motebit verify <bundle-dir>        ${dim("# Verify an exported bundle")}`);
+  console.log();
 }
 
 // ---------------------------------------------------------------------------

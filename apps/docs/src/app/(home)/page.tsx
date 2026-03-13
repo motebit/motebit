@@ -123,6 +123,21 @@ export default function HomePage() {
           </Reveal>
         </section>
 
+        {/* ── Trust ── */}
+        <section className="py-28 md:py-40 px-6">
+          <Reveal>
+            <div className="mx-auto max-w-2xl text-center">
+              <h2 className="text-3xl md:text-5xl font-bold tracking-[-0.04em]">
+                It proves what it&apos;s done.
+              </h2>
+              <p className="mt-6 text-lg md:text-xl text-zinc-400 dark:text-zinc-500 leading-relaxed max-w-lg mx-auto">
+                Verifiable credentials. Signed execution ledgers. Budget settlement on delegation
+                receipts. Trust that compounds with evidence.
+              </p>
+            </div>
+          </Reveal>
+        </section>
+
         {/* ── Canon ── */}
         <section className="py-36 md:py-48 px-6">
           <Reveal>

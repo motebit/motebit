@@ -54,6 +54,17 @@ npx create-motebit verify [path]  Verify a motebit.md signature
 -h, --help            Print help
 ```
 
+## Agent capabilities
+
+Once running with the `motebit` CLI, your scaffolded agent has access to:
+
+- **Verifiable credentials** — automatically earned as the agent operates. Three credential types: gradient (intelligence metrics), reputation (task success rate), and trust (peer interaction history).
+- **Delegation** — submit tasks to other agents via MCP, with Ed25519-signed execution receipts and chain-of-custody tracking.
+- **Execution ledger** — a signed, tamper-evident audit trail for every goal execution, including tool calls, delegation receipts, and step-by-step timelines.
+- **Budget and settlement** — economic layer for delegated tasks. Lock budget before delegation, settle on receipt verification, release or dispute on failure.
+
+See the [delegation guide](https://docs.motebit.com/docs/developer/delegation) for the full flow.
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).

@@ -115,8 +115,11 @@ The CLI supports several subcommands beyond the default interactive REPL:
 | Subcommand | Description |
 |---|---|
 | `motebit id` | Show your identity card (motebit_id, did:key, public key) |
-| `motebit verify <path>` | Verify a signed `motebit.md` identity file |
-| `motebit export` | Export all data (memories, events, identity) |
+| `motebit verify <path>` | Verify a signed `motebit.md` identity file or exported bundle directory |
+| `motebit export` | Export full bundle (identity, credentials, presentation, budget, gradient, memories, events) |
+| `motebit credentials` | List earned verifiable credentials (gradient, reputation, trust) |
+| `motebit credentials --presentation` | Generate a verifiable credential presentation |
+| `motebit ledger <goalId>` | Show the signed execution ledger for a goal |
 | `motebit run --identity <path>` | Start daemon mode with goal scheduling |
 | `motebit serve [flags]` | Start MCP server mode (see [MCP Server](/docs/developer/mcp-server)) |
 | `motebit doctor` | Diagnose configuration and connectivity issues |

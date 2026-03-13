@@ -12,21 +12,25 @@ npm install @motebit/sdk
 
 ## What's included
 
-| Category           | Types                                                                                                                            |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| **Identity**       | `MotebitIdentity`, `MotebitType`, `AgentTrustLevel`, `AgentTrustRecord`                                                          |
-| **State vector**   | `MotebitState`, `TrustMode`, `BatteryMode`                                                                                       |
-| **Behavior**       | `BehaviorCues`, `SPECIES_CONSTRAINTS`                                                                                            |
-| **Memory**         | `MemoryNode`, `MemoryEdge`, `MemoryCandidate`, `MemoryType`, `RelationType`, `SensitivityLevel`                                  |
-| **Policy**         | `PolicyDecision`, `ToolRiskProfile`, `RiskLevel`, `DataClass`, `SideEffect`, `TurnContext`, `InjectionWarning`, `ToolAuditEntry` |
-| **Tools**          | `ToolDefinition`, `ToolResult`, `ToolHandler`, `ToolRegistry`                                                                    |
-| **AI provider**    | `ContextPack`, `AIResponse`, `IntelligenceProvider`, `ConversationMessage`, `ToolCall`                                           |
-| **Events**         | `EventLogEntry`, `EventType`                                                                                                     |
-| **Sync**           | `SyncCursor`, `ConflictEdge`, `SyncConversation`, `SyncConversationMessage`, `ConversationSyncResult`                            |
-| **Plans**          | `Plan`, `PlanStep`, `PlanStatus`, `StepStatus`                                                                                   |
-| **Agent protocol** | `AgentTask`, `AgentTaskStatus`, `ExecutionReceipt`, `AgentCapabilities` (includes `did:key`)                                     |
-| **Render**         | `RenderSpec`, `GeometrySpec`, `MaterialSpec`, `LightingSpec`                                                                     |
-| **Privacy**        | `AuditRecord`, `ExportManifest`                                                                                                  |
+| Category             | Types                                                                                                                                           |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Identity**         | `MotebitIdentity`, `MotebitType`, `AgentTrustLevel`, `AgentTrustRecord`                                                                         |
+| **State vector**     | `MotebitState`, `TrustMode`, `BatteryMode`                                                                                                      |
+| **Behavior**         | `BehaviorCues`, `SPECIES_CONSTRAINTS`                                                                                                           |
+| **Memory**           | `MemoryNode`, `MemoryEdge`, `MemoryCandidate`, `MemoryType`, `RelationType`, `SensitivityLevel`                                                 |
+| **Policy**           | `PolicyDecision`, `ToolRiskProfile`, `RiskLevel`, `DataClass`, `SideEffect`, `TurnContext`, `InjectionWarning`, `ToolAuditEntry`                |
+| **Tools**            | `ToolDefinition`, `ToolResult`, `ToolHandler`, `ToolRegistry`                                                                                   |
+| **AI provider**      | `ContextPack`, `AIResponse`, `IntelligenceProvider`, `ConversationMessage`, `ToolCall`                                                          |
+| **Events**           | `EventLogEntry`, `EventType`                                                                                                                    |
+| **Sync**             | `SyncCursor`, `ConflictEdge`, `SyncConversation`, `SyncConversationMessage`, `ConversationSyncResult`                                           |
+| **Plans**            | `Plan`, `PlanStep`, `PlanStatus`, `StepStatus`                                                                                                  |
+| **Agent protocol**   | `AgentTask`, `AgentTaskStatus`, `ExecutionReceipt`, `AgentCapabilities` (includes `did:key`)                                                    |
+| **Render**           | `RenderSpec`, `GeometrySpec`, `MaterialSpec`, `LightingSpec`                                                                                    |
+| **Credentials**      | `GradientCredentialSubject`, `ReputationCredentialSubject`, `TrustCredentialSubject`, `VC_TYPE_GRADIENT`, `VC_TYPE_REPUTATION`, `VC_TYPE_TRUST` |
+| **Execution ledger** | `GoalExecutionManifest`, `ExecutionTimelineEntry`, `ExecutionStepSummary`, `DelegationReceiptSummary`                                           |
+| **Market**           | `BudgetAllocation`, `SettlementRecord`, `RouteScore`, `AgentServiceListing`, `CapabilityPrice`, `MarketConfig`                                  |
+| **Precision**        | `PrecisionWeights`                                                                                                                              |
+| **Privacy**          | `AuditRecord`, `ExportManifest`                                                                                                                 |
 
 ## Usage
 
