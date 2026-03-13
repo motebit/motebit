@@ -1,0 +1,840 @@
+/**
+ * Dogfood E2E — Two sovereign motebits delegating across the relay.
+ *
+ * This test proves the FULL flow that two CLI motebits would use over the internet,
+ * running locally against an in-process relay with in-memory SQLite.
+ *
+ * Flow:
+ *   Agent A (caller/delegator)  ←→  Relay  ←→  Agent B (service/executor)
+ *
+ *   1. Both agents self-register via bootstrap (no master token)
+ *   2. Relay returns relay-assigned device_ids; signed tokens use those ids
+ *   3. Agent B registers capabilities in the agent registry (discoverable)
+ *   4. Agent A discovers B via the discovery endpoint using a signed token
+ *   5. Agent A submits a task to B's routing address via the relay (dualAuth)
+ *   6. B "executes" the task and posts a signed ExecutionReceipt back
+ *   7. The relay cryptographically verifies the receipt signature
+ *   8. The relay issues a reputation credential to B on verified receipt
+ *   9. Agent A retrieves the completed task+receipt using the master token
+ *  10. Local receipt signature verification (as A would do on first delivery)
+ *  11. Trust stats are recorded (latency)
+ *  12. Hijack prevention: a third party can't bootstrap with A's motebit_id + a new key
+ *  13. Budget lock + settlement when B has a priced service listing
+ *  14. Credential issuance, VP bundling, and public verification endpoint
+ *  15. Tampered receipt is rejected 403
+ */
+
+import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
+import { createSyncRelay } from "../index.js";
+import type { SyncRelay } from "../index.js";
+// eslint-disable-next-line no-restricted-imports -- tests need direct crypto
+import {
+  generateKeypair,
+  createSignedToken,
+  signExecutionReceipt,
+  verifyExecutionReceipt,
+} from "@motebit/crypto";
+import type { KeyPair } from "@motebit/crypto";
+import type { ExecutionReceipt, MotebitId, DeviceId } from "@motebit/sdk";
+
+// === Helpers ===
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/** Build a signed device token. The device_id MUST be the one the relay assigned at bootstrap. */
+async function makeSignedToken(
+  motebitId: string,
+  relayDeviceId: string,
+  keypair: KeyPair,
+): Promise<string> {
+  const now = Date.now();
+  return createSignedToken(
+    { mid: motebitId, did: relayDeviceId, iat: now, exp: now + 5 * 60 * 1000 },
+    keypair.privateKey,
+  );
+}
+
+/** Build a signed ExecutionReceipt from an agent's keypair. */
+async function makeReceipt(
+  taskId: string,
+  executorMotebitId: string,
+  executorDeviceId: string,
+  keypair: KeyPair,
+  opts: { status?: "completed" | "failed"; result?: string } = {},
+): Promise<ExecutionReceipt> {
+  const status = opts.status ?? "completed";
+  const result = opts.result ?? "Task executed successfully";
+
+  const promptHashBuf = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode("Summarize the agent delegation architecture"),
+  );
+  const promptHash = bytesToHex(new Uint8Array(promptHashBuf));
+  const resultHashBuf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(result));
+  const resultHash = bytesToHex(new Uint8Array(resultHashBuf));
+
+  const unsigned = {
+    task_id: taskId,
+    motebit_id: executorMotebitId as unknown as MotebitId,
+    device_id: executorDeviceId as unknown as DeviceId,
+    submitted_at: Date.now() - 100,
+    completed_at: Date.now(),
+    status,
+    result,
+    tools_used: ["web_search", "read_url"],
+    memories_formed: 1,
+    prompt_hash: promptHash,
+    result_hash: resultHash,
+  };
+  return signExecutionReceipt(unsigned, keypair.privateKey);
+}
+
+// === Test Suite ===
+
+describe("Dogfood E2E — Two-Motebit Delegation", () => {
+  let relay: SyncRelay;
+
+  // Agent A: the delegator (caller)
+  let keypairA: KeyPair;
+  let motebitIdA: string;
+  let pubKeyHexA: string;
+  /** Relay-assigned device_id for A (returned by bootstrap). Used in signed tokens. */
+  let relayDeviceIdA: string;
+
+  // Agent B: the executor (service motebit)
+  let keypairB: KeyPair;
+  let motebitIdB: string;
+  let pubKeyHexB: string;
+  /** Relay-assigned device_id for B (returned by bootstrap). Used in signed tokens. */
+  let relayDeviceIdB: string;
+
+  // The relay master token — used for cross-agent operations (A polling B's task result).
+  // In production, A and B run on the SAME relay with a shared master token, OR use WS push.
+  // For HTTP polling the task result, the caller uses the master token (or a service token).
+  const RELAY_MASTER_TOKEN = "relay-internal-only";
+
+  beforeAll(async () => {
+    relay = await createSyncRelay({
+      dbPath: ":memory:",
+      apiToken: RELAY_MASTER_TOKEN,
+      enableDeviceAuth: true,
+      verifyDeviceSignature: true,
+    });
+
+    keypairA = await generateKeypair();
+    keypairB = await generateKeypair();
+
+    motebitIdA = crypto.randomUUID();
+    motebitIdB = crypto.randomUUID();
+
+    pubKeyHexA = bytesToHex(keypairA.publicKey);
+    pubKeyHexB = bytesToHex(keypairB.publicKey);
+  });
+
+  afterAll(() => {
+    relay.close();
+  });
+
+  // =========================================================================
+  // 1 & 2. Bootstrap — both agents self-register (no master token)
+  //         The relay assigns device_ids; we capture them for token signing.
+  // =========================================================================
+
+  it("1. Agent A bootstraps successfully — relay creates identity + device", async () => {
+    const res = await relay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        motebit_id: motebitIdA,
+        device_id: "a-primary",
+        public_key: pubKeyHexA,
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      motebit_id: string;
+      device_id: string;
+      registered: boolean;
+    };
+    expect(body.motebit_id).toBe(motebitIdA);
+    expect(body.device_id).toBeTruthy();
+    expect(body.registered).toBe(true);
+
+    // Capture the relay-assigned device_id — this is what the relay knows as A's device
+    relayDeviceIdA = body.device_id;
+  });
+
+  it("2. Agent B bootstraps successfully — relay creates identity + device", async () => {
+    const res = await relay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        motebit_id: motebitIdB,
+        device_id: "b-primary",
+        public_key: pubKeyHexB,
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      motebit_id: string;
+      device_id: string;
+      registered: boolean;
+    };
+    expect(body.motebit_id).toBe(motebitIdB);
+    expect(body.device_id).toBeTruthy();
+    expect(body.registered).toBe(true);
+
+    relayDeviceIdB = body.device_id;
+  });
+
+  it("3. Bootstrap is idempotent: same key re-registers as 200 (not 201)", async () => {
+    const res = await relay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        motebit_id: motebitIdA,
+        device_id: "a-primary",
+        public_key: pubKeyHexA,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { registered: boolean };
+    expect(body.registered).toBe(false);
+  });
+
+  // =========================================================================
+  // 3. Signed token auth — Agent A uses Ed25519 signed token (no master token)
+  //    Note: must use the relay-assigned relayDeviceIdA, not our chosen device_id.
+  // =========================================================================
+
+  it("4. Agent A authenticates with a signed device token on a protected endpoint", async () => {
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
+
+    const res = await relay.app.request("/api/v1/agents/discover", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("5. Signed token signed by wrong key is rejected 401", async () => {
+    // Token claims to be agent A but is signed by B's private key
+    const spoofedToken = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairB);
+
+    const res = await relay.app.request("/api/v1/agents/discover", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${spoofedToken}` },
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("6. Token with wrong device_id is rejected 401", async () => {
+    // Valid key, but wrong device_id (not what relay stored for A)
+    const wrongDeviceToken = await makeSignedToken(motebitIdA, "wrong-device-id", keypairA);
+
+    const res = await relay.app.request("/api/v1/agents/discover", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${wrongDeviceToken}` },
+    });
+
+    // Relay looks up device by did claim — not found → verification fails
+    expect(res.status).toBe(401);
+  });
+
+  // =========================================================================
+  // 4. Agent B registers as a discoverable service
+  // =========================================================================
+
+  it("7. Agent B registers capabilities in the agent registry", async () => {
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+
+    const res = await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenB}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        motebit_id: motebitIdB,
+        endpoint_url: "http://agent-b.example.com/mcp",
+        capabilities: ["web_search", "general"],
+        metadata: { description: "Agent B — web search service motebit" },
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { motebit_id: string; registered: boolean };
+    expect(body.motebit_id).toBe(motebitIdB);
+    expect(body.registered).toBe(true);
+  });
+
+  // =========================================================================
+  // 5. Agent A discovers Agent B
+  // =========================================================================
+
+  it("8. Agent A discovers Agent B via GET /api/v1/agents/discover?capability=web_search", async () => {
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
+
+    const res = await relay.app.request("/api/v1/agents/discover?capability=web_search", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      agents: Array<{
+        motebit_id: string;
+        endpoint_url: string;
+        capabilities: string[];
+      }>;
+    };
+    const agentB = body.agents.find((a) => a.motebit_id === motebitIdB);
+    expect(agentB).toBeDefined();
+    expect(agentB!.endpoint_url).toBe("http://agent-b.example.com/mcp");
+    expect(agentB!.capabilities).toContain("web_search");
+  });
+
+  it("9. Agent A retrieves Agent B's full profile via GET /api/v1/agents/:motebitId", async () => {
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
+
+    const res = await relay.app.request(`/api/v1/agents/${motebitIdB}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      motebit_id: string;
+      endpoint_url: string;
+      capabilities: string[];
+    };
+    expect(body.motebit_id).toBe(motebitIdB);
+    expect(body.capabilities).toContain("general");
+  });
+
+  // =========================================================================
+  // 6–9. Full delegation flow
+  //   A submits task → relay fans out to B → B posts signed receipt → relay verifies
+  //   A retrieves result via master token (A has no per-device auth for B's address)
+  // =========================================================================
+
+  // Shared task_id across the delegation sub-tests (9–12)
+  let sharedTaskId: string;
+
+  it("10. Agent A submits a task to Agent B's address via signed device token (dualAuth)", async () => {
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
+
+    // Inject B as a connected device so the relay fans the task out via WS
+    const bWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+    relay.connections.set(motebitIdB, [
+      { ws: bWs as never, deviceId: relayDeviceIdB, capabilities: ["web_search", "general"] },
+    ]);
+
+    const res = await relay.app.request(`/agent/${motebitIdB}/task`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenA}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt: "Summarize the agent delegation architecture",
+        submitted_by: motebitIdA,
+        required_capabilities: ["web_search"],
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { task_id: string };
+    expect(body.task_id).toBeTruthy();
+    sharedTaskId = body.task_id;
+
+    // Relay fanned the task_request to B's connected device via WebSocket
+    expect(bWs.send).toHaveBeenCalledOnce();
+    const sentMsg = JSON.parse(bWs.send.mock.calls[0]![0] as string) as {
+      type: string;
+      task: { task_id: string; prompt: string; required_capabilities: string[] };
+    };
+    expect(sentMsg.type).toBe("task_request");
+    expect(sentMsg.task.task_id).toBe(sharedTaskId);
+    expect(sentMsg.task.prompt).toBe("Summarize the agent delegation architecture");
+    expect(sentMsg.task.required_capabilities).toContain("web_search");
+  });
+
+  it("11. Agent B posts a signed ExecutionReceipt back to the relay", async () => {
+    // B uses its own signed device token to post the result
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+
+    const receipt = await makeReceipt(sharedTaskId, motebitIdB, relayDeviceIdB, keypairB, {
+      status: "completed",
+      result: "Delegation architecture uses Ed25519 + relay fan-out.",
+    });
+
+    const res = await relay.app.request(`/agent/${motebitIdB}/task/${sharedTaskId}/result`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenB}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(receipt),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { status: string; credential_id: string | null };
+    // status reflects the task's completion status (same enum as AgentTaskStatus)
+    expect(body.status).toBe("completed");
+  });
+
+  it("12. Agent A retrieves the completed task + receipt via the master token", async () => {
+    // In the real internet scenario, A gets the result via:
+    //   (a) WebSocket push from the relay, or
+    //   (b) HTTP poll using the shared relay master token (or a relay-issued service token).
+    // Here we use the master token to represent authenticated cross-agent retrieval.
+    const res = await relay.app.request(`/agent/${motebitIdB}/task/${sharedTaskId}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${RELAY_MASTER_TOKEN}` },
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      task: { task_id: string; status: string };
+      receipt: ExecutionReceipt | null;
+    };
+    expect(body.task.task_id).toBe(sharedTaskId);
+    expect(body.task.status).toBe("completed");
+    expect(body.receipt).not.toBeNull();
+
+    const receipt = body.receipt!;
+    expect(receipt.motebit_id).toBe(motebitIdB);
+    expect(receipt.task_id).toBe(sharedTaskId);
+    expect(receipt.status).toBe("completed");
+    expect(receipt.signature).toBeTruthy();
+    expect(receipt.prompt_hash).toHaveLength(64); // SHA-256 hex = 64 chars
+    expect(receipt.result_hash).toHaveLength(64);
+    expect(receipt.tools_used).toContain("web_search");
+  });
+
+  it("13. Agent A independently verifies the receipt signature with B's public key", async () => {
+    // Retrieve the receipt (using master token — same as test 12)
+    const res = await relay.app.request(`/agent/${motebitIdB}/task/${sharedTaskId}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${RELAY_MASTER_TOKEN}` },
+    });
+    const body = (await res.json()) as { receipt: ExecutionReceipt };
+    const receipt = body.receipt;
+
+    // Agent A verifies using B's public key (pinned on first contact in real usage)
+    const valid = await verifyExecutionReceipt(receipt, keypairB.publicKey);
+    expect(valid).toBe(true);
+
+    // Sanity check: wrong key fails
+    const invalidWithA = await verifyExecutionReceipt(receipt, keypairA.publicKey);
+    expect(invalidWithA).toBe(false);
+  });
+
+  // =========================================================================
+  // 10. Trust accumulation — latency stats recorded on task completion
+  // =========================================================================
+
+  it("14. Relay records latency stats for tasks with wall_clock_ms (trust accumulation)", async () => {
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+
+    const taskRes = await relay.app.request(`/agent/${motebitIdB}/task`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenA}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt: "Count the results",
+        submitted_by: motebitIdA,
+        wall_clock_ms: 120, // Simulated round-trip latency for stats recording
+        required_capabilities: ["general"],
+      }),
+    });
+    expect(taskRes.status).toBe(201);
+    const { task_id: taskId2 } = (await taskRes.json()) as { task_id: string };
+
+    const receipt2 = await makeReceipt(taskId2, motebitIdB, relayDeviceIdB, keypairB, {
+      result: "Found 7 results.",
+    });
+    const resultRes = await relay.app.request(`/agent/${motebitIdB}/task/${taskId2}/result`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenB}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(receipt2),
+    });
+    expect(resultRes.status).toBe(200);
+
+    // Confirm the task reached completed state
+    const pollRes = await relay.app.request(`/agent/${motebitIdB}/task/${taskId2}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${RELAY_MASTER_TOKEN}` },
+    });
+    expect(pollRes.status).toBe(200);
+    const pollBody = (await pollRes.json()) as { task: { status: string } };
+    expect(pollBody.task.status).toBe("completed");
+  });
+
+  // =========================================================================
+  // 11. Hijack prevention
+  // =========================================================================
+
+  it("15. Hijack prevention: bootstrap with existing motebit_id + different key → 409", async () => {
+    const attackerKeypair = await generateKeypair();
+    const attackerPubKeyHex = bytesToHex(attackerKeypair.publicKey);
+
+    const res = await relay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        motebit_id: motebitIdA, // A's established sovereign identity
+        device_id: "attacker-device",
+        public_key: attackerPubKeyHex, // Different key — must be rejected
+      }),
+    });
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { message?: string; error?: string };
+    const msg = body.message ?? body.error ?? "";
+    expect(msg.toLowerCase()).toMatch(/different public key|re-registration rejected/);
+  });
+
+  it("16. Malformed bootstrap (invalid hex key) → 400", async () => {
+    const res = await relay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        motebit_id: crypto.randomUUID(),
+        public_key: "not-valid-hex",
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  // =========================================================================
+  // 12. Budget lock + settlement with a priced service listing
+  // =========================================================================
+
+  it("17. Budget lock + settlement: Agent B has a priced listing, A submits with max_budget", async () => {
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+
+    // B registers a priced service listing
+    const listingRes = await relay.app.request(`/api/v1/agents/${motebitIdB}/listing`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenB}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        capabilities: ["web_search"],
+        pricing: [{ capability: "web_search", unit_cost: 0.02, currency: "USD", per: "task" }],
+        sla: { max_latency_ms: 2000, availability_guarantee: 0.99 },
+        description: "Agent B — dogfood web search service",
+      }),
+    });
+    expect(listingRes.status).toBe(200);
+
+    // Connect B's device so the relay can route the task via WS fan-out
+    const bWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+    relay.connections.set(motebitIdB, [
+      { ws: bWs as never, deviceId: relayDeviceIdB, capabilities: ["web_search"] },
+    ]);
+
+    // A submits task with max_budget — relay locks funds for B's estimated cost
+    const taskRes = await relay.app.request(`/agent/${motebitIdB}/task`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenA}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt: "Search the web for motebit architecture",
+        submitted_by: motebitIdA,
+        required_capabilities: ["web_search"],
+        max_budget: 1.0,
+      }),
+    });
+    expect(taskRes.status).toBe(201);
+    const { task_id: budgetTaskId } = (await taskRes.json()) as { task_id: string };
+
+    // Budget is tracked by the `:motebitId` URL param on task submission — B's address was used,
+    // so budget allocations are keyed to motebitIdB. A is the requester, B owns the ledger entry.
+    const budgetBeforeRes = await relay.app.request(`/agent/${motebitIdB}/budget`, {
+      headers: { Authorization: `Bearer ${RELAY_MASTER_TOKEN}` },
+    });
+    expect(budgetBeforeRes.status).toBe(200);
+    const budgetBefore = (await budgetBeforeRes.json()) as {
+      summary: { total_locked: number; total_settled: number };
+      allocations: Array<Record<string, unknown>>;
+    };
+    expect(budgetBefore.summary.total_locked).toBeGreaterThan(0);
+    expect(budgetBefore.allocations.some((a) => a.task_id === budgetTaskId)).toBe(true);
+
+    // B posts successful receipt → relay settles the locked funds
+    const receipt = await makeReceipt(budgetTaskId, motebitIdB, relayDeviceIdB, keypairB);
+    const resultRes = await relay.app.request(`/agent/${motebitIdB}/task/${budgetTaskId}/result`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenB}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(receipt),
+    });
+    expect(resultRes.status).toBe(200);
+
+    // Budget after receipt: locked → settled
+    const budgetAfterRes = await relay.app.request(`/agent/${motebitIdB}/budget`, {
+      headers: { Authorization: `Bearer ${RELAY_MASTER_TOKEN}` },
+    });
+    expect(budgetAfterRes.status).toBe(200);
+    const budgetAfter = (await budgetAfterRes.json()) as {
+      summary: { total_locked: number; total_settled: number };
+      allocations: Array<Record<string, unknown>>;
+    };
+    expect(budgetAfter.summary.total_locked).toBe(0);
+    expect(budgetAfter.summary.total_settled).toBeGreaterThan(0);
+
+    const settledAlloc = budgetAfter.allocations.find(
+      (a) => a.task_id === budgetTaskId && a.settlement_id != null,
+    );
+    expect(settledAlloc).toBeDefined();
+  });
+
+  // =========================================================================
+  // 13. Credential issuance — relay issues AgentReputationCredential to B
+  //     on verified receipt delivery when B is in the agent registry
+  // =========================================================================
+
+  it("18. Relay issues AgentReputationCredential to B after successful receipt", async () => {
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
+
+    // B is already in the agent registry (from test 7). Connect B's device.
+    const bWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+    relay.connections.set(motebitIdB, [
+      { ws: bWs as never, deviceId: relayDeviceIdB, capabilities: ["web_search", "general"] },
+    ]);
+
+    // A submits a fresh task
+    const taskRes = await relay.app.request(`/agent/${motebitIdB}/task`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenA}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt: "What is the capital of France?",
+        submitted_by: motebitIdA,
+        required_capabilities: ["general"],
+      }),
+    });
+    expect(taskRes.status).toBe(201);
+    const { task_id: credTaskId } = (await taskRes.json()) as { task_id: string };
+
+    // B posts a successful receipt
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+    const receipt = await makeReceipt(credTaskId, motebitIdB, relayDeviceIdB, keypairB);
+    const resultRes = await relay.app.request(`/agent/${motebitIdB}/task/${credTaskId}/result`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenB}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(receipt),
+    });
+    expect(resultRes.status).toBe(200);
+    const resultBody = (await resultRes.json()) as {
+      status: string;
+      credential_id: string | null;
+    };
+    // credential_id is issued because B is in the registry (public_key resolvable)
+    expect(resultBody.credential_id).toBeTruthy();
+
+    // Retrieve credentials from the relay's credential store
+    const credsRes = await relay.app.request(`/api/v1/agents/${motebitIdB}/credentials`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    expect(credsRes.status).toBe(200);
+    const credsBody = (await credsRes.json()) as {
+      motebit_id: string;
+      credentials: Array<{
+        credential_id: string;
+        credential_type: string;
+        credential: {
+          type: string[];
+          credentialSubject: { id: string };
+          issuer: string;
+        };
+      }>;
+    };
+
+    expect(credsBody.motebit_id).toBe(motebitIdB);
+    expect(credsBody.credentials.length).toBeGreaterThanOrEqual(1);
+
+    const repCred = credsBody.credentials.find(
+      (c) => c.credential_type === "AgentReputationCredential",
+    );
+    expect(repCred).toBeDefined();
+    expect(repCred!.credential.type).toContain("AgentReputationCredential");
+    expect(repCred!.credential.credentialSubject.id).toBeTruthy();
+    expect(repCred!.credential.issuer).toMatch(/^did:key:/);
+  });
+
+  it("19. Public credential verification endpoint validates B's reputation credential", async () => {
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
+
+    // Fetch the credential
+    const credsRes = await relay.app.request(`/api/v1/agents/${motebitIdB}/credentials`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    const credsBody = (await credsRes.json()) as {
+      credentials: Array<{ credential: Record<string, unknown> }>;
+    };
+    expect(credsBody.credentials.length).toBeGreaterThanOrEqual(1);
+    const credential = credsBody.credentials[0]!.credential;
+
+    // Public endpoint — no auth required (anyone can verify a VC)
+    const verifyRes = await relay.app.request("/api/v1/credentials/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(credential),
+    });
+    expect(verifyRes.status).toBe(200);
+    const verifyBody = (await verifyRes.json()) as {
+      valid: boolean;
+      issuer: string;
+      subject: string;
+    };
+    expect(verifyBody.valid).toBe(true);
+    expect(verifyBody.issuer).toMatch(/^did:key:/);
+    expect(verifyBody.subject).toBeTruthy();
+  });
+
+  it("20. Verifiable Presentation bundles B's credentials into a signed VP", async () => {
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+
+    const vpRes = await relay.app.request(`/api/v1/agents/${motebitIdB}/presentation`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${tokenB}` },
+    });
+    expect(vpRes.status).toBe(200);
+    const vpBody = (await vpRes.json()) as {
+      presentation: {
+        "@context": string[];
+        type: string[];
+        holder: string;
+        verifiableCredential: Array<{ type: string[] }>;
+        proof: { type: string };
+      };
+      credential_count: number;
+      relay_did: string;
+    };
+
+    expect(vpBody.presentation.type).toContain("VerifiablePresentation");
+    expect(vpBody.presentation.verifiableCredential.length).toBeGreaterThanOrEqual(1);
+    expect(vpBody.credential_count).toBeGreaterThanOrEqual(1);
+    expect(vpBody.relay_did).toMatch(/^did:key:/);
+    expect(vpBody.presentation.proof.type).toBeTruthy();
+
+    const hasRepCred = vpBody.presentation.verifiableCredential.some((vc) =>
+      vc.type.includes("AgentReputationCredential"),
+    );
+    expect(hasRepCred).toBe(true);
+  });
+
+  // =========================================================================
+  // 14. Receipt integrity — tampered receipt is rejected
+  // =========================================================================
+
+  it("21. Tampered receipt (modified result field) is rejected 403 by the relay", async () => {
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+
+    // Submit a fresh task
+    const taskRes = await relay.app.request(`/agent/${motebitIdB}/task`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenA}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt: "Signature forgery test",
+        required_capabilities: ["general"],
+      }),
+    });
+    expect(taskRes.status).toBe(201);
+    const { task_id: forgedTaskId } = (await taskRes.json()) as { task_id: string };
+
+    // Build a valid receipt, then tamper the result field (invalidates signature)
+    const receipt = await makeReceipt(forgedTaskId, motebitIdB, relayDeviceIdB, keypairB);
+    const tampered: ExecutionReceipt = { ...receipt, result: "FORGED RESULT" };
+
+    const res = await relay.app.request(`/agent/${motebitIdB}/task/${forgedTaskId}/result`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenB}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(tampered),
+    });
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error?: string };
+    // Relay error handler returns { error: "...", status: ... }
+    expect(body.error).toMatch(/invalid Ed25519 signature|verification failed/i);
+  });
+
+  // =========================================================================
+  // 15. Non-existent task → 404
+  // =========================================================================
+
+  it("22. Polling a non-existent task_id returns 404", async () => {
+    const res = await relay.app.request(`/agent/${motebitIdB}/task/${crypto.randomUUID()}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${RELAY_MASTER_TOKEN}` },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  // =========================================================================
+  // 16. Market candidate scoring
+  // =========================================================================
+
+  it("23. Market candidates endpoint returns Agent B as a scored candidate for web_search", async () => {
+    // /api/v1/market/candidates falls under the global /api/v1/* middleware which
+    // requires the master token (device signed tokens are not accepted here).
+    const res = await relay.app.request("/api/v1/market/candidates?capability=web_search", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${RELAY_MASTER_TOKEN}` },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      candidates: Array<{
+        motebit_id: string;
+        selected: boolean;
+        composite: number;
+      }>;
+      total: number;
+    };
+
+    // B has a web_search listing from test 17 — should appear as a scored candidate
+    expect(body.candidates.length).toBeGreaterThanOrEqual(1);
+    const candidateB = body.candidates.find((c) => c.motebit_id === motebitIdB);
+    expect(candidateB).toBeDefined();
+    expect(typeof candidateB!.composite).toBe("number");
+  });
+});

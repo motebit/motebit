@@ -101,6 +101,9 @@ Available commands:
   /discover [cap]    Discover agents on the relay (optional capability filter)
   /discover dom.com  Discover motebit at domain via DNS/well-known
   /delegate <id> <prompt>  Delegate a task to another motebit via the relay
+  /propose <ids> <goal>  Propose a collaborative plan to comma-separated motebit IDs
+  /proposals         List active proposals (sent and received)
+  /proposal <id> [accept|reject|counter]  View or respond to a proposal
   /operator          Show operator mode status
   quit, exit         Exit
 `.trim(),
@@ -1194,6 +1197,412 @@ Available commands:
         console.log(`Trust: ${prevLevel} \u2192 ${newLevel}`);
       } else {
         console.log(`Trust: ${prevLevel}`);
+      }
+      break;
+    }
+
+    case "propose": {
+      if (!repl) {
+        console.log("Propose not available in this context.");
+        break;
+      }
+
+      // Parse: /propose <id1,id2,...> <goal text>
+      const proposeSpaceIdx = args.indexOf(" ");
+      if (proposeSpaceIdx === -1 || !args.trim()) {
+        console.log('Usage: /propose <motebit-id,...> "<goal>"');
+        break;
+      }
+      const rawParticipantIds = args.slice(0, proposeSpaceIdx).trim();
+      const proposalGoal = args.slice(proposeSpaceIdx + 1).trim();
+      if (!rawParticipantIds || !proposalGoal) {
+        console.log('Usage: /propose <motebit-id,...> "<goal>"');
+        break;
+      }
+
+      const participantIds = rawParticipantIds
+        .split(",")
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0);
+      if (participantIds.length === 0) {
+        console.log("Error: no participant IDs provided.");
+        break;
+      }
+
+      const proposeSyncUrl =
+        config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? "https://motebit-sync.fly.dev";
+
+      // Build signed auth token
+      let proposeAuthHeader: string | undefined;
+      if (repl.privateKeyBytes && repl.deviceId) {
+        try {
+          const now = Date.now();
+          const signedToken = await createSignedToken(
+            { mid: repl.motebitId, did: repl.deviceId, iat: now, exp: now + 5 * 60 * 1000 },
+            repl.privateKeyBytes,
+          );
+          proposeAuthHeader = `Bearer ${signedToken}`;
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.log(`Failed to create signed token: ${message}`);
+          break;
+        }
+      } else {
+        const syncToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+        if (syncToken) proposeAuthHeader = `Bearer ${syncToken}`;
+      }
+
+      const proposeHeaders: Record<string, string> = { "Content-Type": "application/json" };
+      if (proposeAuthHeader) proposeHeaders["Authorization"] = proposeAuthHeader;
+
+      // Simple decomposition: distribute goal steps round-robin across participants.
+      // Each participant gets a step: research, implementation, verification, etc.
+      const stepTemplates = [
+        {
+          description: "Research and plan approach",
+          prompt: `Research the best approach for: ${proposalGoal}`,
+        },
+        {
+          description: "Implement core functionality",
+          prompt: `Implement the core functionality for: ${proposalGoal}`,
+        },
+        {
+          description: "Verify and integrate results",
+          prompt: `Verify and integrate all results for: ${proposalGoal}`,
+        },
+      ];
+
+      // Generate as many steps as participants (one step per participant, min 2 steps)
+      const numSteps = Math.max(participantIds.length, 2);
+      const steps = Array.from({ length: numSteps }, (_, i) => {
+        const template = stepTemplates[i % stepTemplates.length] ?? stepTemplates[0]!;
+        const assignedId = participantIds[i % participantIds.length]!;
+        return {
+          description: template.description,
+          prompt: template.prompt,
+          assigned_motebit_id: assignedId,
+          ordinal: i,
+        };
+      });
+
+      // Build participants list with assigned step ordinals
+      const participantsPayload = participantIds.map((id) => ({
+        motebit_id: id,
+        assigned_steps: steps.filter((s) => s.assigned_motebit_id === id).map((s) => s.ordinal),
+      }));
+
+      const proposalId = crypto.randomUUID();
+      const planId = crypto.randomUUID();
+      const expiresAt = Date.now() + 60 * 60 * 1000; // 1 hour
+
+      try {
+        const resp = await fetch(`${proposeSyncUrl}/api/v1/proposals`, {
+          method: "POST",
+          headers: proposeHeaders,
+          body: JSON.stringify({
+            proposal_id: proposalId,
+            plan_id: planId,
+            initiator_motebit_id: repl.motebitId,
+            participants: participantsPayload,
+            plan_snapshot: { goal: proposalGoal, steps },
+            expires_at: expiresAt,
+          }),
+        });
+        if (!resp.ok) {
+          const text = await resp.text();
+          console.log(`Proposal submission failed (${resp.status}): ${text}`);
+          break;
+        }
+        const data = (await resp.json()) as { proposal_id: string; status: string };
+        console.log(
+          `Proposal ${data.proposal_id.slice(0, 12)}... sent to ${participantIds.length} agent(s). Waiting for responses...`,
+        );
+        console.log(`  Goal: ${proposalGoal}`);
+        console.log(
+          `  Steps: ${steps.length} (distributed across ${participantIds.length} participants)`,
+        );
+        console.log(`  Expires: ${new Date(expiresAt).toISOString()}`);
+        console.log(`  Use /proposal ${data.proposal_id.slice(0, 8)} to check status.`);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.log(`Proposal error: ${message}`);
+      }
+      break;
+    }
+
+    case "proposals": {
+      if (!repl) {
+        console.log("Proposals not available in this context.");
+        break;
+      }
+
+      const proposalsSyncUrl =
+        config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? "https://motebit-sync.fly.dev";
+
+      let proposalsAuthHeader: string | undefined;
+      if (repl.privateKeyBytes && repl.deviceId) {
+        try {
+          const now = Date.now();
+          const signedToken = await createSignedToken(
+            { mid: repl.motebitId, did: repl.deviceId, iat: now, exp: now + 5 * 60 * 1000 },
+            repl.privateKeyBytes,
+          );
+          proposalsAuthHeader = `Bearer ${signedToken}`;
+        } catch {
+          // Fall back to static token
+        }
+      }
+      if (!proposalsAuthHeader) {
+        const syncToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+        if (syncToken) proposalsAuthHeader = `Bearer ${syncToken}`;
+      }
+
+      const proposalsHeaders: Record<string, string> = {};
+      if (proposalsAuthHeader) proposalsHeaders["Authorization"] = proposalsAuthHeader;
+
+      try {
+        const resp = await fetch(`${proposalsSyncUrl}/api/v1/proposals`, {
+          headers: proposalsHeaders,
+        });
+        if (!resp.ok) {
+          console.log(`Failed to fetch proposals (${resp.status})`);
+          break;
+        }
+        const data = (await resp.json()) as {
+          proposals: Array<{
+            proposal_id: string;
+            plan_id: string;
+            initiator_motebit_id: string;
+            status: string;
+            created_at: number;
+            expires_at: number;
+          }>;
+        };
+
+        if (data.proposals.length === 0) {
+          console.log("No active proposals.");
+          break;
+        }
+
+        console.log(`\nProposals (${data.proposals.length}):\n`);
+        console.log(
+          `${"ID".padEnd(12)}  ${"STATUS".padEnd(10)}  ${"ROLE".padEnd(10)}  ${"CREATED".padEnd(24)}`,
+        );
+        console.log("-".repeat(62));
+        for (const p of data.proposals) {
+          const idPrefix = p.proposal_id.slice(0, 10);
+          const role = p.initiator_motebit_id === repl.motebitId ? "initiator" : "participant";
+          const created = new Date(p.created_at).toISOString().slice(0, 19).replace("T", " ");
+          console.log(`${idPrefix}..  ${p.status.padEnd(10)}  ${role.padEnd(10)}  ${created}`);
+        }
+        console.log("\nUse /proposal <id> to view details or respond.");
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.log(`Proposals error: ${message}`);
+      }
+      break;
+    }
+
+    case "proposal": {
+      if (!repl) {
+        console.log("Proposal not available in this context.");
+        break;
+      }
+
+      const proposalArgParts = args.trim().split(/\s+/);
+      const proposalId = proposalArgParts[0];
+      const proposalAction = proposalArgParts[1]; // accept | reject | counter | undefined
+
+      if (!proposalId) {
+        console.log("Usage: /proposal <id> [accept|reject|counter]");
+        break;
+      }
+
+      const proposalSyncUrl =
+        config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? "https://motebit-sync.fly.dev";
+
+      let proposalAuthHeader: string | undefined;
+      if (repl.privateKeyBytes && repl.deviceId) {
+        try {
+          const now = Date.now();
+          const signedToken = await createSignedToken(
+            { mid: repl.motebitId, did: repl.deviceId, iat: now, exp: now + 5 * 60 * 1000 },
+            repl.privateKeyBytes,
+          );
+          proposalAuthHeader = `Bearer ${signedToken}`;
+        } catch {
+          // Fall back to static token
+        }
+      }
+      if (!proposalAuthHeader) {
+        const syncToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+        if (syncToken) proposalAuthHeader = `Bearer ${syncToken}`;
+      }
+
+      const proposalHeaders: Record<string, string> = { "Content-Type": "application/json" };
+      if (proposalAuthHeader) proposalHeaders["Authorization"] = proposalAuthHeader;
+
+      // First, fetch the proposal details
+      type ProposalDetail = {
+        proposal_id: string;
+        plan_id: string;
+        initiator_motebit_id: string;
+        status: string;
+        plan_snapshot: unknown;
+        created_at: number;
+        expires_at: number;
+        updated_at: number;
+        participants: Array<{
+          motebit_id: string;
+          assigned_steps: number[];
+          response: string | null;
+          responded_at: number | null;
+        }>;
+      };
+      let proposalData: ProposalDetail | null = null;
+
+      try {
+        const resp = await fetch(`${proposalSyncUrl}/api/v1/proposals/${proposalId}`, {
+          headers: proposalHeaders,
+        });
+        if (!resp.ok) {
+          if (resp.status === 404) {
+            // Try prefix match by listing proposals
+            const listResp = await fetch(`${proposalSyncUrl}/api/v1/proposals`, {
+              headers: proposalHeaders,
+            });
+            if (listResp.ok) {
+              const listData = (await listResp.json()) as {
+                proposals: Array<{ proposal_id: string }>;
+              };
+              const match = listData.proposals.find((p) => p.proposal_id.startsWith(proposalId));
+              if (match) {
+                const fullResp = await fetch(
+                  `${proposalSyncUrl}/api/v1/proposals/${match.proposal_id}`,
+                  { headers: proposalHeaders },
+                );
+                if (fullResp.ok) {
+                  proposalData = (await fullResp.json()) as ProposalDetail;
+                }
+              }
+            }
+            if (!proposalData) {
+              console.log(`Proposal not found: ${proposalId}`);
+              break;
+            }
+          } else {
+            console.log(`Failed to fetch proposal (${resp.status})`);
+            break;
+          }
+        } else {
+          proposalData = (await resp.json()) as ProposalDetail;
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.log(`Proposal fetch error: ${message}`);
+        break;
+      }
+
+      if (!proposalData) break;
+
+      // No action — display details
+      if (!proposalAction) {
+        const isInitiator = proposalData.initiator_motebit_id === repl.motebitId;
+        console.log(`\nProposal: ${proposalData.proposal_id.slice(0, 12)}...`);
+        console.log(`  Status:    ${proposalData.status}`);
+        console.log(`  Role:      ${isInitiator ? "initiator" : "participant"}`);
+        console.log(`  Initiator: ${proposalData.initiator_motebit_id.slice(0, 12)}...`);
+        console.log(`  Created:   ${new Date(proposalData.created_at).toISOString()}`);
+        console.log(`  Expires:   ${new Date(proposalData.expires_at).toISOString()}`);
+
+        const snapshot = proposalData.plan_snapshot as Record<string, unknown> | null;
+        if (snapshot?.goal) {
+          console.log(`  Goal:      ${String(snapshot.goal)}`);
+        }
+
+        if (proposalData.participants.length > 0) {
+          console.log(`\n  Participants (${proposalData.participants.length}):`);
+          for (const p of proposalData.participants) {
+            const steps = p.assigned_steps.join(", ") || "none";
+            const response = p.response ?? "pending";
+            console.log(
+              `    ${p.motebit_id.slice(0, 12)}...  steps=[${steps}]  response=${response}`,
+            );
+          }
+        }
+
+        const myParticipant = proposalData.participants.find(
+          (p) => p.motebit_id === repl.motebitId,
+        );
+        if (myParticipant && !myParticipant.response && proposalData.status === "pending") {
+          console.log("\n  You have not responded. Use:");
+          console.log(`    /proposal ${proposalId} accept`);
+          console.log(`    /proposal ${proposalId} reject`);
+          console.log(`    /proposal ${proposalId} counter`);
+        }
+        break;
+      }
+
+      // Respond to proposal
+      const validActions = ["accept", "reject", "counter"] as const;
+      type ValidAction = (typeof validActions)[number];
+      if (!validActions.includes(proposalAction as ValidAction)) {
+        console.log("Action must be: accept, reject, or counter");
+        break;
+      }
+
+      const responseMap: Record<ValidAction, string> = {
+        accept: "accept",
+        reject: "reject",
+        counter: "counter",
+      };
+
+      const responseBody: {
+        responder_motebit_id: string;
+        response: string;
+        counter_steps?: Array<{ ordinal: number; reason: string; description?: string }>;
+      } = {
+        responder_motebit_id: repl.motebitId,
+        response: responseMap[proposalAction as ValidAction],
+      };
+
+      if (proposalAction === "counter") {
+        // Simple counter: suggest all steps be assigned to caller
+        responseBody.counter_steps = [
+          {
+            ordinal: 0,
+            reason: "Prefer to handle all steps locally",
+            description: "Revised step assignment",
+          },
+        ];
+        console.log("Sending counter-proposal (all steps assigned to you)...");
+      }
+
+      try {
+        const respondResp = await fetch(
+          `${proposalSyncUrl}/api/v1/proposals/${proposalData.proposal_id}/respond`,
+          {
+            method: "POST",
+            headers: proposalHeaders,
+            body: JSON.stringify(responseBody),
+          },
+        );
+        if (!respondResp.ok) {
+          const text = await respondResp.text();
+          console.log(`Response failed (${respondResp.status}): ${text}`);
+          break;
+        }
+        const respondData = (await respondResp.json()) as {
+          status: string;
+          all_responded: boolean;
+        };
+        console.log(`Responded: ${proposalAction}. Proposal status: ${respondData.status}`);
+        if (respondData.all_responded) {
+          console.log("All participants have responded.");
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.log(`Response error: ${message}`);
       }
       break;
     }

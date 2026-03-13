@@ -249,10 +249,43 @@ export async function handleRun(config: CliConfig): Promise<void> {
       localStore: moteDb.eventStore,
     });
 
-    // Handle agent task requests
+    // Handle agent task requests and proposal events
     if (privKeyBytes) {
       const privateKey = privKeyBytes;
       wsAdapter.onCustomMessage((msg) => {
+        // Proposal fan-out events
+        if (msg.type === "proposal") {
+          const proposalId = (msg.proposal_id as string | undefined)?.slice(0, 12) ?? "?";
+          const initiator = (msg.initiator_motebit_id as string | undefined)?.slice(0, 12) ?? "?";
+          console.log(
+            `\nIncoming proposal ${proposalId}... from ${initiator}...: Use /proposal ${proposalId} to view or respond.`,
+          );
+          return;
+        }
+        if (msg.type === "proposal_response") {
+          const proposalId = (msg.proposal_id as string | undefined)?.slice(0, 12) ?? "?";
+          const responder = (msg.responder_motebit_id as string | undefined)?.slice(0, 12) ?? "?";
+          const response = (msg.response as string | undefined) ?? "?";
+          console.log(`\nProposal ${proposalId}... response from ${responder}...: ${response}`);
+          return;
+        }
+        if (msg.type === "proposal_finalized") {
+          const proposalId = (msg.proposal_id as string | undefined)?.slice(0, 12) ?? "?";
+          const status = (msg.status as string | undefined) ?? "?";
+          console.log(`\nProposal ${proposalId}... finalized: ${status}`);
+          return;
+        }
+        if (msg.type === "collaborative_step_result") {
+          const proposalId = (msg.proposal_id as string | undefined)?.slice(0, 12) ?? "?";
+          const stepId = (msg.step_id as string | undefined)?.slice(0, 8) ?? "?";
+          const stepStatus = (msg.status as string | undefined) ?? "?";
+          const contributor = (msg.motebit_id as string | undefined)?.slice(0, 12) ?? "?";
+          console.log(
+            `\nCollaborative step ${stepId}... (proposal ${proposalId}...) ${stepStatus} by ${contributor}...`,
+          );
+          return;
+        }
+
         if (msg.type === "task_request" && msg.task) {
           const task = msg.task as AgentTask;
 
