@@ -798,11 +798,17 @@ export class MotebitRuntime {
    * Create and execute a plan for a goal prompt.
    * Decomposes the goal into steps, then executes each step sequentially,
    * streaming PlanChunk events for progress tracking.
+   *
+   * After execution completes, a signed `GoalExecutionManifest` is built from
+   * the accumulated timeline. Retrieve it with `getLastExecutionManifest()`.
+   * If `privateKey` is provided, the manifest is Ed25519-signed per the
+   * execution-ledger@1.0 spec.
    */
   async *executePlan(
     goalId: string,
     goalPrompt: string,
     runId?: string,
+    privateKey?: Uint8Array,
   ): AsyncGenerator<PlanChunk> {
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
 
@@ -820,6 +826,9 @@ export class MotebitRuntime {
       this.loopDeps,
     );
 
+    const executionStartedAt = Date.now();
+    let finalStatus: GoalExecutionManifest["status"] = "active";
+
     for await (const chunk of this.planEngine.executePlan(
       plan.plan_id,
       this.loopDeps,
@@ -827,8 +836,164 @@ export class MotebitRuntime {
       runId,
     )) {
       this._logPlanChunkEvent(chunk, goalId);
+      if (chunk.type === "plan_completed") finalStatus = "completed";
+      else if (chunk.type === "plan_failed") finalStatus = "failed";
       yield chunk;
     }
+
+    // Build execution manifest from PlanEngine timeline + tool audit data
+    try {
+      this._lastExecutionManifest = await this._buildLiveManifest(
+        goalId,
+        plan.plan_id,
+        executionStartedAt,
+        finalStatus,
+        privateKey,
+      );
+    } catch {
+      // Manifest construction failure should never break the goal flow
+    }
+  }
+
+  private _lastExecutionManifest: GoalExecutionManifest | null = null;
+
+  /**
+   * Return the execution manifest produced by the last `executePlan()` call.
+   * Returns null if no execution has completed or manifest construction failed.
+   */
+  getLastExecutionManifest(): GoalExecutionManifest | null {
+    return this._lastExecutionManifest;
+  }
+
+  /**
+   * Build a signed GoalExecutionManifest from the PlanEngine's accumulated
+   * timeline, augmented with tool audit data (args hashes, call IDs, durations).
+   */
+  private async _buildLiveManifest(
+    goalId: string,
+    planId: string,
+    startedAt: number,
+    status: GoalExecutionManifest["status"],
+    privateKey?: Uint8Array,
+  ): Promise<GoalExecutionManifest> {
+    // 1. Collect structural timeline from PlanEngine
+    const timeline: ExecutionTimelineEntry[] = [];
+
+    // goal_started
+    timeline.push({
+      timestamp: startedAt,
+      type: "goal_started",
+      payload: { goal_id: goalId },
+    });
+
+    // Plan engine timeline (plan_created, step events, plan outcome)
+    const engineTimeline = this.planEngine.takeTimeline();
+
+    // 2. Augment tool events with audit data (args_hash, call_id, precise ok/duration)
+    const toolEntries: ToolAuditEntry[] = [];
+    if (this.toolAuditSink?.queryByRunId != null) {
+      toolEntries.push(...this.toolAuditSink.queryByRunId(planId));
+    }
+
+    // Build a map from tool audit entries keyed by approximate timestamp + tool name
+    // to match with PlanEngine's tool_invoked/tool_result events
+    let auditIndex = 0;
+    for (const entry of engineTimeline) {
+      if (entry.type === "tool_invoked") {
+        // Try to match with an audit entry
+        const auditEntry = toolEntries[auditIndex];
+        if (auditEntry && auditEntry.decision.allowed) {
+          const argsHash = await this._hashString(
+            JSON.stringify(auditEntry.args, Object.keys(auditEntry.args).sort()),
+          );
+          entry.payload = {
+            tool: auditEntry.tool,
+            args_hash: argsHash,
+            call_id: auditEntry.callId,
+          };
+        }
+      } else if (entry.type === "tool_result") {
+        const auditEntry = toolEntries[auditIndex];
+        if (auditEntry && auditEntry.decision.allowed && auditEntry.result) {
+          entry.payload = {
+            tool: auditEntry.tool,
+            ok: auditEntry.result.ok,
+            duration_ms: auditEntry.result.durationMs,
+            call_id: auditEntry.callId,
+          };
+          auditIndex++;
+        } else if (auditEntry) {
+          auditIndex++;
+        }
+      }
+      timeline.push(entry);
+    }
+
+    // goal_completed
+    const completedAt = Date.now();
+    timeline.push({
+      timestamp: completedAt,
+      type: "goal_completed",
+      payload: { goal_id: goalId, status },
+    });
+
+    // 3. Build step summaries from the plan store
+    const steps = this.planStore.getStepsForPlan(planId);
+    const stepSummaries: ExecutionStepSummary[] = steps.map((s) => {
+      const stepToolEntries = toolEntries.filter((t) => {
+        if (s.started_at == null) return false;
+        const end = s.completed_at ?? Infinity;
+        return t.timestamp >= s.started_at && t.timestamp <= end;
+      });
+      const uniqueTools = [...new Set(stepToolEntries.map((t) => t.tool))];
+
+      const summary: ExecutionStepSummary = {
+        step_id: s.step_id,
+        ordinal: s.ordinal,
+        description: s.description,
+        status: s.status,
+        tools_used: uniqueTools,
+        tool_calls: s.tool_calls_made,
+        started_at: s.started_at,
+        completed_at: s.completed_at,
+      };
+
+      if (s.delegation_task_id) {
+        summary.delegation = {
+          task_id: s.delegation_task_id,
+        };
+      }
+
+      return summary;
+    });
+
+    // 4. Compute content hash
+    const contentHash = await this._computeTimelineHash(timeline);
+
+    // 5. Assemble manifest
+    const manifest: GoalExecutionManifest = {
+      spec: "motebit/execution-ledger@1.0",
+      motebit_id: this.motebitId,
+      goal_id: goalId,
+      plan_id: planId,
+      started_at: startedAt,
+      completed_at: completedAt,
+      status,
+      timeline,
+      steps: stepSummaries,
+      delegation_receipts: [],
+      content_hash: contentHash,
+    };
+
+    // 6. Sign if private key provided
+    if (privateKey) {
+      const { sign, toBase64Url, hexToBytes } = await import("@motebit/crypto");
+      const hashBytes = hexToBytes(contentHash);
+      const sig = await sign(hashBytes, privateKey);
+      manifest.signature = toBase64Url(sig);
+    }
+
+    return manifest;
   }
 
   /**

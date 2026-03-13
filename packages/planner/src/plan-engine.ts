@@ -1,5 +1,11 @@
 import { PlanStatus, StepStatus } from "@motebit/sdk";
-import type { Plan, PlanStep, DeviceCapability, DelegatedStepResult } from "@motebit/sdk";
+import type {
+  Plan,
+  PlanStep,
+  DeviceCapability,
+  DelegatedStepResult,
+  ExecutionTimelineEntry,
+} from "@motebit/sdk";
 import type { MotebitLoopDependencies, AgenticChunk } from "@motebit/ai-core";
 import { runTurnStreaming } from "@motebit/ai-core";
 import type { PlanStoreAdapter } from "./types.js";
@@ -49,11 +55,29 @@ export interface PlanEngineConfig {
 
 export class PlanEngine {
   private _isExecuting = false;
+  private _timeline: ExecutionTimelineEntry[] = [];
 
   constructor(
     private store: PlanStoreAdapter,
     private config: PlanEngineConfig = {},
   ) {}
+
+  /**
+   * Return the accumulated timeline from the last execution and reset.
+   * Call this after an executePlan/resumePlan generator is fully consumed.
+   */
+  takeTimeline(): ExecutionTimelineEntry[] {
+    const timeline = this._timeline;
+    this._timeline = [];
+    return timeline;
+  }
+
+  private _pushTimelineEvent(
+    type: ExecutionTimelineEntry["type"],
+    payload: Record<string, unknown>,
+  ): void {
+    this._timeline.push({ timestamp: Date.now(), type, payload });
+  }
 
   get isExecuting(): boolean {
     return this._isExecuting;
@@ -129,10 +153,19 @@ export class PlanEngine {
     ctx?: DecompositionContext,
     runId?: string,
   ): AsyncGenerator<PlanChunk> {
+    // Reset timeline for this execution
+    this._timeline = [];
+
     const plan = this.store.getPlan(planId);
     if (!plan) throw new Error(`Plan not found: ${planId}`);
 
     const steps = this.store.getStepsForPlan(planId);
+
+    this._pushTimelineEvent("plan_created", {
+      plan_id: plan.plan_id,
+      title: plan.title,
+      total_steps: steps.length,
+    });
 
     yield { type: "plan_created", plan, steps };
 
@@ -205,6 +238,7 @@ export class PlanEngine {
           // Required step with unmet deps — fail plan
           const reason = `Unmet dependencies for step ${step.ordinal + 1}`;
           this.failPlan(plan, reason);
+          this._pushTimelineEvent("plan_failed", { plan_id: plan.plan_id, reason });
           yield { type: "plan_failed", plan: this.store.getPlan(plan.plan_id)!, reason };
           return;
         }
@@ -226,6 +260,12 @@ export class PlanEngine {
               updated_at: Date.now(),
             });
             const failedStep = this.store.getStep(step.step_id)!;
+            this._pushTimelineEvent("step_failed", {
+              plan_id: plan.plan_id,
+              step_id: step.step_id,
+              ordinal: step.ordinal,
+              error: failedStep.error_message!,
+            });
             yield { type: "step_failed", step: failedStep, error: failedStep.error_message! };
 
             if (!step.optional) {
@@ -233,6 +273,10 @@ export class PlanEngine {
                 plan,
                 `Required step ${step.ordinal + 1} requires [${capsStr}] not available locally`,
               );
+              this._pushTimelineEvent("plan_failed", {
+                plan_id: plan.plan_id,
+                reason: failedStep.error_message!,
+              });
               yield {
                 type: "plan_failed",
                 plan: this.store.getPlan(plan.plan_id)!,
@@ -256,6 +300,12 @@ export class PlanEngine {
           });
           this.store.updatePlan(plan.plan_id, { current_step_index: i, updated_at: startedAt });
           const updatedStep = this.store.getStep(step.step_id)!;
+          this._pushTimelineEvent("step_started", {
+            plan_id: plan.plan_id,
+            step_id: step.step_id,
+            ordinal: step.ordinal,
+            description: step.description,
+          });
           yield { type: "step_started", step: updatedStep };
 
           try {
@@ -282,6 +332,18 @@ export class PlanEngine {
             completedResults.push(`[Step ${step.ordinal + 1}: ${step.description}]\n${summary}`);
 
             const completedStep = this.store.getStep(step.step_id)!;
+            this._pushTimelineEvent("step_delegated", {
+              plan_id: plan.plan_id,
+              step_id: step.step_id,
+              ordinal: step.ordinal,
+              task_id: delegationResult.task_id,
+            });
+            this._pushTimelineEvent("step_completed", {
+              plan_id: plan.plan_id,
+              step_id: step.step_id,
+              ordinal: step.ordinal,
+              tool_calls_made: 0,
+            });
             yield {
               type: "step_delegated",
               step: completedStep,
@@ -297,10 +359,20 @@ export class PlanEngine {
               updated_at: Date.now(),
             });
             const failedStep = this.store.getStep(step.step_id)!;
+            this._pushTimelineEvent("step_failed", {
+              plan_id: plan.plan_id,
+              step_id: step.step_id,
+              ordinal: step.ordinal,
+              error: errMsg,
+            });
             yield { type: "step_failed", step: failedStep, error: errMsg };
 
             if (!step.optional) {
               this.failPlan(plan, `Delegated step ${step.ordinal + 1} failed: ${errMsg}`);
+              this._pushTimelineEvent("plan_failed", {
+                plan_id: plan.plan_id,
+                reason: errMsg,
+              });
               yield {
                 type: "plan_failed",
                 plan: this.store.getPlan(plan.plan_id)!,
@@ -338,6 +410,12 @@ export class PlanEngine {
           });
 
           const updatedStep = this.store.getStep(step.step_id)!;
+          this._pushTimelineEvent("step_started", {
+            plan_id: plan.plan_id,
+            step_id: step.step_id,
+            ordinal: step.ordinal,
+            description: step.description,
+          });
           yield { type: "step_started", step: updatedStep };
 
           try {
@@ -362,6 +440,12 @@ export class PlanEngine {
             completedResults.push(`[Step ${step.ordinal + 1}: ${step.description}]\n${summary}`);
 
             const completedStep = this.store.getStep(step.step_id)!;
+            this._pushTimelineEvent("step_completed", {
+              plan_id: plan.plan_id,
+              step_id: step.step_id,
+              ordinal: step.ordinal,
+              tool_calls_made: result.toolCallsMade,
+            });
             yield { type: "step_completed", step: completedStep };
             stepSucceeded = true;
             break;
@@ -382,6 +466,12 @@ export class PlanEngine {
           });
 
           const failedStep = this.store.getStep(step.step_id)!;
+          this._pushTimelineEvent("step_failed", {
+            plan_id: plan.plan_id,
+            step_id: step.step_id,
+            ordinal: step.ordinal,
+            error: lastError,
+          });
           yield { type: "step_failed", step: failedStep, error: lastError };
 
           if (!step.optional) {
@@ -427,6 +517,10 @@ export class PlanEngine {
               }
             }
 
+            this._pushTimelineEvent("plan_failed", {
+              plan_id: plan.plan_id,
+              reason: lastError,
+            });
             yield { type: "plan_failed", plan: failedPlan, reason: lastError };
             return;
           }
@@ -445,6 +539,7 @@ export class PlanEngine {
         updated_at: Date.now(),
       });
       const completedPlan = this.store.getPlan(plan.plan_id)!;
+      this._pushTimelineEvent("plan_completed", { plan_id: plan.plan_id });
       yield { type: "plan_completed", plan: completedPlan };
 
       // Post-execution reflection
@@ -531,13 +626,36 @@ export class PlanEngine {
 
     let responseText = "";
     let toolCallsMade = 0;
+    // Track in-flight tool calls for timeline events
+    const toolStartTimes = new Map<string, number>();
 
     for await (const chunk of stream) {
       if (chunk.type === "text") {
         responseText += chunk.text;
       }
-      if (chunk.type === "tool_status" && chunk.status === "calling") {
-        toolCallsMade++;
+      if (chunk.type === "tool_status") {
+        if (chunk.status === "calling") {
+          toolCallsMade++;
+          toolStartTimes.set(chunk.name, Date.now());
+          this._pushTimelineEvent("tool_invoked", {
+            tool: chunk.name,
+            args_hash: "", // args not available from stream — populated by runtime from audit sink
+            call_id: "",
+          });
+        } else if (chunk.status === "done") {
+          const startTime = toolStartTimes.get(chunk.name);
+          const durationMs = startTime != null ? Date.now() - startTime : 0;
+          toolStartTimes.delete(chunk.name);
+          this._pushTimelineEvent("tool_result", {
+            tool: chunk.name,
+            ok:
+              chunk.result == null ||
+              typeof chunk.result !== "string" ||
+              !chunk.result.startsWith("Error"),
+            duration_ms: durationMs,
+            call_id: "",
+          });
+        }
       }
       if (chunk.type === "approval_request") {
         yield { type: "approval_request", step, chunk };
