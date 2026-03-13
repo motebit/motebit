@@ -1083,6 +1083,12 @@ importers:
         specifier: '>=4.12.4'
         version: 4.12.7
     devDependencies:
+      '@motebit/ai-core':
+        specifier: workspace:*
+        version: link:../../packages/ai-core
+      '@motebit/planner':
+        specifier: workspace:*
+        version: link:../../packages/planner
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.11
