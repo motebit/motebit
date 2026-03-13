@@ -15,14 +15,13 @@ export default defineConfig({
       ],
     }),
   ],
-  optimizeDeps: {
-    exclude: ["@motebit/mcp-client"], // Node-only (stdio/child_process), cannot run in webview
-  },
   build: {
     target: "esnext",
     outDir: "dist",
     rollupOptions: {
-      external: ["@motebit/mcp-client"],
+      // Only externalize Node-specific MCP SDK transports (stdio uses node:stream/child_process).
+      // The HTTP transport and Client class are browser-safe (webview-compatible).
+      external: ["@modelcontextprotocol/sdk/client/stdio.js", "cross-spawn", /^node:/],
     },
   },
   server: {
