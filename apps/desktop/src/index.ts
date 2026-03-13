@@ -29,7 +29,7 @@ import {
 } from "@motebit/ai-core";
 export type { OllamaDetectionResult } from "@motebit/ai-core";
 import type { ToolAuditEntry, MemoryNode, MemoryEdge } from "@motebit/sdk";
-import { EventType, SensitivityLevel } from "@motebit/sdk";
+import { EventType, SensitivityLevel, DeviceCapability } from "@motebit/sdk";
 import { InMemoryEventStore, type EventStoreAdapter } from "@motebit/event-log";
 import { InMemoryMemoryStorage, computeDecayedConfidence, embedText } from "@motebit/memory-graph";
 import {
@@ -699,6 +699,15 @@ export class DesktopApp {
       },
       { storage, renderer: this.renderer, ai: provider, keyring },
     );
+
+    // Advertise full desktop capabilities
+    this.runtime.setLocalCapabilities([
+      DeviceCapability.StdioMcp,
+      DeviceCapability.HttpMcp,
+      DeviceCapability.FileSystem,
+      DeviceCapability.Keyring,
+      DeviceCapability.Background,
+    ]);
 
     // Create PlanEngine for multi-step goal execution
     if (config.isTauri && config.invoke) {
@@ -2580,10 +2589,19 @@ export class DesktopApp {
       this.motebitId;
 
     const localEventStore = this._localEventStore;
+    const desktopCapabilities = [
+      DeviceCapability.StdioMcp,
+      DeviceCapability.HttpMcp,
+      DeviceCapability.FileSystem,
+      DeviceCapability.Keyring,
+      DeviceCapability.Background,
+    ];
+
     const wsAdapter = new WebSocketEventStoreAdapter({
       url: wsUrl,
       motebitId: this.motebitId,
       authToken: token,
+      capabilities: desktopCapabilities,
       httpFallback: encryptedHttp,
       localStore: localEventStore ?? undefined,
       onCatchUp: (pulled) => {
@@ -2645,6 +2663,7 @@ export class DesktopApp {
             url: wsUrl,
             motebitId: this.motebitId,
             authToken: freshToken,
+            capabilities: desktopCapabilities,
             httpFallback: encryptedHttp,
             localStore: localEventStore ?? undefined,
           });

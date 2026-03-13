@@ -6,6 +6,8 @@ export interface WebSocketAdapterConfig {
   url: string;
   motebitId: string;
   authToken?: string;
+  /** Device capabilities to advertise on connect. */
+  capabilities?: string[];
   /** Reconnect delay base (ms). Doubles on each retry. */
   reconnectBaseMs?: number;
   /** Max reconnect delay (ms). */
@@ -36,9 +38,9 @@ export type CustomMessageCallback = (msg: { type: string; [key: string]: unknown
 export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   private ws: WebSocket | null = null;
   private config: Required<
-    Omit<WebSocketAdapterConfig, "authToken" | "httpFallback" | "localStore" | "onCatchUp">
+    Omit<WebSocketAdapterConfig, "authToken" | "capabilities" | "httpFallback" | "localStore" | "onCatchUp">
   > &
-    Pick<WebSocketAdapterConfig, "authToken" | "httpFallback" | "localStore" | "onCatchUp">;
+    Pick<WebSocketAdapterConfig, "authToken" | "capabilities" | "httpFallback" | "localStore" | "onCatchUp">;
   private onEventCallbacks: Set<EventReceivedCallback> = new Set();
   private onCustomMessageCallbacks: Set<CustomMessageCallback> = new Set();
   private reconnectAttempt = 0;
@@ -59,10 +61,15 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   connect(): void {
     if (this.ws) return;
 
-    const url =
+    let url =
       this.config.authToken != null && this.config.authToken !== ""
         ? `${this.config.url}?token=${encodeURIComponent(this.config.authToken)}`
         : this.config.url;
+
+    if (this.config.capabilities && this.config.capabilities.length > 0) {
+      const sep = url.includes("?") ? "&" : "?";
+      url += `${sep}capabilities=${encodeURIComponent(this.config.capabilities.join(","))}`;
+    }
 
     this.ws = new WebSocket(url);
 
@@ -154,6 +161,17 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   sendRaw(data: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(data);
+  }
+
+  /**
+   * Update and (re-)announce device capabilities.
+   * Sends immediately if connected, otherwise included on next connect via URL param.
+   */
+  announceCapabilities(capabilities: string[]): void {
+    this.config.capabilities = capabilities;
+    if (this.connected && this.ws) {
+      this.ws.send(JSON.stringify({ type: "capabilities_announce", capabilities }));
+    }
   }
 
   // === EventStoreAdapter ===

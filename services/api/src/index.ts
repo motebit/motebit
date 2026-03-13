@@ -123,6 +123,7 @@ export interface SyncRelayConfig {
 export interface ConnectedDevice {
   ws: WSContext;
   deviceId: string;
+  capabilities?: string[];
 }
 
 export interface SyncRelay {
@@ -362,10 +363,16 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
             return;
           }
 
+          // Parse device capabilities from URL query param
+          const capsParam = url.searchParams.get("capabilities");
+          const capabilities = capsParam != null && capsParam !== ""
+            ? capsParam.split(",").filter(c => c !== "")
+            : undefined;
+
           if (!connections.has(motebitId)) {
             connections.set(motebitId, []);
           }
-          connections.get(motebitId)!.push({ ws, deviceId });
+          connections.get(motebitId)!.push({ ws, deviceId, capabilities });
         },
 
         // eslint-disable-next-line @typescript-eslint/no-misused-promises -- hono ws adapter supports async handlers
@@ -380,11 +387,23 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
               conversations?: SyncConversation[];
               messages?: SyncConversationMessage[];
               task_id?: string;
+              capabilities?: string[];
             };
+
+            // Agent protocol: capabilities_announce
+            if (msg.type === "capabilities_announce" && Array.isArray(msg.capabilities)) {
+              const peers = connections.get(motebitId);
+              if (peers) {
+                const self = peers.find(p => p.ws === ws);
+                if (self) self.capabilities = msg.capabilities as string[];
+              }
+            }
 
             // Agent protocol: task_claim
             if (msg.type === "task_claim" && msg.task_id) {
               const entry = taskQueue.get(msg.task_id);
+              let claimRejected = false;
+
               if (!entry || entry.task.motebit_id !== motebitId) {
                 ws.send(
                   JSON.stringify({
@@ -393,6 +412,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
                     reason: "Task not found",
                   }),
                 );
+                claimRejected = true;
               } else if (entry.task.status !== AgentTaskStatus.Pending) {
                 ws.send(
                   JSON.stringify({
@@ -401,7 +421,30 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
                     reason: "Task already claimed",
                   }),
                 );
+                claimRejected = true;
               } else {
+                // Verify claiming device has required capabilities
+                const requiredCaps = entry.task.required_capabilities ?? [];
+                if (requiredCaps.length > 0) {
+                  const claimingPeers = connections.get(motebitId);
+                  const claimingDevice = claimingPeers?.find(p => p.ws === ws);
+                  if (claimingDevice?.capabilities) {
+                    const hasAll = requiredCaps.every(c => claimingDevice.capabilities!.includes(c));
+                    if (!hasAll) {
+                      ws.send(
+                        JSON.stringify({
+                          type: "task_claim_rejected",
+                          task_id: msg.task_id,
+                          reason: "Device lacks required capabilities",
+                        }),
+                      );
+                      claimRejected = true;
+                    }
+                  }
+                }
+              }
+
+              if (!claimRejected && entry) {
                 entry.task.status = AgentTaskStatus.Claimed;
                 entry.task.claimed_by = deviceId;
                 ws.send(JSON.stringify({ type: "task_claimed", task_id: msg.task_id }));
@@ -1166,6 +1209,8 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       prompt: string;
       submitted_by?: string;
       wall_clock_ms?: number;
+      required_capabilities?: string[];
+      step_id?: string;
     }>();
 
     if (!body.prompt || typeof body.prompt !== "string" || body.prompt.trim() === "") {
@@ -1182,15 +1227,26 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       submitted_by: body.submitted_by,
       wall_clock_ms: body.wall_clock_ms,
       status: AgentTaskStatus.Pending,
+      required_capabilities: Array.isArray(body.required_capabilities)
+        ? body.required_capabilities.filter((c): c is string => typeof c === "string") as AgentTask["required_capabilities"]
+        : undefined,
+      step_id: body.step_id,
     };
 
     taskQueue.set(taskId, { task, expiresAt: now + TASK_TTL_MS });
 
-    // Push task_request to connected devices
+    // Push task_request to connected devices (capability-filtered)
     const peers = connections.get(motebitId);
     if (peers) {
+      const requiredCaps = task.required_capabilities ?? [];
       const payload = JSON.stringify({ type: "task_request", task });
       for (const peer of peers) {
+        // If task requires capabilities, only send to devices that have them
+        // Devices that haven't announced capabilities get the task anyway (backward compat)
+        if (requiredCaps.length > 0 && peer.capabilities) {
+          const hasAll = requiredCaps.every(c => peer.capabilities!.includes(c));
+          if (!hasAll) continue;
+        }
         peer.ws.send(payload);
       }
     }

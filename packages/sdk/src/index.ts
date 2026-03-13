@@ -511,6 +511,7 @@ export interface PlanStep {
   depends_on: string[];
   optional: boolean;
   status: StepStatus;
+  required_capabilities?: DeviceCapability[];
   result_summary: string | null;
   error_message: string | null;
   tool_calls_made: number;
@@ -533,6 +534,15 @@ export interface Plan {
 
 // === Agent Protocol ===
 
+export enum DeviceCapability {
+  StdioMcp = "stdio_mcp",
+  HttpMcp = "http_mcp",
+  FileSystem = "file_system",
+  Keyring = "keyring",
+  Background = "background",
+  LocalLlm = "local_llm",
+}
+
 export enum AgentTaskStatus {
   Pending = "pending",
   Claimed = "claimed",
@@ -552,6 +562,8 @@ export interface AgentTask {
   wall_clock_ms?: number;
   status: AgentTaskStatus;
   claimed_by?: string;
+  required_capabilities?: DeviceCapability[];
+  step_id?: string;
 }
 
 export interface ExecutionReceipt {
@@ -568,6 +580,13 @@ export interface ExecutionReceipt {
   result_hash: string;
   delegation_receipts?: ExecutionReceipt[];
   signature: string;
+}
+
+export interface DelegatedStepResult {
+  step_id: string;
+  task_id: string;
+  receipt: ExecutionReceipt;
+  result_text: string;
 }
 
 export interface AgentCapabilities {

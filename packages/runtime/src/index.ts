@@ -72,8 +72,9 @@ type McpClientAdapter = {
   getTools?(): import("@motebit/sdk").ToolDefinition[];
 };
 import { PlanEngine, InMemoryPlanStore } from "@motebit/planner";
-import type { PlanChunk } from "@motebit/planner";
+import type { PlanChunk, StepDelegationAdapter } from "@motebit/planner";
 import type { PlanStoreAdapter } from "@motebit/planner";
+import type { DeviceCapability } from "@motebit/sdk";
 import { PolicyGate, MemoryGovernor, MemoryClass } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 import { computeGradient, InMemoryGradientStore } from "./gradient.js";
@@ -110,8 +111,10 @@ export type {
 export type { RenderSpec } from "@motebit/sdk";
 export { PolicyGate } from "@motebit/policy";
 export type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
-export type { PlanChunk } from "@motebit/planner";
+export type { PlanChunk, StepDelegationAdapter } from "@motebit/planner";
 export type { PlanStoreAdapter } from "@motebit/planner";
+export { RelayDelegationAdapter } from "@motebit/planner";
+export type { RelayDelegationConfig } from "@motebit/planner";
 export type { GradientSnapshot, GradientStoreAdapter, GradientConfig, BehavioralStats } from "./gradient.js";
 export { computeGradient, InMemoryGradientStore } from "./gradient.js";
 
@@ -472,6 +475,7 @@ export class MotebitRuntime {
   private summarizeAfterMessages: number;
   private planStore: PlanStoreAdapter;
   private planEngine: PlanEngine;
+  private _localCapabilities: DeviceCapability[] = [];
   private _pendingApproval: {
     toolCallId: string;
     toolName: string;
@@ -672,6 +676,15 @@ export class MotebitRuntime {
     return this.loopDeps;
   }
 
+  setLocalCapabilities(caps: DeviceCapability[]): void {
+    this._localCapabilities = caps;
+    this.planEngine.setLocalCapabilities(caps);
+  }
+
+  setDelegationAdapter(adapter: StepDelegationAdapter): void {
+    this.planEngine.setDelegationAdapter(adapter);
+  }
+
   /**
    * Create and execute a plan for a goal prompt.
    * Decomposes the goal into steps, then executes each step sequentially,
@@ -690,7 +703,11 @@ export class MotebitRuntime {
     const { plan } = await this.planEngine.createPlan(
       goalId,
       this.motebitId,
-      { goalPrompt, availableTools },
+      {
+        goalPrompt,
+        availableTools,
+        localCapabilities: this._localCapabilities.length > 0 ? this._localCapabilities : undefined,
+      },
       this.loopDeps,
     );
 

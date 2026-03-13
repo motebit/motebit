@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseDecompositionResponse } from "../decompose.js";
+import { parseDecompositionResponse, buildDecompositionPrompt } from "../decompose.js";
 
 describe("parseDecompositionResponse", () => {
   it("parses valid JSON with multiple steps", () => {
@@ -112,5 +112,54 @@ describe("parseDecompositionResponse", () => {
 
     const result = parseDecompositionResponse(json);
     expect(result.title).toBe("Plan");
+  });
+
+  it("preserves required_capabilities on steps", () => {
+    const json = JSON.stringify({
+      title: "Capability plan",
+      steps: [
+        { description: "Web step", prompt: "Do web thing" },
+        { description: "CLI step", prompt: "Do CLI thing", required_capabilities: ["stdio_mcp", "file_system"] },
+        { description: "Simple step", prompt: "Do simple thing", required_capabilities: [] },
+      ],
+    });
+
+    const result = parseDecompositionResponse(json);
+    expect(result.steps).toHaveLength(3);
+    expect(result.steps[0]!.required_capabilities).toBeUndefined();
+    expect(result.steps[1]!.required_capabilities).toEqual(["stdio_mcp", "file_system"]);
+    expect(result.steps[2]!.required_capabilities).toEqual([]);
+  });
+
+  it("filters non-string required_capabilities", () => {
+    const json = JSON.stringify({
+      title: "Plan",
+      steps: [
+        { description: "Step", prompt: "Do it", required_capabilities: ["stdio_mcp", 42, null, "file_system"] },
+      ],
+    });
+
+    const result = parseDecompositionResponse(json);
+    expect(result.steps[0]!.required_capabilities).toEqual(["stdio_mcp", "file_system"]);
+  });
+});
+
+describe("buildDecompositionPrompt", () => {
+  it("includes localCapabilities when provided", () => {
+    const prompt = buildDecompositionPrompt({
+      goalPrompt: "Do something",
+      localCapabilities: ["http_mcp", "keyring"],
+    });
+
+    expect(prompt).toContain("Local device capabilities: http_mcp, keyring");
+    expect(prompt).toContain("delegated to another device");
+  });
+
+  it("omits localCapabilities when empty or missing", () => {
+    const prompt1 = buildDecompositionPrompt({ goalPrompt: "Do something" });
+    expect(prompt1).not.toContain("Local device capabilities");
+
+    const prompt2 = buildDecompositionPrompt({ goalPrompt: "Do something", localCapabilities: [] });
+    expect(prompt2).not.toContain("Local device capabilities");
   });
 });

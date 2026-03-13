@@ -11,7 +11,7 @@
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { MotebitRuntime } from "@motebit/runtime";
+import { MotebitRuntime, RelayDelegationAdapter } from "@motebit/runtime";
 import type {
   StreamChunk,
   OperatorModeResult,
@@ -43,7 +43,7 @@ export type { MemoryNode } from "@motebit/sdk";
 import { InMemoryToolRegistry } from "@motebit/tools";
 import { PlanEngine } from "@motebit/planner";
 import type { PlanChunk } from "@motebit/planner";
-import { PlanStatus } from "@motebit/sdk";
+import { PlanStatus, DeviceCapability } from "@motebit/sdk";
 import type { PairingSession, PairingStatus, SyncStatus } from "@motebit/sync-engine";
 import type { MotebitState, BehaviorCues, MemoryNode } from "@motebit/sdk";
 import { computeDecayedConfidence, embedText } from "@motebit/memory-graph";
@@ -449,6 +449,9 @@ export class MobileApp {
       { motebitId: this.motebitId, tickRateHz: 2, policy: policyConfig },
       { storage, renderer: this.renderer, ai: provider, keyring: this.keyring },
     );
+
+    // Mobile capabilities: HTTP MCP + secure keyring
+    this.runtime.setLocalCapabilities([DeviceCapability.HttpMcp, DeviceCapability.Keyring]);
 
     // Create PlanEngine for multi-step goal execution
     if (storage.planStore != null) {
@@ -1356,10 +1359,12 @@ export class MobileApp {
           this.motebitId;
 
         const localEventStore = this._localEventStore;
+        const mobileCapabilities = [DeviceCapability.HttpMcp, DeviceCapability.Keyring];
         const wsAdapter = new WebSocketEventStoreAdapter({
           url: wsUrl,
           motebitId: this.motebitId,
           authToken: token,
+          capabilities: mobileCapabilities,
           httpFallback: encryptedHttp,
           localStore: localEventStore ?? undefined,
         });
@@ -1375,6 +1380,18 @@ export class MobileApp {
             await localEventStore.append(dec);
           })();
         });
+
+        // Wire delegation adapter so PlanEngine can delegate steps to capable devices
+        if (this.runtime) {
+          const delegationAdapter = new RelayDelegationAdapter({
+            syncUrl,
+            motebitId: this.motebitId,
+            authToken: token ?? undefined,
+            sendRaw: (data: string) => wsAdapter.sendRaw(data),
+            onCustomMessage: (cb) => wsAdapter.onCustomMessage(cb),
+          });
+          this.runtime.setDelegationAdapter(delegationAdapter);
+        }
 
         this.syncEngine.connectRemote(encryptedWs);
         wsAdapter.connect();

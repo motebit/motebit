@@ -14,7 +14,7 @@ import {
   WebSocketEventStoreAdapter,
 } from "@motebit/sync-engine";
 import type { AgentTask } from "@motebit/sdk";
-import { EventType, RiskLevel, SensitivityLevel, AgentTaskStatus } from "@motebit/sdk";
+import { EventType, RiskLevel, SensitivityLevel, AgentTaskStatus, DeviceCapability } from "@motebit/sdk";
 import {
   createSignedToken,
   verifySignedToken,
@@ -156,6 +156,15 @@ export async function handleRun(config: CliConfig): Promise<void> {
 
   await runtime.init();
 
+  // Advertise full CLI/desktop capabilities
+  runtime.setLocalCapabilities([
+    DeviceCapability.StdioMcp,
+    DeviceCapability.HttpMcp,
+    DeviceCapability.FileSystem,
+    DeviceCapability.Keyring,
+    DeviceCapability.Background,
+  ]);
+
   // Start goal scheduler
   const goals = moteDb.goalStore.list(motebitId);
   const scheduler = new GoalScheduler(
@@ -227,10 +236,19 @@ export async function handleRun(config: CliConfig): Promise<void> {
       authToken: syncToken,
     });
 
+    const cliCapabilities = [
+      DeviceCapability.StdioMcp,
+      DeviceCapability.HttpMcp,
+      DeviceCapability.FileSystem,
+      DeviceCapability.Keyring,
+      DeviceCapability.Background,
+    ];
+
     wsAdapter = new WebSocketEventStoreAdapter({
       url: wsUrl,
       motebitId,
       authToken,
+      capabilities: cliCapabilities,
       httpFallback: httpAdapter,
       localStore: moteDb.eventStore,
     });
@@ -241,6 +259,19 @@ export async function handleRun(config: CliConfig): Promise<void> {
       wsAdapter.onCustomMessage((msg) => {
         if (msg.type === "task_request" && msg.task) {
           const task = msg.task as AgentTask;
+
+          // Check if we have the required capabilities
+          const requiredCaps = task.required_capabilities ?? [];
+          if (requiredCaps.length > 0) {
+            const missingCaps = requiredCaps.filter(c => !cliCapabilities.includes(c));
+            if (missingCaps.length > 0) {
+              console.log(
+                `\nAgent task ${task.task_id.slice(0, 8)}... skipped (missing: ${missingCaps.join(", ")})`,
+              );
+              return;
+            }
+          }
+
           console.log(
             `\nAgent task received: ${task.task_id.slice(0, 8)}... prompt: "${task.prompt.slice(0, 80)}"`,
           );

@@ -1602,6 +1602,7 @@ interface PlanStepRow {
   started_at: number | null;
   completed_at: number | null;
   retry_count: number;
+  required_capabilities: string | null;
 }
 
 function rowToPlanStep(row: PlanStepRow): PlanStep {
@@ -1613,6 +1614,9 @@ function rowToPlanStep(row: PlanStepRow): PlanStep {
     prompt: row.prompt,
     depends_on: JSON.parse(row.depends_on) as string[],
     optional: row.optional === 1,
+    required_capabilities: row.required_capabilities != null
+      ? JSON.parse(row.required_capabilities) as PlanStep["required_capabilities"]
+      : undefined,
     status: row.status as StepStatus,
     result_summary: row.result_summary,
     error_message: row.error_message,
@@ -1646,8 +1650,8 @@ export class SqlitePlanStore {
       `SELECT * FROM plans WHERE motebit_id = ? ORDER BY created_at DESC`,
     );
     this.stmtSaveStep = db.prepare(
-      `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count, required_capabilities)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtGetStep = db.prepare(`SELECT * FROM plan_steps WHERE step_id = ?`);
     this.stmtGetStepsForPlan = db.prepare(
@@ -1722,6 +1726,7 @@ export class SqlitePlanStore {
       step.started_at,
       step.completed_at,
       step.retry_count,
+      step.required_capabilities != null ? JSON.stringify(step.required_capabilities) : null,
     );
   }
 
@@ -1755,6 +1760,7 @@ export class SqlitePlanStore {
       merged.started_at,
       merged.completed_at,
       merged.retry_count,
+      merged.required_capabilities != null ? JSON.stringify(merged.required_capabilities) : null,
     );
   }
 
@@ -2134,6 +2140,11 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   if (userVersion < 23) {
     migrateExec(driver, "ALTER TABLE gradient_snapshots ADD COLUMN curiosity_pressure REAL NOT NULL DEFAULT 0");
     driver.pragma("user_version = 23");
+  }
+
+  if (userVersion < 24) {
+    migrateExec(driver, "ALTER TABLE plan_steps ADD COLUMN required_capabilities TEXT DEFAULT NULL");
+    driver.pragma("user_version = 24");
   }
 
   const eventStore = new SqliteEventStore(driver);

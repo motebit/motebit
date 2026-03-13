@@ -1,6 +1,7 @@
-import { MotebitRuntime } from "@motebit/runtime";
+import { MotebitRuntime, RelayDelegationAdapter } from "@motebit/runtime";
 import type { StreamChunk, StorageAdapters, PlanChunk } from "@motebit/runtime";
 import type { ConversationMessage, BehaviorCues, EventType } from "@motebit/sdk";
+import { DeviceCapability } from "@motebit/sdk";
 import { ThreeJSAdapter } from "@motebit/render-engine";
 import type { AudioReactivity } from "@motebit/render-engine";
 import type { StreamingProvider } from "@motebit/ai-core/browser";
@@ -181,6 +182,9 @@ export class WebApp {
       { motebitId: this._motebitId, tickRateHz: 2 },
       { storage, renderer: this.renderer, ai: undefined, keyring },
     );
+
+    // Web surface: HTTP MCP only (no stdio, no filesystem, no secure keyring)
+    this.runtime.setLocalCapabilities([DeviceCapability.HttpMcp]);
 
     // Register web-safe tools
     this.registerWebTools();
@@ -738,10 +742,21 @@ export class WebApp {
       url: wsUrl,
       motebitId: this._motebitId,
       authToken: token,
+      capabilities: [DeviceCapability.HttpMcp],
       httpFallback: encryptedHttp,
       localStore: localEventStore ?? undefined,
     });
     this._wsAdapter = wsAdapter;
+
+    // Wire delegation adapter so PlanEngine can delegate steps to capable devices
+    const delegationAdapter = new RelayDelegationAdapter({
+      syncUrl: relayUrl,
+      motebitId: this._motebitId,
+      authToken: token ?? undefined,
+      sendRaw: (data: string) => wsAdapter.sendRaw(data),
+      onCustomMessage: (cb) => wsAdapter.onCustomMessage(cb),
+    });
+    this.runtime.setDelegationAdapter(delegationAdapter);
 
     const encryptedWs = new EncryptedEventStoreAdapter({ inner: wsAdapter, key: encKey });
 
@@ -786,9 +801,20 @@ export class WebApp {
             url: wsUrl,
             motebitId: this._motebitId,
             authToken: freshToken,
+            capabilities: [DeviceCapability.HttpMcp],
             httpFallback: encryptedHttp,
             localStore: localEventStore ?? undefined,
           });
+
+          // Re-wire delegation adapter with fresh wsAdapter
+          const freshDelegation = new RelayDelegationAdapter({
+            syncUrl: relayUrl,
+            motebitId: this._motebitId,
+            authToken: freshToken ?? undefined,
+            sendRaw: (data: string) => freshWs.sendRaw(data),
+            onCustomMessage: (cb) => freshWs.onCustomMessage(cb),
+          });
+          this.runtime?.setDelegationAdapter(freshDelegation);
 
           if (this._wsUnsubOnEvent) this._wsUnsubOnEvent();
           this._wsUnsubOnEvent = freshWs.onEvent((raw) => {

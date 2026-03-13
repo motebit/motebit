@@ -1,5 +1,5 @@
 import { PlanStatus, StepStatus } from "@motebit/sdk";
-import type { Plan, PlanStep } from "@motebit/sdk";
+import type { Plan, PlanStep, DeviceCapability, DelegatedStepResult } from "@motebit/sdk";
 import type { MotebitLoopDependencies, AgenticChunk } from "@motebit/ai-core";
 import { runTurnStreaming } from "@motebit/ai-core";
 import type { PlanStoreAdapter } from "./types.js";
@@ -19,7 +19,12 @@ export type PlanChunk =
   | { type: "plan_failed"; plan: Plan; reason: string }
   | { type: "approval_request"; step: PlanStep; chunk: AgenticChunk }
   | { type: "plan_retrying"; failedPlan: Plan; newPlan: Plan }
-  | { type: "reflection"; result: ReflectionResult };
+  | { type: "reflection"; result: ReflectionResult }
+  | { type: "step_delegated"; step: PlanStep; task_id: string };
+
+export interface StepDelegationAdapter {
+  delegateStep(step: PlanStep, timeoutMs: number): Promise<DelegatedStepResult>;
+}
 
 export interface PlanEngineConfig {
   maxStepRetries?: number;
@@ -27,6 +32,10 @@ export interface PlanEngineConfig {
   enableReflection?: boolean;
   /** Maximum number of steps a plan may contain (default 10). */
   maxStepsPerPlan?: number;
+  localCapabilities?: DeviceCapability[];
+  delegationAdapter?: StepDelegationAdapter;
+  /** Timeout for delegated steps in ms (default 300000 = 5 min). */
+  delegationTimeoutMs?: number;
 }
 
 export class PlanEngine {
@@ -39,6 +48,14 @@ export class PlanEngine {
 
   get isExecuting(): boolean {
     return this._isExecuting;
+  }
+
+  setLocalCapabilities(caps: DeviceCapability[]): void {
+    this.config = { ...this.config, localCapabilities: caps };
+  }
+
+  setDelegationAdapter(adapter: StepDelegationAdapter | undefined): void {
+    this.config = { ...this.config, delegationAdapter: adapter };
   }
 
   async createPlan(
@@ -81,6 +98,7 @@ export class PlanEngine {
         prompt: rawStep.prompt,
         depends_on: i > 0 ? [plan.plan_id + ":" + (i - 1)] : [],
         optional: rawStep.optional ?? false,
+        required_capabilities: rawStep.required_capabilities?.map(c => c as DeviceCapability),
         status: StepStatus.Pending,
         result_summary: null,
         error_message: null,
@@ -166,6 +184,75 @@ export class PlanEngine {
           this.failPlan(plan, reason);
           yield { type: "plan_failed", plan: this.store.getPlan(plan.plan_id)!, reason };
           return;
+        }
+
+        // Check if step requires capabilities we don't have locally
+        const localCaps = this.config.localCapabilities ?? [];
+        const requiredCaps = step.required_capabilities ?? [];
+        const missingCaps = requiredCaps.filter(c => !localCaps.includes(c));
+
+        if (missingCaps.length > 0) {
+          const delegationAdapter = this.config.delegationAdapter;
+          if (!delegationAdapter) {
+            // No delegation adapter — fail step
+            const capsStr = missingCaps.join(", ");
+            this.store.updateStep(step.step_id, {
+              status: StepStatus.Failed,
+              completed_at: Date.now(),
+              error_message: `Requires capabilities not available locally: ${capsStr}`,
+            });
+            const failedStep = this.store.getStep(step.step_id)!;
+            yield { type: "step_failed", step: failedStep, error: failedStep.error_message! };
+
+            if (!step.optional) {
+              this.failPlan(plan, `Required step ${step.ordinal + 1} requires [${capsStr}] not available locally`);
+              yield { type: "plan_failed", plan: this.store.getPlan(plan.plan_id)!, reason: failedStep.error_message! };
+              return;
+            }
+            this.store.updateStep(step.step_id, { status: StepStatus.Skipped });
+            continue;
+          }
+
+          // Delegate step to a capable device
+          const startedAt = Date.now();
+          this.store.updateStep(step.step_id, { status: StepStatus.Running, started_at: startedAt });
+          this.store.updatePlan(plan.plan_id, { current_step_index: i, updated_at: startedAt });
+          const updatedStep = this.store.getStep(step.step_id)!;
+          yield { type: "step_started", step: updatedStep };
+
+          try {
+            const timeoutMs = this.config.delegationTimeoutMs ?? 300_000;
+            const delegationResult = await delegationAdapter.delegateStep(updatedStep, timeoutMs);
+
+            const summary = delegationResult.result_text.slice(0, 2000);
+            this.store.updateStep(step.step_id, {
+              status: StepStatus.Completed,
+              completed_at: Date.now(),
+              result_summary: summary || null,
+            });
+            completedResults.push(`[Step ${step.ordinal + 1}: ${step.description}]\n${summary}`);
+
+            const completedStep = this.store.getStep(step.step_id)!;
+            yield { type: "step_delegated", step: completedStep, task_id: delegationResult.task_id };
+            yield { type: "step_completed", step: completedStep };
+          } catch (err: unknown) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            this.store.updateStep(step.step_id, {
+              status: StepStatus.Failed,
+              completed_at: Date.now(),
+              error_message: errMsg,
+            });
+            const failedStep = this.store.getStep(step.step_id)!;
+            yield { type: "step_failed", step: failedStep, error: errMsg };
+
+            if (!step.optional) {
+              this.failPlan(plan, `Delegated step ${step.ordinal + 1} failed: ${errMsg}`);
+              yield { type: "plan_failed", plan: this.store.getPlan(plan.plan_id)!, reason: errMsg };
+              return;
+            }
+            this.store.updateStep(step.step_id, { status: StepStatus.Skipped });
+          }
+          continue;
         }
 
         // Execute step with retries

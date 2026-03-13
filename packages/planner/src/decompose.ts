@@ -5,12 +5,14 @@ export interface DecompositionContext {
   previousOutcomes?: string[];
   availableTools?: string[];
   relevantMemories?: string[];
+  localCapabilities?: string[];
 }
 
 export interface RawPlanStep {
   description: string;
   prompt: string;
   optional?: boolean;
+  required_capabilities?: string[];
 }
 
 export interface RawPlan {
@@ -26,6 +28,10 @@ Rules:
 - Include a final synthesis/summary step when the goal requires gathering information.
 - Maximum 8 steps. If the goal is simple, use fewer.
 - Mark steps as optional if failure wouldn't prevent the goal from succeeding.
+- If a step requires spawning a local process (CLI tool, stdio MCP server), add "required_capabilities": ["stdio_mcp"].
+- If a step requires filesystem access (reading/writing local files), add "required_capabilities": ["file_system"].
+- If a step only needs HTTP API calls or web browsing, omit required_capabilities (all devices can do this).
+- Most steps need no special capabilities. Only annotate when the step genuinely cannot run in a browser.
 
 Output format:
 {
@@ -34,12 +40,13 @@ Output format:
     {
       "description": "What this step accomplishes",
       "prompt": "The exact instruction for the AI to execute this step",
-      "optional": false
+      "optional": false,
+      "required_capabilities": ["stdio_mcp"]
     }
   ]
 }`;
 
-function buildDecompositionPrompt(ctx: DecompositionContext): string {
+export function buildDecompositionPrompt(ctx: DecompositionContext): string {
   const parts: string[] = [];
   parts.push(`Goal: ${ctx.goalPrompt}`);
 
@@ -54,6 +61,12 @@ function buildDecompositionPrompt(ctx: DecompositionContext): string {
   if (ctx.availableTools && ctx.availableTools.length > 0) {
     parts.push("");
     parts.push(`Available tools: ${ctx.availableTools.join(", ")}`);
+  }
+
+  if (ctx.localCapabilities && ctx.localCapabilities.length > 0) {
+    parts.push("");
+    parts.push(`Local device capabilities: ${ctx.localCapabilities.join(", ")}`);
+    parts.push("Steps requiring capabilities NOT in this list will be delegated to another device.");
   }
 
   if (ctx.relevantMemories && ctx.relevantMemories.length > 0) {
@@ -97,6 +110,9 @@ export function parseDecompositionResponse(text: string): RawPlan {
       description: step.description,
       prompt: step.prompt,
       optional: step.optional === true,
+      required_capabilities: Array.isArray(step.required_capabilities)
+        ? step.required_capabilities.filter((c): c is string => typeof c === "string")
+        : undefined,
     });
   }
 
