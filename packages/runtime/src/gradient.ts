@@ -375,6 +375,260 @@ export const NEUTRAL_PRECISION: PrecisionWeights = {
   curiosityModulation: 0.4,
 };
 
+// === Self-Model Summary ===
+
+/**
+ * Metric descriptor for self-narration.
+ * Maps sub-metric keys to human-readable labels and thresholds.
+ */
+interface MetricDescriptor {
+  key: keyof Pick<GradientSnapshot,
+    "knowledge_density" | "knowledge_quality" | "graph_connectivity" |
+    "temporal_stability" | "retrieval_quality" | "interaction_efficiency" |
+    "tool_efficiency" | "curiosity_pressure">;
+  label: string;
+  /** Below this value the metric is "weak" */
+  lowThreshold: number;
+  /** Above this value the metric is "strong" */
+  highThreshold: number;
+  /** Natural-language fragments: [strong, weak] */
+  assessment: [string, string];
+}
+
+const METRIC_DESCRIPTORS: MetricDescriptor[] = [
+  {
+    key: "knowledge_density",
+    label: "Knowledge density",
+    lowThreshold: 0.25,
+    highThreshold: 0.60,
+    assessment: [
+      "accumulated a rich knowledge base",
+      "knowledge base is still sparse — more experience needed",
+    ],
+  },
+  {
+    key: "knowledge_quality",
+    label: "Knowledge quality",
+    lowThreshold: 0.30,
+    highThreshold: 0.65,
+    assessment: [
+      "memories are being reinforced and refined through use",
+      "mostly adding new memories without reinforcing existing ones",
+    ],
+  },
+  {
+    key: "graph_connectivity",
+    label: "Graph connectivity",
+    lowThreshold: 0.15,
+    highThreshold: 0.40,
+    assessment: [
+      "memories are well-connected — ideas relate to each other",
+      "memory graph is fragmented — few connections between concepts",
+    ],
+  },
+  {
+    key: "temporal_stability",
+    label: "Temporal stability",
+    lowThreshold: 0.30,
+    highThreshold: 0.60,
+    assessment: [
+      "long-lived semantic memories dominate — knowledge persists",
+      "memories are predominantly short-lived or episodic",
+    ],
+  },
+  {
+    key: "retrieval_quality",
+    label: "Retrieval quality",
+    lowThreshold: 0.30,
+    highThreshold: 0.65,
+    assessment: [
+      "retrieving relevant memories with high fidelity",
+      "retrieval scores are low — memory search needs better context",
+    ],
+  },
+  {
+    key: "interaction_efficiency",
+    label: "Interaction efficiency",
+    lowThreshold: 0.40,
+    highThreshold: 0.75,
+    assessment: [
+      "completing tasks with few iterations — efficient problem-solving",
+      "taking many iterations per task — may need better planning",
+    ],
+  },
+  {
+    key: "tool_efficiency",
+    label: "Tool efficiency",
+    lowThreshold: 0.50,
+    highThreshold: 0.85,
+    assessment: [
+      "tool calls succeed consistently",
+      "tool calls are frequently blocked or failing",
+    ],
+  },
+  {
+    key: "curiosity_pressure",
+    label: "Curiosity pressure",
+    lowThreshold: 0.30,
+    highThreshold: 0.65,
+    assessment: [
+      "knowledge base is well-maintained — low decay pressure",
+      "knowledge is decaying significantly — attention needed",
+    ],
+  },
+];
+
+export interface SelfModelSummary {
+  /** One-sentence trajectory assessment */
+  trajectory: string;
+  /** Current overall assessment (1-2 sentences) */
+  overall: string;
+  /** Per-metric strengths (human-readable) */
+  strengths: string[];
+  /** Per-metric weaknesses (human-readable) */
+  weaknesses: string[];
+  /** Active inference posture description */
+  posture: string;
+  /** Composite gradient value */
+  gradient: number;
+  /** Gradient delta (trend) */
+  delta: number;
+  /** Number of snapshots analyzed */
+  snapshotCount: number;
+}
+
+/**
+ * Pure: GradientSnapshot[] → SelfModelSummary.
+ *
+ * Takes gradient history (most-recent-first) and produces a natural-language
+ * self-assessment. No LLM calls, no I/O. The agent narrates its own trajectory
+ * from the numbers alone.
+ *
+ * This is the self-model: the agent can articulate what it knows about its own
+ * growth, where it's strong, where it's weak, and what posture it's adopting.
+ */
+export function summarizeGradientHistory(snapshots: GradientSnapshot[]): SelfModelSummary {
+  if (snapshots.length === 0) {
+    return {
+      trajectory: "No gradient history — this agent has not yet measured itself.",
+      overall: "Insufficient data for self-assessment.",
+      strengths: [],
+      weaknesses: [],
+      posture: "Neutral — no precision data available.",
+      gradient: 0,
+      delta: 0,
+      snapshotCount: 0,
+    };
+  }
+
+  const latest = snapshots[0]!;
+  const precision = computePrecision(latest);
+
+  // Trajectory: analyze trend across history
+  const trajectory = narrateTrajectory(snapshots);
+
+  // Per-metric assessment
+  const strengths: string[] = [];
+  const weaknesses: string[] = [];
+
+  for (const desc of METRIC_DESCRIPTORS) {
+    const value = latest[desc.key];
+    if (value >= desc.highThreshold) {
+      strengths.push(desc.assessment[0]);
+    } else if (value < desc.lowThreshold) {
+      weaknesses.push(desc.assessment[1]);
+    }
+  }
+
+  // Overall assessment
+  const overall = narrateOverall(latest, strengths.length, weaknesses.length);
+
+  // Active inference posture
+  const posture = narratePosture(precision);
+
+  return {
+    trajectory,
+    overall,
+    strengths,
+    weaknesses,
+    posture,
+    gradient: latest.gradient,
+    delta: latest.delta,
+    snapshotCount: snapshots.length,
+  };
+}
+
+function narrateTrajectory(snapshots: GradientSnapshot[]): string {
+  if (snapshots.length === 1) {
+    const g = snapshots[0]!.gradient;
+    return `First measurement: gradient at ${(g * 100).toFixed(1)}%. Trajectory unknown — need more data.`;
+  }
+
+  // Compute overall trend: linear regression slope over available history
+  const oldest = snapshots[snapshots.length - 1]!;
+  const latest = snapshots[0]!;
+  const totalDelta = latest.gradient - oldest.gradient;
+  const spanMs = latest.timestamp - oldest.timestamp;
+  const spanHours = spanMs / (1000 * 60 * 60);
+
+  // Count positive vs negative deltas for consistency
+  let rising = 0;
+  let falling = 0;
+  for (const s of snapshots) {
+    if (s.delta > 0.001) rising++;
+    else if (s.delta < -0.001) falling++;
+  }
+  const consistency = Math.max(rising, falling) / Math.max(1, rising + falling);
+
+  if (Math.abs(totalDelta) < 0.02) {
+    return `Stable at ${(latest.gradient * 100).toFixed(1)}% over ${snapshots.length} measurements (${formatDuration(spanHours)}). The agent's model evidence is steady.`;
+  }
+
+  const direction = totalDelta > 0 ? "rising" : "declining";
+  const rate = Math.abs(totalDelta);
+  const pace = rate > 0.15 ? "rapidly" : rate > 0.05 ? "steadily" : "gradually";
+  const consistencyNote = consistency > 0.8
+    ? "consistently"
+    : consistency > 0.5
+      ? "with some fluctuation"
+      : "with significant volatility";
+
+  return `Gradient ${pace} ${direction} from ${(oldest.gradient * 100).toFixed(1)}% to ${(latest.gradient * 100).toFixed(1)}% over ${snapshots.length} measurements (${formatDuration(spanHours)}), ${consistencyNote}. ${totalDelta > 0 ? "The agent is accumulating better models of its niche." : "Model evidence is eroding — the agent should explore and rebuild."}`;
+}
+
+function narrateOverall(
+  snapshot: GradientSnapshot,
+  strengthCount: number,
+  weaknessCount: number,
+): string {
+  const g = snapshot.gradient;
+  const level = g >= 0.7 ? "high" : g >= 0.45 ? "moderate" : g >= 0.25 ? "low" : "very low";
+  const balance =
+    strengthCount > weaknessCount
+      ? "More strengths than weaknesses"
+      : strengthCount === weaknessCount
+        ? "Balanced strengths and weaknesses"
+        : "More weaknesses than strengths";
+
+  return `Intelligence gradient is ${level} at ${(g * 100).toFixed(1)}%. ${balance} — ${strengthCount} strong, ${weaknessCount} needing attention.`;
+}
+
+function narratePosture(precision: PrecisionWeights): string {
+  if (precision.selfTrust > 0.7) {
+    return `Exploiting: high self-trust (${(precision.selfTrust * 100).toFixed(0)}%), tight retrieval precision, low curiosity. The agent trusts its model and acts decisively.`;
+  }
+  if (precision.selfTrust < 0.3) {
+    return `Exploring: low self-trust (${(precision.selfTrust * 100).toFixed(0)}%), diversified retrieval, high curiosity (${(precision.curiosityModulation * 100).toFixed(0)}%). The agent is actively questioning its model.`;
+  }
+  return `Balanced: moderate self-trust (${(precision.selfTrust * 100).toFixed(0)}%), mixed retrieval strategy, moderate curiosity (${(precision.curiosityModulation * 100).toFixed(0)}%). The agent is maintaining equilibrium between known and unknown.`;
+}
+
+function formatDuration(hours: number): string {
+  if (hours < 1) return `${Math.round(hours * 60)}m`;
+  if (hours < 48) return `${Math.round(hours)}h`;
+  return `${Math.round(hours / 24)}d`;
+}
+
 // === In-Memory Store (for tests) ===
 
 export class InMemoryGradientStore implements GradientStoreAdapter {

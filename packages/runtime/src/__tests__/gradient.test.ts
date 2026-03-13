@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeGradient, computePrecision, NEUTRAL_PRECISION, InMemoryGradientStore } from "../gradient.js";
+import { computeGradient, computePrecision, NEUTRAL_PRECISION, InMemoryGradientStore, summarizeGradientHistory } from "../gradient.js";
 import type { GradientSnapshot, BehavioralStats } from "../gradient.js";
 import type { MemoryNode, MemoryEdge, EventLogEntry } from "@motebit/sdk";
 import { EventType, SensitivityLevel, MemoryType, RelationType } from "@motebit/sdk";
@@ -797,5 +797,117 @@ describe("computePrecision", () => {
     expect(NEUTRAL_PRECISION.explorationDrive).toBe(0.5);
     expect(NEUTRAL_PRECISION.retrievalPrecision).toBe(0.6);
     expect(NEUTRAL_PRECISION.curiosityModulation).toBe(0.4);
+  });
+});
+
+// === Self-Model Summary Tests ===
+
+describe("summarizeGradientHistory", () => {
+  function makeSnapshot(gradient: number, delta = 0, timestamp = Date.now()): GradientSnapshot {
+    return {
+      motebit_id: "test",
+      timestamp,
+      gradient,
+      delta,
+      knowledge_density: gradient * 0.8,
+      knowledge_density_raw: gradient * 40,
+      knowledge_quality: gradient * 0.9,
+      graph_connectivity: gradient * 0.5,
+      graph_connectivity_raw: gradient * 1.0,
+      temporal_stability: gradient * 0.7,
+      retrieval_quality: gradient * 0.85,
+      interaction_efficiency: gradient * 0.9,
+      tool_efficiency: gradient * 0.95,
+      curiosity_pressure: gradient * 0.8,
+      stats: {
+        live_nodes: 10, live_edges: 5, semantic_count: 7, episodic_count: 3,
+        pinned_count: 1, avg_confidence: 0.8, avg_half_life: 604800000,
+        consolidation_add: 0, consolidation_update: 0, consolidation_reinforce: 0,
+        consolidation_noop: 0, total_confidence_mass: 8, avg_retrieval_score: 0.7,
+        retrieval_count: 5, avg_iterations_per_turn: 2, total_turns: 5,
+        tool_calls_succeeded: 8, tool_calls_blocked: 1, tool_calls_failed: 1,
+        curiosity_target_count: 3, avg_curiosity_score: 0.5,
+      },
+    };
+  }
+
+  it("returns empty assessment for no history", () => {
+    const summary = summarizeGradientHistory([]);
+    expect(summary.snapshotCount).toBe(0);
+    expect(summary.gradient).toBe(0);
+    expect(summary.strengths).toHaveLength(0);
+    expect(summary.weaknesses).toHaveLength(0);
+    expect(summary.trajectory).toContain("No gradient history");
+  });
+
+  it("produces first-measurement trajectory for single snapshot", () => {
+    const summary = summarizeGradientHistory([makeSnapshot(0.6)]);
+    expect(summary.snapshotCount).toBe(1);
+    expect(summary.trajectory).toContain("First measurement");
+    expect(summary.gradient).toBe(0.6);
+  });
+
+  it("identifies strengths for high-gradient agent", () => {
+    const summary = summarizeGradientHistory([makeSnapshot(0.85)]);
+    expect(summary.strengths.length).toBeGreaterThan(0);
+    expect(summary.overall).toContain("high");
+  });
+
+  it("identifies weaknesses for low-gradient agent", () => {
+    const summary = summarizeGradientHistory([makeSnapshot(0.15)]);
+    expect(summary.weaknesses.length).toBeGreaterThan(0);
+    expect(summary.overall).toContain("low");
+  });
+
+  it("describes rising trajectory across multiple snapshots", () => {
+    const now = Date.now();
+    const snapshots = [
+      makeSnapshot(0.7, 0.05, now),
+      makeSnapshot(0.6, 0.05, now - 3600000),
+      makeSnapshot(0.5, 0.05, now - 7200000),
+      makeSnapshot(0.4, 0, now - 10800000),
+    ];
+    const summary = summarizeGradientHistory(snapshots);
+    expect(summary.trajectory).toContain("rising");
+    expect(summary.trajectory).toContain("accumulating better models");
+    expect(summary.delta).toBe(0.05);
+  });
+
+  it("describes declining trajectory", () => {
+    const now = Date.now();
+    const snapshots = [
+      makeSnapshot(0.3, -0.1, now),
+      makeSnapshot(0.5, -0.1, now - 3600000),
+      makeSnapshot(0.7, 0, now - 7200000),
+    ];
+    const summary = summarizeGradientHistory(snapshots);
+    expect(summary.trajectory).toContain("declining");
+    expect(summary.trajectory).toContain("eroding");
+  });
+
+  it("describes stable trajectory when delta is near zero", () => {
+    const now = Date.now();
+    const snapshots = [
+      makeSnapshot(0.5, 0.001, now),
+      makeSnapshot(0.5, -0.001, now - 3600000),
+      makeSnapshot(0.5, 0, now - 7200000),
+    ];
+    const summary = summarizeGradientHistory(snapshots);
+    expect(summary.trajectory).toContain("Stable");
+  });
+
+  it("describes exploiting posture for high self-trust", () => {
+    const summary = summarizeGradientHistory([makeSnapshot(0.9)]);
+    expect(summary.posture).toContain("Exploit");
+  });
+
+  it("describes exploring posture for low self-trust", () => {
+    const summary = summarizeGradientHistory([makeSnapshot(0.1)]);
+    expect(summary.posture).toContain("Explor");
+  });
+
+  it("describes balanced posture for moderate gradient", () => {
+    const summary = summarizeGradientHistory([makeSnapshot(0.5)]);
+    expect(summary.posture).toContain("Balanced");
   });
 });

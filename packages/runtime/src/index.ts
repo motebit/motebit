@@ -86,8 +86,8 @@ import type { PlanStoreAdapter } from "@motebit/planner";
 import type { DeviceCapability } from "@motebit/sdk";
 import { PolicyGate, MemoryGovernor, MemoryClass } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
-import { computeGradient, computePrecision, NEUTRAL_PRECISION, InMemoryGradientStore } from "./gradient.js";
-import type { GradientSnapshot, GradientStoreAdapter, BehavioralStats } from "./gradient.js";
+import { computeGradient, computePrecision, NEUTRAL_PRECISION, InMemoryGradientStore, summarizeGradientHistory } from "./gradient.js";
+import type { GradientSnapshot, GradientStoreAdapter, BehavioralStats, SelfModelSummary } from "./gradient.js";
 
 // Re-export key types for consumers
 export type {
@@ -125,8 +125,8 @@ export type { PlanChunk, StepDelegationAdapter, CollaborativeDelegationAdapter }
 export type { PlanStoreAdapter } from "@motebit/planner";
 export { RelayDelegationAdapter } from "@motebit/planner";
 export type { RelayDelegationConfig } from "@motebit/planner";
-export type { GradientSnapshot, GradientStoreAdapter, GradientConfig, BehavioralStats } from "./gradient.js";
-export { computeGradient, computePrecision, NEUTRAL_PRECISION, InMemoryGradientStore } from "./gradient.js";
+export type { GradientSnapshot, GradientStoreAdapter, GradientConfig, BehavioralStats, SelfModelSummary } from "./gradient.js";
+export { computeGradient, computePrecision, NEUTRAL_PRECISION, InMemoryGradientStore, summarizeGradientHistory } from "./gradient.js";
 
 // === McpServerConfig (inlined to avoid importing Node-only @motebit/mcp-client) ===
 
@@ -2345,6 +2345,12 @@ export class MotebitRuntime {
   /** Get gradient history (most recent first). */
   getGradientHistory(limit?: number): GradientSnapshot[] {
     return this.gradientStore.list(this.motebitId, limit);
+  }
+
+  /** Self-model: the agent narrates its own trajectory from gradient history. */
+  getGradientSummary(limit = 20): SelfModelSummary {
+    const history = this.gradientStore.list(this.motebitId, limit);
+    return summarizeGradientHistory(history);
   }
 
   /** Return accumulated behavioral stats and reset the accumulator. */
