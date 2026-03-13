@@ -11,7 +11,6 @@ import type {
   VisitorOpts,
   DepartureOpts,
   VisitorState,
-  ReturnTrailState,
 } from "./spec.js";
 
 // === Constants ===
@@ -394,9 +393,6 @@ const VISITOR_ARRIVE_DURATION = 2.0;
 /** Duration (s) of visitor leaving animation. */
 const VISITOR_LEAVE_DURATION = 1.5;
 
-/** Duration (s) the return trail persists. */
-const TRAIL_FADE_DURATION = 3.0;
-
 /** Convert HSL hue (0–360) + fixed saturation/lightness to a THREE.Color. */
 function hueToColor(hue: number, saturation = 0.55, lightness = 0.65): THREE.Color {
   const color = new THREE.Color();
@@ -486,36 +482,6 @@ function createVisitorCreature(hue: number): {
   group.scale.setScalar(0);
 
   return { group, body: bodyMesh, eyes, bodyMaterial: bodyMat };
-}
-
-/**
- * Build the return trail — a warm amber arc from the visitor's position to the
- * creature's re-entry point. Represents the receipt travelling home.
- */
-function createReturnTrail(
-  scene: THREE.Scene,
-  from: THREE.Vector3,
-  to: THREE.Vector3,
-): { line: THREE.Line; geometry: THREE.BufferGeometry; material: THREE.LineBasicMaterial } {
-  const mid = new THREE.Vector3().lerpVectors(from, to, 0.5);
-  mid.y += 0.1;
-
-  const curve = new THREE.QuadraticBezierCurve3(from, mid, to);
-  const points = curve.getPoints(40);
-
-  const geometry = new THREE.BufferGeometry().setFromPoints(points);
-  const material = new THREE.LineBasicMaterial({
-    color: new THREE.Color(1.0, 0.72, 0.3), // warm amber — receipt energy
-    transparent: true,
-    opacity: 0.65,
-    depthWrite: false,
-  });
-
-  const line = new THREE.Line(geometry, material);
-  line.renderOrder = 1;
-  scene.add(line);
-
-  return { line, geometry, material };
 }
 
 // === Visitor Animation ===
@@ -654,7 +620,8 @@ export class ThreeJSAdapter implements RenderAdapter {
   private mainReturnDirection = new THREE.Vector3(-1, 0, 0);
   private ghostMesh: THREE.Mesh | null = null;
   private visitors = new Map<string, VisitorState>();
-  private returnTrails: ReturnTrailState[] = [];
+  /** Timestamp (s) when the creature last returned home — drives the 3s post-return glow. */
+  private _returnGlowStart = -1;
 
   init(target: unknown): Promise<void> {
     if (typeof HTMLCanvasElement === "undefined" || !(target instanceof HTMLCanvasElement)) {
@@ -951,21 +918,6 @@ export class ThreeJSAdapter implements RenderAdapter {
       }
     }
 
-    // === Return trails — fade over TRAIL_FADE_DURATION ===
-    const expiredTrails: ReturnTrailState[] = [];
-    for (const trail of this.returnTrails) {
-      if (!trail.line) continue;
-      const mat = trail.material as THREE.LineBasicMaterial;
-      const elapsed = t - trail.startedAt;
-      const progress = Math.min(1, elapsed / TRAIL_FADE_DURATION);
-      mat.opacity = 0.65 * (1 - progress);
-      if (progress >= 1) expiredTrails.push(trail);
-    }
-    for (const trail of expiredTrails) {
-      this._disposeTrail(trail);
-      this.returnTrails = this.returnTrails.filter((r) => r.id !== trail.id);
-    }
-
     if (this.controls) this.controls.update();
     this.renderer.render(this.scene, this.camera);
   }
@@ -1068,7 +1020,8 @@ export class ThreeJSAdapter implements RenderAdapter {
 
   /**
    * Return your creature from a direction — it materializes, springs back into orbit,
-   * and the ghost fades out. The return trail (receipt energy) fades over 3s.
+   * and the ghost fades out. The interior glows bright on return (carrying the result)
+   * and decays to baseline over 3 seconds.
    * Transitions: away → returning → home.
    */
   returnCreature(opts?: { fromDirection?: { x: number; y: number; z: number } }): void {
@@ -1092,22 +1045,8 @@ export class ThreeJSAdapter implements RenderAdapter {
       this.creature.scale.setScalar(0);
     }
 
-    // Add the return trail from a visitor position (if any just left) to ghost
-    if (this.scene && this.ghostMesh) {
-      const ghostPos = this.ghostMesh.position;
-      const fromPos = dir.clone().multiplyScalar(VISITOR_HOVER_DISTANCE);
-      const trailId = `trail-${Date.now()}`;
-      const { line, geometry, material } = createReturnTrail(this.scene, fromPos, ghostPos);
-      this.returnTrails.push({
-        id: trailId,
-        line,
-        geometry,
-        material,
-        startedAt: Date.now() / 1000,
-        from: { x: fromPos.x, y: fromPos.y, z: fromPos.z },
-        to: { x: ghostPos.x, y: ghostPos.y, z: ghostPos.z },
-      });
-    }
+    // Mark return time — the post-return glow will decay from here over 3s
+    this._returnGlowStart = Date.now() / 1000;
   }
 
   /**
@@ -1201,9 +1140,23 @@ export class ThreeJSAdapter implements RenderAdapter {
     const elapsed = t - this.mainTransitionStart;
 
     switch (this.mainPresence) {
-      case "home":
-        // Normal — no override needed, the main render loop handles it
+      case "home": {
+        // Post-return glow — creature came back carrying something; interior stays bright for 3s
+        if (this._returnGlowStart >= 0) {
+          const glowElapsed = t - this._returnGlowStart;
+          const RETURN_GLOW_DURATION = 3.0;
+          if (glowElapsed < RETURN_GLOW_DURATION) {
+            const returnGlow = 0.8 * (1 - glowElapsed / RETURN_GLOW_DURATION);
+            this.bodyMaterial.emissiveIntensity = Math.max(
+              this.bodyMaterial.emissiveIntensity,
+              returnGlow,
+            );
+          } else {
+            this._returnGlowStart = -1;
+          }
+        }
         break;
+      }
 
       case "departing": {
         // Scale 1 → 0 over DEPART_DURATION (ease-out)
@@ -1305,24 +1258,12 @@ export class ThreeJSAdapter implements RenderAdapter {
     }
   }
 
-  private _disposeTrail(trail: ReturnTrailState): void {
-    if (this.scene && trail.line) {
-      this.scene.remove(trail.line as THREE.Line);
-      (trail.geometry as THREE.BufferGeometry).dispose();
-      (trail.material as THREE.LineBasicMaterial).dispose();
-    }
-  }
-
   dispose(): void {
-    // Dispose visitors and trails
+    // Dispose visitors
     for (const [id, vs] of this.visitors) {
       this._disposeVisitor(id, vs);
     }
     this.visitors.clear();
-    for (const trail of this.returnTrails) {
-      this._disposeTrail(trail);
-    }
-    this.returnTrails = [];
 
     // Dispose ghost
     if (this.scene && this.ghostMesh) {
@@ -1481,7 +1422,8 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
   private mainReturnDirection = new THREE.Vector3(-1, 0, 0);
   private ghostMesh: THREE.Mesh | null = null;
   private visitors = new Map<string, VisitorState>();
-  private returnTrails: ReturnTrailState[] = [];
+  /** Timestamp (s) when the creature last returned home — drives the 3s post-return glow. */
+  private _returnGlowStart = -1;
 
   /** Check if WebXR immersive-ar is available in this browser. */
   static async isSupported(): Promise<boolean> {
@@ -1792,21 +1734,6 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
       }
     }
 
-    // === Return trails ===
-    const expiredTrails: ReturnTrailState[] = [];
-    for (const trail of this.returnTrails) {
-      if (!trail.line) continue;
-      const mat = trail.material as THREE.LineBasicMaterial;
-      const elapsed = t - trail.startedAt;
-      const progress = Math.min(1, elapsed / TRAIL_FADE_DURATION);
-      mat.opacity = 0.65 * (1 - progress);
-      if (progress >= 1) expiredTrails.push(trail);
-    }
-    for (const trail of expiredTrails) {
-      this._disposeTrail(trail);
-      this.returnTrails = this.returnTrails.filter((r) => r.id !== trail.id);
-    }
-
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -1964,21 +1891,8 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
       this.creature.scale.setScalar(0);
     }
 
-    if (this.scene && this.ghostMesh) {
-      const ghostPos = this.ghostMesh.position;
-      const fromPos = dir.clone().multiplyScalar(VISITOR_HOVER_DISTANCE);
-      const trailId = `trail-${Date.now()}`;
-      const { line, geometry, material } = createReturnTrail(this.scene, fromPos, ghostPos);
-      this.returnTrails.push({
-        id: trailId,
-        line,
-        geometry,
-        material,
-        startedAt: Date.now() / 1000,
-        from: { x: fromPos.x, y: fromPos.y, z: fromPos.z },
-        to: { x: ghostPos.x, y: ghostPos.y, z: ghostPos.z },
-      });
-    }
+    // Mark return time — the post-return glow will decay from here over 3s
+    this._returnGlowStart = Date.now() / 1000;
   }
 
   arriveVisitor(id: string, opts: VisitorOpts): void {
@@ -2047,8 +1961,23 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     const elapsed = t - this.mainTransitionStart;
 
     switch (this.mainPresence) {
-      case "home":
+      case "home": {
+        // Post-return glow — creature came back carrying something; interior stays bright for 3s
+        if (this._returnGlowStart >= 0) {
+          const glowElapsed = t - this._returnGlowStart;
+          const RETURN_GLOW_DURATION = 3.0;
+          if (glowElapsed < RETURN_GLOW_DURATION) {
+            const returnGlow = 0.8 * (1 - glowElapsed / RETURN_GLOW_DURATION);
+            this.bodyMaterial.emissiveIntensity = Math.max(
+              this.bodyMaterial.emissiveIntensity,
+              returnGlow,
+            );
+          } else {
+            this._returnGlowStart = -1;
+          }
+        }
         break;
+      }
 
       case "departing": {
         const progress = Math.min(1, elapsed / DEPART_DURATION);
@@ -2131,14 +2060,6 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     }
   }
 
-  private _disposeTrail(trail: ReturnTrailState): void {
-    if (this.scene && trail.line) {
-      this.scene.remove(trail.line as THREE.Line);
-      (trail.geometry as THREE.BufferGeometry).dispose();
-      (trail.material as THREE.LineBasicMaterial).dispose();
-    }
-  }
-
   dispose(): void {
     this.endSession().catch(() => {}); // Best-effort session cleanup
 
@@ -2146,10 +2067,6 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
       this._disposeVisitor(id, vs);
     }
     this.visitors.clear();
-    for (const trail of this.returnTrails) {
-      this._disposeTrail(trail);
-    }
-    this.returnTrails = [];
 
     if (this.scene && this.ghostMesh) {
       this.scene.remove(this.ghostMesh);

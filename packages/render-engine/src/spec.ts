@@ -166,20 +166,6 @@ export interface VisitorState {
   direction: { x: number; y: number; z: number };
 }
 
-/** Internal state for the return trail (receipt travelling back). */
-export interface ReturnTrailState {
-  id: string;
-  line: unknown; // THREE.Line
-  geometry: unknown; // THREE.BufferGeometry
-  material: unknown; // THREE.LineBasicMaterial
-  /** Fade start time — trail fades over 3 seconds. */
-  startedAt: number;
-  /** From position (where visitor was). */
-  from: { x: number; y: number; z: number };
-  /** To position (where creature re-entered orbit). */
-  to: { x: number; y: number; z: number };
-}
-
 // === Frame-Independent Delta Smoothing ===
 
 export function smoothDelta(
