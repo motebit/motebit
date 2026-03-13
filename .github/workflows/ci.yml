@@ -31,6 +31,9 @@ jobs:
       - name: Audit
         run: pnpm audit
 
+      - name: Check dependency architecture
+        run: pnpm check-deps
+
       - name: Typecheck
         run: pnpm typecheck
 

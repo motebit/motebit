@@ -15,8 +15,7 @@
     "./browser": {
       "types": "./dist/browser.d.ts",
       "default": "./dist/browser.js"
-    },
-    "./dist/*": "./dist/*"
+    }
   },
   "scripts": {
     "build": "tsc -b",

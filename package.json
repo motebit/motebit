@@ -27,6 +27,7 @@
     "lint:fix": "turbo run lint -- --fix",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "check-deps": "npx tsx scripts/check-deps.ts",
     "clean": "turbo run clean",
     "changeset": "changeset",
     "version-packages": "changeset version",
@@ -45,6 +46,7 @@
     "husky": "^9.1.7",
     "lint-staged": "^16.3.3",
     "prettier": "^3.3.0",
+    "tsx": "^4.19.0",
     "turbo": "^2.3.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
