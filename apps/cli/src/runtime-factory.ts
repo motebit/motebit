@@ -219,7 +219,7 @@ export class SqlitePlanSyncStoreAdapter implements PlanSyncStoreAdapter {
     const allPlans = this.store.listAllPlans(this.motebitId);
     return allPlans
       .filter((p) => p.updated_at > since)
-      .map((p) => ({ ...p }));
+      .map((p) => ({ ...p, proposal_id: p.proposal_id ?? null, collaborative: p.collaborative ? 1 : 0 }));
   }
 
   getStepsSince(_motebitId: string, since: number): SyncPlanStep[] {
@@ -230,6 +230,7 @@ export class SqlitePlanSyncStoreAdapter implements PlanSyncStoreAdapter {
       depends_on: JSON.stringify(s.depends_on), optional: s.optional, status: s.status,
       required_capabilities: s.required_capabilities != null ? JSON.stringify(s.required_capabilities) : null,
       delegation_task_id: s.delegation_task_id ?? null,
+      assigned_motebit_id: s.assigned_motebit_id ?? null,
       result_summary: s.result_summary, error_message: s.error_message,
       tool_calls_made: s.tool_calls_made, started_at: s.started_at,
       completed_at: s.completed_at, retry_count: s.retry_count, updated_at: s.updated_at,
@@ -239,7 +240,7 @@ export class SqlitePlanSyncStoreAdapter implements PlanSyncStoreAdapter {
   upsertPlan(plan: SyncPlan): void {
     const existing = this.store.getPlan(plan.plan_id);
     if (!existing || plan.updated_at >= existing.updated_at) {
-      this.store.savePlan({ ...plan });
+      this.store.savePlan({ ...plan, proposal_id: plan.proposal_id ?? undefined, collaborative: plan.collaborative === 1 });
     }
   }
 
@@ -256,6 +257,7 @@ export class SqlitePlanSyncStoreAdapter implements PlanSyncStoreAdapter {
       optional: step.optional, status: step.status,
       required_capabilities: step.required_capabilities != null ? JSON.parse(step.required_capabilities) as PlanStep["required_capabilities"] : undefined,
       delegation_task_id: step.delegation_task_id ?? undefined,
+      assigned_motebit_id: step.assigned_motebit_id ?? undefined,
       result_summary: step.result_summary, error_message: step.error_message,
       tool_calls_made: step.tool_calls_made, started_at: step.started_at,
       completed_at: step.completed_at, retry_count: step.retry_count,

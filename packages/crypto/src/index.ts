@@ -646,3 +646,102 @@ export async function verifyReceiptSequence(
 
   return { valid: true };
 }
+
+// === Collaborative Receipt ===
+
+/**
+ * Shape of a collaborative receipt for signing/verification.
+ * Aggregates multiple participant execution receipts under a single proposal.
+ */
+export interface SignableCollaborativeReceipt {
+  proposal_id: string;
+  plan_id: string;
+  participant_receipts: SignableReceipt[];
+  content_hash: string;
+  initiator_signature: string;
+}
+
+/**
+ * Sign a collaborative receipt. Computes a content hash over the canonical
+ * JSON of all participant receipts, then signs the aggregate with the
+ * initiator's Ed25519 private key.
+ */
+export async function signCollaborativeReceipt(
+  receipt: Omit<SignableCollaborativeReceipt, "content_hash" | "initiator_signature">,
+  initiatorPrivateKey: Uint8Array,
+): Promise<SignableCollaborativeReceipt> {
+  // Canonicalize participant receipts for deterministic hashing
+  const receiptsCanonical = canonicalJson(receipt.participant_receipts);
+  const receiptsBytes = new TextEncoder().encode(receiptsCanonical);
+  const contentHash = await hash(receiptsBytes);
+
+  // Sign the content hash + proposal/plan metadata
+  const sigPayload = canonicalJson({
+    proposal_id: receipt.proposal_id,
+    plan_id: receipt.plan_id,
+    content_hash: contentHash,
+  });
+  const sigMessage = new TextEncoder().encode(sigPayload);
+  const sig = await sign(sigMessage, initiatorPrivateKey);
+
+  return {
+    ...receipt,
+    content_hash: contentHash,
+    initiator_signature: toBase64Url(sig),
+  };
+}
+
+/**
+ * Verify a collaborative receipt:
+ * 1. Recomputes content hash from participant receipts and checks it matches.
+ * 2. Verifies the initiator's Ed25519 signature over the aggregate.
+ * 3. Optionally verifies each participant receipt against known keys.
+ */
+export async function verifyCollaborativeReceipt(
+  receipt: SignableCollaborativeReceipt,
+  initiatorPublicKey: Uint8Array,
+  participantKeys?: KnownKeys,
+): Promise<{ valid: boolean; error?: string }> {
+  // 1. Recompute content hash
+  const receiptsCanonical = canonicalJson(receipt.participant_receipts);
+  const receiptsBytes = new TextEncoder().encode(receiptsCanonical);
+  const expectedHash = await hash(receiptsBytes);
+
+  if (expectedHash !== receipt.content_hash) {
+    return { valid: false, error: "Content hash mismatch" };
+  }
+
+  // 2. Verify initiator signature
+  const sigPayload = canonicalJson({
+    proposal_id: receipt.proposal_id,
+    plan_id: receipt.plan_id,
+    content_hash: receipt.content_hash,
+  });
+  const sigMessage = new TextEncoder().encode(sigPayload);
+  try {
+    const sig = fromBase64Url(receipt.initiator_signature);
+    const sigValid = await verify(sig, sigMessage, initiatorPublicKey);
+    if (!sigValid) {
+      return { valid: false, error: "Initiator signature invalid" };
+    }
+  } catch {
+    return { valid: false, error: "Initiator signature decode failed" };
+  }
+
+  // 3. Verify participant receipts if keys provided
+  if (participantKeys) {
+    for (let i = 0; i < receipt.participant_receipts.length; i++) {
+      const pr = receipt.participant_receipts[i]!;
+      const pubKey = participantKeys.get(pr.motebit_id);
+      if (!pubKey) {
+        return { valid: false, error: `Unknown participant key for receipt ${i} (${pr.motebit_id})` };
+      }
+      const prValid = await verifyExecutionReceipt(pr, pubKey);
+      if (!prValid) {
+        return { valid: false, error: `Participant receipt ${i} (${pr.motebit_id}) signature invalid` };
+      }
+    }
+  }
+
+  return { valid: true };
+}

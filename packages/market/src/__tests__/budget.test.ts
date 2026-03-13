@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { allocateBudget, estimateCost } from "../budget.js";
+import { allocateBudget, estimateCost, allocateCollaborativeBudget } from "../budget.js";
 import { asAllocationId, asGoalId, asMotebitId } from "@motebit/sdk";
 import type { AllocationRequest } from "../budget.js";
 
@@ -96,5 +96,51 @@ describe("estimateCost", () => {
     ];
     const result = estimateCost(pricing, []);
     expect(result.amount).toBe(0);
+  });
+});
+
+describe("allocateCollaborativeBudget", () => {
+  it("allocates proportionally by participant pricing", () => {
+    const steps = [
+      { ordinal: 0, assigned_motebit_id: "alice" },
+      { ordinal: 1, assigned_motebit_id: "bob" },
+      { ordinal: 2, assigned_motebit_id: "alice" },
+    ];
+    const participants = [
+      { motebit_id: "alice", assigned_steps: [0, 2] },
+      { motebit_id: "bob", assigned_steps: [1] },
+    ];
+    const pricing = new Map([
+      ["alice", [{ capability: "compute", unit_cost: 10, currency: "USD", per: "task" as const }]],
+      ["bob", [{ capability: "search", unit_cost: 5, currency: "USD", per: "task" as const }]],
+    ]);
+
+    const result = allocateCollaborativeBudget(steps, participants, pricing, 100);
+    expect(result).toHaveLength(2);
+    expect(result[0]!.motebit_id).toBe("alice");
+    expect(result[0]!.estimated_cost).toBe(20); // 2 steps × $10
+    expect(result[1]!.motebit_id).toBe("bob");
+    expect(result[1]!.estimated_cost).toBe(5); // 1 step × $5
+  });
+
+  it("returns empty array if insufficient budget", () => {
+    const steps = [{ ordinal: 0, assigned_motebit_id: "alice" }];
+    const participants = [{ motebit_id: "alice", assigned_steps: [0] }];
+    const pricing = new Map([
+      ["alice", [{ capability: "compute", unit_cost: 100, currency: "USD", per: "task" as const }]],
+    ]);
+
+    const result = allocateCollaborativeBudget(steps, participants, pricing, 50);
+    expect(result).toHaveLength(0);
+  });
+
+  it("handles participants with no pricing", () => {
+    const steps = [{ ordinal: 0, assigned_motebit_id: "alice" }];
+    const participants = [{ motebit_id: "alice", assigned_steps: [0] }];
+    const pricing = new Map(); // No pricing for anyone
+
+    const result = allocateCollaborativeBudget(steps, participants, pricing, 100);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.estimated_cost).toBe(0);
   });
 });

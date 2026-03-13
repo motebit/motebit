@@ -5,6 +5,6 @@ export type { DecompositionContext, RawPlan, RawPlanStep } from "./decompose.js"
 export { PlanEngine } from "./plan-engine.js";
 export type { PlanChunk, PlanEngineConfig, StepDelegationAdapter } from "./plan-engine.js";
 export { RelayDelegationAdapter } from "./delegation-adapter.js";
-export type { RelayDelegationConfig } from "./delegation-adapter.js";
+export type { RelayDelegationConfig, CollaborativeDelegationAdapter, StepResult } from "./delegation-adapter.js";
 export { reflectOnPlan, parseReflectionResponse } from "./reflect.js";
 export type { ReflectionResult } from "./reflect.js";

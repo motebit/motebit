@@ -80,7 +80,7 @@ type McpClientAdapter = {
   getTools?(): import("@motebit/sdk").ToolDefinition[];
 };
 import { PlanEngine, InMemoryPlanStore } from "@motebit/planner";
-import type { PlanChunk, StepDelegationAdapter } from "@motebit/planner";
+import type { PlanChunk, StepDelegationAdapter, CollaborativeDelegationAdapter } from "@motebit/planner";
 import type { PlanStoreAdapter } from "@motebit/planner";
 import type { DeviceCapability } from "@motebit/sdk";
 import { PolicyGate, MemoryGovernor, MemoryClass } from "@motebit/policy";
@@ -120,7 +120,7 @@ export type { RenderSpec } from "@motebit/sdk";
 export { PolicyGate } from "@motebit/policy";
 export type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 export type { GoalExecutionManifest, ExecutionTimelineEntry, ExecutionStepSummary, DelegationReceiptSummary } from "@motebit/sdk";
-export type { PlanChunk, StepDelegationAdapter } from "@motebit/planner";
+export type { PlanChunk, StepDelegationAdapter, CollaborativeDelegationAdapter } from "@motebit/planner";
 export type { PlanStoreAdapter } from "@motebit/planner";
 export { RelayDelegationAdapter } from "@motebit/planner";
 export type { RelayDelegationConfig } from "@motebit/planner";
@@ -636,6 +636,7 @@ export class MotebitRuntime {
     // Plan-execute engine
     this.planStore = adapters.storage.planStore ?? new InMemoryPlanStore();
     this.planEngine = new PlanEngine(this.planStore);
+    this.planEngine.setLocalMotebitId(this.motebitId);
 
     // Intelligence gradient
     this.gradientStore = adapters.storage.gradientStore ?? new InMemoryGradientStore();
@@ -742,6 +743,10 @@ export class MotebitRuntime {
 
   setDelegationAdapter(adapter: StepDelegationAdapter): void {
     this.planEngine.setDelegationAdapter(adapter);
+  }
+
+  setCollaborativeAdapter(adapter: CollaborativeDelegationAdapter | undefined): void {
+    this.planEngine.setCollaborativeAdapter(adapter);
   }
 
   /**

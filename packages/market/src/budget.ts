@@ -57,3 +57,50 @@ export function estimateCost(
   }
   return { amount, currency };
 }
+
+export interface CollaborativeBudgetAllocation {
+  motebit_id: MotebitId;
+  estimated_cost: number;
+  currency: string;
+}
+
+/**
+ * Pure: allocate budget across participants in a collaborative plan.
+ * Sums estimated cost per participant from their assigned steps × pricing.
+ * Returns one allocation per participant, or empty array if insufficient budget.
+ */
+export function allocateCollaborativeBudget(
+  _steps: Array<{ ordinal: number; assigned_motebit_id?: string }>,
+  participants: Array<{ motebit_id: string; assigned_steps: number[] }>,
+  pricing: Map<string, CapabilityPrice[]>,
+  available: number,
+): CollaborativeBudgetAllocation[] {
+  const allocations: CollaborativeBudgetAllocation[] = [];
+  let totalCost = 0;
+
+  for (const participant of participants) {
+    const participantPricing = pricing.get(participant.motebit_id) ?? [];
+    let cost = 0;
+    let currency = "USD";
+
+    for (const _ordinal of participant.assigned_steps) {
+      // Each assigned step incurs the participant's per-task cost
+      for (const price of participantPricing) {
+        if (price.per === "task") {
+          cost += price.unit_cost;
+          currency = price.currency;
+        }
+      }
+    }
+
+    totalCost += cost;
+    allocations.push({
+      motebit_id: participant.motebit_id as MotebitId,
+      estimated_cost: cost,
+      currency,
+    });
+  }
+
+  if (totalCost > available) return [];
+  return allocations;
+}

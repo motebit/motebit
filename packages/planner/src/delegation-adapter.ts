@@ -1,5 +1,18 @@
-import type { PlanStep, DelegatedStepResult, ExecutionReceipt } from "@motebit/sdk";
+import type { PlanStep, DelegatedStepResult, ExecutionReceipt, CollaborativePlanProposal, ProposalResponse } from "@motebit/sdk";
 import type { StepDelegationAdapter } from "./plan-engine.js";
+
+export interface StepResult {
+  status: string;
+  result_summary: string;
+  receipt?: ExecutionReceipt;
+}
+
+export interface CollaborativeDelegationAdapter {
+  submitProposal(proposal: CollaborativePlanProposal, steps: PlanStep[]): Promise<void>;
+  postStepResult(proposalId: string, stepId: string, result: StepResult): Promise<void>;
+  onProposalResponse(cb: (response: ProposalResponse) => void): () => void;
+  onStepResult(cb: (proposalId: string, stepId: string, result: StepResult) => void): () => void;
+}
 
 export interface RelayDelegationConfig {
   syncUrl: string;

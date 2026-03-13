@@ -823,4 +823,405 @@ describe("PlanEngine", () => {
       expect(retryCount).toBe(1);
     });
   });
+
+  describe("collaborative plan execution", () => {
+    it("runSteps skips steps assigned to other agents", async () => {
+      store = new InMemoryPlanStore();
+      engine = new PlanEngine(store, { localMotebitId: "local-mote", enableReflection: false });
+      mockRunTurnStreaming.mockReset();
+      setupStreamMock(["step 0 done", "step 1 done"]);
+
+      const plan: Plan = {
+        plan_id: "plan-collab",
+        goal_id: "goal-collab",
+        motebit_id: "local-mote",
+        title: "Collaborative plan",
+        status: PlanStatus.Active,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+        current_step_index: 0,
+        total_steps: 3,
+      };
+      store.savePlan(plan);
+
+      // Step 0: assigned to local agent
+      store.saveStep({
+        step_id: "step-local-0",
+        plan_id: "plan-collab",
+        ordinal: 0,
+        description: "Local step 0",
+        prompt: "Do local step 0",
+        depends_on: [],
+        optional: false,
+        status: StepStatus.Pending,
+        result_summary: null,
+        error_message: null,
+        tool_calls_made: 0,
+        started_at: null,
+        completed_at: null,
+        retry_count: 0,
+        updated_at: Date.now(),
+        assigned_motebit_id: "local-mote" as never,
+      });
+
+      // Step 1: assigned to local agent
+      store.saveStep({
+        step_id: "step-local-1",
+        plan_id: "plan-collab",
+        ordinal: 1,
+        description: "Local step 1",
+        prompt: "Do local step 1",
+        depends_on: [],
+        optional: false,
+        status: StepStatus.Pending,
+        result_summary: null,
+        error_message: null,
+        tool_calls_made: 0,
+        started_at: null,
+        completed_at: null,
+        retry_count: 0,
+        updated_at: Date.now(),
+        assigned_motebit_id: "local-mote" as never,
+      });
+
+      // Step 2: assigned to a remote agent (last, so no dependency issues)
+      store.saveStep({
+        step_id: "step-remote-2",
+        plan_id: "plan-collab",
+        ordinal: 2,
+        description: "Remote step 2",
+        prompt: "Do remote step 2",
+        depends_on: [],
+        optional: false,
+        status: StepStatus.Pending,
+        result_summary: null,
+        error_message: null,
+        tool_calls_made: 0,
+        started_at: null,
+        completed_at: null,
+        retry_count: 0,
+        updated_at: Date.now(),
+        assigned_motebit_id: "remote-agent" as never,
+      });
+
+      const deps = makeMockDeps();
+      const chunks = await collectChunks(engine.executePlan(plan.plan_id, deps));
+
+      const types = chunks.map((c) => c.type);
+      expect(types).toContain("plan_completed");
+
+      // Steps 0 and 1 should have been executed (started + completed)
+      const stepStarteds = chunks.filter((c) => c.type === "step_started") as Array<{
+        type: "step_started";
+        step: PlanStep;
+      }>;
+      const startedIds = stepStarteds.map((c) => c.step.step_id);
+      expect(startedIds).toContain("step-local-0");
+      expect(startedIds).toContain("step-local-1");
+      expect(startedIds).not.toContain("step-remote-2");
+
+      // Local steps should be completed
+      const step0 = store.getStep("step-local-0");
+      expect(step0!.status).toBe(StepStatus.Completed);
+      const step1 = store.getStep("step-local-1");
+      expect(step1!.status).toBe(StepStatus.Completed);
+
+      // Remote step should still be pending — it was skipped by runSteps
+      const step2 = store.getStep("step-remote-2");
+      expect(step2!.status).toBe(StepStatus.Pending);
+    });
+
+    it("runSteps executes steps with no assigned_motebit_id (unassigned steps)", async () => {
+      store = new InMemoryPlanStore();
+      engine = new PlanEngine(store, { localMotebitId: "local-mote", enableReflection: false });
+      mockRunTurnStreaming.mockReset();
+      setupStreamMock(["unassigned done"]);
+
+      const plan: Plan = {
+        plan_id: "plan-unassigned",
+        goal_id: "goal-u",
+        motebit_id: "local-mote",
+        title: "Unassigned plan",
+        status: PlanStatus.Active,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+        current_step_index: 0,
+        total_steps: 1,
+      };
+      store.savePlan(plan);
+
+      // Step with no assigned_motebit_id — should still be executed
+      store.saveStep({
+        step_id: "step-unassigned",
+        plan_id: "plan-unassigned",
+        ordinal: 0,
+        description: "Unassigned step",
+        prompt: "Do unassigned step",
+        depends_on: [],
+        optional: false,
+        status: StepStatus.Pending,
+        result_summary: null,
+        error_message: null,
+        tool_calls_made: 0,
+        started_at: null,
+        completed_at: null,
+        retry_count: 0,
+        updated_at: Date.now(),
+      });
+
+      const deps = makeMockDeps();
+      const chunks = await collectChunks(engine.executePlan(plan.plan_id, deps));
+
+      const types = chunks.map((c) => c.type);
+      expect(types).toContain("step_completed");
+      expect(types).toContain("plan_completed");
+
+      const step = store.getStep("step-unassigned");
+      expect(step!.status).toBe(StepStatus.Completed);
+    });
+
+    it("executeCollaborativeSteps only runs local steps and calls postStepResult", async () => {
+      store = new InMemoryPlanStore();
+      const mockPostStepResult = vi.fn().mockResolvedValue(undefined);
+      const collaborativeAdapter = {
+        submitProposal: vi.fn(),
+        postStepResult: mockPostStepResult,
+        onProposalResponse: vi.fn().mockReturnValue(() => {}),
+        onStepResult: vi.fn().mockReturnValue(() => {}),
+      };
+      engine = new PlanEngine(store, {
+        localMotebitId: "local-mote",
+        collaborativeAdapter,
+        enableReflection: false,
+      });
+      mockRunTurnStreaming.mockReset();
+      setupStreamMock(["local step result"]);
+
+      const plan: Plan = {
+        plan_id: "plan-collab-exec",
+        goal_id: "goal-collab-exec",
+        motebit_id: "local-mote",
+        title: "Collaborative exec plan",
+        status: PlanStatus.Active,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+        current_step_index: 0,
+        total_steps: 2,
+        proposal_id: "proposal-123" as never,
+      };
+      store.savePlan(plan);
+
+      // Step assigned to local agent
+      store.saveStep({
+        step_id: "step-mine",
+        plan_id: "plan-collab-exec",
+        ordinal: 0,
+        description: "My step",
+        prompt: "Do my step",
+        depends_on: [],
+        optional: false,
+        status: StepStatus.Pending,
+        result_summary: null,
+        error_message: null,
+        tool_calls_made: 0,
+        started_at: null,
+        completed_at: null,
+        retry_count: 0,
+        updated_at: Date.now(),
+        assigned_motebit_id: "local-mote" as never,
+      });
+
+      // Step assigned to another agent
+      store.saveStep({
+        step_id: "step-theirs",
+        plan_id: "plan-collab-exec",
+        ordinal: 1,
+        description: "Their step",
+        prompt: "Do their step",
+        depends_on: [],
+        optional: false,
+        status: StepStatus.Pending,
+        result_summary: null,
+        error_message: null,
+        tool_calls_made: 0,
+        started_at: null,
+        completed_at: null,
+        retry_count: 0,
+        updated_at: Date.now(),
+        assigned_motebit_id: "other-mote" as never,
+      });
+
+      const deps = makeMockDeps();
+      const allSteps = store.getStepsForPlan("plan-collab-exec");
+      const chunks = await collectChunks(
+        engine.executeCollaborativeSteps(plan, allSteps, "local-mote", deps),
+      );
+
+      // Only the local step should have been started and completed
+      const stepStarteds = chunks.filter((c) => c.type === "step_started") as Array<{
+        type: "step_started";
+        step: PlanStep;
+      }>;
+      expect(stepStarteds).toHaveLength(1);
+      expect(stepStarteds[0]!.step.step_id).toBe("step-mine");
+
+      const stepCompleteds = chunks.filter((c) => c.type === "step_completed") as Array<{
+        type: "step_completed";
+        step: PlanStep;
+      }>;
+      expect(stepCompleteds).toHaveLength(1);
+      expect(stepCompleteds[0]!.step.step_id).toBe("step-mine");
+
+      // The remote step should still be pending
+      const theirStep = store.getStep("step-theirs");
+      expect(theirStep!.status).toBe(StepStatus.Pending);
+
+      // postStepResult should have been called for the local step
+      expect(mockPostStepResult).toHaveBeenCalledTimes(1);
+      expect(mockPostStepResult).toHaveBeenCalledWith("proposal-123", "step-mine", {
+        status: "completed",
+        result_summary: "local step result",
+      });
+    });
+
+    it("executeCollaborativeSteps posts failure to relay when step fails", async () => {
+      store = new InMemoryPlanStore();
+      const mockPostStepResult = vi.fn().mockResolvedValue(undefined);
+      const collaborativeAdapter = {
+        submitProposal: vi.fn(),
+        postStepResult: mockPostStepResult,
+        onProposalResponse: vi.fn().mockReturnValue(() => {}),
+        onStepResult: vi.fn().mockReturnValue(() => {}),
+      };
+      engine = new PlanEngine(store, {
+        localMotebitId: "local-mote",
+        collaborativeAdapter,
+        enableReflection: false,
+      });
+      mockRunTurnStreaming.mockReset();
+
+      // Make step execution fail
+      mockRunTurnStreaming.mockImplementation(async function* () {
+        yield { type: "text" as const, text: "" };
+        throw new Error("Step execution error");
+      });
+
+      const plan: Plan = {
+        plan_id: "plan-collab-fail",
+        goal_id: "goal-collab-fail",
+        motebit_id: "local-mote",
+        title: "Collaborative fail plan",
+        status: PlanStatus.Active,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+        current_step_index: 0,
+        total_steps: 1,
+        proposal_id: "proposal-456" as never,
+      };
+      store.savePlan(plan);
+
+      store.saveStep({
+        step_id: "step-fail",
+        plan_id: "plan-collab-fail",
+        ordinal: 0,
+        description: "Failing step",
+        prompt: "Will fail",
+        depends_on: [],
+        optional: false,
+        status: StepStatus.Pending,
+        result_summary: null,
+        error_message: null,
+        tool_calls_made: 0,
+        started_at: null,
+        completed_at: null,
+        retry_count: 0,
+        updated_at: Date.now(),
+        assigned_motebit_id: "local-mote" as never,
+      });
+
+      const deps = makeMockDeps();
+      const allSteps = store.getStepsForPlan("plan-collab-fail");
+      const chunks = await collectChunks(
+        engine.executeCollaborativeSteps(plan, allSteps, "local-mote", deps),
+      );
+
+      const types = chunks.map((c) => c.type);
+      expect(types).toContain("step_failed");
+
+      // Step should be marked as failed in store
+      const failedStep = store.getStep("step-fail");
+      expect(failedStep!.status).toBe(StepStatus.Failed);
+      expect(failedStep!.error_message).toBe("Step execution error");
+
+      // postStepResult should have been called with failure status
+      expect(mockPostStepResult).toHaveBeenCalledTimes(1);
+      expect(mockPostStepResult).toHaveBeenCalledWith("proposal-456", "step-fail", {
+        status: "failed",
+        result_summary: "Step execution error",
+      });
+    });
+
+    it("executeCollaborativeSteps does not call postStepResult without proposal_id", async () => {
+      store = new InMemoryPlanStore();
+      const mockPostStepResult = vi.fn().mockResolvedValue(undefined);
+      const collaborativeAdapter = {
+        submitProposal: vi.fn(),
+        postStepResult: mockPostStepResult,
+        onProposalResponse: vi.fn().mockReturnValue(() => {}),
+        onStepResult: vi.fn().mockReturnValue(() => {}),
+      };
+      engine = new PlanEngine(store, {
+        localMotebitId: "local-mote",
+        collaborativeAdapter,
+        enableReflection: false,
+      });
+      mockRunTurnStreaming.mockReset();
+      setupStreamMock(["step done"]);
+
+      // Plan without proposal_id
+      const plan: Plan = {
+        plan_id: "plan-no-proposal",
+        goal_id: "goal-np",
+        motebit_id: "local-mote",
+        title: "No proposal plan",
+        status: PlanStatus.Active,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+        current_step_index: 0,
+        total_steps: 1,
+      };
+      store.savePlan(plan);
+
+      store.saveStep({
+        step_id: "step-np",
+        plan_id: "plan-no-proposal",
+        ordinal: 0,
+        description: "Step no proposal",
+        prompt: "Do step",
+        depends_on: [],
+        optional: false,
+        status: StepStatus.Pending,
+        result_summary: null,
+        error_message: null,
+        tool_calls_made: 0,
+        started_at: null,
+        completed_at: null,
+        retry_count: 0,
+        updated_at: Date.now(),
+        assigned_motebit_id: "local-mote" as never,
+      });
+
+      const deps = makeMockDeps();
+      const allSteps = store.getStepsForPlan("plan-no-proposal");
+      const chunks = await collectChunks(
+        engine.executeCollaborativeSteps(plan, allSteps, "local-mote", deps),
+      );
+
+      const types = chunks.map((c) => c.type);
+      expect(types).toContain("step_completed");
+
+      // postStepResult should NOT have been called (no proposal_id)
+      expect(mockPostStepResult).not.toHaveBeenCalled();
+    });
+  });
 });

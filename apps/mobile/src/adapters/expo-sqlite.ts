@@ -1055,6 +1055,8 @@ interface PlanRow {
   updated_at: number;
   current_step_index: number;
   total_steps: number;
+  proposal_id: string | null;
+  collaborative: number;
 }
 
 interface PlanStepRow {
@@ -1074,6 +1076,7 @@ interface PlanStepRow {
   retry_count: number;
   required_capabilities: string | null;
   delegation_task_id: string | null;
+  assigned_motebit_id: string | null;
   updated_at: number;
 }
 
@@ -1088,6 +1091,8 @@ function rowToPlan(row: PlanRow): Plan {
     updated_at: row.updated_at,
     current_step_index: row.current_step_index,
     total_steps: row.total_steps,
+    proposal_id: row.proposal_id ?? undefined,
+    collaborative: row.collaborative === 1,
   };
 }
 
@@ -1111,6 +1116,7 @@ function rowToPlanStep(row: PlanStepRow): PlanStep {
       ? JSON.parse(row.required_capabilities) as PlanStep["required_capabilities"]
       : undefined,
     delegation_task_id: row.delegation_task_id ?? undefined,
+    assigned_motebit_id: row.assigned_motebit_id ?? undefined,
     result_summary: row.result_summary,
     error_message: row.error_message,
     tool_calls_made: row.tool_calls_made,
@@ -1126,8 +1132,8 @@ export class ExpoPlanStore implements PlanStoreAdapter {
 
   savePlan(plan: Plan): void {
     this.db.runSync(
-      `INSERT OR REPLACE INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps, proposal_id, collaborative)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         plan.plan_id,
         plan.goal_id,
@@ -1138,6 +1144,8 @@ export class ExpoPlanStore implements PlanStoreAdapter {
         plan.updated_at,
         plan.current_step_index,
         plan.total_steps,
+        plan.proposal_id ?? null,
+        plan.collaborative ? 1 : 0,
       ],
     );
   }
@@ -1178,6 +1186,14 @@ export class ExpoPlanStore implements PlanStoreAdapter {
       fields.push("total_steps = ?");
       values.push(updates.total_steps);
     }
+    if (updates.proposal_id !== undefined) {
+      fields.push("proposal_id = ?");
+      values.push(updates.proposal_id ?? null);
+    }
+    if (updates.collaborative !== undefined) {
+      fields.push("collaborative = ?");
+      values.push(updates.collaborative ? 1 : 0);
+    }
     if (fields.length === 0) return;
     values.push(planId);
     this.db.runSync(`UPDATE plans SET ${fields.join(", ")} WHERE plan_id = ?`, values);
@@ -1185,8 +1201,8 @@ export class ExpoPlanStore implements PlanStoreAdapter {
 
   saveStep(step: PlanStep): void {
     this.db.runSync(
-      `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count, required_capabilities, delegation_task_id, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count, required_capabilities, delegation_task_id, assigned_motebit_id, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         step.step_id,
         step.plan_id,
@@ -1204,6 +1220,7 @@ export class ExpoPlanStore implements PlanStoreAdapter {
         step.retry_count,
         step.required_capabilities != null ? JSON.stringify(step.required_capabilities) : null,
         step.delegation_task_id ?? null,
+        step.assigned_motebit_id ?? null,
         step.updated_at,
       ],
     );
@@ -1262,6 +1279,10 @@ export class ExpoPlanStore implements PlanStoreAdapter {
     if (updates.delegation_task_id !== undefined) {
       fields.push("delegation_task_id = ?");
       values.push(updates.delegation_task_id ?? null);
+    }
+    if (updates.assigned_motebit_id !== undefined) {
+      fields.push("assigned_motebit_id = ?");
+      values.push(updates.assigned_motebit_id ?? null);
     }
     if (updates.updated_at !== undefined) {
       fields.push("updated_at = ?");
@@ -2171,6 +2192,20 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
       // Table may already exist on new DBs
     }
     db.execSync("PRAGMA user_version = 16");
+  }
+
+  // Migration 17: collaborative plan fields
+  if (userVersion < 17) {
+    try {
+      db.execSync("ALTER TABLE plan_steps ADD COLUMN assigned_motebit_id TEXT DEFAULT NULL");
+    } catch { /* Column may already exist on new DBs */ }
+    try {
+      db.execSync("ALTER TABLE plans ADD COLUMN proposal_id TEXT DEFAULT NULL");
+    } catch { /* Column may already exist on new DBs */ }
+    try {
+      db.execSync("ALTER TABLE plans ADD COLUMN collaborative INTEGER DEFAULT 0");
+    } catch { /* Column may already exist on new DBs */ }
+    db.execSync("PRAGMA user_version = 17");
   }
 
   return {

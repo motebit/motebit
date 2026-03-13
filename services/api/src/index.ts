@@ -315,6 +315,54 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       CREATE INDEX IF NOT EXISTS idx_relay_latency_pair ON relay_latency_stats(motebit_id, remote_motebit_id);
   `);
 
+  // Collaborative plan proposal tables
+  moteDb.db.exec(`
+      CREATE TABLE IF NOT EXISTS relay_proposals (
+        proposal_id TEXT PRIMARY KEY,
+        plan_id TEXT NOT NULL,
+        initiator_motebit_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        plan_snapshot TEXT,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_relay_proposals_initiator ON relay_proposals(initiator_motebit_id);
+
+      CREATE TABLE IF NOT EXISTS relay_proposal_participants (
+        proposal_id TEXT NOT NULL,
+        motebit_id TEXT NOT NULL,
+        assigned_steps TEXT NOT NULL DEFAULT '[]',
+        response TEXT,
+        counter_steps TEXT,
+        responded_at INTEGER,
+        signature TEXT,
+        PRIMARY KEY (proposal_id, motebit_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS relay_collaborative_step_results (
+        proposal_id TEXT NOT NULL,
+        step_id TEXT NOT NULL,
+        motebit_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        result_summary TEXT,
+        receipt TEXT,
+        completed_at INTEGER NOT NULL,
+        PRIMARY KEY (proposal_id, step_id)
+      );
+  `);
+
+  // Extend sync tables for collaborative fields (column-exists check pattern)
+  try {
+    moteDb.db.exec("ALTER TABLE sync_plan_steps ADD COLUMN assigned_motebit_id TEXT DEFAULT NULL");
+  } catch { /* column may already exist */ }
+  try {
+    moteDb.db.exec("ALTER TABLE sync_plans ADD COLUMN proposal_id TEXT DEFAULT NULL");
+  } catch { /* column may already exist */ }
+  try {
+    moteDb.db.exec("ALTER TABLE sync_plans ADD COLUMN collaborative INTEGER DEFAULT 0");
+  } catch { /* column may already exist */ }
+
   // Track connected WebSocket clients per motebitId with device identity
   const connections = new Map<string, ConnectedDevice[]>();
 
@@ -336,6 +384,14 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     // Clean expired agent registrations
     const stmtClean = moteDb.db.prepare("DELETE FROM agent_registry WHERE expires_at < ?");
     stmtClean.run(now);
+    // Expire pending proposals past their TTL
+    try {
+      moteDb.db.prepare(
+        "UPDATE relay_proposals SET status = 'expired', updated_at = ? WHERE status = 'pending' AND expires_at < ?",
+      ).run(now, now);
+    } catch {
+      // Best-effort cleanup
+    }
   }, 60_000);
 
   const app = new Hono();
@@ -1444,14 +1500,16 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   function upsertSyncPlan(plan: SyncPlan): void {
     moteDb.db
       .prepare(
-        `INSERT INTO sync_plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO sync_plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps, proposal_id, collaborative)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(plan_id) DO UPDATE SET
          status = CASE WHEN excluded.updated_at >= sync_plans.updated_at THEN excluded.status ELSE sync_plans.status END,
          title = CASE WHEN excluded.updated_at >= sync_plans.updated_at THEN excluded.title ELSE sync_plans.title END,
          updated_at = MAX(excluded.updated_at, sync_plans.updated_at),
          current_step_index = CASE WHEN excluded.updated_at >= sync_plans.updated_at THEN excluded.current_step_index ELSE sync_plans.current_step_index END,
-         total_steps = MAX(excluded.total_steps, sync_plans.total_steps)`,
+         total_steps = MAX(excluded.total_steps, sync_plans.total_steps),
+         proposal_id = CASE WHEN excluded.updated_at >= sync_plans.updated_at THEN excluded.proposal_id ELSE sync_plans.proposal_id END,
+         collaborative = CASE WHEN excluded.updated_at >= sync_plans.updated_at THEN excluded.collaborative ELSE sync_plans.collaborative END`,
       )
       .run(
         plan.plan_id,
@@ -1463,6 +1521,8 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
         plan.updated_at,
         plan.current_step_index,
         plan.total_steps,
+        plan.proposal_id ?? null,
+        plan.collaborative ? 1 : 0,
       );
   }
 
@@ -1486,8 +1546,8 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
         `INSERT OR REPLACE INTO sync_plan_steps
        (step_id, plan_id, motebit_id, ordinal, description, prompt, depends_on, optional, status,
         required_capabilities, delegation_task_id, result_summary, error_message, tool_calls_made,
-        started_at, completed_at, retry_count, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        started_at, completed_at, retry_count, updated_at, assigned_motebit_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         step.step_id,
@@ -1508,6 +1568,7 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
         step.completed_at,
         step.retry_count,
         step.updated_at,
+        step.assigned_motebit_id ?? null,
       );
   }
 
@@ -1998,6 +2059,57 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     await next();
   });
 
+  // Auth middleware for proposal routes
+  app.use("/api/v1/proposals/*", async (c, next) => {
+    const authHeader = c.req.header("authorization");
+    if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+      throw new HTTPException(401, { message: "Missing auth token" });
+    }
+    const token = authHeader.slice(7);
+
+    if (apiToken != null && apiToken !== "" && token === apiToken) {
+      await next();
+      return;
+    }
+
+    const claims = parseTokenPayloadUnsafe(token);
+    if (!claims?.mid) {
+      throw new HTTPException(401, { message: "Invalid token" });
+    }
+    const valid = await verifySignedTokenForDevice(token, claims.mid, identityManager);
+    if (!valid) {
+      throw new HTTPException(401, { message: "Token verification failed" });
+    }
+
+    c.set("callerMotebitId" as never, claims.mid as never);
+    await next();
+  });
+
+  app.use("/api/v1/proposals", async (c, next) => {
+    const authHeader = c.req.header("authorization");
+    if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+      throw new HTTPException(401, { message: "Missing auth token" });
+    }
+    const token = authHeader.slice(7);
+
+    if (apiToken != null && apiToken !== "" && token === apiToken) {
+      await next();
+      return;
+    }
+
+    const claims = parseTokenPayloadUnsafe(token);
+    if (!claims?.mid) {
+      throw new HTTPException(401, { message: "Invalid token" });
+    }
+    const valid = await verifySignedTokenForDevice(token, claims.mid, identityManager);
+    if (!valid) {
+      throw new HTTPException(401, { message: "Token verification failed" });
+    }
+
+    c.set("callerMotebitId" as never, claims.mid as never);
+    await next();
+  });
+
   // POST /api/v1/agents/register — register/refresh an agent's MCP endpoint
   app.post("/api/v1/agents/register", async (c) => {
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
@@ -2284,6 +2396,288 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
         };
       }),
     });
+  });
+
+  // === Collaborative Plan Proposals ===
+
+  // POST /api/v1/proposals — submit proposal
+  app.post("/api/v1/proposals", async (c) => {
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    const body = await c.req.json<{
+      proposal_id: string;
+      plan_id: string;
+      initiator_motebit_id?: string;
+      participants: Array<{ motebit_id: string; assigned_steps: number[] }>;
+      plan_snapshot?: unknown;
+      expires_in_ms?: number;
+    }>();
+
+    const initiatorId = callerMotebitId ?? body.initiator_motebit_id;
+    if (!initiatorId) {
+      throw new HTTPException(400, { message: "Missing initiator_motebit_id" });
+    }
+    if (!body.proposal_id || !body.plan_id || !Array.isArray(body.participants)) {
+      throw new HTTPException(400, { message: "Missing required fields" });
+    }
+
+    const now = Date.now();
+    const expiresAt = now + (body.expires_in_ms ?? 10 * 60 * 1000); // 10 min default
+
+    moteDb.db.prepare(
+      `INSERT INTO relay_proposals (proposal_id, plan_id, initiator_motebit_id, status, plan_snapshot, created_at, expires_at, updated_at)
+       VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)`,
+    ).run(body.proposal_id, body.plan_id, initiatorId, JSON.stringify(body.plan_snapshot ?? null), now, expiresAt, now);
+
+    for (const p of body.participants) {
+      moteDb.db.prepare(
+        `INSERT INTO relay_proposal_participants (proposal_id, motebit_id, assigned_steps)
+         VALUES (?, ?, ?)`,
+      ).run(body.proposal_id, p.motebit_id, JSON.stringify(p.assigned_steps));
+    }
+
+    // Fan out to all participant motebits
+    for (const p of body.participants) {
+      const peers = connections.get(p.motebit_id);
+      if (peers) {
+        const payload = JSON.stringify({
+          type: "proposal",
+          proposal_id: body.proposal_id,
+          plan_id: body.plan_id,
+          initiator_motebit_id: initiatorId,
+          assigned_steps: p.assigned_steps,
+        });
+        for (const peer of peers) {
+          peer.ws.send(payload);
+        }
+      }
+    }
+
+    return c.json({ proposal_id: body.proposal_id, status: "pending", expires_at: expiresAt }, 201);
+  });
+
+  // GET /api/v1/proposals/:proposalId — get proposal state
+  app.get("/api/v1/proposals/:proposalId", (c) => {
+    const proposalId = c.req.param("proposalId");
+    const proposal = moteDb.db.prepare("SELECT * FROM relay_proposals WHERE proposal_id = ?").get(proposalId) as Record<string, unknown> | undefined;
+    if (!proposal) {
+      throw new HTTPException(404, { message: "Proposal not found" });
+    }
+
+    const participants = moteDb.db.prepare(
+      "SELECT * FROM relay_proposal_participants WHERE proposal_id = ?",
+    ).all(proposalId) as Array<Record<string, unknown>>;
+
+    return c.json({
+      proposal_id: proposal.proposal_id,
+      plan_id: proposal.plan_id,
+      initiator_motebit_id: proposal.initiator_motebit_id,
+      status: proposal.status,
+      plan_snapshot: proposal.plan_snapshot ? JSON.parse(proposal.plan_snapshot as string) : null,
+      created_at: proposal.created_at,
+      expires_at: proposal.expires_at,
+      updated_at: proposal.updated_at,
+      participants: participants.map((p) => ({
+        motebit_id: p.motebit_id,
+        assigned_steps: JSON.parse(p.assigned_steps as string),
+        response: p.response ?? null,
+        responded_at: p.responded_at ?? null,
+        counter_steps: p.counter_steps ? JSON.parse(p.counter_steps as string) : null,
+      })),
+    });
+  });
+
+  // POST /api/v1/proposals/:proposalId/respond — participant responds
+  app.post("/api/v1/proposals/:proposalId/respond", async (c) => {
+    const proposalId = c.req.param("proposalId");
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    const body = await c.req.json<{
+      responder_motebit_id?: string;
+      response: string;
+      counter_steps?: unknown;
+      signature?: string;
+    }>();
+
+    const responderId = callerMotebitId ?? body.responder_motebit_id;
+    if (!responderId || !body.response) {
+      throw new HTTPException(400, { message: "Missing required fields" });
+    }
+
+    const proposal = moteDb.db.prepare("SELECT * FROM relay_proposals WHERE proposal_id = ?").get(proposalId) as Record<string, unknown> | undefined;
+    if (!proposal) {
+      throw new HTTPException(404, { message: "Proposal not found" });
+    }
+    if (proposal.status !== "pending") {
+      throw new HTTPException(409, { message: `Proposal is ${proposal.status as string}, cannot respond` });
+    }
+
+    const now = Date.now();
+    moteDb.db.prepare(
+      `UPDATE relay_proposal_participants SET response = ?, counter_steps = ?, responded_at = ?, signature = ? WHERE proposal_id = ? AND motebit_id = ?`,
+    ).run(body.response, body.counter_steps ? JSON.stringify(body.counter_steps) : null, now, body.signature ?? null, proposalId, responderId);
+
+    // Check if all participants have responded
+    const allParticipants = moteDb.db.prepare(
+      "SELECT * FROM relay_proposal_participants WHERE proposal_id = ?",
+    ).all(proposalId) as Array<Record<string, unknown>>;
+
+    const allResponded = allParticipants.every((p) => p.response != null);
+    const allAccepted = allParticipants.every((p) => p.response === "accept");
+    const anyRejected = allParticipants.some((p) => p.response === "reject");
+    const anyCountered = allParticipants.some((p) => p.response === "counter");
+
+    let newStatus = "pending";
+    if (anyRejected) newStatus = "rejected";
+    else if (allAccepted) newStatus = "accepted";
+    else if (anyCountered && allResponded) newStatus = "countered";
+
+    if (newStatus !== "pending") {
+      moteDb.db.prepare(
+        "UPDATE relay_proposals SET status = ?, updated_at = ? WHERE proposal_id = ?",
+      ).run(newStatus, now, proposalId);
+    }
+
+    // Fan out response to initiator
+    const initiatorPeers = connections.get(proposal.initiator_motebit_id as string);
+    if (initiatorPeers) {
+      const payload = JSON.stringify({
+        type: "proposal_response",
+        proposal_id: proposalId,
+        responder_motebit_id: responderId,
+        response: body.response,
+        counter_steps: body.counter_steps ?? null,
+      });
+      for (const peer of initiatorPeers) {
+        peer.ws.send(payload);
+      }
+    }
+
+    // If all accepted, fan out finalized to all participants
+    if (newStatus === "accepted") {
+      for (const p of allParticipants) {
+        const peers = connections.get(p.motebit_id as string);
+        if (peers) {
+          const payload = JSON.stringify({
+            type: "proposal_finalized",
+            proposal_id: proposalId,
+            plan_id: proposal.plan_id,
+            status: "accepted",
+          });
+          for (const peer of peers) {
+            peer.ws.send(payload);
+          }
+        }
+      }
+    }
+
+    return c.json({ status: newStatus, all_responded: allResponded });
+  });
+
+  // POST /api/v1/proposals/:proposalId/withdraw — initiator withdraws
+  app.post("/api/v1/proposals/:proposalId/withdraw", (c) => {
+    const proposalId = c.req.param("proposalId");
+    const proposal = moteDb.db.prepare("SELECT * FROM relay_proposals WHERE proposal_id = ?").get(proposalId) as Record<string, unknown> | undefined;
+    if (!proposal) {
+      throw new HTTPException(404, { message: "Proposal not found" });
+    }
+    if (proposal.status !== "pending") {
+      throw new HTTPException(409, { message: `Proposal is ${proposal.status as string}, cannot withdraw` });
+    }
+
+    const now = Date.now();
+    moteDb.db.prepare(
+      "UPDATE relay_proposals SET status = 'withdrawn', updated_at = ? WHERE proposal_id = ?",
+    ).run(now, proposalId);
+
+    return c.json({ status: "withdrawn" });
+  });
+
+  // GET /api/v1/proposals — list proposals
+  app.get("/api/v1/proposals", (c) => {
+    const motebitId = c.req.query("motebit_id");
+    const status = c.req.query("status");
+    const limitStr = c.req.query("limit");
+    const limit = Math.min(Math.max(parseInt(limitStr ?? "50", 10) || 50, 1), 200);
+
+    let sql = "SELECT * FROM relay_proposals WHERE 1=1";
+    const params: unknown[] = [];
+
+    if (motebitId) {
+      sql += " AND (initiator_motebit_id = ? OR proposal_id IN (SELECT proposal_id FROM relay_proposal_participants WHERE motebit_id = ?))";
+      params.push(motebitId, motebitId);
+    }
+    if (status) {
+      sql += " AND status = ?";
+      params.push(status);
+    }
+    sql += " ORDER BY created_at DESC LIMIT ?";
+    params.push(limit);
+
+    const proposals = moteDb.db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
+
+    return c.json({
+      proposals: proposals.map((p) => ({
+        proposal_id: p.proposal_id,
+        plan_id: p.plan_id,
+        initiator_motebit_id: p.initiator_motebit_id,
+        status: p.status,
+        created_at: p.created_at,
+        expires_at: p.expires_at,
+        updated_at: p.updated_at,
+      })),
+    });
+  });
+
+  // POST /api/v1/proposals/:proposalId/step-result — post step completion
+  app.post("/api/v1/proposals/:proposalId/step-result", async (c) => {
+    const proposalId = c.req.param("proposalId");
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    const body = await c.req.json<{
+      step_id: string;
+      motebit_id?: string;
+      status: string;
+      result_summary?: string;
+      receipt?: unknown;
+    }>();
+
+    const motebitId = callerMotebitId ?? body.motebit_id;
+    if (!motebitId || !body.step_id || !body.status) {
+      throw new HTTPException(400, { message: "Missing required fields" });
+    }
+
+    const now = Date.now();
+    moteDb.db.prepare(
+      `INSERT OR REPLACE INTO relay_collaborative_step_results (proposal_id, step_id, motebit_id, status, result_summary, receipt, completed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(proposalId, body.step_id, motebitId, body.status, body.result_summary ?? null, body.receipt ? JSON.stringify(body.receipt) : null, now);
+
+    // Fan out step result to all participants
+    const participants = moteDb.db.prepare(
+      "SELECT motebit_id FROM relay_proposal_participants WHERE proposal_id = ?",
+    ).all(proposalId) as Array<{ motebit_id: string }>;
+
+    const proposal = moteDb.db.prepare("SELECT initiator_motebit_id FROM relay_proposals WHERE proposal_id = ?").get(proposalId) as { initiator_motebit_id: string } | undefined;
+
+    const recipientIds = new Set(participants.map((p) => p.motebit_id));
+    if (proposal) recipientIds.add(proposal.initiator_motebit_id);
+
+    for (const recipientId of recipientIds) {
+      const peers = connections.get(recipientId);
+      if (peers) {
+        const payload = JSON.stringify({
+          type: "collaborative_step_result",
+          proposal_id: proposalId,
+          step_id: body.step_id,
+          motebit_id: motebitId,
+          status: body.status,
+          result_summary: body.result_summary ?? null,
+        });
+        for (const peer of peers) {
+          peer.ws.send(payload);
+        }
+      }
+    }
+
+    return c.json({ status: "recorded" });
   });
 
   function close(): void {

@@ -2818,6 +2818,8 @@ class TauriPlanSyncStoreAdapter implements PlanSyncStoreAdapter {
         updated_at: p.updated_at,
         current_step_index: p.current_step_index,
         total_steps: p.total_steps,
+        proposal_id: p.proposal_id ?? null,
+        collaborative: p.collaborative ? 1 : 0,
       }));
   }
 
@@ -2837,6 +2839,7 @@ class TauriPlanSyncStoreAdapter implements PlanSyncStoreAdapter {
         required_capabilities: s.required_capabilities != null
           ? JSON.stringify(s.required_capabilities) : null,
         delegation_task_id: s.delegation_task_id ?? null,
+        assigned_motebit_id: s.assigned_motebit_id ?? null,
         result_summary: s.result_summary,
         error_message: s.error_message,
         tool_calls_made: s.tool_calls_made,
@@ -2860,6 +2863,8 @@ class TauriPlanSyncStoreAdapter implements PlanSyncStoreAdapter {
         updated_at: plan.updated_at,
         current_step_index: plan.current_step_index,
         total_steps: plan.total_steps,
+        proposal_id: plan.proposal_id ?? undefined,
+        collaborative: plan.collaborative === 1,
       });
     }
   }
@@ -2886,6 +2891,7 @@ class TauriPlanSyncStoreAdapter implements PlanSyncStoreAdapter {
       required_capabilities: step.required_capabilities != null
         ? JSON.parse(step.required_capabilities) as PlanStep["required_capabilities"] : undefined,
       delegation_task_id: step.delegation_task_id ?? undefined,
+      assigned_motebit_id: step.assigned_motebit_id ?? undefined,
       result_summary: step.result_summary,
       error_message: step.error_message,
       tool_calls_made: step.tool_calls_made,

@@ -7,6 +7,8 @@ import {
   signDelegation,
   verifyDelegation,
   verifyDelegationChain,
+  signCollaborativeReceipt,
+  verifyCollaborativeReceipt,
   toBase64Url,
   hash,
   type SignableReceipt,
@@ -463,5 +465,136 @@ describe("end-to-end: delegation chain with receipt sequence", () => {
 
     expect(toBase64Url(kpB.publicKey)).toBe(d1.delegate_public_key);
     expect(toBase64Url(kpC.publicKey)).toBe(d2.delegate_public_key);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// signCollaborativeReceipt / verifyCollaborativeReceipt
+// ---------------------------------------------------------------------------
+
+describe("signCollaborativeReceipt / verifyCollaborativeReceipt", () => {
+  it("round-trip: sign then verify", async () => {
+    const initiatorKp = await generateKeypair();
+    const participantKp = await generateKeypair();
+
+    // Create a participant receipt
+    const participantReceipt = await signExecutionReceipt(
+      {
+        task_id: "task-1",
+        motebit_id: "participant-1",
+        device_id: "dev-1",
+        submitted_at: 1000,
+        completed_at: 2000,
+        status: "completed",
+        result: "done",
+        tools_used: ["tool_a"],
+        memories_formed: 1,
+        prompt_hash: "abc",
+        result_hash: "def",
+      },
+      participantKp.privateKey,
+    );
+
+    const collaborative = await signCollaborativeReceipt(
+      {
+        proposal_id: "prop-1",
+        plan_id: "plan-1",
+        participant_receipts: [participantReceipt],
+      },
+      initiatorKp.privateKey,
+    );
+
+    expect(collaborative.content_hash).toBeTruthy();
+    expect(collaborative.initiator_signature).toBeTruthy();
+
+    const result = await verifyCollaborativeReceipt(
+      collaborative,
+      initiatorKp.publicKey,
+    );
+    expect(result.valid).toBe(true);
+  });
+
+  it("detects tampered content hash", async () => {
+    const kp = await generateKeypair();
+
+    const collaborative = await signCollaborativeReceipt(
+      {
+        proposal_id: "prop-2",
+        plan_id: "plan-2",
+        participant_receipts: [],
+      },
+      kp.privateKey,
+    );
+
+    const tampered = { ...collaborative, content_hash: "tampered" };
+    const result = await verifyCollaborativeReceipt(tampered, kp.publicKey);
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("Content hash mismatch");
+  });
+
+  it("detects invalid initiator signature", async () => {
+    const kp1 = await generateKeypair();
+    const kp2 = await generateKeypair();
+
+    const collaborative = await signCollaborativeReceipt(
+      {
+        proposal_id: "prop-3",
+        plan_id: "plan-3",
+        participant_receipts: [],
+      },
+      kp1.privateKey,
+    );
+
+    // Verify with wrong key
+    const result = await verifyCollaborativeReceipt(collaborative, kp2.publicKey);
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("Initiator signature invalid");
+  });
+
+  it("verifies participant receipts when keys provided", async () => {
+    const initiatorKp = await generateKeypair();
+    const participantKp = await generateKeypair();
+    const wrongKp = await generateKeypair();
+
+    const participantReceipt = await signExecutionReceipt(
+      {
+        task_id: "task-2",
+        motebit_id: "participant-2",
+        device_id: "dev-2",
+        submitted_at: 1000,
+        completed_at: 2000,
+        status: "completed",
+        result: "done",
+        tools_used: [],
+        memories_formed: 0,
+        prompt_hash: "aaa",
+        result_hash: "bbb",
+      },
+      participantKp.privateKey,
+    );
+
+    const collaborative = await signCollaborativeReceipt(
+      {
+        proposal_id: "prop-4",
+        plan_id: "plan-4",
+        participant_receipts: [participantReceipt],
+      },
+      initiatorKp.privateKey,
+    );
+
+    // Verify with correct participant key
+    const knownKeys = new Map<string, Uint8Array>();
+    knownKeys.set("participant-2", participantKp.publicKey);
+
+    const result1 = await verifyCollaborativeReceipt(collaborative, initiatorKp.publicKey, knownKeys);
+    expect(result1.valid).toBe(true);
+
+    // Verify with wrong participant key
+    const wrongKeys = new Map<string, Uint8Array>();
+    wrongKeys.set("participant-2", wrongKp.publicKey);
+
+    const result2 = await verifyCollaborativeReceipt(collaborative, initiatorKp.publicKey, wrongKeys);
+    expect(result2.valid).toBe(false);
+    expect(result2.error).toContain("signature invalid");
   });
 });

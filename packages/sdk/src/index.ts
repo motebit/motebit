@@ -23,6 +23,7 @@ export type PlanId = Brand<string, "PlanId">;
 export type AllocationId = Brand<string, "AllocationId">;
 export type SettlementId = Brand<string, "SettlementId">;
 export type ListingId = Brand<string, "ListingId">;
+export type ProposalId = Brand<string, "ProposalId">;
 
 /** Brand a string as a MotebitId after validation. */
 export function asMotebitId(id: string): MotebitId { return id as MotebitId; }
@@ -44,6 +45,8 @@ export function asAllocationId(id: string): AllocationId { return id as Allocati
 export function asSettlementId(id: string): SettlementId { return id as SettlementId; }
 /** Brand a string as a ListingId after validation. */
 export function asListingId(id: string): ListingId { return id as ListingId; }
+/** Brand a string as a ProposalId after validation. */
+export function asProposalId(id: string): ProposalId { return id as ProposalId; }
 
 // === Enums ===
 
@@ -71,6 +74,21 @@ export enum MotebitType {
   Personal = "personal",
   Service = "service",
   Collaborative = "collaborative",
+}
+
+export enum ProposalStatus {
+  Pending = "pending",
+  Accepted = "accepted",
+  Countered = "countered",
+  Rejected = "rejected",
+  Withdrawn = "withdrawn",
+  Expired = "expired",
+}
+
+export enum ProposalResponseType {
+  Accept = "accept",
+  Reject = "reject",
+  Counter = "counter",
 }
 
 export interface AgentTrustRecord {
@@ -132,6 +150,11 @@ export enum EventType {
   AgentTaskCompleted = "agent_task_completed",
   AgentTaskFailed = "agent_task_failed",
   AgentTaskDenied = "agent_task_denied",
+  ProposalCreated = "proposal_created",
+  ProposalAccepted = "proposal_accepted",
+  ProposalRejected = "proposal_rejected",
+  ProposalCountered = "proposal_countered",
+  CollaborativeStepCompleted = "collaborative_step_completed",
 }
 
 export enum RelationType {
@@ -524,6 +547,8 @@ export interface PlanStep {
   required_capabilities?: DeviceCapability[];
   /** Task ID assigned by the relay when this step was delegated to a remote device. */
   delegation_task_id?: string;
+  /** Motebit ID of the agent assigned to execute this step in collaborative plans. */
+  assigned_motebit_id?: MotebitId;
   result_summary: string | null;
   error_message: string | null;
   tool_calls_made: number;
@@ -543,6 +568,8 @@ export interface Plan {
   updated_at: number;
   current_step_index: number;
   total_steps: number;
+  proposal_id?: ProposalId;
+  collaborative?: boolean;
 }
 
 // === Plan Sync ===
@@ -558,6 +585,8 @@ export interface SyncPlan {
   updated_at: number;
   current_step_index: number;
   total_steps: number;
+  proposal_id: string | null;
+  collaborative: number;  // 0 | 1 for SQLite wire
 }
 
 /** Plan step record for cross-device sync. */
@@ -573,6 +602,7 @@ export interface SyncPlanStep {
   status: StepStatus;
   required_capabilities: string | null;  // JSON-serialized DeviceCapability[] | null
   delegation_task_id: string | null;
+  assigned_motebit_id: string | null;
   result_summary: string | null;
   error_message: string | null;
   tool_calls_made: number;
@@ -771,6 +801,50 @@ export interface SettlementRecord {
   amount_settled: number;
   status: "completed" | "partial" | "refunded";
   settled_at: number;
+}
+
+// === Collaborative Plan Proposals ===
+
+export interface CollaborativePlanProposal {
+  proposal_id: ProposalId;
+  plan_id: PlanId;
+  initiator_motebit_id: MotebitId;
+  participants: ProposalParticipant[];
+  status: ProposalStatus;
+  created_at: number;
+  expires_at: number;
+  updated_at: number;
+}
+
+export interface ProposalParticipant {
+  motebit_id: MotebitId;
+  assigned_steps: number[];  // step ordinals
+  response: ProposalResponseType | null;
+  responded_at: number | null;
+  counter_steps?: ProposalStepCounter[];
+}
+
+export interface ProposalStepCounter {
+  ordinal: number;
+  description?: string;
+  prompt?: string;
+  reason: string;
+}
+
+export interface ProposalResponse {
+  proposal_id: ProposalId;
+  responder_motebit_id: MotebitId;
+  response: ProposalResponseType;
+  counter_steps?: ProposalStepCounter[];
+  signature: string;
+}
+
+export interface CollaborativeReceipt {
+  proposal_id: ProposalId;
+  plan_id: PlanId;
+  participant_receipts: ExecutionReceipt[];
+  content_hash: string;
+  initiator_signature: string;
 }
 
 export interface MarketConfig {

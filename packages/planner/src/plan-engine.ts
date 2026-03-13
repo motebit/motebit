@@ -3,6 +3,7 @@ import type { Plan, PlanStep, DeviceCapability, DelegatedStepResult } from "@mot
 import type { MotebitLoopDependencies, AgenticChunk } from "@motebit/ai-core";
 import { runTurnStreaming } from "@motebit/ai-core";
 import type { PlanStoreAdapter } from "./types.js";
+import type { CollaborativeDelegationAdapter } from "./delegation-adapter.js";
 import { decomposePlan } from "./decompose.js";
 import type { DecompositionContext } from "./decompose.js";
 import { reflectOnPlan } from "./reflect.js";
@@ -42,6 +43,8 @@ export interface PlanEngineConfig {
   delegationAdapter?: StepDelegationAdapter;
   /** Timeout for delegated steps in ms (default 300000 = 5 min). */
   delegationTimeoutMs?: number;
+  collaborativeAdapter?: CollaborativeDelegationAdapter;
+  localMotebitId?: string;
 }
 
 export class PlanEngine {
@@ -177,6 +180,16 @@ export class PlanEngine {
               `[Step ${step.ordinal + 1}: ${step.description}]\n${step.result_summary}`,
             );
           }
+          continue;
+        }
+
+        // Skip steps assigned to other agents in collaborative plans
+        if (
+          step.assigned_motebit_id != null &&
+          this.config.localMotebitId != null &&
+          step.assigned_motebit_id !== this.config.localMotebitId
+        ) {
+          // This step belongs to another participant — wait for their result
           continue;
         }
 
@@ -582,6 +595,112 @@ export class PlanEngine {
           yield* this.resumePlan(plan.plan_id, deps);
         }
       }
+    }
+  }
+
+  setCollaborativeAdapter(adapter: CollaborativeDelegationAdapter | undefined): void {
+    this.config = { ...this.config, collaborativeAdapter: adapter };
+  }
+
+  setLocalMotebitId(motebitId: string): void {
+    this.config = { ...this.config, localMotebitId: motebitId };
+  }
+
+  /**
+   * Execute only the steps assigned to the local motebit in a collaborative plan.
+   * Posts results back to the relay via the collaborative adapter.
+   */
+  async *executeCollaborativeSteps(
+    plan: Plan,
+    steps: PlanStep[],
+    localMotebitId: string,
+    deps: MotebitLoopDependencies,
+    runId?: string,
+  ): AsyncGenerator<PlanChunk> {
+    const adapter = this.config.collaborativeAdapter;
+    const localSteps = steps.filter(
+      (s) => s.assigned_motebit_id === localMotebitId && s.status === StepStatus.Pending,
+    );
+
+    this._isExecuting = true;
+    const completedResults: string[] = [];
+
+    try {
+      for (const step of localSteps) {
+        // Check dependencies
+        if (!this.areDependenciesMet(step)) {
+          continue; // Will be picked up on next pass
+        }
+
+        const startedAt = Date.now();
+        this.store.updateStep(step.step_id, {
+          status: StepStatus.Running,
+          started_at: startedAt,
+          updated_at: startedAt,
+        });
+
+        const updatedStep = this.store.getStep(step.step_id)!;
+        yield { type: "step_started", step: updatedStep };
+
+        try {
+          const result = yield* this.executeStep(updatedStep, completedResults, deps, runId);
+
+          if (result.suspended) {
+            return;
+          }
+
+          const summary = result.responseText.slice(0, 2000);
+          this.store.updateStep(step.step_id, {
+            status: StepStatus.Completed,
+            completed_at: Date.now(),
+            result_summary: summary || null,
+            tool_calls_made: result.toolCallsMade,
+            updated_at: Date.now(),
+          });
+
+          completedResults.push(`[Step ${step.ordinal + 1}: ${step.description}]\n${summary}`);
+
+          const completedStep = this.store.getStep(step.step_id)!;
+          yield { type: "step_completed", step: completedStep };
+
+          // Post result to relay
+          if (adapter && plan.proposal_id) {
+            try {
+              await adapter.postStepResult(plan.proposal_id, step.step_id, {
+                status: "completed",
+                result_summary: summary,
+              });
+            } catch {
+              // Best-effort posting
+            }
+          }
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          this.store.updateStep(step.step_id, {
+            status: StepStatus.Failed,
+            completed_at: Date.now(),
+            error_message: errMsg,
+            updated_at: Date.now(),
+          });
+
+          const failedStep = this.store.getStep(step.step_id)!;
+          yield { type: "step_failed", step: failedStep, error: errMsg };
+
+          // Post failure to relay
+          if (adapter && plan.proposal_id) {
+            try {
+              await adapter.postStepResult(plan.proposal_id, step.step_id, {
+                status: "failed",
+                result_summary: errMsg,
+              });
+            } catch {
+              // Best-effort posting
+            }
+          }
+        }
+      }
+    } finally {
+      this._isExecuting = false;
     }
   }
 

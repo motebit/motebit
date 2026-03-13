@@ -1589,6 +1589,8 @@ interface PlanRow {
   updated_at: number;
   current_step_index: number;
   total_steps: number;
+  proposal_id: string | null;
+  collaborative: number;
 }
 
 function rowToPlan(row: PlanRow): Plan {
@@ -1602,6 +1604,8 @@ function rowToPlan(row: PlanRow): Plan {
     updated_at: row.updated_at,
     current_step_index: row.current_step_index,
     total_steps: row.total_steps,
+    proposal_id: row.proposal_id ?? undefined,
+    collaborative: row.collaborative === 1,
   };
 }
 
@@ -1622,6 +1626,7 @@ interface PlanStepRow {
   retry_count: number;
   required_capabilities: string | null;
   delegation_task_id: string | null;
+  assigned_motebit_id: string | null;
   updated_at: number;
 }
 
@@ -1638,6 +1643,7 @@ function rowToPlanStep(row: PlanStepRow): PlanStep {
       ? JSON.parse(row.required_capabilities) as PlanStep["required_capabilities"]
       : undefined,
     delegation_task_id: row.delegation_task_id ?? undefined,
+    assigned_motebit_id: row.assigned_motebit_id ?? undefined,
     status: row.status as StepStatus,
     result_summary: row.result_summary,
     error_message: row.error_message,
@@ -1663,8 +1669,8 @@ export class SqlitePlanStore {
 
   constructor(db: DatabaseDriver) {
     this.stmtSavePlan = db.prepare(
-      `INSERT OR REPLACE INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps, proposal_id, collaborative)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtGetPlan = db.prepare(`SELECT * FROM plans WHERE plan_id = ?`);
     this.stmtGetPlanForGoal = db.prepare(
@@ -1677,8 +1683,8 @@ export class SqlitePlanStore {
       `SELECT * FROM plans WHERE motebit_id = ? AND status = 'active' ORDER BY created_at DESC`,
     );
     this.stmtSaveStep = db.prepare(
-      `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count, required_capabilities, delegation_task_id, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO plan_steps (step_id, plan_id, ordinal, description, prompt, depends_on, optional, status, result_summary, error_message, tool_calls_made, started_at, completed_at, retry_count, required_capabilities, delegation_task_id, updated_at, assigned_motebit_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtGetStep = db.prepare(`SELECT * FROM plan_steps WHERE step_id = ?`);
     this.stmtGetStepsForPlan = db.prepare(
@@ -1703,6 +1709,8 @@ export class SqlitePlanStore {
       plan.updated_at,
       plan.current_step_index,
       plan.total_steps,
+      plan.proposal_id ?? null,
+      plan.collaborative ? 1 : 0,
     );
   }
 
@@ -1747,6 +1755,8 @@ export class SqlitePlanStore {
       merged.updated_at,
       merged.current_step_index,
       merged.total_steps,
+      merged.proposal_id ?? null,
+      merged.collaborative ? 1 : 0,
     );
   }
 
@@ -1769,6 +1779,7 @@ export class SqlitePlanStore {
       step.required_capabilities != null ? JSON.stringify(step.required_capabilities) : null,
       step.delegation_task_id ?? null,
       step.updated_at,
+      step.assigned_motebit_id ?? null,
     );
   }
 
@@ -1805,6 +1816,7 @@ export class SqlitePlanStore {
       merged.required_capabilities != null ? JSON.stringify(merged.required_capabilities) : null,
       merged.delegation_task_id ?? null,
       merged.updated_at,
+      merged.assigned_motebit_id ?? null,
     );
   }
 
@@ -2507,6 +2519,13 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     migrateExec(driver, "CREATE INDEX IF NOT EXISTS idx_latency_stats_pair ON latency_stats(motebit_id, remote_motebit_id)");
 
     driver.pragma("user_version = 27");
+  }
+
+  if (userVersion < 28) {
+    migrateExec(driver, "ALTER TABLE plan_steps ADD COLUMN assigned_motebit_id TEXT DEFAULT NULL");
+    migrateExec(driver, "ALTER TABLE plans ADD COLUMN proposal_id TEXT DEFAULT NULL");
+    migrateExec(driver, "ALTER TABLE plans ADD COLUMN collaborative INTEGER DEFAULT 0");
+    driver.pragma("user_version = 28");
   }
 
   const eventStore = new SqliteEventStore(driver);

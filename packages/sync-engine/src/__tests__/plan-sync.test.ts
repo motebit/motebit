@@ -15,6 +15,8 @@ function makePlan(id: string, updatedAt: number, status = PlanStatus.Active): Sy
     updated_at: updatedAt,
     current_step_index: 0,
     total_steps: 2,
+    proposal_id: null,
+    collaborative: 0,
   };
 }
 
@@ -31,6 +33,7 @@ function makeStep(id: string, planId: string, status = StepStatus.Pending, updat
     status,
     required_capabilities: null,
     delegation_task_id: null,
+    assigned_motebit_id: null,
     result_summary: null,
     error_message: null,
     tool_calls_made: 0,
