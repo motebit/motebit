@@ -2,7 +2,7 @@
 
 All notable changes to the published packages are documented here. This project uses [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.0] - 2026-03-13
 
 ### Added
 
@@ -43,6 +43,16 @@ All notable changes to the published packages are documented here. This project 
 - **Active inference precision** — `computePrecision()` maps intelligence gradient to precision weights via sigmoid; gradient feeds back into curiosity (state vector), retrieval (memory graph scoring weights), and routing (market config exploration weight). Closes the loop: model evidence → confidence → action selection
 - **Self-model summary** — `summarizeGradientHistory()` produces natural-language self-assessment from gradient snapshots: trajectory, strengths, weaknesses, and active inference posture. No LLM calls — the agent narrates its own growth from the numbers alone
 - **Self-evidencing thesis test** — integration test proving the complete feedback loop: empty agent → memory accumulates → gradient rises → precision tightens → retrieval weights shift → quality improves → gradient rises further → agent narrates its own growth
+
+- **Trust semiring algebra** — `(TrustScores, max, ×, 0, 1)` in SDK: multiplicative discount for serial chains, max for parallel paths. `composeDelegationTrust()` walks nested receipt trees. Canonical `TRUST_LEVEL_SCORES` de-duplicated from market into SDK
+- **W3C Verifiable Credentials 2.0** — three credential types with `eddsa-jcs-2022` cryptosuite: `AgentReputationCredential` (relay-issued on receipt), `AgentGradientCredential` (self-issued in housekeeping), `AgentTrustCredential` (peer-issued on trust transitions). `VerifiablePresentation` bundles multiple VCs for third-party verification
+- **Execution ledger** — `motebit/execution-ledger@1.0` spec: PlanEngine records timeline events, runtime builds + signs `GoalExecutionManifest` (SHA-256 content hash, Ed25519 signature). Relay stores and serves ledgers
+- **Budget allocation + settlement** — `estimateCost()` from candidate pricing, `allocateBudget()` locks funds, `settleOnReceipt()` settles/refunds. HTTP 402 for insufficient budget
+- **Precision feedback loop** — `PrecisionWeights` (selfTrust, explorationDrive, retrievalPrecision, curiosityModulation) computed from gradient via sigmoid, injected into system prompt as natural-language guidance
+- **Rate limiting** — sliding window per IP with 5 tiers (auth 30/min, read 60/min, write 30/min, public 20/min, expensive 10/min). Master token bypasses
+- **Bundle export + verification** — `motebit export` writes full directory (identity + credentials + presentation + budget + gradient), `motebit verify <dir>` validates signatures, VC proofs, VP integrity, cross-references
+- **Relay deployment** — Fly.io production at `motebit-sync.fly.dev`, CI deploy on push to main, persistent SQLite volume, health checks
+- **Credential UI** — web sovereign panel (3 tabs), desktop/mobile credentials section, 12th admin dashboard tab
 
 ### Fixed
 

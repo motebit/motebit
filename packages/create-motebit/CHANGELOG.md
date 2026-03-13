@@ -2,6 +2,12 @@
 
 All notable changes to `create-motebit` are documented here. For full project history, see the [root changelog](../../CHANGELOG.md).
 
+## [0.3.0] - 2026-03-13
+
+### Changed
+
+- Uses `@motebit/verify@0.3.0` with DID and bundle verification support
+
 ## [0.2.0] - 2026-03-10
 
 ### Changed

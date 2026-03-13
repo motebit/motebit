@@ -2,7 +2,7 @@
 
 All notable changes to `@motebit/sdk` are documented here. For full project history, see the [root changelog](../../CHANGELOG.md).
 
-## [Unreleased]
+## [0.3.0] - 2026-03-13
 
 ### Added
 
@@ -19,6 +19,12 @@ All notable changes to `@motebit/sdk` are documented here. For full project hist
 - `did` field on `VerifyResult` and `AgentCapabilities`
 - `ReputationSnapshot` type for Beta-binomial smoothed reputation
 - `CandidateProfile` and `TaskRequirements` types for market scoring
+- Trust semiring algebra: `trustAdd`, `trustMultiply`, `composeTrustChain`, `joinParallelRoutes`, `composeDelegationTrust`
+- Canonical `TRUST_LEVEL_SCORES` mapping (single source of truth)
+- W3C Verifiable Credentials types: `VerifiableCredential`, `VerifiablePresentation`, `CredentialProof`
+- `ExecutionTimelineEntry` and `GoalExecutionManifest` types for execution ledger
+- Budget allocation types: `BudgetAllocation`, `Settlement`
+- `precisionContext` field on `ContextPack`
 
 ## [0.1.0] - 2026-03-08
 

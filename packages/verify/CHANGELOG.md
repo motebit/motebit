@@ -2,11 +2,12 @@
 
 All notable changes to `@motebit/verify` are documented here. For full project history, see the [root changelog](../../CHANGELOG.md).
 
-## [Unreleased]
+## [0.3.0] - 2026-03-13
 
 ### Added
 
 - `did` field in `VerifyResult` — every verified identity now includes its W3C `did:key` Decentralized Identifier
+- Bundle directory verification: validates identity + credentials + presentations as a unit
 
 ## [0.2.0] - 2026-03-10
 
