@@ -1,0 +1,167 @@
+---
+title: Execution Ledger
+description: A cryptographically signed timeline of goal execution — what happened, in what order, provably.
+---
+
+An execution receipt proves a task was completed. An execution ledger proves _how_ it was completed — every step, every tool call, every delegation, in cryptographic order. The ledger is a signed timeline conforming to the `motebit/execution-ledger@1.0` specification.
+
+The ledger records structure, not content. Tool arguments are SHA-256 hashed. Prompts and results are excluded. A verifier can see _which tools were called_, _in what order_, _whether they succeeded_, and _how long they took_ — without learning what was said or what data was processed.
+
+## What gets recorded
+
+The ledger tracks the lifecycle of goal execution through typed timeline events:
+
+| Event Type | What It Captures |
+|------------|-----------------|
+| `goal_started` | Goal execution begins. Records `goal_id`. |
+| `plan_created` | A plan was generated. Records `plan_id`, `title`, `total_steps`. |
+| `step_started` | A plan step begins. Records `step_id`, `ordinal`, `description`. |
+| `tool_invoked` | A tool was called. Records `tool` name, `args_hash` (SHA-256 of canonical JSON arguments), `call_id`. |
+| `tool_result` | Tool returned. Records `tool` name, `ok` (boolean), `duration_ms`, `call_id`. |
+| `step_completed` | Step finished successfully. Records `tool_calls_made` count. |
+| `step_failed` | Step finished with an error. Records `error` message. |
+| `step_delegated` | Step was delegated to another agent. Records `task_id`. |
+| `plan_completed` | All steps completed. |
+| `plan_failed` | Plan execution failed. Records `reason`. |
+| `goal_completed` | Goal execution ended. Records final `status`. |
+
+Events are ordered by timestamp. The timeline is an append-only sequence — events cannot be reordered or removed after the ledger is signed.
+
+## Privacy by design
+
+The ledger is deliberately opaque about content:
+
+- **Tool arguments are hashed.** The `args_hash` field is a SHA-256 hex digest of the canonical JSON arguments. A party who knows the original arguments can verify they match, but the arguments are not recoverable from the hash.
+- **Prompts are excluded.** The `goal_started` event records the `goal_id` but not the prompt text. Goal prompts may contain sensitive user instructions.
+- **Results are excluded.** Only `ok` (boolean) and `duration_ms` are recorded for tool results. The ledger proves _what happened_, not _what was said_.
+
+This means you can share a ledger with a third party to prove execution without exposing the content of the work.
+
+## Signing
+
+The ledger is signed in three steps:
+
+1. **Canonical serialization** — Each timeline entry is serialized as canonical JSON (keys sorted lexicographically, no whitespace). Entries are joined with newlines.
+2. **Content hash** — SHA-256 over the canonical timeline bytes, encoded as lowercase hex (64 characters).
+3. **Signature** — Ed25519 signature over the raw 32-byte content hash (not the hex string), encoded as base64url.
+
+The signature proves the timeline is authentic (signed by the agent's keypair) and untampered (any modification invalidates the content hash).
+
+**Unsigned ledgers** are also valid. The sync relay can reconstruct a ledger from synced events, but it does not hold the agent's private key. Unsigned ledgers can be verified for content integrity (the hash matches the timeline) but not for authenticity (no signature to check).
+
+## Delegation chains
+
+When a step is delegated to another agent, the ledger records the delegation in three places:
+
+1. **Timeline** — A `step_delegated` event with the `task_id`.
+2. **Step summary** — The `delegation.receipt_hash` field links to the delegated agent's execution.
+3. **Delegation receipts** — The `delegation_receipts` array includes metadata: `task_id`, `motebit_id`, `device_id`, `status`, `tools_used`, and `signature_prefix` (first 16 characters of the receipt's Ed25519 signature).
+
+This creates a verifiable chain. The parent ledger references delegated execution by content hash. The full signed receipt can be retrieved from the relay for independent verification. Delegation verification is recursive — a ledger is fully verified when all nested delegations are also verified.
+
+## Ledger structure
+
+```json
+{
+  "spec": "motebit/execution-ledger@1.0",
+  "motebit_id": "019...",
+  "goal_id": "goal-abc",
+  "plan_id": "plan-xyz",
+  "started_at": 1710288000000,
+  "completed_at": 1710288060000,
+  "status": "completed",
+  "timeline": [
+    {
+      "timestamp": 1710288000000,
+      "type": "goal_started",
+      "payload": { "goal_id": "goal-abc" }
+    },
+    {
+      "timestamp": 1710288001000,
+      "type": "tool_invoked",
+      "payload": {
+        "tool": "web_search",
+        "args_hash": "a3f2b8c1d4e5...",
+        "call_id": "call-001"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "step_id": "step-1",
+      "ordinal": 0,
+      "description": "Search for relevant information",
+      "status": "completed",
+      "tools_used": ["web_search"],
+      "tool_calls": 2,
+      "started_at": 1710288001000,
+      "completed_at": 1710288030000
+    }
+  ],
+  "delegation_receipts": [],
+  "content_hash": "7f83b1657ff1fc...",
+  "signature": "dGhpcyBpcyBh..."
+}
+```
+
+## CLI commands
+
+```bash
+# Display a formatted ledger summary for a goal
+motebit ledger <goal_id>
+
+# Output the full ledger as JSON
+motebit ledger <goal_id> --json
+```
+
+The formatted output shows the goal ID, plan ID, status, timestamps, event count, and signature status (signed or relay-reconstructed). The `--json` output includes the complete timeline and step summaries for programmatic processing.
+
+The command fetches the ledger from the sync relay. Requires `--sync-url` or the `MOTEBIT_SYNC_URL` environment variable.
+
+## API endpoints
+
+### Submit a signed ledger
+
+```
+POST /agent/:motebitId/ledger
+```
+
+The agent submits its signed execution ledger after goal completion. The relay stores the full ledger document and indexes it by goal ID.
+
+### Retrieve a ledger
+
+```
+GET /agent/:motebitId/ledger/:goalId
+```
+
+Returns the execution ledger for a specific goal. If the agent submitted a signed ledger, that is returned. Otherwise, the relay reconstructs one from synced events (unsigned).
+
+The relay-constructed ledger has the same structure but omits the `signature` field. It can be verified for content integrity (the content hash matches the timeline) but not for authenticity.
+
+### Reconstructed ledger (admin)
+
+```
+GET /api/v1/execution/:motebitId/:goalId
+```
+
+Returns the relay-reconstructed execution manifest. This endpoint builds the ledger from the relay's own records (plans, steps, tool audit entries) rather than from an agent-submitted document. Useful for comparing the agent's claimed timeline against the relay's observed events.
+
+## Verification
+
+To verify a ledger:
+
+1. Check `spec` is `"motebit/execution-ledger@1.0"`.
+2. Recompute the content hash from the timeline using canonical JSON serialization.
+3. Compare the recomputed hash against `content_hash`. If they differ, the timeline has been tampered with.
+4. If `signature` is present, decode it from base64url and verify the Ed25519 signature over the raw content hash bytes using the agent's public key.
+5. For each delegation receipt, obtain the delegated agent's public key and verify recursively.
+
+## Security considerations
+
+The ledger provides strong guarantees about integrity and authenticity, with explicit limits:
+
+- **Timestamps are self-reported.** A malicious agent can fabricate timestamps. The ledger proves the agent _claims_ events occurred in this order — not that the timestamps are accurate.
+- **Completeness is not guaranteed.** The ledger proves recorded events are authentic and unmodified. It does not prove the record is complete — an agent could omit events before signing.
+- **Low-entropy arguments may be recoverable.** Tool arguments with small value spaces (booleans, short enumerations) could potentially be brute-forced from the `args_hash`. The hash is one-way under SHA-256, but entropy matters.
+
+For the full specification including the canonical serialization algorithm, signing details, and threat model, see the [motebit/execution-ledger@1.0 spec](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md).
