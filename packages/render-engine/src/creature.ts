@@ -585,6 +585,7 @@ export function disposeCreature(refs: CreatureRefs): void {
   const disposeMeshes = (group: THREE.Group) => {
     group.traverse((child) => {
       if (child instanceof THREE.Mesh) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access -- Three.js Mesh.geometry types
         child.geometry.dispose();
         if (child.material instanceof THREE.Material) child.material.dispose();
       }

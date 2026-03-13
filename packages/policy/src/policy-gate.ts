@@ -243,6 +243,7 @@ export class PolicyGate {
     }
 
     // 4. Path allowlist check for file tools — uses segment boundary matching
+    // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- args.path is any from tool schema
     if (this.config.pathAllowList && args.path && typeof args.path === "string") {
       const argPath = args.path;
       const allowed = this.config.pathAllowList.some((p) => {
@@ -267,6 +268,7 @@ export class PolicyGate {
     if (
       this.config.domainAllowList &&
       this.config.domainAllowList.length > 0 &&
+      // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- args.url is any from tool schema
       args.url &&
       typeof args.url === "string"
     ) {
@@ -389,6 +391,7 @@ export class PolicyGate {
     directiveDensity?: number;
     structuralFlags?: string[];
   } {
+    // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- result.data is unknown, falsy check is intentional
     if (!result.data) {
       return { result, injectionDetected: false, injectionPatterns: [] };
     }

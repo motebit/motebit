@@ -516,7 +516,7 @@ describe("McpClientAdapter — external data boundary", () => {
     // Source attribute should have no brackets/quotes/backslashes
     const sourceMatch = data.match(/source="([^"]+)"/);
     expect(sourceMatch).not.toBeNull();
-    expect(sourceMatch![1]).not.toMatch(/[\[\]"\\]/);
+    expect(sourceMatch![1]).not.toMatch(/[[\]"\\]/);
   });
 
   it("sanitizes brackets/quotes/backslashes in tool name", async () => {

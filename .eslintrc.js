@@ -21,15 +21,28 @@ module.exports = {
   },
   rules: {
     "@typescript-eslint/no-explicit-any": "error",
-    "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
-    "@typescript-eslint/strict-boolean-expressions": "warn",
-    "no-console": "warn",
-    "import/no-extraneous-dependencies": [
+    "@typescript-eslint/no-unused-vars": [
       "error",
+      { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
+    ],
+    "@typescript-eslint/strict-boolean-expressions": [
+      "warn",
       {
-        devDependencies: ["**/__tests__/**", "**/*.test.ts", "**/*.spec.ts"],
+        allowString: true,
+        allowNumber: true,
+        allowNullableObject: true,
+        allowNullableBoolean: true,
+        allowNullableString: true,
+        allowNullableNumber: false,
+        allowNullableEnum: false,
+        allowAny: false,
       },
     ],
+    "no-console": "warn",
+    // Disabled: eslint-plugin-import@2.32.0 crashes with minimatch 10.x
+    // (minimatch removed default export, plugin uses _minimatch2.default)
+    // Re-enable after upgrading to eslint-plugin-import@2.33+ or pinning minimatch@9
+    "import/no-extraneous-dependencies": "off",
     "import/no-relative-packages": "error",
     "no-restricted-imports": [
       "error",
@@ -59,6 +72,7 @@ module.exports = {
         "@typescript-eslint/no-explicit-any": "off",
         "@typescript-eslint/no-unsafe-enum-comparison": "off",
         "@typescript-eslint/no-unnecessary-type-assertion": "off",
+        "require-yield": "off",
         "@typescript-eslint/no-unused-vars": [
           "error",
           { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
@@ -71,12 +85,15 @@ module.exports = {
       files: ["apps/cli/src/**/*.ts"],
       rules: {
         "no-console": "off",
-        "import/no-extraneous-dependencies": [
-          "error",
-          {
-            devDependencies: true,
-          },
-        ],
+        // Matches global disable — see note above
+        "import/no-extraneous-dependencies": "off",
+      },
+    },
+    {
+      // Services are server entry points — console is the logging interface.
+      files: ["services/*/src/**/*.ts"],
+      rules: {
+        "no-console": "off",
       },
     },
     {

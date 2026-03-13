@@ -140,7 +140,7 @@ export function AdminApp(): React.ReactElement {
           setBudgetSummary(budgetRes.summary as { total_locked: number; total_settled: number });
         }
         if ("allocations" in budgetRes) {
-          setBudgetAllocations(budgetRes.allocations as BudgetAllocationEntry[]);
+          setBudgetAllocations(budgetRes.allocations);
         }
 
         if (eventsRes.events.length > 0) {

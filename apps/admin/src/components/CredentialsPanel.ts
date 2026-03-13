@@ -10,7 +10,7 @@ const TYPE_COLORS: Record<string, string> = {
 };
 
 function resolveIssuer(cred: CredentialEntry["credential"]): string {
-  if (!cred.issuer) return "unknown";
+  if (cred.issuer == null) return "unknown";
   if (typeof cred.issuer === "string") return cred.issuer;
   return cred.issuer.id ?? "unknown";
 }

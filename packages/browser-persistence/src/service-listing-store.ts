@@ -15,10 +15,12 @@ export class IdbServiceListingStore implements ServiceListingStoreAdapter {
     const tx = this.db.transaction("service_listings", "readonly");
     const store = tx.objectStore("service_listings");
     const index = store.index("motebit_id");
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- IDB .get() returns any
     const result = await idbRequest(index.get(motebitId));
     return (result as AgentServiceListing | undefined) ?? null;
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await -- fire-and-forget IDB put
   async set(listing: AgentServiceListing): Promise<void> {
     const tx = this.db.transaction("service_listings", "readwrite");
     tx.objectStore("service_listings").put({ ...listing });
@@ -31,6 +33,7 @@ export class IdbServiceListingStore implements ServiceListingStoreAdapter {
     return records.sort((a, b) => b.updated_at - a.updated_at);
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await -- fire-and-forget IDB delete
   async delete(listingId: string): Promise<void> {
     const tx = this.db.transaction("service_listings", "readwrite");
     tx.objectStore("service_listings").delete(listingId);

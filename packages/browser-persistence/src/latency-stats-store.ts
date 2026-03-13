@@ -17,6 +17,7 @@ interface LatencyEntry {
 export class IdbLatencyStatsStore implements LatencyStatsStoreAdapter {
   constructor(private db: IDBDatabase) {}
 
+  // eslint-disable-next-line @typescript-eslint/require-await -- fire-and-forget IDB add
   async record(motebitId: string, remoteMotebitId: string, latencyMs: number): Promise<void> {
     const tx = this.db.transaction("latency_stats", "readwrite");
     const entry: LatencyEntry = {

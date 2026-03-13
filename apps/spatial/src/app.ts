@@ -61,7 +61,7 @@ const satSlider = document.getElementById("sat-slider") as HTMLInputElement | nu
 const voiceIndicator = document.getElementById("voice-indicator") as HTMLElement;
 
 // Gaze overlay (reserved for future presence visualization)
-const gazeOverlay = document.getElementById("gaze-overlay") as HTMLElement | null;
+const gazeOverlay = document.getElementById("gaze-overlay");
 
 // === State ===
 

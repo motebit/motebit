@@ -580,8 +580,10 @@ export async function* runTurnStreaming(
   if (memoriesFormed.length > 0) {
     // Link new memories to retrieved memories from this turn
     for (const newNode of memoriesFormed) {
+      // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- defensive: embedding is required but guard against malformed nodes
       if (!newNode.embedding) continue;
       for (const retrieved of relevantMemories) {
+        // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- defensive: embedding is required but guard against malformed nodes
         if (!retrieved.embedding) continue;
         const sim = cosineSimilarity(newNode.embedding, retrieved.embedding);
         if (sim >= EDGE_SIMILARITY_THRESHOLD) {
@@ -594,6 +596,7 @@ export async function* runTurnStreaming(
       for (let j = i + 1; j < memoriesFormed.length; j++) {
         const a = memoriesFormed[i]!;
         const b = memoriesFormed[j]!;
+        // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- defensive: embedding is required but guard against malformed nodes
         if (!a.embedding || !b.embedding) continue;
         const sim = cosineSimilarity(a.embedding, b.embedding);
         if (sim >= EDGE_SIMILARITY_THRESHOLD) {

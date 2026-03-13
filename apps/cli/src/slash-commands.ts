@@ -130,6 +130,7 @@ Available commands:
           const halfDays = Math.round(node.half_life / MS_PER_DAY);
           const defaultDays = 30;
           const compounded = halfDays > defaultDays;
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-enum-comparison -- MemoryType string enum
           const type = node.memory_type === "episodic" ? "epi" : "sem";
           const edges = edgeCounts.get(node.node_id) ?? 0;
           const pin = node.pinned ? " pin" : "";
@@ -161,7 +162,9 @@ Available commands:
       }
 
       const DAY = 86_400_000;
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-enum-comparison -- MemoryType string enum
       const sem = live.filter((n) => (n.memory_type ?? "semantic") === "semantic").length;
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-enum-comparison -- MemoryType string enum
       const epi = live.filter((n) => n.memory_type === "episodic").length;
       const pinned = live.filter((n) => n.pinned).length;
       const avgHalfLife = live.reduce((s, n) => s + n.half_life, 0) / live.length;
@@ -1534,7 +1537,9 @@ Available commands:
         console.log(`  Expires:   ${new Date(proposalData.expires_at).toISOString()}`);
 
         const snapshot = proposalData.plan_snapshot as Record<string, unknown> | null;
+        // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- Record<string, unknown> value check
         if (snapshot?.goal) {
+          // eslint-disable-next-line @typescript-eslint/no-base-to-string -- snapshot.goal is a string at runtime
           console.log(`  Goal:      ${String(snapshot.goal)}`);
         }
 

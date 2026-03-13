@@ -861,14 +861,15 @@ export async function handleLedger(config: CliConfig): Promise<void> {
   console.log();
   console.log(`  Execution Ledger`);
   console.log(`  ${"─".repeat(50)}`);
-  console.log(`  goal_id        ${manifest.goal_id}`);
-  console.log(`  plan_id        ${manifest.plan_id ?? "—"}`);
-  console.log(`  status         ${manifest.status}`);
+  console.log(`  goal_id        ${String(manifest.goal_id)}`);
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string -- plan_id is a string at runtime
+  console.log(`  plan_id        ${String(manifest.plan_id ?? "—")}`);
+  console.log(`  status         ${String(manifest.status)}`);
   console.log(
-    `  started_at     ${manifest.started_at ? new Date(manifest.started_at as number).toISOString() : "—"}`,
+    `  started_at     ${manifest.started_at != null ? new Date(manifest.started_at as number).toISOString() : "—"}`,
   );
   console.log(
-    `  completed_at   ${manifest.completed_at ? new Date(manifest.completed_at as number).toISOString() : "—"}`,
+    `  completed_at   ${manifest.completed_at != null ? new Date(manifest.completed_at as number).toISOString() : "—"}`,
   );
   console.log(`  timeline       ${timeline.length} events`);
   console.log(
@@ -1375,7 +1376,7 @@ async function verifyBundle(dirPath: string): Promise<void> {
       const gradientData = gradientResult.data as Record<string, unknown>;
       const composite =
         typeof gradientData["gradient"] === "number"
-          ? (gradientData["gradient"] as number).toFixed(2)
+          ? gradientData["gradient"].toFixed(2)
           : "unknown";
       console.log(`  Gradient:                  composite: ${composite}`);
     }

@@ -1109,7 +1109,7 @@ export class MotebitRuntime {
           event_id: crypto.randomUUID(),
           motebit_id: this.motebitId,
           timestamp: Date.now(),
-          event_type: eventType!,
+          event_type: eventType,
           payload,
           version_clock: clock + 1,
           tombstoned: false,
@@ -1162,7 +1162,7 @@ export class MotebitRuntime {
 
     // Filter to events related to this goal/plan
     const relevantEvents = events.filter((e) => {
-      const p = e.payload as Record<string, unknown>;
+      const p = e.payload;
       return p.goal_id === goalId || p.plan_id === plan.plan_id;
     });
 
@@ -1176,7 +1176,7 @@ export class MotebitRuntime {
         e.event_type !== EventType.AgentTaskFailed
       )
         return false;
-      const p = e.payload as Record<string, unknown>;
+      const p = e.payload;
       return delegationTaskIds.has(p.task_id as string);
     });
 
@@ -1203,7 +1203,7 @@ export class MotebitRuntime {
 
     // Plan lifecycle events — only emit recognized fields (no raw payload leak)
     for (const event of relevantEvents) {
-      const p = event.payload as Record<string, unknown>;
+      const p = event.payload;
       switch (event.event_type) {
         case EventType.PlanCreated:
           timeline.push({
@@ -1372,10 +1372,10 @@ export class MotebitRuntime {
       if (s.delegation_task_id) {
         // Find matching receipt event to include receipt hash
         const receiptEvent = receiptEvents.find((e) => {
-          const p = e.payload as Record<string, unknown>;
+          const p = e.payload;
           return p.task_id === s.delegation_task_id;
         });
-        const receiptPayload = receiptEvent?.payload as Record<string, unknown> | undefined;
+        const receiptPayload = receiptEvent?.payload;
         const receipt = receiptPayload?.receipt as Record<string, unknown> | undefined;
         summary.delegation = {
           task_id: s.delegation_task_id,
@@ -1388,7 +1388,7 @@ export class MotebitRuntime {
 
     // 7. Extract delegation receipt summaries from event log
     const delegationReceipts: DelegationReceiptSummary[] = receiptEvents.map((e) => {
-      const p = e.payload as Record<string, unknown>;
+      const p = e.payload;
       const receipt = p.receipt as Record<string, unknown> | undefined;
       return {
         task_id: p.task_id as string,

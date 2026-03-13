@@ -54,7 +54,7 @@ function computePriceEfficiency(
   listing: AgentServiceListing | null,
   requirements: TaskRequirements,
 ): number {
-  if (!listing || listing.pricing.length === 0 || !requirements.max_budget) return 0.7;
+  if (!listing || listing.pricing.length === 0 || requirements.max_budget == null) return 0.7;
   let totalCost = 0;
   for (const cap of requirements.required_capabilities) {
     const price = listing.pricing.find((p) => p.capability === cap);

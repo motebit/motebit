@@ -53,7 +53,7 @@ function formatTimeAgo(ts: number): string {
 }
 
 function resolveIssuer(cred: CredentialEntry["credential"]): string {
-  if (!cred.issuer) return "unknown";
+  if (cred.issuer == null) return "unknown";
   if (typeof cred.issuer === "string") {
     return cred.issuer.length > 28 ? cred.issuer.slice(0, 28) + "..." : cred.issuer;
   }

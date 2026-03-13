@@ -145,7 +145,7 @@ export function wireServerDeps(
         ctx.callerMotebitId = caller.motebitId;
         ctx.callerTrustLevel = caller.trustLevel;
       }
-      return runtime.policy.validate(tool as ToolDefinition, args, ctx);
+      return runtime.policy.validate(tool, args, ctx);
     },
     executeTool: (name, args) => runtime.getToolRegistry().execute(name, args),
 
@@ -199,7 +199,7 @@ export function wireServerDeps(
         confidence: n.confidence,
         similarity: 0,
         half_life_days: Math.round(n.half_life / 86_400_000),
-        memory_type: (n.memory_type ?? "semantic") as string,
+        memory_type: n.memory_type ?? "semantic",
         created_at: n.created_at,
       }));
     };
@@ -346,6 +346,7 @@ export async function startServiceServer(
       });
       if (regResp.ok) {
         heartbeatTimer = setInterval(
+          // eslint-disable-next-line @typescript-eslint/no-misused-promises -- fire-and-forget heartbeat
           async () => {
             try {
               await fetch(`${config.syncUrl}/api/v1/agents/heartbeat`, {
