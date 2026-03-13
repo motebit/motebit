@@ -42,7 +42,7 @@ describe("computeServiceReputation", () => {
     const rep = computeServiceReputation(MID, receipts, makeTrust());
     expect(rep.composite).toBeGreaterThan(0);
     expect(rep.composite).toBeLessThanOrEqual(1);
-    expect(rep.sub_scores.reliability).toBe(1.0);
+    expect(rep.sub_scores.reliability).toBeCloseTo(11 / 12); // Beta-binomial: (1+10)/(2+10)
     expect(rep.sample_size).toBe(10);
   });
 
@@ -53,7 +53,7 @@ describe("computeServiceReputation", () => {
       makeReceipt({ status: "failed" }),
     ];
     const rep = computeServiceReputation(MID, receipts, makeTrust());
-    expect(rep.sub_scores.reliability).toBeCloseTo(1 / 3);
+    expect(rep.sub_scores.reliability).toBeCloseTo(2 / 5); // Beta-binomial: (1+1)/(2+3)
   });
 
   it("returns low score for empty receipt history", () => {

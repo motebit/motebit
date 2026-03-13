@@ -58,7 +58,7 @@ export function computeServiceReputation(
 
   // Reliability: fraction completed
   const completed = recent.filter((r) => r.status === "completed").length;
-  const reliability = completed / recent.length;
+  const reliability = (1 + completed) / (2 + recent.length);
 
   // Speed: average duration (lower = better), normalized
   const durations = recent
