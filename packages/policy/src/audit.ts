@@ -21,6 +21,8 @@ export interface AuditLogSink {
   query(turnId: string): ToolAuditEntry[];
   getAll(): ToolAuditEntry[];
   queryStatsSince(afterTimestamp: number): AuditStatsSince;
+  /** Query tool audit entries by run_id (plan execution). Optional — returns [] if not implemented. */
+  queryByRunId?(runId: string): ToolAuditEntry[];
 }
 
 const DEFAULT_MAX_ENTRIES = 10_000;
@@ -64,6 +66,10 @@ export class InMemoryAuditSink implements AuditLogSink {
       }
     }
     return { distinctTurns: turns.size, totalToolCalls: recent.length, succeeded, blocked, failed };
+  }
+
+  queryByRunId(runId: string): ToolAuditEntry[] {
+    return this.entries.filter((e) => e.runId === runId);
   }
 
   get size(): number {

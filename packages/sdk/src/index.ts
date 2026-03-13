@@ -638,6 +638,64 @@ export interface DelegatedStepResult {
   result_text: string;
 }
 
+// === Execution Ledger ===
+
+export type ExecutionTimelineType =
+  | "goal_started"
+  | "plan_created"
+  | "step_started"
+  | "tool_invoked"
+  | "tool_result"
+  | "step_completed"
+  | "step_failed"
+  | "step_delegated"
+  | "plan_completed"
+  | "plan_failed"
+  | "goal_completed";
+
+export interface ExecutionTimelineEntry {
+  timestamp: number;
+  type: ExecutionTimelineType;
+  payload: Record<string, unknown>;
+}
+
+export interface ExecutionStepSummary {
+  step_id: string;
+  ordinal: number;
+  description: string;
+  status: string;
+  tools_used: string[];
+  tool_calls: number;
+  started_at: number | null;
+  completed_at: number | null;
+  delegation?: { task_id: string; receipt_hash?: string };
+}
+
+export interface GoalExecutionManifest {
+  spec: "motebit/execution-ledger@1.0";
+  motebit_id: string;
+  goal_id: string;
+  plan_id: string;
+  started_at: number;
+  completed_at: number;
+  status: "completed" | "failed" | "paused" | "active";
+  timeline: ExecutionTimelineEntry[];
+  steps: ExecutionStepSummary[];
+  delegation_receipts: DelegationReceiptSummary[];
+  content_hash: string;
+  signature?: string;
+}
+
+export interface DelegationReceiptSummary {
+  task_id: string;
+  motebit_id: string;
+  device_id: string;
+  status: string;
+  completed_at: number;
+  tools_used: string[];
+  signature_prefix: string;
+}
+
 export interface AgentCapabilities {
   motebit_id: MotebitId;
   public_key: string;

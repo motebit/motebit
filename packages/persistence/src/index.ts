@@ -861,6 +861,7 @@ function rowToToolAudit(row: ToolAuditRow): ToolAuditEntry {
 export class SqliteToolAuditSink implements AuditLogSink {
   private stmtAppend: PreparedStatement;
   private stmtQueryTurn: PreparedStatement;
+  private stmtQueryRunId: PreparedStatement;
   private stmtGetAll: PreparedStatement;
   private stmtStatsSince: PreparedStatement;
 
@@ -871,6 +872,9 @@ export class SqliteToolAuditSink implements AuditLogSink {
     );
     this.stmtQueryTurn = db.prepare(
       `SELECT * FROM tool_audit_log WHERE turn_id = ? ORDER BY timestamp ASC`,
+    );
+    this.stmtQueryRunId = db.prepare(
+      `SELECT * FROM tool_audit_log WHERE run_id = ? ORDER BY timestamp ASC`,
     );
     this.stmtGetAll = db.prepare(`SELECT * FROM tool_audit_log ORDER BY timestamp ASC`);
     this.stmtStatsSince = db.prepare(
@@ -927,6 +931,11 @@ export class SqliteToolAuditSink implements AuditLogSink {
       blocked: row.blocked ?? 0,
       failed: row.failed ?? 0,
     };
+  }
+
+  queryByRunId(runId: string): ToolAuditEntry[] {
+    const rows = this.stmtQueryRunId.all(runId) as ToolAuditRow[];
+    return rows.map(rowToToolAudit);
   }
 }
 

@@ -30,6 +30,7 @@
  *   GET  /api/v1/audit/:motebitId                      — tool audit log
  *   GET  /api/v1/plans/:motebitId                      — list plans with steps
  *   GET  /api/v1/plans/:motebitId/:planId              — single plan with steps
+ *   GET  /api/v1/execution/:motebitId/:goalId          — execution ledger manifest
  *   GET  /api/v1/agent-trust/:motebitId                 — agent trust records
  *   GET  /api/v1/gradient/:motebitId?limit=100         — intelligence gradient snapshots
  *   GET  /api/v1/sync/:motebitId/pull                  — pull events (aliased for admin)
@@ -112,6 +113,21 @@ async function verifySignedTokenForDevice(
   const pubKeyBytes = hexToBytes(device.public_key);
   const payload = await verifySignedToken(token, pubKeyBytes);
   return payload !== null && payload.mid === motebitId;
+}
+
+// === Canonical JSON (deterministic serialization for execution ledger hashing) ===
+
+function canonicalJsonApi(obj: unknown): string {
+  if (obj === null || obj === undefined) return JSON.stringify(obj);
+  if (typeof obj !== "object") return JSON.stringify(obj);
+  if (Array.isArray(obj)) {
+    return "[" + obj.map((item) => canonicalJsonApi(item)).join(",") + "]";
+  }
+  const sorted = Object.keys(obj as Record<string, unknown>).sort();
+  const entries = sorted.map(
+    (key) => JSON.stringify(key) + ":" + canonicalJsonApi((obj as Record<string, unknown>)[key]),
+  );
+  return "{" + entries.join(",") + "}";
 }
 
 // === Config ===
@@ -703,6 +719,165 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     }
     const steps = moteDb.planStore.getStepsForPlan(planId);
     return c.json({ motebit_id: motebitId, plan: { ...plan, steps } });
+  });
+
+  // --- Execution Ledger: replayable execution manifest for a goal ---
+  // Server-side reconstruction from event log + tool audit. Same algorithm as
+  // MotebitRuntime.replayGoal() but without Ed25519 signing (relay doesn't hold
+  // the motebit's private key — signing happens device-side).
+  app.get("/api/v1/execution/:motebitId/:goalId", async (c) => {
+    const motebitId = asMotebitId(c.req.param("motebitId"));
+    const goalId = c.req.param("goalId");
+
+    // 1. Plan + steps
+    const plan = moteDb.planStore.getPlanForGoal(goalId);
+    if (!plan || plan.motebit_id !== motebitId) {
+      throw new HTTPException(404, { message: "No plan found for goal" });
+    }
+    const steps = moteDb.planStore.getStepsForPlan(plan.plan_id);
+
+    // 2. Query plan lifecycle + delegation events
+    const planEventTypes = [
+      "plan_created", "plan_step_started", "plan_step_completed",
+      "plan_step_failed", "plan_step_delegated", "plan_completed",
+      "plan_failed", "goal_created", "goal_executed", "goal_completed",
+      "agent_task_completed", "agent_task_failed",
+    ];
+    const allEvents = await eventStore.query({ motebit_id: motebitId });
+    const relevantEvents = allEvents.filter((e) => {
+      if (!planEventTypes.includes(e.event_type)) return false;
+      const p = e.payload as Record<string, unknown>;
+      return p.goal_id === goalId || p.plan_id === plan.plan_id;
+    });
+
+    // 3. Delegation receipt metadata from task completion events
+    const delegationTaskIds = new Set(
+      steps.filter((s) => s.delegation_task_id).map((s) => s.delegation_task_id!),
+    );
+    const receiptEvents = allEvents.filter((e) => {
+      if (e.event_type !== "agent_task_completed" && e.event_type !== "agent_task_failed") return false;
+      const p = e.payload as Record<string, unknown>;
+      return delegationTaskIds.has(p.task_id as string);
+    });
+
+    // 4. Tool audit entries
+    const toolEntries = moteDb.toolAuditSink.queryByRunId?.(plan.plan_id) ?? [];
+
+    // 5. Build timeline — only emit recognized fields (no raw payload leak)
+    type TimelineEntry = { timestamp: number; type: string; payload: Record<string, unknown> };
+    const timeline: TimelineEntry[] = [];
+
+    const goalStart = relevantEvents.find((e) => e.event_type === "goal_created" || e.event_type === "goal_executed");
+    if (goalStart) {
+      timeline.push({ timestamp: goalStart.timestamp, type: "goal_started", payload: { goal_id: goalId } });
+    }
+
+    const typeFieldMap: Record<string, { mapped: string; fields: string[] }> = {
+      plan_created: { mapped: "plan_created", fields: ["plan_id", "title", "total_steps"] },
+      plan_step_started: { mapped: "step_started", fields: ["plan_id", "step_id", "ordinal", "description"] },
+      plan_step_completed: { mapped: "step_completed", fields: ["plan_id", "step_id", "ordinal", "tool_calls_made"] },
+      plan_step_failed: { mapped: "step_failed", fields: ["plan_id", "step_id", "ordinal", "error"] },
+      plan_step_delegated: { mapped: "step_delegated", fields: ["plan_id", "step_id", "ordinal", "task_id"] },
+      plan_completed: { mapped: "plan_completed", fields: ["plan_id"] },
+      plan_failed: { mapped: "plan_failed", fields: ["plan_id", "reason"] },
+    };
+
+    for (const event of relevantEvents) {
+      const mapping = typeFieldMap[event.event_type];
+      if (!mapping) continue;
+      const p = event.payload as Record<string, unknown>;
+      const payload: Record<string, unknown> = {};
+      for (const field of mapping.fields) {
+        if (p[field] !== undefined) payload[field] = p[field];
+      }
+      timeline.push({ timestamp: event.timestamp, type: mapping.mapped, payload });
+    }
+
+    // Tool invocations
+    for (const entry of toolEntries) {
+      if (!entry.decision.allowed) continue;
+      timeline.push({
+        timestamp: entry.timestamp,
+        type: "tool_invoked",
+        payload: { tool: entry.tool, call_id: entry.callId },
+      });
+      if (entry.result) {
+        timeline.push({
+          timestamp: entry.timestamp + (entry.result.durationMs ?? 0),
+          type: "tool_result",
+          payload: { tool: entry.tool, ok: entry.result.ok, duration_ms: entry.result.durationMs, call_id: entry.callId },
+        });
+      }
+    }
+
+    const goalEnd = relevantEvents.find((e) => e.event_type === "goal_completed");
+    if (goalEnd) {
+      timeline.push({ timestamp: goalEnd.timestamp, type: "goal_completed", payload: { goal_id: goalId, status: plan.status } });
+    }
+
+    timeline.sort((a, b) => a.timestamp - b.timestamp);
+
+    // 6. Step summaries
+    const stepSummaries = steps.map((s) => {
+      const stepToolEntries = toolEntries.filter((t) => {
+        if (s.started_at == null) return false;
+        const end = s.completed_at ?? Infinity;
+        return t.timestamp >= s.started_at && t.timestamp <= end;
+      });
+      const summary: Record<string, unknown> = {
+        step_id: s.step_id,
+        ordinal: s.ordinal,
+        description: s.description,
+        status: s.status,
+        tools_used: [...new Set(stepToolEntries.map((t) => t.tool))],
+        tool_calls: s.tool_calls_made,
+        started_at: s.started_at,
+        completed_at: s.completed_at,
+      };
+      if (s.delegation_task_id) {
+        const re = receiptEvents.find((e) => (e.payload as Record<string, unknown>).task_id === s.delegation_task_id);
+        const receipt = re ? (re.payload as Record<string, unknown>).receipt as Record<string, unknown> | undefined : undefined;
+        summary.delegation = { task_id: s.delegation_task_id, receipt_hash: receipt?.signature };
+      }
+      return summary;
+    });
+
+    // 7. Delegation receipt summaries
+    const delegationReceipts = receiptEvents.map((e) => {
+      const p = e.payload as Record<string, unknown>;
+      const receipt = p.receipt as Record<string, unknown> | undefined;
+      return {
+        task_id: p.task_id as string,
+        motebit_id: (receipt?.motebit_id ?? "") as string,
+        device_id: (receipt?.device_id ?? "") as string,
+        status: (p.status ?? "unknown") as string,
+        completed_at: (receipt?.completed_at ?? e.timestamp) as number,
+        tools_used: (p.tools_used ?? []) as string[],
+        signature_prefix: (receipt?.signature ?? "") as string,
+      };
+    });
+
+    // 8. Content hash (SHA-256 of canonical timeline)
+    const canonicalLines = timeline.map((entry) => canonicalJsonApi(entry));
+    const hashBuf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalLines.join("\n")));
+    const contentHash = Array.from(new Uint8Array(hashBuf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+
+    // 9. Status mapping
+    const statusMap: Record<string, string> = { completed: "completed", failed: "failed", paused: "paused", active: "active" };
+
+    return c.json({
+      spec: "motebit/execution-ledger@1.0",
+      motebit_id: motebitId,
+      goal_id: goalId,
+      plan_id: plan.plan_id,
+      started_at: timeline[0]?.timestamp ?? plan.created_at,
+      completed_at: timeline[timeline.length - 1]?.timestamp ?? plan.updated_at,
+      status: statusMap[plan.status] ?? "failed",
+      timeline,
+      steps: stepSummaries,
+      delegation_receipts: delegationReceipts,
+      content_hash: contentHash,
+    });
   });
 
   // --- Agent Trust: trust records for known agents ---
