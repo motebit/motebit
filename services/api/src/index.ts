@@ -73,10 +73,13 @@ import type {
   SyncConversationMessage,
   ExecutionReceipt,
 } from "@motebit/sdk";
-import { AgentTaskStatus, asMotebitId, asNodeId, asConversationId, asPlanId } from "@motebit/sdk";
+import { AgentTaskStatus, asMotebitId, asListingId, asNodeId, asConversationId, asPlanId } from "@motebit/sdk";
 import type { AgentTask, MotebitId, NodeId, SyncPlan, SyncPlanStep } from "@motebit/sdk";
 import type { WSContext } from "hono/ws";
 import { verifySignedToken, verifyExecutionReceipt, hexPublicKeyToDidKey } from "@motebit/crypto";
+import { rankCandidates } from "@motebit/market";
+import type { CandidateProfile, TaskRequirements } from "@motebit/market";
+import type { CapabilityPrice } from "@motebit/sdk";
 
 function hexToBytes(hex: string): Uint8Array {
   const bytes = new Uint8Array(hex.length / 2);
@@ -1610,6 +1613,92 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     });
   }
 
+  // --- Shared: build CandidateProfile[] from relay DB ---
+
+  function buildCandidateProfiles(
+    capabilityFilter?: string,
+    maxBudget?: number,
+    limit = 20,
+  ): { profiles: CandidateProfile[]; requirements: TaskRequirements } {
+    const now = Date.now();
+
+    // Query service listings, optionally filtered by capability
+    let listingRows: Array<Record<string, unknown>>;
+    if (capabilityFilter) {
+      listingRows = moteDb.db
+        .prepare(
+          `SELECT l.*, r.public_key, r.expires_at
+           FROM relay_service_listings l
+           LEFT JOIN agent_registry r ON l.motebit_id = r.motebit_id
+           WHERE EXISTS (SELECT 1 FROM json_each(l.capabilities) WHERE value = ?)
+           LIMIT ?`,
+        )
+        .all(capabilityFilter, limit) as Array<Record<string, unknown>>;
+    } else {
+      listingRows = moteDb.db
+        .prepare(
+          `SELECT l.*, r.public_key, r.expires_at
+           FROM relay_service_listings l
+           LEFT JOIN agent_registry r ON l.motebit_id = r.motebit_id
+           LIMIT ?`,
+        )
+        .all(limit) as Array<Record<string, unknown>>;
+    }
+
+    // Batch-fetch latency stats for all candidates in one query
+    const latencyStmt = moteDb.db.prepare(
+      `SELECT latency_ms FROM relay_latency_stats
+       WHERE remote_motebit_id = ?
+       ORDER BY recorded_at DESC LIMIT 100`,
+    );
+
+    const profiles: CandidateProfile[] = listingRows.map((row) => {
+      const mid = row.motebit_id as string;
+      const isOnline = (row.expires_at as number | null) != null && (row.expires_at as number) > now;
+
+      const latencyRows = latencyStmt.all(mid) as Array<{ latency_ms: number }>;
+      let latencyStats: { avg_ms: number; p95_ms: number; sample_count: number } | null = null;
+      if (latencyRows.length > 0) {
+        const vals = latencyRows.map((r) => r.latency_ms);
+        const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+        const sorted = [...vals].sort((a, b) => a - b);
+        const p95Idx = Math.min(Math.ceil(sorted.length * 0.95) - 1, sorted.length - 1);
+        latencyStats = { avg_ms: avg, p95_ms: sorted[p95Idx]!, sample_count: vals.length };
+      }
+
+      const capabilities = JSON.parse(row.capabilities as string) as string[];
+      const pricing = JSON.parse(row.pricing as string) as CapabilityPrice[];
+
+      return {
+        motebit_id: asMotebitId(mid),
+        trust_record: null, // Relay has no per-motebit trust context; agents bring their own trust
+        listing: {
+          listing_id: asListingId(row.listing_id as string),
+          motebit_id: asMotebitId(mid),
+          capabilities,
+          pricing,
+          sla: {
+            max_latency_ms: row.sla_max_latency_ms as number,
+            availability_guarantee: row.sla_availability as number,
+          },
+          description: row.description as string,
+          updated_at: row.updated_at as number,
+        },
+        latency_stats: latencyStats,
+        is_online: isOnline,
+      } satisfies CandidateProfile;
+    });
+
+    const requirements: TaskRequirements = {
+      required_capabilities: capabilityFilter ? [capabilityFilter] : [],
+      max_budget: maxBudget,
+    };
+
+    return { profiles, requirements };
+  }
+
+  // --- Task submission with scored routing ---
+
   app.post("/agent/:motebitId/task", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const body = await c.req.json<{
@@ -1618,6 +1707,8 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       wall_clock_ms?: number;
       required_capabilities?: string[];
       step_id?: string;
+      max_budget?: number;
+      currency?: string;
     }>();
 
     if (!body.prompt || typeof body.prompt !== "string" || body.prompt.trim() === "") {
@@ -1642,19 +1733,61 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
 
     taskQueue.set(taskId, { task, expiresAt: now + TASK_TTL_MS });
 
-    // Push task_request to connected devices (capability-filtered)
-    const peers = connections.get(motebitId);
-    if (peers) {
-      const requiredCaps = task.required_capabilities ?? [];
-      const payload = JSON.stringify({ type: "task_request", task });
-      for (const peer of peers) {
-        // If task requires capabilities, only send to devices that have them
-        // Devices that haven't announced capabilities get the task anyway (backward compat)
-        if (requiredCaps.length > 0 && peer.capabilities) {
-          const hasAll = requiredCaps.every(c => peer.capabilities!.includes(c));
-          if (!hasAll) continue;
+    const requiredCaps = task.required_capabilities ?? [];
+    const payload = JSON.stringify({ type: "task_request", task });
+    let routed = false;
+
+    // Phase 1: Scored routing — find best service agents from listings
+    if (requiredCaps.length > 0) {
+      try {
+        const { profiles, requirements } = buildCandidateProfiles(
+          requiredCaps[0],
+          body.max_budget,
+          20,
+        );
+        // Narrow to candidates matching ALL required capabilities (not just the first)
+        const multiCapProfiles = requiredCaps.length > 1
+          ? profiles.filter((p) =>
+              requiredCaps.every((cap) => p.listing?.capabilities.includes(cap)),
+            )
+          : profiles;
+
+        if (multiCapProfiles.length > 0) {
+          const ranked = rankCandidates(multiCapProfiles, {
+            ...requirements,
+            required_capabilities: requiredCaps,
+            max_budget: body.max_budget,
+          });
+          const selected = ranked.filter((r) => r.selected && r.composite > 0);
+
+          if (selected.length > 0) {
+            const selectedIds = new Set(selected.map((s) => s.motebit_id as string));
+            // Route to connected devices belonging to selected agents
+            for (const [peerId, peers] of connections) {
+              if (!selectedIds.has(peerId)) continue;
+              for (const peer of peers) {
+                peer.ws.send(payload);
+              }
+            }
+            routed = true;
+          }
         }
-        peer.ws.send(payload);
+      } catch {
+        // Scoring failed — fall through to broadcast
+      }
+    }
+
+    // Phase 2: Broadcast fallback — original behavior
+    if (!routed) {
+      const peers = connections.get(motebitId);
+      if (peers) {
+        for (const peer of peers) {
+          if (requiredCaps.length > 0 && peer.capabilities) {
+            const hasAll = requiredCaps.every(c => peer.capabilities!.includes(c));
+            if (!hasAll) continue;
+          }
+          peer.ws.send(payload);
+        }
       }
     }
 
@@ -2130,82 +2263,27 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     const limit = Math.min(Math.max(parseInt(limitStr ?? "20", 10) || 20, 1), 100);
     const maxBudget = maxBudgetStr ? parseFloat(maxBudgetStr) : undefined;
 
-    const now = Date.now();
+    const { profiles, requirements } = buildCandidateProfiles(capability ?? undefined, maxBudget, limit);
 
-    // Get all service listings (optionally filtered by capability)
-    let listingRows: Array<Record<string, unknown>>;
-    if (capability) {
-      listingRows = moteDb.db
-        .prepare(
-          `SELECT l.*, r.public_key, r.expires_at
-           FROM relay_service_listings l
-           LEFT JOIN agent_registry r ON l.motebit_id = r.motebit_id
-           WHERE EXISTS (SELECT 1 FROM json_each(l.capabilities) WHERE value = ?)
-           LIMIT ?`,
-        )
-        .all(capability, limit) as Array<Record<string, unknown>>;
-    } else {
-      listingRows = moteDb.db
-        .prepare(
-          `SELECT l.*, r.public_key, r.expires_at
-           FROM relay_service_listings l
-           LEFT JOIN agent_registry r ON l.motebit_id = r.motebit_id
-           LIMIT ?`,
-        )
-        .all(limit) as Array<Record<string, unknown>>;
-    }
+    const ranked = rankCandidates(profiles, requirements);
 
-    // Build candidate profiles with scoring data
-    const candidates = listingRows.map((row) => {
-      const mid = row.motebit_id as string;
-      const isOnline = (row.expires_at as number | null) != null && (row.expires_at as number) > now;
-
-      // Get trust record from persistence
-      const trustRow = moteDb.agentTrustStore
-        ? (() => {
-            // Look up any trust records for this agent (use first available motebit's trust data)
-            return null; // Trust lookups are per-motebit, relay doesn't have a single owner context
-          })()
-        : null;
-
-      // Get latency stats
-      const latencyRows = moteDb.db
-        .prepare(
-          `SELECT latency_ms FROM relay_latency_stats
-           WHERE remote_motebit_id = ?
-           ORDER BY recorded_at DESC LIMIT 100`,
-        )
-        .all(mid) as Array<{ latency_ms: number }>;
-
-      let latencyStats: { avg_ms: number; p95_ms: number; sample_count: number } | null = null;
-      if (latencyRows.length > 0) {
-        const vals = latencyRows.map((r) => r.latency_ms);
-        const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
-        const sorted = [...vals].sort((a, b) => a - b);
-        const p95Idx = Math.min(Math.ceil(sorted.length * 0.95) - 1, sorted.length - 1);
-        latencyStats = { avg_ms: avg, p95_ms: sorted[p95Idx]!, sample_count: vals.length };
-      }
-
-      const capabilities = JSON.parse(row.capabilities as string) as string[];
-      const pricing = JSON.parse(row.pricing as string) as Array<{ capability: string; unit_cost: number; currency: string; per: string }>;
-
-      return {
-        motebit_id: mid,
-        capabilities,
-        pricing,
-        sla: {
-          max_latency_ms: row.sla_max_latency_ms as number,
-          availability_guarantee: row.sla_availability as number,
-        },
-        description: row.description as string,
-        is_online: isOnline,
-        latency_stats: latencyStats,
-        trust_record: trustRow,
-        max_budget: maxBudget,
-      };
+    return c.json({
+      candidates: ranked.map((score) => {
+        const profile = profiles.find((p) => p.motebit_id === score.motebit_id);
+        return {
+          motebit_id: score.motebit_id,
+          composite: score.composite,
+          sub_scores: score.sub_scores,
+          selected: score.selected,
+          capabilities: profile?.listing?.capabilities ?? [],
+          pricing: profile?.listing?.pricing ?? [],
+          sla: profile?.listing?.sla ?? null,
+          description: profile?.listing?.description ?? "",
+          is_online: profile?.is_online ?? false,
+          latency_stats: profile?.latency_stats ?? null,
+        };
+      }),
     });
-
-    return c.json({ candidates });
   });
 
   function close(): void {

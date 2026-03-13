@@ -1086,6 +1086,9 @@ importers:
       '@motebit/event-log':
         specifier: workspace:*
         version: link:../../packages/event-log
+      '@motebit/market':
+        specifier: workspace:*
+        version: link:../../packages/market
       '@motebit/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence

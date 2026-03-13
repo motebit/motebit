@@ -21,6 +21,7 @@
     "@motebit/core-identity": "workspace:*",
     "@motebit/crypto": "workspace:*",
     "@motebit/event-log": "workspace:*",
+    "@motebit/market": "workspace:*",
     "@motebit/persistence": "workspace:*",
     "@motebit/sdk": "workspace:*",
     "hono": "^4.6.0"
