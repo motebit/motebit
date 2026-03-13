@@ -1,22 +1,17 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TrustMode, type BehaviorCues, type RenderSpec } from "@motebit/sdk";
-import {
-  CANONICAL_SPEC,
-  CANONICAL_MATERIAL,
-  smoothDelta,
-  trustToDistance,
-  idToHue,
-} from "./spec.js";
+import { CANONICAL_SPEC, CANONICAL_MATERIAL, smoothDelta, idToHue } from "./spec.js";
 import type {
   RenderAdapter,
   RenderFrame,
   InteriorColor,
   AudioReactivity,
-  RemoteCreatureOpts,
-  RemoteCreatureActivity,
-  RemoteCreatureState,
-  DelegationLineState,
+  CreaturePresence,
+  VisitorOpts,
+  DepartureOpts,
+  VisitorState,
+  ReturnTrailState,
 } from "./spec.js";
 
 // === Constants ===
@@ -358,11 +353,49 @@ function computeBlinkFactor(
   return 1.0;
 }
 
-// === Multi-Creature Helpers ===
-// Remote creatures are the same species as the local motebit — same glass, same physics.
-// They are smaller (0.6x), calmer (slower breathing), and tinted by their motebit_id hue.
+// === Easing Functions ===
+// Physics-derived: departure shrinks with ease-out (energy leaves fast, then drifts).
+// Return springs back with ease-in-out-back (surface tension snapping home = slight overshoot).
 
-const REMOTE_SCALE = 0.6; // Visitors are smaller — they're guests, not the protagonist
+function easeOutCubic(t: number): number {
+  return 1 - Math.pow(1 - t, 3);
+}
+
+function easeInOutBack(t: number): number {
+  const c1 = 1.70158;
+  const c2 = c1 * 1.525;
+  return t < 0.5
+    ? (Math.pow(2 * t, 2) * ((c2 + 1) * 2 * t - c2)) / 2
+    : (Math.pow(2 * t - 2, 2) * ((c2 + 1) * (t * 2 - 2) + c2) + 2) / 2;
+}
+
+// === Presence Model Helpers ===
+// Visitors are the same species — same glass, same physics.
+// Smaller (0.7x) — guests, not the protagonist. Eyes look toward the ghost.
+
+/** Visitor scale — 70% of the home creature. Guests are smaller. */
+const VISITOR_SCALE = 0.7;
+
+/** Distance (m) at which visitors hover after arrival. */
+const VISITOR_HOVER_DISTANCE = 1.5;
+
+/** Distance (m) at which visitors start their arrival animation (initial spawn point). */
+const VISITOR_SPAWN_DISTANCE = 3.0;
+
+/** Duration (s) of creature departure animation (scale 1 → 0). */
+const DEPART_DURATION = 2.0;
+
+/** Duration (s) of creature return animation (scale 0 → 1 + spring). */
+const RETURN_DURATION = 1.5;
+
+/** Duration (s) of visitor arrival animation. */
+const VISITOR_ARRIVE_DURATION = 2.0;
+
+/** Duration (s) of visitor leaving animation. */
+const VISITOR_LEAVE_DURATION = 1.5;
+
+/** Duration (s) the return trail persists. */
+const TRAIL_FADE_DURATION = 3.0;
 
 /** Convert HSL hue (0–360) + fixed saturation/lightness to a THREE.Color. */
 function hueToColor(hue: number, saturation = 0.55, lightness = 0.65): THREE.Color {
@@ -371,8 +404,25 @@ function hueToColor(hue: number, saturation = 0.55, lightness = 0.65): THREE.Col
   return color;
 }
 
-/** Build a remote creature group (body + eyes). No smile — remote agents are ambient. */
-function createRemoteCreature(hue: number): {
+/**
+ * Build the ghost — a dim wireframe sphere at the original orbit position.
+ * This is the memory of the departed creature: the absence is felt.
+ */
+function createGhost(): THREE.Mesh {
+  const ghostGeometry = new THREE.SphereGeometry(BODY_R, 16, 12);
+  const ghostMaterial = new THREE.MeshBasicMaterial({
+    color: 0x8888aa,
+    wireframe: true,
+    transparent: true,
+    opacity: 0.08,
+  });
+  const ghost = new THREE.Mesh(ghostGeometry, ghostMaterial);
+  ghost.renderOrder = 0;
+  return ghost;
+}
+
+/** Build a visitor creature group (body + eyes). No smile — visitors are transient. */
+function createVisitorCreature(hue: number): {
   group: THREE.Group;
   body: THREE.Mesh;
   eyes: THREE.Group;
@@ -408,7 +458,7 @@ function createRemoteCreature(hue: number): {
   bodyMesh.renderOrder = 2;
   group.add(bodyMesh);
 
-  // Eyes — simplified (no catchlights on remote agents, they're ambient presence)
+  // Eyes — simplified (no catchlights on visitors, they're transient presence)
   const eyes = new THREE.Group();
   const eyeGeo = new THREE.SphereGeometry(EYE_R * 0.85, 24, 24);
   const eyeMat = new THREE.MeshStandardMaterial({
@@ -432,30 +482,32 @@ function createRemoteCreature(hue: number): {
 
   group.add(eyes);
 
-  group.scale.setScalar(REMOTE_SCALE);
+  // Start invisible — arrival animation grows it in
+  group.scale.setScalar(0);
 
   return { group, body: bodyMesh, eyes, bodyMaterial: bodyMat };
 }
 
-/** Build the delegation arc line (quadratic bezier, warm amber glow). Returns line ID. */
-function createDelegationArc(
+/**
+ * Build the return trail — a warm amber arc from the visitor's position to the
+ * creature's re-entry point. Represents the receipt travelling home.
+ */
+function createReturnTrail(
   scene: THREE.Scene,
   from: THREE.Vector3,
   to: THREE.Vector3,
 ): { line: THREE.Line; geometry: THREE.BufferGeometry; material: THREE.LineBasicMaterial } {
-  // Organic arc — mid-point lifted on Y for catenary feel, not laser-straight
   const mid = new THREE.Vector3().lerpVectors(from, to, 0.5);
-  mid.y += 0.12;
+  mid.y += 0.1;
 
   const curve = new THREE.QuadraticBezierCurve3(from, mid, to);
   const points = curve.getPoints(40);
 
   const geometry = new THREE.BufferGeometry().setFromPoints(points);
   const material = new THREE.LineBasicMaterial({
-    color: new THREE.Color(1.0, 0.72, 0.3), // warm amber — matches ENV_LIGHT sun color
+    color: new THREE.Color(1.0, 0.72, 0.3), // warm amber — receipt energy
     transparent: true,
-    opacity: 0.55,
-    linewidth: 1, // Note: linewidth > 1 requires LineSegments2, ignored on most WebGL
+    opacity: 0.65,
     depthWrite: false,
   });
 
@@ -466,138 +518,101 @@ function createDelegationArc(
   return { line, geometry, material };
 }
 
-/** Create the pulse indicator — a small warm sphere that travels along the arc. */
-function createPulseMesh(): THREE.Mesh {
-  const geo = new THREE.SphereGeometry(0.008, 8, 8);
-  const mat = new THREE.MeshBasicMaterial({
-    color: new THREE.Color(1.0, 0.85, 0.4),
-    transparent: true,
-    opacity: 0.0,
-    depthWrite: false,
-  });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.renderOrder = 4;
-  return mesh;
-}
+// === Visitor Animation ===
 
-/** Compute the world position of a remote creature given a flat index (for circle layout). */
-function circlePosition(index: number, total: number, distance: number): THREE.Vector3 {
-  const angle = (index / Math.max(total, 1)) * Math.PI * 2;
-  return new THREE.Vector3(Math.cos(angle) * distance, 0, Math.sin(angle) * distance);
-}
-
-// === Remote Creature Animation ===
-
-function animateRemoteCreature(state: RemoteCreatureState, t: number, dt: number): void {
+function animateVisitor(state: VisitorState, t: number, dt: number, ghostPos: THREE.Vector3): void {
+  if (!state.group) return;
   const body = state.body as THREE.Mesh;
   const eyes = state.eyes as THREE.Group;
   const mat = state.bodyMaterial as THREE.MeshPhysicalMaterial;
   const group = state.group as THREE.Group;
 
-  // Breathing — slower/calmer than the main creature (1.4 Hz base vs 2.0 Hz)
-  // Phase offset prevents all remote agents from breathing in unison
-  const breatheRate = state.activity === "processing" ? 2.2 : 1.4;
+  const elapsed = t - state.transitionStart;
+
+  switch (state.presence) {
+    case "arriving": {
+      // Scale 0 → VISITOR_SCALE over VISITOR_ARRIVE_DURATION (ease-out)
+      const progress = Math.min(1, elapsed / VISITOR_ARRIVE_DURATION);
+      const scale = VISITOR_SCALE * easeOutCubic(progress);
+      group.scale.setScalar(scale);
+
+      // Drift from spawn position toward hover position
+      const dir = new THREE.Vector3(
+        state.direction.x,
+        state.direction.y,
+        state.direction.z,
+      ).normalize();
+      const spawnPos = dir.clone().multiplyScalar(VISITOR_SPAWN_DISTANCE);
+      const hoverPos = dir.clone().multiplyScalar(VISITOR_HOVER_DISTANCE);
+      const pos = spawnPos.lerp(hoverPos, easeOutCubic(progress));
+      group.position.copy(pos);
+      group.userData.basePosition = group.position.clone();
+
+      // Interior glow ramps up as it arrives — carrying the task
+      mat.emissiveIntensity = smoothDelta(mat.emissiveIntensity, 0.2, dt, 3.0);
+      break;
+    }
+
+    case "present": {
+      // Floating in place — gentle bob, no orbital dynamics
+      const bobY = organicNoise(t + state.phase, [1.1, 1.73, 0.61]) * 0.007;
+      const basePos = group.userData.basePosition as THREE.Vector3 | undefined;
+      if (basePos) {
+        group.position.set(basePos.x, basePos.y + bobY, basePos.z);
+      }
+      // Eyes look toward the ghost position (where the target creature was)
+      if (ghostPos.length() > 0.001) {
+        group.lookAt(ghostPos);
+      }
+      // Slow interior pulse while present
+      const pulse = 0.1 + 0.12 * (0.5 + 0.5 * Math.sin((t + state.phase) * 0.6 * Math.PI * 2));
+      mat.emissiveIntensity = pulse;
+      break;
+    }
+
+    case "leaving": {
+      // Scale VISITOR_SCALE → 0 over VISITOR_LEAVE_DURATION, drift back to origin
+      const progress = Math.min(1, elapsed / VISITOR_LEAVE_DURATION);
+      const scale = VISITOR_SCALE * (1 - easeOutCubic(progress));
+      group.scale.setScalar(scale);
+
+      // Drift back in departure direction
+      const dir = new THREE.Vector3(
+        state.direction.x,
+        state.direction.y,
+        state.direction.z,
+      ).normalize();
+      const hoverPos = dir.clone().multiplyScalar(VISITOR_HOVER_DISTANCE);
+      const spawnPos = dir.clone().multiplyScalar(VISITOR_SPAWN_DISTANCE);
+      const pos = hoverPos.lerp(spawnPos, easeOutCubic(progress));
+      group.position.copy(pos);
+
+      // Warm glow on departure — carrying the receipt home
+      const departGlow = (1 - progress) * 0.4;
+      mat.emissiveIntensity = departGlow;
+      break;
+    }
+
+    default:
+      break;
+  }
+
+  // Breathing — slower/calmer than the main creature (1.4 Hz base)
+  const breatheRate = 1.4;
   const breatheRaw = Math.sin((t + state.phase) * breatheRate);
   const breathe =
     breatheRaw > 0
       ? breatheRaw * 0.01
       : Math.sign(breatheRaw) * Math.pow(Math.abs(breatheRaw), 0.6) * 0.01;
-
   const REST_Y = 0.97;
   body.scale.set(1.0 + breathe, REST_Y - breathe, 1.0 + breathe);
 
-  // Gentle bob — same physics, slower
-  const bobY = organicNoise(t + state.phase, [1.1, 1.73, 0.61]) * 0.007;
-  const basePos = group.userData.basePosition as THREE.Vector3 | undefined;
-  if (basePos) {
-    group.position.set(basePos.x, basePos.y + bobY, basePos.z);
-  }
-
-  // Activity-state emissive modulation
-  switch (state.activity) {
-    case "idle":
-      mat.emissiveIntensity = smoothDelta(mat.emissiveIntensity, 0.0, dt, 3.0);
-      break;
-
-    case "processing":
-      // Steady moderate glow — active interior
-      mat.emissiveIntensity = smoothDelta(mat.emissiveIntensity, 0.35, dt, 4.0);
-      break;
-
-    case "delegating": {
-      // Slow sine pulse — 0.8 Hz, range 0.15–0.5
-      const pulse = 0.15 + 0.35 * (0.5 + 0.5 * Math.sin((t + state.phase) * 0.8 * Math.PI * 2));
-      mat.emissiveIntensity = pulse;
-      break;
-    }
-
-    case "completed": {
-      // Brief bright flash then fade to idle
-      const elapsed = t - state.completedAt;
-      if (elapsed < 0.25) {
-        // Flash up
-        mat.emissiveIntensity = smoothDelta(mat.emissiveIntensity, 0.9, dt, 15.0);
-      } else {
-        // Fade out
-        mat.emissiveIntensity = smoothDelta(mat.emissiveIntensity, 0.0, dt, 2.5);
-      }
-      break;
-    }
-  }
-
-  // Eyes: calm half-open on remote agents — they're ambient presence, not engaging
-  const eyeScale = state.activity === "processing" ? 0.9 : 0.75;
+  // Eyes: calm half-open
+  const eyeScale = state.presence === "present" ? 0.85 : 0.75;
   const leftEye = eyes.children[0] as THREE.Mesh;
   const rightEye = eyes.children[1] as THREE.Mesh;
   leftEye.scale.setScalar(eyeScale);
   rightEye.scale.setScalar(eyeScale);
-}
-
-// === Delegation Line Animation ===
-
-function animateDelegationLine(
-  state: DelegationLineState,
-  t: number,
-  dt: number,
-  fromPos: THREE.Vector3,
-  toPos: THREE.Vector3,
-): void {
-  const mat = state.material as THREE.LineBasicMaterial;
-
-  // Gentle opacity breath — the connection is alive
-  const breathOpacity = 0.45 + 0.1 * Math.sin(t * 0.9);
-  mat.opacity = breathOpacity;
-
-  // Recompute arc geometry if either endpoint has moved
-  const geo = state.geometry as THREE.BufferGeometry;
-  const mid = new THREE.Vector3().lerpVectors(fromPos, toPos, 0.5);
-  mid.y += 0.12;
-  const curve = new THREE.QuadraticBezierCurve3(fromPos, mid, toPos);
-  const points = curve.getPoints(40);
-  geo.setFromPoints(points);
-
-  // Pulse animation — a warm dot travelling from source to target
-  const pulseMesh = state.pulseMesh as THREE.Mesh | null;
-  if (pulseMesh && state.pulseProgress >= 0) {
-    const pulseMat = pulseMesh.material as THREE.MeshBasicMaterial;
-    // Progress 0→1 over 0.7 seconds
-    state.pulseProgress = Math.min(1, state.pulseProgress + dt / 0.7);
-
-    // Position along the curve
-    const pt = curve.getPoint(state.pulseProgress);
-    pulseMesh.position.copy(pt);
-
-    // Opacity: ramp up then down (bell curve)
-    const p = state.pulseProgress;
-    const bell = Math.sin(p * Math.PI); // 0→1→0
-    pulseMat.opacity = bell * 0.9;
-
-    if (state.pulseProgress >= 1) {
-      // Pulse complete — hide and reset
-      pulseMat.opacity = 0;
-      state.pulseProgress = -1;
-    }
-  }
 }
 
 // === Three.js Adapter ===
@@ -632,9 +647,14 @@ export class ThreeJSAdapter implements RenderAdapter {
   private smileMesh: THREE.Mesh | null = null;
   private blinkState: BlinkState = createBlinkState();
 
-  // Multi-creature state
-  private remoteCreatures = new Map<string, RemoteCreatureState>();
-  private delegationLines = new Map<string, DelegationLineState>();
+  // Presence model state
+  private mainPresence: CreaturePresence = "home";
+  private mainTransitionStart = 0;
+  private mainDepartDirection = new THREE.Vector3(1, 0, 0);
+  private mainReturnDirection = new THREE.Vector3(-1, 0, 0);
+  private ghostMesh: THREE.Mesh | null = null;
+  private visitors = new Map<string, VisitorState>();
+  private returnTrails: ReturnTrailState[] = [];
 
   init(target: unknown): Promise<void> {
     if (typeof HTMLCanvasElement === "undefined" || !(target instanceof HTMLCanvasElement)) {
@@ -885,22 +905,65 @@ export class ThreeJSAdapter implements RenderAdapter {
       this.creature.rotation.z = organicNoise(t, [0.4, 0.67]) * tiltAmount;
     }
 
-    // === Remote creatures — ambient animation, after the main creature ===
-    // Skip headless entries (group is null). Transition completed → idle after 2s.
-    for (const rc of this.remoteCreatures.values()) {
-      if (!rc.group) continue;
-      if (rc.activity === "completed" && rc.completedAt > 0 && t - rc.completedAt > 2.0) {
-        rc.activity = "idle";
+    // === Main creature presence transitions ===
+    this._tickMainPresence(t, dt);
+
+    // === Ghost — slow pulse while creature is away ===
+    if (this.ghostMesh) {
+      const ghostMat = this.ghostMesh.material as THREE.MeshBasicMaterial;
+      const isVisible =
+        this.mainPresence === "away" ||
+        this.mainPresence === "departing" ||
+        this.mainPresence === "returning";
+      if (isVisible) {
+        // Slow half-rate pulse: 0.05–0.11 opacity
+        const ghostPulse = 0.08 + 0.03 * Math.sin(t * 0.5 * Math.PI * 2);
+        ghostMat.opacity = ghostPulse;
+        this.ghostMesh.visible = true;
+      } else {
+        ghostMat.opacity = smoothDelta(ghostMat.opacity, 0, dt, 4.0);
+        if (ghostMat.opacity < 0.005) this.ghostMesh.visible = false;
       }
-      animateRemoteCreature(rc, t, dt);
     }
 
-    // === Delegation lines — update arc geometry and pulse progress ===
-    for (const dl of this.delegationLines.values()) {
-      if (!dl.line) continue;
-      const fromPos = this._resolveCreaturePosition(dl.fromId);
-      const toPos = this._resolveCreaturePosition(dl.toId);
-      animateDelegationLine(dl, t, dt, fromPos, toPos);
+    // === Visitors — animate presence transitions ===
+    const ghostPos = this.ghostMesh
+      ? (this.ghostMesh as THREE.Mesh).position.clone()
+      : new THREE.Vector3(0, 0, 0);
+    for (const [id, vs] of this.visitors) {
+      if (!vs.group) continue;
+      animateVisitor(vs, t, dt, ghostPos);
+      // Auto-advance leaving → remove after animation completes
+      if (vs.presence === "leaving") {
+        const elapsed = t - vs.transitionStart;
+        if (elapsed >= VISITOR_LEAVE_DURATION) {
+          this._disposeVisitor(id, vs);
+          this.visitors.delete(id);
+        }
+      }
+      // Auto-advance arriving → present after animation completes
+      if (vs.presence === "arriving") {
+        const elapsed = t - vs.transitionStart;
+        if (elapsed >= VISITOR_ARRIVE_DURATION) {
+          vs.presence = "present";
+          vs.transitionStart = t;
+        }
+      }
+    }
+
+    // === Return trails — fade over TRAIL_FADE_DURATION ===
+    const expiredTrails: ReturnTrailState[] = [];
+    for (const trail of this.returnTrails) {
+      if (!trail.line) continue;
+      const mat = trail.material as THREE.LineBasicMaterial;
+      const elapsed = t - trail.startedAt;
+      const progress = Math.min(1, elapsed / TRAIL_FADE_DURATION);
+      mat.opacity = 0.65 * (1 - progress);
+      if (progress >= 1) expiredTrails.push(trail);
+    }
+    for (const trail of expiredTrails) {
+      this._disposeTrail(trail);
+      this.returnTrails = this.returnTrails.filter((r) => r.id !== trail.id);
     }
 
     if (this.controls) this.controls.update();
@@ -976,71 +1039,260 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.controls.update();
   }
 
-  // === Multi-Creature API ===
+  // === Presence API ===
 
   /**
-   * Add a remote creature to the constellation.
-   * Positions it based on trust score and derived hue from the ID.
-   * No-op headless (no scene).
+   * Depart your creature — it detaches, shrinks, and drifts away.
+   * Leaves a ghost at the original orbit position.
+   * Transitions: home → departing → away.
    */
-  addRemoteCreature(id: string, opts: RemoteCreatureOpts): void {
-    if (this.remoteCreatures.has(id)) return; // already tracked
+  departCreature(opts?: DepartureOpts): void {
+    if (this.mainPresence !== "home") return;
 
-    const hue = opts.hue ?? idToHue(id);
-    const distance = trustToDistance(opts.trustScore);
+    const dir = opts?.direction
+      ? new THREE.Vector3(opts.direction.x, opts.direction.y, opts.direction.z).normalize()
+      : new THREE.Vector3(1, 0, 0);
+    this.mainDepartDirection = dir;
+    this.mainPresence = "departing";
+    this.mainTransitionStart = Date.now() / 1000;
 
-    // Headless: track metadata without THREE objects
+    // Create ghost at current creature position
+    if (this.scene && !this.ghostMesh) {
+      this.ghostMesh = createGhost();
+      const creaturePos = this.creature?.position.clone() ?? new THREE.Vector3(0, 0, 0);
+      this.ghostMesh.position.copy(creaturePos);
+      this.ghostMesh.visible = true;
+      this.scene.add(this.ghostMesh);
+    }
+  }
+
+  /**
+   * Return your creature from a direction — it materializes, springs back into orbit,
+   * and the ghost fades out. The return trail (receipt energy) fades over 3s.
+   * Transitions: away → returning → home.
+   */
+  returnCreature(opts?: { fromDirection?: { x: number; y: number; z: number } }): void {
+    if (this.mainPresence !== "away" && this.mainPresence !== "departing") return;
+
+    const dir = opts?.fromDirection
+      ? new THREE.Vector3(
+          opts.fromDirection.x,
+          opts.fromDirection.y,
+          opts.fromDirection.z,
+        ).normalize()
+      : this.mainDepartDirection.clone().negate();
+    this.mainReturnDirection = dir;
+    this.mainPresence = "returning";
+    this.mainTransitionStart = Date.now() / 1000;
+
+    // Spawn creature at the return direction distance, scale 0
+    if (this.creature) {
+      const spawnPos = dir.clone().multiplyScalar(VISITOR_SPAWN_DISTANCE * 0.5);
+      this.creature.position.copy(spawnPos);
+      this.creature.scale.setScalar(0);
+    }
+
+    // Add the return trail from a visitor position (if any just left) to ghost
+    if (this.scene && this.ghostMesh) {
+      const ghostPos = this.ghostMesh.position;
+      const fromPos = dir.clone().multiplyScalar(VISITOR_HOVER_DISTANCE);
+      const trailId = `trail-${Date.now()}`;
+      const { line, geometry, material } = createReturnTrail(this.scene, fromPos, ghostPos);
+      this.returnTrails.push({
+        id: trailId,
+        line,
+        geometry,
+        material,
+        startedAt: Date.now() / 1000,
+        from: { x: fromPos.x, y: fromPos.y, z: fromPos.z },
+        to: { x: ghostPos.x, y: ghostPos.y, z: ghostPos.z },
+      });
+    }
+  }
+
+  /**
+   * A visitor (another person's motebit) materializes in your space.
+   * It arrives from `direction`, grows to VISITOR_SCALE, and floats in place.
+   * Its eyes look toward the ghost (where your creature was).
+   */
+  arriveVisitor(id: string, opts: VisitorOpts): void {
+    if (this.visitors.has(id)) return;
+
+    const hue = idToHue(opts.motebitId);
+    const dir = opts.direction
+      ? { x: opts.direction.x, y: opts.direction.y, z: opts.direction.z }
+      : { x: -1, y: 0, z: 0 }; // default: arrive from the left
+
+    // Headless: track without THREE objects
     if (!this.scene) {
-      const state: RemoteCreatureState = {
+      const state: VisitorState = {
         id,
         group: null,
         body: null,
         eyes: null,
         bodyMaterial: null,
         trustScore: opts.trustScore,
-        activity: "idle",
+        presence: "arriving",
         hue,
         phase: Math.random() * Math.PI * 2,
-        completedAt: -1,
+        transitionStart: Date.now() / 1000,
+        direction: dir,
       };
-      this.remoteCreatures.set(id, state);
+      this.visitors.set(id, state);
       return;
     }
 
-    const index = this.remoteCreatures.size;
-    const total = index + 1;
-    const pos = opts.position
-      ? new THREE.Vector3(opts.position.x, opts.position.y, opts.position.z)
-      : circlePosition(index, total, distance);
-
-    const { group, body, eyes, bodyMaterial } = createRemoteCreature(hue);
-    group.position.copy(pos);
-    group.userData.basePosition = pos.clone();
+    const { group, body, eyes, bodyMaterial } = createVisitorCreature(hue);
+    // Start at spawn distance in arrival direction
+    const dirVec = new THREE.Vector3(dir.x, dir.y, dir.z).normalize();
+    const spawnPos = dirVec.clone().multiplyScalar(VISITOR_SPAWN_DISTANCE);
+    group.position.copy(spawnPos);
+    group.userData.basePosition = spawnPos.clone();
     this.scene.add(group);
 
-    const state: RemoteCreatureState = {
+    const state: VisitorState = {
       id,
       group,
       body,
       eyes,
       bodyMaterial,
       trustScore: opts.trustScore,
-      activity: "idle",
+      presence: "arriving",
       hue,
       phase: Math.random() * Math.PI * 2,
-      completedAt: -1,
+      transitionStart: Date.now() / 1000,
+      direction: dir,
     };
 
-    this.remoteCreatures.set(id, state);
+    this.visitors.set(id, state);
   }
 
   /**
-   * Remove a remote creature from the constellation and dispose its Three.js objects.
+   * A visitor departs — it shrinks back to 0, drifts to origin direction, then is removed.
+   * A warm glow on departure carries the receipt energy home.
    */
-  removeRemoteCreature(id: string): void {
-    const state = this.remoteCreatures.get(id);
+  departVisitor(id: string): void {
+    const state = this.visitors.get(id);
     if (!state) return;
+    if (state.presence === "leaving") return;
+    state.presence = "leaving";
+    state.transitionStart = Date.now() / 1000;
+  }
 
+  /** The current presence state of the main creature. */
+  getMainPresence(): CreaturePresence {
+    return this.mainPresence;
+  }
+
+  /** Access the visitor map (for testing). */
+  getVisitors(): Map<string, VisitorState> {
+    return this.visitors;
+  }
+
+  // === Main Presence Tick ===
+
+  /**
+   * Advance the main creature's presence state machine each render frame.
+   * Called from render() after all main-creature animation.
+   */
+  private _tickMainPresence(t: number, dt: number): void {
+    if (!this.creature || !this.bodyMaterial) return;
+
+    const elapsed = t - this.mainTransitionStart;
+
+    switch (this.mainPresence) {
+      case "home":
+        // Normal — no override needed, the main render loop handles it
+        break;
+
+      case "departing": {
+        // Scale 1 → 0 over DEPART_DURATION (ease-out)
+        const progress = Math.min(1, elapsed / DEPART_DURATION);
+        const scale = 1 - easeOutCubic(progress);
+        this.creature.scale.setScalar(scale);
+
+        // Drift toward departure direction
+        const driftAmount = easeOutCubic(progress) * 0.8;
+        const departPos = this.mainDepartDirection.clone().multiplyScalar(driftAmount);
+        this.creature.position.add(departPos.multiplyScalar(dt));
+
+        // Brief emissive brightening (energy of launch) then fade
+        if (elapsed < 0.3) {
+          this.bodyMaterial.emissiveIntensity = smoothDelta(
+            this.bodyMaterial.emissiveIntensity,
+            0.8,
+            dt,
+            12.0,
+          );
+        }
+
+        if (progress >= 1) {
+          // Creature is gone
+          this.mainPresence = "away";
+          this.mainTransitionStart = t;
+          this.creature.scale.setScalar(0);
+          this.creature.visible = false;
+        }
+        break;
+      }
+
+      case "away":
+        // Creature hidden — ghost visible, handled in render loop
+        this.creature.visible = false;
+        this.creature.scale.setScalar(0);
+        break;
+
+      case "returning": {
+        // Scale 0 → 1 over RETURN_DURATION, spring physics (ease-in-out-back)
+        const progress = Math.min(1, elapsed / RETURN_DURATION);
+        const scale = easeInOutBack(progress);
+        this.creature.scale.setScalar(Math.max(0, scale));
+        this.creature.visible = true;
+
+        // Drift from spawn position toward origin (home orbit position)
+        const spawnPos = this.mainReturnDirection
+          .clone()
+          .multiplyScalar(VISITOR_SPAWN_DISTANCE * 0.5);
+        const homePos = new THREE.Vector3(0, 0, 0);
+        const pos = spawnPos.lerp(homePos, easeInOutBack(Math.min(1, progress)));
+        this.creature.position.copy(pos);
+
+        // Interior glows bright on arrival — carrying the result
+        const arrivalGlow = (1 - progress) * 0.9;
+        this.bodyMaterial.emissiveIntensity = Math.max(
+          this.bodyMaterial.emissiveIntensity,
+          arrivalGlow,
+        );
+
+        if (progress >= 1) {
+          // Home — brief bright pulse ("I'm home")
+          this.mainPresence = "home";
+          this.mainTransitionStart = t;
+          this.creature.scale.setScalar(1);
+          this.creature.position.set(0, 0, 0);
+
+          // Fade out ghost
+          if (this.ghostMesh) {
+            const ghostMat = this.ghostMesh.material as THREE.MeshBasicMaterial;
+            ghostMat.opacity = 0;
+            this.ghostMesh.visible = false;
+          }
+        }
+        break;
+      }
+
+      default:
+        break;
+    }
+
+    // Suppress main render-loop position/scale overrides while in a transition
+    void dt; // used above
+  }
+
+  // === Disposal Helpers ===
+
+  private _disposeVisitor(id: string, state: VisitorState): void {
+    void id;
     if (this.scene && state.group) {
       const group = state.group as THREE.Group;
       this.scene.remove(group);
@@ -1051,182 +1303,34 @@ export class ThreeJSAdapter implements RenderAdapter {
         }
       });
     }
-
-    // Remove any delegation lines that reference this creature
-    for (const [lineId, line] of this.delegationLines) {
-      if (line.fromId === id || line.toId === id) {
-        this.removeDelegationLine(lineId);
-      }
-    }
-
-    this.remoteCreatures.delete(id);
   }
 
-  /**
-   * Update a remote creature's trust score (and derived position).
-   * Updates state but does not teleport the creature — position smooths over time.
-   */
-  updateRemoteCreature(id: string, opts: Partial<RemoteCreatureOpts>): void {
-    const state = this.remoteCreatures.get(id);
-    if (!state) return;
-
-    if (opts.trustScore !== undefined) {
-      state.trustScore = opts.trustScore;
-      const distance = trustToDistance(opts.trustScore);
-      if (state.group && !opts.position) {
-        // Reposition radially: preserve angle, update distance
-        const group = state.group as THREE.Group;
-        const current = group.position;
-        const angle = Math.atan2(current.z, current.x);
-        const newPos = new THREE.Vector3(
-          Math.cos(angle) * distance,
-          current.y,
-          Math.sin(angle) * distance,
-        );
-        group.userData.basePosition = newPos.clone();
-      }
+  private _disposeTrail(trail: ReturnTrailState): void {
+    if (this.scene && trail.line) {
+      this.scene.remove(trail.line as THREE.Line);
+      (trail.geometry as THREE.BufferGeometry).dispose();
+      (trail.material as THREE.LineBasicMaterial).dispose();
     }
-
-    if (opts.position) {
-      if (state.group) {
-        const group = state.group as THREE.Group;
-        const pos = new THREE.Vector3(opts.position.x, opts.position.y, opts.position.z);
-        group.userData.basePosition = pos.clone();
-      }
-    }
-
-    if (opts.hue !== undefined) {
-      state.hue = opts.hue;
-    }
-  }
-
-  /**
-   * Set the activity state of a remote creature.
-   * Drives emissive animations on the next render tick.
-   */
-  setRemoteCreatureActivity(id: string, activity: RemoteCreatureActivity): void {
-    const state = this.remoteCreatures.get(id);
-    if (!state) return;
-    if (activity === "completed") {
-      state.completedAt = Date.now() / 1000; // approximate render time
-    }
-    state.activity = activity;
-  }
-
-  /**
-   * Add a delegation arc between two agents.
-   * `fromId` can be "self" (local creature) or a remote creature ID.
-   * Returns the delegation line ID (for later removal).
-   */
-  addDelegationLine(fromId: string | "self", toId: string): string {
-    const lineId = `dl-xr-${this.delegationLines.size}-${Date.now()}`;
-
-    if (!this.scene) {
-      // Headless: track state without THREE objects
-      const state: DelegationLineState = {
-        id: lineId,
-        fromId,
-        toId,
-        line: null,
-        geometry: null,
-        material: null,
-        pulseProgress: -1,
-        pulseMesh: null,
-      };
-      this.delegationLines.set(lineId, state);
-      return lineId;
-    }
-
-    // Resolve positions
-    const fromPos = this._resolveCreaturePosition(fromId);
-    const toPos = this._resolveCreaturePosition(toId);
-
-    const { line, geometry, material } = createDelegationArc(this.scene, fromPos, toPos);
-    const pulseMesh = createPulseMesh();
-    this.scene.add(pulseMesh);
-
-    const state: DelegationLineState = {
-      id: lineId,
-      fromId,
-      toId,
-      line,
-      geometry,
-      material,
-      pulseProgress: -1,
-      pulseMesh,
-    };
-
-    this.delegationLines.set(lineId, state);
-    return lineId;
-  }
-
-  /**
-   * Remove a delegation arc and dispose its Three.js objects.
-   */
-  removeDelegationLine(lineId: string): void {
-    const state = this.delegationLines.get(lineId);
-    if (!state) return;
-
-    if (this.scene) {
-      if (state.line) {
-        const line = state.line as THREE.Line;
-        this.scene.remove(line);
-        const geo = state.geometry as THREE.BufferGeometry;
-        const mat = state.material as THREE.LineBasicMaterial;
-        geo.dispose();
-        mat.dispose();
-      }
-      if (state.pulseMesh) {
-        const pm = state.pulseMesh as THREE.Mesh;
-        this.scene.remove(pm);
-        pm.geometry.dispose();
-        if (pm.material instanceof THREE.Material) pm.material.dispose();
-      }
-    }
-
-    this.delegationLines.delete(lineId);
-  }
-
-  /**
-   * Trigger a pulse on a delegation line (e.g., when a receipt is received).
-   */
-  pulseDelegationLine(lineId: string): void {
-    const state = this.delegationLines.get(lineId);
-    if (!state) return;
-    state.pulseProgress = 0;
-  }
-
-  /** Access the remote creatures map (for testing). */
-  getRemoteCreatures(): Map<string, RemoteCreatureState> {
-    return this.remoteCreatures;
-  }
-
-  /** Access the delegation lines map (for testing). */
-  getDelegationLines(): Map<string, DelegationLineState> {
-    return this.delegationLines;
-  }
-
-  private _resolveCreaturePosition(id: string | "self"): THREE.Vector3 {
-    if (id === "self") {
-      return this.creature
-        ? (this.creature as THREE.Group).position.clone()
-        : new THREE.Vector3(0, 0, 0);
-    }
-    const state = this.remoteCreatures.get(id);
-    if (state?.group) {
-      return (state.group as THREE.Group).position.clone();
-    }
-    return new THREE.Vector3(0, 0, 0);
   }
 
   dispose(): void {
-    // Dispose remote creatures and delegation lines first
-    for (const id of Array.from(this.remoteCreatures.keys())) {
-      this.removeRemoteCreature(id);
+    // Dispose visitors and trails
+    for (const [id, vs] of this.visitors) {
+      this._disposeVisitor(id, vs);
     }
-    for (const id of Array.from(this.delegationLines.keys())) {
-      this.removeDelegationLine(id);
+    this.visitors.clear();
+    for (const trail of this.returnTrails) {
+      this._disposeTrail(trail);
     }
+    this.returnTrails = [];
+
+    // Dispose ghost
+    if (this.scene && this.ghostMesh) {
+      this.scene.remove(this.ghostMesh);
+      this.ghostMesh.geometry.dispose();
+      if (this.ghostMesh.material instanceof THREE.Material) this.ghostMesh.material.dispose();
+    }
+    this.ghostMesh = null;
 
     if (this.creature) {
       this.creature.traverse((obj) => {
@@ -1272,6 +1376,8 @@ export class ThreeJSAdapter implements RenderAdapter {
 
 export class SpatialAdapter implements RenderAdapter {
   private spec: RenderSpec = CANONICAL_SPEC;
+  private _mainPresence: CreaturePresence = "home";
+  private _visitors = new Map<string, VisitorState>();
   init(_target: unknown): Promise<void> {
     return Promise.resolve();
   }
@@ -1288,6 +1394,38 @@ export class SpatialAdapter implements RenderAdapter {
   setTrustMode(_mode: TrustMode): void {}
   setListeningIndicator(_active: boolean): void {}
   dispose(): void {}
+  departCreature(_opts?: DepartureOpts): void {
+    this._mainPresence = "departing";
+  }
+  returnCreature(_opts?: { fromDirection?: { x: number; y: number; z: number } }): void {
+    this._mainPresence = "returning";
+  }
+  arriveVisitor(id: string, opts: VisitorOpts): void {
+    if (this._visitors.has(id)) return;
+    this._visitors.set(id, {
+      id,
+      group: null,
+      body: null,
+      eyes: null,
+      bodyMaterial: null,
+      trustScore: opts.trustScore,
+      presence: "arriving",
+      hue: idToHue(opts.motebitId),
+      phase: 0,
+      transitionStart: Date.now() / 1000,
+      direction: opts.direction ?? { x: -1, y: 0, z: 0 },
+    });
+  }
+  departVisitor(id: string): void {
+    const s = this._visitors.get(id);
+    if (s) s.presence = "leaving";
+  }
+  getMainPresence(): CreaturePresence {
+    return this._mainPresence;
+  }
+  getVisitors(): Map<string, VisitorState> {
+    return this._visitors;
+  }
 }
 
 // === WebXR Three.js Adapter ===
@@ -1336,9 +1474,14 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
   private interiorColor: InteriorColor | null = null;
   private blinkState: BlinkState = createBlinkState();
 
-  // Remote creatures and delegation lines for agent network visualization
-  private remoteCreatures = new Map<string, RemoteCreatureState>();
-  private delegationLines = new Map<string, DelegationLineState>();
+  // Presence model state
+  private mainPresence: CreaturePresence = "home";
+  private mainTransitionStart = 0;
+  private mainDepartDirection = new THREE.Vector3(1, 0, 0);
+  private mainReturnDirection = new THREE.Vector3(-1, 0, 0);
+  private ghostMesh: THREE.Mesh | null = null;
+  private visitors = new Map<string, VisitorState>();
+  private returnTrails: ReturnTrailState[] = [];
 
   /** Check if WebXR immersive-ar is available in this browser. */
   static async isSupported(): Promise<boolean> {
@@ -1606,16 +1749,62 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
       this.creature.rotation.z = organicNoise(t, [0.4, 0.67]) * tiltAmount;
     }
 
-    // Remote creatures — ambient animation
-    for (const state of this.remoteCreatures.values()) {
-      animateRemoteCreature(state, t, dt);
+    // === Main creature presence transitions ===
+    this._tickMainPresence(t, dt);
+
+    // === Ghost — slow pulse while creature is away ===
+    if (this.ghostMesh) {
+      const ghostMat = this.ghostMesh.material as THREE.MeshBasicMaterial;
+      const isVisible =
+        this.mainPresence === "away" ||
+        this.mainPresence === "departing" ||
+        this.mainPresence === "returning";
+      if (isVisible) {
+        const ghostPulse = 0.08 + 0.03 * Math.sin(t * 0.5 * Math.PI * 2);
+        ghostMat.opacity = ghostPulse;
+        this.ghostMesh.visible = true;
+      } else {
+        ghostMat.opacity = smoothDelta(ghostMat.opacity, 0, dt, 4.0);
+        if (ghostMat.opacity < 0.005) this.ghostMesh.visible = false;
+      }
     }
 
-    // Delegation lines — arc animation + pulse
-    for (const state of this.delegationLines.values()) {
-      const fromPos = this._resolveCreaturePosition(state.fromId);
-      const toPos = this._resolveCreaturePosition(state.toId);
-      animateDelegationLine(state, t, dt, fromPos, toPos);
+    // === Visitors ===
+    const ghostPos = this.ghostMesh
+      ? (this.ghostMesh as THREE.Mesh).position.clone()
+      : new THREE.Vector3(0, 0, 0);
+    for (const [id, vs] of this.visitors) {
+      if (!vs.group) continue;
+      animateVisitor(vs, t, dt, ghostPos);
+      if (vs.presence === "leaving") {
+        const elapsed = t - vs.transitionStart;
+        if (elapsed >= VISITOR_LEAVE_DURATION) {
+          this._disposeVisitor(id, vs);
+          this.visitors.delete(id);
+        }
+      }
+      if (vs.presence === "arriving") {
+        const elapsed = t - vs.transitionStart;
+        if (elapsed >= VISITOR_ARRIVE_DURATION) {
+          vs.presence = "present";
+          vs.transitionStart = t;
+        }
+      }
+    }
+
+    // === Return trails ===
+    const expiredTrails: ReturnTrailState[] = [];
+    for (const trail of this.returnTrails) {
+      if (!trail.line) continue;
+      const mat = trail.material as THREE.LineBasicMaterial;
+      const elapsed = t - trail.startedAt;
+      const progress = Math.min(1, elapsed / TRAIL_FADE_DURATION);
+      mat.opacity = 0.65 * (1 - progress);
+      if (progress >= 1) expiredTrails.push(trail);
+    }
+    for (const trail of expiredTrails) {
+      this._disposeTrail(trail);
+      this.returnTrails = this.returnTrails.filter((r) => r.id !== trail.id);
     }
 
     this.renderer.render(this.scene, this.camera);
@@ -1736,59 +1925,200 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     this.listeningActive = active;
   }
 
-  // === Multi-Creature API (agent network visualization) ===
+  // === Presence API ===
 
-  addRemoteCreature(id: string, opts: RemoteCreatureOpts): void {
-    if (this.remoteCreatures.has(id)) return;
+  departCreature(opts?: DepartureOpts): void {
+    if (this.mainPresence !== "home") return;
+    const dir = opts?.direction
+      ? new THREE.Vector3(opts.direction.x, opts.direction.y, opts.direction.z).normalize()
+      : new THREE.Vector3(1, 0, 0);
+    this.mainDepartDirection = dir;
+    this.mainPresence = "departing";
+    this.mainTransitionStart = Date.now() / 1000;
 
-    const hue = opts.hue ?? idToHue(id);
-    const distance = trustToDistance(opts.trustScore);
+    if (this.scene && !this.ghostMesh) {
+      this.ghostMesh = createGhost();
+      const creaturePos = this.creature?.position.clone() ?? new THREE.Vector3(0, 0, 0);
+      this.ghostMesh.position.copy(creaturePos);
+      this.ghostMesh.visible = true;
+      this.scene.add(this.ghostMesh);
+    }
+  }
+
+  returnCreature(opts?: { fromDirection?: { x: number; y: number; z: number } }): void {
+    if (this.mainPresence !== "away" && this.mainPresence !== "departing") return;
+    const dir = opts?.fromDirection
+      ? new THREE.Vector3(
+          opts.fromDirection.x,
+          opts.fromDirection.y,
+          opts.fromDirection.z,
+        ).normalize()
+      : this.mainDepartDirection.clone().negate();
+    this.mainReturnDirection = dir;
+    this.mainPresence = "returning";
+    this.mainTransitionStart = Date.now() / 1000;
+
+    if (this.creature) {
+      const spawnPos = dir.clone().multiplyScalar(VISITOR_SPAWN_DISTANCE * 0.5);
+      this.creature.position.copy(spawnPos);
+      this.creature.scale.setScalar(0);
+    }
+
+    if (this.scene && this.ghostMesh) {
+      const ghostPos = this.ghostMesh.position;
+      const fromPos = dir.clone().multiplyScalar(VISITOR_HOVER_DISTANCE);
+      const trailId = `trail-${Date.now()}`;
+      const { line, geometry, material } = createReturnTrail(this.scene, fromPos, ghostPos);
+      this.returnTrails.push({
+        id: trailId,
+        line,
+        geometry,
+        material,
+        startedAt: Date.now() / 1000,
+        from: { x: fromPos.x, y: fromPos.y, z: fromPos.z },
+        to: { x: ghostPos.x, y: ghostPos.y, z: ghostPos.z },
+      });
+    }
+  }
+
+  arriveVisitor(id: string, opts: VisitorOpts): void {
+    if (this.visitors.has(id)) return;
+    const hue = idToHue(opts.motebitId);
+    const dir = opts.direction ?? { x: -1, y: 0, z: 0 };
 
     if (!this.scene) {
-      this.remoteCreatures.set(id, {
+      this.visitors.set(id, {
         id,
         group: null,
         body: null,
         eyes: null,
         bodyMaterial: null,
         trustScore: opts.trustScore,
-        activity: "idle",
+        presence: "arriving",
         hue,
         phase: Math.random() * Math.PI * 2,
-        completedAt: -1,
+        transitionStart: Date.now() / 1000,
+        direction: dir,
       });
       return;
     }
 
-    const index = this.remoteCreatures.size;
-    const total = index + 1;
-    const pos = opts.position
-      ? new THREE.Vector3(opts.position.x, opts.position.y, opts.position.z)
-      : circlePosition(index, total, distance);
-
-    const { group, body, eyes, bodyMaterial } = createRemoteCreature(hue);
-    group.position.copy(pos);
-    group.userData.basePosition = pos.clone();
+    const { group, body, eyes, bodyMaterial } = createVisitorCreature(hue);
+    const dirVec = new THREE.Vector3(dir.x, dir.y, dir.z).normalize();
+    const spawnPos = dirVec.clone().multiplyScalar(VISITOR_SPAWN_DISTANCE);
+    group.position.copy(spawnPos);
+    group.userData.basePosition = spawnPos.clone();
     this.scene.add(group);
 
-    this.remoteCreatures.set(id, {
+    this.visitors.set(id, {
       id,
       group,
       body,
       eyes,
       bodyMaterial,
       trustScore: opts.trustScore,
-      activity: "idle",
+      presence: "arriving",
       hue,
       phase: Math.random() * Math.PI * 2,
-      completedAt: -1,
+      transitionStart: Date.now() / 1000,
+      direction: dir,
     });
   }
 
-  removeRemoteCreature(id: string): void {
-    const state = this.remoteCreatures.get(id);
-    if (!state) return;
+  departVisitor(id: string): void {
+    const state = this.visitors.get(id);
+    if (!state || state.presence === "leaving") return;
+    state.presence = "leaving";
+    state.transitionStart = Date.now() / 1000;
+  }
 
+  getMainPresence(): CreaturePresence {
+    return this.mainPresence;
+  }
+
+  getVisitors(): Map<string, VisitorState> {
+    return this.visitors;
+  }
+
+  // === Main Presence Tick ===
+
+  private _tickMainPresence(t: number, dt: number): void {
+    if (!this.creature || !this.bodyMaterial) return;
+    const elapsed = t - this.mainTransitionStart;
+
+    switch (this.mainPresence) {
+      case "home":
+        break;
+
+      case "departing": {
+        const progress = Math.min(1, elapsed / DEPART_DURATION);
+        const scale = 1 - easeOutCubic(progress);
+        this.creature.scale.setScalar(scale);
+        const driftAmount = easeOutCubic(progress) * 0.8;
+        const departPos = this.mainDepartDirection.clone().multiplyScalar(driftAmount);
+        this.creature.position.add(departPos.multiplyScalar(dt));
+        if (elapsed < 0.3) {
+          this.bodyMaterial.emissiveIntensity = smoothDelta(
+            this.bodyMaterial.emissiveIntensity,
+            0.8,
+            dt,
+            12.0,
+          );
+        }
+        if (progress >= 1) {
+          this.mainPresence = "away";
+          this.mainTransitionStart = t;
+          this.creature.scale.setScalar(0);
+          this.creature.visible = false;
+        }
+        break;
+      }
+
+      case "away":
+        this.creature.visible = false;
+        this.creature.scale.setScalar(0);
+        break;
+
+      case "returning": {
+        const progress = Math.min(1, elapsed / RETURN_DURATION);
+        const scale = easeInOutBack(progress);
+        this.creature.scale.setScalar(Math.max(0, scale));
+        this.creature.visible = true;
+        const spawnPos = this.mainReturnDirection
+          .clone()
+          .multiplyScalar(VISITOR_SPAWN_DISTANCE * 0.5);
+        const homePos = new THREE.Vector3(0, 0, 0);
+        const pos = spawnPos.lerp(homePos, easeInOutBack(Math.min(1, progress)));
+        this.creature.position.copy(pos);
+        const arrivalGlow = (1 - progress) * 0.9;
+        this.bodyMaterial.emissiveIntensity = Math.max(
+          this.bodyMaterial.emissiveIntensity,
+          arrivalGlow,
+        );
+        if (progress >= 1) {
+          this.mainPresence = "home";
+          this.mainTransitionStart = t;
+          this.creature.scale.setScalar(1);
+          this.creature.position.set(0, 0, 0);
+          if (this.ghostMesh) {
+            const ghostMat = this.ghostMesh.material as THREE.MeshBasicMaterial;
+            ghostMat.opacity = 0;
+            this.ghostMesh.visible = false;
+          }
+        }
+        break;
+      }
+
+      default:
+        break;
+    }
+    void dt;
+  }
+
+  // === Disposal Helpers ===
+
+  private _disposeVisitor(id: string, state: VisitorState): void {
+    void id;
     if (this.scene && state.group) {
       const group = state.group as THREE.Group;
       this.scene.remove(group);
@@ -1799,165 +2129,34 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
         }
       });
     }
+  }
 
-    for (const [lineId, line] of this.delegationLines) {
-      if (line.fromId === id || line.toId === id) {
-        this.removeDelegationLine(lineId);
-      }
+  private _disposeTrail(trail: ReturnTrailState): void {
+    if (this.scene && trail.line) {
+      this.scene.remove(trail.line as THREE.Line);
+      (trail.geometry as THREE.BufferGeometry).dispose();
+      (trail.material as THREE.LineBasicMaterial).dispose();
     }
-
-    this.remoteCreatures.delete(id);
-  }
-
-  updateRemoteCreature(id: string, opts: Partial<RemoteCreatureOpts>): void {
-    const state = this.remoteCreatures.get(id);
-    if (!state) return;
-
-    if (opts.trustScore !== undefined) {
-      state.trustScore = opts.trustScore;
-      const distance = trustToDistance(opts.trustScore);
-      if (state.group && !opts.position) {
-        const group = state.group as THREE.Group;
-        const current = group.position;
-        const angle = Math.atan2(current.z, current.x);
-        group.userData.basePosition = new THREE.Vector3(
-          Math.cos(angle) * distance,
-          current.y,
-          Math.sin(angle) * distance,
-        ).clone();
-      }
-    }
-
-    if (opts.position && state.group) {
-      const group = state.group as THREE.Group;
-      group.userData.basePosition = new THREE.Vector3(
-        opts.position.x,
-        opts.position.y,
-        opts.position.z,
-      ).clone();
-    }
-
-    if (opts.hue !== undefined) state.hue = opts.hue;
-  }
-
-  setRemoteCreatureActivity(id: string, activity: RemoteCreatureActivity): void {
-    const state = this.remoteCreatures.get(id);
-    if (!state) return;
-    if (activity === "completed") state.completedAt = Date.now() / 1000;
-    state.activity = activity;
-  }
-
-  addDelegationLine(fromId: string | "self", toId: string): string {
-    const lineId = `dl-xr-${this.delegationLines.size}-${Date.now()}`;
-
-    if (!this.scene) {
-      this.delegationLines.set(lineId, {
-        id: lineId,
-        fromId,
-        toId,
-        line: null,
-        geometry: null,
-        material: null,
-        pulseProgress: -1,
-        pulseMesh: null,
-      });
-      return lineId;
-    }
-
-    const fromPos = this._resolveCreaturePosition(fromId);
-    const toPos = this._resolveCreaturePosition(toId);
-    const { line, geometry, material } = createDelegationArc(this.scene, fromPos, toPos);
-    const pulseMesh = createPulseMesh();
-    this.scene.add(pulseMesh);
-
-    this.delegationLines.set(lineId, {
-      id: lineId,
-      fromId,
-      toId,
-      line,
-      geometry,
-      material,
-      pulseProgress: -1,
-      pulseMesh,
-    });
-    return lineId;
-  }
-
-  removeDelegationLine(lineId: string): void {
-    const state = this.delegationLines.get(lineId);
-    if (!state) return;
-
-    if (this.scene) {
-      if (state.line) {
-        this.scene.remove(state.line as THREE.Line);
-        (state.geometry as THREE.BufferGeometry).dispose();
-        (state.material as THREE.LineBasicMaterial).dispose();
-      }
-      if (state.pulseMesh) {
-        const pm = state.pulseMesh as THREE.Mesh;
-        this.scene.remove(pm);
-        pm.geometry.dispose();
-        if (pm.material instanceof THREE.Material) pm.material.dispose();
-      }
-    }
-
-    this.delegationLines.delete(lineId);
-  }
-
-  pulseDelegationLine(lineId: string): void {
-    const state = this.delegationLines.get(lineId);
-    if (state) state.pulseProgress = 0;
-  }
-
-  getRemoteCreatures(): Map<string, RemoteCreatureState> {
-    return this.remoteCreatures;
-  }
-
-  getDelegationLines(): Map<string, DelegationLineState> {
-    return this.delegationLines;
-  }
-
-  private _resolveCreaturePosition(id: string | "self"): THREE.Vector3 {
-    if (id === "self") {
-      return this.creature
-        ? (this.creature as THREE.Group).position.clone()
-        : new THREE.Vector3(0, 0, 0);
-    }
-    const state = this.remoteCreatures.get(id);
-    if (state?.group) {
-      return (state.group as THREE.Group).position.clone();
-    }
-    return new THREE.Vector3(0, 0, 0);
   }
 
   dispose(): void {
     this.endSession().catch(() => {}); // Best-effort session cleanup
 
-    // Dispose remote creatures
-    for (const state of this.remoteCreatures.values()) {
-      if (state.group) {
-        const group = state.group as THREE.Group;
-        group.traverse((obj) => {
-          if (obj instanceof THREE.Mesh) {
-            obj.geometry.dispose();
-            if (obj.material instanceof THREE.Material) obj.material.dispose();
-          }
-        });
-      }
+    for (const [id, vs] of this.visitors) {
+      this._disposeVisitor(id, vs);
     }
-    this.remoteCreatures.clear();
+    this.visitors.clear();
+    for (const trail of this.returnTrails) {
+      this._disposeTrail(trail);
+    }
+    this.returnTrails = [];
 
-    // Dispose delegation lines
-    for (const state of this.delegationLines.values()) {
-      if (state.geometry) (state.geometry as THREE.BufferGeometry).dispose();
-      if (state.material) (state.material as THREE.LineBasicMaterial).dispose();
-      if (state.pulseMesh) {
-        const pm = state.pulseMesh as THREE.Mesh;
-        pm.geometry.dispose();
-        if (pm.material instanceof THREE.Material) pm.material.dispose();
-      }
+    if (this.scene && this.ghostMesh) {
+      this.scene.remove(this.ghostMesh);
+      this.ghostMesh.geometry.dispose();
+      if (this.ghostMesh.material instanceof THREE.Material) this.ghostMesh.material.dispose();
     }
-    this.delegationLines.clear();
+    this.ghostMesh = null;
 
     if (this.creature) {
       this.creature.traverse((obj) => {

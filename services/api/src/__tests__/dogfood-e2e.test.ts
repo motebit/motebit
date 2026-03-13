@@ -357,16 +357,20 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
     expect(body.task_id).toBeTruthy();
     sharedTaskId = body.task_id;
 
-    // Relay fanned the task_request to B's connected device via WebSocket
-    expect(bWs.send).toHaveBeenCalledOnce();
-    const sentMsg = JSON.parse(bWs.send.mock.calls[0]![0] as string) as {
-      type: string;
-      task: { task_id: string; prompt: string; required_capabilities: string[] };
-    };
-    expect(sentMsg.type).toBe("task_request");
-    expect(sentMsg.task.task_id).toBe(sharedTaskId);
-    expect(sentMsg.task.prompt).toBe("Summarize the agent delegation architecture");
-    expect(sentMsg.task.required_capabilities).toContain("web_search");
+    // Relay fanned the task_request to B's connected device via WebSocket.
+    // B also receives delegation_arrived (spatial presence), so send may be called >1 times.
+    const bMessages = bWs.send.mock.calls.map(
+      (c) =>
+        JSON.parse(c[0] as string) as {
+          type: string;
+          task?: { task_id: string; prompt: string; required_capabilities: string[] };
+        },
+    );
+    const sentMsg = bMessages.find((m) => m.type === "task_request");
+    expect(sentMsg).toBeDefined();
+    expect(sentMsg!.task!.task_id).toBe(sharedTaskId);
+    expect(sentMsg!.task!.prompt).toBe("Summarize the agent delegation architecture");
+    expect(sentMsg!.task!.required_capabilities).toContain("web_search");
   });
 
   it("11. Agent B posts a signed ExecutionReceipt back to the relay", async () => {
@@ -799,10 +803,215 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
   });
 
   // =========================================================================
+  // Spatial presence events — AR/VR delegation animation
+  //   delegation_departed         → submitter when task is accepted
+  //   delegation_arrived          → worker when task arrives
+  //   delegation_returning        → submitter when receipt is posted
+  //   delegation_visitor_departing → worker after receipt
+  // =========================================================================
+
+  it("22. Spatial: delegation_departed sent to submitter and delegation_arrived sent to worker on task submission", async () => {
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
+
+    // Both A and B have WS connections so we can capture events on each side
+    const wsA = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+    const wsB = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+
+    relay.connections.set(motebitIdA, [
+      { ws: wsA as never, deviceId: relayDeviceIdA, capabilities: [] },
+    ]);
+    relay.connections.set(motebitIdB, [
+      { ws: wsB as never, deviceId: relayDeviceIdB, capabilities: ["web_search", "general"] },
+    ]);
+
+    const res = await relay.app.request(`/agent/${motebitIdB}/task`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenA}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt: "Spatial presence test: find something",
+        submitted_by: motebitIdA,
+        required_capabilities: ["web_search"],
+      }),
+    });
+    expect(res.status).toBe(201);
+    const { task_id: spatialTaskId } = (await res.json()) as { task_id: string };
+
+    // wsA should have received delegation_departed (A's submitter view)
+    const aSentMessages = wsA.send.mock.calls.map(
+      (call) => JSON.parse(call[0] as string) as Record<string, unknown>,
+    );
+    const departed = aSentMessages.find((m) => m.type === "delegation_departed");
+    expect(departed).toBeDefined();
+    expect(departed!.task_id).toBe(spatialTaskId);
+    expect(departed!.target_motebit_id).toBe(motebitIdB);
+    expect(departed!.submitted_by).toBe(motebitIdA);
+
+    // wsB should have received both task_request (existing) and delegation_arrived (new)
+    const bSentMessages = wsB.send.mock.calls.map(
+      (call) => JSON.parse(call[0] as string) as Record<string, unknown>,
+    );
+    const taskRequest = bSentMessages.find((m) => m.type === "task_request");
+    expect(taskRequest).toBeDefined();
+
+    const arrived = bSentMessages.find((m) => m.type === "delegation_arrived");
+    expect(arrived).toBeDefined();
+    expect(arrived!.task_id).toBe(spatialTaskId);
+    expect(arrived!.source_motebit_id).toBe(motebitIdA);
+    // prompt is capped at 100 chars
+    expect(typeof arrived!.prompt).toBe("string");
+    expect((arrived!.prompt as string).length).toBeLessThanOrEqual(100);
+
+    // Clean up connections so subsequent tests start fresh
+    relay.connections.delete(motebitIdA);
+    relay.connections.delete(motebitIdB);
+
+    // Store task_id for the return-journey test
+    (globalThis as Record<string, unknown>).__spatialTaskId = spatialTaskId;
+  });
+
+  it("23. Spatial: delegation_returning sent to submitter and delegation_visitor_departing sent to worker on receipt", async () => {
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+
+    // Submit a fresh task so we control the lifecycle end-to-end
+    const wsA = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+    const wsB = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+
+    relay.connections.set(motebitIdA, [
+      { ws: wsA as never, deviceId: relayDeviceIdA, capabilities: [] },
+    ]);
+    relay.connections.set(motebitIdB, [
+      { ws: wsB as never, deviceId: relayDeviceIdB, capabilities: ["web_search", "general"] },
+    ]);
+
+    const taskRes = await relay.app.request(`/agent/${motebitIdB}/task`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenA}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt: "Spatial return journey test",
+        submitted_by: motebitIdA,
+        required_capabilities: ["general"],
+      }),
+    });
+    expect(taskRes.status).toBe(201);
+    const { task_id: returnTaskId } = (await taskRes.json()) as { task_id: string };
+
+    // Reset call counts so the receipt assertions are clean
+    wsA.send.mockClear();
+    wsB.send.mockClear();
+
+    // B posts a successful receipt
+    const receipt = await makeReceipt(returnTaskId, motebitIdB, relayDeviceIdB, keypairB, {
+      status: "completed",
+      result: "Spatial return test complete",
+    });
+    const resultRes = await relay.app.request(`/agent/${motebitIdB}/task/${returnTaskId}/result`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenB}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(receipt),
+    });
+    expect(resultRes.status).toBe(200);
+
+    // wsA should have received delegation_returning (A's submitter view — motebit coming home)
+    const aSentMessages = wsA.send.mock.calls.map(
+      (call) => JSON.parse(call[0] as string) as Record<string, unknown>,
+    );
+    const returning = aSentMessages.find((m) => m.type === "delegation_returning");
+    expect(returning).toBeDefined();
+    expect(returning!.task_id).toBe(returnTaskId);
+    expect(returning!.target_motebit_id).toBe(motebitIdB);
+    expect(returning!.status).toBe("completed");
+    expect(returning!.receipt_verified).toBe(true);
+
+    // wsB should have received task_result (existing) AND delegation_visitor_departing (new)
+    const bSentMessages = wsB.send.mock.calls.map(
+      (call) => JSON.parse(call[0] as string) as Record<string, unknown>,
+    );
+    const taskResult = bSentMessages.find((m) => m.type === "task_result");
+    expect(taskResult).toBeDefined();
+
+    const visitorDeparting = bSentMessages.find((m) => m.type === "delegation_visitor_departing");
+    expect(visitorDeparting).toBeDefined();
+    expect(visitorDeparting!.task_id).toBe(returnTaskId);
+    expect(visitorDeparting!.source_motebit_id).toBe(motebitIdA);
+
+    relay.connections.delete(motebitIdA);
+    relay.connections.delete(motebitIdB);
+  });
+
+  it("24. Spatial: delegation_returning status is 'failed' when receipt.status is 'failed'", async () => {
+    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA);
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB);
+
+    const wsA = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+    const wsB = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+
+    relay.connections.set(motebitIdA, [
+      { ws: wsA as never, deviceId: relayDeviceIdA, capabilities: [] },
+    ]);
+    relay.connections.set(motebitIdB, [
+      { ws: wsB as never, deviceId: relayDeviceIdB, capabilities: ["general"] },
+    ]);
+
+    const taskRes = await relay.app.request(`/agent/${motebitIdB}/task`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenA}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt: "This task will fail",
+        submitted_by: motebitIdA,
+        required_capabilities: ["general"],
+      }),
+    });
+    expect(taskRes.status).toBe(201);
+    const { task_id: failTaskId } = (await taskRes.json()) as { task_id: string };
+
+    wsA.send.mockClear();
+    wsB.send.mockClear();
+
+    // B posts a failed receipt
+    const receipt = await makeReceipt(failTaskId, motebitIdB, relayDeviceIdB, keypairB, {
+      status: "failed",
+      result: "Command not found",
+    });
+    const resultRes = await relay.app.request(`/agent/${motebitIdB}/task/${failTaskId}/result`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenB}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(receipt),
+    });
+    expect(resultRes.status).toBe(200);
+
+    const aSentMessages = wsA.send.mock.calls.map(
+      (call) => JSON.parse(call[0] as string) as Record<string, unknown>,
+    );
+    const returning = aSentMessages.find((m) => m.type === "delegation_returning");
+    expect(returning).toBeDefined();
+    expect(returning!.status).toBe("failed");
+    expect(returning!.receipt_verified).toBe(true);
+
+    relay.connections.delete(motebitIdA);
+    relay.connections.delete(motebitIdB);
+  });
+
+  // =========================================================================
   // 15. Non-existent task → 404
   // =========================================================================
 
-  it("22. Polling a non-existent task_id returns 404", async () => {
+  it("25. Polling a non-existent task_id returns 404", async () => {
     const res = await relay.app.request(`/agent/${motebitIdB}/task/${crypto.randomUUID()}`, {
       method: "GET",
       headers: { Authorization: `Bearer ${RELAY_MASTER_TOKEN}` },
@@ -814,7 +1023,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
   // 16. Market candidate scoring
   // =========================================================================
 
-  it("23. Market candidates endpoint returns Agent B as a scored candidate for web_search", async () => {
+  it("26. Market candidates endpoint returns Agent B as a scored candidate for web_search", async () => {
     // /api/v1/market/candidates falls under the global /api/v1/* middleware which
     // requires the master token (device signed tokens are not accepted here).
     const res = await relay.app.request("/api/v1/market/candidates?capability=web_search", {

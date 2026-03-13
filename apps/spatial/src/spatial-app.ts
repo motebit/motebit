@@ -14,22 +14,27 @@
  * Presence state machine drives the creature's body language through the
  * existing pipeline: StateVector → BehaviorEngine → RenderEngine.
  *
+ * Physical travel model (event-driven, not polling-driven):
+ * - When your motebit delegates, it LEAVES your body. A ghost remains.
+ * - Another person's motebit ARRIVES in your space as a visitor.
+ * - When done, your motebit RETURNS carrying the receipt.
+ * - Trust is the gatekeeper — blocked agents are invisible, unknown agents
+ *   are distant and faint, trusted agents appear close and bright.
+ *
  * Relay integration (best-effort, gated behind showNetwork setting):
  * - Registers identity on bootstrap via POST /api/v1/agents/bootstrap
  * - Registers in agent discovery via POST /api/v1/agents/register
- * - Discovers other agents every 30 seconds via GET /api/v1/agents/discover
- * - Visualizes discovered agents as remote creatures (trust-positioned)
- * - Visualizes delegation flow with animated arcs on the render adapter
+ * - Maintains heartbeat every 5 minutes
+ * - Listens for spatial presence events via WS: delegation_departed,
+ *   delegation_arrived, delegation_returning, delegation_visitor_departing
  */
 
 import { MotebitRuntime } from "@motebit/runtime";
 import { RelayDelegationAdapter } from "@motebit/runtime";
-import type { StepDelegationAdapter } from "@motebit/runtime";
 import { createBrowserStorage, IdbAgentTrustStore } from "@motebit/browser-persistence";
 import type { StreamChunk, KeyringAdapter, StorageAdapters } from "@motebit/runtime";
 import { WebXRThreeJSAdapter } from "@motebit/render-engine";
-import { trustLevelToScore } from "@motebit/sdk";
-import { AgentTrustLevel } from "@motebit/sdk";
+import { trustLevelToScore, AgentTrustLevel } from "@motebit/sdk";
 import {
   CloudProvider,
   OllamaProvider,
@@ -90,22 +95,37 @@ const PRESENCE_MAP: Record<PresenceState, PresenceMapping> = {
   processing: { social_distance: 0.15, attention: 0.85, processing: 0.95 },
 };
 
-// === Discovered agent record ===
+// === Visitor Record ===
 
-export interface DiscoveredAgent {
-  motebit_id: string;
-  endpoint_url: string;
-  capabilities: string[];
-  trust_score: number;
-  last_seen: number;
+/** A visitor currently in your space (trust-admitted). */
+export interface VisitorRecord {
+  motebitId: string;
+  trustScore: number;
+  /** Task the visitor arrived with, if known. */
+  taskDescription?: string;
 }
+
+// === Delegation Presence ===
+
+/**
+ * Physical travel state of your own motebit:
+ *   home → away (delegated, ghost visible) → home (returned with receipt)
+ */
+export type DelegationPresence = "home" | "away";
 
 // === Constants ===
 
 const DEFAULT_RELAY_URL = "https://motebit-sync.fly.dev";
-const DISCOVERY_INTERVAL_MS = 30_000; // 30 seconds
 const HEARTBEAT_INTERVAL_MS = 5 * 60_000; // 5 minutes
-const DELEGATION_VIZ_CLEANUP_MS = 3_000; // 3 seconds after receipt
+
+// === Spatial WS message shape ===
+
+interface SpatialWsMessage {
+  type: string;
+  source_motebit_id?: string;
+  target_motebit_id?: string;
+  task_description?: string;
+}
 
 // === SpatialApp ===
 
@@ -139,12 +159,17 @@ export class SpatialApp {
     showNetwork: true,
   };
 
-  // Relay / discovery state
-  private discoveredAgents = new Map<string, DiscoveredAgent>();
-  private discoveryTimer: ReturnType<typeof setInterval> | null = null;
+  // Relay state
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private relayAuthToken: string | null = null;
   private tokenFactory: (() => Promise<string>) | null = null;
+  private _ws: WebSocket | null = null;
+
+  // Physical travel state
+  private _delegationPresence: DelegationPresence = "home";
+  private _delegationTarget: string | null = null;
+  /** Visitors currently in your space, keyed by their motebitId. */
+  private _visitors = new Map<string, VisitorRecord>();
 
   motebitId = "spatial-local";
   deviceId = "spatial-local";
@@ -232,6 +257,20 @@ export class SpatialApp {
     );
   }
 
+  // === Delegation Presence ===
+
+  get delegationPresence(): DelegationPresence {
+    return this._delegationPresence;
+  }
+
+  get delegationTarget(): string | null {
+    return this._delegationTarget;
+  }
+
+  get visitors(): ReadonlyMap<string, VisitorRecord> {
+    return this._visitors;
+  }
+
   // === Lifecycle ===
 
   /** Initialize the WebXR adapter with the canvas. */
@@ -268,7 +307,6 @@ export class SpatialApp {
     this.storage = storage;
 
     // Grab the IDB instance for agent trust lookups
-    // IdbAgentTrustStore is returned as agentTrustStore in StorageAdapters
     const agentTrustStore = (storage as unknown as { agentTrustStore?: IdbAgentTrustStore })
       .agentTrustStore;
     if (agentTrustStore) {
@@ -387,7 +425,7 @@ export class SpatialApp {
 
   /**
    * Connect to the relay: bootstrap identity, register for discovery, start heartbeat,
-   * wire RelayDelegationAdapter on the runtime, and start the discovery loop.
+   * wire RelayDelegationAdapter on the runtime, and open a WS for spatial presence events.
    *
    * Best-effort — any relay error is swallowed; the app works offline.
    * Must be called after bootstrap() and initAI().
@@ -466,8 +504,8 @@ export class SpatialApp {
     }
 
     // 3. Wire RelayDelegationAdapter on the runtime for outbound delegation.
-    // Wrap it with a visualization decorator that intercepts delegateStep() to
-    // show arcs and activity states on the render adapter.
+    // WS events are the source of truth for departure/return animation — the adapter
+    // handles the actual task submission via HTTP.
     if (this.runtime && this.tokenFactory) {
       const tokenFactory = this.tokenFactory;
       const motebitId = this.motebitId;
@@ -475,55 +513,34 @@ export class SpatialApp {
         syncUrl: relayUrl,
         motebitId,
         authToken: tokenFactory,
-        // No WebSocket in the spatial app — HTTP polling only
         sendRaw: () => {},
         onCustomMessage: () => () => {},
         getExplorationDrive: () => this.runtime?.getPrecision().explorationDrive,
-        onDelegationFailure: () => {
-          // Delegation failure — clear any active arcs for this step (handled via completion)
-        },
+        onDelegationFailure: () => {},
       });
-
-      // Thin decorator to intercept delegateStep for visualization
-      const adapter = this;
-      const vizAdapter: StepDelegationAdapter = {
-        delegateStep: async (step, timeoutMs, onTaskSubmitted) => {
-          // Use the assigned agent ID if known, otherwise fall back to a generic label
-          const targetId = step.assigned_motebit_id ?? "unknown";
-          const lineId = adapter._onDelegationStart(targetId);
-          try {
-            const result = await inner.delegateStep(step, timeoutMs, onTaskSubmitted);
-            adapter._onDelegationComplete(targetId, lineId);
-            return result;
-          } catch (err: unknown) {
-            // On failure: clean up arc immediately
-            adapter.adapter.removeDelegationLine(lineId);
-            adapter.adapter.setRemoteCreatureActivity(targetId, "idle");
-            throw err;
-          }
-        },
-        pollTaskResult: inner.pollTaskResult.bind(inner),
-      };
-      this.runtime.setDelegationAdapter(vizAdapter);
+      this.runtime.setDelegationAdapter(inner);
     }
 
-    // 4. Start discovery loop
-    this._startDiscoveryLoop();
+    // 4. Open WebSocket for spatial presence events.
+    // All visualization is event-driven — this replaces the old discovery polling loop.
+    this._openPresenceWs(relayUrl, authToken);
   }
 
   /**
-   * Disconnect from the relay and clean up remote creatures.
+   * Disconnect from the relay and clean up visitors.
    * Best-effort deregistration.
    */
   async disconnectRelay(): Promise<void> {
     // Stop timers
-    if (this.discoveryTimer) {
-      clearInterval(this.discoveryTimer);
-      this.discoveryTimer = null;
-    }
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
+    }
+
+    // Close WS
+    if (this._ws) {
+      this._ws.close();
+      this._ws = null;
     }
 
     // Best-effort deregistration
@@ -538,87 +555,138 @@ export class SpatialApp {
       }
     }
 
-    // Remove all remote creatures from the render adapter
-    for (const id of this.discoveredAgents.keys()) {
-      this.adapter.removeRemoteCreature(id);
+    // Depart all visitors cleanly
+    for (const id of this._visitors.keys()) {
+      this.adapter.departVisitor(id);
     }
-    this.discoveredAgents.clear();
+    this._visitors.clear();
   }
 
-  // === Discovery Loop ===
+  // === Spatial Presence WebSocket ===
 
-  private _startDiscoveryLoop(): void {
-    // Run immediately, then on interval
-    void this._runDiscovery();
-    this.discoveryTimer = setInterval(() => {
-      void this._runDiscovery();
-    }, DISCOVERY_INTERVAL_MS);
-  }
+  /**
+   * Open a WebSocket connection to the relay for spatial presence events.
+   * Handles: delegation_departed, delegation_arrived, delegation_returning,
+   * delegation_visitor_departing.
+   *
+   * Best-effort — closed on relay disconnect, no automatic reconnect (the app
+   * works fine without it; delegation still executes via HTTP).
+   */
+  private _openPresenceWs(relayUrl: string, authToken: string | null): void {
+    if (typeof WebSocket === "undefined") return;
 
-  private async _runDiscovery(): Promise<void> {
-    const { relayUrl, showNetwork } = this.networkSettings;
-    if (relayUrl === "" || !showNetwork) return;
+    // Convert http(s) to ws(s)
+    const wsUrl = relayUrl.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://");
 
-    let data: Array<{
-      motebit_id: string;
-      endpoint_url: string;
-      capabilities?: string[];
-    }>;
+    const url = authToken
+      ? `${wsUrl}/api/v1/ws?token=${encodeURIComponent(authToken)}`
+      : `${wsUrl}/api/v1/ws`;
 
+    let ws: WebSocket;
     try {
-      const freshToken = this.tokenFactory ? await this.tokenFactory() : this.relayAuthToken;
-      const headers: Record<string, string> = {};
-      if (freshToken) headers["Authorization"] = `Bearer ${freshToken}`;
-      const resp = await fetch(`${relayUrl}/api/v1/agents/discover`, { headers });
-      if (!resp.ok) return;
-      const body = (await resp.json()) as { agents?: typeof data } | typeof data | null | undefined;
-      // The relay may return { agents: [...] } or a bare array
-      if (Array.isArray(body)) {
-        data = body;
-      } else if (body != null && typeof body === "object" && Array.isArray(body.agents)) {
-        data = body.agents;
-      } else {
-        return;
-      }
+      ws = new WebSocket(url);
     } catch {
       return; // Best-effort
     }
 
-    // Filter out self
-    const discovered = data.filter((a) => a.motebit_id !== this.motebitId);
-    const discoveredIds = new Set(discovered.map((a) => a.motebit_id));
-
-    // Remove agents that are no longer present
-    for (const id of this.discoveredAgents.keys()) {
-      if (!discoveredIds.has(id)) {
-        this.adapter.removeRemoteCreature(id);
-        this.discoveredAgents.delete(id);
+    ws.onmessage = (event) => {
+      let msg: SpatialWsMessage;
+      try {
+        msg = JSON.parse(event.data as string) as SpatialWsMessage;
+      } catch {
+        return;
       }
-    }
+      void this._handlePresenceEvent(msg);
+    };
 
-    // Add or update discovered agents
-    for (const agent of discovered) {
-      const trustScore = await this._lookupTrustScore(agent.motebit_id);
+    ws.onerror = () => {
+      /* best-effort */
+    };
+    ws.onclose = () => {
+      if (this._ws === ws) this._ws = null;
+    };
 
-      if (!this.discoveredAgents.has(agent.motebit_id)) {
-        // New agent — add to render adapter
-        this.adapter.addRemoteCreature(agent.motebit_id, { trustScore });
-      } else {
-        // Existing agent — update trust score (may drift closer/farther)
-        this.adapter.updateRemoteCreature(agent.motebit_id, { trustScore });
+    this._ws = ws;
+  }
+
+  /**
+   * Handle incoming spatial presence events from the relay WS.
+   * All visualization is event-driven — no polling.
+   */
+  async _handlePresenceEvent(msg: SpatialWsMessage): Promise<void> {
+    switch (msg.type) {
+      case "delegation_departed": {
+        // YOUR motebit just left to do work somewhere else.
+        // A ghost remains at the original position.
+        this._delegationPresence = "away";
+        this._delegationTarget = msg.target_motebit_id ?? null;
+        this.adapter.departCreature({ direction: { x: 0, y: 0, z: -1 } });
+        break;
       }
 
-      this.discoveredAgents.set(agent.motebit_id, {
-        motebit_id: agent.motebit_id,
-        endpoint_url: agent.endpoint_url,
-        capabilities: agent.capabilities ?? [],
-        trust_score: trustScore,
-        last_seen: Date.now(),
-      });
+      case "delegation_arrived": {
+        // Someone ELSE's motebit just arrived in YOUR space, carrying a task.
+        // Trust is the admission gate — blocked agents are never rendered.
+        if (!msg.source_motebit_id) break;
+        const sourceId = msg.source_motebit_id;
+
+        const trustScore = await this._lookupTrustScore(sourceId);
+
+        // Blocked (0.0) → invisible. Your space is sacred.
+        if (trustScore === 0.0) break;
+
+        const record: VisitorRecord = {
+          motebitId: sourceId,
+          trustScore,
+          taskDescription: msg.task_description,
+        };
+        this._visitors.set(sourceId, record);
+
+        this.adapter.arriveVisitor(sourceId, {
+          motebitId: sourceId,
+          trustScore,
+          // Direction derived from trust: trusted closer (front), unknown from the side
+          direction: this._trustToArrivalDirection(trustScore),
+        });
+        break;
+      }
+
+      case "delegation_returning": {
+        // YOUR motebit is coming back with results.
+        this._delegationPresence = "home";
+        this._delegationTarget = null;
+        this.adapter.returnCreature({ fromDirection: { x: 0, y: 0, z: -1 } });
+        break;
+      }
+
+      case "delegation_visitor_departing": {
+        // A visitor in YOUR space is leaving (work complete).
+        if (!msg.source_motebit_id) break;
+        const visitorId = msg.source_motebit_id;
+        this._visitors.delete(visitorId);
+        this.adapter.departVisitor(visitorId);
+        break;
+      }
+
+      default:
+        break;
     }
   }
 
-  private async _lookupTrustScore(remoteMotebitId: string): Promise<number> {
+  /**
+   * Map a trust score to an arrival direction unit vector.
+   * Trusted (0.9+) → arrives from front (toward you — a welcome friend)
+   * Verified (0.6–0.9) → slight angle
+   * Unknown (0.1) → from the side, maximum distance
+   */
+  private _trustToArrivalDirection(trustScore: number): { x: number; y: number; z: number } {
+    if (trustScore >= 0.9) return { x: 0, y: 0, z: -1 }; // front — welcome
+    if (trustScore >= 0.6) return { x: -0.5, y: 0, z: -0.866 }; // 30° off-axis
+    if (trustScore >= 0.3) return { x: -0.866, y: 0, z: -0.5 }; // 60° off-axis
+    return { x: -1, y: 0, z: 0 }; // side — keep distance
+  }
+
+  async _lookupTrustScore(remoteMotebitId: string): Promise<number> {
     if (!this.agentTrustStore) return trustLevelToScore(AgentTrustLevel.Unknown);
 
     try {
@@ -628,52 +696,6 @@ export class SpatialApp {
     } catch {
       return trustLevelToScore(AgentTrustLevel.Unknown);
     }
-  }
-
-  // === Delegation Visualization ===
-
-  /**
-   * Called when the delegation adapter starts a delegation to a target agent.
-   * Adds a delegation arc and sets the target to processing state.
-   * Returns the line ID for later use.
-   */
-  private _onDelegationStart(targetId: string): string {
-    const lineId = this.adapter.addDelegationLine("self", targetId);
-    this.adapter.setRemoteCreatureActivity(targetId, "processing");
-    return lineId;
-  }
-
-  /**
-   * Called when a receipt is received from a target agent.
-   * Pulses the arc, sets the target to completed, then cleans up after 3s.
-   */
-  private _onDelegationComplete(targetId: string, lineId: string): void {
-    this.adapter.pulseDelegationLine(lineId);
-    this.adapter.setRemoteCreatureActivity(targetId, "completed");
-
-    setTimeout(() => {
-      this.adapter.removeDelegationLine(lineId);
-      this.adapter.setRemoteCreatureActivity(targetId, "idle");
-    }, DELEGATION_VIZ_CLEANUP_MS);
-  }
-
-  /**
-   * Manually trigger delegation visualization (for when runtime delegates via tool).
-   * Returns the line ID.
-   */
-  startDelegationVisualization(targetId: string): string {
-    return this._onDelegationStart(targetId);
-  }
-
-  completeDelegationVisualization(targetId: string, lineId: string): void {
-    this._onDelegationComplete(targetId, lineId);
-  }
-
-  /**
-   * Get discovered agents for the gaze overlay UI.
-   */
-  getDiscoveredAgents(): DiscoveredAgent[] {
-    return Array.from(this.discoveredAgents.values());
   }
 
   // === Messaging ===

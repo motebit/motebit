@@ -73,6 +73,13 @@ export interface RenderAdapter {
   setTrustMode(mode: TrustMode): void;
   setListeningIndicator(active: boolean): void;
   dispose(): void;
+  // Presence model
+  departCreature(opts?: DepartureOpts): void;
+  returnCreature(opts?: { fromDirection?: { x: number; y: number; z: number } }): void;
+  arriveVisitor(id: string, opts: VisitorOpts): void;
+  departVisitor(id: string): void;
+  getMainPresence(): CreaturePresence;
+  getVisitors(): Map<string, VisitorState>;
 }
 
 // === Multi-Creature Constants & Pure Functions ===
@@ -106,49 +113,71 @@ export function idToHue(id: string): number {
   return ((hash % 360) + 360) % 360;
 }
 
-// === Multi-Creature Types ===
+// === Presence Model Types ===
 
-/** Options for creating or updating a remote creature. */
-export interface RemoteCreatureOpts {
-  /** 0–1 trust score — higher trust places the creature closer (MIN_DISTANCE). */
+/**
+ * The presence state of a creature in the scene.
+ *
+ * Your creature:
+ *   home → departing → away → returning → home
+ *
+ * Visitor creatures:
+ *   arriving → present → leaving (then removed)
+ */
+export type CreaturePresence =
+  | "home" // your creature, orbiting your body normally
+  | "departing" // your creature detaching, drifting away (delegation sent)
+  | "away" // your creature is gone, only a ghost remains
+  | "returning" // your creature coming back (receipt received)
+  | "arriving" // a visitor materializing in your space
+  | "present" // a visitor fully present, carrying a task
+  | "leaving"; // a visitor departing after completing work
+
+/** Options for a visitor creature arriving in your space. */
+export interface VisitorOpts {
+  motebitId: string;
+  /** Direction the visitor arrives from — a unit vector in world space. */
+  direction?: { x: number; y: number; z: number };
+  /** 0–1 trust score — used to derive identity tint intensity. */
   trustScore: number;
-  /** World-space position. If omitted, auto-placed by trustToDistance() on the XZ plane. */
-  position?: { x: number; y: number; z: number };
-  /** Hue 0–360. If omitted, derived from `id` via idToHue(). */
-  hue?: number;
 }
 
-/** Activity state — drives emissive animations. */
-export type RemoteCreatureActivity = "idle" | "processing" | "delegating" | "completed";
+/** Options for departing your own creature. */
+export interface DepartureOpts {
+  /** Direction to drift toward — a unit vector in world space. */
+  direction?: { x: number; y: number; z: number };
+}
 
-/** Internal state tracked per remote creature. */
-export interface RemoteCreatureState {
+/** Internal state tracked per visitor creature. */
+export interface VisitorState {
   id: string;
   group: unknown; // THREE.Group — typed as unknown to avoid THREE dep in spec
   body: unknown; // THREE.Mesh
   eyes: unknown; // THREE.Group
   bodyMaterial: unknown; // THREE.MeshPhysicalMaterial
   trustScore: number;
-  activity: RemoteCreatureActivity;
+  presence: CreaturePresence;
   hue: number;
   /** Per-creature phase offset so breathing is not in lockstep. */
   phase: number;
-  /** Timestamp when 'completed' state started — drives the flash-then-fade. */
-  completedAt: number;
+  /** Timestamp when this presence state started — drives transition progress. */
+  transitionStart: number;
+  /** Direction the visitor came from (for arrival / leaving animations). */
+  direction: { x: number; y: number; z: number };
 }
 
-/** Internal state tracked per delegation line. */
-export interface DelegationLineState {
+/** Internal state for the return trail (receipt travelling back). */
+export interface ReturnTrailState {
   id: string;
-  fromId: string | "self";
-  toId: string;
   line: unknown; // THREE.Line
   geometry: unknown; // THREE.BufferGeometry
   material: unknown; // THREE.LineBasicMaterial
-  /** Active pulse: 0–1 progress along the line, -1 = no pulse. */
-  pulseProgress: number;
-  /** Pulse indicator point mesh. */
-  pulseMesh: unknown; // THREE.Mesh | null
+  /** Fade start time — trail fades over 3 seconds. */
+  startedAt: number;
+  /** From position (where visitor was). */
+  from: { x: number; y: number; z: number };
+  /** To position (where creature re-entered orbit). */
+  to: { x: number; y: number; z: number };
 }
 
 // === Frame-Independent Delta Smoothing ===

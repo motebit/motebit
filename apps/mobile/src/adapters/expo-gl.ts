@@ -17,6 +17,10 @@ import type {
   RenderFrame,
   InteriorColor,
   AudioReactivity,
+  CreaturePresence,
+  VisitorState,
+  VisitorOpts,
+  DepartureOpts,
 } from "@motebit/render-engine";
 import type { RenderSpec, BehaviorCues } from "@motebit/sdk";
 
@@ -619,6 +623,16 @@ export class ExpoGLAdapter implements RenderAdapter {
 
   setTrustMode(_mode: import("@motebit/sdk").TrustMode): void {}
   setListeningIndicator(_active: boolean): void {}
+  departCreature(_opts?: DepartureOpts): void {}
+  returnCreature(_opts?: { fromDirection?: { x: number; y: number; z: number } }): void {}
+  arriveVisitor(_id: string, _opts: VisitorOpts): void {}
+  departVisitor(_id: string): void {}
+  getMainPresence(): CreaturePresence {
+    return "home";
+  }
+  getVisitors(): Map<string, VisitorState> {
+    return new Map();
+  }
 
   dispose(): void {
     if (this.bodyMesh) {

@@ -4,8 +4,7 @@ import {
   idToHue,
   REMOTE_MIN_DISTANCE,
   REMOTE_MAX_DISTANCE,
-  ThreeJSAdapter,
-  type RemoteCreatureActivity,
+  SpatialAdapter,
 } from "@motebit/render-engine";
 import { SpatialApp } from "../spatial-app";
 
@@ -28,7 +27,6 @@ describe("trustToDistance", () => {
   });
 
   it("result never below REMOTE_MIN_DISTANCE", () => {
-    // Values clamped: over-trust still gives min distance
     expect(trustToDistance(1.0)).toBeGreaterThanOrEqual(REMOTE_MIN_DISTANCE);
     expect(trustToDistance(2.0)).toBeGreaterThanOrEqual(REMOTE_MIN_DISTANCE);
   });
@@ -61,7 +59,7 @@ describe("idToHue", () => {
   it("is deterministic — same input always gives same output", () => {
     const id = "motebit-test-id-12345";
     expect(idToHue(id)).toBe(idToHue(id));
-    expect(idToHue(id)).toBe(idToHue(id)); // call three times
+    expect(idToHue(id)).toBe(idToHue(id));
   });
 
   it("different IDs produce different hues (distribution test)", () => {
@@ -80,7 +78,6 @@ describe("idToHue", () => {
 
     const hues = uuids.map(idToHue);
     const uniqueHues = new Set(hues);
-    // All 10 should be distinct
     expect(uniqueHues.size).toBe(10);
   });
 
@@ -98,244 +95,258 @@ describe("idToHue", () => {
 });
 
 // ---------------------------------------------------------------------------
-// ThreeJSAdapter (headless) — multi-creature state management
+// SpatialAdapter (headless) — physical travel presence model
 // ---------------------------------------------------------------------------
 
-describe("ThreeJSAdapter multi-creature (headless)", () => {
-  let adapter: ThreeJSAdapter;
+describe("SpatialAdapter physical travel (headless)", () => {
+  let adapter: SpatialAdapter;
 
-  beforeEach(async () => {
-    adapter = new ThreeJSAdapter();
-    await adapter.init(null); // headless — no WebGL
+  beforeEach(() => {
+    adapter = new SpatialAdapter();
   });
 
-  it("addRemoteCreature tracks the creature by ID", () => {
-    adapter.addRemoteCreature("agent-1", { trustScore: 0.8 });
-    expect(adapter.getRemoteCreatures().has("agent-1")).toBe(true);
+  it("initial presence is home", () => {
+    expect(adapter.getMainPresence()).toBe("home");
   });
 
-  it("addRemoteCreature is idempotent — duplicate ID is ignored", () => {
-    adapter.addRemoteCreature("agent-1", { trustScore: 0.8 });
-    adapter.addRemoteCreature("agent-1", { trustScore: 0.5 }); // second call ignored
-    expect(adapter.getRemoteCreatures().size).toBe(1);
+  it("departCreature transitions to departing", () => {
+    adapter.departCreature({ direction: { x: 0, y: 0, z: -1 } });
+    expect(adapter.getMainPresence()).toBe("departing");
   });
 
-  it("addRemoteCreature stores the trust score", () => {
-    adapter.addRemoteCreature("agent-1", { trustScore: 0.7 });
-    const state = adapter.getRemoteCreatures().get("agent-1");
-    expect(state).toBeDefined();
-    expect(state!.trustScore).toBe(0.7);
+  it("returnCreature transitions to returning", () => {
+    adapter.departCreature();
+    adapter.returnCreature();
+    expect(adapter.getMainPresence()).toBe("returning");
   });
 
-  it("addRemoteCreature derives hue from ID when not provided", () => {
-    const id = "agent-hue-test";
-    adapter.addRemoteCreature(id, { trustScore: 0.5 });
-    const state = adapter.getRemoteCreatures().get(id);
-    expect(state).toBeDefined();
-    expect(state!.hue).toBe(idToHue(id));
+  it("arriveVisitor adds a visitor with correct trust score", () => {
+    adapter.arriveVisitor("visitor-1", { motebitId: "visitor-1", trustScore: 0.8 });
+    const visitors = adapter.getVisitors();
+    expect(visitors.has("visitor-1")).toBe(true);
+    expect(visitors.get("visitor-1")!.trustScore).toBe(0.8);
   });
 
-  it("addRemoteCreature uses explicit hue when provided", () => {
-    adapter.addRemoteCreature("agent-explicit-hue", { trustScore: 0.5, hue: 180 });
-    const state = adapter.getRemoteCreatures().get("agent-explicit-hue");
-    expect(state!.hue).toBe(180);
+  it("arriveVisitor sets initial presence to arriving", () => {
+    adapter.arriveVisitor("visitor-1", { motebitId: "visitor-1", trustScore: 0.7 });
+    expect(adapter.getVisitors().get("visitor-1")!.presence).toBe("arriving");
   });
 
-  it("addRemoteCreature sets initial activity to idle", () => {
-    adapter.addRemoteCreature("agent-1", { trustScore: 0.5 });
-    const state = adapter.getRemoteCreatures().get("agent-1");
-    expect(state!.activity).toBe("idle");
+  it("arriveVisitor is idempotent — duplicate call is ignored", () => {
+    adapter.arriveVisitor("visitor-1", { motebitId: "visitor-1", trustScore: 0.8 });
+    adapter.arriveVisitor("visitor-1", { motebitId: "visitor-1", trustScore: 0.5 });
+    expect(adapter.getVisitors().size).toBe(1);
+    expect(adapter.getVisitors().get("visitor-1")!.trustScore).toBe(0.8);
   });
 
-  it("removeRemoteCreature removes the creature from tracking", () => {
-    adapter.addRemoteCreature("agent-1", { trustScore: 0.8 });
-    adapter.removeRemoteCreature("agent-1");
-    expect(adapter.getRemoteCreatures().has("agent-1")).toBe(false);
+  it("departVisitor transitions visitor to leaving", () => {
+    adapter.arriveVisitor("visitor-1", { motebitId: "visitor-1", trustScore: 0.8 });
+    adapter.departVisitor("visitor-1");
+    expect(adapter.getVisitors().get("visitor-1")!.presence).toBe("leaving");
   });
 
-  it("removeRemoteCreature is safe for unknown ID", () => {
-    expect(() => adapter.removeRemoteCreature("nonexistent")).not.toThrow();
+  it("departVisitor is safe for unknown ID", () => {
+    expect(() => adapter.departVisitor("nonexistent")).not.toThrow();
   });
 
-  it("updateRemoteCreature changes trust score", () => {
-    adapter.addRemoteCreature("agent-1", { trustScore: 0.2 });
-    adapter.updateRemoteCreature("agent-1", { trustScore: 0.9 });
-    const state = adapter.getRemoteCreatures().get("agent-1");
-    expect(state!.trustScore).toBe(0.9);
-  });
-
-  it("updateRemoteCreature is safe for unknown ID", () => {
-    expect(() => adapter.updateRemoteCreature("nonexistent", { trustScore: 0.5 })).not.toThrow();
-  });
-
-  it("setRemoteCreatureActivity changes the activity", () => {
-    adapter.addRemoteCreature("agent-1", { trustScore: 0.5 });
-
-    const activities: RemoteCreatureActivity[] = ["processing", "delegating", "completed", "idle"];
-    for (const activity of activities) {
-      adapter.setRemoteCreatureActivity("agent-1", activity);
-      const state = adapter.getRemoteCreatures().get("agent-1");
-      expect(state!.activity).toBe(activity);
-    }
-  });
-
-  it("setRemoteCreatureActivity is safe for unknown ID", () => {
-    expect(() => adapter.setRemoteCreatureActivity("nonexistent", "processing")).not.toThrow();
-  });
-
-  it("addDelegationLine tracks the line", () => {
-    adapter.addRemoteCreature("agent-1", { trustScore: 0.5 });
-    const lineId = adapter.addDelegationLine("self", "agent-1");
-    expect(adapter.getDelegationLines().has(lineId)).toBe(true);
-  });
-
-  it("addDelegationLine stores from/to IDs", () => {
-    adapter.addRemoteCreature("agent-1", { trustScore: 0.5 });
-    adapter.addRemoteCreature("agent-2", { trustScore: 0.7 });
-    const lineId = adapter.addDelegationLine("agent-1", "agent-2");
-    const state = adapter.getDelegationLines().get(lineId);
-    expect(state).toBeDefined();
-    expect(state!.fromId).toBe("agent-1");
-    expect(state!.toId).toBe("agent-2");
-  });
-
-  it("addDelegationLine returns unique IDs for multiple lines", () => {
-    adapter.addRemoteCreature("agent-1", { trustScore: 0.5 });
-    adapter.addRemoteCreature("agent-2", { trustScore: 0.7 });
-    const id1 = adapter.addDelegationLine("self", "agent-1");
-    const id2 = adapter.addDelegationLine("self", "agent-2");
-    expect(id1).not.toBe(id2);
-  });
-
-  it("removeDelegationLine removes the line from tracking", () => {
-    adapter.addRemoteCreature("agent-1", { trustScore: 0.5 });
-    const lineId = adapter.addDelegationLine("self", "agent-1");
-    adapter.removeDelegationLine(lineId);
-    expect(adapter.getDelegationLines().has(lineId)).toBe(false);
-  });
-
-  it("removeDelegationLine is safe for unknown ID", () => {
-    expect(() => adapter.removeDelegationLine("nonexistent-line")).not.toThrow();
-  });
-
-  it("removeRemoteCreature also removes delegation lines that reference it", () => {
-    adapter.addRemoteCreature("agent-1", { trustScore: 0.5 });
-    const lineId = adapter.addDelegationLine("self", "agent-1");
-    adapter.removeRemoteCreature("agent-1");
-    expect(adapter.getDelegationLines().has(lineId)).toBe(false);
-  });
-
-  it("multiple creatures — add 5, remove 2, verify remaining", () => {
-    for (let i = 0; i < 5; i++) {
-      adapter.addRemoteCreature(`agent-${i}`, { trustScore: i * 0.2 });
-    }
-    expect(adapter.getRemoteCreatures().size).toBe(5);
-
-    adapter.removeRemoteCreature("agent-1");
-    adapter.removeRemoteCreature("agent-3");
-
-    expect(adapter.getRemoteCreatures().size).toBe(3);
-    expect(adapter.getRemoteCreatures().has("agent-0")).toBe(true);
-    expect(adapter.getRemoteCreatures().has("agent-2")).toBe(true);
-    expect(adapter.getRemoteCreatures().has("agent-4")).toBe(true);
-    expect(adapter.getRemoteCreatures().has("agent-1")).toBe(false);
-    expect(adapter.getRemoteCreatures().has("agent-3")).toBe(false);
+  it("multiple visitors are tracked independently", () => {
+    adapter.arriveVisitor("visitor-a", { motebitId: "visitor-a", trustScore: 0.9 });
+    adapter.arriveVisitor("visitor-b", { motebitId: "visitor-b", trustScore: 0.3 });
+    expect(adapter.getVisitors().size).toBe(2);
+    expect(adapter.getVisitors().get("visitor-a")!.trustScore).toBe(0.9);
+    expect(adapter.getVisitors().get("visitor-b")!.trustScore).toBe(0.3);
   });
 });
 
 // ---------------------------------------------------------------------------
-// SpatialApp integration — discovery + delegation visualization
+// SpatialApp integration — physical travel model
 // ---------------------------------------------------------------------------
 
-describe("SpatialApp constellation integration", () => {
+describe("SpatialApp physical travel integration", () => {
   let app: SpatialApp;
 
-  // Mock fetch for discovery
   const mockFetch = vi.fn();
 
   beforeEach(() => {
     app = new SpatialApp();
-    // Spy on adapter methods to verify integration
-    vi.spyOn(app.adapter, "addRemoteCreature");
-    vi.spyOn(app.adapter, "removeRemoteCreature");
-    vi.spyOn(app.adapter, "updateRemoteCreature");
-    vi.spyOn(app.adapter, "setRemoteCreatureActivity");
-    vi.spyOn(app.adapter, "addDelegationLine");
-    vi.spyOn(app.adapter, "removeDelegationLine");
-    vi.spyOn(app.adapter, "pulseDelegationLine");
-    // Replace global fetch
+    vi.spyOn(app.adapter, "departCreature");
+    vi.spyOn(app.adapter, "returnCreature");
+    vi.spyOn(app.adapter, "arriveVisitor");
+    vi.spyOn(app.adapter, "departVisitor");
+    vi.spyOn(app.adapter, "getMainPresence");
+    vi.spyOn(app.adapter, "getVisitors");
     vi.stubGlobal("fetch", mockFetch);
   });
 
-  it("SpatialApp exposes the adapter for multi-creature calls", () => {
-    expect(app.adapter).toBeDefined();
-    expect(typeof app.adapter.addRemoteCreature).toBe("function");
-    expect(typeof app.adapter.removeRemoteCreature).toBe("function");
-    expect(typeof app.adapter.updateRemoteCreature).toBe("function");
-    expect(typeof app.adapter.setRemoteCreatureActivity).toBe("function");
-    expect(typeof app.adapter.addDelegationLine).toBe("function");
-    expect(typeof app.adapter.removeDelegationLine).toBe("function");
-  });
-
-  it("addRemoteCreature is callable via adapter on SpatialApp", () => {
-    app.adapter.addRemoteCreature("remote-agent-1", { trustScore: 0.6 });
-    expect(app.adapter.addRemoteCreature).toHaveBeenCalledWith("remote-agent-1", {
-      trustScore: 0.6,
-    });
-    expect(app.adapter.getRemoteCreatures().has("remote-agent-1")).toBe(true);
-  });
-
-  it("delegation visualization — line add + activity change + cleanup", () => {
-    // Simulate delegation start:
-    // 1. Creature appears
-    app.adapter.addRemoteCreature("delegate-agent", { trustScore: 0.5 });
-
-    // 2. Delegation line added + activity set to 'delegating'
-    app.adapter.addDelegationLine("self", "delegate-agent");
-    app.adapter.setRemoteCreatureActivity("delegate-agent", "delegating");
-
-    expect(app.adapter.addDelegationLine).toHaveBeenCalledWith("self", "delegate-agent");
-    expect(app.adapter.setRemoteCreatureActivity).toHaveBeenCalledWith(
-      "delegate-agent",
-      "delegating",
-    );
-
-    // 3. Receipt received → pulse + completed
-    const lineId = [...app.adapter.getDelegationLines().keys()][0]!;
-    app.adapter.pulseDelegationLine(lineId);
-    app.adapter.setRemoteCreatureActivity("delegate-agent", "completed");
-
-    expect(app.adapter.pulseDelegationLine).toHaveBeenCalledWith(lineId);
-    expect(app.adapter.setRemoteCreatureActivity).toHaveBeenCalledWith(
-      "delegate-agent",
-      "completed",
-    );
-
-    // 4. Cleanup — line removed + activity back to idle
-    app.adapter.removeDelegationLine(lineId);
-    app.adapter.setRemoteCreatureActivity("delegate-agent", "idle");
-
-    expect(app.adapter.removeDelegationLine).toHaveBeenCalledWith(lineId);
-    expect(app.adapter.getDelegationLines().has(lineId)).toBe(false);
-
-    const finalState = app.adapter.getRemoteCreatures().get("delegate-agent");
-    expect(finalState!.activity).toBe("idle");
-  });
-
-  it("trust update propagates to updateRemoteCreature", () => {
-    app.adapter.addRemoteCreature("trusted-agent", { trustScore: 0.3 });
-
-    // Simulate receipt verification bumping trust
-    app.adapter.updateRemoteCreature("trusted-agent", { trustScore: 0.8 });
-
-    expect(app.adapter.updateRemoteCreature).toHaveBeenCalledWith("trusted-agent", {
-      trustScore: 0.8,
+  // 1. Departure flow
+  it("delegation_departed triggers departure and sets presence away", async () => {
+    await app._handlePresenceEvent({
+      type: "delegation_departed",
+      target_motebit_id: "target-agent-abc",
     });
 
-    const state = app.adapter.getRemoteCreatures().get("trusted-agent");
-    expect(state!.trustScore).toBe(0.8);
+    expect(app.adapter.departCreature).toHaveBeenCalledWith({ direction: { x: 0, y: 0, z: -1 } });
+    expect(app.delegationPresence).toBe("away");
+    expect(app.delegationTarget).toBe("target-agent-abc");
   });
 
+  // 2. Visitor arrival with known trust
+  it("delegation_arrived with Verified trust calls arriveVisitor with correct score", async () => {
+    (
+      app as unknown as {
+        agentTrustStore: { getAgentTrust: () => Promise<{ trust_level: string }> };
+      }
+    ).agentTrustStore = {
+      getAgentTrust: vi.fn().mockResolvedValue({ trust_level: "verified" }),
+    };
+
+    await app._handlePresenceEvent({
+      type: "delegation_arrived",
+      source_motebit_id: "visitor-xyz",
+      task_description: "search for recent AI papers",
+    });
+
+    expect(app.adapter.arriveVisitor).toHaveBeenCalledWith(
+      "visitor-xyz",
+      expect.objectContaining({ motebitId: "visitor-xyz" }),
+    );
+    expect(app.visitors.has("visitor-xyz")).toBe(true);
+    expect(app.visitors.get("visitor-xyz")!.taskDescription).toBe("search for recent AI papers");
+  });
+
+  // 3. Trust admission — Blocked agent → NOT rendered
+  it("delegation_arrived from Blocked agent does NOT call arriveVisitor", async () => {
+    (
+      app as unknown as {
+        agentTrustStore: { getAgentTrust: () => Promise<{ trust_level: string }> };
+      }
+    ).agentTrustStore = {
+      getAgentTrust: vi.fn().mockResolvedValue({ trust_level: "blocked" }),
+    };
+
+    await app._handlePresenceEvent({
+      type: "delegation_arrived",
+      source_motebit_id: "blocked-agent",
+    });
+
+    expect(app.adapter.arriveVisitor).not.toHaveBeenCalled();
+    expect(app.visitors.has("blocked-agent")).toBe(false);
+  });
+
+  // 4. Return flow
+  it("delegation_returning triggers return and sets presence home", async () => {
+    await app._handlePresenceEvent({
+      type: "delegation_departed",
+      target_motebit_id: "some-agent",
+    });
+    expect(app.delegationPresence).toBe("away");
+
+    await app._handlePresenceEvent({ type: "delegation_returning" });
+
+    expect(app.adapter.returnCreature).toHaveBeenCalledWith({
+      fromDirection: { x: 0, y: 0, z: -1 },
+    });
+    expect(app.delegationPresence).toBe("home");
+    expect(app.delegationTarget).toBeNull();
+  });
+
+  // 5. Visitor departure
+  it("delegation_visitor_departing calls departVisitor and removes visitor", async () => {
+    (
+      app as unknown as {
+        agentTrustStore: { getAgentTrust: () => Promise<{ trust_level: string }> };
+      }
+    ).agentTrustStore = {
+      getAgentTrust: vi.fn().mockResolvedValue({ trust_level: "verified" }),
+    };
+
+    await app._handlePresenceEvent({
+      type: "delegation_arrived",
+      source_motebit_id: "visitor-abc",
+    });
+    expect(app.visitors.has("visitor-abc")).toBe(true);
+
+    await app._handlePresenceEvent({
+      type: "delegation_visitor_departing",
+      source_motebit_id: "visitor-abc",
+    });
+
+    expect(app.adapter.departVisitor).toHaveBeenCalledWith("visitor-abc");
+    expect(app.visitors.has("visitor-abc")).toBe(false);
+  });
+
+  // 6. Full round trip
+  it("full round trip: depart → away → return → home, all states correct", async () => {
+    expect(app.delegationPresence).toBe("home");
+
+    await app._handlePresenceEvent({ type: "delegation_departed", target_motebit_id: "agent-x" });
+    expect(app.delegationPresence).toBe("away");
+    expect(app.delegationTarget).toBe("agent-x");
+
+    await app._handlePresenceEvent({ type: "delegation_returning" });
+    expect(app.delegationPresence).toBe("home");
+    expect(app.delegationTarget).toBeNull();
+
+    expect(app.adapter.departCreature).toHaveBeenCalledTimes(1);
+    expect(app.adapter.returnCreature).toHaveBeenCalledTimes(1);
+  });
+
+  // 7. Unknown agent falls back to Unknown trust — visible but faint
+  it("delegation_arrived with no trust store renders visitor at Unknown trust score", async () => {
+    (app as unknown as { agentTrustStore: null }).agentTrustStore = null;
+
+    await app._handlePresenceEvent({
+      type: "delegation_arrived",
+      source_motebit_id: "unknown-visitor",
+    });
+
+    // Unknown trust is non-zero (AgentTrustLevel.Unknown → ~0.1)
+    expect(app.adapter.arriveVisitor).toHaveBeenCalled();
+    expect(app.visitors.has("unknown-visitor")).toBe(true);
+    const visitor = app.visitors.get("unknown-visitor")!;
+    expect(visitor.trustScore).toBeGreaterThan(0);
+    expect(visitor.trustScore).toBeLessThan(0.3);
+  });
+
+  // 8. Inbound task: visitor arrives processing, then departs when done
+  it("inbound task flow: visitor arrives, task executes, visitor departs", async () => {
+    (
+      app as unknown as {
+        agentTrustStore: { getAgentTrust: () => Promise<{ trust_level: string }> };
+      }
+    ).agentTrustStore = {
+      getAgentTrust: vi.fn().mockResolvedValue({ trust_level: "trusted" }),
+    };
+
+    // Visitor arrives with a task
+    await app._handlePresenceEvent({
+      type: "delegation_arrived",
+      source_motebit_id: "task-carrier",
+      task_description: "summarise the docs",
+    });
+    expect(app.visitors.has("task-carrier")).toBe(true);
+    expect(app.visitors.get("task-carrier")!.taskDescription).toBe("summarise the docs");
+
+    // Relay signals the visitor's work is done
+    await app._handlePresenceEvent({
+      type: "delegation_visitor_departing",
+      source_motebit_id: "task-carrier",
+    });
+    expect(app.adapter.departVisitor).toHaveBeenCalledWith("task-carrier");
+    expect(app.visitors.has("task-carrier")).toBe(false);
+  });
+
+  // 9. Adapter exposes physical travel API
+  it("SpatialApp exposes the adapter with physical travel methods", () => {
+    expect(typeof app.adapter.departCreature).toBe("function");
+    expect(typeof app.adapter.returnCreature).toBe("function");
+    expect(typeof app.adapter.arriveVisitor).toBe("function");
+    expect(typeof app.adapter.departVisitor).toBe("function");
+    expect(typeof app.adapter.getMainPresence).toBe("function");
+    expect(typeof app.adapter.getVisitors).toBe("function");
+  });
+
+  // 10. Dispose cleans up correctly
   it("dispose cleans up correctly", () => {
     const disposeSpy = vi.spyOn(app.adapter, "dispose");
     app.dispose();

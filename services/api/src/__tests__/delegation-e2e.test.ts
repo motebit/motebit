@@ -265,16 +265,19 @@ describe("Delegation E2E", () => {
     });
     expect(res.status).toBe(201);
 
-    // Only Device B should receive the task_request
-    expect(deviceA.send).not.toHaveBeenCalled();
-    expect(deviceB.send).toHaveBeenCalledOnce();
+    // Both devices share the same motebit — delegation_arrived goes to all connections.
+    // Only Device B (capable) should receive task_request; Device A gets only spatial events.
+    const aMessages = deviceA.send.mock.calls.map(
+      (c) => JSON.parse(c[0] as string) as { type: string },
+    );
+    expect(aMessages.every((m) => m.type !== "task_request")).toBe(true);
 
-    const msg = JSON.parse(deviceB.send.mock.calls[0]![0] as string) as {
-      type: string;
-      task: AgentTask;
-    };
-    expect(msg.type).toBe("task_request");
-    expect(msg.task.required_capabilities).toContain("stdio_mcp");
+    const bMessages = deviceB.send.mock.calls.map(
+      (c) => JSON.parse(c[0] as string) as { type: string; task?: AgentTask },
+    );
+    const taskRequestMsg = bMessages.find((m) => m.type === "task_request");
+    expect(taskRequestMsg).toBeDefined();
+    expect(taskRequestMsg!.task!.required_capabilities).toContain("stdio_mcp");
   });
 
   it("recovery via pollTaskResult: orphaned step resolved on reconnect", async () => {

@@ -5,6 +5,10 @@
  * gesture recognition, gaze attention, and WebXR session. The creature has
  * intelligence, memory, identity, and ambient voice interaction — the same
  * sovereign runtime that powers the desktop app, with browser-native substitutions.
+ *
+ * Physical travel model: your motebit physically departs when delegating and
+ * returns with proof. Visitors arrive from the network and leave when done.
+ * All presence visualization is event-driven via the relay WS, not polling.
  */
 
 import { SpatialApp } from "./spatial-app";
@@ -43,11 +47,15 @@ const showNetworkToggle = document.getElementById("show-network-toggle") as HTML
 // Voice indicator
 const voiceIndicator = document.getElementById("voice-indicator") as HTMLElement;
 
-// Gaze overlay — shown when looking at a remote agent
+// Gaze overlay — shown when looking at a visitor or the ghost
 const gazeOverlay = document.getElementById("gaze-overlay") as HTMLElement | null;
 const gazeAgentId = document.getElementById("gaze-agent-id") as HTMLElement | null;
 const gazeAgentTrust = document.getElementById("gaze-agent-trust") as HTMLElement | null;
 const gazeAgentCaps = document.getElementById("gaze-agent-caps") as HTMLElement | null;
+
+// Delegation active indicator — amber pulse when your motebit is away
+const delegationIndicator = document.getElementById("delegation-indicator") as HTMLElement | null;
+const delegationLabel = document.getElementById("delegation-label") as HTMLElement | null;
 
 // === State ===
 
@@ -56,8 +64,8 @@ let lastTime = 0;
 
 // Gaze attention state
 let lastGazeHit = false;
-// Remote agent gaze state
-let gazedAgentId: string | null = null;
+// Gaze target (visitor id or "ghost")
+let gazedTarget: string | null = null;
 
 // === Settings persistence ===
 
@@ -271,6 +279,7 @@ function startFlatPreview(): void {
     const time = now / 1000;
 
     app.renderFrame(dt, time);
+    updateDelegationIndicator();
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
@@ -324,8 +333,11 @@ async function startAR(): Promise<void> {
     // Gaze-based attention: check if user is looking at the local creature
     updateGazeAttention(camera, headPos);
 
-    // Check gaze against remote agents (for discovery overlay)
-    updateRemoteGaze(camera, headPos);
+    // Check gaze against visitors and ghost
+    updatePresenceGaze(camera, headPos);
+
+    // Update delegation active indicator
+    updateDelegationIndicator();
 
     // Hand gesture recognition (requires XRFrame + hand-tracking feature)
     const session = renderer.xr.getSession();
@@ -421,28 +433,27 @@ function updateGazeAttention(
   lastGazeHit = gazeHit;
 }
 
-// === Remote Agent Gaze Overlay ===
+// === Visitor + Ghost Gaze Overlay ===
 
 /**
- * Check if user is looking at a remote agent (discovered via relay).
- * When a gaze hit occurs, show a floating label with agent info.
+ * Check if user is looking at a visitor or the ghost (when away).
+ * Shows a floating label with the appropriate info.
  *
- * Remote creatures are positioned in a ring around the user at trust-derived
- * distances. We project each agent's expected world position and check the
- * gaze ray against a generous 0.3m threshold.
+ * Visitors hover at trust-derived distances around the user.
+ * The ghost is at the original creature orbit position.
  */
-function updateRemoteGaze(
+function updatePresenceGaze(
   camera: {
     matrixWorld: { elements: ArrayLike<number> };
     position: { x: number; y: number; z: number };
   },
   headPos: [number, number, number],
 ): void {
-  if (!app.networkConfig.showNetwork) return;
-
-  const agents = app.getDiscoveredAgents();
-  if (agents.length === 0) {
-    if (gazedAgentId !== null) hideGazeOverlay();
+  if (!app.networkConfig.showNetwork) {
+    if (gazedTarget !== null) {
+      gazedTarget = null;
+      hideGazeOverlay();
+    }
     return;
   }
 
@@ -453,18 +464,18 @@ function updateRemoteGaze(
 
   const [cx, cy, cz] = headPos;
 
-  // Remote creatures are arranged in a circle around the user's position.
-  // We use the same circle layout as circlePosition() in the render engine.
-  const total = agents.length;
-  let closestId: string | null = null;
+  let closestTarget: string | null = null;
   let closestDist = Infinity;
 
+  // Check visitors — positioned at trust-derived distances
+  const visitors = Array.from(app.visitors.values());
+  const total = visitors.length;
   for (let i = 0; i < total; i++) {
-    const agent = agents[i]!;
+    const visitor = visitors[i]!;
     const REMOTE_MAX = 2.0;
     const REMOTE_MIN = 0.4;
-    const dist = REMOTE_MAX - agent.trust_score * (REMOTE_MAX - REMOTE_MIN);
-    const angle = (i / total) * Math.PI * 2;
+    const dist = REMOTE_MAX - visitor.trustScore * (REMOTE_MAX - REMOTE_MIN);
+    const angle = (i / Math.max(total, 1)) * Math.PI * 2;
     const rx = cx + Math.cos(angle) * dist;
     const ry = cy - 0.35; // ~shoulder height
     const rz = cz + Math.sin(angle) * dist;
@@ -474,7 +485,7 @@ function updateRemoteGaze(
     const dz = rz - cz;
 
     const proj = dx * fwdX + dy * fwdY + dz * fwdZ;
-    if (proj <= 0) continue; // Behind camera
+    if (proj <= 0) continue;
 
     const perpX = dx - proj * fwdX;
     const perpY = dy - proj * fwdY;
@@ -483,41 +494,109 @@ function updateRemoteGaze(
 
     if (perpDist < 0.3 && perpDist < closestDist) {
       closestDist = perpDist;
-      closestId = agent.motebit_id;
+      closestTarget = visitor.motebitId;
     }
   }
 
-  if (closestId !== null) {
-    if (closestId !== gazedAgentId) {
-      gazedAgentId = closestId;
-      const agent = agents.find((a) => a.motebit_id === closestId);
-      if (agent) showGazeOverlay(agent);
+  // Check ghost — when the creature is away, a ghost hovers at orbit position
+  if (app.delegationPresence === "away" && closestTarget === null) {
+    const state = app.dynamics.getState();
+    const anchorX = cx + 0.2;
+    const anchorY = cy - 0.35;
+    const anchorZ = cz - 0.05;
+    const ghostX = anchorX + Math.cos(state.angle) * state.radius;
+    const ghostY = anchorY;
+    const ghostZ = anchorZ + Math.sin(state.angle) * state.radius;
+
+    const dx = ghostX - cx;
+    const dy = ghostY - cy;
+    const dz = ghostZ - cz;
+    const proj = dx * fwdX + dy * fwdY + dz * fwdZ;
+    if (proj > 0) {
+      const perpX = dx - proj * fwdX;
+      const perpY = dy - proj * fwdY;
+      const perpZ = dz - proj * fwdZ;
+      const perpDist = Math.sqrt(perpX * perpX + perpY * perpY + perpZ * perpZ);
+      if (perpDist < 0.25) {
+        closestTarget = "ghost";
+        closestDist = perpDist;
+      }
+    }
+  }
+
+  if (closestTarget !== null) {
+    if (closestTarget !== gazedTarget) {
+      gazedTarget = closestTarget;
+      if (closestTarget === "ghost") {
+        showGhostOverlay();
+      } else {
+        const visitor = app.visitors.get(closestTarget);
+        if (visitor)
+          showVisitorOverlay(visitor.motebitId, visitor.trustScore, visitor.taskDescription);
+      }
     }
   } else {
-    if (gazedAgentId !== null) {
-      gazedAgentId = null;
+    if (gazedTarget !== null) {
+      gazedTarget = null;
       hideGazeOverlay();
     }
   }
 }
 
-function showGazeOverlay(agent: {
-  motebit_id: string;
-  trust_score: number;
-  capabilities: string[];
-}): void {
+function showVisitorOverlay(motebitId: string, trustScore: number, task?: string): void {
   if (!gazeOverlay) return;
-  if (gazeAgentId) gazeAgentId.textContent = `Agent: ${agent.motebit_id.slice(0, 12)}...`;
-  if (gazeAgentTrust) gazeAgentTrust.textContent = `Trust: ${Math.round(agent.trust_score * 100)}%`;
+  if (gazeAgentId) gazeAgentId.textContent = `Visitor: ${motebitId.slice(0, 12)}…`;
+  if (gazeAgentTrust) gazeAgentTrust.textContent = `Trust: ${Math.round(trustScore * 100)}%`;
   if (gazeAgentCaps) {
-    const caps = agent.capabilities.slice(0, 3).join(", ");
-    gazeAgentCaps.textContent = caps.length > 0 ? `Tools: ${caps}` : "No tools";
+    gazeAgentCaps.textContent = task != null && task !== "" ? `Task: ${task}` : "Carrying a task";
   }
+  gazeOverlay.classList.remove("hidden");
+}
+
+function showGhostOverlay(): void {
+  if (!gazeOverlay) return;
+  const target = app.delegationTarget;
+  if (gazeAgentId) gazeAgentId.textContent = "Your agent is away";
+  if (gazeAgentTrust) {
+    gazeAgentTrust.textContent =
+      target != null ? `Delegated to ${target.slice(0, 12)}…` : "On a delegation";
+  }
+  if (gazeAgentCaps) gazeAgentCaps.textContent = "Will return with proof";
   gazeOverlay.classList.remove("hidden");
 }
 
 function hideGazeOverlay(): void {
   gazeOverlay?.classList.add("hidden");
+}
+
+// === Delegation Active Indicator ===
+
+/**
+ * Update the amber delegation indicator.
+ * Shows when your motebit is away on a task. Silent state change — no toast.
+ */
+function updateDelegationIndicator(): void {
+  if (!delegationIndicator) return;
+  const isAway = app.delegationPresence === "away";
+  if (isAway) {
+    delegationIndicator.classList.remove("hidden");
+    // rAF deferred so CSS transition fires
+    requestAnimationFrame(() => {
+      delegationIndicator?.classList.add("active");
+    });
+    if (delegationLabel) {
+      const target = app.delegationTarget;
+      delegationLabel.textContent = target != null ? `away · ${target.slice(0, 8)}` : "away";
+    }
+  } else {
+    delegationIndicator.classList.remove("active");
+    // Hide after fade-out transition (400ms)
+    setTimeout(() => {
+      if (app.delegationPresence !== "away") {
+        delegationIndicator?.classList.add("hidden");
+      }
+    }, 450);
+  }
 }
 
 // === Handle input ===

@@ -498,11 +498,17 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
   // Track connected WebSocket clients per motebitId with device identity
   const connections = new Map<string, ConnectedDevice[]>();
 
-  // In-memory agent task queue: task_id → { task, receipt?, expiresAt }
+  // In-memory agent task queue: task_id → { task, receipt?, expiresAt, submitted_by? }
   const TASK_TTL_MS = 10 * 60 * 1000; // 10 minutes
   const taskQueue = new Map<
     string,
-    { task: AgentTask; receipt?: ExecutionReceipt; expiresAt: number; allocation_id?: string }
+    {
+      task: AgentTask;
+      receipt?: ExecutionReceipt;
+      expiresAt: number;
+      allocation_id?: string;
+      submitted_by?: string;
+    }
   >();
 
   // Periodic cleanup of expired tasks and agent registrations
@@ -2141,6 +2147,24 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
     return { profiles, requirements };
   }
 
+  // --- Spatial presence broadcast helper ---
+
+  /**
+   * Send a WebSocket event to all connections for a specific motebit_id.
+   * Used for spatial presence events (AR/VR delegation animations).
+   */
+  function broadcastToMotebit(targetMotebitId: string, message: Record<string, unknown>): void {
+    const targetConnections = connections.get(targetMotebitId);
+    if (targetConnections) {
+      const data = JSON.stringify(message);
+      for (const conn of targetConnections) {
+        if (conn.ws.readyState === 1) {
+          conn.ws.send(data);
+        }
+      }
+    }
+  }
+
   // --- Task submission with scored routing ---
 
   app.post("/agent/:motebitId/task", async (c) => {
@@ -2181,7 +2205,12 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
       step_id: body.step_id,
     };
 
-    taskQueue.set(taskId, { task, expiresAt: now + TASK_TTL_MS });
+    // Capture the submitter identity for spatial presence events and receipt fan-out.
+    // Prefer callerMotebitId (from dualAuth signed token) over body.submitted_by.
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    const submittedBy = callerMotebitId ?? body.submitted_by;
+
+    taskQueue.set(taskId, { task, expiresAt: now + TASK_TTL_MS, submitted_by: submittedBy });
 
     const requiredCaps = task.required_capabilities ?? [];
     const payload = JSON.stringify({ type: "task_request", task });
@@ -2313,6 +2342,24 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
         }
       }
     }
+
+    // Spatial presence events — notify both parties for AR/VR delegation animation.
+    // delegation_departed → submitter's spatial app: "your motebit has left"
+    // delegation_arrived  → worker's spatial app:    "a visitor motebit has arrived"
+    if (submittedBy) {
+      broadcastToMotebit(submittedBy, {
+        type: "delegation_departed",
+        task_id: taskId,
+        target_motebit_id: motebitId,
+        submitted_by: submittedBy,
+      });
+    }
+    broadcastToMotebit(motebitId, {
+      type: "delegation_arrived",
+      task_id: taskId,
+      source_motebit_id: submittedBy ?? null,
+      prompt: body.prompt.slice(0, 100),
+    });
 
     return c.json({ task_id: taskId, status: task.status }, 201);
   });
@@ -2583,6 +2630,26 @@ export async function createSyncRelay(config: SyncRelayConfig = {}): Promise<Syn
         peer.ws.send(payload);
       }
     }
+
+    // Spatial presence events — notify both parties for AR/VR return animation.
+    // delegation_returning         → submitter's spatial app: "your motebit is coming home"
+    // delegation_visitor_departing → worker's spatial app:    "the visitor is leaving"
+    const receiptStatus = receipt.status === "completed" ? "completed" : "failed";
+    const taskSubmittedBy = entry.submitted_by ?? (entry.task.submitted_by as string | undefined);
+    if (taskSubmittedBy) {
+      broadcastToMotebit(taskSubmittedBy, {
+        type: "delegation_returning",
+        task_id: taskId,
+        target_motebit_id: motebitId,
+        status: receiptStatus,
+        receipt_verified: true, // We only reach this point after successful Ed25519 verification
+      });
+    }
+    broadcastToMotebit(motebitId, {
+      type: "delegation_visitor_departing",
+      task_id: taskId,
+      source_motebit_id: taskSubmittedBy ?? null,
+    });
 
     return c.json({ status: entry.task.status, credential_id });
   });

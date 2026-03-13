@@ -13,10 +13,15 @@
 import type { RenderSpec } from "@motebit/sdk";
 import {
   CANONICAL_SPEC,
+  idToHue,
   type RenderAdapter,
   type RenderFrame,
   type InteriorColor,
   type AudioReactivity,
+  type CreaturePresence,
+  type VisitorOpts,
+  type DepartureOpts,
+  type VisitorState,
 } from "@motebit/render-engine";
 
 // === Spatial Anchor ===
@@ -332,6 +337,8 @@ export function getAnchorForReference(
 export class WebXRAdapter implements RenderAdapter {
   private spec: RenderSpec = CANONICAL_SPEC;
   private session: unknown = null;
+  private _mainPresence: CreaturePresence = "home";
+  private _visitors = new Map<string, VisitorState>();
 
   isActive(): boolean {
     return this.session != null;
@@ -355,7 +362,43 @@ export class WebXRAdapter implements RenderAdapter {
   setTrustMode(_mode: import("@motebit/sdk").TrustMode): void {}
   setListeningIndicator(_active: boolean): void {}
 
+  departCreature(_opts?: DepartureOpts): void {
+    this._mainPresence = "departing";
+  }
+  returnCreature(_opts?: { fromDirection?: { x: number; y: number; z: number } }): void {
+    if (this._mainPresence === "departing" || this._mainPresence === "away") {
+      this._mainPresence = "returning";
+    }
+  }
+  arriveVisitor(id: string, opts: VisitorOpts): void {
+    if (this._visitors.has(id)) return;
+    this._visitors.set(id, {
+      id,
+      group: null,
+      body: null,
+      eyes: null,
+      bodyMaterial: null,
+      trustScore: opts.trustScore,
+      presence: "arriving",
+      hue: idToHue(opts.motebitId),
+      phase: 0,
+      transitionStart: Date.now() / 1000,
+      direction: opts.direction ?? { x: -1, y: 0, z: 0 },
+    });
+  }
+  departVisitor(id: string): void {
+    const s = this._visitors.get(id);
+    if (s && s.presence !== "leaving") s.presence = "leaving";
+  }
+  getMainPresence(): CreaturePresence {
+    return this._mainPresence;
+  }
+  getVisitors(): Map<string, VisitorState> {
+    return this._visitors;
+  }
+
   dispose(): void {
     this.session = null;
+    this._visitors.clear();
   }
 }
