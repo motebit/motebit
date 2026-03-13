@@ -3581,6 +3581,13 @@ let app: Hono;
 if (process.env.VITEST != null) {
   app = new Hono();
 } else {
+  if (process.env.NODE_ENV === "production" && !process.env.MOTEBIT_DB_PATH) {
+    // eslint-disable-next-line no-console
+    console.error(
+      "FATAL: MOTEBIT_DB_PATH must be set in production (otherwise data is lost on restart)",
+    );
+    process.exit(1);
+  }
   const relay = await createSyncRelay({
     dbPath: process.env.MOTEBIT_DB_PATH,
     apiToken: process.env.MOTEBIT_API_TOKEN,
@@ -3590,6 +3597,10 @@ if (process.env.VITEST != null) {
   app = relay.app;
 
   const port = Number(process.env.PORT ?? 3000);
+  // eslint-disable-next-line no-console
+  console.log(
+    `Motebit sync relay config: db=${process.env.MOTEBIT_DB_PATH ?? ":memory:"} deviceAuth=${process.env.MOTEBIT_ENABLE_DEVICE_AUTH !== "false"}`,
+  );
   const server = serve({ fetch: app.fetch, port }, (info) => {
     // eslint-disable-next-line no-console
     console.log(`Motebit sync relay listening on http://localhost:${info.port}`);

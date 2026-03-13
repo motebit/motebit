@@ -1,0 +1,14 @@
+.git
+.github
+.husky
+.changeset
+.turbo
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/__tests__
+**/__stubs__
+apps/
+services/proxy/
+services/summarize/
+services/web-search/
