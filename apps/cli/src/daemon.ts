@@ -343,7 +343,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
 
       console.log(`Agent surface: active (WS → ${wsUrl.replace(/token=.*/, "token=***")})`);
     } else {
-      console.log("Agent surface: disabled (no private key)");
+      console.log("Agent surface: inactive — passphrase required to sign auth tokens");
     }
 
     wsAdapter.connect();
@@ -440,6 +440,8 @@ export async function handleRun(config: CliConfig): Promise<void> {
       new HttpPlanSyncAdapter({ baseUrl: syncUrl, motebitId, authToken: syncToken }),
     );
     planSyncEngine.start();
+  } else {
+    console.log("Agent surface: inactive — use --sync-url to connect to relay");
   }
 
   // Graceful shutdown on SIGINT/SIGTERM with safety timeout

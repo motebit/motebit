@@ -713,7 +713,15 @@ Available commands:
           await adapter.connect();
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
+          const hint = /ECONNREFUSED/.test(message)
+            ? "Is the server running? Check the URL and port."
+            : /ENOTFOUND|EAI_AGAIN/.test(message)
+              ? "DNS resolution failed. Check the hostname."
+              : /ETIMEDOUT|timeout/i.test(message)
+                ? "Connection timed out. The server may be unreachable."
+                : "Check the URL and ensure the server accepts MCP connections.";
           console.log(`Failed to connect to "${addName}": ${message}`);
+          console.log(`  ${hint}`);
           break;
         }
         // Pin manifest hash, register tools -- cleanup adapter on failure
@@ -730,7 +738,17 @@ Available commands:
           } catch {
             /* best effort */
           }
-          console.log(`Failed to register tools from "${addName}": ${message}`);
+          const phase = /identity|signature|verification|public.?key/i.test(message)
+            ? "Identity verification failed"
+            : /manifest|hash|tool/i.test(message)
+              ? "Manifest validation failed"
+              : "Tool registration failed";
+          console.log(`${phase} for "${addName}": ${message}`);
+          if (phase === "Identity verification failed") {
+            console.log(
+              "  The server's identity could not be verified. Use --motebit only with trusted servers.",
+            );
+          }
           break;
         }
         // Track adapter
