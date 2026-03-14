@@ -1,0 +1,122 @@
+---
+title: How We Built This
+description: 133K lines of TypeScript in 26 days. One human architect, one AI.
+---
+
+Motebit was built in 26 days.
+
+Not a prototype. Not a proof of concept. A 39-package monorepo — 133,000 lines of TypeScript, 3,000+ tests, five application surfaces, three open specifications, four published npm packages, and zero TODOs.
+
+One human. One AI. 428 commits.
+
+## The numbers
+
+| | |
+|---|---|
+| **Duration** | February 15 – March 13, 2026 |
+| **Commits** | 428 |
+| **Lines of TypeScript** | 133,000 |
+| **Tests** | 3,000+ across 98 files |
+| **Test-to-code ratio** | 1.1× |
+| **Packages** | 39 |
+| **Application surfaces** | 5 — desktop, CLI, mobile, web, spatial |
+| **Published npm packages** | 4 — create-motebit, motebit, @motebit/sdk, @motebit/verify |
+| **Open specifications** | 3 — identity, execution ledger, relay federation |
+| **TODOs in codebase** | 0 |
+
+402 of 428 commits were co-authored with [Claude](https://claude.ai).
+
+## Commit one
+
+The git history is public. Anyone can verify it.
+
+```
+commit d9a2cf2
+Date:   Sun Feb 15 20:26:39 2026 -0800
+
+    Round 1: Full architecture scaffold with types, stubs, and tests
+
+    Monorepo with 12 packages, 5 services, 4 apps, and infrastructure.
+    All packages compile under strict TypeScript, 201 unit tests pass.
+
+ 96 files changed, 17766 insertions(+)
+```
+
+The first commit was not a `git init` with a README. It was 96 files and 17,766 lines: 12 packages, 5 services, 4 apps, Terraform infrastructure, CI pipelines, and 201 passing tests.
+
+The package structure in that commit — sdk, crypto, event-log, core-identity, memory-graph, state-vector, behavior-engine, render-engine, ai-core, privacy-layer, sync-engine — is the same structure that exists today. It was never restructured. 428 commits later, the foundation never moved.
+
+The architecture was designed, then instantiated. Not discovered through iteration. The git history is the proof.
+
+## How it worked
+
+The bottleneck in software development has shifted. With AI pair-programming, the constraint is no longer implementation speed — it's architectural coherence. How do you maintain a consistent vision across hundreds of AI-assisted commits?
+
+The answer, for us, was a single file.
+
+### CLAUDE.md as control surface
+
+The `CLAUDE.md` in the repository root is not documentation. It's a control surface — a living document that tells the AI what the project is, what patterns to follow, what conventions to enforce, and where the boundaries are.
+
+It declares:
+
+- **The thesis.** The architectural reasoning behind every decision. Not marketing — the actual logic that should inform implementation.
+- **The patterns.** Adapter boundaries, event sourcing, fail-closed privacy, streaming-first, pure computation. The AI follows these patterns because the control document says to.
+- **The conventions.** Error handling uses `{ cause: err }` for stack preservation. Branded ID types enforce compile-time safety. Secrets go in the OS keyring, never config files. These rules prevent drift across hundreds of commits.
+- **The state of the world.** What's built, what's proven, what's untested. This keeps the AI from reimplementing what exists or assuming what doesn't.
+
+The document grew from a few paragraphs to 8,000+ words. It became the single source of truth that kept 39 packages architecturally coherent.
+
+### The design documents are load-bearing
+
+The project includes documents that look like philosophy:
+
+- `DROPLET.md` — derives the visual form from physics
+- `THE_SOVEREIGN_INTERIOR.md` — the identity thesis
+- `THE_METABOLIC_PRINCIPLE.md` — what to build vs. what to absorb
+
+These are not decoration. They are constraints. When the AI suggests a feature, the question is: can this be traced to surface tension? If it can't, it doesn't belong. The documents prevent scope creep and maintain coherence across a codebase too large for any single person to hold in their head.
+
+### What the human did vs. what the AI did
+
+**The human:**
+- The thesis, the architecture, the design constraints
+- The CLAUDE.md control surface
+- Every strategic decision — what to build, what to cut, what patterns to use
+- The specifications and design documents
+- The cryptographic primitives and security model
+
+**The AI:**
+- Implementation code following the architectural patterns
+- Test suites including formal axiom verification
+- Consistency across 39 packages
+- The mechanical work of wiring adapters, types, and protocols
+
+10% of the time was architecture and direction. 90% was implementation and review. But the 10% is what made the 90% coherent rather than just voluminous.
+
+## What this means
+
+This is not a story about AI replacing developers. A codebase of this size without architectural direction would be a mess — more code is not better code. The AI did not make the decisions that matter. It executed them at a speed that wasn't previously possible.
+
+What changed is the economics. A single person with domain knowledge and clear architectural vision can now build what previously required a team. The cost of exploring an idea dropped by an order of magnitude. The cost of bad ideas dropped too — you can build, evaluate, and discard faster.
+
+## What's real and what's not
+
+The infrastructure is built. The cryptography is correct — Ed25519 via audited `@noble` libraries, AES-256-GCM, PBKDF2 at 600k iterations. The tests verify mathematical axioms (all seven semiring properties), cryptographic roundtrips, and tamper detection.
+
+What's untested in production:
+- Two motebits delegating across the internet
+- Multi-device sync under real network conditions
+- The intelligence gradient trending upward over weeks of real usage
+- External developers completing the full flow without guidance
+- Multi-relay federation across independent operators
+
+We are honest about this because the gap between built and proven is where most projects die. Building the system was the easier part.
+
+## Try it
+
+```bash
+npm create motebit@latest my-agent
+```
+
+30 seconds to a signed agent identity. The [specification](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md) is MIT licensed. The [verification library](https://www.npmjs.com/package/@motebit/verify) is MIT licensed and zero-dependency. The [source](https://github.com/motebit/motebit) is available.
