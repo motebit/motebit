@@ -65,6 +65,10 @@ export interface VerifiedSettlement {
   originRelay: string;
   grossAmount: number;
   receiptHash: string;
+  /** x402 on-chain transaction hash proving payment actually happened. */
+  x402TxHash?: string;
+  /** x402 network identifier (CAIP-2) for the payment chain. */
+  x402Network?: string;
 }
 
 // === Helpers ===
@@ -878,6 +882,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     const body = await c.req.json<{
       task_id: string; settlement_id: string; origin_relay: string;
       gross_amount: number; receipt_hash: string; signature: string;
+      x402_tx_hash?: string; x402_network?: string;
     }>();
 
     if (!body.task_id || !body.settlement_id || !body.origin_relay || body.gross_amount == null) {
@@ -897,6 +902,8 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       originRelay: body.origin_relay,
       grossAmount: body.gross_amount,
       receiptHash: body.receipt_hash,
+      x402TxHash: body.x402_tx_hash,
+      x402Network: body.x402_network,
     });
 
     return c.json({ status: "settled", fee_amount: result.feeAmount, net_amount: result.netAmount });

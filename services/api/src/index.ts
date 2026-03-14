@@ -442,6 +442,18 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // Federation tables (relay_identity, relay_peers, relay_federation_settlements)
   createFederationTables(moteDb.db);
 
+  // Migration: add x402 payment proof columns to relay_federation_settlements
+  {
+    const cols = moteDb.db.prepare("PRAGMA table_info(relay_federation_settlements)").all() as Array<{ name: string }>;
+    const colNames = new Set(cols.map((c) => c.name));
+    if (!colNames.has("x402_tx_hash")) {
+      moteDb.db.exec("ALTER TABLE relay_federation_settlements ADD COLUMN x402_tx_hash TEXT");
+    }
+    if (!colNames.has("x402_network")) {
+      moteDb.db.exec("ALTER TABLE relay_federation_settlements ADD COLUMN x402_network TEXT");
+    }
+  }
+
   // Create market relay tables (service listings + latency stats for routing)
   moteDb.db.exec(`
       CREATE TABLE IF NOT EXISTS relay_service_listings (
@@ -1141,28 +1153,21 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
             // Agent protocol: task_claim
             if (msg.type === "task_claim" && msg.task_id) {
-              const entry = taskQueue.get(msg.task_id);
-              let claimRejected = false;
+              const taskId = msg.task_id as string;
+              const entry = taskQueue.get(taskId);
 
               if (!entry || entry.task.motebit_id !== motebitId) {
-                ws.send(
-                  JSON.stringify({
-                    type: "task_claim_rejected",
-                    task_id: msg.task_id,
-                    reason: "Task not found",
-                  }),
-                );
-                claimRejected = true;
+                ws.send(JSON.stringify({ type: "task_claim_rejected", task_id: taskId, reason: "Task not found" }));
               } else if (entry.task.status !== AgentTaskStatus.Pending) {
-                ws.send(
-                  JSON.stringify({
-                    type: "task_claim_rejected",
-                    task_id: msg.task_id,
-                    reason: "Task already claimed",
-                  }),
-                );
-                claimRejected = true;
+                // Already claimed — atomic check: status is read BEFORE any async work
+                ws.send(JSON.stringify({ type: "task_claim_rejected", task_id: taskId, reason: "already_claimed" }));
               } else {
+                // Atomic claim: set status BEFORE any further checks or responses.
+                // Safe in single-threaded JS; prevents bugs if relay ever runs with
+                // worker threads or multi-instance.
+                entry.task.status = AgentTaskStatus.Claimed;
+                entry.task.claimed_by = deviceId;
+
                 // Verify claiming device has required capabilities
                 const requiredCaps = entry.task.required_capabilities ?? [];
                 if (requiredCaps.length > 0) {
@@ -1173,23 +1178,19 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
                       claimingDevice.capabilities!.includes(c),
                     );
                     if (!hasAll) {
-                      ws.send(
-                        JSON.stringify({
-                          type: "task_claim_rejected",
-                          task_id: msg.task_id,
-                          reason: "Device lacks required capabilities",
-                        }),
-                      );
-                      claimRejected = true;
+                      // Roll back claim — device lacks capabilities
+                      entry.task.status = AgentTaskStatus.Pending;
+                      entry.task.claimed_by = undefined;
+                      ws.send(JSON.stringify({ type: "task_claim_rejected", task_id: taskId, reason: "Device lacks required capabilities" }));
+                    } else {
+                      ws.send(JSON.stringify({ type: "task_claimed", task_id: taskId }));
                     }
+                  } else {
+                    ws.send(JSON.stringify({ type: "task_claimed", task_id: taskId }));
                   }
+                } else {
+                  ws.send(JSON.stringify({ type: "task_claimed", task_id: taskId }));
                 }
-              }
-
-              if (!claimRejected && entry) {
-                entry.task.status = AgentTaskStatus.Claimed;
-                entry.task.claimed_by = deviceId;
-                ws.send(JSON.stringify({ type: "task_claimed", task_id: msg.task_id }));
               }
             }
 
@@ -1849,14 +1850,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
           const settlementId = crypto.randomUUID();
 
           moteDb.db
-            .prepare(`INSERT OR IGNORE INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-            .run(settlementId, verified.taskId, relayIdentity.relayMotebitId, verified.originRelay, null, grossAmount, feeAmount, netAmount, PLATFORM_FEE_RATE, Date.now(), receiptHash);
+            .prepare(`INSERT OR IGNORE INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash, x402_tx_hash, x402_network) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            .run(settlementId, verified.taskId, relayIdentity.relayMotebitId, verified.originRelay, null, grossAmount, feeAmount, netAmount, PLATFORM_FEE_RATE, Date.now(), receiptHash, entry.x402_tx_hash ?? null, entry.x402_network ?? null);
 
           const peerInfo = moteDb.db
             .prepare("SELECT endpoint_url FROM relay_peers WHERE peer_relay_id = ?")
             .get(verified.originRelay) as { endpoint_url: string } | undefined;
           if (peerInfo) {
-            const settlementBody = { task_id: verified.taskId, settlement_id: settlementId, origin_relay: relayIdentity.relayMotebitId, gross_amount: netAmount, receipt_hash: receiptHash };
+            const settlementBody = { task_id: verified.taskId, settlement_id: settlementId, origin_relay: relayIdentity.relayMotebitId, gross_amount: netAmount, receipt_hash: receiptHash, x402_tx_hash: entry.x402_tx_hash ?? undefined, x402_network: entry.x402_network ?? undefined };
             const settlementSig = await sign(new TextEncoder().encode(canonicalJson(settlementBody)), relayIdentity.privateKey);
             try {
               const resp = await fetch(`${peerInfo.endpoint_url}/federation/v1/settlement/forward`, {
@@ -1880,8 +1881,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       const feeAmount = verified.grossAmount * PLATFORM_FEE_RATE;
       const netAmount = verified.grossAmount - feeAmount;
       moteDb.db
-        .prepare(`INSERT OR IGNORE INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(verified.settlementId, verified.taskId, verified.originRelay, null, null, verified.grossAmount, feeAmount, netAmount, PLATFORM_FEE_RATE, Date.now(), verified.receiptHash);
+        .prepare(`INSERT OR IGNORE INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash, x402_tx_hash, x402_network) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(verified.settlementId, verified.taskId, verified.originRelay, null, null, verified.grossAmount, feeAmount, netAmount, PLATFORM_FEE_RATE, Date.now(), verified.receiptHash, verified.x402TxHash ?? null, verified.x402Network ?? null);
       return { feeAmount, netAmount };
     },
   });
