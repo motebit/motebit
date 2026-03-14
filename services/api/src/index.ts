@@ -128,6 +128,12 @@ import {
   trustLevelToScore,
 } from "@motebit/sdk";
 
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 function hexToBytes(hex: string): Uint8Array {
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < hex.length; i += 2) {
@@ -237,6 +243,12 @@ export interface SyncRelay {
   close(): void;
   /** Connected WebSocket clients per motebitId. Exposed for testing. */
   connections: Map<string, ConnectedDevice[]>;
+  /** Persistent relay identity. Stable across restarts. */
+  relayIdentity: {
+    relayMotebitId: string;
+    publicKeyHex: string;
+    did: string;
+  };
 }
 
 // === Rate Limiter ===
@@ -407,6 +419,18 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         registered_at INTEGER NOT NULL,
         last_heartbeat INTEGER NOT NULL,
         expires_at    INTEGER NOT NULL
+      );
+  `);
+
+  // Relay identity — persistent Ed25519 keypair for credential signing, federation, verification.
+  // Without this, the relay generates ephemeral keys on restart and can't be "motebit verified."
+  moteDb.db.exec(`
+      CREATE TABLE IF NOT EXISTS relay_identity (
+        relay_motebit_id TEXT PRIMARY KEY,
+        public_key       TEXT NOT NULL,
+        private_key_hex  TEXT NOT NULL,
+        did              TEXT NOT NULL,
+        created_at       INTEGER NOT NULL
       );
   `);
 
@@ -662,6 +686,54 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const publicLimiter = new RateLimiter(20, 60_000); // 20 req/min
   const expensiveLimiter = new RateLimiter(10, 60_000); // 10 req/min
   const allLimiters = [authLimiter, readLimiter, writeLimiter, publicLimiter, expensiveLimiter];
+
+  // --- Relay Identity: persistent Ed25519 keypair ---
+  // The relay is itself a motebit — a cryptographic entity with a stable identity.
+  // This keypair persists across restarts so the relay can be verified, accumulate
+  // reputation, and peer with other relays for federation.
+  const existingIdentity = moteDb.db.prepare("SELECT * FROM relay_identity LIMIT 1").get() as
+    | { relay_motebit_id: string; public_key: string; private_key_hex: string; did: string }
+    | undefined;
+
+  let relayIdentity: {
+    relayMotebitId: string;
+    publicKey: Uint8Array;
+    privateKey: Uint8Array;
+    publicKeyHex: string;
+    did: string;
+  };
+
+  if (existingIdentity) {
+    relayIdentity = {
+      relayMotebitId: existingIdentity.relay_motebit_id,
+      publicKey: hexToBytes(existingIdentity.public_key),
+      privateKey: hexToBytes(existingIdentity.private_key_hex),
+      publicKeyHex: existingIdentity.public_key,
+      did: existingIdentity.did,
+    };
+  } else {
+    // First boot — generate and persist relay identity
+    const keypair = await generateKeypair();
+    const pubHex = bytesToHex(keypair.publicKey);
+    const privHex = bytesToHex(keypair.privateKey);
+    const did = publicKeyToDidKey(keypair.publicKey);
+    const relayMotebitId = `relay-${crypto.randomUUID()}`;
+
+    moteDb.db
+      .prepare(
+        `INSERT INTO relay_identity (relay_motebit_id, public_key, private_key_hex, did, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(relayMotebitId, pubHex, privHex, did, Date.now());
+
+    relayIdentity = {
+      relayMotebitId,
+      publicKey: keypair.publicKey,
+      privateKey: keypair.privateKey,
+      publicKeyHex: pubHex,
+      did,
+    };
+  }
 
   const app = new Hono();
   // eslint-disable-next-line @typescript-eslint/unbound-method -- hono utility functions, not bound methods
@@ -1659,6 +1731,17 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     return c.json({ motebit_id: motebitId, scores: ranked });
   });
 
+  // --- Federation: relay identity (public, unauthenticated) ---
+  // eslint-disable-next-line @typescript-eslint/require-await -- Hono handler, sync data
+  app.get("/federation/v1/identity", async (c) => {
+    return c.json({
+      spec: "motebit/relay-federation@1.0",
+      relay_motebit_id: relayIdentity.relayMotebitId,
+      public_key: relayIdentity.publicKeyHex,
+      did: relayIdentity.did,
+    });
+  });
+
   // --- Gradient: intelligence gradient snapshots ---
   app.get("/api/v1/gradient/:motebitId", (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
@@ -1695,14 +1778,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   });
 
   // --- Credentials: relay-issued reputation VC ---
-  // Relay generates an ephemeral keypair on startup for signing credentials.
-  // In production this should be a persisted relay identity.
-  let relayKeypairPromise: Promise<{ publicKey: Uint8Array; privateKey: Uint8Array }> | null = null;
+  // Uses the persistent relay identity for credential signing.
+  // The relay IS a motebit — its keypair persists across restarts.
   function getRelayKeypair(): Promise<{ publicKey: Uint8Array; privateKey: Uint8Array }> {
-    if (!relayKeypairPromise) {
-      relayKeypairPromise = generateKeypair();
-    }
-    return relayKeypairPromise;
+    return Promise.resolve({
+      publicKey: relayIdentity.publicKey,
+      privateKey: relayIdentity.privateKey,
+    });
   }
 
   app.post("/api/v1/credentials/:motebitId/reputation", async (c) => {
@@ -4531,7 +4613,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const originalApp = app as Hono & { injectWebSocket?: typeof injectWebSocket };
   originalApp.injectWebSocket = injectWebSocket;
 
-  return { app, close, connections };
+  return {
+    app,
+    close,
+    connections,
+    relayIdentity: {
+      relayMotebitId: relayIdentity.relayMotebitId,
+      publicKeyHex: relayIdentity.publicKeyHex,
+      did: relayIdentity.did,
+    },
+  };
 }
 
 // === Standalone boot ===
