@@ -108,6 +108,7 @@ import {
 } from "@motebit/crypto";
 /* eslint-enable no-restricted-imports */
 import type { KeySuccessionRecord } from "@motebit/crypto";
+import { createLogger } from "./logger.js";
 import {
   createFederationTables,
   initRelayIdentity,
@@ -661,9 +662,19 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // eslint-disable-next-line @typescript-eslint/unbound-method -- hono utility functions, not bound methods
   const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 
+  const logger = createLogger({ service: "relay" });
+
   // --- Middleware ---
   app.use("*", secureHeaders());
   app.use("*", cors({ origin: corsOrigin }));
+
+  // Correlation ID middleware — generates or propagates X-Correlation-ID
+  app.use("*", async (c, next) => {
+    const correlationId = c.req.header("x-correlation-id") ?? crypto.randomUUID();
+    c.set("correlationId" as never, correlationId as never);
+    c.header("X-Correlation-ID", correlationId);
+    await next();
+  });
 
   // --- x402 Payment Layer ---
   // Task submission requires on-chain USDC payment via x402 when the agent has
@@ -1771,7 +1782,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
             const settlementSig = await sign(new TextEncoder().encode(canonicalJson(settlementBody)), relayIdentity.privateKey);
             try {
               const resp = await fetch(`${peerInfo.endpoint_url}/federation/v1/settlement/forward`, {
-                method: "POST", headers: { "Content-Type": "application/json" },
+                method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-ID": verified.taskId },
                 body: JSON.stringify({ ...settlementBody, signature: bytesToHex(settlementSig) }),
                 signal: AbortSignal.timeout(10000),
               });
@@ -2108,6 +2119,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       x402_network: x402Net,
     });
 
+    logger.info("task.submitted", { correlationId: taskId, taskId, motebitId, capabilities: task.required_capabilities ?? [] });
+
     // Persist budget allocation so settlement can verify the lock exists.
     // Prevents overdraft: callers cannot submit unbounded tasks without a price lock.
     if (priceSnapshot && priceSnapshot > 0) {
@@ -2242,7 +2255,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
                   const resp = await fetch(`${peerEndpoint}/federation/v1/task/forward`, {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
+                    headers: { "Content-Type": "application/json", "X-Correlation-ID": taskId },
                     body: JSON.stringify({
                       ...forwardBody,
                       signature: bytesToHex(forwardSig),
@@ -2252,6 +2265,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
                   if (resp.ok) {
                     routed = true;
+                    logger.info("task.forwarded", { correlationId: taskId, peerRelay: peerEndpoint, targetAgent: selId });
                   }
                 } catch {
                   // Federation forward failed — try next candidate or fall through to broadcast
@@ -2437,6 +2451,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     }
 
     if (!pubKeyHex) {
+      logger.error("receipt.verification_failed", { correlationId: taskId, reason: "no public key found for executing agent" });
       throw new HTTPException(403, {
         message: "Receipt verification failed: no public key found for executing agent",
       });
@@ -2444,10 +2459,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
     const receiptValid = await verifyExecutionReceipt(receipt, hexToBytes(pubKeyHex));
     if (!receiptValid) {
+      logger.error("receipt.verification_failed", { correlationId: taskId, reason: "invalid Ed25519 signature" });
       throw new HTTPException(403, {
         message: "Receipt verification failed: invalid Ed25519 signature",
       });
     }
+
+    logger.info("receipt.received", { correlationId: taskId, status: receipt.status, motebitId: receipt.motebit_id as string });
 
     entry.receipt = receipt;
     // Extend TTL so recovery polling has a full window after completion
@@ -2467,6 +2485,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       .get(taskId, motebitId) as { settlement_id: string } | undefined;
     if (existingSettlement) {
       // Already settled — return success (idempotent) without duplicate trust/settlement/credential
+      logger.info("settlement.duplicate", { correlationId: taskId });
       return c.json({ status: "already_settled" });
     }
 
@@ -2761,6 +2780,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
           }
 
           moteDb.db.exec("COMMIT");
+          logger.info("settlement.created", {
+            correlationId: taskId,
+            gross: settlement.amount_settled + settlement.platform_fee,
+            fee: settlement.platform_fee,
+            net: settlement.amount_settled,
+            x402TxHash: entry.x402_tx_hash ?? null,
+          });
+          if (credentialRow) {
+            logger.info("credential.issued", { correlationId: taskId, motebitId: credentialRow.subject, type: credentialRow.type });
+          }
         } catch (txnErr) {
           moteDb.db.exec("ROLLBACK");
           throw txnErr;
@@ -2816,7 +2845,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
           await fetch(`${originPeer.endpoint_url}/federation/v1/task/result`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", "X-Correlation-ID": taskId },
             body: JSON.stringify({ ...resultBody, signature: bytesToHex(resultSig) }),
             signal: AbortSignal.timeout(10000),
           });
@@ -3354,7 +3383,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       try {
         const resp = await fetch(`${peer.endpoint_url}/federation/v1/discover`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "X-Correlation-ID": queryId },
           body: JSON.stringify({
             query: { capability, motebit_id: motebitId, limit },
             hop_count: 0,
@@ -4094,10 +4123,7 @@ if (process.env.VITEST != null) {
   app = new Hono();
 } else {
   if (process.env.NODE_ENV === "production" && !process.env.MOTEBIT_DB_PATH) {
-    // eslint-disable-next-line no-console
-    console.error(
-      "FATAL: MOTEBIT_DB_PATH must be set in production (otherwise data is lost on restart)",
-    );
+    createLogger({ service: "relay" }).error("relay.fatal", { reason: "MOTEBIT_DB_PATH must be set in production (otherwise data is lost on restart)" });
     process.exit(1);
   }
   // x402 payment layer: required — every task settlement flows through x402
@@ -4127,13 +4153,15 @@ if (process.env.VITEST != null) {
   app = relay.app;
 
   const port = Number(process.env.PORT ?? 3000);
-  // eslint-disable-next-line no-console
-  console.log(
-    `Motebit sync relay config: db=${process.env.MOTEBIT_DB_PATH ?? ":memory:"} deviceAuth=${process.env.MOTEBIT_ENABLE_DEVICE_AUTH !== "false"} federation=${process.env.MOTEBIT_FEDERATION_ENDPOINT_URL ?? "disabled"} keyEncryption=${process.env.MOTEBIT_RELAY_KEY_PASSPHRASE ? "active" : "disabled"}`,
-  );
+  const bootLogger = createLogger({ service: "relay" });
+  bootLogger.info("relay.starting", {
+    db: process.env.MOTEBIT_DB_PATH ?? ":memory:",
+    deviceAuth: process.env.MOTEBIT_ENABLE_DEVICE_AUTH !== "false",
+    federation: process.env.MOTEBIT_FEDERATION_ENDPOINT_URL ?? "disabled",
+    keyEncryption: process.env.MOTEBIT_RELAY_KEY_PASSPHRASE ? "active" : "disabled",
+  });
   const server = serve({ fetch: app.fetch, port }, (info) => {
-    // eslint-disable-next-line no-console
-    console.log(`Motebit sync relay listening on http://localhost:${info.port}`);
+    bootLogger.info("relay.listening", { port: info.port });
   });
   // Inject WebSocket support
   const injectWs = (app as Hono & { injectWebSocket?: (server: unknown) => void }).injectWebSocket;

@@ -12,6 +12,9 @@ import { HTTPException } from "hono/http-exception";
 import { sign, verify, generateKeypair, publicKeyToDidKey, canonicalJson } from "@motebit/crypto";
 import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from "node:crypto";
 import type { ExecutionReceipt } from "@motebit/sdk";
+import { createLogger } from "./logger.js";
+
+const logger = createLogger({ service: "relay", module: "federation" });
 
 // === Types ===
 
@@ -342,12 +345,15 @@ export async function sendHeartbeats(db: any, relayIdentity: RelayIdentity): Pro
       if (newMissed >= HEARTBEAT_REMOVE_THRESHOLD) {
         db.prepare("UPDATE relay_peers SET missed_heartbeats = ?, state = 'removed' WHERE peer_relay_id = ?")
           .run(newMissed, peer.peer_relay_id);
+        logger.warn("federation.peer.suspended", { peerId: peer.peer_relay_id });
       } else if (newMissed >= HEARTBEAT_SUSPEND_THRESHOLD) {
         db.prepare("UPDATE relay_peers SET missed_heartbeats = ?, state = 'suspended' WHERE peer_relay_id = ?")
           .run(newMissed, peer.peer_relay_id);
+        logger.warn("federation.peer.suspended", { peerId: peer.peer_relay_id });
       } else {
         db.prepare("UPDATE relay_peers SET missed_heartbeats = ? WHERE peer_relay_id = ?")
           .run(newMissed, peer.peer_relay_id);
+        logger.warn("federation.heartbeat.missed", { peerId: peer.peer_relay_id, missed: newMissed });
       }
     }
   }
@@ -404,7 +410,7 @@ export async function processSettlementRetries(db: any, relayIdentity: RelayIden
 
       const resp = await fetch(`${peerInfo.endpoint_url}/federation/v1/settlement/forward`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-Correlation-ID": retry.task_id },
         body: JSON.stringify({ ...settlementBody, signature: bytesToHex(sig) }),
         signal: AbortSignal.timeout(10_000),
       });
@@ -665,6 +671,8 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       `UPDATE relay_peers SET state = 'active', peered_at = ?, last_heartbeat_at = ?, nonce = NULL WHERE peer_relay_id = ?`,
     ).run(now, now, relay_id);
 
+    logger.info("federation.peer.active", { peerId: relay_id });
+
     return c.json({ status: "active", peered_at: now });
   });
 
@@ -790,7 +798,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
         try {
           const resp = await fetch(`${peer.endpoint_url}/federation/v1/discover`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", "X-Correlation-ID": body.query_id as string },
             body: JSON.stringify({
               query: body.query, hop_count: body.hop_count + 1, max_hops: body.max_hops,
               visited, query_id: body.query_id, origin_relay: body.origin_relay,

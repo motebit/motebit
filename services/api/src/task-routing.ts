@@ -236,7 +236,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
       try {
         const resp = await fetch(`${peer.endpoint_url}/federation/v1/discover`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "X-Correlation-ID": queryId },
           body: JSON.stringify({
             query: { capability: requiredCaps[0], limit: 20 },
             hop_count: 0,
