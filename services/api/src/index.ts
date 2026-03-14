@@ -113,7 +113,12 @@ import type { VerifiableCredential, KeySuccessionRecord } from "@motebit/crypto"
 import { graphRankCandidates, settleOnReceipt } from "@motebit/market";
 import type { CandidateProfile, TaskRequirements } from "@motebit/market";
 import type { CapabilityPrice, BudgetAllocation, AgentTrustRecord } from "@motebit/sdk";
-import { PLATFORM_FEE_RATE, AgentTrustLevel, evaluateTrustTransition } from "@motebit/sdk";
+import {
+  PLATFORM_FEE_RATE,
+  AgentTrustLevel,
+  EventType,
+  evaluateTrustTransition,
+} from "@motebit/sdk";
 
 function hexToBytes(hex: string): Uint8Array {
   const bytes = new Uint8Array(hex.length / 2);
@@ -2796,7 +2801,30 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
           };
           const newLevel = evaluateTrustTransition(updated);
           if (newLevel != null) {
+            const previousLevel = existing.trust_level;
             updated.trust_level = newLevel;
+            // Emit trust transition event for audit trail (sibling of runtime's bumpTrustFromReceipt)
+            try {
+              const clock = await eventStore.getLatestClock(asMotebitId(motebitId));
+              await eventStore.append({
+                event_id: crypto.randomUUID(),
+                motebit_id: asMotebitId(motebitId),
+                timestamp: now,
+                event_type: EventType.TrustLevelChanged,
+                payload: {
+                  remote_motebit_id: executingAgentId,
+                  previous_level: previousLevel,
+                  new_level: newLevel,
+                  successful_tasks: updated.successful_tasks,
+                  failed_tasks: updated.failed_tasks,
+                  source: "relay_receipt_verification",
+                },
+                version_clock: clock + 1,
+                tombstoned: false,
+              });
+            } catch {
+              // Event emission is best-effort
+            }
           }
           await moteDb.agentTrustStore.setAgentTrust(updated);
         } else {

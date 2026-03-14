@@ -97,13 +97,25 @@ export function graphRankCandidates(
   candidates: CandidateProfile[],
   requirements: TaskRequirements,
   config?: {
-    weights?: { trust: number; cost: number; latency: number; reliability: number };
+    weights?: {
+      trust: number;
+      cost: number;
+      latency: number;
+      reliability: number;
+      regulatory_risk?: number;
+    };
     peerEdges?: Array<{ from: string; to: string; weight: RouteWeight }>;
     maxCandidates?: number;
     explorationWeight?: number;
   },
 ): RouteScore[] {
-  const weights = config?.weights ?? { trust: 0.35, cost: 0.25, latency: 0.2, reliability: 0.2 };
+  const weights = config?.weights ?? {
+    trust: 0.3,
+    cost: 0.2,
+    latency: 0.15,
+    reliability: 0.15,
+    regulatory_risk: 0.2,
+  };
   const maxCandidates = config?.maxCandidates ?? 10;
   const explorationWeight = config?.explorationWeight ?? 0;
 
@@ -139,11 +151,14 @@ export function graphRankCandidates(
     const costScore = route.cost === Infinity ? 0 : 1 / (1 + route.cost);
     const latencyNorm = route.latency === Infinity ? 0 : 1 / (1 + route.latency / 1000);
 
+    const riskScore = route.regulatory_risk === Infinity ? 0 : 1 / (1 + route.regulatory_risk);
+
     const composite =
       route.trust * weights.trust +
       costScore * weights.cost +
       latencyNorm * weights.latency +
-      route.reliability * weights.reliability;
+      route.reliability * weights.reliability +
+      riskScore * (weights.regulatory_risk ?? 0);
 
     scores.push({
       motebit_id: nodeId as MotebitId,
