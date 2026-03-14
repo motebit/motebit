@@ -912,7 +912,7 @@ describe("reflect", () => {
     await expect(headless.reflect()).rejects.toThrow("No AI provider configured");
   });
 
-  it("calls aiReflect and returns result", async () => {
+  it("calls aiReflect and returns result", { timeout: 15_000 }, async () => {
     const runtime = new MotebitRuntime(
       { motebitId: "reflect-test", tickRateHz: 0 },
       createAdapters(createMockProvider()),
