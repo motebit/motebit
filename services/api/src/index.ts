@@ -962,6 +962,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       const deviceId = url.searchParams.get("device_id") ?? crypto.randomUUID();
       const token = url.searchParams.get("token");
 
+      // Per-connection rate limit: max 100 messages per 10 seconds
+      const WS_RATE_LIMIT = 100;
+      const WS_RATE_WINDOW_MS = 10_000;
+      let wsMessageCount = 0;
+      let wsWindowStart = Date.now();
+
       return {
         // eslint-disable-next-line @typescript-eslint/no-misused-promises -- hono ws adapter supports async handlers
         async onOpen(_event, ws) {
@@ -1021,6 +1027,18 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
         // eslint-disable-next-line @typescript-eslint/no-misused-promises -- hono ws adapter supports async handlers
         async onMessage(event, ws) {
+          // Per-connection rate limiting
+          const now = Date.now();
+          if (now - wsWindowStart > WS_RATE_WINDOW_MS) {
+            wsMessageCount = 0;
+            wsWindowStart = now;
+          }
+          wsMessageCount++;
+          if (wsMessageCount > WS_RATE_LIMIT) {
+            ws.send(JSON.stringify({ type: "error", message: "Rate limit exceeded" }));
+            return;
+          }
+
           try {
             const raw = event.data;
             const msg = JSON.parse(
