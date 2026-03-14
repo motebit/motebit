@@ -1002,22 +1002,15 @@ export class MotebitRuntime {
       if (s.delegation_task_id) {
         // Find the step_delegated event for this step to extract routing provenance
         const delegatedEvent = timeline.find(
-          (e) =>
-            e.type === "step_delegated" &&
-            (e.payload as Record<string, unknown>).step_id === s.step_id,
+          (e) => e.type === "step_delegated" && e.payload.step_id === s.step_id,
         );
-        const routingChoice = delegatedEvent
-          ? ((delegatedEvent.payload as Record<string, unknown>)
-              .routing_choice as ExecutionStepSummary["delegation"] extends {
-              routing_choice?: infer R;
-            }
-              ? R
-              : never)
-          : undefined;
+        const routingChoice = delegatedEvent?.payload.routing_choice as
+          | NonNullable<ExecutionStepSummary["delegation"]>["routing_choice"]
+          | undefined;
 
         summary.delegation = {
           task_id: s.delegation_task_id,
-          routing_choice: routingChoice ?? undefined,
+          routing_choice: routingChoice,
         };
       }
 
