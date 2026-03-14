@@ -77,7 +77,11 @@ function computeCapabilityMatch(
   return matched / requirements.required_capabilities.length;
 }
 
-/** Pure: (candidate, requirements, config?) → RouteScore */
+/**
+ * Pure: (candidate, requirements, config?) → RouteScore
+ *
+ * @deprecated Use `graphRankCandidates` from `./graph-routing.js` instead.
+ */
 export function scoreCandidate(
   candidate: CandidateProfile,
   requirements: TaskRequirements,
@@ -145,7 +149,14 @@ export function applyPrecisionToMarketConfig(
   };
 }
 
-/** Pure: (candidates[], requirements, config?) → sorted RouteScore[] with top N selected */
+/**
+ * Pure: (candidates[], requirements, config?) → sorted RouteScore[] with top N selected
+ *
+ * @deprecated Use `graphRankCandidates` from `./graph-routing.js` instead.
+ * This function uses a linear weighted sum that ignores multi-hop trust
+ * composition, regulatory risk, and provenance. Retained for backward
+ * compatibility; will be removed in a future version.
+ */
 export function rankCandidates(
   candidates: CandidateProfile[],
   requirements: TaskRequirements,

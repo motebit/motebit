@@ -961,6 +961,14 @@ export interface AgentServiceListing {
   description: string;
   /** Wallet address for x402 on-chain payment settlement (e.g. "0x..." for EVM). */
   pay_to_address?: string;
+  /**
+   * Self-declared regulatory risk score [0, ∞). 0 = no risk, higher = more risk.
+   * Accumulates along delegation chains via RegulatoryRiskSemiring (min, +).
+   * Sources: jurisdiction, data handling classification, compliance certifications,
+   * audit requirements. The score is declared by the agent; verification is via
+   * credentials (e.g. compliance attestation VCs).
+   */
+  regulatory_risk?: number;
   updated_at: number;
 }
 

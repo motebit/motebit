@@ -58,7 +58,7 @@ export function buildRoutingGraph(
     const latency = candidate.latency_stats?.avg_ms ?? 5000;
     const reliability = computeReliability(candidate);
 
-    const regulatory_risk = 0; // default: no risk data in CandidateProfile (populated by relay when available)
+    const regulatory_risk = candidate.listing?.regulatory_risk ?? 0;
 
     graph.setEdge(selfId, candidate.motebit_id, {
       trust,

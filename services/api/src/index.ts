@@ -413,6 +413,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         sla_availability REAL NOT NULL DEFAULT 0.99,
         description   TEXT NOT NULL DEFAULT '',
         pay_to_address TEXT,
+        regulatory_risk REAL,
         updated_at    INTEGER NOT NULL DEFAULT 0
       );
       CREATE INDEX IF NOT EXISTS idx_relay_listings_motebit ON relay_service_listings(motebit_id);
@@ -2445,6 +2446,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
             availability_guarantee: row.sla_availability as number,
           },
           description: row.description as string,
+          regulatory_risk: (row.regulatory_risk as number | null) ?? undefined,
           updated_at: row.updated_at as number,
         },
         latency_stats: latencyStats,
@@ -3718,6 +3720,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       description?: string;
       /** Wallet address for x402 payment settlement (e.g. "0x..." for EVM). */
       pay_to_address?: string;
+      /** Self-declared regulatory risk score [0, ∞). 0 = no risk, higher = more risk. */
+      regulatory_risk?: number;
     }>();
 
     const now = Date.now();
@@ -3731,8 +3735,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     moteDb.db
       .prepare(
         `INSERT INTO relay_service_listings
-         (listing_id, motebit_id, capabilities, pricing, sla_max_latency_ms, sla_availability, description, pay_to_address, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (listing_id, motebit_id, capabilities, pricing, sla_max_latency_ms, sla_availability, description, pay_to_address, regulatory_risk, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         listingId,
@@ -3743,6 +3747,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         body.sla?.availability_guarantee ?? 0.99,
         body.description ?? "",
         body.pay_to_address ?? null,
+        body.regulatory_risk ?? null,
         now,
       );
 

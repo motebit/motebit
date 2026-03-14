@@ -97,7 +97,7 @@ export function buildAgentGraph(
     const cost = estimateAgentCost(agent.listing);
     const latency = agent.latency_ms ?? 5000;
     const reliability = agent.reliability ?? 0.5;
-    const regulatory_risk = agent.regulatory_risk ?? 0;
+    const regulatory_risk = agent.regulatory_risk ?? agent.listing?.regulatory_risk ?? 0;
 
     graph.setEdge(selfId, agent.motebit_id, { trust, cost, latency, reliability, regulatory_risk });
   }
