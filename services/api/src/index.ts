@@ -104,6 +104,7 @@ import {
   issueReputationCredential,
   verifyKeySuccession,
   sign,
+  canonicalJson,
 } from "@motebit/crypto";
 /* eslint-enable no-restricted-imports */
 import type { KeySuccessionRecord } from "@motebit/crypto";
@@ -1800,7 +1801,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
             .get(verified.originRelay) as { endpoint_url: string } | undefined;
           if (peerInfo) {
             const settlementBody = { task_id: verified.taskId, settlement_id: settlementId, origin_relay: relayIdentity.relayMotebitId, gross_amount: netAmount, receipt_hash: receiptHash };
-            const settlementSig = await sign(new TextEncoder().encode(JSON.stringify(settlementBody)), relayIdentity.privateKey);
+            const settlementSig = await sign(new TextEncoder().encode(canonicalJson(settlementBody)), relayIdentity.privateKey);
             try {
               const resp = await fetch(`${peerInfo.endpoint_url}/federation/v1/settlement/forward`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
@@ -2779,7 +2780,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
                     },
                     routing_choice: routingChoice,
                   };
-                  const forwardBytes = new TextEncoder().encode(JSON.stringify(forwardBody));
+                  const forwardBytes = new TextEncoder().encode(canonicalJson(forwardBody));
                   const forwardSig = await sign(forwardBytes, relayIdentity.privateKey);
 
                   const resp = await fetch(`${peerEndpoint}/federation/v1/task/forward`, {
@@ -3278,7 +3279,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
             origin_relay: relayIdentity.relayMotebitId,
             receipt,
           };
-          const resultBytes = new TextEncoder().encode(JSON.stringify(resultBody));
+          const resultBytes = new TextEncoder().encode(canonicalJson(resultBody));
           const resultSig = await sign(resultBytes, relayIdentity.privateKey);
 
           await fetch(`${originPeer.endpoint_url}/federation/v1/task/result`, {

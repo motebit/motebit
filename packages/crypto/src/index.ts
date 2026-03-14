@@ -461,9 +461,12 @@ export function canonicalJson(obj: unknown): string {
     return "[" + obj.map((item) => canonicalJson(item)).join(",") + "]";
   }
   const sorted = Object.keys(obj as Record<string, unknown>).sort();
-  const entries = sorted.map(
-    (key) => JSON.stringify(key) + ":" + canonicalJson((obj as Record<string, unknown>)[key]),
-  );
+  const entries: string[] = [];
+  for (const key of sorted) {
+    const val = (obj as Record<string, unknown>)[key];
+    if (val === undefined) continue; // Match JSON.stringify behavior: omit undefined
+    entries.push(JSON.stringify(key) + ":" + canonicalJson(val));
+  }
   return "{" + entries.join(",") + "}";
 }
 

@@ -9,7 +9,7 @@
  */
 import type { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { sign, verify, generateKeypair, publicKeyToDidKey } from "@motebit/crypto";
+import { sign, verify, generateKeypair, publicKeyToDidKey, canonicalJson } from "@motebit/crypto";
 import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from "node:crypto";
 import type { ExecutionReceipt } from "@motebit/sdk";
 
@@ -144,6 +144,7 @@ export function createFederationTables(db: any): void {
       receipt_hash TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_fed_settlements_task ON relay_federation_settlements(task_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_fed_settlements_dedup ON relay_federation_settlements(task_id, upstream_relay_id);
   `);
 
   db.exec(`
@@ -240,7 +241,7 @@ export async function initRelayIdentity(db: any, passphrase?: string): Promise<R
     };
   }
 
-  // First boot — generate and persist
+  // First boot — generate and persist (race-safe: INSERT OR IGNORE + re-query)
   const keypair = await generateKeypair();
   const pubHex = bytesToHex(keypair.publicKey);
   const privHex = bytesToHex(keypair.privateKey);
@@ -249,10 +250,17 @@ export async function initRelayIdentity(db: any, passphrase?: string): Promise<R
 
   const storedPriv = passphrase ? encryptPrivateKey(privHex, passphrase) : privHex;
 
-  db.prepare(
-    `INSERT INTO relay_identity (relay_motebit_id, public_key, private_key_hex, did, created_at)
+  // INSERT OR IGNORE: if another process inserted between our SELECT and INSERT,
+  // this silently no-ops and we re-query to get the winner's identity.
+  const result = db.prepare(
+    `INSERT OR IGNORE INTO relay_identity (relay_motebit_id, public_key, private_key_hex, did, created_at)
      VALUES (?, ?, ?, ?, ?)`,
   ).run(relayMotebitId, pubHex, storedPriv, did, Date.now());
+
+  if (result.changes === 0) {
+    // Another process won the race — load their identity
+    return initRelayIdentity(db, passphrase);
+  }
 
   return { relayMotebitId, publicKey: keypair.publicKey, privateKey: keypair.privateKey, publicKeyHex: pubHex, did };
 }
@@ -387,7 +395,7 @@ export async function processSettlementRetries(db: any, relayIdentity: RelayIden
         continue;
       }
 
-      const sigBytes = new TextEncoder().encode(JSON.stringify(settlementBody));
+      const sigBytes = new TextEncoder().encode(canonicalJson(settlementBody));
       const sig = await sign(sigBytes, relayIdentity.privateKey);
 
       const resp = await fetch(`${peerInfo.endpoint_url}/federation/v1/settlement/forward`, {
@@ -600,7 +608,10 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     crypto.getRandomValues(ourNonceBytes);
     const ourNonce = bytesToHex(ourNonceBytes);
 
-    const challengeSig = await sign(hexToBytes(nonce), relayIdentity.privateKey);
+    // Sign relay_id + nonce together so the challenge is bound to this specific peer.
+    // Prevents replay: a signature from one peering attempt can't be reused for another.
+    const challengeMsg = new TextEncoder().encode(`${relay_id}:${nonce}`);
+    const challengeSig = await sign(challengeMsg, relayIdentity.privateKey);
 
     db.prepare(
       `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, display_name, state, nonce, missed_heartbeats, agent_count, trust_score)
@@ -636,7 +647,9 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     if (!peer) throw new HTTPException(404, { message: "No pending peer found for this relay_id" });
     if (!peer.nonce) throw new HTTPException(400, { message: "No nonce stored for this peer" });
 
-    const valid = await verify(hexToBytes(challenge_response), hexToBytes(peer.nonce), hexToBytes(peer.public_key));
+    // Verify: the peer signed their own relay_id + our nonce (bound to this specific relationship)
+    const confirmMsg = new TextEncoder().encode(`${relay_id}:${peer.nonce}`);
+    const valid = await verify(hexToBytes(challenge_response), confirmMsg, hexToBytes(peer.public_key));
     if (!valid) {
       db.prepare("DELETE FROM relay_peers WHERE peer_relay_id = ?").run(relay_id);
       throw new HTTPException(403, { message: "Challenge response verification failed" });
@@ -814,7 +827,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
     // Federation owns: peer validation + signature verification
     const { signature, ...payload } = body;
-    await verifyPeerSignature(db, body.origin_relay, signature, new TextEncoder().encode(JSON.stringify(payload)));
+    await verifyPeerSignature(db, body.origin_relay, signature, new TextEncoder().encode(canonicalJson(payload)));
 
     // Check target agent exists locally
     const agent = db
@@ -847,7 +860,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
     // Federation owns: peer validation + signature verification
     const { signature, ...payload } = body;
-    await verifyPeerSignature(db, body.origin_relay, signature, new TextEncoder().encode(JSON.stringify(payload)), ["active", "suspended"]);
+    await verifyPeerSignature(db, body.origin_relay, signature, new TextEncoder().encode(canonicalJson(payload)), ["active", "suspended"]);
 
     // Relay owns: task queue update, WebSocket fan-out, trust update, credential issuance, settlement
     await deps.onTaskResultReceived({
@@ -875,7 +888,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
     // Federation owns: peer validation + signature verification
     const { signature, ...payload } = body;
-    await verifyPeerSignature(db, body.origin_relay, signature, new TextEncoder().encode(JSON.stringify(payload)), ["active", "suspended"]);
+    await verifyPeerSignature(db, body.origin_relay, signature, new TextEncoder().encode(canonicalJson(payload)), ["active", "suspended"]);
 
     // Relay owns: fee calculation and recording
     const result = await deps.onSettlementReceived({
