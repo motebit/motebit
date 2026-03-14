@@ -970,4 +970,124 @@ describe("Delegation E2E", () => {
     expect(s!.platform_fee).toBeCloseTo(0.052632, 4);
     expect(s!.amount_settled).toBeCloseTo(1.0, 4);
   });
+
+  // === Settlement Idempotency & Duplicate Receipt Prevention ===
+
+  it("duplicate receipt: second post returns already_settled, no duplicate settlement", async () => {
+    // Register worker agent with a service listing so settlement is created
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: workerMotebitId,
+        endpoint_url: "http://localhost:9999/mcp",
+        capabilities: ["stdio_mcp"],
+      }),
+    });
+
+    await relay.app.request(`/api/v1/agents/${workerMotebitId}/listing`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        capabilities: ["stdio_mcp"],
+        pricing: [{ capability: "stdio_mcp", unit_cost: 1.0, currency: "USD", per: "task" }],
+        sla: { max_latency_ms: 3000, availability_guarantee: 0.99 },
+        description: "Worker agent for idempotency test",
+      }),
+    });
+
+    const workerWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+    relay.connections.set(MOTEBIT_ID, [
+      { ws: workerWs as never, deviceId: "worker-device", capabilities: ["stdio_mcp"] },
+    ]);
+
+    // Submit task
+    const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        prompt: "Idempotency test task",
+        required_capabilities: ["stdio_mcp"],
+      }),
+    });
+    expect(taskRes.status).toBe(201);
+    const { task_id: taskId } = (await taskRes.json()) as { task_id: string };
+
+    // First receipt — should succeed and create settlement
+    const receipt = await makeReceipt(taskId);
+    const res1 = await relay.app.request(`/agent/${MOTEBIT_ID}/task/${taskId}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(receipt),
+    });
+    expect(res1.status).toBe(200);
+    const body1 = (await res1.json()) as { status: string };
+    expect(body1.status).not.toBe("already_settled");
+
+    // Second receipt (duplicate) — should return already_settled
+    const res2 = await relay.app.request(`/agent/${MOTEBIT_ID}/task/${taskId}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(receipt),
+    });
+    expect(res2.status).toBe(200);
+    const body2 = (await res2.json()) as { status: string };
+    expect(body2.status).toBe("already_settled");
+
+    // Verify only one settlement exists
+    const settleRes = await relay.app.request(`/agent/${MOTEBIT_ID}/settlements`, {
+      headers: AUTH_HEADER,
+    });
+    const settleBody = (await settleRes.json()) as {
+      summary: { settlement_count: number };
+      settlements: Array<Record<string, unknown>>;
+    };
+    const matching = settleBody.settlements.filter((s) => s.allocation_id === `x402-${taskId}`);
+    expect(matching).toHaveLength(1);
+  });
+
+  it("stale receipt: completed_at 2 hours after submitted_at is rejected with 400", async () => {
+    const workerWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+    relay.connections.set(MOTEBIT_ID, [
+      { ws: workerWs as never, deviceId: "worker-device", capabilities: ["stdio_mcp"] },
+    ]);
+
+    // Submit task
+    const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        prompt: "Stale receipt test task",
+        required_capabilities: ["stdio_mcp"],
+      }),
+    });
+    expect(taskRes.status).toBe(201);
+    const { task_id: taskId } = (await taskRes.json()) as { task_id: string };
+
+    // Build a receipt with completed_at 2 hours after submitted_at
+    const now = Date.now();
+    const unsigned = {
+      task_id: taskId,
+      motebit_id: workerMotebitId as unknown as MotebitId,
+      device_id: "worker-device" as unknown as DeviceId,
+      submitted_at: now,
+      completed_at: now + 2 * 60 * 60 * 1000, // 2 hours later — beyond the 1 hour window
+      status: "completed" as const,
+      result: "Stale result",
+      tools_used: ["shell_exec"],
+      memories_formed: 0,
+      prompt_hash: "abc123",
+      result_hash: "def456",
+    };
+    const staleReceipt = await signExecutionReceipt(unsigned, workerKeypair.privateKey);
+
+    const res = await relay.app.request(`/agent/${MOTEBIT_ID}/task/${taskId}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(staleReceipt),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain("timestamp outside acceptable window");
+  });
 });

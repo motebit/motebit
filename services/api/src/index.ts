@@ -487,6 +487,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       CREATE TABLE IF NOT EXISTS relay_settlements (
         settlement_id TEXT PRIMARY KEY,
         allocation_id TEXT NOT NULL UNIQUE,
+        task_id TEXT NOT NULL DEFAULT '',
         motebit_id TEXT NOT NULL DEFAULT '',
         receipt_hash TEXT NOT NULL DEFAULT '',
         ledger_hash TEXT,
@@ -498,6 +499,37 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       );
       CREATE INDEX IF NOT EXISTS idx_relay_settlements_alloc ON relay_settlements(allocation_id);
       CREATE INDEX IF NOT EXISTS idx_relay_settlements_motebit ON relay_settlements(motebit_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_settlements_dedup ON relay_settlements(task_id, motebit_id);
+  `);
+
+  // Migration: add x402 payment proof columns (safe on existing DBs — ALTER TABLE IF NOT EXISTS not
+  // supported by SQLite, so we check pragma table_info instead).
+  {
+    const cols = moteDb.db.prepare("PRAGMA table_info(relay_settlements)").all() as Array<{ name: string }>;
+    const colNames = new Set(cols.map((c) => c.name));
+    if (!colNames.has("x402_tx_hash")) {
+      moteDb.db.exec("ALTER TABLE relay_settlements ADD COLUMN x402_tx_hash TEXT");
+    }
+    if (!colNames.has("x402_network")) {
+      moteDb.db.exec("ALTER TABLE relay_settlements ADD COLUMN x402_network TEXT");
+    }
+  }
+
+  // Budget allocation tracking — prevents overdraft by recording locked funds at task submission
+  moteDb.db.exec(`
+      CREATE TABLE IF NOT EXISTS relay_allocations (
+        allocation_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL UNIQUE,
+        motebit_id TEXT NOT NULL,
+        amount_locked REAL NOT NULL,
+        currency TEXT NOT NULL DEFAULT 'USDC',
+        status TEXT NOT NULL DEFAULT 'locked',
+        created_at INTEGER NOT NULL,
+        settled_at INTEGER,
+        released_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_allocations_task ON relay_allocations(task_id);
+      CREATE INDEX IF NOT EXISTS idx_allocations_status ON relay_allocations(status) WHERE status = 'locked';
   `);
 
   // Collaborative plan proposal tables
@@ -657,6 +689,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       submitted_by?: string;
       /** Gross amount x402 charged at submission time (from listing price). */
       price_snapshot?: number;
+      /** x402 on-chain transaction hash captured from the payment settlement. */
+      x402_tx_hash?: string;
+      /** x402 network (CAIP-2) captured from the payment settlement. */
+      x402_network?: string;
       /** When set, this task was forwarded from a peer relay and the result should be returned there. */
       origin_relay?: string;
     }
@@ -684,6 +720,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
           "UPDATE relay_proposals SET status = 'expired', updated_at = ? WHERE status = 'pending' AND expires_at < ?",
         )
         .run(now, now);
+    } catch {
+      // Best-effort cleanup
+    }
+    // Release stale budget allocations locked > 1 hour with no settlement
+    try {
+      moteDb.db
+        .prepare(
+          "UPDATE relay_allocations SET status = 'released', released_at = ? WHERE status = 'locked' AND created_at < ?",
+        )
+        .run(now, now - 3_600_000);
     } catch {
       // Best-effort cleanup
     }
@@ -761,6 +807,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     }
   }
 
+  // Capture x402 settlement proof so the task handler can link it to the task queue entry.
+  // Same single-threaded pattern as currentPricing — set by hook, read by handler, no interleaving.
+  let lastSettleTxHash: string | undefined;
+  let lastSettleNetwork: string | undefined;
+
   {
     const { paymentMiddleware, x402ResourceServer } = await import("@x402/hono");
     const { ExactEvmScheme } = await import("@x402/evm/exact/server");
@@ -775,6 +826,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       network,
       new ExactEvmScheme(),
     );
+
+    resourceServer.onAfterSettle(async (ctx) => {
+      lastSettleTxHash = ctx.result.transaction;
+      lastSettleNetwork = ctx.result.network;
+    });
 
     // Single DB lookup per request. The wrapper sets currentPricing before
     // calling x402Gate; the price/payTo callbacks read it synchronously within
@@ -2658,12 +2714,35 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         ? unitCostAtSubmission / (1 - PLATFORM_FEE_RATE) // gross = what x402 charged (unit_cost + platform fee)
         : undefined;
 
+    // Capture x402 payment proof from the settlement hook (set during middleware).
+    // Read-and-clear so the next request starts fresh.
+    const x402TxHash = lastSettleTxHash;
+    const x402Net = lastSettleNetwork;
+    lastSettleTxHash = undefined;
+    lastSettleNetwork = undefined;
+
     taskQueue.set(taskId, {
       task,
       expiresAt: now + TASK_TTL_MS,
       submitted_by: submittedBy,
       price_snapshot: priceSnapshot,
+      x402_tx_hash: x402TxHash,
+      x402_network: x402Net,
     });
+
+    // Persist budget allocation so settlement can verify the lock exists.
+    // Prevents overdraft: callers cannot submit unbounded tasks without a price lock.
+    if (priceSnapshot && priceSnapshot > 0) {
+      try {
+        moteDb.db
+          .prepare(
+            "INSERT OR IGNORE INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, ?, 'locked', ?)",
+          )
+          .run(`x402-${taskId}`, taskId, motebitId, priceSnapshot, now);
+      } catch {
+        // Best-effort allocation — don't block task submission on accounting errors
+      }
+    }
 
     const requiredCaps = task.required_capabilities ?? [];
     const payload = JSON.stringify({ type: "task_request", task });
@@ -2951,6 +3030,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       });
     }
 
+    // Reject stale receipts — completed_at must be within 1 hour of submitted_at
+    if (receipt.completed_at && entry.task.submitted_at) {
+      const elapsed = receipt.completed_at - entry.task.submitted_at;
+      if (elapsed > 3_600_000 || elapsed < -60_000) { // 1 hour max, 1 min clock skew tolerance
+        throw new HTTPException(400, { message: "Receipt timestamp outside acceptable window" });
+      }
+    }
+
     // Cryptographic verification: resolve executing agent's public key and verify Ed25519 signature.
     // Try agent_registry first (service agents), then fall back to device records (personal agents).
     let pubKeyHex: string | undefined;
@@ -2993,6 +3080,17 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         : receipt.status === "denied"
           ? AgentTaskStatus.Denied
           : AgentTaskStatus.Failed;
+
+    // Idempotency: if this task+agent already has a settlement, skip all side effects
+    const existingSettlement = moteDb.db
+      .prepare(
+        "SELECT settlement_id FROM relay_settlements WHERE task_id = ? AND motebit_id = ?",
+      )
+      .get(taskId, motebitId) as { settlement_id: string } | undefined;
+    if (existingSettlement) {
+      // Already settled — return success (idempotent) without duplicate trust/settlement/credential
+      return c.json({ status: "already_settled" });
+    }
 
     // Update trust record: increment task counts and evaluate level transitions.
     // This is the feedback loop that feeds the semiring computation graph.
@@ -3132,18 +3230,38 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     // Uses the price_snapshot captured at task submission time so the relay's
     // accounting matches what x402 actually charged. If the agent changed pricing
     // between submission and receipt delivery, we settle at the original price.
+    //
+    // Consumes the persistent allocation if one exists (prevents double-settlement).
+    //
+    // Settlement and credential issuance are wrapped in a single SQLite transaction
+    // so that if settlement DB insert fails, the credential is not issued either.
+    // This prevents orphaned credentials for unrecorded settlements.
+    let credential_id: string | null = null;
     {
       try {
+        // Check for a persistent allocation created at task submission time.
+        // If the allocation is already settled/released, skip re-settlement.
+        const persistentAlloc = moteDb.db
+          .prepare(
+            "SELECT * FROM relay_allocations WHERE task_id = ? AND status = 'locked'",
+          )
+          .get(taskId) as
+          | { allocation_id: string; amount_locked: number; motebit_id: string }
+          | undefined;
+
         // Gross amount = what x402 charged the caller (unit_cost + platform fee).
-        // Prefers the snapshot captured at submission time; falls back to current
-        // listing price for tasks submitted before snapshotting was deployed.
+        // Prefers the persistent allocation amount, then the in-memory snapshot,
+        // then falls back to current listing price for legacy tasks.
         const fallbackUnitCost = getListingUnitCost(receipt.motebit_id as string);
         const grossAmount =
+          persistentAlloc?.amount_locked ??
           entry.price_snapshot ??
           (fallbackUnitCost > 0 ? fallbackUnitCost / (1 - PLATFORM_FEE_RATE) : 0);
 
         const settlementId = asSettlementId(crypto.randomUUID());
-        const allocationId = asAllocationId(`x402-${taskId}`);
+        const allocationId = persistentAlloc
+          ? asAllocationId(persistentAlloc.allocation_id)
+          : asAllocationId(`x402-${taskId}`);
         const allocation: BudgetAllocation = {
           allocation_id: allocationId,
           goal_id: asGoalId(taskId),
@@ -3156,85 +3274,121 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
         const settlement = settleOnReceipt(allocation, receipt, null, settlementId);
 
-        moteDb.db
-          .prepare(
-            `INSERT INTO relay_settlements
-             (settlement_id, allocation_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            settlement.settlement_id,
-            settlement.allocation_id,
-            motebitId,
-            settlement.receipt_hash,
-            settlement.ledger_hash,
-            settlement.amount_settled,
-            settlement.platform_fee,
-            settlement.platform_fee_rate,
-            settlement.status,
-            settlement.settled_at,
+        // Prepare credential data outside the transaction (credential issuance is async).
+        // Only issue credential for completed receipts.
+        let credentialRow: {
+          credential_id: string;
+          subject: string;
+          issuer: string;
+          type: string;
+          json: string;
+          issued_at: number;
+        } | null = null;
+
+        if (receipt.status === "completed") {
+          const latencyRows = moteDb.db
+            .prepare(
+              "SELECT latency_ms FROM relay_latency_stats WHERE remote_motebit_id = ? ORDER BY recorded_at DESC LIMIT 100",
+            )
+            .all(receipt.motebit_id as string) as Array<{ latency_ms: number }>;
+          const avgLatency =
+            latencyRows.length > 0
+              ? latencyRows.reduce((a, r) => a + r.latency_ms, 0) / latencyRows.length
+              : receipt.completed_at && receipt.submitted_at
+                ? receipt.completed_at - receipt.submitted_at
+                : 0;
+
+          const subjectDid = pubKeyHex
+            ? hexPublicKeyToDidKey(pubKeyHex)
+            : `did:motebit:${receipt.motebit_id as string}`;
+
+          const relayKeys = getRelayKeypair(relayIdentity);
+          const vc = await issueReputationCredential(
+            {
+              success_rate: 1.0,
+              avg_latency_ms: avgLatency,
+              task_count: latencyRows.length + 1,
+              trust_score: 1.0,
+              availability: 1.0,
+              measured_at: Date.now(),
+            },
+            relayKeys.privateKey,
+            relayKeys.publicKey,
+            subjectDid,
           );
+
+          const credType =
+            vc.type.find((t) => t !== "VerifiableCredential") ?? "VerifiableCredential";
+          credentialRow = {
+            credential_id: crypto.randomUUID(),
+            subject: receipt.motebit_id as string,
+            issuer: vc.issuer,
+            type: credType,
+            json: JSON.stringify(vc),
+            issued_at: Date.now(),
+          };
+        }
+
+        // Atomic transaction: settlement + credential (if applicable) + allocation update.
+        // If settlement INSERT fails, credential is not issued — prevents orphaned credentials.
+        // Uses BEGIN/COMMIT/ROLLBACK since DatabaseDriver doesn't expose .transaction().
+        moteDb.db.exec("BEGIN");
+        try {
+          moteDb.db
+            .prepare(
+              `INSERT OR IGNORE INTO relay_settlements
+               (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, x402_tx_hash, x402_network)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              settlement.settlement_id,
+              settlement.allocation_id,
+              taskId,
+              motebitId,
+              settlement.receipt_hash,
+              settlement.ledger_hash,
+              settlement.amount_settled,
+              settlement.platform_fee,
+              settlement.platform_fee_rate,
+              settlement.status,
+              settlement.settled_at,
+              entry.x402_tx_hash ?? null,
+              entry.x402_network ?? null,
+            );
+
+          // Mark the persistent allocation as settled so it cannot be double-spent
+          if (persistentAlloc) {
+            moteDb.db
+              .prepare(
+                "UPDATE relay_allocations SET status = 'settled', settled_at = ? WHERE task_id = ?",
+              )
+              .run(Date.now(), taskId);
+          }
+
+          if (credentialRow) {
+            moteDb.db
+              .prepare(
+                `INSERT INTO relay_credentials (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at)
+                 VALUES (?, ?, ?, ?, ?, ?)`,
+              )
+              .run(
+                credentialRow.credential_id,
+                credentialRow.subject,
+                credentialRow.issuer,
+                credentialRow.type,
+                credentialRow.json,
+                credentialRow.issued_at,
+              );
+            credential_id = credentialRow.credential_id;
+          }
+
+          moteDb.db.exec("COMMIT");
+        } catch (txnErr) {
+          moteDb.db.exec("ROLLBACK");
+          throw txnErr;
+        }
       } catch {
         // Best-effort settlement audit — don't block receipt delivery on accounting errors
-      }
-    }
-
-    // Issue a reputation credential for the executing agent on successful receipt
-    let credential_id: string | null = null;
-    if (receipt.status === "completed") {
-      try {
-        // Compute agent reputation stats from latency records + receipt data
-        const latencyRows = moteDb.db
-          .prepare(
-            "SELECT latency_ms FROM relay_latency_stats WHERE remote_motebit_id = ? ORDER BY recorded_at DESC LIMIT 100",
-          )
-          .all(receipt.motebit_id as string) as Array<{ latency_ms: number }>;
-        const avgLatency =
-          latencyRows.length > 0
-            ? latencyRows.reduce((a, r) => a + r.latency_ms, 0) / latencyRows.length
-            : receipt.completed_at && receipt.submitted_at
-              ? receipt.completed_at - receipt.submitted_at
-              : 0;
-
-        // Derive subject DID from the executing agent's public key
-        const subjectDid = pubKeyHex
-          ? hexPublicKeyToDidKey(pubKeyHex)
-          : `did:motebit:${receipt.motebit_id as string}`;
-
-        const relayKeys = getRelayKeypair(relayIdentity);
-        const vc = await issueReputationCredential(
-          {
-            success_rate: 1.0, // This receipt succeeded
-            avg_latency_ms: avgLatency,
-            task_count: latencyRows.length + 1,
-            trust_score: 1.0,
-            availability: 1.0,
-            measured_at: Date.now(),
-          },
-          relayKeys.privateKey,
-          relayKeys.publicKey,
-          subjectDid,
-        );
-
-        // Store the credential
-        credential_id = crypto.randomUUID();
-        const credentialType =
-          vc.type.find((t) => t !== "VerifiableCredential") ?? "VerifiableCredential";
-        moteDb.db
-          .prepare(
-            `INSERT INTO relay_credentials (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            credential_id,
-            receipt.motebit_id as string,
-            vc.issuer,
-            credentialType,
-            JSON.stringify(vc),
-            Date.now(),
-          );
-      } catch {
-        // Best-effort credential issuance — don't block receipt delivery
       }
     }
 
