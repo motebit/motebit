@@ -112,6 +112,7 @@ import {
 import type { VerifiableCredential, KeySuccessionRecord } from "@motebit/crypto";
 import {
   graphRankCandidates,
+  explainedRankCandidates,
   settleOnReceipt,
   computeTrustClosure,
   findTrustedRoute,
@@ -886,6 +887,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   app.use("/api/v1/agents/:motebitId/listing", rateLimitMiddleware(readLimiter));
   app.use("/agent/:motebitId/capabilities", rateLimitMiddleware(readLimiter));
   app.use("/agent/:motebitId/settlements", rateLimitMiddleware(readLimiter));
+  app.use("/api/v1/agents/:motebitId/trust-closure", rateLimitMiddleware(readLimiter));
+  app.use("/api/v1/agents/:motebitId/path-to/*", rateLimitMiddleware(readLimiter));
+  app.use("/api/v1/agents/:motebitId/graph", rateLimitMiddleware(readLimiter));
+  app.use("/api/v1/agents/:motebitId/routing-explanation", rateLimitMiddleware(readLimiter));
 
   // Write endpoints: task submission, result, ledger (30 req/min)
   app.use("/agent/:motebitId/task", rateLimitMiddleware(writeLimiter));
@@ -1648,7 +1653,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       motebitId,
     );
     const peerEdges = fetchPeerEdges();
-    const ranked = graphRankCandidates(asMotebitId(motebitId), profiles, requirements, {
+    const ranked = explainedRankCandidates(asMotebitId(motebitId), profiles, requirements, {
       peerEdges,
     });
     return c.json({ motebit_id: motebitId, scores: ranked });

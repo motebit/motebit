@@ -65,7 +65,7 @@ packages/
   planner/           PlanEngine: goal decomposition, reflection, plan adjustment
   voice/             Voice pipeline: VAD, STT, TTS adapters
   github-action/     GitHub Action for identity verification
-  market/            Budget allocation (estimateCost, allocateBudget), settlement (settleOnReceipt), reputation scoring, graph-based routing (graphRankCandidates, computeTrustClosure, findTrustedRoute)
+  market/            Budget allocation (estimateCost, allocateBudget), settlement (settleOnReceipt), reputation scoring, graph-based routing (graphRankCandidates, explainedRankCandidates, computeTrustClosure, findTrustedRoute)
   semiring/          Trust Semiring Algebra — generic semiring computation graph for agent network routing. Semiring<T> interface, concrete semirings (Trust, Cost, Latency, Bottleneck, Reliability, Boolean, RegulatoryRisk), product/record combinators, WeightedDigraph<T>, generic traversal (Bellman-Ford, Floyd-Warshall), provenance tracking, agent network bridge (RouteWeight: trust × cost × latency × reliability × regulatory_risk)
   policy-invariants/ Clamping rules, state bounds validation
 
@@ -74,7 +74,7 @@ spec/
   execution-ledger-v1.md  motebit/execution-ledger@1.0 specification — goal execution timeline, signed manifests
 
 services/
-  api/             Sync relay server: REST + WebSocket, device auth, receipt verification, budget/settlement, credential issuance, rate limiting
+  api/             Sync relay server: REST + WebSocket, device auth, receipt verification, budget/settlement, credential issuance, rate limiting, graph query endpoints (trust-closure, path-to, graph, routing-explanation with provenance), multi-hop delegation edge caching (relay_delegation_edges)
   summarize/       Conversation summarization service
   web-search/      Reference service: web search + URL reading via MCP
 ```
