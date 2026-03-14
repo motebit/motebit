@@ -107,6 +107,8 @@ import {
   verifyVerifiableCredential,
   createPresentation,
   verifyKeySuccession,
+  sign,
+  verify,
 } from "@motebit/crypto";
 /* eslint-enable no-restricted-imports */
 import type { VerifiableCredential, KeySuccessionRecord } from "@motebit/crypto";
@@ -230,6 +232,13 @@ export interface SyncRelayConfig {
   verifyDeviceSignature?: boolean; // When true, uses Ed25519 signed token verification (default: true)
   /** x402 on-chain payment for task submission. Required in production. */
   x402: X402Config;
+  /** Federation configuration. Omit to disable federation. */
+  federation?: {
+    /** Display name for this relay in the federation. */
+    displayName?: string;
+    /** Public endpoint URL for this relay (how peers reach us). */
+    endpointUrl?: string;
+  };
 }
 
 export interface ConnectedDevice {
@@ -313,6 +322,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     enableDeviceAuth = true,
     verifyDeviceSignature = true,
     x402: x402Config,
+    federation: federationConfig,
   } = config;
 
   const moteDb: MotebitDatabase = await openMotebitDatabase(dbPath);
@@ -431,6 +441,23 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         private_key_hex  TEXT NOT NULL,
         did              TEXT NOT NULL,
         created_at       INTEGER NOT NULL
+      );
+  `);
+
+  // Relay peers — bilateral peering relationships for federation (relay-federation-v1.0 §3.4)
+  moteDb.db.exec(`
+      CREATE TABLE IF NOT EXISTS relay_peers (
+        peer_relay_id     TEXT PRIMARY KEY,
+        public_key        TEXT NOT NULL,
+        endpoint_url      TEXT NOT NULL,
+        display_name      TEXT,
+        state             TEXT NOT NULL DEFAULT 'pending',
+        peered_at         INTEGER,
+        last_heartbeat_at INTEGER,
+        missed_heartbeats INTEGER NOT NULL DEFAULT 0,
+        agent_count       INTEGER NOT NULL DEFAULT 0,
+        trust_score       REAL NOT NULL DEFAULT 0.5,
+        nonce             TEXT
       );
   `);
 
@@ -981,6 +1008,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // Expensive endpoints: presentation bundling, bootstrap (10 req/min)
   app.use("/api/v1/agents/:motebitId/presentation", rateLimitMiddleware(expensiveLimiter));
   app.use("/api/v1/agents/bootstrap", rateLimitMiddleware(expensiveLimiter));
+
+  // Federation peering endpoints (30 req/min — write tier)
+  app.use("/federation/v1/peer/*", rateLimitMiddleware(writeLimiter));
 
   if (apiToken != null && apiToken !== "") {
     app.use("/identity/*", bearerAuth({ token: apiToken }));
@@ -1740,6 +1770,249 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       public_key: relayIdentity.publicKeyHex,
       did: relayIdentity.did,
     });
+  });
+
+  // --- Federation: peering protocol (relay-federation-v1.0 §3.1–3.4) ---
+
+  // POST /federation/v1/peer/propose — Step 1 of peering handshake
+  app.post("/federation/v1/peer/propose", async (c) => {
+    const body = await c.req.json<{
+      relay_id?: string;
+      public_key?: string;
+      endpoint_url?: string;
+      display_name?: string;
+      nonce?: string;
+    }>();
+
+    const { relay_id, public_key, endpoint_url, display_name, nonce } = body;
+    if (!relay_id || !public_key) {
+      throw new HTTPException(400, { message: "relay_id and public_key are required" });
+    }
+    if (!endpoint_url) {
+      throw new HTTPException(400, { message: "endpoint_url is required" });
+    }
+    if (!nonce) {
+      throw new HTTPException(400, { message: "nonce is required" });
+    }
+
+    // Check if peer already exists in active or pending state
+    const existing = moteDb.db
+      .prepare("SELECT state FROM relay_peers WHERE peer_relay_id = ?")
+      .get(relay_id) as { state: string } | undefined;
+    if (existing && (existing.state === "active" || existing.state === "pending")) {
+      throw new HTTPException(409, {
+        message: `Peer already exists in ${existing.state} state`,
+      });
+    }
+
+    // Generate our nonce for the challenge
+    const ourNonceBytes = new Uint8Array(32);
+    crypto.getRandomValues(ourNonceBytes);
+    const ourNonce = bytesToHex(ourNonceBytes);
+
+    // Sign their nonce with our private key (proves we hold our key)
+    const theirNonceBytes = hexToBytes(nonce);
+    const challengeSig = await sign(theirNonceBytes, relayIdentity.privateKey);
+    const challengeHex = bytesToHex(challengeSig);
+
+    // Upsert peer as pending (handles re-proposal after removal)
+    moteDb.db
+      .prepare(
+        `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, display_name, state, nonce, missed_heartbeats, agent_count, trust_score)
+         VALUES (?, ?, ?, ?, 'pending', ?, 0, 0, 0.5)
+         ON CONFLICT(peer_relay_id) DO UPDATE SET
+           public_key = excluded.public_key,
+           endpoint_url = excluded.endpoint_url,
+           display_name = excluded.display_name,
+           state = 'pending',
+           nonce = excluded.nonce,
+           missed_heartbeats = 0`,
+      )
+      .run(relay_id, public_key, endpoint_url, display_name ?? null, ourNonce);
+
+    return c.json({
+      relay_id: relayIdentity.relayMotebitId,
+      public_key: relayIdentity.publicKeyHex,
+      endpoint_url: federationConfig?.endpointUrl ?? "self",
+      display_name: federationConfig?.displayName ?? null,
+      nonce: ourNonce,
+      challenge: challengeHex,
+    });
+  });
+
+  // POST /federation/v1/peer/confirm — Step 3 of peering handshake
+  app.post("/federation/v1/peer/confirm", async (c) => {
+    const body = await c.req.json<{
+      relay_id?: string;
+      challenge_response?: string;
+    }>();
+
+    const { relay_id, challenge_response } = body;
+    if (!relay_id || !challenge_response) {
+      throw new HTTPException(400, {
+        message: "relay_id and challenge_response are required",
+      });
+    }
+
+    // Look up pending peer
+    const peer = moteDb.db
+      .prepare("SELECT * FROM relay_peers WHERE peer_relay_id = ? AND state = 'pending'")
+      .get(relay_id) as
+      | { peer_relay_id: string; public_key: string; nonce: string | null }
+      | undefined;
+    if (!peer) {
+      throw new HTTPException(404, { message: "No pending peer found for this relay_id" });
+    }
+    if (!peer.nonce) {
+      throw new HTTPException(400, { message: "No nonce stored for this peer" });
+    }
+
+    // Verify challenge_response: peer signed our nonce with their private key
+    const nonceBytes = hexToBytes(peer.nonce);
+    const sigBytes = hexToBytes(challenge_response);
+    const peerPubKey = hexToBytes(peer.public_key);
+    const valid = await verify(sigBytes, nonceBytes, peerPubKey);
+    if (!valid) {
+      // Discard the peer on failed verification
+      moteDb.db.prepare("DELETE FROM relay_peers WHERE peer_relay_id = ?").run(relay_id);
+      throw new HTTPException(403, { message: "Challenge response verification failed" });
+    }
+
+    // Activate peer
+    const now = Date.now();
+    moteDb.db
+      .prepare(
+        `UPDATE relay_peers
+         SET state = 'active', peered_at = ?, last_heartbeat_at = ?, nonce = NULL
+         WHERE peer_relay_id = ?`,
+      )
+      .run(now, now, relay_id);
+
+    return c.json({ status: "active", peered_at: now });
+  });
+
+  // POST /federation/v1/peer/heartbeat — Liveness + metadata exchange
+  app.post("/federation/v1/peer/heartbeat", async (c) => {
+    const body = await c.req.json<{
+      relay_id?: string;
+      timestamp?: number;
+      agent_count?: number;
+      signature?: string;
+    }>();
+
+    const { relay_id, timestamp, agent_count, signature } = body;
+    if (!relay_id || timestamp == null || agent_count == null || !signature) {
+      throw new HTTPException(400, {
+        message: "relay_id, timestamp, agent_count, and signature are required",
+      });
+    }
+
+    // Look up peer in active or suspended state
+    const peer = moteDb.db
+      .prepare(
+        "SELECT * FROM relay_peers WHERE peer_relay_id = ? AND state IN ('active', 'suspended')",
+      )
+      .get(relay_id) as { peer_relay_id: string; public_key: string; state: string } | undefined;
+    if (!peer) {
+      throw new HTTPException(404, { message: "No active or suspended peer found" });
+    }
+
+    // Verify signature over relay_id + timestamp
+    const encoder = new TextEncoder();
+    const messageBytes = encoder.encode(`${relay_id}${timestamp}`);
+    const sigBytes = hexToBytes(signature);
+    const peerPubKey = hexToBytes(peer.public_key);
+    const valid = await verify(sigBytes, messageBytes, peerPubKey);
+    if (!valid) {
+      throw new HTTPException(403, { message: "Heartbeat signature verification failed" });
+    }
+
+    // Update peer: reset missed heartbeats, update agent_count
+    const now = Date.now();
+    const newState = peer.state === "suspended" ? "active" : peer.state;
+    moteDb.db
+      .prepare(
+        `UPDATE relay_peers
+         SET last_heartbeat_at = ?, missed_heartbeats = 0, agent_count = ?, state = ?
+         WHERE peer_relay_id = ?`,
+      )
+      .run(now, agent_count, newState, relay_id);
+
+    // Sign our response heartbeat
+    const ourTimestamp = Date.now();
+    const localAgentCount = (
+      moteDb.db.prepare("SELECT COUNT(*) as cnt FROM agent_registry").get() as { cnt: number }
+    ).cnt;
+    const responseMsg = encoder.encode(`${relayIdentity.relayMotebitId}${ourTimestamp}`);
+    const responseSig = await sign(responseMsg, relayIdentity.privateKey);
+
+    return c.json({
+      relay_id: relayIdentity.relayMotebitId,
+      timestamp: ourTimestamp,
+      agent_count: localAgentCount,
+      signature: bytesToHex(responseSig),
+    });
+  });
+
+  // POST /federation/v1/peer/remove — Unilateral peer removal
+  app.post("/federation/v1/peer/remove", async (c) => {
+    const body = await c.req.json<{
+      relay_id?: string;
+      signature?: string;
+    }>();
+
+    const { relay_id, signature } = body;
+    if (!relay_id || !signature) {
+      throw new HTTPException(400, { message: "relay_id and signature are required" });
+    }
+
+    // Look up peer
+    const peer = moteDb.db
+      .prepare("SELECT * FROM relay_peers WHERE peer_relay_id = ?")
+      .get(relay_id) as { peer_relay_id: string; public_key: string; state: string } | undefined;
+    if (!peer) {
+      throw new HTTPException(404, { message: "Peer not found" });
+    }
+
+    // Verify signature over relay_id
+    const encoder = new TextEncoder();
+    const messageBytes = encoder.encode(relay_id);
+    const sigBytes = hexToBytes(signature);
+    const peerPubKey = hexToBytes(peer.public_key);
+    const valid = await verify(sigBytes, messageBytes, peerPubKey);
+    if (!valid) {
+      throw new HTTPException(403, { message: "Removal signature verification failed" });
+    }
+
+    moteDb.db
+      .prepare("UPDATE relay_peers SET state = 'removed' WHERE peer_relay_id = ?")
+      .run(relay_id);
+
+    return c.json({ status: "removed" });
+  });
+
+  // GET /federation/v1/peers — List all peers (admin/debugging)
+  // eslint-disable-next-line @typescript-eslint/require-await -- Hono handler, sync data
+  app.get("/federation/v1/peers", async (c) => {
+    const rows = moteDb.db
+      .prepare(
+        `SELECT peer_relay_id, public_key, endpoint_url, display_name, state,
+                peered_at, last_heartbeat_at, missed_heartbeats, agent_count, trust_score
+         FROM relay_peers`,
+      )
+      .all() as Array<{
+      peer_relay_id: string;
+      public_key: string;
+      endpoint_url: string;
+      display_name: string | null;
+      state: string;
+      peered_at: number | null;
+      last_heartbeat_at: number | null;
+      missed_heartbeats: number;
+      agent_count: number;
+      trust_score: number;
+    }>;
+    return c.json({ peers: rows });
   });
 
   // --- Gradient: intelligence gradient snapshots ---
