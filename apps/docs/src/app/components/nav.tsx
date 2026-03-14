@@ -25,7 +25,14 @@ export function Nav() {
           href="/"
           className="flex items-center gap-2 text-zinc-900/90 dark:text-zinc-100/90 text-[13px] font-medium tracking-tight"
         >
-          <img src="/motebit-mark.svg" alt="" width={20} height={20} />
+          <img src="/motebit-mark.svg" alt="" width={20} height={20} className="dark:hidden" />
+          <img
+            src="/motebit-mark-dark.svg"
+            alt=""
+            width={20}
+            height={20}
+            className="hidden dark:block"
+          />
           Motebit
         </Link>
         <div className="flex items-center gap-5">
