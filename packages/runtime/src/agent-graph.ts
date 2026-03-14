@@ -24,6 +24,7 @@ import {
   addDelegationEdges,
   mostTrustedPath,
   cheapestPath,
+  lowestRiskPath,
   rankReachableAgents,
   projectGraph,
   TrustSemiring,
@@ -121,6 +122,12 @@ export class AgentGraphManager {
   async cheapestPath(targetId: string): Promise<{ cost: number; path: string[] } | null> {
     const graph = await this.getGraph();
     return cheapestPath(graph, this.motebitId, targetId);
+  }
+
+  /** Find the lowest regulatory risk path to a target agent. */
+  async lowestRiskPath(targetId: string): Promise<{ risk: number; path: string[] } | null> {
+    const graph = await this.getGraph();
+    return lowestRiskPath(graph, this.motebitId, targetId);
   }
 
   /**
