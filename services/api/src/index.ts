@@ -94,7 +94,7 @@ import {
   asSettlementId,
   asGoalId,
 } from "@motebit/sdk";
-import type { AgentTask, MotebitId, NodeId, SyncPlan, SyncPlanStep } from "@motebit/sdk";
+import type { AgentTask, MotebitId, NodeId } from "@motebit/sdk";
 import type { WSContext } from "hono/ws";
 /* eslint-disable no-restricted-imports -- Relay service generates its own keypair (not a user surface) */
 import {
@@ -119,6 +119,8 @@ import {
 import type { RelayIdentity } from "./federation.js";
 import { registerCredentialRoutes, getRelayKeypair } from "./credentials.js";
 import { createTaskRouter } from "./task-routing.js";
+import { createDataSyncTables, registerDataSyncRoutes, upsertSyncConversation, upsertSyncMessage } from "./data-sync.js";
+import { createPairingTables, registerPairingRoutes } from "./pairing.js";
 import {
   graphRankCandidates,
   explainedRankCandidates,
@@ -309,17 +311,7 @@ class RateLimiter {
 
 // === Pairing Code Generator ===
 
-const PAIRING_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // 30 chars, no ambiguous 0/O/1/I/L
-const PAIRING_CODE_LENGTH = 6;
-const PAIRING_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-function generatePairingCode(): string {
-  const bytes = new Uint8Array(PAIRING_CODE_LENGTH);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes)
-    .map((b) => PAIRING_ALPHABET[b % PAIRING_ALPHABET.length])
-    .join("");
-}
+// Pairing constants and code generation moved to pairing.ts
 
 export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRelay> {
   const {
@@ -336,94 +328,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const eventStore = new EventStore(moteDb.eventStore);
   const identityManager = new IdentityManager(moteDb.identityStorage, eventStore);
 
-  // Create pairing_sessions table
-  moteDb.db.exec(`
-      CREATE TABLE IF NOT EXISTS pairing_sessions (
-        pairing_id TEXT PRIMARY KEY,
-        motebit_id TEXT NOT NULL,
-        initiator_device_id TEXT NOT NULL,
-        pairing_code TEXT NOT NULL UNIQUE,
-        status TEXT NOT NULL DEFAULT 'pending',
-        claiming_device_name TEXT,
-        claiming_public_key TEXT,
-        approved_device_id TEXT,
-        approved_device_token TEXT,
-        created_at INTEGER NOT NULL,
-        expires_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_pairing_code ON pairing_sessions (pairing_code);
-  `);
+  // Pairing sessions table
+  createPairingTables(moteDb.db);
 
-  // Create conversation sync tables (relay-side storage)
-  moteDb.db.exec(`
-      CREATE TABLE IF NOT EXISTS sync_conversations (
-        conversation_id TEXT PRIMARY KEY,
-        motebit_id TEXT NOT NULL,
-        started_at INTEGER NOT NULL,
-        last_active_at INTEGER NOT NULL,
-        title TEXT,
-        summary TEXT,
-        message_count INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE INDEX IF NOT EXISTS idx_sync_conv_motebit
-        ON sync_conversations (motebit_id, last_active_at DESC);
-
-      CREATE TABLE IF NOT EXISTS sync_conversation_messages (
-        message_id TEXT PRIMARY KEY,
-        conversation_id TEXT NOT NULL,
-        motebit_id TEXT NOT NULL,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        tool_calls TEXT,
-        tool_call_id TEXT,
-        created_at INTEGER NOT NULL,
-        token_estimate INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE INDEX IF NOT EXISTS idx_sync_conv_messages
-        ON sync_conversation_messages (conversation_id, created_at ASC);
-  `);
-
-  // Create plan sync tables (relay-side storage)
-  moteDb.db.exec(`
-      CREATE TABLE IF NOT EXISTS sync_plans (
-        plan_id TEXT PRIMARY KEY,
-        goal_id TEXT NOT NULL,
-        motebit_id TEXT NOT NULL,
-        title TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'active',
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        current_step_index INTEGER NOT NULL DEFAULT 0,
-        total_steps INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE INDEX IF NOT EXISTS idx_sync_plans_motebit
-        ON sync_plans (motebit_id, updated_at DESC);
-
-      CREATE TABLE IF NOT EXISTS sync_plan_steps (
-        step_id TEXT PRIMARY KEY,
-        plan_id TEXT NOT NULL,
-        motebit_id TEXT NOT NULL,
-        ordinal INTEGER NOT NULL,
-        description TEXT NOT NULL,
-        prompt TEXT NOT NULL,
-        depends_on TEXT NOT NULL DEFAULT '[]',
-        optional INTEGER NOT NULL DEFAULT 0,
-        status TEXT NOT NULL DEFAULT 'pending',
-        required_capabilities TEXT,
-        delegation_task_id TEXT,
-        result_summary TEXT,
-        error_message TEXT,
-        tool_calls_made INTEGER NOT NULL DEFAULT 0,
-        started_at INTEGER,
-        completed_at INTEGER,
-        retry_count INTEGER NOT NULL DEFAULT 0,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_sync_plan_steps_motebit
-        ON sync_plan_steps (motebit_id, updated_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_sync_plan_steps_plan
-        ON sync_plan_steps (plan_id, ordinal ASC);
-  `);
+  // Create conversation + plan sync tables (extracted to data-sync.ts)
+  createDataSyncTables(moteDb.db);
 
   // Create agent discovery registry table
   moteDb.db.exec(`
@@ -654,23 +563,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // Startup cleanup: purge expired blacklist entries
   moteDb.db.prepare("DELETE FROM relay_token_blacklist WHERE expires_at < ?").run(Date.now());
-
-  // Extend sync tables for collaborative fields (column-exists check pattern)
-  try {
-    moteDb.db.exec("ALTER TABLE sync_plan_steps ADD COLUMN assigned_motebit_id TEXT DEFAULT NULL");
-  } catch {
-    /* column may already exist */
-  }
-  try {
-    moteDb.db.exec("ALTER TABLE sync_plans ADD COLUMN proposal_id TEXT DEFAULT NULL");
-  } catch {
-    /* column may already exist */
-  }
-  try {
-    moteDb.db.exec("ALTER TABLE sync_plans ADD COLUMN collaborative INTEGER DEFAULT 0");
-  } catch {
-    /* column may already exist */
-  }
 
   // --- Revocation callback helpers ---
 
@@ -1230,7 +1122,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
             if (msg.type === "push_conversations" && Array.isArray(msg.conversations)) {
               for (const conv of msg.conversations) {
-                upsertSyncConversation(conv);
+                upsertSyncConversation(moteDb.db, conv);
               }
               ws.send(
                 JSON.stringify({ type: "ack_conversations", accepted: msg.conversations.length }),
@@ -1252,7 +1144,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
             if (msg.type === "push_messages" && Array.isArray(msg.messages)) {
               for (const m of msg.messages) {
-                upsertSyncMessage(m);
+                upsertSyncMessage(moteDb.db, m);
               }
               ws.send(JSON.stringify({ type: "ack_messages", accepted: msg.messages.length }));
 
@@ -2033,554 +1925,21 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     return c.json(identity);
   });
 
-  // --- Pairing: helper to verify device auth and extract motebitId ---
-  async function verifyPairingAuth(
-    authHeader: string | undefined,
-  ): Promise<{ motebitId: string; deviceId: string } | null> {
-    if (authHeader == null || !authHeader.startsWith("Bearer ")) return null;
-    const token = authHeader.slice(7);
-
-    // Master token bypass
-    if (apiToken != null && apiToken !== "" && token === apiToken) return null; // master token can't initiate pairing (no motebitId context)
-
-    if (!token.includes(".")) return null; // must be a signed token
-
-    const claims = parseTokenPayloadUnsafe(token);
-    if (!claims || !claims.mid || !claims.did) return null;
-
-    const verified = await verifySignedTokenForDevice(
-      token,
-      claims.mid,
-      identityManager,
-      "device:auth",
-      isTokenBlacklisted,
-      isAgentRevoked,
-    );
-    if (!verified) return null;
-
-    return { motebitId: claims.mid, deviceId: claims.did };
-  }
-
-  // --- Pairing: initiate (Device A, authenticated) ---
-  app.post("/pairing/initiate", async (c) => {
-    const device = await verifyPairingAuth(c.req.header("authorization"));
-    if (!device) {
-      throw new HTTPException(401, { message: "Signed device token required for pairing" });
-    }
-
-    const pairingId = crypto.randomUUID();
-    const pairingCode = generatePairingCode();
-    const now = Date.now();
-    const expiresAt = now + PAIRING_TTL_MS;
-
-    moteDb.db
-      .prepare(
-        `
-      INSERT INTO pairing_sessions (pairing_id, motebit_id, initiator_device_id, pairing_code, status, created_at, expires_at)
-      VALUES (?, ?, ?, ?, 'pending', ?, ?)
-    `,
-      )
-      .run(pairingId, device.motebitId, device.deviceId, pairingCode, now, expiresAt);
-
-    return c.json({ pairing_id: pairingId, pairing_code: pairingCode, expires_at: expiresAt }, 201);
+  // --- Pairing routes (extracted to pairing.ts) ---
+  registerPairingRoutes({
+    db: moteDb.db,
+    app,
+    apiToken,
+    identityManager,
+    parseTokenPayloadUnsafe,
+    verifySignedTokenForDevice,
+    isTokenBlacklisted,
+    isAgentRevoked,
   });
 
-  // --- Pairing: claim (Device B, no auth) ---
-  app.post("/pairing/claim", async (c) => {
-    const body = await c.req.json<{
-      pairing_code: string;
-      device_name: string;
-      public_key: string;
-    }>();
-    const { pairing_code, device_name, public_key } = body;
 
-    if (!pairing_code || typeof pairing_code !== "string" || !/^[A-Z2-9]{6}$/.test(pairing_code)) {
-      throw new HTTPException(400, { message: "Invalid pairing code format" });
-    }
-    if (!device_name || typeof device_name !== "string") {
-      throw new HTTPException(400, { message: "Missing device_name" });
-    }
-    if (!public_key || typeof public_key !== "string" || !/^[0-9a-f]{64}$/i.test(public_key)) {
-      throw new HTTPException(400, { message: "Invalid public_key — must be 64-char hex string" });
-    }
-
-    const session = moteDb.db
-      .prepare(
-        `
-      SELECT * FROM pairing_sessions WHERE pairing_code = ?
-    `,
-      )
-      .get(pairing_code) as Record<string, unknown> | undefined;
-
-    if (!session) {
-      throw new HTTPException(404, { message: "Invalid pairing code" });
-    }
-    if ((session.expires_at as number) < Date.now()) {
-      throw new HTTPException(410, { message: "Pairing code expired" });
-    }
-    if ((session.status as string) !== "pending") {
-      throw new HTTPException(409, { message: "Pairing code already used" });
-    }
-
-    moteDb.db
-      .prepare(
-        `
-      UPDATE pairing_sessions SET status = 'claimed', claiming_device_name = ?, claiming_public_key = ? WHERE pairing_id = ?
-    `,
-      )
-      .run(device_name, public_key, session.pairing_id as string);
-
-    return c.json({ pairing_id: session.pairing_id, motebit_id: session.motebit_id });
-  });
-
-  // --- Pairing: get session (Device A, authenticated) ---
-  app.get("/pairing/:pairingId", async (c) => {
-    const device = await verifyPairingAuth(c.req.header("authorization"));
-    if (!device) {
-      throw new HTTPException(401, { message: "Signed device token required" });
-    }
-
-    const pairingId = c.req.param("pairingId");
-    const session = moteDb.db
-      .prepare(
-        `
-      SELECT * FROM pairing_sessions WHERE pairing_id = ?
-    `,
-      )
-      .get(pairingId) as Record<string, unknown> | undefined;
-
-    if (!session) {
-      throw new HTTPException(404, { message: "Pairing session not found" });
-    }
-    if ((session.motebit_id as string) !== device.motebitId) {
-      throw new HTTPException(403, { message: "Not authorized for this pairing session" });
-    }
-
-    return c.json({
-      pairing_id: session.pairing_id,
-      motebit_id: session.motebit_id,
-      status: session.status,
-      pairing_code: session.pairing_code,
-      claiming_device_name: session.claiming_device_name,
-      claiming_public_key: session.claiming_public_key,
-      created_at: session.created_at,
-      expires_at: session.expires_at,
-    });
-  });
-
-  // --- Pairing: approve (Device A, authenticated) ---
-  app.post("/pairing/:pairingId/approve", async (c) => {
-    const device = await verifyPairingAuth(c.req.header("authorization"));
-    if (!device) {
-      throw new HTTPException(401, { message: "Signed device token required" });
-    }
-
-    const pairingId = c.req.param("pairingId");
-    const session = moteDb.db
-      .prepare(
-        `
-      SELECT * FROM pairing_sessions WHERE pairing_id = ?
-    `,
-      )
-      .get(pairingId) as Record<string, unknown> | undefined;
-
-    if (!session) {
-      throw new HTTPException(404, { message: "Pairing session not found" });
-    }
-    if ((session.motebit_id as string) !== device.motebitId) {
-      throw new HTTPException(403, { message: "Not authorized for this pairing session" });
-    }
-    if ((session.status as string) !== "claimed") {
-      throw new HTTPException(409, {
-        message: `Cannot approve — status is '${String(session.status)}'`,
-      });
-    }
-
-    // Register the claiming device under the same motebit identity
-    const registeredDevice = await identityManager.registerDevice(
-      session.motebit_id as string,
-      (session.claiming_device_name as string) || "Paired Device",
-      session.claiming_public_key as string,
-    );
-
-    moteDb.db
-      .prepare(
-        `
-      UPDATE pairing_sessions SET status = 'approved', approved_device_id = ?, approved_device_token = ? WHERE pairing_id = ?
-    `,
-      )
-      .run(registeredDevice.device_id, registeredDevice.device_token, pairingId);
-
-    return c.json({
-      device_id: registeredDevice.device_id,
-      device_token: registeredDevice.device_token,
-      motebit_id: session.motebit_id,
-    });
-  });
-
-  // --- Pairing: deny (Device A, authenticated) ---
-  app.post("/pairing/:pairingId/deny", async (c) => {
-    const device = await verifyPairingAuth(c.req.header("authorization"));
-    if (!device) {
-      throw new HTTPException(401, { message: "Signed device token required" });
-    }
-
-    const pairingId = c.req.param("pairingId");
-    const session = moteDb.db
-      .prepare(
-        `
-      SELECT * FROM pairing_sessions WHERE pairing_id = ?
-    `,
-      )
-      .get(pairingId) as Record<string, unknown> | undefined;
-
-    if (!session) {
-      throw new HTTPException(404, { message: "Pairing session not found" });
-    }
-    if ((session.motebit_id as string) !== device.motebitId) {
-      throw new HTTPException(403, { message: "Not authorized for this pairing session" });
-    }
-
-    moteDb.db
-      .prepare(
-        `
-      UPDATE pairing_sessions SET status = 'denied' WHERE pairing_id = ?
-    `,
-      )
-      .run(pairingId);
-
-    return c.json({ status: "denied" });
-  });
-
-  // --- Pairing: status (Device B polls, no auth) ---
-  app.get("/pairing/:pairingId/status", (c) => {
-    const pairingId = c.req.param("pairingId");
-    const session = moteDb.db
-      .prepare(
-        `
-      SELECT status, motebit_id, approved_device_id, approved_device_token FROM pairing_sessions WHERE pairing_id = ?
-    `,
-      )
-      .get(pairingId) as Record<string, unknown> | undefined;
-
-    if (!session) {
-      throw new HTTPException(404, { message: "Pairing session not found" });
-    }
-
-    const result: Record<string, unknown> = { status: session.status };
-    if ((session.status as string) === "approved") {
-      result.motebit_id = session.motebit_id;
-      result.device_id = session.approved_device_id;
-      result.device_token = session.approved_device_token;
-    }
-
-    return c.json(result);
-  });
-
-  // === Conversation Sync Helpers ===
-
-  function upsertSyncConversation(conv: SyncConversation): void {
-    moteDb.db
-      .prepare(
-        `INSERT INTO sync_conversations (conversation_id, motebit_id, started_at, last_active_at, title, summary, message_count)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(conversation_id) DO UPDATE SET
-         last_active_at = MAX(excluded.last_active_at, sync_conversations.last_active_at),
-         title = CASE WHEN excluded.last_active_at >= sync_conversations.last_active_at THEN excluded.title ELSE sync_conversations.title END,
-         summary = CASE WHEN excluded.last_active_at >= sync_conversations.last_active_at THEN excluded.summary ELSE sync_conversations.summary END,
-         message_count = MAX(excluded.message_count, sync_conversations.message_count)`,
-      )
-      .run(
-        conv.conversation_id,
-        conv.motebit_id,
-        conv.started_at,
-        conv.last_active_at,
-        conv.title,
-        conv.summary,
-        conv.message_count,
-      );
-  }
-
-  function upsertSyncMessage(msg: SyncConversationMessage): void {
-    moteDb.db
-      .prepare(
-        `INSERT OR IGNORE INTO sync_conversation_messages
-       (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        msg.message_id,
-        msg.conversation_id,
-        msg.motebit_id,
-        msg.role,
-        msg.content,
-        msg.tool_calls,
-        msg.tool_call_id,
-        msg.created_at,
-        msg.token_estimate,
-      );
-  }
-
-  // --- Conversation Sync: push conversations ---
-  app.post("/sync/:motebitId/conversations", async (c) => {
-    const motebitId = asMotebitId(c.req.param("motebitId"));
-    const body = await c.req.json<{ conversations: SyncConversation[] }>();
-    if (!Array.isArray(body.conversations)) {
-      throw new HTTPException(400, {
-        message: "Missing or invalid 'conversations' field (must be array)",
-      });
-    }
-    for (const conv of body.conversations) {
-      upsertSyncConversation(conv);
-    }
-
-    // Fan out to WebSocket clients, skipping the sender device
-    const senderDeviceId = c.req.header("x-device-id");
-    const peers = connections.get(motebitId);
-    if (peers) {
-      for (const conv of body.conversations) {
-        const payload = JSON.stringify({ type: "conversation", conversation: conv });
-        for (const peer of peers) {
-          if (peer.deviceId !== senderDeviceId) {
-            peer.ws.send(payload);
-          }
-        }
-      }
-    }
-
-    return c.json({ motebit_id: motebitId, accepted: body.conversations.length });
-  });
-
-  // --- Conversation Sync: pull conversations ---
-  app.get("/sync/:motebitId/conversations", (c) => {
-    const motebitId = asMotebitId(c.req.param("motebitId"));
-    const since = Number(c.req.query("since") ?? "0");
-    const rows = moteDb.db
-      .prepare(
-        `SELECT * FROM sync_conversations WHERE motebit_id = ? AND last_active_at > ? ORDER BY last_active_at ASC`,
-      )
-      .all(motebitId, since) as SyncConversation[];
-    return c.json({ motebit_id: motebitId, conversations: rows, since });
-  });
-
-  // --- Conversation Sync: push messages ---
-  app.post("/sync/:motebitId/messages", async (c) => {
-    const motebitId = asMotebitId(c.req.param("motebitId"));
-    const body = await c.req.json<{ messages: SyncConversationMessage[] }>();
-    if (!Array.isArray(body.messages)) {
-      throw new HTTPException(400, {
-        message: "Missing or invalid 'messages' field (must be array)",
-      });
-    }
-    for (const msg of body.messages) {
-      upsertSyncMessage(msg);
-    }
-
-    // Fan out to WebSocket clients, skipping the sender device
-    const senderDeviceId = c.req.header("x-device-id");
-    const peers = connections.get(motebitId);
-    if (peers) {
-      for (const msg of body.messages) {
-        const payload = JSON.stringify({ type: "conversation_message", message: msg });
-        for (const peer of peers) {
-          if (peer.deviceId !== senderDeviceId) {
-            peer.ws.send(payload);
-          }
-        }
-      }
-    }
-
-    return c.json({ motebit_id: motebitId, accepted: body.messages.length });
-  });
-
-  // --- Conversation Sync: pull messages ---
-  app.get("/sync/:motebitId/messages", (c) => {
-    const motebitId = asMotebitId(c.req.param("motebitId"));
-    const conversationId = c.req.query("conversation_id");
-    const since = Number(c.req.query("since") ?? "0");
-    if (conversationId == null || conversationId === "") {
-      throw new HTTPException(400, { message: "Missing 'conversation_id' query parameter" });
-    }
-    const rows = moteDb.db
-      .prepare(
-        `SELECT * FROM sync_conversation_messages WHERE conversation_id = ? AND motebit_id = ? AND created_at > ? ORDER BY created_at ASC`,
-      )
-      .all(conversationId, motebitId, since) as SyncConversationMessage[];
-    return c.json({
-      motebit_id: motebitId,
-      conversation_id: conversationId,
-      messages: rows,
-      since,
-    });
-  });
-
-  // === Plan Sync Helpers ===
-
-  /** Step status ordinal for monotonicity enforcement. */
-  const STEP_STATUS_ORDER: Record<string, number> = {
-    pending: 0,
-    running: 1,
-    completed: 2,
-    failed: 2,
-    skipped: 2,
-  };
-
-  function upsertSyncPlan(plan: SyncPlan): void {
-    moteDb.db
-      .prepare(
-        `INSERT INTO sync_plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps, proposal_id, collaborative)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(plan_id) DO UPDATE SET
-         status = CASE WHEN excluded.updated_at >= sync_plans.updated_at THEN excluded.status ELSE sync_plans.status END,
-         title = CASE WHEN excluded.updated_at >= sync_plans.updated_at THEN excluded.title ELSE sync_plans.title END,
-         updated_at = MAX(excluded.updated_at, sync_plans.updated_at),
-         current_step_index = CASE WHEN excluded.updated_at >= sync_plans.updated_at THEN excluded.current_step_index ELSE sync_plans.current_step_index END,
-         total_steps = MAX(excluded.total_steps, sync_plans.total_steps),
-         proposal_id = CASE WHEN excluded.updated_at >= sync_plans.updated_at THEN excluded.proposal_id ELSE sync_plans.proposal_id END,
-         collaborative = CASE WHEN excluded.updated_at >= sync_plans.updated_at THEN excluded.collaborative ELSE sync_plans.collaborative END`,
-      )
-      .run(
-        plan.plan_id,
-        plan.goal_id,
-        plan.motebit_id,
-        plan.title,
-        plan.status,
-        plan.created_at,
-        plan.updated_at,
-        plan.current_step_index,
-        plan.total_steps,
-        plan.proposal_id ?? null,
-        plan.collaborative ? 1 : 0,
-      );
-  }
-
-  function upsertSyncPlanStep(step: SyncPlanStep): void {
-    // Check existing status for monotonicity
-    const existing = moteDb.db
-      .prepare(`SELECT status, updated_at FROM sync_plan_steps WHERE step_id = ?`)
-      .get(step.step_id) as { status: string; updated_at: number } | undefined;
-
-    if (existing) {
-      const incomingOrder = STEP_STATUS_ORDER[step.status] ?? 0;
-      const existingOrder = STEP_STATUS_ORDER[existing.status] ?? 0;
-      // Never regress status
-      if (incomingOrder < existingOrder) return;
-      // Same tier: use updated_at
-      if (incomingOrder === existingOrder && step.updated_at < existing.updated_at) return;
-    }
-
-    moteDb.db
-      .prepare(
-        `INSERT OR REPLACE INTO sync_plan_steps
-       (step_id, plan_id, motebit_id, ordinal, description, prompt, depends_on, optional, status,
-        required_capabilities, delegation_task_id, result_summary, error_message, tool_calls_made,
-        started_at, completed_at, retry_count, updated_at, assigned_motebit_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        step.step_id,
-        step.plan_id,
-        step.motebit_id,
-        step.ordinal,
-        step.description,
-        step.prompt,
-        step.depends_on,
-        step.optional ? 1 : 0,
-        step.status,
-        step.required_capabilities,
-        step.delegation_task_id,
-        step.result_summary,
-        step.error_message,
-        step.tool_calls_made,
-        step.started_at,
-        step.completed_at,
-        step.retry_count,
-        step.updated_at,
-        step.assigned_motebit_id ?? null,
-      );
-  }
-
-  // --- Plan Sync: push plans ---
-  app.post("/sync/:motebitId/plans", async (c) => {
-    const motebitId = asMotebitId(c.req.param("motebitId"));
-    const body = await c.req.json<{ plans: SyncPlan[] }>();
-    if (!Array.isArray(body.plans)) {
-      throw new HTTPException(400, { message: "Missing or invalid 'plans' field (must be array)" });
-    }
-    for (const plan of body.plans) {
-      upsertSyncPlan(plan);
-    }
-
-    // Fan out to WebSocket clients
-    const senderDeviceId = c.req.header("x-device-id");
-    const peers = connections.get(motebitId);
-    if (peers) {
-      for (const plan of body.plans) {
-        const payload = JSON.stringify({ type: "plan", plan });
-        for (const peer of peers) {
-          if (peer.deviceId !== senderDeviceId) {
-            peer.ws.send(payload);
-          }
-        }
-      }
-    }
-
-    return c.json({ motebit_id: motebitId, accepted: body.plans.length });
-  });
-
-  // --- Plan Sync: pull plans ---
-  app.get("/sync/:motebitId/plans", (c) => {
-    const motebitId = asMotebitId(c.req.param("motebitId"));
-    const since = Number(c.req.query("since") ?? "0");
-    const rows = moteDb.db
-      .prepare(
-        `SELECT * FROM sync_plans WHERE motebit_id = ? AND updated_at > ? ORDER BY updated_at ASC`,
-      )
-      .all(motebitId, since) as SyncPlan[];
-    return c.json({ motebit_id: motebitId, plans: rows, since });
-  });
-
-  // --- Plan Sync: push steps ---
-  app.post("/sync/:motebitId/plan-steps", async (c) => {
-    const motebitId = asMotebitId(c.req.param("motebitId"));
-    const body = await c.req.json<{ steps: SyncPlanStep[] }>();
-    if (!Array.isArray(body.steps)) {
-      throw new HTTPException(400, { message: "Missing or invalid 'steps' field (must be array)" });
-    }
-    for (const step of body.steps) {
-      upsertSyncPlanStep(step);
-    }
-
-    // Fan out to WebSocket clients
-    const senderDeviceId = c.req.header("x-device-id");
-    const peers = connections.get(motebitId);
-    if (peers) {
-      for (const step of body.steps) {
-        const payload = JSON.stringify({ type: "plan_step", step });
-        for (const peer of peers) {
-          if (peer.deviceId !== senderDeviceId) {
-            peer.ws.send(payload);
-          }
-        }
-      }
-    }
-
-    return c.json({ motebit_id: motebitId, accepted: body.steps.length });
-  });
-
-  // --- Plan Sync: pull steps ---
-  app.get("/sync/:motebitId/plan-steps", (c) => {
-    const motebitId = asMotebitId(c.req.param("motebitId"));
-    const since = Number(c.req.query("since") ?? "0");
-    const rows = moteDb.db
-      .prepare(
-        `SELECT * FROM sync_plan_steps WHERE motebit_id = ? AND updated_at > ? ORDER BY updated_at ASC`,
-      )
-      .all(motebitId, since) as SyncPlanStep[];
-    // SQLite stores boolean as integer — normalize for wire format
-    const normalized = rows.map((r) => ({ ...r, optional: Boolean(r.optional) }));
-    return c.json({ motebit_id: motebitId, steps: normalized, since });
-  });
+  // === Data Sync Routes (conversations, messages, plans, plan steps) ===
+  registerDataSyncRoutes({ db: moteDb.db, app, connections });
 
   // === Agent Protocol Endpoints ===
 
