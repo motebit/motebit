@@ -2,9 +2,11 @@ import { describe, it, expect } from "vitest";
 import {
   buildRoutingGraph,
   graphRankCandidates,
+  explainedRankCandidates,
   computeTrustClosure,
   findTrustedRoute,
 } from "../graph-routing.js";
+import type { ExplainedRouteScore } from "../graph-routing.js";
 import type { CandidateProfile, TaskRequirements } from "../scoring.js";
 import { AgentTrustLevel, asMotebitId, asListingId } from "@motebit/sdk";
 import type { AgentTrustRecord, AgentServiceListing } from "@motebit/sdk";
@@ -396,5 +398,144 @@ describe("findTrustedRoute", () => {
     ];
     const route = findTrustedRoute(SELF_ID, asMotebitId("blocked"), candidates);
     expect(route).toBeNull();
+  });
+});
+
+// ── explainedRankCandidates ─────────────────────────────────────────
+
+describe("explainedRankCandidates", () => {
+  it("returns routing_paths for direct edges (single-hop)", () => {
+    const candidates = [
+      makeCandidate({
+        motebit_id: asMotebitId("agent-a"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Trusted }),
+      }),
+    ];
+    const scores = explainedRankCandidates(SELF_ID, candidates, defaultReqs);
+
+    expect(scores.length).toBe(1);
+    const score = scores[0]!;
+    expect(score.motebit_id).toBe("agent-a");
+    // Direct edge: provenance path is [agent-a]
+    expect(score.routing_paths.length).toBeGreaterThanOrEqual(1);
+    expect(score.routing_paths.some((p) => p.includes("agent-a"))).toBe(true);
+  });
+
+  it("includes intermediate agents in multi-hop paths", () => {
+    // self -> A (trust 0.9), A -> B (trust 0.8)
+    const agentA = makeCandidate({
+      motebit_id: asMotebitId("agent-a"),
+      trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Trusted }),
+      listing: makeListing({ capabilities: ["web_search"] }),
+    });
+    const agentB = makeCandidate({
+      motebit_id: asMotebitId("agent-b"),
+      trust_record: null,
+      listing: makeListing({ capabilities: ["web_search"], motebit_id: asMotebitId("agent-b") }),
+      is_online: true,
+    });
+
+    const peerEdges = [
+      {
+        from: "agent-a",
+        to: "agent-b",
+        weight: {
+          trust: 0.8,
+          cost: 1,
+          latency: 100,
+          reliability: 0.9,
+          regulatory_risk: 0,
+        } as RouteWeight,
+      },
+    ];
+
+    const scores = explainedRankCandidates(SELF_ID, [agentA, agentB], defaultReqs, { peerEdges });
+
+    const scoreB = scores.find((s) => s.motebit_id === "agent-b");
+    expect(scoreB).toBeDefined();
+    // Multi-hop path should include agent-a as intermediate
+    const hasMultiHop = scoreB!.routing_paths.some(
+      (p) => p.length >= 2 && p.includes("agent-a") && p.includes("agent-b"),
+    );
+    expect(hasMultiHop).toBe(true);
+  });
+
+  it("counts alternatives_considered from the number of derivation paths", () => {
+    // self -> A, self -> B, A -> C, B -> C — C has two paths
+    const agentA = makeCandidate({
+      motebit_id: asMotebitId("agent-a"),
+      trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Trusted }),
+      listing: makeListing({ capabilities: ["web_search"] }),
+    });
+    const agentB = makeCandidate({
+      motebit_id: asMotebitId("agent-b"),
+      trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Verified }),
+      listing: makeListing({ capabilities: ["web_search"] }),
+    });
+    const agentC = makeCandidate({
+      motebit_id: asMotebitId("agent-c"),
+      trust_record: null,
+      listing: makeListing({ capabilities: ["web_search"], motebit_id: asMotebitId("agent-c") }),
+      is_online: true,
+    });
+
+    const peerEdges = [
+      {
+        from: "agent-a",
+        to: "agent-c",
+        weight: {
+          trust: 0.7,
+          cost: 1,
+          latency: 100,
+          reliability: 0.9,
+          regulatory_risk: 0,
+        } as RouteWeight,
+      },
+      {
+        from: "agent-b",
+        to: "agent-c",
+        weight: {
+          trust: 0.6,
+          cost: 2,
+          latency: 200,
+          reliability: 0.85,
+          regulatory_risk: 0,
+        } as RouteWeight,
+      },
+    ];
+
+    const scores = explainedRankCandidates(SELF_ID, [agentA, agentB, agentC], defaultReqs, {
+      peerEdges,
+    });
+
+    const scoreC = scores.find((s) => s.motebit_id === "agent-c");
+    expect(scoreC).toBeDefined();
+    // agent-c is reachable via: direct (self->C), via A (self->A->C), via B (self->B->C)
+    // Direct path exists because agentC is a candidate with is_online=true
+    expect(scoreC!.alternatives_considered).toBeGreaterThanOrEqual(2);
+  });
+
+  it("is backward-compatible with RouteScore shape", () => {
+    const candidates = [makeCandidate()];
+    const scores = explainedRankCandidates(SELF_ID, candidates, defaultReqs);
+
+    expect(scores.length).toBe(1);
+    const score: ExplainedRouteScore = scores[0]!;
+    // All RouteScore fields present
+    expect(score).toHaveProperty("motebit_id");
+    expect(score).toHaveProperty("composite");
+    expect(score).toHaveProperty("sub_scores");
+    expect(score).toHaveProperty("selected");
+    expect(score.sub_scores).toHaveProperty("trust");
+    expect(score.sub_scores).toHaveProperty("success_rate");
+    expect(score.sub_scores).toHaveProperty("latency");
+    expect(score.sub_scores).toHaveProperty("price_efficiency");
+    expect(score.sub_scores).toHaveProperty("capability_match");
+    expect(score.sub_scores).toHaveProperty("availability");
+    // Plus provenance fields
+    expect(score).toHaveProperty("routing_paths");
+    expect(score).toHaveProperty("alternatives_considered");
+    expect(Array.isArray(score.routing_paths)).toBe(true);
+    expect(typeof score.alternatives_considered).toBe("number");
   });
 });

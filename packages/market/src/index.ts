@@ -2,9 +2,11 @@ export { scoreCandidate, rankCandidates, applyPrecisionToMarketConfig } from "./
 export {
   buildRoutingGraph,
   graphRankCandidates,
+  explainedRankCandidates,
   computeTrustClosure,
   findTrustedRoute,
 } from "./graph-routing.js";
+export type { ExplainedRouteScore } from "./graph-routing.js";
 export type { CandidateProfile, TaskRequirements } from "./scoring.js";
 export { allocateBudget, estimateCost } from "./budget.js";
 export type { AllocationRequest } from "./budget.js";

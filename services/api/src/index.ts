@@ -110,7 +110,13 @@ import {
 } from "@motebit/crypto";
 /* eslint-enable no-restricted-imports */
 import type { VerifiableCredential, KeySuccessionRecord } from "@motebit/crypto";
-import { graphRankCandidates, settleOnReceipt } from "@motebit/market";
+import {
+  graphRankCandidates,
+  settleOnReceipt,
+  computeTrustClosure,
+  findTrustedRoute,
+  buildRoutingGraph,
+} from "@motebit/market";
 import type { CandidateProfile, TaskRequirements } from "@motebit/market";
 import type { CapabilityPrice, BudgetAllocation, AgentTrustRecord } from "@motebit/sdk";
 import {
@@ -118,6 +124,7 @@ import {
   AgentTrustLevel,
   EventType,
   evaluateTrustTransition,
+  trustLevelToScore,
 } from "@motebit/sdk";
 
 function hexToBytes(hex: string): Uint8Array {
@@ -426,6 +433,20 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         recorded_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_relay_latency_pair ON relay_latency_stats(motebit_id, remote_motebit_id);
+
+      CREATE TABLE IF NOT EXISTS relay_delegation_edges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_motebit_id TEXT NOT NULL,
+        to_motebit_id TEXT NOT NULL,
+        trust REAL NOT NULL DEFAULT 0.1,
+        cost REAL NOT NULL DEFAULT 0,
+        latency_ms REAL NOT NULL DEFAULT 5000,
+        reliability REAL NOT NULL DEFAULT 0.5,
+        regulatory_risk REAL NOT NULL DEFAULT 0,
+        recorded_at INTEGER NOT NULL,
+        receipt_hash TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_delegation_edges_from ON relay_delegation_edges(from_motebit_id);
   `);
 
   // Settlement ledger — x402 handles payment, this is the relay's accounting record
@@ -674,6 +695,51 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       return pricing.reduce((sum, p) => sum + (p.unit_cost ?? 0), 0);
     } catch {
       return 0;
+    }
+  }
+
+  // Helper: fetch recent delegation edges for multi-hop routing.
+  function fetchPeerEdges(): Array<{
+    from: string;
+    to: string;
+    weight: {
+      trust: number;
+      cost: number;
+      latency: number;
+      reliability: number;
+      regulatory_risk: number;
+    };
+  }> {
+    try {
+      const rows = moteDb.db
+        .prepare(
+          `SELECT from_motebit_id, to_motebit_id, trust, cost, latency_ms, reliability, regulatory_risk
+           FROM relay_delegation_edges
+           WHERE recorded_at > ?
+           ORDER BY recorded_at DESC LIMIT 500`,
+        )
+        .all(Date.now() - 30 * 24 * 60 * 60 * 1000) as Array<{
+        from_motebit_id: string;
+        to_motebit_id: string;
+        trust: number;
+        cost: number;
+        latency_ms: number;
+        reliability: number;
+        regulatory_risk: number;
+      }>;
+      return rows.map((row) => ({
+        from: row.from_motebit_id,
+        to: row.to_motebit_id,
+        weight: {
+          trust: row.trust,
+          cost: row.cost,
+          latency: row.latency_ms,
+          reliability: row.reliability,
+          regulatory_risk: row.regulatory_risk,
+        },
+      }));
+    } catch {
+      return [];
     }
   }
 
@@ -1524,6 +1590,68 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const records = await moteDb.agentTrustStore.listAgentTrust(motebitId);
     return c.json({ motebit_id: motebitId, records });
+  });
+
+  // --- Graph Query: trust closure for an agent ---
+  // eslint-disable-next-line @typescript-eslint/require-await
+  app.get("/api/v1/agents/:motebitId/trust-closure", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const { profiles } = buildCandidateProfiles(undefined, undefined, 100, motebitId);
+    const closure = computeTrustClosure(asMotebitId(motebitId), profiles);
+    const closureArray = Array.from(closure.entries())
+      .map(([agent_id, trust]) => ({ agent_id, trust }))
+      .sort((a, b) => b.trust - a.trust);
+    return c.json({ motebit_id: motebitId, closure: closureArray });
+  });
+
+  // --- Graph Query: find trusted path between two agents ---
+  // eslint-disable-next-line @typescript-eslint/require-await
+  app.get("/api/v1/agents/:motebitId/path-to/:targetId", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const targetId = c.req.param("targetId");
+    const { profiles } = buildCandidateProfiles(undefined, undefined, 100, motebitId);
+    const route = findTrustedRoute(asMotebitId(motebitId), asMotebitId(targetId), profiles);
+    if (!route) {
+      throw new HTTPException(404, { message: "No trusted path found" });
+    }
+    return c.json({ source: motebitId, target: targetId, trust: route.trust, path: route.path });
+  });
+
+  // --- Graph Query: full routing graph for an agent ---
+  // eslint-disable-next-line @typescript-eslint/require-await
+  app.get("/api/v1/agents/:motebitId/graph", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const { profiles } = buildCandidateProfiles(undefined, undefined, 100, motebitId);
+    const graph = buildRoutingGraph(asMotebitId(motebitId), profiles);
+    const nodes = [...graph.nodes()];
+    const edges = graph.edges().map((e) => ({ from: e.from, to: e.to, weight: e.weight }));
+    return c.json({
+      motebit_id: motebitId,
+      nodes,
+      edges,
+      node_count: nodes.length,
+      edge_count: edges.length,
+    });
+  });
+
+  // --- Graph Query: routing explanation with full scoring detail ---
+  // eslint-disable-next-line @typescript-eslint/require-await
+  app.get("/api/v1/agents/:motebitId/routing-explanation", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const capability = c.req.query("capability");
+    const limitStr = c.req.query("limit");
+    const limit = Math.min(Math.max(parseInt(limitStr ?? "10", 10) || 10, 1), 100);
+    const { profiles, requirements } = buildCandidateProfiles(
+      capability ?? undefined,
+      undefined,
+      limit,
+      motebitId,
+    );
+    const peerEdges = fetchPeerEdges();
+    const ranked = graphRankCandidates(asMotebitId(motebitId), profiles, requirements, {
+      peerEdges,
+    });
+    return c.json({ motebit_id: motebitId, scores: ranked });
   });
 
   // --- Gradient: intelligence gradient snapshots ---
@@ -2577,6 +2705,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
             typeof body.exploration_drive === "number"
               ? Math.max(0, Math.min(1, body.exploration_drive))
               : undefined;
+          const peerEdges = fetchPeerEdges();
           const ranked = graphRankCandidates(
             asMotebitId(callerMotebitId ?? motebitId),
             eligibleProfiles,
@@ -2587,6 +2716,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
             {
               maxCandidates: 10,
               explorationWeight,
+              peerEdges,
             },
           );
           const selected = ranked.filter((r) => r.selected && r.composite > 0);
@@ -2844,6 +2974,56 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         }
       } catch {
         // Trust update is best-effort — don't block receipt delivery
+      }
+    }
+
+    // Cache delegation edges for multi-hop routing intelligence.
+    // When agent B delegates to C, the edge B→C is stored so future
+    // routing queries can discover multi-hop paths (A→B→C) even if
+    // A has never directly interacted with C.
+    if (receipt.delegation_receipts && receipt.delegation_receipts.length > 0) {
+      try {
+        const insertEdge = moteDb.db.prepare(
+          `INSERT INTO relay_delegation_edges
+           (from_motebit_id, to_motebit_id, trust, cost, latency_ms, reliability, regulatory_risk, recorded_at, receipt_hash)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        );
+
+        function walkReceipts(parentMotebitId: string, receipts: ExecutionReceipt[]): void {
+          for (const sub of receipts) {
+            const latency =
+              sub.completed_at && sub.submitted_at ? sub.completed_at - sub.submitted_at : 5000;
+            const reliability = sub.status === "completed" ? 0.9 : 0.3;
+            const trustRow = moteDb.db
+              .prepare(
+                "SELECT trust_level FROM agent_trust WHERE motebit_id = ? AND remote_motebit_id = ?",
+              )
+              .get(motebitId, sub.motebit_id) as { trust_level: string } | undefined;
+            const trust = trustRow
+              ? trustLevelToScore(trustRow.trust_level as AgentTrustLevel)
+              : 0.1;
+
+            insertEdge.run(
+              parentMotebitId,
+              sub.motebit_id,
+              trust,
+              0,
+              latency > 0 ? latency : 5000,
+              reliability,
+              0,
+              Date.now(),
+              sub.result_hash ?? null,
+            );
+
+            if (sub.delegation_receipts && sub.delegation_receipts.length > 0) {
+              walkReceipts(sub.motebit_id as string, sub.delegation_receipts);
+            }
+          }
+        }
+
+        walkReceipts(receipt.motebit_id as string, receipt.delegation_receipts);
+      } catch {
+        // Best-effort edge caching
       }
     }
 
@@ -3926,11 +4106,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     const explorationStr = c.req.query("exploration_drive");
     const explorationWeight =
       explorationStr != null ? Math.max(0, Math.min(1, parseFloat(explorationStr))) : undefined;
+    const peerEdges = fetchPeerEdges();
     const ranked = graphRankCandidates(
       asMotebitId("relay"), // public endpoint, no caller identity
       profiles,
       requirements,
-      { explorationWeight },
+      { explorationWeight, peerEdges },
     );
 
     return c.json({

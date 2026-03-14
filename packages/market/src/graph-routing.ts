@@ -15,13 +15,14 @@ import { AgentTrustLevel, trustLevelToScore } from "@motebit/sdk";
 import {
   WeightedDigraph,
   RouteWeightSemiring,
+  AnnotatedRouteWeightSemiring,
   TrustSemiring,
   projectGraph,
   optimalPaths,
   optimalPathTrace,
   transitiveClosure,
 } from "@motebit/semiring";
-import type { RouteWeight } from "@motebit/semiring";
+import type { RouteWeight, Annotated } from "@motebit/semiring";
 import type { CandidateProfile, TaskRequirements } from "./scoring.js";
 
 // ── Graph Construction ──────────────────────────────────────────────
@@ -252,6 +253,170 @@ export function findTrustedRoute(
   const result = optimalPathTrace(trustGraph, selfId, targetId);
   if (!result) return null;
   return { trust: result.value, path: result.path };
+}
+
+// ── Explained Routing (Provenance) ──────────────────────────────────
+
+/**
+ * RouteScore extended with provenance: explains WHY each agent was chosen.
+ *
+ * routing_paths enumerates the derivation paths — each path is a sequence
+ * of agent IDs traversed to reach this candidate through the graph.
+ */
+export interface ExplainedRouteScore extends RouteScore {
+  /** Derivation paths: each path is a sequence of agent IDs traversed to reach this candidate. */
+  routing_paths: string[][];
+  /** Number of alternative routes that were considered (paths in provenance set). */
+  alternatives_considered: number;
+}
+
+/**
+ * Rank candidates with provenance tracking — returns WHY each agent was chosen.
+ *
+ * Same as graphRankCandidates but uses annotatedSemiring to track derivation
+ * paths through the agent graph. Each result includes the routing explanation:
+ * which edges (agent IDs) were traversed to reach this candidate.
+ *
+ * This is the algebraic answer to "explain this routing decision" — not logging,
+ * not post-hoc reconstruction, but a first-class semiring query.
+ */
+export function explainedRankCandidates(
+  selfId: MotebitId,
+  candidates: CandidateProfile[],
+  requirements: TaskRequirements,
+  config?: {
+    weights?: {
+      trust: number;
+      cost: number;
+      latency: number;
+      reliability: number;
+      regulatory_risk?: number;
+    };
+    peerEdges?: Array<{ from: string; to: string; weight: RouteWeight }>;
+    maxCandidates?: number;
+    explorationWeight?: number;
+    maxProvPaths?: number;
+  },
+): ExplainedRouteScore[] {
+  const weights = config?.weights ?? {
+    trust: 0.3,
+    cost: 0.2,
+    latency: 0.15,
+    reliability: 0.15,
+    regulatory_risk: 0.2,
+  };
+  const maxCandidates = config?.maxCandidates ?? 10;
+  const explorationWeight = config?.explorationWeight ?? 0;
+
+  // 1. Build the plain routing graph
+  const plainGraph = buildRoutingGraph(selfId, candidates, config?.peerEdges);
+
+  // 2. Build an annotated graph: wrap each edge weight with provenance
+  //    The provenance label for each edge is the target node ID — this records
+  //    which agent was traversed to reach the destination.
+  const annotatedGraph = new WeightedDigraph(AnnotatedRouteWeightSemiring);
+  for (const node of plainGraph.nodes()) {
+    annotatedGraph.addNode(node);
+  }
+  for (const edge of plainGraph.edges()) {
+    const annotated: Annotated<RouteWeight> = {
+      value: edge.weight,
+      why: [[edge.to]],
+    };
+    annotatedGraph.setEdge(edge.from, edge.to, annotated);
+  }
+
+  // 3. Run optimalPaths over the annotated graph
+  const annotatedPaths = optimalPaths(annotatedGraph, selfId);
+
+  // 4. Build candidate lookup
+  const candidateMap = new Map<string, CandidateProfile>();
+  for (const c of candidates) {
+    candidateMap.set(c.motebit_id, c);
+  }
+
+  // 5. Score and build ExplainedRouteScore[]
+  const scores: ExplainedRouteScore[] = [];
+
+  for (const [nodeId, annotatedRoute] of annotatedPaths) {
+    if (nodeId === selfId) continue;
+    const route = annotatedRoute.value;
+    if (route.trust === 0) continue;
+
+    const candidate = candidateMap.get(nodeId);
+
+    // Capability match is a hard gate
+    const capabilityMatch = computeCapabilityMatch(candidate, requirements);
+    if (capabilityMatch === 0 && requirements.required_capabilities.length > 0) continue;
+
+    // Compute sub_scores for backward compatibility
+    const successRate = candidate ? computeReliability(candidate) : route.reliability;
+    const latencyScore =
+      route.latency === Infinity ? 0 : 1 - route.latency / (route.latency + 5000);
+    const priceEfficiency = computePriceEfficiency(candidate, requirements);
+    const availability = candidate?.is_online ? 1.0 : 0.0;
+
+    // Normalize cost and latency to [0,1] where higher is better
+    const costScore = route.cost === Infinity ? 0 : 1 / (1 + route.cost);
+    const latencyNorm = route.latency === Infinity ? 0 : 1 / (1 + route.latency / 1000);
+    const riskScore = route.regulatory_risk === Infinity ? 0 : 1 / (1 + route.regulatory_risk);
+
+    const composite =
+      route.trust * weights.trust +
+      costScore * weights.cost +
+      latencyNorm * weights.latency +
+      route.reliability * weights.reliability +
+      riskScore * (weights.regulatory_risk ?? 0);
+
+    // Extract provenance paths (filter out empty identity paths)
+    const routingPaths: string[][] = annotatedRoute.why
+      .map((p) => [...p])
+      .filter((p) => p.length > 0);
+
+    scores.push({
+      motebit_id: nodeId as MotebitId,
+      composite,
+      sub_scores: {
+        trust: route.trust,
+        success_rate: successRate,
+        latency: latencyScore,
+        price_efficiency: priceEfficiency,
+        capability_match: capabilityMatch,
+        availability,
+      },
+      selected: false,
+      routing_paths: routingPaths,
+      alternatives_considered: routingPaths.length,
+    });
+  }
+
+  scores.sort((a, b) => b.composite - a.composite);
+
+  // Epsilon-greedy exploration
+  if (explorationWeight > 0 && scores.length > 1) {
+    const probe = (scores[0]!.composite * 1000) % 1;
+    if (probe < explorationWeight) {
+      const explorationIdx = Math.min(
+        1 + Math.floor(probe * (scores.length - 1)),
+        scores.length - 1,
+      );
+      if (explorationIdx > 1 && scores[explorationIdx]!.composite > 0) {
+        const temp = scores[1]!;
+        scores[1] = scores[explorationIdx]!;
+        scores[explorationIdx] = temp;
+      }
+    }
+  }
+
+  // Mark top N as selected
+  let selected = 0;
+  for (const score of scores) {
+    if (selected >= maxCandidates || score.composite === 0) break;
+    score.selected = true;
+    selected++;
+  }
+
+  return scores;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
