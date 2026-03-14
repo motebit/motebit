@@ -461,6 +461,37 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       );
   `);
 
+  // Migration: add Phase 5 trust tracking columns to relay_peers
+  for (const col of [
+    "ALTER TABLE relay_peers ADD COLUMN trust_level TEXT NOT NULL DEFAULT 'first_contact'",
+    "ALTER TABLE relay_peers ADD COLUMN successful_forwards INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE relay_peers ADD COLUMN failed_forwards INTEGER NOT NULL DEFAULT 0",
+  ]) {
+    try {
+      moteDb.db.exec(col);
+    } catch {
+      /* column already exists */
+    }
+  }
+
+  // Phase 5: Federation settlement records
+  moteDb.db.exec(`
+    CREATE TABLE IF NOT EXISTS relay_federation_settlements (
+      settlement_id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      upstream_relay_id TEXT NOT NULL,
+      downstream_relay_id TEXT,
+      agent_id TEXT,
+      gross_amount REAL NOT NULL,
+      fee_amount REAL NOT NULL,
+      net_amount REAL NOT NULL,
+      fee_rate REAL NOT NULL,
+      settled_at INTEGER NOT NULL,
+      receipt_hash TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_fed_settlements_task ON relay_federation_settlements(task_id);
+  `);
+
   // Create market relay tables (service listings + latency stats for routing)
   moteDb.db.exec(`
       CREATE TABLE IF NOT EXISTS relay_service_listings (
@@ -1029,6 +1060,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // Federation task routing (30 req/min — write tier)
   app.use("/federation/v1/task/*", rateLimitMiddleware(writeLimiter));
+
+  // Federation settlement endpoints (Phase 5)
+  app.use("/federation/v1/settlement/*", rateLimitMiddleware(writeLimiter));
+  app.use("/federation/v1/settlements", rateLimitMiddleware(readLimiter));
 
   if (apiToken != null && apiToken !== "") {
     app.use("/identity/*", bearerAuth({ token: apiToken }));
@@ -3767,6 +3802,49 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       } catch {
         // Best-effort federation result return — receipt is already stored locally
       }
+
+      // Phase 5: Update trust for the originating relay (peer side trust accumulation)
+      try {
+        const peerRow = moteDb.db
+          .prepare(
+            "SELECT trust_level, successful_forwards, failed_forwards FROM relay_peers WHERE peer_relay_id = ?",
+          )
+          .get(entry.origin_relay) as
+          | { trust_level: string; successful_forwards: number; failed_forwards: number }
+          | undefined;
+
+        if (peerRow) {
+          const isSuccess = receipt.status === "completed";
+          const newSuccessful = peerRow.successful_forwards + (isSuccess ? 1 : 0);
+          const newFailed = peerRow.failed_forwards + (isSuccess ? 0 : 1);
+
+          const trustRecord: AgentTrustRecord = {
+            motebit_id: asMotebitId(relayIdentity.relayMotebitId),
+            remote_motebit_id: asMotebitId(entry.origin_relay),
+            trust_level: peerRow.trust_level as AgentTrustLevel,
+            first_seen_at: 0,
+            last_seen_at: Date.now(),
+            interaction_count: newSuccessful + newFailed,
+            successful_tasks: newSuccessful,
+            failed_tasks: newFailed,
+          };
+
+          const newLevel = evaluateTrustTransition(trustRecord);
+          const trustLevel = newLevel ?? peerRow.trust_level;
+          const trustScore = trustLevelToScore(trustLevel as AgentTrustLevel);
+
+          moteDb.db
+            .prepare(
+              `UPDATE relay_peers SET
+              successful_forwards = ?, failed_forwards = ?,
+              trust_level = ?, trust_score = ?
+              WHERE peer_relay_id = ?`,
+            )
+            .run(newSuccessful, newFailed, trustLevel, trustScore, entry.origin_relay);
+        }
+      } catch {
+        // Best-effort trust update
+      }
     }
 
     return c.json({ status: entry.task.status, credential_id });
@@ -4643,28 +4721,224 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       }
     }
 
-    // Update relay trust for the peer relay (trust accumulation from federation)
+    // Phase 5: Update relay trust using evaluateTrustTransition state machine
     try {
-      const taskSucceeded = body.receipt.status === "completed";
-      const taskFailed = body.receipt.status === "failed";
-      const currentTrust =
-        (
-          moteDb.db
-            .prepare("SELECT trust_score FROM relay_peers WHERE peer_relay_id = ?")
-            .get(body.origin_relay) as { trust_score: number } | undefined
-        )?.trust_score ?? 0.5;
+      const peerRow = moteDb.db
+        .prepare(
+          "SELECT trust_level, successful_forwards, failed_forwards FROM relay_peers WHERE peer_relay_id = ?",
+        )
+        .get(body.origin_relay) as
+        | { trust_level: string; successful_forwards: number; failed_forwards: number }
+        | undefined;
 
-      // Simple EMA trust update: successful forwards increase trust, failures decrease
-      const delta = taskSucceeded ? 0.01 : taskFailed ? -0.02 : 0;
-      const newTrust = Math.max(0, Math.min(1, currentTrust + delta));
-      moteDb.db
-        .prepare("UPDATE relay_peers SET trust_score = ? WHERE peer_relay_id = ?")
-        .run(newTrust, body.origin_relay);
+      if (peerRow) {
+        const isSuccess = body.receipt.status === "completed";
+        const newSuccessful = peerRow.successful_forwards + (isSuccess ? 1 : 0);
+        const newFailed = peerRow.failed_forwards + (isSuccess ? 0 : 1);
+
+        // Build a trust record compatible with evaluateTrustTransition
+        const trustRecord: AgentTrustRecord = {
+          motebit_id: asMotebitId(relayIdentity.relayMotebitId),
+          remote_motebit_id: asMotebitId(body.origin_relay),
+          trust_level: peerRow.trust_level as AgentTrustLevel,
+          first_seen_at: 0,
+          last_seen_at: Date.now(),
+          interaction_count: newSuccessful + newFailed,
+          successful_tasks: newSuccessful,
+          failed_tasks: newFailed,
+        };
+
+        const newLevel = evaluateTrustTransition(trustRecord);
+        const trustLevel = newLevel ?? peerRow.trust_level;
+        const trustScore = trustLevelToScore(trustLevel as AgentTrustLevel);
+
+        moteDb.db
+          .prepare(
+            `UPDATE relay_peers SET
+            successful_forwards = ?, failed_forwards = ?,
+            trust_level = ?, trust_score = ?
+            WHERE peer_relay_id = ?`,
+          )
+          .run(newSuccessful, newFailed, trustLevel, trustScore, body.origin_relay);
+
+        // Phase 5: Issue reputation credential on trust level transitions
+        if (newLevel && newLevel !== peerRow.trust_level) {
+          try {
+            const relayKeys = await getRelayKeypair();
+            const peerDid = hexPublicKeyToDidKey(
+              (
+                moteDb.db
+                  .prepare("SELECT public_key FROM relay_peers WHERE peer_relay_id = ?")
+                  .get(body.origin_relay) as { public_key: string }
+              ).public_key,
+            );
+            const vc = await issueReputationCredential(
+              {
+                success_rate: newSuccessful / Math.max(1, newSuccessful + newFailed),
+                avg_latency_ms: 0,
+                task_count: newSuccessful + newFailed,
+                trust_score: trustScore,
+                availability: 1.0,
+                measured_at: Date.now(),
+              },
+              relayKeys.privateKey,
+              relayKeys.publicKey,
+              peerDid,
+            );
+            const credId = crypto.randomUUID();
+            const credentialType =
+              vc.type.find((t) => t !== "VerifiableCredential") ?? "VerifiableCredential";
+            moteDb.db
+              .prepare(
+                `INSERT INTO relay_credentials (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at)
+                 VALUES (?, ?, ?, ?, ?, ?)`,
+              )
+              .run(
+                credId,
+                body.origin_relay,
+                vc.issuer,
+                credentialType,
+                JSON.stringify(vc),
+                Date.now(),
+              );
+          } catch {
+            // Best-effort credential issuance
+          }
+        }
+      }
     } catch {
       // Best-effort trust update
     }
 
+    // Phase 5: Federation settlement — record our fee and forward settlement to the peer
+    try {
+      const entry = taskQueue.get(body.task_id);
+      if (entry?.price_snapshot && entry.price_snapshot > 0) {
+        const grossAmount = entry.price_snapshot;
+        const feeAmount = grossAmount * PLATFORM_FEE_RATE;
+        const netAmount = grossAmount - feeAmount;
+        const receiptHash = body.receipt.result_hash ?? body.receipt.signature ?? "";
+        const settlementId = crypto.randomUUID();
+
+        // Record the originating relay's settlement
+        moteDb.db
+          .prepare(
+            `INSERT OR IGNORE INTO relay_federation_settlements
+           (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id,
+            gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            settlementId,
+            body.task_id,
+            relayIdentity.relayMotebitId,
+            body.origin_relay,
+            null,
+            grossAmount,
+            feeAmount,
+            netAmount,
+            PLATFORM_FEE_RATE,
+            Date.now(),
+            receiptHash,
+          );
+
+        // Forward settlement to the peer relay that executed the task
+        const peerInfo = moteDb.db
+          .prepare("SELECT endpoint_url FROM relay_peers WHERE peer_relay_id = ?")
+          .get(body.origin_relay) as { endpoint_url: string } | undefined;
+        if (peerInfo) {
+          const settlementBody = {
+            task_id: body.task_id,
+            settlement_id: settlementId,
+            origin_relay: relayIdentity.relayMotebitId,
+            gross_amount: netAmount,
+            receipt_hash: receiptHash,
+          };
+          const settlementBytes = new TextEncoder().encode(JSON.stringify(settlementBody));
+          const settlementSig = await sign(settlementBytes, relayIdentity.privateKey);
+          await fetch(`${peerInfo.endpoint_url}/federation/v1/settlement/forward`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...settlementBody, signature: bytesToHex(settlementSig) }),
+            signal: AbortSignal.timeout(10000),
+          });
+        }
+      }
+    } catch {
+      // Best-effort settlement forwarding
+    }
+
     return c.json({ status: "accepted" });
+  });
+
+  // POST /federation/v1/settlement/forward — receive settlement forwarding from originating relay (Phase 5)
+  app.post("/federation/v1/settlement/forward", async (c) => {
+    const body = await c.req.json<{
+      task_id: string;
+      settlement_id: string;
+      origin_relay: string;
+      gross_amount: number;
+      receipt_hash: string;
+      signature: string;
+    }>();
+
+    if (!body.task_id || !body.settlement_id || !body.origin_relay || body.gross_amount == null) {
+      throw new HTTPException(400, { message: "Missing required fields" });
+    }
+
+    // Verify peer
+    const peer = moteDb.db
+      .prepare(
+        "SELECT * FROM relay_peers WHERE peer_relay_id = ? AND state IN ('active', 'suspended')",
+      )
+      .get(body.origin_relay) as { public_key: string; peer_relay_id: string } | undefined;
+    if (!peer) {
+      throw new HTTPException(403, { message: "Unknown peer relay" });
+    }
+
+    // Verify signature
+    const { signature, ...payload } = body;
+    const msgBytes = new TextEncoder().encode(JSON.stringify(payload));
+    const valid = await verify(hexToBytes(signature), msgBytes, hexToBytes(peer.public_key));
+    if (!valid) {
+      throw new HTTPException(403, { message: "Invalid federation signature" });
+    }
+
+    // Record the settlement — this relay takes its own fee from the forwarded amount
+    const feeAmount = body.gross_amount * PLATFORM_FEE_RATE;
+    const netAmount = body.gross_amount - feeAmount;
+
+    moteDb.db
+      .prepare(
+        `INSERT OR IGNORE INTO relay_federation_settlements
+       (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id,
+        gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        body.settlement_id,
+        body.task_id,
+        body.origin_relay,
+        null,
+        null,
+        body.gross_amount,
+        feeAmount,
+        netAmount,
+        PLATFORM_FEE_RATE,
+        Date.now(),
+        body.receipt_hash,
+      );
+
+    return c.json({ status: "settled", fee_amount: feeAmount, net_amount: netAmount });
+  });
+
+  // GET /federation/v1/settlements — federation settlement history (Phase 5)
+  app.get("/federation/v1/settlements", (c) => {
+    const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
+    const rows = moteDb.db
+      .prepare("SELECT * FROM relay_federation_settlements ORDER BY settled_at DESC LIMIT ?")
+      .all(limit);
+    return c.json({ settlements: rows });
   });
 
   // GET /api/v1/agents/:motebitId — get specific agent
