@@ -13,7 +13,9 @@ import {
   createPresentation,
 } from "@motebit/crypto";
 import type { VerifiableCredential } from "@motebit/crypto";
-import { asMotebitId } from "@motebit/sdk";
+import { asMotebitId, AgentTrustLevel } from "@motebit/sdk";
+import type { ExecutionReceipt, MotebitId, DeviceId, AgentTrustRecord } from "@motebit/sdk";
+import { computeServiceReputation } from "@motebit/market";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { IdentityManager } from "@motebit/core-identity";
 import type { Hono } from "hono";
@@ -42,14 +44,16 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
   app.post("/api/v1/credentials/:motebitId/reputation", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
 
-    // Compute reputation from settlement records and latency stats
+    // Build receipts from settlement records for computeServiceReputation
     const settlements = db
       .prepare(
-        `SELECT status, settled_at FROM relay_settlements
+        `SELECT task_id, motebit_id, status, settled_at FROM relay_settlements
          WHERE motebit_id = ?
          ORDER BY settled_at DESC LIMIT 1000`,
       )
       .all(motebitId) as Array<{
+      task_id: string;
+      motebit_id: string;
       status: string;
       settled_at: number;
     }>;
@@ -58,17 +62,51 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
       return c.json({ error: "No task history for this agent" }, 404);
     }
 
-    const succeeded = settlements.filter((r) => r.status === "completed").length;
-    const successRate = succeeded / settlements.length;
+    // Query latency stats for duration data
     const latencies = db
       .prepare(
-        `SELECT latency_ms FROM relay_latency_stats
+        `SELECT latency_ms, recorded_at FROM relay_latency_stats
          WHERE remote_motebit_id = ?
          ORDER BY recorded_at DESC LIMIT 1000`,
       )
-      .all(motebitId) as Array<{ latency_ms: number }>;
-    const avgLatency =
-      latencies.length > 0 ? latencies.reduce((a, b) => a + b.latency_ms, 0) / latencies.length : 0;
+      .all(motebitId) as Array<{ latency_ms: number; recorded_at: number }>;
+
+    // Build minimal ExecutionReceipt[] from settlement + latency data
+    const receipts: ExecutionReceipt[] = settlements.map((s, i) => ({
+      task_id: s.task_id,
+      motebit_id: s.motebit_id as unknown as MotebitId,
+      device_id: "" as unknown as DeviceId,
+      submitted_at: s.settled_at - (latencies[i]?.latency_ms ?? 5000),
+      completed_at: s.settled_at,
+      status: s.status as "completed" | "failed" | "denied",
+      result: "",
+      tools_used: [],
+      memories_formed: 0,
+      prompt_hash: "",
+      result_hash: "",
+      signature: "",
+    }));
+
+    // Query trust record
+    const trustRow = db
+      .prepare("SELECT * FROM agent_trust WHERE remote_motebit_id = ? ORDER BY last_seen_at DESC LIMIT 1")
+      .get(motebitId) as Record<string, unknown> | undefined;
+    const trustRecord: AgentTrustRecord | null = trustRow
+      ? {
+          motebit_id: asMotebitId(trustRow.motebit_id as string),
+          remote_motebit_id: asMotebitId(trustRow.remote_motebit_id as string),
+          trust_level: trustRow.trust_level as AgentTrustLevel,
+          first_seen_at: trustRow.first_seen_at as number,
+          last_seen_at: trustRow.last_seen_at as number,
+          interaction_count: trustRow.interaction_count as number,
+          successful_tasks: (trustRow.successful_tasks as number | null) ?? 0,
+          failed_tasks: (trustRow.failed_tasks as number | null) ?? 0,
+        }
+      : null;
+
+    // Compute reputation using the market package's proper algorithm
+    // (Beta-binomial prior, coefficient-of-variation consistency, exponential recency decay)
+    const reputation = computeServiceReputation(motebitId, receipts, trustRecord);
 
     // Look up agent's public key for did:key subject
     const identity = await identityManager.load(motebitId);
@@ -79,14 +117,16 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
       : `did:motebit:${motebitId}`;
 
     const relayKeys = getRelayKeypair(relayIdentity);
+    const avgLatency =
+      latencies.length > 0 ? latencies.reduce((a, b) => a + b.latency_ms, 0) / latencies.length : 0;
     const vc = await issueReputationCredential(
       {
-        success_rate: successRate,
+        success_rate: reputation.sub_scores.reliability,
         avg_latency_ms: avgLatency,
-        task_count: settlements.length,
-        trust_score: successRate, // Simple: trust = success rate for now
-        availability: 1.0, // Relay can't measure this yet
-        measured_at: Date.now(),
+        task_count: reputation.sample_size,
+        trust_score: reputation.composite,
+        availability: reputation.sub_scores.recency,
+        measured_at: reputation.timestamp,
       },
       relayKeys.privateKey,
       relayKeys.publicKey,
