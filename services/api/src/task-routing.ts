@@ -259,11 +259,14 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
         };
         if (!data.agents || data.agents.length === 0) return [];
 
+        const MAX_CANDIDATES_PER_PEER = 50;
+        const agents = (data.agents ?? []).slice(0, MAX_CANDIDATES_PER_PEER);
+
         // Convert discovery results to CandidateProfile with chain trust
         const peerTrust = peer.trust_score ?? 0.5;
         const results: { profile: CandidateProfile; _source_relay_endpoint: string }[] = [];
 
-        for (const agent of data.agents) {
+        for (const agent of agents) {
           // Filter to agents matching ALL required capabilities
           if (requiredCaps.length > 1) {
             if (!requiredCaps.every((cap) => agent.capabilities?.includes(cap))) continue;
@@ -303,6 +306,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     });
 
     const settled = await Promise.allSettled(promises);
+    const MAX_TOTAL_FEDERATED = 100;
     return settled
       .filter(
         (
@@ -311,7 +315,8 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
           { profile: CandidateProfile; _source_relay_endpoint: string }[]
         > => r.status === "fulfilled",
       )
-      .flatMap((r) => r.value);
+      .flatMap((r) => r.value)
+      .slice(0, MAX_TOTAL_FEDERATED);
   }
 
   // Helper: query local agent_registry -- shared by discover endpoint and federation handler

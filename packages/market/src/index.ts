@@ -5,8 +5,17 @@ export {
   explainedRankCandidates,
   computeTrustClosure,
   findTrustedRoute,
+  weightedSumComposite,
+  lexicographicComposite,
 } from "./graph-routing.js";
-export type { ExplainedRouteScore } from "./graph-routing.js";
+export type {
+  ExplainedRouteScore,
+  NormalizedScores,
+  CompositeFunction,
+  RoutingPolicy,
+  RoutingConfig,
+  RoutingWeights,
+} from "./graph-routing.js";
 export type { CandidateProfile, TaskRequirements } from "./scoring.js";
 export { allocateBudget, estimateCost } from "./budget.js";
 export type { AllocationRequest } from "./budget.js";

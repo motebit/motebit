@@ -102,6 +102,8 @@ export function FederationPanel(): React.ReactElement {
   const [identity, setIdentity] = useState<RelayIdentityData | null>(null);
   const [peers, setPeers] = useState<PeerEntry[]>([]);
   const [settlements, setSettlements] = useState<SettlementEntry[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState(false);
 
   const refresh = useCallback(async (signal: AbortSignal) => {
     try {
@@ -113,9 +115,12 @@ export function FederationPanel(): React.ReactElement {
       setIdentity(id);
       setPeers(p);
       setSettlements(s);
+      setError(id == null);
+      setLoaded(true);
     } catch (err) {
       if (!(err instanceof DOMException && err.name === "AbortError")) {
-        // silently ignore non-abort errors
+        setError(true);
+        setLoaded(true);
       }
     }
   }, []);
@@ -131,6 +136,28 @@ export function FederationPanel(): React.ReactElement {
       clearInterval(interval);
     };
   }, [refresh]);
+
+  if (!loaded) {
+    return React.createElement(
+      "div",
+      { className: "panel" },
+      React.createElement("h2", null, "Federation"),
+      React.createElement("div", { className: "count" }, "Loading..."),
+    );
+  }
+
+  if (error && identity == null) {
+    return React.createElement(
+      "div",
+      { className: "panel" },
+      React.createElement("h2", null, "Federation"),
+      React.createElement(
+        "div",
+        { className: "count" },
+        "Federation not enabled on this relay, or the endpoint is unreachable.",
+      ),
+    );
+  }
 
   return React.createElement(
     "div",

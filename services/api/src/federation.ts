@@ -623,7 +623,8 @@ export function registerFederationRoutes(deps: FederationDeps): void {
        ON CONFLICT(peer_relay_id) DO UPDATE SET
          public_key = excluded.public_key, endpoint_url = excluded.endpoint_url,
          display_name = excluded.display_name, state = 'pending',
-         nonce = excluded.nonce, missed_heartbeats = 0`,
+         nonce = excluded.nonce, missed_heartbeats = 0
+         WHERE relay_peers.state NOT IN ('active', 'pending')`,
     ).run(relay_id, public_key, endpoint_url, display_name ?? null, ourNonce);
 
     return c.json({
@@ -684,6 +685,11 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     if (!peer) throw new HTTPException(404, { message: "No active or suspended peer found" });
 
     const encoder = new TextEncoder();
+    const drift = Math.abs(Date.now() - timestamp);
+    if (drift > 300_000) { // ±5 minutes
+      throw new HTTPException(400, { message: "Heartbeat timestamp outside acceptable drift (±5min)" });
+    }
+
     const valid = await verify(hexToBytes(sig), encoder.encode(`${relay_id}${timestamp}`), hexToBytes(peer.public_key));
     if (!valid) throw new HTTPException(403, { message: "Heartbeat signature verification failed" });
 
@@ -756,7 +762,8 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     federationQueryCache.set(body.query_id, Date.now());
 
     // Loop prevention
-    if (body.visited.includes(relayIdentity.relayMotebitId)) return c.json({ agents: [] });
+    const visitedSet = new Set(body.visited);
+    if (visitedSet.has(relayIdentity.relayMotebitId)) return c.json({ agents: [] });
 
     // Local results
     const localAgents = deps.queryLocalAgents(body.query.capability, body.query.motebit_id, body.query.limit ?? 20);
@@ -767,7 +774,8 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       hop_distance: body.hop_count + 1,
     }));
 
-    // At hop limit — local only
+    // hop_count is 0-based: 0 = direct peer, 1 = peer-of-peer, etc.
+    // At hop_count >= max_hops, we've reached the limit — return local only, no forwarding.
     if (body.hop_count >= body.max_hops) return c.json({ agents: results });
 
     // Forward to active peers
@@ -777,7 +785,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       .all() as Array<{ peer_relay_id: string; endpoint_url: string }>;
 
     const forwardPromises = peers
-      .filter((p) => !visited.includes(p.peer_relay_id))
+      .filter((p) => !visitedSet.has(p.peer_relay_id))
       .map(async (peer) => {
         try {
           const resp = await fetch(`${peer.endpoint_url}/federation/v1/discover`, {

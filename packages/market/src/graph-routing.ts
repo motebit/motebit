@@ -41,8 +41,77 @@ const DEFAULT_WEIGHTS: Required<RoutingWeights> = {
   regulatory_risk: 0.2,
 };
 
+/**
+ * Normalized scores derived from semiring-computed RouteWeight values.
+ *
+ * All values are in [0,1]:
+ * - trust, reliability: directly from semiring (higher is better)
+ * - costScore, latencyNorm, riskScore: normalized via 1/(1+x) (lower raw value → higher score)
+ */
+export interface NormalizedScores {
+  /** Trust ∈ [0,1]: composed multiplicatively along chains (TrustSemiring). */
+  trust: number;
+  /** Reliability ∈ [0,1]: composed multiplicatively along chains (ReliabilitySemiring). */
+  reliability: number;
+  /** Cost ∈ [0,1]: normalized from [0,∞) via 1/(1+cost). Higher means cheaper. */
+  costScore: number;
+  /** Latency ∈ [0,1]: normalized from [0,∞) via 1/(1+latency/1000). Higher means faster. */
+  latencyNorm: number;
+  /** Risk ∈ [0,1]: normalized from [0,∞) via 1/(1+risk). Higher means less risky. */
+  riskScore: number;
+}
+
+/**
+ * A composite function maps normalized semiring scores to a single ordering value.
+ *
+ * This is a policy choice, not an algebraic artifact. The semiring algebra computes
+ * the per-dimension values (trust, cost, latency, reliability, risk) through the
+ * graph. The composite function decides how to combine them for ranking.
+ *
+ * Higher return values indicate better routes.
+ */
+export type CompositeFunction = (route: RouteWeight, normalized: NormalizedScores) => number;
+
+/** Default: weighted sum (backward compatible). All inputs [0,1], composite ∈ [0,1]. */
+export const weightedSumComposite: CompositeFunction = (_route, scores) => {
+  // Uses DEFAULT_WEIGHTS ratios. When called from scoreRoute, the actual weights
+  // are baked into the closure via the RoutingPolicy. This standalone version
+  // uses the default weights for direct invocation.
+  return (
+    scores.trust * DEFAULT_WEIGHTS.trust +
+    scores.costScore * DEFAULT_WEIGHTS.cost +
+    scores.latencyNorm * DEFAULT_WEIGHTS.latency +
+    scores.reliability * DEFAULT_WEIGHTS.reliability +
+    scores.riskScore * DEFAULT_WEIGHTS.regulatory_risk
+  );
+};
+
+/**
+ * Lexicographic composite: trust first, then reliability, then cost.
+ *
+ * Returns a composite where trust is the primary key, reliability secondary,
+ * cost tertiary. Encoded as a single number with separated magnitude bands.
+ * Higher is better.
+ */
+export const lexicographicComposite: CompositeFunction = (_route, scores) => {
+  return scores.trust * 1e6 + scores.reliability * 1e3 + scores.costScore;
+};
+
+/**
+ * Routing policy: configurable weights and composite function.
+ *
+ * The composite function is a policy choice that determines how semiring-computed
+ * per-dimension values are combined into a single ordering for candidate ranking.
+ * The default (weightedSumComposite) preserves backward compatibility.
+ */
+export interface RoutingPolicy {
+  weights?: RoutingWeights;
+  composite?: CompositeFunction;
+}
+
 export interface RoutingConfig {
   weights?: RoutingWeights;
+  compositeFunction?: CompositeFunction;
   peerEdges?: Array<{ from: string; to: string; weight: RouteWeight }>;
   maxCandidates?: number;
   explorationWeight?: number;
@@ -124,6 +193,7 @@ function scoreRoute(
   candidate: CandidateProfile | undefined,
   requirements: TaskRequirements,
   weights: Required<RoutingWeights>,
+  compositeFunction?: CompositeFunction,
 ): RouteScore | null {
   // Capability match is a hard gate
   const capabilityMatch = computeCapabilityMatch(candidate, requirements);
@@ -143,14 +213,19 @@ function scoreRoute(
   const latencyNorm = route.latency === Infinity ? 0 : 1 / (1 + route.latency / 1000);
   const riskScore = route.regulatory_risk === Infinity ? 0 : 1 / (1 + route.regulatory_risk);
 
-  // Composite: weighted sum of semiring values + normalized accumulators.
-  // All inputs are [0,1], weights sum to 1.0 — composite ∈ [0,1].
-  const composite =
-    trust * weights.trust +
-    costScore * weights.cost +
-    latencyNorm * weights.latency +
-    reliability * weights.reliability +
-    riskScore * weights.regulatory_risk;
+  // Build normalized scores for the composite function
+  const normalized: NormalizedScores = { trust, reliability, costScore, latencyNorm, riskScore };
+
+  // Composite: policy-driven combination of semiring values + normalized accumulators.
+  // The composite function is a configurable policy choice (default: weighted sum).
+  const compositeFn = compositeFunction ?? ((_route: RouteWeight, scores: NormalizedScores) =>
+    scores.trust * weights.trust +
+    scores.costScore * weights.cost +
+    scores.latencyNorm * weights.latency +
+    scores.reliability * weights.reliability +
+    scores.riskScore * weights.regulatory_risk
+  );
+  const composite = compositeFn(route, normalized);
 
   // Sub-scores for observability — includes both semiring and candidate-level metrics
   const successRate = candidate ? computeReliability(candidate) : reliability;
@@ -228,6 +303,7 @@ export function graphRankCandidates(
   const weights = { ...DEFAULT_WEIGHTS, ...config?.weights };
   const maxCandidates = config?.maxCandidates ?? 10;
   const explorationWeight = config?.explorationWeight ?? 0;
+  const compositeFn = config?.compositeFunction;
 
   const graph = buildRoutingGraph(selfId, candidates, config?.peerEdges);
   const paths = optimalPaths(graph, selfId);
@@ -238,7 +314,7 @@ export function graphRankCandidates(
   const scores: RouteScore[] = [];
   for (const [nodeId, route] of paths) {
     if (nodeId === selfId || route.trust === 0) continue;
-    const score = scoreRoute(nodeId, route, candidateMap.get(nodeId), requirements, weights);
+    const score = scoreRoute(nodeId, route, candidateMap.get(nodeId), requirements, weights, compositeFn);
     if (score) scores.push(score);
   }
 
@@ -331,6 +407,7 @@ export function explainedRankCandidates(
   const weights = { ...DEFAULT_WEIGHTS, ...config?.weights };
   const maxCandidates = config?.maxCandidates ?? 10;
   const explorationWeight = config?.explorationWeight ?? 0;
+  const compositeFn = config?.compositeFunction;
 
   // 1. Build the plain routing graph
   const plainGraph = buildRoutingGraph(selfId, candidates, config?.peerEdges);
@@ -365,6 +442,7 @@ export function explainedRankCandidates(
       candidateMap.get(nodeId),
       requirements,
       weights,
+      compositeFn,
     );
     if (!score) continue;
 
