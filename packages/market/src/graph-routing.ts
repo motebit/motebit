@@ -4,10 +4,8 @@
  * Bridges the existing CandidateProfile type (flat list, linear scoring)
  * with the semiring computation graph (algebraic multi-hop routing).
  *
- * This module coexists with the existing scoring.ts — backward compatible.
- * The runtime can use either linear scoring (rankCandidates) or graph-based
- * routing (graphRankCandidates) depending on whether multi-hop trust
- * composition is needed.
+ * This is the primary routing module. The deprecated scoring.ts (scoreCandidate,
+ * rankCandidates) is retained for reference but no longer exported from the package.
  */
 
 import type { MotebitId, RouteScore } from "@motebit/sdk";
@@ -114,6 +112,11 @@ export function buildRoutingGraph(
 /**
  * Score a single route from the semiring graph into a RouteScore.
  * Pure function — no graph access, no side effects.
+ *
+ * Uses semiring-computed values directly for trust and reliability
+ * (already algebraically composed via TrustSemiring/ReliabilitySemiring).
+ * Only normalizes cost, latency, and risk (additive accumulators with no
+ * natural [0,1] bound) via sigmoid-style mapping.
  */
 function scoreRoute(
   nodeId: string,
@@ -126,27 +129,40 @@ function scoreRoute(
   const capabilityMatch = computeCapabilityMatch(candidate, requirements);
   if (capabilityMatch === 0 && requirements.required_capabilities.length > 0) return null;
 
-  const successRate = candidate ? computeReliability(candidate) : route.reliability;
-  const latencyScore = route.latency === Infinity ? 0 : 1 - route.latency / (route.latency + 5000);
-  const priceEfficiency = computePriceEfficiency(candidate, requirements);
-  const availability = candidate?.is_online ? 1.0 : 0.0;
+  // Semiring values — used directly from the algebraic computation.
+  // trust ∈ [0,1]: composed multiplicatively along chains (TrustSemiring)
+  // reliability ∈ [0,1]: composed multiplicatively along chains (ReliabilitySemiring)
+  const trust = route.trust;
+  const reliability = route.reliability;
 
+  // Additive accumulators — need normalization to [0,1] (lower is better → invert)
+  // cost ∈ [0,∞): accumulated additively along chains (CostSemiring/tropical)
+  // latency ∈ [0,∞): accumulated additively along chains (LatencySemiring/tropical)
+  // risk ∈ [0,∞): accumulated additively along chains (RegulatoryRiskSemiring)
   const costScore = route.cost === Infinity ? 0 : 1 / (1 + route.cost);
   const latencyNorm = route.latency === Infinity ? 0 : 1 / (1 + route.latency / 1000);
   const riskScore = route.regulatory_risk === Infinity ? 0 : 1 / (1 + route.regulatory_risk);
 
+  // Composite: weighted sum of semiring values + normalized accumulators.
+  // All inputs are [0,1], weights sum to 1.0 — composite ∈ [0,1].
   const composite =
-    route.trust * weights.trust +
+    trust * weights.trust +
     costScore * weights.cost +
     latencyNorm * weights.latency +
-    route.reliability * weights.reliability +
+    reliability * weights.reliability +
     riskScore * weights.regulatory_risk;
+
+  // Sub-scores for observability — includes both semiring and candidate-level metrics
+  const successRate = candidate ? computeReliability(candidate) : reliability;
+  const latencyScore = route.latency === Infinity ? 0 : 1 - route.latency / (route.latency + 5000);
+  const priceEfficiency = computePriceEfficiency(candidate, requirements);
+  const availability = candidate?.is_online ? 1.0 : 0.0;
 
   return {
     motebit_id: nodeId as MotebitId,
     composite,
     sub_scores: {
-      trust: route.trust,
+      trust,
       success_rate: successRate,
       latency: latencyScore,
       price_efficiency: priceEfficiency,
@@ -196,8 +212,7 @@ function finalizeScores<T extends RouteScore>(
 /**
  * Rank candidates using semiring graph traversal.
  *
- * Unlike the existing rankCandidates (linear weighted sum),
- * this performs algebraic composition through the graph:
+ * Performs algebraic composition through the semiring graph:
  * - Trust composes multiplicatively along chains
  * - Cost/latency compose additively along chains
  * - Parallel alternatives pick the best

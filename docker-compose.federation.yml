@@ -1,0 +1,73 @@
+# Two-relay federation test environment
+# Usage: docker-compose -f docker-compose.federation.yml up --build
+#
+# relay-a: http://localhost:3000
+# relay-b: http://localhost:3001
+#
+# After startup, run scripts/federation-test.sh to peer the relays
+# and verify cross-relay discovery and task routing.
+
+services:
+  relay-a:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      NODE_ENV: production
+      MOTEBIT_API_TOKEN: test-token
+      MOTEBIT_DB_PATH: /data/relay.db
+      MOTEBIT_FEDERATION_ENDPOINT_URL: http://relay-a:3000
+      MOTEBIT_FEDERATION_DISPLAY_NAME: relay-alpha
+      MOTEBIT_ENABLE_DEVICE_AUTH: "false"
+      X402_PAY_TO_ADDRESS: "0x0000000000000000000000000000000000000001"
+      X402_NETWORK: "eip155:84532"
+      X402_TESTNET: "true"
+    volumes:
+      - relay-a-data:/data
+    networks:
+      - federation
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  relay-b:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    ports:
+      - "3001:3000"
+    environment:
+      PORT: "3000"
+      NODE_ENV: production
+      MOTEBIT_API_TOKEN: test-token
+      MOTEBIT_DB_PATH: /data/relay.db
+      MOTEBIT_FEDERATION_ENDPOINT_URL: http://relay-b:3000
+      MOTEBIT_FEDERATION_DISPLAY_NAME: relay-beta
+      MOTEBIT_ENABLE_DEVICE_AUTH: "false"
+      X402_PAY_TO_ADDRESS: "0x0000000000000000000000000000000000000002"
+      X402_NETWORK: "eip155:84532"
+      X402_TESTNET: "true"
+    volumes:
+      - relay-b-data:/data
+    networks:
+      - federation
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  relay-a-data:
+  relay-b-data:
+
+networks:
+  federation:
+    driver: bridge

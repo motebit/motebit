@@ -1,4 +1,4 @@
-export { scoreCandidate, rankCandidates, applyPrecisionToMarketConfig } from "./scoring.js";
+export { applyPrecisionToMarketConfig } from "./scoring.js";
 export {
   buildRoutingGraph,
   graphRankCandidates,

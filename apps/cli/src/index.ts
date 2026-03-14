@@ -40,6 +40,9 @@ import {
   handleLedger,
   handleCredentials,
   handleRegister,
+  handleFederationStatus,
+  handleFederationPeers,
+  handleFederationPeer,
 } from "./subcommands.js";
 import { handleRun, handleServe } from "./daemon.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
@@ -148,6 +151,21 @@ async function main(): Promise<void> {
 
   if (subcommand === "credentials") {
     await handleCredentials(config);
+    return;
+  }
+
+  if (subcommand === "federation") {
+    const fedCmd = config.positionals[1];
+    if (fedCmd === "status") {
+      await handleFederationStatus(config);
+    } else if (fedCmd === "peers") {
+      await handleFederationPeers(config);
+    } else if (fedCmd === "peer") {
+      await handleFederationPeer(config);
+    } else {
+      console.error("Usage: motebit federation [status|peers|peer <url>]");
+      process.exit(1);
+    }
     return;
   }
 

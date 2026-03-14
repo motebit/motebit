@@ -52,6 +52,7 @@ import { GradientPanel } from "./components/GradientPanel";
 import { TrustPanel } from "./components/TrustPanel";
 import { AgentGraphPanel } from "./components/AgentGraphPanel";
 import { CredentialsPanel } from "./components/CredentialsPanel";
+import { FederationPanel } from "./components/FederationPanel";
 
 const DEFAULT_STATE: MotebitState = {
   attention: 0,
@@ -222,6 +223,7 @@ export function AdminApp(): React.ReactElement {
       "gradient",
       "trust",
       "credentials",
+      "federation",
     ].map((panel) =>
       React.createElement(
         "button",
@@ -312,6 +314,9 @@ export function AdminApp(): React.ReactElement {
             });
         },
       });
+      break;
+    case "federation":
+      content = React.createElement(FederationPanel, null);
       break;
     default:
       content = React.createElement(

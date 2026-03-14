@@ -101,17 +101,23 @@ import {
   verifySignedToken,
   verifyExecutionReceipt,
   hexPublicKeyToDidKey,
-  generateKeypair,
-  publicKeyToDidKey,
   issueReputationCredential,
-  verifyVerifiableCredential,
-  createPresentation,
   verifyKeySuccession,
   sign,
-  verify,
 } from "@motebit/crypto";
 /* eslint-enable no-restricted-imports */
-import type { VerifiableCredential, KeySuccessionRecord } from "@motebit/crypto";
+import type { KeySuccessionRecord } from "@motebit/crypto";
+import {
+  createFederationTables,
+  initRelayIdentity,
+  createFederationQueryCache,
+  registerFederationRoutes,
+  startHeartbeatLoop,
+  startSettlementRetryLoop,
+} from "./federation.js";
+import type { RelayIdentity } from "./federation.js";
+import { registerCredentialRoutes, getRelayKeypair } from "./credentials.js";
+import { createTaskRouter } from "./task-routing.js";
 import {
   graphRankCandidates,
   explainedRankCandidates,
@@ -120,7 +126,7 @@ import {
   findTrustedRoute,
   buildRoutingGraph,
 } from "@motebit/market";
-import type { CandidateProfile, TaskRequirements } from "@motebit/market";
+import type { CandidateProfile } from "@motebit/market";
 import type { CapabilityPrice, BudgetAllocation, AgentTrustRecord } from "@motebit/sdk";
 import {
   PLATFORM_FEE_RATE,
@@ -432,65 +438,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       );
   `);
 
-  // Relay identity — persistent Ed25519 keypair for credential signing, federation, verification.
-  // Without this, the relay generates ephemeral keys on restart and can't be "motebit verified."
-  moteDb.db.exec(`
-      CREATE TABLE IF NOT EXISTS relay_identity (
-        relay_motebit_id TEXT PRIMARY KEY,
-        public_key       TEXT NOT NULL,
-        private_key_hex  TEXT NOT NULL,
-        did              TEXT NOT NULL,
-        created_at       INTEGER NOT NULL
-      );
-  `);
-
-  // Relay peers — bilateral peering relationships for federation (relay-federation-v1.0 §3.4)
-  moteDb.db.exec(`
-      CREATE TABLE IF NOT EXISTS relay_peers (
-        peer_relay_id     TEXT PRIMARY KEY,
-        public_key        TEXT NOT NULL,
-        endpoint_url      TEXT NOT NULL,
-        display_name      TEXT,
-        state             TEXT NOT NULL DEFAULT 'pending',
-        peered_at         INTEGER,
-        last_heartbeat_at INTEGER,
-        missed_heartbeats INTEGER NOT NULL DEFAULT 0,
-        agent_count       INTEGER NOT NULL DEFAULT 0,
-        trust_score       REAL NOT NULL DEFAULT 0.5,
-        nonce             TEXT
-      );
-  `);
-
-  // Migration: add Phase 5 trust tracking columns to relay_peers
-  for (const col of [
-    "ALTER TABLE relay_peers ADD COLUMN trust_level TEXT NOT NULL DEFAULT 'first_contact'",
-    "ALTER TABLE relay_peers ADD COLUMN successful_forwards INTEGER NOT NULL DEFAULT 0",
-    "ALTER TABLE relay_peers ADD COLUMN failed_forwards INTEGER NOT NULL DEFAULT 0",
-  ]) {
-    try {
-      moteDb.db.exec(col);
-    } catch {
-      /* column already exists */
-    }
-  }
-
-  // Phase 5: Federation settlement records
-  moteDb.db.exec(`
-    CREATE TABLE IF NOT EXISTS relay_federation_settlements (
-      settlement_id TEXT PRIMARY KEY,
-      task_id TEXT NOT NULL,
-      upstream_relay_id TEXT NOT NULL,
-      downstream_relay_id TEXT,
-      agent_id TEXT,
-      gross_amount REAL NOT NULL,
-      fee_amount REAL NOT NULL,
-      net_amount REAL NOT NULL,
-      fee_rate REAL NOT NULL,
-      settled_at INTEGER NOT NULL,
-      receipt_hash TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_fed_settlements_task ON relay_federation_settlements(task_id);
-  `);
+  // Federation tables (relay_identity, relay_peers, relay_federation_settlements)
+  createFederationTables(moteDb.db);
 
   // Create market relay tables (service listings + latency stats for routing)
   moteDb.db.exec(`
@@ -748,62 +697,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const allLimiters = [authLimiter, readLimiter, writeLimiter, publicLimiter, expensiveLimiter];
 
   // --- Relay Identity: persistent Ed25519 keypair ---
-  // The relay is itself a motebit — a cryptographic entity with a stable identity.
-  // This keypair persists across restarts so the relay can be verified, accumulate
-  // reputation, and peer with other relays for federation.
-  const existingIdentity = moteDb.db.prepare("SELECT * FROM relay_identity LIMIT 1").get() as
-    | { relay_motebit_id: string; public_key: string; private_key_hex: string; did: string }
-    | undefined;
+  const relayIdentity: RelayIdentity = await initRelayIdentity(moteDb.db, process.env.MOTEBIT_RELAY_KEY_PASSPHRASE);
 
-  let relayIdentity: {
-    relayMotebitId: string;
-    publicKey: Uint8Array;
-    privateKey: Uint8Array;
-    publicKeyHex: string;
-    did: string;
-  };
-
-  if (existingIdentity) {
-    relayIdentity = {
-      relayMotebitId: existingIdentity.relay_motebit_id,
-      publicKey: hexToBytes(existingIdentity.public_key),
-      privateKey: hexToBytes(existingIdentity.private_key_hex),
-      publicKeyHex: existingIdentity.public_key,
-      did: existingIdentity.did,
-    };
-  } else {
-    // First boot — generate and persist relay identity
-    const keypair = await generateKeypair();
-    const pubHex = bytesToHex(keypair.publicKey);
-    const privHex = bytesToHex(keypair.privateKey);
-    const did = publicKeyToDidKey(keypair.publicKey);
-    const relayMotebitId = `relay-${crypto.randomUUID()}`;
-
-    moteDb.db
-      .prepare(
-        `INSERT INTO relay_identity (relay_motebit_id, public_key, private_key_hex, did, created_at)
-         VALUES (?, ?, ?, ?, ?)`,
-      )
-      .run(relayMotebitId, pubHex, privHex, did, Date.now());
-
-    relayIdentity = {
-      relayMotebitId,
-      publicKey: keypair.publicKey,
-      privateKey: keypair.privateKey,
-      publicKeyHex: pubHex,
-      did,
-    };
-  }
+  // Task routing helpers (extracted to task-routing.ts)
+  const taskRouter = createTaskRouter({ db: moteDb.db, relayIdentity, federationConfig });
 
   // Federation query deduplication — prevents forwarding loops and replay
-  const federationQueryCache = new Map<string, number>(); // query_id → timestamp
-  const FEDERATION_QUERY_TTL_MS = 30_000;
-  const federationQueryPruneInterval = setInterval(() => {
-    const cutoff = Date.now() - FEDERATION_QUERY_TTL_MS;
-    for (const [id, ts] of federationQueryCache) {
-      if (ts < cutoff) federationQueryCache.delete(id);
-    }
-  }, FEDERATION_QUERY_TTL_MS);
+  const { cache: federationQueryCache, pruneInterval: federationQueryPruneInterval } =
+    createFederationQueryCache();
 
   const app = new Hono();
   // eslint-disable-next-line @typescript-eslint/unbound-method -- hono utility functions, not bound methods
@@ -838,51 +739,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       return pricing.reduce((sum, p) => sum + (p.unit_cost ?? 0), 0);
     } catch {
       return 0;
-    }
-  }
-
-  // Helper: fetch recent delegation edges for multi-hop routing.
-  function fetchPeerEdges(): Array<{
-    from: string;
-    to: string;
-    weight: {
-      trust: number;
-      cost: number;
-      latency: number;
-      reliability: number;
-      regulatory_risk: number;
-    };
-  }> {
-    try {
-      const rows = moteDb.db
-        .prepare(
-          `SELECT from_motebit_id, to_motebit_id, trust, cost, latency_ms, reliability, regulatory_risk
-           FROM relay_delegation_edges
-           WHERE recorded_at > ?
-           ORDER BY recorded_at DESC LIMIT 500`,
-        )
-        .all(Date.now() - 30 * 24 * 60 * 60 * 1000) as Array<{
-        from_motebit_id: string;
-        to_motebit_id: string;
-        trust: number;
-        cost: number;
-        latency_ms: number;
-        reliability: number;
-        regulatory_risk: number;
-      }>;
-      return rows.map((row) => ({
-        from: row.from_motebit_id,
-        to: row.to_motebit_id,
-        weight: {
-          trust: row.trust,
-          cost: row.cost,
-          latency: row.latency_ms,
-          reliability: row.reliability,
-          regulatory_risk: row.regulatory_risk,
-        },
-      }));
-    } catch {
-      return [];
     }
   }
 
@@ -1052,16 +908,17 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   app.use("/api/v1/agents/:motebitId/presentation", rateLimitMiddleware(expensiveLimiter));
   app.use("/api/v1/agents/bootstrap", rateLimitMiddleware(expensiveLimiter));
 
-  // Federation peering endpoints (30 req/min — write tier)
+  // Federation peering endpoints (30 req/min per IP — write tier)
+  // POST handlers also enforce per-peer rate limiting (30 req/min per relay_id) in federation.ts
   app.use("/federation/v1/peer/*", rateLimitMiddleware(writeLimiter));
 
-  // Federation discovery (60 req/min — read tier)
+  // Federation discovery (60 req/min per IP — read tier, plus per-peer in federation.ts)
   app.use("/federation/v1/discover", rateLimitMiddleware(readLimiter));
 
-  // Federation task routing (30 req/min — write tier)
+  // Federation task routing (30 req/min per IP — write tier, plus per-peer in federation.ts)
   app.use("/federation/v1/task/*", rateLimitMiddleware(writeLimiter));
 
-  // Federation settlement endpoints (Phase 5)
+  // Federation settlement endpoints (Phase 5, plus per-peer in federation.ts)
   app.use("/federation/v1/settlement/*", rateLimitMiddleware(writeLimiter));
   app.use("/federation/v1/settlements", rateLimitMiddleware(readLimiter));
 
@@ -1756,7 +1613,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // eslint-disable-next-line @typescript-eslint/require-await
   app.get("/api/v1/agents/:motebitId/trust-closure", async (c) => {
     const motebitId = c.req.param("motebitId");
-    const { profiles } = buildCandidateProfiles(undefined, undefined, 100, motebitId);
+    const { profiles } = taskRouter.buildCandidateProfiles(undefined, undefined, 100, motebitId);
     const closure = computeTrustClosure(asMotebitId(motebitId), profiles);
     const closureArray = Array.from(closure.entries())
       .map(([agent_id, trust]) => ({ agent_id, trust }))
@@ -1769,7 +1626,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   app.get("/api/v1/agents/:motebitId/path-to/:targetId", async (c) => {
     const motebitId = c.req.param("motebitId");
     const targetId = c.req.param("targetId");
-    const { profiles } = buildCandidateProfiles(undefined, undefined, 100, motebitId);
+    const { profiles } = taskRouter.buildCandidateProfiles(undefined, undefined, 100, motebitId);
     const route = findTrustedRoute(asMotebitId(motebitId), asMotebitId(targetId), profiles);
     if (!route) {
       throw new HTTPException(404, { message: "No trusted path found" });
@@ -1781,7 +1638,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // eslint-disable-next-line @typescript-eslint/require-await
   app.get("/api/v1/agents/:motebitId/graph", async (c) => {
     const motebitId = c.req.param("motebitId");
-    const { profiles } = buildCandidateProfiles(undefined, undefined, 100, motebitId);
+    const { profiles } = taskRouter.buildCandidateProfiles(undefined, undefined, 100, motebitId);
     const graph = buildRoutingGraph(asMotebitId(motebitId), profiles);
     const nodes = [...graph.nodes()];
     const edges = graph.edges().map((e) => ({ from: e.from, to: e.to, weight: e.weight }));
@@ -1801,271 +1658,175 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     const capability = c.req.query("capability");
     const limitStr = c.req.query("limit");
     const limit = Math.min(Math.max(parseInt(limitStr ?? "10", 10) || 10, 1), 100);
-    const { profiles, requirements } = buildCandidateProfiles(
+    const { profiles, requirements } = taskRouter.buildCandidateProfiles(
       capability ?? undefined,
       undefined,
       limit,
       motebitId,
     );
-    const peerEdges = fetchPeerEdges();
+    const peerEdges = taskRouter.fetchPeerEdges();
     const ranked = explainedRankCandidates(asMotebitId(motebitId), profiles, requirements, {
       peerEdges,
     });
     return c.json({ motebit_id: motebitId, scores: ranked });
   });
 
-  // --- Federation: relay identity (public, unauthenticated) ---
-  // eslint-disable-next-line @typescript-eslint/require-await -- Hono handler, sync data
-  app.get("/federation/v1/identity", async (c) => {
-    return c.json({
-      spec: "motebit/relay-federation@1.0",
-      relay_motebit_id: relayIdentity.relayMotebitId,
-      public_key: relayIdentity.publicKeyHex,
-      did: relayIdentity.did,
-    });
-  });
+  // --- Federation: all 11 endpoints (identity, peering, discovery, task forwarding, settlement) ---
+  // Protocol logic (peer validation, signature verification, loop prevention) lives in federation.ts.
+  // Business logic (task queue, WebSocket fan-out, trust, credentials) provided via callbacks.
+  registerFederationRoutes({
+    db: moteDb.db,
+    app,
+    relayIdentity,
+    federationConfig,
+    federationQueryCache,
+    queryLocalAgents: taskRouter.queryLocalAgents,
 
-  // --- Federation: peering protocol (relay-federation-v1.0 §3.1–3.4) ---
+    async onTaskForwarded(verified) {
+      const task: AgentTask = {
+        task_id: verified.taskId,
+        motebit_id: asMotebitId(verified.targetAgent),
+        prompt: verified.payload.prompt,
+        submitted_at: Date.now(),
+        submitted_by: verified.payload.submitted_by ?? `relay:${verified.originRelay}`,
+        wall_clock_ms: verified.payload.wall_clock_ms,
+        status: AgentTaskStatus.Pending,
+        required_capabilities: verified.payload.required_capabilities as AgentTask["required_capabilities"],
+      };
 
-  // POST /federation/v1/peer/propose — Step 1 of peering handshake
-  app.post("/federation/v1/peer/propose", async (c) => {
-    const body = await c.req.json<{
-      relay_id?: string;
-      public_key?: string;
-      endpoint_url?: string;
-      display_name?: string;
-      nonce?: string;
-    }>();
-
-    const { relay_id, public_key, endpoint_url, display_name, nonce } = body;
-    if (!relay_id || !public_key) {
-      throw new HTTPException(400, { message: "relay_id and public_key are required" });
-    }
-    if (!endpoint_url) {
-      throw new HTTPException(400, { message: "endpoint_url is required" });
-    }
-    if (!nonce) {
-      throw new HTTPException(400, { message: "nonce is required" });
-    }
-
-    // Check if peer already exists in active or pending state
-    const existing = moteDb.db
-      .prepare("SELECT state FROM relay_peers WHERE peer_relay_id = ?")
-      .get(relay_id) as { state: string } | undefined;
-    if (existing && (existing.state === "active" || existing.state === "pending")) {
-      throw new HTTPException(409, {
-        message: `Peer already exists in ${existing.state} state`,
+      taskQueue.set(verified.taskId, {
+        task,
+        expiresAt: Date.now() + TASK_TTL_MS,
+        submitted_by: task.submitted_by,
+        origin_relay: verified.originRelay,
       });
-    }
 
-    // Generate our nonce for the challenge
-    const ourNonceBytes = new Uint8Array(32);
-    crypto.getRandomValues(ourNonceBytes);
-    const ourNonce = bytesToHex(ourNonceBytes);
+      const agentPeers = connections.get(verified.targetAgent);
+      if (agentPeers && agentPeers.length > 0) {
+        const payload = JSON.stringify({ type: "task_request", task });
+        for (const p of agentPeers) p.ws.send(payload);
+        return { status: "routed" as const };
+      }
+      return { status: "pending" as const };
+    },
 
-    // Sign their nonce with our private key (proves we hold our key)
-    const theirNonceBytes = hexToBytes(nonce);
-    const challengeSig = await sign(theirNonceBytes, relayIdentity.privateKey);
-    const challengeHex = bytesToHex(challengeSig);
+    async onTaskResultReceived(verified) {
+      const entry = taskQueue.get(verified.taskId);
+      if (!entry) throw new HTTPException(404, { message: "Task not found or expired" });
 
-    // Upsert peer as pending (handles re-proposal after removal)
-    moteDb.db
-      .prepare(
-        `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, display_name, state, nonce, missed_heartbeats, agent_count, trust_score)
-         VALUES (?, ?, ?, ?, 'pending', ?, 0, 0, 0.5)
-         ON CONFLICT(peer_relay_id) DO UPDATE SET
-           public_key = excluded.public_key,
-           endpoint_url = excluded.endpoint_url,
-           display_name = excluded.display_name,
-           state = 'pending',
-           nonce = excluded.nonce,
-           missed_heartbeats = 0`,
-      )
-      .run(relay_id, public_key, endpoint_url, display_name ?? null, ourNonce);
+      // Update task
+      entry.receipt = verified.receipt;
+      entry.expiresAt = Math.max(entry.expiresAt, Date.now() + TASK_TTL_MS);
+      entry.task.status =
+        verified.receipt.status === "completed"
+          ? AgentTaskStatus.Completed
+          : verified.receipt.status === "denied"
+            ? AgentTaskStatus.Denied
+            : AgentTaskStatus.Failed;
 
-    return c.json({
-      relay_id: relayIdentity.relayMotebitId,
-      public_key: relayIdentity.publicKeyHex,
-      endpoint_url: federationConfig?.endpointUrl ?? "self",
-      display_name: federationConfig?.displayName ?? null,
-      nonce: ourNonce,
-      challenge: challengeHex,
-    });
-  });
+      // Fan out to submitter
+      const submittedBy = entry.submitted_by ?? entry.task.submitted_by;
+      if (submittedBy) {
+        const peers = connections.get(submittedBy);
+        if (peers) {
+          const msg = JSON.stringify({ type: "task_result", task_id: verified.taskId, receipt: verified.receipt });
+          for (const p of peers) p.ws.send(msg);
+        }
+      }
 
-  // POST /federation/v1/peer/confirm — Step 3 of peering handshake
-  app.post("/federation/v1/peer/confirm", async (c) => {
-    const body = await c.req.json<{
-      relay_id?: string;
-      challenge_response?: string;
-    }>();
+      // Trust update via evaluateTrustTransition
+      try {
+        const peerRow = moteDb.db
+          .prepare("SELECT trust_level, successful_forwards, failed_forwards FROM relay_peers WHERE peer_relay_id = ?")
+          .get(verified.originRelay) as { trust_level: string; successful_forwards: number; failed_forwards: number } | undefined;
 
-    const { relay_id, challenge_response } = body;
-    if (!relay_id || !challenge_response) {
-      throw new HTTPException(400, {
-        message: "relay_id and challenge_response are required",
-      });
-    }
+        if (peerRow) {
+          const isSuccess = verified.receipt.status === "completed";
+          const newSuccessful = peerRow.successful_forwards + (isSuccess ? 1 : 0);
+          const newFailed = peerRow.failed_forwards + (isSuccess ? 0 : 1);
 
-    // Look up pending peer
-    const peer = moteDb.db
-      .prepare("SELECT * FROM relay_peers WHERE peer_relay_id = ? AND state = 'pending'")
-      .get(relay_id) as
-      | { peer_relay_id: string; public_key: string; nonce: string | null }
-      | undefined;
-    if (!peer) {
-      throw new HTTPException(404, { message: "No pending peer found for this relay_id" });
-    }
-    if (!peer.nonce) {
-      throw new HTTPException(400, { message: "No nonce stored for this peer" });
-    }
+          const trustRecord: AgentTrustRecord = {
+            motebit_id: asMotebitId(relayIdentity.relayMotebitId),
+            remote_motebit_id: asMotebitId(verified.originRelay),
+            trust_level: peerRow.trust_level as AgentTrustLevel,
+            first_seen_at: 0, last_seen_at: Date.now(),
+            interaction_count: newSuccessful + newFailed,
+            successful_tasks: newSuccessful, failed_tasks: newFailed,
+          };
 
-    // Verify challenge_response: peer signed our nonce with their private key
-    const nonceBytes = hexToBytes(peer.nonce);
-    const sigBytes = hexToBytes(challenge_response);
-    const peerPubKey = hexToBytes(peer.public_key);
-    const valid = await verify(sigBytes, nonceBytes, peerPubKey);
-    if (!valid) {
-      // Discard the peer on failed verification
-      moteDb.db.prepare("DELETE FROM relay_peers WHERE peer_relay_id = ?").run(relay_id);
-      throw new HTTPException(403, { message: "Challenge response verification failed" });
-    }
+          const newLevel = evaluateTrustTransition(trustRecord);
+          const trustLevel = newLevel ?? peerRow.trust_level;
+          const trustScore = trustLevelToScore(trustLevel as AgentTrustLevel);
 
-    // Activate peer
-    const now = Date.now();
-    moteDb.db
-      .prepare(
-        `UPDATE relay_peers
-         SET state = 'active', peered_at = ?, last_heartbeat_at = ?, nonce = NULL
-         WHERE peer_relay_id = ?`,
-      )
-      .run(now, now, relay_id);
+          moteDb.db
+            .prepare("UPDATE relay_peers SET successful_forwards = ?, failed_forwards = ?, trust_level = ?, trust_score = ? WHERE peer_relay_id = ?")
+            .run(newSuccessful, newFailed, trustLevel, trustScore, verified.originRelay);
 
-    return c.json({ status: "active", peered_at: now });
-  });
+          // Issue credential on trust level transition
+          if (newLevel && newLevel !== peerRow.trust_level) {
+            try {
+              const relayKeys = getRelayKeypair(relayIdentity);
+              const peerDid = hexPublicKeyToDidKey(
+                (moteDb.db.prepare("SELECT public_key FROM relay_peers WHERE peer_relay_id = ?").get(verified.originRelay) as { public_key: string }).public_key,
+              );
+              const vc = await issueReputationCredential(
+                { success_rate: newSuccessful / Math.max(1, newSuccessful + newFailed), avg_latency_ms: 0, task_count: newSuccessful + newFailed, trust_score: trustScore, availability: 1.0, measured_at: Date.now() },
+                relayKeys.privateKey, relayKeys.publicKey, peerDid,
+              );
+              const credentialType = vc.type.find((t) => t !== "VerifiableCredential") ?? "VerifiableCredential";
+              moteDb.db
+                .prepare("INSERT INTO relay_credentials (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at) VALUES (?, ?, ?, ?, ?, ?)")
+                .run(crypto.randomUUID(), verified.originRelay, vc.issuer, credentialType, JSON.stringify(vc), Date.now());
+            } catch { /* best-effort */ }
+          }
+        }
+      } catch { /* best-effort trust update */ }
 
-  // POST /federation/v1/peer/heartbeat — Liveness + metadata exchange
-  app.post("/federation/v1/peer/heartbeat", async (c) => {
-    const body = await c.req.json<{
-      relay_id?: string;
-      timestamp?: number;
-      agent_count?: number;
-      signature?: string;
-    }>();
+      // Settlement forwarding
+      try {
+        if (entry.price_snapshot && entry.price_snapshot > 0) {
+          const grossAmount = entry.price_snapshot;
+          const feeAmount = grossAmount * PLATFORM_FEE_RATE;
+          const netAmount = grossAmount - feeAmount;
+          const receiptHash = verified.receipt.result_hash ?? verified.receipt.signature ?? "";
+          const settlementId = crypto.randomUUID();
 
-    const { relay_id, timestamp, agent_count, signature } = body;
-    if (!relay_id || timestamp == null || agent_count == null || !signature) {
-      throw new HTTPException(400, {
-        message: "relay_id, timestamp, agent_count, and signature are required",
-      });
-    }
+          moteDb.db
+            .prepare(`INSERT OR IGNORE INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            .run(settlementId, verified.taskId, relayIdentity.relayMotebitId, verified.originRelay, null, grossAmount, feeAmount, netAmount, PLATFORM_FEE_RATE, Date.now(), receiptHash);
 
-    // Look up peer in active or suspended state
-    const peer = moteDb.db
-      .prepare(
-        "SELECT * FROM relay_peers WHERE peer_relay_id = ? AND state IN ('active', 'suspended')",
-      )
-      .get(relay_id) as { peer_relay_id: string; public_key: string; state: string } | undefined;
-    if (!peer) {
-      throw new HTTPException(404, { message: "No active or suspended peer found" });
-    }
+          const peerInfo = moteDb.db
+            .prepare("SELECT endpoint_url FROM relay_peers WHERE peer_relay_id = ?")
+            .get(verified.originRelay) as { endpoint_url: string } | undefined;
+          if (peerInfo) {
+            const settlementBody = { task_id: verified.taskId, settlement_id: settlementId, origin_relay: relayIdentity.relayMotebitId, gross_amount: netAmount, receipt_hash: receiptHash };
+            const settlementSig = await sign(new TextEncoder().encode(JSON.stringify(settlementBody)), relayIdentity.privateKey);
+            try {
+              const resp = await fetch(`${peerInfo.endpoint_url}/federation/v1/settlement/forward`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ...settlementBody, signature: bytesToHex(settlementSig) }),
+                signal: AbortSignal.timeout(10000),
+              });
+              if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            } catch {
+              // Settlement forward failed — queue for retry instead of dropping
+              moteDb.db
+                .prepare(`INSERT INTO relay_settlement_retries (retry_id, settlement_id, task_id, peer_relay_id, payload_json, attempts, max_attempts, next_retry_at, status, created_at) VALUES (?, ?, ?, ?, ?, 0, 5, ?, 'pending', ?)`)
+                .run(crypto.randomUUID(), settlementId, verified.taskId, verified.originRelay, JSON.stringify(settlementBody), Date.now() + 30000, Date.now());
+            }
+          }
+        }
+      } catch { /* best-effort settlement */ }
+    },
 
-    // Verify signature over relay_id + timestamp
-    const encoder = new TextEncoder();
-    const messageBytes = encoder.encode(`${relay_id}${timestamp}`);
-    const sigBytes = hexToBytes(signature);
-    const peerPubKey = hexToBytes(peer.public_key);
-    const valid = await verify(sigBytes, messageBytes, peerPubKey);
-    if (!valid) {
-      throw new HTTPException(403, { message: "Heartbeat signature verification failed" });
-    }
-
-    // Update peer: reset missed heartbeats, update agent_count
-    const now = Date.now();
-    const newState = peer.state === "suspended" ? "active" : peer.state;
-    moteDb.db
-      .prepare(
-        `UPDATE relay_peers
-         SET last_heartbeat_at = ?, missed_heartbeats = 0, agent_count = ?, state = ?
-         WHERE peer_relay_id = ?`,
-      )
-      .run(now, agent_count, newState, relay_id);
-
-    // Sign our response heartbeat
-    const ourTimestamp = Date.now();
-    const localAgentCount = (
-      moteDb.db.prepare("SELECT COUNT(*) as cnt FROM agent_registry").get() as { cnt: number }
-    ).cnt;
-    const responseMsg = encoder.encode(`${relayIdentity.relayMotebitId}${ourTimestamp}`);
-    const responseSig = await sign(responseMsg, relayIdentity.privateKey);
-
-    return c.json({
-      relay_id: relayIdentity.relayMotebitId,
-      timestamp: ourTimestamp,
-      agent_count: localAgentCount,
-      signature: bytesToHex(responseSig),
-    });
-  });
-
-  // POST /federation/v1/peer/remove — Unilateral peer removal
-  app.post("/federation/v1/peer/remove", async (c) => {
-    const body = await c.req.json<{
-      relay_id?: string;
-      signature?: string;
-    }>();
-
-    const { relay_id, signature } = body;
-    if (!relay_id || !signature) {
-      throw new HTTPException(400, { message: "relay_id and signature are required" });
-    }
-
-    // Look up peer
-    const peer = moteDb.db
-      .prepare("SELECT * FROM relay_peers WHERE peer_relay_id = ?")
-      .get(relay_id) as { peer_relay_id: string; public_key: string; state: string } | undefined;
-    if (!peer) {
-      throw new HTTPException(404, { message: "Peer not found" });
-    }
-
-    // Verify signature over relay_id
-    const encoder = new TextEncoder();
-    const messageBytes = encoder.encode(relay_id);
-    const sigBytes = hexToBytes(signature);
-    const peerPubKey = hexToBytes(peer.public_key);
-    const valid = await verify(sigBytes, messageBytes, peerPubKey);
-    if (!valid) {
-      throw new HTTPException(403, { message: "Removal signature verification failed" });
-    }
-
-    moteDb.db
-      .prepare("UPDATE relay_peers SET state = 'removed' WHERE peer_relay_id = ?")
-      .run(relay_id);
-
-    return c.json({ status: "removed" });
-  });
-
-  // GET /federation/v1/peers — List all peers (admin/debugging)
-  // eslint-disable-next-line @typescript-eslint/require-await -- Hono handler, sync data
-  app.get("/federation/v1/peers", async (c) => {
-    const rows = moteDb.db
-      .prepare(
-        `SELECT peer_relay_id, public_key, endpoint_url, display_name, state,
-                peered_at, last_heartbeat_at, missed_heartbeats, agent_count, trust_score
-         FROM relay_peers`,
-      )
-      .all() as Array<{
-      peer_relay_id: string;
-      public_key: string;
-      endpoint_url: string;
-      display_name: string | null;
-      state: string;
-      peered_at: number | null;
-      last_heartbeat_at: number | null;
-      missed_heartbeats: number;
-      agent_count: number;
-      trust_score: number;
-    }>;
-    return c.json({ peers: rows });
+    async onSettlementReceived(verified) {
+      const feeAmount = verified.grossAmount * PLATFORM_FEE_RATE;
+      const netAmount = verified.grossAmount - feeAmount;
+      moteDb.db
+        .prepare(`INSERT OR IGNORE INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(verified.settlementId, verified.taskId, verified.originRelay, null, null, verified.grossAmount, feeAmount, netAmount, PLATFORM_FEE_RATE, Date.now(), verified.receiptHash);
+      return { feeAmount, netAmount };
+    },
   });
 
   // --- Gradient: intelligence gradient snapshots ---
@@ -2103,75 +1864,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     });
   });
 
-  // --- Credentials: relay-issued reputation VC ---
-  // Uses the persistent relay identity for credential signing.
-  // The relay IS a motebit — its keypair persists across restarts.
-  function getRelayKeypair(): Promise<{ publicKey: Uint8Array; privateKey: Uint8Array }> {
-    return Promise.resolve({
-      publicKey: relayIdentity.publicKey,
-      privateKey: relayIdentity.privateKey,
-    });
-  }
-
-  app.post("/api/v1/credentials/:motebitId/reputation", async (c) => {
-    const motebitId = asMotebitId(c.req.param("motebitId"));
-
-    // Compute reputation from settlement records and latency stats
-    const settlements = moteDb.db
-      .prepare(
-        `SELECT status, settled_at FROM relay_settlements
-         WHERE motebit_id = ?
-         ORDER BY settled_at DESC LIMIT 1000`,
-      )
-      .all(motebitId) as Array<{
-      status: string;
-      settled_at: number;
-    }>;
-
-    if (settlements.length === 0) {
-      return c.json({ error: "No task history for this agent" }, 404);
-    }
-
-    const succeeded = settlements.filter((r) => r.status === "completed").length;
-    const successRate = succeeded / settlements.length;
-    const latencies = moteDb.db
-      .prepare(
-        `SELECT latency_ms FROM relay_latency_stats
-         WHERE remote_motebit_id = ?
-         ORDER BY recorded_at DESC LIMIT 1000`,
-      )
-      .all(motebitId) as Array<{ latency_ms: number }>;
-    const avgLatency =
-      latencies.length > 0 ? latencies.reduce((a, b) => a + b.latency_ms, 0) / latencies.length : 0;
-
-    // Look up agent's public key for did:key subject
-    const identity = await identityManager.load(motebitId);
-    const devices = identity ? await identityManager.listDevices(motebitId) : [];
-    const agentPubKeyHex = devices[0]?.public_key;
-    const subjectDid = agentPubKeyHex
-      ? hexPublicKeyToDidKey(agentPubKeyHex)
-      : `did:motebit:${motebitId}`;
-
-    const relayKeys = await getRelayKeypair();
-    const vc = await issueReputationCredential(
-      {
-        success_rate: successRate,
-        avg_latency_ms: avgLatency,
-        task_count: settlements.length,
-        trust_score: successRate, // Simple: trust = success rate for now
-        availability: 1.0, // Relay can't measure this yet
-        measured_at: Date.now(),
-      },
-      relayKeys.privateKey,
-      relayKeys.publicKey,
-      subjectDid,
-    );
-
-    return c.json({
-      credential: vc,
-      relay_did: publicKeyToDidKey(relayKeys.publicKey),
-    });
-  });
+  // --- Credentials: extracted to credentials.ts ---
+  registerCredentialRoutes({ db: moteDb.db, app, relayIdentity, identityManager });
 
   // --- State: current state vector ---
   app.get("/api/v1/state/:motebitId", (c) => {
@@ -2893,211 +2587,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     app.use("/agent/*/settlements", bearerAuth({ token: apiToken }));
   }
 
-  // --- Shared: build CandidateProfile[] from relay DB ---
-
-  function buildCandidateProfiles(
-    capabilityFilter?: string,
-    maxBudget?: number,
-    limit = 20,
-    callerMotebitId?: string,
-  ): { profiles: CandidateProfile[]; requirements: TaskRequirements } {
-    const now = Date.now();
-
-    // Query service listings, optionally filtered by capability
-    let listingRows: Array<Record<string, unknown>>;
-    if (capabilityFilter) {
-      listingRows = moteDb.db
-        .prepare(
-          `SELECT l.*, r.public_key, r.expires_at
-           FROM relay_service_listings l
-           LEFT JOIN agent_registry r ON l.motebit_id = r.motebit_id
-           WHERE EXISTS (SELECT 1 FROM json_each(l.capabilities) WHERE value = ?)
-           LIMIT ?`,
-        )
-        .all(capabilityFilter, limit) as Array<Record<string, unknown>>;
-    } else {
-      listingRows = moteDb.db
-        .prepare(
-          `SELECT l.*, r.public_key, r.expires_at
-           FROM relay_service_listings l
-           LEFT JOIN agent_registry r ON l.motebit_id = r.motebit_id
-           LIMIT ?`,
-        )
-        .all(limit) as Array<Record<string, unknown>>;
-    }
-
-    // Batch-fetch latency stats for all candidates in one query
-    const latencyStmt = moteDb.db.prepare(
-      `SELECT latency_ms FROM relay_latency_stats
-       WHERE remote_motebit_id = ?
-       ORDER BY recorded_at DESC LIMIT 100`,
-    );
-
-    const profiles: CandidateProfile[] = listingRows.map((row) => {
-      const mid = row.motebit_id as string;
-      const isOnline =
-        (row.expires_at as number | null) != null && (row.expires_at as number) > now;
-
-      const latencyRows = latencyStmt.all(mid) as Array<{ latency_ms: number }>;
-      let latencyStats: { avg_ms: number; p95_ms: number; sample_count: number } | null = null;
-      if (latencyRows.length > 0) {
-        const vals = latencyRows.map((r) => r.latency_ms);
-        const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
-        const sorted = [...vals].sort((a, b) => a - b);
-        const p95Idx = Math.min(Math.ceil(sorted.length * 0.95) - 1, sorted.length - 1);
-        latencyStats = { avg_ms: avg, p95_ms: sorted[p95Idx]!, sample_count: vals.length };
-      }
-
-      const capabilities = JSON.parse(row.capabilities as string) as string[];
-      const pricing = JSON.parse(row.pricing as string) as CapabilityPrice[];
-
-      // Fetch caller's trust record for this candidate (enables semiring routing).
-      // Uses raw DB query (sync) to stay in the synchronous .map() context.
-      let trust_record: AgentTrustRecord | null = null;
-      if (callerMotebitId) {
-        const trustRow = moteDb.db
-          .prepare(`SELECT * FROM agent_trust WHERE motebit_id = ? AND remote_motebit_id = ?`)
-          .get(callerMotebitId, mid) as Record<string, unknown> | undefined;
-        if (trustRow) {
-          trust_record = {
-            motebit_id: asMotebitId(trustRow.motebit_id as string),
-            remote_motebit_id: asMotebitId(trustRow.remote_motebit_id as string),
-            trust_level: trustRow.trust_level as string as AgentTrustLevel,
-            public_key: trustRow.public_key as string | undefined,
-            first_seen_at: trustRow.first_seen_at as number,
-            last_seen_at: trustRow.last_seen_at as number,
-            interaction_count: trustRow.interaction_count as number,
-            successful_tasks: (trustRow.successful_tasks as number | null) ?? 0,
-            failed_tasks: (trustRow.failed_tasks as number | null) ?? 0,
-            notes: trustRow.notes as string | undefined,
-          };
-        }
-      }
-
-      return {
-        motebit_id: asMotebitId(mid),
-        trust_record,
-        listing: {
-          listing_id: asListingId(row.listing_id as string),
-          motebit_id: asMotebitId(mid),
-          capabilities,
-          pricing,
-          sla: {
-            max_latency_ms: row.sla_max_latency_ms as number,
-            availability_guarantee: row.sla_availability as number,
-          },
-          description: row.description as string,
-          regulatory_risk: (row.regulatory_risk as number | null) ?? undefined,
-          updated_at: row.updated_at as number,
-        },
-        latency_stats: latencyStats,
-        is_online: isOnline,
-      } satisfies CandidateProfile;
-    });
-
-    const requirements: TaskRequirements = {
-      required_capabilities: capabilityFilter ? [capabilityFilter] : [],
-      max_budget: maxBudget,
-    };
-
-    return { profiles, requirements };
-  }
-
-  // --- Federated candidate fetching (Phase 4: Cross-Relay Task Routing) ---
-
-  /**
-   * Fetch candidate profiles from active peer relays via federation discovery.
-   * Returns CandidateProfile[] with chain_trust composed from peer relay trust
-   * and the reported agent trust. Failures are gracefully ignored (best-effort).
-   */
-  async function fetchFederatedCandidates(
-    requiredCaps: string[],
-    _callerMotebitId?: string,
-  ): Promise<{ profile: CandidateProfile; _source_relay_endpoint: string }[]> {
-    const peers = moteDb.db
-      .prepare(
-        "SELECT peer_relay_id, endpoint_url, trust_score FROM relay_peers WHERE state = 'active'",
-      )
-      .all() as Array<{ peer_relay_id: string; endpoint_url: string; trust_score: number }>;
-
-    if (peers.length === 0) return [];
-
-    const queryId = crypto.randomUUID();
-    const visited = [relayIdentity.relayMotebitId];
-
-    const promises = peers.map(async (peer) => {
-      try {
-        const resp = await fetch(`${peer.endpoint_url}/federation/v1/discover`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            query: { capability: requiredCaps[0], limit: 20 },
-            hop_count: 0,
-            max_hops: 1, // Only one hop for task routing candidates
-            visited,
-            query_id: queryId,
-            origin_relay: relayIdentity.relayMotebitId,
-          }),
-          signal: AbortSignal.timeout(5000),
-        });
-        if (!resp.ok) return [];
-        const data = (await resp.json()) as {
-          agents: Array<{
-            motebit_id: string;
-            capabilities: string[];
-            public_key?: string;
-            endpoint_url?: string;
-            source_relay?: string;
-          }>;
-        };
-        if (!data.agents || data.agents.length === 0) return [];
-
-        // Convert discovery results to CandidateProfile with chain trust
-        const peerTrust = peer.trust_score ?? 0.5;
-        const results: { profile: CandidateProfile; _source_relay_endpoint: string }[] = [];
-
-        for (const agent of data.agents) {
-          // Filter to agents matching ALL required capabilities
-          if (requiredCaps.length > 1) {
-            if (!requiredCaps.every((cap) => agent.capabilities?.includes(cap))) continue;
-          }
-          // Skip agents that are local (already covered by local candidate search)
-          if (agent.source_relay === relayIdentity.relayMotebitId) continue;
-
-          // Compose chain trust: local→peer relay trust × peer relay's trust in agent (default 0.5)
-          const agentTrust = 0.5; // Default — peer relay doesn't expose per-agent trust in discovery
-          const chainTrust = peerTrust * agentTrust;
-
-          results.push({
-            profile: {
-              motebit_id: asMotebitId(agent.motebit_id),
-              trust_record: null, // No local trust record for remote agents
-              listing: null, // Remote listings aren't available locally
-              latency_stats: null, // No local latency data for remote agents
-              is_online: true, // Peer discovery returned them, assume available
-              chain_trust: chainTrust,
-            },
-            _source_relay_endpoint: peer.endpoint_url,
-          });
-        }
-        return results;
-      } catch {
-        return []; // Best-effort: peer failure doesn't block local routing
-      }
-    });
-
-    const settled = await Promise.allSettled(promises);
-    return settled
-      .filter(
-        (
-          r,
-        ): r is PromiseFulfilledResult<
-          { profile: CandidateProfile; _source_relay_endpoint: string }[]
-        > => r.status === "fulfilled",
-      )
-      .flatMap((r) => r.value);
-  }
-
   // --- Spatial presence broadcast helper ---
 
   /**
@@ -3191,7 +2680,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     // Phase 1: Scored routing — find best service agents from listings
     if (requiredCaps.length > 0) {
       try {
-        const { profiles, requirements } = buildCandidateProfiles(
+        const { profiles, requirements } = taskRouter.buildCandidateProfiles(
           requiredCaps[0],
           undefined,
           20,
@@ -3221,7 +2710,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
           [];
         const remoteAgentRelay = new Map<string, string>(); // remote agent motebit_id → peer relay endpoint_url
         try {
-          federatedCandidates = await fetchFederatedCandidates(requiredCaps, callerMotebitId);
+          federatedCandidates = await taskRouter.fetchFederatedCandidates(requiredCaps, callerMotebitId);
           for (const fc of federatedCandidates) {
             // Filter out excluded agents from federated results too
             if (!excludeSet.has(fc.profile.motebit_id as string)) {
@@ -3244,7 +2733,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
             typeof body.exploration_drive === "number"
               ? Math.max(0, Math.min(1, body.exploration_drive))
               : undefined;
-          const peerEdges = fetchPeerEdges();
+          const peerEdges = taskRouter.fetchPeerEdges();
           const ranked = explainedRankCandidates(
             asMotebitId(callerMotebitId ?? motebitId),
             allProfiles,
@@ -3711,7 +3200,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
           ? hexPublicKeyToDidKey(pubKeyHex)
           : `did:motebit:${receipt.motebit_id as string}`;
 
-        const relayKeys = await getRelayKeypair();
+        const relayKeys = getRelayKeypair(relayIdentity);
         const vc = await issueReputationCredential(
           {
             success_rate: 1.0, // This receipt succeeded
@@ -4005,38 +3494,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     return c.json(JSON.parse(row.manifest_json) as Record<string, unknown>);
   });
 
-  // === Credential Verification (public, no auth) ===
-
-  app.post("/api/v1/credentials/verify", async (c) => {
-    let body: unknown;
-    try {
-      body = await c.req.json();
-    } catch {
-      throw new HTTPException(400, { message: "Invalid JSON body" });
-    }
-    const vc = body as VerifiableCredential;
-    if (
-      !vc ||
-      !Array.isArray(vc["@context"]) ||
-      !Array.isArray(vc.type) ||
-      !vc.issuer ||
-      !vc.credentialSubject ||
-      !vc.proof
-    ) {
-      throw new HTTPException(400, {
-        message:
-          "Invalid credential: missing required fields (@context, type, issuer, credentialSubject, proof)",
-      });
-    }
-
-    const valid = await verifyVerifiableCredential(vc);
-    return c.json({
-      valid,
-      issuer: vc.issuer,
-      subject: vc.credentialSubject.id,
-    });
-  });
-
   // === Agent Discovery Registry ===
 
   // Auth middleware for agent registry routes
@@ -4322,83 +3779,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     return c.json({ ok: true });
   });
 
-  // Helper: query local agent_registry — shared by discover endpoint and federation handler
-  function queryLocalAgents(
-    capability?: string,
-    motebitId?: string,
-    limit = 20,
-  ): Array<{
-    motebit_id: string;
-    public_key: string;
-    did?: string;
-    endpoint_url: string;
-    capabilities: string[];
-    metadata: Record<string, unknown> | null;
-  }> {
-    const now = Date.now();
-
-    let rows: Array<Record<string, unknown>>;
-
-    if (capability && motebitId) {
-      rows = moteDb.db
-        .prepare(
-          `
-        SELECT * FROM agent_registry
-        WHERE expires_at > ? AND motebit_id = ?
-          AND EXISTS (SELECT 1 FROM json_each(capabilities) WHERE value = ?)
-        LIMIT ?
-      `,
-        )
-        .all(now, motebitId, capability, limit) as Array<Record<string, unknown>>;
-    } else if (capability) {
-      rows = moteDb.db
-        .prepare(
-          `
-        SELECT * FROM agent_registry
-        WHERE expires_at > ?
-          AND EXISTS (SELECT 1 FROM json_each(capabilities) WHERE value = ?)
-        LIMIT ?
-      `,
-        )
-        .all(now, capability, limit) as Array<Record<string, unknown>>;
-    } else if (motebitId) {
-      rows = moteDb.db
-        .prepare(
-          `
-        SELECT * FROM agent_registry WHERE expires_at > ? AND motebit_id = ? LIMIT ?
-      `,
-        )
-        .all(now, motebitId, limit) as Array<Record<string, unknown>>;
-    } else {
-      rows = moteDb.db
-        .prepare(
-          `
-        SELECT * FROM agent_registry WHERE expires_at > ? LIMIT ?
-      `,
-        )
-        .all(now, limit) as Array<Record<string, unknown>>;
-    }
-
-    return rows.map((r) => {
-      const pk = r.public_key as string;
-      let agentDid: string | undefined;
-      try {
-        if (pk) agentDid = hexPublicKeyToDidKey(pk);
-      } catch {
-        // Non-fatal
-      }
-      return {
-        motebit_id: r.motebit_id as string,
-        public_key: pk,
-        did: agentDid,
-        endpoint_url: r.endpoint_url as string,
-        capabilities: JSON.parse(r.capabilities as string) as string[],
-        // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- DB row field is untyped
-        metadata: r.metadata ? (JSON.parse(r.metadata as string) as Record<string, unknown>) : null,
-      };
-    });
-  }
-
   // GET /api/v1/agents/discover — find agents (with optional federation forwarding)
   app.get("/api/v1/agents/discover", async (c) => {
     const capability = c.req.query("capability");
@@ -4407,7 +3787,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     const limit = Math.min(Math.max(1, limitParam), 100);
 
     // Local results (existing behavior, unchanged)
-    const localAgents = queryLocalAgents(capability ?? undefined, motebitId ?? undefined, limit);
+    const localAgents = taskRouter.queryLocalAgents(capability ?? undefined, motebitId ?? undefined, limit);
 
     // Add source_relay metadata to local results
     const localResults = localAgents.map((a) => ({
@@ -4482,464 +3862,15 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     return c.json({ agents: final });
   });
 
-  // POST /federation/v1/discover — receive forwarded discovery queries from peer relays
-  app.post("/federation/v1/discover", async (c) => {
-    const body = await c.req.json<{
-      query: { capability?: string; motebit_id?: string; limit?: number };
-      hop_count: number;
-      max_hops: number;
-      visited: string[];
-      query_id: string;
-      origin_relay: string;
-    }>();
+  // Phase 3-5 endpoints (discover, task/forward, task/result, settlement) are now
+  // registered by registerFederationRoutes above via callbacks.
 
-    // Validate
-    if (!body.query_id || body.max_hops > 3) {
-      throw new HTTPException(400, { message: "Invalid federation query" });
-    }
+  // Heartbeat sender — probes active/suspended peers every 60s.
+  // Suspends at 3 missed, removes at 5.
+  const heartbeatInterval = startHeartbeatLoop(moteDb.db, relayIdentity);
 
-    // Dedup check
-    if (federationQueryCache.has(body.query_id)) {
-      return c.json({ agents: [] });
-    }
-    federationQueryCache.set(body.query_id, Date.now());
-
-    // Loop prevention
-    if (body.visited.includes(relayIdentity.relayMotebitId)) {
-      return c.json({ agents: [] });
-    }
-
-    // Get local results
-    const localAgents = queryLocalAgents(
-      body.query.capability,
-      body.query.motebit_id,
-      body.query.limit ?? 20,
-    );
-    const results = localAgents.map((a) => ({
-      ...a,
-      source_relay: relayIdentity.relayMotebitId,
-      relay_name: federationConfig?.displayName ?? null,
-      hop_distance: body.hop_count + 1,
-    }));
-
-    // Hop limit — return only local results, no forwarding
-    if (body.hop_count >= body.max_hops) {
-      return c.json({ agents: results });
-    }
-
-    // Forward to OUR active peers (excluding visited)
-    const visited = [...body.visited, relayIdentity.relayMotebitId];
-    const peers = moteDb.db
-      .prepare("SELECT peer_relay_id, endpoint_url FROM relay_peers WHERE state = 'active'")
-      .all() as Array<{ peer_relay_id: string; endpoint_url: string }>;
-
-    const forwardPromises = peers
-      .filter((p) => !visited.includes(p.peer_relay_id))
-      .map(async (peer) => {
-        try {
-          const resp = await fetch(`${peer.endpoint_url}/federation/v1/discover`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              query: body.query,
-              hop_count: body.hop_count + 1,
-              max_hops: body.max_hops,
-              visited,
-              query_id: body.query_id,
-              origin_relay: body.origin_relay,
-            }),
-            signal: AbortSignal.timeout(5000),
-          });
-          if (!resp.ok) return [];
-          const data = (await resp.json()) as { agents: Array<Record<string, unknown>> };
-          return data.agents ?? [];
-        } catch {
-          return [];
-        }
-      });
-
-    const peerResults = (await Promise.allSettled(forwardPromises))
-      .filter(
-        (r): r is PromiseFulfilledResult<Array<Record<string, unknown>>> =>
-          r.status === "fulfilled",
-      )
-      .flatMap((r) => r.value);
-
-    // Merge and dedup by motebit_id (prefer lowest hop_distance)
-    const merged = new Map<string, Record<string, unknown>>();
-    for (const agent of [...results, ...peerResults]) {
-      const id = agent.motebit_id as string;
-      const existing = merged.get(id);
-      if (!existing || (agent.hop_distance as number) < (existing.hop_distance as number)) {
-        merged.set(id, agent);
-      }
-    }
-
-    return c.json({ agents: [...merged.values()] });
-  });
-
-  // POST /federation/v1/task/forward — receive a forwarded task from a peer relay (Phase 4)
-  app.post("/federation/v1/task/forward", async (c) => {
-    const body = await c.req.json<{
-      task_id: string;
-      origin_relay: string;
-      target_agent: string;
-      task_payload: {
-        prompt: string;
-        required_capabilities?: string[];
-        submitted_by?: string;
-        wall_clock_ms?: number;
-      };
-      routing_choice?: Record<string, unknown>;
-      signature: string;
-    }>();
-
-    // Validate required fields
-    if (!body.task_id || !body.origin_relay || !body.target_agent || !body.task_payload?.prompt) {
-      throw new HTTPException(400, { message: "Missing required fields" });
-    }
-
-    // Verify the origin relay is a known active peer
-    const peer = moteDb.db
-      .prepare("SELECT * FROM relay_peers WHERE peer_relay_id = ? AND state = 'active'")
-      .get(body.origin_relay) as { public_key: string; peer_relay_id: string } | undefined;
-    if (!peer) {
-      throw new HTTPException(403, { message: "Unknown or inactive peer relay" });
-    }
-
-    // Verify signature
-    const { signature, ...payload } = body;
-    const msgBytes = new TextEncoder().encode(JSON.stringify(payload));
-    const sigBytes = hexToBytes(signature);
-    const valid = await verify(sigBytes, msgBytes, hexToBytes(peer.public_key));
-    if (!valid) {
-      throw new HTTPException(403, { message: "Invalid federation signature" });
-    }
-
-    // Check target agent is registered locally
-    const agent = moteDb.db
-      .prepare("SELECT * FROM agent_registry WHERE motebit_id = ? AND expires_at > ?")
-      .get(body.target_agent, Date.now()) as Record<string, unknown> | undefined;
-    if (!agent) {
-      throw new HTTPException(404, { message: "Target agent not found on this relay" });
-    }
-
-    // Create task and store in queue with origin_relay tracking
-    const task: AgentTask = {
-      task_id: body.task_id,
-      motebit_id: asMotebitId(body.target_agent),
-      prompt: body.task_payload.prompt,
-      submitted_at: Date.now(),
-      submitted_by: body.task_payload.submitted_by ?? `relay:${body.origin_relay}`,
-      wall_clock_ms: body.task_payload.wall_clock_ms,
-      status: AgentTaskStatus.Pending,
-      required_capabilities: body.task_payload
-        .required_capabilities as AgentTask["required_capabilities"],
-    };
-
-    taskQueue.set(body.task_id, {
-      task,
-      expiresAt: Date.now() + TASK_TTL_MS,
-      submitted_by: task.submitted_by,
-      origin_relay: body.origin_relay, // Track that this is a federated task
-    });
-
-    // Route to the target agent via WebSocket
-    const agentPeers = connections.get(body.target_agent);
-    if (agentPeers && agentPeers.length > 0) {
-      const taskPayload = JSON.stringify({ type: "task_request", task });
-      for (const p of agentPeers) {
-        p.ws.send(taskPayload);
-      }
-      return c.json({ task_id: body.task_id, status: "routed" });
-    }
-
-    return c.json({ task_id: body.task_id, status: "pending" }, 202);
-  });
-
-  // POST /federation/v1/task/result — receive a task result from a peer relay (Phase 4)
-  app.post("/federation/v1/task/result", async (c) => {
-    const body = await c.req.json<{
-      task_id: string;
-      origin_relay: string;
-      receipt: ExecutionReceipt;
-      signature: string;
-    }>();
-
-    // Validate required fields
-    if (!body.task_id || !body.origin_relay || !body.receipt) {
-      throw new HTTPException(400, { message: "Missing required fields" });
-    }
-
-    // Verify peer — accept from active or suspended peers (result may arrive during suspension)
-    const peer = moteDb.db
-      .prepare(
-        "SELECT * FROM relay_peers WHERE peer_relay_id = ? AND state IN ('active', 'suspended')",
-      )
-      .get(body.origin_relay) as { public_key: string; peer_relay_id: string } | undefined;
-    if (!peer) {
-      throw new HTTPException(403, { message: "Unknown peer relay" });
-    }
-
-    // Verify signature
-    const { signature, ...payload } = body;
-    const msgBytes = new TextEncoder().encode(JSON.stringify(payload));
-    const valid = await verify(hexToBytes(signature), msgBytes, hexToBytes(peer.public_key));
-    if (!valid) {
-      throw new HTTPException(403, { message: "Invalid federation signature" });
-    }
-
-    // Find the pending task
-    const entry = taskQueue.get(body.task_id);
-    if (!entry) {
-      throw new HTTPException(404, { message: "Task not found or expired" });
-    }
-
-    // Update task with receipt
-    entry.receipt = body.receipt;
-    entry.expiresAt = Math.max(entry.expiresAt, Date.now() + TASK_TTL_MS);
-    entry.task.status =
-      body.receipt.status === "completed"
-        ? AgentTaskStatus.Completed
-        : body.receipt.status === "denied"
-          ? AgentTaskStatus.Denied
-          : AgentTaskStatus.Failed;
-
-    // Fan out to the original submitter's connected devices
-    const submittedBy = entry.submitted_by ?? entry.task.submitted_by;
-    if (submittedBy) {
-      const submitterPeers = connections.get(submittedBy);
-      if (submitterPeers) {
-        const resultPayload = JSON.stringify({
-          type: "task_result",
-          task_id: body.task_id,
-          receipt: body.receipt,
-        });
-        for (const p of submitterPeers) {
-          p.ws.send(resultPayload);
-        }
-      }
-    }
-
-    // Phase 5: Update relay trust using evaluateTrustTransition state machine
-    try {
-      const peerRow = moteDb.db
-        .prepare(
-          "SELECT trust_level, successful_forwards, failed_forwards FROM relay_peers WHERE peer_relay_id = ?",
-        )
-        .get(body.origin_relay) as
-        | { trust_level: string; successful_forwards: number; failed_forwards: number }
-        | undefined;
-
-      if (peerRow) {
-        const isSuccess = body.receipt.status === "completed";
-        const newSuccessful = peerRow.successful_forwards + (isSuccess ? 1 : 0);
-        const newFailed = peerRow.failed_forwards + (isSuccess ? 0 : 1);
-
-        // Build a trust record compatible with evaluateTrustTransition
-        const trustRecord: AgentTrustRecord = {
-          motebit_id: asMotebitId(relayIdentity.relayMotebitId),
-          remote_motebit_id: asMotebitId(body.origin_relay),
-          trust_level: peerRow.trust_level as AgentTrustLevel,
-          first_seen_at: 0,
-          last_seen_at: Date.now(),
-          interaction_count: newSuccessful + newFailed,
-          successful_tasks: newSuccessful,
-          failed_tasks: newFailed,
-        };
-
-        const newLevel = evaluateTrustTransition(trustRecord);
-        const trustLevel = newLevel ?? peerRow.trust_level;
-        const trustScore = trustLevelToScore(trustLevel as AgentTrustLevel);
-
-        moteDb.db
-          .prepare(
-            `UPDATE relay_peers SET
-            successful_forwards = ?, failed_forwards = ?,
-            trust_level = ?, trust_score = ?
-            WHERE peer_relay_id = ?`,
-          )
-          .run(newSuccessful, newFailed, trustLevel, trustScore, body.origin_relay);
-
-        // Phase 5: Issue reputation credential on trust level transitions
-        if (newLevel && newLevel !== peerRow.trust_level) {
-          try {
-            const relayKeys = await getRelayKeypair();
-            const peerDid = hexPublicKeyToDidKey(
-              (
-                moteDb.db
-                  .prepare("SELECT public_key FROM relay_peers WHERE peer_relay_id = ?")
-                  .get(body.origin_relay) as { public_key: string }
-              ).public_key,
-            );
-            const vc = await issueReputationCredential(
-              {
-                success_rate: newSuccessful / Math.max(1, newSuccessful + newFailed),
-                avg_latency_ms: 0,
-                task_count: newSuccessful + newFailed,
-                trust_score: trustScore,
-                availability: 1.0,
-                measured_at: Date.now(),
-              },
-              relayKeys.privateKey,
-              relayKeys.publicKey,
-              peerDid,
-            );
-            const credId = crypto.randomUUID();
-            const credentialType =
-              vc.type.find((t) => t !== "VerifiableCredential") ?? "VerifiableCredential";
-            moteDb.db
-              .prepare(
-                `INSERT INTO relay_credentials (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at)
-                 VALUES (?, ?, ?, ?, ?, ?)`,
-              )
-              .run(
-                credId,
-                body.origin_relay,
-                vc.issuer,
-                credentialType,
-                JSON.stringify(vc),
-                Date.now(),
-              );
-          } catch {
-            // Best-effort credential issuance
-          }
-        }
-      }
-    } catch {
-      // Best-effort trust update
-    }
-
-    // Phase 5: Federation settlement — record our fee and forward settlement to the peer
-    try {
-      const entry = taskQueue.get(body.task_id);
-      if (entry?.price_snapshot && entry.price_snapshot > 0) {
-        const grossAmount = entry.price_snapshot;
-        const feeAmount = grossAmount * PLATFORM_FEE_RATE;
-        const netAmount = grossAmount - feeAmount;
-        const receiptHash = body.receipt.result_hash ?? body.receipt.signature ?? "";
-        const settlementId = crypto.randomUUID();
-
-        // Record the originating relay's settlement
-        moteDb.db
-          .prepare(
-            `INSERT OR IGNORE INTO relay_federation_settlements
-           (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id,
-            gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            settlementId,
-            body.task_id,
-            relayIdentity.relayMotebitId,
-            body.origin_relay,
-            null,
-            grossAmount,
-            feeAmount,
-            netAmount,
-            PLATFORM_FEE_RATE,
-            Date.now(),
-            receiptHash,
-          );
-
-        // Forward settlement to the peer relay that executed the task
-        const peerInfo = moteDb.db
-          .prepare("SELECT endpoint_url FROM relay_peers WHERE peer_relay_id = ?")
-          .get(body.origin_relay) as { endpoint_url: string } | undefined;
-        if (peerInfo) {
-          const settlementBody = {
-            task_id: body.task_id,
-            settlement_id: settlementId,
-            origin_relay: relayIdentity.relayMotebitId,
-            gross_amount: netAmount,
-            receipt_hash: receiptHash,
-          };
-          const settlementBytes = new TextEncoder().encode(JSON.stringify(settlementBody));
-          const settlementSig = await sign(settlementBytes, relayIdentity.privateKey);
-          await fetch(`${peerInfo.endpoint_url}/federation/v1/settlement/forward`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ...settlementBody, signature: bytesToHex(settlementSig) }),
-            signal: AbortSignal.timeout(10000),
-          });
-        }
-      }
-    } catch {
-      // Best-effort settlement forwarding
-    }
-
-    return c.json({ status: "accepted" });
-  });
-
-  // POST /federation/v1/settlement/forward — receive settlement forwarding from originating relay (Phase 5)
-  app.post("/federation/v1/settlement/forward", async (c) => {
-    const body = await c.req.json<{
-      task_id: string;
-      settlement_id: string;
-      origin_relay: string;
-      gross_amount: number;
-      receipt_hash: string;
-      signature: string;
-    }>();
-
-    if (!body.task_id || !body.settlement_id || !body.origin_relay || body.gross_amount == null) {
-      throw new HTTPException(400, { message: "Missing required fields" });
-    }
-
-    // Verify peer
-    const peer = moteDb.db
-      .prepare(
-        "SELECT * FROM relay_peers WHERE peer_relay_id = ? AND state IN ('active', 'suspended')",
-      )
-      .get(body.origin_relay) as { public_key: string; peer_relay_id: string } | undefined;
-    if (!peer) {
-      throw new HTTPException(403, { message: "Unknown peer relay" });
-    }
-
-    // Verify signature
-    const { signature, ...payload } = body;
-    const msgBytes = new TextEncoder().encode(JSON.stringify(payload));
-    const valid = await verify(hexToBytes(signature), msgBytes, hexToBytes(peer.public_key));
-    if (!valid) {
-      throw new HTTPException(403, { message: "Invalid federation signature" });
-    }
-
-    // Record the settlement — this relay takes its own fee from the forwarded amount
-    const feeAmount = body.gross_amount * PLATFORM_FEE_RATE;
-    const netAmount = body.gross_amount - feeAmount;
-
-    moteDb.db
-      .prepare(
-        `INSERT OR IGNORE INTO relay_federation_settlements
-       (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id,
-        gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        body.settlement_id,
-        body.task_id,
-        body.origin_relay,
-        null,
-        null,
-        body.gross_amount,
-        feeAmount,
-        netAmount,
-        PLATFORM_FEE_RATE,
-        Date.now(),
-        body.receipt_hash,
-      );
-
-    return c.json({ status: "settled", fee_amount: feeAmount, net_amount: netAmount });
-  });
-
-  // GET /federation/v1/settlements — federation settlement history (Phase 5)
-  app.get("/federation/v1/settlements", (c) => {
-    const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
-    const rows = moteDb.db
-      .prepare("SELECT * FROM relay_federation_settlements ORDER BY settled_at DESC LIMIT ?")
-      .all(limit);
-    return c.json({ settlements: rows });
-  });
+  // Settlement retry loop — retries failed settlement forwards every 30s with exponential backoff.
+  const settlementRetryInterval = startSettlementRetryLoop(moteDb.db, relayIdentity);
 
   // GET /api/v1/agents/:motebitId — get specific agent
   app.get("/api/v1/agents/:motebitId", (c) => {
@@ -5051,25 +3982,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     return c.json({ ok: true, revoked: body.jtis.length });
   });
 
-  // POST /api/v1/agents/:motebitId/revoke-credential — revoke a verifiable credential
-  app.post("/api/v1/agents/:motebitId/revoke-credential", async (c) => {
-    const motebitId = c.req.param("motebitId");
-    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
-    if (callerMotebitId && callerMotebitId !== motebitId) {
-      throw new HTTPException(403, { message: "Cannot revoke credentials for another agent" });
-    }
-    const body = await c.req.json<{ credential_id: string; reason?: string }>();
-    if (!body.credential_id) {
-      throw new HTTPException(400, { message: "credential_id is required" });
-    }
-    moteDb.db
-      .prepare(
-        "INSERT OR REPLACE INTO relay_revoked_credentials (credential_id, motebit_id, reason) VALUES (?, ?, ?)",
-      )
-      .run(body.credential_id, motebitId, body.reason ?? null);
-    return c.json({ ok: true, credential_id: body.credential_id });
-  });
-
   // POST /api/v1/agents/:motebitId/revoke — mark agent identity as revoked
   app.post("/api/v1/agents/:motebitId/revoke", (c) => {
     const motebitId = c.req.param("motebitId");
@@ -5079,18 +3991,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     }
     moteDb.db.prepare("UPDATE agent_registry SET revoked = 1 WHERE motebit_id = ?").run(motebitId);
     return c.json({ ok: true, motebit_id: motebitId, revoked: true });
-  });
-
-  // GET /api/v1/credentials/:credentialId/status — public credential revocation status
-  app.get("/api/v1/credentials/:credentialId/status", (c) => {
-    const credentialId = c.req.param("credentialId");
-    const row = moteDb.db
-      .prepare("SELECT revoked_at, reason FROM relay_revoked_credentials WHERE credential_id = ?")
-      .get(credentialId) as { revoked_at: string; reason: string | null } | undefined;
-    if (!row) {
-      return c.json({ revoked: false });
-    }
-    return c.json({ revoked: true, revoked_at: row.revoked_at, reason: row.reason ?? "" });
   });
 
   // === Market Endpoints ===
@@ -5141,81 +4041,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       );
 
     return c.json({ listing_id: listingId, updated_at: now }, 200);
-  });
-
-  // GET /api/v1/agents/:motebitId/credentials — list credentials issued to/by agent
-  app.get("/api/v1/agents/:motebitId/credentials", (c) => {
-    const mid = asMotebitId(c.req.param("motebitId"));
-    const typeFilter = c.req.query("type");
-    const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
-
-    let rows: Array<{
-      credential_id: string;
-      credential_type: string;
-      credential_json: string;
-      issued_at: number;
-    }>;
-    if (typeFilter) {
-      rows = moteDb.db
-        .prepare(
-          "SELECT credential_id, credential_type, credential_json, issued_at FROM relay_credentials WHERE subject_motebit_id = ? AND credential_type = ? ORDER BY issued_at DESC LIMIT ?",
-        )
-        .all(mid, typeFilter, limit) as typeof rows;
-    } else {
-      rows = moteDb.db
-        .prepare(
-          "SELECT credential_id, credential_type, credential_json, issued_at FROM relay_credentials WHERE subject_motebit_id = ? ORDER BY issued_at DESC LIMIT ?",
-        )
-        .all(mid, limit) as typeof rows;
-    }
-
-    const credentials = rows.map((r) => ({
-      credential_id: r.credential_id,
-      credential_type: r.credential_type,
-      credential: JSON.parse(r.credential_json) as VerifiableCredential,
-      issued_at: r.issued_at,
-    }));
-
-    return c.json({ motebit_id: mid, credentials });
-  });
-
-  // POST /api/v1/agents/:motebitId/presentation — bundle credentials into a signed VP
-  app.post("/api/v1/agents/:motebitId/presentation", async (c) => {
-    const mid = asMotebitId(c.req.param("motebitId"));
-    const typeFilter = c.req.query("type");
-    const limit = Math.min(parseInt(c.req.query("limit") ?? "100", 10) || 100, 500);
-
-    let rows: Array<{
-      credential_json: string;
-    }>;
-    if (typeFilter) {
-      rows = moteDb.db
-        .prepare(
-          "SELECT credential_json FROM relay_credentials WHERE subject_motebit_id = ? AND credential_type = ? ORDER BY issued_at DESC LIMIT ?",
-        )
-        .all(mid, typeFilter, limit) as typeof rows;
-    } else {
-      rows = moteDb.db
-        .prepare(
-          "SELECT credential_json FROM relay_credentials WHERE subject_motebit_id = ? ORDER BY issued_at DESC LIMIT ?",
-        )
-        .all(mid, limit) as typeof rows;
-    }
-
-    if (rows.length === 0) {
-      throw new HTTPException(404, { message: "No credentials found for this agent" });
-    }
-
-    const credentials = rows.map((r) => JSON.parse(r.credential_json) as VerifiableCredential);
-
-    const relayKeys = await getRelayKeypair();
-    const vp = await createPresentation(credentials, relayKeys.privateKey, relayKeys.publicKey);
-
-    return c.json({
-      presentation: vp,
-      credential_count: credentials.length,
-      relay_did: publicKeyToDidKey(relayKeys.publicKey),
-    });
   });
 
   // GET /api/v1/agents/:motebitId/listing — get service listing
@@ -5306,7 +4131,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     const limit = Math.min(Math.max(parseInt(limitStr ?? "20", 10) || 20, 1), 100);
     const maxBudget = maxBudgetStr ? parseFloat(maxBudgetStr) : undefined;
 
-    const { profiles, requirements } = buildCandidateProfiles(
+    const { profiles, requirements } = taskRouter.buildCandidateProfiles(
       capability ?? undefined,
       maxBudget,
       limit,
@@ -5315,7 +4140,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     const explorationStr = c.req.query("exploration_drive");
     const explorationWeight =
       explorationStr != null ? Math.max(0, Math.min(1, parseFloat(explorationStr))) : undefined;
-    const peerEdges = fetchPeerEdges();
+    const peerEdges = taskRouter.fetchPeerEdges();
     const ranked = graphRankCandidates(
       asMotebitId("relay"), // public endpoint, no caller identity
       profiles,
@@ -5707,6 +4532,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     connections.clear();
     clearInterval(taskCleanupInterval);
     clearInterval(federationQueryPruneInterval);
+    clearInterval(heartbeatInterval);
+    clearInterval(settlementRetryInterval);
     moteDb.close();
   }
 
@@ -5757,13 +4584,19 @@ if (process.env.VITEST != null) {
     corsOrigin: process.env.MOTEBIT_CORS_ORIGIN,
     enableDeviceAuth: process.env.MOTEBIT_ENABLE_DEVICE_AUTH !== "false",
     x402: x402Env,
+    federation: process.env.MOTEBIT_FEDERATION_ENDPOINT_URL
+      ? {
+          endpointUrl: process.env.MOTEBIT_FEDERATION_ENDPOINT_URL,
+          displayName: process.env.MOTEBIT_FEDERATION_DISPLAY_NAME,
+        }
+      : undefined,
   });
   app = relay.app;
 
   const port = Number(process.env.PORT ?? 3000);
   // eslint-disable-next-line no-console
   console.log(
-    `Motebit sync relay config: db=${process.env.MOTEBIT_DB_PATH ?? ":memory:"} deviceAuth=${process.env.MOTEBIT_ENABLE_DEVICE_AUTH !== "false"}`,
+    `Motebit sync relay config: db=${process.env.MOTEBIT_DB_PATH ?? ":memory:"} deviceAuth=${process.env.MOTEBIT_ENABLE_DEVICE_AUTH !== "false"} federation=${process.env.MOTEBIT_FEDERATION_ENDPOINT_URL ?? "disabled"} keyEncryption=${process.env.MOTEBIT_RELAY_KEY_PASSPHRASE ? "active" : "disabled"}`,
   );
   const server = serve({ fetch: app.fetch, port }, (info) => {
     // eslint-disable-next-line no-console
