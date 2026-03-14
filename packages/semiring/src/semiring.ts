@@ -130,20 +130,27 @@ export function recordSemiring<R extends Record<string, unknown>>(fields: {
   const zero = {} as R;
   const one = {} as R;
   for (const k of keys) {
-    zero[k] = fields[k]!.zero as R[typeof k];
-    one[k] = fields[k]!.one as R[typeof k];
+    const f = fields[k];
+    zero[k] = f.zero;
+    one[k] = f.one;
   }
   return {
     zero,
     one,
     add(a, b) {
       const r = {} as R;
-      for (const k of keys) r[k] = fields[k]!.add(a[k], b[k]) as R[typeof k];
+      for (const k of keys) {
+        const f = fields[k];
+        r[k] = f.add(a[k], b[k]);
+      }
       return r;
     },
     mul(a, b) {
       const r = {} as R;
-      for (const k of keys) r[k] = fields[k]!.mul(a[k], b[k]) as R[typeof k];
+      for (const k of keys) {
+        const f = fields[k];
+        r[k] = f.mul(a[k], b[k]);
+      }
       return r;
     },
   };

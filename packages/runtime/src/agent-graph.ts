@@ -197,7 +197,7 @@ export class AgentGraphManager {
       const reliability = total > 0 ? successful / total : 0.5;
 
       profiles.push({
-        motebit_id: record.remote_motebit_id as MotebitId,
+        motebit_id: record.remote_motebit_id,
         trust_record: record,
         listing,
         latency_ms: null, // populated from latency store if available
