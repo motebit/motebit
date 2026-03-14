@@ -71,7 +71,8 @@ packages/
 
 spec/
   identity-v1.md          motebit/identity@1.0 specification — file format, signing algorithm, verification
-  execution-ledger-v1.md  motebit/execution-ledger@1.0 specification — goal execution timeline, signed manifests
+  execution-ledger-v1.md  motebit/execution-ledger@1.0 specification — goal execution timeline, signed manifests, routing provenance (§4.1.1)
+  relay-federation-v1.md  motebit/relay-federation@1.0 specification — multi-relay peering, federated discovery, cross-relay task routing via semiring graph, settlement chains, receipt co-signing (Draft)
 
 services/
   api/             Sync relay server: REST + WebSocket, device auth, receipt verification, budget/settlement, credential issuance, rate limiting, graph query endpoints (trust-closure, path-to, graph, routing-explanation with provenance), multi-hop delegation edge caching (relay_delegation_edges)
@@ -142,7 +143,7 @@ Tauri app. Two key files for the UI layer:
 
 ## Admin Dashboard
 
-`apps/admin/src/AdminApp.tsx` — React + Vite. 12 tabs: State Vector (Recharts trending), Memory Graph (D3-force), Behavior Cues (live preview), Event Log, Tool Audit Log, Goals, Plans, Conversations (with message drill-down), Devices, Intelligence Gradient (hero score, 8 sub-metric bars: kd/kq/gc/ts/rq/ie/te/cp, trend chart), Agent Trust (trust levels, reputation, task success), Credentials (VC list with type/issuer/validity, VP generation). Polls API every 2s. All endpoints wired to API relay. Configured via `VITE_API_URL`, `VITE_MOTEBIT_ID`, `VITE_API_TOKEN`.
+`apps/admin/src/AdminApp.tsx` — React + Vite. 12 tabs: State Vector (Recharts trending), Memory Graph (D3-force), Behavior Cues (live preview), Event Log, Tool Audit Log, Goals, Plans, Conversations (with message drill-down), Devices, Intelligence Gradient (hero score, 8 sub-metric bars: kd/kq/gc/ts/rq/ie/te/cp, trend chart), Agent Trust (D3-force agent graph visualization with trust-colored nodes + flat trust records table), Credentials (VC list with type/issuer/validity, VP generation). Polls API every 2s. All endpoints wired to API relay. Configured via `VITE_API_URL`, `VITE_MOTEBIT_ID`, `VITE_API_TOKEN`.
 
 ## State Vector (9 fields)
 
