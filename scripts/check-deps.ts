@@ -33,10 +33,11 @@ const LAYER: Record<string, number> = {
   "@motebit/event-log": 1,
   "@motebit/policy": 1,
   "@motebit/tools": 1,
-  "@motebit/market": 1,
+  "@motebit/semiring": 1,
   "@motebit/policy-invariants": 1,
 
   // Layer 2 — Engines (depend on Layer 0–1)
+  "@motebit/market": 2,
   "@motebit/behavior-engine": 2,
   "@motebit/state-vector": 2,
   "@motebit/render-engine": 2,
