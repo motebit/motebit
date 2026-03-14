@@ -34,14 +34,14 @@ jobs:
       - name: Check dependency architecture
         run: pnpm check-deps
 
+      - name: Build
+        run: pnpm build
+
       - name: Typecheck
         run: pnpm typecheck
 
       - name: Lint
         run: pnpm lint
-
-      - name: Build
-        run: pnpm build
 
       - name: Test with coverage
         run: pnpm test -- -- --coverage --coverage.reporter=text --coverage.reporter=json-summary --coverage.reporter=json
