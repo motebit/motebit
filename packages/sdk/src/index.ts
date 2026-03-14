@@ -863,6 +863,14 @@ export interface DelegatedStepResult {
   task_id: string;
   receipt: ExecutionReceipt;
   result_text: string;
+  /** Routing provenance from the relay — why this agent was selected. */
+  routing_choice?: {
+    selected_agent: string;
+    composite_score: number;
+    sub_scores: Record<string, number>;
+    routing_paths: string[][];
+    alternatives_considered: number;
+  };
 }
 
 // === Execution Ledger ===
@@ -900,7 +908,27 @@ export interface ExecutionStepSummary {
   tool_calls: number;
   started_at: number | null;
   completed_at: number | null;
-  delegation?: { task_id: string; receipt_hash?: string };
+  delegation?: {
+    task_id: string;
+    receipt_hash?: string;
+    /** Routing provenance: why this agent was selected for delegation. */
+    routing_choice?: {
+      selected_agent: string;
+      composite_score: number;
+      sub_scores: {
+        trust: number;
+        success_rate: number;
+        latency: number;
+        price_efficiency: number;
+        capability_match: number;
+        availability: number;
+      };
+      /** Derivation paths through the agent graph. */
+      routing_paths: string[][];
+      /** Number of candidate agents that were scored. */
+      alternatives_considered: number;
+    };
+  };
 }
 
 export interface GoalExecutionManifest {

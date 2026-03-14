@@ -2675,6 +2675,15 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     const requiredCaps = task.required_capabilities ?? [];
     const payload = JSON.stringify({ type: "task_request", task });
     let routed = false;
+    let routingChoice:
+      | {
+          selected_agent: string;
+          composite_score: number;
+          sub_scores: Record<string, number>;
+          routing_paths: string[][];
+          alternatives_considered: number;
+        }
+      | undefined;
 
     // Phase 1: Scored routing — find best service agents from listings
     if (requiredCaps.length > 0) {
@@ -2711,7 +2720,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
               ? Math.max(0, Math.min(1, body.exploration_drive))
               : undefined;
           const peerEdges = fetchPeerEdges();
-          const ranked = graphRankCandidates(
+          const ranked = explainedRankCandidates(
             asMotebitId(callerMotebitId ?? motebitId),
             eligibleProfiles,
             {
@@ -2727,6 +2736,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
           const selected = ranked.filter((r) => r.selected && r.composite > 0);
 
           if (selected.length > 0) {
+            // Capture routing provenance from the top-ranked agent for the response
+            const topScore = selected[0]!;
+            routingChoice = {
+              selected_agent: topScore.motebit_id as string,
+              composite_score: topScore.composite,
+              sub_scores: topScore.sub_scores,
+              routing_paths: topScore.routing_paths,
+              alternatives_considered: topScore.alternatives_considered,
+            };
+
             const selectedIds = new Set(selected.map((s) => s.motebit_id as string));
             // Route to connected devices belonging to selected agents
             for (const [peerId, peers] of connections) {
@@ -2777,7 +2796,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       prompt: body.prompt.slice(0, 100),
     });
 
-    return c.json({ task_id: taskId, status: task.status }, 201);
+    return c.json(
+      { task_id: taskId, status: task.status, routing_choice: routingChoice ?? null },
+      201,
+    );
   });
 
   // GET /agent/:motebitId/task/:taskId — poll task status

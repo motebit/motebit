@@ -25,6 +25,31 @@ import {
 import type { RouteWeight, Annotated } from "@motebit/semiring";
 import type { CandidateProfile, TaskRequirements } from "./scoring.js";
 
+// ── Shared Types ────────────────────────────────────────────────────
+
+export interface RoutingWeights {
+  trust: number;
+  cost: number;
+  latency: number;
+  reliability: number;
+  regulatory_risk?: number;
+}
+
+const DEFAULT_WEIGHTS: Required<RoutingWeights> = {
+  trust: 0.3,
+  cost: 0.2,
+  latency: 0.15,
+  reliability: 0.15,
+  regulatory_risk: 0.2,
+};
+
+export interface RoutingConfig {
+  weights?: RoutingWeights;
+  peerEdges?: Array<{ from: string; to: string; weight: RouteWeight }>;
+  maxCandidates?: number;
+  explorationWeight?: number;
+}
+
 // ── Graph Construction ──────────────────────────────────────────────
 
 /**
@@ -80,6 +105,92 @@ export function buildRoutingGraph(
   return graph;
 }
 
+// ── Shared Scoring Core ─────────────────────────────────────────────
+//
+// Single source of truth for route → RouteScore conversion.
+// Both graphRankCandidates and explainedRankCandidates delegate here.
+// If the scoring formula changes, it changes once.
+
+/**
+ * Score a single route from the semiring graph into a RouteScore.
+ * Pure function — no graph access, no side effects.
+ */
+function scoreRoute(
+  nodeId: string,
+  route: RouteWeight,
+  candidate: CandidateProfile | undefined,
+  requirements: TaskRequirements,
+  weights: Required<RoutingWeights>,
+): RouteScore | null {
+  // Capability match is a hard gate
+  const capabilityMatch = computeCapabilityMatch(candidate, requirements);
+  if (capabilityMatch === 0 && requirements.required_capabilities.length > 0) return null;
+
+  const successRate = candidate ? computeReliability(candidate) : route.reliability;
+  const latencyScore = route.latency === Infinity ? 0 : 1 - route.latency / (route.latency + 5000);
+  const priceEfficiency = computePriceEfficiency(candidate, requirements);
+  const availability = candidate?.is_online ? 1.0 : 0.0;
+
+  const costScore = route.cost === Infinity ? 0 : 1 / (1 + route.cost);
+  const latencyNorm = route.latency === Infinity ? 0 : 1 / (1 + route.latency / 1000);
+  const riskScore = route.regulatory_risk === Infinity ? 0 : 1 / (1 + route.regulatory_risk);
+
+  const composite =
+    route.trust * weights.trust +
+    costScore * weights.cost +
+    latencyNorm * weights.latency +
+    route.reliability * weights.reliability +
+    riskScore * weights.regulatory_risk;
+
+  return {
+    motebit_id: nodeId as MotebitId,
+    composite,
+    sub_scores: {
+      trust: route.trust,
+      success_rate: successRate,
+      latency: latencyScore,
+      price_efficiency: priceEfficiency,
+      capability_match: capabilityMatch,
+      availability,
+    },
+    selected: false,
+  };
+}
+
+/**
+ * Apply epsilon-greedy exploration noise and mark top N as selected.
+ * Mutates the scores array in place. Shared by both ranking functions.
+ */
+function finalizeScores<T extends RouteScore>(
+  scores: T[],
+  maxCandidates: number,
+  explorationWeight: number,
+): void {
+  scores.sort((a, b) => b.composite - a.composite);
+
+  if (explorationWeight > 0 && scores.length > 1) {
+    const probe = (scores[0]!.composite * 1000) % 1;
+    if (probe < explorationWeight) {
+      const explorationIdx = Math.min(
+        1 + Math.floor(probe * (scores.length - 1)),
+        scores.length - 1,
+      );
+      if (explorationIdx > 1 && scores[explorationIdx]!.composite > 0) {
+        const temp = scores[1]!;
+        scores[1] = scores[explorationIdx]!;
+        scores[explorationIdx] = temp;
+      }
+    }
+  }
+
+  let selected = 0;
+  for (const score of scores) {
+    if (selected >= maxCandidates || score.composite === 0) break;
+    score.selected = true;
+    selected++;
+  }
+}
+
 // ── Graph-based Ranking ─────────────────────────────────────────────
 
 /**
@@ -97,111 +208,26 @@ export function graphRankCandidates(
   selfId: MotebitId,
   candidates: CandidateProfile[],
   requirements: TaskRequirements,
-  config?: {
-    weights?: {
-      trust: number;
-      cost: number;
-      latency: number;
-      reliability: number;
-      regulatory_risk?: number;
-    };
-    peerEdges?: Array<{ from: string; to: string; weight: RouteWeight }>;
-    maxCandidates?: number;
-    explorationWeight?: number;
-  },
+  config?: RoutingConfig,
 ): RouteScore[] {
-  const weights = config?.weights ?? {
-    trust: 0.3,
-    cost: 0.2,
-    latency: 0.15,
-    reliability: 0.15,
-    regulatory_risk: 0.2,
-  };
+  const weights = { ...DEFAULT_WEIGHTS, ...config?.weights };
   const maxCandidates = config?.maxCandidates ?? 10;
   const explorationWeight = config?.explorationWeight ?? 0;
 
   const graph = buildRoutingGraph(selfId, candidates, config?.peerEdges);
   const paths = optimalPaths(graph, selfId);
 
-  // Build a lookup for candidate data (needed for sub_scores)
   const candidateMap = new Map<string, CandidateProfile>();
-  for (const c of candidates) {
-    candidateMap.set(c.motebit_id, c);
-  }
+  for (const c of candidates) candidateMap.set(c.motebit_id, c);
 
   const scores: RouteScore[] = [];
-
   for (const [nodeId, route] of paths) {
-    if (nodeId === selfId) continue;
-    if (route.trust === 0) continue; // unreachable or blocked
-
-    const candidate = candidateMap.get(nodeId);
-
-    // Capability match is a hard gate — skip candidates missing required capabilities
-    const capabilityMatch = computeCapabilityMatch(candidate, requirements);
-    if (capabilityMatch === 0 && requirements.required_capabilities.length > 0) continue;
-
-    // Compute sub_scores for backward compatibility
-    const successRate = candidate ? computeReliability(candidate) : route.reliability;
-    const latencyScore =
-      route.latency === Infinity ? 0 : 1 - route.latency / (route.latency + 5000);
-    const priceEfficiency = computePriceEfficiency(candidate, requirements);
-    const availability = candidate?.is_online ? 1.0 : 0.0;
-
-    // Normalize cost and latency to [0,1] where higher is better
-    const costScore = route.cost === Infinity ? 0 : 1 / (1 + route.cost);
-    const latencyNorm = route.latency === Infinity ? 0 : 1 / (1 + route.latency / 1000);
-
-    const riskScore = route.regulatory_risk === Infinity ? 0 : 1 / (1 + route.regulatory_risk);
-
-    const composite =
-      route.trust * weights.trust +
-      costScore * weights.cost +
-      latencyNorm * weights.latency +
-      route.reliability * weights.reliability +
-      riskScore * (weights.regulatory_risk ?? 0);
-
-    scores.push({
-      motebit_id: nodeId as MotebitId,
-      composite,
-      sub_scores: {
-        trust: route.trust,
-        success_rate: successRate,
-        latency: latencyScore,
-        price_efficiency: priceEfficiency,
-        capability_match: capabilityMatch,
-        availability,
-      },
-      selected: false,
-    });
+    if (nodeId === selfId || route.trust === 0) continue;
+    const score = scoreRoute(nodeId, route, candidateMap.get(nodeId), requirements, weights);
+    if (score) scores.push(score);
   }
 
-  scores.sort((a, b) => b.composite - a.composite);
-
-  // Epsilon-greedy exploration (same deterministic approach as existing scoring)
-  if (explorationWeight > 0 && scores.length > 1) {
-    const probe = (scores[0]!.composite * 1000) % 1;
-    if (probe < explorationWeight) {
-      const explorationIdx = Math.min(
-        1 + Math.floor(probe * (scores.length - 1)),
-        scores.length - 1,
-      );
-      if (explorationIdx > 1 && scores[explorationIdx]!.composite > 0) {
-        const temp = scores[1]!;
-        scores[1] = scores[explorationIdx]!;
-        scores[explorationIdx] = temp;
-      }
-    }
-  }
-
-  // Mark top N as selected (skip zero-scored)
-  let selected = 0;
-  for (const score of scores) {
-    if (selected >= maxCandidates || score.composite === 0) break;
-    score.selected = true;
-    selected++;
-  }
-
+  finalizeScores(scores, maxCandidates, explorationWeight);
   return scores;
 }
 
@@ -273,9 +299,10 @@ export interface ExplainedRouteScore extends RouteScore {
 /**
  * Rank candidates with provenance tracking — returns WHY each agent was chosen.
  *
- * Same as graphRankCandidates but uses annotatedSemiring to track derivation
- * paths through the agent graph. Each result includes the routing explanation:
- * which edges (agent IDs) were traversed to reach this candidate.
+ * Same scoring as graphRankCandidates (shared scoreRoute core) but uses
+ * annotatedSemiring to track derivation paths through the agent graph.
+ * Each result includes the routing explanation: which edges (agent IDs)
+ * were traversed to reach this candidate.
  *
  * This is the algebraic answer to "explain this routing decision" — not logging,
  * not post-hoc reconstruction, but a first-class semiring query.
@@ -284,40 +311,20 @@ export function explainedRankCandidates(
   selfId: MotebitId,
   candidates: CandidateProfile[],
   requirements: TaskRequirements,
-  config?: {
-    weights?: {
-      trust: number;
-      cost: number;
-      latency: number;
-      reliability: number;
-      regulatory_risk?: number;
-    };
-    peerEdges?: Array<{ from: string; to: string; weight: RouteWeight }>;
-    maxCandidates?: number;
-    explorationWeight?: number;
-    maxProvPaths?: number;
-  },
+  config?: RoutingConfig & { maxProvPaths?: number },
 ): ExplainedRouteScore[] {
-  const weights = config?.weights ?? {
-    trust: 0.3,
-    cost: 0.2,
-    latency: 0.15,
-    reliability: 0.15,
-    regulatory_risk: 0.2,
-  };
+  const weights = { ...DEFAULT_WEIGHTS, ...config?.weights };
   const maxCandidates = config?.maxCandidates ?? 10;
   const explorationWeight = config?.explorationWeight ?? 0;
 
   // 1. Build the plain routing graph
   const plainGraph = buildRoutingGraph(selfId, candidates, config?.peerEdges);
 
-  // 2. Build an annotated graph: wrap each edge weight with provenance
+  // 2. Build an annotated graph: wrap each edge weight with provenance.
   //    The provenance label for each edge is the target node ID — this records
   //    which agent was traversed to reach the destination.
   const annotatedGraph = new WeightedDigraph(AnnotatedRouteWeightSemiring);
-  for (const node of plainGraph.nodes()) {
-    annotatedGraph.addNode(node);
-  }
+  for (const node of plainGraph.nodes()) annotatedGraph.addNode(node);
   for (const edge of plainGraph.edges()) {
     const annotated: Annotated<RouteWeight> = {
       value: edge.weight,
@@ -329,93 +336,33 @@ export function explainedRankCandidates(
   // 3. Run optimalPaths over the annotated graph
   const annotatedPaths = optimalPaths(annotatedGraph, selfId);
 
-  // 4. Build candidate lookup
+  // 4. Score using the shared core, attach provenance
   const candidateMap = new Map<string, CandidateProfile>();
-  for (const c of candidates) {
-    candidateMap.set(c.motebit_id, c);
-  }
+  for (const c of candidates) candidateMap.set(c.motebit_id, c);
 
-  // 5. Score and build ExplainedRouteScore[]
   const scores: ExplainedRouteScore[] = [];
-
   for (const [nodeId, annotatedRoute] of annotatedPaths) {
-    if (nodeId === selfId) continue;
-    const route = annotatedRoute.value;
-    if (route.trust === 0) continue;
+    if (nodeId === selfId || annotatedRoute.value.trust === 0) continue;
 
-    const candidate = candidateMap.get(nodeId);
+    const score = scoreRoute(
+      nodeId,
+      annotatedRoute.value,
+      candidateMap.get(nodeId),
+      requirements,
+      weights,
+    );
+    if (!score) continue;
 
-    // Capability match is a hard gate
-    const capabilityMatch = computeCapabilityMatch(candidate, requirements);
-    if (capabilityMatch === 0 && requirements.required_capabilities.length > 0) continue;
-
-    // Compute sub_scores for backward compatibility
-    const successRate = candidate ? computeReliability(candidate) : route.reliability;
-    const latencyScore =
-      route.latency === Infinity ? 0 : 1 - route.latency / (route.latency + 5000);
-    const priceEfficiency = computePriceEfficiency(candidate, requirements);
-    const availability = candidate?.is_online ? 1.0 : 0.0;
-
-    // Normalize cost and latency to [0,1] where higher is better
-    const costScore = route.cost === Infinity ? 0 : 1 / (1 + route.cost);
-    const latencyNorm = route.latency === Infinity ? 0 : 1 / (1 + route.latency / 1000);
-    const riskScore = route.regulatory_risk === Infinity ? 0 : 1 / (1 + route.regulatory_risk);
-
-    const composite =
-      route.trust * weights.trust +
-      costScore * weights.cost +
-      latencyNorm * weights.latency +
-      route.reliability * weights.reliability +
-      riskScore * (weights.regulatory_risk ?? 0);
-
-    // Extract provenance paths (filter out empty identity paths)
-    const routingPaths: string[][] = annotatedRoute.why
-      .map((p) => [...p])
-      .filter((p) => p.length > 0);
+    const routingPaths = annotatedRoute.why.map((p) => [...p]).filter((p) => p.length > 0);
 
     scores.push({
-      motebit_id: nodeId as MotebitId,
-      composite,
-      sub_scores: {
-        trust: route.trust,
-        success_rate: successRate,
-        latency: latencyScore,
-        price_efficiency: priceEfficiency,
-        capability_match: capabilityMatch,
-        availability,
-      },
-      selected: false,
+      ...score,
       routing_paths: routingPaths,
       alternatives_considered: routingPaths.length,
     });
   }
 
-  scores.sort((a, b) => b.composite - a.composite);
-
-  // Epsilon-greedy exploration
-  if (explorationWeight > 0 && scores.length > 1) {
-    const probe = (scores[0]!.composite * 1000) % 1;
-    if (probe < explorationWeight) {
-      const explorationIdx = Math.min(
-        1 + Math.floor(probe * (scores.length - 1)),
-        scores.length - 1,
-      );
-      if (explorationIdx > 1 && scores[explorationIdx]!.composite > 0) {
-        const temp = scores[1]!;
-        scores[1] = scores[explorationIdx]!;
-        scores[explorationIdx] = temp;
-      }
-    }
-  }
-
-  // Mark top N as selected
-  let selected = 0;
-  for (const score of scores) {
-    if (selected >= maxCandidates || score.composite === 0) break;
-    score.selected = true;
-    selected++;
-  }
-
+  finalizeScores(scores, maxCandidates, explorationWeight);
   return scores;
 }
 

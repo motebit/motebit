@@ -337,6 +337,7 @@ export class PlanEngine {
               step_id: step.step_id,
               ordinal: step.ordinal,
               task_id: delegationResult.task_id,
+              routing_choice: delegationResult.routing_choice ?? undefined,
             });
             this._pushTimelineEvent("step_completed", {
               plan_id: plan.plan_id,

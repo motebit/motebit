@@ -134,7 +134,12 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
       throw new Error(`Relay task submission failed (${resp.status}): ${text}`);
     }
 
-    const { task_id } = (await resp.json()) as { task_id: string };
+    const taskResp = (await resp.json()) as {
+      task_id: string;
+      routing_choice?: DelegatedStepResult["routing_choice"];
+    };
+    const { task_id } = taskResp;
+    const routingChoice = taskResp.routing_choice;
 
     // Persist task_id immediately so recovery can find it if we crash/close
     onTaskSubmitted?.(task_id);
@@ -167,6 +172,7 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
             task_id,
             receipt,
             result_text: receipt.result,
+            routing_choice: routingChoice ?? undefined,
           });
         } else {
           // Attach the failed agent's ID to the error for exclusion
