@@ -12,10 +12,11 @@ import type {
   SyncPlanStep,
 } from "@motebit/sdk";
 import { asMotebitId } from "@motebit/sdk";
+import type { DatabaseDriver } from "@motebit/persistence";
 import type { ConnectedDevice } from "./index.js";
 
 export interface DataSyncDeps {
-  db: any;
+  db: DatabaseDriver;
   app: Hono;
   connections: Map<string, ConnectedDevice[]>;
 }
@@ -24,7 +25,7 @@ export interface DataSyncDeps {
  * Create all data-sync tables (conversations, messages, plans, plan steps)
  * and apply schema migrations for collaborative fields.
  */
-export function createDataSyncTables(db: any): void {
+export function createDataSyncTables(db: DatabaseDriver): void {
   // Create conversation sync tables (relay-side storage)
   db.exec(`
       CREATE TABLE IF NOT EXISTS sync_conversations (
@@ -116,7 +117,7 @@ export function createDataSyncTables(db: any): void {
 
 // === Conversation Sync Helpers ===
 
-export function upsertSyncConversation(db: any, conv: SyncConversation): void {
+export function upsertSyncConversation(db: DatabaseDriver, conv: SyncConversation): void {
   db.prepare(
     `INSERT INTO sync_conversations (conversation_id, motebit_id, started_at, last_active_at, title, summary, message_count)
        VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -136,7 +137,7 @@ export function upsertSyncConversation(db: any, conv: SyncConversation): void {
   );
 }
 
-export function upsertSyncMessage(db: any, msg: SyncConversationMessage): void {
+export function upsertSyncMessage(db: DatabaseDriver, msg: SyncConversationMessage): void {
   db.prepare(
     `INSERT OR IGNORE INTO sync_conversation_messages
        (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate)
@@ -165,7 +166,7 @@ const STEP_STATUS_ORDER: Record<string, number> = {
   skipped: 2,
 };
 
-function upsertSyncPlan(db: any, plan: SyncPlan): void {
+function upsertSyncPlan(db: DatabaseDriver, plan: SyncPlan): void {
   db.prepare(
     `INSERT INTO sync_plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps, proposal_id, collaborative)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -192,7 +193,7 @@ function upsertSyncPlan(db: any, plan: SyncPlan): void {
   );
 }
 
-function upsertSyncPlanStep(db: any, step: SyncPlanStep): void {
+function upsertSyncPlanStep(db: DatabaseDriver, step: SyncPlanStep): void {
   // Check existing status for monotonicity
   const existing = db
     .prepare(`SELECT status, updated_at FROM sync_plan_steps WHERE step_id = ?`)

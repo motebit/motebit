@@ -12,6 +12,7 @@ import { HTTPException } from "hono/http-exception";
 import { sign, verify, generateKeypair, publicKeyToDidKey, canonicalJson } from "@motebit/crypto";
 import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from "node:crypto";
 import type { ExecutionReceipt } from "@motebit/sdk";
+import type { DatabaseDriver } from "@motebit/persistence";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "relay", module: "federation" });
@@ -93,8 +94,7 @@ export function hexToBytes(hex: string): Uint8Array {
 // === Database ===
 
 /** Create federation-related tables (relay_identity, relay_peers, relay_federation_settlements). */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- accepts any better-sqlite3 db
-export function createFederationTables(db: any): void {
+export function createFederationTables(db: DatabaseDriver): void {
   // Relay identity — persistent Ed25519 keypair for credential signing, federation, verification.
   // Private key is encrypted at rest via AES-256-GCM when MOTEBIT_RELAY_KEY_PASSPHRASE is set.
   db.exec(`
@@ -223,8 +223,10 @@ export function isEncryptedFormat(value: string): boolean {
  * using AES-256-GCM with a PBKDF2-derived key. Without a passphrase (dev mode), the
  * private key is stored as plaintext hex for backward compatibility.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- accepts any better-sqlite3 db
-export async function initRelayIdentity(db: any, passphrase?: string): Promise<RelayIdentity> {
+export async function initRelayIdentity(
+  db: DatabaseDriver,
+  passphrase?: string,
+): Promise<RelayIdentity> {
   const existing = db.prepare("SELECT * FROM relay_identity LIMIT 1").get() as
     | { relay_motebit_id: string; public_key: string; private_key_hex: string; did: string }
     | undefined;
@@ -309,8 +311,10 @@ const HEARTBEAT_REMOVE_THRESHOLD = 5;
  * Single tick: send heartbeats to all active/suspended peers.
  * Exported for direct testing — the interval wrapper is `startHeartbeatLoop`.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- accepts any better-sqlite3 db
-export async function sendHeartbeats(db: any, relayIdentity: RelayIdentity): Promise<void> {
+export async function sendHeartbeats(
+  db: DatabaseDriver,
+  relayIdentity: RelayIdentity,
+): Promise<void> {
   const peers = db
     .prepare(
       "SELECT peer_relay_id, endpoint_url, missed_heartbeats, state FROM relay_peers WHERE state IN ('active', 'suspended')",
@@ -395,9 +399,8 @@ const RETRY_BACKOFF_MS = [30_000, 120_000, 480_000, 1_920_000, 7_200_000];
  * Single tick: process pending settlement retries.
  * Exported for direct testing — the interval wrapper is `startSettlementRetryLoop`.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- accepts any better-sqlite3 db
 export async function processSettlementRetries(
-  db: any,
+  db: DatabaseDriver,
   relayIdentity: RelayIdentity,
 ): Promise<void> {
   const now = Date.now();
@@ -473,9 +476,8 @@ export async function processSettlementRetries(
 }
 
 /** Start the settlement retry loop. Returns the interval handle for cleanup. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function startSettlementRetryLoop(
-  db: any,
+  db: DatabaseDriver,
   relayIdentity: RelayIdentity,
   intervalMs = 30_000,
 ): ReturnType<typeof setInterval> {
@@ -485,9 +487,8 @@ export function startSettlementRetryLoop(
 }
 
 /** Start the heartbeat sender loop. Returns the interval handle for cleanup. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function startHeartbeatLoop(
-  db: any,
+  db: DatabaseDriver,
   relayIdentity: RelayIdentity,
   intervalMs = 60_000,
 ): ReturnType<typeof setInterval> {
@@ -502,9 +503,8 @@ export function startHeartbeatLoop(
  * Look up an active peer and verify its Ed25519 signature over a payload.
  * Returns the peer's public key on success, throws HTTPException on failure.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- accepts any better-sqlite3 db
 async function verifyPeerSignature(
-  db: any,
+  db: DatabaseDriver,
   peerId: string,
   signatureHex: string,
   payloadBytes: Uint8Array,
@@ -572,8 +572,7 @@ export class PeerRateLimiter {
 // === Federation Routes ===
 
 export interface FederationDeps {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accepts any better-sqlite3 db
-  db: any;
+  db: DatabaseDriver;
   app: Hono;
   relayIdentity: RelayIdentity;
   federationConfig?: FederationConfig;
@@ -583,7 +582,9 @@ export interface FederationDeps {
   queryLocalAgents(capability?: string, motebitId?: string, limit?: number): AgentInfo[];
 
   /** Called when a verified forwarded task arrives from a peer. */
-  onTaskForwarded(task: VerifiedForwardedTask): Promise<{ status: "routed" | "pending" }>;
+  onTaskForwarded(
+    task: VerifiedForwardedTask,
+  ): Promise<{ status: "routed" | "pending" }> | { status: "routed" | "pending" };
 
   /** Called when a verified task result arrives from a peer. */
   onTaskResultReceived(result: VerifiedTaskResult): Promise<void>;
@@ -591,7 +592,7 @@ export interface FederationDeps {
   /** Called when a verified settlement arrives from a peer. */
   onSettlementReceived(
     settlement: VerifiedSettlement,
-  ): Promise<{ feeAmount: number; netAmount: number }>;
+  ): Promise<{ feeAmount: number; netAmount: number }> | { feeAmount: number; netAmount: number };
 }
 
 /** Register all 11 federation endpoints on the Hono app. */
@@ -617,8 +618,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 1: Identity ──
 
-  // eslint-disable-next-line @typescript-eslint/require-await -- Hono handler, sync data
-  app.get("/federation/v1/identity", async (c) => {
+  app.get("/federation/v1/identity", (c) => {
     return c.json({
       spec: "motebit/relay-federation@1.0",
       relay_motebit_id: relayIdentity.relayMotebitId,
@@ -807,8 +807,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     return c.json({ status: "removed" });
   });
 
-  // eslint-disable-next-line @typescript-eslint/require-await -- Hono handler, sync data
-  app.get("/federation/v1/peers", async (c) => {
+  app.get("/federation/v1/peers", (c) => {
     const rows = db
       .prepare(
         `SELECT peer_relay_id, public_key, endpoint_url, display_name, state,
@@ -876,7 +875,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              "X-Correlation-ID": body.query_id as string,
+              "X-Correlation-ID": body.query_id,
             },
             body: JSON.stringify({
               query: body.query,
@@ -1051,8 +1050,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     });
   });
 
-  // eslint-disable-next-line @typescript-eslint/require-await -- Hono handler, sync data
-  app.get("/federation/v1/settlements", async (c) => {
+  app.get("/federation/v1/settlements", (c) => {
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
     const rows = db
       .prepare("SELECT * FROM relay_federation_settlements ORDER BY settled_at DESC LIMIT ?")

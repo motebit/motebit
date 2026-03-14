@@ -102,7 +102,14 @@ module.exports = {
       // through bootstrapIdentity() from @motebit/core-identity.
       // See packages/core-identity/README.md for rationale.
       files: ["apps/*/src/**/*.ts", "services/*/src/**/*.ts"],
-      excludedFiles: ["**/__tests__/**", "**/*.test.ts", "**/*.spec.ts"],
+      excludedFiles: [
+        "**/__tests__/**",
+        "**/*.test.ts",
+        "**/*.spec.ts",
+        // Relay federation generates its own Ed25519 keypair for relay identity,
+        // not a user surface — generateKeypair is the correct primitive here.
+        "services/api/src/federation.ts",
+      ],
       rules: {
         "no-restricted-imports": [
           "error",

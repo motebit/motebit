@@ -754,9 +754,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       new ExactEvmScheme(),
     );
 
-    resourceServer.onAfterSettle(async (ctx) => {
+    resourceServer.onAfterSettle((ctx): Promise<void> => {
       lastSettleTxHash = ctx.result.transaction;
       lastSettleNetwork = ctx.result.network;
+      return Promise.resolve();
     });
 
     // Single DB lookup per request. The wrapper sets currentPricing before
@@ -1086,7 +1087,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
             // Agent protocol: task_claim
             if (msg.type === "task_claim" && msg.task_id) {
-              const taskId = msg.task_id as string;
+              const taskId = msg.task_id;
               const entry = taskQueue.get(taskId);
 
               if (!entry || entry.task.motebit_id !== motebitId) {
@@ -1689,9 +1690,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     relayIdentity,
     federationConfig,
     federationQueryCache,
-    queryLocalAgents: taskRouter.queryLocalAgents,
+    queryLocalAgents: (capability, motebitId, limit) =>
+      taskRouter.queryLocalAgents(capability, motebitId, limit),
 
-    async onTaskForwarded(verified) {
+    onTaskForwarded(verified) {
       const task: AgentTask = {
         task_id: verified.taskId,
         motebit_id: asMotebitId(verified.targetAgent),
@@ -1755,7 +1757,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
             "SELECT trust_level, successful_forwards, failed_forwards FROM relay_peers WHERE peer_relay_id = ?",
           )
           .get(verified.originRelay) as
-          | { trust_level: string; successful_forwards: number; failed_forwards: number }
+          | { trust_level: AgentTrustLevel; successful_forwards: number; failed_forwards: number }
           | undefined;
 
         if (peerRow) {
@@ -1766,7 +1768,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
           const trustRecord: AgentTrustRecord = {
             motebit_id: asMotebitId(relayIdentity.relayMotebitId),
             remote_motebit_id: asMotebitId(verified.originRelay),
-            trust_level: peerRow.trust_level as AgentTrustLevel,
+            trust_level: peerRow.trust_level,
             first_seen_at: 0,
             last_seen_at: Date.now(),
             interaction_count: newSuccessful + newFailed,
@@ -1776,7 +1778,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
           const newLevel = evaluateTrustTransition(trustRecord);
           const trustLevel = newLevel ?? peerRow.trust_level;
-          const trustScore = trustLevelToScore(trustLevel as AgentTrustLevel);
+          const trustScore = trustLevelToScore(trustLevel);
 
           moteDb.db
             .prepare(
@@ -1914,7 +1916,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       }
     },
 
-    async onSettlementReceived(verified) {
+    onSettlementReceived(verified) {
       const feeAmount = verified.grossAmount * PLATFORM_FEE_RATE;
       const netAmount = verified.grossAmount - feeAmount;
       moteDb.db
@@ -2718,7 +2720,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         );
 
-        function walkReceipts(parentMotebitId: string, receipts: ExecutionReceipt[]): void {
+        const walkReceipts = (parentMotebitId: string, receipts: ExecutionReceipt[]): void => {
           for (const sub of receipts) {
             const latency =
               sub.completed_at && sub.submitted_at ? sub.completed_at - sub.submitted_at : 5000;
@@ -2748,7 +2750,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
               walkReceipts(sub.motebit_id as string, sub.delegation_receipts);
             }
           }
-        }
+        };
 
         walkReceipts(receipt.motebit_id as string, receipt.delegation_receipts);
       } catch {

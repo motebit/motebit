@@ -11,11 +11,11 @@ import type { CapabilityPrice, AgentTrustRecord } from "@motebit/sdk";
 import { asMotebitId, asListingId, AgentTrustLevel } from "@motebit/sdk";
 import type { ListingId } from "@motebit/sdk";
 import { hexPublicKeyToDidKey } from "@motebit/crypto";
+import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity, FederationConfig } from "./federation.js";
 
 export interface TaskRouterDeps {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accepts any better-sqlite3 db
-  db: any;
+  db: DatabaseDriver;
   relayIdentity: RelayIdentity;
   federationConfig?: FederationConfig;
 }
