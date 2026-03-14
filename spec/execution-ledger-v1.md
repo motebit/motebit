@@ -99,7 +99,7 @@ When a step is delegated, the `delegation` object contains:
 | Field            | Type   | Required | Description                                                         |
 | ---------------- | ------ | -------- | ------------------------------------------------------------------- |
 | `task_id`        | string | yes      | The task identifier sent to the delegated agent.                    |
-| `receipt_hash`   | string | no       | SHA-256 hex of the delegated agent's execution ledger content hash. |
+| `receipt_hash`   | string | no       | The delegated agent's Ed25519 receipt signature (base64url). |
 | `routing_choice` | object | no       | Routing provenance from scored delegation. See §4.1.1.              |
 
 #### 4.1.1 — Routing Choice
@@ -234,7 +234,7 @@ Delegation verification is recursive. A ledger is fully verified when all nested
 When a step is delegated to another agent, the delegated agent produces its own execution receipt signed with its own keypair. The parent ledger records the delegation in three places:
 
 1. **Timeline:** A `step_delegated` event with the `task_id` and `ordinal`.
-2. **Step summary:** The `delegation.receipt_hash` field contains the first 16 characters of the delegated agent's receipt signature (linkage to the full receipt held by the relay or delegating agent).
+2. **Step summary:** The `delegation.receipt_hash` field contains the delegated agent's Ed25519 receipt signature (linkage to the full receipt held by the relay or delegating agent).
 3. **Delegation receipts:** The `delegation_receipts` array includes a `DelegationReceiptSummary` (§4.2) with task_id, motebit_id, device_id, status, tools_used, and signature_prefix. Full signed receipts are edge artifacts — the delegating agent or relay retains them for full verification.
 
 This creates a verifiable chain: the parent ledger references delegated execution by receipt metadata, and the full receipt can be retrieved from the relay for independent signature verification.

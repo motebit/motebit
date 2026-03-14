@@ -34,7 +34,7 @@ Each relay has a persistent cryptographic identity, independent of the agents it
 | **Algorithm**  | Ed25519                                                                                       |
 | **Key size**   | 32-byte public key, 64-byte private key (seed + public)                                       |
 | **Generation** | On first relay startup, if no keypair exists                                                  |
-| **Storage**    | Private key in OS keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager) |
+| **Storage**    | Private key encrypted at rest with AES-256-GCM using PBKDF2-derived key (100k iterations) when `MOTEBIT_RELAY_KEY_PASSPHRASE` env var is set. Plaintext hex fallback for dev mode (no passphrase). |
 | **Identifier** | `motebit_id` (UUID v7, time-ordered) — distinct from any agent's `motebit_id`                 |
 
 The relay's `motebit_id` and public key are published to peers during the peering handshake (§3). The private key MUST NOT leave the host machine.
@@ -91,9 +91,9 @@ Relay A (initiator)                         Relay B (responder)
 
 **Step 1 — Propose.** Relay A sends its identity and a 32-byte random nonce (`nonce_a`).
 
-**Step 2 — Respond.** Relay B validates the proposal, stores A as a pending peer, generates its own nonce (`nonce_b`), and returns a challenge: the Ed25519 signature of `nonce_a` using B's private key. This proves B holds the private key corresponding to the public key it advertises.
+**Step 2 — Respond.** Relay B validates the proposal, stores A as a pending peer, generates its own nonce (`nonce_b`), and returns a challenge: the Ed25519 signature of `relay_id:nonce_a` (the proposer's relay_id concatenated with `:` and the nonce, UTF-8 encoded) using B's private key. This proves B holds the private key corresponding to the public key it advertises. The nonce is bound to the relay_id to prevent cross-peering replay.
 
-**Step 3 — Confirm.** Relay A verifies B's challenge signature against B's public key. If valid, A signs `nonce_b` with its own private key and sends the response. Relay B verifies A's signature. Both relays transition the peer to `active` state.
+**Step 3 — Confirm.** Relay A verifies B's challenge signature against B's public key. If valid, A signs `relay_id:nonce_b` (A's own relay_id concatenated with `:` and B's nonce) with its own private key and sends the response. Relay B verifies A's signature. Both relays transition the peer to `active` state.
 
 If any verification fails, the handshake is aborted and the peer record is discarded.
 
@@ -106,12 +106,12 @@ Active peers exchange heartbeats to confirm liveness and synchronize metadata.
 | **Interval**     | 60 seconds                                        |
 | **Endpoint**     | `POST /federation/v1/peer/heartbeat`              |
 | **Payload**      | `{ relay_id, timestamp, agent_count, signature }` |
-| **Missed limit** | 5 consecutive missed heartbeats                   |
-| **Action**       | Peer state transitions to `suspended`             |
+| **Missed limit** | 3 consecutive missed heartbeats → `suspended`; 5 → `removed` |
+| **Action**       | Peer state transitions to `suspended` at 3, `removed` at 5   |
 
 The `signature` field is the Ed25519 signature of `relay_id || timestamp` (concatenated UTF-8 bytes). This prevents replay and spoofing.
 
-A suspended peer is not removed — it is excluded from discovery and routing until heartbeats resume. After 3 consecutive successful heartbeats, the peer transitions back to `active`.
+A suspended peer is excluded from discovery and routing until heartbeats resume. After a single successful heartbeat, the peer transitions back to `active`. A peer that reaches 5 consecutive missed heartbeats is transitioned to `removed` and requires a full handshake to re-establish.
 
 ### 3.3 — Peer Removal
 
@@ -336,6 +336,30 @@ After a forwarded task completes and the receipt is verified, the originating re
 
 The receiving relay verifies the signature, records its own settlement entry, and pays the agent via the standard `settleOnReceipt` flow.
 
+### 7.4 — Settlement Retry
+
+When a settlement forward fails (network error, peer timeout), the originating relay queues the settlement for exponential backoff retry rather than dropping it.
+
+| Parameter        | Value                                    |
+| ---------------- | ---------------------------------------- |
+| **Max attempts** | 5                                        |
+| **Backoff**      | 30s, 2min, 8min, 32min, 2h              |
+| **Status**       | `pending` → `completed` or `failed`     |
+| **Storage**      | `relay_settlement_retries` table         |
+
+After 5 failed attempts, the settlement is marked as `failed` and requires manual intervention. Successful retry clears the queue entry.
+
+### 7.5 — Payment Proof (x402)
+
+Settlement records may include optional on-chain payment proof fields:
+
+| Field          | Type   | Required | Description                                          |
+| -------------- | ------ | -------- | ---------------------------------------------------- |
+| `x402_tx_hash` | string | no       | Transaction hash for on-chain payment verification.  |
+| `x402_network` | string | no       | Network identifier (e.g., `"ethereum"`, `"base"`).   |
+
+These fields flow through the settlement forwarding pipeline and are stored in both `relay_settlements` and `relay_federation_settlements` tables for audit linkage.
+
 ---
 
 ## 8. Receipt Verification
@@ -380,8 +404,8 @@ Both signatures must be valid for the receipt to be accepted. On acceptance:
 
 | Condition                     | Detection                                   | Response                                                                        |
 | ----------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------- |
-| Peer stops sending heartbeats | 5 consecutive missed heartbeats (5 minutes) | Peer state transitions to `suspended`.                                          |
-| Peer resumes heartbeats       | 3 consecutive successful heartbeats         | Peer state transitions back to `active`.                                        |
+| Peer stops sending heartbeats | 3 consecutive missed heartbeats (3 minutes) | Peer state transitions to `suspended`. At 5 missed, transitions to `removed`.   |
+| Peer resumes heartbeats       | 1 successful heartbeat                      | Peer state transitions back to `active`.                                        |
 | Peer down during task         | HTTP timeout or connection error            | Task fails locally; originating relay retries via alternate route if available. |
 
 A suspended peer is excluded from discovery forwarding and task routing. The local relay's own agents and routes through other peers are unaffected.
@@ -401,7 +425,7 @@ Administrators can manually block a peer relay by transitioning its state to `re
 
 | Data Type          | Freshness Source        | Staleness Threshold | Action                           |
 | ------------------ | ----------------------- | ------------------- | -------------------------------- |
-| Peer liveness      | Heartbeat               | 5 minutes (5 × 60s) | Suspend peer                     |
+| Peer liveness      | Heartbeat               | 3 minutes (3 × 60s) | Suspend peer (remove at 5 × 60s) |
 | Agent availability | Heartbeat `agent_count` | 5 minutes           | Re-query on next discovery       |
 | Trust scores       | Task completion events  | None (event-driven) | No expiry; accumulates over time |
 | Discovery cache    | Query deduplication TTL | 30 seconds          | Cache eviction                   |
