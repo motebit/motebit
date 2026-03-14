@@ -11,7 +11,9 @@ const LOG_LEVELS: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error
 
 let minLevel: LogLevel = (process.env.LOG_LEVEL as LogLevel) ?? "info";
 
-export function setLogLevel(level: LogLevel): void { minLevel = level; }
+export function setLogLevel(level: LogLevel): void {
+  minLevel = level;
+}
 
 function emit(entry: LogEntry): void {
   if (LOG_LEVELS[entry.level] < LOG_LEVELS[minLevel]) return;

@@ -33,10 +33,7 @@ function bytesToHex(bytes: Uint8Array): string {
 const RELAY_A_URL = "http://relay-a.test:3000";
 const RELAY_B_URL = "http://relay-b.test:3001";
 
-async function createFederatedRelay(
-  endpointUrl: string,
-  displayName: string,
-): Promise<SyncRelay> {
+async function createFederatedRelay(endpointUrl: string, displayName: string): Promise<SyncRelay> {
   return createSyncRelay({
     apiToken: API_TOKEN,
     x402: {
@@ -55,36 +52,34 @@ async function createFederatedRelay(
  */
 function installFetchInterceptor(relayA: SyncRelay, relayB: SyncRelay): void {
   const originalFetch = globalThis.fetch;
-  vi.stubGlobal(
-    "fetch",
-    async (input: string | URL | Request, init?: RequestInit) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const url =
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 
-      let relay: SyncRelay | undefined;
-      let path = "";
+    let relay: SyncRelay | undefined;
+    let path = "";
 
-      if (url.startsWith(RELAY_A_URL)) {
-        relay = relayA;
-        path = url.slice(RELAY_A_URL.length);
-      } else if (url.startsWith(RELAY_B_URL)) {
-        relay = relayB;
-        path = url.slice(RELAY_B_URL.length);
-      }
+    if (url.startsWith(RELAY_A_URL)) {
+      relay = relayA;
+      path = url.slice(RELAY_A_URL.length);
+    } else if (url.startsWith(RELAY_B_URL)) {
+      relay = relayB;
+      path = url.slice(RELAY_B_URL.length);
+    }
 
-      if (relay) {
-        // Route to the Hono app
-        const res = await relay.app.request(path, {
-          method: init?.method ?? "GET",
-          headers: init?.headers as Record<string, string>,
-          body: init?.body as string,
-        });
-        return res as unknown as Response;
-      }
+    if (relay) {
+      // Route to the Hono app
+      const res = await relay.app.request(path, {
+        method: init?.method ?? "GET",
+        headers: init?.headers as Record<string, string>,
+        body: init?.body as string,
+      });
+      return res as unknown as Response;
+    }
 
-      // Fall through to real fetch for non-federation URLs
-      return originalFetch(input, init);
-    },
-  );
+    // Fall through to real fetch for non-federation URLs
+    return originalFetch(input, init);
+  });
 }
 
 /**
@@ -123,10 +118,7 @@ function installFetchInterceptor(relayA: SyncRelay, relayB: SyncRelay): void {
  * This bypasses the handshake but gives us a known-good peered state for testing
  * all the other federation functionality (discovery, routing, settlement).
  */
-async function establishPeering(
-  relayA: SyncRelay,
-  relayB: SyncRelay,
-): Promise<void> {
+async function establishPeering(relayA: SyncRelay, relayB: SyncRelay): Promise<void> {
   const resA = await relayA.app.request("/federation/v1/identity");
   const idA = (await resA.json()) as { relay_motebit_id: string; public_key: string; did: string };
   const resB = await relayB.app.request("/federation/v1/identity");
@@ -772,9 +764,7 @@ describe("Federation E2E", () => {
 
       // Simulate Bob being "connected" to Relay B via WebSocket
       const bobWs = { send: vi.fn(), close: vi.fn() };
-      relayB.connections.set(bob.motebitId, [
-        { ws: bobWs as never, deviceId: "bob-device" },
-      ]);
+      relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
 
       // 2. Peer the relays
       await establishPeering(relayA, relayB);
@@ -800,7 +790,11 @@ describe("Federation E2E", () => {
       // The relay A discovers Bob on relay B, ranks him, forwards via /federation/v1/task/forward,
       // relay B receives it, puts it in the task queue, and sends to Bob's WebSocket.
       const bobMessages = bobWs.send.mock.calls.map(
-        (c: unknown[]) => JSON.parse(c[0] as string) as { type: string; task?: { task_id: string; prompt: string } },
+        (c: unknown[]) =>
+          JSON.parse(c[0] as string) as {
+            type: string;
+            task?: { task_id: string; prompt: string };
+          },
       );
       const taskRequest = bobMessages.find((m) => m.type === "task_request");
 

@@ -18,6 +18,8 @@ Every AI agent today is a session — no persistent identity, no memory that com
 
 MCP defines what tools an agent can reach. Motebit defines **who the agent is**.
 
+39 packages. 133K lines of TypeScript. 3,000+ tests. [Built in 26 days.](https://docs.motebit.com/docs/how-we-built-this)
+
 ## Why
 
 Three things no one else is building together:
@@ -83,29 +85,35 @@ apps/
   desktop/     Tauri app — glass droplet creature, full identity/crypto/operator mode
   cli/         Node.js REPL and daemon — developer console, goal scheduling
   mobile/      React Native + Expo — full-featured mobile companion
-  admin/       React dashboard — 11-tab real-time monitoring
   web/         Browser app — zero-install entry point, IndexedDB identity
+  admin/       React dashboard — 13-tab real-time monitoring
+  spatial/     AR/VR positioning — body-relative orbital mechanics
 
 packages/
+  sdk/             Core protocol types — zero deps, MIT licensed
+  verify/          Standalone signature verifier — zero deps, MIT licensed
+  create-motebit/  `npm create motebit` scaffolder — MIT licensed
   runtime/         MotebitRuntime — wires all engines, streaming AI loop
   ai-core/         Pluggable providers: Anthropic, Ollama, Hybrid fallback
-  crypto/          Ed25519 signing, AES-256-GCM, PBKDF2, signed delegation tokens
+  crypto/          Ed25519 signing, AES-256-GCM, PBKDF2, W3C VC 2.0 credentials
   memory-graph/    Semantic memory with cosine similarity, half-life decay
   policy/          PolicyGate: tool approval, budgets, audit, injection defense
   planner/         PlanEngine: goal decomposition, reflection, plan adjustment
   sync-engine/     Multi-device sync: HTTP/WebSocket, conflict detection, backoff
+  market/          Budget allocation, settlement, reputation scoring, graph routing
+  semiring/        Trust algebra — generic semirings for agent network routing
   mcp-server/      Exposes motebit as an MCP server with bearer auth
   mcp-client/      MCP client: tool discovery, manifest pinning, EXTERNAL_DATA boundary
-  sdk/             Core protocol types — zero deps, MIT licensed
-  verify/          Standalone signature verifier — zero deps, MIT licensed
-  create-motebit/  `npm create motebit` scaffolder — MIT licensed
+  ...              27 packages total — see full list in docs
 
 services/
-  api/         Sync relay: REST + WebSocket, Ed25519 device auth, event fan-out
-  web-search/  Reference service motebit: proves the full discover→delegate→receipt loop
+  api/         Sync relay: device auth, receipt verification, budget settlement,
+               credential issuance, federation, rate limiting
 
 spec/
-  identity-v1.md   Open specification for the motebit identity file format
+  identity-v1.md          motebit/identity@1.0 — agent identity file format
+  execution-ledger-v1.md  motebit/execution-ledger@1.0 — signed goal timelines
+  relay-federation-v1.md  motebit/relay-federation@1.0 — multi-relay peering
 ```
 
 The full architecture is documented at [docs.motebit.com](https://docs.motebit.com).
@@ -132,7 +140,7 @@ A `motebit.md` declares identity (Ed25519 public key, unique agent ID, W3C `did:
 pnpm install
 
 pnpm run build       # Build all packages
-pnpm run test        # Run all tests (~2,100 across 30+ files)
+pnpm run test        # Run all tests (3,000+ across 98 files)
 pnpm run typecheck   # Type-check all packages (59 targets)
 pnpm run lint        # Lint all packages
 

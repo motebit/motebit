@@ -29,7 +29,10 @@ export interface CredentialDeps {
 }
 
 /** Returns the relay's persistent keypair for credential signing. */
-export function getRelayKeypair(relayIdentity: RelayIdentity): { publicKey: Uint8Array; privateKey: Uint8Array } {
+export function getRelayKeypair(relayIdentity: RelayIdentity): {
+  publicKey: Uint8Array;
+  privateKey: Uint8Array;
+} {
   return {
     publicKey: relayIdentity.publicKey,
     privateKey: relayIdentity.privateKey,
@@ -89,7 +92,9 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
 
     // Query trust record
     const trustRow = db
-      .prepare("SELECT * FROM agent_trust WHERE remote_motebit_id = ? ORDER BY last_seen_at DESC LIMIT 1")
+      .prepare(
+        "SELECT * FROM agent_trust WHERE remote_motebit_id = ? ORDER BY last_seen_at DESC LIMIT 1",
+      )
       .get(motebitId) as Record<string, unknown> | undefined;
     const trustRecord: AgentTrustRecord | null = trustRow
       ? {
@@ -181,11 +186,9 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
     if (!body.credential_id) {
       throw new HTTPException(400, { message: "credential_id is required" });
     }
-    db
-      .prepare(
-        "INSERT OR REPLACE INTO relay_revoked_credentials (credential_id, motebit_id, reason) VALUES (?, ?, ?)",
-      )
-      .run(body.credential_id, motebitId, body.reason ?? null);
+    db.prepare(
+      "INSERT OR REPLACE INTO relay_revoked_credentials (credential_id, motebit_id, reason) VALUES (?, ?, ?)",
+    ).run(body.credential_id, motebitId, body.reason ?? null);
     return c.json({ ok: true, credential_id: body.credential_id });
   });
 

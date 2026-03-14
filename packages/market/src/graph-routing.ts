@@ -218,13 +218,14 @@ function scoreRoute(
 
   // Composite: policy-driven combination of semiring values + normalized accumulators.
   // The composite function is a configurable policy choice (default: weighted sum).
-  const compositeFn = compositeFunction ?? ((_route: RouteWeight, scores: NormalizedScores) =>
-    scores.trust * weights.trust +
-    scores.costScore * weights.cost +
-    scores.latencyNorm * weights.latency +
-    scores.reliability * weights.reliability +
-    scores.riskScore * weights.regulatory_risk
-  );
+  const compositeFn =
+    compositeFunction ??
+    ((_route: RouteWeight, scores: NormalizedScores) =>
+      scores.trust * weights.trust +
+      scores.costScore * weights.cost +
+      scores.latencyNorm * weights.latency +
+      scores.reliability * weights.reliability +
+      scores.riskScore * weights.regulatory_risk);
   const composite = compositeFn(route, normalized);
 
   // Sub-scores for observability — includes both semiring and candidate-level metrics
@@ -314,7 +315,14 @@ export function graphRankCandidates(
   const scores: RouteScore[] = [];
   for (const [nodeId, route] of paths) {
     if (nodeId === selfId || route.trust === 0) continue;
-    const score = scoreRoute(nodeId, route, candidateMap.get(nodeId), requirements, weights, compositeFn);
+    const score = scoreRoute(
+      nodeId,
+      route,
+      candidateMap.get(nodeId),
+      requirements,
+      weights,
+      compositeFn,
+    );
     if (score) scores.push(score);
   }
 

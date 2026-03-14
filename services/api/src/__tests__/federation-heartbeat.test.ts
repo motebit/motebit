@@ -28,10 +28,13 @@ function insertPeer(db: any, peerId: string, endpointUrl: string, state: string,
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function getPeer(db: any, peerId: string): { state: string; missed_heartbeats: number } | undefined {
-  return db.prepare("SELECT state, missed_heartbeats FROM relay_peers WHERE peer_relay_id = ?").get(peerId) as
-    | { state: string; missed_heartbeats: number }
-    | undefined;
+function getPeer(
+  db: any,
+  peerId: string,
+): { state: string; missed_heartbeats: number } | undefined {
+  return db
+    .prepare("SELECT state, missed_heartbeats FROM relay_peers WHERE peer_relay_id = ?")
+    .get(peerId) as { state: string; missed_heartbeats: number } | undefined;
 }
 
 describe("Heartbeat Sender", () => {
@@ -51,7 +54,9 @@ describe("Heartbeat Sender", () => {
 
     const moteDb = await openMotebitDatabase(":memory:");
     createFederationTables(moteDb.db);
-    moteDb.db.exec("CREATE TABLE IF NOT EXISTS agent_registry (motebit_id TEXT PRIMARY KEY, expires_at INTEGER)");
+    moteDb.db.exec(
+      "CREATE TABLE IF NOT EXISTS agent_registry (motebit_id TEXT PRIMARY KEY, expires_at INTEGER)",
+    );
     db = moteDb.db;
   });
 
@@ -109,12 +114,15 @@ describe("Heartbeat Sender", () => {
     insertPeer(db, "recovering-peer", "http://recovering.test", "suspended", 3);
 
     vi.stubGlobal("fetch", async () => {
-      return new Response(JSON.stringify({
-        relay_id: "peer-relay",
-        timestamp: Date.now(),
-        agent_count: 5,
-        signature: bytesToHex(new Uint8Array(64)),
-      }), { status: 200, headers: { "Content-Type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          relay_id: "peer-relay",
+          timestamp: Date.now(),
+          agent_count: 5,
+          signature: bytesToHex(new Uint8Array(64)),
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
     });
 
     await sendHeartbeats(db, identity);
@@ -146,7 +154,15 @@ describe("Heartbeat Sender", () => {
 
     vi.stubGlobal("fetch", async (url: string) => {
       if (typeof url === "string" && url.includes("alive.test")) {
-        return new Response(JSON.stringify({ relay_id: "alive", timestamp: Date.now(), agent_count: 1, signature: "aa" }), { status: 200 });
+        return new Response(
+          JSON.stringify({
+            relay_id: "alive",
+            timestamp: Date.now(),
+            agent_count: 1,
+            signature: "aa",
+          }),
+          { status: 200 },
+        );
       }
       throw new Error("Connection refused");
     });

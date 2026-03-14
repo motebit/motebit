@@ -29,13 +29,13 @@ Each relay has a persistent cryptographic identity, independent of the agents it
 
 ### 2.1 — Keypair
 
-| Property       | Value                                                                                         |
-| -------------- | --------------------------------------------------------------------------------------------- |
-| **Algorithm**  | Ed25519                                                                                       |
-| **Key size**   | 32-byte public key, 64-byte private key (seed + public)                                       |
-| **Generation** | On first relay startup, if no keypair exists                                                  |
+| Property       | Value                                                                                                                                                                                              |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Algorithm**  | Ed25519                                                                                                                                                                                            |
+| **Key size**   | 32-byte public key, 64-byte private key (seed + public)                                                                                                                                            |
+| **Generation** | On first relay startup, if no keypair exists                                                                                                                                                       |
 | **Storage**    | Private key encrypted at rest with AES-256-GCM using PBKDF2-derived key (100k iterations) when `MOTEBIT_RELAY_KEY_PASSPHRASE` env var is set. Plaintext hex fallback for dev mode (no passphrase). |
-| **Identifier** | `motebit_id` (UUID v7, time-ordered) — distinct from any agent's `motebit_id`                 |
+| **Identifier** | `motebit_id` (UUID v7, time-ordered) — distinct from any agent's `motebit_id`                                                                                                                      |
 
 The relay's `motebit_id` and public key are published to peers during the peering handshake (§3). The private key MUST NOT leave the host machine.
 
@@ -101,11 +101,11 @@ If any verification fails, the handshake is aborted and the peer record is disca
 
 Active peers exchange heartbeats to confirm liveness and synchronize metadata.
 
-| Parameter        | Value                                             |
-| ---------------- | ------------------------------------------------- |
-| **Interval**     | 60 seconds                                        |
-| **Endpoint**     | `POST /federation/v1/peer/heartbeat`              |
-| **Payload**      | `{ relay_id, timestamp, agent_count, signature }` |
+| Parameter        | Value                                                        |
+| ---------------- | ------------------------------------------------------------ |
+| **Interval**     | 60 seconds                                                   |
+| **Endpoint**     | `POST /federation/v1/peer/heartbeat`                         |
+| **Payload**      | `{ relay_id, timestamp, agent_count, signature }`            |
 | **Missed limit** | 3 consecutive missed heartbeats → `suspended`; 5 → `removed` |
 | **Action**       | Peer state transitions to `suspended` at 3, `removed` at 5   |
 
@@ -340,12 +340,12 @@ The receiving relay verifies the signature, records its own settlement entry, an
 
 When a settlement forward fails (network error, peer timeout), the originating relay queues the settlement for exponential backoff retry rather than dropping it.
 
-| Parameter        | Value                                    |
-| ---------------- | ---------------------------------------- |
-| **Max attempts** | 5                                        |
-| **Backoff**      | 30s, 2min, 8min, 32min, 2h              |
-| **Status**       | `pending` → `completed` or `failed`     |
-| **Storage**      | `relay_settlement_retries` table         |
+| Parameter        | Value                               |
+| ---------------- | ----------------------------------- |
+| **Max attempts** | 5                                   |
+| **Backoff**      | 30s, 2min, 8min, 32min, 2h          |
+| **Status**       | `pending` → `completed` or `failed` |
+| **Storage**      | `relay_settlement_retries` table    |
 
 After 5 failed attempts, the settlement is marked as `failed` and requires manual intervention. Successful retry clears the queue entry.
 
@@ -353,10 +353,10 @@ After 5 failed attempts, the settlement is marked as `failed` and requires manua
 
 Settlement records may include optional on-chain payment proof fields:
 
-| Field          | Type   | Required | Description                                          |
-| -------------- | ------ | -------- | ---------------------------------------------------- |
-| `x402_tx_hash` | string | no       | Transaction hash for on-chain payment verification.  |
-| `x402_network` | string | no       | Network identifier (e.g., `"ethereum"`, `"base"`).   |
+| Field          | Type   | Required | Description                                         |
+| -------------- | ------ | -------- | --------------------------------------------------- |
+| `x402_tx_hash` | string | no       | Transaction hash for on-chain payment verification. |
+| `x402_network` | string | no       | Network identifier (e.g., `"ethereum"`, `"base"`).  |
 
 These fields flow through the settlement forwarding pipeline and are stored in both `relay_settlements` and `relay_federation_settlements` tables for audit linkage.
 

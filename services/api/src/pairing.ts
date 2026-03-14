@@ -25,7 +25,10 @@ function generatePairingCode(): string {
 // --- Dependencies ---
 
 export interface PairingDeps {
-  db: { prepare(sql: string): { run(...args: unknown[]): void; get(...args: unknown[]): unknown }; exec(sql: string): void };
+  db: {
+    prepare(sql: string): { run(...args: unknown[]): void; get(...args: unknown[]): unknown };
+    exec(sql: string): void;
+  };
   app: Hono;
   apiToken: string | undefined;
   identityManager: IdentityManager;
@@ -119,14 +122,12 @@ export function registerPairingRoutes(deps: PairingDeps): void {
     const now = Date.now();
     const expiresAt = now + PAIRING_TTL_MS;
 
-    db
-      .prepare(
-        `
+    db.prepare(
+      `
       INSERT INTO pairing_sessions (pairing_id, motebit_id, initiator_device_id, pairing_code, status, created_at, expires_at)
       VALUES (?, ?, ?, ?, 'pending', ?, ?)
     `,
-      )
-      .run(pairingId, device.motebitId, device.deviceId, pairingCode, now, expiresAt);
+    ).run(pairingId, device.motebitId, device.deviceId, pairingCode, now, expiresAt);
 
     return c.json({ pairing_id: pairingId, pairing_code: pairingCode, expires_at: expiresAt }, 201);
   });
@@ -168,13 +169,11 @@ export function registerPairingRoutes(deps: PairingDeps): void {
       throw new HTTPException(409, { message: "Pairing code already used" });
     }
 
-    db
-      .prepare(
-        `
+    db.prepare(
+      `
       UPDATE pairing_sessions SET status = 'claimed', claiming_device_name = ?, claiming_public_key = ? WHERE pairing_id = ?
     `,
-      )
-      .run(device_name, public_key, session.pairing_id as string);
+    ).run(device_name, public_key, session.pairing_id as string);
 
     return c.json({ pairing_id: session.pairing_id, motebit_id: session.motebit_id });
   });
@@ -249,13 +248,11 @@ export function registerPairingRoutes(deps: PairingDeps): void {
       session.claiming_public_key as string,
     );
 
-    db
-      .prepare(
-        `
+    db.prepare(
+      `
       UPDATE pairing_sessions SET status = 'approved', approved_device_id = ?, approved_device_token = ? WHERE pairing_id = ?
     `,
-      )
-      .run(registeredDevice.device_id, registeredDevice.device_token, pairingId);
+    ).run(registeredDevice.device_id, registeredDevice.device_token, pairingId);
 
     return c.json({
       device_id: registeredDevice.device_id,
@@ -287,13 +284,11 @@ export function registerPairingRoutes(deps: PairingDeps): void {
       throw new HTTPException(403, { message: "Not authorized for this pairing session" });
     }
 
-    db
-      .prepare(
-        `
+    db.prepare(
+      `
       UPDATE pairing_sessions SET status = 'denied' WHERE pairing_id = ?
     `,
-      )
-      .run(pairingId);
+    ).run(pairingId);
 
     return c.json({ status: "denied" });
   });

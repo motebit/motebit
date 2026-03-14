@@ -117,45 +117,41 @@ export function createDataSyncTables(db: any): void {
 // === Conversation Sync Helpers ===
 
 export function upsertSyncConversation(db: any, conv: SyncConversation): void {
-  db
-    .prepare(
-      `INSERT INTO sync_conversations (conversation_id, motebit_id, started_at, last_active_at, title, summary, message_count)
+  db.prepare(
+    `INSERT INTO sync_conversations (conversation_id, motebit_id, started_at, last_active_at, title, summary, message_count)
        VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(conversation_id) DO UPDATE SET
          last_active_at = MAX(excluded.last_active_at, sync_conversations.last_active_at),
          title = CASE WHEN excluded.last_active_at >= sync_conversations.last_active_at THEN excluded.title ELSE sync_conversations.title END,
          summary = CASE WHEN excluded.last_active_at >= sync_conversations.last_active_at THEN excluded.summary ELSE sync_conversations.summary END,
          message_count = MAX(excluded.message_count, sync_conversations.message_count)`,
-    )
-    .run(
-      conv.conversation_id,
-      conv.motebit_id,
-      conv.started_at,
-      conv.last_active_at,
-      conv.title,
-      conv.summary,
-      conv.message_count,
-    );
+  ).run(
+    conv.conversation_id,
+    conv.motebit_id,
+    conv.started_at,
+    conv.last_active_at,
+    conv.title,
+    conv.summary,
+    conv.message_count,
+  );
 }
 
 export function upsertSyncMessage(db: any, msg: SyncConversationMessage): void {
-  db
-    .prepare(
-      `INSERT OR IGNORE INTO sync_conversation_messages
+  db.prepare(
+    `INSERT OR IGNORE INTO sync_conversation_messages
        (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      msg.message_id,
-      msg.conversation_id,
-      msg.motebit_id,
-      msg.role,
-      msg.content,
-      msg.tool_calls,
-      msg.tool_call_id,
-      msg.created_at,
-      msg.token_estimate,
-    );
+  ).run(
+    msg.message_id,
+    msg.conversation_id,
+    msg.motebit_id,
+    msg.role,
+    msg.content,
+    msg.tool_calls,
+    msg.tool_call_id,
+    msg.created_at,
+    msg.token_estimate,
+  );
 }
 
 // === Plan Sync Helpers ===
@@ -170,9 +166,8 @@ const STEP_STATUS_ORDER: Record<string, number> = {
 };
 
 function upsertSyncPlan(db: any, plan: SyncPlan): void {
-  db
-    .prepare(
-      `INSERT INTO sync_plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps, proposal_id, collaborative)
+  db.prepare(
+    `INSERT INTO sync_plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps, proposal_id, collaborative)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(plan_id) DO UPDATE SET
          status = CASE WHEN excluded.updated_at >= sync_plans.updated_at THEN excluded.status ELSE sync_plans.status END,
@@ -182,20 +177,19 @@ function upsertSyncPlan(db: any, plan: SyncPlan): void {
          total_steps = MAX(excluded.total_steps, sync_plans.total_steps),
          proposal_id = CASE WHEN excluded.updated_at >= sync_plans.updated_at THEN excluded.proposal_id ELSE sync_plans.proposal_id END,
          collaborative = CASE WHEN excluded.updated_at >= sync_plans.updated_at THEN excluded.collaborative ELSE sync_plans.collaborative END`,
-    )
-    .run(
-      plan.plan_id,
-      plan.goal_id,
-      plan.motebit_id,
-      plan.title,
-      plan.status,
-      plan.created_at,
-      plan.updated_at,
-      plan.current_step_index,
-      plan.total_steps,
-      plan.proposal_id ?? null,
-      plan.collaborative ? 1 : 0,
-    );
+  ).run(
+    plan.plan_id,
+    plan.goal_id,
+    plan.motebit_id,
+    plan.title,
+    plan.status,
+    plan.created_at,
+    plan.updated_at,
+    plan.current_step_index,
+    plan.total_steps,
+    plan.proposal_id ?? null,
+    plan.collaborative ? 1 : 0,
+  );
 }
 
 function upsertSyncPlanStep(db: any, step: SyncPlanStep): void {
@@ -213,35 +207,33 @@ function upsertSyncPlanStep(db: any, step: SyncPlanStep): void {
     if (incomingOrder === existingOrder && step.updated_at < existing.updated_at) return;
   }
 
-  db
-    .prepare(
-      `INSERT OR REPLACE INTO sync_plan_steps
+  db.prepare(
+    `INSERT OR REPLACE INTO sync_plan_steps
        (step_id, plan_id, motebit_id, ordinal, description, prompt, depends_on, optional, status,
         required_capabilities, delegation_task_id, result_summary, error_message, tool_calls_made,
         started_at, completed_at, retry_count, updated_at, assigned_motebit_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      step.step_id,
-      step.plan_id,
-      step.motebit_id,
-      step.ordinal,
-      step.description,
-      step.prompt,
-      step.depends_on,
-      step.optional ? 1 : 0,
-      step.status,
-      step.required_capabilities,
-      step.delegation_task_id,
-      step.result_summary,
-      step.error_message,
-      step.tool_calls_made,
-      step.started_at,
-      step.completed_at,
-      step.retry_count,
-      step.updated_at,
-      step.assigned_motebit_id ?? null,
-    );
+  ).run(
+    step.step_id,
+    step.plan_id,
+    step.motebit_id,
+    step.ordinal,
+    step.description,
+    step.prompt,
+    step.depends_on,
+    step.optional ? 1 : 0,
+    step.status,
+    step.required_capabilities,
+    step.delegation_task_id,
+    step.result_summary,
+    step.error_message,
+    step.tool_calls_made,
+    step.started_at,
+    step.completed_at,
+    step.retry_count,
+    step.updated_at,
+    step.assigned_motebit_id ?? null,
+  );
 }
 
 /**

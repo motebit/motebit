@@ -233,7 +233,9 @@ export async function initRelayIdentity(db: any, passphrase?: string): Promise<R
     let privHex: string;
     if (isEncryptedFormat(existing.private_key_hex)) {
       if (!passphrase) {
-        throw new Error("Relay private key is encrypted but no passphrase provided (set MOTEBIT_RELAY_KEY_PASSPHRASE)");
+        throw new Error(
+          "Relay private key is encrypted but no passphrase provided (set MOTEBIT_RELAY_KEY_PASSPHRASE)",
+        );
       }
       privHex = decryptPrivateKey(existing.private_key_hex, passphrase);
     } else {
@@ -259,17 +261,25 @@ export async function initRelayIdentity(db: any, passphrase?: string): Promise<R
 
   // INSERT OR IGNORE: if another process inserted between our SELECT and INSERT,
   // this silently no-ops and we re-query to get the winner's identity.
-  const result = db.prepare(
-    `INSERT OR IGNORE INTO relay_identity (relay_motebit_id, public_key, private_key_hex, did, created_at)
+  const result = db
+    .prepare(
+      `INSERT OR IGNORE INTO relay_identity (relay_motebit_id, public_key, private_key_hex, did, created_at)
      VALUES (?, ?, ?, ?, ?)`,
-  ).run(relayMotebitId, pubHex, storedPriv, did, Date.now());
+    )
+    .run(relayMotebitId, pubHex, storedPriv, did, Date.now());
 
   if (result.changes === 0) {
     // Another process won the race — load their identity
     return initRelayIdentity(db, passphrase);
   }
 
-  return { relayMotebitId, publicKey: keypair.publicKey, privateKey: keypair.privateKey, publicKeyHex: pubHex, did };
+  return {
+    relayMotebitId,
+    publicKey: keypair.publicKey,
+    privateKey: keypair.privateKey,
+    publicKeyHex: pubHex,
+    did,
+  };
 }
 
 // === Federation Query Dedup ===
@@ -302,14 +312,23 @@ const HEARTBEAT_REMOVE_THRESHOLD = 5;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accepts any better-sqlite3 db
 export async function sendHeartbeats(db: any, relayIdentity: RelayIdentity): Promise<void> {
   const peers = db
-    .prepare("SELECT peer_relay_id, endpoint_url, missed_heartbeats, state FROM relay_peers WHERE state IN ('active', 'suspended')")
-    .all() as Array<{ peer_relay_id: string; endpoint_url: string; missed_heartbeats: number; state: string }>;
+    .prepare(
+      "SELECT peer_relay_id, endpoint_url, missed_heartbeats, state FROM relay_peers WHERE state IN ('active', 'suspended')",
+    )
+    .all() as Array<{
+    peer_relay_id: string;
+    endpoint_url: string;
+    missed_heartbeats: number;
+    state: string;
+  }>;
 
   if (peers.length === 0) return;
 
   const encoder = new TextEncoder();
   const timestamp = Date.now();
-  const agentCount = (db.prepare("SELECT COUNT(*) as cnt FROM agent_registry").get() as { cnt: number }).cnt;
+  const agentCount = (
+    db.prepare("SELECT COUNT(*) as cnt FROM agent_registry").get() as { cnt: number }
+  ).cnt;
   const message = encoder.encode(`${relayIdentity.relayMotebitId}${timestamp}`);
   const signature = await sign(message, relayIdentity.privateKey);
   const signatureHex = bytesToHex(signature);
@@ -338,22 +357,30 @@ export async function sendHeartbeats(db: any, relayIdentity: RelayIdentity): Pro
 
     if (succeeded) {
       // Reset missed count, reactivate if suspended
-      db.prepare("UPDATE relay_peers SET missed_heartbeats = 0, state = 'active', last_heartbeat_at = ? WHERE peer_relay_id = ?")
-        .run(Date.now(), peer.peer_relay_id);
+      db.prepare(
+        "UPDATE relay_peers SET missed_heartbeats = 0, state = 'active', last_heartbeat_at = ? WHERE peer_relay_id = ?",
+      ).run(Date.now(), peer.peer_relay_id);
     } else {
       const newMissed = peer.missed_heartbeats + 1;
       if (newMissed >= HEARTBEAT_REMOVE_THRESHOLD) {
-        db.prepare("UPDATE relay_peers SET missed_heartbeats = ?, state = 'removed' WHERE peer_relay_id = ?")
-          .run(newMissed, peer.peer_relay_id);
+        db.prepare(
+          "UPDATE relay_peers SET missed_heartbeats = ?, state = 'removed' WHERE peer_relay_id = ?",
+        ).run(newMissed, peer.peer_relay_id);
         logger.warn("federation.peer.suspended", { peerId: peer.peer_relay_id });
       } else if (newMissed >= HEARTBEAT_SUSPEND_THRESHOLD) {
-        db.prepare("UPDATE relay_peers SET missed_heartbeats = ?, state = 'suspended' WHERE peer_relay_id = ?")
-          .run(newMissed, peer.peer_relay_id);
+        db.prepare(
+          "UPDATE relay_peers SET missed_heartbeats = ?, state = 'suspended' WHERE peer_relay_id = ?",
+        ).run(newMissed, peer.peer_relay_id);
         logger.warn("federation.peer.suspended", { peerId: peer.peer_relay_id });
       } else {
-        db.prepare("UPDATE relay_peers SET missed_heartbeats = ? WHERE peer_relay_id = ?")
-          .run(newMissed, peer.peer_relay_id);
-        logger.warn("federation.heartbeat.missed", { peerId: peer.peer_relay_id, missed: newMissed });
+        db.prepare("UPDATE relay_peers SET missed_heartbeats = ? WHERE peer_relay_id = ?").run(
+          newMissed,
+          peer.peer_relay_id,
+        );
+        logger.warn("federation.heartbeat.missed", {
+          peerId: peer.peer_relay_id,
+          missed: newMissed,
+        });
       }
     }
   }
@@ -369,25 +396,28 @@ const RETRY_BACKOFF_MS = [30_000, 120_000, 480_000, 1_920_000, 7_200_000];
  * Exported for direct testing — the interval wrapper is `startSettlementRetryLoop`.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accepts any better-sqlite3 db
-export async function processSettlementRetries(db: any, relayIdentity: RelayIdentity): Promise<void> {
+export async function processSettlementRetries(
+  db: any,
+  relayIdentity: RelayIdentity,
+): Promise<void> {
   const now = Date.now();
   const pending = db
     .prepare(
       "SELECT * FROM relay_settlement_retries WHERE status = 'pending' AND next_retry_at <= ? AND attempts < max_attempts",
     )
     .all(now) as Array<{
-      retry_id: string;
-      settlement_id: string;
-      task_id: string;
-      peer_relay_id: string;
-      payload_json: string;
-      attempts: number;
-      max_attempts: number;
-      next_retry_at: number;
-      status: string;
-      last_error: string | null;
-      created_at: number;
-    }>;
+    retry_id: string;
+    settlement_id: string;
+    task_id: string;
+    peer_relay_id: string;
+    payload_json: string;
+    attempts: number;
+    max_attempts: number;
+    next_retry_at: number;
+    status: string;
+    last_error: string | null;
+    created_at: number;
+  }>;
 
   if (pending.length === 0) return;
 
@@ -400,8 +430,9 @@ export async function processSettlementRetries(db: any, relayIdentity: RelayIden
 
       if (!peerInfo) {
         // Peer no longer exists — mark failed
-        db.prepare("UPDATE relay_settlement_retries SET status = 'failed', last_error = ? WHERE retry_id = ?")
-          .run("Peer relay no longer exists", retry.retry_id);
+        db.prepare(
+          "UPDATE relay_settlement_retries SET status = 'failed', last_error = ? WHERE retry_id = ?",
+        ).run("Peer relay no longer exists", retry.retry_id);
         continue;
       }
 
@@ -416,8 +447,9 @@ export async function processSettlementRetries(db: any, relayIdentity: RelayIden
       });
 
       if (resp.ok) {
-        db.prepare("UPDATE relay_settlement_retries SET status = 'completed' WHERE retry_id = ?")
-          .run(retry.retry_id);
+        db.prepare(
+          "UPDATE relay_settlement_retries SET status = 'completed' WHERE retry_id = ?",
+        ).run(retry.retry_id);
       } else {
         throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
       }
@@ -426,13 +458,15 @@ export async function processSettlementRetries(db: any, relayIdentity: RelayIden
       const errorMsg = err instanceof Error ? err.message : String(err);
 
       if (newAttempts >= retry.max_attempts) {
-        db.prepare("UPDATE relay_settlement_retries SET status = 'failed', attempts = ?, last_error = ? WHERE retry_id = ?")
-          .run(newAttempts, errorMsg, retry.retry_id);
+        db.prepare(
+          "UPDATE relay_settlement_retries SET status = 'failed', attempts = ?, last_error = ? WHERE retry_id = ?",
+        ).run(newAttempts, errorMsg, retry.retry_id);
       } else {
         const backoffMs = RETRY_BACKOFF_MS[Math.min(newAttempts - 1, RETRY_BACKOFF_MS.length - 1)]!;
         const nextRetry = Date.now() + backoffMs;
-        db.prepare("UPDATE relay_settlement_retries SET attempts = ?, next_retry_at = ?, last_error = ? WHERE retry_id = ?")
-          .run(newAttempts, nextRetry, errorMsg, retry.retry_id);
+        db.prepare(
+          "UPDATE relay_settlement_retries SET attempts = ?, next_retry_at = ?, last_error = ? WHERE retry_id = ?",
+        ).run(newAttempts, nextRetry, errorMsg, retry.retry_id);
       }
     }
   }
@@ -478,7 +512,9 @@ async function verifyPeerSignature(
 ): Promise<string> {
   const stateList = allowedStates.map(() => "?").join(", ");
   const peer = db
-    .prepare(`SELECT public_key FROM relay_peers WHERE peer_relay_id = ? AND state IN (${stateList})`)
+    .prepare(
+      `SELECT public_key FROM relay_peers WHERE peer_relay_id = ? AND state IN (${stateList})`,
+    )
     .get(peerId, ...allowedStates) as { public_key: string } | undefined;
   if (!peer) {
     throw new HTTPException(403, { message: "Unknown or inactive peer relay" });
@@ -553,7 +589,9 @@ export interface FederationDeps {
   onTaskResultReceived(result: VerifiedTaskResult): Promise<void>;
 
   /** Called when a verified settlement arrives from a peer. */
-  onSettlementReceived(settlement: VerifiedSettlement): Promise<{ feeAmount: number; netAmount: number }>;
+  onSettlementReceived(
+    settlement: VerifiedSettlement,
+  ): Promise<{ feeAmount: number; netAmount: number }>;
 }
 
 /** Register all 11 federation endpoints on the Hono app. */
@@ -601,7 +639,8 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     }>();
 
     const { relay_id, public_key, endpoint_url, display_name, nonce } = body;
-    if (!relay_id || !public_key) throw new HTTPException(400, { message: "relay_id and public_key are required" });
+    if (!relay_id || !public_key)
+      throw new HTTPException(400, { message: "relay_id and public_key are required" });
     if (!endpoint_url) throw new HTTPException(400, { message: "endpoint_url is required" });
     if (!nonce) throw new HTTPException(400, { message: "nonce is required" });
 
@@ -654,13 +693,19 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
     const peer = db
       .prepare("SELECT * FROM relay_peers WHERE peer_relay_id = ? AND state = 'pending'")
-      .get(relay_id) as { peer_relay_id: string; public_key: string; nonce: string | null } | undefined;
+      .get(relay_id) as
+      | { peer_relay_id: string; public_key: string; nonce: string | null }
+      | undefined;
     if (!peer) throw new HTTPException(404, { message: "No pending peer found for this relay_id" });
     if (!peer.nonce) throw new HTTPException(400, { message: "No nonce stored for this peer" });
 
     // Verify: the peer signed their own relay_id + our nonce (bound to this specific relationship)
     const confirmMsg = new TextEncoder().encode(`${relay_id}:${peer.nonce}`);
-    const valid = await verify(hexToBytes(challenge_response), confirmMsg, hexToBytes(peer.public_key));
+    const valid = await verify(
+      hexToBytes(challenge_response),
+      confirmMsg,
+      hexToBytes(peer.public_key),
+    );
     if (!valid) {
       db.prepare("DELETE FROM relay_peers WHERE peer_relay_id = ?").run(relay_id);
       throw new HTTPException(403, { message: "Challenge response verification failed" });
@@ -678,28 +723,43 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   app.post("/federation/v1/peer/heartbeat", async (c) => {
     const body = await c.req.json<{
-      relay_id?: string; timestamp?: number; agent_count?: number; signature?: string;
+      relay_id?: string;
+      timestamp?: number;
+      agent_count?: number;
+      signature?: string;
     }>();
     const { relay_id, timestamp, agent_count, signature: sig } = body;
     if (!relay_id || timestamp == null || agent_count == null || !sig) {
-      throw new HTTPException(400, { message: "relay_id, timestamp, agent_count, and signature are required" });
+      throw new HTTPException(400, {
+        message: "relay_id, timestamp, agent_count, and signature are required",
+      });
     }
 
     checkPeerLimit(relay_id);
 
     const peer = db
-      .prepare("SELECT * FROM relay_peers WHERE peer_relay_id = ? AND state IN ('active', 'suspended')")
+      .prepare(
+        "SELECT * FROM relay_peers WHERE peer_relay_id = ? AND state IN ('active', 'suspended')",
+      )
       .get(relay_id) as { peer_relay_id: string; public_key: string; state: string } | undefined;
     if (!peer) throw new HTTPException(404, { message: "No active or suspended peer found" });
 
     const encoder = new TextEncoder();
     const drift = Math.abs(Date.now() - timestamp);
-    if (drift > 300_000) { // ±5 minutes
-      throw new HTTPException(400, { message: "Heartbeat timestamp outside acceptable drift (±5min)" });
+    if (drift > 300_000) {
+      // ±5 minutes
+      throw new HTTPException(400, {
+        message: "Heartbeat timestamp outside acceptable drift (±5min)",
+      });
     }
 
-    const valid = await verify(hexToBytes(sig), encoder.encode(`${relay_id}${timestamp}`), hexToBytes(peer.public_key));
-    if (!valid) throw new HTTPException(403, { message: "Heartbeat signature verification failed" });
+    const valid = await verify(
+      hexToBytes(sig),
+      encoder.encode(`${relay_id}${timestamp}`),
+      hexToBytes(peer.public_key),
+    );
+    if (!valid)
+      throw new HTTPException(403, { message: "Heartbeat signature verification failed" });
 
     const now = Date.now();
     db.prepare(
@@ -707,28 +767,40 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     ).run(now, agent_count, peer.state === "suspended" ? "active" : peer.state, relay_id);
 
     const ourTimestamp = Date.now();
-    const localAgentCount = (db.prepare("SELECT COUNT(*) as cnt FROM agent_registry").get() as { cnt: number }).cnt;
-    const responseSig = await sign(encoder.encode(`${relayIdentity.relayMotebitId}${ourTimestamp}`), relayIdentity.privateKey);
+    const localAgentCount = (
+      db.prepare("SELECT COUNT(*) as cnt FROM agent_registry").get() as { cnt: number }
+    ).cnt;
+    const responseSig = await sign(
+      encoder.encode(`${relayIdentity.relayMotebitId}${ourTimestamp}`),
+      relayIdentity.privateKey,
+    );
 
     return c.json({
-      relay_id: relayIdentity.relayMotebitId, timestamp: ourTimestamp,
-      agent_count: localAgentCount, signature: bytesToHex(responseSig),
+      relay_id: relayIdentity.relayMotebitId,
+      timestamp: ourTimestamp,
+      agent_count: localAgentCount,
+      signature: bytesToHex(responseSig),
     });
   });
 
   app.post("/federation/v1/peer/remove", async (c) => {
     const body = await c.req.json<{ relay_id?: string; signature?: string }>();
     const { relay_id, signature: sig } = body;
-    if (!relay_id || !sig) throw new HTTPException(400, { message: "relay_id and signature are required" });
+    if (!relay_id || !sig)
+      throw new HTTPException(400, { message: "relay_id and signature are required" });
 
     checkPeerLimit(relay_id);
 
-    const peer = db
-      .prepare("SELECT * FROM relay_peers WHERE peer_relay_id = ?")
-      .get(relay_id) as { peer_relay_id: string; public_key: string } | undefined;
+    const peer = db.prepare("SELECT * FROM relay_peers WHERE peer_relay_id = ?").get(relay_id) as
+      | { peer_relay_id: string; public_key: string }
+      | undefined;
     if (!peer) throw new HTTPException(404, { message: "Peer not found" });
 
-    const valid = await verify(hexToBytes(sig), new TextEncoder().encode(relay_id), hexToBytes(peer.public_key));
+    const valid = await verify(
+      hexToBytes(sig),
+      new TextEncoder().encode(relay_id),
+      hexToBytes(peer.public_key),
+    );
     if (!valid) throw new HTTPException(403, { message: "Removal signature verification failed" });
 
     db.prepare("UPDATE relay_peers SET state = 'removed' WHERE peer_relay_id = ?").run(relay_id);
@@ -774,7 +846,11 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     if (visitedSet.has(relayIdentity.relayMotebitId)) return c.json({ agents: [] });
 
     // Local results
-    const localAgents = deps.queryLocalAgents(body.query.capability, body.query.motebit_id, body.query.limit ?? 20);
+    const localAgents = deps.queryLocalAgents(
+      body.query.capability,
+      body.query.motebit_id,
+      body.query.limit ?? 20,
+    );
     const results = localAgents.map((a) => ({
       ...a,
       source_relay: relayIdentity.relayMotebitId,
@@ -798,10 +874,17 @@ export function registerFederationRoutes(deps: FederationDeps): void {
         try {
           const resp = await fetch(`${peer.endpoint_url}/federation/v1/discover`, {
             method: "POST",
-            headers: { "Content-Type": "application/json", "X-Correlation-ID": body.query_id as string },
+            headers: {
+              "Content-Type": "application/json",
+              "X-Correlation-ID": body.query_id as string,
+            },
             body: JSON.stringify({
-              query: body.query, hop_count: body.hop_count + 1, max_hops: body.max_hops,
-              visited, query_id: body.query_id, origin_relay: body.origin_relay,
+              query: body.query,
+              hop_count: body.hop_count + 1,
+              max_hops: body.max_hops,
+              visited,
+              query_id: body.query_id,
+              origin_relay: body.origin_relay,
             }),
             signal: AbortSignal.timeout(5000),
           });
@@ -814,7 +897,10 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       });
 
     const peerResults = (await Promise.allSettled(forwardPromises))
-      .filter((r): r is PromiseFulfilledResult<Array<Record<string, unknown>>> => r.status === "fulfilled")
+      .filter(
+        (r): r is PromiseFulfilledResult<Array<Record<string, unknown>>> =>
+          r.status === "fulfilled",
+      )
       .flatMap((r) => r.value);
 
     // Merge — prefer lowest hop_distance
@@ -834,9 +920,17 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   app.post("/federation/v1/task/forward", async (c) => {
     const body = await c.req.json<{
-      task_id: string; origin_relay: string; target_agent: string;
-      task_payload: { prompt: string; required_capabilities?: string[]; submitted_by?: string; wall_clock_ms?: number };
-      routing_choice?: Record<string, unknown>; signature: string;
+      task_id: string;
+      origin_relay: string;
+      target_agent: string;
+      task_payload: {
+        prompt: string;
+        required_capabilities?: string[];
+        submitted_by?: string;
+        wall_clock_ms?: number;
+      };
+      routing_choice?: Record<string, unknown>;
+      signature: string;
     }>();
 
     if (!body.task_id || !body.origin_relay || !body.target_agent || !body.task_payload?.prompt) {
@@ -847,7 +941,12 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
     // Federation owns: peer validation + signature verification
     const { signature, ...payload } = body;
-    await verifyPeerSignature(db, body.origin_relay, signature, new TextEncoder().encode(canonicalJson(payload)));
+    await verifyPeerSignature(
+      db,
+      body.origin_relay,
+      signature,
+      new TextEncoder().encode(canonicalJson(payload)),
+    );
 
     // Check target agent exists locally
     const agent = db
@@ -864,12 +963,18 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       routingChoice: body.routing_choice,
     });
 
-    return c.json({ task_id: body.task_id, status: result.status }, result.status === "pending" ? 202 : 200);
+    return c.json(
+      { task_id: body.task_id, status: result.status },
+      result.status === "pending" ? 202 : 200,
+    );
   });
 
   app.post("/federation/v1/task/result", async (c) => {
     const body = await c.req.json<{
-      task_id: string; origin_relay: string; receipt: ExecutionReceipt; signature: string;
+      task_id: string;
+      origin_relay: string;
+      receipt: ExecutionReceipt;
+      signature: string;
     }>();
 
     if (!body.task_id || !body.origin_relay || !body.receipt) {
@@ -880,7 +985,13 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
     // Federation owns: peer validation + signature verification
     const { signature, ...payload } = body;
-    await verifyPeerSignature(db, body.origin_relay, signature, new TextEncoder().encode(canonicalJson(payload)), ["active", "suspended"]);
+    await verifyPeerSignature(
+      db,
+      body.origin_relay,
+      signature,
+      new TextEncoder().encode(canonicalJson(payload)),
+      ["active", "suspended"],
+    );
 
     // Relay owns: task queue update, WebSocket fan-out, trust update, credential issuance, settlement
     await deps.onTaskResultReceived({
@@ -896,9 +1007,14 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   app.post("/federation/v1/settlement/forward", async (c) => {
     const body = await c.req.json<{
-      task_id: string; settlement_id: string; origin_relay: string;
-      gross_amount: number; receipt_hash: string; signature: string;
-      x402_tx_hash?: string; x402_network?: string;
+      task_id: string;
+      settlement_id: string;
+      origin_relay: string;
+      gross_amount: number;
+      receipt_hash: string;
+      signature: string;
+      x402_tx_hash?: string;
+      x402_network?: string;
     }>();
 
     if (!body.task_id || !body.settlement_id || !body.origin_relay || body.gross_amount == null) {
@@ -909,7 +1025,13 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
     // Federation owns: peer validation + signature verification
     const { signature, ...payload } = body;
-    await verifyPeerSignature(db, body.origin_relay, signature, new TextEncoder().encode(canonicalJson(payload)), ["active", "suspended"]);
+    await verifyPeerSignature(
+      db,
+      body.origin_relay,
+      signature,
+      new TextEncoder().encode(canonicalJson(payload)),
+      ["active", "suspended"],
+    );
 
     // Relay owns: fee calculation and recording
     const result = await deps.onSettlementReceived({
@@ -922,7 +1044,11 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       x402Network: body.x402_network,
     });
 
-    return c.json({ status: "settled", fee_amount: result.feeAmount, net_amount: result.netAmount });
+    return c.json({
+      status: "settled",
+      fee_amount: result.feeAmount,
+      net_amount: result.netAmount,
+    });
   });
 
   // eslint-disable-next-line @typescript-eslint/require-await -- Hono handler, sync data

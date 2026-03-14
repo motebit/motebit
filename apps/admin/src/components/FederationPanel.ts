@@ -214,7 +214,12 @@ export function FederationPanel(): React.ReactElement {
             null,
             React.createElement(
               "tr",
-              { style: { borderBottom: "1px solid rgba(255,255,255,0.1)", textAlign: "left" as const } },
+              {
+                style: {
+                  borderBottom: "1px solid rgba(255,255,255,0.1)",
+                  textAlign: "left" as const,
+                },
+              },
               React.createElement("th", { style: { padding: "6px 8px" } }, "Peer Relay"),
               React.createElement("th", { style: { padding: "6px 8px" } }, "Name"),
               React.createElement("th", { style: { padding: "6px 8px" } }, "State"),
@@ -240,11 +245,7 @@ export function FederationPanel(): React.ReactElement {
                   { style: { padding: "6px 8px", fontFamily: "monospace" } },
                   truncateId(p.peer_relay_id),
                 ),
-                React.createElement(
-                  "td",
-                  { style: { padding: "6px 8px" } },
-                  p.display_name ?? "-",
-                ),
+                React.createElement("td", { style: { padding: "6px 8px" } }, p.display_name ?? "-"),
                 React.createElement(
                   "td",
                   { style: { padding: "6px 8px" } },
@@ -268,11 +269,7 @@ export function FederationPanel(): React.ReactElement {
                   { style: { padding: "6px 8px" } },
                   p.trust_score.toFixed(2),
                 ),
-                React.createElement(
-                  "td",
-                  { style: { padding: "6px 8px" } },
-                  String(p.agent_count),
-                ),
+                React.createElement("td", { style: { padding: "6px 8px" } }, String(p.agent_count)),
                 React.createElement(
                   "td",
                   { style: { padding: "6px 8px" } },
@@ -311,7 +308,12 @@ export function FederationPanel(): React.ReactElement {
             null,
             React.createElement(
               "tr",
-              { style: { borderBottom: "1px solid rgba(255,255,255,0.1)", textAlign: "left" as const } },
+              {
+                style: {
+                  borderBottom: "1px solid rgba(255,255,255,0.1)",
+                  textAlign: "left" as const,
+                },
+              },
               React.createElement("th", { style: { padding: "6px 8px" } }, "Settlement"),
               React.createElement("th", { style: { padding: "6px 8px" } }, "Task"),
               React.createElement("th", { style: { padding: "6px 8px" } }, "Upstream"),

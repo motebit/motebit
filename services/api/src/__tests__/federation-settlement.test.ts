@@ -70,8 +70,17 @@ function insertRetry(
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function getRetry(db: any, retryId: string): { status: string; attempts: number; next_retry_at: number; last_error: string | null } | undefined {
-  return db.prepare("SELECT status, attempts, next_retry_at, last_error FROM relay_settlement_retries WHERE retry_id = ?").get(retryId) as
+function getRetry(
+  db: any,
+  retryId: string,
+):
+  | { status: string; attempts: number; next_retry_at: number; last_error: string | null }
+  | undefined {
+  return db
+    .prepare(
+      "SELECT status, attempts, next_retry_at, last_error FROM relay_settlement_retries WHERE retry_id = ?",
+    )
+    .get(retryId) as
     | { status: string; attempts: number; next_retry_at: number; last_error: string | null }
     | undefined;
 }
@@ -93,7 +102,9 @@ describe("Settlement Retry Queue", () => {
 
     const moteDb = await openMotebitDatabase(":memory:");
     createFederationTables(moteDb.db);
-    moteDb.db.exec("CREATE TABLE IF NOT EXISTS agent_registry (motebit_id TEXT PRIMARY KEY, expires_at INTEGER)");
+    moteDb.db.exec(
+      "CREATE TABLE IF NOT EXISTS agent_registry (motebit_id TEXT PRIMARY KEY, expires_at INTEGER)",
+    );
     db = moteDb.db;
   });
 
@@ -223,7 +234,11 @@ describe("Settlement Retry Queue", () => {
   it("skips retries already completed or failed", async () => {
     insertPeer(db, "peer-1", "http://peer.test");
     const completedId = insertRetry(db, { peerRelayId: "peer-1", status: "completed" });
-    const failedId = insertRetry(db, { peerRelayId: "peer-1", status: "failed", retryId: crypto.randomUUID() });
+    const failedId = insertRetry(db, {
+      peerRelayId: "peer-1",
+      status: "failed",
+      retryId: crypto.randomUUID(),
+    });
 
     let fetchCalled = false;
     vi.stubGlobal("fetch", async () => {
@@ -243,7 +258,10 @@ describe("Settlement Retry Queue", () => {
     const retryId = insertRetry(db, { peerRelayId: "peer-1" });
 
     vi.stubGlobal("fetch", async () => {
-      return new Response("Internal Server Error", { status: 500, statusText: "Internal Server Error" });
+      return new Response("Internal Server Error", {
+        status: 500,
+        statusText: "Internal Server Error",
+      });
     });
 
     await processSettlementRetries(db, identity);

@@ -51,8 +51,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build web app
-        run: pnpm --filter @motebit/web build
+      - name: Build web app and dependencies
+        run: pnpm --filter @motebit/web... build
 
       - name: Install Vercel CLI
         run: pnpm add -g vercel

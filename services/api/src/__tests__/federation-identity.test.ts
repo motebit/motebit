@@ -22,7 +22,9 @@ describe("Relay Identity Encryption", () => {
     createFederationTables(db);
     // initRelayIdentity needs agent_registry for some queries but not for identity itself;
     // create a minimal stub table so the DB doesn't error if needed.
-    db.exec("CREATE TABLE IF NOT EXISTS agent_registry (motebit_id TEXT PRIMARY KEY, expires_at INTEGER)");
+    db.exec(
+      "CREATE TABLE IF NOT EXISTS agent_registry (motebit_id TEXT PRIMARY KEY, expires_at INTEGER)",
+    );
   });
 
   it("stores key as plaintext hex without passphrase (backward compat)", async () => {

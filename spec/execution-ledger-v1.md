@@ -96,11 +96,11 @@ The `steps` array contains one entry per plan step. Each entry is a JSON object:
 
 When a step is delegated, the `delegation` object contains:
 
-| Field            | Type   | Required | Description                                                         |
-| ---------------- | ------ | -------- | ------------------------------------------------------------------- |
-| `task_id`        | string | yes      | The task identifier sent to the delegated agent.                    |
+| Field            | Type   | Required | Description                                                  |
+| ---------------- | ------ | -------- | ------------------------------------------------------------ |
+| `task_id`        | string | yes      | The task identifier sent to the delegated agent.             |
 | `receipt_hash`   | string | no       | The delegated agent's Ed25519 receipt signature (base64url). |
-| `routing_choice` | object | no       | Routing provenance from scored delegation. See §4.1.1.              |
+| `routing_choice` | object | no       | Routing provenance from scored delegation. See §4.1.1.       |
 
 #### 4.1.1 — Routing Choice
 
