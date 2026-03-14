@@ -20,9 +20,11 @@ import {
   fetchPlans,
   fetchGradient,
   fetchAgentTrust,
+  fetchAgentGraph,
   fetchCredentials,
   fetchBudget,
   generatePresentation,
+  config,
 } from "./api";
 import type {
   GoalEntry,
@@ -31,6 +33,7 @@ import type {
   PlanEntry,
   GradientSnapshotEntry,
   AgentTrustEntry,
+  AgentGraphEdge,
   CredentialEntry,
   BudgetAllocationEntry,
 } from "./api";
@@ -47,6 +50,7 @@ import { DevicesPanel } from "./components/DevicesPanel";
 import { PlansPanel } from "./components/PlansPanel";
 import { GradientPanel } from "./components/GradientPanel";
 import { TrustPanel } from "./components/TrustPanel";
+import { AgentGraphPanel } from "./components/AgentGraphPanel";
 import { CredentialsPanel } from "./components/CredentialsPanel";
 
 const DEFAULT_STATE: MotebitState = {
@@ -74,6 +78,10 @@ export function AdminApp(): React.ReactElement {
   const [gradientCurrent, setGradientCurrent] = useState<GradientSnapshotEntry | null>(null);
   const [gradientHistory, setGradientHistory] = useState<GradientSnapshotEntry[]>([]);
   const [trustRecords, setTrustRecords] = useState<AgentTrustEntry[]>([]);
+  const [agentGraphNodes, setAgentGraphNodes] = useState<string[]>([]);
+  const [agentGraphEdges, setAgentGraphEdges] = useState<AgentGraphEdge[]>([]);
+  const [agentGraphNodeCount, setAgentGraphNodeCount] = useState(0);
+  const [agentGraphEdgeCount, setAgentGraphEdgeCount] = useState(0);
   const [credentials, setCredentials] = useState<CredentialEntry[]>([]);
   const [budgetSummary, setBudgetSummary] = useState<{
     total_locked: number;
@@ -103,6 +111,7 @@ export function AdminApp(): React.ReactElement {
           plansRes,
           gradientRes,
           trustRes,
+          agentGraphRes,
           credRes,
           budgetRes,
         ] = await Promise.all([
@@ -116,6 +125,13 @@ export function AdminApp(): React.ReactElement {
           fetchPlans(signal),
           fetchGradient(signal),
           fetchAgentTrust(signal),
+          fetchAgentGraph(signal).catch(() => ({
+            motebit_id: config.motebitId,
+            nodes: [] as string[],
+            edges: [] as AgentGraphEdge[],
+            node_count: 0,
+            edge_count: 0,
+          })),
           fetchCredentials(signal).catch(() => ({ credentials: [] as CredentialEntry[] })),
           fetchBudget(signal).catch(() => ({
             summary: null,
@@ -135,6 +151,10 @@ export function AdminApp(): React.ReactElement {
         setGradientCurrent(gradientRes.current);
         setGradientHistory(gradientRes.history);
         setTrustRecords(trustRes.records);
+        setAgentGraphNodes(agentGraphRes.nodes);
+        setAgentGraphEdges(agentGraphRes.edges);
+        setAgentGraphNodeCount(agentGraphRes.node_count);
+        setAgentGraphEdgeCount(agentGraphRes.edge_count);
         setCredentials(credRes.credentials);
         if ("summary" in budgetRes && budgetRes.summary != null) {
           setBudgetSummary(budgetRes.summary as { total_locked: number; total_settled: number });
@@ -257,7 +277,18 @@ export function AdminApp(): React.ReactElement {
       });
       break;
     case "trust":
-      content = React.createElement(TrustPanel, { records: trustRecords });
+      content = React.createElement(
+        "div",
+        null,
+        React.createElement(AgentGraphPanel, {
+          nodes: agentGraphNodes,
+          edges: agentGraphEdges,
+          selfId: config.motebitId,
+          nodeCount: agentGraphNodeCount,
+          edgeCount: agentGraphEdgeCount,
+        }),
+        React.createElement(TrustPanel, { records: trustRecords }),
+      );
       break;
     case "credentials":
       content = React.createElement(CredentialsPanel, {

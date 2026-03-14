@@ -406,3 +406,29 @@ export interface BudgetResponse {
 export function fetchBudget(signal?: AbortSignal): Promise<BudgetResponse> {
   return apiFetch<BudgetResponse>(`/agent/${config.motebitId}/budget`, { signal });
 }
+
+// === Agent Graph ===
+
+export interface AgentGraphEdge {
+  from: string;
+  to: string;
+  weight: {
+    trust: number;
+    cost: number;
+    latency: number;
+    reliability: number;
+    regulatory_risk: number;
+  };
+}
+
+export interface AgentGraphResponse {
+  motebit_id: string;
+  nodes: string[];
+  edges: AgentGraphEdge[];
+  node_count: number;
+  edge_count: number;
+}
+
+export function fetchAgentGraph(signal?: AbortSignal): Promise<AgentGraphResponse> {
+  return apiFetch<AgentGraphResponse>(`/api/v1/agents/${config.motebitId}/graph`, { signal });
+}

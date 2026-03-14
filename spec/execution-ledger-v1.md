@@ -96,10 +96,38 @@ The `steps` array contains one entry per plan step. Each entry is a JSON object:
 
 When a step is delegated, the `delegation` object contains:
 
-| Field          | Type   | Description                                                         |
-| -------------- | ------ | ------------------------------------------------------------------- |
-| `task_id`      | string | The task identifier sent to the delegated agent.                    |
-| `receipt_hash` | string | SHA-256 hex of the delegated agent's execution ledger content hash. |
+| Field            | Type   | Required | Description                                                         |
+| ---------------- | ------ | -------- | ------------------------------------------------------------------- |
+| `task_id`        | string | yes      | The task identifier sent to the delegated agent.                    |
+| `receipt_hash`   | string | no       | SHA-256 hex of the delegated agent's execution ledger content hash. |
+| `routing_choice` | object | no       | Routing provenance from scored delegation. See §4.1.1.              |
+
+#### 4.1.1 — Routing Choice
+
+The `routing_choice` field is present when the relay performed scored routing and returned provenance data. It records which agent was selected, the composite score that justified the selection, and the algebraic derivation paths from the semiring computation graph.
+
+**Purpose:** Regulatory compliance audit trail. The routing choice proves the delegation decision was justified given the trust, cost, and capability state at delegation time. Because `routing_choice` is included in the step summary before the manifest's `content_hash` is computed and Ed25519-signed (§5, §6), it cannot be fabricated or altered post-hoc.
+
+| Field                     | Type       | Description                                                                                   |
+| ------------------------- | ---------- | --------------------------------------------------------------------------------------------- |
+| `selected_agent`          | string     | MotebitId of the agent that was chosen for delegation.                                        |
+| `composite_score`         | number     | Weighted composite score (0–1) combining all sub-scores.                                      |
+| `sub_scores`              | object     | Individual scoring dimensions (see below).                                                    |
+| `routing_paths`           | string[][] | Derivation paths from the semiring algebra — each path is an ordered list of node MotebitIds. |
+| `alternatives_considered` | number     | Total number of candidate agents that were scored before selection.                           |
+
+**Sub-scores object:**
+
+| Field              | Type   | Description                                       |
+| ------------------ | ------ | ------------------------------------------------- |
+| `trust`            | number | Trust score from the semiring trust computation.  |
+| `success_rate`     | number | Historical task success rate for the agent.       |
+| `latency`          | number | Latency score (lower latency → higher score).     |
+| `price_efficiency` | number | Cost efficiency relative to alternatives.         |
+| `capability_match` | number | How well the agent's capabilities match the task. |
+| `availability`     | number | Agent availability at routing time.               |
+
+All sub-score values are numbers in the range 0–1.
 
 ### 4.2 — Delegation Receipt Summary
 
