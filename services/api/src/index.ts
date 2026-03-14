@@ -762,6 +762,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     };
   }
 
+  // Federation query deduplication — prevents forwarding loops and replay
+  const federationQueryCache = new Map<string, number>(); // query_id → timestamp
+  const FEDERATION_QUERY_TTL_MS = 30_000;
+  const federationQueryPruneInterval = setInterval(() => {
+    const cutoff = Date.now() - FEDERATION_QUERY_TTL_MS;
+    for (const [id, ts] of federationQueryCache) {
+      if (ts < cutoff) federationQueryCache.delete(id);
+    }
+  }, FEDERATION_QUERY_TTL_MS);
+
   const app = new Hono();
   // eslint-disable-next-line @typescript-eslint/unbound-method -- hono utility functions, not bound methods
   const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
@@ -1011,6 +1021,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // Federation peering endpoints (30 req/min — write tier)
   app.use("/federation/v1/peer/*", rateLimitMiddleware(writeLimiter));
+
+  // Federation discovery (60 req/min — read tier)
+  app.use("/federation/v1/discover", rateLimitMiddleware(readLimiter));
 
   if (apiToken != null && apiToken !== "") {
     app.use("/identity/*", bearerAuth({ token: apiToken }));
@@ -4042,12 +4055,19 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     return c.json({ ok: true });
   });
 
-  // GET /api/v1/agents/discover — find agents
-  app.get("/api/v1/agents/discover", (c) => {
-    const capability = c.req.query("capability");
-    const motebitId = c.req.query("motebit_id");
-    const limitParam = Number(c.req.query("limit") ?? "20");
-    const limit = Math.min(Math.max(1, limitParam), 100);
+  // Helper: query local agent_registry — shared by discover endpoint and federation handler
+  function queryLocalAgents(
+    capability?: string,
+    motebitId?: string,
+    limit = 20,
+  ): Array<{
+    motebit_id: string;
+    public_key: string;
+    did?: string;
+    endpoint_url: string;
+    capabilities: string[];
+    metadata: Record<string, unknown> | null;
+  }> {
     const now = Date.now();
 
     let rows: Array<Record<string, unknown>>;
@@ -4092,7 +4112,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         .all(now, limit) as Array<Record<string, unknown>>;
     }
 
-    const agents = rows.map((r) => {
+    return rows.map((r) => {
       const pk = r.public_key as string;
       let agentDid: string | undefined;
       try {
@@ -4101,17 +4121,194 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         // Non-fatal
       }
       return {
-        motebit_id: r.motebit_id,
+        motebit_id: r.motebit_id as string,
         public_key: pk,
         did: agentDid,
-        endpoint_url: r.endpoint_url,
+        endpoint_url: r.endpoint_url as string,
         capabilities: JSON.parse(r.capabilities as string) as string[],
         // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- DB row field is untyped
         metadata: r.metadata ? (JSON.parse(r.metadata as string) as Record<string, unknown>) : null,
       };
     });
+  }
 
-    return c.json({ agents });
+  // GET /api/v1/agents/discover — find agents (with optional federation forwarding)
+  app.get("/api/v1/agents/discover", async (c) => {
+    const capability = c.req.query("capability");
+    const motebitId = c.req.query("motebit_id");
+    const limitParam = Number(c.req.query("limit") ?? "20");
+    const limit = Math.min(Math.max(1, limitParam), 100);
+
+    // Local results (existing behavior, unchanged)
+    const localAgents = queryLocalAgents(capability ?? undefined, motebitId ?? undefined, limit);
+
+    // Add source_relay metadata to local results
+    const localResults = localAgents.map((a) => ({
+      ...a,
+      source_relay: relayIdentity.relayMotebitId,
+      relay_name: federationConfig?.displayName ?? null,
+      hop_distance: 0,
+    }));
+
+    // Check for active peers — if none, return local only (backward compatible)
+    const activePeerCount = (
+      moteDb.db.prepare("SELECT COUNT(*) as cnt FROM relay_peers WHERE state = 'active'").get() as {
+        cnt: number;
+      }
+    ).cnt;
+
+    if (activePeerCount === 0) {
+      return c.json({ agents: localResults });
+    }
+
+    // Forward to active peers
+    const queryId = crypto.randomUUID();
+    federationQueryCache.set(queryId, Date.now());
+    const visited = [relayIdentity.relayMotebitId];
+
+    const peers = moteDb.db
+      .prepare("SELECT peer_relay_id, endpoint_url FROM relay_peers WHERE state = 'active'")
+      .all() as Array<{ peer_relay_id: string; endpoint_url: string }>;
+
+    const forwardPromises = peers.map(async (peer) => {
+      try {
+        const resp = await fetch(`${peer.endpoint_url}/federation/v1/discover`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: { capability, motebit_id: motebitId, limit },
+            hop_count: 0,
+            max_hops: 3,
+            visited,
+            query_id: queryId,
+            origin_relay: relayIdentity.relayMotebitId,
+          }),
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!resp.ok) return [];
+        const data = (await resp.json()) as { agents: Array<Record<string, unknown>> };
+        return data.agents ?? [];
+      } catch {
+        return [];
+      }
+    });
+
+    const peerResults = (await Promise.allSettled(forwardPromises))
+      .filter(
+        (r): r is PromiseFulfilledResult<Array<Record<string, unknown>>> =>
+          r.status === "fulfilled",
+      )
+      .flatMap((r) => r.value);
+
+    // Merge: dedup by motebit_id, prefer lowest hop_distance
+    const merged = new Map<string, Record<string, unknown>>();
+    for (const agent of [...localResults, ...peerResults]) {
+      const id = agent.motebit_id as string;
+      const existing = merged.get(id);
+      if (!existing || (agent.hop_distance as number) < (existing.hop_distance as number)) {
+        merged.set(id, agent);
+      }
+    }
+
+    // Trim to limit
+    const final = [...merged.values()].slice(0, limit);
+    return c.json({ agents: final });
+  });
+
+  // POST /federation/v1/discover — receive forwarded discovery queries from peer relays
+  app.post("/federation/v1/discover", async (c) => {
+    const body = await c.req.json<{
+      query: { capability?: string; motebit_id?: string; limit?: number };
+      hop_count: number;
+      max_hops: number;
+      visited: string[];
+      query_id: string;
+      origin_relay: string;
+    }>();
+
+    // Validate
+    if (!body.query_id || body.max_hops > 3) {
+      throw new HTTPException(400, { message: "Invalid federation query" });
+    }
+
+    // Dedup check
+    if (federationQueryCache.has(body.query_id)) {
+      return c.json({ agents: [] });
+    }
+    federationQueryCache.set(body.query_id, Date.now());
+
+    // Loop prevention
+    if (body.visited.includes(relayIdentity.relayMotebitId)) {
+      return c.json({ agents: [] });
+    }
+
+    // Get local results
+    const localAgents = queryLocalAgents(
+      body.query.capability,
+      body.query.motebit_id,
+      body.query.limit ?? 20,
+    );
+    const results = localAgents.map((a) => ({
+      ...a,
+      source_relay: relayIdentity.relayMotebitId,
+      relay_name: federationConfig?.displayName ?? null,
+      hop_distance: body.hop_count + 1,
+    }));
+
+    // Hop limit — return only local results, no forwarding
+    if (body.hop_count >= body.max_hops) {
+      return c.json({ agents: results });
+    }
+
+    // Forward to OUR active peers (excluding visited)
+    const visited = [...body.visited, relayIdentity.relayMotebitId];
+    const peers = moteDb.db
+      .prepare("SELECT peer_relay_id, endpoint_url FROM relay_peers WHERE state = 'active'")
+      .all() as Array<{ peer_relay_id: string; endpoint_url: string }>;
+
+    const forwardPromises = peers
+      .filter((p) => !visited.includes(p.peer_relay_id))
+      .map(async (peer) => {
+        try {
+          const resp = await fetch(`${peer.endpoint_url}/federation/v1/discover`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              query: body.query,
+              hop_count: body.hop_count + 1,
+              max_hops: body.max_hops,
+              visited,
+              query_id: body.query_id,
+              origin_relay: body.origin_relay,
+            }),
+            signal: AbortSignal.timeout(5000),
+          });
+          if (!resp.ok) return [];
+          const data = (await resp.json()) as { agents: Array<Record<string, unknown>> };
+          return data.agents ?? [];
+        } catch {
+          return [];
+        }
+      });
+
+    const peerResults = (await Promise.allSettled(forwardPromises))
+      .filter(
+        (r): r is PromiseFulfilledResult<Array<Record<string, unknown>>> =>
+          r.status === "fulfilled",
+      )
+      .flatMap((r) => r.value);
+
+    // Merge and dedup by motebit_id (prefer lowest hop_distance)
+    const merged = new Map<string, Record<string, unknown>>();
+    for (const agent of [...results, ...peerResults]) {
+      const id = agent.motebit_id as string;
+      const existing = merged.get(id);
+      if (!existing || (agent.hop_distance as number) < (existing.hop_distance as number)) {
+        merged.set(id, agent);
+      }
+    }
+
+    return c.json({ agents: [...merged.values()] });
   });
 
   // GET /api/v1/agents/:motebitId — get specific agent
@@ -4879,6 +5076,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     }
     connections.clear();
     clearInterval(taskCleanupInterval);
+    clearInterval(federationQueryPruneInterval);
     moteDb.close();
   }
 
