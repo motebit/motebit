@@ -58,6 +58,10 @@ jobs:
       - name: Build packages
         run: pnpm build
 
+      - name: Build frontend
+        working-directory: apps/desktop
+        run: pnpm vite build
+
       - name: Build Tauri app
         working-directory: apps/desktop
         run: pnpm tauri build ${{ matrix.args }}
@@ -66,14 +70,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.target }}
-          path: apps/desktop/src-tauri/target/**/release/bundle/**/*.{dmg,app,deb,AppImage,rpm,msi,exe}
-          if-no-files-found: warn
-
-      - name: Upload artifacts (flat search)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: desktop-bundles-${{ matrix.target }}
           path: |
             apps/desktop/src-tauri/target/release/bundle/
             apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/
