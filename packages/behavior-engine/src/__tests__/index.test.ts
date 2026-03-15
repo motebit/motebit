@@ -386,3 +386,204 @@ describe("BehaviorEngine delegation glow", () => {
     expect(cues.glow_intensity).toBeCloseTo(baseline.glow_intensity, 2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Trust context modulation
+// ---------------------------------------------------------------------------
+
+describe("BehaviorEngine trust context", () => {
+  it("trusted agents increase glow intensity", () => {
+    const engine = new BehaviorEngine();
+    const baseline = engine.compute(makeDefaultState());
+
+    engine.setTrustContext({ avgTrustLevel: 3, trustedCount: 5 });
+    const withTrust = engine.compute(makeDefaultState());
+
+    expect(withTrust.glow_intensity).toBeGreaterThan(baseline.glow_intensity);
+  });
+
+  it("trusted agents decrease hover distance (closer social distance)", () => {
+    const engine = new BehaviorEngine();
+    const baseline = engine.compute(makeDefaultState());
+
+    engine.setTrustContext({ avgTrustLevel: 3, trustedCount: 5 });
+    const withTrust = engine.compute(makeDefaultState());
+
+    expect(withTrust.hover_distance).toBeLessThan(baseline.hover_distance);
+  });
+
+  it("trustedCount=0 produces no trust modulation even with high avgTrustLevel", () => {
+    const engine = new BehaviorEngine();
+    const baseline = engine.compute(makeDefaultState());
+
+    engine.setTrustContext({ avgTrustLevel: 3, trustedCount: 0 });
+    const withNoTrusted = engine.compute(makeDefaultState());
+
+    expect(withNoTrusted.glow_intensity).toBeCloseTo(baseline.glow_intensity, 2);
+  });
+
+  it("trust glow effect is proportional to avgTrustLevel", () => {
+    const lowEngine = new BehaviorEngine();
+    lowEngine.compute(makeDefaultState()); // establish baseline tick
+    lowEngine.setTrustContext({ avgTrustLevel: 1, trustedCount: 3 });
+    const lowTrust = lowEngine.compute(makeDefaultState());
+
+    const highEngine = new BehaviorEngine();
+    highEngine.compute(makeDefaultState()); // establish baseline tick
+    highEngine.setTrustContext({ avgTrustLevel: 3, trustedCount: 3 });
+    const highTrust = highEngine.compute(makeDefaultState());
+
+    expect(highTrust.glow_intensity).toBeGreaterThan(lowTrust.glow_intensity);
+  });
+
+  it("trust glow is clamped to 1.0", () => {
+    const engine = new BehaviorEngine();
+    engine.setTrustContext({ avgTrustLevel: 3, trustedCount: 100 });
+    // High processing + confidence + delegation + trust = maximal glow pressure
+    engine.setDelegating(true);
+    const state = makeDefaultState({ processing: 1, confidence: 1 });
+    const cues = engine.compute(state);
+    expect(cues.glow_intensity).toBeLessThanOrEqual(1.0);
+  });
+
+  it("setTrustContext(null) removes trust modulation", () => {
+    const engine = new BehaviorEngine();
+    engine.setTrustContext({ avgTrustLevel: 3, trustedCount: 5 });
+    engine.compute(makeDefaultState());
+
+    engine.setTrustContext(null);
+    const cues = engine.compute(makeDefaultState());
+
+    const baselineEngine = new BehaviorEngine();
+    baselineEngine.compute(makeDefaultState());
+    const baseline = baselineEngine.compute(makeDefaultState());
+
+    expect(cues.glow_intensity).toBeCloseTo(baseline.glow_intensity, 2);
+  });
+
+  it("reset clears trust context", () => {
+    const engine = new BehaviorEngine();
+    engine.setTrustContext({ avgTrustLevel: 3, trustedCount: 5 });
+    engine.reset();
+    const cues = engine.compute(makeDefaultState());
+
+    const baselineEngine = new BehaviorEngine();
+    const baseline = baselineEngine.compute(makeDefaultState());
+    expect(cues.glow_intensity).toBeCloseTo(baseline.glow_intensity, 2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Duchenne eye squint
+// ---------------------------------------------------------------------------
+
+describe("BehaviorEngine Duchenne eye squint", () => {
+  it("positive smile reduces eye dilation", () => {
+    const engine = new BehaviorEngine();
+    // Need to converge toward positive smile first
+    for (let i = 0; i < 20; i++) {
+      engine.compute(makeDefaultState({ affect_valence: 1, attention: 0.5 }));
+    }
+    const smiling = engine.compute(makeDefaultState({ affect_valence: 1, attention: 0.5 }));
+
+    const neutralEngine = new BehaviorEngine();
+    for (let i = 0; i < 20; i++) {
+      neutralEngine.compute(makeDefaultState({ affect_valence: 0, attention: 0.5 }));
+    }
+    const neutral = neutralEngine.compute(makeDefaultState({ affect_valence: 0, attention: 0.5 }));
+
+    // Smiling should narrow the eyes (lower dilation)
+    expect(smiling.eye_dilation).toBeLessThan(neutral.eye_dilation);
+  });
+
+  it("negative smile does not trigger squint", () => {
+    const engine = new BehaviorEngine();
+    // Converge to negative valence
+    for (let i = 0; i < 20; i++) {
+      engine.compute(makeDefaultState({ affect_valence: -1, attention: 0.5 }));
+    }
+    const frowning = engine.compute(makeDefaultState({ affect_valence: -1, attention: 0.5 }));
+
+    // Negative smile_curvature should NOT reduce eye_dilation via squint
+    expect(frowning.smile_curvature).toBeLessThanOrEqual(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computeRawCues purity
+// ---------------------------------------------------------------------------
+
+describe("computeRawCues purity", () => {
+  it("same input always produces identical output", () => {
+    const state = makeDefaultState({
+      attention: 0.7,
+      processing: 0.3,
+      curiosity: 0.5,
+      affect_valence: 0.4,
+    });
+    const a = computeRawCues(state);
+    const b = computeRawCues(state);
+    expect(a).toEqual(b);
+  });
+
+  it("does not mutate the input state", () => {
+    const state = makeDefaultState({ attention: 0.7, processing: 0.3 });
+    const copy = { ...state };
+    computeRawCues(state);
+    expect(state).toEqual(copy);
+  });
+
+  it("speaking_activity is always 0 from raw cues (engine controls it)", () => {
+    const states = [
+      makeDefaultState({ attention: 1, processing: 1, curiosity: 1 }),
+      makeDefaultState({ attention: 0, processing: 0, curiosity: 0 }),
+      makeDefaultState({ affect_valence: 1, affect_arousal: 0.35 }),
+    ];
+    for (const state of states) {
+      expect(computeRawCues(state).speaking_activity).toBe(0);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-impulse composition
+// ---------------------------------------------------------------------------
+
+describe("BehaviorEngine multi-impulse composition", () => {
+  it("simultaneous impulses on different fields are additive", () => {
+    const engine = new BehaviorEngine();
+    engine.injectImpulse("glow_intensity", 0.1, 10);
+    engine.injectImpulse("smile_curvature", 0.05, 10);
+    const cues = engine.compute(makeDefaultState());
+
+    // Glow should be boosted above baseline
+    const baselineEngine = new BehaviorEngine();
+    const baseline = baselineEngine.compute(makeDefaultState());
+    expect(cues.glow_intensity).toBeGreaterThan(baseline.glow_intensity);
+    expect(cues.smile_curvature).toBeGreaterThan(baseline.smile_curvature);
+  });
+
+  it("multiple impulses on the same field stack", () => {
+    const singleEngine = new BehaviorEngine();
+    singleEngine.injectImpulse("glow_intensity", 0.05, 10);
+    const single = singleEngine.compute(makeDefaultState());
+
+    const doubleEngine = new BehaviorEngine();
+    doubleEngine.injectImpulse("glow_intensity", 0.05, 10);
+    doubleEngine.injectImpulse("glow_intensity", 0.05, 10);
+    const doubled = doubleEngine.compute(makeDefaultState());
+
+    expect(doubled.glow_intensity).toBeGreaterThan(single.glow_intensity);
+  });
+
+  it("impulse on hover_distance shifts position", () => {
+    const engine = new BehaviorEngine();
+    const baseline = engine.compute(makeDefaultState());
+
+    const impulsed = new BehaviorEngine();
+    impulsed.injectImpulse("hover_distance", -0.1, 10); // pull closer
+    const cues = impulsed.compute(makeDefaultState());
+
+    expect(cues.hover_distance).toBeLessThan(baseline.hover_distance);
+  });
+});

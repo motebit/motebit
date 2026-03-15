@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { InMemoryEventStore, EventStore } from "../index";
+import { InMemoryEventStore, EventStore, type EventStoreAdapter } from "../index";
 import { EventType } from "@motebit/sdk";
 import type { EventLogEntry } from "@motebit/sdk";
 
@@ -250,5 +250,314 @@ describe("EventStore compaction passthrough", () => {
     const deleted = await eventStore.compact("m1", 1);
     expect(deleted).toBe(1);
     expect(await eventStore.countEvents("m1")).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Combined filter composition
+// ---------------------------------------------------------------------------
+
+describe("InMemoryEventStore combined filters", () => {
+  let store: InMemoryEventStore;
+
+  beforeEach(async () => {
+    store = new InMemoryEventStore();
+    // 6 events across 2 motebits, 2 types, 3 time windows
+    await store.append(
+      makeEvent({
+        motebit_id: "m1",
+        event_type: EventType.StateUpdated,
+        timestamp: 100,
+        version_clock: 1,
+      }),
+    );
+    await store.append(
+      makeEvent({
+        motebit_id: "m1",
+        event_type: EventType.MemoryFormed,
+        timestamp: 200,
+        version_clock: 2,
+      }),
+    );
+    await store.append(
+      makeEvent({
+        motebit_id: "m1",
+        event_type: EventType.StateUpdated,
+        timestamp: 300,
+        version_clock: 3,
+      }),
+    );
+    await store.append(
+      makeEvent({
+        motebit_id: "m2",
+        event_type: EventType.StateUpdated,
+        timestamp: 150,
+        version_clock: 1,
+      }),
+    );
+    await store.append(
+      makeEvent({
+        motebit_id: "m2",
+        event_type: EventType.MemoryFormed,
+        timestamp: 250,
+        version_clock: 2,
+      }),
+    );
+    await store.append(
+      makeEvent({
+        motebit_id: "m1",
+        event_type: EventType.ToolUsed,
+        timestamp: 400,
+        version_clock: 4,
+      }),
+    );
+  });
+
+  it("combines motebit_id + event_types", async () => {
+    const results = await store.query({
+      motebit_id: "m1",
+      event_types: [EventType.StateUpdated],
+    });
+    expect(results).toHaveLength(2);
+    expect(
+      results.every((e) => e.motebit_id === "m1" && e.event_type === EventType.StateUpdated),
+    ).toBe(true);
+  });
+
+  it("combines motebit_id + time range", async () => {
+    const results = await store.query({
+      motebit_id: "m1",
+      after_timestamp: 150,
+      before_timestamp: 350,
+    });
+    expect(results).toHaveLength(2);
+    expect(results.map((e) => e.version_clock).sort()).toEqual([2, 3]);
+  });
+
+  it("combines motebit_id + event_types + after_version_clock + limit", async () => {
+    const results = await store.query({
+      motebit_id: "m1",
+      event_types: [EventType.StateUpdated, EventType.MemoryFormed, EventType.ToolUsed],
+      after_version_clock: 1,
+      limit: 2,
+    });
+    expect(results).toHaveLength(2);
+    expect(results.every((e) => e.version_clock > 1)).toBe(true);
+  });
+
+  it("returns empty when all filters exclude everything", async () => {
+    const results = await store.query({
+      motebit_id: "m1",
+      event_types: [EventType.IdentityCreated], // no m1 events of this type
+    });
+    expect(results).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Adapter contract: minimal adapter (no optional methods)
+// ---------------------------------------------------------------------------
+
+describe("EventStore with minimal adapter", () => {
+  it("compact returns 0 when adapter lacks compact()", async () => {
+    const minimal: EventStoreAdapter = {
+      append: async () => {},
+      query: async () => [],
+      getLatestClock: async () => 0,
+      tombstone: async () => {},
+      // no compact, no countEvents
+    };
+    const eventStore = new EventStore(minimal);
+    const deleted = await eventStore.compact("m1", 10);
+    expect(deleted).toBe(0);
+  });
+
+  it("countEvents returns -1 when adapter lacks countEvents()", async () => {
+    const minimal: EventStoreAdapter = {
+      append: async () => {},
+      query: async () => [],
+      getLatestClock: async () => 0,
+      tombstone: async () => {},
+    };
+    const eventStore = new EventStore(minimal);
+    expect(await eventStore.countEvents("m1")).toBe(-1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Replay semantics
+// ---------------------------------------------------------------------------
+
+describe("EventStore replay semantics", () => {
+  let eventStore: EventStore;
+
+  beforeEach(() => {
+    eventStore = new EventStore(new InMemoryEventStore());
+  });
+
+  it("replay includes tombstoned events (tombstone is a marker, not a delete)", async () => {
+    await eventStore.append(makeEvent({ event_id: "e1", motebit_id: "m1", version_clock: 1 }));
+    await eventStore.append(makeEvent({ event_id: "e2", motebit_id: "m1", version_clock: 2 }));
+    await eventStore.tombstone("e1", "m1");
+
+    const replayed: EventLogEntry[] = [];
+    await eventStore.replay("m1", async (entry) => {
+      replayed.push(entry);
+    });
+
+    expect(replayed).toHaveLength(2);
+    expect(replayed[0]!.tombstoned).toBe(true);
+    expect(replayed[1]!.tombstoned).toBe(false);
+  });
+
+  it("replay on empty store invokes handler zero times", async () => {
+    const replayed: EventLogEntry[] = [];
+    await eventStore.replay("nonexistent", async (entry) => {
+      replayed.push(entry);
+    });
+    expect(replayed).toHaveLength(0);
+  });
+
+  it("replay is stable-sorted by version_clock (insertion order preserved for equal clocks)", async () => {
+    // Two events from different devices with the same version_clock
+    await eventStore.append(
+      makeEvent({ event_id: "a", motebit_id: "m1", device_id: "d1" as any, version_clock: 1 }),
+    );
+    await eventStore.append(
+      makeEvent({ event_id: "b", motebit_id: "m1", device_id: "d2" as any, version_clock: 1 }),
+    );
+
+    const ids: string[] = [];
+    await eventStore.replay("m1", async (entry) => {
+      ids.push(entry.event_id);
+    });
+    // Both should appear — neither is lost
+    expect(ids).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Append immutability
+// ---------------------------------------------------------------------------
+
+describe("InMemoryEventStore immutability", () => {
+  it("append shallow-copies the entry so external mutation does not affect the log", async () => {
+    const store = new InMemoryEventStore();
+    const event = makeEvent({ motebit_id: "m1", version_clock: 1 });
+    await store.append(event);
+
+    // Mutate the original object after append
+    event.version_clock = 999;
+    event.motebit_id = "mutated" as any;
+
+    const results = await store.query({});
+    expect(results[0]!.version_clock).toBe(1);
+    expect(results[0]!.motebit_id).toBe("m1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-device interleaving
+// ---------------------------------------------------------------------------
+
+describe("multi-device version clock interleaving", () => {
+  let eventStore: EventStore;
+
+  beforeEach(() => {
+    eventStore = new EventStore(new InMemoryEventStore());
+  });
+
+  it("getLatestClock reflects the maximum across all devices", async () => {
+    await eventStore.append(
+      makeEvent({ motebit_id: "m1", device_id: "d1" as any, version_clock: 3 }),
+    );
+    await eventStore.append(
+      makeEvent({ motebit_id: "m1", device_id: "d2" as any, version_clock: 7 }),
+    );
+    await eventStore.append(
+      makeEvent({ motebit_id: "m1", device_id: "d1" as any, version_clock: 5 }),
+    );
+
+    expect(await eventStore.getLatestClock("m1")).toBe(7);
+  });
+
+  it("replay interleaves events from multiple devices by version_clock", async () => {
+    await eventStore.append(
+      makeEvent({ event_id: "d1-1", motebit_id: "m1", device_id: "d1" as any, version_clock: 1 }),
+    );
+    await eventStore.append(
+      makeEvent({ event_id: "d2-1", motebit_id: "m1", device_id: "d2" as any, version_clock: 2 }),
+    );
+    await eventStore.append(
+      makeEvent({ event_id: "d1-2", motebit_id: "m1", device_id: "d1" as any, version_clock: 3 }),
+    );
+    await eventStore.append(
+      makeEvent({ event_id: "d2-2", motebit_id: "m1", device_id: "d2" as any, version_clock: 4 }),
+    );
+
+    const order: string[] = [];
+    await eventStore.replay("m1", async (entry) => {
+      order.push(entry.event_id);
+    });
+    expect(order).toEqual(["d1-1", "d2-1", "d1-2", "d2-2"]);
+  });
+
+  it("compact preserves events above the clock regardless of device", async () => {
+    await eventStore.append(
+      makeEvent({ event_id: "d1-1", motebit_id: "m1", device_id: "d1" as any, version_clock: 1 }),
+    );
+    await eventStore.append(
+      makeEvent({ event_id: "d2-1", motebit_id: "m1", device_id: "d2" as any, version_clock: 2 }),
+    );
+    await eventStore.append(
+      makeEvent({ event_id: "d1-2", motebit_id: "m1", device_id: "d1" as any, version_clock: 3 }),
+    );
+
+    const deleted = await eventStore.compact("m1", 2);
+    expect(deleted).toBe(2);
+    expect(await eventStore.countEvents("m1")).toBe(1);
+
+    const remaining = await eventStore.query({ motebit_id: "m1" });
+    expect(remaining[0]!.event_id).toBe("d1-2");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Edge cases
+// ---------------------------------------------------------------------------
+
+describe("edge cases", () => {
+  it("compact with beforeClock=0 removes nothing", async () => {
+    const store = new InMemoryEventStore();
+    await store.append(makeEvent({ motebit_id: "m1", version_clock: 1 }));
+    const deleted = await store.compact("m1", 0);
+    expect(deleted).toBe(0);
+    expect(await store.countEvents("m1")).toBe(1);
+  });
+
+  it("tombstone requires matching motebit_id — wrong motebit does nothing", async () => {
+    const store = new InMemoryEventStore();
+    await store.append(makeEvent({ event_id: "e1", motebit_id: "m1" }));
+    await store.tombstone("e1", "m2"); // wrong motebit
+    const results = await store.query({});
+    expect(results[0]!.tombstoned).toBe(false);
+  });
+
+  it("deduplication persists across interleaved appends", async () => {
+    const store = new InMemoryEventStore();
+    await store.append(makeEvent({ event_id: "dup", motebit_id: "m1", version_clock: 1 }));
+    await store.append(makeEvent({ event_id: "other", motebit_id: "m1", version_clock: 2 }));
+    await store.append(makeEvent({ event_id: "dup", motebit_id: "m1", version_clock: 3 })); // dup, even with different clock
+    const results = await store.query({});
+    expect(results).toHaveLength(2);
+    // The original version_clock is preserved (first write wins)
+    expect(results.find((e) => e.event_id === "dup")!.version_clock).toBe(1);
+  });
+
+  it("query with empty event_types array returns nothing", async () => {
+    const store = new InMemoryEventStore();
+    await store.append(makeEvent());
+    const results = await store.query({ event_types: [] });
+    expect(results).toHaveLength(0);
   });
 });
