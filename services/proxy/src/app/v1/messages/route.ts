@@ -4,7 +4,8 @@ const DAILY_LIMIT = 5;
 const MAX_BODY_SIZE = 100_000; // 100KB
 const MAX_MESSAGE_LENGTH = 10_000;
 const MAX_MESSAGES = 50;
-const MODEL_ALLOWLIST = ["claude-sonnet-4-20250514"];
+// Free tier model allowlist — BYOK users can use any model
+const FREE_MODEL_ALLOWLIST = ["claude-sonnet-4-20250514"];
 
 const ALLOWED_ORIGINS = new Set([
   "https://motebit.com",
@@ -73,8 +74,11 @@ export async function POST(request: Request): Promise<Response> {
 
   const cors = corsHeaders(origin);
 
-  // API key check
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  // Determine API key: user's own key (BYOK) or server's free-tier key
+  const clientApiKey = request.headers.get("x-api-key");
+  const isBYOK = clientApiKey != null && clientApiKey !== "";
+  const apiKey = isBYOK ? clientApiKey : process.env.ANTHROPIC_API_KEY;
+
   if (!apiKey) {
     return new Response(
       JSON.stringify({ error: "server_error", message: "Proxy not configured" }),
@@ -82,26 +86,28 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  // Rate limit
-  const ip = getClientIP(request);
-  const { allowed, remaining } = await checkRateLimit(ip);
-  if (!allowed) {
-    return new Response(
-      JSON.stringify({
-        error: "rate_limited",
-        message: `You've used your ${DAILY_LIMIT} free messages today. Add your own API key in Settings for unlimited use, or try again tomorrow.`,
-        remaining: 0,
-      }),
-      {
-        status: 429,
-        headers: {
-          ...cors,
-          "Content-Type": "application/json",
-          "Retry-After": "86400",
-          "X-RateLimit-Remaining": "0",
+  // Rate limit — only for free tier, BYOK users pay their own way
+  if (!isBYOK) {
+    const ip = getClientIP(request);
+    const { allowed } = await checkRateLimit(ip);
+    if (!allowed) {
+      return new Response(
+        JSON.stringify({
+          error: "rate_limited",
+          message: `You've used your ${DAILY_LIMIT} free messages today. Add your own API key in Settings for unlimited use, or try again tomorrow.`,
+          remaining: 0,
+        }),
+        {
+          status: 429,
+          headers: {
+            ...cors,
+            "Content-Type": "application/json",
+            "Retry-After": "86400",
+            "X-RateLimit-Remaining": "0",
+          },
         },
-      },
-    );
+      );
+    }
   }
 
   // Parse and validate body
@@ -123,13 +129,19 @@ export async function POST(request: Request): Promise<Response> {
     });
   }
 
-  // Validate model
+  // Validate model — free tier is restricted, BYOK can use any model
   const model = body.model as string | undefined;
-  if (!model || !MODEL_ALLOWLIST.includes(model)) {
+  if (!model) {
+    return new Response(JSON.stringify({ error: "invalid_model", message: "Model is required" }), {
+      status: 400,
+      headers: { ...cors, "Content-Type": "application/json" },
+    });
+  }
+  if (!isBYOK && !FREE_MODEL_ALLOWLIST.includes(model)) {
     return new Response(
       JSON.stringify({
         error: "invalid_model",
-        message: `Model must be one of: ${MODEL_ALLOWLIST.join(", ")}`,
+        message: `Free tier model must be one of: ${FREE_MODEL_ALLOWLIST.join(", ")}. Add your own API key for other models.`,
       }),
       { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
     );
@@ -158,15 +170,22 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
-  // Build proxied request — strip tools to keep costs down, force streaming
-  const proxiedBody = {
+  // Build proxied request
+  const proxiedBody: Record<string, unknown> = {
     model: body.model,
     messages: body.messages,
     system: body.system,
-    max_tokens: Math.min((body.max_tokens as number) || 1024, 2048),
+    max_tokens: isBYOK
+      ? (body.max_tokens as number) || 4096
+      : Math.min((body.max_tokens as number) || 1024, 2048),
     temperature: body.temperature,
     stream: true,
   };
+
+  // BYOK users get tool support; free tier strips tools to keep costs down
+  if (isBYOK && body.tools) {
+    proxiedBody.tools = body.tools;
+  }
 
   // Forward to Anthropic
   const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
@@ -186,7 +205,6 @@ export async function POST(request: Request): Promise<Response> {
       ...cors,
       "Content-Type": anthropicRes.headers.get("Content-Type") ?? "text/event-stream",
       "Cache-Control": "no-cache",
-      "X-RateLimit-Remaining": String(remaining),
     },
   });
 }

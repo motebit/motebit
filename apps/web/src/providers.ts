@@ -210,7 +210,18 @@ export class WebLLMProvider implements StreamingProvider {
 
 export function createProvider(config: ProviderConfig): StreamingProvider | IntelligenceProvider {
   switch (config.type) {
-    case "anthropic":
+    case "anthropic": {
+      // Route through CORS proxy — browser can't call api.anthropic.com directly
+      const anthropicConfig: CloudProviderConfig = {
+        provider: "anthropic",
+        api_key: config.apiKey ?? "",
+        model: config.model,
+        base_url: PROXY_BASE_URL,
+        max_tokens: config.maxTokens,
+        temperature: config.temperature,
+      };
+      return new CloudProvider(anthropicConfig);
+    }
     case "openai": {
       const cloudConfig: CloudProviderConfig = {
         provider: config.type,
