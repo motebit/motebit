@@ -66,14 +66,17 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.target }}
+          path: apps/desktop/src-tauri/target/**/release/bundle/**/*.{dmg,app,deb,AppImage,rpm,msi,exe}
+          if-no-files-found: warn
+
+      - name: Upload artifacts (flat search)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-bundles-${{ matrix.target }}
           path: |
-            apps/desktop/src-tauri/target/*/release/bundle/**/*.dmg
-            apps/desktop/src-tauri/target/*/release/bundle/**/*.app
-            apps/desktop/src-tauri/target/release/bundle/**/*.deb
-            apps/desktop/src-tauri/target/release/bundle/**/*.AppImage
-            apps/desktop/src-tauri/target/release/bundle/**/*.rpm
-            apps/desktop/src-tauri/target/release/bundle/**/*.msi
-            apps/desktop/src-tauri/target/release/bundle/**/*.exe
+            apps/desktop/src-tauri/target/release/bundle/
+            apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/
           if-no-files-found: warn
 
   create-release:
