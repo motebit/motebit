@@ -58,10 +58,6 @@ jobs:
       - name: Build packages
         run: pnpm build
 
-      - name: Build frontend
-        working-directory: apps/desktop
-        run: pnpm vite build
-
       - name: Build Tauri app
         working-directory: apps/desktop
         run: pnpm tauri build ${{ matrix.args }}
