@@ -33,7 +33,12 @@ export function addMessage(
 ): void {
   const bubble = document.createElement("div");
   bubble.className = `chat-bubble ${role}`;
-  bubble.textContent = text;
+  // System messages may contain safe HTML (action links); user/assistant use textContent
+  if (role === "system") {
+    bubble.innerHTML = text;
+  } else {
+    bubble.textContent = text;
+  }
 
   if (immediate) {
     bubble.classList.add("visible");
@@ -438,7 +443,16 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
       if (msg.includes("rate_limited") || msg.includes("429")) {
         addMessage(
           "system",
-          "You've used your free messages for today. Add your own API key in Settings for unlimited use, or come back tomorrow.",
+          `You've used your free messages for today. <a href="#" class="chat-action-link" data-action="open-settings">Add your own API key</a> for unlimited use, or come back tomorrow.`,
+        );
+      } else if (
+        msg.includes("Load failed") ||
+        msg.includes("Failed to fetch") ||
+        msg.includes("NetworkError")
+      ) {
+        addMessage(
+          "system",
+          `Couldn't reach the server. <a href="#" class="chat-action-link" data-action="open-settings">Connect your own API key</a> to chat directly with Claude.`,
         );
       } else {
         addMessage("system", `Error: ${msg}`);
@@ -463,6 +477,27 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
 
   // Wire up input → send button visibility
   chatInput.addEventListener("input", updateSendButton);
+
+  // Wire up action links in system messages (e.g. "open settings")
+  chatLog.addEventListener("click", (e: MouseEvent) => {
+    const link = (e.target as HTMLElement).closest<HTMLAnchorElement>(".chat-action-link");
+    if (!link) return;
+    e.preventDefault();
+    if (link.dataset.action === "open-settings") {
+      // Open directly to the Intelligence tab for API key entry
+      const settingsModal = document.getElementById("settings-modal");
+      if (settingsModal) {
+        callbacks.openSettings();
+        // Switch to intelligence tab after modal opens
+        const intelligenceTab = document.querySelector<HTMLElement>(
+          '.settings-tab[data-tab="intelligence"]',
+        );
+        intelligenceTab?.click();
+      } else {
+        callbacks.openSettings();
+      }
+    }
+  });
 
   return { handleSend };
 }

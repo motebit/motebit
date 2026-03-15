@@ -1,12 +1,11 @@
-import { kv } from "@vercel/kv";
-
 export const runtime = "edge";
 
 const DAILY_LIMIT = 5;
 const MAX_BODY_SIZE = 100_000; // 100KB
 const MAX_MESSAGE_LENGTH = 10_000;
 const MAX_MESSAGES = 50;
-const MODEL_ALLOWLIST = ["claude-haiku-4-5-20251001", "claude-sonnet-4-20250514"];
+// Free proxy is Haiku only — Sonnet users bring their own key
+const MODEL_ALLOWLIST = ["claude-haiku-4-5-20251001"];
 
 const ALLOWED_ORIGINS = new Set([
   "https://motebit.com",
@@ -35,16 +34,23 @@ function getClientIP(request: Request): string {
 }
 
 async function checkRateLimit(ip: string): Promise<{ allowed: boolean; remaining: number }> {
-  const today = new Date().toISOString().slice(0, 10);
-  const key = `proxy:${ip}:${today}`;
-  const count = await kv.incr(key);
-  if (count === 1) {
-    await kv.expire(key, 86400);
+  try {
+    const { kv } = await import("@vercel/kv");
+    const today = new Date().toISOString().slice(0, 10);
+    const key = `proxy:${ip}:${today}`;
+    const count = await kv.incr(key);
+    if (count === 1) {
+      await kv.expire(key, 86400);
+    }
+    return {
+      allowed: count <= DAILY_LIMIT,
+      remaining: Math.max(0, DAILY_LIMIT - count),
+    };
+  } catch {
+    // KV unavailable — allow the request but mark as last free message
+    // to avoid crashing the proxy when KV is not provisioned
+    return { allowed: true, remaining: 0 };
   }
-  return {
-    allowed: count <= DAILY_LIMIT,
-    remaining: Math.max(0, DAILY_LIMIT - count),
-  };
 }
 
 // OPTIONS — CORS preflight
