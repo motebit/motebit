@@ -280,6 +280,39 @@ function updateSendButton(): void {
   }
 }
 
+// === Error Formatting ===
+
+const SETTINGS_LINK = `<a href="#" class="chat-action-link" data-action="open-settings">`;
+
+function formatErrorMessage(msg: string): string {
+  // Rate limit (proxy free tier exhausted)
+  if (msg.includes("rate_limited") || msg.includes("429")) {
+    return `You've used your free messages for today. ${SETTINGS_LINK}Add your own API key</a> for unlimited use, or come back tomorrow.`;
+  }
+  // Invalid API key
+  if (msg.includes("401") || msg.includes("authentication_error")) {
+    return `Invalid API key. ${SETTINGS_LINK}Check your key in Settings</a>.`;
+  }
+  // No credits / billing
+  if (msg.includes("402") || msg.includes("billing") || msg.includes("insufficient")) {
+    return `No API credits. Add credits at <a href="https://console.anthropic.com" target="_blank" rel="noopener" class="chat-action-link">console.anthropic.com</a>, or ${SETTINGS_LINK}use a different key</a>.`;
+  }
+  // Overloaded
+  if (msg.includes("529") || msg.includes("overloaded")) {
+    return "Claude is overloaded right now. Try again in a moment.";
+  }
+  // Network failure (browser-level fetch error)
+  if (
+    msg.includes("Load failed") ||
+    msg.includes("Failed to fetch") ||
+    msg.includes("NetworkError")
+  ) {
+    return `Couldn't reach the server. ${SETTINGS_LINK}Connect your own API key</a> to chat directly with Claude.`;
+  }
+  // Generic fallback — still show the raw error for debugging
+  return `Something went wrong: ${msg}`;
+}
+
 // === Chat Init ===
 
 export interface ChatCallbacks {
@@ -439,24 +472,9 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
       } else if (bubble && !textEl?.textContent) {
         bubble.remove();
       }
-      // Detect rate limit from proxy
-      if (msg.includes("rate_limited") || msg.includes("429")) {
-        addMessage(
-          "system",
-          `You've used your free messages for today. <a href="#" class="chat-action-link" data-action="open-settings">Add your own API key</a> for unlimited use, or come back tomorrow.`,
-        );
-      } else if (
-        msg.includes("Load failed") ||
-        msg.includes("Failed to fetch") ||
-        msg.includes("NetworkError")
-      ) {
-        addMessage(
-          "system",
-          `Couldn't reach the server. <a href="#" class="chat-action-link" data-action="open-settings">Connect your own API key</a> to chat directly with Claude.`,
-        );
-      } else {
-        addMessage("system", `Error: ${msg}`);
-      }
+      // Map errors to actionable messages
+      const systemMsg = formatErrorMessage(msg);
+      addMessage("system", systemMsg);
     } finally {
       setProcessing(false);
     }
