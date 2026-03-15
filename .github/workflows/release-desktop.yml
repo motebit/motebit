@@ -70,9 +70,10 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: apps/desktop
+          tauriScript: pnpm tauri
           args: ${{ matrix.args }}
-          tagName: ${{ github.ref_name }}
-          releaseName: "Motebit Desktop ${{ github.ref_name }}"
-          releaseBody: "Desktop release for ${{ github.ref_name }}"
+          tagName: desktop-v__VERSION__
+          releaseName: "Motebit Desktop v__VERSION__"
+          releaseBody: "Desktop app binaries. macOS builds are unsigned — right-click → Open on first launch."
           releaseDraft: true
           prerelease: false
