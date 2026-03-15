@@ -59,22 +59,45 @@ jobs:
         run: pnpm build
 
       - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
+        working-directory: apps/desktop
+        run: pnpm tauri build ${{ matrix.args }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.target }}
+          path: |
+            apps/desktop/src-tauri/target/*/release/bundle/**/*.dmg
+            apps/desktop/src-tauri/target/*/release/bundle/**/*.app
+            apps/desktop/src-tauri/target/release/bundle/**/*.deb
+            apps/desktop/src-tauri/target/release/bundle/**/*.AppImage
+            apps/desktop/src-tauri/target/release/bundle/**/*.rpm
+            apps/desktop/src-tauri/target/release/bundle/**/*.msi
+            apps/desktop/src-tauri/target/release/bundle/**/*.exe
+          if-no-files-found: warn
+
+  create-release:
+    needs: build-tauri
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create draft release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        with:
-          projectPath: apps/desktop
-          tauriScript: pnpm tauri
-          args: ${{ matrix.args }}
-          tagName: desktop-v__VERSION__
-          releaseName: "Motebit Desktop v__VERSION__"
-          releaseBody: "Desktop app binaries. macOS builds are unsigned — right-click → Open on first launch."
-          releaseDraft: true
-          prerelease: false
-          includeUpdaterJson: false
+        run: |
+          TAG="desktop-v0.1.0"
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "Motebit Desktop v0.1.0" \
+            --notes "Desktop app binaries. macOS builds are unsigned — right-click → Open on first launch." \
+            --draft \
+            artifacts/**/* 2>/dev/null || \
+          gh release upload "$TAG" \
+            --repo "${{ github.repository }}" \
+            --clobber \
+            artifacts/**/* 2>/dev/null || true
