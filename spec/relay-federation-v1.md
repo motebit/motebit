@@ -608,4 +608,47 @@ Relays SHOULD advertise their supported federation version in the `GET /federati
 
 ---
 
+## Appendix A. Implementation Deviations
+
+The reference implementation (`services/api/`) deviates from this specification in the following ways. These are intentional design choices, not bugs. They are documented here so that independent implementors can interoperate correctly.
+
+### A.1 — Authentication: JSON Body vs. Headers
+
+**Spec (§10.2):** Requires `X-Relay-Id`, `X-Relay-Signature`, `X-Relay-Timestamp` headers on every federation request.
+
+**Implementation:** Authenticating fields (`origin_relay`, `signature`, `timestamp`) are included in the JSON request body. The signature covers the canonical JSON of all body fields except `signature` itself. Functionally equivalent — the signed payload is the same canonical JSON either way — but the transport layer differs.
+
+**Interop note:** An independent relay MUST accept both styles (header-based and body-based) to peer with the reference implementation.
+
+### A.2 — Graph Augmentation
+
+**Spec (§5.1):** Describes explicit relay-to-relay edges in the `WeightedDigraph<RouteWeight>` via an `augmentGraphWithFederatedAgents()` function.
+
+**Implementation:** Federated candidates are fetched at query time via `fetchFederatedCandidates()` and merged into the ranking with a pre-computed `chain_trust = peerTrust × agentTrust`. This is algebraically equivalent to a single-hop product semiring computation but does not model relay nodes as explicit graph vertices.
+
+**Consequence:** Multi-hop routing (relay A → relay B → relay C) uses chain_trust composition at each hop rather than a single graph traversal. Results are identical for the current 1-hop federation topology. Graph-based routing becomes necessary when multi-hop chains are common.
+
+### A.3 — Configuration Settings Not Yet Enforced
+
+**Spec (§12):** Defines 9 configuration settings including `federation.enabled`, `federation.max_peers`, `federation.auto_accept_peers`, and `federation.allowed_peers`.
+
+**Implementation:** The following settings are not yet enforced:
+
+| Setting                        | Status                                                                      |
+| ------------------------------ | --------------------------------------------------------------------------- |
+| `federation.enabled`           | Federation is always available when the relay starts. No toggle to disable. |
+| `federation.max_peers`         | No upper bound on peer count.                                               |
+| `federation.auto_accept_peers` | Peering always requires the bilateral handshake (propose → confirm).        |
+| `federation.allowed_peers`     | No allowlist filtering. Any relay can propose peering.                      |
+
+These are governance knobs for production deployments. The protocol mechanics (handshake, heartbeat, routing, settlement) are fully implemented regardless.
+
+### A.4 — Version Compatibility Check
+
+**Spec (§14):** Peering between relays with incompatible major versions MUST be rejected during the handshake.
+
+**Implementation:** The `GET /federation/v1/identity` response includes `"spec": "motebit/relay-federation@1.0"`, but the peering handshake does not validate the peer's advertised version. All current relays are on the same version. Version checking should be added before a v2.0 is defined.
+
+---
+
 _motebit/relay-federation@1.0 — Draft Specification, 2026._
