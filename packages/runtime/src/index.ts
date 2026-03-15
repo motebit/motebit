@@ -14,18 +14,14 @@ import type {
   PrecisionWeights,
   KeyringAdapter,
 } from "@motebit/sdk";
-import { EventType, SensitivityLevel, AgentTrustLevel } from "@motebit/sdk";
+import { EventType, AgentTrustLevel } from "@motebit/sdk";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 import type { EventStoreAdapter } from "@motebit/event-log";
 import {
   MemoryGraph,
   InMemoryMemoryStorage,
-  embedText,
-  computeDecayedConfidence,
   buildConsolidationPrompt,
   parseConsolidationResponse,
-  clusterBySimilarity,
-  findCuriosityTargets,
 } from "@motebit/memory-graph";
 import type { ConsolidationProvider, CuriosityTarget } from "@motebit/memory-graph";
 import { StateVectorEngine } from "@motebit/state-vector";
@@ -49,10 +45,6 @@ import {
   extractActions,
   actionsToStateUpdates,
   getImpulsesForAction,
-  trimConversation,
-  summarizeConversation,
-  shouldSummarize,
-  reflect as aiReflect,
   TaskRouter,
   withTaskConfig,
 } from "@motebit/ai-core";
@@ -61,7 +53,6 @@ import type {
   MotebitLoopDependencies,
   TurnResult,
   AgenticChunk,
-  ContextBudget,
   ReflectionResult,
   TaskRouterConfig,
   TaskType,
@@ -84,7 +75,7 @@ import type {
 } from "@motebit/planner";
 import type { PlanStoreAdapter } from "@motebit/planner";
 import type { DeviceCapability } from "@motebit/sdk";
-import { PolicyGate, MemoryGovernor, MemoryClass } from "@motebit/policy";
+import { PolicyGate, MemoryGovernor } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 import {
   computeGradient,
@@ -102,6 +93,11 @@ import {
   bumpTrustFromReceipt as _bumpTrustFromReceipt,
   recordAgentInteraction as _recordAgentInteraction,
 } from "./agent-trust.js";
+import { ConversationManager } from "./conversation.js";
+import { performReflection, runReflectionSafe } from "./reflection.js";
+import type { ReflectionDeps } from "./reflection.js";
+import { runHousekeeping } from "./housekeeping.js";
+import type { HousekeepingDeps } from "./housekeeping.js";
 import type { AgentTrustDeps } from "./agent-trust.js";
 export { canonicalJson } from "./execution-ledger.js";
 import type {
@@ -269,7 +265,6 @@ export type {
 import type {
   StorageAdapters,
   StateSnapshotAdapter,
-  ConversationStoreAdapter,
   AgentTrustStoreAdapter,
   ServiceListingStoreAdapter,
   LatencyStatsStoreAdapter,
@@ -388,8 +383,7 @@ export class MotebitRuntime {
   private renderer: RenderAdapter;
   private provider: StreamingProvider | null;
   private loopDeps: MotebitLoopDependencies | null = null;
-  private conversationHistory: ConversationMessage[] = [];
-  private maxHistory: number;
+  private conversation: ConversationManager;
   private _isProcessing = false;
   private latestCues: BehaviorCues = {
     hover_distance: 0.4,
@@ -410,10 +404,7 @@ export class MotebitRuntime {
   private motebitToolServers = new Map<string, string>();
   private keyring: KeyringAdapter | null;
   private toolAuditSink?: AuditLogSink;
-  private conversationStore: ConversationStoreAdapter | null;
-  private conversationId: string | null = null;
   private externalToolSources = new Map<string, string[]>();
-  private summarizeAfterMessages: number;
   private planStore: PlanStoreAdapter;
   private planEngine: PlanEngine;
   private _localCapabilities: DeviceCapability[] = [];
@@ -428,7 +419,6 @@ export class MotebitRuntime {
   private taskRouter: TaskRouter | null;
   private approvalTimer: ReturnType<typeof setTimeout> | null = null;
   private approvalExpiredCallback: (() => void) | null = null;
-  private sessionInfo: { continued: boolean; lastActiveAt: number } | null = null;
   private episodicConsolidation: boolean;
   private gradientStore: GradientStoreAdapter;
   private _behavioralStats: BehavioralStats = {
@@ -451,10 +441,8 @@ export class MotebitRuntime {
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
     this.motebitId = config.motebitId;
-    this.maxHistory = config.maxConversationHistory ?? 40;
     this.compactionThreshold = config.compactionThreshold ?? 1000;
     this.mcpConfigs = config.mcpServers ?? [];
-    this.summarizeAfterMessages = config.summarizeAfterMessages ?? 20;
     this.approvalTimeoutMs = config.approvalTimeoutMs ?? 600_000; // 10 min default
     this.taskRouter = config.taskRouter ? new TaskRouter(config.taskRouter) : null;
     this.episodicConsolidation = config.episodicConsolidation ?? false;
@@ -507,27 +495,17 @@ export class MotebitRuntime {
       }
     }
 
-    // Conversation persistence — resume active conversation if within window
-    this.conversationStore = adapters.storage.conversationStore ?? null;
-    if (this.conversationStore) {
-      const active = this.conversationStore.getActiveConversation(this.motebitId);
-      if (active) {
-        this.conversationId = active.conversationId;
-        const messages = this.conversationStore.loadMessages(active.conversationId);
-        for (const msg of messages) {
-          if (msg.role === "user" || msg.role === "assistant") {
-            this.conversationHistory.push({
-              role: msg.role,
-              content: msg.content,
-            });
-          }
-        }
-        // Mark as continued session so the LLM knows it's resuming
-        if (this.conversationHistory.length > 0) {
-          this.sessionInfo = { continued: true, lastActiveAt: active.lastActiveAt };
-        }
-      }
-    }
+    // Conversation lifecycle
+    this.conversation = new ConversationManager({
+      motebitId: this.motebitId,
+      maxHistory: config.maxConversationHistory ?? 40,
+      summarizeAfterMessages: config.summarizeAfterMessages ?? 20,
+      store: adapters.storage.conversationStore ?? null,
+      getProvider: () => this.provider,
+      getTaskRouter: () => this.taskRouter,
+      generateCompletion: (prompt, taskType) => this.generateCompletion(prompt, taskType),
+    });
+    this.conversation.resumeActiveConversation();
 
     // Plan-execute engine
     this.planStore = adapters.storage.planStore ?? new InMemoryPlanStore();
@@ -1117,19 +1095,19 @@ export class MotebitRuntime {
     this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
 
     try {
-      const trimmed = this.trimHistory();
+      const trimmed = this.conversation.trimmed();
       const knownAgents = await this.listTrustedAgents();
       const precisionCtx = buildPrecisionContext(this._precision);
       const result = await runTurn(this.loopDeps, text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
         runId,
-        sessionInfo: this.sessionInfo ?? undefined,
+        sessionInfo: this.conversation.getSessionInfo() ?? undefined,
         curiosityHints: this.buildCuriosityHints(),
         knownAgents: knownAgents.length > 0 ? knownAgents : undefined,
         precisionContext: precisionCtx || undefined,
       });
-      this.pushToHistory(text, result.response);
+      this.conversation.pushExchange(text, result.response);
       // Accumulate behavioral stats for the intelligence gradient
       this._behavioralStats.turnCount++;
       this._behavioralStats.totalIterations += result.iterations;
@@ -1137,7 +1115,7 @@ export class MotebitRuntime {
       this._behavioralStats.toolCallsBlocked += result.toolCallsBlocked;
       this._behavioralStats.toolCallsFailed += result.toolCallsFailed;
       // Session info applies only to the first message after resume
-      this.sessionInfo = null;
+      this.conversation.clearSessionInfo();
       return result;
     } finally {
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
@@ -1155,20 +1133,20 @@ export class MotebitRuntime {
     this.behavior.setSpeaking(true);
 
     try {
-      const trimmed = this.trimHistory();
+      const trimmed = this.conversation.trimmed();
       const knownAgents = await this.listTrustedAgents();
       const precisionCtx = buildPrecisionContext(this._precision);
       const stream = runTurnStreaming(this.loopDeps, text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
         runId,
-        sessionInfo: this.sessionInfo ?? undefined,
+        sessionInfo: this.conversation.getSessionInfo() ?? undefined,
         curiosityHints: this.buildCuriosityHints(),
         knownAgents: knownAgents.length > 0 ? knownAgents : undefined,
         precisionContext: precisionCtx || undefined,
       });
       // Session info applies only to the first message after resume
-      this.sessionInfo = null;
+      this.conversation.clearSessionInfo();
       yield* this.processStream(stream, text, runId);
     } finally {
       this.behavior.setSpeaking(false);
@@ -1189,10 +1167,8 @@ export class MotebitRuntime {
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
 
     // Save current conversation context
-    const savedHistory = [...this.conversationHistory];
-    const savedConversationId = this.conversationId;
-    this.conversationHistory = [];
-    this.conversationId = null;
+    const savedCtx = this.conversation.saveContext();
+    this.conversation.clearForTask();
 
     const wallClockMs = task.wall_clock_ms ?? 60_000;
     const abortController = new AbortController();
@@ -1233,8 +1209,7 @@ export class MotebitRuntime {
       clearTimeout(timeout);
 
       // Restore user conversation context
-      this.conversationHistory = savedHistory;
-      this.conversationId = savedConversationId;
+      this.conversation.restoreContext(savedCtx);
     }
 
     // Drain delegation receipts from motebit MCP adapters
@@ -1475,7 +1450,7 @@ export class MotebitRuntime {
         void this.logToolUsed(pending.toolName, sanitized.data ?? sanitized.error);
 
         // Push tool call + result into conversation history for continuation
-        this.conversationHistory.push(
+        this.conversation.injectIntermediateMessages(
           {
             role: "assistant" as const,
             content: `[tool_use: ${pending.toolName}(${JSON.stringify(pending.args)})]`,
@@ -1484,7 +1459,7 @@ export class MotebitRuntime {
         );
       } else {
         // Push denial into conversation history
-        this.conversationHistory.push(
+        this.conversation.injectIntermediateMessages(
           {
             role: "assistant" as const,
             content: `[tool_use: ${pending.toolName}(${JSON.stringify(pending.args)})]`,
@@ -1498,7 +1473,7 @@ export class MotebitRuntime {
 
       // Run continuation turn with updated history
       const stream = runTurnStreaming(this.loopDeps, pending.userMessage, {
-        conversationHistory: this.conversationHistory,
+        conversationHistory: this.conversation.liveHistory,
         previousCues: this.latestCues,
         runId: pending.runId,
       });
@@ -1535,7 +1510,7 @@ export class MotebitRuntime {
       const expired = this._pendingApproval;
       this._pendingApproval = null;
       // Push denial into conversation history so LLM sees it on next turn
-      this.conversationHistory.push(
+      this.conversation.injectIntermediateMessages(
         {
           role: "assistant" as const,
           content: `[tool_use: ${expired.toolName}(${JSON.stringify(expired.args)})]`,
@@ -1676,17 +1651,16 @@ export class MotebitRuntime {
     }
 
     if (result) {
-      this.pushToHistory(userMessage, result.response);
+      this.conversation.pushExchange(userMessage, result.response);
     }
   }
 
   resetConversation(): void {
     // Trigger reflection on previous conversation before clearing (background)
-    if (this.provider && this.conversationHistory.length > 0) {
-      void this.runReflection();
+    if (this.provider && this.conversation.getHistory().length > 0) {
+      void runReflectionSafe(this.reflectionDeps);
     }
-    this.conversationHistory = [];
-    this.conversationId = null;
+    this.conversation.reset();
   }
 
   /**
@@ -1695,107 +1669,21 @@ export class MotebitRuntime {
    * Returns the reflection result for display (e.g. in the CLI).
    */
   async reflect(goals?: Array<{ description: string; status: string }>): Promise<ReflectionResult> {
-    if (!this.provider) throw new Error("No AI provider configured");
-
-    const summary =
-      this.conversationId != null && this.conversationId !== "" && this.conversationStore != null
-        ? (this.conversationStore.getActiveConversation(this.motebitId)?.summary ?? null)
-        : null;
-
-    const recentMemories = await this.memory.exportAll();
-    const memories = recentMemories.nodes.slice(0, 10).map((n) => ({ content: n.content }));
-
-    const result = await aiReflect(
-      summary,
-      this.conversationHistory,
-      goals ?? [],
-      memories,
-      this.provider,
-      this.taskRouter ?? undefined,
-    );
-
-    // Store insights and plan adjustments as memories
-    await this.storeReflectionInsights(result);
-
-    // Audit: log that reflection occurred
-    void this.logReflectionCompleted(result);
-
-    return result;
+    return performReflection(this.reflectionDeps, goals);
   }
 
-  private async runReflection(): Promise<void> {
-    try {
-      await this.reflect();
-    } catch {
-      // Reflection is best-effort — don't crash the runtime
-    }
-  }
-
-  private async storeReflectionInsights(result: ReflectionResult): Promise<void> {
-    for (const insight of result.insights) {
-      try {
-        const candidate = {
-          content: `[reflection] ${insight}`,
-          confidence: 0.7,
-          sensitivity: SensitivityLevel.None,
-        };
-        const [decision] = this.memoryGovernor.evaluate([candidate]);
-        if (decision && decision.memoryClass === MemoryClass.REJECTED) {
-          continue;
-        }
-        const embedding = await embedText(candidate.content);
-        await this.memory.formMemory(candidate, embedding);
-        // Memory formed — brief confidence + warmth spike visible through glass
-        const cur = this.state.getState();
-        this.state.pushUpdate({
-          confidence: Math.min(1, cur.confidence + 0.2),
-          affect_valence: Math.min(1, cur.affect_valence + 0.15),
-        });
-      } catch {
-        // Memory formation is best-effort during reflection
-      }
-    }
-
-    // Store plan adjustments as memories — behavioral learnings for future planning
-    for (const adjustment of result.planAdjustments) {
-      try {
-        const candidate = {
-          content: `[plan_adjustment] ${adjustment}`,
-          confidence: 0.6,
-          sensitivity: SensitivityLevel.None,
-        };
-        const [decision] = this.memoryGovernor.evaluate([candidate]);
-        if (decision && decision.memoryClass === MemoryClass.REJECTED) {
-          continue;
-        }
-        const embedding = await embedText(candidate.content);
-        await this.memory.formMemory(candidate, embedding);
-      } catch {
-        // Memory formation is best-effort during reflection
-      }
-    }
-  }
-
-  private async logReflectionCompleted(result: ReflectionResult): Promise<void> {
-    try {
-      const clock = await this.events.getLatestClock(this.motebitId);
-      await this.events.append({
-        event_id: crypto.randomUUID(),
-        motebit_id: this.motebitId,
-        timestamp: Date.now(),
-        event_type: EventType.ReflectionCompleted,
-        payload: {
-          source: "runtime_reflect",
-          insights_count: result.insights.length,
-          adjustments_count: result.planAdjustments.length,
-          self_assessment_preview: result.selfAssessment.slice(0, 100),
-        },
-        version_clock: clock + 1,
-        tombstoned: false,
-      });
-    } catch {
-      // Audit logging is best-effort
-    }
+  private get reflectionDeps(): ReflectionDeps {
+    return {
+      motebitId: this.motebitId,
+      memory: this.memory,
+      events: this.events,
+      state: this.state,
+      memoryGovernor: this.memoryGovernor,
+      getProvider: () => this.provider,
+      getTaskRouter: () => this.taskRouter,
+      getConversationSummary: () => this.conversation.getStoredSummary(),
+      getConversationHistory: () => this.conversation.getHistory(),
+    };
   }
 
   /**
@@ -1850,27 +1738,16 @@ export class MotebitRuntime {
   }
 
   getConversationHistory(): ConversationMessage[] {
-    return [...this.conversationHistory];
+    return this.conversation.getHistory();
   }
 
   getConversationId(): string | null {
-    return this.conversationId;
+    return this.conversation.getId();
   }
 
   /** Load a specific past conversation by ID, replacing current history. */
   loadConversation(conversationId: string): void {
-    if (!this.conversationStore) return;
-    const messages = this.conversationStore.loadMessages(conversationId);
-    this.conversationHistory = [];
-    for (const msg of messages) {
-      if (msg.role === "user" || msg.role === "assistant") {
-        this.conversationHistory.push({
-          role: msg.role,
-          content: msg.content,
-        });
-      }
-    }
-    this.conversationId = conversationId;
+    this.conversation.load(conversationId);
   }
 
   /** List recent conversations (for UI/CLI). */
@@ -1881,79 +1758,17 @@ export class MotebitRuntime {
     title: string | null;
     messageCount: number;
   }> {
-    if (!this.conversationStore) return [];
-    return this.conversationStore.listConversations(this.motebitId, limit);
+    return this.conversation.list(limit);
   }
 
   /** Generate a title for the current conversation via AI, with heuristic fallback. */
   async autoTitle(): Promise<string | null> {
-    if (this.conversationStore == null || this.conversationId == null || this.conversationId === "")
-      return null;
-    const convos = this.conversationStore.listConversations(this.motebitId, 100);
-    const current = convos.find((c) => c.conversationId === this.conversationId);
-    if (current?.title != null && current.title !== "") return null; // already titled
-
-    const history = this.getConversationHistory();
-    if (history.length < 4) return null;
-
-    if (this.provider) {
-      try {
-        const snippet = history
-          .slice(0, 6)
-          .map((m) => `${m.role}: ${m.content.slice(0, 200)}`)
-          .join("\n");
-        const prompt = `Generate a very short title (5-7 words max) for this conversation. Return ONLY the title, no quotes, no explanation.\n\n${snippet}`;
-        const raw = await this.generateCompletion(prompt, "title_generation");
-        const title = raw
-          .trim()
-          .replace(/^["']|["']$/g, "")
-          .slice(0, 100);
-        if (title.length > 0 && title.length < 100) {
-          this.conversationStore.updateTitle(this.conversationId, title);
-          return title;
-        }
-      } catch {
-        // Fall through to heuristic
-      }
-    }
-
-    // Heuristic fallback: first 7 words of first user message
-    const first = history.find((m) => m.role === "user");
-    if (first) {
-      const words = first.content.split(/\s+/);
-      let title = words.slice(0, 7).join(" ");
-      if (words.length > 7) title += "...";
-      if (title.length > 0) {
-        this.conversationStore.updateTitle(this.conversationId, title);
-        return title;
-      }
-    }
-    return null;
+    return this.conversation.autoTitle();
   }
 
   /** Manually trigger summarization of the current conversation. */
   async summarizeCurrentConversation(): Promise<string | null> {
-    if (
-      this.provider == null ||
-      this.conversationStore == null ||
-      this.conversationId == null ||
-      this.conversationId === ""
-    )
-      return null;
-    const history = this.getConversationHistory();
-    if (history.length < 2) return null;
-    const existingSummary =
-      this.conversationStore.getActiveConversation(this.motebitId)?.summary ?? null;
-    const summary = await summarizeConversation(
-      history,
-      existingSummary,
-      this.provider,
-      this.taskRouter ?? undefined,
-    );
-    if (summary && this.conversationId) {
-      this.conversationStore.updateSummary(this.conversationId, summary);
-    }
-    return summary;
+    return this.conversation.summarize();
   }
 
   // === Rendering ===
@@ -2047,169 +1862,23 @@ export class MotebitRuntime {
     }
   }
 
-  /**
-   * Prune decayed and retention-expired memories.
-   * Tombstones memories where:
-   *   1. Decayed confidence falls below memoryGovernor.persistenceThreshold
-   *   2. Age exceeds the sensitivity-level retention period
-   * Pinned memories are always preserved.
-   */
   async housekeeping(): Promise<void> {
-    try {
-      const { nodes } = await this.memory.exportAll();
-      const now = Date.now();
-      const threshold = this.memoryGovernor.getConfig().persistenceThreshold;
-      const MS_PER_DAY = 24 * 60 * 60 * 1000;
-      let tombstonedDecay = 0;
-      let tombstonedRetention = 0;
-      let skippedPinned = 0;
-
-      for (const node of nodes) {
-        // Skip already tombstoned
-        if (node.tombstoned) continue;
-
-        // Never touch pinned memories
-        if (node.pinned) {
-          skippedPinned++;
-          continue;
-        }
-
-        // Check retention period by sensitivity level
-        const retention = this.privacy.getRetentionRules(node.sensitivity);
-        if (retention.max_retention_days !== Infinity) {
-          const ageMs = now - node.created_at;
-          const maxMs = retention.max_retention_days * MS_PER_DAY;
-          if (ageMs > maxMs) {
-            await this.memory.deleteMemory(node.node_id);
-            tombstonedRetention++;
-            continue;
-          }
-        }
-
-        // Check decayed confidence against persistence threshold
-        const elapsed = now - node.created_at;
-        const decayed = computeDecayedConfidence(node.confidence, node.half_life, elapsed);
-        if (decayed < threshold) {
-          await this.memory.deleteMemory(node.node_id);
-          tombstonedDecay++;
-        }
-      }
-
-      // Compute curiosity targets — decaying high-value memories worth asking about
-      this._curiosityTargets = findCuriosityTargets(
-        nodes.filter((n) => !n.tombstoned && !n.pinned),
-      );
-
-      // Log housekeeping run
-      const clock = await this.events.getLatestClock(this.motebitId);
-      await this.events.append({
-        event_id: crypto.randomUUID(),
-        motebit_id: this.motebitId,
-        timestamp: now,
-        event_type: EventType.HousekeepingRun,
-        payload: {
-          source: "memory_housekeeping",
-          total_memories: nodes.length,
-          tombstoned_decay: tombstonedDecay,
-          tombstoned_retention: tombstonedRetention,
-          skipped_pinned: skippedPinned,
-          curiosity_targets: this._curiosityTargets.length,
-        },
-        version_clock: clock + 1,
-        tombstoned: false,
-      });
-
-      // Episodic consolidation (guarded by config flag)
-      if (this.episodicConsolidation && this.provider) {
-        await this.consolidateEpisodicMemories(nodes, now);
-      }
-
-      // Compute intelligence gradient — data already loaded
-      await this.computeAndStoreGradient(nodes);
-    } catch {
-      // Housekeeping is best-effort — don't crash the runtime
-    }
+    const result = await runHousekeeping(this.housekeepingDeps);
+    this._curiosityTargets = result.curiosityTargets;
   }
 
-  /**
-   * Consolidate aging episodic memories into semantic summaries.
-   * Groups similar episodic memories by embedding, asks LLM to summarize each cluster,
-   * and forms a new semantic memory from the summary.
-   */
-  private async consolidateEpisodicMemories(
-    allNodes: import("@motebit/sdk").MemoryNode[],
-    now: number,
-  ): Promise<void> {
-    const { MemoryType: MT } = await import("@motebit/sdk");
-
-    // Find episodic memories past 50% of their half-life, not tombstoned, not pinned
-    const candidates = allNodes.filter((n) => {
-      if (n.tombstoned || n.pinned) return false;
-      if (n.memory_type !== MT.Episodic) return false;
-      const elapsed = now - n.created_at;
-      return elapsed > n.half_life * 0.5;
-    });
-
-    if (candidates.length < 3) return; // Not enough to consolidate
-
-    // Cluster by cosine similarity
-    const clusters = clusterBySimilarity(candidates, 0.6);
-
-    for (const cluster of clusters) {
-      if (cluster.length < 2) continue;
-
-      // Summarize cluster via LLM
-      const contents = cluster.map((n) => `- ${n.content}`).join("\n");
-      const prompt = `Summarize the following episodic observations into a single factual statement:\n${contents}\n\nRespond with ONLY the summary sentence.`;
-
-      try {
-        if (!this.provider) return; // Provider may have been cleared concurrently
-        const result = await this.provider.generate({
-          recent_events: [],
-          relevant_memories: [],
-          current_state: this.state.getState(),
-          user_message: prompt,
-        });
-
-        const summary = result.text.trim();
-        if (summary.length < 5) continue;
-
-        // Compute average confidence + boost
-        const avgConf = cluster.reduce((sum, n) => sum + n.confidence, 0) / cluster.length;
-        const newConf = Math.min(1.0, avgConf + 0.1);
-
-        // Form new semantic memory — governor checks for secrets in the summary text
-        const candidate = {
-          content: summary,
-          confidence: newConf,
-          sensitivity: cluster[0]!.sensitivity,
-          memory_type: MT.Semantic,
-        };
-        const [decision] = this.memoryGovernor.evaluate([candidate]);
-        if (decision && decision.memoryClass === MemoryClass.REJECTED) {
-          continue;
-        }
-        const embedding = await embedText(summary);
-        const synthesized = await this.memory.formMemory(
-          candidate,
-          embedding,
-          MemoryGraph.HALF_LIFE_SEMANTIC,
-        );
-
-        // Create PartOf edges — lineage trail from synthesis to each source
-        const { RelationType: SynthRT } = await import("@motebit/sdk");
-        for (const sourceNode of cluster) {
-          await this.memory.link(synthesized.node_id, sourceNode.node_id, SynthRT.PartOf);
-        }
-
-        // Tombstone the episodic cluster members (edges preserved for lineage)
-        for (const node of cluster) {
-          await this.memory.deleteMemory(node.node_id);
-        }
-      } catch {
-        // Consolidation is best-effort per cluster
-      }
-    }
+  private get housekeepingDeps(): HousekeepingDeps {
+    return {
+      motebitId: this.motebitId,
+      memory: this.memory,
+      events: this.events,
+      state: this.state,
+      memoryGovernor: this.memoryGovernor,
+      privacy: this.privacy,
+      episodicConsolidation: this.episodicConsolidation,
+      getProvider: () => this.provider,
+      computeAndStoreGradient: (nodes) => this.computeAndStoreGradient(nodes).then(() => {}),
+    };
   }
 
   // === Curiosity Targets ===
@@ -2427,82 +2096,6 @@ export class MotebitRuntime {
         memoryGovernor: this.memoryGovernor,
         consolidationProvider,
       };
-    }
-  }
-
-  /** Default context window budget — conservative to fit most models. */
-  private static readonly CONVERSATION_BUDGET: ContextBudget = {
-    maxTokens: 8000,
-    reserveForResponse: 1024,
-  };
-
-  /** Trim conversation history to fit within token budget. In-memory history stays complete. */
-  private trimHistory(): ConversationMessage[] {
-    const summary =
-      this.conversationId != null && this.conversationId !== "" && this.conversationStore != null
-        ? (this.conversationStore.getActiveConversation(this.motebitId)?.summary ?? null)
-        : null;
-    return trimConversation(this.conversationHistory, MotebitRuntime.CONVERSATION_BUDGET, summary);
-  }
-
-  private pushToHistory(userMessage: string, assistantResponse: string): void {
-    this.conversationHistory.push(
-      { role: "user", content: userMessage },
-      { role: "assistant", content: assistantResponse },
-    );
-    if (this.conversationHistory.length > this.maxHistory) {
-      this.conversationHistory = this.conversationHistory.slice(-this.maxHistory);
-    }
-
-    // Persist to conversation store
-    if (this.conversationStore != null) {
-      if (this.conversationId == null || this.conversationId === "") {
-        this.conversationId = this.conversationStore.createConversation(this.motebitId);
-      }
-      this.conversationStore.appendMessage(this.conversationId, this.motebitId, {
-        role: "user",
-        content: userMessage,
-      });
-      this.conversationStore.appendMessage(this.conversationId, this.motebitId, {
-        role: "assistant",
-        content: assistantResponse,
-      });
-    }
-
-    // Trigger background summarization at message-count intervals
-    if (
-      this.provider &&
-      this.conversationStore != null &&
-      this.conversationId != null &&
-      this.conversationId !== "" &&
-      shouldSummarize(this.conversationHistory.length, this.summarizeAfterMessages)
-    ) {
-      void this.runSummarization();
-    }
-  }
-
-  private async runSummarization(): Promise<void> {
-    if (
-      this.provider == null ||
-      this.conversationStore == null ||
-      this.conversationId == null ||
-      this.conversationId === ""
-    )
-      return;
-    try {
-      const existingSummary =
-        this.conversationStore.getActiveConversation(this.motebitId)?.summary ?? null;
-      const summary = await summarizeConversation(
-        this.conversationHistory,
-        existingSummary,
-        this.provider,
-        this.taskRouter ?? undefined,
-      );
-      if (summary && this.conversationId) {
-        this.conversationStore.updateSummary(this.conversationId, summary);
-      }
-    } catch {
-      // Summarization is best-effort — don't crash the runtime
     }
   }
 
