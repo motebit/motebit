@@ -1006,6 +1006,27 @@ export class TauriConversationStore implements ConversationStoreAdapter {
     );
   }
 
+  deleteConversation(conversationId: string): void {
+    // Fire-and-forget async delete to DB
+    void dbExecute(this.invoke, "DELETE FROM conversation_messages WHERE conversation_id = ?", [
+      conversationId,
+    ]).then(() =>
+      dbExecute(this.invoke, "DELETE FROM conversations WHERE conversation_id = ?", [
+        conversationId,
+      ]),
+    );
+    // Invalidate caches
+    this._messagesCache.delete(conversationId);
+    this._conversationsListCache = this._conversationsListCache.filter(
+      (c) => c.conversationId !== conversationId,
+    );
+    for (const [motebitId, active] of this._activeCache) {
+      if (active?.conversationId === conversationId) {
+        this._activeCache.delete(motebitId);
+      }
+    }
+  }
+
   // Internal cache for sync listConversations() calls
   private _conversationsListCache: Array<{
     conversationId: string;

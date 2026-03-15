@@ -847,6 +847,13 @@ export class ExpoSqliteConversationStore implements ConversationStoreAdapter {
       messageCount: r.message_count,
     }));
   }
+
+  deleteConversation(conversationId: string): void {
+    this.db.runSync("DELETE FROM conversation_messages WHERE conversation_id = ?", [
+      conversationId,
+    ]);
+    this.db.runSync("DELETE FROM conversations WHERE conversation_id = ?", [conversationId]);
+  }
 }
 
 // === Goal Types ===
