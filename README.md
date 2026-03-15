@@ -1,7 +1,7 @@
 # Motebit
 
 <p align="center">
-  <img src="social-preview.png" alt="Motebit — Cryptographic identity for AI agents" width="100%">
+  <img src="social-preview.png" alt="Motebit — A sovereign agent runtime" width="100%">
 </p>
 
 <p align="center">
@@ -12,43 +12,102 @@
   <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/protocol-MIT-green" alt="Protocol: MIT"></a>
 </p>
 
-**Cryptographic identity for AI agents.**
+**A sovereign agent runtime.** Persistent identity, accumulated memory, earned trust, governed delegation — wrapped in a glass droplet that breathes.
 
-Every AI agent today is a session — no persistent identity, no memory that compounds, no trust history, no proof of who it is. Motebit is the missing layer: Ed25519 keypairs, signed identity files, governance policy, and portable memory that travel with the agent across devices, providers, and time.
+Every AI agent today is a session. No identity that persists. No memory that compounds. No trust that accumulates. No proof of what it's done. Motebit is the missing layer: a complete runtime where the intelligence is pluggable but the identity is the asset.
 
-MCP defines what tools an agent can reach. Motebit defines **who the agent is**.
+## What it is
 
-39 packages. 133K lines of TypeScript. 3,000+ tests. [Built in 26 days.](https://docs.motebit.com/docs/how-we-built-this)
+A motebit is a droplet of intelligence under surface tension.
 
-## Why
+**Identity** — Ed25519 keypairs, `did:key` URIs, signed identity files. The agent can prove who it is to any service, any relay, any other agent. Not a session token — a cryptographic entity that exists across time and devices.
 
-Three things no one else is building together:
+**Memory** — A semantic graph that compounds with use. Memories form during conversation, decay naturally over time, consolidate from episodic to semantic. The longer it runs, the more it knows. Curiosity targets emerge from the graph.
 
-- **Persistent sovereign identity** — not a session token. An Ed25519 keypair that anchors an agent across devices, providers, and time. A `motebit.md` file that any tool can verify.
-- **Accumulated trust** — memory that compounds with use and fades naturally with time. Signed execution receipts. Trust levels that update as agents collaborate. The longer it runs, the more capable it becomes.
-- **Governance at the boundary** — sensitivity-aware policy gates that control what the agent can do autonomously, what requires approval, and what is always denied. Fail-closed by default.
+**Trust** — Agents earn trust through verified interactions. Signed execution receipts create an immutable audit trail. Trust levels transition as collaboration succeeds or fails. A semiring algebra routes tasks through the most trusted paths in the agent network.
 
-## Quickstart
+**Governance** — Policy gates control what crosses the boundary. Tool approval, budget limits, sensitivity-aware privacy, deletion certificates. Fail-closed by default. The operator decides what the agent can do autonomously, what requires approval, and what is always denied.
+
+**Delegation** — Agents delegate tasks to other agents through MCP. Each delegation produces a signed receipt with SHA-256 hashed prompt/result. Nested delegation receipts maintain chain-of-custody. Budget allocation and settlement happen on verified receipts.
+
+**Embodiment** — A glass droplet rendered in Three.js. The body is passive; the interior is active. State drives behavior deterministically: curiosity dilates the eyes, mood curves the smile, processing brightens the glow. No stage directions — just physics.
+
+**Federation** — Relays peer with each other through mutual authentication. Agents are discoverable across relays. Cross-relay routing uses the trust semiring to find optimal paths. Settlement chains handle cross-relay payment.
+
+## Try it
 
 ```bash
-# Scaffold a signed agent identity (30 seconds)
+# Meet the creature — zero install, zero signup
+open https://motebit.com
+
+# Or scaffold a signed agent identity (30 seconds)
 npm create motebit@latest my-agent
-cd my-agent
+cd my-agent && node verify.js
 
-# Verify the signature
-node verify.js
-
-# Install the CLI
+# Install the operator console
 npm install -g motebit
 
-# Start an interactive REPL session
+# Start an interactive session
 motebit
 
-# Or run as a background daemon with goal scheduling
+# Or run as a daemon with goal scheduling
 motebit run --identity ./motebit.md
 ```
 
-The scaffolded `motebit.md` is a human-readable identity file signed with Ed25519. It declares governance policy, memory parameters, privacy rules, and device registrations. Any tool can verify it — no motebit runtime required.
+## Five surfaces
+
+| Surface     | Purpose                                  | Entry point                                             |
+| ----------- | ---------------------------------------- | ------------------------------------------------------- |
+| **Web**     | Zero-friction first encounter            | [motebit.com](https://motebit.com)                      |
+| **CLI**     | Developer console, operator mode, daemon | `npm install -g motebit`                                |
+| **Desktop** | Tauri app — glass creature companion     | [Releases](https://github.com/motebit/motebit/releases) |
+| **Mobile**  | React Native — travels with you          | Expo build                                              |
+| **Spatial** | AR/VR — body-relative orbital mechanics  | WebXR prototype                                         |
+
+Each surface maximizes what its platform offers. The web connects via HTTP MCP. The CLI operates. The desktop companions. Mobile travels. Spatial embodies. The anti-pattern is shimming platform-impossible capabilities.
+
+## Architecture
+
+```
+apps/
+  web/         Browser — IndexedDB identity, CORS proxy, glass creature
+  cli/         Node.js — REPL, daemon, goal scheduling, operator console
+  desktop/     Tauri — OS keyring, stdio MCP, full operator mode
+  mobile/      React Native — Expo, secure keychain, triple providers
+  admin/       React — 13-tab real-time monitoring dashboard
+  spatial/     WebXR — 6DOF anchoring, spatial audio reactivity
+
+packages/
+  sdk/             Core types — zero deps, MIT licensed
+  verify/          Signature verifier — zero deps, MIT licensed
+  create-motebit/  Scaffolder — MIT licensed
+  runtime/         Orchestrator — wires all engines, streaming AI loop
+  ai-core/         Pluggable providers: Claude, Ollama, OpenAI, WebLLM, Hybrid
+  crypto/          Ed25519, AES-256-GCM, PBKDF2, W3C VC 2.0 credentials
+  memory-graph/    Semantic memory, cosine similarity, half-life decay
+  event-log/       Append-only event sourcing, version clocks, compaction
+  state-vector/    9-field interior state, EMA smoothing, hysteresis
+  behavior-engine/ State → BehaviorCues, deterministic, species-constrained
+  policy/          PolicyGate, MemoryGovernor, injection defense, audit
+  privacy-layer/   Sensitivity levels, retention rules, deletion certificates
+  planner/         PlanEngine: goal decomposition, reflection, adjustment
+  sync-engine/     Multi-device sync, HTTP/WebSocket, conflict detection
+  market/          Budget allocation, settlement, reputation, graph routing
+  semiring/        Trust algebra — generic semirings for network routing
+  mcp-server/      Expose motebit as MCP server, bearer auth, synthetic tools
+  mcp-client/      MCP client, tool discovery, manifest pinning
+  render-engine/   Glass droplet: MeshPhysicalMaterial, breathing, sag, glow
+  ...              39 packages total
+
+services/
+  api/         Sync relay — device auth, receipt verification, budget settlement,
+               credential issuance, federation, 5-tier rate limiting
+
+spec/
+  identity-v1.md          motebit/identity@1.0
+  execution-ledger-v1.md  motebit/execution-ledger@1.0
+  relay-federation-v1.md  motebit/relay-federation@1.0
+```
 
 ## SDK
 
@@ -56,97 +115,41 @@ The scaffolded `motebit.md` is a human-readable identity file signed with Ed2551
 import { verify } from "@motebit/verify";
 import { readFileSync } from "node:fs";
 
-// Verify a motebit identity file
 const result = await verify(readFileSync("motebit.md", "utf-8"));
 if (result.valid) {
-  console.log(result.identity.motebit_id); // 0195a8f2-...
+  console.log(result.identity.motebit_id);
   console.log(result.did); // did:key:z6Mk...
   console.log(result.identity.governance.trust_mode);
 }
 ```
 
 ```typescript
-import type { ExecutionReceipt, AgentTask, MotebitState } from "@motebit/sdk";
-
-// Types for building on the motebit protocol
-const receipt: ExecutionReceipt = {
-  task_id: "...",
-  motebit_id: "...",
-  // Ed25519 signature over canonical JSON of prompt_hash + result_hash
-  signature: "...",
-  // ...
-};
+import type { ExecutionReceipt, MotebitState, AgentTrustRecord } from "@motebit/sdk";
 ```
 
-## Architecture
+Four npm packages, all zero monorepo dependencies:
 
-```
-apps/
-  desktop/     Tauri app — glass droplet creature, full identity/crypto/operator mode
-  cli/         Node.js REPL and daemon — developer console, goal scheduling
-  mobile/      React Native + Expo — full-featured mobile companion
-  web/         Browser app — zero-install entry point, IndexedDB identity
-  admin/       React dashboard — 13-tab real-time monitoring
-  spatial/     AR/VR positioning — body-relative orbital mechanics
-
-packages/
-  sdk/             Core protocol types — zero deps, MIT licensed
-  verify/          Standalone signature verifier — zero deps, MIT licensed
-  create-motebit/  `npm create motebit` scaffolder — MIT licensed
-  runtime/         MotebitRuntime — wires all engines, streaming AI loop
-  ai-core/         Pluggable providers: Anthropic, Ollama, Hybrid fallback
-  crypto/          Ed25519 signing, AES-256-GCM, PBKDF2, W3C VC 2.0 credentials
-  memory-graph/    Semantic memory with cosine similarity, half-life decay
-  policy/          PolicyGate: tool approval, budgets, audit, injection defense
-  planner/         PlanEngine: goal decomposition, reflection, plan adjustment
-  sync-engine/     Multi-device sync: HTTP/WebSocket, conflict detection, backoff
-  market/          Budget allocation, settlement, reputation scoring, graph routing
-  semiring/        Trust algebra — generic semirings for agent network routing
-  mcp-server/      Exposes motebit as an MCP server with bearer auth
-  mcp-client/      MCP client: tool discovery, manifest pinning, EXTERNAL_DATA boundary
-  ...              27 packages total — see full list in docs
-
-services/
-  api/         Sync relay: device auth, receipt verification, budget settlement,
-               credential issuance, federation, rate limiting
-
-spec/
-  identity-v1.md          motebit/identity@1.0 — agent identity file format
-  execution-ledger-v1.md  motebit/execution-ledger@1.0 — signed goal timelines
-  relay-federation-v1.md  motebit/relay-federation@1.0 — multi-relay peering
-```
-
-The full architecture is documented at [docs.motebit.com](https://docs.motebit.com).
-
-## Packages
-
-| Package                                                            | Description                                              | Version                                                                                               | License |
-| ------------------------------------------------------------------ | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------- |
-| [`create-motebit`](https://www.npmjs.com/package/create-motebit)   | `npm create motebit` — scaffolds a signed agent identity | [![npm](https://img.shields.io/npm/v/create-motebit)](https://www.npmjs.com/package/create-motebit)   | MIT     |
-| [`motebit`](https://www.npmjs.com/package/motebit)                 | CLI — REPL, daemon, goal scheduling, operator console    | [![npm](https://img.shields.io/npm/v/motebit)](https://www.npmjs.com/package/motebit)                 | BSL-1.1 |
-| [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) | Signature verification library — zero dependencies       | [![npm](https://img.shields.io/npm/v/@motebit/verify)](https://www.npmjs.com/package/@motebit/verify) | MIT     |
-| [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk)       | Core protocol types — zero dependencies                  | [![npm](https://img.shields.io/npm/v/@motebit/sdk)](https://www.npmjs.com/package/@motebit/sdk)       | MIT     |
+| Package                                                            | Description                                       | License |
+| ------------------------------------------------------------------ | ------------------------------------------------- | ------- |
+| [`create-motebit`](https://www.npmjs.com/package/create-motebit)   | `npm create motebit` — scaffold a signed identity | MIT     |
+| [`motebit`](https://www.npmjs.com/package/motebit)                 | CLI — REPL, daemon, operator console              | BSL-1.1 |
+| [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) | Signature verification — zero dependencies        | MIT     |
+| [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk)       | Protocol types — zero dependencies                | MIT     |
 
 ## Specification
 
 [**motebit/identity@1.0**](spec/identity-v1.md) — the open specification for agent identity files. MIT licensed. Anyone can implement it.
 
-A `motebit.md` declares identity (Ed25519 public key, unique agent ID, W3C `did:key`), governance (trust mode, risk thresholds), privacy (sensitivity levels, retention rules), memory (decay parameters), and registered devices.
+A `motebit.md` declares identity (Ed25519 public key, agent ID, `did:key`), governance (trust mode, risk thresholds), privacy (sensitivity levels, retention rules), memory (decay parameters), and registered devices.
 
 ## Development
 
 ```bash
-# Prerequisites: Node >= 20, pnpm 9.15
-pnpm install
-
-pnpm run build       # Build all packages
-pnpm run test        # Run all tests (3,000+ across 98 files)
-pnpm run typecheck   # Type-check all packages (59 targets)
-pnpm run lint        # Lint all packages
-
-# Single package
-pnpm --filter @motebit/runtime build
-pnpm --filter @motebit/runtime test
+pnpm install           # Node >= 20, pnpm 9.15
+pnpm run build         # Build all 39 packages
+pnpm run test          # 3,000+ tests across 98 files
+pnpm run typecheck     # Type-check all packages
+pnpm run lint          # Lint all packages
 ```
 
 ## License
@@ -160,13 +163,14 @@ The **protocol layer** is MIT licensed — use it freely, build on it, implement
 
 The **platform implementation** is [BSL 1.1](LICENSE) — free to use, source-available, converts to MIT per-version after 4 years (2030-03-09).
 
-"Motebit" is a trademark of Daniel Hakim. See [TRADEMARK.md](TRADEMARK.md) for the full policy.
+"Motebit" is a trademark of Daniel Hakim. See [TRADEMARK.md](TRADEMARK.md).
 
 ## Links
 
+- [motebit.com](https://motebit.com) — meet the creature
 - [Documentation](https://docs.motebit.com) — guides, architecture, API reference
 - [Specification](spec/identity-v1.md) — motebit/identity@1.0
 - [npm](https://www.npmjs.com/org/motebit) — published packages
-- [GitHub Discussions](https://github.com/motebit/motebit/discussions) — questions, ideas, show & tell
+- [Discussions](https://github.com/motebit/motebit/discussions) — questions, ideas, show & tell
 - [Bug reports](https://github.com/motebit/motebit/issues/new?template=bug_report.yml)
 - [Contributing](CONTRIBUTING.md)
