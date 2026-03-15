@@ -9,11 +9,20 @@
  */
 import type { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { sign, verify, generateKeypair, publicKeyToDidKey, canonicalJson } from "@motebit/crypto";
+import {
+  sign,
+  verify,
+  generateKeypair,
+  publicKeyToDidKey,
+  canonicalJson,
+  bytesToHex,
+  hexToBytes,
+} from "@motebit/crypto";
 import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from "node:crypto";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import type { DatabaseDriver } from "@motebit/persistence";
 import { createLogger } from "./logger.js";
+import { SlidingWindowLimiter } from "./rate-limiter.js";
 
 const logger = createLogger({ service: "relay", module: "federation" });
 
@@ -77,19 +86,10 @@ export interface VerifiedSettlement {
 
 // === Helpers ===
 
-export function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-export function hexToBytes(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
-  }
-  return bytes;
-}
+// Re-export for test consumers that import from federation.ts
+export { bytesToHex, hexToBytes };
+/** @deprecated Use SlidingWindowLimiter directly. Kept for test import compatibility. */
+export { SlidingWindowLimiter as PeerRateLimiter };
 
 // === Database ===
 
@@ -546,46 +546,6 @@ async function verifyPeerSignature(
 
 // === Per-Peer Rate Limiter ===
 
-/**
- * Per-peer sliding window rate limiter for federation endpoints.
- * Keys on the relay_id from the request body, isolating each peer's
- * quota so one misbehaving peer cannot exhaust the limit for others.
- */
-export class PeerRateLimiter {
-  private windows: Map<string, { count: number; resetAt: number }> = new Map();
-
-  constructor(
-    private maxRequests: number,
-    private windowMs: number,
-  ) {}
-
-  check(peerId: string): { allowed: boolean; remaining: number; resetAt: number } {
-    const now = Date.now();
-    const entry = this.windows.get(peerId);
-
-    if (!entry || entry.resetAt <= now) {
-      const resetAt = now + this.windowMs;
-      this.windows.set(peerId, { count: 1, resetAt });
-      return { allowed: true, remaining: this.maxRequests - 1, resetAt };
-    }
-
-    entry.count++;
-    const allowed = entry.count <= this.maxRequests;
-    const remaining = Math.max(0, this.maxRequests - entry.count);
-    return { allowed, remaining, resetAt: entry.resetAt };
-  }
-
-  /** Remove expired entries to prevent memory growth. */
-  cleanup(): void {
-    const now = Date.now();
-    for (const [key, entry] of this.windows) {
-      if (entry.resetAt <= now) {
-        this.windows.delete(key);
-      }
-    }
-  }
-}
-
 // === Federation Routes ===
 
 export interface FederationDeps {
@@ -620,7 +580,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
   // Unlike the per-IP limiter in index.ts, this keys on the peer's relay_id
   // from the request body so one misbehaving peer cannot exhaust the quota
   // for all other peers.
-  const peerLimiter = new PeerRateLimiter(30, 60_000);
+  const peerLimiter = new SlidingWindowLimiter(30, 60_000);
 
   /** Check per-peer rate limit; throws HTTPException 429 if exceeded. */
   function checkPeerLimit(relayId: string): void {

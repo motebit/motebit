@@ -286,6 +286,15 @@ export function didKeyToPublicKey(did: string): Uint8Array {
 }
 
 /**
+ * Convert bytes to a hex string.
+ */
+export function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
  * Convert a hex string to bytes.
  */
 export function hexToBytes(hex: string): Uint8Array {

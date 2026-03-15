@@ -5,7 +5,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { AgentTrustLevel, RiskLevel } from "@motebit/sdk";
 import type { ToolDefinition, ToolResult, PolicyDecision } from "@motebit/sdk";
-import { hexPublicKeyToDidKey, verifyDelegation, parseScopeSet } from "@motebit/crypto";
+import { hexPublicKeyToDidKey, hexToBytes, verifyDelegation, parseScopeSet } from "@motebit/crypto";
 import type { DelegationToken } from "@motebit/crypto";
 
 // Re-export for consumers
@@ -907,15 +907,6 @@ export class McpServerAdapter {
       // Unknown caller — deny when motebit auth is in use
       return null;
     }
-
-    // Convert hex string to Uint8Array
-    const hexToBytes = (hex: string): Uint8Array => {
-      const bytes = new Uint8Array(hex.length / 2);
-      for (let i = 0; i < hex.length; i += 2) {
-        bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
-      }
-      return bytes;
-    };
 
     const pubKeyBytes = hexToBytes(publicKeyHex);
     const payload = await this.deps.verifySignedToken(token, pubKeyBytes);

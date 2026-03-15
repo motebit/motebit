@@ -105,10 +105,13 @@ import {
   verifyKeySuccession,
   sign,
   canonicalJson,
+  bytesToHex,
+  hexToBytes,
 } from "@motebit/crypto";
 /* eslint-enable no-restricted-imports */
 import type { KeySuccessionRecord } from "@motebit/crypto";
 import { createLogger } from "./logger.js";
+import { SlidingWindowLimiter } from "./rate-limiter.js";
 import {
   createFederationTables,
   initRelayIdentity,
@@ -144,20 +147,6 @@ import {
   evaluateTrustTransition,
   trustLevelToScore,
 } from "@motebit/sdk";
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function hexToBytes(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
-  }
-  return bytes;
-}
 
 /** Decode the payload half of a signed token without verifying the signature. */
 function parseTokenPayloadUnsafe(
@@ -210,21 +199,6 @@ async function verifySignedTokenForDevice(
   return true;
 }
 
-// === Canonical JSON (deterministic serialization for execution ledger hashing) ===
-
-function canonicalJsonApi(obj: unknown): string {
-  if (obj === null || obj === undefined) return JSON.stringify(obj);
-  if (typeof obj !== "object") return JSON.stringify(obj);
-  if (Array.isArray(obj)) {
-    return "[" + obj.map((item) => canonicalJsonApi(item)).join(",") + "]";
-  }
-  const sorted = Object.keys(obj as Record<string, unknown>).sort();
-  const entries = sorted.map(
-    (key) => JSON.stringify(key) + ":" + canonicalJsonApi((obj as Record<string, unknown>)[key]),
-  );
-  return "{" + entries.join(",") + "}";
-}
-
 // === Config ===
 
 /** x402 payment configuration — the relay's settlement layer. */
@@ -273,44 +247,6 @@ export interface SyncRelay {
     publicKeyHex: string;
     did: string;
   };
-}
-
-// === Rate Limiter ===
-
-class RateLimiter {
-  private windows: Map<string, { count: number; resetAt: number }> = new Map();
-
-  constructor(
-    private maxRequests: number,
-    private windowMs: number,
-  ) {}
-
-  check(key: string): { allowed: boolean; remaining: number; resetAt: number } {
-    const now = Date.now();
-    const entry = this.windows.get(key);
-
-    if (!entry || entry.resetAt <= now) {
-      // New window
-      const resetAt = now + this.windowMs;
-      this.windows.set(key, { count: 1, resetAt });
-      return { allowed: true, remaining: this.maxRequests - 1, resetAt };
-    }
-
-    entry.count++;
-    const allowed = entry.count <= this.maxRequests;
-    const remaining = Math.max(0, this.maxRequests - entry.count);
-    return { allowed, remaining, resetAt: entry.resetAt };
-  }
-
-  /** Remove expired entries to prevent memory growth. */
-  cleanup(): void {
-    const now = Date.now();
-    for (const [key, entry] of this.windows) {
-      if (entry.resetAt <= now) {
-        this.windows.delete(key);
-      }
-    }
-  }
 }
 
 // === Factory ===
@@ -650,11 +586,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   }, 60_000);
 
   // Rate limiter instances per endpoint category (per-relay for test isolation)
-  const authLimiter = new RateLimiter(30, 60_000); // 30 req/min
-  const readLimiter = new RateLimiter(60, 60_000); // 60 req/min
-  const writeLimiter = new RateLimiter(30, 60_000); // 30 req/min
-  const publicLimiter = new RateLimiter(20, 60_000); // 20 req/min
-  const expensiveLimiter = new RateLimiter(10, 60_000); // 10 req/min
+  const authLimiter = new SlidingWindowLimiter(30, 60_000); // 30 req/min
+  const readLimiter = new SlidingWindowLimiter(60, 60_000); // 60 req/min
+  const writeLimiter = new SlidingWindowLimiter(30, 60_000); // 30 req/min
+  const publicLimiter = new SlidingWindowLimiter(20, 60_000); // 20 req/min
+  const expensiveLimiter = new SlidingWindowLimiter(10, 60_000); // 10 req/min
   const allLimiters = [authLimiter, readLimiter, writeLimiter, publicLimiter, expensiveLimiter];
 
   // --- Relay Identity: persistent Ed25519 keypair ---
@@ -832,7 +768,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     return authHeader != null && authHeader === `Bearer ${apiToken}`;
   }
 
-  function rateLimitMiddleware(limiter: RateLimiter) {
+  function rateLimitMiddleware(limiter: SlidingWindowLimiter) {
     return async (
       c: Parameters<Parameters<typeof app.use>[1]>[0],
       next: () => Promise<void>,
@@ -1580,14 +1516,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     });
 
     // 8. Content hash (SHA-256 of canonical timeline)
-    const canonicalLines = timeline.map((entry) => canonicalJsonApi(entry));
+    const canonicalLines = timeline.map((entry) => canonicalJson(entry));
     const hashBuf = await crypto.subtle.digest(
       "SHA-256",
       new TextEncoder().encode(canonicalLines.join("\n")),
     );
-    const contentHash = Array.from(new Uint8Array(hashBuf))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
+    const contentHash = bytesToHex(new Uint8Array(hashBuf));
 
     // 9. Status mapping
     const statusMap: Record<string, string> = {
