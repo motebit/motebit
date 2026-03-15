@@ -1571,13 +1571,20 @@ export class MotebitRuntime {
     let accumulated = "";
     let yieldedCleanLength = 0;
 
+    // State tags are collected during streaming but applied once at the end.
+    // The creature's only visible change while speaking is the processing glow
+    // and speaking activity. This is the physics of surface tension: perturbation
+    // → oscillation → new equilibrium. Not snap-snap-snap.
+    let pendingStateUpdates: Partial<MotebitState> = {};
+
     for await (const chunk of stream) {
       if (chunk.type === "text") {
         accumulated += chunk.text;
 
+        // Collect state updates — don't apply yet
         const stateUpdates = extractStateTags(accumulated);
         if (Object.keys(stateUpdates).length > 0) {
-          this.state.pushUpdate(stateUpdates);
+          pendingStateUpdates = { ...pendingStateUpdates, ...stateUpdates };
         }
       }
 
@@ -1667,6 +1674,11 @@ export class MotebitRuntime {
 
     if (result) {
       this.conversation.pushExchange(userMessage, result.response);
+    }
+
+    // Apply collected state updates as the creature settles into new equilibrium
+    if (Object.keys(pendingStateUpdates).length > 0) {
+      this.state.pushUpdate(pendingStateUpdates);
     }
   }
 
