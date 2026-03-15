@@ -94,6 +94,14 @@ import {
   recordAgentInteraction as _recordAgentInteraction,
 } from "./agent-trust.js";
 import { ConversationManager } from "./conversation.js";
+
+/** Strip state/memory/action tags for display — preserves whitespace between words (unlike stripTags which trims). */
+function stripDisplayTags(text: string): string {
+  return text
+    .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
+    .replace(/<state\s+[^>]*\/>/g, "")
+    .replace(/\*[^*]+\*/g, "");
+}
 import { performReflection, runReflectionSafe } from "./reflection.js";
 import type { ReflectionDeps } from "./reflection.js";
 import { runHousekeeping } from "./housekeeping.js";
@@ -1638,7 +1646,18 @@ export class MotebitRuntime {
         this.state.pushUpdate({ confidence: 0.4, affect_valence: -0.2, attention: 0.95 });
       }
 
-      yield chunk;
+      // Strip state/memory/action tags from text before yielding to UI
+      if (chunk.type === "text") {
+        const clean = stripDisplayTags(accumulated);
+        // Only yield if there's new visible text beyond what we've already sent
+        const prevClean = stripDisplayTags(accumulated.slice(0, -chunk.text.length));
+        const delta = clean.slice(prevClean.length);
+        if (delta) {
+          yield { type: "text" as const, text: delta };
+        }
+      } else {
+        yield chunk;
+      }
       if (chunk.type === "result") {
         result = chunk.result;
         // Accumulate behavioral stats for the intelligence gradient
