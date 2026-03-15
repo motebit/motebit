@@ -119,7 +119,7 @@ document.addEventListener("keydown", (e) => {
 
 // === Bootstrap ===
 
-const DEFAULT_PROXY_MODEL = "claude-haiku-4-5-20251001";
+const DEFAULT_PROXY_MODEL = "claude-sonnet-4-20250514";
 const DEFAULT_WEBLLM_MODEL = "Llama-3.2-3B-Instruct-q4f16_1-MLC";
 
 /** Try to connect via the free proxy — instant, no download. */

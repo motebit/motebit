@@ -4,8 +4,7 @@ const DAILY_LIMIT = 5;
 const MAX_BODY_SIZE = 100_000; // 100KB
 const MAX_MESSAGE_LENGTH = 10_000;
 const MAX_MESSAGES = 50;
-// Free proxy is Haiku only — Sonnet users bring their own key
-const MODEL_ALLOWLIST = ["claude-haiku-4-5-20251001"];
+const MODEL_ALLOWLIST = ["claude-sonnet-4-20250514"];
 
 const ALLOWED_ORIGINS = new Set([
   "https://motebit.com",
