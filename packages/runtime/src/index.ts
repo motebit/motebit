@@ -99,7 +99,7 @@ import { ConversationManager } from "./conversation.js";
  */
 function stripDisplayTags(text: string): { clean: string; pending: string } {
   // Strip complete tags
-  let clean = text
+  const clean = text
     .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
     .replace(/<state\s+[^>]*\/>/g, "")
     .replace(/\*[^*]+\*/g, "");
