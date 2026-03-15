@@ -30,7 +30,7 @@ export function HeroSection() {
             <h1 className="text-[clamp(2rem,4.5vw,3.5rem)] font-bold tracking-[-0.04em] leading-[1.05] text-zinc-900 dark:text-zinc-100">
               A droplet of intelligence under surface tension.
             </h1>
-            <p className="mt-5 text-[clamp(0.9rem,1.6vw,1.1rem)] text-zinc-500 dark:text-zinc-400 leading-relaxed">
+            <p className="mt-5 text-[clamp(0.9rem,1.6vw,1.1rem)] text-zinc-500 dark:text-zinc-200 leading-relaxed">
               You own the identity. The intelligence is pluggable. The body is yours.
             </p>
             <div className="mt-8 flex gap-3 hero-enter-buttons">
@@ -42,7 +42,7 @@ export function HeroSection() {
               </Link>
               <Link
                 href="/docs/introduction"
-                className="px-6 py-2.5 rounded-full border border-zinc-200 text-zinc-500 text-sm hover:border-zinc-300 hover:text-zinc-700 dark:border-zinc-700 dark:text-zinc-400 dark:hover:border-zinc-600 dark:hover:text-zinc-200 transition-all"
+                className="px-6 py-2.5 rounded-full border border-zinc-200 text-zinc-500 text-sm hover:border-zinc-300 hover:text-zinc-700 dark:border-zinc-500 dark:text-zinc-200 dark:hover:border-zinc-400 dark:hover:text-zinc-100 transition-all"
               >
                 Documentation
               </Link>
