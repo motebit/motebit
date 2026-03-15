@@ -16,19 +16,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
-import { generateKeypair, signExecutionReceipt } from "@motebit/crypto";
+import { generateKeypair, signExecutionReceipt, bytesToHex } from "@motebit/crypto";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
 
 // === Helpers ===
 
 const API_TOKEN = "test-token";
 const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
 
 const RELAY_A_URL = "http://relay-a.test:3000";
 const RELAY_B_URL = "http://relay-b.test:3001";

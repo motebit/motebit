@@ -2,18 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
-import { generateKeypair, createSignedToken } from "@motebit/crypto";
+import { generateKeypair, createSignedToken, bytesToHex } from "@motebit/crypto";
 
 // === Helpers ===
 
 const API_TOKEN = "test-token";
 const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
 
 async function createTestRelay(): Promise<SyncRelay> {
   return createSyncRelay({

@@ -33,17 +33,12 @@ import {
   createSignedToken,
   signExecutionReceipt,
   verifyExecutionReceipt,
+  bytesToHex,
 } from "@motebit/crypto";
 import type { KeyPair } from "@motebit/crypto";
 import type { ExecutionReceipt, MotebitId, DeviceId } from "@motebit/sdk";
 
 // === Helpers ===
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
 
 /** Build a signed device token. The device_id MUST be the one the relay assigned at bootstrap. */
 async function makeSignedToken(

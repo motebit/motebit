@@ -10,13 +10,7 @@ import { processSettlementRetries, createFederationTables } from "../federation.
 import type { RelayIdentity } from "../federation.js";
 import { openMotebitDatabase } from "@motebit/persistence";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
-import { generateKeypair } from "@motebit/crypto";
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
+import { generateKeypair, bytesToHex } from "@motebit/crypto";
 
 /** Insert a peer so settlement retries can look up the endpoint. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

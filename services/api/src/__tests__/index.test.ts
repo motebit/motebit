@@ -4,19 +4,18 @@ import type { SyncRelay } from "../index.js";
 import { EventType } from "@motebit/sdk";
 import type { EventLogEntry, AgentTask, ExecutionReceipt } from "@motebit/sdk";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
-import { generateKeypair, createSignedToken, signExecutionReceipt } from "@motebit/crypto";
+import {
+  generateKeypair,
+  createSignedToken,
+  signExecutionReceipt,
+  bytesToHex,
+} from "@motebit/crypto";
 
 // === Helpers ===
 
 const API_TOKEN = "test-token";
 const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
 const MOTEBIT_ID = "test-mote";
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
 
 async function createTestRelay(overrides?: {
   enableDeviceAuth?: boolean;

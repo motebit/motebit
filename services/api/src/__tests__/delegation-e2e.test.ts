@@ -14,7 +14,7 @@ import { DeviceCapability, StepStatus, PlanStatus } from "@motebit/sdk";
 import type { ExecutionReceipt, MotebitId, DeviceId, AgentTask } from "@motebit/sdk";
 import type { MotebitLoopDependencies } from "@motebit/ai-core";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
-import { generateKeypair, signExecutionReceipt } from "@motebit/crypto";
+import { generateKeypair, signExecutionReceipt, bytesToHex } from "@motebit/crypto";
 import type { KeyPair } from "@motebit/crypto";
 
 // === Constants ===
@@ -26,12 +26,6 @@ const MOTEBIT_ID = "test-mote";
 // Worker agent identity — generated per test, registered in beforeEach
 let workerKeypair: KeyPair;
 let workerMotebitId: string;
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
 
 // === Helpers ===
 
