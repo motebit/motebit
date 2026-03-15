@@ -111,6 +111,27 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       time.textContent = formatTimeAgo(node.created_at);
       meta.appendChild(time);
 
+      const deleteBtn = document.createElement("button");
+      deleteBtn.className = "memory-delete-btn";
+      deleteBtn.title = "Forget this memory";
+      deleteBtn.textContent = "\u00d7";
+      let confirmTimer: ReturnType<typeof setTimeout> | null = null;
+      deleteBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (deleteBtn.classList.contains("confirming")) {
+          if (confirmTimer) clearTimeout(confirmTimer);
+          void runtime.memory.deleteMemory(node.node_id).then(() => populateMemories());
+        } else {
+          deleteBtn.classList.add("confirming");
+          deleteBtn.textContent = "Forget?";
+          confirmTimer = setTimeout(() => {
+            deleteBtn.classList.remove("confirming");
+            deleteBtn.textContent = "\u00d7";
+          }, 3000);
+        }
+      });
+      meta.appendChild(deleteBtn);
+
       item.appendChild(meta);
       memoryList.appendChild(item);
     }
@@ -176,11 +197,24 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       }
 
       const deleteBtn = document.createElement("button");
-      deleteBtn.textContent = "Delete";
-      deleteBtn.addEventListener("click", () => {
-        goals = goals.filter((g) => g.goal_id !== goal.goal_id);
-        saveGoals(goals);
-        renderGoals();
+      deleteBtn.textContent = "\u00d7";
+      deleteBtn.className = "goal-delete-btn";
+      let goalConfirmTimer: ReturnType<typeof setTimeout> | null = null;
+      deleteBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (deleteBtn.classList.contains("confirming")) {
+          if (goalConfirmTimer) clearTimeout(goalConfirmTimer);
+          goals = goals.filter((g) => g.goal_id !== goal.goal_id);
+          saveGoals(goals);
+          renderGoals();
+        } else {
+          deleteBtn.classList.add("confirming");
+          deleteBtn.textContent = "Delete?";
+          goalConfirmTimer = setTimeout(() => {
+            deleteBtn.classList.remove("confirming");
+            deleteBtn.textContent = "\u00d7";
+          }, 3000);
+        }
       });
       actions.appendChild(deleteBtn);
 

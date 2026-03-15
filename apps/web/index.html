@@ -1362,10 +1362,37 @@
     .memory-item-meta {
       display: flex;
       gap: 8px;
+      align-items: center;
       margin-top: 4px;
       font-size: 11px;
       color: var(--text-faint);
     }
+    .memory-delete-btn {
+      background: none;
+      border: none;
+      color: var(--text-ghost);
+      font-size: 14px;
+      cursor: pointer;
+      padding: 0 2px;
+      line-height: 1;
+      margin-left: auto;
+      opacity: 0;
+      transition: opacity 0.15s, color 0.15s;
+    }
+    .memory-item:hover .memory-delete-btn { opacity: 1; }
+    .memory-delete-btn:hover { color: var(--text-secondary); }
+    .memory-delete-btn.confirming { opacity: 1; font-size: 10px; color: #e55; }
+    .goal-delete-btn {
+      background: none;
+      border: none;
+      color: var(--text-ghost);
+      font-size: 14px;
+      cursor: pointer;
+      padding: 0 2px;
+      line-height: 1;
+    }
+    .goal-delete-btn:hover { color: var(--text-secondary); }
+    .goal-delete-btn.confirming { font-size: 10px; color: #e55; }
 
     /* MCP server list items */
     .mcp-server-item {
