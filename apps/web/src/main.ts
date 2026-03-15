@@ -240,6 +240,11 @@ async function bootstrap(): Promise<void> {
   // Restore provider config and auto-connect
   const savedConfig = loadProviderConfig();
   if (savedConfig != null) {
+    // Migrate stale proxy model — proxy allowlist may have changed
+    if (savedConfig.type === "proxy" && savedConfig.model !== DEFAULT_PROXY_MODEL) {
+      savedConfig.model = DEFAULT_PROXY_MODEL;
+      saveProviderConfig(savedConfig);
+    }
     currentConfig = savedConfig;
 
     if (savedConfig.type === "webllm") {
