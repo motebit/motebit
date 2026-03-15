@@ -427,6 +427,8 @@ export async function processSettlementRetries(
   for (const retry of pending) {
     try {
       const settlementBody = JSON.parse(retry.payload_json) as Record<string, unknown>;
+      // Fresh timestamp on each retry so the receiver accepts it (±5min drift check)
+      settlementBody.timestamp = Date.now();
       const peerInfo = db
         .prepare("SELECT endpoint_url FROM relay_peers WHERE peer_relay_id = ?")
         .get(retry.peer_relay_id) as { endpoint_url: string } | undefined;
@@ -503,13 +505,28 @@ export function startHeartbeatLoop(
  * Look up an active peer and verify its Ed25519 signature over a payload.
  * Returns the peer's public key on success, throws HTTPException on failure.
  */
+/** Maximum acceptable clock drift for federation request timestamps (±5 minutes). */
+const FEDERATION_TIMESTAMP_DRIFT_MS = 300_000;
+
 async function verifyPeerSignature(
   db: DatabaseDriver,
   peerId: string,
   signatureHex: string,
   payloadBytes: Uint8Array,
   allowedStates = ["active"],
+  /** If provided, reject requests with timestamps outside ±5min drift. */
+  timestamp?: number,
 ): Promise<string> {
+  // Timestamp drift check — prevents replay attacks
+  if (timestamp != null) {
+    const drift = Math.abs(Date.now() - timestamp);
+    if (drift > FEDERATION_TIMESTAMP_DRIFT_MS) {
+      throw new HTTPException(400, {
+        message: "Request timestamp outside acceptable drift (±5min)",
+      });
+    }
+  }
+
   const stateList = allowedStates.map(() => "?").join(", ");
   const peer = db
     .prepare(
@@ -929,6 +946,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
         wall_clock_ms?: number;
       };
       routing_choice?: Record<string, unknown>;
+      timestamp?: number;
       signature: string;
     }>();
 
@@ -938,13 +956,15 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
     checkPeerLimit(body.origin_relay);
 
-    // Federation owns: peer validation + signature verification
+    // Federation owns: peer validation + signature verification + timestamp drift check
     const { signature, ...payload } = body;
     await verifyPeerSignature(
       db,
       body.origin_relay,
       signature,
       new TextEncoder().encode(canonicalJson(payload)),
+      ["active"],
+      body.timestamp,
     );
 
     // Check target agent exists locally
@@ -973,6 +993,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       task_id: string;
       origin_relay: string;
       receipt: ExecutionReceipt;
+      timestamp?: number;
       signature: string;
     }>();
 
@@ -982,7 +1003,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
     checkPeerLimit(body.origin_relay);
 
-    // Federation owns: peer validation + signature verification
+    // Federation owns: peer validation + signature verification + timestamp drift check
     const { signature, ...payload } = body;
     await verifyPeerSignature(
       db,
@@ -990,6 +1011,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       signature,
       new TextEncoder().encode(canonicalJson(payload)),
       ["active", "suspended"],
+      body.timestamp,
     );
 
     // Relay owns: task queue update, WebSocket fan-out, trust update, credential issuance, settlement
@@ -1011,6 +1033,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       origin_relay: string;
       gross_amount: number;
       receipt_hash: string;
+      timestamp?: number;
       signature: string;
       x402_tx_hash?: string;
       x402_network?: string;
@@ -1022,7 +1045,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
     checkPeerLimit(body.origin_relay);
 
-    // Federation owns: peer validation + signature verification
+    // Federation owns: peer validation + signature verification + timestamp drift check
     const { signature, ...payload } = body;
     await verifyPeerSignature(
       db,
@@ -1030,6 +1053,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       signature,
       new TextEncoder().encode(canonicalJson(payload)),
       ["active", "suspended"],
+      body.timestamp,
     );
 
     // Relay owns: fee calculation and recording

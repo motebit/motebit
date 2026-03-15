@@ -1872,6 +1872,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
               origin_relay: relayIdentity.relayMotebitId,
               gross_amount: netAmount,
               receipt_hash: receiptHash,
+              timestamp: Date.now(),
               x402_tx_hash: entry.x402_tx_hash ?? undefined,
               x402_network: entry.x402_network ?? undefined,
             };
@@ -2390,6 +2391,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
                       wall_clock_ms: body.wall_clock_ms,
                     },
                     routing_choice: routingChoice,
+                    timestamp: Date.now(),
                   };
                   const forwardBytes = new TextEncoder().encode(canonicalJson(forwardBody));
                   const forwardSig = await sign(forwardBytes, relayIdentity.privateKey);
@@ -2995,6 +2997,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
             task_id: taskId,
             origin_relay: relayIdentity.relayMotebitId,
             receipt,
+            timestamp: Date.now(),
           };
           const resultBytes = new TextEncoder().encode(canonicalJson(resultBody));
           const resultSig = await sign(resultBytes, relayIdentity.privateKey);
