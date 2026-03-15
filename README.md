@@ -172,5 +172,5 @@ The **platform implementation** is [BSL 1.1](LICENSE) — free to use, source-av
 - [Specification](spec/identity-v1.md) — motebit/identity@1.0
 - [npm](https://www.npmjs.com/org/motebit) — published packages
 - [Discussions](https://github.com/motebit/motebit/discussions) — questions, ideas, show & tell
-- [Bug reports](https://github.com/motebit/motebit/issues/new?template=bug_report.yml)
-- [Contributing](CONTRIBUTING.md)
+- [Bug reports](https://github.com/motebit/motebit/issues/new?template=bug_report.yml) — found something broken? let us know
+- [Contributing](CONTRIBUTING.md) — how to contribute to motebit
