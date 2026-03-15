@@ -42,9 +42,6 @@ import {
   runTurn,
   runTurnStreaming,
   extractStateTags,
-  extractActions,
-  actionsToStateUpdates,
-  getImpulsesForAction,
   TaskRouter,
   withTaskConfig,
 } from "@motebit/ai-core";
@@ -1564,7 +1561,7 @@ export class MotebitRuntime {
     }
   }
 
-  /** Shared stream processing — extracts state tags, actions, handles tool/approval/injection chunks. */
+  /** Shared stream processing — extracts state tags, handles tool/approval/injection chunks. */
   private async *processStream(
     stream: AsyncGenerator<AgenticChunk>,
     userMessage: string,
@@ -1573,7 +1570,6 @@ export class MotebitRuntime {
     let result: TurnResult | null = null;
     let accumulated = "";
     let yieldedCleanLength = 0;
-    const appliedActions = new Set<string>();
 
     for await (const chunk of stream) {
       if (chunk.type === "text") {
@@ -1582,29 +1578,6 @@ export class MotebitRuntime {
         const stateUpdates = extractStateTags(accumulated);
         if (Object.keys(stateUpdates).length > 0) {
           this.state.pushUpdate(stateUpdates);
-        }
-
-        const actions = extractActions(accumulated);
-        const newActions = actions.filter((a) => !appliedActions.has(a));
-        if (newActions.length > 0) {
-          for (const a of newActions) appliedActions.add(a);
-          const actionDeltas = actionsToStateUpdates(newActions);
-          if (Object.keys(actionDeltas).length > 0) {
-            const current = this.state.getState();
-            const absolute: Record<string, number> = {};
-            for (const [field, delta] of Object.entries(actionDeltas)) {
-              const base = (current as unknown as Record<string, unknown>)[field];
-              absolute[field] = (typeof base === "number" ? base : 0) + (delta as number);
-            }
-            this.state.pushUpdate(absolute as Partial<MotebitState>);
-          }
-          // Inject impulses for immediate visual pop
-          for (const action of newActions) {
-            const impulses = getImpulsesForAction(action);
-            for (const imp of impulses) {
-              this.behavior.injectImpulse(imp.field, imp.magnitude, imp.halfLife);
-            }
-          }
         }
       }
 
