@@ -77,3 +77,4 @@ jobs:
           releaseBody: "Desktop app binaries. macOS builds are unsigned — right-click → Open on first launch."
           releaseDraft: true
           prerelease: false
+          includeUpdaterJson: false
