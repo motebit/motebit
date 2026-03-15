@@ -848,6 +848,17 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     app.use("/identity", bearerAuth({ token: apiToken }));
     // Device registration is protected by the master token
     app.use("/device/*", bearerAuth({ token: apiToken }));
+    // Admin query endpoints — interior state is not public surface
+    app.use("/api/v1/state/*", bearerAuth({ token: apiToken }));
+    app.use("/api/v1/memory/*", bearerAuth({ token: apiToken }));
+    app.use("/api/v1/audit/*", bearerAuth({ token: apiToken }));
+    app.use("/api/v1/goals/*", bearerAuth({ token: apiToken }));
+    app.use("/api/v1/conversations/*", bearerAuth({ token: apiToken }));
+    app.use("/api/v1/plans/*", bearerAuth({ token: apiToken }));
+    app.use("/api/v1/agent-trust/*", bearerAuth({ token: apiToken }));
+    app.use("/api/v1/gradient/*", bearerAuth({ token: apiToken }));
+    app.use("/api/v1/sync/*", bearerAuth({ token: apiToken }));
+    app.use("/api/v1/execution/*", bearerAuth({ token: apiToken }));
   }
 
   if (enableDeviceAuth) {
