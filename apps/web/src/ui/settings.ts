@@ -2,6 +2,7 @@ import type { WebContext } from "../types";
 import type { ProviderConfig, ProviderType } from "../storage";
 import { saveProviderConfig, saveSoulColor } from "../storage";
 import { detectOllamaModels, checkWebGPU, WebLLMProvider, DEFAULT_OLLAMA_URL } from "../providers";
+import { hexPublicKeyToDidKey } from "@motebit/crypto";
 import type { ColorPickerAPI } from "./color-picker";
 
 // === DOM Refs ===
@@ -14,6 +15,7 @@ const modelIndicator = document.getElementById("model-indicator") as HTMLDivElem
 // Identity fields
 const identityMotebitId = document.getElementById("identity-motebit-id") as HTMLDivElement;
 const identityDeviceId = document.getElementById("identity-device-id") as HTMLDivElement;
+const identityDid = document.getElementById("identity-did") as HTMLDivElement;
 const identityPublicKey = document.getElementById("identity-public-key") as HTMLDivElement;
 
 // === Provider Tab DOM ===
@@ -81,11 +83,13 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   function populateIdentityFields(): void {
     identityMotebitId.textContent = ctx.app.motebitId || "—";
     identityDeviceId.textContent = ctx.app.deviceId || "—";
-    identityPublicKey.textContent = ctx.app.publicKeyHex || "—";
+    const pubHex = ctx.app.publicKeyHex;
+    identityDid.textContent = pubHex ? hexPublicKeyToDidKey(pubHex) : "—";
+    identityPublicKey.textContent = pubHex || "—";
   }
 
   function setupIdentityCopyHandlers(): void {
-    for (const el of [identityMotebitId, identityDeviceId, identityPublicKey]) {
+    for (const el of [identityMotebitId, identityDeviceId, identityDid, identityPublicKey]) {
       el.addEventListener("click", () => {
         const text = el.textContent;
         if (text == null || text === "" || text === "—") return;
