@@ -493,6 +493,35 @@ export class WebApp {
     await this.runtime?.housekeeping();
   }
 
+  async exportData(): Promise<string> {
+    const runtime = this.runtime;
+    const identity = {
+      motebitId: this._motebitId,
+      deviceId: this._deviceId,
+      publicKeyHex: this._publicKeyHex,
+    };
+    const memories = runtime ? await runtime.memory.exportAll() : { nodes: [], edges: [] };
+    const conversations = runtime ? runtime.listConversations() : [];
+    const credentials = runtime ? runtime.getIssuedCredentials() : [];
+    const gradient = runtime ? runtime.getGradient() : null;
+
+    return JSON.stringify(
+      {
+        exported_at: new Date().toISOString(),
+        identity,
+        memories: {
+          nodes: memories.nodes.filter((n) => !n.tombstoned),
+          edges: memories.edges,
+        },
+        conversations,
+        credentials,
+        gradient,
+      },
+      null,
+      2,
+    );
+  }
+
   getRuntime(): MotebitRuntime | null {
     return this.runtime;
   }

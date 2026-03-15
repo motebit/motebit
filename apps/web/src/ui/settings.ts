@@ -103,6 +103,19 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
 
   setupIdentityCopyHandlers();
 
+  // Export Data button
+  document.getElementById("settings-export-data")?.addEventListener("click", () => {
+    void ctx.app.exportData().then((json) => {
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `motebit-export-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  });
+
   document.querySelectorAll(".settings-tab").forEach((tab) => {
     tab.addEventListener("click", () => {
       const name = (tab as HTMLElement).dataset.tab;
