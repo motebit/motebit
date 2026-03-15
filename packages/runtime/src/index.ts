@@ -98,6 +98,11 @@ import {
 import { AgentGraphManager } from "./agent-graph.js";
 import { replayGoal, hashString, computeTimelineHash } from "./execution-ledger.js";
 import { setOperatorMode, setupOperatorPin, resetOperatorPin } from "./operator.js";
+import {
+  bumpTrustFromReceipt as _bumpTrustFromReceipt,
+  recordAgentInteraction as _recordAgentInteraction,
+} from "./agent-trust.js";
+import type { AgentTrustDeps } from "./agent-trust.js";
 export { canonicalJson } from "./execution-ledger.js";
 import type {
   GradientSnapshot,
@@ -2525,140 +2530,27 @@ export class MotebitRuntime {
    * Trust progression: Unknown → FirstContact (on first interaction) → Verified (after 5+ verified).
    * Never auto-promotes to Trusted — requires explicit owner action.
    */
-  async bumpTrustFromReceipt(receipt: ExecutionReceipt, verified: boolean): Promise<void> {
-    if (this.agentTrustStore == null) return;
-    if (!verified) return; // Unverified receipts don't affect trust
-
-    const remoteMotebitId = receipt.motebit_id;
-    const now = Date.now();
-    const existing = await this.agentTrustStore.getAgentTrust(this.motebitId, remoteMotebitId);
-
-    const taskSucceeded = receipt.status === "completed";
-    const taskFailed = receipt.status === "failed";
-
-    if (existing != null) {
-      const updated: AgentTrustRecord = {
-        ...existing,
-        last_seen_at: now,
-        interaction_count: existing.interaction_count + 1,
-        successful_tasks: (existing.successful_tasks ?? 0) + (taskSucceeded ? 1 : 0),
-        failed_tasks: (existing.failed_tasks ?? 0) + (taskFailed ? 1 : 0),
-      };
-      // Evaluate trust level transition (promotion or demotion)
-      const { evaluateTrustTransition } = await import("@motebit/sdk");
-      const newLevel = evaluateTrustTransition(updated);
-      if (newLevel != null) {
-        const previousLevel = updated.trust_level;
-        updated.trust_level = newLevel;
-        // Emit trust transition event for audit trail
-        try {
-          const clock = await this.events.getLatestClock(this.motebitId);
-          await this.events.append({
-            event_id: crypto.randomUUID(),
-            motebit_id: this.motebitId,
-            timestamp: now,
-            event_type: EventType.TrustLevelChanged,
-            payload: {
-              remote_motebit_id: remoteMotebitId,
-              previous_level: previousLevel,
-              new_level: newLevel,
-              successful_tasks: updated.successful_tasks,
-              failed_tasks: updated.failed_tasks,
-            },
-            version_clock: clock + 1,
-            tombstoned: false,
-          });
-        } catch {
-          // Event emission is best-effort
-        }
-        // Issue trust credential for the transition (best-effort)
-        if (this._signingKeys) {
-          try {
-            const { issueTrustCredential, hexPublicKeyToDidKey } = await import("@motebit/crypto");
-            let subjectDid = `did:motebit:${remoteMotebitId}`;
-            if (updated.public_key) {
-              try {
-                subjectDid = hexPublicKeyToDidKey(updated.public_key);
-              } catch {
-                // public_key may not be hex — fall back to did:motebit
-              }
-            }
-            const vc = await issueTrustCredential(
-              {
-                trust_level: updated.trust_level,
-                interaction_count: updated.interaction_count,
-                successful_tasks: updated.successful_tasks,
-                failed_tasks: updated.failed_tasks,
-                first_seen_at: updated.first_seen_at,
-                last_seen_at: updated.last_seen_at,
-              },
-              this._signingKeys.privateKey,
-              this._signingKeys.publicKey,
-              subjectDid,
-            );
-            this._issuedCredentials.push(vc);
-          } catch {
-            // Credential issuance is best-effort
-          }
-        }
-      }
-      await this.agentTrustStore.setAgentTrust(updated);
-      this.agentGraph.invalidate();
-    } else {
-      // First interaction — create at FirstContact
-      const record: AgentTrustRecord = {
-        motebit_id: this.motebitId,
-        remote_motebit_id: remoteMotebitId,
-        trust_level: AgentTrustLevel.FirstContact,
-        first_seen_at: now,
-        last_seen_at: now,
-        interaction_count: 1,
-        successful_tasks: taskSucceeded ? 1 : 0,
-        failed_tasks: taskFailed ? 1 : 0,
-      };
-      await this.agentTrustStore.setAgentTrust(record);
-      this.agentGraph.invalidate();
-    }
+  private get trustDeps(): AgentTrustDeps {
+    return {
+      motebitId: this.motebitId,
+      agentTrustStore: this.agentTrustStore,
+      events: this.events,
+      agentGraph: this.agentGraph,
+      signingKeys: this._signingKeys,
+      onCredentialIssued: (vc) => this._issuedCredentials.push(vc),
+    };
   }
 
-  /**
-   * Record or update trust for a remote motebit after an MCP interaction.
-   * If no record exists, creates one at FirstContact level.
-   * If one exists, bumps interaction_count and last_seen_at.
-   */
+  async bumpTrustFromReceipt(receipt: ExecutionReceipt, verified: boolean): Promise<void> {
+    return _bumpTrustFromReceipt(this.trustDeps, receipt, verified);
+  }
+
   async recordAgentInteraction(
     remoteMotebitId: string,
     publicKey?: string,
     motebitType?: string,
   ): Promise<AgentTrustRecord | null> {
-    if (this.agentTrustStore == null) return null;
-    const now = Date.now();
-    const existing = await this.agentTrustStore.getAgentTrust(this.motebitId, remoteMotebitId);
-    if (existing != null) {
-      const updated: AgentTrustRecord = {
-        ...existing,
-        last_seen_at: now,
-        interaction_count: existing.interaction_count + 1,
-        public_key: publicKey ?? existing.public_key,
-        notes: motebitType ? `type:${motebitType}` : existing.notes,
-      };
-      await this.agentTrustStore.setAgentTrust(updated);
-      this.agentGraph.invalidate();
-      return updated;
-    }
-    const record: AgentTrustRecord = {
-      motebit_id: this.motebitId,
-      remote_motebit_id: remoteMotebitId,
-      trust_level: AgentTrustLevel.FirstContact,
-      public_key: publicKey,
-      first_seen_at: now,
-      last_seen_at: now,
-      interaction_count: 1,
-      notes: motebitType ? `type:${motebitType}` : undefined,
-    };
-    await this.agentTrustStore.setAgentTrust(record);
-    this.agentGraph.invalidate();
-    return record;
+    return _recordAgentInteraction(this.trustDeps, remoteMotebitId, publicKey, motebitType);
   }
 
   /** Get trust record for a specific remote motebit. */
