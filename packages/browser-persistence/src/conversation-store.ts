@@ -26,6 +26,8 @@ interface MessageRecord {
 }
 
 export class IdbConversationStore implements ConversationStoreAdapter {
+  private _lastMessageTs = 0;
+
   constructor(private db: IDBDatabase) {}
 
   createConversation(motebitId: string): string {
@@ -55,7 +57,10 @@ export class IdbConversationStore implements ConversationStoreAdapter {
       toolCallId?: string;
     },
   ): void {
-    const now = Date.now();
+    // Monotonic timestamp: guarantees insertion order even when two
+    // messages are appended in the same millisecond (user + assistant)
+    const now = Math.max(Date.now(), this._lastMessageTs + 1);
+    this._lastMessageTs = now;
     const messageId = crypto.randomUUID();
     const record: MessageRecord = {
       messageId,
