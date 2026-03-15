@@ -84,13 +84,26 @@ export function initConversations(
       deleteBtn.className = "conv-delete-btn";
       deleteBtn.title = "Delete conversation";
       deleteBtn.textContent = "\u00d7";
+      let confirmTimer: ReturnType<typeof setTimeout> | null = null;
       deleteBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        ctx.app.deleteConversation(entry.conversationId);
-        if (entry.conversationId === activeId) {
-          callbacks.onLoad(); // refresh chat if active conversation was deleted
+        if (deleteBtn.classList.contains("confirming")) {
+          // Second tap — delete
+          if (confirmTimer) clearTimeout(confirmTimer);
+          ctx.app.deleteConversation(entry.conversationId);
+          if (entry.conversationId === activeId) {
+            callbacks.onLoad();
+          }
+          populateList();
+        } else {
+          // First tap — ask for confirmation
+          deleteBtn.classList.add("confirming");
+          deleteBtn.textContent = "Delete?";
+          confirmTimer = setTimeout(() => {
+            deleteBtn.classList.remove("confirming");
+            deleteBtn.textContent = "\u00d7";
+          }, 3000);
         }
-        populateList();
       });
       metaDiv.appendChild(deleteBtn);
 
