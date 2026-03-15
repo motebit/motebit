@@ -80,6 +80,20 @@ export function initConversations(
       countSpan.textContent = `${entry.messageCount} msgs`;
       metaDiv.appendChild(countSpan);
 
+      const deleteBtn = document.createElement("button");
+      deleteBtn.className = "conv-delete-btn";
+      deleteBtn.title = "Delete conversation";
+      deleteBtn.textContent = "\u00d7";
+      deleteBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        ctx.app.deleteConversation(entry.conversationId);
+        if (entry.conversationId === activeId) {
+          callbacks.onLoad(); // refresh chat if active conversation was deleted
+        }
+        populateList();
+      });
+      metaDiv.appendChild(deleteBtn);
+
       item.appendChild(metaDiv);
 
       item.addEventListener("click", () => {

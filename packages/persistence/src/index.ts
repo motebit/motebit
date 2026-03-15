@@ -1504,6 +1504,13 @@ export class SqliteConversationStore {
     return rows.map(rowToConversation);
   }
 
+  deleteConversation(conversationId: string): void {
+    this.db
+      .prepare(`DELETE FROM conversation_messages WHERE conversation_id = ?`)
+      .run(conversationId);
+    this.db.prepare(`DELETE FROM conversations WHERE conversation_id = ?`).run(conversationId);
+  }
+
   // === Sync-oriented methods ===
 
   /** Get conversations updated since a given timestamp. */

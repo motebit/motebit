@@ -1225,6 +1225,7 @@ export interface ConversationStoreAdapter {
     title: string | null;
     messageCount: number;
   }>;
+  deleteConversation(conversationId: string): void;
 }
 
 export interface StateSnapshotAdapter {

@@ -97,6 +97,17 @@ export class ConversationManager {
     this.currentId = conversationId;
   }
 
+  delete(conversationId: string): void {
+    const { store } = this.deps;
+    if (!store) return;
+    store.deleteConversation(conversationId);
+    // If we just deleted the active conversation, reset
+    if (this.currentId === conversationId) {
+      this.history = [];
+      this.currentId = null;
+    }
+  }
+
   list(limit?: number): Array<{
     conversationId: string;
     startedAt: number;
@@ -188,7 +199,7 @@ export class ConversationManager {
     if (current?.title != null && current.title !== "") return null; // already titled
 
     const history = this.getHistory();
-    if (history.length < 4) return null;
+    if (history.length < 2) return null;
 
     const provider = this.deps.getProvider();
     if (provider) {

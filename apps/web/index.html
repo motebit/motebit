@@ -2106,10 +2106,24 @@
     .conv-item-meta {
       display: flex;
       justify-content: space-between;
+      align-items: center;
       font-size: 11px;
       color: var(--text-faint);
       margin-top: 3px;
     }
+    .conv-delete-btn {
+      background: none;
+      border: none;
+      color: var(--text-ghost);
+      font-size: 14px;
+      cursor: pointer;
+      padding: 0 2px;
+      line-height: 1;
+      opacity: 0;
+      transition: opacity 0.15s, color 0.15s;
+    }
+    .conv-item:hover .conv-delete-btn { opacity: 1; }
+    .conv-delete-btn:hover { color: var(--text-secondary); }
     .conv-panel-close {
       background: none;
       border: none;

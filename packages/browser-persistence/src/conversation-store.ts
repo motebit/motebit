@@ -150,6 +150,35 @@ export class IdbConversationStore implements ConversationStoreAdapter {
     return [];
   }
 
+  deleteConversation(conversationId: string): void {
+    const tx = this.db.transaction(["conversations", "conversation_messages"], "readwrite");
+    tx.objectStore("conversations").delete(conversationId);
+    // Delete all messages for this conversation via index cursor
+    const msgStore = tx.objectStore("conversation_messages");
+    const index = msgStore.index("conversation_id");
+    const req = index.openCursor(conversationId);
+    req.onsuccess = () => {
+      const cursor = req.result;
+      if (cursor) {
+        cursor.delete();
+        cursor.continue();
+      }
+    };
+    // Invalidate caches
+    this._messageCache.delete(conversationId);
+    for (const [motebitId, list] of this._conversationListCache) {
+      this._conversationListCache.set(
+        motebitId,
+        list.filter((c) => c.conversationId !== conversationId),
+      );
+    }
+    for (const [motebitId, active] of this._activeConversationCache) {
+      if (active.conversationId === conversationId) {
+        this._activeConversationCache.delete(motebitId);
+      }
+    }
+  }
+
   // === Preload / Cache ===
 
   private _messageCache = new Map<string, MessageRecord[]>();

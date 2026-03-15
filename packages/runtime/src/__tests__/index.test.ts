@@ -809,6 +809,7 @@ describe("Session continuity", () => {
       updateSummary: vi.fn(),
       updateTitle: vi.fn(),
       listConversations: vi.fn().mockReturnValue([]),
+      deleteConversation: vi.fn(),
     };
   }
 

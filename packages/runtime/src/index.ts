@@ -1765,6 +1765,11 @@ export class MotebitRuntime {
     this.conversation.load(conversationId);
   }
 
+  /** Delete a conversation and its messages. */
+  deleteConversation(conversationId: string): void {
+    this.conversation.delete(conversationId);
+  }
+
   /** List recent conversations (for UI/CLI). */
   listConversations(limit?: number): Array<{
     conversationId: string;

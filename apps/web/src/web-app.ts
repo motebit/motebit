@@ -435,6 +435,10 @@ export class WebApp {
     return this.runtime.getConversationHistory();
   }
 
+  deleteConversation(id: string): void {
+    this.runtime?.deleteConversation(id);
+  }
+
   listConversations(): Array<{
     conversationId: string;
     startedAt: number;
