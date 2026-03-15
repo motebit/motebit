@@ -106,6 +106,7 @@ import type {
   BehavioralStats,
   SelfModelSummary,
 } from "./gradient.js";
+export type { GradientSnapshot, GradientStoreAdapter } from "./gradient.js";
 
 // Re-export key types for consumers
 export type {
