@@ -95,12 +95,35 @@ import {
 } from "./agent-trust.js";
 import { ConversationManager } from "./conversation.js";
 
-/** Strip state/memory/action tags for display — preserves whitespace between words (unlike stripTags which trims). */
-function stripDisplayTags(text: string): string {
-  return text
+/**
+ * Strip state/memory/action tags for display — preserves whitespace.
+ * Returns { clean, pending } where pending is a trailing incomplete
+ * tag/action that shouldn't be yielded yet (it may close in a later chunk).
+ */
+function stripDisplayTags(text: string): { clean: string; pending: string } {
+  // Strip complete tags
+  let clean = text
     .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
     .replace(/<state\s+[^>]*\/>/g, "")
     .replace(/\*[^*]+\*/g, "");
+
+  // Check for trailing incomplete patterns that might close in a later chunk
+  // Incomplete action: *text without closing *
+  const lastStar = clean.lastIndexOf("*");
+  if (lastStar !== -1) {
+    // If there's an odd number of * characters after stripping, the last one is unclosed
+    const afterLastStar = clean.slice(lastStar);
+    const starCount = (afterLastStar.match(/\*/g) ?? []).length;
+    if (starCount % 2 === 1) {
+      return { clean: clean.slice(0, lastStar), pending: clean.slice(lastStar) };
+    }
+  }
+  // Incomplete XML tag: < without closing >
+  const lastOpen = clean.lastIndexOf("<");
+  if (lastOpen !== -1 && !clean.includes(">", lastOpen)) {
+    return { clean: clean.slice(0, lastOpen), pending: clean.slice(lastOpen) };
+  }
+  return { clean, pending: "" };
 }
 import { performReflection, runReflectionSafe } from "./reflection.js";
 import type { ReflectionDeps } from "./reflection.js";
@@ -1549,6 +1572,7 @@ export class MotebitRuntime {
   ): AsyncGenerator<StreamChunk> {
     let result: TurnResult | null = null;
     let accumulated = "";
+    let yieldedCleanLength = 0;
     const appliedActions = new Set<string>();
 
     for await (const chunk of stream) {
@@ -1648,11 +1672,10 @@ export class MotebitRuntime {
 
       // Strip state/memory/action tags from text before yielding to UI
       if (chunk.type === "text") {
-        const clean = stripDisplayTags(accumulated);
-        // Only yield if there's new visible text beyond what we've already sent
-        const prevClean = stripDisplayTags(accumulated.slice(0, -chunk.text.length));
-        const delta = clean.slice(prevClean.length);
+        const { clean } = stripDisplayTags(accumulated);
+        const delta = clean.slice(yieldedCleanLength);
         if (delta) {
+          yieldedCleanLength += delta.length;
           yield { type: "text" as const, text: delta };
         }
       } else {
