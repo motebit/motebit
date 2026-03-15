@@ -1592,14 +1592,14 @@ export class MotebitRuntime {
       if (chunk.type === "tool_status") {
         const motebitServer = this.motebitToolServers.get(chunk.name);
         if (chunk.status === "calling") {
-          this.state.pushUpdate({ processing: 0.95, attention: 0.9, curiosity: 0.7 });
+          this.state.pushUpdate({ processing: 0.95 });
           // Emit delegation_start for motebit MCP tools
           if (motebitServer) {
             this.behavior.setDelegating(true);
             yield { type: "delegation_start", server: motebitServer, tool: chunk.name };
           }
         } else if (chunk.status === "done") {
-          this.state.pushUpdate({ processing: 0.6, confidence: 0.7 });
+          this.state.pushUpdate({ processing: 0.6 });
           void this.logToolUsed(chunk.name, chunk.result);
           // Emit delegation_complete for motebit MCP tools
           if (motebitServer) {
@@ -1642,12 +1642,12 @@ export class MotebitRuntime {
           runId,
         };
         this.startApprovalTimeout();
-        this.state.pushUpdate({ processing: 0.5, attention: 0.95, affect_arousal: 0.2 });
+        this.state.pushUpdate({ processing: 0.5 });
       }
 
-      // Injection warning
+      // Injection warning — processing dips, personality shifts deferred
       if (chunk.type === "injection_warning") {
-        this.state.pushUpdate({ confidence: 0.4, affect_valence: -0.2, attention: 0.95 });
+        this.state.pushUpdate({ processing: 0.3 });
       }
 
       // Strip state/memory/action tags from text before yielding to UI
