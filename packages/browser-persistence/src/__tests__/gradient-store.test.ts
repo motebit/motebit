@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { openMotebitDB } from "../idb.js";
 import { IdbGradientStore } from "../gradient-store.js";
-import type { GradientSnapshot } from "@motebit/runtime";
+import type { GradientSnapshot } from "@motebit/sdk";
 
 describe("IdbGradientStore", () => {
   let store: IdbGradientStore;

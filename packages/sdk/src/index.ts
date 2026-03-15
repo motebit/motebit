@@ -1174,3 +1174,154 @@ export interface PrecisionWeights {
   /** Curiosity modulation [0-1]. Fed back into state vector curiosity field. */
   curiosityModulation: number;
 }
+
+// === Platform Storage Adapter Interfaces ===
+//
+// Pure adapter contracts for platform-specific persistence implementations.
+// These live in SDK so that both the runtime (consumer) and persistence
+// packages (implementors) can depend on them without layer violations.
+
+export interface ConversationStoreAdapter {
+  createConversation(motebitId: string): string;
+  appendMessage(
+    conversationId: string,
+    motebitId: string,
+    msg: {
+      role: string;
+      content: string;
+      toolCalls?: string;
+      toolCallId?: string;
+    },
+  ): void;
+  loadMessages(
+    conversationId: string,
+    limit?: number,
+  ): Array<{
+    messageId: string;
+    conversationId: string;
+    motebitId: string;
+    role: string;
+    content: string;
+    toolCalls: string | null;
+    toolCallId: string | null;
+    createdAt: number;
+    tokenEstimate: number;
+  }>;
+  getActiveConversation(motebitId: string): {
+    conversationId: string;
+    startedAt: number;
+    lastActiveAt: number;
+    summary: string | null;
+  } | null;
+  updateSummary(conversationId: string, summary: string): void;
+  updateTitle(conversationId: string, title: string): void;
+  listConversations(
+    motebitId: string,
+    limit?: number,
+  ): Array<{
+    conversationId: string;
+    startedAt: number;
+    lastActiveAt: number;
+    title: string | null;
+    messageCount: number;
+  }>;
+}
+
+export interface StateSnapshotAdapter {
+  saveState(motebitId: string, stateJson: string, versionClock?: number): void;
+  loadState(motebitId: string): string | null;
+  /** Version clock at last snapshot — used to determine what's safe to compact. */
+  getSnapshotClock?(motebitId: string): number;
+}
+
+export interface KeyringAdapter {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string): Promise<void>;
+  delete(key: string): Promise<void>;
+}
+
+export interface AgentTrustStoreAdapter {
+  getAgentTrust(motebitId: string, remoteMotebitId: string): Promise<AgentTrustRecord | null>;
+  setAgentTrust(record: AgentTrustRecord): Promise<void>;
+  listAgentTrust(motebitId: string): Promise<AgentTrustRecord[]>;
+  updateTrustLevel(
+    motebitId: string,
+    remoteMotebitId: string,
+    level: AgentTrustLevel,
+  ): Promise<void>;
+}
+
+export interface ServiceListingStoreAdapter {
+  get(motebitId: string): Promise<AgentServiceListing | null>;
+  set(listing: AgentServiceListing): Promise<void>;
+  list(): Promise<AgentServiceListing[]>;
+  delete(listingId: string): Promise<void>;
+}
+
+export interface BudgetAllocationStoreAdapter {
+  get(allocationId: string): Promise<BudgetAllocation | null>;
+  create(allocation: BudgetAllocation): Promise<void>;
+  updateStatus(allocationId: string, status: string): Promise<void>;
+  listByGoal(goalId: string): Promise<BudgetAllocation[]>;
+}
+
+export interface SettlementStoreAdapter {
+  get(settlementId: string): Promise<SettlementRecord | null>;
+  create(settlement: SettlementRecord): Promise<void>;
+  listByAllocation(allocationId: string): Promise<SettlementRecord[]>;
+}
+
+export interface LatencyStatsStoreAdapter {
+  record(motebitId: string, remoteMotebitId: string, latencyMs: number): Promise<void>;
+  getStats(
+    motebitId: string,
+    remoteMotebitId: string,
+    limit?: number,
+  ): Promise<{ avg_ms: number; p95_ms: number; sample_count: number }>;
+}
+
+export interface GradientSnapshot {
+  motebit_id: string;
+  timestamp: number;
+  gradient: number;
+  delta: number;
+  knowledge_density: number;
+  knowledge_density_raw: number;
+  knowledge_quality: number;
+  graph_connectivity: number;
+  graph_connectivity_raw: number;
+  temporal_stability: number;
+  retrieval_quality: number;
+  interaction_efficiency: number;
+  tool_efficiency: number;
+  curiosity_pressure: number;
+  stats: {
+    live_nodes: number;
+    live_edges: number;
+    semantic_count: number;
+    episodic_count: number;
+    pinned_count: number;
+    avg_confidence: number;
+    avg_half_life: number;
+    consolidation_add: number;
+    consolidation_update: number;
+    consolidation_reinforce: number;
+    consolidation_noop: number;
+    total_confidence_mass: number;
+    avg_retrieval_score: number;
+    retrieval_count: number;
+    avg_iterations_per_turn: number;
+    total_turns: number;
+    tool_calls_succeeded: number;
+    tool_calls_blocked: number;
+    tool_calls_failed: number;
+    curiosity_target_count: number;
+    avg_curiosity_score: number;
+  };
+}
+
+export interface GradientStoreAdapter {
+  save(snapshot: GradientSnapshot): void;
+  latest(motebitId: string): GradientSnapshot | null;
+  list(motebitId: string, limit?: number): GradientSnapshot[];
+}

@@ -1,4 +1,4 @@
-import type { BudgetAllocationStoreAdapter } from "@motebit/runtime";
+import type { BudgetAllocationStoreAdapter } from "@motebit/sdk";
 import type { BudgetAllocation } from "@motebit/sdk";
 import { idbRequest } from "./idb.js";
 

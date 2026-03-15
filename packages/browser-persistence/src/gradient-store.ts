@@ -1,4 +1,4 @@
-import type { GradientStoreAdapter, GradientSnapshot } from "@motebit/runtime";
+import type { GradientStoreAdapter, GradientSnapshot } from "@motebit/sdk";
 import { idbRequest } from "./idb.js";
 
 /**

@@ -1,4 +1,4 @@
-import type { AgentTrustStoreAdapter } from "@motebit/runtime";
+import type { AgentTrustStoreAdapter } from "@motebit/sdk";
 import type { AgentTrustRecord, AgentTrustLevel } from "@motebit/sdk";
 import { idbRequest } from "./idb.js";
 

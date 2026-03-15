@@ -1,4 +1,4 @@
-import type { ConversationStoreAdapter } from "@motebit/runtime";
+import type { ConversationStoreAdapter } from "@motebit/sdk";
 import { idbRequest } from "./idb.js";
 
 const ACTIVE_CONVERSATION_WINDOW_MS = 4 * 60 * 60 * 1000; // 4 hours

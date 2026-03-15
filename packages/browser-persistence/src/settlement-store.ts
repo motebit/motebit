@@ -1,4 +1,4 @@
-import type { SettlementStoreAdapter } from "@motebit/runtime";
+import type { SettlementStoreAdapter } from "@motebit/sdk";
 import type { SettlementRecord } from "@motebit/sdk";
 import { idbRequest } from "./idb.js";
 

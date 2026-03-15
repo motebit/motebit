@@ -12,9 +12,8 @@ import type {
   DelegationReceiptSummary,
   ToolAuditEntry,
   AgentServiceListing,
-  BudgetAllocation,
-  SettlementRecord,
   PrecisionWeights,
+  KeyringAdapter,
 } from "@motebit/sdk";
 import { EventType, SensitivityLevel, AgentTrustLevel } from "@motebit/sdk";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
@@ -152,13 +151,7 @@ export type {
 export type { PlanStoreAdapter } from "@motebit/planner";
 export { RelayDelegationAdapter } from "@motebit/planner";
 export type { RelayDelegationConfig } from "@motebit/planner";
-export type {
-  GradientSnapshot,
-  GradientStoreAdapter,
-  GradientConfig,
-  BehavioralStats,
-  SelfModelSummary,
-} from "./gradient.js";
+export type { GradientConfig, BehavioralStats, SelfModelSummary } from "./gradient.js";
 export {
   computeGradient,
   computePrecision,
@@ -254,107 +247,28 @@ class SimpleToolRegistry implements ToolRegistry {
 export { SimpleToolRegistry };
 
 // === Platform Adapter Interfaces ===
+// Canonical definitions live in @motebit/sdk. Re-exported here for backward compatibility.
 
-// === Conversation Store Adapter ===
+export type {
+  ConversationStoreAdapter,
+  StateSnapshotAdapter,
+  KeyringAdapter,
+  AgentTrustStoreAdapter,
+  ServiceListingStoreAdapter,
+  BudgetAllocationStoreAdapter,
+  SettlementStoreAdapter,
+  LatencyStatsStoreAdapter,
+} from "@motebit/sdk";
 
-export interface ConversationStoreAdapter {
-  createConversation(motebitId: string): string;
-  appendMessage(
-    conversationId: string,
-    motebitId: string,
-    msg: {
-      role: string;
-      content: string;
-      toolCalls?: string;
-      toolCallId?: string;
-    },
-  ): void;
-  loadMessages(
-    conversationId: string,
-    limit?: number,
-  ): Array<{
-    messageId: string;
-    conversationId: string;
-    motebitId: string;
-    role: string;
-    content: string;
-    toolCalls: string | null;
-    toolCallId: string | null;
-    createdAt: number;
-    tokenEstimate: number;
-  }>;
-  getActiveConversation(motebitId: string): {
-    conversationId: string;
-    startedAt: number;
-    lastActiveAt: number;
-    summary: string | null;
-  } | null;
-  updateSummary(conversationId: string, summary: string): void;
-  updateTitle(conversationId: string, title: string): void;
-  listConversations(
-    motebitId: string,
-    limit?: number,
-  ): Array<{
-    conversationId: string;
-    startedAt: number;
-    lastActiveAt: number;
-    title: string | null;
-    messageCount: number;
-  }>;
-}
-
-export interface StateSnapshotAdapter {
-  saveState(motebitId: string, stateJson: string, versionClock?: number): void;
-  loadState(motebitId: string): string | null;
-  /** Version clock at last snapshot — used to determine what's safe to compact. */
-  getSnapshotClock?(motebitId: string): number;
-}
-
-export interface KeyringAdapter {
-  get(key: string): Promise<string | null>;
-  set(key: string, value: string): Promise<void>;
-  delete(key: string): Promise<void>;
-}
-
-export interface AgentTrustStoreAdapter {
-  getAgentTrust(motebitId: string, remoteMotebitId: string): Promise<AgentTrustRecord | null>;
-  setAgentTrust(record: AgentTrustRecord): Promise<void>;
-  listAgentTrust(motebitId: string): Promise<AgentTrustRecord[]>;
-  updateTrustLevel(
-    motebitId: string,
-    remoteMotebitId: string,
-    level: AgentTrustLevel,
-  ): Promise<void>;
-}
-
-export interface ServiceListingStoreAdapter {
-  get(motebitId: string): Promise<AgentServiceListing | null>;
-  set(listing: AgentServiceListing): Promise<void>;
-  list(): Promise<AgentServiceListing[]>;
-  delete(listingId: string): Promise<void>;
-}
-
-export interface BudgetAllocationStoreAdapter {
-  get(allocationId: string): Promise<BudgetAllocation | null>;
-  create(allocation: BudgetAllocation): Promise<void>;
-  updateStatus(allocationId: string, status: string): Promise<void>;
-  listByGoal(goalId: string): Promise<BudgetAllocation[]>;
-}
-
-export interface SettlementStoreAdapter {
-  get(settlementId: string): Promise<SettlementRecord | null>;
-  create(settlement: SettlementRecord): Promise<void>;
-  listByAllocation(allocationId: string): Promise<SettlementRecord[]>;
-}
-
-export interface LatencyStatsStoreAdapter {
-  record(motebitId: string, remoteMotebitId: string, latencyMs: number): Promise<void>;
-  getStats(
-    motebitId: string,
-    remoteMotebitId: string,
-    limit?: number,
-  ): Promise<{ avg_ms: number; p95_ms: number; sample_count: number }>;
-}
+import type {
+  ConversationStoreAdapter,
+  StateSnapshotAdapter,
+  AgentTrustStoreAdapter,
+  ServiceListingStoreAdapter,
+  BudgetAllocationStoreAdapter,
+  SettlementStoreAdapter,
+  LatencyStatsStoreAdapter,
+} from "@motebit/sdk";
 
 export interface StorageAdapters {
   eventStore: EventStoreAdapter;

@@ -24,59 +24,16 @@ import type {
   EventLogEntry,
   PrecisionWeights,
   MarketConfig,
+  GradientSnapshot,
+  GradientStoreAdapter,
 } from "@motebit/sdk";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 
+// Re-export from SDK so internal consumers that import from "./gradient.js" still resolve
+export type { GradientSnapshot, GradientStoreAdapter } from "@motebit/sdk";
+
 /** Must match MAX_TOOL_ITERATIONS in @motebit/ai-core loop.ts */
 const MAX_TOOL_ITERATIONS = 10;
-
-// === Types ===
-
-export interface GradientSnapshot {
-  motebit_id: string;
-  timestamp: number;
-  gradient: number;
-  delta: number;
-  knowledge_density: number;
-  knowledge_density_raw: number;
-  knowledge_quality: number;
-  graph_connectivity: number;
-  graph_connectivity_raw: number;
-  temporal_stability: number;
-  retrieval_quality: number;
-  interaction_efficiency: number;
-  tool_efficiency: number;
-  curiosity_pressure: number;
-  stats: {
-    live_nodes: number;
-    live_edges: number;
-    semantic_count: number;
-    episodic_count: number;
-    pinned_count: number;
-    avg_confidence: number;
-    avg_half_life: number;
-    consolidation_add: number;
-    consolidation_update: number;
-    consolidation_reinforce: number;
-    consolidation_noop: number;
-    total_confidence_mass: number;
-    avg_retrieval_score: number;
-    retrieval_count: number;
-    avg_iterations_per_turn: number;
-    total_turns: number;
-    tool_calls_succeeded: number;
-    tool_calls_blocked: number;
-    tool_calls_failed: number;
-    curiosity_target_count: number;
-    avg_curiosity_score: number;
-  };
-}
-
-export interface GradientStoreAdapter {
-  save(snapshot: GradientSnapshot): void;
-  latest(motebitId: string): GradientSnapshot | null;
-  list(motebitId: string, limit?: number): GradientSnapshot[];
-}
 
 export interface BehavioralStats {
   turnCount: number;

@@ -1,4 +1,4 @@
-import type { ServiceListingStoreAdapter } from "@motebit/runtime";
+import type { ServiceListingStoreAdapter } from "@motebit/sdk";
 import type { AgentServiceListing } from "@motebit/sdk";
 import { idbRequest } from "./idb.js";
 

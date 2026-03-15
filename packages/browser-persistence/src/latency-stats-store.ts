@@ -1,4 +1,4 @@
-import type { LatencyStatsStoreAdapter } from "@motebit/runtime";
+import type { LatencyStatsStoreAdapter } from "@motebit/sdk";
 import { idbRequest } from "./idb.js";
 
 interface LatencyEntry {
