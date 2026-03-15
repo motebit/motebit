@@ -19,8 +19,7 @@ export interface AgentTrustDeps {
   events: EventStore;
   agentGraph: AgentGraphManager;
   signingKeys: { privateKey: Uint8Array; publicKey: Uint8Array } | null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  onCredentialIssued?: (vc: any) => void;
+  onCredentialIssued?: (vc: import("@motebit/crypto").VerifiableCredential<unknown>) => void;
 }
 
 // === Trust from Receipt ===

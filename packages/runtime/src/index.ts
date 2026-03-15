@@ -436,8 +436,7 @@ export class MotebitRuntime {
   private _curiosityTargets: CuriosityTarget[] = [];
   private _precision: PrecisionWeights;
   private _signingKeys: { privateKey: Uint8Array; publicKey: Uint8Array } | null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private _issuedCredentials: import("@motebit/crypto").VerifiableCredential<any>[] = [];
+  private _issuedCredentials: import("@motebit/crypto").VerifiableCredential<unknown>[] = [];
   private _signingKeysErased = false;
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
