@@ -18,6 +18,14 @@ Every AI agent today is a session. No identity that persists. No memory that com
 
 39 packages. 133K lines of TypeScript. 3,000+ tests. [Built in 26 days.](https://docs.motebit.com/docs/how-we-built-this)
 
+|                | Agents today   | Motebit                                                           |
+| -------------- | -------------- | ----------------------------------------------------------------- |
+| **Identity**   | Session token  | Ed25519 keypair — persists across devices, providers, time        |
+| **Memory**     | Context window | Semantic graph — compounds, decays, consolidates                  |
+| **Trust**      | None           | Signed receipts — earned, algebraic, auditable                    |
+| **Governance** | None           | Policy gate — fail-closed, sensitivity-aware, operator-controlled |
+| **Proof**      | None           | Verifiable credentials — W3C VC 2.0, cryptographically signed     |
+
 ## What it is
 
 A motebit is a droplet of intelligence under surface tension.
