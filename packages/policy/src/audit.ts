@@ -8,22 +8,8 @@ import type { ToolAuditEntry, PolicyDecision, InjectionWarning } from "@motebit/
  * it succeeded, failed, was denied, or required approval.
  */
 
-export interface AuditStatsSince {
-  distinctTurns: number;
-  totalToolCalls: number;
-  succeeded: number;
-  blocked: number;
-  failed: number;
-}
-
-export interface AuditLogSink {
-  append(entry: ToolAuditEntry): void;
-  query(turnId: string): ToolAuditEntry[];
-  getAll(): ToolAuditEntry[];
-  queryStatsSince(afterTimestamp: number): AuditStatsSince;
-  /** Query tool audit entries by run_id (plan execution). Optional — returns [] if not implemented. */
-  queryByRunId?(runId: string): ToolAuditEntry[];
-}
+export type { AuditStatsSince, AuditLogSink } from "@motebit/sdk";
+import type { AuditStatsSince, AuditLogSink } from "@motebit/sdk";
 
 const DEFAULT_MAX_ENTRIES = 10_000;
 

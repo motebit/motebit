@@ -1,4 +1,4 @@
-import type { StorageAdapters } from "@motebit/runtime";
+import type { StorageAdapters } from "@motebit/sdk";
 import { openMotebitDB } from "./idb.js";
 import { IdbEventStore } from "./event-store.js";
 import { IdbMemoryStorage } from "./memory-storage.js";

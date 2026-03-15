@@ -1325,3 +1325,123 @@ export interface GradientStoreAdapter {
   latest(motebitId: string): GradientSnapshot | null;
   list(motebitId: string, limit?: number): GradientSnapshot[];
 }
+
+// --- Adapter interfaces from Layer 1-3 packages ---
+// Moved here so StorageAdapters (the integration hub) can live in SDK,
+// eliminating the browser-persistence → runtime layer violation entirely.
+
+export interface EventFilter {
+  motebit_id?: string;
+  event_types?: EventType[];
+  after_timestamp?: number;
+  before_timestamp?: number;
+  after_version_clock?: number;
+  limit?: number;
+}
+
+export interface EventStoreAdapter {
+  append(entry: EventLogEntry): Promise<void>;
+  query(filter: EventFilter): Promise<EventLogEntry[]>;
+  getLatestClock(motebitId: string): Promise<number>;
+  tombstone(eventId: string, motebitId: string): Promise<void>;
+  /** Delete events with version_clock <= beforeClock. Returns count deleted. */
+  compact?(motebitId: string, beforeClock: number): Promise<number>;
+  /** Count total events for a motebit. */
+  countEvents?(motebitId: string): Promise<number>;
+}
+
+export interface MemoryQuery {
+  motebit_id: string;
+  min_confidence?: number;
+  sensitivity_filter?: SensitivityLevel[];
+  limit?: number;
+  include_tombstoned?: boolean;
+  pinned?: boolean;
+}
+
+export interface MemoryStorageAdapter {
+  saveNode(node: MemoryNode): Promise<void>;
+  getNode(nodeId: string): Promise<MemoryNode | null>;
+  queryNodes(query: MemoryQuery): Promise<MemoryNode[]>;
+  saveEdge(edge: MemoryEdge): Promise<void>;
+  getEdges(nodeId: string): Promise<MemoryEdge[]>;
+  tombstoneNode(nodeId: string): Promise<void>;
+  /** Tombstone with ownership check. Returns true if the node existed and belonged to motebitId. */
+  tombstoneNodeOwned?(nodeId: string, motebitId: string): Promise<boolean>;
+  pinNode(nodeId: string, pinned: boolean): Promise<void>;
+  getAllNodes(motebitId: string): Promise<MemoryNode[]>;
+  getAllEdges(motebitId: string): Promise<MemoryEdge[]>;
+}
+
+export interface DeviceRegistration {
+  device_id: string;
+  motebit_id: string;
+  device_token: string;
+  public_key: string; // hex-encoded Ed25519 public key
+  registered_at: number;
+  device_name?: string;
+}
+
+export interface IdentityStorage {
+  save(identity: MotebitIdentity): Promise<void>;
+  load(motebitId: string): Promise<MotebitIdentity | null>;
+  loadByOwner(ownerId: string): Promise<MotebitIdentity | null>;
+  // Device registration (optional — implementations that don't need device auth can omit)
+  saveDevice?(device: DeviceRegistration): Promise<void>;
+  loadDevice?(deviceId: string): Promise<DeviceRegistration | null>;
+  loadDeviceByToken?(token: string): Promise<DeviceRegistration | null>;
+  listDevices?(motebitId: string): Promise<DeviceRegistration[]>;
+}
+
+export interface AuditLogAdapter {
+  record(entry: AuditRecord): Promise<void>;
+  query(motebitId: string, options?: { limit?: number; after?: number }): Promise<AuditRecord[]>;
+}
+
+export interface AuditStatsSince {
+  distinctTurns: number;
+  totalToolCalls: number;
+  succeeded: number;
+  blocked: number;
+  failed: number;
+}
+
+export interface AuditLogSink {
+  append(entry: ToolAuditEntry): void;
+  query(turnId: string): ToolAuditEntry[];
+  getAll(): ToolAuditEntry[];
+  queryStatsSince(afterTimestamp: number): AuditStatsSince;
+  /** Query tool audit entries by run_id (plan execution). Optional — returns [] if not implemented. */
+  queryByRunId?(runId: string): ToolAuditEntry[];
+}
+
+export interface PlanStoreAdapter {
+  savePlan(plan: Plan): void;
+  getPlan(planId: string): Plan | null;
+  getPlanForGoal(goalId: string): Plan | null;
+  updatePlan(planId: string, updates: Partial<Plan>): void;
+  saveStep(step: PlanStep): void;
+  getStep(stepId: string): PlanStep | null;
+  getStepsForPlan(planId: string): PlanStep[];
+  updateStep(stepId: string, updates: Partial<PlanStep>): void;
+  getNextPendingStep(planId: string): PlanStep | null;
+  /** List all active plans for a motebit. Optional — returns [] if not implemented. */
+  listActivePlans?(motebitId: string): Plan[];
+}
+
+export interface StorageAdapters {
+  eventStore: EventStoreAdapter;
+  memoryStorage: MemoryStorageAdapter;
+  identityStorage: IdentityStorage;
+  auditLog: AuditLogAdapter;
+  stateSnapshot?: StateSnapshotAdapter;
+  toolAuditSink?: AuditLogSink;
+  conversationStore?: ConversationStoreAdapter;
+  planStore?: PlanStoreAdapter;
+  gradientStore?: GradientStoreAdapter;
+  agentTrustStore?: AgentTrustStoreAdapter;
+  serviceListingStore?: ServiceListingStoreAdapter;
+  budgetAllocationStore?: BudgetAllocationStoreAdapter;
+  settlementStore?: SettlementStoreAdapter;
+  latencyStatsStore?: LatencyStatsStoreAdapter;
+}

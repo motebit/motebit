@@ -62,28 +62,8 @@ function normalizeWeights(
 
 // === Interfaces ===
 
-export interface MemoryQuery {
-  motebit_id: string;
-  min_confidence?: number;
-  sensitivity_filter?: SensitivityLevel[];
-  limit?: number;
-  include_tombstoned?: boolean;
-  pinned?: boolean;
-}
-
-export interface MemoryStorageAdapter {
-  saveNode(node: MemoryNode): Promise<void>;
-  getNode(nodeId: string): Promise<MemoryNode | null>;
-  queryNodes(query: MemoryQuery): Promise<MemoryNode[]>;
-  saveEdge(edge: MemoryEdge): Promise<void>;
-  getEdges(nodeId: string): Promise<MemoryEdge[]>;
-  tombstoneNode(nodeId: string): Promise<void>;
-  /** Tombstone with ownership check. Returns true if the node existed and belonged to motebitId. */
-  tombstoneNodeOwned?(nodeId: string, motebitId: string): Promise<boolean>;
-  pinNode(nodeId: string, pinned: boolean): Promise<void>;
-  getAllNodes(motebitId: string): Promise<MemoryNode[]>;
-  getAllEdges(motebitId: string): Promise<MemoryEdge[]>;
-}
+export type { MemoryQuery, MemoryStorageAdapter } from "@motebit/sdk";
+import type { MemoryQuery, MemoryStorageAdapter } from "@motebit/sdk";
 
 // === Half-Life Decay ===
 

@@ -7,10 +7,8 @@ import { createDeletionCertificate } from "@motebit/crypto";
 
 // === Audit Log ===
 
-export interface AuditLogAdapter {
-  record(entry: AuditRecord): Promise<void>;
-  query(motebitId: string, options?: { limit?: number; after?: number }): Promise<AuditRecord[]>;
-}
+export type { AuditLogAdapter } from "@motebit/sdk";
+import type { AuditLogAdapter } from "@motebit/sdk";
 
 export class InMemoryAuditLog implements AuditLogAdapter {
   private records: AuditRecord[] = [];

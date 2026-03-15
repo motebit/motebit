@@ -1,26 +1,6 @@
-import type { EventLogEntry, EventType } from "@motebit/sdk";
-
-// === Interfaces ===
-
-export interface EventFilter {
-  motebit_id?: string;
-  event_types?: EventType[];
-  after_timestamp?: number;
-  before_timestamp?: number;
-  after_version_clock?: number;
-  limit?: number;
-}
-
-export interface EventStoreAdapter {
-  append(entry: EventLogEntry): Promise<void>;
-  query(filter: EventFilter): Promise<EventLogEntry[]>;
-  getLatestClock(motebitId: string): Promise<number>;
-  tombstone(eventId: string, motebitId: string): Promise<void>;
-  /** Delete events with version_clock <= beforeClock. Returns count deleted. */
-  compact?(motebitId: string, beforeClock: number): Promise<number>;
-  /** Count total events for a motebit. */
-  countEvents?(motebitId: string): Promise<number>;
-}
+import type { EventLogEntry } from "@motebit/sdk";
+export type { EventFilter, EventStoreAdapter } from "@motebit/sdk";
+import type { EventFilter, EventStoreAdapter } from "@motebit/sdk";
 
 // === In-Memory Adapter (for testing and lightweight use) ===
 

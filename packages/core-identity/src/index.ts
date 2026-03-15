@@ -30,29 +30,10 @@ function generateUUIDv7(): string {
   ].join("-");
 }
 
-// === Device Registration ===
+// === Device Registration & Identity Storage ===
 
-export interface DeviceRegistration {
-  device_id: string;
-  motebit_id: string;
-  device_token: string;
-  public_key: string; // hex-encoded Ed25519 public key
-  registered_at: number;
-  device_name?: string;
-}
-
-// === Identity Storage Interface ===
-
-export interface IdentityStorage {
-  save(identity: MotebitIdentity): Promise<void>;
-  load(motebitId: string): Promise<MotebitIdentity | null>;
-  loadByOwner(ownerId: string): Promise<MotebitIdentity | null>;
-  // Device registration (optional — implementations that don't need device auth can omit)
-  saveDevice?(device: DeviceRegistration): Promise<void>;
-  loadDevice?(deviceId: string): Promise<DeviceRegistration | null>;
-  loadDeviceByToken?(token: string): Promise<DeviceRegistration | null>;
-  listDevices?(motebitId: string): Promise<DeviceRegistration[]>;
-}
+export type { DeviceRegistration, IdentityStorage } from "@motebit/sdk";
+import type { DeviceRegistration, IdentityStorage } from "@motebit/sdk";
 
 // === In-Memory Storage (for testing) ===
 

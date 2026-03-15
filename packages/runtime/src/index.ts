@@ -29,11 +29,9 @@ import {
   findCuriosityTargets,
 } from "@motebit/memory-graph";
 import type { ConsolidationProvider, CuriosityTarget } from "@motebit/memory-graph";
-import type { MemoryStorageAdapter } from "@motebit/memory-graph";
 import { StateVectorEngine } from "@motebit/state-vector";
 import { BehaviorEngine } from "@motebit/behavior-engine";
 import { IdentityManager, InMemoryIdentityStorage } from "@motebit/core-identity";
-import type { IdentityStorage } from "@motebit/core-identity";
 import { PrivacyLayer, InMemoryAuditLog } from "@motebit/privacy-layer";
 import type { AuditLogAdapter } from "@motebit/privacy-layer";
 import { SyncEngine } from "@motebit/sync-engine";
@@ -258,34 +256,17 @@ export type {
   BudgetAllocationStoreAdapter,
   SettlementStoreAdapter,
   LatencyStatsStoreAdapter,
+  StorageAdapters,
 } from "@motebit/sdk";
 
 import type {
-  ConversationStoreAdapter,
+  StorageAdapters,
   StateSnapshotAdapter,
+  ConversationStoreAdapter,
   AgentTrustStoreAdapter,
   ServiceListingStoreAdapter,
-  BudgetAllocationStoreAdapter,
-  SettlementStoreAdapter,
   LatencyStatsStoreAdapter,
 } from "@motebit/sdk";
-
-export interface StorageAdapters {
-  eventStore: EventStoreAdapter;
-  memoryStorage: MemoryStorageAdapter;
-  identityStorage: IdentityStorage;
-  auditLog: AuditLogAdapter;
-  stateSnapshot?: StateSnapshotAdapter;
-  toolAuditSink?: AuditLogSink;
-  conversationStore?: ConversationStoreAdapter;
-  planStore?: PlanStoreAdapter;
-  gradientStore?: GradientStoreAdapter;
-  agentTrustStore?: AgentTrustStoreAdapter;
-  serviceListingStore?: ServiceListingStoreAdapter;
-  budgetAllocationStore?: BudgetAllocationStoreAdapter;
-  settlementStore?: SettlementStoreAdapter;
-  latencyStatsStore?: LatencyStatsStoreAdapter;
-}
 
 export interface PlatformAdapters {
   storage: StorageAdapters;

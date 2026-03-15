@@ -1,19 +1,7 @@
 import { StepStatus, PlanStatus } from "@motebit/sdk";
-import type { Plan, PlanStep } from "@motebit/sdk";
+import type { Plan, PlanStep, PlanStoreAdapter } from "@motebit/sdk";
 
-export interface PlanStoreAdapter {
-  savePlan(plan: Plan): void;
-  getPlan(planId: string): Plan | null;
-  getPlanForGoal(goalId: string): Plan | null;
-  updatePlan(planId: string, updates: Partial<Plan>): void;
-  saveStep(step: PlanStep): void;
-  getStep(stepId: string): PlanStep | null;
-  getStepsForPlan(planId: string): PlanStep[];
-  updateStep(stepId: string, updates: Partial<PlanStep>): void;
-  getNextPendingStep(planId: string): PlanStep | null;
-  /** List all active plans for a motebit. Optional — returns [] if not implemented. */
-  listActivePlans?(motebitId: string): Plan[];
-}
+export type { PlanStoreAdapter } from "@motebit/sdk";
 
 export class InMemoryPlanStore implements PlanStoreAdapter {
   private plans = new Map<string, Plan>();

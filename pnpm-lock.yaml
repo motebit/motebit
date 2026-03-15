@@ -653,9 +653,6 @@ importers:
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
-      '@motebit/runtime':
-        specifier: workspace:*
-        version: link:../runtime
       fake-indexeddb:
         specifier: ^6.0.0
         version: 6.2.5
