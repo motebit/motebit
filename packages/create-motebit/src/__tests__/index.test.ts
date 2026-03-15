@@ -46,7 +46,7 @@ describe("create-motebit", () => {
   it("prints version with --version", () => {
     const { stdout, exitCode } = run(["--version"]);
     expect(exitCode).toBe(0);
-    expect(stdout.trim()).toBe("0.1.2");
+    expect(stdout.trim()).toBe("0.3.0");
   });
 
   it("prints help with --help", () => {
@@ -85,7 +85,7 @@ describe("create-motebit", () => {
     // package.json has correct content
     const pkg = JSON.parse(readFileSync(join(projectDir, "package.json"), "utf-8"));
     expect(pkg.dependencies).toHaveProperty("@motebit/verify");
-    expect(pkg.dependencies["@motebit/verify"]).toBe("^0.1.0");
+    expect(pkg.dependencies["@motebit/verify"]).toBe("^0.3.0");
     expect(pkg.scripts.verify).toContain("create-motebit verify");
     expect(pkg.type).toBe("module");
     expect(pkg.private).toBe(true);

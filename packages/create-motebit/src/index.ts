@@ -21,7 +21,7 @@ import { createRL, input, password, select } from "./prompts.js";
 // Constants
 // ---------------------------------------------------------------------------
 
-const VERSION = "0.1.2";
+const VERSION = "0.3.0";
 
 // ---------------------------------------------------------------------------
 // Colors (ANSI — disabled if NO_COLOR is set)
@@ -84,7 +84,7 @@ function makePackageJson(name: string): string {
       verify: "npx create-motebit verify motebit.md",
     },
     dependencies: {
-      "@motebit/verify": "^0.1.0",
+      "@motebit/verify": "^0.3.0",
     },
   };
   return JSON.stringify(pkg, null, 2) + "\n";

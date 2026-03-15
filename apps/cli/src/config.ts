@@ -7,7 +7,7 @@ import type { McpServerConfig } from "@motebit/mcp-client";
 import type { MotebitPersonalityConfig } from "@motebit/ai-core";
 import type { connectMcpServers } from "@motebit/mcp-client";
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.3.0";
 export const CONFIG_DIR = path.join(os.homedir(), ".motebit");
 export const CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
 
