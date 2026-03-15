@@ -148,7 +148,8 @@ Four npm packages, all zero monorepo dependencies:
 
 ## Specification
 
-[**motebit/identity@1.0**](spec/identity-v1.md) — the open specification for agent identity files. MIT licensed. Anyone can implement it.
+> [!NOTE]
+> **Motebit is a protocol first.** The `motebit.md` identity file is an [open standard](spec/identity-v1.md) (MIT) that can be verified by any tool, with or without the motebit runtime. The [verification library](https://www.npmjs.com/package/@motebit/verify) is zero-dependency and MIT licensed.
 
 A `motebit.md` declares identity (Ed25519 public key, agent ID, `did:key`), governance (trust mode, risk thresholds), privacy (sensitivity levels, retention rules), memory (decay parameters), and registered devices.
 
