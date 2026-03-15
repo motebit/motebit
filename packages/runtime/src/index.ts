@@ -97,6 +97,7 @@ import {
 } from "./gradient.js";
 import { AgentGraphManager } from "./agent-graph.js";
 import { replayGoal, hashString, computeTimelineHash } from "./execution-ledger.js";
+import { setOperatorMode, setupOperatorPin, resetOperatorPin } from "./operator.js";
 export { canonicalJson } from "./execution-ledger.js";
 import type {
   GradientSnapshot,
@@ -348,59 +349,10 @@ export type StreamChunk =
       receipt?: { task_id: string; status: string; tools_used: string[] };
     };
 
-// === Operator Mode Result ===
+// === Operator Mode ===
+// Canonical implementation in ./operator.ts. Re-exported here.
 
-export interface OperatorModeResult {
-  success: boolean;
-  needsSetup?: boolean;
-  error?: string;
-  /** If locked out, the timestamp (ms) when the lockout expires. */
-  lockedUntil?: number;
-}
-
-const OPERATOR_PIN_KEY = "operator_pin_hash";
-const OPERATOR_PIN_ATTEMPTS_KEY = "operator_pin_attempts";
-const MAX_PIN_ATTEMPTS = 5;
-const PIN_LOCKOUT_BASE_MS = 30_000; // 30 seconds
-
-interface PinAttemptState {
-  /** Number of consecutive failed attempts. */
-  count: number;
-  /** Timestamp (ms) of the last failed attempt. */
-  lastFailedAt: number;
-}
-
-function pinLockoutMs(attempts: number): number {
-  if (attempts < MAX_PIN_ATTEMPTS) return 0;
-  // Exponential backoff: 30s, 5m, 30m, capped at 30m
-  const exponent = attempts - MAX_PIN_ATTEMPTS;
-  return Math.min(PIN_LOCKOUT_BASE_MS * Math.pow(10, exponent), 30 * 60_000);
-}
-
-function toHex(buf: ArrayBuffer): string {
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-async function hashPin(pin: string, existingSalt?: string): Promise<string> {
-  const salt = existingSalt
-    ? new Uint8Array(existingSalt.match(/.{2}/g)!.map((h) => parseInt(h, 16)))
-    : crypto.getRandomValues(new Uint8Array(16));
-  const keyMaterial = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(pin),
-    "PBKDF2",
-    false,
-    ["deriveBits"],
-  );
-  const derived = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt, iterations: 100_000, hash: "SHA-256" },
-    keyMaterial,
-    256,
-  );
-  return `${toHex(salt.buffer)}:${toHex(derived)}`;
-}
+export type { OperatorModeResult } from "./operator.js";
 
 // === In-Memory Storage Factory ===
 
@@ -1068,105 +1020,27 @@ export class MotebitRuntime {
     return this.policy.operatorMode;
   }
 
-  /**
-   * Enable/disable operator mode with PIN authentication.
-   * Disabling never requires a PIN (safe direction).
-   * If no keyring is available, falls through (dev mode).
-   * Rate-limited: after 5 failed attempts, exponential lockout (30s → 5m → 30m).
-   */
-  async setOperatorMode(enabled: boolean, pin?: string): Promise<OperatorModeResult> {
-    // Disabling is always allowed (safe direction)
-    if (!enabled) {
-      this.policy.setOperatorMode(false);
-      this.wireLoopDeps();
-      return { success: true };
-    }
-
-    // No keyring → fall through (non-Tauri dev mode)
-    if (!this.keyring) {
-      this.policy.setOperatorMode(true);
-      this.wireLoopDeps();
-      return { success: true };
-    }
-
-    // Check if PIN is set up
-    const storedHash = await this.keyring.get(OPERATOR_PIN_KEY);
-    if (storedHash == null || storedHash === "") {
-      return { success: false, needsSetup: true };
-    }
-
-    // PIN is required
-    if (pin == null || pin === "") {
-      return { success: false, error: "PIN required" };
-    }
-
-    // Check rate limiting
-    const attemptState = await this.getPinAttemptState();
-    const lockoutMs = pinLockoutMs(attemptState.count);
-    if (lockoutMs > 0) {
-      const lockedUntil = attemptState.lastFailedAt + lockoutMs;
-      if (Date.now() < lockedUntil) {
-        return { success: false, error: "Too many failed attempts", lockedUntil };
-      }
-    }
-
-    // Support both legacy (plain hex) and salted (salt:key) formats
-    const parts = storedHash.split(":");
-    const inputHash = parts.length === 2 ? await hashPin(pin, parts[0]) : await hashPin(pin);
-    if (inputHash !== storedHash) {
-      await this.recordPinFailure(attemptState);
-      return { success: false, error: "Incorrect PIN" };
-    }
-
-    // Success — reset attempt counter
-    await this.clearPinAttempts();
-    this.policy.setOperatorMode(true);
-    this.wireLoopDeps();
-    return { success: true };
+  private get operatorDeps(): import("./operator.js").OperatorDeps {
+    return {
+      keyring: this.keyring,
+      policy: this.policy,
+      onPolicyChanged: () => this.wireLoopDeps(),
+    };
   }
 
-  private async getPinAttemptState(): Promise<PinAttemptState> {
-    if (!this.keyring) return { count: 0, lastFailedAt: 0 };
-    const raw = await this.keyring.get(OPERATOR_PIN_ATTEMPTS_KEY);
-    if (raw == null || raw === "") return { count: 0, lastFailedAt: 0 };
-    try {
-      return JSON.parse(raw) as PinAttemptState;
-    } catch {
-      return { count: 0, lastFailedAt: 0 };
-    }
+  async setOperatorMode(
+    enabled: boolean,
+    pin?: string,
+  ): Promise<import("./operator.js").OperatorModeResult> {
+    return setOperatorMode(this.operatorDeps, enabled, pin);
   }
 
-  private async recordPinFailure(prev: PinAttemptState): Promise<void> {
-    if (!this.keyring) return;
-    const state: PinAttemptState = { count: prev.count + 1, lastFailedAt: Date.now() };
-    await this.keyring.set(OPERATOR_PIN_ATTEMPTS_KEY, JSON.stringify(state));
-  }
-
-  private async clearPinAttempts(): Promise<void> {
-    if (!this.keyring) return;
-    await this.keyring.delete(OPERATOR_PIN_ATTEMPTS_KEY);
-  }
-
-  /**
-   * Set up the operator mode PIN (first-time only, or reset).
-   * PIN must be 4-6 digits.
-   */
   async setupOperatorPin(pin: string): Promise<void> {
-    if (!this.keyring) throw new Error("Keyring not available");
-    if (!/^\d{4,6}$/.test(pin)) throw new Error("PIN must be 4-6 digits");
-    const hashed = await hashPin(pin);
-    await this.keyring.set(OPERATOR_PIN_KEY, hashed);
+    return setupOperatorPin(this.keyring, pin);
   }
 
-  /**
-   * Reset the operator PIN — clears the keyring hash and disables operator mode.
-   */
   async resetOperatorPin(): Promise<void> {
-    if (!this.keyring) throw new Error("Keyring not available");
-    await this.keyring.delete(OPERATOR_PIN_KEY);
-    await this.clearPinAttempts();
-    this.policy.setOperatorMode(false);
-    this.wireLoopDeps();
+    return resetOperatorPin(this.operatorDeps);
   }
 
   /**
