@@ -101,17 +101,21 @@ function stripDisplayTags(text: string): { clean: string; pending: string } {
   // Strip complete tags
   const clean = text
     .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
+    .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
     .replace(/<state\s+[^>]*\/>/g, "")
     .replace(/\*[^*]+\*/g, "");
 
   // Check for trailing incomplete patterns that might close in a later chunk
 
-  // Incomplete <memory> tag: opened but no </memory> yet
-  const lastMemoryOpen = clean.lastIndexOf("<memory");
-  if (lastMemoryOpen !== -1) {
-    const afterOpen = clean.slice(lastMemoryOpen);
-    if (!afterOpen.includes("</memory>")) {
-      return { clean: clean.slice(0, lastMemoryOpen), pending: clean.slice(lastMemoryOpen) };
+  // Incomplete <memory> or <thinking> tag: opened but not closed yet
+  for (const tag of ["<memory", "<thinking"]) {
+    const lastOpen = clean.lastIndexOf(tag);
+    if (lastOpen !== -1) {
+      const closeTag = `</${tag.slice(1)}>`;
+      const afterOpen = clean.slice(lastOpen);
+      if (!afterOpen.includes(closeTag)) {
+        return { clean: clean.slice(0, lastOpen), pending: clean.slice(lastOpen) };
+      }
     }
   }
 
