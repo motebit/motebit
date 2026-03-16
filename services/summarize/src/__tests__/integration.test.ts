@@ -31,6 +31,7 @@ const WS_MOTEBIT_ID = "01961234-0001-7abc-def0-111111111111";
 const SUM_MOTEBIT_ID = "01961234-0002-7abc-def0-222222222222";
 const WS_PORT = 39210;
 const SUM_PORT = 39211;
+const TEST_TOKEN = "test-integration-token";
 
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes)
@@ -152,7 +153,13 @@ beforeAll(async () => {
   };
 
   wsServer = new McpServerAdapter(
-    { name: "test-web-search", transport: "http", port: WS_PORT, motebitType: "service" },
+    {
+      name: "test-web-search",
+      transport: "http",
+      port: WS_PORT,
+      motebitType: "service",
+      authToken: TEST_TOKEN,
+    },
     wsDeps,
   );
   await wsServer.start();
@@ -167,6 +174,7 @@ beforeAll(async () => {
     name: "web-search",
     transport: "http",
     url: `http://localhost:${WS_PORT}/mcp`,
+    authToken: TEST_TOKEN,
     motebit: true,
   });
   await webSearchAdapter.connect();
@@ -256,14 +264,22 @@ beforeAll(async () => {
   };
 
   sumServer = new McpServerAdapter(
-    { name: "test-summarize", transport: "http", port: SUM_PORT, motebitType: "service" },
+    {
+      name: "test-summarize",
+      transport: "http",
+      port: SUM_PORT,
+      motebitType: "service",
+      authToken: TEST_TOKEN,
+    },
     sumDeps,
   );
   await sumServer.start();
 
   // Connect client to summarize service
   sumClient = new Client({ name: "test-caller", version: "0.1.0" }, { capabilities: {} });
-  const transport = new StreamableHTTPClientTransport(new URL(`http://localhost:${SUM_PORT}/mcp`));
+  const transport = new StreamableHTTPClientTransport(new URL(`http://localhost:${SUM_PORT}/mcp`), {
+    requestInit: { headers: { Authorization: `Bearer ${TEST_TOKEN}` } },
+  });
   await sumClient.connect(transport);
 }, 30_000);
 

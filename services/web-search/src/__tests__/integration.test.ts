@@ -31,6 +31,7 @@ import { generate as generateIdentity, verify as verifyIdentityFile } from "@mot
 // Deterministic test ID
 const TEST_MOTEBIT_ID = "01961234-5678-7abc-def0-123456789abc";
 const TEST_PORT = 39201; // High port to avoid conflicts
+const TEST_TOKEN = "test-integration-token";
 
 let server: McpServerAdapter;
 let client: Client;
@@ -178,6 +179,7 @@ beforeAll(async () => {
       transport: "http",
       port: TEST_PORT,
       motebitType: "service",
+      authToken: TEST_TOKEN,
     },
     deps,
   );
@@ -185,7 +187,12 @@ beforeAll(async () => {
 
   // 7. Connect MCP client
   client = new Client({ name: "test-client", version: "0.1.0" }, { capabilities: {} });
-  const transport = new StreamableHTTPClientTransport(new URL(`http://localhost:${TEST_PORT}/mcp`));
+  const transport = new StreamableHTTPClientTransport(
+    new URL(`http://localhost:${TEST_PORT}/mcp`),
+    {
+      requestInit: { headers: { Authorization: `Bearer ${TEST_TOKEN}` } },
+    },
+  );
   await client.connect(transport);
 }, 30_000);
 
