@@ -89,9 +89,8 @@ export function initVoice(ctx: WebContext, chatAPI: ChatAPI): VoiceAPI {
     return { updateVoiceGlowColor() {} };
   }
 
-  // Show mic button and flag wrapper for layout adjustment
-  micBtn.style.display = "flex";
-  inputBarWrapper.classList.add("has-mic");
+  // Mic button hidden — presence circle is the voice UI
+  micBtn.style.display = "none";
 
   let recognition: SpeechRecognition | null = null;
   let isListening = false;
