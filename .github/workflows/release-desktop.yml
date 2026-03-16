@@ -81,18 +81,29 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: List downloaded artifacts
+        run: find artifacts -type f | head -50
+
       - name: Create draft release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="desktop-v0.1.0"
+          # Collect installable files (skip .sig files and intermediate dirs)
+          FILES=$(find artifacts -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' -o -name '*.rpm' -o -name '*.msi' -o -name '*.exe' \))
+          if [ -z "$FILES" ]; then
+            echo "No installable artifacts found"
+            find artifacts -type f
+            exit 0
+          fi
+          echo "Uploading: $FILES"
           gh release create "$TAG" \
             --repo "${{ github.repository }}" \
             --title "Motebit Desktop v0.1.0" \
             --notes "Desktop app binaries. macOS builds are unsigned — right-click → Open on first launch." \
             --draft \
-            artifacts/**/* 2>/dev/null || \
+            $FILES 2>/dev/null || \
           gh release upload "$TAG" \
             --repo "${{ github.repository }}" \
             --clobber \
-            artifacts/**/* 2>/dev/null || true
+            $FILES
