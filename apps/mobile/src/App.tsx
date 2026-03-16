@@ -1642,17 +1642,21 @@ export function App(): React.ReactElement {
               {micState === "transcribing" ? (
                 <ActivityIndicator size="small" color={themeColors.textPrimary} />
               ) : (
-                <Text style={ds.micButtonText}>
-                  {micState === "off"
-                    ? "\u{1F399}"
-                    : micState === "ambient"
-                      ? "\u{1F399}"
-                      : micState === "voice"
-                        ? "\u25A0"
-                        : micState === "speaking"
-                          ? "\u23F9"
-                          : "\u{1F399}"}
-                </Text>
+                <View
+                  style={{
+                    width: 14,
+                    height: 14,
+                    borderRadius: 7,
+                    backgroundColor:
+                      micState === "off"
+                        ? "transparent"
+                        : micState === "voice"
+                          ? themeColors.accent
+                          : themeColors.accent + "99",
+                    borderWidth: micState === "off" ? 2 : 0,
+                    borderColor: themeColors.textMuted,
+                  }}
+                />
               )}
             </TouchableOpacity>
           ) : null}
