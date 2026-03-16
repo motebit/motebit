@@ -165,6 +165,10 @@ export function App(): React.ReactElement {
   const sttRef = useRef<STTProvider | null>(null);
   const audioMonitorRef = useRef<AudioMonitor | null>(null);
   const ttsPulseRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Streaming TTS state
+  const ttsBufferRef = useRef("");
+  const ttsQueueRef = useRef<string[]>([]);
+  const ttsStreamingRef = useRef(false);
   // Track whether voice was auto-triggered by VAD (vs manual tap from ambient)
   const vadTriggeredRef = useRef(false);
   // Audio level for VoiceIndicator visualization
@@ -877,9 +881,58 @@ export function App(): React.ReactElement {
   );
 
   // === Send message ===
+  // --- Streaming TTS helpers ---
+  const pushTTSChunk = useCallback(
+    (delta: string) => {
+      if (!settings?.voiceResponseEnabled || !settings?.voiceEnabled || !ttsRef.current) return;
+      ttsBufferRef.current += delta;
+      const match = ttsBufferRef.current.match(/^([\s\S]*?[.!?])\s+([\s\S]*)$/);
+      if (match) {
+        const sentence = match[1]!.trim();
+        ttsBufferRef.current = match[2]!;
+        if (sentence) {
+          ttsQueueRef.current.push(sentence);
+          if (!ttsStreamingRef.current) speakNextQueued();
+        }
+      }
+    },
+    [settings?.voiceResponseEnabled, settings?.voiceEnabled],
+  );
+
+  const flushTTS = useCallback(() => {
+    if (!ttsRef.current) return;
+    const remaining = ttsBufferRef.current.trim();
+    ttsBufferRef.current = "";
+    if (remaining) {
+      ttsQueueRef.current.push(remaining);
+      if (!ttsStreamingRef.current) speakNextQueued();
+    }
+  }, []);
+
+  const cancelStreamingTTS = useCallback(() => {
+    ttsBufferRef.current = "";
+    ttsQueueRef.current = [];
+    ttsStreamingRef.current = false;
+    ttsRef.current?.cancel();
+  }, []);
+
+  function speakNextQueued(): void {
+    if (ttsQueueRef.current.length === 0) {
+      ttsStreamingRef.current = false;
+      return;
+    }
+    ttsStreamingRef.current = true;
+    const sentence = ttsQueueRef.current.shift()!;
+    ttsRef.current
+      ?.speak(sentence)
+      .then(() => speakNextQueued())
+      .catch(() => speakNextQueued());
+  }
+
   const handleSend = useCallback(async () => {
     const text = inputText.trim();
     if (!text || isProcessing) return;
+    cancelStreamingTTS();
 
     // Slash command detection
     if (text.startsWith("/")) {
@@ -951,6 +1004,7 @@ export function App(): React.ReactElement {
                   : m,
               ),
             );
+            pushTTSChunk(chunk.text);
             break;
 
           case "tool_status":
@@ -1020,58 +1074,11 @@ export function App(): React.ReactElement {
           ),
         );
 
-        // TTS — speak the response if voice is active and response is enabled
-        const voiceActive = micState !== "off";
-        const responseEnabled = settings?.voiceResponseEnabled !== false;
-        if (
-          voiceActive &&
-          responseEnabled &&
-          settings?.voiceEnabled === true &&
-          ttsRef.current != null &&
-          finalText != null &&
-          finalText !== ""
-        ) {
-          setMicState("speaking");
-          // Stop ambient monitor during TTS (avoid feedback)
-          if (audioMonitorRef.current?.isRunning === true) {
-            void audioMonitorRef.current.stop();
-          }
-
-          // Start TTS pulse — synthesized wave so creature breathes during speech
-          const startTime = Date.now();
-          ttsPulseRef.current = setInterval(() => {
-            const elapsed = (Date.now() - startTime) / 1000;
-            const base = 0.06;
-            const wave = Math.sin(elapsed * 4.5) * 0.04;
-            const rms = base + wave;
-            app.current.setAudioReactivity({
-              rms,
-              low: base * 0.8 + wave * 0.5,
-              mid: base * 1.2 + wave,
-              high: base * 0.4 + Math.sin(elapsed * 11.3) * 0.03,
-            });
-            setAudioLevel(rms);
-          }, 33);
-
-          try {
-            await ttsRef.current.speak(finalText);
-          } catch {
-            // Non-fatal — TTS failure should not block the UI
-          } finally {
-            // Stop TTS pulse
-            if (ttsPulseRef.current != null) {
-              clearInterval(ttsPulseRef.current);
-              ttsPulseRef.current = null;
-            }
-            app.current.setAudioReactivity(null);
-            setAudioLevel(0);
-            // Return to ambient — creature keeps listening
-            setMicState("ambient");
-          }
-        }
+        // TTS — flush remaining streamed speech
+        flushTTS();
       }
     },
-    [settings?.voiceEnabled, micState],
+    [settings?.voiceEnabled, micState, pushTTSChunk, flushTTS],
   );
 
   // === Approval handler ===
