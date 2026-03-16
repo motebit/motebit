@@ -67,6 +67,21 @@ export class InMemoryAuditSink implements AuditLogSink {
   }
 }
 
+/** Redact arg values whose keys look like secrets (keys, tokens, passwords, credentials). */
+const SENSITIVE_KEY_RE = /key|token|password|secret|credential|auth|api.?key/i;
+
+function redactSensitiveArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const redacted: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(args)) {
+    if (SENSITIVE_KEY_RE.test(k) && typeof v === "string" && v.length > 0) {
+      redacted[k] = "[REDACTED]";
+    } else {
+      redacted[k] = v;
+    }
+  }
+  return redacted;
+}
+
 export class AuditLogger {
   private sink: AuditLogSink;
 
@@ -90,7 +105,7 @@ export class AuditLogger {
       runId,
       callId,
       tool,
-      args,
+      args: redactSensitiveArgs(args),
       decision,
       timestamp: Date.now(),
     });

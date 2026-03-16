@@ -754,12 +754,19 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // --- Rate Limiting ---
 
+  /**
+   * Extract client IP. Uses the rightmost non-private IP from x-forwarded-for
+   * to resist spoofing — the rightmost entry is set by the closest trusted proxy.
+   * Falls back to x-real-ip or "unknown" for direct connections.
+   */
   function getClientIp(c: { req: { header: (name: string) => string | undefined } }): string {
-    return (
-      c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ??
-      c.req.header("x-real-ip") ??
-      "unknown"
-    );
+    const xff = c.req.header("x-forwarded-for");
+    if (xff) {
+      const ips = xff.split(",").map((ip) => ip.trim());
+      // Rightmost IP is set by the trusted reverse proxy (Vercel/Cloudflare)
+      return ips[ips.length - 1] ?? "unknown";
+    }
+    return c.req.header("x-real-ip") ?? "unknown";
   }
 
   function isMasterToken(c: { req: { header: (name: string) => string | undefined } }): boolean {

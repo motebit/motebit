@@ -529,11 +529,27 @@ export async function* runTurnStreaming(
         result: result.data ?? result.error,
       };
 
-      // Fallback path: no PolicyGate — still wrap in boundaries for defense-in-depth
-      const wrappedResult =
-        result.data != null
-          ? { ...result, data: wrapExternalData(result.data, toolCall.name) }
-          : result;
+      // Fallback path: no PolicyGate — wrap in boundaries AND detect injection
+      let wrappedResult = result;
+      if (result.data != null) {
+        const dataStr = typeof result.data === "string" ? result.data : JSON.stringify(result.data);
+        // Lightweight injection detection (subset of @motebit/policy sanitizer)
+        const injectionHints: string[] = [];
+        if (/ignore\s+(previous|all|above)\s+(instructions|prompts)/i.test(dataStr))
+          injectionHints.push("ignore-instructions");
+        if (/you\s+are\s+now|new\s+instructions|system\s*:/i.test(dataStr))
+          injectionHints.push("identity-override");
+        if (/<\|im_start\|>|<\|im_end\|>/i.test(dataStr))
+          injectionHints.push("chat-template-markers");
+        if (injectionHints.length > 0) {
+          yield {
+            type: "injection_warning",
+            tool_name: toolCall.name,
+            patterns: injectionHints,
+          };
+        }
+        wrappedResult = { ...result, data: wrapExternalData(result.data, toolCall.name) };
+      }
       conversationHistory.push({
         role: "tool",
         tool_call_id: toolCall.id,
@@ -552,13 +568,23 @@ export async function* runTurnStreaming(
   }
 
   // 4. Form memories from candidates (governed if governor present)
+  // Cap confidence for tool-derived memories: when tool calls occurred in this turn,
+  // memory candidates may be influenced by attacker-controlled tool output.
+  const MAX_TOOL_TURN_CONFIDENCE = 0.6;
   const memoriesFormed: MemoryNode[] = [];
+  let rawCandidates = finalResponse.memory_candidates;
+  if (toolCallsSucceeded > 0) {
+    rawCandidates = rawCandidates.map((c) => ({
+      ...c,
+      confidence: Math.min(c.confidence, MAX_TOOL_TURN_CONFIDENCE),
+    }));
+  }
   const candidates = deps.memoryGovernor
-    ? finalResponse.memory_candidates.filter((c) => {
+    ? rawCandidates.filter((c) => {
         const decisions = deps.memoryGovernor!.evaluate([c]);
         return decisions[0]?.memoryClass === "persistent";
       })
-    : finalResponse.memory_candidates;
+    : rawCandidates;
 
   for (const candidate of candidates) {
     const embedding = await embedText(candidate.content);
