@@ -1,12 +1,91 @@
 import type { WebContext } from "../types";
 import { hasCeilingBeenShown, markCeilingShown } from "../storage";
 
+// === Streaming TTS ===
+
+/** Speaks text incrementally as sentences complete during streaming. */
+class StreamingTTS {
+  private buffer = "";
+  private queue: string[] = [];
+  private speaking = false;
+  private _enabled = false;
+
+  get enabled(): boolean {
+    return this._enabled;
+  }
+
+  enable(): void {
+    this._enabled = true;
+  }
+
+  disable(): void {
+    this._enabled = false;
+    this.cancel();
+  }
+
+  /** Feed a text delta from the stream. Speaks when a sentence boundary is detected. */
+  push(delta: string): void {
+    if (!this._enabled) return;
+    this.buffer += delta;
+
+    // Detect sentence boundaries: . ! ? followed by space or end of buffer
+    const match = this.buffer.match(/^([\s\S]*?[.!?])\s+([\s\S]*)$/);
+    if (match) {
+      const sentence = match[1]!.trim();
+      this.buffer = match[2]!;
+      if (sentence) {
+        this.queue.push(sentence);
+        if (!this.speaking) this.speakNext();
+      }
+    }
+  }
+
+  /** Flush remaining buffer (call at end of stream). */
+  flush(): void {
+    if (!this._enabled) return;
+    const remaining = this.buffer.trim();
+    this.buffer = "";
+    if (remaining) {
+      this.queue.push(remaining);
+      if (!this.speaking) this.speakNext();
+    }
+  }
+
+  cancel(): void {
+    this.buffer = "";
+    this.queue = [];
+    this.speaking = false;
+    if (typeof speechSynthesis !== "undefined") {
+      speechSynthesis.cancel();
+    }
+  }
+
+  private speakNext(): void {
+    if (this.queue.length === 0) {
+      this.speaking = false;
+      return;
+    }
+    this.speaking = true;
+    const text = this.queue.shift()!;
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.05;
+    utterance.pitch = 1.0;
+    utterance.volume = 0.85;
+    utterance.onend = () => this.speakNext();
+    utterance.onerror = () => this.speakNext();
+    speechSynthesis.speak(utterance);
+  }
+}
+
+const streamingTTS = new StreamingTTS();
+
 // === DOM Refs ===
 
 const chatLog = document.getElementById("chat-log") as HTMLDivElement;
 const chatInput = document.getElementById("chat-input") as HTMLInputElement;
 const chatInputRow = document.getElementById("chat-input-row") as HTMLDivElement;
 const sendBtn = document.getElementById("send-btn") as HTMLButtonElement;
+const voiceToggleBtn = document.getElementById("voice-toggle-btn") as HTMLButtonElement;
 const toastContainer = document.getElementById("toast-container") as HTMLDivElement;
 const errorBanner = document.getElementById("error-banner") as HTMLDivElement;
 
@@ -364,6 +443,8 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
       return;
     }
 
+    streamingTTS.cancel(); // Interrupt any ongoing speech
+
     if (!ctx.app.isProviderConnected) {
       addMessage("system", "No provider connected. Open settings to configure one.");
       return;
@@ -406,6 +487,7 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
             accumulated += chunk.text;
             textEl!.textContent = accumulated;
             chatLog.scrollTop = chatLog.scrollHeight;
+            streamingTTS.push(chunk.text);
             break;
           }
 
@@ -464,6 +546,7 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
           }
 
           case "result": {
+            streamingTTS.flush();
             // Trigger auto-titling in background (best-effort, don't surface errors)
             void ctx.app.autoTitle().catch(() => {});
             break;
@@ -496,6 +579,18 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
   // Wire up send button
   sendBtn.addEventListener("click", () => {
     void handleSend();
+  });
+
+  // Wire up voice toggle
+  voiceToggleBtn.addEventListener("click", () => {
+    const enabled = streamingTTS.enabled;
+    if (enabled) {
+      streamingTTS.disable();
+      voiceToggleBtn.setAttribute("aria-pressed", "false");
+    } else {
+      streamingTTS.enable();
+      voiceToggleBtn.setAttribute("aria-pressed", "true");
+    }
   });
 
   // Wire up input → send button visibility
