@@ -515,46 +515,32 @@ export function animateCreature(
   const listeningIridescence = state.listeningActive ? Math.sin(t * Math.PI * 2) * 0.08 : 0;
   refs.bodyMaterial.iridescence = 0.4 + audioShimmer + listeningIridescence;
 
-  // Eye-led expression — eyes are the dominant feature (Pixar principle)
+  // Eyes — interior structures visible through glass. Calm, steady, present.
+  // No jittering, no darting. A droplet's interior doesn't fidget.
   {
     const trustEyeMax = state.trustMode === TrustMode.Minimal ? 0.2 : 0.4;
     const baseEyeScale = 0.8 + cues.eye_dilation * trustEyeMax;
-    const smileSquint = Math.max(0, cues.smile_curvature) * 0.8;
+    const smileSquint = Math.max(0, cues.smile_curvature) * 0.3;
     const eyeScale = baseEyeScale - smileSquint;
-    const curiosityAsym = Math.max(0, cues.eye_dilation - 0.3) * 0.25;
-    const speakGaze =
-      cues.speaking_activity > 0.01
-        ? organicNoise(t, [1.1, 1.7, 2.3]) * cues.speaking_activity * 0.04
-        : 0;
-    const speakWiden =
-      cues.speaking_activity > 0.01
-        ? (0.5 + 0.5 * organicNoise(t, [0.8, 1.3])) * cues.speaking_activity * 0.06
-        : 0;
     const blink = computeBlinkFactor(
       state.blinkState,
       t,
       cues.glow_intensity,
       cues.speaking_activity,
     );
-    const leftScale = eyeScale + curiosityAsym + speakWiden;
-    const rightScale = eyeScale + speakWiden;
-    refs.leftEye.scale.set(leftScale, leftScale * blink, leftScale);
-    refs.rightEye.scale.set(rightScale, rightScale * blink, rightScale);
+    refs.leftEye.scale.set(eyeScale, eyeScale * blink, eyeScale);
+    refs.rightEye.scale.set(eyeScale, eyeScale * blink, eyeScale);
 
     const eyeZ = 0.08 + Math.sin(t * 0.25) * 0.001;
     refs.leftEye.position.z = eyeZ;
     refs.rightEye.position.z = eyeZ;
 
-    const thinkLift = Math.max(0, cues.glow_intensity - 0.4) * 0.06;
-    refs.leftEye.position.y = 0.015 + thinkLift + speakGaze;
-    refs.rightEye.position.y = 0.015 + thinkLift + speakGaze * 0.7;
+    const thinkLift = Math.max(0, cues.glow_intensity - 0.4) * 0.03;
+    refs.leftEye.position.y = 0.015 + thinkLift;
+    refs.rightEye.position.y = 0.015 + thinkLift;
 
-    const speakHGaze =
-      cues.speaking_activity > 0.01
-        ? organicNoise(t, [0.9, 1.5]) * cues.speaking_activity * 0.003
-        : 0;
-    refs.leftEye.position.x = -0.055 + speakHGaze;
-    refs.rightEye.position.x = 0.055 + speakHGaze;
+    refs.leftEye.position.x = -0.055;
+    refs.rightEye.position.x = 0.055;
   }
 
   // Smile — supports the eyes, doesn't steal the scene
