@@ -568,6 +568,9 @@ importers:
       '@motebit/tools':
         specifier: workspace:*
         version: link:../../packages/tools
+      '@motebit/voice':
+        specifier: workspace:^
+        version: link:../../packages/voice
       three:
         specifier: ^0.170.0
         version: 0.170.0
