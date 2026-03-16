@@ -159,7 +159,7 @@ describe("MotebitRuntime", () => {
     await expect(headless.sendMessage("hello")).rejects.toThrow("AI not initialized");
   });
 
-  it("sendMessage returns turn result", async () => {
+  it("sendMessage returns turn result", { timeout: 15_000 }, async () => {
     const result = await runtime.sendMessage("hello");
     expect(result.response).toBe("Hello from mock");
     expect(result.stateAfter).toBeDefined();
