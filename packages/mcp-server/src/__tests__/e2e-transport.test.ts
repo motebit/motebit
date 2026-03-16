@@ -58,10 +58,13 @@ function makeDeps(overrides?: Partial<MotebitServerDeps>): MotebitServerDeps {
   };
 }
 
+const TEST_AUTH_TOKEN = "test-e2e-token";
+
 function makeConfig(port: number, overrides?: Partial<McpServerConfig>): McpServerConfig {
   return {
     transport: "http",
     port,
+    authToken: TEST_AUTH_TOKEN,
     ...overrides,
   };
 }
@@ -105,6 +108,7 @@ describe("E2E: McpClientAdapter ↔ McpServerAdapter (StreamableHTTP)", () => {
       name: "test-server",
       transport: "http",
       url: `http://localhost:${port}/mcp`,
+      authToken: TEST_AUTH_TOKEN,
     });
 
     await client.connect();
@@ -139,6 +143,7 @@ describe("E2E: McpClientAdapter ↔ McpServerAdapter (StreamableHTTP)", () => {
       name: "test-server",
       transport: "http",
       url: `http://localhost:${port}/mcp`,
+      authToken: TEST_AUTH_TOKEN,
     });
 
     await client.connect();
@@ -176,6 +181,7 @@ describe("E2E: McpClientAdapter ↔ McpServerAdapter (StreamableHTTP)", () => {
       name: "test-server",
       transport: "http",
       url: `http://localhost:${port}/mcp`,
+      authToken: TEST_AUTH_TOKEN,
     });
 
     await client.connect();
@@ -200,6 +206,7 @@ describe("E2E: McpClientAdapter ↔ McpServerAdapter (StreamableHTTP)", () => {
       name: "test-server",
       transport: "http",
       url: `http://localhost:${port}/mcp`,
+      authToken: TEST_AUTH_TOKEN,
     });
 
     await client1.connect();
@@ -214,6 +221,7 @@ describe("E2E: McpClientAdapter ↔ McpServerAdapter (StreamableHTTP)", () => {
       name: "test-server",
       transport: "http",
       url: `http://localhost:${port}/mcp`,
+      authToken: TEST_AUTH_TOKEN,
     });
 
     await client2.connect();
@@ -231,6 +239,7 @@ describe("E2E: McpClientAdapter ↔ McpServerAdapter (StreamableHTTP)", () => {
       name: "test-server",
       transport: "http",
       url: `http://localhost:${port}/mcp`,
+      authToken: TEST_AUTH_TOKEN,
     });
 
     await client.connect();
@@ -256,6 +265,7 @@ describe("E2E: McpClientAdapter ↔ McpServerAdapter (StreamableHTTP)", () => {
       name: "untrusted-server",
       transport: "http",
       url: `http://localhost:${port}/mcp`,
+      authToken: TEST_AUTH_TOKEN,
       trusted: false,
     });
 
@@ -276,6 +286,7 @@ describe("E2E: McpClientAdapter ↔ McpServerAdapter (StreamableHTTP)", () => {
       name: "trusted-server",
       transport: "http",
       url: `http://localhost:${port}/mcp`,
+      authToken: TEST_AUTH_TOKEN,
       trusted: true,
     });
 
@@ -326,6 +337,7 @@ describe("E2E: Policy enforcement through StreamableHTTP", () => {
       name: "policy-test",
       transport: "http",
       url: `http://localhost:${port}/mcp`,
+      authToken: TEST_AUTH_TOKEN,
     });
 
     await client.connect();

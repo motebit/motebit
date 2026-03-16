@@ -1274,18 +1274,18 @@ describe("McpServerAdapter — HTTP auth", () => {
     await adapter.stop();
   });
 
-  it("skips auth when authToken is not configured", async () => {
+  it("rejects when authToken is not configured and no token provided", async () => {
     const adapter = new McpServerAdapter(makeConfig({ transport: "http", port: 0 }), makeDeps());
     await adapter.start();
 
     const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
     const addr = server.address() as import("node:net").AddressInfo;
 
-    // No Authorization header, should still get through
+    // No Authorization header — must be rejected (fail-closed)
     const res = await fetch(`http://localhost:${addr.port}/mcp`, {
       method: "POST",
     });
-    expect(res.status).toBe(400); // invalid session, not 401
+    expect(res.status).toBe(401);
 
     await adapter.stop();
   });
@@ -1465,18 +1465,18 @@ describe("McpServerAdapter — mutual authentication", () => {
     await adapter.stop();
   });
 
-  it("open access when no authToken and no motebit: prefix", async () => {
+  it("rejects when no authToken and no motebit: prefix", async () => {
     const adapter = new McpServerAdapter(makeConfig({ transport: "http", port: 0 }), makeDeps());
     await adapter.start();
 
     const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
     const addr = server.address() as import("node:net").AddressInfo;
 
-    // No auth header at all
+    // No auth header at all — fail-closed
     const res = await fetch(`http://localhost:${addr.port}/mcp`, {
       method: "POST",
     });
-    expect(res.status).toBe(400); // invalid session, not 401
+    expect(res.status).toBe(401);
 
     await adapter.stop();
   });

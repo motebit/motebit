@@ -42,6 +42,8 @@ export interface McpServerConfig {
   callerDeviceId?: string;
   /** Caller's Ed25519 private key — used to sign auth tokens. NOT persisted. */
   callerPrivateKey?: Uint8Array;
+  /** Static Bearer token for non-motebit MCP servers that require auth. */
+  authToken?: string;
 }
 
 export interface MotebitIdentityResult {
@@ -152,17 +154,21 @@ export class McpClientAdapter {
       const { StreamableHTTPClientTransport } =
         await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
 
-      // Build request options with optional motebit auth
+      // Build request options with auth
       const requestInit: Record<string, unknown> = {};
       if (
         (this.config.motebit || this.config.motebitType) &&
         this.config.callerMotebitId &&
         this.config.callerPrivateKey
       ) {
+        // Motebit signed token auth
         const token = await this.createCallerToken();
         if (token) {
           requestInit.headers = { Authorization: `Bearer motebit:${token}` };
         }
+      } else if (this.config.authToken) {
+        // Static Bearer token auth
+        requestInit.headers = { Authorization: `Bearer ${this.config.authToken}` };
       }
 
       const transportOpts = Object.keys(requestInit).length > 0 ? { requestInit } : undefined;

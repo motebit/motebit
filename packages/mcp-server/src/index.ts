@@ -980,8 +980,16 @@ export class McpServerAdapter {
           res.end(JSON.stringify({ error: "unauthorized" }));
           return;
         }
+      } else {
+        // No auth configured and no valid token — reject by default.
+        // Open access is never safe for HTTP transport. Operators must
+        // set authToken or callers must use motebit signed tokens.
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({ error: "unauthorized — set authToken or use a motebit signed token" }),
+        );
+        return;
       }
-      // If no authToken configured and no motebit token, allow (open access)
 
       // MCP endpoint — Streamable HTTP transport
       if (url.pathname === "/mcp") {
