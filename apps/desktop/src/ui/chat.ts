@@ -584,6 +584,9 @@ export interface ChatCallbacks {
   openGoalsPanel(): void;
   openMemoryPanel(nodeId?: string): void;
   speakResponse(text: string): void;
+  pushTTSChunk(delta: string): void;
+  flushTTS(): void;
+  cancelStreamingTTS(): void;
   getMicState(): MicState;
   updateModelIndicator(): void;
 }
@@ -934,6 +937,7 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
 
     chatInput.value = "";
     hideAutocomplete();
+    callbacks.cancelStreamingTTS();
 
     if (isSlashCommand(text)) {
       const { command, args } = parseSlashCommand(text);
@@ -979,6 +983,7 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
           accumulated += chunk.text;
           te.textContent = stripPartialActionTag(accumulated);
           chatLog.scrollTop = chatLog.scrollHeight;
+          callbacks.pushTTSChunk(chunk.text);
         } else if (chunk.type === "tool_status") {
           if (chunk.status === "calling") {
             removeThinkingIndicator(thinkingEl);
@@ -1036,10 +1041,7 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
 
       void ctx.app.generateTitleInBackground();
 
-      const micState = callbacks.getMicState();
-      if (accumulated && (micState === "ambient" || micState === "off")) {
-        callbacks.speakResponse(accumulated);
-      }
+      callbacks.flushTTS();
     } catch (err: unknown) {
       removeThinkingIndicator(thinkingEl);
       const msg = err instanceof Error ? err.message : String(err);

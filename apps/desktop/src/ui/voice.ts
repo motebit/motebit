@@ -85,6 +85,9 @@ export interface VoiceAPI {
   stopVoice(transfer: boolean, toAmbient: boolean): void;
   stopAmbient(): void;
   speakAssistantResponse(text: string): void;
+  pushTTSChunk(delta: string): void;
+  flushTTS(): void;
+  cancelStreamingTTS(): void;
   cancelTTS(): void;
   updateVoiceGlowColor(): void;
   rebuildTtsProvider(invoke?: InvokeFn): void;
@@ -668,6 +671,80 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
     }
   }
 
+  // --- Streaming TTS — speak sentences as they arrive during streaming ---
+  let ttsBuffer = "";
+  let ttsQueue: string[] = [];
+  let ttsStreaming = false;
+
+  function pushTTSChunk(delta: string): void {
+    if (!voiceResponseEnabled) return;
+    ttsBuffer += delta;
+    const match = ttsBuffer.match(/^([\s\S]*?[.!?])\s+([\s\S]*)$/);
+    if (match) {
+      const sentence = match[1]!.trim();
+      ttsBuffer = match[2]!;
+      if (sentence) {
+        ttsQueue.push(sentence);
+        if (!ttsStreaming) speakNextQueued();
+      }
+    }
+  }
+
+  function flushTTS(): void {
+    if (!voiceResponseEnabled) return;
+    const remaining = ttsBuffer.trim();
+    ttsBuffer = "";
+    if (remaining) {
+      ttsQueue.push(remaining);
+      if (!ttsStreaming) speakNextQueued();
+    }
+  }
+
+  function cancelStreamingTTS(): void {
+    ttsBuffer = "";
+    ttsQueue = [];
+    ttsStreaming = false;
+    ttsProvider.cancel();
+    ttsSpeaking = false;
+    stopTTSPulse();
+  }
+
+  function speakNextQueued(): void {
+    if (ttsQueue.length === 0) {
+      ttsStreaming = false;
+      ttsSpeaking = false;
+      stopTTSPulse();
+      // Re-enter ambient if mic is active
+      if (micStream && audioContext && analyserNode) {
+        ttsCooldownUntil = performance.now() + TTS_COOLDOWN_MS;
+        micState = "ambient";
+        micBtn.classList.add("ambient");
+        setTimeout(() => {
+          if (micState === "ambient") {
+            if (sileroVad) void sileroVad.start();
+            startAmbientLoop();
+          }
+        }, TTS_COOLDOWN_MS);
+      } else {
+        micState = "off";
+        micBtn.classList.remove("ambient");
+      }
+      return;
+    }
+    ttsStreaming = true;
+    ttsSpeaking = true;
+    micState = "speaking";
+    micBtn.classList.remove("active");
+    micBtn.classList.add("ambient");
+    startTTSPulse();
+
+    const sentence = ttsQueue.shift()!;
+    ttsProvider
+      .speak(sentence)
+      .then(() => speakNextQueued())
+      .catch(() => speakNextQueued());
+  }
+
   function speakAssistantResponse(text: string): void {
     if (!voiceResponseEnabled) return;
     const clean = stripTags(text).trim();
@@ -861,6 +938,9 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
     stopVoice,
     stopAmbient,
     speakAssistantResponse,
+    pushTTSChunk,
+    flushTTS,
+    cancelStreamingTTS,
     cancelTTS,
     updateVoiceGlowColor,
     rebuildTtsProvider,

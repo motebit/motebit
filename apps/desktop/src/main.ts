@@ -82,6 +82,9 @@ const chat = initChat(ctx, {
   openGoalsPanel: () => goals.open(),
   openMemoryPanel: (nodeId) => memory.open(nodeId),
   speakResponse: (text) => voice.speakAssistantResponse(text),
+  pushTTSChunk: (delta) => voice.pushTTSChunk(delta),
+  flushTTS: () => voice.flushTTS(),
+  cancelStreamingTTS: () => voice.cancelStreamingTTS(),
   getMicState: () => voice.getMicState(),
   updateModelIndicator: () => settings.updateModelIndicator(),
 });
