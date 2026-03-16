@@ -23,7 +23,7 @@ export interface InterpolatedState extends MotebitState {
 
 const DEFAULT_CONFIG: StateVectorConfig = {
   tick_rate_hz: 2,
-  ema_alpha: 0.3,
+  ema_alpha: 0.1, // Slow settle — state changes take ~3s to fully express
   hysteresis_threshold: 0.05,
   hysteresis_sustain_ms: 500,
 };
