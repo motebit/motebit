@@ -9,6 +9,7 @@ import { initChat, addMessage, showToast } from "./ui/chat";
 import { initSettings } from "./ui/settings";
 import { initConversations } from "./ui/conversations";
 import { initVoice } from "./ui/voice";
+import { setStreamingTTSEnabled } from "./ui/chat";
 import { initGatedPanels } from "./ui/gated-panels";
 import { initSovereignPanels } from "./ui/sovereign-panels";
 import { initTheme } from "./ui/theme";
@@ -63,7 +64,11 @@ const conversations = initConversations(ctx, {
   },
 });
 
-const voiceAPI = initVoice(ctx, chatAPI);
+const voiceAPI = initVoice(ctx, chatAPI, {
+  onPresenceToggle(active) {
+    setStreamingTTSEnabled(active);
+  },
+});
 
 initSlashCommands(chatAPI, ctx, {
   openSettings: () => settings.open(),

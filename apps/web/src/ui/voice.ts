@@ -69,9 +69,17 @@ export interface VoiceAPI {
   updateVoiceGlowColor(): void;
 }
 
+export interface VoiceCallbacks {
+  onPresenceToggle(active: boolean): void;
+}
+
 // === Voice Init ===
 
-export function initVoice(ctx: WebContext, chatAPI: ChatAPI): VoiceAPI {
+export function initVoice(
+  ctx: WebContext,
+  chatAPI: ChatAPI,
+  voiceCallbacks?: VoiceCallbacks,
+): VoiceAPI {
   if (!micBtn || !inputBarWrapper) {
     return { updateVoiceGlowColor() {} };
   }
@@ -89,8 +97,9 @@ export function initVoice(ctx: WebContext, chatAPI: ChatAPI): VoiceAPI {
     return { updateVoiceGlowColor() {} };
   }
 
-  // Mic button hidden — presence circle is the voice UI
-  micBtn.style.display = "none";
+  // Show presence circle — it's both the voice indicator and the voice input trigger
+  micBtn.style.display = "flex";
+  inputBarWrapper.classList.add("has-mic");
 
   let recognition: SpeechRecognition | null = null;
   let isListening = false;
@@ -435,8 +444,10 @@ export function initVoice(ctx: WebContext, chatAPI: ChatAPI): VoiceAPI {
   micBtn.addEventListener("click", () => {
     if (isListening) {
       stopListening();
+      voiceCallbacks?.onPresenceToggle(false);
     } else {
       void startListening();
+      voiceCallbacks?.onPresenceToggle(true);
     }
   });
 

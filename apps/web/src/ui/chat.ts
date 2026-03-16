@@ -79,13 +79,20 @@ class StreamingTTS {
 
 const streamingTTS = new StreamingTTS();
 
+export function setStreamingTTSEnabled(enabled: boolean): void {
+  if (enabled) {
+    streamingTTS.enable();
+  } else {
+    streamingTTS.disable();
+  }
+}
+
 // === DOM Refs ===
 
 const chatLog = document.getElementById("chat-log") as HTMLDivElement;
 const chatInput = document.getElementById("chat-input") as HTMLInputElement;
 const chatInputRow = document.getElementById("chat-input-row") as HTMLDivElement;
 const sendBtn = document.getElementById("send-btn") as HTMLButtonElement;
-const voiceToggleBtn = document.getElementById("voice-toggle-btn") as HTMLButtonElement;
 const toastContainer = document.getElementById("toast-container") as HTMLDivElement;
 const errorBanner = document.getElementById("error-banner") as HTMLDivElement;
 
@@ -581,18 +588,6 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
   // Wire up send button
   sendBtn.addEventListener("click", () => {
     void handleSend();
-  });
-
-  // Wire up voice toggle
-  voiceToggleBtn.addEventListener("click", () => {
-    const enabled = streamingTTS.enabled;
-    if (enabled) {
-      streamingTTS.disable();
-      voiceToggleBtn.setAttribute("aria-pressed", "false");
-    } else {
-      streamingTTS.enable();
-      voiceToggleBtn.setAttribute("aria-pressed", "true");
-    }
   });
 
   // Wire up input → send button visibility
