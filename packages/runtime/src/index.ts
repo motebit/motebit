@@ -1206,6 +1206,7 @@ export class MotebitRuntime {
     task: AgentTask,
     privateKey: Uint8Array,
     deviceId: string,
+    publicKey?: Uint8Array,
   ): AsyncGenerator<StreamChunk> {
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
 
@@ -1392,6 +1393,7 @@ export class MotebitRuntime {
     const receipt = await signExecutionReceipt(
       receiptBody as Omit<ExecutionReceipt, "signature">,
       privateKey,
+      publicKey,
     );
 
     // Log event

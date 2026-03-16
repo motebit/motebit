@@ -843,6 +843,8 @@ export interface AgentTask {
 export interface ExecutionReceipt {
   task_id: string;
   motebit_id: MotebitId;
+  /** Signer's Ed25519 public key (hex). Enables verification without relay lookup. */
+  public_key?: string;
   device_id: DeviceId;
   submitted_at: number;
   completed_at: number;

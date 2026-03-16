@@ -446,6 +446,8 @@ export async function verifySignedToken(
 export interface SignableReceipt {
   task_id: string;
   motebit_id: string;
+  /** Signer's Ed25519 public key (hex). Enables verification without relay lookup. */
+  public_key?: string;
   device_id: string;
   submitted_at: number;
   completed_at: number;
@@ -487,11 +489,14 @@ export function canonicalJson(obj: unknown): string {
 export async function signExecutionReceipt<T extends Omit<SignableReceipt, "signature">>(
   receipt: T,
   privateKey: Uint8Array,
+  publicKey?: Uint8Array,
 ): Promise<T & { signature: string }> {
-  const canonical = canonicalJson(receipt);
+  // Embed the public key for portable verification (no relay lookup needed)
+  const body = publicKey ? { ...receipt, public_key: bytesToHex(publicKey) } : receipt;
+  const canonical = canonicalJson(body);
   const message = new TextEncoder().encode(canonical);
   const sig = await sign(message, privateKey);
-  return { ...receipt, signature: toBase64Url(sig) };
+  return { ...body, signature: toBase64Url(sig) } as T & { signature: string };
 }
 
 /**
@@ -544,8 +549,12 @@ export async function verifyReceiptChain(
 ): Promise<ReceiptVerification> {
   const { task_id, motebit_id } = receipt;
 
-  // Look up public key for this receipt's motebit_id
-  const publicKey = knownKeys.get(motebit_id);
+  // Use embedded public key if available, otherwise look up from known keys.
+  // Embedded keys enable portable verification without relay lookup.
+  let publicKey = knownKeys.get(motebit_id);
+  if (!publicKey && receipt.public_key) {
+    publicKey = hexToBytes(receipt.public_key);
+  }
   if (!publicKey) {
     // Recurse into delegations even if this receipt can't be verified
     const delegations = await verifyDelegations(receipt, knownKeys);
