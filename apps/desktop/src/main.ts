@@ -20,7 +20,6 @@ import {
   dismissBanner,
   initChat,
   showGoalApprovalCard,
-  streamGreeting,
   GREETING_PROMPT_MARKER,
 } from "./ui/chat";
 import { deriveInteriorColor } from "./ui/color-picker";
@@ -48,8 +47,7 @@ if (canvas == null) throw new Error("Canvas element #motebit-canvas not found");
 
 const app = new DesktopApp();
 let currentConfig: DesktopAIConfig | null = null;
-let isFirstLaunch = false;
-let greetingSent = false;
+// isFirstLaunch tracking removed — creature doesn't speak first (thesis: passive body)
 
 // === Desktop Context ===
 
@@ -169,7 +167,7 @@ async function tryBootstrapIdentity(
         onClick: () => {
           void tryBootstrapIdentity(invoke).then((result) => {
             if (result?.isFirstLaunch === true) {
-              isFirstLaunch = true;
+              // first launch detected
               addMessage("system", "Your mote has been created");
             }
           });
@@ -187,7 +185,7 @@ async function tryBootstrapIdentity(
                 if (result) {
                   dismissBanner("identity-limited");
                   if (result.isFirstLaunch) {
-                    isFirstLaunch = true;
+                    // first launch detected
                     addMessage("system", "Your mote has been created");
                   }
                 }
@@ -546,12 +544,8 @@ function onAIReady(config: DesktopAIConfig): void {
     }
   }
 
-  // First-run greeting — agent introduces itself via real streaming pipeline
-  if (isFirstLaunch && !greetingSent && previousMessages.length === 0) {
-    setTimeout(() => {
-      void streamGreeting(ctx);
-    }, 1500);
-  }
+  // No first-run greeting — the creature is present, not performing.
+  // It breathes and waits. The user's first message is the perturbation.
 
   // Start goal scheduler (Tauri only)
   if (config.isTauri && config.invoke) {
@@ -660,8 +654,6 @@ async function bootstrap(): Promise<void> {
     const invoke = config.invoke;
     const raw = await invoke<string>("read_config");
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    greetingSent = Boolean(parsed.first_run_greeting_sent);
-
     if (parsed.motebit_id != null) {
       welcomeBackdrop.classList.remove("open");
       await tryBootstrapIdentity(invoke);
@@ -685,7 +677,7 @@ async function bootstrap(): Promise<void> {
           );
           const result = await tryBootstrapIdentity(invoke);
           if (result?.isFirstLaunch === true) {
-            isFirstLaunch = true;
+            // first launch detected
             addMessage("system", "Your mote has been created");
           }
         } else {
@@ -700,7 +692,6 @@ async function bootstrap(): Promise<void> {
         welcomeBackdrop.classList.remove("open");
         const result = await tryBootstrapIdentity(invoke);
         if (result?.isFirstLaunch === true) {
-          isFirstLaunch = true;
           addMessage("system", "Your mote has been created");
         }
 
