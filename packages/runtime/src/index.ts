@@ -105,16 +105,26 @@ function stripDisplayTags(text: string): { clean: string; pending: string } {
     .replace(/\*[^*]+\*/g, "");
 
   // Check for trailing incomplete patterns that might close in a later chunk
+
+  // Incomplete <memory> tag: opened but no </memory> yet
+  const lastMemoryOpen = clean.lastIndexOf("<memory");
+  if (lastMemoryOpen !== -1) {
+    const afterOpen = clean.slice(lastMemoryOpen);
+    if (!afterOpen.includes("</memory>")) {
+      return { clean: clean.slice(0, lastMemoryOpen), pending: clean.slice(lastMemoryOpen) };
+    }
+  }
+
   // Incomplete action: *text without closing *
   const lastStar = clean.lastIndexOf("*");
   if (lastStar !== -1) {
-    // If there's an odd number of * characters after stripping, the last one is unclosed
     const afterLastStar = clean.slice(lastStar);
     const starCount = (afterLastStar.match(/\*/g) ?? []).length;
     if (starCount % 2 === 1) {
       return { clean: clean.slice(0, lastStar), pending: clean.slice(lastStar) };
     }
   }
+
   // Incomplete XML tag: < without closing >
   const lastOpen = clean.lastIndexOf("<");
   if (lastOpen !== -1 && !clean.includes(">", lastOpen)) {
