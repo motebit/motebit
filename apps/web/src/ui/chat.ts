@@ -31,6 +31,7 @@ export function addMessage(
   text: string,
   immediate = false,
 ): void {
+  if (!text) return; // Skip empty messages (e.g. suppressed errors)
   const bubble = document.createElement("div");
   bubble.className = `chat-bubble ${role}`;
   // System messages may contain safe HTML (action links); user/assistant use textContent
@@ -309,6 +310,10 @@ function formatErrorMessage(msg: string): string {
   ) {
     return `Couldn't reach the server. ${SETTINGS_LINK}Connect your own API key</a> to chat directly with Claude.`;
   }
+  // Safari WebKit noise — suppress known harmless DOM exceptions
+  if (msg.includes("did not match the expected pattern")) {
+    return ""; // Suppress — Safari IDB/streaming artifact, not a real error
+  }
   // Generic fallback — still show the raw error for debugging
   return `Something went wrong: ${msg}`;
 }
@@ -459,8 +464,8 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
           }
 
           case "result": {
-            // Trigger auto-titling in background
-            void ctx.app.autoTitle();
+            // Trigger auto-titling in background (best-effort, don't surface errors)
+            void ctx.app.autoTitle().catch(() => {});
             break;
           }
         }
