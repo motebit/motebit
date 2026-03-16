@@ -522,10 +522,12 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
                 accumulated += resumeChunk.text;
                 textEl!.textContent = accumulated;
                 chatLog.scrollTop = chatLog.scrollHeight;
+                streamingTTS.push(resumeChunk.text);
               } else if (resumeChunk.type === "tool_status") {
                 if (resumeChunk.status === "calling") showToolStatus(resumeChunk.name);
                 else if (resumeChunk.status === "done") completeToolStatus(resumeChunk.name);
               } else if (resumeChunk.type === "result") {
+                streamingTTS.flush();
                 void ctx.app.autoTitle();
               }
             }
