@@ -103,7 +103,8 @@ function stripDisplayTags(text: string): { clean: string; pending: string } {
     .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
     .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
     .replace(/<state\s+[^>]*\/>/g, "")
-    .replace(/\*[^*]+\*/g, "");
+    .replace(/\*[^*]+\*/g, "")
+    .replace(/ {2,}/g, " ");
 
   // Check for trailing incomplete patterns that might close in a later chunk
 
