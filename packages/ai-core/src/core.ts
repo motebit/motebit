@@ -289,6 +289,7 @@ export function actionsToStateUpdates(actions: string[]): Partial<MotebitState> 
 export function stripTags(text: string): string {
   return text
     .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
+    .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
     .replace(/<state\s+[^>]*\/>/g, "")
     .replace(/\*[^*]+\*/g, "")
     .replace(/\n{3,}/g, "\n\n")

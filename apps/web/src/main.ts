@@ -281,7 +281,14 @@ async function bootstrap(): Promise<void> {
   const history = app.getConversationHistory();
   for (const msg of history) {
     if (msg.role === "user" || msg.role === "assistant") {
-      addMessage(msg.role, msg.content, true);
+      // Strip any tags that leaked into stored content (e.g. <thinking> from older sessions)
+      const clean = msg.content
+        .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
+        .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
+        .replace(/<state\s+[^>]*\/>/g, "")
+        .replace(/ {2,}/g, " ")
+        .trim();
+      if (clean) addMessage(msg.role, clean, true);
     }
   }
 }
