@@ -184,6 +184,47 @@ Array of registered devices. MAY be empty. Each device entry:
 | `public_key`    | string | yes      | Hex-encoded Ed25519 public key for this device. |
 | `registered_at` | string | yes      | ISO 8601 timestamp of device registration.      |
 
+### 3.8 — `succession` (optional)
+
+An ordered array of key succession records. Each record proves a key rotation — a transfer of authority from one Ed25519 keypair to another. The array is chronologically ordered (oldest first). The last entry's `new_public_key` MUST match the current `identity.public_key`.
+
+| Field               | Type   | Required | Description                                                                              |
+| ------------------- | ------ | -------- | ---------------------------------------------------------------------------------------- |
+| `old_public_key`    | string | yes      | Hex-encoded Ed25519 public key being retired (64 hex chars).                             |
+| `new_public_key`    | string | yes      | Hex-encoded Ed25519 public key taking over (64 hex chars).                               |
+| `timestamp`         | number | yes      | Epoch milliseconds when the rotation occurred.                                           |
+| `reason`            | string | no       | Human-readable reason for rotation.                                                      |
+| `old_key_signature` | string | yes      | Hex-encoded Ed25519 signature by the old key over the canonical payload (128 hex chars). |
+| `new_key_signature` | string | yes      | Hex-encoded Ed25519 signature by the new key over the canonical payload (128 hex chars). |
+
+#### 3.8.1 — Canonical Payload
+
+Both signatures in a succession record are computed over the same canonical JSON payload. The payload is constructed as follows:
+
+1. Build a JSON object with keys sorted alphabetically: `{"new_public_key":"...","old_public_key":"...","reason":"...","timestamp":...}`
+2. The `reason` key is **omitted** (not set to `null`) when no reason is provided.
+3. Encode the JSON string as UTF-8 bytes.
+4. Both the old and new private keys sign the same canonical bytes.
+
+The dual-signature scheme proves two things:
+
+- **Non-repudiation:** The old key holder authorized the succession. They cannot later deny having transferred authority.
+- **Acknowledgment:** The new key holder signed the same payload, proving they accepted the identity. This prevents unwanted identity assignment — no one can unilaterally push an identity onto a keypair without its holder's consent.
+
+#### 3.8.2 — Chain Validation Rules
+
+A verifier MUST apply the following rules when a `succession` array is present:
+
+1. **Independent verifiability.** Each record is independently verifiable: decode both signatures, reconstruct the canonical payload from the record's fields, and verify both `old_key_signature` (against `old_public_key`) and `new_key_signature` (against `new_public_key`).
+2. **Adjacency.** For adjacent records: `chain[i].new_public_key === chain[i+1].old_public_key`. The chain must be contiguous.
+3. **Temporal ordering.** `chain[i].timestamp < chain[i+1].timestamp`. Rotations must be strictly ordered in time.
+4. **Terminal match.** The last record's `new_public_key` MUST match `identity.public_key`. The chain must end at the current identity.
+5. **Identity continuity.** The `motebit_id` does NOT change across rotations. A key rotation is a change of cryptographic authority, not a change of identity.
+
+#### 3.8.3 — Backward Compatibility
+
+The `succession` field is optional. Identity files without it are valid and represent identities that have never rotated keys. Verifiers MUST NOT reject files that lack a `succession` array.
+
 ---
 
 ## 4. Signature
@@ -303,9 +344,60 @@ devices:
 
 Note: The signature above is illustrative. A real file would contain a valid Ed25519 signature that passes verification against the declared public key.
 
-### 5.2 — Service Identity Example
+### 5.2 — Identity with Key Succession
 
-A `motebit.md` file for a service motebit:
+A `motebit.md` file for an agent that has rotated its key once:
+
+```markdown
+---
+spec: "motebit/identity@1.0"
+motebit_id: "019474a3-7e8b-7f1c-9d2e-4b8a1c3d5e6f"
+created_at: "2026-02-18T00:00:00.000Z"
+owner_id: "user_01HQXK9V3M"
+identity:
+  algorithm: "Ed25519"
+  public_key: "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3"
+governance:
+  trust_mode: "guarded"
+  max_risk_auto: "R1_DRAFT"
+  require_approval_above: "R1_DRAFT"
+  deny_above: "R4_MONEY"
+  operator_mode: false
+privacy:
+  default_sensitivity: "personal"
+  retention_days:
+    none: 365
+    personal: 90
+    medical: 30
+    financial: 30
+    secret: 7
+  fail_closed: true
+memory:
+  half_life_days: 7
+  confidence_threshold: 0.3
+  per_turn_limit: 5
+devices:
+  - device_id: "dev-macbook-01"
+    name: "MacBook Pro"
+    public_key: "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3"
+    registered_at: "2026-02-18T00:00:00.000Z"
+succession:
+  - old_public_key: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+    new_public_key: "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3"
+    timestamp: 1710700800000
+    reason: "Scheduled key rotation"
+    old_key_signature: "a1b2c3d4...128_hex_chars...representing_old_key_signing_canonical_payload"
+    new_key_signature: "e5f6a1b2...128_hex_chars...representing_new_key_signing_canonical_payload"
+---
+
+<!-- motebit:sig:Ed25519:dGhpcyBpcyBhIHBsYWNlaG9sZGVyIHNpZ25hdHVyZQ -->
+```
+
+Note: The `motebit_id` remains unchanged from the original identity. The `identity.public_key` now matches `succession[0].new_public_key`. The file is signed by the new key. The succession record's dual signatures prove the old key authorized the rotation and the new key accepted it. Signatures above are illustrative.
+
+### 5.3 — Service Identity Example
+
+A `motebit.md` file for a service motebit (see §3.6):
 
 ```markdown
 ---
@@ -393,6 +485,8 @@ When a field in the identity changes (e.g., a new device is registered, governan
 
 The previous signature becomes invalid. If the file is tracked in version control, the diff shows exactly what changed and the new signature confirms the change was authorized by the key holder.
 
+**Key rotation** is a special case. When rotating keys, the `identity.public_key` changes to the new key, a succession record is appended to the `succession` array (see §3.8), and the entire file is re-signed with the **new** private key. The succession record's dual signatures (old key + new key) provide the cryptographic bridge between the old and new keypairs. After rotation, the old private key is no longer needed for signing the identity file.
+
 ---
 
 ## 8. Security Considerations
@@ -403,9 +497,11 @@ The private key MUST NOT appear in the `motebit.md` file. It SHOULD be stored in
 
 ### 8.2 — Key Rotation
 
-This version of the specification does not define a key rotation mechanism. If a private key is compromised, a new keypair MUST be generated and a new `motebit.md` file created with a new `motebit_id`. The old identity is abandoned, not revoked — there is no centralized revocation authority by design.
+Key rotation is supported via the `succession` mechanism defined in §3.8. When a private key is compromised or needs to be retired, the key holder generates a new keypair and creates a succession record signed by both the old and new keys. The `motebit_id` remains the same — the identity continues with a new key and a verifiable succession chain proving the transfer of authority.
 
-Future versions MAY introduce key rotation via a signed succession record.
+The old identity is no longer abandoned. Instead, the succession chain provides a cryptographic audit trail from the original key through every rotation to the current key. Any verifier can walk the chain and confirm that each transition was authorized by both the outgoing and incoming key holders.
+
+There is still no centralized revocation authority by design. Succession is a bilateral cryptographic handoff, not a broadcast.
 
 ### 8.3 — Signature Scope
 
@@ -427,6 +523,9 @@ Implementations SHOULD use a restricted YAML parser that handles only the data t
 | **YAML injection**                   | Restricted parser; no anchors/aliases/tags; only spec-defined types        | Full YAML parsers may be vulnerable          |
 | **Signature stripping**              | Verifiers MUST reject files without a valid signature comment              | Applications that skip verification          |
 | **Post-signature content injection** | Signature scope is frontmatter only; post-signature content is untrusted   | Applications must not trust unsigned content |
+| **Key compromise (with succession)** | Old key signs succession record delegating to new key; chain is verifiable | Window between compromise and rotation       |
+| **Forged succession**                | Both old AND new keys must sign the record                                 | Simultaneous compromise of both keys         |
+| **Succession chain truncation**      | Frontmatter signature by current key covers entire succession array        | Verifier must check chain completeness       |
 
 **Trust boundary:** A valid `motebit.md` proves the holder has the private key. It does NOT prove the holder is trustworthy, authorized, or human. Trust is accumulated at the application layer through history, reputation, and governance — not by the identity file alone.
 

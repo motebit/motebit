@@ -459,6 +459,221 @@ describe("verify — service identity", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Helpers for succession chain tests
+// ---------------------------------------------------------------------------
+
+function canonicalJson(obj: unknown): string {
+  if (obj === null || obj === undefined) return JSON.stringify(obj);
+  if (typeof obj !== "object") return JSON.stringify(obj);
+  if (Array.isArray(obj)) {
+    return "[" + obj.map((item) => canonicalJson(item)).join(",") + "]";
+  }
+  const sorted = Object.keys(obj as Record<string, unknown>).sort();
+  const entries: string[] = [];
+  for (const key of sorted) {
+    const val = (obj as Record<string, unknown>)[key];
+    if (val === undefined) continue;
+    entries.push(JSON.stringify(key) + ":" + canonicalJson(val));
+  }
+  return "{" + entries.join(",") + "}";
+}
+
+async function createSuccessionRecord(
+  oldKp: Awaited<ReturnType<typeof makeKeypair>>,
+  newKp: Awaited<ReturnType<typeof makeKeypair>>,
+  timestamp: number,
+  reason?: string,
+) {
+  const payloadObj: Record<string, unknown> = {
+    old_public_key: oldKp.publicKeyHex,
+    new_public_key: newKp.publicKeyHex,
+    timestamp,
+  };
+  if (reason !== undefined) {
+    payloadObj.reason = reason;
+  }
+  const payload = canonicalJson(payloadObj);
+  const message = new TextEncoder().encode(payload);
+
+  const oldSig = await ed.signAsync(message, oldKp.privateKey);
+  const newSig = await ed.signAsync(message, newKp.privateKey);
+
+  return {
+    old_public_key: oldKp.publicKeyHex,
+    new_public_key: newKp.publicKeyHex,
+    timestamp,
+    ...(reason !== undefined ? { reason } : {}),
+    old_key_signature: toHex(oldSig),
+    new_key_signature: toHex(newSig),
+  };
+}
+
+function buildYamlWithSuccession(
+  publicKeyHex: string,
+  successionRecords: Array<{
+    old_public_key: string;
+    new_public_key: string;
+    timestamp: number;
+    reason?: string;
+    old_key_signature: string;
+    new_key_signature: string;
+  }>,
+): string {
+  const lines = [
+    `spec: "motebit/identity@1.0"`,
+    `motebit_id: "01234567-89ab-cdef-0123-456789abcdef"`,
+    `created_at: "2026-01-15T00:00:00.000Z"`,
+    `owner_id: "owner-test"`,
+    `identity:`,
+    `  algorithm: "Ed25519"`,
+    `  public_key: "${publicKeyHex}"`,
+    `governance:`,
+    `  trust_mode: "guarded"`,
+    `  max_risk_auto: "R1_DRAFT"`,
+    `  require_approval_above: "R1_DRAFT"`,
+    `  deny_above: "R4_MONEY"`,
+    `  operator_mode: false`,
+    `privacy:`,
+    `  default_sensitivity: "personal"`,
+    `  retention_days:`,
+    `    none: 365`,
+    `  fail_closed: true`,
+    `memory:`,
+    `  half_life_days: 7`,
+    `  confidence_threshold: 0.3`,
+    `  per_turn_limit: 5`,
+    `devices: []`,
+    `succession:`,
+  ];
+
+  for (const rec of successionRecords) {
+    lines.push(`  - old_public_key: "${rec.old_public_key}"`);
+    lines.push(`    new_public_key: "${rec.new_public_key}"`);
+    lines.push(`    timestamp: ${rec.timestamp}`);
+    if (rec.reason !== undefined) {
+      lines.push(`    reason: "${rec.reason}"`);
+    }
+    lines.push(`    old_key_signature: "${rec.old_key_signature}"`);
+    lines.push(`    new_key_signature: "${rec.new_key_signature}"`);
+  }
+
+  return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// verify() — succession chain
+// ---------------------------------------------------------------------------
+
+describe("verify — succession chain", () => {
+  it("verifies identity file with one succession record", async () => {
+    const kp1 = await makeKeypair(); // genesis key
+    const kp2 = await makeKeypair(); // current key
+
+    const record = await createSuccessionRecord(kp1, kp2, 1000000);
+    const yaml = buildYamlWithSuccession(kp2.publicKeyHex, [record]);
+
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+    expect(result.succession).toBeDefined();
+    expect(result.succession!.valid).toBe(true);
+    expect(result.succession!.rotations).toBe(1);
+    expect(result.succession!.genesis_public_key).toBe(kp1.publicKeyHex);
+    expect(result.succession!.error).toBeUndefined();
+  });
+
+  it("verifies identity file with succession record including reason", async () => {
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+
+    const record = await createSuccessionRecord(kp1, kp2, 1000000, "key compromise");
+    const yaml = buildYamlWithSuccession(kp2.publicKeyHex, [record]);
+
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+    expect(result.succession!.valid).toBe(true);
+    expect(result.succession!.rotations).toBe(1);
+  });
+
+  it("verifies identity file with multi-hop succession chain", async () => {
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+    const kp3 = await makeKeypair();
+
+    const rec1 = await createSuccessionRecord(kp1, kp2, 1000000);
+    const rec2 = await createSuccessionRecord(kp2, kp3, 2000000);
+    const yaml = buildYamlWithSuccession(kp3.publicKeyHex, [rec1, rec2]);
+
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp3.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+    expect(result.succession!.valid).toBe(true);
+    expect(result.succession!.rotations).toBe(2);
+    expect(result.succession!.genesis_public_key).toBe(kp1.publicKeyHex);
+  });
+
+  it("backward compat: no succession field returns no succession result", async () => {
+    const { content } = await generateValidFile();
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+    expect(result.succession).toBeUndefined();
+  });
+
+  it("fails when succession chain linkage is broken", async () => {
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+    const kp3 = await makeKeypair();
+    const kpRandom = await makeKeypair();
+
+    // rec1 goes kp1 -> kpRandom, rec2 goes kp2 -> kp3
+    // Linkage broken: kpRandom != kp2
+    const rec1 = await createSuccessionRecord(kp1, kpRandom, 1000000);
+    const rec2 = await createSuccessionRecord(kp2, kp3, 2000000);
+    const yaml = buildYamlWithSuccession(kp3.publicKeyHex, [rec1, rec2]);
+
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp3.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true); // file signature is valid
+    expect(result.succession).toBeDefined();
+    expect(result.succession!.valid).toBe(false);
+    expect(result.succession!.error).toContain("chain broken");
+  });
+
+  it("fails when last succession new_public_key doesn't match identity public_key", async () => {
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+    const kpActual = await makeKeypair(); // actual identity key, different from kp2
+
+    const record = await createSuccessionRecord(kp1, kp2, 1000000);
+    // Identity uses kpActual, but succession chain ends at kp2
+    const yaml = buildYamlWithSuccession(kpActual.publicKeyHex, [record]);
+
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kpActual.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true); // file signature is valid
+    expect(result.succession).toBeDefined();
+    expect(result.succession!.valid).toBe(false);
+    expect(result.succession!.error).toContain("terminal");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Cross-compatibility with @motebit/identity-file
 // ---------------------------------------------------------------------------
 // NOTE: Cross-compat is now tested in @motebit/identity-file's test suite,

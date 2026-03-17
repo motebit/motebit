@@ -67,6 +67,15 @@ export interface MotebitIdentityFile {
     public_key: string;
     registered_at: string;
   }>;
+
+  succession?: Array<{
+    old_public_key: string;
+    new_public_key: string;
+    timestamp: number;
+    reason?: string;
+    old_key_signature: string;
+    new_key_signature: string;
+  }>;
 }
 
 export interface VerifyResult {
@@ -75,6 +84,13 @@ export interface VerifyResult {
   /** W3C did:key URI derived from the Ed25519 public key. Present when valid. */
   did?: string;
   error?: string;
+  /** Present when the identity has a succession chain. */
+  succession?: {
+    valid: boolean;
+    genesis_public_key?: string;
+    rotations: number;
+    error?: string;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -230,6 +246,26 @@ function fromBase64Url(str: string): Uint8Array {
 }
 
 // ---------------------------------------------------------------------------
+// Canonical JSON — must match @motebit/crypto's canonicalJson exactly
+// ---------------------------------------------------------------------------
+
+function canonicalJson(obj: unknown): string {
+  if (obj === null || obj === undefined) return JSON.stringify(obj);
+  if (typeof obj !== "object") return JSON.stringify(obj);
+  if (Array.isArray(obj)) {
+    return "[" + obj.map((item) => canonicalJson(item)).join(",") + "]";
+  }
+  const sorted = Object.keys(obj as Record<string, unknown>).sort();
+  const entries: string[] = [];
+  for (const key of sorted) {
+    const val = (obj as Record<string, unknown>)[key];
+    if (val === undefined) continue;
+    entries.push(JSON.stringify(key) + ":" + canonicalJson(val));
+  }
+  return "{" + entries.join(",") + "}";
+}
+
+// ---------------------------------------------------------------------------
 // did:key derivation (inlined — verify has zero monorepo deps)
 // ---------------------------------------------------------------------------
 
@@ -355,10 +391,127 @@ export async function verify(content: string): Promise<VerifyResult> {
     valid = false;
   }
 
+  if (!valid) {
+    return {
+      valid: false,
+      identity: null,
+      error: "Signature verification failed",
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Succession chain verification (optional — backward compatible)
+  // ---------------------------------------------------------------------------
+
+  const chain = parsed.frontmatter.succession;
+  let successionResult: VerifyResult["succession"];
+
+  if (chain && chain.length > 0) {
+    successionResult = await verifySuccessionChain(chain, pubKeyHex);
+  }
+
   return {
-    valid,
-    identity: valid ? parsed.frontmatter : null,
-    did: valid ? publicKeyToDidKey(pubKey) : undefined,
-    error: valid ? undefined : "Signature verification failed",
+    valid: true,
+    identity: parsed.frontmatter,
+    did: publicKeyToDidKey(pubKey),
+    ...(successionResult ? { succession: successionResult } : {}),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Succession chain verification
+// ---------------------------------------------------------------------------
+
+async function verifySuccessionChain(
+  chain: NonNullable<MotebitIdentityFile["succession"]>,
+  currentPublicKeyHex: string,
+): Promise<NonNullable<VerifyResult["succession"]>> {
+  try {
+    for (let i = 0; i < chain.length; i++) {
+      const record = chain[i]!;
+
+      // Build canonical payload matching @motebit/crypto's keySuccessionPayload
+      const payloadObj: Record<string, unknown> = {
+        old_public_key: record.old_public_key,
+        new_public_key: record.new_public_key,
+        timestamp: record.timestamp,
+      };
+      if (record.reason !== undefined) {
+        payloadObj.reason = record.reason;
+      }
+      const payload = canonicalJson(payloadObj);
+      const message = new TextEncoder().encode(payload);
+
+      // Verify old key signature
+      const oldPubKey = hexToBytes(record.old_public_key);
+      const oldSig = hexToBytes(record.old_key_signature);
+      const oldValid = await ed.verifyAsync(oldSig, message, oldPubKey);
+      if (!oldValid) {
+        return {
+          valid: false,
+          rotations: chain.length,
+          error: `Succession record ${i}: old_key_signature verification failed`,
+        };
+      }
+
+      // Verify new key signature
+      const newPubKey = hexToBytes(record.new_public_key);
+      const newSig = hexToBytes(record.new_key_signature);
+      const newValid = await ed.verifyAsync(newSig, message, newPubKey);
+      if (!newValid) {
+        return {
+          valid: false,
+          rotations: chain.length,
+          error: `Succession record ${i}: new_key_signature verification failed`,
+        };
+      }
+
+      // Verify chain linkage: chain[i].new_public_key === chain[i+1].old_public_key
+      if (i < chain.length - 1) {
+        const next = chain[i + 1]!;
+        if (record.new_public_key !== next.old_public_key) {
+          return {
+            valid: false,
+            rotations: chain.length,
+            error: `Succession chain broken at record ${i}: new_public_key does not match next record's old_public_key`,
+          };
+        }
+      }
+
+      // Verify temporal ordering
+      if (i < chain.length - 1) {
+        const next = chain[i + 1]!;
+        if (record.timestamp >= next.timestamp) {
+          return {
+            valid: false,
+            rotations: chain.length,
+            error: `Succession chain temporal ordering violated at record ${i}`,
+          };
+        }
+      }
+    }
+
+    // Verify terminal: last record's new_public_key matches identity.public_key
+    const lastRecord = chain[chain.length - 1]!;
+    if (lastRecord.new_public_key !== currentPublicKeyHex) {
+      return {
+        valid: false,
+        rotations: chain.length,
+        error: "Succession chain terminal: last new_public_key does not match identity public_key",
+      };
+    }
+
+    return {
+      valid: true,
+      genesis_public_key: chain[0]!.old_public_key,
+      rotations: chain.length,
+    };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      valid: false,
+      rotations: 0,
+      error: `Succession verification error: ${msg}`,
+    };
+  }
 }

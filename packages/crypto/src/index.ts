@@ -991,6 +991,96 @@ export async function verifyKeySuccession(record: KeySuccessionRecord): Promise<
   }
 }
 
+// === Succession Chain Verification ===
+
+import type { SuccessionChainResult } from "@motebit/sdk";
+export type { SuccessionChainResult } from "@motebit/sdk";
+
+/**
+ * Verify a full key succession chain — an ordered array of KeySuccessionRecords
+ * representing a sequence of key rotations from a genesis key to the current active key.
+ *
+ * Validates:
+ * 1. Each record's dual signatures (old key + new key) via verifyKeySuccession().
+ * 2. Chain linkage: chain[i].new_public_key === chain[i+1].old_public_key.
+ * 3. Temporal ordering: chain[i].timestamp < chain[i+1].timestamp.
+ *
+ * An empty chain returns invalid (no genesis key).
+ */
+export async function verifySuccessionChain(
+  chain: KeySuccessionRecord[],
+): Promise<SuccessionChainResult> {
+  if (chain.length === 0) {
+    return {
+      valid: false,
+      genesis_public_key: "",
+      current_public_key: "",
+      length: 0,
+      error: { index: 0, message: "Empty succession chain" },
+    };
+  }
+
+  const genesisKey = chain[0]!.old_public_key;
+  const currentKey = chain[chain.length - 1]!.new_public_key;
+
+  for (let i = 0; i < chain.length; i++) {
+    const record = chain[i]!;
+
+    // Verify dual signatures
+    const sigValid = await verifyKeySuccession(record);
+    if (!sigValid) {
+      return {
+        valid: false,
+        genesis_public_key: genesisKey,
+        current_public_key: currentKey,
+        length: chain.length,
+        error: { index: i, message: `Record ${i} has invalid signature` },
+      };
+    }
+
+    // Verify chain linkage (current record's new key must be next record's old key)
+    if (i < chain.length - 1) {
+      const next = chain[i + 1]!;
+      if (record.new_public_key !== next.old_public_key) {
+        return {
+          valid: false,
+          genesis_public_key: genesisKey,
+          current_public_key: currentKey,
+          length: chain.length,
+          error: {
+            index: i + 1,
+            message: `Chain break at ${i + 1}: expected old_public_key "${record.new_public_key}", got "${next.old_public_key}"`,
+          },
+        };
+      }
+    }
+
+    // Verify temporal ordering
+    if (i < chain.length - 1) {
+      const next = chain[i + 1]!;
+      if (record.timestamp >= next.timestamp) {
+        return {
+          valid: false,
+          genesis_public_key: genesisKey,
+          current_public_key: currentKey,
+          length: chain.length,
+          error: {
+            index: i + 1,
+            message: `Temporal ordering violation at ${i + 1}: timestamp ${next.timestamp} is not after ${record.timestamp}`,
+          },
+        };
+      }
+    }
+  }
+
+  return {
+    valid: true,
+    genesis_public_key: genesisKey,
+    current_public_key: currentKey,
+    length: chain.length,
+  };
+}
+
 // === Verifiable Credentials ===
 
 export {

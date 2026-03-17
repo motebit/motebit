@@ -875,6 +875,35 @@ export interface DelegatedStepResult {
   };
 }
 
+// === Key Succession ===
+
+/**
+ * A key succession record proving that one Ed25519 key has been replaced by another.
+ * Both the old and new keys sign the record, creating a cryptographic chain of custody.
+ * Structurally compatible with @motebit/crypto KeySuccessionRecord.
+ */
+export interface KeySuccessionRecord {
+  old_public_key: string; // hex
+  new_public_key: string; // hex
+  timestamp: number;
+  reason?: string;
+  old_key_signature: string; // hex, old key signs the canonical payload
+  new_key_signature: string; // hex, new key signs the canonical payload
+}
+
+/** Result of verifying a key succession chain. */
+export interface SuccessionChainResult {
+  valid: boolean;
+  /** The original (genesis) public key. */
+  genesis_public_key: string;
+  /** The current (active) public key. */
+  current_public_key: string;
+  /** Number of key rotations. */
+  length: number;
+  /** If invalid, the index of the first broken link and error. */
+  error?: { index: number; message: string };
+}
+
 // === Execution Ledger ===
 
 export type ExecutionTimelineType =
