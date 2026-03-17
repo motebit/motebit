@@ -677,6 +677,9 @@ importers:
       '@motebit/event-log':
         specifier: workspace:*
         version: link:../event-log
+      '@motebit/identity-file':
+        specifier: workspace:*
+        version: link:../identity-file
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk

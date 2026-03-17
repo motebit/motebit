@@ -9,16 +9,14 @@ import { EventType, RiskLevel } from "@motebit/sdk";
 import {
   generate as generateIdentityFile,
   verify as verifyIdentityFile,
-  rotate as rotateIdentityFile,
 } from "@motebit/identity-file";
+import { rotateIdentityKeys } from "@motebit/core-identity";
 import {
   hexPublicKeyToDidKey,
   verifyVerifiableCredential,
   verifyVerifiablePresentation,
   createSignedToken,
   secureErase,
-  generateKeypair,
-  signKeySuccession,
   bytesToHex,
 } from "@motebit/crypto";
 import type { VerifiableCredential, VerifiablePresentation } from "@motebit/crypto";
@@ -1763,12 +1761,12 @@ function discoverIdentityFile(): string | null {
   // 1. Walk up from cwd looking for motebit.md
   let dir = process.cwd();
   const root = path.parse(dir).root;
-  while (true) {
+  let parent = path.dirname(dir);
+  while (dir !== parent && dir !== root) {
     const candidate = path.join(dir, "motebit.md");
     if (fs.existsSync(candidate)) return candidate;
-    const parent = path.dirname(dir);
-    if (parent === dir || parent === root) break;
     dir = parent;
+    parent = path.dirname(dir);
   }
   // Check root itself
   const rootCandidate = path.join(root, "motebit.md");
@@ -1844,56 +1842,43 @@ export async function handleRotate(config: CliConfig): Promise<void> {
   const oldPrivateKey = fromHex(oldPrivKeyHex);
   const oldPublicKey = fromHex(oldPublicKeyHex);
 
-  // 4. Generate new Ed25519 keypair
-  const newKeypair = await generateKeypair();
-  const newPublicKeyHex = bytesToHex(newKeypair.publicKey);
-  console.log(`  Old public key: ${oldPublicKeyHex.slice(0, 16)}...`);
-  console.log(`  New public key: ${newPublicKeyHex.slice(0, 16)}...`);
-
-  // 5. Create succession record (both old and new keys sign)
-  const successionRecord = await signKeySuccession(
+  // 4. Generate new keypair, sign succession, rotate identity file
+  const rotateResult = await rotateIdentityKeys({
+    existingContent,
     oldPrivateKey,
-    newKeypair.privateKey,
-    newKeypair.publicKey,
     oldPublicKey,
     reason,
-  );
+  });
+  console.log(`  Old public key: ${oldPublicKeyHex.slice(0, 16)}...`);
+  console.log(`  New public key: ${rotateResult.newPublicKeyHex.slice(0, 16)}...`);
   console.log("  Succession record: created (dual-signed)");
 
-  // 6. Update identity file: change public key, append succession, re-sign
-  const rotatedContent = await rotateIdentityFile({
-    existingContent,
-    newPublicKey: newKeypair.publicKey,
-    newPrivateKey: newKeypair.privateKey,
-    successionRecord,
-  });
-
-  // Verify the rotated file before writing
-  const rotatedVerify = await verifyIdentityFile(rotatedContent);
+  // 5. Verify the rotated file before writing
+  const rotatedVerify = await verifyIdentityFile(rotateResult.identityFileContent);
   if (!rotatedVerify.valid) {
     console.error("Error: rotated identity file failed self-verification. Aborting.");
     if (rotatedVerify.error) console.error(`  ${rotatedVerify.error}`);
     secureErase(oldPrivateKey);
-    secureErase(newKeypair.privateKey);
+    secureErase(rotateResult.newPrivateKey);
     rl.close();
     process.exit(1);
   }
 
-  fs.writeFileSync(identityPath, rotatedContent, "utf-8");
+  fs.writeFileSync(identityPath, rotateResult.identityFileContent, "utf-8");
   console.log("  Identity file: updated and re-signed");
 
-  // 7. Encrypt new private key and update config
+  // 6. Encrypt new private key and update config
   fullConfig.cli_encrypted_key = await encryptPrivateKey(
-    bytesToHex(newKeypair.privateKey),
+    bytesToHex(rotateResult.newPrivateKey),
     passphrase,
   );
-  fullConfig.device_public_key = newPublicKeyHex;
+  fullConfig.device_public_key = rotateResult.newPublicKeyHex;
   saveFullConfig(fullConfig);
   console.log("  Config: new key encrypted and saved");
 
   // Securely erase old key material
   secureErase(oldPrivateKey);
-  secureErase(newKeypair.privateKey);
+  secureErase(rotateResult.newPrivateKey);
 
   // 8. Submit succession record to relay if configured
   const syncUrl = fullConfig.sync_url ?? process.env["MOTEBIT_SYNC_URL"];
@@ -1925,7 +1910,7 @@ export async function handleRotate(config: CliConfig): Promise<void> {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify(successionRecord),
+        body: JSON.stringify(rotateResult.successionRecord),
       });
 
       if (relayResp.ok) {
@@ -1948,8 +1933,8 @@ export async function handleRotate(config: CliConfig): Promise<void> {
   console.log();
   console.log("Key rotation complete.");
   console.log(`  motebit_id   ${motebitId}`);
-  console.log(`  did          ${hexPublicKeyToDidKey(newPublicKeyHex)}`);
-  console.log(`  public_key   ${newPublicKeyHex.slice(0, 16)}...`);
+  console.log(`  did          ${hexPublicKeyToDidKey(rotateResult.newPublicKeyHex)}`);
+  console.log(`  public_key   ${rotateResult.newPublicKeyHex.slice(0, 16)}...`);
   const chainLength = (identity.succession?.length ?? 0) + 1;
   console.log(`  rotations    ${chainLength}`);
   if (reason) {

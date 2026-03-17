@@ -29,12 +29,11 @@ import {
   createSignedToken,
   deriveSyncEncryptionKey,
   secureErase,
-  generateKeypair,
-  signKeySuccession,
   bytesToHex,
 } from "@motebit/crypto";
 import {
   bootstrapIdentity as sharedBootstrapIdentity,
+  rotateIdentityKeys,
   type BootstrapConfigStore,
   type BootstrapKeyStore,
 } from "@motebit/core-identity";
@@ -89,7 +88,6 @@ import type { EventType } from "@motebit/sdk";
 import {
   generate as generateIdentityFile,
   parse as parseIdentityFile,
-  rotate as rotateIdentityFile,
   governanceToPolicyConfig,
 } from "@motebit/identity-file";
 import { createExpoStorage, ExpoGoalStore } from "./adapters/expo-sqlite";
@@ -974,48 +972,41 @@ export class MobileApp {
         oldPubKeyBytes[i / 2] = parseInt(oldPubKeyHex.slice(i, i + 2), 16);
       }
 
-      // 3. Generate new keypair
-      const newKeypair = await generateKeypair();
-
-      // 4. Create signed succession record
-      const successionRecord = await signKeySuccession(
-        oldPrivKeyBytes,
-        newKeypair.privateKey,
-        newKeypair.publicKey,
-        oldPubKeyBytes,
-        reason,
-      );
-
-      // 5. Rotate identity file if it exists
+      // 3. Rotate identity file if it exists (generates keypair + succession internally)
       const existingIdentityFile = await AsyncStorage.getItem(IDENTITY_FILE_KEY);
+      let newPubKeyHex: string;
+      let newPrivKeyHex: string;
+      let successionRecord: unknown;
+
       if (existingIdentityFile != null && existingIdentityFile !== "") {
-        try {
-          const rotatedContent = await rotateIdentityFile({
-            existingContent: existingIdentityFile,
-            newPublicKey: newKeypair.publicKey,
-            newPrivateKey: newKeypair.privateKey,
-            successionRecord,
-          });
-          await AsyncStorage.setItem(IDENTITY_FILE_KEY, rotatedContent);
-        } catch {
-          // Non-fatal — identity file rotation is best-effort
-        }
+        const rotateResult = await rotateIdentityKeys({
+          existingContent: existingIdentityFile,
+          oldPrivateKey: oldPrivKeyBytes,
+          oldPublicKey: oldPubKeyBytes,
+          reason,
+        });
+        await AsyncStorage.setItem(IDENTITY_FILE_KEY, rotateResult.identityFileContent);
+        newPubKeyHex = rotateResult.newPublicKeyHex;
+        newPrivKeyHex = bytesToHex(rotateResult.newPrivateKey);
+        successionRecord = rotateResult.successionRecord;
+        secureErase(rotateResult.newPrivateKey);
+      } else {
+        // No identity file — generate raw keypair for device key rotation only
+        const { generateKeypair } = await import("@motebit/crypto");
+        const newKeypair = await generateKeypair();
+        newPubKeyHex = bytesToHex(newKeypair.publicKey);
+        newPrivKeyHex = bytesToHex(newKeypair.privateKey);
+        secureErase(newKeypair.privateKey);
       }
 
-      // 6. Store new private key in secure store
-      const newPrivKeyHex = bytesToHex(newKeypair.privateKey);
+      // 4. Store new private key in secure store
       await this.keyring.set("device_private_key", newPrivKeyHex);
 
-      // 7. Update public key in secure store and in-memory
-      const newPubKeyHex = bytesToHex(newKeypair.publicKey);
+      // 5. Update public key in secure store and in-memory
       await this.keyring.set("device_public_key", newPubKeyHex);
       this.publicKey = newPubKeyHex;
 
-      // 8. Securely erase key material
-      secureErase(newKeypair.privateKey);
-      secureErase(newKeypair.publicKey);
-
-      // 9. Submit to relay if configured (best-effort)
+      // 6. Submit to relay if configured (best-effort)
       try {
         const syncUrl = await this.getSyncUrl();
         if (syncUrl != null && syncUrl !== "") {
@@ -1029,7 +1020,7 @@ export class MobileApp {
             body: JSON.stringify({
               device_id: this.deviceId,
               new_public_key: newPubKeyHex,
-              succession_record: successionRecord,
+              ...(successionRecord != null ? { succession_record: successionRecord } : {}),
             }),
           });
         }

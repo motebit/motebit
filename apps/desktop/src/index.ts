@@ -35,6 +35,7 @@ import { InMemoryMemoryStorage, computeDecayedConfidence, embedText } from "@mot
 import {
   InMemoryIdentityStorage,
   bootstrapIdentity as sharedBootstrapIdentity,
+  rotateIdentityKeys,
   type BootstrapConfigStore,
   type BootstrapKeyStore,
 } from "@motebit/core-identity";
@@ -44,15 +45,13 @@ import {
   deriveSyncEncryptionKey,
   hexPublicKeyToDidKey,
   secureErase,
-  generateKeypair,
-  signKeySuccession,
+  bytesToHex,
 } from "@motebit/crypto";
 import {
   generate as generateIdentityFile,
   parse as parseIdentityFile,
   verify as verifyIdentity,
   governanceToPolicyConfig,
-  rotate as rotateIdentityFile,
 } from "@motebit/identity-file";
 import {
   PairingClient,
@@ -1227,10 +1226,7 @@ export class DesktopApp {
     const oldKeypair = await this.getDeviceKeypair(invoke);
     if (!oldKeypair) throw new Error("No device keypair available");
 
-    // Generate new Ed25519 keypair
-    const newKeypair = await generateKeypair();
-
-    // Parse old private key from hex
+    // Parse old keys from hex
     const oldPrivKeyBytes = new Uint8Array(oldKeypair.privateKey.length / 2);
     for (let i = 0; i < oldKeypair.privateKey.length; i += 2) {
       oldPrivKeyBytes[i / 2] = parseInt(oldKeypair.privateKey.slice(i, i + 2), 16);
@@ -1241,36 +1237,32 @@ export class DesktopApp {
     }
 
     try {
-      // Create succession record signed by both keys
-      const successionRecord = await signKeySuccession(
-        oldPrivKeyBytes,
-        newKeypair.privateKey,
-        newKeypair.publicKey,
-        oldPubKeyBytes,
-        reason,
-      );
-
-      // Convert new keys to hex
-      const newPubKeyHex = Array.from(newKeypair.publicKey)
-        .map((b: number) => b.toString(16).padStart(2, "0"))
-        .join("");
-      const newPrivKeyHex = Array.from(newKeypair.privateKey)
-        .map((b: number) => b.toString(16).padStart(2, "0"))
-        .join("");
-
-      // Update identity file if it exists
+      // Read config and identity file
       const raw = await invoke<string>("read_config");
       const configData = JSON.parse(raw) as Record<string, unknown>;
       const existingIdentityFile = configData._identity_file as string | undefined;
 
+      // Generate new keypair, sign succession, rotate identity file
+      let newPubKeyHex: string;
+      let newPrivKeyHex: string;
       if (existingIdentityFile != null && existingIdentityFile !== "") {
-        const rotatedContent = await rotateIdentityFile({
+        const rotateResult = await rotateIdentityKeys({
           existingContent: existingIdentityFile,
-          newPublicKey: newKeypair.publicKey,
-          newPrivateKey: newKeypair.privateKey,
-          successionRecord,
+          oldPrivateKey: oldPrivKeyBytes,
+          oldPublicKey: oldPubKeyBytes,
+          reason,
         });
-        configData._identity_file = rotatedContent;
+        configData._identity_file = rotateResult.identityFileContent;
+        newPubKeyHex = rotateResult.newPublicKeyHex;
+        newPrivKeyHex = bytesToHex(rotateResult.newPrivateKey);
+        secureErase(rotateResult.newPrivateKey);
+      } else {
+        // No identity file — generate raw keypair for device key rotation only
+        const { generateKeypair } = await import("@motebit/crypto");
+        const newKeypair = await generateKeypair();
+        newPubKeyHex = bytesToHex(newKeypair.publicKey);
+        newPrivKeyHex = bytesToHex(newKeypair.privateKey);
+        secureErase(newKeypair.privateKey);
       }
 
       // Store new private key in keyring
@@ -1289,7 +1281,7 @@ export class DesktopApp {
       let rotationCount = 1;
       if (configData._identity_file != null && typeof configData._identity_file === "string") {
         try {
-          const parsed = parseIdentityFile(configData._identity_file as string);
+          const parsed = parseIdentityFile(configData._identity_file);
           const chain = (parsed.frontmatter as unknown as Record<string, unknown>).succession;
           if (Array.isArray(chain)) rotationCount = chain.length;
         } catch {
@@ -1324,7 +1316,6 @@ export class DesktopApp {
       return { oldKeyFingerprint, newKeyFingerprint, rotationCount };
     } finally {
       secureErase(oldPrivKeyBytes);
-      secureErase(newKeypair.privateKey);
     }
   }
 

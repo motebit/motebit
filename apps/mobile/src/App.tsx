@@ -27,7 +27,11 @@ import {
   Modal,
   Appearance,
 } from "react-native";
-import { GLView } from "expo-gl";
+import { GLView as _GLView } from "expo-gl";
+
+// expo-gl types lag behind React 19's stricter JSX component constraints
+const GLView = _GLView as unknown as typeof _GLView &
+  (new (props: Record<string, unknown>) => React.Component<Record<string, unknown>>);
 import type { ExpoWebGLRenderingContext } from "expo-gl";
 import * as SecureStore from "expo-secure-store";
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";

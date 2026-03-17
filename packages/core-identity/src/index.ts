@@ -2,7 +2,9 @@ import type { MotebitIdentity, EventLogEntry } from "@motebit/sdk";
 import { EventType } from "@motebit/sdk";
 import type { EventStoreAdapter } from "@motebit/event-log";
 import { EventStore } from "@motebit/event-log";
-import { generateKeypair } from "@motebit/crypto";
+import { generateKeypair, signKeySuccession, bytesToHex } from "@motebit/crypto";
+import type { KeySuccessionRecord } from "@motebit/crypto";
+import { rotate as rotateIdentityFile } from "@motebit/identity-file";
 
 // === UUID v7 Generation ===
 
@@ -416,6 +418,56 @@ export async function bootstrapIdentity(opts: {
     deviceId: device.device_id,
     publicKeyHex: pubKeyHex,
     isFirstLaunch: true,
+  };
+}
+
+// === Key Rotation ===
+
+export interface RotateIdentityKeysResult {
+  /** Updated identity file content (re-signed with new key) */
+  identityFileContent: string;
+  /** New Ed25519 keypair */
+  newPublicKey: Uint8Array;
+  newPrivateKey: Uint8Array;
+  newPublicKeyHex: string;
+  /** Dual-signed succession record */
+  successionRecord: KeySuccessionRecord;
+}
+
+/**
+ * Generate a new Ed25519 keypair, create a dual-signed succession record,
+ * and rotate the identity file. This is the proper way to rotate keys —
+ * surfaces should call this instead of importing generateKeypair directly.
+ */
+export async function rotateIdentityKeys(opts: {
+  existingContent: string;
+  oldPrivateKey: Uint8Array;
+  oldPublicKey: Uint8Array;
+  reason?: string;
+}): Promise<RotateIdentityKeysResult> {
+  const newKeypair = await generateKeypair();
+
+  const successionRecord = await signKeySuccession(
+    opts.oldPrivateKey,
+    newKeypair.privateKey,
+    newKeypair.publicKey,
+    opts.oldPublicKey,
+    opts.reason,
+  );
+
+  const identityFileContent = await rotateIdentityFile({
+    existingContent: opts.existingContent,
+    newPublicKey: newKeypair.publicKey,
+    newPrivateKey: newKeypair.privateKey,
+    successionRecord,
+  });
+
+  return {
+    identityFileContent,
+    newPublicKey: newKeypair.publicKey,
+    newPrivateKey: newKeypair.privateKey,
+    newPublicKeyHex: bytesToHex(newKeypair.publicKey),
+    successionRecord,
   };
 }
 
