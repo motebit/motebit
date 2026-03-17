@@ -407,6 +407,27 @@ export function fetchBudget(signal?: AbortSignal): Promise<BudgetResponse> {
   return apiFetch<BudgetResponse>(`/agent/${config.motebitId}/budget`, { signal });
 }
 
+// === Key Succession ===
+
+export interface KeySuccessionEntry {
+  old_public_key: string;
+  new_public_key: string;
+  timestamp: number;
+  reason?: string;
+  old_key_signature: string;
+  new_key_signature: string;
+}
+
+export interface SuccessionResponse {
+  motebit_id: string;
+  chain: KeySuccessionEntry[];
+  current_public_key: string;
+}
+
+export function fetchSuccession(signal?: AbortSignal): Promise<SuccessionResponse> {
+  return apiFetch<SuccessionResponse>(`/api/v1/agents/${config.motebitId}/succession`, { signal });
+}
+
 // === Agent Graph ===
 
 export interface AgentGraphEdge {

@@ -23,6 +23,7 @@ import {
   fetchAgentGraph,
   fetchCredentials,
   fetchBudget,
+  fetchSuccession,
   generatePresentation,
   config,
 } from "./api";
@@ -36,6 +37,7 @@ import type {
   AgentGraphEdge,
   CredentialEntry,
   BudgetAllocationEntry,
+  SuccessionResponse,
 } from "./api";
 import { useStateHistory } from "./hooks/useStateHistory";
 import { ConnectionStatus } from "./components/ConnectionStatus";
@@ -89,6 +91,7 @@ export function AdminApp(): React.ReactElement {
     total_settled: number;
   } | null>(null);
   const [budgetAllocations, setBudgetAllocations] = useState<BudgetAllocationEntry[]>([]);
+  const [succession, setSuccession] = useState<SuccessionResponse | null>(null);
   const [presentation, setPresentation] = useState<Record<string, unknown> | null>(null);
   const [presentationLoading, setPresentationLoading] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -115,6 +118,7 @@ export function AdminApp(): React.ReactElement {
           agentGraphRes,
           credRes,
           budgetRes,
+          successionRes,
         ] = await Promise.all([
           fetchState(signal),
           fetchMemory(signal),
@@ -138,6 +142,7 @@ export function AdminApp(): React.ReactElement {
             summary: null,
             allocations: [] as BudgetAllocationEntry[],
           })),
+          fetchSuccession(signal).catch(() => null as SuccessionResponse | null),
         ]);
 
         setState(stateRes.state);
@@ -162,6 +167,9 @@ export function AdminApp(): React.ReactElement {
         }
         if ("allocations" in budgetRes) {
           setBudgetAllocations(budgetRes.allocations);
+        }
+        if (successionRes != null) {
+          setSuccession(successionRes);
         }
 
         if (eventsRes.events.length > 0) {
@@ -297,6 +305,7 @@ export function AdminApp(): React.ReactElement {
         credentials,
         budgetSummary,
         budgetAllocations,
+        succession,
         presentation,
         presentationLoading,
         onGeneratePresentation: () => {

@@ -495,6 +495,98 @@ export function initSovereignPanels(ctx: WebContext): SovereignPanelsAPI {
     }
   }
 
+  // === Identity / Succession Tab ===
+  const successionContent = document.getElementById("succession-content") as HTMLDivElement;
+  const successionEmpty = document.getElementById("succession-empty") as HTMLDivElement;
+
+  interface KeySuccessionEntry {
+    old_public_key: string;
+    new_public_key: string;
+    timestamp: number;
+    reason?: string;
+    old_key_signature: string;
+    new_key_signature: string;
+  }
+
+  interface SuccessionResponse {
+    motebit_id: string;
+    chain: KeySuccessionEntry[];
+    current_public_key: string;
+  }
+
+  async function loadSuccession(): Promise<void> {
+    const syncUrl = loadSyncUrl();
+    if (!syncUrl) {
+      successionContent.innerHTML = "";
+      successionEmpty.style.display = "block";
+      successionEmpty.textContent = "Connect to a relay to view identity succession.";
+      return;
+    }
+
+    try {
+      const data = (await relayFetch(
+        ctx,
+        `/api/v1/agents/${ctx.app.motebitId}/succession`,
+      )) as SuccessionResponse;
+
+      successionContent.innerHTML = "";
+      if (!data.chain || data.chain.length === 0) {
+        successionEmpty.style.display = "block";
+        successionEmpty.textContent = "No key rotations.";
+        return;
+      }
+
+      successionEmpty.style.display = "none";
+
+      // Summary
+      const summary = document.createElement("div");
+      summary.style.cssText = "margin-bottom:12px;";
+
+      const genesisKey = data.chain[0]!.old_public_key;
+      summary.innerHTML = `
+        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;">
+          <span style="font-weight:600;">Rotations:</span> ${data.chain.length}
+        </div>
+        <div style="font-size:11px;color:var(--text-ghost);margin-bottom:4px;">
+          <span style="font-weight:600;">Genesis key:</span> <code style="font-size:10px;">${escapeHtml(truncate(genesisKey, 24))}</code>
+        </div>
+        <div style="font-size:11px;color:var(--text-ghost);">
+          <span style="font-weight:600;">Current key:</span> <code style="font-size:10px;">${escapeHtml(truncate(data.current_public_key, 24))}</code>
+        </div>
+      `;
+      successionContent.appendChild(summary);
+
+      // Timeline
+      const timelineHeader = document.createElement("div");
+      timelineHeader.style.cssText =
+        "font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:6px;";
+      timelineHeader.textContent = "Rotation Timeline";
+      successionContent.appendChild(timelineHeader);
+
+      for (const entry of data.chain) {
+        const item = document.createElement("div");
+        item.style.cssText =
+          "padding:8px;margin-bottom:6px;border-radius:6px;background:var(--bg-card, rgba(255,255,255,0.04));font-size:11px;";
+        item.innerHTML = `
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+            <span style="color:var(--text-secondary);">${formatDate(entry.timestamp)}</span>
+            ${entry.reason ? `<span style="color:var(--text-ghost);font-style:italic;">${escapeHtml(entry.reason)}</span>` : ""}
+          </div>
+          <div style="color:var(--text-ghost);">
+            <code style="font-size:10px;">${escapeHtml(truncate(entry.old_public_key, 16))}</code>
+            <span style="margin:0 4px;">&#x2192;</span>
+            <code style="font-size:10px;">${escapeHtml(truncate(entry.new_public_key, 16))}</code>
+          </div>
+        `;
+        successionContent.appendChild(item);
+      }
+    } catch (err: unknown) {
+      successionContent.innerHTML = "";
+      successionEmpty.style.display = "block";
+      successionEmpty.textContent = `Failed to load: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
   // === Panel open/close ===
 
   function open(): void {
@@ -504,6 +596,7 @@ export function initSovereignPanels(ctx: WebContext): SovereignPanelsAPI {
     void loadCredentials();
     void loadLedger();
     void loadBudget();
+    void loadSuccession();
   }
 
   function close(): void {

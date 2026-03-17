@@ -44,12 +44,15 @@ import {
   deriveSyncEncryptionKey,
   hexPublicKeyToDidKey,
   secureErase,
+  generateKeypair,
+  signKeySuccession,
 } from "@motebit/crypto";
 import {
   generate as generateIdentityFile,
   parse as parseIdentityFile,
   verify as verifyIdentity,
   governanceToPolicyConfig,
+  rotate as rotateIdentityFile,
 } from "@motebit/identity-file";
 import {
   PairingClient,
@@ -1209,6 +1212,120 @@ export class DesktopApp {
   async verifyIdentityFile(content: string): Promise<{ valid: boolean; error?: string }> {
     const result = await verifyIdentity(content);
     return { valid: result.valid, error: result.error };
+  }
+
+  /**
+   * Rotate the Ed25519 keypair: generate a new keypair, create a signed succession
+   * record (both old and new keys sign), update the identity file, store the new
+   * private key in keyring, and update the config with the new public key.
+   * Returns the old and new public key fingerprints and the rotation count.
+   */
+  async rotateKey(
+    invoke: InvokeFn,
+    reason?: string,
+  ): Promise<{ oldKeyFingerprint: string; newKeyFingerprint: string; rotationCount: number }> {
+    const oldKeypair = await this.getDeviceKeypair(invoke);
+    if (!oldKeypair) throw new Error("No device keypair available");
+
+    // Generate new Ed25519 keypair
+    const newKeypair = await generateKeypair();
+
+    // Parse old private key from hex
+    const oldPrivKeyBytes = new Uint8Array(oldKeypair.privateKey.length / 2);
+    for (let i = 0; i < oldKeypair.privateKey.length; i += 2) {
+      oldPrivKeyBytes[i / 2] = parseInt(oldKeypair.privateKey.slice(i, i + 2), 16);
+    }
+    const oldPubKeyBytes = new Uint8Array(oldKeypair.publicKey.length / 2);
+    for (let i = 0; i < oldKeypair.publicKey.length; i += 2) {
+      oldPubKeyBytes[i / 2] = parseInt(oldKeypair.publicKey.slice(i, i + 2), 16);
+    }
+
+    try {
+      // Create succession record signed by both keys
+      const successionRecord = await signKeySuccession(
+        oldPrivKeyBytes,
+        newKeypair.privateKey,
+        newKeypair.publicKey,
+        oldPubKeyBytes,
+        reason,
+      );
+
+      // Convert new keys to hex
+      const newPubKeyHex = Array.from(newKeypair.publicKey)
+        .map((b: number) => b.toString(16).padStart(2, "0"))
+        .join("");
+      const newPrivKeyHex = Array.from(newKeypair.privateKey)
+        .map((b: number) => b.toString(16).padStart(2, "0"))
+        .join("");
+
+      // Update identity file if it exists
+      const raw = await invoke<string>("read_config");
+      const configData = JSON.parse(raw) as Record<string, unknown>;
+      const existingIdentityFile = configData._identity_file as string | undefined;
+
+      if (existingIdentityFile != null && existingIdentityFile !== "") {
+        const rotatedContent = await rotateIdentityFile({
+          existingContent: existingIdentityFile,
+          newPublicKey: newKeypair.publicKey,
+          newPrivateKey: newKeypair.privateKey,
+          successionRecord,
+        });
+        configData._identity_file = rotatedContent;
+      }
+
+      // Store new private key in keyring
+      await invoke<void>("keyring_set", { key: "device_private_key", value: newPrivKeyHex });
+
+      // Update config with new public key
+      configData.device_public_key = newPubKeyHex;
+      await invoke<void>("write_config", { json: JSON.stringify(configData) });
+
+      // Update in-memory state
+      const oldKeyFingerprint = this.publicKey.slice(0, 16);
+      this.publicKey = newPubKeyHex;
+      const newKeyFingerprint = newPubKeyHex.slice(0, 16);
+
+      // Count rotations from identity file succession chain
+      let rotationCount = 1;
+      if (configData._identity_file != null && typeof configData._identity_file === "string") {
+        try {
+          const parsed = parseIdentityFile(configData._identity_file as string);
+          const chain = (parsed.frontmatter as unknown as Record<string, unknown>).succession;
+          if (Array.isArray(chain)) rotationCount = chain.length;
+        } catch {
+          // Non-fatal
+        }
+      }
+
+      // Update relay if configured
+      const syncUrl = configData.sync_url as string | undefined;
+      const masterToken = configData.sync_master_token as string | undefined;
+      if (syncUrl != null && syncUrl !== "") {
+        try {
+          const headers: Record<string, string> = {
+            "Content-Type": "application/json",
+          };
+          if (masterToken) headers["Authorization"] = `Bearer ${masterToken}`;
+
+          await fetch(`${syncUrl}/device/register`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              motebit_id: this.motebitId,
+              device_name: "Desktop",
+              public_key: newPubKeyHex,
+            }),
+          });
+        } catch {
+          // Non-fatal — relay update is best-effort
+        }
+      }
+
+      return { oldKeyFingerprint, newKeyFingerprint, rotationCount };
+    } finally {
+      secureErase(oldPrivKeyBytes);
+      secureErase(newKeypair.privateKey);
+    }
   }
 
   async exportAllData(): Promise<string> {

@@ -25,7 +25,14 @@ import {
   HybridProvider,
   DEFAULT_OLLAMA_URL,
 } from "@motebit/ai-core";
-import { createSignedToken, deriveSyncEncryptionKey, secureErase } from "@motebit/crypto";
+import {
+  createSignedToken,
+  deriveSyncEncryptionKey,
+  secureErase,
+  generateKeypair,
+  signKeySuccession,
+  bytesToHex,
+} from "@motebit/crypto";
 import {
   bootstrapIdentity as sharedBootstrapIdentity,
   type BootstrapConfigStore,
@@ -82,6 +89,7 @@ import type { EventType } from "@motebit/sdk";
 import {
   generate as generateIdentityFile,
   parse as parseIdentityFile,
+  rotate as rotateIdentityFile,
   governanceToPolicyConfig,
 } from "@motebit/identity-file";
 import { createExpoStorage, ExpoGoalStore } from "./adapters/expo-sqlite";
@@ -944,6 +952,95 @@ export class MobileApp {
       deviceId: this.deviceId,
       publicKey: this.publicKey,
     };
+  }
+
+  // === Key Rotation ===
+
+  /**
+   * Rotate the Ed25519 keypair: generate new keys, create a signed succession
+   * record (old + new keys both sign), update identity file, store new private
+   * key in expo-secure-store, and submit to relay if configured.
+   */
+  async rotateKey(reason?: string): Promise<{ newPublicKey: string }> {
+    // 1. Load existing private key
+    const oldPrivKeyBytes = await this._getPrivKeyBytes();
+
+    try {
+      // 2. Derive old public key from the stored hex
+      const oldPubKeyHex = this.publicKey;
+      if (!oldPubKeyHex) throw new Error("No public key available — bootstrap first");
+      const oldPubKeyBytes = new Uint8Array(oldPubKeyHex.length / 2);
+      for (let i = 0; i < oldPubKeyHex.length; i += 2) {
+        oldPubKeyBytes[i / 2] = parseInt(oldPubKeyHex.slice(i, i + 2), 16);
+      }
+
+      // 3. Generate new keypair
+      const newKeypair = await generateKeypair();
+
+      // 4. Create signed succession record
+      const successionRecord = await signKeySuccession(
+        oldPrivKeyBytes,
+        newKeypair.privateKey,
+        newKeypair.publicKey,
+        oldPubKeyBytes,
+        reason,
+      );
+
+      // 5. Rotate identity file if it exists
+      const existingIdentityFile = await AsyncStorage.getItem(IDENTITY_FILE_KEY);
+      if (existingIdentityFile != null && existingIdentityFile !== "") {
+        try {
+          const rotatedContent = await rotateIdentityFile({
+            existingContent: existingIdentityFile,
+            newPublicKey: newKeypair.publicKey,
+            newPrivateKey: newKeypair.privateKey,
+            successionRecord,
+          });
+          await AsyncStorage.setItem(IDENTITY_FILE_KEY, rotatedContent);
+        } catch {
+          // Non-fatal — identity file rotation is best-effort
+        }
+      }
+
+      // 6. Store new private key in secure store
+      const newPrivKeyHex = bytesToHex(newKeypair.privateKey);
+      await this.keyring.set("device_private_key", newPrivKeyHex);
+
+      // 7. Update public key in secure store and in-memory
+      const newPubKeyHex = bytesToHex(newKeypair.publicKey);
+      await this.keyring.set("device_public_key", newPubKeyHex);
+      this.publicKey = newPubKeyHex;
+
+      // 8. Securely erase key material
+      secureErase(newKeypair.privateKey);
+      secureErase(newKeypair.publicKey);
+
+      // 9. Submit to relay if configured (best-effort)
+      try {
+        const syncUrl = await this.getSyncUrl();
+        if (syncUrl != null && syncUrl !== "") {
+          const token = await this.createSyncToken("device:auth");
+          await fetch(`${syncUrl}/api/v1/agents/${this.motebitId}/key-rotation`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              device_id: this.deviceId,
+              new_public_key: newPubKeyHex,
+              succession_record: successionRecord,
+            }),
+          });
+        }
+      } catch {
+        // Non-fatal — relay notification is best-effort
+      }
+
+      return { newPublicKey: newPubKeyHex };
+    } finally {
+      secureErase(oldPrivKeyBytes);
+    }
   }
 
   // === Governance ===

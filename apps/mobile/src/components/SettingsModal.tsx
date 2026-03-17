@@ -378,6 +378,33 @@ export function SettingsModal({
                 })();
               }}
               onLinkDevice={onLinkDevice}
+              onRotateKey={() => {
+                Alert.alert(
+                  "Rotate Key",
+                  "Generate a new keypair with a signed succession record? The old key will sign over authority to the new key.",
+                  [
+                    { text: "Cancel", style: "cancel" },
+                    {
+                      text: "Rotate",
+                      style: "destructive",
+                      onPress: () => {
+                        void (async () => {
+                          try {
+                            const result = await app.rotateKey("manual rotation from mobile");
+                            Alert.alert(
+                              "Key Rotated",
+                              `New public key: ${result.newPublicKey.slice(0, 16)}...`,
+                            );
+                          } catch (err: unknown) {
+                            const msg = err instanceof Error ? err.message : String(err);
+                            Alert.alert("Key Rotation Failed", msg);
+                          }
+                        })();
+                      },
+                    },
+                  ],
+                );
+              }}
             />
           )}
         </ScrollView>
@@ -1030,12 +1057,14 @@ function IdentityTab({
   publicKey,
   onExport,
   onLinkDevice,
+  onRotateKey,
 }: {
   motebitId: string;
   deviceId: string;
   publicKey: string;
   onExport: () => void;
   onLinkDevice?: () => void;
+  onRotateKey?: () => void;
 }) {
   const colors = useTheme();
   const styles = useMemo(() => createSettingsStyles(colors), [colors]);
@@ -1133,6 +1162,12 @@ function IdentityTab({
           {copiedField === "publicKey" ? "Copied!" : "Copy"}
         </Text>
       </TouchableOpacity>
+
+      {onRotateKey && (
+        <TouchableOpacity style={styles.rotateKeyButton} onPress={onRotateKey} activeOpacity={0.7}>
+          <Text style={styles.rotateKeyText}>Rotate Key</Text>
+        </TouchableOpacity>
+      )}
 
       {onLinkDevice && (
         <TouchableOpacity
@@ -1759,6 +1794,16 @@ function createSettingsStyles(c: ThemeColors) {
       textAlign: "center",
     },
     identityCopiedLabel: { color: c.statusSuccess },
+    rotateKeyButton: {
+      backgroundColor: c.buttonSecondaryBg,
+      borderRadius: 10,
+      paddingVertical: 14,
+      marginTop: 20,
+      alignItems: "center",
+      borderWidth: 1,
+      borderColor: c.statusWarning,
+    },
+    rotateKeyText: { color: c.statusWarning, fontSize: 15, fontWeight: "600" as const },
     docsButton: {
       backgroundColor: c.borderLight,
       borderRadius: 10,

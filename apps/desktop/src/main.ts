@@ -130,6 +130,8 @@ document.addEventListener("keydown", (e) => {
       app.setAudioReactivity(null);
     } else if (micState === "ambient") {
       voice.stopAmbient();
+    } else if (settings.isRotateKeyDialogOpen()) {
+      settings.closeRotateKeyDialog();
     } else if (settings.isPinDialogOpen()) {
       settings.closePinDialog();
     } else if (goalsPanel.classList.contains("open")) {

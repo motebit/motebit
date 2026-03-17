@@ -127,6 +127,8 @@ export interface SettingsAPI {
   setDiscoveryCollisions(v: NameCollision[]): void;
   isPinDialogOpen(): boolean;
   closePinDialog(): void;
+  isRotateKeyDialogOpen(): boolean;
+  closeRotateKeyDialog(): void;
 }
 
 export interface SettingsDeps {
@@ -138,6 +140,7 @@ export interface SettingsDeps {
 
 export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsAPI {
   const { colorPicker, voice, pairing, scrollToRunId } = deps;
+  let pendingRotation = false;
 
   // === Tab Switching ===
 
@@ -549,6 +552,83 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       }, 8000);
     });
     input.click();
+  });
+
+  // === Key Rotation ===
+
+  const rotateKeyBackdrop = document.getElementById("rotate-key-backdrop") as HTMLDivElement;
+  const rotateKeyReason = document.getElementById("rotate-key-reason") as HTMLInputElement;
+  const rotateKeyError = document.getElementById("rotate-key-error") as HTMLDivElement;
+  const rotateKeyResult = document.getElementById("rotate-key-result") as HTMLDivElement;
+  const rotateKeyConfirm = document.getElementById("rotate-key-confirm") as HTMLButtonElement;
+
+  function showRotateKeyDialog(): void {
+    rotateKeyReason.value = "";
+    rotateKeyError.textContent = "";
+    rotateKeyResult.style.display = "none";
+    rotateKeyResult.textContent = "";
+    rotateKeyConfirm.disabled = false;
+    rotateKeyConfirm.textContent = "Rotate";
+    rotateKeyBackdrop.classList.add("open");
+    requestAnimationFrame(() => rotateKeyReason.focus());
+  }
+
+  function closeRotateKeyDialog(): void {
+    rotateKeyBackdrop.classList.remove("open");
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- DOM event handler
+  async function handleRotateKeyConfirm(): Promise<void> {
+    rotateKeyError.textContent = "";
+    rotateKeyConfirm.disabled = true;
+    rotateKeyConfirm.textContent = "Rotating\u2026";
+
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const reason = rotateKeyReason.value.trim() || undefined;
+      const result = await ctx.app.rotateKey(invoke as InvokeFn, reason);
+
+      // Show result briefly, then close and update identity display
+      rotateKeyResult.style.display = "block";
+      rotateKeyResult.textContent = `${result.oldKeyFingerprint}\u2026 \u2192 ${result.newKeyFingerprint}\u2026\nRotation #${result.rotationCount}`;
+
+      // Update identity display with new key
+      populateIdentityTab();
+
+      setTimeout(() => {
+        closeRotateKeyDialog();
+      }, 2000);
+    } catch (err: unknown) {
+      rotateKeyError.textContent = err instanceof Error ? err.message : String(err);
+      rotateKeyConfirm.disabled = false;
+      rotateKeyConfirm.textContent = "Rotate";
+    }
+  }
+
+  document.getElementById("settings-rotate-key")!.addEventListener("click", () => {
+    const config = ctx.getConfig();
+    if (config?.isTauri !== true || config.invoke == null) {
+      addMessage("system", "Key rotation requires Tauri (not available in dev mode)");
+      return;
+    }
+
+    // If operator mode is enabled, require PIN verification first
+    if (ctx.app.isOperatorMode) {
+      pendingRotation = true;
+      showPinDialog("verify");
+      return;
+    }
+
+    showRotateKeyDialog();
+  });
+
+  document.getElementById("rotate-key-cancel")!.addEventListener("click", closeRotateKeyDialog);
+  document.getElementById("rotate-key-confirm")!.addEventListener("click", () => {
+    void handleRotateKeyConfirm();
+  });
+  rotateKeyReason.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") void handleRotateKeyConfirm();
+    if (e.key === "Escape") closeRotateKeyDialog();
   });
 
   // === Governance Audit Activity ===
@@ -1235,6 +1315,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     pinInput.value = "";
     pinConfirmInput.value = "";
     pinError.textContent = "";
+    pendingRotation = false;
     settingsOperatorMode.checked = ctx.app.isOperatorMode;
   }
 
@@ -1284,6 +1365,11 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     }
 
     pinBackdrop.classList.remove("open");
+    if (pendingRotation) {
+      pendingRotation = false;
+      showRotateKeyDialog();
+      return;
+    }
     if (pendingSettingsSave) {
       const s = pendingSettingsSave;
       pendingSettingsSave = null;
@@ -1384,5 +1470,9 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       return pinBackdrop.classList.contains("open");
     },
     closePinDialog,
+    isRotateKeyDialogOpen() {
+      return rotateKeyBackdrop.classList.contains("open");
+    },
+    closeRotateKeyDialog,
   };
 }

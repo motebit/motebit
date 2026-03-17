@@ -1,5 +1,5 @@
 import React from "react";
-import type { CredentialEntry, BudgetAllocationEntry } from "../api";
+import type { CredentialEntry, BudgetAllocationEntry, SuccessionResponse } from "../api";
 
 const TYPE_COLORS: Record<string, string> = {
   reputation: "#4caf50",
@@ -26,6 +26,7 @@ interface CredentialsPanelProps {
   credentials: CredentialEntry[];
   budgetSummary: { total_locked: number; total_settled: number } | null;
   budgetAllocations: BudgetAllocationEntry[];
+  succession: SuccessionResponse | null;
   presentation: Record<string, unknown> | null;
   presentationLoading: boolean;
   onGeneratePresentation: () => void;
@@ -35,6 +36,7 @@ export function CredentialsPanel({
   credentials,
   budgetSummary,
   budgetAllocations,
+  succession,
   presentation,
   presentationLoading,
   onGeneratePresentation,
@@ -285,5 +287,120 @@ export function CredentialsPanel({
         ),
       );
     }),
+
+    // Key Succession section
+    React.createElement("h2", { style: { marginTop: "24px" } }, "Key Succession"),
+
+    succession != null && succession.chain.length > 0
+      ? React.createElement(
+          "div",
+          null,
+          React.createElement(
+            "div",
+            {
+              style: {
+                display: "flex",
+                gap: "16px",
+                marginBottom: "12px",
+              },
+            },
+            React.createElement(
+              "div",
+              {
+                style: {
+                  padding: "8px 14px",
+                  borderRadius: "4px",
+                  background: "rgba(0,0,0,0.05)",
+                  fontSize: "13px",
+                },
+              },
+              React.createElement(
+                "div",
+                { style: { fontSize: "10px", opacity: 0.6 } },
+                "Rotations",
+              ),
+              React.createElement(
+                "div",
+                { style: { fontWeight: "bold" } },
+                String(succession.chain.length),
+              ),
+            ),
+            React.createElement(
+              "div",
+              {
+                style: {
+                  padding: "8px 14px",
+                  borderRadius: "4px",
+                  background: "rgba(0,0,0,0.05)",
+                  fontSize: "13px",
+                },
+              },
+              React.createElement(
+                "div",
+                { style: { fontSize: "10px", opacity: 0.6 } },
+                "Current Key",
+              ),
+              React.createElement(
+                "div",
+                {
+                  style: { fontWeight: "bold", fontSize: "11px", wordBreak: "break-all" as const },
+                },
+                succession.current_public_key.slice(0, 24) + "...",
+              ),
+            ),
+          ),
+          React.createElement(
+            "div",
+            {
+              style: {
+                fontSize: "11px",
+                opacity: 0.6,
+                marginBottom: "8px",
+              },
+            },
+            `Genesis key: ${succession.chain[0]!.old_public_key.slice(0, 24)}...`,
+          ),
+          ...succession.chain.map((entry, i) =>
+            React.createElement(
+              "div",
+              {
+                key: `succ-${i}`,
+                className: "event-entry device-entry",
+              },
+              React.createElement(
+                "div",
+                { className: "device-header" },
+                React.createElement("span", { className: "device-name" }, `Rotation ${i + 1}`),
+                React.createElement(
+                  "span",
+                  {
+                    style: {
+                      color: "#f0a030",
+                      fontWeight: "bold",
+                      fontSize: "12px",
+                      padding: "2px 6px",
+                      borderRadius: "3px",
+                      border: "1px solid #f0a030",
+                    },
+                  },
+                  "rotated",
+                ),
+              ),
+              React.createElement(
+                "div",
+                { className: "device-meta" },
+                React.createElement("span", null, `old: ${entry.old_public_key.slice(0, 16)}...`),
+                React.createElement("span", null, `new: ${entry.new_public_key.slice(0, 16)}...`),
+                entry.reason ? React.createElement("span", null, `reason: ${entry.reason}`) : null,
+                React.createElement(
+                  "span",
+                  { className: "timestamp" },
+                  `rotated ${new Date(entry.timestamp).toISOString()}`,
+                ),
+              ),
+            ),
+          ),
+        )
+      : React.createElement("div", { className: "count" }, "No key rotations"),
   );
 }
