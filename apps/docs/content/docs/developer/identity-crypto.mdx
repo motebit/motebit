@@ -106,6 +106,6 @@ A valid signature proves the holder has the private key. It does not prove the h
 | Concern | Approach |
 |---------|----------|
 | **Key storage** | OS keychain (desktop/mobile) or PBKDF2-encrypted file (CLI). Never plaintext. |
-| **Key rotation** | Not yet supported. If a key is compromised, generate a new keypair and a new `motebit_id`. The old identity is abandoned, not revoked — there is no central authority. |
+| **Key rotation** | Signed succession records (spec §3.8). The old keypair signs a tombstone declaring the new keypair as successor — both keys sign the canonical payload. The `motebit_id` persists across rotations. Rotate via `motebit rotate` (CLI) or `npx create-motebit rotate` (scaffolder). No centralized revocation — succession chains are verifiable by anyone. |
 | **Secure erasure** | `secureErase()` overwrites byte arrays with random data then zeros before garbage collection. |
 | **Private key scope** | The private key never appears in `motebit.md`, never crosses the network, and never enters a config file. |
