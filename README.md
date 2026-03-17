@@ -16,7 +16,7 @@
 
 Every AI agent today is a session. No identity that persists. No memory that compounds. No trust that accumulates. No proof of what it's done. Motebit is the missing layer: a complete runtime where the intelligence is pluggable but the identity is the asset.
 
-39 packages. 133K lines of TypeScript. 3,000+ tests. [Built in 26 days.](https://docs.motebit.com/docs/how-we-built-this)
+39 packages. 144K lines of TypeScript. 3,000+ tests. [Built in 26 days.](https://docs.motebit.com/docs/how-we-built-this)
 
 |                | Agents today   | Motebit                                                           |
 | -------------- | -------------- | ----------------------------------------------------------------- |
@@ -92,7 +92,7 @@ packages/
   verify/          Signature verifier — zero deps, MIT licensed
   create-motebit/  Scaffolder — MIT licensed
   runtime/         Orchestrator — wires all engines, streaming AI loop
-  ai-core/         Pluggable providers: Claude, Ollama, OpenAI, WebLLM, Hybrid
+  ai-core/         Pluggable providers: Claude, Ollama, Hybrid fallback
   crypto/          Ed25519, AES-256-GCM, PBKDF2, W3C VC 2.0 credentials, signed succession
   memory-graph/    Semantic memory, cosine similarity, half-life decay
   event-log/       Append-only event sourcing, version clocks, compaction

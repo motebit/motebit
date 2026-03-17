@@ -12,12 +12,12 @@ Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Nod
 | `apps/desktop` | Tauri (Rust + webview). Flagship client. Three.js glass creature, identity bootstrap, operator mode, voice input, audio-reactive rendering, goal execution, multi-device pairing, MCP discovery with manifest pinning. |
 | `apps/cli` | Node.js REPL + daemon. Full operator console — chat, goal scheduling, tool approval queue, operator mode, `motebit export` / `verify`. |
 | `apps/mobile` | React Native + Expo. Full parity. expo-gl + Three.js rendering, SQLite adapters, dual providers (Anthropic + Ollama + Hybrid), plan-based goal execution, MCP per-server trust, approval queue UI, voice input. |
-| `apps/admin` | React + Vite dashboard. 10-tab real-time monitoring — state vector, memory graph, behavior cues, event log, tool audit, goals, plans, conversations, devices, intelligence gradient. |
+| `apps/admin` | React + Vite dashboard. 13-tab real-time monitoring — state vector, memory graph, behavior cues, event log, tool audit, goals, plans, conversations, devices, intelligence gradient, agent trust, credentials, federation. |
 | `apps/spatial` | AR/VR positioning library. Body-relative orbital mechanics, WebXR audio reactivity. |
 | `apps/docs` | Fumadocs + Next.js. This site. |
-| `packages/` | 18 shared TypeScript packages — the interior of the system. |
+| `packages/` | 26 shared TypeScript packages — the interior of the system. |
 | `services/api` | Sync relay server. REST + WebSocket, device auth, fan-out. |
-| `spec/` | `identity-v1.md` — the motebit.md file format specification. |
+| `spec/` | Three open specifications — `identity-v1.md`, `execution-ledger-v1.md`, `relay-federation-v1.md`. |
 
 ## Package layers
 
