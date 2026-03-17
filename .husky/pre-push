@@ -1,0 +1,1 @@
+pnpm turbo run typecheck --filter="...[origin/main]"
