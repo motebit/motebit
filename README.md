@@ -172,7 +172,7 @@ The **protocol layer** is MIT licensed — use it freely, build on it, implement
 - [`packages/create-motebit/`](packages/create-motebit/) — CLI scaffolder
 - [`packages/sdk/`](packages/sdk/) — core protocol types
 
-The **platform implementation** is [BSL 1.1](LICENSE) — free to use, source-available, converts to MIT per-version after 4 years (2030-03-09).
+The **platform implementation** is [BSL 1.1](LICENSE) — free to use, source-available, converts to MIT four years after each version's release.
 
 "Motebit" is a trademark of Daniel Hakim. See [TRADEMARK.md](TRADEMARK.md).
 
