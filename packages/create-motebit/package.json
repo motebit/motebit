@@ -36,20 +36,19 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsup",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint --parser-options=project:tsconfig.eslint.json src/",
     "clean": "rm -rf dist .turbo *.tsbuildinfo",
     "prepublishOnly": "npm run build"
   },
-  "dependencies": {
+  "devDependencies": {
     "@motebit/verify": "workspace:*",
     "@noble/ed25519": "^3.0.0",
-    "@noble/hashes": "^1.6.0"
-  },
-  "devDependencies": {
+    "@noble/hashes": "^1.6.0",
     "@types/node": "^22.0.0",
+    "tsup": "^8.0.0",
     "typescript": "^5.6.0",
     "vitest": "^3.0.0"
   },

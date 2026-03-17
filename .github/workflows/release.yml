@@ -52,3 +52,26 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
+
+      - name: Post-publish smoke test
+        if: steps.changesets.outputs.published == 'true'
+        env:
+          MOTEBIT_PASSPHRASE: smoke-test-ci-passphrase
+        run: |
+          set -euo pipefail
+
+          echo "Waiting for npm registry propagation..."
+          sleep 10
+
+          SMOKE_DIR=$(mktemp -d)
+          echo "Running create-motebit in $SMOKE_DIR"
+          cd "$SMOKE_DIR"
+          npx create-motebit@latest test-agent --yes
+          cd test-agent
+          npm install
+          node verify.js
+
+          echo "Checking motebit CLI version..."
+          npx motebit@latest --version
+
+          echo "Smoke test passed."

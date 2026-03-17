@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 /**
  * create-motebit — Scaffold a motebit agent project with identity.
  *
@@ -18,10 +16,13 @@ import type { TrustMode, EncryptedKey, ServiceIdentityOptions } from "./generate
 import { createRL, input, password, select } from "./prompts.js";
 
 // ---------------------------------------------------------------------------
-// Constants
+// Constants (injected by tsup at build time — see tsup.config.ts `define`)
 // ---------------------------------------------------------------------------
 
-const VERSION = "0.3.0";
+declare const __PKG_VERSION__: string;
+declare const __VERIFY_VERSION__: string;
+
+const VERSION = __PKG_VERSION__;
 
 // ---------------------------------------------------------------------------
 // Colors (ANSI — disabled if NO_COLOR is set)
@@ -84,7 +85,7 @@ function makePackageJson(name: string): string {
       verify: "npx create-motebit verify motebit.md",
     },
     dependencies: {
-      "@motebit/verify": "^0.3.0",
+      "@motebit/verify": `^${__VERIFY_VERSION__}`,
     },
   };
   return JSON.stringify(pkg, null, 2) + "\n";

@@ -61,3 +61,26 @@ jobs:
         run: pnpm --filter motebit publish --no-git-checks --provenance ${{ inputs.dry-run && '--dry-run' || '' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Post-publish smoke test
+        if: ${{ !inputs.dry-run }}
+        env:
+          MOTEBIT_PASSPHRASE: smoke-test-ci-passphrase
+        run: |
+          set -euo pipefail
+
+          echo "Waiting for npm registry propagation..."
+          sleep 10
+
+          SMOKE_DIR=$(mktemp -d)
+          echo "Running create-motebit in $SMOKE_DIR"
+          cd "$SMOKE_DIR"
+          npx create-motebit@latest test-agent --yes
+          cd test-agent
+          npm install
+          node verify.js
+
+          echo "Checking motebit CLI version..."
+          npx motebit@latest --version
+
+          echo "Smoke test passed."
