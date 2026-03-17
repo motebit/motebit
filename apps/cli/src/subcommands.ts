@@ -6,7 +6,11 @@ import * as path from "node:path";
 import { openMotebitDatabase } from "@motebit/persistence";
 import { EventStore } from "@motebit/event-log";
 import { EventType, RiskLevel } from "@motebit/sdk";
-import { generate as generateIdentityFile, verifyIdentityFile } from "@motebit/identity-file";
+import {
+  generate as generateIdentityFile,
+  verifyIdentityFile,
+  rotate as rotateIdentityFile,
+} from "@motebit/identity-file";
 import { rotateIdentityKeys } from "@motebit/core-identity";
 import {
   hexPublicKeyToDidKey,
@@ -1839,9 +1843,8 @@ export async function handleRotate(config: CliConfig): Promise<void> {
   const oldPrivateKey = fromHex(oldPrivKeyHex);
   const oldPublicKey = fromHex(oldPublicKeyHex);
 
-  // 4. Generate new keypair, sign succession, rotate identity file
+  // 4. Generate new keypair and sign succession record
   const rotateResult = await rotateIdentityKeys({
-    existingContent,
     oldPrivateKey,
     oldPublicKey,
     reason,
@@ -1850,8 +1853,14 @@ export async function handleRotate(config: CliConfig): Promise<void> {
   console.log(`  New public key: ${rotateResult.newPublicKeyHex.slice(0, 16)}...`);
   console.log("  Succession record: created (dual-signed)");
 
-  // 5. Verify the rotated file before writing
-  const rotatedVerify = await verifyIdentityFile(rotateResult.identityFileContent);
+  // 5. Rotate identity file and verify before writing
+  const rotatedContent = await rotateIdentityFile({
+    existingContent,
+    newPublicKey: rotateResult.newPublicKey,
+    newPrivateKey: rotateResult.newPrivateKey,
+    successionRecord: rotateResult.successionRecord,
+  });
+  const rotatedVerify = await verifyIdentityFile(rotatedContent);
   if (!rotatedVerify.valid) {
     console.error("Error: rotated identity file failed self-verification. Aborting.");
     if (rotatedVerify.error) console.error(`  ${rotatedVerify.error}`);
@@ -1861,7 +1870,7 @@ export async function handleRotate(config: CliConfig): Promise<void> {
     process.exit(1);
   }
 
-  fs.writeFileSync(identityPath, rotateResult.identityFileContent, "utf-8");
+  fs.writeFileSync(identityPath, rotatedContent, "utf-8");
   console.log("  Identity file: updated and re-signed");
 
   // 6. Encrypt new private key and update config

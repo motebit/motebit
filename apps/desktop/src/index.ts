@@ -52,6 +52,7 @@ import {
   parse as parseIdentityFile,
   verifyIdentityFile as verifyIdentity,
   governanceToPolicyConfig,
+  rotate as rotateIdentityFile,
 } from "@motebit/identity-file";
 import {
   PairingClient,
@@ -1247,12 +1248,17 @@ export class DesktopApp {
       let newPrivKeyHex: string;
       if (existingIdentityFile != null && existingIdentityFile !== "") {
         const rotateResult = await rotateIdentityKeys({
-          existingContent: existingIdentityFile,
           oldPrivateKey: oldPrivKeyBytes,
           oldPublicKey: oldPubKeyBytes,
           reason,
         });
-        configData._identity_file = rotateResult.identityFileContent;
+        const rotatedContent = await rotateIdentityFile({
+          existingContent: existingIdentityFile,
+          newPublicKey: rotateResult.newPublicKey,
+          newPrivateKey: rotateResult.newPrivateKey,
+          successionRecord: rotateResult.successionRecord,
+        });
+        configData._identity_file = rotatedContent;
         newPubKeyHex = rotateResult.newPublicKeyHex;
         newPrivKeyHex = bytesToHex(rotateResult.newPrivateKey);
         secureErase(rotateResult.newPrivateKey);

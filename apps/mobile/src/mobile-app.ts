@@ -89,6 +89,7 @@ import {
   generate as generateIdentityFile,
   parse as parseIdentityFile,
   governanceToPolicyConfig,
+  rotate as rotateIdentityFile,
 } from "@motebit/identity-file";
 import { createExpoStorage, ExpoGoalStore } from "./adapters/expo-sqlite";
 import type { ExpoStorageResult } from "./adapters/expo-sqlite";
@@ -980,12 +981,17 @@ export class MobileApp {
 
       if (existingIdentityFile != null && existingIdentityFile !== "") {
         const rotateResult = await rotateIdentityKeys({
-          existingContent: existingIdentityFile,
           oldPrivateKey: oldPrivKeyBytes,
           oldPublicKey: oldPubKeyBytes,
           reason,
         });
-        await AsyncStorage.setItem(IDENTITY_FILE_KEY, rotateResult.identityFileContent);
+        const rotatedContent = await rotateIdentityFile({
+          existingContent: existingIdentityFile,
+          newPublicKey: rotateResult.newPublicKey,
+          newPrivateKey: rotateResult.newPrivateKey,
+          successionRecord: rotateResult.successionRecord,
+        });
+        await AsyncStorage.setItem(IDENTITY_FILE_KEY, rotatedContent);
         newPubKeyHex = rotateResult.newPublicKeyHex;
         newPrivKeyHex = bytesToHex(rotateResult.newPrivateKey);
         successionRecord = rotateResult.successionRecord;

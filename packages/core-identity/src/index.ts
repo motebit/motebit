@@ -4,7 +4,6 @@ import type { EventStoreAdapter } from "@motebit/event-log";
 import { EventStore } from "@motebit/event-log";
 import { generateKeypair, signKeySuccession, bytesToHex } from "@motebit/crypto";
 import type { KeySuccessionRecord } from "@motebit/crypto";
-import { rotate as rotateIdentityFile } from "@motebit/identity-file";
 
 // === UUID v7 Generation ===
 
@@ -424,8 +423,6 @@ export async function bootstrapIdentity(opts: {
 // === Key Rotation ===
 
 export interface RotateIdentityKeysResult {
-  /** Updated identity file content (re-signed with new key) */
-  identityFileContent: string;
   /** New Ed25519 keypair */
   newPublicKey: Uint8Array;
   newPrivateKey: Uint8Array;
@@ -435,12 +432,15 @@ export interface RotateIdentityKeysResult {
 }
 
 /**
- * Generate a new Ed25519 keypair, create a dual-signed succession record,
- * and rotate the identity file. This is the proper way to rotate keys —
- * surfaces should call this instead of importing generateKeypair directly.
+ * Generate a new Ed25519 keypair and create a dual-signed succession record.
+ * This is the proper way to rotate keys — surfaces should call this instead
+ * of importing generateKeypair directly.
+ *
+ * The caller is responsible for updating the identity file using
+ * `rotate()` from `@motebit/identity-file` with the returned keypair
+ * and succession record.
  */
 export async function rotateIdentityKeys(opts: {
-  existingContent: string;
   oldPrivateKey: Uint8Array;
   oldPublicKey: Uint8Array;
   reason?: string;
@@ -455,15 +455,7 @@ export async function rotateIdentityKeys(opts: {
     opts.reason,
   );
 
-  const identityFileContent = await rotateIdentityFile({
-    existingContent: opts.existingContent,
-    newPublicKey: newKeypair.publicKey,
-    newPrivateKey: newKeypair.privateKey,
-    successionRecord,
-  });
-
   return {
-    identityFileContent,
     newPublicKey: newKeypair.publicKey,
     newPrivateKey: newKeypair.privateKey,
     newPublicKeyHex: bytesToHex(newKeypair.publicKey),

@@ -16,8 +16,7 @@
   "dependencies": {
     "@motebit/sdk": "workspace:*",
     "@motebit/event-log": "workspace:*",
-    "@motebit/crypto": "workspace:*",
-    "@motebit/identity-file": "workspace:*"
+    "@motebit/crypto": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.6.0",
