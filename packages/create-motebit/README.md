@@ -42,6 +42,18 @@ A `motebit.md` is a human-readable, cryptographically signed agent identity file
 
 The identity file is YAML frontmatter signed with Ed25519. Any tool can verify it using the [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) package.
 
+## Rotate your key
+
+If your private key is compromised or you want to refresh, rotate to a new keypair:
+
+```bash
+npx create-motebit rotate                          # Interactive
+npx create-motebit rotate --reason "Routine refresh"  # With reason
+npx create-motebit rotate path/to/motebit.md --yes    # Non-interactive
+```
+
+This creates a cryptographic succession record — both old and new keys sign the transition, proving you authorized the change. The `motebit_id` stays the same. Trust, credentials, and history transfer because the chain is verifiable by anyone.
+
 ## Options
 
 ```
@@ -49,9 +61,11 @@ npm create motebit [dir]          Scaffold with identity generation
 npm create motebit [dir] --yes    Non-interactive (requires MOTEBIT_PASSPHRASE)
 npm create motebit [dir] --service  Create a service identity
 npx create-motebit verify [path]  Verify a motebit.md signature
+npx create-motebit rotate [path]  Rotate key with signed succession record
 
 -v, --version         Print version
 -h, --help            Print help
+--reason "..."        Reason for key rotation (with rotate)
 ```
 
 ## Agent capabilities
