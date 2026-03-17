@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 const BIN = join(__dirname, "../../dist/index.js");
+const PKG = JSON.parse(readFileSync(join(__dirname, "../../package.json"), "utf-8"));
+const VERSION = PKG.version as string;
 
 function run(
   args: string[],
@@ -46,7 +48,7 @@ describe("create-motebit", () => {
   it("prints version with --version", () => {
     const { stdout, exitCode } = run(["--version"]);
     expect(exitCode).toBe(0);
-    expect(stdout.trim()).toBe("0.3.0");
+    expect(stdout.trim()).toBe(VERSION);
   });
 
   it("prints help with --help", () => {
