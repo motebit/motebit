@@ -16,7 +16,7 @@
 
 Every AI agent today is a session. No identity that persists. No memory that compounds. No trust that accumulates. No proof of what it's done. Motebit is the missing layer: a complete runtime where the intelligence is pluggable but the identity is the asset.
 
-39 packages. 144K lines of TypeScript. 3,000+ tests. [Built in 26 days.](https://docs.motebit.com/docs/how-we-built-this)
+39 packages. 144K lines of TypeScript. 3,000+ tests. [Foundation built in 26 days.](https://docs.motebit.com/docs/how-we-built-this)
 
 |                | Agents today   | Motebit                                                           |
 | -------------- | -------------- | ----------------------------------------------------------------- |
