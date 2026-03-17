@@ -154,7 +154,7 @@ To verify a ledger:
 2. Recompute the content hash from the timeline using canonical JSON serialization.
 3. Compare the recomputed hash against `content_hash`. If they differ, the timeline has been tampered with.
 4. If `signature` is present, decode it from base64url and verify the Ed25519 signature over the raw content hash bytes using the agent's public key.
-5. For each delegation receipt, obtain the delegated agent's public key and verify recursively.
+5. For each delegation receipt, verify using the embedded public key (receipts are self-verifiable). Fall back to a known-keys lookup for legacy receipts without embedded keys.
 
 ## Security considerations
 

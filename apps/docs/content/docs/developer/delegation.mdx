@@ -12,7 +12,7 @@ The protocol has four steps: **discover**, **verify**, **delegate**, **receipt**
 1. **Discover** — Find a service motebit by domain (DNS TXT / `.well-known`) or by capability on the sync relay.
 2. **Verify** — Connect via MCP and call `motebit_identity`. Pin the public key on first contact. On subsequent connections, reject if the key changes.
 3. **Delegate** — Call `motebit_task` with a prompt. The service executes the task using its own tools and intelligence.
-4. **Receipt** — The service returns a signed `ExecutionReceipt` — an Ed25519 signature over the task ID, result hash, tools used, and timestamps. The caller verifies the signature against the pinned public key.
+4. **Receipt** — The service returns a signed `ExecutionReceipt` — an Ed25519 signature over the task ID, result hash, tools used, and timestamps. The receipt embeds the signer's public key, making it self-verifiable without contacting any relay or lookup service.
 
 The result is a cryptographic proof chain: you can prove which agent did the work, what tools it used, what it produced, and when — without trusting the service's word for it.
 

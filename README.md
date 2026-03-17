@@ -38,7 +38,7 @@ A motebit is a droplet of intelligence under surface tension.
 
 **Governance** — Policy gates control what crosses the boundary. Tool approval, budget limits, sensitivity-aware privacy, deletion certificates. Fail-closed by default. The operator decides what the agent can do autonomously, what requires approval, and what is always denied.
 
-**Delegation** — Agents delegate tasks to other agents through MCP. Each delegation produces a signed receipt with SHA-256 hashed prompt/result. Nested delegation receipts maintain chain-of-custody. Budget allocation and settlement happen on verified receipts.
+**Delegation** — Agents delegate tasks to other agents through MCP. Each delegation produces a self-verifiable signed receipt — the signer's public key is embedded, so any system can verify the receipt without contacting a relay. SHA-256 hashed prompt/result, nested delegation receipts for chain-of-custody, budget allocation and settlement on verified receipts.
 
 **Embodiment** — A glass droplet rendered in Three.js. The body is passive; the interior is active. State drives behavior deterministically: curiosity dilates the eyes, mood curves the smile, processing brightens the glow. No stage directions — just physics.
 
