@@ -40,6 +40,7 @@ import {
   handleLedger,
   handleCredentials,
   handleRegister,
+  handleRotate,
   handleFederationStatus,
   handleFederationPeers,
   handleFederationPeer,
@@ -114,6 +115,11 @@ async function main(): Promise<void> {
 
   if (subcommand === "register") {
     await handleRegister(config);
+    return;
+  }
+
+  if (subcommand === "rotate") {
+    await handleRotate(config);
     return;
   }
 

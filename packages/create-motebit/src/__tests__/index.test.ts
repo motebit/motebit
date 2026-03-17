@@ -218,4 +218,78 @@ describe("create-motebit", () => {
     expect(stdout).toContain("motebit_id");
     expect(stdout).toContain("trust_mode");
   });
+
+  // -- rotate --
+
+  it("rotates key with --yes", () => {
+    // Scaffold first
+    const subDir = "rotate-test";
+    run([subDir, "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-rotate",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+
+    const identityPath = join(testDir, subDir, "motebit.md");
+    expect(existsSync(identityPath)).toBe(true);
+
+    // Read old public key from config
+    const configBefore = JSON.parse(readFileSync(join(configDir, "config.json"), "utf-8"));
+    const oldKey = configBefore.device_public_key as string;
+
+    // Rotate
+    const { stdout, exitCode } = run(["rotate", identityPath, "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-rotate",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Key rotated successfully");
+    expect(stdout).toContain("rotations");
+
+    // Config should have a different public key
+    const configAfter = JSON.parse(readFileSync(join(configDir, "config.json"), "utf-8"));
+    expect(configAfter.device_public_key).not.toBe(oldKey);
+
+    // Verify the rotated identity
+    const { stdout: verifyOut, exitCode: verifyExit } = run(["verify", identityPath]);
+    expect(verifyExit).toBe(0);
+    expect(verifyOut).toContain("valid");
+  });
+
+  it("rotate on missing file fails gracefully", () => {
+    const { stdout, exitCode } = run(
+      ["rotate", join(testDir, "nonexistent.md"), "--yes"],
+      testDir,
+      {
+        MOTEBIT_PASSPHRASE: "test-pass",
+        MOTEBIT_CONFIG_DIR: configDir,
+      },
+    );
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("Could not read");
+  });
+
+  it("rotate shows old and new key in output", () => {
+    // Scaffold first
+    const subDir = "rotate-keys-test";
+    run([subDir, "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-keys",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+
+    const identityPath = join(testDir, subDir, "motebit.md");
+
+    // Rotate
+    const { stdout, exitCode } = run(
+      ["rotate", identityPath, "--yes", "--reason", "scheduled rotation"],
+      testDir,
+      {
+        MOTEBIT_PASSPHRASE: "test-pass-keys",
+        MOTEBIT_CONFIG_DIR: configDir,
+      },
+    );
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("old key");
+    expect(stdout).toContain("new key");
+    expect(stdout).toContain("scheduled rotation");
+  });
 });

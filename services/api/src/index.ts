@@ -806,6 +806,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   app.use("/api/v1/agents/register", rateLimitMiddleware(authLimiter));
   app.use("/api/v1/agents/heartbeat", rateLimitMiddleware(authLimiter));
   app.use("/api/v1/agents/deregister", rateLimitMiddleware(authLimiter));
+  app.use("/api/v1/agents/:motebitId/rotate-key", rateLimitMiddleware(writeLimiter));
+  app.use("/api/v1/agents/:motebitId/succession", rateLimitMiddleware(readLimiter));
 
   // Read endpoints: discover, credentials, capabilities, listings (60 req/min)
   app.use("/api/v1/agents/discover", rateLimitMiddleware(readLimiter));
@@ -3177,6 +3179,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       return;
     }
 
+    // Succession chain is publicly readable — any third party can verify key lineage
+    if (c.req.path.endsWith("/succession") && c.req.method === "GET") {
+      await next();
+      return;
+    }
+
     const authHeader = c.req.header("authorization");
     if (authHeader == null || !authHeader.startsWith("Bearer ")) {
       throw new HTTPException(401, { message: "Missing auth token" });
@@ -3396,6 +3404,71 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     const deviceWithKey = devices.find((d) => d.public_key);
     const publicKey = deviceWithKey ? deviceWithKey.public_key : "";
 
+    // --- Succession chain validation on re-registration ---
+    // If the agent already has a stored public key and the new key differs,
+    // require a valid succession record proving key lineage.
+    const existingAgent = moteDb.db
+      .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+      .get(motebitId) as { public_key: string } | undefined;
+
+    if (
+      existingAgent &&
+      existingAgent.public_key &&
+      publicKey &&
+      existingAgent.public_key !== publicKey
+    ) {
+      const succession = (body as Record<string, unknown>).succession as
+        | KeySuccessionRecord
+        | undefined;
+      if (!succession) {
+        throw new HTTPException(400, {
+          message: "Public key differs from stored key — succession record required",
+        });
+      }
+
+      // Verify the succession record signatures
+      const successionValid = await verifyKeySuccession(succession);
+      if (!successionValid) {
+        throw new HTTPException(400, { message: "Invalid key succession signatures" });
+      }
+
+      // Verify the old key in the succession record matches the stored key
+      if (succession.old_public_key !== existingAgent.public_key) {
+        throw new HTTPException(400, {
+          message: "Succession old_public_key does not match stored public key",
+        });
+      }
+
+      // Verify the new key in the succession record matches the registering key
+      if (succession.new_public_key !== publicKey) {
+        throw new HTTPException(400, {
+          message: "Succession new_public_key does not match registering public key",
+        });
+      }
+
+      // Store the succession record for chain auditability
+      moteDb.db
+        .prepare(
+          `INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          motebitId,
+          succession.old_public_key,
+          succession.new_public_key,
+          succession.timestamp,
+          succession.reason ?? null,
+          succession.old_key_signature,
+          succession.new_key_signature,
+        );
+
+      logger.info("agent.key.succession_on_register", {
+        motebitId,
+        oldKey: existingAgent.public_key.slice(0, 16) + "...",
+        newKey: publicKey.slice(0, 16) + "...",
+      });
+    }
+
     const now = Date.now();
     const expiresAt = now + 15 * 60 * 1000; // 15 minutes
 
@@ -3612,6 +3685,17 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       throw new HTTPException(400, { message: "Invalid key succession signatures" });
     }
 
+    // Verify old_public_key matches the stored key in agent_registry (if registered)
+    const storedAgent = moteDb.db
+      .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+      .get(motebitId) as { public_key: string } | undefined;
+
+    if (storedAgent && storedAgent.public_key && storedAgent.public_key !== body.old_public_key) {
+      throw new HTTPException(400, {
+        message: "Succession old_public_key does not match stored public key",
+      });
+    }
+
     // Store the succession record
     moteDb.db
       .prepare(
@@ -3634,6 +3718,53 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       .run(body.new_public_key, motebitId);
 
     return c.json({ ok: true, motebit_id: motebitId });
+  });
+
+  // GET /api/v1/agents/:motebitId/succession — query full key succession chain
+  app.get("/api/v1/agents/:motebitId/succession", (c) => {
+    const motebitId = c.req.param("motebitId");
+    const correlationId = c.req.header("x-correlation-id") ?? crypto.randomUUID();
+
+    // Retrieve the full succession chain ordered by timestamp
+    const chain = moteDb.db
+      .prepare(
+        `SELECT old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature
+         FROM relay_key_successions
+         WHERE motebit_id = ?
+         ORDER BY timestamp ASC`,
+      )
+      .all(motebitId) as Array<{
+      old_public_key: string;
+      new_public_key: string;
+      timestamp: number;
+      reason: string | null;
+      old_key_signature: string;
+      new_key_signature: string;
+    }>;
+
+    // Look up the current public key from agent_registry
+    const agent = moteDb.db
+      .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+      .get(motebitId) as { public_key: string } | undefined;
+
+    logger.info("agent.succession.query", {
+      correlationId,
+      motebitId,
+      chainLength: chain.length,
+    });
+
+    return c.json({
+      motebit_id: motebitId,
+      chain: chain.map((r) => ({
+        old_public_key: r.old_public_key,
+        new_public_key: r.new_public_key,
+        timestamp: r.timestamp,
+        reason: r.reason,
+        old_key_signature: r.old_key_signature,
+        new_key_signature: r.new_key_signature,
+      })),
+      current_public_key: agent?.public_key ?? null,
+    });
   });
 
   // === Revocation Endpoints ===

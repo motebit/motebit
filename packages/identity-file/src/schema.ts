@@ -45,4 +45,13 @@ export interface MotebitIdentityFile {
     public_key: string;
     registered_at: string;
   }>;
+
+  succession?: Array<{
+    old_public_key: string;
+    new_public_key: string;
+    timestamp: number;
+    reason?: string;
+    old_key_signature: string;
+    new_key_signature: string;
+  }>;
 }

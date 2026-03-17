@@ -10,7 +10,7 @@
  * YAML serialization, and risk-level bridging on top.
  */
 
-import { sign as ed25519Sign, toBase64Url } from "@motebit/crypto";
+import { sign as ed25519Sign, toBase64Url, bytesToHex } from "@motebit/crypto";
 export { publicKeyToDidKey, hexPublicKeyToDidKey } from "@motebit/crypto";
 import { RiskLevel } from "@motebit/sdk";
 import { parse, verify } from "@motebit/verify";
@@ -213,6 +213,47 @@ export async function update(
   const frontmatter = `---\n${yaml}\n---`;
   const frontmatterBytes = new TextEncoder().encode(yaml);
   const signature = await ed25519Sign(frontmatterBytes, privateKey);
+  const sigB64 = toBase64Url(signature);
+
+  return `${frontmatter}\n${SIG_PREFIX}${sigB64}${SIG_SUFFIX}\n`;
+}
+
+export interface RotateOptions {
+  existingContent: string;
+  newPublicKey: Uint8Array;
+  newPrivateKey: Uint8Array;
+  successionRecord: {
+    old_public_key: string;
+    new_public_key: string;
+    timestamp: number;
+    reason?: string;
+    old_key_signature: string;
+    new_key_signature: string;
+  };
+}
+
+/**
+ * Rotate the key in an identity file: update the public key, append the
+ * succession record, and re-sign with the new private key.
+ */
+export async function rotate(opts: RotateOptions): Promise<string> {
+  const parsed = parse(opts.existingContent);
+  const data = { ...parsed.frontmatter } as MotebitIdentityFile;
+
+  // Update the public key to the new one
+  data.identity = {
+    algorithm: "Ed25519",
+    public_key: bytesToHex(opts.newPublicKey),
+  };
+
+  // Append succession record to existing chain (or create new chain)
+  const existingChain = data.succession ?? [];
+  data.succession = [...existingChain, opts.successionRecord];
+
+  const yaml = serializeYaml(data);
+  const frontmatter = `---\n${yaml}\n---`;
+  const frontmatterBytes = new TextEncoder().encode(yaml);
+  const signature = await ed25519Sign(frontmatterBytes, opts.newPrivateKey);
   const sigB64 = toBase64Url(signature);
 
   return `${frontmatter}\n${SIG_PREFIX}${sigB64}${SIG_SUFFIX}\n`;

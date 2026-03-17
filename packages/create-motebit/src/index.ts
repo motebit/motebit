@@ -13,6 +13,7 @@ import { join, basename, resolve } from "node:path";
 import { homedir } from "node:os";
 import { generateIdentity } from "./generate.js";
 import type { TrustMode, EncryptedKey, ServiceIdentityOptions } from "./generate.js";
+import { rotateKey } from "./rotate.js";
 import { createRL, input, password, select } from "./prompts.js";
 
 // ---------------------------------------------------------------------------
@@ -458,6 +459,141 @@ async function verifyCmd(filePath: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// rotate command
+// ---------------------------------------------------------------------------
+
+async function rotateCmd(
+  filePath: string,
+  nonInteractive: boolean,
+  reason?: string,
+): Promise<void> {
+  console.log();
+
+  // 1. Read and verify the existing identity file
+  let content: string;
+  try {
+    content = readFileSync(filePath, "utf-8");
+  } catch {
+    console.log(`  ${red("!")} Could not read ${filePath}`);
+    console.log();
+    process.exit(1);
+    return;
+  }
+
+  const verifyResult = await verify(content);
+  if (!verifyResult.valid) {
+    console.log(`  ${red("!")} Identity file is invalid: ${verifyResult.error}`);
+    console.log();
+    process.exit(1);
+    return;
+  }
+
+  // 2. Load config to get encrypted private key
+  const config = loadConfig();
+  if (!config.cli_encrypted_key) {
+    console.log(`  ${red("!")} No encrypted key found in ${configPath()}`);
+    console.log(`    The config must contain cli_encrypted_key from the original scaffold.`);
+    console.log();
+    process.exit(1);
+    return;
+  }
+
+  // 3. Get the current passphrase
+  let oldPassphrase: string;
+  let newPassphrase: string;
+
+  if (nonInteractive) {
+    oldPassphrase = process.env["MOTEBIT_PASSPHRASE"] ?? "";
+    if (!oldPassphrase) {
+      console.log(`  ${red("!")} --yes requires MOTEBIT_PASSPHRASE environment variable.`);
+      console.log();
+      process.exit(1);
+      return;
+    }
+    newPassphrase = oldPassphrase; // reuse with --yes
+  } else {
+    const rl = createRL();
+    oldPassphrase = await password(rl, "? Current passphrase: ");
+    if (!oldPassphrase) {
+      rl.close();
+      console.log(`  ${red("!")} Passphrase cannot be empty.`);
+      console.log();
+      process.exit(1);
+      return;
+    }
+
+    newPassphrase = await password(rl, "? New passphrase (Enter to reuse current): ");
+    if (!newPassphrase) {
+      newPassphrase = oldPassphrase;
+    } else {
+      const confirm = await password(rl, "? Confirm new passphrase: ");
+      if (confirm !== newPassphrase) {
+        rl.close();
+        console.log(`  ${red("!")} Passphrases do not match.`);
+        console.log();
+        process.exit(1);
+        return;
+      }
+    }
+    rl.close();
+  }
+
+  // 4. Perform the rotation
+  console.log(`  Generating new Ed25519 keypair...`);
+
+  let result;
+  try {
+    result = await rotateKey({
+      identityFileContent: content,
+      encryptedOldKey: config.cli_encrypted_key,
+      oldPassphrase,
+      newPassphrase,
+      reason,
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.log(`  ${red("!")} Rotation failed: ${msg}`);
+    console.log();
+    process.exit(1);
+    return;
+  }
+
+  // 5. Write updated identity file
+  writeFileSync(filePath, result.identityFileContent, "utf-8");
+
+  // 6. Update config
+  config.device_public_key = result.newPublicKeyHex;
+  config.cli_encrypted_key = result.newEncryptedKey;
+  saveConfig(config);
+
+  // 7. Verify the updated file
+  const reVerify = await verify(result.identityFileContent);
+  if (!reVerify.valid) {
+    console.log(`  ${red("!")} Post-rotation verification failed: ${reVerify.error}`);
+    console.log(`    The identity file may be corrupted. Restore from backup.`);
+    console.log();
+    process.exit(1);
+    return;
+  }
+
+  // 8. Display summary
+  console.log(`  Signing identity file...`);
+  console.log();
+  console.log(`  ${green("+")} Key rotated successfully`);
+  console.log();
+  console.log(`    old key    ${dim(result.oldPublicKeyHex.slice(0, 16))}...`);
+  console.log(`    new key    ${dim(result.newPublicKeyHex.slice(0, 16))}...`);
+  console.log(`    rotations  ${result.rotationCount}`);
+  if (reason) {
+    console.log(`    reason     ${dim(reason)}`);
+  }
+  console.log();
+  console.log(`  Identity file updated: ${dim(filePath)}`);
+  console.log(`  Config updated:        ${dim(configPath())}`);
+  console.log();
+}
+
+// ---------------------------------------------------------------------------
 // help
 // ---------------------------------------------------------------------------
 
@@ -470,11 +606,13 @@ function printHelp(): void {
     npm create motebit [dir]          Guided scaffold with identity generation
     npm create motebit [dir] --yes    Non-interactive (defaults + MOTEBIT_PASSPHRASE)
     npx create-motebit verify [path]  Verify a motebit.md signature
+    npx create-motebit rotate [path]  Rotate the key in a motebit.md identity file
 
   ${bold("Options:")}
 
     -y, --yes             Non-interactive mode (requires MOTEBIT_PASSPHRASE env var)
     --service             Create a service motebit identity (prompts for service fields)
+    --reason "..."        Reason for key rotation (used with rotate)
     -v, --version         Print version
     -h, --help            Print this help
 
@@ -484,6 +622,15 @@ function printHelp(): void {
     2. Encrypts your private key and stores it in ~/.motebit/config.json
     3. Scaffolds a project directory with verify.js, package.json, .env.example
     4. Run ${cyan("node verify.js")} to verify your identity
+
+  ${bold("What happens on rotate:")}
+
+    1. Verifies the existing motebit.md signature
+    2. Decrypts the old private key from ~/.motebit/config.json
+    3. Generates a new Ed25519 keypair
+    4. Creates a dual-signed succession record (old + new key)
+    5. Re-signs the identity file with the new key
+    6. Updates config with the new encrypted key
 
   ${bold("Environment variables:")}
 
@@ -516,14 +663,25 @@ async function main(): Promise<void> {
   const positional = args.filter((a) => !a.startsWith("-"));
   const command = positional[0];
 
+  const nonInteractive = args.includes("-y") || args.includes("--yes");
+
   if (command === "verify") {
     const filePath = positional[1] ?? "motebit.md";
     await verifyCmd(filePath);
     return;
   }
 
+  if (command === "rotate") {
+    const filePath = positional[1] ?? "motebit.md";
+    // Parse --reason flag
+    const reasonIdx = args.indexOf("--reason");
+    const reason =
+      reasonIdx !== -1 && reasonIdx + 1 < args.length ? args[reasonIdx + 1] : undefined;
+    await rotateCmd(filePath, nonInteractive, reason);
+    return;
+  }
+
   // Default: guided scaffold
-  const nonInteractive = args.includes("-y") || args.includes("--yes");
   const serviceMode = args.includes("--service");
   const targetDir = command ?? ".";
   await guidedScaffold(targetDir, nonInteractive, serviceMode);
