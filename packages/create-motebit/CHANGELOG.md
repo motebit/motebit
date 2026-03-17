@@ -1,5 +1,11 @@
 # create-motebit Changelog
 
+## 0.3.1
+
+### Patch Changes
+
+- [`cc5faa4`](https://github.com/motebit/motebit/commit/cc5faa4044e3c441a40c2da8a56eebcdd8a9994c) Thanks [@hakimlabs](https://github.com/hakimlabs)! - Harden build: switch to tsup for robust shebang injection, inject version strings at build time to eliminate drift, bundle all dependencies into single zero-dep output.
+
 All notable changes to `create-motebit` are documented here. For full project history, see the [root changelog](../../CHANGELOG.md).
 
 ## [0.3.0] - 2026-03-13
