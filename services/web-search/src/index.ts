@@ -24,7 +24,7 @@ import {
 } from "@motebit/tools";
 import type { SearchProvider } from "@motebit/tools";
 import { wireServerDeps, startServiceServer } from "@motebit/mcp-server";
-import { verify as verifyIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
+import { verifyIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
 import { verifySignedToken, signExecutionReceipt, hash as sha256 } from "@motebit/crypto";
 import { embedText } from "@motebit/memory-graph";
 

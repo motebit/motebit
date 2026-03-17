@@ -26,7 +26,7 @@ import {
   verifySignedToken,
   hash as sha256,
 } from "@motebit/crypto";
-import { generate as generateIdentity, verify as verifyIdentityFile } from "@motebit/identity-file";
+import { generate as generateIdentity, verifyIdentityFile } from "@motebit/identity-file";
 
 // Deterministic test ID
 const TEST_MOTEBIT_ID = "01961234-5678-7abc-def0-123456789abc";

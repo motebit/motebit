@@ -6,10 +6,7 @@ import * as path from "node:path";
 import { openMotebitDatabase } from "@motebit/persistence";
 import { EventStore } from "@motebit/event-log";
 import { EventType, RiskLevel } from "@motebit/sdk";
-import {
-  generate as generateIdentityFile,
-  verify as verifyIdentityFile,
-} from "@motebit/identity-file";
+import { generate as generateIdentityFile, verifyIdentityFile } from "@motebit/identity-file";
 import { rotateIdentityKeys } from "@motebit/core-identity";
 import {
   hexPublicKeyToDidKey,

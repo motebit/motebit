@@ -50,7 +50,7 @@ import {
 import {
   generate as generateIdentityFile,
   parse as parseIdentityFile,
-  verify as verifyIdentity,
+  verifyIdentityFile as verifyIdentity,
   governanceToPolicyConfig,
 } from "@motebit/identity-file";
 import {

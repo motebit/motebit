@@ -19,7 +19,7 @@ import { InMemoryToolRegistry } from "@motebit/tools";
 import type { ToolResult, ExecutionReceipt } from "@motebit/sdk";
 import { wireServerDeps, startServiceServer } from "@motebit/mcp-server";
 import { McpClientAdapter } from "@motebit/mcp-client";
-import { verify as verifyIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
+import { verifyIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
 import { verifySignedToken, signExecutionReceipt, hash as sha256 } from "@motebit/crypto";
 import { embedText } from "@motebit/memory-graph";
 import { summarizeSearchDefinition, createSummarizeSearchHandler } from "./tool.js";

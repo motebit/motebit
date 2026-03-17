@@ -24,7 +24,7 @@ import {
   DeviceCapability,
 } from "@motebit/sdk";
 import { createSignedToken, verifySignedToken, secureErase } from "@motebit/crypto";
-import { verify as verifyIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
+import { verifyIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
 import { McpServerAdapter } from "@motebit/mcp-server";
 import type {
   MotebitServerDeps,
