@@ -372,8 +372,12 @@ function hexToBytes(hex: string): Uint8Array {
 }
 
 function fromBase64Url(str: string): Uint8Array {
-  const padded = str.replace(/-/g, "+").replace(/_/g, "/");
-  const binary = atob(padded);
+  // Replace URL-safe chars and re-pad (atob requires padding in some environments)
+  let base64 = str.replace(/-/g, "+").replace(/_/g, "/");
+  const pad = base64.length % 4;
+  if (pad === 2) base64 += "==";
+  else if (pad === 3) base64 += "=";
+  const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
     bytes[i] = binary.charCodeAt(i);
@@ -733,15 +737,31 @@ async function verifySuccessionChain(
 async function verifyReceiptSignature(
   receipt: ExecutionReceipt,
   publicKey: Uint8Array,
-): Promise<boolean> {
+): Promise<{ valid: boolean; error?: string }> {
   const { signature, ...body } = receipt;
+
+  if (!signature || signature.trim() === "") {
+    return { valid: false, error: "Receipt signature is empty" };
+  }
+
+  let sig: Uint8Array;
+  try {
+    sig = fromBase64Url(signature);
+  } catch {
+    return { valid: false, error: "Receipt signature is not valid base64url" };
+  }
+
+  if (sig.length !== 64) {
+    return { valid: false, error: `Receipt signature must be 64 bytes, got ${sig.length}` };
+  }
+
   const canonical = canonicalJson(body);
   const message = new TextEncoder().encode(canonical);
   try {
-    const sig = fromBase64Url(signature);
-    return await ed.verifyAsync(sig, message, publicKey);
+    const valid = await ed.verifyAsync(sig, message, publicKey);
+    return { valid };
   } catch {
-    return false;
+    return { valid: false, error: "Ed25519 verification threw" };
   }
 }
 
@@ -775,11 +795,11 @@ async function verifyReceipt(receipt: ExecutionReceipt): Promise<ReceiptVerifyRe
     };
   }
 
-  const signatureValid = await verifyReceiptSignature(receipt, publicKey);
+  const sigResult = await verifyReceiptSignature(receipt, publicKey);
   const errors: VerificationError[] = [];
 
-  if (!signatureValid) {
-    errors.push({ message: "Receipt signature verification failed" });
+  if (!sigResult.valid) {
+    errors.push({ message: sigResult.error ?? "Receipt signature verification failed" });
   }
 
   // Recursively verify delegation receipts
@@ -794,7 +814,7 @@ async function verifyReceipt(receipt: ExecutionReceipt): Promise<ReceiptVerifyRe
 
   return {
     type: "receipt",
-    valid: signatureValid && delegationErrors.length === 0,
+    valid: sigResult.valid && delegationErrors.length === 0,
     receipt,
     signer: signerDid,
     ...(delegations.length > 0 ? { delegations } : {}),

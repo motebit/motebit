@@ -200,4 +200,38 @@ describe("verify — execution receipts", () => {
     expect(r2.valid).toBe(false);
     expect(r2.errors![0]!.message).toContain("Expected type");
   });
+
+  it("fails on empty signature string", async () => {
+    const kp = await makeKeypair();
+    const body = makeReceiptBody(kp.publicKeyHex);
+    const receipt: ExecutionReceipt = { ...body, signature: "" };
+
+    const result = await verify(receipt);
+    expect(result.type).toBe("receipt");
+    expect(result.valid).toBe(false);
+    expect(result.errors![0]!.message).toContain("empty");
+  });
+
+  it("fails on malformed base64url signature", async () => {
+    const kp = await makeKeypair();
+    const body = makeReceiptBody(kp.publicKeyHex);
+    const receipt: ExecutionReceipt = { ...body, signature: "!!!not-base64!!!" };
+
+    const result = await verify(receipt);
+    expect(result.type).toBe("receipt");
+    expect(result.valid).toBe(false);
+  });
+
+  it("fails on wrong-length signature (not 64 bytes)", async () => {
+    const kp = await makeKeypair();
+    const body = makeReceiptBody(kp.publicKeyHex);
+    // 32 bytes instead of 64 — valid base64url but wrong signature length
+    const shortSig = toBase64Url(new Uint8Array(32));
+    const receipt: ExecutionReceipt = { ...body, signature: shortSig };
+
+    const result = await verify(receipt);
+    expect(result.type).toBe("receipt");
+    expect(result.valid).toBe(false);
+    expect(result.errors![0]!.message).toContain("64 bytes");
+  });
 });
