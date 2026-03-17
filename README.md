@@ -30,7 +30,7 @@ Every AI agent today is a session. No identity that persists. No memory that com
 
 A motebit is a droplet of intelligence under surface tension.
 
-**Identity** — Ed25519 keypairs, `did:key` URIs, signed identity files. The agent can prove who it is to any service, any relay, any other agent. Not a session token — a cryptographic entity that exists across time and devices.
+**Identity** — Ed25519 keypairs, `did:key` URIs, signed identity files. The agent can prove who it is to any service, any relay, any other agent. Not a session token — a cryptographic entity that exists across time and devices. Keys rotate via signed succession records — both old and new keys sign the transition, the `motebit_id` persists, and anyone can verify the chain without trusting an intermediary.
 
 **Memory** — A semantic graph that compounds with use. Memories form during conversation, decay naturally over time, consolidate from episodic to semantic. The longer it runs, the more it knows. Curiosity targets emerge from the graph.
 
@@ -93,7 +93,7 @@ packages/
   create-motebit/  Scaffolder — MIT licensed
   runtime/         Orchestrator — wires all engines, streaming AI loop
   ai-core/         Pluggable providers: Claude, Ollama, OpenAI, WebLLM, Hybrid
-  crypto/          Ed25519, AES-256-GCM, PBKDF2, W3C VC 2.0 credentials
+  crypto/          Ed25519, AES-256-GCM, PBKDF2, W3C VC 2.0 credentials, signed succession
   memory-graph/    Semantic memory, cosine similarity, half-life decay
   event-log/       Append-only event sourcing, version clocks, compaction
   state-vector/    9-field interior state, EMA smoothing, hysteresis
@@ -151,7 +151,7 @@ Four npm packages, all zero monorepo dependencies:
 > [!NOTE]
 > **Motebit is a protocol first.** The `motebit.md` identity file is an [open standard](spec/identity-v1.md) (MIT) that can be verified by any tool, with or without the motebit runtime. The [verification library](https://www.npmjs.com/package/@motebit/verify) is zero-dependency and MIT licensed.
 
-A `motebit.md` declares identity (Ed25519 public key, agent ID, `did:key`), governance (trust mode, risk thresholds), privacy (sensitivity levels, retention rules), memory (decay parameters), and registered devices.
+A `motebit.md` declares identity (Ed25519 public key, agent ID, `did:key`), governance (trust mode, risk thresholds), privacy (sensitivity levels, retention rules), memory (decay parameters), registered devices, and key succession history (§3.8).
 
 ## Development
 
