@@ -343,7 +343,7 @@ function checkExportSurface(packages: PkgInfo[]): void {
 
 // Packages that bundle workspace deps via tsup — devDependencies are inlined
 // at build time, so importing them in production source is correct.
-const BUNDLED_PACKAGES = new Set(["motebit"]);
+const BUNDLED_PACKAGES = new Set(["motebit", "create-motebit"]);
 
 // Check 5: Undeclared dependencies
 function checkUndeclaredDeps(packages: PkgInfo[]): void {
