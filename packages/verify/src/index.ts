@@ -1,13 +1,25 @@
 /**
- * @motebit/verify — Standalone verifier for motebit.md agent identity files.
+ * @motebit/verify — Standalone verifier for all Motebit artifacts.
  *
- * Implements the verification algorithm from the motebit/identity@1.0 spec.
+ * Verifies identity files, execution receipts, verifiable credentials,
+ * and verifiable presentations. One function, any artifact, zero config.
+ *
  * Zero monorepo dependencies — only @noble/ed25519 for cryptography.
  *
  * Usage:
  *   import { verify } from "@motebit/verify";
+ *
+ *   // Identity file
  *   const result = await verify(fs.readFileSync("motebit.md", "utf-8"));
- *   if (result.valid) console.log(result.identity.motebit_id);
+ *
+ *   // Execution receipt (JSON)
+ *   const result = await verify(receiptJson);
+ *
+ *   // Verifiable credential or presentation (JSON)
+ *   const result = await verify(credentialJson);
+ *
+ *   // With expected type (fail-fast on misclassification)
+ *   const result = await verify(artifact, { expectedType: "receipt" });
  */
 
 import * as ed from "@noble/ed25519";
@@ -18,9 +30,9 @@ if (!ed.hashes.sha512) {
   ed.hashes.sha512 = (msg: Uint8Array) => sha512(msg);
 }
 
-// ---------------------------------------------------------------------------
-// Types — matches motebit/identity@1.0 schema
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// Types — Identity (motebit/identity@1.0 schema)
+// ===========================================================================
 
 export interface MotebitIdentityFile {
   spec: string;
@@ -68,23 +80,93 @@ export interface MotebitIdentityFile {
     registered_at: string;
   }>;
 
-  succession?: Array<{
-    old_public_key: string;
-    new_public_key: string;
-    timestamp: number;
-    reason?: string;
-    old_key_signature: string;
-    new_key_signature: string;
-  }>;
+  succession?: Array<SuccessionRecord>;
 }
 
-export interface VerifyResult {
+export interface SuccessionRecord {
+  old_public_key: string;
+  new_public_key: string;
+  timestamp: number;
+  reason?: string;
+  old_key_signature: string;
+  new_key_signature: string;
+}
+
+// ===========================================================================
+// Types — Execution Receipt
+// ===========================================================================
+
+export interface ExecutionReceipt {
+  task_id: string;
+  motebit_id: string;
+  /** Signer's Ed25519 public key (hex). Enables verification without relay lookup. */
+  public_key?: string;
+  device_id: string;
+  submitted_at: number;
+  completed_at: number;
+  status: string;
+  result: string;
+  tools_used: string[];
+  memories_formed: number;
+  prompt_hash: string;
+  result_hash: string;
+  delegation_receipts?: ExecutionReceipt[];
+  delegated_scope?: string;
+  signature: string;
+}
+
+// ===========================================================================
+// Types — W3C Verifiable Credentials / Presentations
+// ===========================================================================
+
+export interface DataIntegrityProof {
+  type: "DataIntegrityProof";
+  cryptosuite: "eddsa-jcs-2022";
+  created: string;
+  verificationMethod: string;
+  proofPurpose: "assertionMethod" | "authentication";
+  proofValue: string;
+}
+
+export interface VerifiableCredential {
+  "@context": string[];
+  type: string[];
+  issuer: string;
+  credentialSubject: Record<string, unknown> & { id: string };
+  validFrom: string;
+  validUntil?: string;
+  credentialStatus?: { id: string; type: string };
+  proof: DataIntegrityProof;
+}
+
+export interface VerifiablePresentation {
+  "@context": string[];
+  type: string[];
+  holder: string;
+  verifiableCredential: VerifiableCredential[];
+  proof: DataIntegrityProof;
+}
+
+// ===========================================================================
+// Types — Verification Results (discriminated union)
+// ===========================================================================
+
+export interface VerificationError {
+  message: string;
+  path?: string;
+}
+
+interface BaseResult {
   valid: boolean;
+  errors?: VerificationError[];
+}
+
+export interface IdentityVerifyResult extends BaseResult {
+  type: "identity";
   identity: MotebitIdentityFile | null;
-  /** W3C did:key URI derived from the Ed25519 public key. Present when valid. */
   did?: string;
+  /** First error message. Convenience accessor for backward compatibility. */
   error?: string;
-  /** Present when the identity has a succession chain. */
   succession?: {
     valid: boolean;
     genesis_public_key?: string;
@@ -93,9 +175,61 @@ export interface VerifyResult {
   };
 }
 
-// ---------------------------------------------------------------------------
+export interface ReceiptVerifyResult extends BaseResult {
+  type: "receipt";
+  receipt: ExecutionReceipt | null;
+  signer?: string;
+  delegations?: ReceiptVerifyResult[];
+}
+
+export interface CredentialVerifyResult extends BaseResult {
+  type: "credential";
+  credential: VerifiableCredential | null;
+  issuer?: string;
+  subject?: string;
+  expired?: boolean;
+}
+
+export interface PresentationVerifyResult extends BaseResult {
+  type: "presentation";
+  presentation: VerifiablePresentation | null;
+  holder?: string;
+  credentials?: CredentialVerifyResult[];
+}
+
+export type VerifyResult =
+  | IdentityVerifyResult
+  | ReceiptVerifyResult
+  | CredentialVerifyResult
+  | PresentationVerifyResult;
+
+export type ArtifactType = VerifyResult["type"];
+
+export interface VerifyOptions {
+  expectedType?: ArtifactType;
+}
+
+// ===========================================================================
+// Legacy VerifyResult — backward compatible with pre-0.4.0
+// ===========================================================================
+
+/** @deprecated Use VerifyResult instead. Kept for backward compatibility. */
+export interface LegacyVerifyResult {
+  valid: boolean;
+  identity: MotebitIdentityFile | null;
+  did?: string;
+  error?: string;
+  succession?: {
+    valid: boolean;
+    genesis_public_key?: string;
+    rotations: number;
+    error?: string;
+  };
+}
+
+// ===========================================================================
 // Minimal YAML parser — handles only the motebit identity schema
-// ---------------------------------------------------------------------------
+// ===========================================================================
 
 function parseYamlValue(raw: string): unknown {
   const trimmed = raw.trim();
@@ -223,9 +357,9 @@ function parseYaml(text: string): MotebitIdentityFile {
   return root as unknown as MotebitIdentityFile;
 }
 
-// ---------------------------------------------------------------------------
+// ===========================================================================
 // Encoding helpers
-// ---------------------------------------------------------------------------
+// ===========================================================================
 
 function hexToBytes(hex: string): Uint8Array {
   const bytes = new Uint8Array(hex.length / 2);
@@ -245,9 +379,9 @@ function fromBase64Url(str: string): Uint8Array {
   return bytes;
 }
 
-// ---------------------------------------------------------------------------
-// Canonical JSON — must match @motebit/crypto's canonicalJson exactly
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// Canonical JSON (JCS/RFC 8785) — must match @motebit/crypto exactly
+// ===========================================================================
 
 function canonicalJson(obj: unknown): string {
   if (obj === null || obj === undefined) return JSON.stringify(obj);
@@ -265,9 +399,9 @@ function canonicalJson(obj: unknown): string {
   return "{" + entries.join(",") + "}";
 }
 
-// ---------------------------------------------------------------------------
-// did:key derivation (inlined — verify has zero monorepo deps)
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// Base58btc encoding/decoding (for did:key and VC proof values)
+// ===========================================================================
 
 const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
@@ -287,6 +421,32 @@ function base58btcEncode(bytes: Uint8Array): string {
   return BASE58_ALPHABET[0]!.repeat(zeros) + result;
 }
 
+function base58btcDecode(str: string): Uint8Array {
+  let zeros = 0;
+  while (zeros < str.length && str[zeros] === BASE58_ALPHABET[0]) zeros++;
+  let value = 0n;
+  for (let i = 0; i < str.length; i++) {
+    const idx = BASE58_ALPHABET.indexOf(str[i]!);
+    if (idx === -1) throw new Error(`Invalid base58 character: ${str[i]}`);
+    value = value * 58n + BigInt(idx);
+  }
+  const hex: string[] = [];
+  while (value > 0n) {
+    const byte = Number(value & 0xffn);
+    hex.unshift(byte.toString(16).padStart(2, "0"));
+    value >>= 8n;
+  }
+  const dataBytes =
+    hex.length > 0 ? new Uint8Array(hex.map((h) => parseInt(h, 16))) : new Uint8Array(0);
+  const result = new Uint8Array(zeros + dataBytes.length);
+  result.set(dataBytes, zeros);
+  return result;
+}
+
+// ===========================================================================
+// did:key derivation and parsing
+// ===========================================================================
+
 function publicKeyToDidKey(pubKey: Uint8Array): string {
   const prefixed = new Uint8Array(34);
   prefixed[0] = 0xed;
@@ -295,16 +455,84 @@ function publicKeyToDidKey(pubKey: Uint8Array): string {
   return `did:key:z${base58btcEncode(prefixed)}`;
 }
 
-// ---------------------------------------------------------------------------
+function didKeyToPublicKey(did: string): Uint8Array {
+  if (!did.startsWith("did:key:z")) {
+    throw new Error("Invalid did:key URI: must start with did:key:z");
+  }
+  const encoded = did.slice("did:key:z".length);
+  const decoded = base58btcDecode(encoded);
+  if (decoded.length !== 34) {
+    throw new Error(
+      `Invalid did:key: expected 34 bytes (2 prefix + 32 key), got ${decoded.length}`,
+    );
+  }
+  if (decoded[0] !== 0xed || decoded[1] !== 0x01) {
+    throw new Error("Invalid did:key: multicodec prefix is not ed25519-pub (0xed01)");
+  }
+  return decoded.slice(2);
+}
+
+// ===========================================================================
+// SHA-256 (Web Crypto — available in Node 18+ and all browsers)
+// ===========================================================================
+
+async function sha256(data: Uint8Array): Promise<Uint8Array> {
+  const buf = await crypto.subtle.digest("SHA-256", data as BufferSource);
+  return new Uint8Array(buf);
+}
+
+// ===========================================================================
 // Constants
-// ---------------------------------------------------------------------------
+// ===========================================================================
 
 const SIG_PREFIX = "<!-- motebit:sig:Ed25519:";
 const SIG_SUFFIX = " -->";
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// Artifact detection
+// ===========================================================================
+
+function detectArtifactType(artifact: unknown): ArtifactType | null {
+  // String → identity file (YAML frontmatter) or JSON
+  if (typeof artifact === "string") {
+    // Any string containing frontmatter delimiters is an identity file attempt
+    if (artifact.includes("---")) {
+      return "identity";
+    }
+    // Try parsing as JSON
+    try {
+      const parsed = JSON.parse(artifact) as unknown;
+      return detectArtifactType(parsed);
+    } catch {
+      return null;
+    }
+  }
+
+  if (typeof artifact !== "object" || artifact === null) return null;
+
+  const obj = artifact as Record<string, unknown>;
+
+  // Verifiable Presentation: has "holder" + "verifiableCredential" + "proof"
+  if ("holder" in obj && "verifiableCredential" in obj && "proof" in obj) {
+    return "presentation";
+  }
+
+  // Verifiable Credential: has "credentialSubject" + "issuer" + "proof"
+  if ("credentialSubject" in obj && "issuer" in obj && "proof" in obj) {
+    return "credential";
+  }
+
+  // Execution Receipt: has "task_id" + "motebit_id" + "signature" + "prompt_hash"
+  if ("task_id" in obj && "motebit_id" in obj && "signature" in obj && "prompt_hash" in obj) {
+    return "receipt";
+  }
+
+  return null;
+}
+
+// ===========================================================================
+// Identity file parsing and verification
+// ===========================================================================
 
 /**
  * Parse a motebit.md file into its components.
@@ -337,51 +565,44 @@ export function parse(content: string): {
   return { frontmatter, signature, rawFrontmatter };
 }
 
-/**
- * Verify a motebit.md file's Ed25519 signature.
- *
- * Returns `{ valid: true, identity }` if the signature is valid,
- * or `{ valid: false, identity: null, error }` if verification fails.
- *
- * Implements the motebit/identity@1.0 verification algorithm (spec §4.3).
- */
-export async function verify(content: string): Promise<VerifyResult> {
+function identityError(msg: string): IdentityVerifyResult {
+  return { type: "identity", valid: false, identity: null, error: msg, errors: [{ message: msg }] };
+}
+
+async function verifyIdentity(content: string): Promise<IdentityVerifyResult> {
   let parsed: ReturnType<typeof parse>;
   try {
     parsed = parse(content);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    return { valid: false, identity: null, error: msg };
+    return identityError(msg);
   }
 
-  // Step 6: Extract and validate public key
   const pubKeyHex = parsed.frontmatter.identity?.public_key;
   if (!pubKeyHex) {
-    return { valid: false, identity: null, error: "No public key in frontmatter" };
+    return identityError("No public key in frontmatter");
   }
 
   let pubKey: Uint8Array;
   try {
     pubKey = hexToBytes(pubKeyHex);
   } catch {
-    return { valid: false, identity: null, error: "Invalid public key hex" };
+    return identityError("Invalid public key hex");
   }
   if (pubKey.length !== 32) {
-    return { valid: false, identity: null, error: "Public key must be 32 bytes" };
+    return identityError("Public key must be 32 bytes");
   }
 
-  // Step 5: Extract and validate signature
   let sigBytes: Uint8Array;
   try {
     sigBytes = fromBase64Url(parsed.signature);
   } catch {
-    return { valid: false, identity: null, error: "Invalid signature encoding" };
+    return identityError("Invalid signature encoding");
   }
   if (sigBytes.length !== 64) {
-    return { valid: false, identity: null, error: "Signature must be 64 bytes" };
+    return identityError("Signature must be 64 bytes");
   }
 
-  // Steps 7-8: Verify Ed25519 signature over frontmatter bytes
   const frontmatterBytes = new TextEncoder().encode(parsed.rawFrontmatter);
 
   let valid: boolean;
@@ -392,25 +613,18 @@ export async function verify(content: string): Promise<VerifyResult> {
   }
 
   if (!valid) {
-    return {
-      valid: false,
-      identity: null,
-      error: "Signature verification failed",
-    };
+    return identityError("Signature verification failed");
   }
 
-  // ---------------------------------------------------------------------------
-  // Succession chain verification (optional — backward compatible)
-  // ---------------------------------------------------------------------------
-
   const chain = parsed.frontmatter.succession;
-  let successionResult: VerifyResult["succession"];
+  let successionResult: IdentityVerifyResult["succession"];
 
   if (chain && chain.length > 0) {
     successionResult = await verifySuccessionChain(chain, pubKeyHex);
   }
 
   return {
+    type: "identity",
     valid: true,
     identity: parsed.frontmatter,
     did: publicKeyToDidKey(pubKey),
@@ -418,19 +632,18 @@ export async function verify(content: string): Promise<VerifyResult> {
   };
 }
 
-// ---------------------------------------------------------------------------
+// ===========================================================================
 // Succession chain verification
-// ---------------------------------------------------------------------------
+// ===========================================================================
 
 async function verifySuccessionChain(
-  chain: NonNullable<MotebitIdentityFile["succession"]>,
+  chain: SuccessionRecord[],
   currentPublicKeyHex: string,
-): Promise<NonNullable<VerifyResult["succession"]>> {
+): Promise<NonNullable<IdentityVerifyResult["succession"]>> {
   try {
     for (let i = 0; i < chain.length; i++) {
       const record = chain[i]!;
 
-      // Build canonical payload matching @motebit/crypto's keySuccessionPayload
       const payloadObj: Record<string, unknown> = {
         old_public_key: record.old_public_key,
         new_public_key: record.new_public_key,
@@ -442,7 +655,6 @@ async function verifySuccessionChain(
       const payload = canonicalJson(payloadObj);
       const message = new TextEncoder().encode(payload);
 
-      // Verify old key signature
       const oldPubKey = hexToBytes(record.old_public_key);
       const oldSig = hexToBytes(record.old_key_signature);
       const oldValid = await ed.verifyAsync(oldSig, message, oldPubKey);
@@ -454,7 +666,6 @@ async function verifySuccessionChain(
         };
       }
 
-      // Verify new key signature
       const newPubKey = hexToBytes(record.new_public_key);
       const newSig = hexToBytes(record.new_key_signature);
       const newValid = await ed.verifyAsync(newSig, message, newPubKey);
@@ -466,7 +677,6 @@ async function verifySuccessionChain(
         };
       }
 
-      // Verify chain linkage: chain[i].new_public_key === chain[i+1].old_public_key
       if (i < chain.length - 1) {
         const next = chain[i + 1]!;
         if (record.new_public_key !== next.old_public_key) {
@@ -478,7 +688,6 @@ async function verifySuccessionChain(
         }
       }
 
-      // Verify temporal ordering
       if (i < chain.length - 1) {
         const next = chain[i + 1]!;
         if (record.timestamp >= next.timestamp) {
@@ -491,7 +700,6 @@ async function verifySuccessionChain(
       }
     }
 
-    // Verify terminal: last record's new_public_key matches identity.public_key
     const lastRecord = chain[chain.length - 1]!;
     if (lastRecord.new_public_key !== currentPublicKeyHex) {
       return {
@@ -514,4 +722,316 @@ async function verifySuccessionChain(
       error: `Succession verification error: ${msg}`,
     };
   }
+}
+
+// ===========================================================================
+// Receipt verification
+// ===========================================================================
+
+async function verifyReceiptSignature(
+  receipt: ExecutionReceipt,
+  publicKey: Uint8Array,
+): Promise<boolean> {
+  const { signature, ...body } = receipt;
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  try {
+    const sig = fromBase64Url(signature);
+    return await ed.verifyAsync(sig, message, publicKey);
+  } catch {
+    return false;
+  }
+}
+
+async function verifyReceipt(receipt: ExecutionReceipt): Promise<ReceiptVerifyResult> {
+  // Resolve public key: embedded in receipt, or fail
+  let publicKey: Uint8Array | null = null;
+  let signerDid: string | undefined;
+
+  if (receipt.public_key) {
+    try {
+      publicKey = hexToBytes(receipt.public_key);
+      if (publicKey.length === 32) {
+        signerDid = publicKeyToDidKey(publicKey);
+      } else {
+        publicKey = null;
+      }
+    } catch {
+      publicKey = null;
+    }
+  }
+
+  if (!publicKey) {
+    // Recursively verify delegations even if root can't be verified
+    const delegations = await verifyReceiptDelegations(receipt);
+    return {
+      type: "receipt",
+      valid: false,
+      receipt,
+      errors: [{ message: "No embedded public_key — cannot verify without known keys" }],
+      ...(delegations.length > 0 ? { delegations } : {}),
+    };
+  }
+
+  const signatureValid = await verifyReceiptSignature(receipt, publicKey);
+  const errors: VerificationError[] = [];
+
+  if (!signatureValid) {
+    errors.push({ message: "Receipt signature verification failed" });
+  }
+
+  // Recursively verify delegation receipts
+  const delegations = await verifyReceiptDelegations(receipt);
+  const delegationErrors = delegations.filter((d) => !d.valid);
+  for (const d of delegationErrors) {
+    errors.push({
+      message: `Delegation ${d.receipt?.task_id ?? "unknown"}: verification failed`,
+      path: `delegation_receipts`,
+    });
+  }
+
+  return {
+    type: "receipt",
+    valid: signatureValid && delegationErrors.length === 0,
+    receipt,
+    signer: signerDid,
+    ...(delegations.length > 0 ? { delegations } : {}),
+    ...(errors.length > 0 ? { errors } : {}),
+  };
+}
+
+async function verifyReceiptDelegations(receipt: ExecutionReceipt): Promise<ReceiptVerifyResult[]> {
+  if (!receipt.delegation_receipts || receipt.delegation_receipts.length === 0) {
+    return [];
+  }
+  return Promise.all(receipt.delegation_receipts.map((dr) => verifyReceipt(dr)));
+}
+
+// ===========================================================================
+// Verifiable Credential verification (eddsa-jcs-2022)
+// ===========================================================================
+
+async function verifyDataIntegrity(
+  document: Record<string, unknown>,
+  proof: DataIntegrityProof,
+): Promise<boolean> {
+  if (proof.type !== "DataIntegrityProof" || proof.cryptosuite !== "eddsa-jcs-2022") {
+    return false;
+  }
+
+  // Extract public key from verificationMethod (did:key URI)
+  const did = proof.verificationMethod.split("#")[0]!;
+  let publicKey: Uint8Array;
+  try {
+    publicKey = didKeyToPublicKey(did);
+  } catch {
+    return false;
+  }
+
+  // Reconstruct proof options (without proofValue)
+  const { proofValue, ...proofOptions } = proof;
+
+  const encoder = new TextEncoder();
+
+  // Hash proof options and document separately
+  const proofHash = await sha256(encoder.encode(canonicalJson(proofOptions)));
+  const { proof: _proof, ...docWithoutProof } = document;
+  const docHash = await sha256(encoder.encode(canonicalJson(docWithoutProof)));
+
+  // Concatenate hashes and verify
+  const combined = new Uint8Array(proofHash.length + docHash.length);
+  combined.set(proofHash);
+  combined.set(docHash, proofHash.length);
+
+  // Decode signature (strip "z" prefix — base58btc multibase)
+  if (!proofValue.startsWith("z")) return false;
+  let signature: Uint8Array;
+  try {
+    signature = base58btcDecode(proofValue.slice(1));
+  } catch {
+    return false;
+  }
+
+  return ed.verifyAsync(signature, combined, publicKey);
+}
+
+async function verifyCredential(vc: VerifiableCredential): Promise<CredentialVerifyResult> {
+  const errors: VerificationError[] = [];
+
+  // Check expiry
+  let expired = false;
+  if (vc.validUntil) {
+    const expiresAt = new Date(vc.validUntil).getTime();
+    if (Date.now() > expiresAt) {
+      expired = true;
+      errors.push({ message: "Credential has expired", path: "validUntil" });
+    }
+  }
+
+  // Verify proof
+  const proofValid = await verifyDataIntegrity(vc as unknown as Record<string, unknown>, vc.proof);
+  if (!proofValid) {
+    errors.push({ message: "Credential proof verification failed", path: "proof" });
+  }
+
+  // Extract issuer DID
+  const issuerDid = typeof vc.issuer === "string" ? vc.issuer : undefined;
+  const subjectId = vc.credentialSubject?.id;
+
+  return {
+    type: "credential",
+    valid: proofValid && !expired,
+    credential: vc,
+    issuer: issuerDid,
+    subject: subjectId,
+    expired,
+    ...(errors.length > 0 ? { errors } : {}),
+  };
+}
+
+// ===========================================================================
+// Verifiable Presentation verification
+// ===========================================================================
+
+async function verifyPresentation(vp: VerifiablePresentation): Promise<PresentationVerifyResult> {
+  const errors: VerificationError[] = [];
+
+  // Verify VP envelope proof
+  const envelopeValid = await verifyDataIntegrity(
+    vp as unknown as Record<string, unknown>,
+    vp.proof,
+  );
+  if (!envelopeValid) {
+    errors.push({ message: "Presentation proof verification failed", path: "proof" });
+  }
+
+  // Verify each contained credential
+  const credentialResults: CredentialVerifyResult[] = [];
+  for (let i = 0; i < vp.verifiableCredential.length; i++) {
+    const vc = vp.verifiableCredential[i]!;
+    const vcResult = await verifyCredential(vc);
+    credentialResults.push(vcResult);
+    if (!vcResult.valid) {
+      errors.push({
+        message: `Credential ${i} verification failed`,
+        path: `verifiableCredential[${i}]`,
+      });
+    }
+  }
+
+  const allValid = envelopeValid && credentialResults.every((c) => c.valid);
+
+  return {
+    type: "presentation",
+    valid: allValid,
+    presentation: vp,
+    holder: vp.holder,
+    credentials: credentialResults,
+    ...(errors.length > 0 ? { errors } : {}),
+  };
+}
+
+// ===========================================================================
+// Public API
+// ===========================================================================
+
+/**
+ * Verify any Motebit artifact: identity file, execution receipt,
+ * verifiable credential, or verifiable presentation.
+ *
+ * Accepts strings (identity files, JSON) or parsed objects (receipts,
+ * credentials, presentations). Detects the artifact type automatically.
+ *
+ * Use `options.expectedType` to fail fast if the artifact doesn't match
+ * the expected type.
+ *
+ * @example
+ * ```ts
+ * import { verify } from "@motebit/verify";
+ *
+ * // Identity file (string)
+ * const r1 = await verify(identityFileContent);
+ * if (r1.type === "identity" && r1.valid) console.log(r1.did);
+ *
+ * // Execution receipt (object or JSON string)
+ * const r2 = await verify(receipt, { expectedType: "receipt" });
+ * if (r2.type === "receipt" && r2.valid) console.log(r2.signer);
+ *
+ * // Verifiable credential
+ * const r3 = await verify(credential);
+ * if (r3.type === "credential" && r3.valid) console.log(r3.issuer);
+ * ```
+ */
+export async function verify(artifact: unknown, options?: VerifyOptions): Promise<VerifyResult> {
+  const detected = detectArtifactType(artifact);
+
+  if (detected === null) {
+    // Return a generic failure — use identity as the default type for backward compat
+    const fallbackType = options?.expectedType ?? "identity";
+    return {
+      type: fallbackType,
+      valid: false,
+      ...(fallbackType === "identity" ? { identity: null } : {}),
+      ...(fallbackType === "receipt" ? { receipt: null } : {}),
+      ...(fallbackType === "credential" ? { credential: null } : {}),
+      ...(fallbackType === "presentation" ? { presentation: null } : {}),
+      errors: [{ message: "Unrecognized artifact format" }],
+    } as VerifyResult;
+  }
+
+  if (options?.expectedType && options.expectedType !== detected) {
+    return {
+      type: detected,
+      valid: false,
+      ...(detected === "identity" ? { identity: null } : {}),
+      ...(detected === "receipt" ? { receipt: null } : {}),
+      ...(detected === "credential" ? { credential: null } : {}),
+      ...(detected === "presentation" ? { presentation: null } : {}),
+      errors: [{ message: `Expected type "${options.expectedType}" but detected "${detected}"` }],
+    } as VerifyResult;
+  }
+
+  // Parse JSON strings into objects for non-identity types
+  let resolved = artifact;
+  if (typeof artifact === "string" && detected !== "identity") {
+    try {
+      resolved = JSON.parse(artifact) as unknown;
+    } catch {
+      return {
+        type: detected,
+        valid: false,
+        ...(detected === "receipt" ? { receipt: null } : {}),
+        ...(detected === "credential" ? { credential: null } : {}),
+        ...(detected === "presentation" ? { presentation: null } : {}),
+        errors: [{ message: "Failed to parse JSON" }],
+      } as VerifyResult;
+    }
+  }
+
+  switch (detected) {
+    case "identity":
+      return verifyIdentity(resolved as string);
+    case "receipt":
+      return verifyReceipt(resolved as ExecutionReceipt);
+    case "credential":
+      return verifyCredential(resolved as VerifiableCredential);
+    case "presentation":
+      return verifyPresentation(resolved as VerifiablePresentation);
+  }
+}
+
+/**
+ * Verify a motebit.md identity file. Backward-compatible with pre-0.4.0.
+ *
+ * @deprecated Use `verify(content)` instead — it handles all artifact types.
+ */
+export async function verifyIdentityFile(content: string): Promise<LegacyVerifyResult> {
+  const result = await verifyIdentity(content);
+  return {
+    valid: result.valid,
+    identity: result.identity,
+    did: result.did,
+    error: result.errors?.[0]?.message,
+    succession: result.succession,
+  };
 }

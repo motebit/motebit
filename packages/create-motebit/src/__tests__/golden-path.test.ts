@@ -36,7 +36,7 @@ describe("golden path: generate -> verify -> decrypt -> match", () => {
     const verification = await verify(result.identityFileContent);
 
     expect(verification.valid).toBe(true);
-    expect(verification.error).toBeUndefined();
+    expect(verification.errors).toBeUndefined();
     expect(verification.identity).not.toBeNull();
     expect(verification.identity!.motebit_id).toBe(result.motebitId);
     expect(verification.identity!.identity.algorithm).toBe("Ed25519");
@@ -139,6 +139,6 @@ describe("golden path: generate -> verify -> decrypt -> match", () => {
 
     const verification = await verify(tampered);
     expect(verification.valid).toBe(false);
-    expect(verification.error).toBeDefined();
+    expect(verification.errors).toBeDefined();
   });
 });

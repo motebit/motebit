@@ -133,7 +133,7 @@ describe("verify — valid signatures", () => {
     expect(result.identity!.motebit_id).toBe("01234567-89ab-cdef-0123-456789abcdef");
     expect(result.identity!.spec).toBe("motebit/identity@1.0");
     expect(result.did).toMatch(/^did:key:z[1-9A-HJ-NP-Za-km-z]+$/);
-    expect(result.error).toBeUndefined();
+    expect(result.errors).toBeUndefined();
   });
 
   it("returns deterministic did:key on valid verification", async () => {
@@ -168,7 +168,7 @@ describe("verify — tamper detection", () => {
     const result = await verify(tampered);
     expect(result.valid).toBe(false);
     expect(result.identity).toBeNull();
-    expect(result.error).toBe("Signature verification failed");
+    expect(result.errors?.[0]?.message).toBe("Signature verification failed");
   });
 
   it("fails when trust_mode is changed", async () => {
@@ -233,7 +233,7 @@ describe("verify — wrong key", () => {
 
     const result = await verify(content);
     expect(result.valid).toBe(false);
-    expect(result.error).toBe("Signature verification failed");
+    expect(result.errors?.[0]?.message).toBe("Signature verification failed");
   });
 });
 
@@ -245,13 +245,13 @@ describe("verify — malformed inputs", () => {
   it("returns error for missing frontmatter", async () => {
     const result = await verify("no frontmatter");
     expect(result.valid).toBe(false);
-    expect(result.error).toBe("Missing frontmatter opening ---");
+    expect(result.errors?.[0]?.message).toBe("Unrecognized artifact format");
   });
 
   it("returns error for missing signature", async () => {
     const result = await verify("---\nspec: test\n---\n");
     expect(result.valid).toBe(false);
-    expect(result.error).toBe("Missing signature");
+    expect(result.errors?.[0]?.message).toBe("Missing signature");
   });
 
   it("returns error for missing public key", async () => {
@@ -260,7 +260,7 @@ describe("verify — malformed inputs", () => {
 
     const result = await verify(content);
     expect(result.valid).toBe(false);
-    expect(result.error).toBe("No public key in frontmatter");
+    expect(result.errors?.[0]?.message).toBe("No public key in frontmatter");
   });
 
   it("returns error for invalid public key hex (wrong length)", async () => {
@@ -274,7 +274,7 @@ describe("verify — malformed inputs", () => {
 
     const result = await verify(content);
     expect(result.valid).toBe(false);
-    expect(result.error).toBe("Public key must be 32 bytes");
+    expect(result.errors?.[0]?.message).toBe("Public key must be 32 bytes");
   });
 
   it("returns error for invalid signature encoding", async () => {
@@ -291,7 +291,7 @@ describe("verify — malformed inputs", () => {
     const result = await verify(content);
     expect(result.valid).toBe(false);
     // Could be encoding error or length error
-    expect(result.error).toBeTruthy();
+    expect(result.errors?.[0]?.message).toBeTruthy();
   });
 });
 

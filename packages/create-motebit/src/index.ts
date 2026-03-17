@@ -7,7 +7,7 @@
  *   npx create-motebit verify [path] # Verify an existing motebit.md
  */
 
-import { verify } from "@motebit/verify";
+import { verifyIdentityFile } from "@motebit/verify";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -360,7 +360,7 @@ async function guidedScaffold(
   console.log();
   console.log(`  Identity stored in ${dim(configPath())}`);
   console.log(`  Motebit ID: ${cyan(result.motebitId)}`);
-  const verifyResult = await verify(result.identityFileContent);
+  const verifyResult = await verifyIdentityFile(result.identityFileContent);
   if (verifyResult.did) {
     console.log(`  DID:        ${dim(verifyResult.did)}`);
   }
@@ -416,7 +416,7 @@ async function verifyCmd(filePath: string): Promise<void> {
     return; // unreachable — hints to TS that content is assigned above
   }
 
-  const result = await verify(content);
+  const result = await verifyIdentityFile(content);
 
   if (result.valid) {
     const id = result.identity!;
@@ -480,7 +480,7 @@ async function rotateCmd(
     return;
   }
 
-  const verifyResult = await verify(content);
+  const verifyResult = await verifyIdentityFile(content);
   if (!verifyResult.valid) {
     console.log(`  ${red("!")} Identity file is invalid: ${verifyResult.error}`);
     console.log();
@@ -567,7 +567,7 @@ async function rotateCmd(
   saveConfig(config);
 
   // 7. Verify the updated file
-  const reVerify = await verify(result.identityFileContent);
+  const reVerify = await verifyIdentityFile(result.identityFileContent);
   if (!reVerify.valid) {
     console.log(`  ${red("!")} Post-rotation verification failed: ${reVerify.error}`);
     console.log(`    The identity file may be corrupted. Restore from backup.`);

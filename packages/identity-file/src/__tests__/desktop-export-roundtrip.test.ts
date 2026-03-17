@@ -9,7 +9,8 @@
 import { describe, it, expect } from "vitest";
 import { generateKeypair } from "@motebit/crypto";
 import { RiskLevel } from "@motebit/sdk";
-import { generate, parse, verify, governanceToPolicyConfig, toHex } from "../index.js";
+import { generate, parse, governanceToPolicyConfig, toHex } from "../index.js";
+import { verifyIdentityFile as verify } from "@motebit/verify";
 
 // ---------------------------------------------------------------------------
 // Desktop preset mappings — mirrored from apps/desktop/src/index.ts

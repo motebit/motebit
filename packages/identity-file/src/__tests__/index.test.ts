@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { generateKeypair } from "@motebit/crypto";
-import { verify as standaloneVerify } from "@motebit/verify";
-import { generate, parse, verify, update, toHex } from "../index";
+import { verifyIdentityFile as standaloneVerify } from "@motebit/verify";
+import { generate, parse, update, toHex } from "../index";
+
+// Use the legacy verifyIdentityFile for backward-compat result shape
+const verify = async (content: string) => standaloneVerify(content);
 
 // ---------------------------------------------------------------------------
 // Helpers
