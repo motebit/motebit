@@ -207,6 +207,8 @@ export type ArtifactType = VerifyResult["type"];
 
 export interface VerifyOptions {
   expectedType?: ArtifactType;
+  /** Clock skew tolerance in seconds for credential expiry checks. Default: 60. */
+  clockSkewSeconds?: number;
 }
 
 // ===========================================================================
@@ -855,14 +857,20 @@ async function verifyDataIntegrity(
   return ed.verifyAsync(signature, combined, publicKey);
 }
 
-async function verifyCredential(vc: VerifiableCredential): Promise<CredentialVerifyResult> {
+const DEFAULT_CLOCK_SKEW_SECONDS = 60;
+
+async function verifyCredential(
+  vc: VerifiableCredential,
+  clockSkewSeconds = DEFAULT_CLOCK_SKEW_SECONDS,
+): Promise<CredentialVerifyResult> {
   const errors: VerificationError[] = [];
 
-  // Check expiry
+  // Check expiry (with clock skew tolerance for distributed systems)
   let expired = false;
   if (vc.validUntil) {
     const expiresAt = new Date(vc.validUntil).getTime();
-    if (Date.now() > expiresAt) {
+    const skewMs = clockSkewSeconds * 1000;
+    if (Date.now() > expiresAt + skewMs) {
       expired = true;
       errors.push({ message: "Credential has expired", path: "validUntil" });
     }
@@ -893,7 +901,10 @@ async function verifyCredential(vc: VerifiableCredential): Promise<CredentialVer
 // Verifiable Presentation verification
 // ===========================================================================
 
-async function verifyPresentation(vp: VerifiablePresentation): Promise<PresentationVerifyResult> {
+async function verifyPresentation(
+  vp: VerifiablePresentation,
+  clockSkewSeconds = DEFAULT_CLOCK_SKEW_SECONDS,
+): Promise<PresentationVerifyResult> {
   const errors: VerificationError[] = [];
 
   // Verify VP envelope proof
@@ -909,7 +920,7 @@ async function verifyPresentation(vp: VerifiablePresentation): Promise<Presentat
   const credentialResults: CredentialVerifyResult[] = [];
   for (let i = 0; i < vp.verifiableCredential.length; i++) {
     const vc = vp.verifiableCredential[i]!;
-    const vcResult = await verifyCredential(vc);
+    const vcResult = await verifyCredential(vc, clockSkewSeconds);
     credentialResults.push(vcResult);
     if (!vcResult.valid) {
       errors.push({
@@ -1014,9 +1025,9 @@ export async function verify(artifact: unknown, options?: VerifyOptions): Promis
     case "receipt":
       return verifyReceipt(resolved as ExecutionReceipt);
     case "credential":
-      return verifyCredential(resolved as VerifiableCredential);
+      return verifyCredential(resolved as VerifiableCredential, options?.clockSkewSeconds);
     case "presentation":
-      return verifyPresentation(resolved as VerifiablePresentation);
+      return verifyPresentation(resolved as VerifiablePresentation, options?.clockSkewSeconds);
   }
 }
 

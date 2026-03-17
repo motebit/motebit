@@ -205,6 +205,55 @@ describe("verify — verifiable credentials", () => {
     expect(r.expired).toBe(true);
   });
 
+  it("tolerates clock skew within grace period (default 60s)", async () => {
+    const kp = await makeKeypair();
+    // Expired 30 seconds ago — within the 60s default grace period
+    const vc = await makeSignedCredential(kp, {
+      validFrom: new Date(Date.now() - 7200000).toISOString(),
+      validUntil: new Date(Date.now() - 30000).toISOString(),
+    });
+
+    const result = await verify(vc);
+    expect(result.type).toBe("credential");
+    expect(result.valid).toBe(true);
+
+    const r = result as CredentialVerifyResult;
+    expect(r.expired).toBe(false);
+  });
+
+  it("rejects expired credential beyond grace period", async () => {
+    const kp = await makeKeypair();
+    // Expired 2 minutes ago — beyond the 60s default grace period
+    const vc = await makeSignedCredential(kp, {
+      validFrom: new Date(Date.now() - 7200000).toISOString(),
+      validUntil: new Date(Date.now() - 120000).toISOString(),
+    });
+
+    const result = await verify(vc);
+    expect(result.type).toBe("credential");
+    expect(result.valid).toBe(false);
+
+    const r = result as CredentialVerifyResult;
+    expect(r.expired).toBe(true);
+  });
+
+  it("respects custom clockSkewSeconds option", async () => {
+    const kp = await makeKeypair();
+    // Expired 90 seconds ago — beyond default 60s but within custom 120s
+    const vc = await makeSignedCredential(kp, {
+      validFrom: new Date(Date.now() - 7200000).toISOString(),
+      validUntil: new Date(Date.now() - 90000).toISOString(),
+    });
+
+    // Fails with default grace
+    const r1 = await verify(vc);
+    expect(r1.valid).toBe(false);
+
+    // Passes with extended grace
+    const r2 = await verify(vc, { clockSkewSeconds: 120 });
+    expect(r2.valid).toBe(true);
+  });
+
   it("respects expectedType option", async () => {
     const kp = await makeKeypair();
     const vc = await makeSignedCredential(kp);
