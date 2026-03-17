@@ -178,5 +178,6 @@ Motebit is calm software. Do not confirm what the user can already see.
 - Database: `~/.motebit/motebit.db` (SQLite, WAL mode)
 
 - **Sibling boundary rule.** When you fix a boundary (auth, policy, validation, rendering), audit all sibling boundaries for the same gap in the same pass. A fix applied to one path but not its siblings is incomplete. Docs are siblings of code — when implementation changes, sync CLAUDE.md, docs site, and spec in the same commit.
+- **One-pass delivery.** When a core primitive ships (identity, crypto, policy), implement across all surfaces in the same pass. Do not defer UI if the package boundary is stable. Isolation at the package level exists to enable parallel delivery.
 - Dependency overrides in `package.json` must be upper-bounded (`>=4.59.0 <5.0.0`), especially for 0.x semver.
 - **Structured logging.** Relay uses `createLogger(module)` from `logger.ts` for structured JSON logs with correlation IDs. Every request gets a `x-correlation-id` header, propagated through the log context. Use `logger.info({ correlationId, ... })`, not `console.log`.
