@@ -123,13 +123,18 @@ spec/
 
 ```typescript
 import { verify } from "@motebit/verify";
-import { readFileSync } from "node:fs";
 
-const result = await verify(readFileSync("motebit.md", "utf-8"));
-if (result.valid) {
-  console.log(result.identity.motebit_id);
+// Verify any artifact — identity file, receipt, credential, or presentation
+const result = await verify(artifact);
+
+if (result.type === "identity" && result.valid) {
   console.log(result.did); // did:key:z6Mk...
-  console.log(result.identity.governance.trust_mode);
+  console.log(result.succession); // key rotation chain
+}
+
+if (result.type === "receipt" && result.valid) {
+  console.log(result.signer); // did:key of executing agent
+  console.log(result.delegations); // nested delegation chain
 }
 ```
 
