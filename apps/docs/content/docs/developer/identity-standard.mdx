@@ -48,23 +48,34 @@ Install the standalone verifier:
 npm install @motebit/verify
 ```
 
+`@motebit/verify` verifies any Motebit artifact — identity files, execution receipts, verifiable credentials, and presentations. One function, zero monorepo dependencies, MIT licensed.
+
 ```typescript
 import { verify } from "@motebit/verify";
 import fs from "node:fs";
 
-const content = fs.readFileSync("motebit.md", "utf-8");
-const result = await verify(content);
-
-if (result.valid) {
+// Identity file
+const result = await verify(fs.readFileSync("motebit.md", "utf-8"));
+if (result.type === "identity" && result.valid) {
   console.log("Verified:", result.identity.motebit_id);
-  console.log("DID:", result.did); // W3C did:key derived from Ed25519 public key
+  console.log("DID:", result.did);
   console.log("Trust mode:", result.identity.governance.trust_mode);
-} else {
-  console.error("Failed:", result.error);
+}
+
+// Execution receipt — self-verifiable via embedded public key
+const r = await verify(receipt, { expectedType: "receipt" });
+if (r.type === "receipt" && r.valid) {
+  console.log("Signer:", r.signer);   // did:key of the executing agent
+}
+
+// Verifiable credential (W3C VC 2.0, eddsa-jcs-2022)
+const c = await verify(credential, { expectedType: "credential" });
+if (c.type === "credential" && c.valid) {
+  console.log("Issuer:", c.issuer);
 }
 ```
 
-`@motebit/verify` has zero monorepo dependencies — only `@noble/ed25519` for cryptography.
+All verification is offline — no network calls, no relay lookup. Everything needed is embedded in the artifact.
 
 ## What's in a motebit.md
 
