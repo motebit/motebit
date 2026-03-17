@@ -1901,6 +1901,7 @@ export async function handleRotate(config: CliConfig): Promise<void> {
     const baseUrl = syncUrl.replace(/\/+$/, "");
     try {
       // Re-decrypt new key for signing the relay request
+      if (!fullConfig.cli_encrypted_key) throw new Error("No encrypted key in config");
       const newPrivKeyHex = await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
       const newPrivKey = fromHex(newPrivKeyHex);
       const deviceId = fullConfig.device_id ?? "";
