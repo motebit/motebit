@@ -76,7 +76,8 @@ export async function runHousekeeping(deps: HousekeepingDeps): Promise<Housekeep
         const ageMs = now - node.created_at;
         const maxMs = retention.max_retention_days * MS_PER_DAY;
         if (ageMs > maxMs) {
-          await deps.memory.deleteMemory(node.node_id);
+          // Use privacy layer to create deletion certificate + tombstone
+          await deps.privacy.deleteMemory(node.node_id, "retention_enforcement");
           tombstonedRetention++;
           continue;
         }

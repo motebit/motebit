@@ -193,10 +193,27 @@ export class ExportManager {
     private motebitId: string,
   ) {}
 
+  /** Sensitivity levels where display_allowed is true. */
+  private static readonly DISPLAY_ALLOWED = new Set<string>([
+    SensitivityLevel.None,
+    SensitivityLevel.Personal,
+  ]);
+
   /**
    * Export all user data as a JSON manifest.
+   *
+   * By default, memories with sensitive classifications (medical, financial, secret)
+   * are filtered out. Pass `includeAllSensitivity: true` to bypass the filter
+   * (e.g. for the agent owner who explicitly requests everything via --all).
+   *
+   * Returns the manifest plus a count of redacted memories.
    */
-  async exportAll(identity: MotebitIdentity): Promise<ExportManifest> {
+  async exportAll(
+    identity: MotebitIdentity,
+    options?: { includeAllSensitivity?: boolean },
+  ): Promise<ExportManifest & { redacted_count: number }> {
+    const includeAll = options?.includeAllSensitivity === true;
+
     // Audit the export request
     await this.auditLog.record({
       audit_id: crypto.randomUUID(),
@@ -205,7 +222,7 @@ export class ExportManager {
       action: "export_all",
       target_type: "motebit",
       target_id: this.motebitId,
-      details: {},
+      details: { include_all_sensitivity: includeAll },
     });
 
     // Log the export event
@@ -224,14 +241,21 @@ export class ExportManager {
     const events = await this.eventStore.query({ motebit_id: this.motebitId });
     const auditRecords = await this.auditLog.query(this.motebitId);
 
+    // Filter sensitive memories unless explicitly bypassed
+    const filteredNodes = includeAll
+      ? nodes
+      : nodes.filter((n) => ExportManager.DISPLAY_ALLOWED.has(n.sensitivity));
+    const redactedCount = nodes.length - filteredNodes.length;
+
     return {
       motebit_id: this.motebitId,
       exported_at: Date.now(),
       identity,
-      memories: nodes,
+      memories: filteredNodes,
       edges,
       events,
       audit_log: auditRecords,
+      redacted_count: redactedCount,
     };
   }
 }
@@ -294,9 +318,12 @@ export class PrivacyLayer {
     }
   }
 
-  async exportAll(identity: MotebitIdentity): Promise<ExportManifest> {
+  async exportAll(
+    identity: MotebitIdentity,
+    options?: { includeAllSensitivity?: boolean },
+  ): Promise<ExportManifest & { redacted_count: number }> {
     try {
-      return await this.exportManager.exportAll(identity);
+      return await this.exportManager.exportAll(identity, options);
     } catch (error) {
       throw new Error("Privacy layer: access denied (fail-closed)", { cause: error });
     }

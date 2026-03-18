@@ -5,7 +5,7 @@ import { computeDecayedConfidence } from "@motebit/memory-graph";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { McpClientAdapter, type McpServerConfig } from "@motebit/mcp-client";
 import { InMemoryToolRegistry } from "@motebit/tools";
-import { AgentTrustLevel } from "@motebit/sdk";
+import { AgentTrustLevel, SensitivityLevel } from "@motebit/sdk";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import { computeReputationScore } from "@motebit/policy";
 import { createSignedToken, verifyExecutionReceipt, hexToBytes } from "@motebit/crypto";
@@ -236,8 +236,18 @@ Available commands:
     case "export": {
       const memories = await runtime.memory.exportAll();
       const state = runtime.getState();
-      const exportData = { memories, state };
+      // Filter out sensitive memories (medical/financial/secret) — only None and Personal are display_allowed
+      const displayAllowed = new Set<string>([SensitivityLevel.None, SensitivityLevel.Personal]);
+      const totalCount = memories.nodes.length;
+      const filteredNodes = memories.nodes.filter((n) => displayAllowed.has(n.sensitivity));
+      const redactedCount = totalCount - filteredNodes.length;
+      const exportData = { memories: { nodes: filteredNodes, edges: memories.edges }, state };
       console.log(JSON.stringify(exportData, null, 2));
+      if (redactedCount > 0) {
+        console.error(
+          `\n(${redactedCount} sensitive ${redactedCount === 1 ? "memory" : "memories"} redacted from export)`,
+        );
+      }
       break;
     }
 

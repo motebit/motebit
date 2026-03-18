@@ -11,7 +11,7 @@ import type {
   TurnContext,
   ConversationMessage,
 } from "@motebit/sdk";
-import { EventType, RelationType } from "@motebit/sdk";
+import { EventType, RelationType, SensitivityLevel } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MemoryGraph, ConsolidationProvider } from "@motebit/memory-graph";
 import { embedText, cosineSimilarity } from "@motebit/memory-graph";
@@ -245,11 +245,18 @@ export async function* runTurnStreaming(
   });
 
   // 2. Embed user message and retrieve relevant memories (two-bucket: pinned + similarity)
+  // Sensitivity gate: only include None and Personal memories in context sent to
+  // external AI providers. Medical, Financial, and Secret memories stay local.
+  const CONTEXT_SAFE_SENSITIVITY = [SensitivityLevel.None, SensitivityLevel.Personal];
+
   const queryEmbedding = await embedText(userMessage);
-  const pinnedMemories = await memoryGraph.getPinnedMemories();
+  const pinnedMemories = (await memoryGraph.getPinnedMemories()).filter((m) =>
+    CONTEXT_SAFE_SENSITIVITY.includes(m.sensitivity),
+  );
   const similarityMemories = await memoryGraph.retrieve(queryEmbedding, {
     limit: 5,
     strengthenCoRetrieved: true,
+    sensitivityFilter: CONTEXT_SAFE_SENSITIVITY,
   });
 
   // Merge: pinned first (cap 5), then similarity (deduplicated)

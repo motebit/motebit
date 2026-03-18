@@ -178,6 +178,27 @@ describe("Runtime housekeeping — memory retention enforcement", () => {
     expect(alive).toHaveLength(0);
   });
 
+  it("creates deletion certificate for retention-expired memories", async () => {
+    const deleteSpy = vi.spyOn(runtime.privacy, "deleteMemory");
+    const embedding = new Array(384).fill(0.1);
+    const node = await runtime.memory.formMemory(
+      { content: "expired secret", confidence: 0.9, sensitivity: SensitivityLevel.Secret },
+      embedding,
+      SEVEN_DAYS * 100,
+    );
+
+    // Backdate to 45 days ago — exceeds secret retention of 30 days
+    const fortyFiveDaysAgo = Date.now() - 45 * 24 * 60 * 60 * 1000;
+    node.last_accessed = fortyFiveDaysAgo;
+    node.created_at = fortyFiveDaysAgo;
+    await memoryStorage.saveNode(node);
+
+    await runtime.housekeeping();
+
+    // Verify privacy layer was used (creates deletion certificate + audit trail)
+    expect(deleteSpy).toHaveBeenCalledWith(node.node_id, "retention_enforcement");
+  });
+
   it("preserves medical memory within retention period", async () => {
     const embedding = new Array(384).fill(0.1);
     const node = await runtime.memory.formMemory(

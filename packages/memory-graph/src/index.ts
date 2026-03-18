@@ -636,6 +636,10 @@ export class MemoryGraph {
           const neighbor = await this.storage.getNode(neighborId);
           if (!neighbor || neighbor.tombstoned) continue;
 
+          // Sensitivity filter for neighbor — prevent edge expansion from leaking
+          // high-sensitivity memories when a sensitivity filter is active
+          if (sensitivityFilter && !sensitivityFilter.includes(neighbor.sensitivity)) continue;
+
           // Temporal filter for neighbor
           if (!includeExpired && neighbor.valid_until != null && neighbor.valid_until <= now)
             continue;

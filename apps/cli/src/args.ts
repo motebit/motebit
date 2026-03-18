@@ -23,6 +23,7 @@ export interface CliConfig {
   servePort: string | undefined;
   json: boolean;
   presentation: boolean;
+  all?: boolean;
   version: boolean;
   help: boolean;
   positionals: string[];
@@ -52,6 +53,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       "serve-port": { type: "string" },
       json: { type: "boolean", default: false },
       presentation: { type: "boolean", default: false },
+      all: { type: "boolean", default: false },
       version: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -90,6 +92,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     servePort: values["serve-port"],
     json: values.json,
     presentation: values.presentation,
+    all: values.all,
     version: values.version,
     help: values.help,
     positionals,
@@ -105,6 +108,7 @@ Commands:
   id                        Show your identity (motebit_id, did:key, public key)
   doctor                    Check system readiness (Node, SQLite, config)
   export [--output <dir>]   Export identity bundle (motebit.md, credentials, budget, gradient)
+    --all                   Include sensitive memories (medical/financial/secret) in export
   verify <path>             Verify a motebit.md identity file signature
   register [--sync-url <url>]  Register this identity with the relay (enables discovery)
   rotate [--reason "..."]   Rotate Ed25519 keypair with cryptographic succession chain

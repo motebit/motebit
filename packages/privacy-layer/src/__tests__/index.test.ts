@@ -239,6 +239,60 @@ describe("PrivacyLayer", () => {
       const events = await eventStore.query({ motebit_id: MOTEBIT_ID });
       expect(events.some((e) => e.event_type === EventType.ExportRequested)).toBe(true);
     });
+
+    it("filters out sensitive memories by default", async () => {
+      await memoryGraph.formMemory(
+        { content: "public info", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 0],
+      );
+      await memoryGraph.formMemory(
+        { content: "personal note", confidence: 0.8, sensitivity: SensitivityLevel.Personal },
+        [0, 1],
+      );
+      await memoryGraph.formMemory(
+        { content: "medical record", confidence: 0.9, sensitivity: SensitivityLevel.Medical },
+        [1, 1],
+      );
+      await memoryGraph.formMemory(
+        { content: "bank details", confidence: 0.9, sensitivity: SensitivityLevel.Financial },
+        [0.5, 0.5],
+      );
+      await memoryGraph.formMemory(
+        { content: "secret key", confidence: 1.0, sensitivity: SensitivityLevel.Secret },
+        [0.3, 0.7],
+      );
+
+      const manifest = await privacyLayer.exportAll(makeIdentity());
+
+      // Only None and Personal should survive
+      const contents = manifest.memories.map((m) => m.content);
+      expect(contents).toContain("public info");
+      expect(contents).toContain("personal note");
+      expect(contents).not.toContain("medical record");
+      expect(contents).not.toContain("bank details");
+      expect(contents).not.toContain("secret key");
+      expect(manifest.redacted_count).toBe(3);
+    });
+
+    it("includes all memories when includeAllSensitivity is true", async () => {
+      await memoryGraph.formMemory(
+        { content: "allowed", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 0],
+      );
+      await memoryGraph.formMemory(
+        { content: "secret stuff", confidence: 1.0, sensitivity: SensitivityLevel.Secret },
+        [0, 1],
+      );
+
+      const manifest = await privacyLayer.exportAll(makeIdentity(), {
+        includeAllSensitivity: true,
+      });
+
+      const contents = manifest.memories.map((m) => m.content);
+      expect(contents).toContain("allowed");
+      expect(contents).toContain("secret stuff");
+      expect(manifest.redacted_count).toBe(0);
+    });
   });
 
   describe("fail-closed behavior", () => {
