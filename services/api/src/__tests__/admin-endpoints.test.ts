@@ -99,7 +99,7 @@ describe("Admin — Gradient", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       motebit_id: string;
-      current: unknown | null;
+      current: unknown;
       history: unknown[];
     };
     expect(body.motebit_id).toBe(motebitId);
