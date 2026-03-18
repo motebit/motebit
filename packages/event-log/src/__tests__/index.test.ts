@@ -421,10 +421,10 @@ describe("EventStore replay semantics", () => {
   it("replay is stable-sorted by version_clock (insertion order preserved for equal clocks)", async () => {
     // Two events from different devices with the same version_clock
     await eventStore.append(
-      makeEvent({ event_id: "a", motebit_id: "m1", device_id: "d1" as any, version_clock: 1 }),
+      makeEvent({ event_id: "a", motebit_id: "m1", device_id: "d1", version_clock: 1 }),
     );
     await eventStore.append(
-      makeEvent({ event_id: "b", motebit_id: "m1", device_id: "d2" as any, version_clock: 1 }),
+      makeEvent({ event_id: "b", motebit_id: "m1", device_id: "d2", version_clock: 1 }),
     );
 
     const ids: string[] = [];
@@ -448,7 +448,7 @@ describe("InMemoryEventStore immutability", () => {
 
     // Mutate the original object after append
     event.version_clock = 999;
-    event.motebit_id = "mutated" as any;
+    event.motebit_id = "mutated";
 
     const results = await store.query({});
     expect(results[0]!.version_clock).toBe(1);
@@ -468,31 +468,25 @@ describe("multi-device version clock interleaving", () => {
   });
 
   it("getLatestClock reflects the maximum across all devices", async () => {
-    await eventStore.append(
-      makeEvent({ motebit_id: "m1", device_id: "d1" as any, version_clock: 3 }),
-    );
-    await eventStore.append(
-      makeEvent({ motebit_id: "m1", device_id: "d2" as any, version_clock: 7 }),
-    );
-    await eventStore.append(
-      makeEvent({ motebit_id: "m1", device_id: "d1" as any, version_clock: 5 }),
-    );
+    await eventStore.append(makeEvent({ motebit_id: "m1", device_id: "d1", version_clock: 3 }));
+    await eventStore.append(makeEvent({ motebit_id: "m1", device_id: "d2", version_clock: 7 }));
+    await eventStore.append(makeEvent({ motebit_id: "m1", device_id: "d1", version_clock: 5 }));
 
     expect(await eventStore.getLatestClock("m1")).toBe(7);
   });
 
   it("replay interleaves events from multiple devices by version_clock", async () => {
     await eventStore.append(
-      makeEvent({ event_id: "d1-1", motebit_id: "m1", device_id: "d1" as any, version_clock: 1 }),
+      makeEvent({ event_id: "d1-1", motebit_id: "m1", device_id: "d1", version_clock: 1 }),
     );
     await eventStore.append(
-      makeEvent({ event_id: "d2-1", motebit_id: "m1", device_id: "d2" as any, version_clock: 2 }),
+      makeEvent({ event_id: "d2-1", motebit_id: "m1", device_id: "d2", version_clock: 2 }),
     );
     await eventStore.append(
-      makeEvent({ event_id: "d1-2", motebit_id: "m1", device_id: "d1" as any, version_clock: 3 }),
+      makeEvent({ event_id: "d1-2", motebit_id: "m1", device_id: "d1", version_clock: 3 }),
     );
     await eventStore.append(
-      makeEvent({ event_id: "d2-2", motebit_id: "m1", device_id: "d2" as any, version_clock: 4 }),
+      makeEvent({ event_id: "d2-2", motebit_id: "m1", device_id: "d2", version_clock: 4 }),
     );
 
     const order: string[] = [];
@@ -504,13 +498,13 @@ describe("multi-device version clock interleaving", () => {
 
   it("compact preserves events above the clock regardless of device", async () => {
     await eventStore.append(
-      makeEvent({ event_id: "d1-1", motebit_id: "m1", device_id: "d1" as any, version_clock: 1 }),
+      makeEvent({ event_id: "d1-1", motebit_id: "m1", device_id: "d1", version_clock: 1 }),
     );
     await eventStore.append(
-      makeEvent({ event_id: "d2-1", motebit_id: "m1", device_id: "d2" as any, version_clock: 2 }),
+      makeEvent({ event_id: "d2-1", motebit_id: "m1", device_id: "d2", version_clock: 2 }),
     );
     await eventStore.append(
-      makeEvent({ event_id: "d1-2", motebit_id: "m1", device_id: "d1" as any, version_clock: 3 }),
+      makeEvent({ event_id: "d1-2", motebit_id: "m1", device_id: "d1", version_clock: 3 }),
     );
 
     const deleted = await eventStore.compact("m1", 2);

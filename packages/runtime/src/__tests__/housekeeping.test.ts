@@ -12,7 +12,7 @@ vi.mock("@motebit/memory-graph", async (importOriginal) => {
 
 import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
 import type { StreamingProvider } from "@motebit/ai-core";
-import type { AIResponse, ContextPack } from "@motebit/sdk";
+import type { AIResponse, ContextPack, MemoryStorageAdapter } from "@motebit/sdk";
 
 function createMockProvider(): StreamingProvider {
   const response: AIResponse = {
@@ -39,12 +39,15 @@ const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
 
 describe("Runtime housekeeping — memory retention enforcement", () => {
   let runtime: MotebitRuntime;
+  let memoryStorage: MemoryStorageAdapter;
 
   beforeEach(() => {
+    const storage = createInMemoryStorage();
+    memoryStorage = storage.memoryStorage;
     runtime = new MotebitRuntime(
       { motebitId: "hk-test", tickRateHz: 0 },
       {
-        storage: createInMemoryStorage(),
+        storage,
         renderer: new NullRenderer(),
         ai: createMockProvider(),
       },
@@ -74,7 +77,7 @@ describe("Runtime housekeeping — memory retention enforcement", () => {
     node.created_at = thirtyDaysAgo;
     // Save the backdated node (InMemoryMemoryStorage stores by reference after formMemory,
     // but we re-save to be explicit)
-    await (runtime as any).memory["storage"].saveNode(node);
+    await memoryStorage.saveNode(node);
 
     await runtime.housekeeping();
 
@@ -103,7 +106,7 @@ describe("Runtime housekeeping — memory retention enforcement", () => {
     node.last_accessed = thirtyDaysAgo;
     node.created_at = thirtyDaysAgo;
     node.pinned = true;
-    await (runtime as any).memory["storage"].saveNode(node);
+    await memoryStorage.saveNode(node);
 
     await runtime.housekeeping();
 
@@ -145,7 +148,7 @@ describe("Runtime housekeeping — memory retention enforcement", () => {
     const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
     node.created_at = thirtyDaysAgo;
     node.last_accessed = Date.now(); // accessed just now
-    await (runtime as any).memory["storage"].saveNode(node);
+    await memoryStorage.saveNode(node);
 
     await runtime.housekeeping();
 
@@ -166,7 +169,7 @@ describe("Runtime housekeeping — memory retention enforcement", () => {
     const hundredDaysAgo = Date.now() - 100 * 24 * 60 * 60 * 1000;
     node.last_accessed = hundredDaysAgo;
     node.created_at = hundredDaysAgo;
-    await (runtime as any).memory["storage"].saveNode(node);
+    await memoryStorage.saveNode(node);
 
     await runtime.housekeeping();
 
@@ -187,7 +190,7 @@ describe("Runtime housekeeping — memory retention enforcement", () => {
     const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
     node.last_accessed = thirtyDaysAgo;
     node.created_at = thirtyDaysAgo;
-    await (runtime as any).memory["storage"].saveNode(node);
+    await memoryStorage.saveNode(node);
 
     await runtime.housekeeping();
 
@@ -208,7 +211,7 @@ describe("Runtime housekeeping — memory retention enforcement", () => {
     const fortyFiveDaysAgo = Date.now() - 45 * 24 * 60 * 60 * 1000;
     node.last_accessed = fortyFiveDaysAgo;
     node.created_at = fortyFiveDaysAgo;
-    await (runtime as any).memory["storage"].saveNode(node);
+    await memoryStorage.saveNode(node);
 
     await runtime.housekeeping();
 
@@ -229,7 +232,7 @@ describe("Runtime housekeeping — memory retention enforcement", () => {
     const longAgo = Date.now() - 1000 * 24 * 60 * 60 * 1000;
     node.last_accessed = longAgo;
     node.created_at = longAgo;
-    await (runtime as any).memory["storage"].saveNode(node);
+    await memoryStorage.saveNode(node);
 
     await runtime.housekeeping();
 
@@ -256,7 +259,7 @@ describe("Runtime housekeeping — memory retention enforcement", () => {
     const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
     decayed.last_accessed = thirtyDaysAgo;
     decayed.created_at = thirtyDaysAgo;
-    await (runtime as any).memory["storage"].saveNode(decayed);
+    await memoryStorage.saveNode(decayed);
 
     const expired = await runtime.memory.formMemory(
       { content: "expired medical", confidence: 0.9, sensitivity: SensitivityLevel.Medical },
@@ -266,7 +269,7 @@ describe("Runtime housekeeping — memory retention enforcement", () => {
     const hundredDaysAgo = Date.now() - 100 * 24 * 60 * 60 * 1000;
     expired.last_accessed = hundredDaysAgo;
     expired.created_at = hundredDaysAgo;
-    await (runtime as any).memory["storage"].saveNode(expired);
+    await memoryStorage.saveNode(expired);
 
     await runtime.housekeeping();
 
@@ -309,7 +312,7 @@ describe("Runtime housekeeping — memory retention enforcement", () => {
     const fifteenDaysAgo = Date.now() - 15 * 24 * 60 * 60 * 1000;
     node.created_at = fifteenDaysAgo;
     node.last_accessed = fifteenDaysAgo;
-    await (runtime as any).memory["storage"].saveNode(node);
+    await memoryStorage.saveNode(node);
 
     // Before housekeeping, no targets
     expect(runtime.getCuriosityTargets()).toHaveLength(0);
@@ -333,10 +336,11 @@ describe("Runtime housekeeping — memory retention enforcement", () => {
 
   it("respects custom persistence threshold from memoryGovernance config", async () => {
     // Create runtime with very low threshold (0.01)
+    const localStorage = createInMemoryStorage();
     const rt = new MotebitRuntime(
       { motebitId: "low-thresh", tickRateHz: 0, memoryGovernance: { persistenceThreshold: 0.01 } },
       {
-        storage: createInMemoryStorage(),
+        storage: localStorage,
         renderer: new NullRenderer(),
         ai: createMockProvider(),
       },
@@ -354,7 +358,7 @@ describe("Runtime housekeeping — memory retention enforcement", () => {
     const fifteenDaysAgo = Date.now() - 15 * 24 * 60 * 60 * 1000;
     node.last_accessed = fifteenDaysAgo;
     node.created_at = fifteenDaysAgo;
-    await (rt as any).memory["storage"].saveNode(node);
+    await localStorage.memoryStorage.saveNode(node);
 
     await rt.housekeeping();
 

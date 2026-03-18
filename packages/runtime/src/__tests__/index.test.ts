@@ -3,7 +3,7 @@ import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
 import type { PlatformAdapters, KeyringAdapter } from "../index";
 import type { StreamingProvider } from "@motebit/ai-core";
 import type { AIResponse, ContextPack } from "@motebit/sdk";
-import { TrustMode, BatteryMode } from "@motebit/sdk";
+import { TrustMode, BatteryMode, EventType } from "@motebit/sdk";
 
 // === Mock Provider ===
 
@@ -337,7 +337,7 @@ describe("MotebitRuntime compaction", () => {
         event_id: `e-${i}`,
         motebit_id: "compact-test",
         timestamp: Date.now(),
-        event_type: "state_updated" as any,
+        event_type: EventType.StateUpdated,
         payload: {},
         version_clock: i,
         tombstoned: false,
@@ -362,7 +362,7 @@ describe("MotebitRuntime compaction", () => {
       event_id: "e-1",
       motebit_id: "compact-test",
       timestamp: Date.now(),
-      event_type: "state_updated" as any,
+      event_type: EventType.StateUpdated,
       payload: {},
       version_clock: 1,
       tombstoned: false,
@@ -385,7 +385,7 @@ describe("MotebitRuntime compaction", () => {
         event_id: `e-${i}`,
         motebit_id: "compact-test",
         timestamp: Date.now(),
-        event_type: "state_updated" as any,
+        event_type: EventType.StateUpdated,
         payload: {},
         version_clock: i,
         tombstoned: false,
