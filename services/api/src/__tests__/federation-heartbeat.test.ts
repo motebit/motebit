@@ -7,13 +7,18 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { sendHeartbeats, createFederationTables } from "../federation.js";
 import type { RelayIdentity } from "../federation.js";
-import { openMotebitDatabase } from "@motebit/persistence";
+import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
 import { generateKeypair, bytesToHex } from "@motebit/crypto";
 
 /** Manually insert a peer into the DB for heartbeat testing. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function insertPeer(db: any, peerId: string, endpointUrl: string, state: string, missed = 0): void {
+function insertPeer(
+  db: DatabaseDriver,
+  peerId: string,
+  endpointUrl: string,
+  state: string,
+  missed = 0,
+): void {
   const keypair = crypto.getRandomValues(new Uint8Array(32));
   db.prepare(
     `INSERT OR REPLACE INTO relay_peers (peer_relay_id, public_key, endpoint_url, state, missed_heartbeats, agent_count, trust_score)
@@ -21,9 +26,8 @@ function insertPeer(db: any, peerId: string, endpointUrl: string, state: string,
   ).run(peerId, bytesToHex(keypair), endpointUrl, state, missed);
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getPeer(
-  db: any,
+  db: DatabaseDriver,
   peerId: string,
 ): { state: string; missed_heartbeats: number } | undefined {
   return db
@@ -32,8 +36,7 @@ function getPeer(
 }
 
 describe("Heartbeat Sender", () => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let db: any;
+  let db: DatabaseDriver;
   let identity: RelayIdentity;
 
   beforeEach(async () => {

@@ -1,13 +1,14 @@
 import "fake-indexeddb/auto";
 
 // Minimal localStorage/sessionStorage polyfill for vitest (Node.js)
-if (typeof globalThis.localStorage === "undefined") {
+function makeStoragePolyfill(): Storage {
   const store = new Map<string, string>();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (globalThis as any).localStorage = {
+  return {
     getItem: (key: string) => store.get(key) ?? null,
     setItem: (key: string, value: string) => store.set(key, String(value)),
-    removeItem: (key: string) => store.delete(key),
+    removeItem: (key: string) => {
+      store.delete(key);
+    },
     clear: () => store.clear(),
     get length() {
       return store.size;
@@ -16,17 +17,16 @@ if (typeof globalThis.localStorage === "undefined") {
   };
 }
 
+if (typeof globalThis.localStorage === "undefined") {
+  Object.defineProperty(globalThis, "localStorage", {
+    value: makeStoragePolyfill(),
+    writable: true,
+  });
+}
+
 if (typeof globalThis.sessionStorage === "undefined") {
-  const store = new Map<string, string>();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (globalThis as any).sessionStorage = {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => store.set(key, String(value)),
-    removeItem: (key: string) => store.delete(key),
-    clear: () => store.clear(),
-    get length() {
-      return store.size;
-    },
-    key: (index: number) => [...store.keys()][index] ?? null,
-  };
+  Object.defineProperty(globalThis, "sessionStorage", {
+    value: makeStoragePolyfill(),
+    writable: true,
+  });
 }

@@ -1,8 +1,8 @@
+import type React from "react";
 import { DocsLayout } from "fumadocs-ui/layouts/docs";
 import { source } from "@/lib/source";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export default function Layout({ children }: { children: any }) {
+export default function Layout({ children }: { children: React.ReactNode }) {
   return (
     <DocsLayout
       tree={source.pageTree}

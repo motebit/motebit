@@ -1,3 +1,4 @@
+import type React from "react";
 import "./global.css";
 import { RootProvider } from "fumadocs-ui/provider";
 import type { Metadata } from "next";
@@ -8,8 +9,7 @@ export const metadata: Metadata = {
     "A persistent, cryptographically-anchored, sovereign agent. You own the identity. The intelligence is pluggable. The body is yours.",
 };
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export default function RootLayout({ children }: { children: any }) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <body>

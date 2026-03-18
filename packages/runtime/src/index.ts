@@ -167,6 +167,17 @@ export type {
   ConversationMessage,
   AgentTrustRecord,
 } from "@motebit/sdk";
+import type {
+  GradientCredentialSubject,
+  ReputationCredentialSubject,
+  TrustCredentialSubject,
+} from "@motebit/sdk";
+
+/** Union of all credential subject types issued by the runtime. */
+type AnyCredentialSubject =
+  | GradientCredentialSubject
+  | ReputationCredentialSubject
+  | TrustCredentialSubject;
 export { AgentTrustLevel } from "@motebit/sdk";
 export type { EventStoreAdapter } from "@motebit/event-log";
 export type { MemoryStorageAdapter, CuriosityTarget } from "@motebit/memory-graph";
@@ -479,7 +490,8 @@ export class MotebitRuntime {
   private _curiosityTargets: CuriosityTarget[] = [];
   private _precision: PrecisionWeights;
   private _signingKeys: { privateKey: Uint8Array; publicKey: Uint8Array } | null;
-  private _issuedCredentials: import("@motebit/crypto").VerifiableCredential<unknown>[] = [];
+  private _issuedCredentials: import("@motebit/crypto").VerifiableCredential<AnyCredentialSubject>[] =
+    [];
   private _credentialStore: import("@motebit/sdk").CredentialStoreAdapter | null = null;
   private _signingKeysErased = false;
 
@@ -2145,8 +2157,7 @@ export class MotebitRuntime {
    * Return all verifiable credentials issued by this runtime (gradient + trust).
    * Credentials accumulate in memory; consumers can read and clear as needed.
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  getIssuedCredentials(): import("@motebit/crypto").VerifiableCredential<any>[] {
+  getIssuedCredentials(): import("@motebit/crypto").VerifiableCredential<AnyCredentialSubject>[] {
     return [...this._issuedCredentials];
   }
 
@@ -2159,7 +2170,9 @@ export class MotebitRuntime {
 
   /** Push a credential to both in-memory cache and persistent store. */
   private _persistCredential(vc: import("@motebit/crypto").VerifiableCredential<unknown>): void {
-    this._issuedCredentials.push(vc);
+    this._issuedCredentials.push(
+      vc as import("@motebit/crypto").VerifiableCredential<AnyCredentialSubject>,
+    );
     if (this._credentialStore) {
       try {
         const credType =

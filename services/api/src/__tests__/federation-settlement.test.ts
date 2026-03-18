@@ -8,13 +8,17 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { processSettlementRetries, createFederationTables } from "../federation.js";
 import type { RelayIdentity } from "../federation.js";
-import { openMotebitDatabase } from "@motebit/persistence";
+import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
 import { generateKeypair, bytesToHex } from "@motebit/crypto";
 
 /** Insert a peer so settlement retries can look up the endpoint. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function insertPeer(db: any, peerId: string, endpointUrl: string, state = "active"): void {
+function insertPeer(
+  db: DatabaseDriver,
+  peerId: string,
+  endpointUrl: string,
+  state = "active",
+): void {
   const keypair = crypto.getRandomValues(new Uint8Array(32));
   db.prepare(
     `INSERT OR REPLACE INTO relay_peers (peer_relay_id, public_key, endpoint_url, state, missed_heartbeats, agent_count, trust_score)
@@ -23,9 +27,8 @@ function insertPeer(db: any, peerId: string, endpointUrl: string, state = "activ
 }
 
 /** Insert a retry entry directly for testing. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function insertRetry(
-  db: any,
+  db: DatabaseDriver,
   opts: {
     retryId?: string;
     settlementId?: string;
@@ -63,9 +66,8 @@ function insertRetry(
   return retryId;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getRetry(
-  db: any,
+  db: DatabaseDriver,
   retryId: string,
 ):
   | { status: string; attempts: number; next_retry_at: number; last_error: string | null }
@@ -80,8 +82,7 @@ function getRetry(
 }
 
 describe("Settlement Retry Queue", () => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let db: any;
+  let db: DatabaseDriver;
   let identity: RelayIdentity;
 
   beforeEach(async () => {

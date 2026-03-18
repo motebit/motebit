@@ -17,18 +17,24 @@ function stubDOM(): void {
     };
   const removeListener = (_event: string, _handler: (...args: unknown[]) => void) => {};
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (globalThis as any).window = {
-    addEventListener: addListener("window"),
-    removeEventListener: removeListener,
-    innerWidth: 1920,
-    innerHeight: 1080,
-  };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (globalThis as any).document = {
-    addEventListener: addListener("document"),
-    removeEventListener: removeListener,
-  };
+  Object.defineProperty(globalThis, "window", {
+    value: {
+      addEventListener: addListener("window"),
+      removeEventListener: removeListener,
+      innerWidth: 1920,
+      innerHeight: 1080,
+    },
+    writable: true,
+    configurable: true,
+  });
+  Object.defineProperty(globalThis, "document", {
+    value: {
+      addEventListener: addListener("document"),
+      removeEventListener: removeListener,
+    },
+    writable: true,
+    configurable: true,
+  });
 }
 
 function fireEvent(target: string, event: string, data: Record<string, unknown> = {}): void {

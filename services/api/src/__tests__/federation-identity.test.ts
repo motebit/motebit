@@ -10,11 +10,10 @@ import {
   bytesToHex,
   isEncryptedFormat,
 } from "../federation.js";
-import { openMotebitDatabase } from "@motebit/persistence";
+import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
 
 describe("Relay Identity Encryption", () => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let db: any;
+  let db: DatabaseDriver;
 
   beforeEach(async () => {
     const moteDb = await openMotebitDatabase(":memory:");

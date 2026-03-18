@@ -2,7 +2,12 @@ import { describe, it, expect, vi } from "vitest";
 import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
 import type { PlatformAdapters, AgentTrustStoreAdapter } from "../index";
 import { AgentTrustLevel } from "@motebit/sdk";
-import type { AgentTrustRecord } from "@motebit/sdk";
+import type {
+  AgentTrustRecord,
+  GradientCredentialSubject,
+  TrustCredentialSubject,
+  ReputationCredentialSubject,
+} from "@motebit/sdk";
 
 // Mock embedText — avoid loading HF pipeline in tests
 vi.mock("@motebit/memory-graph", async (importOriginal) => {
@@ -119,7 +124,10 @@ describe("Gradient credential issuance during housekeeping", () => {
 
     const gradientCred = creds.find((c) => c.type.includes("AgentGradientCredential"));
     expect(gradientCred).toBeDefined();
-    expect(gradientCred!.credentialSubject.gradient).toBeGreaterThanOrEqual(0);
+    const gradientSubject = gradientCred!.credentialSubject as GradientCredentialSubject & {
+      id: string;
+    };
+    expect(gradientSubject.gradient).toBeGreaterThanOrEqual(0);
     expect(gradientCred!.proof).toBeDefined();
     expect(gradientCred!.proof.type).toBe("DataIntegrityProof");
   });
@@ -183,8 +191,9 @@ describe("Trust credential issuance on trust transitions", () => {
     const creds = runtime.getIssuedCredentials();
     const trustCred = creds.find((c) => c.type.includes("AgentTrustCredential"));
     expect(trustCred).toBeDefined();
-    expect(trustCred!.credentialSubject.trust_level).toBe(AgentTrustLevel.Verified);
-    expect(trustCred!.credentialSubject.interaction_count).toBe(5);
+    const trustSubject = trustCred!.credentialSubject as TrustCredentialSubject & { id: string };
+    expect(trustSubject.trust_level).toBe(AgentTrustLevel.Verified);
+    expect(trustSubject.interaction_count).toBe(5);
     expect(trustCred!.proof).toBeDefined();
   });
 
@@ -276,8 +285,9 @@ describe("Peer reputation credential issuance on verified receipts", () => {
     const creds = runtime.getIssuedCredentials();
     const repCred = creds.find((c) => c.type.includes("AgentReputationCredential"));
     expect(repCred).toBeDefined();
-    expect(repCred!.credentialSubject.success_rate).toBe(1.0);
-    expect(repCred!.credentialSubject.task_count).toBe(1);
+    const repSubject = repCred!.credentialSubject as ReputationCredentialSubject & { id: string };
+    expect(repSubject.success_rate).toBe(1.0);
+    expect(repSubject.task_count).toBe(1);
     expect(repCred!.proof).toBeDefined();
     expect(repCred!.proof.type).toBe("DataIntegrityProof");
   });

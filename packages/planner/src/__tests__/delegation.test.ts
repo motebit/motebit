@@ -500,8 +500,9 @@ describe("RelayDelegationAdapter retry with failover", () => {
     });
     vi.stubGlobal("fetch", mockFetch);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let messageCallback: any = null;
+    const cbRef: { current: ((msg: { type: string; [key: string]: unknown }) => void) | null } = {
+      current: null,
+    };
     const failedReceipt: ExecutionReceipt = {
       ...makeReceipt("task-1", "failed"),
       motebit_id: "agent-bad" as MotebitId,
@@ -514,9 +515,9 @@ describe("RelayDelegationAdapter retry with failover", () => {
       motebitId: "test-mote",
       sendRaw: vi.fn(),
       onCustomMessage: (cb) => {
-        messageCallback = cb;
+        cbRef.current = cb;
         return () => {
-          messageCallback = null;
+          cbRef.current = null;
         };
       },
       maxDelegationRetries: 2,
@@ -527,12 +528,12 @@ describe("RelayDelegationAdapter retry with failover", () => {
     // Wait for first attempt to register
     await new Promise((r) => setTimeout(r, 20));
     // First attempt fails
-    messageCallback?.({ type: "task_result", task_id: "task-1", receipt: failedReceipt });
+    cbRef.current?.({ type: "task_result", task_id: "task-1", receipt: failedReceipt });
 
     // Wait for retry
     await new Promise((r) => setTimeout(r, 20));
     // Second attempt succeeds
-    messageCallback?.({ type: "task_result", task_id: "task-2", receipt: successReceipt });
+    cbRef.current?.({ type: "task_result", task_id: "task-2", receipt: successReceipt });
 
     const result = await resultPromise;
     expect(result.task_id).toBe("task-2");
@@ -555,8 +556,9 @@ describe("RelayDelegationAdapter retry with failover", () => {
       }),
     );
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let messageCallback: any = null;
+    const cbRef: { current: ((msg: { type: string; [key: string]: unknown }) => void) | null } = {
+      current: null,
+    };
     const failures: Array<{ attempt: number; error: string; agentId?: string }> = [];
 
     const adapter = new RelayDelegationAdapter({
@@ -564,9 +566,9 @@ describe("RelayDelegationAdapter retry with failover", () => {
       motebitId: "test-mote",
       sendRaw: vi.fn(),
       onCustomMessage: (cb) => {
-        messageCallback = cb;
+        cbRef.current = cb;
         return () => {
-          messageCallback = null;
+          cbRef.current = null;
         };
       },
       maxDelegationRetries: 1,
@@ -585,10 +587,10 @@ describe("RelayDelegationAdapter retry with failover", () => {
     const resultPromise = adapter.delegateStep(makeStep(), 5000);
 
     await new Promise((r) => setTimeout(r, 20));
-    messageCallback?.({ type: "task_result", task_id: "task-1", receipt: failedReceipt });
+    cbRef.current?.({ type: "task_result", task_id: "task-1", receipt: failedReceipt });
 
     await new Promise((r) => setTimeout(r, 20));
-    messageCallback?.({ type: "task_result", task_id: "task-2", receipt: successReceipt });
+    cbRef.current?.({ type: "task_result", task_id: "task-2", receipt: successReceipt });
 
     await resultPromise;
 
@@ -609,17 +611,18 @@ describe("RelayDelegationAdapter retry with failover", () => {
       }),
     );
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let messageCallback: any = null;
+    const cbRef: { current: ((msg: { type: string; [key: string]: unknown }) => void) | null } = {
+      current: null,
+    };
 
     const adapter = new RelayDelegationAdapter({
       syncUrl: "http://localhost:3000",
       motebitId: "test-mote",
       sendRaw: vi.fn(),
       onCustomMessage: (cb) => {
-        messageCallback = cb;
+        cbRef.current = cb;
         return () => {
-          messageCallback = null;
+          cbRef.current = null;
         };
       },
       maxDelegationRetries: 1, // 2 total attempts
@@ -634,14 +637,14 @@ describe("RelayDelegationAdapter retry with failover", () => {
     const resultPromise = adapter.delegateStep(makeStep(), 5000);
 
     await new Promise((r) => setTimeout(r, 20));
-    messageCallback?.({
+    cbRef.current?.({
       type: "task_result",
       task_id: "task-1",
       receipt: makeFailReceipt("task-1", "agent-a"),
     });
 
     await new Promise((r) => setTimeout(r, 20));
-    messageCallback?.({
+    cbRef.current?.({
       type: "task_result",
       task_id: "task-2",
       receipt: makeFailReceipt("task-2", "agent-b"),
