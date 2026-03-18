@@ -2,7 +2,7 @@
 
 ## Decision-making
 
-Motebit is maintained by [Daniel Hakim](https://github.com/hakimlabs). All architectural decisions, release approvals, and roadmap priorities are made by the maintainer.
+Motebit is maintained by [Daniel Hakim](https://github.com/hakimlabs) at Motebit, Inc. All architectural decisions, release approvals, and roadmap priorities are made by the maintainer.
 
 This is a single-maintainer project in early development. As the project grows and the community develops, governance will evolve to include contributor roles, an RFC process, and shared decision-making.
 

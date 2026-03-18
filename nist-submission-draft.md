@@ -1,7 +1,7 @@
 # NIST NCCoE Comment — Software and AI Agent Identity and Authorization
 
 **To:** AI-Identity@nist.gov
-**From:** Daniel Hakim, Motebit
+**From:** Daniel Hakim, Motebit, Inc.
 **Date:** March 2026
 **Re:** Comment on NCCoE Concept Paper — Accelerating the Adoption of Software and AI Agent Identity and Authorization
 
@@ -263,5 +263,5 @@ We welcome the opportunity to collaborate with the NCCoE as a technology partner
 ---
 
 Daniel Hakim
-Motebit
+Motebit, Inc.
 daniel@motebit.com

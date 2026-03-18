@@ -2,7 +2,7 @@
 
 ## Trademarks
 
-"Motebit" is a trademark of Daniel Hakim.
+"Motebit" is a trademark of Motebit, Inc.
 
 ### Word Marks
 

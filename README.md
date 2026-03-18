@@ -179,7 +179,7 @@ The **protocol layer** is MIT licensed — use it freely, build on it, implement
 
 The **platform implementation** is [BSL 1.1](LICENSE) — free to use, source-available, converts to MIT four years after each version's release.
 
-"Motebit" is a trademark of Daniel Hakim. See [TRADEMARK.md](TRADEMARK.md).
+"Motebit" is a trademark of Motebit, Inc. See [TRADEMARK.md](TRADEMARK.md).
 
 ## Links
 

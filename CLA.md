@@ -14,11 +14,11 @@ By submitting a contribution (via pull request, patch, or any other mechanism) t
 
 ## 2. Grant of Copyright License
 
-You hereby grant to Motebit (Daniel Hakim) and to recipients of software distributed by Motebit a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable copyright license to reproduce, prepare derivative works of, publicly display, publicly perform, sublicense, and distribute your contributions and such derivative works.
+You hereby grant to Motebit, Inc. and to recipients of software distributed by Motebit a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable copyright license to reproduce, prepare derivative works of, publicly display, publicly perform, sublicense, and distribute your contributions and such derivative works.
 
 ## 3. Grant of Patent License
 
-You hereby grant to Motebit (Daniel Hakim) and to recipients of software distributed by Motebit a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable patent license to make, have made, use, offer to sell, sell, import, and otherwise transfer the contribution, where such license applies only to those patent claims licensable by you that are necessarily infringed by your contribution alone or by combination of your contribution with the project to which the contribution was submitted.
+You hereby grant to Motebit, Inc. and to recipients of software distributed by Motebit a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable patent license to make, have made, use, offer to sell, sell, import, and otherwise transfer the contribution, where such license applies only to those patent claims licensable by you that are necessarily infringed by your contribution alone or by combination of your contribution with the project to which the contribution was submitted.
 
 ## 4. You Represent That
 

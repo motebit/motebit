@@ -125,4 +125,4 @@ const newLevel = evaluateTrustTransition(record); // AgentTrustLevel | null
 
 ## License
 
-MIT. Motebit is a trademark of Daniel Hakim.
+MIT. Motebit is a trademark of Motebit, Inc.
