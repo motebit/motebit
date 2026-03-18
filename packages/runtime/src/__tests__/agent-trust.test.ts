@@ -218,4 +218,36 @@ describe("MotebitRuntime bumpTrustFromReceipt", () => {
     // Should not throw
     await noTrustRuntime.bumpTrustFromReceipt(fakeReceipt("remote-1"), true);
   });
+
+  it("credential-blended trust affects graph edge weight", async () => {
+    const keys = await (async () => {
+      const { generateKeypair } = await import("@motebit/crypto");
+      return generateKeypair();
+    })();
+    const { adapters } = createAdaptersWithTrust();
+    const rt = new MotebitRuntime(
+      { motebitId: "test-mote", tickRateHz: 0, signingKeys: keys },
+      adapters,
+    );
+
+    // Bump trust 3 times — builds trust record + issues 3 reputation credentials
+    await rt.bumpTrustFromReceipt(fakeReceipt("remote-1"), true);
+    await rt.bumpTrustFromReceipt(fakeReceipt("remote-1"), true);
+    await rt.bumpTrustFromReceipt(fakeReceipt("remote-1"), true);
+
+    // Credentials should have been issued
+    const creds = rt.getIssuedCredentials();
+    const repCreds = creds.filter((c) => c.type.includes("AgentReputationCredential"));
+    expect(repCreds.length).toBe(3);
+
+    // Get the graph — should incorporate credential evidence
+    const mgr = rt.getAgentGraph();
+    expect(mgr).not.toBeNull();
+    const snapshot = await mgr.getGraphSnapshot();
+    expect(snapshot.nodes.length).toBeGreaterThanOrEqual(2);
+    const edge = snapshot.edges.find((e) => e.to === "remote-1");
+    expect(edge).toBeDefined();
+    // Trust should be at least the static FirstContact score (0.3)
+    expect(edge!.weight.trust).toBeGreaterThanOrEqual(0.3);
+  });
 });

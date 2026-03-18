@@ -66,6 +66,8 @@ export interface AgentProfile {
   is_online: boolean;
   /** Regulatory risk score for this agent. 0 = no risk, higher = more risk. */
   regulatory_risk?: number;
+  /** When set, overrides the trust_record-derived trust score. Used for credential-blended trust. */
+  trust_override?: number;
 }
 
 /**
@@ -89,7 +91,9 @@ export function buildAgentGraph(
   for (const agent of agents) {
     if (!agent.is_online) continue;
 
-    const trust = agent.trust_record ? trustLevelToScore(agent.trust_record.trust_level) : 0.1;
+    const trust =
+      agent.trust_override ??
+      (agent.trust_record ? trustLevelToScore(agent.trust_record.trust_level) : 0.1);
 
     // Blocked agents: zero trust annihilates the edge
     if (agent.trust_record?.trust_level === AgentTrustLevel.Blocked) continue;

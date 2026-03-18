@@ -15,8 +15,9 @@ import type {
   AgentTrustRecord,
   AgentServiceListing,
   ExecutionReceipt,
+  ReputationCredentialSubject,
 } from "@motebit/sdk";
-import { trustLevelToScore, AgentTrustLevel } from "@motebit/sdk";
+import { trustLevelToScore, AgentTrustLevel, VC_TYPE_REPUTATION } from "@motebit/sdk";
 import type { WeightedDigraph } from "@motebit/semiring";
 import type { RouteWeight, AgentProfile } from "@motebit/semiring";
 import {
@@ -51,6 +52,75 @@ interface LatencyStatsStoreAdapter {
   ): { avg_ms: number } | null | Promise<{ avg_ms: number } | null>;
 }
 
+/** Minimal VC shape for credential aggregation (avoids @motebit/crypto dependency). */
+interface CredentialLike {
+  type: string[];
+  issuer: string;
+  validFrom?: string;
+  credentialSubject: ReputationCredentialSubject & { id: string };
+}
+
+/**
+ * Provides access to stored credentials about remote agents.
+ * Returns reputation VCs where the credentialSubject.id matches the remote agent.
+ */
+interface CredentialStoreAdapter {
+  getCredentialsForSubject(subjectMotebitId: string): CredentialLike[] | Promise<CredentialLike[]>;
+}
+
+// ── Inline Credential Aggregation ───────────────────────────────────
+//
+// Trust-weighted credential aggregation (one-pass EigenTrust).
+// Inlined here to avoid adding @motebit/market as a runtime dependency.
+// The canonical implementation lives in packages/market/src/credential-weight.ts.
+
+const FRESHNESS_HALF_LIFE_MS = 24 * 60 * 60 * 1000; // 24h
+const SAMPLE_SATURATION_K = 50;
+const MIN_ISSUER_TRUST = 0.05;
+const MAX_BLEND = 0.5;
+
+function aggregateAndBlend(
+  credentials: CredentialLike[],
+  getIssuerTrust: (issuerDid: string) => number,
+  staticTrust: number,
+): number {
+  const now = Date.now();
+  let wSum = 0;
+  let wSuccessRate = 0;
+  let wTrustScore = 0;
+  const issuers = new Set<string>();
+
+  for (const vc of credentials) {
+    if (!vc.type.includes(VC_TYPE_REPUTATION)) continue;
+    const subject = vc.credentialSubject;
+    const issuerTrust = getIssuerTrust(vc.issuer);
+    if (issuerTrust < MIN_ISSUER_TRUST) continue;
+
+    const issuedAt = vc.validFrom ? new Date(vc.validFrom).getTime() : 0;
+    const age = Math.max(0, now - issuedAt);
+    const freshness = Math.exp((-age * Math.LN2) / FRESHNESS_HALF_LIFE_MS);
+    const taskCount = subject.task_count ?? subject.sample_size ?? 1;
+    const confidence = Math.min(taskCount, SAMPLE_SATURATION_K) / SAMPLE_SATURATION_K;
+    const w = issuerTrust * freshness * confidence;
+    if (w <= 0) continue;
+
+    wSum += w;
+    wSuccessRate += w * subject.success_rate;
+    wTrustScore += w * subject.trust_score;
+    issuers.add(vc.issuer);
+  }
+
+  if (wSum === 0) return staticTrust;
+
+  // Blend factor: diversity × weight saturation, capped at MAX_BLEND
+  const diversityFactor = Math.min(issuers.size, 5) / 5;
+  const weightFactor = Math.min(wSum, 3) / 3;
+  const blend = MAX_BLEND * diversityFactor * weightFactor;
+  const credTrust = (wSuccessRate / wSum) * 0.7 + (wTrustScore / wSum) * 0.3;
+
+  return staticTrust * (1 - blend) + credTrust * blend;
+}
+
 /**
  * Manages the agent network graph for a runtime instance.
  *
@@ -75,6 +145,7 @@ export class AgentGraphManager {
     private readonly trustStore: AgentTrustStoreAdapter | null,
     private readonly listingStore: ServiceListingStoreAdapter | null,
     _latencyStore: LatencyStatsStoreAdapter | null,
+    private readonly credentialStore: CredentialStoreAdapter | null = null,
   ) {}
 
   /** Mark the graph as stale. Next query triggers a rebuild. */
@@ -180,6 +251,25 @@ export class AgentGraphManager {
     if (!this.trustStore) return [];
 
     const trustRecords = await this.trustStore.listAgentTrust(this.motebitId);
+
+    // Pre-compute issuer trust lookup for credential weighting.
+    // Uses static trust levels — avoids circular dependency with the graph.
+    const issuerTrustByDid = new Map<string, number>();
+    for (const rec of trustRecords) {
+      // Map both did:motebit and did:key forms to the trust score
+      const score = trustLevelToScore(rec.trust_level);
+      issuerTrustByDid.set(`did:motebit:${rec.remote_motebit_id}`, score);
+      if (rec.public_key) {
+        try {
+          const { hexPublicKeyToDidKey } = await import("@motebit/crypto");
+          issuerTrustByDid.set(hexPublicKeyToDidKey(rec.public_key), score);
+        } catch {
+          // public_key may not be valid hex — skip did:key mapping
+        }
+      }
+    }
+    const getIssuerTrust = (issuerDid: string): number => issuerTrustByDid.get(issuerDid) ?? 0.1;
+
     const profiles: AgentProfile[] = [];
 
     for (const record of trustRecords) {
@@ -196,6 +286,25 @@ export class AgentGraphManager {
       const total = successful + failed;
       const reliability = total > 0 ? successful / total : 0.5;
 
+      // Compute credential-blended trust override if credential store is available
+      let trust_override: number | undefined;
+      if (this.credentialStore) {
+        try {
+          const creds = await this.credentialStore.getCredentialsForSubject(
+            record.remote_motebit_id,
+          );
+          if (creds.length > 0) {
+            const staticTrust = trustLevelToScore(record.trust_level);
+            const blended = aggregateAndBlend(creds, getIssuerTrust, staticTrust);
+            if (blended !== staticTrust) {
+              trust_override = blended;
+            }
+          }
+        } catch {
+          // Credential aggregation is best-effort — fall back to static trust
+        }
+      }
+
       profiles.push({
         motebit_id: record.remote_motebit_id,
         trust_record: record,
@@ -203,6 +312,7 @@ export class AgentGraphManager {
         latency_ms: null, // populated from latency store if available
         reliability,
         is_online: true, // trust records imply prior contact; liveness checked at delegation time
+        trust_override,
       });
     }
 

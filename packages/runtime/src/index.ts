@@ -566,11 +566,32 @@ export class MotebitRuntime {
     this.latencyStatsStore = adapters.storage.latencyStatsStore ?? null;
 
     // Agent graph — algebraic routing substrate
+    // The credential store adapter queries the runtime's issued credentials
+    // to aggregate peer-issued reputation into routing trust weights.
+    const credentialStore = {
+      getCredentialsForSubject: (subjectMotebitId: string) =>
+        this._issuedCredentials
+          .filter(
+            (vc) =>
+              vc.credentialSubject?.id?.includes(subjectMotebitId) &&
+              vc.type.includes("AgentReputationCredential"),
+          )
+          .map((vc) => ({
+            type: vc.type,
+            issuer: vc.issuer,
+            validFrom: (vc as unknown as Record<string, unknown>).validFrom as string | undefined,
+            credentialSubject:
+              vc.credentialSubject as import("@motebit/sdk").ReputationCredentialSubject & {
+                id: string;
+              },
+          })),
+    };
     this.agentGraph = new AgentGraphManager(
       this.motebitId,
       this.agentTrustStore,
       this.serviceListingStore,
       this.latencyStatsStore,
+      credentialStore,
     );
 
     this.wireLoopDeps();
