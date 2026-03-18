@@ -105,7 +105,9 @@ export function CredentialsPanel({
       const seen = new Set<string>();
       const merged: CredentialEntry[] = [];
       for (const c of [...localCreds, ...relayCreds].sort((a, b) => b.issued_at - a.issued_at)) {
-        const key = `${String((c.credential as Record<string, unknown>).issuer ?? "")}:${c.credential_type}:${c.issued_at}`;
+        const issuerVal = (c.credential as Record<string, unknown>).issuer;
+        const issuerKey = typeof issuerVal === "string" ? issuerVal : "";
+        const key = `${issuerKey}:${c.credential_type}:${c.issued_at}`;
         if (!seen.has(key)) {
           seen.add(key);
           merged.push(c);
