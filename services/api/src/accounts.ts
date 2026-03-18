@@ -249,6 +249,48 @@ export function hasTransactionWithReference(
   return row !== undefined;
 }
 
+// === Stripe Checkout ===
+
+/**
+ * Process a completed Stripe Checkout session. Credits the agent's virtual account.
+ * Idempotent: uses the Stripe session ID as deposit reference.
+ *
+ * @returns true if the deposit was applied, false if it was already processed (idempotent replay).
+ */
+export function processStripeCheckout(
+  db: DatabaseDriver,
+  sessionId: string,
+  motebitId: string,
+  amount: number,
+  paymentIntent?: string,
+): boolean {
+  if (amount <= 0) return false;
+
+  // Idempotency: skip if this session was already processed
+  if (hasTransactionWithReference(db, motebitId, sessionId)) {
+    logger.info("stripe.checkout.idempotent", { motebitId, sessionId });
+    return false;
+  }
+
+  creditAccount(
+    db,
+    motebitId,
+    amount,
+    "deposit",
+    sessionId,
+    paymentIntent ? `Stripe Checkout: ${paymentIntent}` : `Stripe Checkout: ${sessionId}`,
+  );
+
+  logger.info("stripe.checkout.credited", {
+    motebitId,
+    sessionId,
+    amount,
+    paymentIntent: paymentIntent ?? null,
+  });
+
+  return true;
+}
+
 // === Withdrawals ===
 
 export interface WithdrawalRequest {

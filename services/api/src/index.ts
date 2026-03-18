@@ -146,6 +146,7 @@ import {
   getWithdrawals,
   getPendingWithdrawals,
   reconcileLedger,
+  processStripeCheckout,
 } from "./accounts.js";
 import { createPairingTables, registerPairingRoutes } from "./pairing.js";
 import {
@@ -165,6 +166,7 @@ import {
   evaluateTrustTransition,
   trustLevelToScore,
 } from "@motebit/sdk";
+import Stripe from "stripe";
 
 /** Decode the payload half of a signed token without verifying the signature. */
 function parseTokenPayloadUnsafe(
@@ -248,6 +250,12 @@ export interface SyncRelayConfig {
     /** Public endpoint URL for this relay (how peers reach us). */
     endpointUrl?: string;
   };
+  /** Stripe Checkout configuration. Omit to disable Stripe deposits. */
+  stripe?: {
+    secretKey: string;
+    webhookSecret: string;
+    currency?: string; // default 'usd'
+  };
 }
 
 export interface ConnectedDevice {
@@ -287,7 +295,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     x402: x402Config,
     issueCredentials = process.env.MOTEBIT_RELAY_ISSUE_CREDENTIALS === "true",
     federation: federationConfig,
+    stripe: stripeConfig,
   } = config;
+
+  // Stripe Checkout — optional fiat on-ramp for virtual account deposits
+  const stripeClient = stripeConfig ? new Stripe(stripeConfig.secretKey) : null;
 
   const moteDb: MotebitDatabase = await openMotebitDatabase(dbPath);
   const eventStore = new EventStore(moteDb.eventStore);
@@ -934,6 +946,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   app.use("/api/v1/agents/:motebitId/withdraw", rateLimitMiddleware(writeLimiter));
   app.use("/api/v1/agents/:motebitId/balance", rateLimitMiddleware(readLimiter));
   app.use("/api/v1/agents/:motebitId/withdrawals", rateLimitMiddleware(readLimiter));
+  app.use("/api/v1/agents/:motebitId/checkout", rateLimitMiddleware(writeLimiter));
+  app.use("/api/v1/stripe/webhook", rateLimitMiddleware(publicLimiter));
   app.use("/api/v1/admin/withdrawals/*", rateLimitMiddleware(writeLimiter));
   app.use("/api/v1/admin/reconciliation", rateLimitMiddleware(expensiveLimiter));
 
@@ -1464,7 +1478,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       if (
         c.req.path.startsWith("/api/v1/agents") ||
         c.req.path.startsWith("/api/v1/credentials/verify") ||
-        c.req.path.match(/\/api\/v1\/credentials\/[^/]+\/status/)
+        c.req.path.match(/\/api\/v1\/credentials\/[^/]+\/status/) ||
+        c.req.path.startsWith("/api/v1/stripe/")
       ) {
         await next();
         return;
@@ -2326,6 +2341,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
       return dualAuth(c, next, "account:withdrawals");
     });
+    app.use("/api/v1/agents/*/checkout", async (c, next) => {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
+      return dualAuth(c, next, "account:checkout");
+    });
+    // Note: /api/v1/stripe/webhook has NO auth middleware — Stripe calls it directly.
+    // Verification is done via the webhook signature.
     // Admin withdrawal management — master token only
     app.use("/api/v1/admin/withdrawals/*", bearerAuth({ token: apiToken }));
     // Admin reconciliation — master token only
@@ -3729,6 +3750,123 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     return c.json(result);
   });
 
+  // --- Stripe Checkout Endpoints ---
+
+  // POST /api/v1/agents/:motebitId/checkout — create a Stripe Checkout Session for deposit
+  app.post("/api/v1/agents/:motebitId/checkout", async (c) => {
+    if (!stripeClient || !stripeConfig) {
+      throw new HTTPException(501, { message: "Stripe is not configured on this relay" });
+    }
+
+    const motebitId = c.req.param("motebitId");
+    const correlationId = c.get("correlationId" as never) as string;
+    const body = await c.req.json<{ amount: number }>();
+
+    if (typeof body.amount !== "number" || body.amount <= 0) {
+      throw new HTTPException(400, { message: "amount must be a positive number (in dollars)" });
+    }
+
+    // Stripe minimum is $0.50
+    if (body.amount < 0.5) {
+      throw new HTTPException(400, { message: "Minimum deposit amount is $0.50" });
+    }
+
+    const baseUrl = new URL(c.req.url);
+    const successUrl = `${baseUrl.origin}/api/v1/agents/${motebitId}/balance`;
+    const cancelUrl = `${baseUrl.origin}/api/v1/agents/${motebitId}/balance`;
+
+    const session = await stripeClient.checkout.sessions.create({
+      mode: "payment",
+      payment_method_types: ["card"],
+      line_items: [
+        {
+          price_data: {
+            currency: stripeConfig.currency ?? "usd",
+            product_data: {
+              name: `Motebit Agent Deposit (${motebitId.slice(0, 8)}...)`,
+            },
+            unit_amount: Math.round(body.amount * 100), // cents
+          },
+          quantity: 1,
+        },
+      ],
+      metadata: { motebit_id: motebitId, amount: String(body.amount) },
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+    });
+
+    logger.info("stripe.checkout.created", {
+      correlationId,
+      motebitId,
+      sessionId: session.id,
+      amount: body.amount,
+    });
+
+    return c.json({ checkout_url: session.url, session_id: session.id });
+  });
+
+  // POST /api/v1/stripe/webhook — handle Stripe webhook events (no auth — verified via signature)
+  app.post("/api/v1/stripe/webhook", async (c) => {
+    if (!stripeClient || !stripeConfig) {
+      throw new HTTPException(501, { message: "Stripe is not configured on this relay" });
+    }
+
+    const sig = c.req.header("stripe-signature");
+    if (!sig) {
+      throw new HTTPException(400, { message: "Missing stripe-signature header" });
+    }
+
+    const rawBody = await c.req.text();
+    let event: Stripe.Event;
+    try {
+      event = stripeClient.webhooks.constructEvent(rawBody, sig, stripeConfig.webhookSecret);
+    } catch (err) {
+      logger.info("stripe.webhook.signature_failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw new HTTPException(400, { message: "Invalid webhook signature" });
+    }
+
+    logger.info("stripe.webhook.received", { type: event.type, id: event.id });
+
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object;
+      const motebitId = session.metadata?.motebit_id;
+      const amount = session.metadata?.amount ? parseFloat(session.metadata.amount) : 0;
+
+      if (!motebitId || !amount || amount <= 0) {
+        logger.info("stripe.webhook.invalid_metadata", {
+          eventId: event.id,
+          metadata: session.metadata,
+        });
+        return c.json({ received: true });
+      }
+
+      const paymentIntent =
+        typeof session.payment_intent === "string"
+          ? session.payment_intent
+          : session.payment_intent?.id;
+
+      const applied = processStripeCheckout(
+        moteDb.db,
+        session.id,
+        motebitId,
+        amount,
+        paymentIntent ?? undefined,
+      );
+
+      logger.info("stripe.webhook.processed", {
+        eventId: event.id,
+        sessionId: session.id,
+        motebitId,
+        amount,
+        applied,
+      });
+    }
+
+    return c.json({ received: true });
+  });
+
   // GET /agent/:motebitId/capabilities — public (no auth)
   app.get("/agent/:motebitId/capabilities", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
@@ -5080,6 +5218,14 @@ if (process.env.VITEST != null) {
           displayName: process.env.MOTEBIT_FEDERATION_DISPLAY_NAME,
         }
       : undefined,
+    stripe:
+      process.env.STRIPE_SECRET_KEY && process.env.STRIPE_WEBHOOK_SECRET
+        ? {
+            secretKey: process.env.STRIPE_SECRET_KEY,
+            webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+            currency: process.env.STRIPE_CURRENCY,
+          }
+        : undefined,
   });
   app = relay.app;
 

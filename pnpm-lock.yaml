@@ -1172,6 +1172,9 @@ importers:
       hono:
         specifier: '>=4.12.4 <5.0.0'
         version: 4.12.7
+      stripe:
+        specifier: ^17.0.0
+        version: 17.7.0
     devDependencies:
       '@motebit/ai-core':
         specifier: workspace:*
@@ -8746,6 +8749,10 @@ packages:
 
   strip-literal@3.1.0:
     resolution: {integrity: sha512-8r3mkIM/2+PpjHoOtiAW8Rg3jJLHaV7xPwG+YRGrv6FP0wwk/toTpATxWYOW0BKdWwl82VT2tFYi5DlROa0Mxg==}
+
+  stripe@17.7.0:
+    resolution: {integrity: sha512-aT2BU9KkizY9SATf14WhhYVv2uOapBWX0OFWF4xvcj1mPaNotlSc2CsxpS4DS46ZueSppmCF5BX1sNYBtwBvfw==}
+    engines: {node: '>=12.*'}
 
   structured-headers@0.4.1:
     resolution: {integrity: sha512-0MP/Cxx5SzeeZ10p/bZI0S6MpgD+yxAhi1BOQ34jgnMXsCq3j1t6tQnZu+KdlL7dvJTLT3g9xN8tl10TqgFMcg==}
@@ -18625,6 +18632,11 @@ snapshots:
   strip-literal@3.1.0:
     dependencies:
       js-tokens: 9.0.1
+
+  stripe@17.7.0:
+    dependencies:
+      '@types/node': 22.19.11
+      qs: 6.15.0
 
   structured-headers@0.4.1: {}
 
