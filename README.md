@@ -163,7 +163,7 @@ A `motebit.md` declares identity (Ed25519 public key, agent ID, `did:key`), gove
 ```bash
 pnpm install           # Node >= 20, pnpm 9.15
 pnpm run build         # Build all 39 packages
-pnpm run test          # 3,000+ tests across 139 files
+pnpm run test          # 3,071 tests across 140 files
 pnpm run typecheck     # Type-check all packages
 pnpm run lint          # Lint all packages
 ```
