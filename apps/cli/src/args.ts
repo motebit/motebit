@@ -19,6 +19,7 @@ export interface CliConfig {
   wallClock: string | undefined;
   project: string | undefined;
   reason: string | undefined;
+  destination: string | undefined;
   serveTransport: string | undefined;
   servePort: string | undefined;
   json: boolean;
@@ -49,6 +50,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       "wall-clock": { type: "string" },
       project: { type: "string" },
       reason: { type: "string" },
+      destination: { type: "string" },
       "serve-transport": { type: "string" },
       "serve-port": { type: "string" },
       json: { type: "boolean", default: false },
@@ -88,6 +90,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     wallClock: values["wall-clock"],
     project: values.project,
     reason: values.reason,
+    destination: values.destination,
     serveTransport: values["serve-transport"],
     servePort: values["serve-port"],
     json: values.json,
@@ -125,6 +128,8 @@ Commands:
   goal resume <goal_id>     Resume a paused goal
   ledger <goal_id>          Show execution ledger for a goal [--json]
   credentials               List credentials from relay [--presentation]
+  balance                   Show virtual account balance and recent transactions
+  withdraw <amount> [--destination <addr>]  Request a withdrawal
   approvals list            List approval queue items
   approvals show <id>       Show approval detail
   approvals approve <id>    Approve a pending tool call
@@ -172,6 +177,9 @@ Slash commands (in REPL):
   /goal resume <id>  Resume a paused goal
   /goal outcomes <id> Show execution history
   /approvals         Show pending approval queue
+  /balance           Show virtual account balance and recent transactions
+  /withdraw <amount> [destination]  Request a withdrawal
+  /deposits          Show recent deposit transactions
   /reflect           Trigger reflection — see what the agent learned
   /mcp list          List MCP servers and trust status
   /mcp trust <name>  Mark MCP server as trusted (tools skip approval)

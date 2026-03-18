@@ -88,6 +88,9 @@ Available commands:
   /goal resume <id>  Resume a paused goal
   /goal outcomes <id> Show execution history
   /approvals         Show pending approval queue
+  /balance           Show virtual account balance and recent transactions
+  /withdraw <amount> [destination]  Request a withdrawal
+  /deposits          Show recent deposit transactions
   /reflect           Trigger reflection — see what the agent learned
   /mcp list          List MCP servers and trust status
   /mcp add <name> <url> [--motebit]  Add an HTTP MCP server
@@ -1664,6 +1667,165 @@ Available commands:
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         console.log(`Response error: ${message}`);
+      }
+      break;
+    }
+
+    case "balance": {
+      const balSyncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig?.sync_url;
+      if (!balSyncUrl) {
+        console.log("No sync URL configured. Set --sync-url or MOTEBIT_SYNC_URL.");
+        break;
+      }
+      if (!repl) {
+        console.log("Balance requires an active REPL session.");
+        break;
+      }
+      try {
+        const balToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+        const balHeaders: Record<string, string> = {};
+        if (balToken) balHeaders["Authorization"] = `Bearer ${balToken}`;
+        const balResp = await fetch(
+          `${balSyncUrl.replace(/\/+$/, "")}/api/v1/agents/${repl.motebitId}/balance`,
+          { headers: balHeaders },
+        );
+        if (!balResp.ok) {
+          const balText = await balResp.text();
+          console.log(`Balance request failed (${balResp.status}): ${balText.slice(0, 200)}`);
+          break;
+        }
+        const balData = (await balResp.json()) as {
+          balance: number;
+          currency: string;
+          transactions: Array<{
+            type: string;
+            amount: number;
+            created_at: string;
+          }>;
+        };
+        console.log(`\nBalance: $${balData.balance.toFixed(2)} ${balData.currency}`);
+        const recentTx = (balData.transactions ?? []).slice(0, 5);
+        if (recentTx.length > 0) {
+          console.log("Recent:");
+          for (const tx of recentTx) {
+            const sign = tx.amount >= 0 ? "+" : "";
+            const ago = formatTimeAgo(Date.now() - new Date(tx.created_at).getTime());
+            console.log(
+              `  ${sign}$${Math.abs(tx.amount).toFixed(2)}  ${tx.type.padEnd(20)} ${ago}`,
+            );
+          }
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.log(`Balance error: ${message}`);
+      }
+      break;
+    }
+
+    case "withdraw": {
+      const wdSyncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig?.sync_url;
+      if (!wdSyncUrl) {
+        console.log("No sync URL configured. Set --sync-url or MOTEBIT_SYNC_URL.");
+        break;
+      }
+      if (!repl) {
+        console.log("Withdraw requires an active REPL session.");
+        break;
+      }
+      const wdParts = args.split(/\s+/);
+      const wdAmountStr = wdParts[0];
+      if (!wdAmountStr) {
+        console.log("Usage: /withdraw <amount> [destination]");
+        break;
+      }
+      const wdAmount = parseFloat(wdAmountStr);
+      if (isNaN(wdAmount) || wdAmount <= 0) {
+        console.log("Error: amount must be a positive number.");
+        break;
+      }
+      const wdDest = wdParts[1] ?? undefined;
+      try {
+        const wdToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+        const wdHeaders: Record<string, string> = { "Content-Type": "application/json" };
+        if (wdToken) wdHeaders["Authorization"] = `Bearer ${wdToken}`;
+        const wdBody: Record<string, unknown> = { amount: wdAmount };
+        if (wdDest) wdBody["destination"] = wdDest;
+        const wdResp = await fetch(
+          `${wdSyncUrl.replace(/\/+$/, "")}/api/v1/agents/${repl.motebitId}/withdraw`,
+          {
+            method: "POST",
+            headers: wdHeaders,
+            body: JSON.stringify(wdBody),
+          },
+        );
+        if (wdResp.status === 402) {
+          console.log("Insufficient balance.");
+          break;
+        }
+        if (!wdResp.ok) {
+          const wdText = await wdResp.text();
+          console.log(`Withdrawal failed (${wdResp.status}): ${wdText.slice(0, 200)}`);
+          break;
+        }
+        const wdData = (await wdResp.json()) as { withdrawal_id?: string };
+        console.log(`Withdrawal of $${wdAmount.toFixed(2)} submitted.`);
+        if (wdData.withdrawal_id != null && wdData.withdrawal_id !== "") {
+          console.log(`  ID: ${wdData.withdrawal_id}`);
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.log(`Withdrawal error: ${message}`);
+      }
+      break;
+    }
+
+    case "deposits": {
+      const depSyncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig?.sync_url;
+      if (!depSyncUrl) {
+        console.log("No sync URL configured. Set --sync-url or MOTEBIT_SYNC_URL.");
+        break;
+      }
+      if (!repl) {
+        console.log("Deposits requires an active REPL session.");
+        break;
+      }
+      try {
+        const depToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+        const depHeaders: Record<string, string> = {};
+        if (depToken) depHeaders["Authorization"] = `Bearer ${depToken}`;
+        const depResp = await fetch(
+          `${depSyncUrl.replace(/\/+$/, "")}/api/v1/agents/${repl.motebitId}/balance`,
+          { headers: depHeaders },
+        );
+        if (!depResp.ok) {
+          const depText = await depResp.text();
+          console.log(`Deposits request failed (${depResp.status}): ${depText.slice(0, 200)}`);
+          break;
+        }
+        const depData = (await depResp.json()) as {
+          transactions: Array<{
+            type: string;
+            amount: number;
+            created_at: string;
+            reference?: string;
+            description?: string;
+          }>;
+        };
+        const deposits = (depData.transactions ?? []).filter((tx) => tx.type === "deposit");
+        if (deposits.length === 0) {
+          console.log("No deposit transactions found.");
+          break;
+        }
+        console.log(`\nDeposits (${deposits.length}):\n`);
+        for (const tx of deposits) {
+          const ago = formatTimeAgo(Date.now() - new Date(tx.created_at).getTime());
+          const ref = tx.reference ? `  ref=${tx.reference}` : "";
+          const desc = tx.description ? `  ${tx.description}` : "";
+          console.log(`  +$${Math.abs(tx.amount).toFixed(2)}  ${ago}${ref}${desc}`);
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.log(`Deposits error: ${message}`);
       }
       break;
     }

@@ -45,6 +45,7 @@ const stubConfig = {
   wallClock: undefined,
   project: undefined,
   reason: undefined,
+  destination: undefined,
   serveTransport: undefined,
   servePort: undefined,
   json: false,

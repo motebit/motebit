@@ -55,6 +55,7 @@ import { TrustPanel } from "./components/TrustPanel";
 import { AgentGraphPanel } from "./components/AgentGraphPanel";
 import { CredentialsPanel } from "./components/CredentialsPanel";
 import { FederationPanel } from "./components/FederationPanel";
+import { AccountsPanel } from "./components/AccountsPanel";
 
 const DEFAULT_STATE: MotebitState = {
   attention: 0,
@@ -232,6 +233,7 @@ export function AdminApp(): React.ReactElement {
       "trust",
       "credentials",
       "federation",
+      "accounts",
     ].map((panel) =>
       React.createElement(
         "button",
@@ -326,6 +328,9 @@ export function AdminApp(): React.ReactElement {
       break;
     case "federation":
       content = React.createElement(FederationPanel, null);
+      break;
+    case "accounts":
+      content = React.createElement(AccountsPanel, null);
       break;
     default:
       content = React.createElement(

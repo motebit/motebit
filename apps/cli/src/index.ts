@@ -44,6 +44,8 @@ import {
   handleFederationStatus,
   handleFederationPeers,
   handleFederationPeer,
+  handleBalance,
+  handleWithdraw,
 } from "./subcommands.js";
 import { handleRun, handleServe } from "./daemon.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
@@ -153,6 +155,16 @@ async function main(): Promise<void> {
 
   if (subcommand === "credentials") {
     await handleCredentials(config);
+    return;
+  }
+
+  if (subcommand === "balance") {
+    await handleBalance(config);
+    return;
+  }
+
+  if (subcommand === "withdraw") {
+    await handleWithdraw(config);
     return;
   }
 

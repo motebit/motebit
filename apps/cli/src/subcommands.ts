@@ -31,7 +31,7 @@ import {
   bootstrapIdentity,
 } from "./identity.js";
 import { getDbPath } from "./runtime-factory.js";
-import { formatMs } from "./utils.js";
+import { formatMs, formatTimeAgo } from "./utils.js";
 import { parseInterval } from "./intervals.js";
 
 export async function handleDoctor(): Promise<void> {
@@ -1972,4 +1972,113 @@ export async function handleRotate(config: CliConfig): Promise<void> {
   console.log();
 
   rl.close();
+}
+
+// ---------------------------------------------------------------------------
+// motebit balance — show virtual account balance and recent transactions
+// ---------------------------------------------------------------------------
+
+export async function handleBalance(config: CliConfig): Promise<void> {
+  const fullConfig = loadFullConfig();
+  const motebitId = fullConfig.motebit_id;
+  if (motebitId == null || motebitId === "") {
+    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
+    process.exit(1);
+  }
+
+  const relayUrl = getRelayUrl(config);
+  const token = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const result = await fetchRelayJson(`${relayUrl}/api/v1/agents/${motebitId}/balance`, headers);
+  if (!result.ok) {
+    console.error(`Failed to get balance: ${result.error}`);
+    process.exit(1);
+  }
+
+  const data = result.data as {
+    balance: number;
+    currency: string;
+    transactions: Array<{
+      type: string;
+      amount: number;
+      created_at: string;
+    }>;
+  };
+
+  if (config.json) {
+    console.log(JSON.stringify(data, null, 2));
+    return;
+  }
+
+  console.log(`\nBalance: $${data.balance.toFixed(2)} ${data.currency}`);
+  const recent = (data.transactions ?? []).slice(0, 5);
+  if (recent.length > 0) {
+    console.log("Recent:");
+    for (const tx of recent) {
+      const sign = tx.amount >= 0 ? "+" : "";
+      const ago = formatTimeAgo(Date.now() - new Date(tx.created_at).getTime());
+      console.log(`  ${sign}$${Math.abs(tx.amount).toFixed(2)}  ${tx.type.padEnd(20)} ${ago}`);
+    }
+  }
+  console.log();
+}
+
+// ---------------------------------------------------------------------------
+// motebit withdraw <amount> [--destination <addr>]
+// ---------------------------------------------------------------------------
+
+export async function handleWithdraw(config: CliConfig): Promise<void> {
+  const fullConfig = loadFullConfig();
+  const motebitId = fullConfig.motebit_id;
+  if (motebitId == null || motebitId === "") {
+    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
+    process.exit(1);
+  }
+
+  const amountStr = config.positionals[1];
+  if (!amountStr) {
+    console.error("Usage: motebit withdraw <amount> [--destination <addr>]");
+    process.exit(1);
+  }
+  const amount = parseFloat(amountStr);
+  if (isNaN(amount) || amount <= 0) {
+    console.error("Error: amount must be a positive number.");
+    process.exit(1);
+  }
+
+  const relayUrl = getRelayUrl(config);
+  const token = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const body: Record<string, unknown> = { amount };
+  if (config.destination) body["destination"] = config.destination;
+
+  try {
+    const res = await fetch(`${relayUrl}/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+    if (res.status === 402) {
+      console.error("Insufficient balance.");
+      process.exit(1);
+    }
+    if (!res.ok) {
+      const text = await res.text();
+      console.error(`Withdrawal failed (${res.status}): ${text.slice(0, 200)}`);
+      process.exit(1);
+    }
+    const data = (await res.json()) as { withdrawal_id?: string };
+    console.log(`Withdrawal of $${amount.toFixed(2)} submitted.`);
+    if (data.withdrawal_id != null && data.withdrawal_id !== "") {
+      console.log(`  ID: ${data.withdrawal_id}`);
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`Error: could not reach relay: ${msg}`);
+    process.exit(1);
+  }
 }

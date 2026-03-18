@@ -108,6 +108,22 @@ interface BudgetResponse {
   allocations: BudgetAllocation[];
 }
 
+interface BalanceTransaction {
+  transaction_id: string;
+  type: string;
+  amount: number;
+  balance_after: number;
+  description: string | null;
+  created_at: number;
+}
+
+interface BalanceResponse {
+  motebit_id: string;
+  balance: number;
+  currency: string;
+  transactions: BalanceTransaction[];
+}
+
 // --- Panel init ---
 
 export function initSovereignPanels(ctx: WebContext): SovereignPanelsAPI {
@@ -479,48 +495,110 @@ export function initSovereignPanels(ctx: WebContext): SovereignPanelsAPI {
     }
 
     try {
-      const data = (await relayFetch(ctx, `/agent/${ctx.app.motebitId}/budget`)) as BudgetResponse;
+      // Fetch balance and budget in parallel
+      const [balanceData, budgetData] = await Promise.all([
+        relayFetch(ctx, `/api/v1/agents/${ctx.app.motebitId}/balance`).catch(
+          () => null,
+        ) as Promise<BalanceResponse | null>,
+        relayFetch(ctx, `/agent/${ctx.app.motebitId}/budget`).catch(
+          () => null,
+        ) as Promise<BudgetResponse | null>,
+      ]);
 
       budgetEmpty.style.display = "none";
-
-      // Summary
-      budgetSummary.innerHTML = `
-        <div class="budget-metric">
-          <span class="budget-metric-label">Total Locked</span>
-          <span class="budget-metric-value">${data.total_locked.toFixed(4)}</span>
-        </div>
-        <div class="budget-metric">
-          <span class="budget-metric-label">Total Settled</span>
-          <span class="budget-metric-value">${data.total_settled.toFixed(4)}</span>
-        </div>
-      `;
-
-      // Allocation list
+      budgetSummary.innerHTML = "";
       budgetList.innerHTML = "";
-      if (data.allocations == null || data.allocations.length === 0) {
-        budgetEmpty.style.display = "block";
-        budgetEmpty.textContent = "No budget allocations yet.";
-        return;
+
+      // --- Balance section ---
+      if (balanceData) {
+        const balanceSection = document.createElement("div");
+        balanceSection.className = "budget-balance-section";
+
+        const balanceHeader = document.createElement("div");
+        balanceHeader.className = "budget-metric";
+        balanceHeader.innerHTML = `
+          <span class="budget-metric-label">Balance</span>
+          <span class="budget-metric-value">${balanceData.balance.toFixed(2)} ${escapeHtml(balanceData.currency)}</span>
+        `;
+        balanceSection.appendChild(balanceHeader);
+
+        // Recent transactions (last 5)
+        const recentTxns = balanceData.transactions.slice(0, 5);
+        if (recentTxns.length > 0) {
+          const txnHeader = document.createElement("div");
+          txnHeader.style.cssText =
+            "font-size:11px;font-weight:600;color:var(--text-secondary);margin:8px 0 4px;";
+          txnHeader.textContent = "Recent Transactions";
+          balanceSection.appendChild(txnHeader);
+
+          for (const txn of recentTxns) {
+            const txnRow = document.createElement("div");
+            txnRow.style.cssText =
+              "display:flex;align-items:center;gap:8px;padding:4px 0;font-size:11px;border-bottom:1px solid var(--border-subtle, rgba(255,255,255,0.06));";
+
+            const isCredit =
+              txn.type === "deposit" ||
+              txn.type === "settlement_credit" ||
+              txn.type === "allocation_release";
+            const sign = isCredit ? "+" : "\u2212";
+            const color = isCredit ? "var(--accent-green, #4ade80)" : "var(--text-secondary)";
+
+            txnRow.innerHTML = `
+              <span style="flex:0 0 auto;padding:1px 6px;border-radius:3px;background:var(--bg-card, rgba(255,255,255,0.04));color:var(--text-ghost);font-size:10px;">${escapeHtml(txn.type)}</span>
+              <span style="flex:1;color:var(--text-ghost);">${escapeHtml(txn.description ?? "")}</span>
+              <span style="color:${color};font-weight:500;white-space:nowrap;">${sign}${Math.abs(txn.amount).toFixed(4)}</span>
+              <span style="color:var(--text-ghost);font-size:10px;white-space:nowrap;">${formatDate(txn.created_at)}</span>
+            `;
+            balanceSection.appendChild(txnRow);
+          }
+        }
+
+        budgetSummary.appendChild(balanceSection);
       }
 
-      for (const alloc of data.allocations) {
-        const row = document.createElement("div");
-        row.className = "budget-alloc-row";
-
-        const statusClass =
-          alloc.status === "settled"
-            ? "settled"
-            : alloc.status === "locked"
-              ? "locked"
-              : "released";
-
-        row.innerHTML = `
-          <span class="budget-alloc-status ${statusClass}">${escapeHtml(alloc.status)}</span>
-          <span class="budget-alloc-amount">${alloc.amount_locked.toFixed(4)} ${escapeHtml(alloc.currency)}</span>
-          <span class="budget-alloc-time">${formatDate(alloc.created_at)}</span>
-          ${alloc.settlement_status ? `<span class="budget-settlement-badge ${alloc.settlement_status}">${alloc.amount_settled?.toFixed(4) ?? ""} settled</span>` : ""}
+      // --- Budget allocations section ---
+      if (budgetData) {
+        const allocHeader = document.createElement("div");
+        allocHeader.style.cssText = "display:flex;gap:12px;margin:8px 0;";
+        allocHeader.innerHTML = `
+          <div class="budget-metric">
+            <span class="budget-metric-label">Total Locked</span>
+            <span class="budget-metric-value">${budgetData.total_locked.toFixed(4)}</span>
+          </div>
+          <div class="budget-metric">
+            <span class="budget-metric-label">Total Settled</span>
+            <span class="budget-metric-value">${budgetData.total_settled.toFixed(4)}</span>
+          </div>
         `;
-        budgetList.appendChild(row);
+        budgetSummary.appendChild(allocHeader);
+
+        if (budgetData.allocations != null && budgetData.allocations.length > 0) {
+          for (const alloc of budgetData.allocations) {
+            const row = document.createElement("div");
+            row.className = "budget-alloc-row";
+
+            const statusClass =
+              alloc.status === "settled"
+                ? "settled"
+                : alloc.status === "locked"
+                  ? "locked"
+                  : "released";
+
+            row.innerHTML = `
+              <span class="budget-alloc-status ${statusClass}">${escapeHtml(alloc.status)}</span>
+              <span class="budget-alloc-amount">${alloc.amount_locked.toFixed(4)} ${escapeHtml(alloc.currency)}</span>
+              <span class="budget-alloc-time">${formatDate(alloc.created_at)}</span>
+              ${alloc.settlement_status ? `<span class="budget-settlement-badge ${alloc.settlement_status}">${alloc.amount_settled?.toFixed(4) ?? ""} settled</span>` : ""}
+            `;
+            budgetList.appendChild(row);
+          }
+        }
+      }
+
+      // Show empty state only if both failed or returned nothing
+      if (!balanceData && !budgetData) {
+        budgetEmpty.style.display = "block";
+        budgetEmpty.textContent = "No budget data available.";
       }
     } catch (err: unknown) {
       budgetSummary.innerHTML = "";
