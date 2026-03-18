@@ -111,10 +111,20 @@ export async function decrypt(payload: EncryptedPayload, key: Uint8Array): Promi
 }
 
 /** Default PBKDF2 iterations. Override via MOTEBIT_PBKDF2_ITERATIONS for tests. */
-const DEFAULT_PBKDF2_ITERATIONS =
-  typeof process !== "undefined" && process.env["MOTEBIT_PBKDF2_ITERATIONS"]
-    ? Number(process.env["MOTEBIT_PBKDF2_ITERATIONS"])
-    : 600_000;
+const DEFAULT_PBKDF2_ITERATIONS = (() => {
+  if (typeof process === "undefined") return 600_000;
+  const override = process.env["MOTEBIT_PBKDF2_ITERATIONS"];
+  if (!override) return 600_000;
+  const n = Number(override);
+  // Safety: prevent accidentally shipping weak crypto to production
+  if (n < 100_000 && process.env["NODE_ENV"] !== "test") {
+    throw new Error(
+      `PBKDF2 iterations (${n}) too low for non-test environment. ` +
+        `Set NODE_ENV=test or use >= 100,000 iterations.`,
+    );
+  }
+  return n;
+})();
 
 /**
  * Derive a key from a password using PBKDF2.

@@ -114,10 +114,19 @@ function generateSalt(): Uint8Array {
 }
 
 /** Default PBKDF2 iterations. Override via MOTEBIT_PBKDF2_ITERATIONS for tests. */
-const DEFAULT_PBKDF2_ITERATIONS =
-  typeof process !== "undefined" && process.env["MOTEBIT_PBKDF2_ITERATIONS"]
-    ? Number(process.env["MOTEBIT_PBKDF2_ITERATIONS"])
-    : 600_000;
+const DEFAULT_PBKDF2_ITERATIONS = (() => {
+  if (typeof process === "undefined") return 600_000;
+  const override = process.env["MOTEBIT_PBKDF2_ITERATIONS"];
+  if (!override) return 600_000;
+  const n = Number(override);
+  if (n < 100_000 && process.env["NODE_ENV"] !== "test") {
+    throw new Error(
+      `PBKDF2 iterations (${n}) too low for non-test environment. ` +
+        `Set NODE_ENV=test or use >= 100,000 iterations.`,
+    );
+  }
+  return n;
+})();
 
 async function deriveKey(
   password: string,
