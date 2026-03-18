@@ -20,6 +20,10 @@ export default defineConfig({
   ],
   test: {
     setupFiles: ["./src/__tests__/__stubs__/patch-ajv.ts"],
+    coverage: {
+      include: ["src/**/*.ts"],
+      exclude: ["src/__tests__/**"],
+    },
     server: {
       deps: {
         // Inline the MCP SDK and its transitive deps so Vite processes them

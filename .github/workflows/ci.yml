@@ -44,7 +44,11 @@ jobs:
         run: pnpm lint
 
       - name: Test with coverage
-        run: pnpm test -- -- --coverage --coverage.reporter=text --coverage.reporter=json-summary --coverage.reporter=json
+        run: pnpm run test:coverage
+
+      - name: Coverage summary
+        if: always()
+        run: node scripts/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload coverage reports
         if: always()
