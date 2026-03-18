@@ -354,7 +354,9 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       const seen = new Set<string>();
       const merged: CredEntry[] = [];
       for (const c of [...localCreds, ...relayCreds].sort((a, b) => b.issued_at - a.issued_at)) {
-        const key = `${String(c.credential.issuer ?? "")}:${c.credential_type}:${c.issued_at}`;
+        const issuerVal = c.credential.issuer;
+        const issuerKey = typeof issuerVal === "string" ? issuerVal : "";
+        const key = `${issuerKey}:${c.credential_type}:${c.issued_at}`;
         if (!seen.has(key)) {
           seen.add(key);
           merged.push(c);
