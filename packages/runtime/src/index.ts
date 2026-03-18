@@ -480,6 +480,7 @@ export class MotebitRuntime {
   private _precision: PrecisionWeights;
   private _signingKeys: { privateKey: Uint8Array; publicKey: Uint8Array } | null;
   private _issuedCredentials: import("@motebit/crypto").VerifiableCredential<unknown>[] = [];
+  private _credentialStore: import("@motebit/sdk").CredentialStoreAdapter | null = null;
   private _signingKeysErased = false;
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
@@ -565,12 +566,34 @@ export class MotebitRuntime {
     this.serviceListingStore = adapters.storage.serviceListingStore ?? null;
     this.latencyStatsStore = adapters.storage.latencyStatsStore ?? null;
 
+    // Credential persistence — persists issued VCs across restarts
+    this._credentialStore = adapters.storage.credentialStore ?? null;
+
     // Agent graph — algebraic routing substrate
-    // The credential store adapter queries the runtime's issued credentials
-    // to aggregate peer-issued reputation into routing trust weights.
-    const credentialStore = {
-      getCredentialsForSubject: (subjectMotebitId: string) =>
-        this._issuedCredentials
+    // The credential store adapter reads from persistent storage (survives restart)
+    // with fallback to in-memory credentials for environments without persistence.
+    const graphCredentialStore = {
+      getCredentialsForSubject: (subjectMotebitId: string) => {
+        // Prefer persistent store (has historical credentials across sessions)
+        if (this._credentialStore) {
+          const stored = this._credentialStore.listBySubject(subjectMotebitId);
+          return stored
+            .filter((sc) => sc.credential_type === "AgentReputationCredential")
+            .map((sc) => {
+              const vc = JSON.parse(sc.credential_json) as Record<string, unknown>;
+              return {
+                type: vc.type as string[],
+                issuer: vc.issuer as string,
+                validFrom: vc.validFrom as string | undefined,
+                credentialSubject:
+                  vc.credentialSubject as import("@motebit/sdk").ReputationCredentialSubject & {
+                    id: string;
+                  },
+              };
+            });
+        }
+        // Fallback: in-memory credentials only
+        return this._issuedCredentials
           .filter(
             (vc) =>
               vc.credentialSubject?.id?.includes(subjectMotebitId) &&
@@ -584,14 +607,15 @@ export class MotebitRuntime {
               vc.credentialSubject as import("@motebit/sdk").ReputationCredentialSubject & {
                 id: string;
               },
-          })),
+          }));
+      },
     };
     this.agentGraph = new AgentGraphManager(
       this.motebitId,
       this.agentTrustStore,
       this.serviceListingStore,
       this.latencyStatsStore,
-      credentialStore,
+      graphCredentialStore,
     );
 
     this.wireLoopDeps();
@@ -2076,7 +2100,7 @@ export class MotebitRuntime {
           this._signingKeys.privateKey,
           this._signingKeys.publicKey,
         );
-        if (vc) this._issuedCredentials.push(vc);
+        if (vc) this._persistCredential(vc);
       } catch {
         // Credential issuance is best-effort — don't break gradient computation
       }
@@ -2131,6 +2155,27 @@ export class MotebitRuntime {
    */
   clearIssuedCredentials(): void {
     this._issuedCredentials = [];
+  }
+
+  /** Push a credential to both in-memory cache and persistent store. */
+  private _persistCredential(vc: import("@motebit/crypto").VerifiableCredential<unknown>): void {
+    this._issuedCredentials.push(vc);
+    if (this._credentialStore) {
+      try {
+        const credType =
+          vc.type.find((t) => t !== "VerifiableCredential") ?? "VerifiableCredential";
+        this._credentialStore.save({
+          credential_id: crypto.randomUUID(),
+          subject_motebit_id: vc.credentialSubject?.id ?? "",
+          issuer_did: vc.issuer,
+          credential_type: credType,
+          credential_json: JSON.stringify(vc),
+          issued_at: Date.now(),
+        });
+      } catch {
+        // Credential persistence is best-effort
+      }
+    }
   }
 
   private wireLoopDeps(): void {
@@ -2200,7 +2245,7 @@ export class MotebitRuntime {
       events: this.events,
       agentGraph: this.agentGraph,
       signingKeys: this._signingKeys,
-      onCredentialIssued: (vc) => this._issuedCredentials.push(vc),
+      onCredentialIssued: (vc) => this._persistCredential(vc),
     };
   }
 

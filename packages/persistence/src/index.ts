@@ -24,6 +24,7 @@ import type {
   ListingId,
   GoalId,
   MotebitId,
+  StoredCredential,
 } from "@motebit/sdk";
 import { PlanStatus, StepStatus, AgentTrustLevel } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
@@ -2300,6 +2301,55 @@ export class SqliteLatencyStatsStore {
   }
 }
 
+// === Credential Store ===
+
+export class SqliteCredentialStore {
+  private stmtSave: PreparedStatement;
+  private stmtBySubject: PreparedStatement;
+  private stmtList: PreparedStatement;
+  private stmtListByType: PreparedStatement;
+
+  constructor(db: DatabaseDriver) {
+    this.stmtSave = db.prepare(
+      `INSERT OR REPLACE INTO issued_credentials
+       (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmtBySubject = db.prepare(
+      `SELECT * FROM issued_credentials WHERE subject_motebit_id = ? ORDER BY issued_at DESC LIMIT ?`,
+    );
+    this.stmtList = db.prepare(
+      `SELECT * FROM issued_credentials WHERE issuer_did LIKE ? OR subject_motebit_id LIKE ? ORDER BY issued_at DESC LIMIT ?`,
+    );
+    this.stmtListByType = db.prepare(
+      `SELECT * FROM issued_credentials WHERE (issuer_did LIKE ? OR subject_motebit_id LIKE ?) AND credential_type = ? ORDER BY issued_at DESC LIMIT ?`,
+    );
+  }
+
+  save(credential: StoredCredential): void {
+    this.stmtSave.run(
+      credential.credential_id,
+      credential.subject_motebit_id,
+      credential.issuer_did,
+      credential.credential_type,
+      credential.credential_json,
+      credential.issued_at,
+    );
+  }
+
+  listBySubject(subjectMotebitId: string, limit = 100): StoredCredential[] {
+    return this.stmtBySubject.all(subjectMotebitId, limit) as StoredCredential[];
+  }
+
+  list(motebitId: string, type?: string, limit = 100): StoredCredential[] {
+    const pattern = `%${motebitId}%`;
+    if (type) {
+      return this.stmtListByType.all(pattern, pattern, type, limit) as StoredCredential[];
+    }
+    return this.stmtList.all(pattern, pattern, limit) as StoredCredential[];
+  }
+}
+
 // === Factory ===
 
 export interface MotebitDatabase {
@@ -2321,6 +2371,7 @@ export interface MotebitDatabase {
   budgetAllocationStore: SqliteBudgetAllocationStore;
   settlementStore: SqliteSettlementStore;
   latencyStatsStore: SqliteLatencyStatsStore;
+  credentialStore: SqliteCredentialStore;
   close(): void;
 }
 
@@ -2602,6 +2653,29 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     driver.pragma("user_version = 28");
   }
 
+  if (userVersion < 29) {
+    migrateExec(
+      driver,
+      `CREATE TABLE IF NOT EXISTS issued_credentials (
+        credential_id TEXT PRIMARY KEY,
+        subject_motebit_id TEXT NOT NULL,
+        issuer_did TEXT NOT NULL,
+        credential_type TEXT NOT NULL,
+        credential_json TEXT NOT NULL,
+        issued_at INTEGER NOT NULL
+      )`,
+    );
+    migrateExec(
+      driver,
+      "CREATE INDEX IF NOT EXISTS idx_creds_subject ON issued_credentials(subject_motebit_id)",
+    );
+    migrateExec(
+      driver,
+      "CREATE INDEX IF NOT EXISTS idx_creds_type ON issued_credentials(credential_type)",
+    );
+    driver.pragma("user_version = 29");
+  }
+
   const eventStore = new SqliteEventStore(driver);
   const memoryStorage = new SqliteMemoryStorage(driver);
   const identityStorage = new SqliteIdentityStorage(driver);
@@ -2619,6 +2693,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   const budgetAllocationStore = new SqliteBudgetAllocationStore(driver);
   const settlementStore = new SqliteSettlementStore(driver);
   const latencyStatsStore = new SqliteLatencyStatsStore(driver);
+  const credentialStore = new SqliteCredentialStore(driver);
 
   return {
     db: driver,
@@ -2639,6 +2714,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     budgetAllocationStore,
     settlementStore,
     latencyStatsStore,
+    credentialStore,
     close() {
       driver.close();
     },

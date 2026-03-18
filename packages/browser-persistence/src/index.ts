@@ -13,6 +13,7 @@ import { IdbServiceListingStore } from "./service-listing-store.js";
 import { IdbBudgetAllocationStore } from "./budget-allocation-store.js";
 import { IdbSettlementStore } from "./settlement-store.js";
 import { IdbLatencyStatsStore } from "./latency-stats-store.js";
+import { IdbCredentialStore } from "./credential-store.js";
 
 export { openMotebitDB, idbRequest, idbTransaction } from "./idb.js";
 export { IdbEventStore } from "./event-store.js";
@@ -29,6 +30,7 @@ export { IdbServiceListingStore } from "./service-listing-store.js";
 export { IdbBudgetAllocationStore } from "./budget-allocation-store.js";
 export { IdbSettlementStore } from "./settlement-store.js";
 export { IdbLatencyStatsStore } from "./latency-stats-store.js";
+export { IdbCredentialStore } from "./credential-store.js";
 export type { StateSnapshotAdapter } from "./state-snapshot.js";
 
 export async function createBrowserStorage(): Promise<StorageAdapters> {
@@ -47,5 +49,6 @@ export async function createBrowserStorage(): Promise<StorageAdapters> {
     budgetAllocationStore: new IdbBudgetAllocationStore(db),
     settlementStore: new IdbSettlementStore(db),
     latencyStatsStore: new IdbLatencyStatsStore(db),
+    credentialStore: new IdbCredentialStore(db),
   };
 }

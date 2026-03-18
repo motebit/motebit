@@ -1461,6 +1461,28 @@ export interface PlanStoreAdapter {
   listActivePlans?(motebitId: string): Plan[];
 }
 
+/** Stored credential record — JSON-serialized VC with metadata. */
+export interface StoredCredential {
+  credential_id: string;
+  /** The agent the credential is about (credentialSubject.id). */
+  subject_motebit_id: string;
+  /** did:key of the issuer. */
+  issuer_did: string;
+  /** e.g. "AgentReputationCredential", "AgentTrustCredential", "AgentGradientCredential". */
+  credential_type: string;
+  /** Full JSON-serialized VerifiableCredential. */
+  credential_json: string;
+  issued_at: number;
+}
+
+export interface CredentialStoreAdapter {
+  save(credential: StoredCredential): void;
+  /** List credentials about a specific subject agent. */
+  listBySubject(subjectMotebitId: string, limit?: number): StoredCredential[];
+  /** List all credentials, optionally filtered by type. */
+  list(motebitId: string, type?: string, limit?: number): StoredCredential[];
+}
+
 export interface StorageAdapters {
   eventStore: EventStoreAdapter;
   memoryStorage: MemoryStorageAdapter;
@@ -1476,4 +1498,5 @@ export interface StorageAdapters {
   budgetAllocationStore?: BudgetAllocationStoreAdapter;
   settlementStore?: SettlementStoreAdapter;
   latencyStatsStore?: LatencyStatsStoreAdapter;
+  credentialStore?: CredentialStoreAdapter;
 }
