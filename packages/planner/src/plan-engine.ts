@@ -27,7 +27,12 @@ export type PlanChunk =
   | { type: "approval_request"; step: PlanStep; chunk: AgenticChunk }
   | { type: "plan_retrying"; failedPlan: Plan; newPlan: Plan }
   | { type: "reflection"; result: ReflectionResult }
-  | { type: "step_delegated"; step: PlanStep; task_id: string };
+  | {
+      type: "step_delegated";
+      step: PlanStep;
+      task_id: string;
+      routing_choice?: DelegatedStepResult["routing_choice"];
+    };
 
 export interface StepDelegationAdapter {
   delegateStep(
@@ -349,6 +354,7 @@ export class PlanEngine {
               type: "step_delegated",
               step: completedStep,
               task_id: delegationResult.task_id,
+              routing_choice: delegationResult.routing_choice,
             };
             yield { type: "step_completed", step: completedStep };
           } catch (err: unknown) {

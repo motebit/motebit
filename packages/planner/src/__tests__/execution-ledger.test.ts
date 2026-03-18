@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { PlanStatus, StepStatus } from "@motebit/sdk";
-import type { Plan } from "@motebit/sdk";
+import { PlanStatus, StepStatus, DeviceCapability } from "@motebit/sdk";
+import type { Plan, PlanStep, DelegatedStepResult, ExecutionReceipt, MotebitId, DeviceId } from "@motebit/sdk";
 import type { MotebitLoopDependencies } from "@motebit/ai-core";
+import type { StepDelegationAdapter } from "../plan-engine.js";
 
 // Mock runTurnStreaming at the module level
 vi.mock("@motebit/ai-core", async (importOriginal) => {
@@ -345,5 +346,159 @@ describe("PlanEngine execution ledger timeline", () => {
     for (let i = 1; i < timeline.length; i++) {
       expect(timeline[i]!.timestamp).toBeGreaterThanOrEqual(timeline[i - 1]!.timestamp);
     }
+  });
+
+  it("records routing_choice in step_delegated timeline event and chunk", async () => {
+    const store = new InMemoryPlanStore();
+    const routingChoice = {
+      selected_agent: "agent-worker-1",
+      composite_score: 0.87,
+      sub_scores: {
+        trust: 0.9,
+        success_rate: 0.95,
+        latency: 0.7,
+        price_efficiency: 0.8,
+        capability_match: 1.0,
+        availability: 0.85,
+      },
+      routing_paths: [["agent-origin", "agent-worker-1"]],
+      alternatives_considered: 3,
+    };
+
+    const mockAdapter: StepDelegationAdapter = {
+      delegateStep: vi.fn().mockImplementation(async (step: PlanStep) => {
+        return {
+          step_id: step.step_id,
+          task_id: "delegated-task-route",
+          receipt: {
+            task_id: "delegated-task-route",
+            motebit_id: "agent-worker-1" as MotebitId,
+            device_id: "dev-1" as DeviceId,
+            submitted_at: Date.now(),
+            completed_at: Date.now(),
+            status: "completed",
+            result: "Routed result",
+            tools_used: ["web_search"],
+            memories_formed: 0,
+            prompt_hash: "abc",
+            result_hash: "def",
+            signature: "sig",
+          } satisfies ExecutionReceipt,
+          result_text: "Routed result",
+          routing_choice: routingChoice,
+        } satisfies DelegatedStepResult;
+      }),
+    };
+
+    const engine = new PlanEngine(store, {
+      localCapabilities: [DeviceCapability.HttpMcp],
+      delegationAdapter: mockAdapter,
+    });
+
+    const deps = makeMockDeps(1);
+    // Override to produce a step requiring delegation
+    (deps.provider as unknown as { generate: ReturnType<typeof vi.fn> }).generate = vi
+      .fn()
+      .mockResolvedValue({
+        text: JSON.stringify({
+          title: "Routing test plan",
+          steps: [
+            {
+              description: "Remote step",
+              prompt: "do remote thing",
+              required_capabilities: ["stdio_mcp"],
+            },
+          ],
+        }),
+      });
+
+    const { plan } = await engine.createPlan("goal-route", "mote-1", { goalPrompt: "Route" }, deps);
+
+    const chunks: PlanChunk[] = [];
+    for await (const chunk of engine.executePlan(plan.plan_id, deps)) {
+      chunks.push(chunk);
+    }
+
+    // 1. Verify the step_delegated chunk carries routing_choice
+    const delegatedChunks = chunks.filter((c) => c.type === "step_delegated");
+    expect(delegatedChunks).toHaveLength(1);
+    const delegatedChunk = delegatedChunks[0]!;
+    expect(delegatedChunk.type).toBe("step_delegated");
+    if (delegatedChunk.type === "step_delegated") {
+      expect(delegatedChunk.routing_choice).toEqual(routingChoice);
+    }
+
+    // 2. Verify the timeline event includes routing_choice
+    const timeline = engine.takeTimeline();
+    const stepDelegatedEvent = timeline.find((e) => e.type === "step_delegated");
+    expect(stepDelegatedEvent).toBeDefined();
+    expect(stepDelegatedEvent!.payload.routing_choice).toEqual(routingChoice);
+
+    // 3. Verify routing_choice is included in canonical JSON (affects content hash)
+    const canonical = JSON.stringify(stepDelegatedEvent);
+    expect(canonical).toContain("agent-worker-1");
+    expect(canonical).toContain("composite_score");
+  });
+
+  it("step_delegated timeline event omits routing_choice when not provided", async () => {
+    const store = new InMemoryPlanStore();
+
+    const mockAdapter: StepDelegationAdapter = {
+      delegateStep: vi.fn().mockImplementation(async (step: PlanStep) => {
+        return {
+          step_id: step.step_id,
+          task_id: "delegated-task-no-route",
+          receipt: {
+            task_id: "delegated-task-no-route",
+            motebit_id: "agent-basic" as MotebitId,
+            device_id: "dev-1" as DeviceId,
+            submitted_at: Date.now(),
+            completed_at: Date.now(),
+            status: "completed",
+            result: "Basic result",
+            tools_used: [],
+            memories_formed: 0,
+            prompt_hash: "abc",
+            result_hash: "def",
+            signature: "sig",
+          } satisfies ExecutionReceipt,
+          result_text: "Basic result",
+          // No routing_choice
+        } satisfies DelegatedStepResult;
+      }),
+    };
+
+    const engine = new PlanEngine(store, {
+      localCapabilities: [DeviceCapability.HttpMcp],
+      delegationAdapter: mockAdapter,
+    });
+
+    const deps = makeMockDeps(1);
+    (deps.provider as unknown as { generate: ReturnType<typeof vi.fn> }).generate = vi
+      .fn()
+      .mockResolvedValue({
+        text: JSON.stringify({
+          title: "No-route plan",
+          steps: [
+            {
+              description: "Remote step",
+              prompt: "do thing",
+              required_capabilities: ["stdio_mcp"],
+            },
+          ],
+        }),
+      });
+
+    const { plan } = await engine.createPlan("goal-no-route", "mote-1", { goalPrompt: "Test" }, deps);
+
+    for await (const _chunk of engine.executePlan(plan.plan_id, deps)) {
+      // consume
+    }
+
+    const timeline = engine.takeTimeline();
+    const stepDelegatedEvent = timeline.find((e) => e.type === "step_delegated");
+    expect(stepDelegatedEvent).toBeDefined();
+    // routing_choice should be undefined (not present)
+    expect(stepDelegatedEvent!.payload.routing_choice).toBeUndefined();
   });
 });

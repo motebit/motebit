@@ -1042,6 +1042,7 @@ export class MotebitRuntime {
           step_id: chunk.step.step_id,
           ordinal: chunk.step.ordinal,
           task_id: chunk.task_id,
+          routing_choice: chunk.routing_choice,
         };
         break;
       case "plan_completed":

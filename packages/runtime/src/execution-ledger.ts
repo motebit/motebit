@@ -189,6 +189,7 @@ export async function replayGoal(
             step_id: p.step_id,
             ordinal: p.ordinal,
             task_id: p.task_id,
+            routing_choice: p.routing_choice,
           },
         });
         break;
@@ -312,9 +313,19 @@ export async function replayGoal(
       });
       const receiptPayload = receiptEvent?.payload;
       const receipt = receiptPayload?.receipt as Record<string, unknown> | undefined;
+
+      // Extract routing provenance from the step_delegated timeline event
+      const delegatedEvent = timeline.find(
+        (e) => e.type === "step_delegated" && e.payload.step_id === s.step_id,
+      );
+      const routingChoice = delegatedEvent?.payload.routing_choice as
+        | NonNullable<ExecutionStepSummary["delegation"]>["routing_choice"]
+        | undefined;
+
       summary.delegation = {
         task_id: s.delegation_task_id,
         receipt_hash: receipt?.signature as string | undefined,
+        routing_choice: routingChoice,
       };
     }
 

@@ -241,4 +241,293 @@ describe("MotebitRuntime.replayGoal", () => {
     // delegation_receipts is empty (no delegations in this test)
     expect(manifest.delegation_receipts).toEqual([]);
   });
+
+  it("includes routing_choice in step summary for delegated steps", async () => {
+    const planStore = new InMemoryPlanStore();
+    const auditSink = new InMemoryAuditSink();
+    const adapters = createTestAdapters(planStore, auditSink);
+    const runtime = new MotebitRuntime({ motebitId: MOTEBIT_ID, tickRateHz: 0 }, adapters);
+
+    const now = Date.now();
+    const delegatedPlanId = "plan-delegated-1" as PlanId;
+    const delegatedGoalId = "goal-delegated-1" as GoalId;
+    const delegationTaskId = "task-delegated-abc";
+
+    const routingChoice = {
+      selected_agent: "agent-worker-42",
+      composite_score: 0.92,
+      sub_scores: {
+        trust: 0.95,
+        success_rate: 0.88,
+        latency: 0.75,
+        price_efficiency: 0.9,
+        capability_match: 1.0,
+        availability: 0.9,
+      },
+      routing_paths: [["agent-origin", "agent-worker-42"]],
+      alternatives_considered: 5,
+    };
+
+    // Create plan with a delegated step
+    planStore.savePlan({
+      plan_id: delegatedPlanId,
+      goal_id: delegatedGoalId,
+      motebit_id: MOTEBIT_ID,
+      title: "Delegation routing test",
+      status: PlanStatus.Completed,
+      created_at: now,
+      updated_at: now + 5000,
+      current_step_index: 1,
+      total_steps: 1,
+    });
+
+    planStore.saveStep({
+      step_id: "step-d1",
+      plan_id: delegatedPlanId,
+      ordinal: 0,
+      description: "Remote capability step",
+      prompt: "Execute remote task",
+      depends_on: [],
+      optional: false,
+      status: StepStatus.Completed,
+      result_summary: "Completed by remote agent",
+      error_message: null,
+      tool_calls_made: 0,
+      started_at: now + 1000,
+      completed_at: now + 3000,
+      retry_count: 0,
+      updated_at: now + 3000,
+      delegation_task_id: delegationTaskId,
+    });
+
+    // Emit events including PlanStepDelegated with routing_choice
+    const eventStore = adapters.storage.eventStore;
+
+    await eventStore.append(
+      makeEvent("ev-d1", EventType.GoalCreated, { goal_id: delegatedGoalId }, now),
+    );
+    await eventStore.append(
+      makeEvent("ev-d2", EventType.GoalExecuted, { goal_id: delegatedGoalId }, now + 100),
+    );
+    await eventStore.append(
+      makeEvent(
+        "ev-d3",
+        EventType.PlanCreated,
+        { plan_id: delegatedPlanId, title: "Delegation routing test", total_steps: 1 },
+        now + 200,
+      ),
+    );
+    await eventStore.append(
+      makeEvent(
+        "ev-d4",
+        EventType.PlanStepStarted,
+        {
+          plan_id: delegatedPlanId,
+          step_id: "step-d1",
+          ordinal: 0,
+          description: "Remote capability step",
+        },
+        now + 1000,
+      ),
+    );
+    await eventStore.append(
+      makeEvent(
+        "ev-d5",
+        EventType.PlanStepDelegated,
+        {
+          plan_id: delegatedPlanId,
+          step_id: "step-d1",
+          ordinal: 0,
+          task_id: delegationTaskId,
+          routing_choice: routingChoice,
+        },
+        now + 1500,
+      ),
+    );
+    await eventStore.append(
+      makeEvent(
+        "ev-d6",
+        EventType.PlanStepCompleted,
+        { plan_id: delegatedPlanId, step_id: "step-d1", ordinal: 0, tool_calls_made: 0 },
+        now + 3000,
+      ),
+    );
+    await eventStore.append(
+      makeEvent("ev-d7", EventType.PlanCompleted, { plan_id: delegatedPlanId }, now + 3500),
+    );
+    await eventStore.append(
+      makeEvent("ev-d8", EventType.GoalCompleted, { goal_id: delegatedGoalId }, now + 4000),
+    );
+
+    // Add a receipt event for the delegation
+    await eventStore.append(
+      makeEvent(
+        "ev-d9",
+        EventType.AgentTaskCompleted,
+        {
+          task_id: delegationTaskId,
+          status: "completed",
+          tools_used: ["web_search"],
+          receipt: {
+            task_id: delegationTaskId,
+            motebit_id: "agent-worker-42",
+            device_id: "dev-42",
+            completed_at: now + 2500,
+            status: "completed",
+            signature: "sig-abc123def456",
+          },
+        },
+        now + 2500,
+      ),
+    );
+
+    // Replay and verify
+    const manifest = await runtime.replayGoal(delegatedGoalId);
+    expect(manifest).not.toBeNull();
+    if (!manifest) return;
+
+    // Verify spec and identity
+    expect(manifest.spec).toBe("motebit/execution-ledger@1.0");
+    expect(manifest.goal_id).toBe(delegatedGoalId);
+
+    // Verify the timeline includes step_delegated with routing_choice
+    const delegatedTimelineEntry = manifest.timeline.find((e) => e.type === "step_delegated");
+    expect(delegatedTimelineEntry).toBeDefined();
+    expect(delegatedTimelineEntry!.payload.routing_choice).toEqual(routingChoice);
+
+    // Verify step summary includes routing_choice in delegation field
+    expect(manifest.steps).toHaveLength(1);
+    const step = manifest.steps[0]!;
+    expect(step.delegation).toBeDefined();
+    expect(step.delegation!.task_id).toBe(delegationTaskId);
+    expect(step.delegation!.routing_choice).toEqual(routingChoice);
+    expect(step.delegation!.routing_choice!.selected_agent).toBe("agent-worker-42");
+    expect(step.delegation!.routing_choice!.composite_score).toBe(0.92);
+    expect(step.delegation!.routing_choice!.alternatives_considered).toBe(5);
+    expect(step.delegation!.routing_choice!.routing_paths).toEqual([
+      ["agent-origin", "agent-worker-42"],
+    ]);
+
+    // Verify routing_choice is covered by the content hash (it's in the timeline)
+    expect(manifest.content_hash).toMatch(/^[0-9a-f]{64}$/);
+
+    // Verify the routing_choice is present in the timeline JSON (affects content hash)
+    const timelineJson = manifest.timeline.map((e) => JSON.stringify(e)).join("");
+    expect(timelineJson).toContain("agent-worker-42");
+    expect(timelineJson).toContain("composite_score");
+
+    // Verify delegation_receipts are populated
+    expect(manifest.delegation_receipts).toHaveLength(1);
+    expect(manifest.delegation_receipts[0]!.task_id).toBe(delegationTaskId);
+    expect(manifest.delegation_receipts[0]!.motebit_id).toBe("agent-worker-42");
+  });
+
+  it("routing_choice in timeline is covered by content_hash signature", async () => {
+    const planStore = new InMemoryPlanStore();
+    const auditSink = new InMemoryAuditSink();
+    const adapters = createTestAdapters(planStore, auditSink);
+    const runtime = new MotebitRuntime({ motebitId: MOTEBIT_ID, tickRateHz: 0 }, adapters);
+
+    const now = Date.now();
+    const pId = "plan-hash-test" as PlanId;
+    const gId = "goal-hash-test" as GoalId;
+
+    planStore.savePlan({
+      plan_id: pId,
+      goal_id: gId,
+      motebit_id: MOTEBIT_ID,
+      title: "Hash test",
+      status: PlanStatus.Completed,
+      created_at: now,
+      updated_at: now + 3000,
+      current_step_index: 1,
+      total_steps: 1,
+    });
+
+    planStore.saveStep({
+      step_id: "step-h1",
+      plan_id: pId,
+      ordinal: 0,
+      description: "Delegated step",
+      prompt: "Do it",
+      depends_on: [],
+      optional: false,
+      status: StepStatus.Completed,
+      result_summary: "Done",
+      error_message: null,
+      tool_calls_made: 0,
+      started_at: now + 500,
+      completed_at: now + 1500,
+      retry_count: 0,
+      updated_at: now + 1500,
+      delegation_task_id: "task-hash-1",
+    });
+
+    const eventStore = adapters.storage.eventStore;
+
+    await eventStore.append(makeEvent("eh-1", EventType.GoalCreated, { goal_id: gId }, now));
+    await eventStore.append(
+      makeEvent(
+        "eh-2",
+        EventType.PlanCreated,
+        { plan_id: pId, title: "Hash test", total_steps: 1 },
+        now + 100,
+      ),
+    );
+    await eventStore.append(
+      makeEvent(
+        "eh-3",
+        EventType.PlanStepStarted,
+        { plan_id: pId, step_id: "step-h1", ordinal: 0, description: "Delegated step" },
+        now + 500,
+      ),
+    );
+    await eventStore.append(
+      makeEvent(
+        "eh-4",
+        EventType.PlanStepDelegated,
+        {
+          plan_id: pId,
+          step_id: "step-h1",
+          ordinal: 0,
+          task_id: "task-hash-1",
+          routing_choice: {
+            selected_agent: "agent-x",
+            composite_score: 0.5,
+            sub_scores: { trust: 0.5, success_rate: 0.5, latency: 0.5, price_efficiency: 0.5, capability_match: 0.5, availability: 0.5 },
+            routing_paths: [["a", "agent-x"]],
+            alternatives_considered: 2,
+          },
+        },
+        now + 600,
+      ),
+    );
+    await eventStore.append(
+      makeEvent(
+        "eh-5",
+        EventType.PlanStepCompleted,
+        { plan_id: pId, step_id: "step-h1", ordinal: 0, tool_calls_made: 0 },
+        now + 1500,
+      ),
+    );
+    await eventStore.append(
+      makeEvent("eh-6", EventType.PlanCompleted, { plan_id: pId }, now + 2000),
+    );
+    await eventStore.append(
+      makeEvent("eh-7", EventType.GoalCompleted, { goal_id: gId }, now + 2500),
+    );
+
+    const manifest = await runtime.replayGoal(gId);
+    expect(manifest).not.toBeNull();
+    if (!manifest) return;
+
+    // Verify content hash is computed (it covers routing_choice in the timeline)
+    const hash1 = manifest.content_hash;
+    expect(hash1).toMatch(/^[0-9a-f]{64}$/);
+
+    // Independently recompute the hash to verify it matches
+    const { computeTimelineHash } = await import("../execution-ledger.js");
+    const recomputedHash = await computeTimelineHash(manifest.timeline);
+    expect(recomputedHash).toBe(hash1);
+  });
 });
