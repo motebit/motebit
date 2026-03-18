@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { GoalScheduler } from "../scheduler.js";
 import { createMotebitDatabase, type MotebitDatabase, type Goal } from "@motebit/persistence";
-import { EventType, RiskLevel, SensitivityLevel } from "@motebit/sdk";
+import { EventType, RiskLevel, SensitivityLevel, TrustMode, BatteryMode } from "@motebit/sdk";
 import type { ToolDefinition, ToolHandler, MemoryNode } from "@motebit/sdk";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import type { TurnResult } from "@motebit/ai-core";
@@ -21,8 +21,8 @@ function makeMockTurnResult(): TurnResult {
       affect_arousal: 0,
       social_distance: 0.5,
       curiosity: 0,
-      trust_mode: 0,
-      battery_mode: 0,
+      trust_mode: TrustMode.Guarded,
+      battery_mode: BatteryMode.Normal,
     },
     cues: {
       hover_distance: 0.4,
