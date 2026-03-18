@@ -324,66 +324,89 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       headers["Authorization"] = `Bearer ${config.syncMasterToken}`;
     }
 
-    // Fetch credentials
+    // Fetch credentials — merge relay + local peer-issued credentials
     try {
-      const credRes = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/credentials`, { headers });
-      if (credRes.ok) {
-        const data = (await credRes.json()) as {
-          credentials: Array<{
-            credential_id: string;
-            credential_type: string;
-            credential: Record<string, unknown>;
-            issued_at: number;
-          }>;
-        };
-        const creds = data.credentials ?? [];
-        const countEl = document.getElementById("credentials-count") as HTMLElement;
-        countEl.textContent = `${creds.length} credential${creds.length !== 1 ? "s" : ""}`;
+      type CredEntry = {
+        credential_id: string;
+        credential_type: string;
+        credential: Record<string, unknown>;
+        issued_at: number;
+      };
 
-        // Type badges
-        const badgesEl = document.getElementById("credentials-type-badges") as HTMLElement;
-        badgesEl.innerHTML = "";
-        const typeCounts: Record<string, number> = {};
-        for (const c of creds) {
-          typeCounts[c.credential_type] = (typeCounts[c.credential_type] ?? 0) + 1;
-        }
-        const typeColors: Record<string, string> = {
-          reputation: "#4caf50",
-          trust: "#ff9800",
-          gradient: "#2196f3",
-          capability: "#9c27b0",
-        };
-        for (const [type, count] of Object.entries(typeCounts)) {
-          const badge = document.createElement("span");
-          const color = typeColors[type] ?? "#616161";
-          badge.style.cssText = `color:${color};font-size:11px;padding:1px 6px;border-radius:3px;border:1px solid ${color}`;
-          badge.textContent = `${type}: ${count}`;
-          badgesEl.appendChild(badge);
-        }
+      // Start with locally-persisted peer-issued credentials
+      const localCreds = ctx.app.getLocalCredentials();
 
-        // Credential list
-        const listEl = document.getElementById("credentials-list") as HTMLElement;
-        listEl.innerHTML = "";
-        for (const c of creds.slice(0, 20)) {
-          const row = document.createElement("div");
-          row.style.cssText =
-            "font-size:11px;padding:4px 0;border-bottom:1px solid var(--border-light);display:flex;justify-content:space-between;align-items:center;";
-          const left = document.createElement("span");
-          left.textContent = c.credential_id.slice(0, 12) + "...";
-          left.style.color = "var(--text-secondary)";
-          const right = document.createElement("span");
-          const color = typeColors[c.credential_type] ?? "#616161";
-          right.style.cssText = `color:${color};font-size:10px;font-weight:600;`;
-          right.textContent = c.credential_type;
-          row.appendChild(left);
-          row.appendChild(right);
-          listEl.appendChild(row);
+      // Merge with relay credentials if available
+      let relayCreds: CredEntry[] = [];
+      try {
+        const credRes = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/credentials`, {
+          headers,
+        });
+        if (credRes.ok) {
+          const data = (await credRes.json()) as { credentials: CredEntry[] };
+          relayCreds = data.credentials ?? [];
         }
-
-        // Enable present button
-        const presentBtn = document.getElementById("credentials-present-btn") as HTMLButtonElement;
-        presentBtn.disabled = creds.length === 0;
+      } catch {
+        // Relay fetch failed — local credentials still display
       }
+
+      // Deduplicate by issuer + type + timestamp
+      const seen = new Set<string>();
+      const merged: CredEntry[] = [];
+      for (const c of [...localCreds, ...relayCreds].sort((a, b) => b.issued_at - a.issued_at)) {
+        const key = `${String(c.credential.issuer ?? "")}:${c.credential_type}:${c.issued_at}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          merged.push(c);
+        }
+      }
+      const creds = merged;
+      const countEl = document.getElementById("credentials-count") as HTMLElement;
+      countEl.textContent = `${creds.length} credential${creds.length !== 1 ? "s" : ""}`;
+
+      // Type badges
+      const badgesEl = document.getElementById("credentials-type-badges") as HTMLElement;
+      badgesEl.innerHTML = "";
+      const typeCounts: Record<string, number> = {};
+      for (const c of creds) {
+        typeCounts[c.credential_type] = (typeCounts[c.credential_type] ?? 0) + 1;
+      }
+      const typeColors: Record<string, string> = {
+        reputation: "#4caf50",
+        trust: "#ff9800",
+        gradient: "#2196f3",
+        capability: "#9c27b0",
+      };
+      for (const [type, count] of Object.entries(typeCounts)) {
+        const badge = document.createElement("span");
+        const color = typeColors[type] ?? "#616161";
+        badge.style.cssText = `color:${color};font-size:11px;padding:1px 6px;border-radius:3px;border:1px solid ${color}`;
+        badge.textContent = `${type}: ${count}`;
+        badgesEl.appendChild(badge);
+      }
+
+      // Credential list
+      const listEl = document.getElementById("credentials-list") as HTMLElement;
+      listEl.innerHTML = "";
+      for (const c of creds.slice(0, 20)) {
+        const row = document.createElement("div");
+        row.style.cssText =
+          "font-size:11px;padding:4px 0;border-bottom:1px solid var(--border-light);display:flex;justify-content:space-between;align-items:center;";
+        const left = document.createElement("span");
+        left.textContent = c.credential_id.slice(0, 12) + "...";
+        left.style.color = "var(--text-secondary)";
+        const right = document.createElement("span");
+        const color = typeColors[c.credential_type] ?? "#616161";
+        right.style.cssText = `color:${color};font-size:10px;font-weight:600;`;
+        right.textContent = c.credential_type;
+        row.appendChild(left);
+        row.appendChild(right);
+        listEl.appendChild(row);
+      }
+
+      // Enable present button
+      const presentBtn = document.getElementById("credentials-present-btn") as HTMLButtonElement;
+      presentBtn.disabled = creds.length === 0;
     } catch {
       // Credentials fetch failed — leave defaults
     }

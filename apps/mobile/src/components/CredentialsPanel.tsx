@@ -87,16 +87,31 @@ export function CredentialsPanel({
       const motebitId = app.motebitId;
       if (!motebitId) return;
 
-      // Fetch credentials
-      try {
-        const credRes = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/credentials`);
-        if (credRes.ok) {
-          const data = (await credRes.json()) as { credentials: CredentialEntry[] };
-          setCredentials(data.credentials ?? []);
+      // Merge local peer-issued credentials with relay credentials
+      const localCreds: CredentialEntry[] = app.getLocalCredentials();
+      let relayCreds: CredentialEntry[] = [];
+      if (syncUrl) {
+        try {
+          const credRes = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/credentials`);
+          if (credRes.ok) {
+            const data = (await credRes.json()) as { credentials: CredentialEntry[] };
+            relayCreds = data.credentials ?? [];
+          }
+        } catch {
+          // Relay fetch failed — local credentials still display
         }
-      } catch {
-        // Credentials fetch failed
       }
+      // Deduplicate by issuer + type + timestamp
+      const seen = new Set<string>();
+      const merged: CredentialEntry[] = [];
+      for (const c of [...localCreds, ...relayCreds].sort((a, b) => b.issued_at - a.issued_at)) {
+        const key = `${String((c.credential as Record<string, unknown>).issuer ?? "")}:${c.credential_type}:${c.issued_at}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          merged.push(c);
+        }
+      }
+      setCredentials(merged);
 
       // Fetch budget
       try {

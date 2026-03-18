@@ -1116,6 +1116,25 @@ export class DesktopApp {
       }));
   }
 
+  /** Return locally-issued credentials (peer-issued reputation, trust, gradient). */
+  getLocalCredentials(): Array<{
+    credential_id: string;
+    credential_type: string;
+    credential: Record<string, unknown>;
+    issued_at: number;
+  }> {
+    if (!this.runtime) return [];
+    return this.runtime.getIssuedCredentials().map((vc) => ({
+      credential_id: crypto.randomUUID(),
+      credential_type:
+        vc.type.find((t: string) => t !== "VerifiableCredential") ?? "VerifiableCredential",
+      credential: vc as unknown as Record<string, unknown>,
+      issued_at: (vc as unknown as Record<string, unknown>).validFrom
+        ? new Date((vc as unknown as Record<string, unknown>).validFrom as string).getTime()
+        : Date.now(),
+    }));
+  }
+
   // === Identity ===
 
   getIdentityInfo(): { motebitId: string; deviceId: string; publicKey: string; did: string } {

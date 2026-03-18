@@ -145,76 +145,110 @@ export function initSovereignPanels(ctx: WebContext): SovereignPanelsAPI {
   const credVerifyBtn = document.getElementById("cred-verify-btn") as HTMLButtonElement;
   const credVerifyResult = document.getElementById("cred-verify-result") as HTMLDivElement;
 
+  /** Convert runtime-issued VCs to the same shape as relay CredentialEntry[]. */
+  function localCredentialsToEntries(): CredentialEntry[] {
+    const runtime = ctx.app.getRuntime();
+    if (!runtime) return [];
+    return runtime.getIssuedCredentials().map((vc) => ({
+      credential_id: crypto.randomUUID(),
+      credential_type: vc.type.find((t) => t !== "VerifiableCredential") ?? "VerifiableCredential",
+      credential: vc as unknown as CredentialEntry["credential"],
+      issued_at: vc.validFrom ? new Date(vc.validFrom).getTime() : Date.now(),
+      _local: true,
+    }));
+  }
+
+  /** Deduplicate credentials by issuer + type + subject, preferring newest. */
+  function deduplicateCredentials(entries: CredentialEntry[]): CredentialEntry[] {
+    const seen = new Map<string, CredentialEntry>();
+    for (const entry of entries) {
+      const issuer =
+        typeof entry.credential.issuer === "string"
+          ? entry.credential.issuer
+          : String(entry.credential.issuer?.id ?? "");
+      const subject = entry.credential.credentialSubject?.id ?? "";
+      const key = `${issuer}:${entry.credential_type}:${subject}:${entry.issued_at}`;
+      const existing = seen.get(key);
+      if (!existing || entry.issued_at > existing.issued_at) {
+        seen.set(key, entry);
+      }
+    }
+    return [...seen.values()].sort((a, b) => b.issued_at - a.issued_at);
+  }
+
   async function loadCredentials(): Promise<void> {
+    // Start with locally-persisted peer-issued credentials
+    const localEntries = localCredentialsToEntries();
+
+    // Try to merge with relay credentials if connected
+    let relayEntries: CredentialEntry[] = [];
     const syncUrl = loadSyncUrl();
-    if (!syncUrl) {
-      credList.innerHTML = "";
+    if (syncUrl) {
+      try {
+        const data = (await relayFetch(ctx, `/api/v1/agents/${ctx.app.motebitId}/credentials`)) as {
+          credentials: CredentialEntry[];
+        };
+        relayEntries = data.credentials ?? [];
+      } catch {
+        // Relay fetch failed — local credentials still display
+      }
+    }
+
+    const allEntries = deduplicateCredentials([...localEntries, ...relayEntries]);
+
+    credList.innerHTML = "";
+    if (allEntries.length === 0) {
       credEmpty.style.display = "block";
-      credEmpty.textContent = "Connect to a relay to view credentials.";
+      credEmpty.textContent = syncUrl
+        ? "No credentials issued yet."
+        : "No local credentials. Connect to a relay for more.";
       return;
     }
 
-    try {
-      const data = (await relayFetch(ctx, `/api/v1/agents/${ctx.app.motebitId}/credentials`)) as {
-        credentials: CredentialEntry[];
-      };
+    credEmpty.style.display = "none";
 
-      credList.innerHTML = "";
-      if (!data.credentials || data.credentials.length === 0) {
-        credEmpty.style.display = "block";
-        credEmpty.textContent = "No credentials issued yet.";
-        return;
-      }
+    for (const entry of allEntries) {
+      const item = document.createElement("div");
+      item.className = "cred-item";
 
-      credEmpty.style.display = "none";
+      const issuerRaw = entry.credential.issuer;
+      const issuerStr =
+        typeof issuerRaw === "string"
+          ? issuerRaw
+          : typeof issuerRaw === "object" && issuerRaw != null && "id" in issuerRaw
+            ? String(issuerRaw.id)
+            : "unknown";
 
-      for (const entry of data.credentials) {
-        const item = document.createElement("div");
-        item.className = "cred-item";
+      const typeName =
+        entry.credential_type !== "VerifiableCredential"
+          ? entry.credential_type
+          : (entry.credential.type?.find((t) => t !== "VerifiableCredential") ??
+            "VerifiableCredential");
 
-        const issuerRaw = entry.credential.issuer;
-        const issuerStr =
-          typeof issuerRaw === "string"
-            ? issuerRaw
-            : typeof issuerRaw === "object" && issuerRaw != null && "id" in issuerRaw
-              ? String(issuerRaw.id)
-              : "unknown";
+      item.innerHTML = `
+        <div class="cred-item-header">
+          <span class="cred-type-badge">${escapeHtml(typeName)}</span>
+          <span class="cred-time">${formatDate(entry.issued_at)}</span>
+        </div>
+        <div class="cred-item-issuer">Issuer: ${escapeHtml(truncate(issuerStr, 48))}</div>
+      `;
 
-        const typeName =
-          entry.credential_type !== "VerifiableCredential"
-            ? entry.credential_type
-            : (entry.credential.type?.find((t) => t !== "VerifiableCredential") ??
-              "VerifiableCredential");
+      // Expand on click to show full JSON
+      const detail = document.createElement("div");
+      detail.className = "cred-item-detail";
+      detail.style.display = "none";
+      const pre = document.createElement("pre");
+      pre.className = "cred-json";
+      pre.textContent = JSON.stringify(entry.credential, null, 2);
+      detail.appendChild(pre);
+      item.appendChild(detail);
 
-        item.innerHTML = `
-          <div class="cred-item-header">
-            <span class="cred-type-badge">${escapeHtml(typeName)}</span>
-            <span class="cred-time">${formatDate(entry.issued_at)}</span>
-          </div>
-          <div class="cred-item-issuer">Issuer: ${escapeHtml(truncate(issuerStr, 48))}</div>
-        `;
+      item.addEventListener("click", () => {
+        const isOpen = detail.style.display !== "none";
+        detail.style.display = isOpen ? "none" : "block";
+      });
 
-        // Expand on click to show full JSON
-        const detail = document.createElement("div");
-        detail.className = "cred-item-detail";
-        detail.style.display = "none";
-        const pre = document.createElement("pre");
-        pre.className = "cred-json";
-        pre.textContent = JSON.stringify(entry.credential, null, 2);
-        detail.appendChild(pre);
-        item.appendChild(detail);
-
-        item.addEventListener("click", () => {
-          const isOpen = detail.style.display !== "none";
-          detail.style.display = isOpen ? "none" : "block";
-        });
-
-        credList.appendChild(item);
-      }
-    } catch (err: unknown) {
-      credList.innerHTML = "";
-      credEmpty.style.display = "block";
-      credEmpty.textContent = `Failed to load: ${err instanceof Error ? err.message : String(err)}`;
+      credList.appendChild(item);
     }
   }
 
