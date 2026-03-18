@@ -156,7 +156,7 @@ export function setProcessing(active: boolean): void {
 export function showToast(text: string, duration = 3000): void {
   if (activeToast) {
     activeToast.remove();
-    if (activeToastTimer) clearTimeout(activeToastTimer);
+    if (activeToastTimer != null) clearTimeout(activeToastTimer);
   }
   const el = document.createElement("div");
   el.className = "toast";

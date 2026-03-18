@@ -163,12 +163,12 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
     }
     const vc = body as VerifiableCredential;
     if (
-      !vc ||
+      vc == null ||
       !Array.isArray(vc["@context"]) ||
       !Array.isArray(vc.type) ||
-      !vc.issuer ||
-      !vc.credentialSubject ||
-      !vc.proof
+      vc.issuer == null ||
+      vc.credentialSubject == null ||
+      vc.proof == null
     ) {
       throw new HTTPException(400, {
         message:

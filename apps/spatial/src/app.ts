@@ -361,7 +361,7 @@ mcpAddBtn?.addEventListener("click", () => {
   const name = mcpAddName?.value.trim() ?? "";
   const url = mcpAddUrl?.value.trim() ?? "";
   if (!name || !url) return;
-  if (mcpAddBtn) {
+  if (mcpAddBtn != null) {
     mcpAddBtn.disabled = true;
     mcpAddBtn.textContent = "Connecting...";
   }
@@ -383,7 +383,7 @@ mcpAddBtn?.addEventListener("click", () => {
       statusEl.textContent = `MCP failed: ${msg}`;
     })
     .finally(() => {
-      if (mcpAddBtn) {
+      if (mcpAddBtn != null) {
         mcpAddBtn.disabled = false;
         mcpAddBtn.textContent = "Add";
       }

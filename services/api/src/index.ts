@@ -954,7 +954,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       return {
         // eslint-disable-next-line @typescript-eslint/no-misused-promises -- hono ws adapter supports async handlers
         async onOpen(_event, ws) {
-          if (!motebitId) {
+          if (motebitId == null) {
             ws.close(4000, "Missing motebitId");
             return;
           }
@@ -1744,7 +1744,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
             .run(newSuccessful, newFailed, trustLevel, trustScore, verified.originRelay);
 
           // Issue credential on trust level transition (only when relay credential issuance is enabled)
-          if (issueCredentials && newLevel && newLevel !== peerRow.trust_level) {
+          if (issueCredentials && newLevel != null && newLevel !== peerRow.trust_level) {
             try {
               const relayKeys = getRelayKeypair(relayIdentity);
               const peerDid = hexPublicKeyToDidKey(
@@ -1792,7 +1792,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
       // Settlement forwarding
       try {
-        if (entry.price_snapshot && entry.price_snapshot > 0) {
+        if (entry.price_snapshot != null && entry.price_snapshot > 0) {
           const grossAmount = entry.price_snapshot;
           const feeAmount = grossAmount * PLATFORM_FEE_RATE;
           const netAmount = grossAmount - feeAmount;
@@ -1974,9 +1974,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     const motebitId: MotebitId = asMotebitId(c.req.param("motebitId"));
     const nodeId: NodeId = asNodeId(c.req.param("nodeId"));
     try {
-      const deleted = moteDb.memoryStorage.tombstoneNodeOwned
-        ? await moteDb.memoryStorage.tombstoneNodeOwned(nodeId, motebitId)
-        : (await moteDb.memoryStorage.tombstoneNode(nodeId), true);
+      const deleted =
+        moteDb.memoryStorage.tombstoneNodeOwned != null
+          ? await moteDb.memoryStorage.tombstoneNodeOwned(nodeId, motebitId)
+          : (await moteDb.memoryStorage.tombstoneNode(nodeId), true);
       if (!deleted) {
         return c.json({ motebit_id: motebitId, node_id: nodeId, deleted: false }, 404);
       }
@@ -2225,7 +2226,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
     // Persist budget allocation so settlement can verify the lock exists.
     // Prevents overdraft: callers cannot submit unbounded tasks without a price lock.
-    if (priceSnapshot && priceSnapshot > 0) {
+    if (priceSnapshot != null && priceSnapshot > 0) {
       try {
         moteDb.db
           .prepare(
@@ -2554,8 +2555,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       // then any device with a key (covers cross-device delegation where device_id may differ)
       const devices = await identityManager.listDevices(asMotebitId(receipt.motebit_id as string));
       const device =
-        (receipt.device_id ? devices.find((d) => d.device_id === receipt.device_id) : undefined) ??
-        devices.find((d) => d.public_key);
+        (receipt.device_id != null
+          ? devices.find((d) => d.device_id === receipt.device_id)
+          : undefined) ?? devices.find((d) => d.public_key);
       if (device?.public_key) {
         pubKeyHex = device.public_key;
       }
@@ -2726,7 +2728,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     // Record latency for routing intelligence
     if (receipt.completed_at && entry.task.submitted_at) {
       const elapsed = receipt.completed_at - entry.task.submitted_at;
-      if (elapsed > 0 && receipt.motebit_id) {
+      if (elapsed > 0 && receipt.motebit_id != null) {
         try {
           moteDb.db
             .prepare(

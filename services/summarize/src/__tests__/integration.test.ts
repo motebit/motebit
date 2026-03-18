@@ -229,7 +229,7 @@ beforeAll(async () => {
 
       // Drain delegation receipts
       const delegationReceipts: ExecutionReceipt[] = [];
-      if (webSearchAdapter.getAndResetDelegationReceipts) {
+      if (webSearchAdapter.getAndResetDelegationReceipts != null) {
         delegationReceipts.push(...webSearchAdapter.getAndResetDelegationReceipts());
       }
 

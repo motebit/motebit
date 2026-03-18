@@ -89,7 +89,7 @@ export function initConversations(
         e.stopPropagation();
         if (deleteBtn.classList.contains("confirming")) {
           // Second tap — delete
-          if (confirmTimer) clearTimeout(confirmTimer);
+          if (confirmTimer != null) clearTimeout(confirmTimer);
           ctx.app.deleteConversation(entry.conversationId);
           if (entry.conversationId === activeId) {
             callbacks.onLoad();

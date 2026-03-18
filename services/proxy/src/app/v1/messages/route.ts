@@ -183,7 +183,7 @@ export async function POST(request: Request): Promise<Response> {
   };
 
   // BYOK users get tool support; free tier strips tools to keep costs down
-  if (isBYOK && body.tools) {
+  if (isBYOK && body.tools != null) {
     proxiedBody.tools = body.tools;
   }
 

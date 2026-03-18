@@ -325,11 +325,11 @@ export class WebApp {
 
   stop(): void {
     this.cursorPresence.stop();
-    if (this.cuesTickInterval) {
+    if (this.cuesTickInterval != null) {
       clearInterval(this.cuesTickInterval);
       this.cuesTickInterval = null;
     }
-    if (this.housekeepingInterval) {
+    if (this.housekeepingInterval != null) {
       clearInterval(this.housekeepingInterval);
       this.housekeepingInterval = null;
     }
@@ -924,7 +924,7 @@ export class WebApp {
   }
 
   stopSync(): void {
-    if (this._wsTokenRefreshTimer) {
+    if (this._wsTokenRefreshTimer != null) {
       clearInterval(this._wsTokenRefreshTimer);
       this._wsTokenRefreshTimer = null;
     }

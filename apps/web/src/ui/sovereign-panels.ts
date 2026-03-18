@@ -454,7 +454,7 @@ export function initSovereignPanels(ctx: WebContext): SovereignPanelsAPI {
         entry.innerHTML = `
           <span class="ledger-event-type">${escapeHtml(event.type)}</span>
           <span class="ledger-event-desc">${escapeHtml(event.description ?? "")}</span>
-          ${event.timestamp ? `<span class="ledger-event-time">${formatDate(event.timestamp)}</span>` : ""}
+          ${event.timestamp != null ? `<span class="ledger-event-time">${formatDate(event.timestamp)}</span>` : ""}
         `;
         timeline.appendChild(entry);
       }
@@ -497,7 +497,7 @@ export function initSovereignPanels(ctx: WebContext): SovereignPanelsAPI {
 
       // Allocation list
       budgetList.innerHTML = "";
-      if (!data.allocations || data.allocations.length === 0) {
+      if (data.allocations == null || data.allocations.length === 0) {
         budgetEmpty.style.display = "block";
         budgetEmpty.textContent = "No budget allocations yet.";
         return;
@@ -565,7 +565,7 @@ export function initSovereignPanels(ctx: WebContext): SovereignPanelsAPI {
       )) as SuccessionResponse;
 
       successionContent.innerHTML = "";
-      if (!data.chain || data.chain.length === 0) {
+      if (data.chain == null || data.chain.length === 0) {
         successionEmpty.style.display = "block";
         successionEmpty.textContent = "No key rotations.";
         return;

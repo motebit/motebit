@@ -1129,9 +1129,10 @@ export class DesktopApp {
       credential_type:
         vc.type.find((t: string) => t !== "VerifiableCredential") ?? "VerifiableCredential",
       credential: vc as unknown as Record<string, unknown>,
-      issued_at: (vc as unknown as Record<string, unknown>).validFrom
-        ? new Date((vc as unknown as Record<string, unknown>).validFrom as string).getTime()
-        : Date.now(),
+      issued_at:
+        (vc as unknown as Record<string, unknown>).validFrom != null
+          ? new Date((vc as unknown as Record<string, unknown>).validFrom as string).getTime()
+          : Date.now(),
     }));
   }
 

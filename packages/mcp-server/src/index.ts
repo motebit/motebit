@@ -608,7 +608,7 @@ export class McpServerAdapter {
             const scopeSet = parseScopeSet(token.scope);
 
             // Check required_capabilities against delegated scope
-            if (args.required_capabilities && Array.isArray(args.required_capabilities)) {
+            if (args.required_capabilities != null && Array.isArray(args.required_capabilities)) {
               const required = args.required_capabilities as string[];
               if (!scopeSet.has("*")) {
                 for (const cap of required) {

@@ -931,7 +931,8 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     const agent = db
       .prepare("SELECT 1 FROM agent_registry WHERE motebit_id = ? AND expires_at > ?")
       .get(body.target_agent, Date.now());
-    if (!agent) throw new HTTPException(404, { message: "Target agent not found on this relay" });
+    if (agent == null)
+      throw new HTTPException(404, { message: "Target agent not found on this relay" });
 
     // Relay owns: task queuing and WebSocket routing
     const result = await deps.onTaskForwarded({
@@ -957,7 +958,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       signature: string;
     }>();
 
-    if (!body.task_id || !body.origin_relay || !body.receipt) {
+    if (!body.task_id || !body.origin_relay || body.receipt == null) {
       throw new HTTPException(400, { message: "Missing required fields" });
     }
 

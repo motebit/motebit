@@ -955,7 +955,7 @@ export class SpatialApp {
       } catch {
         // Sync setup failed — fall back to delegation-only
         this.setSyncStatus("error");
-        if (this.runtime && this.tokenFactory) {
+        if (this.runtime != null && this.tokenFactory != null) {
           const tokenFactory = this.tokenFactory;
           const inner = new RelayDelegationAdapter({
             syncUrl: relayUrl,

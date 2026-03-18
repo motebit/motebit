@@ -120,7 +120,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       deleteBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         if (deleteBtn.classList.contains("confirming")) {
-          if (confirmTimer) clearTimeout(confirmTimer);
+          if (confirmTimer != null) clearTimeout(confirmTimer);
           void runtime.memory.deleteMemory(node.node_id).then(() => populateMemories());
         } else {
           deleteBtn.classList.add("confirming");
@@ -204,7 +204,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       deleteBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         if (deleteBtn.classList.contains("confirming")) {
-          if (goalConfirmTimer) clearTimeout(goalConfirmTimer);
+          if (goalConfirmTimer != null) clearTimeout(goalConfirmTimer);
           goals = goals.filter((g) => g.goal_id !== goal.goal_id);
           saveGoals(goals);
           renderGoals();

@@ -103,7 +103,8 @@ async function main(): Promise<void> {
     agentTrustStore: moteDb.agentTrustStore,
   };
 
-  const policyOverrides = identity.governance ? governanceToPolicyConfig(identity.governance) : {};
+  const policyOverrides =
+    identity.governance != null ? governanceToPolicyConfig(identity.governance) : {};
 
   // 3. Build tool registry with summarize_search
   const registry = new InMemoryToolRegistry();
@@ -155,7 +156,7 @@ async function main(): Promise<void> {
 
       // Drain delegation receipts from web-search adapter
       const delegationReceipts: ExecutionReceipt[] = [];
-      if (webSearchAdapter.getAndResetDelegationReceipts) {
+      if (webSearchAdapter.getAndResetDelegationReceipts != null) {
         delegationReceipts.push(...webSearchAdapter.getAndResetDelegationReceipts());
       }
 

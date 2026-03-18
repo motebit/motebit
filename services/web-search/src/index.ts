@@ -163,7 +163,8 @@ async function main(): Promise<void> {
     agentTrustStore: moteDb.agentTrustStore,
   };
 
-  const policyOverrides = identity.governance ? governanceToPolicyConfig(identity.governance) : {};
+  const policyOverrides =
+    identity.governance != null ? governanceToPolicyConfig(identity.governance) : {};
 
   const runtime = new MotebitRuntime(
     { motebitId, policy: { ...policyOverrides } },

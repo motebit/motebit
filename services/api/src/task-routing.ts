@@ -257,7 +257,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
             source_relay?: string;
           }>;
         };
-        if (!data.agents || data.agents.length === 0) return [];
+        if (data.agents == null || data.agents.length === 0) return [];
 
         const MAX_CANDIDATES_PER_PEER = 50;
         const agents = (data.agents ?? []).slice(0, MAX_CANDIDATES_PER_PEER);

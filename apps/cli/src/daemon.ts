@@ -288,7 +288,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
           return;
         }
 
-        if (msg.type === "task_request" && msg.task) {
+        if (msg.type === "task_request" && msg.task != null) {
           const task = msg.task as AgentTask;
 
           // Check if we have the required capabilities

@@ -1552,7 +1552,7 @@ Available commands:
         break;
       }
 
-      if (!proposalData) break;
+      if (proposalData == null) break;
 
       // No action — display details
       if (!proposalAction) {
