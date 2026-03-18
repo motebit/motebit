@@ -1,2 +1,2 @@
-pnpm turbo run build typecheck lint --filter="...[origin/main]"
+pnpm turbo run build typecheck lint test --filter="...[origin/main]"
 pnpm format:check
