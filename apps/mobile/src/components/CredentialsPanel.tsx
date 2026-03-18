@@ -37,6 +37,19 @@ interface BudgetAllocation {
   settlement_status?: string;
 }
 
+interface AccountBalance {
+  balance: number;
+  currency: string;
+  transactions: Array<{
+    transaction_id: string;
+    type: string;
+    amount: number;
+    balance_after: number;
+    description?: string;
+    created_at: number;
+  }>;
+}
+
 const TYPE_COLORS: Record<string, string> = {
   reputation: "#4caf50",
   trust: "#ff9800",
@@ -77,6 +90,7 @@ export function CredentialsPanel({
   const [credentials, setCredentials] = useState<CredentialEntry[]>([]);
   const [budgetSummary, setBudgetSummary] = useState<BudgetSummary | null>(null);
   const [budgetAllocations, setBudgetAllocations] = useState<BudgetAllocation[]>([]);
+  const [accountBalance, setAccountBalance] = useState<AccountBalance | null>(null);
   const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -128,6 +142,17 @@ export function CredentialsPanel({
         }
       } catch {
         // Budget fetch failed
+      }
+
+      // Fetch virtual account balance
+      try {
+        const balanceRes = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/balance`);
+        if (balanceRes.ok) {
+          const data = (await balanceRes.json()) as AccountBalance;
+          setAccountBalance(data);
+        }
+      } catch {
+        // Balance fetch failed
       }
     } finally {
       setLoading(false);
@@ -187,6 +212,46 @@ export function CredentialsPanel({
                         </View>
                       );
                     })}
+                  </View>
+                )}
+
+                {/* Account balance */}
+                {accountBalance != null && (
+                  <View style={styles.budgetSection}>
+                    <Text style={styles.sectionTitle}>Account Balance</Text>
+                    <View style={styles.balanceRow}>
+                      <Text style={styles.balanceAmount}>{accountBalance.balance.toFixed(2)}</Text>
+                      <Text style={styles.balanceCurrency}>{accountBalance.currency ?? "USD"}</Text>
+                    </View>
+                    {accountBalance.transactions.length > 0 && (
+                      <>
+                        <Text style={[styles.sectionTitle, { marginTop: 8, marginBottom: 4 }]}>
+                          Recent Transactions
+                        </Text>
+                        {accountBalance.transactions.slice(0, 5).map((tx) => {
+                          const isCredit = tx.amount > 0;
+                          return (
+                            <View key={tx.transaction_id} style={styles.allocationItem}>
+                              <Text style={styles.allocationId}>
+                                {tx.type}
+                                {tx.description ? ` — ${tx.description}` : ""}
+                              </Text>
+                              <Text
+                                style={[
+                                  styles.allocationStatus,
+                                  {
+                                    color: isCredit ? colors.statusSuccess : colors.statusError,
+                                  },
+                                ]}
+                              >
+                                {isCredit ? "+" : ""}
+                                {tx.amount.toFixed(2)}
+                              </Text>
+                            </View>
+                          );
+                        })}
+                      </>
+                    )}
                   </View>
                 )}
 
@@ -340,6 +405,21 @@ function createStyles(c: ThemeColors) {
       fontSize: 13,
       fontWeight: "600",
       marginBottom: 8,
+    },
+    balanceRow: {
+      flexDirection: "row",
+      alignItems: "baseline",
+      gap: 4,
+      marginBottom: 4,
+    },
+    balanceAmount: {
+      color: c.textPrimary,
+      fontSize: 22,
+      fontWeight: "700",
+    },
+    balanceCurrency: {
+      color: c.textMuted,
+      fontSize: 12,
     },
     budgetSection: {
       marginBottom: 8,

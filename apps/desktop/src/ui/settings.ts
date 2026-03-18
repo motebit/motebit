@@ -458,6 +458,49 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     } catch {
       // Budget fetch failed — leave defaults
     }
+
+    // Fetch virtual account balance + recent transactions
+    try {
+      const balanceRes = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/balance`, { headers });
+      if (balanceRes.ok) {
+        const data = (await balanceRes.json()) as {
+          balance: number;
+          currency: string;
+          transactions: Array<{
+            transaction_id: string;
+            type: string;
+            amount: number;
+            balance_after: number;
+            description?: string;
+            created_at: number;
+          }>;
+        };
+        (document.getElementById("balance-amount") as HTMLElement).textContent =
+          data.balance.toFixed(2);
+        (document.getElementById("balance-currency") as HTMLElement).textContent =
+          data.currency ?? "USD";
+
+        const txListEl = document.getElementById("balance-transactions") as HTMLElement;
+        txListEl.innerHTML = "";
+        for (const tx of (data.transactions ?? []).slice(0, 5)) {
+          const row = document.createElement("div");
+          row.style.cssText =
+            "font-size:11px;padding:3px 0;border-bottom:1px solid var(--border-light);display:flex;justify-content:space-between;align-items:center;";
+          const left = document.createElement("span");
+          left.style.color = "var(--text-secondary)";
+          left.textContent = `${tx.type}${tx.description ? " — " + tx.description : ""}`;
+          const right = document.createElement("span");
+          const isCredit = tx.amount > 0;
+          right.style.cssText = `font-size:10px;font-weight:600;color:${isCredit ? "#4caf50" : "#ef5350"};`;
+          right.textContent = `${isCredit ? "+" : ""}${tx.amount.toFixed(2)}`;
+          row.appendChild(left);
+          row.appendChild(right);
+          txListEl.appendChild(row);
+        }
+      }
+    } catch {
+      // Balance fetch failed — leave defaults
+    }
   }
 
   // Copy buttons
