@@ -23,6 +23,7 @@ export default defineConfig({
     coverage: {
       include: ["src/**/*.ts"],
       exclude: ["src/__tests__/**"],
+      thresholds: { statements: 73, branches: 80, functions: 81, lines: 73 },
     },
     server: {
       deps: {

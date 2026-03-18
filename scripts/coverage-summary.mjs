@@ -5,6 +5,7 @@ const root = resolve(import.meta.dirname, "..");
 
 // Known thresholds (from vitest.config.ts files)
 const thresholds = {
+  // Ring 1 — pure computation (2pt gap)
   "packages/event-log": 100,
   "packages/crypto": 97,
   "packages/memory-graph": 96,
@@ -13,11 +14,23 @@ const thresholds = {
   "packages/policy": 96,
   "packages/verify": 90,
   "packages/identity-file": 96,
+  "packages/behavior-engine": 100,
+  "packages/state-vector": 97,
+  "packages/sdk": 89,
+  "packages/policy-invariants": 85,
+  // Ring 2 — orchestration (3pt gap)
   "packages/planner": 87,
   "packages/sync-engine": 82,
   "packages/runtime": 78,
   "packages/ai-core": 76,
+  "packages/core-identity": 82,
+  "packages/mcp-client": 89,
+  "packages/privacy-layer": 85,
+  "packages/tools": 87,
+  "packages/voice": 87,
+  // Ring 3 — I/O adapters (5pt gap)
   "packages/persistence": 80,
+  "packages/mcp-server": 73,
   "services/api": 74,
 };
 
