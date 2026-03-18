@@ -318,7 +318,7 @@ describe("create-motebit", () => {
     // Succession record should contain the original key as old_public_key
     expect(afterFirst).toContain(`old_public_key: "${key0}"`);
     // Extract key1
-    const key1Match = afterFirst.match(/^  public_key: "([0-9a-f]+)"/m);
+    const key1Match = afterFirst.match(/^ {2}public_key: "([0-9a-f]+)"/m);
     expect(key1Match).not.toBeNull();
     const key1 = key1Match![1]!;
     expect(key1).not.toBe(key0);
@@ -338,7 +338,7 @@ describe("create-motebit", () => {
     expect(afterSecond).toContain(`new_public_key: "${key1}"`);
     // Second succession record must have key1 as old_public_key
     // The identity public_key should be key2 (neither key0 nor key1)
-    const key2Match = afterSecond.match(/^  public_key: "([0-9a-f]+)"/m);
+    const key2Match = afterSecond.match(/^ {2}public_key: "([0-9a-f]+)"/m);
     expect(key2Match).not.toBeNull();
     const key2 = key2Match![1]!;
     expect(key2).not.toBe(key0);
