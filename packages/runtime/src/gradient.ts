@@ -183,7 +183,9 @@ export function computeGradient(
   const ts = 0.6 * semanticRatio + 0.2 * pinnedRatio + 0.2 * halfLifeScore;
 
   // === Retrieval Quality (rq) ===
-  const rq = retrievalStats?.avgScore ?? 0;
+  // When no retrievals occurred (idle period), hold neutral (0.5) rather than
+  // dragging the gradient down with 0. Consistent with ie/te/cp no-data defaults.
+  const rq = retrievalStats && retrievalStats.count > 0 ? retrievalStats.avgScore : 0.5;
 
   // === Interaction Efficiency (ie) ===
   // 1.0 = always single-iteration, 0.0 = always hitting MAX_TOOL_ITERATIONS (10)

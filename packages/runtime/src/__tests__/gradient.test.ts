@@ -66,19 +66,20 @@ function makeConsolidationEvent(
 }
 
 describe("computeGradient", () => {
-  it("returns baseline gradient for empty motebit (ie/te/cp default to 0.5)", () => {
+  it("returns baseline gradient for empty motebit (ie/te/cp/rq default to 0.5)", () => {
     const result = computeGradient("test-motebit", [], [], [], null);
 
-    // ie=0.5, te=0.5, cp=0.5 default when no behavioral/curiosity stats
-    // gradient = 0.12*0.5 + 0.10*0.5 + 0.13*0.5 = 0.175
+    // ie=0.5, te=0.5, cp=0.5, rq=0.5 default when no data
+    // gradient = 0.15*0.5 + 0.12*0.5 + 0.10*0.5 + 0.13*0.5 = 0.25
     expect(result.knowledge_density).toBe(0);
     expect(result.knowledge_quality).toBe(0);
     expect(result.graph_connectivity).toBe(0);
     expect(result.temporal_stability).toBe(0);
+    expect(result.retrieval_quality).toBe(0.5);
     expect(result.interaction_efficiency).toBe(0.5);
     expect(result.tool_efficiency).toBe(0.5);
     expect(result.curiosity_pressure).toBe(0.5);
-    expect(result.gradient).toBeCloseTo(0.175, 10);
+    expect(result.gradient).toBeCloseTo(0.25, 10);
     expect(result.delta).toBe(0);
     expect(result.stats.live_nodes).toBe(0);
     expect(result.stats.live_edges).toBe(0);
@@ -279,8 +280,8 @@ describe("computeGradient", () => {
 
     const result = computeGradient("test-motebit", [dead1, dead2], [], [], null);
 
-    // Memory sub-metrics are 0, but ie/te/cp default to 0.5
-    expect(result.gradient).toBeCloseTo(0.175, 10);
+    // Memory sub-metrics are 0, but ie/te/cp/rq default to 0.5
+    expect(result.gradient).toBeCloseTo(0.25, 10);
     expect(result.stats.live_nodes).toBe(0);
   });
 
@@ -335,12 +336,23 @@ describe("computeGradient", () => {
     expect(result.stats.consolidation_reinforce).toBe(1);
   });
 
-  it("retrieval quality is 0 when no retrieval stats provided", () => {
+  it("retrieval quality defaults to neutral (0.5) when no retrieval stats provided", () => {
     const node = makeNode();
     const result = computeGradient("test-motebit", [node], [], [], null);
-    expect(result.retrieval_quality).toBe(0);
+    // No retrievals = idle period → hold neutral, don't drag gradient down
+    expect(result.retrieval_quality).toBe(0.5);
     expect(result.stats.avg_retrieval_score).toBe(0);
     expect(result.stats.retrieval_count).toBe(0);
+  });
+
+  it("retrieval quality defaults to neutral when count is 0", () => {
+    const node = makeNode();
+    const result = computeGradient("test-motebit", [node], [], [], null, undefined, {
+      avgScore: 0,
+      count: 0,
+    });
+    // Explicitly passed stats with count=0 → still idle, hold neutral
+    expect(result.retrieval_quality).toBe(0.5);
   });
 
   it("retrieval quality equals avgScore when retrieval stats provided", () => {
