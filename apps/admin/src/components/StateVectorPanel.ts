@@ -35,7 +35,7 @@ export function StateVectorPanel({ state, history }: StateVectorPanelProps): Rea
     "div",
     { className: "state-chart-container" },
     h(
-      ResponsiveContainer as unknown as unknown as React.ComponentType<Record<string, unknown>>,
+      ResponsiveContainer as unknown as React.ComponentType<Record<string, unknown>>,
       { width: "100%", height: 200 },
       h(
         LineChart as unknown as React.ComponentType<Record<string, unknown>>,
@@ -69,7 +69,7 @@ export function StateVectorPanel({ state, history }: StateVectorPanelProps): Rea
         h(Legend as unknown as React.ComponentType<Record<string, unknown>>, {
           wrapperStyle: { fontSize: 11, color: "#e0e0e0" },
         }),
-        h(Line as unknown as unknown as React.ComponentType<Record<string, unknown>>, {
+        h(Line as unknown as React.ComponentType<Record<string, unknown>>, {
           type: "monotone",
           dataKey: "attention",
           stroke: "#e94560",
@@ -77,7 +77,7 @@ export function StateVectorPanel({ state, history }: StateVectorPanelProps): Rea
           dot: false,
           isAnimationActive: false,
         }),
-        h(Line as unknown as unknown as React.ComponentType<Record<string, unknown>>, {
+        h(Line as unknown as React.ComponentType<Record<string, unknown>>, {
           type: "monotone",
           dataKey: "confidence",
           stroke: "#4ade80",
@@ -85,7 +85,7 @@ export function StateVectorPanel({ state, history }: StateVectorPanelProps): Rea
           dot: false,
           isAnimationActive: false,
         }),
-        h(Line as unknown as unknown as React.ComponentType<Record<string, unknown>>, {
+        h(Line as unknown as React.ComponentType<Record<string, unknown>>, {
           type: "monotone",
           dataKey: "valence",
           stroke: "#60a5fa",
@@ -93,7 +93,7 @@ export function StateVectorPanel({ state, history }: StateVectorPanelProps): Rea
           dot: false,
           isAnimationActive: false,
         }),
-        h(Line as unknown as unknown as React.ComponentType<Record<string, unknown>>, {
+        h(Line as unknown as React.ComponentType<Record<string, unknown>>, {
           type: "monotone",
           dataKey: "curiosity",
           stroke: "#fbbf24",

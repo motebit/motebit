@@ -83,7 +83,7 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
     "div",
     { className: "gradient-chart-container" },
     h(
-      ResponsiveContainer as unknown as unknown as React.ComponentType<Record<string, unknown>>,
+      ResponsiveContainer as unknown as React.ComponentType<Record<string, unknown>>,
       { width: "100%", height: 220 },
       h(
         LineChart as unknown as React.ComponentType<Record<string, unknown>>,
