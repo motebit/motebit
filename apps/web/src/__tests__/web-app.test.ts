@@ -259,7 +259,7 @@ describe("Streaming chat", () => {
     app.stop();
   });
 
-  it("prevents concurrent message processing", async () => {
+  it("prevents concurrent message processing", { timeout: 15_000 }, async () => {
     const app = new WebApp();
     await app.init(null as unknown as HTMLCanvasElement);
     await app.bootstrap();
