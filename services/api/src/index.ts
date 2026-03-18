@@ -2614,7 +2614,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
     // Update trust record: increment task counts and evaluate level transitions.
     // This is the feedback loop that feeds the semiring computation graph.
-    {
+    // Skip self-delegation: submitter === executor produces no trust signal.
+    if (motebitId !== (receipt.motebit_id as string)) {
       try {
         const executingAgentId = receipt.motebit_id as string;
         const taskSucceeded = receipt.status === "completed";
