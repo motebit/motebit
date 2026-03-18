@@ -166,7 +166,8 @@ export function initSovereignPanels(ctx: WebContext): SovereignPanelsAPI {
         typeof entry.credential.issuer === "string"
           ? entry.credential.issuer
           : String(entry.credential.issuer?.id ?? "");
-      const subject = entry.credential.credentialSubject?.id ?? "";
+      const subjectRaw = entry.credential.credentialSubject?.id;
+      const subject = typeof subjectRaw === "string" ? subjectRaw : "";
       const key = `${issuer}:${entry.credential_type}:${subject}:${entry.issued_at}`;
       const existing = seen.get(key);
       if (!existing || entry.issued_at > existing.issued_at) {
