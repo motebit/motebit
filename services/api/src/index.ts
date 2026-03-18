@@ -2170,6 +2170,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     if (!body.prompt || typeof body.prompt !== "string" || body.prompt.trim() === "") {
       throw new HTTPException(400, { message: "Missing or empty 'prompt' field" });
     }
+    if (body.required_capabilities != null && !Array.isArray(body.required_capabilities)) {
+      throw new HTTPException(400, {
+        message: "required_capabilities must be an array of strings",
+      });
+    }
 
     const taskId = crypto.randomUUID();
     const now = Date.now();
@@ -2473,8 +2478,15 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
     const entry = taskQueue.get(taskId);
 
-    if (!entry || entry.task.motebit_id !== motebitId) {
-      throw new HTTPException(404, { message: "Task not found" });
+    if (!entry) {
+      throw new HTTPException(404, {
+        message: `Task not found — it may have expired (TTL ${Math.round(TASK_TTL_MS / 60_000)}min) or the task_id is invalid`,
+      });
+    }
+    if (entry.task.motebit_id !== motebitId) {
+      throw new HTTPException(404, {
+        message: "Task not found — motebit_id in URL does not match the task's target agent",
+      });
     }
 
     return c.json({ task: entry.task, receipt: entry.receipt ?? null });
@@ -2511,8 +2523,15 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     }
 
     const entry = taskQueue.get(taskId);
-    if (!entry || entry.task.motebit_id !== motebitId) {
-      throw new HTTPException(404, { message: "Task not found" });
+    if (!entry) {
+      throw new HTTPException(404, {
+        message: `Task not found — it may have expired (TTL ${Math.round(TASK_TTL_MS / 60_000)}min) or the task_id is invalid`,
+      });
+    }
+    if (entry.task.motebit_id !== motebitId) {
+      throw new HTTPException(404, {
+        message: "Task not found — motebit_id in URL does not match the task's target agent",
+      });
     }
 
     const receipt = await c.req.json<ExecutionReceipt>();
@@ -2540,7 +2559,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       const elapsed = receipt.completed_at - entry.task.submitted_at;
       if (elapsed > 3_600_000 || elapsed < -60_000) {
         // 1 hour max, 1 min clock skew tolerance
-        throw new HTTPException(400, { message: "Receipt timestamp outside acceptable window" });
+        throw new HTTPException(400, {
+          message: `Receipt timestamp outside acceptable window (elapsed=${Math.round(elapsed / 1000)}s, allowed=-60s to +3600s) — check agent clock synchronization`,
+        });
       }
     }
 
@@ -2566,12 +2587,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     }
 
     if (!pubKeyHex) {
+      const executingId = receipt.motebit_id as string;
       logger.error("receipt.verification_failed", {
         correlationId: taskId,
+        executingAgentId: executingId,
         reason: "no public key found for executing agent",
       });
       throw new HTTPException(403, {
-        message: "Receipt verification failed: no public key found for executing agent",
+        message: `Receipt verification failed: no public key on file for agent ${executingId}. The executing agent must register with the relay before submitting receipts (POST /api/v1/agents/:id/register or sync via WebSocket).`,
       });
     }
 
@@ -2615,7 +2638,19 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     // Update trust record: increment task counts and evaluate level transitions.
     // This is the feedback loop that feeds the semiring computation graph.
     // Skip self-delegation: submitter === executor produces no trust signal.
-    if (motebitId !== (receipt.motebit_id as string)) {
+    // Compare the task SUBMITTER (who delegated) with the EXECUTOR (who ran it),
+    // not the URL path param (task target) which equals executor in normal routing.
+    const taskSubmitter = entry.submitted_by ?? entry.task.submitted_by;
+    const isSelfDelegation =
+      taskSubmitter != null && taskSubmitter === (receipt.motebit_id as string);
+    if (isSelfDelegation) {
+      logger.info("trust.self_delegation_skipped", {
+        correlationId: taskId,
+        motebitId,
+        reason: "submitter === executor — no trust signal or credential issued",
+      });
+    }
+    if (!isSelfDelegation) {
       try {
         const executingAgentId = receipt.motebit_id as string;
         const taskSucceeded = receipt.status === "completed";
@@ -2805,7 +2840,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
           issued_at: number;
         } | null = null;
 
-        if (issueCredentials && receipt.status === "completed") {
+        if (issueCredentials && receipt.status === "completed" && !isSelfDelegation) {
           const latencyRows = moteDb.db
             .prepare(
               "SELECT latency_ms FROM relay_latency_stats WHERE remote_motebit_id = ? ORDER BY recorded_at DESC LIMIT 100",

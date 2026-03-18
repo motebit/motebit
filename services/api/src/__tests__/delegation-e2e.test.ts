@@ -1041,6 +1041,60 @@ describe("Delegation E2E", () => {
     expect(matching).toHaveLength(1);
   });
 
+  it("self-delegation: receipt accepted but no trust record or credential issued", async () => {
+    // Use workerMotebitId (which has a registered device with public key) as BOTH
+    // submitter and executor — this is the self-delegation scenario.
+    // Register agent in the discovery registry so relay can resolve capabilities.
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: workerMotebitId,
+        endpoint_url: "http://localhost:9999/mcp",
+        capabilities: ["stdio_mcp"],
+      }),
+    });
+
+    const workerWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+    relay.connections.set(MOTEBIT_ID, [
+      { ws: workerWs as never, deviceId: "worker-device", capabilities: ["stdio_mcp"] },
+    ]);
+
+    // Submit task with submitted_by === workerMotebitId (self-delegation)
+    const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        prompt: "Self-delegation test",
+        submitted_by: workerMotebitId,
+      }),
+    });
+    expect(taskRes.status).toBe(201);
+    const { task_id: taskId } = (await taskRes.json()) as { task_id: string };
+
+    // Build receipt where executor === submitter (self-delegation)
+    const receipt = await makeReceipt(taskId);
+
+    const receiptRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task/${taskId}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(receipt),
+    });
+    expect(receiptRes.status).toBe(200);
+
+    // No credential should be issued for self-delegation
+    const credsRes = await relay.app.request(`/api/v1/agents/${workerMotebitId}/credentials`, {
+      headers: AUTH_HEADER,
+    });
+    const credsBody = (await credsRes.json()) as {
+      credentials: Array<{ credential_type: string }>;
+    };
+    const repCreds = credsBody.credentials.filter(
+      (c) => c.credential_type === "AgentReputationCredential",
+    );
+    expect(repCreds).toHaveLength(0);
+  });
+
   it("stale receipt: completed_at 2 hours after submitted_at is rejected with 400", async () => {
     const workerWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
     relay.connections.set(MOTEBIT_ID, [

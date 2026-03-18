@@ -1092,6 +1092,21 @@ describe("Sync Relay — agent protocol", () => {
     expect(body.task.step_id).toBe("step-123");
   });
 
+  it("POST /agent/:id/task rejects non-array required_capabilities", async () => {
+    const res = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        prompt: "Test validation",
+        required_capabilities: "web_search",
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain("must be an array");
+  });
+
   it("settlement audit: priced listing + receipt → settlement with 5% fee", async () => {
     // Create a service agent with pricing
     const serviceKeypair = await generateKeypair();
