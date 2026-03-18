@@ -702,17 +702,12 @@ export async function handleServe(config: CliConfig): Promise<void> {
       const decisions = runtime.memoryGovernor.evaluate([candidate]);
       const decision = decisions[0];
       if (!decision || decision.memoryClass === MemoryClass.REJECTED) {
-        throw new Error(
-          `Memory rejected by governance: ${decision?.reason ?? "unknown"}`,
-        );
+        throw new Error(`Memory rejected by governance: ${decision?.reason ?? "unknown"}`);
       }
       // Use the (possibly confidence-capped) candidate from the decision
       const governedCandidate = decision.candidate;
       const embedding = await embedText(governedCandidate.content);
-      const node = await runtime.memory.formMemory(
-        governedCandidate,
-        embedding,
-      );
+      const node = await runtime.memory.formMemory(governedCandidate, embedding);
       return { node_id: node.node_id };
     },
 

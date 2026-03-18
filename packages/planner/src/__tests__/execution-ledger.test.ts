@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { PlanStatus, StepStatus, DeviceCapability } from "@motebit/sdk";
-import type { Plan, PlanStep, DelegatedStepResult, ExecutionReceipt, MotebitId, DeviceId } from "@motebit/sdk";
+import type {
+  Plan,
+  PlanStep,
+  DelegatedStepResult,
+  ExecutionReceipt,
+  MotebitId,
+  DeviceId,
+} from "@motebit/sdk";
 import type { MotebitLoopDependencies } from "@motebit/ai-core";
 import type { StepDelegationAdapter } from "../plan-engine.js";
 
@@ -489,7 +496,12 @@ describe("PlanEngine execution ledger timeline", () => {
         }),
       });
 
-    const { plan } = await engine.createPlan("goal-no-route", "mote-1", { goalPrompt: "Test" }, deps);
+    const { plan } = await engine.createPlan(
+      "goal-no-route",
+      "mote-1",
+      { goalPrompt: "Test" },
+      deps,
+    );
 
     for await (const _chunk of engine.executePlan(plan.plan_id, deps)) {
       // consume

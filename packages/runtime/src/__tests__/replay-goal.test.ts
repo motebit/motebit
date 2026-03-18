@@ -494,7 +494,14 @@ describe("MotebitRuntime.replayGoal", () => {
           routing_choice: {
             selected_agent: "agent-x",
             composite_score: 0.5,
-            sub_scores: { trust: 0.5, success_rate: 0.5, latency: 0.5, price_efficiency: 0.5, capability_match: 0.5, availability: 0.5 },
+            sub_scores: {
+              trust: 0.5,
+              success_rate: 0.5,
+              latency: 0.5,
+              price_efficiency: 0.5,
+              capability_match: 0.5,
+              availability: 0.5,
+            },
             routing_paths: [["a", "agent-x"]],
             alternatives_considered: 2,
           },

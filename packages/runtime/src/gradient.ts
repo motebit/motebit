@@ -157,9 +157,12 @@ export function computeGradient(
   //     not degrading. Dragging to 0 would penalize a mature, quiescent agent.
   //   - If the agent has zero memories, kq=0 is correct (truly empty, no quality to measure).
   // This is consistent with rq/ie/te/cp which all default to 0.5 on no data.
-  const kq = totalConsolidation > 0
-    ? (reinforceCount + updateCount) / totalConsolidation
-    : (liveNodes.length > 0 ? 0.5 : 0);
+  const kq =
+    totalConsolidation > 0
+      ? (reinforceCount + updateCount) / totalConsolidation
+      : liveNodes.length > 0
+        ? 0.5
+        : 0;
 
   // === Graph Connectivity (gc) ===
   const nodeCount = liveNodes.length;
