@@ -54,6 +54,12 @@ export interface TaskRouter {
     capabilities: string[];
     metadata: Record<string, unknown> | null;
   }>;
+  /**
+   * Record a federation forward result (success or failure) for circuit breaker evaluation.
+   * On failure, increments failed_forwards and suspends the peer if the failure rate
+   * exceeds the threshold (3+ consecutive failures or >50% failure rate over last 10).
+   */
+  recordPeerForwardResult(peerEndpoint: string, success: boolean): void;
 }
 
 export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
@@ -301,6 +307,8 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
         }
         return results;
       } catch {
+        // Record discover failure for circuit breaker evaluation
+        recordPeerForwardResult(peer.endpoint_url, false);
         return []; // Best-effort: peer failure doesn't block local routing
       }
     });
@@ -396,5 +404,60 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     });
   }
 
-  return { fetchPeerEdges, buildCandidateProfiles, fetchFederatedCandidates, queryLocalAgents };
+  // Circuit breaker: track per-peer forward results and suspend peers exceeding failure thresholds.
+  const CIRCUIT_BREAKER_CONSECUTIVE_FAILURES = 3;
+  const CIRCUIT_BREAKER_MIN_SAMPLE = 6;
+  const CIRCUIT_BREAKER_FAILURE_RATE = 0.5;
+
+  function recordPeerForwardResult(peerEndpoint: string, success: boolean): void {
+    const col = success ? "successful_forwards" : "failed_forwards";
+    db.prepare(`UPDATE relay_peers SET ${col} = ${col} + 1 WHERE endpoint_url = ?`).run(
+      peerEndpoint,
+    );
+
+    if (!success) {
+      // Evaluate circuit breaker: suspend peer if failure rate exceeds threshold.
+      const peer = db
+        .prepare(
+          "SELECT peer_relay_id, state, successful_forwards, failed_forwards FROM relay_peers WHERE endpoint_url = ? AND state = 'active'",
+        )
+        .get(peerEndpoint) as
+        | {
+            peer_relay_id: string;
+            state: string;
+            successful_forwards: number;
+            failed_forwards: number;
+          }
+        | undefined;
+
+      if (peer) {
+        const total = peer.successful_forwards + peer.failed_forwards;
+        const shouldSuspend =
+          // Consecutive failures: if last N forwards all failed
+          peer.failed_forwards >= CIRCUIT_BREAKER_CONSECUTIVE_FAILURES &&
+          total >= CIRCUIT_BREAKER_MIN_SAMPLE &&
+          peer.failed_forwards / total > CIRCUIT_BREAKER_FAILURE_RATE;
+
+        if (shouldSuspend) {
+          db.prepare("UPDATE relay_peers SET state = 'suspended' WHERE peer_relay_id = ?").run(
+            peer.peer_relay_id,
+          );
+        }
+      }
+    } else {
+      // On success, reset failed_forwards to prevent stale failures from accumulating.
+      // This gives the peer a clean slate after recovering.
+      db.prepare(
+        "UPDATE relay_peers SET failed_forwards = 0 WHERE endpoint_url = ? AND state = 'active'",
+      ).run(peerEndpoint);
+    }
+  }
+
+  return {
+    fetchPeerEdges,
+    buildCandidateProfiles,
+    fetchFederatedCandidates,
+    queryLocalAgents,
+    recordPeerForwardResult,
+  };
 }

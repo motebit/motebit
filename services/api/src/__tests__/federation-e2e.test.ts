@@ -734,6 +734,65 @@ describe("Federation E2E", () => {
       expect(taskRequests[0]!.task!.task_id).not.toBe(taskRequests[1]!.task!.task_id);
     });
 
+    it("circuit breaker: repeated forward failures suspend the peer", async () => {
+      // Register agent on Relay B
+      const bob = await registerAgent(relayB, "bob-circuit", ["circuit-cap"]);
+      const bobWs = { send: vi.fn(), close: vi.fn() };
+      relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
+
+      await establishPeering(relayA, relayB);
+
+      // Verify peer is active
+      const peerBefore = relayA.moteDb.db
+        .prepare("SELECT state, failed_forwards FROM relay_peers WHERE endpoint_url = ?")
+        .get(RELAY_B_URL) as { state: string; failed_forwards: number } | undefined;
+      expect(peerBefore?.state).toBe("active");
+
+      // Make federation forwards fail by intercepting fetch
+      const originalFetch = globalThis.fetch;
+      vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (url.includes("/federation/v1/task/forward")) {
+          throw new DOMException("The operation was aborted", "AbortError");
+        }
+        // Allow discovery to work so routing finds the remote agent
+        if (url.startsWith(RELAY_B_URL)) {
+          return relayB.app.request(url.slice(RELAY_B_URL.length), {
+            method: init?.method ?? "GET",
+            headers: init?.headers as Record<string, string>,
+            body: init?.body as string,
+          }) as unknown as Response;
+        }
+        return originalFetch(input, init);
+      });
+
+      // Submit enough tasks to trigger circuit breaker
+      // Thresholds: min 6 samples, >50% failure rate, 3+ consecutive failures
+      const alice = await registerAgent(relayA, "alice-circuit", ["web-search"]);
+      for (let i = 0; i < 7; i++) {
+        await relayA.app.request(`/agent/${alice.motebitId}/task`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+          body: JSON.stringify({
+            prompt: `Circuit breaker test ${i}`,
+            required_capabilities: ["circuit-cap"],
+          }),
+        });
+      }
+
+      // Restore fetch
+      vi.stubGlobal("fetch", originalFetch);
+      installFetchInterceptor(relayA, relayB);
+
+      // Peer should now be suspended due to repeated forward failures
+      const peerAfter = relayA.moteDb.db
+        .prepare("SELECT state, failed_forwards FROM relay_peers WHERE endpoint_url = ?")
+        .get(RELAY_B_URL) as { state: string; failed_forwards: number };
+      expect(peerAfter.state).toBe("suspended");
+      expect(peerAfter.failed_forwards).toBeGreaterThanOrEqual(6);
+    });
+
     it("duplicate task_id in onTaskForwarded returns duplicate status", async () => {
       // Directly test the idempotency check by queuing a task, then calling
       // onTaskForwarded with the same task_id through the relay's task queue.

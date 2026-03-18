@@ -2406,11 +2406,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
                   if (resp.ok) {
                     routed = true;
+                    taskRouter.recordPeerForwardResult(peerEndpoint, true);
                     logger.info("task.forwarded", {
                       correlationId: taskId,
                       peerRelay: peerEndpoint,
                       targetAgent: selId,
                     });
+                  } else {
+                    taskRouter.recordPeerForwardResult(peerEndpoint, false);
                   }
                 } catch (fwdErr) {
                   // Federation forward failed or timed out. Do NOT fall through to local
@@ -2418,6 +2421,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
                   // fired, and broadcasting locally would cause double-execution.
                   // The task stays in Pending; if the peer did accept, its receipt will
                   // arrive via federation/v1/task/result.
+                  taskRouter.recordPeerForwardResult(peerEndpoint, false);
                   logger.warn("task.forward_failed", {
                     correlationId: taskId,
                     peerRelay: peerEndpoint,
