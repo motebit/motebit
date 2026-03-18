@@ -139,6 +139,8 @@ function aggregateAndBlend(
 export class AgentGraphManager {
   private _graph: WeightedDigraph<RouteWeight> | null = null;
   private _dirty = true;
+  /** Cached credential-blended trust overrides per remote agent. Invalidated with the graph. */
+  private _credentialTrustCache = new Map<string, number>();
 
   constructor(
     private readonly motebitId: MotebitId,
@@ -152,6 +154,7 @@ export class AgentGraphManager {
   invalidate(): void {
     this._graph = null;
     this._dirty = true;
+    this._credentialTrustCache.clear();
   }
 
   /** Get or build the current agent graph. */
@@ -286,22 +289,29 @@ export class AgentGraphManager {
       const total = successful + failed;
       const reliability = total > 0 ? successful / total : 0.5;
 
-      // Compute credential-blended trust override if credential store is available
+      // Compute credential-blended trust override if credential store is available.
+      // Results are cached per agent — invalidated with the graph.
       let trust_override: number | undefined;
       if (this.credentialStore) {
-        try {
-          const creds = await this.credentialStore.getCredentialsForSubject(
-            record.remote_motebit_id,
-          );
-          if (creds.length > 0) {
-            const staticTrust = trustLevelToScore(record.trust_level);
-            const blended = aggregateAndBlend(creds, getIssuerTrust, staticTrust);
-            if (blended !== staticTrust) {
-              trust_override = blended;
+        const cached = this._credentialTrustCache.get(record.remote_motebit_id);
+        if (cached !== undefined) {
+          trust_override = cached;
+        } else {
+          try {
+            const creds = await this.credentialStore.getCredentialsForSubject(
+              record.remote_motebit_id,
+            );
+            if (creds.length > 0) {
+              const staticTrust = trustLevelToScore(record.trust_level);
+              const blended = aggregateAndBlend(creds, getIssuerTrust, staticTrust);
+              if (blended !== staticTrust) {
+                trust_override = blended;
+                this._credentialTrustCache.set(record.remote_motebit_id, blended);
+              }
             }
+          } catch {
+            // Credential aggregation is best-effort — fall back to static trust
           }
-        } catch {
-          // Credential aggregation is best-effort — fall back to static trust
         }
       }
 
