@@ -329,12 +329,25 @@ export class MemoryGraph {
 
   /**
    * Form a new memory from a candidate.
+   * Rejects redacted content (from sync sensitivity redaction) — returns null
+   * instead of storing "[REDACTED]" as a memory node.
    */
   async formMemory(
     candidate: MemoryCandidate,
     embedding: number[],
     halfLife?: number,
   ): Promise<MemoryNode> {
+    // Guard: reject redacted content that arrives via sync.
+    // The relay redacts sensitive memory_formed events, replacing content with
+    // "[REDACTED]". If a consumer naively replays or re-forms from redacted
+    // payloads, we must not store placeholder text as a real memory.
+    if (
+      candidate.content === "[REDACTED]" ||
+      (candidate as unknown as Record<string, unknown>).redacted === true
+    ) {
+      throw new Error("Cannot form memory from redacted content");
+    }
+
     const nodeId = crypto.randomUUID();
     const now = Date.now();
     const memoryType = candidate.memory_type ?? MemoryType.Semantic;

@@ -26,6 +26,7 @@ import {
 import { createSignedToken, verifySignedToken, secureErase } from "@motebit/crypto";
 import { verifyIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
 import { McpServerAdapter } from "@motebit/mcp-server";
+import { MemoryClass } from "@motebit/policy";
 import type {
   MotebitServerDeps,
   McpServerConfig as McpServerAdapterConfig,
@@ -697,13 +698,25 @@ export async function handleServe(config: CliConfig): Promise<void> {
     },
 
     storeMemory: async (content: string, sensitivity?: string) => {
-      const embedding = await embedText(content);
+      // Run through MemoryGovernor for injection defense — external callers
+      // must not bypass the same governance the agentic loop enforces.
+      const candidate = {
+        content,
+        confidence: 0.7,
+        sensitivity: (sensitivity as SensitivityLevel) ?? SensitivityLevel.None,
+      };
+      const decisions = runtime.memoryGovernor.evaluate([candidate]);
+      const decision = decisions[0];
+      if (!decision || decision.memoryClass === MemoryClass.REJECTED) {
+        throw new Error(
+          `Memory rejected by governance: ${decision?.reason ?? "unknown"}`,
+        );
+      }
+      // Use the (possibly confidence-capped) candidate from the decision
+      const governedCandidate = decision.candidate;
+      const embedding = await embedText(governedCandidate.content);
       const node = await runtime.memory.formMemory(
-        {
-          content,
-          confidence: 0.7,
-          sensitivity: (sensitivity as SensitivityLevel) ?? SensitivityLevel.None,
-        },
+        governedCandidate,
         embedding,
       );
       return { node_id: node.node_id };

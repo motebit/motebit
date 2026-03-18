@@ -201,7 +201,6 @@ describe("Streaming chat", () => {
   it("throws when runtime not initialized", async () => {
     const app = new WebApp();
     await expect(async () => {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _chunk of app.sendMessageStreaming("test")) {
         // Should not reach here
       }
@@ -214,7 +213,6 @@ describe("Streaming chat", () => {
     await app.bootstrap();
 
     await expect(async () => {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _chunk of app.sendMessageStreaming("test")) {
         // Should not reach here
       }
@@ -267,7 +265,6 @@ describe("Streaming chat", () => {
     await app.bootstrap();
 
     // Provider that blocks until resolved
-    // eslint-disable-next-line @typescript-eslint/no-empty-function
     let resolveStream: () => void = () => {};
     const mockProvider = {
       generateStream: vi.fn().mockImplementation(async function* () {
@@ -301,7 +298,6 @@ describe("Streaming chat", () => {
 
     // Second message should fail with "Already processing"
     await expect(async () => {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _chunk of app.sendMessageStreaming("second")) {
         // noop
       }
@@ -460,7 +456,6 @@ describe("Goals", () => {
   it("throws when executing goal without runtime", async () => {
     const app = new WebApp();
     await expect(async () => {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _chunk of app.executeGoal("g1", "test")) {
         // noop
       }
@@ -473,7 +468,6 @@ describe("Goals", () => {
     await app.bootstrap();
 
     await expect(async () => {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _chunk of app.executeGoal("g1", "test")) {
         // noop
       }

@@ -44,7 +44,6 @@ export interface VerifiableCredential<T = Record<string, unknown>> {
   proof: DataIntegrityProof;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export interface VerifiablePresentation {
   "@context": ["https://www.w3.org/ns/credentials/v2"];
   type: ["VerifiablePresentation"];

@@ -136,6 +136,21 @@ describe("computeGradient", () => {
     expect(result.knowledge_quality).toBe(0);
   });
 
+  it("stable agent with memories but no consolidation events defaults kq to 0.5", () => {
+    // A mature agent may have no consolidation events in the 7-day window
+    // because all memories are already reinforced. kq=0 would penalize this
+    // agent incorrectly. With live nodes present, kq should default to 0.5 (neutral).
+    const nodes = [makeNode(), makeNode(), makeNode()];
+    const result = computeGradient("test-motebit", nodes, [], [], null);
+    expect(result.knowledge_quality).toBe(0.5);
+  });
+
+  it("empty agent with no memories and no consolidation defaults kq to 0", () => {
+    // Truly empty: no memories AND no consolidation. kq=0 is correct.
+    const result = computeGradient("test-motebit", [], [], [], null);
+    expect(result.knowledge_quality).toBe(0);
+  });
+
   it("mature motebit has kq near 1 (all REINFORCEs)", () => {
     const events = [
       makeConsolidationEvent("REINFORCE"),

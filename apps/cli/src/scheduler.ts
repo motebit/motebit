@@ -890,7 +890,6 @@ export class GoalScheduler {
   }
 
   private async consumeAndDiscard(stream: AsyncGenerator<StreamChunk>): Promise<void> {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     for await (const _chunk of stream) {
       // drain
     }

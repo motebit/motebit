@@ -91,7 +91,8 @@ export function fetchState(signal?: AbortSignal): Promise<StateResponse> {
 }
 
 export function fetchMemory(signal?: AbortSignal): Promise<MemoryResponse> {
-  return apiFetch<MemoryResponse>(`/api/v1/memory/${config.motebitId}`, { signal });
+  // Admin dashboard needs all sensitivity levels for monitoring.
+  return apiFetch<MemoryResponse>(`/api/v1/memory/${config.motebitId}?sensitivity=all`, { signal });
 }
 
 export function fetchEvents(afterClock: number, signal?: AbortSignal): Promise<EventsResponse> {

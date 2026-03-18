@@ -79,7 +79,7 @@ describe("fetchMemory", () => {
 
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
     const call = fetchMock.mock.calls[0]!;
-    expect(call[0]).toBe(`${config.apiUrl}/api/v1/memory/${config.motebitId}`);
+    expect(call[0]).toBe(`${config.apiUrl}/api/v1/memory/${config.motebitId}?sensitivity=all`);
     expectAuthHeader(call);
     expect(result).toEqual(data);
   });

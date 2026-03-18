@@ -152,7 +152,14 @@ export function computeGradient(
   }
 
   const totalConsolidation = addCount + updateCount + reinforceCount + noopCount;
-  const kq = totalConsolidation > 0 ? (reinforceCount + updateCount) / totalConsolidation : 0;
+  // When no consolidation events exist in the window:
+  //   - If the agent has live memories, default to neutral (0.5) — the agent is stable,
+  //     not degrading. Dragging to 0 would penalize a mature, quiescent agent.
+  //   - If the agent has zero memories, kq=0 is correct (truly empty, no quality to measure).
+  // This is consistent with rq/ie/te/cp which all default to 0.5 on no data.
+  const kq = totalConsolidation > 0
+    ? (reinforceCount + updateCount) / totalConsolidation
+    : (liveNodes.length > 0 ? 0.5 : 0);
 
   // === Graph Connectivity (gc) ===
   const nodeCount = liveNodes.length;

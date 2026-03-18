@@ -309,6 +309,33 @@ describe("MemoryGraph", () => {
       const node = await graph.formMemory(candidate, [1], 3600000);
       expect(node.half_life).toBe(3600000);
     });
+
+    it("rejects redacted content (literal '[REDACTED]')", async () => {
+      const candidate: MemoryCandidate = {
+        content: "[REDACTED]",
+        confidence: 0.8,
+        sensitivity: SensitivityLevel.None,
+      };
+      await expect(graph.formMemory(candidate, [1, 0])).rejects.toThrow(
+        "Cannot form memory from redacted content",
+      );
+      // No memory should have been stored
+      const events = await eventStore.query({ motebit_id: motebitId });
+      expect(events).toHaveLength(0);
+    });
+
+    it("rejects content with redacted flag set", async () => {
+      const candidate = {
+        content: "[REDACTED]",
+        confidence: 0.8,
+        sensitivity: SensitivityLevel.None,
+        redacted: true,
+        redacted_sensitivity: "medical",
+      } as MemoryCandidate;
+      await expect(graph.formMemory(candidate, [1, 0])).rejects.toThrow(
+        "Cannot form memory from redacted content",
+      );
+    });
   });
 
   describe("retrieve (two-pass)", () => {

@@ -929,7 +929,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     if (err instanceof HTTPException) {
       return c.json({ error: err.message, status: err.status }, err.status);
     }
-    // eslint-disable-next-line no-console
     console.error(err);
     return c.json({ error: "Internal server error", status: 500 }, 500);
   });
@@ -1359,7 +1358,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         return;
       }
       const mw = bearerAuth({ token: apiToken });
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance between middleware and handler signatures
       return mw(c as never, next);
     });
   }
@@ -1629,8 +1628,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   });
 
   // --- Graph Query: trust closure for an agent ---
-  // eslint-disable-next-line @typescript-eslint/require-await
-  app.get("/api/v1/agents/:motebitId/trust-closure", async (c) => {
+  app.get("/api/v1/agents/:motebitId/trust-closure", (c) => {
     const motebitId = c.req.param("motebitId");
     const { profiles } = taskRouter.buildCandidateProfiles(undefined, undefined, 100, motebitId);
     const closure = computeTrustClosure(asMotebitId(motebitId), profiles);
@@ -1641,8 +1639,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   });
 
   // --- Graph Query: find trusted path between two agents ---
-  // eslint-disable-next-line @typescript-eslint/require-await
-  app.get("/api/v1/agents/:motebitId/path-to/:targetId", async (c) => {
+  app.get("/api/v1/agents/:motebitId/path-to/:targetId", (c) => {
     const motebitId = c.req.param("motebitId");
     const targetId = c.req.param("targetId");
     const { profiles } = taskRouter.buildCandidateProfiles(undefined, undefined, 100, motebitId);
@@ -1654,8 +1651,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   });
 
   // --- Graph Query: full routing graph for an agent ---
-  // eslint-disable-next-line @typescript-eslint/require-await
-  app.get("/api/v1/agents/:motebitId/graph", async (c) => {
+  app.get("/api/v1/agents/:motebitId/graph", (c) => {
     const motebitId = c.req.param("motebitId");
     const { profiles } = taskRouter.buildCandidateProfiles(undefined, undefined, 100, motebitId);
     const graph = buildRoutingGraph(asMotebitId(motebitId), profiles);
@@ -1671,8 +1667,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   });
 
   // --- Graph Query: routing explanation with full scoring detail ---
-  // eslint-disable-next-line @typescript-eslint/require-await
-  app.get("/api/v1/agents/:motebitId/routing-explanation", async (c) => {
+  app.get("/api/v1/agents/:motebitId/routing-explanation", (c) => {
     const motebitId = c.req.param("motebitId");
     const capability = c.req.query("capability");
     const limitStr = c.req.query("limit");
@@ -3153,8 +3148,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   });
 
   // GET /agent/:motebitId/settlements — settlement history for this agent
-  // eslint-disable-next-line @typescript-eslint/require-await -- Hono handler, sync SQLite
-  app.get("/agent/:motebitId/settlements", async (c) => {
+  app.get("/agent/:motebitId/settlements", (c) => {
     const mid = asMotebitId(c.req.param("motebitId"));
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
 
