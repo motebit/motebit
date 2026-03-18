@@ -167,6 +167,7 @@ describe("Two-Motebit Delegation E2E", () => {
     relay = await createSyncRelay({
       apiToken: API_TOKEN,
       enableDeviceAuth: false,
+      issueCredentials: true,
       x402: {
         payToAddress: "0x0000000000000000000000000000000000000000",
         network: "eip155:84532",

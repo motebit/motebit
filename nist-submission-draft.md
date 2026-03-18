@@ -185,11 +185,13 @@ The execution receipt chain provides cryptographic non-repudiation:
 
 The system also issues W3C Verifiable Credentials (VC 2.0) with `eddsa-jcs-2022` cryptosuite:
 
-| Credential Type               | Issuer       | Trigger                    |
-| ----------------------------- | ------------ | -------------------------- |
-| **AgentReputationCredential** | Relay        | Verified execution receipt |
-| **AgentGradientCredential**   | Self (agent) | Periodic housekeeping      |
-| **AgentTrustCredential**      | Peer (agent) | Trust level transition     |
+| Credential Type               | Issuer                  | Trigger                    |
+| ----------------------------- | ----------------------- | -------------------------- |
+| **AgentReputationCredential** | Peer (delegating agent) | Verified execution receipt |
+| **AgentGradientCredential**   | Self (agent)            | Periodic housekeeping      |
+| **AgentTrustCredential**      | Peer (agent)            | Trust level transition     |
+
+Reputation credentials follow a peer attestation model: the agent that delegated the task attests to the result, not the relay. This aligns with the principle that trust should be grounded in direct interaction, not mediated by a central authority. The relay may optionally co-sign reputation credentials for additional assurance, but the primary attestation is peer-to-peer. This design avoids single-point-of-failure trust and enables credential portability across relays.
 
 Credentials bundle into signed Verifiable Presentations for third-party verification. The credential lifecycle creates a compounding trust history — agents accumulate verifiable records of successful execution over time.
 

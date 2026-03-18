@@ -126,6 +126,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
       apiToken: RELAY_MASTER_TOKEN,
       enableDeviceAuth: true,
       verifyDeviceSignature: true,
+      issueCredentials: true,
       x402: {
         payToAddress: "0x0000000000000000000000000000000000000000",
         network: "eip155:84532",

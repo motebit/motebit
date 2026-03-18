@@ -394,7 +394,7 @@ Both signatures must be valid for the receipt to be accepted. On acceptance:
 
 - Trust is updated for both the agent (via `evaluateTrustTransition`) and the forwarding relay.
 - Settlement is triggered (§7).
-- If applicable, credentials are issued.
+- If relay credential issuance is enabled (`MOTEBIT_RELAY_ISSUE_CREDENTIALS=true`), the relay co-signs an `AgentReputationCredential`. By default, reputation credentials are peer-issued by the delegating agent at the runtime layer.
 
 ---
 
@@ -522,7 +522,7 @@ Federation is deployed in 5 phases. Each phase is independently deployable and b
 
 - Extend `evaluateTrustTransition` to relay peers.
 - Implement cross-relay trust accumulation.
-- Issue `AgentReputationCredential` for cross-relay task completions.
+- Relay co-signs `AgentReputationCredential` for cross-relay task completions (when `issueCredentials` is enabled; peer-issued by default).
 - Expose federation trust metrics in admin dashboard.
 
 **Prerequisite:** Phase 4.

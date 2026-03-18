@@ -265,6 +265,107 @@ describe("Trust credential issuance on trust transitions", () => {
   });
 });
 
+describe("Peer reputation credential issuance on verified receipts", () => {
+  it("issues a reputation credential on verified completed receipt", async () => {
+    const keys = await generateEd25519Keypair();
+    const { adapters, config } = createAdaptersWithTrust(keys);
+    const runtime = new MotebitRuntime(config, adapters);
+
+    await runtime.bumpTrustFromReceipt(fakeReceipt("remote-1"), true);
+
+    const creds = runtime.getIssuedCredentials();
+    const repCred = creds.find((c) => c.type.includes("AgentReputationCredential"));
+    expect(repCred).toBeDefined();
+    expect(repCred!.credentialSubject.success_rate).toBe(1.0);
+    expect(repCred!.credentialSubject.task_count).toBe(1);
+    expect(repCred!.proof).toBeDefined();
+    expect(repCred!.proof.type).toBe("DataIntegrityProof");
+  });
+
+  it("does not issue reputation credential without signing keys", async () => {
+    const { adapters, config } = createAdaptersWithTrust();
+    const runtime = new MotebitRuntime(config, adapters);
+
+    await runtime.bumpTrustFromReceipt(fakeReceipt("remote-1"), true);
+
+    const creds = runtime.getIssuedCredentials();
+    const repCred = creds.find((c) => c.type.includes("AgentReputationCredential"));
+    expect(repCred).toBeUndefined();
+  });
+
+  it("does not issue reputation credential for failed receipt", async () => {
+    const keys = await generateEd25519Keypair();
+    const { adapters, config } = createAdaptersWithTrust(keys);
+    const runtime = new MotebitRuntime(config, adapters);
+
+    const failedReceipt = { ...fakeReceipt("remote-1"), status: "failed" as const };
+    await runtime.bumpTrustFromReceipt(failedReceipt, true);
+
+    const creds = runtime.getIssuedCredentials();
+    const repCred = creds.find((c) => c.type.includes("AgentReputationCredential"));
+    expect(repCred).toBeUndefined();
+  });
+
+  it("reputation credential is verifiable via @motebit/crypto", async () => {
+    const keys = await generateEd25519Keypair();
+    const { adapters, config } = createAdaptersWithTrust(keys);
+    const runtime = new MotebitRuntime(config, adapters);
+
+    await runtime.bumpTrustFromReceipt(fakeReceipt("remote-1"), true);
+
+    const creds = runtime.getIssuedCredentials();
+    const repCred = creds.find((c) => c.type.includes("AgentReputationCredential"));
+    expect(repCred).toBeDefined();
+
+    const { verifyVerifiableCredential } = await import("@motebit/crypto");
+    const valid = await verifyVerifiableCredential(repCred!);
+    expect(valid).toBe(true);
+  });
+
+  it("reputation credential failure does not break trust record saving", async () => {
+    const { trustStore } = createAdaptersWithTrust();
+
+    // Use invalid keys that will cause signing to fail.
+    const badKeyRuntime = new MotebitRuntime(
+      {
+        motebitId: "test-mote",
+        tickRateHz: 0,
+        signingKeys: {
+          privateKey: new Uint8Array(1), // Invalid — too short
+          publicKey: new Uint8Array(1),
+        },
+      },
+      {
+        storage: { ...createInMemoryStorage(), agentTrustStore: trustStore },
+        renderer: new NullRenderer(),
+      },
+    );
+
+    await badKeyRuntime.bumpTrustFromReceipt(fakeReceipt("remote-1"), true);
+
+    // Trust record should still be saved despite credential issuance failure
+    const record = await trustStore.getAgentTrust("test-mote", "remote-1");
+    expect(record).not.toBeNull();
+    expect(record!.interaction_count).toBe(1);
+    expect(record!.successful_tasks).toBe(1);
+  });
+
+  it("issues reputation credential on every completed receipt (not just transitions)", async () => {
+    const keys = await generateEd25519Keypair();
+    const { adapters, config } = createAdaptersWithTrust(keys);
+    const runtime = new MotebitRuntime(config, adapters);
+
+    // 3 receipts — all should produce reputation credentials
+    await runtime.bumpTrustFromReceipt(fakeReceipt("remote-1"), true);
+    await runtime.bumpTrustFromReceipt(fakeReceipt("remote-1"), true);
+    await runtime.bumpTrustFromReceipt(fakeReceipt("remote-1"), true);
+
+    const creds = runtime.getIssuedCredentials();
+    const repCreds = creds.filter((c) => c.type.includes("AgentReputationCredential"));
+    expect(repCreds).toHaveLength(3);
+  });
+});
+
 describe("Credential cache management", () => {
   it("getIssuedCredentials returns a copy", async () => {
     const keys = await generateEd25519Keypair();

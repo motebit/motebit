@@ -114,6 +114,43 @@ export async function bumpTrustFromReceipt(
     }
     await agentTrustStore.setAgentTrust(updated);
     agentGraph.invalidate();
+
+    // Issue peer reputation credential on every completed receipt (best-effort)
+    if (signingKeys && taskSucceeded) {
+      try {
+        const { issueReputationCredential, hexPublicKeyToDidKey } = await import("@motebit/crypto");
+        let subjectDid = `did:motebit:${remoteMotebitId}`;
+        if (updated.public_key) {
+          try {
+            subjectDid = hexPublicKeyToDidKey(updated.public_key);
+          } catch {
+            // public_key may not be hex — fall back to did:motebit
+          }
+        }
+        const successRate =
+          updated.successful_tasks / Math.max(1, updated.successful_tasks + updated.failed_tasks);
+        const avgLatency =
+          receipt.completed_at && receipt.submitted_at
+            ? receipt.completed_at - receipt.submitted_at
+            : 0;
+        const vc = await issueReputationCredential(
+          {
+            success_rate: successRate,
+            avg_latency_ms: avgLatency,
+            task_count: updated.interaction_count,
+            trust_score: successRate,
+            availability: 1.0,
+            measured_at: now,
+          },
+          signingKeys.privateKey,
+          signingKeys.publicKey,
+          subjectDid,
+        );
+        onCredentialIssued?.(vc);
+      } catch {
+        // Credential issuance is best-effort
+      }
+    }
   } else {
     // First interaction — create at FirstContact
     const record: AgentTrustRecord = {
@@ -128,6 +165,34 @@ export async function bumpTrustFromReceipt(
     };
     await agentTrustStore.setAgentTrust(record);
     agentGraph.invalidate();
+
+    // Issue peer reputation credential on first completed receipt (best-effort)
+    if (signingKeys && taskSucceeded) {
+      try {
+        const { issueReputationCredential } = await import("@motebit/crypto");
+        const subjectDid = `did:motebit:${remoteMotebitId}`;
+        const avgLatency =
+          receipt.completed_at && receipt.submitted_at
+            ? receipt.completed_at - receipt.submitted_at
+            : 0;
+        const vc = await issueReputationCredential(
+          {
+            success_rate: 1.0,
+            avg_latency_ms: avgLatency,
+            task_count: 1,
+            trust_score: 1.0,
+            availability: 1.0,
+            measured_at: now,
+          },
+          signingKeys.privateKey,
+          signingKeys.publicKey,
+          subjectDid,
+        );
+        onCredentialIssued?.(vc);
+      } catch {
+        // Credential issuance is best-effort
+      }
+    }
   }
 }
 

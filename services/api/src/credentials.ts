@@ -26,6 +26,8 @@ export interface CredentialDeps {
   app: Hono;
   relayIdentity: RelayIdentity;
   identityManager: IdentityManager;
+  /** When true, relay issues reputation credentials on demand. Default: false (peer-issued). */
+  issueCredentials?: boolean;
 }
 
 /** Returns the relay's persistent keypair for credential signing. */
@@ -41,10 +43,17 @@ export function getRelayKeypair(relayIdentity: RelayIdentity): {
 
 /** Register all credential endpoints on the Hono app. */
 export function registerCredentialRoutes(deps: CredentialDeps): void {
-  const { db, app, relayIdentity, identityManager } = deps;
+  const { db, app, relayIdentity, identityManager, issueCredentials = false } = deps;
 
   // POST /api/v1/credentials/:motebitId/reputation — compute reputation, issue VC
+  // Only available when relay credential issuance is enabled.
   app.post("/api/v1/credentials/:motebitId/reputation", async (c) => {
+    if (!issueCredentials) {
+      return c.json(
+        { error: "Relay credential issuance is disabled. Reputation credentials are peer-issued." },
+        403,
+      );
+    }
     const motebitId = asMotebitId(c.req.param("motebitId"));
 
     // Build receipts from settlement records for computeServiceReputation

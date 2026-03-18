@@ -221,6 +221,8 @@ export interface SyncRelayConfig {
   verifyDeviceSignature?: boolean; // When true, uses Ed25519 signed token verification (default: true)
   /** x402 on-chain payment for task submission. Required in production. */
   x402: X402Config;
+  /** When true, relay issues AgentReputationCredentials on verified receipts. Default: false (peer-issued). */
+  issueCredentials?: boolean;
   /** Federation configuration. Omit to disable federation. */
   federation?: {
     /** Display name for this relay in the federation. */
@@ -263,6 +265,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     enableDeviceAuth = true,
     verifyDeviceSignature = true,
     x402: x402Config,
+    issueCredentials = process.env.MOTEBIT_RELAY_ISSUE_CREDENTIALS === "true",
     federation: federationConfig,
   } = config;
 
@@ -1740,8 +1743,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
             )
             .run(newSuccessful, newFailed, trustLevel, trustScore, verified.originRelay);
 
-          // Issue credential on trust level transition
-          if (newLevel && newLevel !== peerRow.trust_level) {
+          // Issue credential on trust level transition (only when relay credential issuance is enabled)
+          if (issueCredentials && newLevel && newLevel !== peerRow.trust_level) {
             try {
               const relayKeys = getRelayKeypair(relayIdentity);
               const peerDid = hexPublicKeyToDidKey(
@@ -1933,7 +1936,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   });
 
   // --- Credentials: extracted to credentials.ts ---
-  registerCredentialRoutes({ db: moteDb.db, app, relayIdentity, identityManager });
+  registerCredentialRoutes({
+    db: moteDb.db,
+    app,
+    relayIdentity,
+    identityManager,
+    issueCredentials,
+  });
 
   // --- State: current state vector ---
   app.get("/api/v1/state/:motebitId", (c) => {
@@ -2780,7 +2789,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         const settlement = settleOnReceipt(allocation, receipt, null, settlementId);
 
         // Prepare credential data outside the transaction (credential issuance is async).
-        // Only issue credential for completed receipts.
+        // Only issue credential for completed receipts when relay credential issuance is enabled.
+        // By default, reputation credentials are peer-issued by the delegating agent.
         let credentialRow: {
           credential_id: string;
           subject: string;
@@ -2790,7 +2800,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
           issued_at: number;
         } | null = null;
 
-        if (receipt.status === "completed") {
+        if (issueCredentials && receipt.status === "completed") {
           const latencyRows = moteDb.db
             .prepare(
               "SELECT latency_ms FROM relay_latency_stats WHERE remote_motebit_id = ? ORDER BY recorded_at DESC LIMIT 100",
