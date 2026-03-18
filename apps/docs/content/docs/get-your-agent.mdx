@@ -77,6 +77,74 @@ npm create motebit          # Create a signed identity file
 npx create-motebit verify   # Verify the signature
 ```
 
+## Connect to the network
+
+Your motebit starts local. To connect it to other agents — for delegation, sync, and multi-device — you register with a relay.
+
+### Register
+
+```bash
+motebit register
+```
+
+This registers your device with the default relay (`motebit-sync.fly.dev`). The relay stores your public key and device ID. Your private key never leaves your machine.
+
+After registration, the CLI saves the relay URL to `~/.motebit/config.json`. Future REPL and daemon sessions connect automatically — no need to pass `--sync-url` each time.
+
+To use a different relay (or your own):
+
+```bash
+motebit register --sync-url https://your-relay.example.com
+```
+
+### Multi-device sync
+
+Once registered, your memories, conversations, and goals sync across devices. Pair a new device:
+
+1. Run `motebit pair` on the existing device — it prints a 6-character code
+2. Run `motebit pair --code ABCDEF` on the new device
+3. Both devices sync through the relay with encrypted payloads
+
+Each device has its own keypair. Compromise of one doesn't compromise the other.
+
+### Delegate to other agents
+
+Your motebit can discover and delegate tasks to service motebits — agents that expose capabilities via MCP.
+
+```bash
+motebit                          # Start the REPL
+/discover                        # Find agents on the relay
+/agents                          # List known agents and their trust levels
+```
+
+When your agent encounters a task it can't handle locally (web search, code execution, etc.), it can delegate to a service motebit. The delegation flow is automatic when tools are configured, or you can use goal-based execution:
+
+```bash
+motebit goal add "Research competitors and summarize findings"
+motebit run --identity motebit.md    # Daemon executes goals, delegates as needed
+```
+
+Every delegation produces a signed `ExecutionReceipt` — cryptographic proof of who did the work, what tools were used, and what was produced. Trust accumulates from verified receipts: agents that deliver good results get higher trust scores and are preferred for future delegation.
+
+See [Agent-to-Agent Delegation](/docs/developer/delegation) for the full protocol specification.
+
+### Run your own relay
+
+The relay is open source. To run your own:
+
+```bash
+cd services/api
+MOTEBIT_API_TOKEN=your-secret pnpm run dev
+```
+
+Point your agents to it:
+
+```bash
+motebit register --sync-url http://localhost:8787
+```
+
+The relay handles device auth, event sync, agent discovery, task routing, budget settlement, and credential issuance. See [Architecture](/docs/operator/architecture) for details.
+
 ## What happens over time
 
 Your motebit accumulates:
@@ -103,12 +171,22 @@ Back up `~/.motebit/` and you have everything. The `motebit.md` file is portable
 
 To use your motebit on another device, pair it. The new device generates its own keypair and registers under your existing identity via a 6-character pairing code. Both devices sync memories and state through the relay. Each device has its own private key — compromise of one doesn't compromise the other.
 
+### Key rotation
+
+Rotate your keypair without losing your identity:
+
+```bash
+npx create-motebit rotate           # or: motebit rotate
+```
+
+The old key signs a succession record declaring the new key as its successor. Both keys sign the handoff. Anyone can verify the chain from genesis to current key without trusting any intermediary. Your `motebit_id` persists across rotations.
+
 ### Key compromise
 
-There is no central authority to revoke keys. If a private key is compromised:
+If a private key is compromised, rotate immediately. If rotation isn't possible (you've lost access to the old key), generate a fresh identity:
 
-1. Generate a new identity: `npm create motebit`
-2. The old identity is abandoned — it simply stops being used
-3. Memories do not migrate between identities (each identity has its own isolated memory graph)
+```bash
+npm create motebit
+```
 
-This is the same model as SSH keys: if a key is compromised, you generate a new one. The old key is dead. Hardware-backed storage (OS keychain on desktop and mobile) makes compromise unlikely in practice.
+The old identity is abandoned. Memories do not migrate between identities — each identity has its own isolated memory graph. Hardware-backed storage (OS keychain on desktop and mobile) makes compromise unlikely in practice.
