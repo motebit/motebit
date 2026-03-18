@@ -129,6 +129,15 @@ import {
   upsertSyncConversation,
   upsertSyncMessage,
 } from "./data-sync.js";
+import {
+  createAccountTables,
+  getOrCreateAccount,
+  getAccountBalance,
+  creditAccount,
+  debitAccount,
+  getTransactions,
+  hasTransactionWithReference,
+} from "./accounts.js";
 import { createPairingTables, registerPairingRoutes } from "./pairing.js";
 import {
   graphRankCandidates,
@@ -280,6 +289,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // Create conversation + plan sync tables (extracted to data-sync.ts)
   createDataSyncTables(moteDb.db);
+
+  // Virtual account tables (deposit/withdrawal/settlement balances)
+  createAccountTables(moteDb.db);
 
   // Create agent discovery registry table
   moteDb.db.exec(`
@@ -578,13 +590,46 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     } catch {
       // Best-effort cleanup
     }
-    // Release stale budget allocations locked > 1 hour with no settlement
+    // Release stale budget allocations locked > 1 hour with no settlement.
+    // Return held funds to the delegator's virtual account.
     try {
-      moteDb.db
+      const staleAllocations = moteDb.db
         .prepare(
-          "UPDATE relay_allocations SET status = 'released', released_at = ? WHERE status = 'locked' AND created_at < ?",
+          "SELECT allocation_id, task_id, motebit_id, amount_locked FROM relay_allocations WHERE status = 'locked' AND created_at < ?",
         )
-        .run(now, now - 3_600_000);
+        .all(now - 3_600_000) as Array<{
+        allocation_id: string;
+        task_id: string;
+        motebit_id: string;
+        amount_locked: number;
+      }>;
+
+      if (staleAllocations.length > 0) {
+        moteDb.db.exec("BEGIN");
+        try {
+          for (const alloc of staleAllocations) {
+            // Look up the task submitter (delegator) to credit the right account
+            const taskEntry = taskQueue.get(alloc.task_id);
+            const delegatorId = taskEntry?.submitted_by ?? alloc.motebit_id;
+            creditAccount(
+              moteDb.db,
+              delegatorId,
+              alloc.amount_locked,
+              "allocation_release",
+              alloc.allocation_id,
+              `Stale allocation release for task ${alloc.task_id}`,
+            );
+          }
+          moteDb.db
+            .prepare(
+              "UPDATE relay_allocations SET status = 'released', released_at = ? WHERE status = 'locked' AND created_at < ?",
+            )
+            .run(now, now - 3_600_000);
+          moteDb.db.exec("COMMIT");
+        } catch {
+          moteDb.db.exec("ROLLBACK");
+        }
+      }
     } catch {
       // Best-effort cleanup
     }
@@ -746,12 +791,61 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
     // Wrap x402: single getAgentPricing() call per request.
     // Free tasks (no listing / zero price) bypass payment gate entirely.
+    // Virtual account bypass: if the delegator has sufficient virtual balance,
+    // skip x402 — the task handler will debit the virtual account directly.
     app.use("*", async (c, next) => {
       const isTaskPost = c.req.method === "POST" && /\/agent\/[^/]+\/task/.test(c.req.path);
       if (!isTaskPost) return next();
       const agentId = extractMotebitIdFromPath(c.req.path);
       currentPricing = agentId ? getAgentPricing(agentId) : null;
       if (!currentPricing) return next(); // Free — no x402
+
+      // Virtual account bypass: check if the delegator has sufficient virtual
+      // balance to cover the cost. If so, skip x402 and let the handler debit
+      // the virtual account directly.
+      //
+      // Step 1: Try the auth token (signed tokens contain the caller's motebit_id).
+      // Step 2: If master token (no caller identity in token), peek at the body
+      //         using arrayBuffer() which allows re-reading via a fresh Request.
+      try {
+        let delegatorId: string | undefined;
+        const authHeader = c.req.header("authorization");
+        if (authHeader?.startsWith("Bearer ")) {
+          const token = authHeader.slice(7);
+          const claims = parseTokenPayloadUnsafe(token);
+          if (claims?.mid) {
+            delegatorId = claims.mid;
+          }
+        }
+
+        // If token didn't yield a delegator, peek at body for submitted_by
+        if (!delegatorId) {
+          const buf = await c.req.raw.arrayBuffer();
+          const bodyText = new TextDecoder().decode(buf);
+          // Reconstruct the request with the same body so x402 and handler can read it
+          const newReq = new Request(c.req.raw.url, {
+            method: c.req.raw.method,
+            headers: c.req.raw.headers,
+            body: bodyText,
+          });
+          // Replace the raw request on the context so downstream can re-read body
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any -- Hono internals: replacing raw request for body re-read
+          (c.req as any).raw = newReq;
+          const body = JSON.parse(bodyText) as { submitted_by?: string };
+          delegatorId = body.submitted_by;
+        }
+
+        if (delegatorId) {
+          const gross = currentPricing.unitCost / (1 - PLATFORM_FEE_RATE);
+          const account = getAccountBalance(moteDb.db, delegatorId);
+          if (account && account.balance >= gross) {
+            return next();
+          }
+        }
+      } catch {
+        // Parse failed — fall through to x402
+      }
+
       // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
       return x402Gate(c, next);
     });
@@ -824,6 +918,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   app.use("/api/v1/agents/:motebitId/path-to/*", rateLimitMiddleware(readLimiter));
   app.use("/api/v1/agents/:motebitId/graph", rateLimitMiddleware(readLimiter));
   app.use("/api/v1/agents/:motebitId/routing-explanation", rateLimitMiddleware(readLimiter));
+
+  // Virtual account endpoints (write: deposit, read: balance)
+  app.use("/api/v1/agents/:motebitId/deposit", rateLimitMiddleware(writeLimiter));
+  app.use("/api/v1/agents/:motebitId/balance", rateLimitMiddleware(readLimiter));
 
   // Write endpoints: task submission, result, ledger (30 req/min)
   app.use("/agent/:motebitId/task", rateLimitMiddleware(writeLimiter));
@@ -2196,6 +2294,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     app.use("/agent/*/ledger", bearerAuth({ token: apiToken }));
     app.use("/agent/*/ledger/*", bearerAuth({ token: apiToken }));
     app.use("/agent/*/settlements", bearerAuth({ token: apiToken }));
+
+    // Auth middleware for virtual account routes — master token or signed device token
+    app.use("/api/v1/agents/*/deposit", async (c, next) => {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
+      return dualAuth(c, next, "account:deposit");
+    });
+    app.use("/api/v1/agents/*/balance", async (c, next) => {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
+      return dualAuth(c, next, "account:balance");
+    });
   }
 
   // --- Spatial presence broadcast helper ---
@@ -2298,14 +2406,83 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
     // Persist budget allocation so settlement can verify the lock exists.
     // Prevents overdraft: callers cannot submit unbounded tasks without a price lock.
+    //
+    // Virtual account path: if the delegator has a virtual account with sufficient
+    // balance, debit it directly (allocation_hold). If insufficient AND no x402
+    // payment was made AND the agent requires payment (has pay_to_address), return 402.
+    // x402 payments auto-deposit to the delegator's account first, then proceed with
+    // allocation hold. Agents without pay_to_address are "free" — their price snapshot
+    // is recorded for auditing but payment is not enforced.
     if (priceSnapshot != null && priceSnapshot > 0) {
+      // Determine whether this agent requires payment (has pay_to_address in listing)
+      const agentPricing = getAgentPricing(motebitId);
+      const requiresPayment = agentPricing != null;
+
       try {
-        moteDb.db
-          .prepare(
-            "INSERT OR IGNORE INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, ?, 'locked', ?)",
-          )
-          .run(`x402-${taskId}`, taskId, motebitId, priceSnapshot, now);
-      } catch {
+        const delegatorId = submittedBy ?? motebitId;
+
+        // If x402 payment was made, auto-deposit to delegator's virtual account
+        if (x402TxHash) {
+          moteDb.db.exec("BEGIN");
+          try {
+            creditAccount(
+              moteDb.db,
+              delegatorId,
+              priceSnapshot,
+              "deposit",
+              `x402-${taskId}`,
+              `x402 payment for task ${taskId}`,
+            );
+            moteDb.db.exec("COMMIT");
+          } catch (depositErr) {
+            moteDb.db.exec("ROLLBACK");
+            throw new Error("x402 auto-deposit failed", { cause: depositErr });
+          }
+        }
+
+        // Try to hold funds from virtual account
+        const account = getAccountBalance(moteDb.db, delegatorId);
+        const virtualBalance = account?.balance ?? 0;
+
+        if (virtualBalance >= priceSnapshot) {
+          // Sufficient virtual balance — create allocation hold
+          moteDb.db.exec("BEGIN");
+          try {
+            debitAccount(
+              moteDb.db,
+              delegatorId,
+              priceSnapshot,
+              "allocation_hold",
+              `x402-${taskId}`,
+              `Hold for task ${taskId} to ${motebitId}`,
+            );
+            moteDb.db
+              .prepare(
+                "INSERT OR IGNORE INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, ?, 'locked', ?)",
+              )
+              .run(`x402-${taskId}`, taskId, motebitId, priceSnapshot, now);
+            moteDb.db.exec("COMMIT");
+          } catch (holdErr) {
+            moteDb.db.exec("ROLLBACK");
+            throw new Error("Allocation hold failed", { cause: holdErr });
+          }
+        } else if (requiresPayment && !x402TxHash) {
+          // Paid agent, no virtual balance, no x402 payment — 402
+          throw new HTTPException(402, {
+            message: "Insufficient funds — deposit to virtual account or pay via x402",
+          });
+        } else {
+          // Either free agent (best-effort allocation) or x402 deposited (balance should be sufficient).
+          // Persist allocation record for settlement audit.
+          moteDb.db
+            .prepare(
+              "INSERT OR IGNORE INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, ?, 'locked', ?)",
+            )
+            .run(`x402-${taskId}`, taskId, motebitId, priceSnapshot, now);
+        }
+      } catch (err) {
+        // Re-throw intentional HTTP errors (402)
+        if (err instanceof HTTPException) throw err;
         // Best-effort allocation — don't block task submission on accounting errors
       }
     }
@@ -3003,6 +3180,55 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
               .run(Date.now(), taskId);
           }
 
+          // Virtual account settlement: credit the worker, handle refund/partial release.
+          // The delegator was already debited at task submission (allocation_hold).
+          // The platform fee is the difference — not credited to anyone.
+          {
+            const workerMotebitId = receipt.motebit_id as string;
+
+            if (settlement.status === "refunded") {
+              // Full refund: release the held amount back to the delegator
+              const delegatorId = entry.submitted_by ?? entry.task.submitted_by ?? motebitId;
+              creditAccount(
+                moteDb.db,
+                delegatorId,
+                settlement.amount_settled + settlement.platform_fee, // gross = full lock amount
+                "allocation_release",
+                settlement.settlement_id,
+                `Refund for task ${taskId} (${receipt.status})`,
+              );
+            } else {
+              // Completed or partial: credit worker with net amount (after platform fee)
+              if (settlement.amount_settled > 0) {
+                creditAccount(
+                  moteDb.db,
+                  workerMotebitId,
+                  settlement.amount_settled,
+                  "settlement_credit",
+                  settlement.settlement_id,
+                  `Payment for task ${taskId}`,
+                );
+              }
+
+              // If partial settlement, release the unused portion back to the delegator
+              if (settlement.status === "partial" && persistentAlloc) {
+                const grossSettled = settlement.amount_settled + settlement.platform_fee;
+                const remainder = persistentAlloc.amount_locked - grossSettled;
+                if (remainder > 0) {
+                  const delegatorId = entry.submitted_by ?? entry.task.submitted_by ?? motebitId;
+                  creditAccount(
+                    moteDb.db,
+                    delegatorId,
+                    remainder,
+                    "allocation_release",
+                    settlement.settlement_id,
+                    `Partial release for task ${taskId}`,
+                  );
+                }
+              }
+            }
+          }
+
           if (credentialRow) {
             moteDb.db
               .prepare(
@@ -3176,6 +3402,114 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       motebit_id: mid,
       summary: totals,
       settlements,
+    });
+  });
+
+  // --- Virtual Account Endpoints ---
+
+  // POST /api/v1/agents/:motebitId/deposit — credit virtual account
+  app.post("/api/v1/agents/:motebitId/deposit", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const correlationId = c.get("correlationId" as never) as string;
+    const body = await c.req.json<{
+      amount: number;
+      currency?: string;
+      reference?: string;
+      description?: string;
+    }>();
+
+    if (typeof body.amount !== "number" || body.amount <= 0) {
+      throw new HTTPException(400, { message: "amount must be a positive number" });
+    }
+
+    // Idempotency: if a reference is provided and already used, return current balance
+    if (body.reference) {
+      if (hasTransactionWithReference(moteDb.db, motebitId, body.reference)) {
+        const account = getOrCreateAccount(moteDb.db, motebitId);
+        logger.info("account.deposit_idempotent", {
+          correlationId,
+          motebitId,
+          reference: body.reference,
+        });
+        return c.json({
+          motebit_id: motebitId,
+          balance: account.balance,
+          transaction_id: null,
+          idempotent: true,
+        });
+      }
+    }
+
+    // Atomic deposit: credit + transaction in a single SQLite transaction
+    let newBalance: number;
+    const txnId = crypto.randomUUID();
+    moteDb.db.exec("BEGIN");
+    try {
+      const account = getOrCreateAccount(moteDb.db, motebitId);
+      newBalance = account.balance + body.amount;
+      const now = Date.now();
+
+      moteDb.db
+        .prepare("UPDATE relay_accounts SET balance = ?, updated_at = ? WHERE motebit_id = ?")
+        .run(newBalance, now, motebitId);
+
+      moteDb.db
+        .prepare(
+          `INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at)
+           VALUES (?, ?, 'deposit', ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          txnId,
+          motebitId,
+          body.amount,
+          newBalance,
+          body.reference ?? null,
+          body.description ?? null,
+          now,
+        );
+
+      moteDb.db.exec("COMMIT");
+    } catch (err) {
+      moteDb.db.exec("ROLLBACK");
+      throw new Error("Deposit failed", { cause: err });
+    }
+
+    logger.info("account.deposit", {
+      correlationId,
+      motebitId,
+      amount: body.amount,
+      balanceAfter: newBalance,
+      reference: body.reference ?? null,
+    });
+
+    return c.json({
+      motebit_id: motebitId,
+      balance: newBalance,
+      transaction_id: txnId,
+    });
+  });
+
+  // GET /api/v1/agents/:motebitId/balance — query virtual account balance + recent transactions
+  app.get("/api/v1/agents/:motebitId/balance", (c) => {
+    const motebitId = c.req.param("motebitId");
+    const account = getAccountBalance(moteDb.db, motebitId);
+
+    if (!account) {
+      return c.json({
+        motebit_id: motebitId,
+        balance: 0,
+        currency: "USD",
+        transactions: [],
+      });
+    }
+
+    const transactions = getTransactions(moteDb.db, motebitId, 50);
+
+    return c.json({
+      motebit_id: motebitId,
+      balance: account.balance,
+      currency: account.currency,
+      transactions,
     });
   });
 
