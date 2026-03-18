@@ -526,7 +526,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
   // Documentation button
   document.getElementById("settings-docs")!.addEventListener("click", () => {
-    window.open("https://docs.motebit.dev", "_blank");
+    window.open("https://docs.motebit.com", "_blank");
   });
 
   // Export Identity File button

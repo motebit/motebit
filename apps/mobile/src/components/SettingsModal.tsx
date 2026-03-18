@@ -1181,7 +1181,7 @@ function IdentityTab({
 
       <TouchableOpacity
         style={styles.docsButton}
-        onPress={() => void Linking.openURL("https://docs.motebit.dev")}
+        onPress={() => void Linking.openURL("https://docs.motebit.com")}
         activeOpacity={0.7}
       >
         <Text style={styles.docsText}>Documentation</Text>

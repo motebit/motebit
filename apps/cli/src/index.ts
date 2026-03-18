@@ -89,11 +89,7 @@ async function main(): Promise<void> {
   const subcommand = config.positionals[0];
 
   if (subcommand === "verify") {
-    const filePath = config.positionals[1];
-    if (filePath == null || filePath === "") {
-      console.error("Usage: motebit verify <path>");
-      process.exit(1);
-    }
+    const filePath = config.positionals[1] ?? "motebit.md";
     await handleVerify(filePath);
     return;
   }
@@ -217,6 +213,18 @@ async function main(): Promise<void> {
     config.model = personalityConfig.default_model;
   }
 
+  // Fail fast if API key is missing (before expensive passphrase/PBKDF2 flow)
+  if (config.provider !== "ollama") {
+    const key = process.env["ANTHROPIC_API_KEY"];
+    if (key == null || key === "") {
+      console.error(
+        "Error: ANTHROPIC_API_KEY environment variable is not set.\n" +
+          "Set it with: export ANTHROPIC_API_KEY=sk-ant-...",
+      );
+      return;
+    }
+  }
+
   // Create readline early for passphrase prompts
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
@@ -337,17 +345,23 @@ async function main(): Promise<void> {
   // Init runtime (renderer + MCP handled above)
   await runtime.init();
 
-  // Initial sync
-  try {
-    console.log("Syncing...");
-    const result = await runtime.sync.sync();
-    console.log(`Synced: pulled ${result.pulled} events, pushed ${result.pushed} events`);
-    if (result.conflicts.length > 0) {
-      console.log(`  [${result.conflicts.length} conflicts detected]`);
+  // Initial sync — only attempt if a remote sync URL was configured
+  const hasSyncRemote =
+    config.syncUrl != null ||
+    process.env["MOTEBIT_SYNC_URL"] != null ||
+    (reloadedConfig.sync_url != null && reloadedConfig.sync_url !== "");
+  if (hasSyncRemote) {
+    try {
+      console.log("Syncing...");
+      const result = await runtime.sync.sync();
+      console.log(`Synced: pulled ${result.pulled} events, pushed ${result.pushed} events`);
+      if (result.conflicts.length > 0) {
+        console.log(`  [${result.conflicts.length} conflicts detected]`);
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`Sync failed (continuing offline): ${message}`);
     }
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.warn(`Sync failed (continuing offline): ${message}`);
   }
 
   const shutdown = async (): Promise<void> => {

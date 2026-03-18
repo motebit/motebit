@@ -46,7 +46,7 @@ import {
 import type { SearchProvider } from "@motebit/tools";
 import type { McpServerConfig } from "@motebit/mcp-client";
 import type { CliConfig } from "./args.js";
-import { CONFIG_DIR } from "./config.js";
+import { CONFIG_DIR, loadFullConfig } from "./config.js";
 
 export function getApiKey(): string {
   const key = process.env["ANTHROPIC_API_KEY"];
@@ -354,8 +354,8 @@ export async function createRuntime(
     },
   );
 
-  // Wire sync if configured
-  const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
+  // Wire sync if configured (CLI arg > env var > config file)
+  const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? loadFullConfig().sync_url;
   const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
 
   if (syncUrl != null && syncUrl !== "") {

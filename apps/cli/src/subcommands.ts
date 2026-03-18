@@ -115,7 +115,7 @@ export async function handleDoctor(): Promise<void> {
   console.log();
 
   if (!allOk) {
-    console.log("Some checks failed. See https://motebit.dev/docs for troubleshooting.\n");
+    console.log("Some checks failed. See https://docs.motebit.com for troubleshooting.\n");
     process.exit(1);
   } else {
     console.log("All checks passed.\n");
@@ -1472,13 +1472,7 @@ export async function handleRegister(config: CliConfig): Promise<void> {
       if (envPassphrase != null && envPassphrase !== "") {
         passphrase = envPassphrase;
       } else {
-        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-        passphrase = await new Promise<string>((resolve) => {
-          rl.question("Passphrase (to sign registration): ", (answer) => {
-            rl.close();
-            resolve(answer);
-          });
-        });
+        passphrase = await promptPassphrase("Passphrase (to sign registration): ");
       }
       const pkHex = await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
       privateKeyBytes = fromHex(pkHex);

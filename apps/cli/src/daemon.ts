@@ -1,6 +1,5 @@
 // --- Daemon mode and MCP server mode ---
 
-import * as readline from "node:readline";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { MotebitRuntime, NullRenderer } from "@motebit/runtime";
@@ -35,7 +34,7 @@ import { PlanEngine, RelayDelegationAdapter } from "@motebit/planner";
 import { GoalScheduler } from "./scheduler.js";
 import type { CliConfig } from "./args.js";
 import { loadFullConfig, extractPersonality } from "./config.js";
-import { fromHex, decryptPrivateKey } from "./identity.js";
+import { fromHex, decryptPrivateKey, promptPassphrase } from "./identity.js";
 import { getDbPath, createProvider, buildToolRegistry } from "./runtime-factory.js";
 
 export async function handleRun(config: CliConfig): Promise<void> {
@@ -179,7 +178,8 @@ export async function handleRun(config: CliConfig): Promise<void> {
   );
 
   // Wire agent task handler via WebSocket (if sync URL configured)
-  const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
+  // Fallback chain: CLI arg > env var > config file
+  const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig.sync_url;
   const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
   let wsAdapter: WebSocketEventStoreAdapter | null = null;
   let daemonHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
@@ -192,13 +192,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
     if (fullConfig.cli_encrypted_key) {
       try {
         // Prompt for passphrase to decrypt private key
-        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-        const passphrase = await new Promise<string>((resolve) => {
-          rl.question("Passphrase (for agent signing): ", (answer) => {
-            rl.close();
-            resolve(answer);
-          });
-        });
+        const passphrase = await promptPassphrase("Passphrase (for agent signing): ");
         const pkHex = await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
         privKeyBytes = fromHex(pkHex);
       } catch {
@@ -734,13 +728,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
 
   if (fullConfigForServe.cli_encrypted_key) {
     try {
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      const passphrase = await new Promise<string>((resolve) => {
-        rl.question("Passphrase (for agent signing): ", (answer) => {
-          rl.close();
-          resolve(answer);
-        });
-      });
+      const passphrase = await promptPassphrase("Passphrase (for agent signing): ");
       const pkHex = await decryptPrivateKey(fullConfigForServe.cli_encrypted_key, passphrase);
       const privateKey = fromHex(pkHex);
 
@@ -795,8 +783,9 @@ export async function handleServe(config: CliConfig): Promise<void> {
   }
 
   // Register with discovery relay (HTTP transport only)
+  // Fallback chain: CLI arg > env var > config file
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
-  const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
+  const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig.sync_url;
   if (transport === "http" && syncUrl) {
     try {
       const toolNames = runtime

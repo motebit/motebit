@@ -1,6 +1,7 @@
 // --- Identity bootstrap and key management ---
 
 import * as readline from "node:readline";
+import { Writable } from "node:stream";
 import { deriveKey, encrypt, decrypt, generateSalt } from "@motebit/crypto";
 import type { EncryptedPayload } from "@motebit/crypto";
 import {
@@ -26,9 +27,30 @@ export function fromHex(hex: string): Uint8Array {
   return bytes;
 }
 
-export function promptPassphrase(rl: readline.Interface, prompt: string): Promise<string> {
+export function promptPassphrase(_rl: readline.Interface, prompt: string): Promise<string>;
+export function promptPassphrase(prompt: string): Promise<string>;
+export function promptPassphrase(
+  rlOrPrompt: readline.Interface | string,
+  maybePrompt?: string,
+): Promise<string> {
+  const prompt = typeof rlOrPrompt === "string" ? rlOrPrompt : maybePrompt!;
   return new Promise((resolve) => {
-    rl.question(prompt, (answer) => resolve(answer));
+    const mutedOutput = new Writable({
+      write(_chunk, _encoding, callback) {
+        callback();
+      },
+    });
+    const silentRl = readline.createInterface({
+      input: process.stdin,
+      output: mutedOutput,
+      terminal: true,
+    });
+    process.stdout.write(prompt);
+    silentRl.question("", (answer) => {
+      silentRl.close();
+      process.stdout.write("\n");
+      resolve(answer);
+    });
   });
 }
 
