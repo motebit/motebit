@@ -461,4 +461,171 @@ describe("Virtual Accounts", () => {
     });
     expect(res.status).toBe(401);
   });
+
+  // --- Withdrawals ---
+
+  it("withdrawal debits balance and creates pending withdrawal", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+
+    await deposit(relay, motebitId, 100);
+
+    const res = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ amount: 30, destination: "0xMyWallet" }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { motebit_id: string; withdrawal: Record<string, unknown> };
+    expect(body.withdrawal.status).toBe("pending");
+    expect(body.withdrawal.amount).toBe(30);
+    expect(body.withdrawal.destination).toBe("0xMyWallet");
+
+    // Balance should be reduced
+    const balance = await getBalance(relay, motebitId);
+    expect(balance.balance).toBe(70);
+  });
+
+  it("withdrawal with insufficient balance returns 402", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+
+    await deposit(relay, motebitId, 5);
+
+    const res = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ amount: 50 }),
+    });
+    expect(res.status).toBe(402);
+  });
+
+  it("withdrawal history lists withdrawals", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+
+    await deposit(relay, motebitId, 100);
+
+    // Make two withdrawals
+    await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ amount: 20 }),
+    });
+    await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ amount: 10 }),
+    });
+
+    const res = await relay.app.request(`/api/v1/agents/${motebitId}/withdrawals`, {
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { withdrawals: Array<Record<string, unknown>> };
+    expect(body.withdrawals).toHaveLength(2);
+  });
+
+  it("admin can complete a pending withdrawal", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+
+    await deposit(relay, motebitId, 100);
+
+    // Request withdrawal
+    const withdrawRes = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ amount: 50 }),
+    });
+    const { withdrawal } = (await withdrawRes.json()) as {
+      withdrawal: { withdrawal_id: string };
+    };
+
+    // Admin completes it
+    const completeRes = await relay.app.request(
+      `/api/v1/admin/withdrawals/${withdrawal.withdrawal_id}/complete`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+        body: JSON.stringify({ payout_reference: "stripe_transfer_xyz" }),
+      },
+    );
+    expect(completeRes.status).toBe(200);
+    const body = (await completeRes.json()) as { status: string };
+    expect(body.status).toBe("completed");
+
+    // Balance should still be 50 (not refunded)
+    const balance = await getBalance(relay, motebitId);
+    expect(balance.balance).toBe(50);
+  });
+
+  it("admin can fail a withdrawal and refund the agent", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+
+    await deposit(relay, motebitId, 100);
+
+    // Request withdrawal
+    const withdrawRes = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ amount: 40 }),
+    });
+    const { withdrawal } = (await withdrawRes.json()) as {
+      withdrawal: { withdrawal_id: string };
+    };
+
+    // Balance is now 60
+    expect((await getBalance(relay, motebitId)).balance).toBe(60);
+
+    // Admin fails it
+    const failRes = await relay.app.request(
+      `/api/v1/admin/withdrawals/${withdrawal.withdrawal_id}/fail`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+        body: JSON.stringify({ reason: "Payout provider rejected" }),
+      },
+    );
+    expect(failRes.status).toBe(200);
+    const body = (await failRes.json()) as { refunded: boolean };
+    expect(body.refunded).toBe(true);
+
+    // Balance should be restored to 100
+    const balance = await getBalance(relay, motebitId);
+    expect(balance.balance).toBe(100);
+  });
+
+  it("admin pending withdrawals endpoint lists all pending", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+
+    await deposit(relay, motebitId, 100);
+    await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ amount: 25 }),
+    });
+
+    const res = await relay.app.request(`/api/v1/admin/withdrawals/pending`, {
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      withdrawals: Array<Record<string, unknown>>;
+      count: number;
+    };
+    expect(body.count).toBeGreaterThanOrEqual(1);
+    expect(body.withdrawals.some((w) => w.motebit_id === motebitId)).toBe(true);
+  });
+
+  it("withdraw requires auth", async () => {
+    const res = await relay.app.request(`/api/v1/agents/some-agent/withdraw`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ amount: 10 }),
+    });
+    expect(res.status).toBe(401);
+  });
 });

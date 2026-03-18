@@ -131,12 +131,18 @@ import {
 } from "./data-sync.js";
 import {
   createAccountTables,
+  createWithdrawalTables,
   getOrCreateAccount,
   getAccountBalance,
   creditAccount,
   debitAccount,
   getTransactions,
   hasTransactionWithReference,
+  requestWithdrawal,
+  completeWithdrawal,
+  failWithdrawal,
+  getWithdrawals,
+  getPendingWithdrawals,
 } from "./accounts.js";
 import { createPairingTables, registerPairingRoutes } from "./pairing.js";
 import {
@@ -292,6 +298,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // Virtual account tables (deposit/withdrawal/settlement balances)
   createAccountTables(moteDb.db);
+  createWithdrawalTables(moteDb.db);
 
   // Create agent discovery registry table
   moteDb.db.exec(`
@@ -919,9 +926,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   app.use("/api/v1/agents/:motebitId/graph", rateLimitMiddleware(readLimiter));
   app.use("/api/v1/agents/:motebitId/routing-explanation", rateLimitMiddleware(readLimiter));
 
-  // Virtual account endpoints (write: deposit, read: balance)
+  // Virtual account endpoints (write: deposit/withdraw, read: balance/withdrawals)
   app.use("/api/v1/agents/:motebitId/deposit", rateLimitMiddleware(writeLimiter));
+  app.use("/api/v1/agents/:motebitId/withdraw", rateLimitMiddleware(writeLimiter));
   app.use("/api/v1/agents/:motebitId/balance", rateLimitMiddleware(readLimiter));
+  app.use("/api/v1/agents/:motebitId/withdrawals", rateLimitMiddleware(readLimiter));
+  app.use("/api/v1/admin/withdrawals/*", rateLimitMiddleware(writeLimiter));
 
   // Write endpoints: task submission, result, ledger (30 req/min)
   app.use("/agent/:motebitId/task", rateLimitMiddleware(writeLimiter));
@@ -2304,6 +2314,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
       return dualAuth(c, next, "account:balance");
     });
+    app.use("/api/v1/agents/*/withdraw", async (c, next) => {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
+      return dualAuth(c, next, "account:withdraw");
+    });
+    app.use("/api/v1/agents/*/withdrawals", async (c, next) => {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
+      return dualAuth(c, next, "account:withdrawals");
+    });
+    // Admin withdrawal management — master token only
+    app.use("/api/v1/admin/withdrawals/*", bearerAuth({ token: apiToken }));
   }
 
   // --- Spatial presence broadcast helper ---
@@ -3511,6 +3531,109 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       currency: account.currency,
       transactions,
     });
+  });
+
+  // POST /api/v1/agents/:motebitId/withdraw — request withdrawal from virtual account
+  app.post("/api/v1/agents/:motebitId/withdraw", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const correlationId = c.get("correlationId" as never) as string;
+    const body = await c.req.json<{
+      amount: number;
+      destination?: string;
+    }>();
+
+    if (typeof body.amount !== "number" || body.amount <= 0) {
+      throw new HTTPException(400, { message: "amount must be a positive number" });
+    }
+
+    const withdrawal = requestWithdrawal(
+      moteDb.db,
+      motebitId,
+      body.amount,
+      body.destination ?? "pending",
+    );
+
+    if (!withdrawal) {
+      throw new HTTPException(402, { message: "Insufficient balance for withdrawal" });
+    }
+
+    logger.info("withdrawal.endpoint.requested", {
+      correlationId,
+      motebitId,
+      withdrawalId: withdrawal.withdrawal_id,
+      amount: body.amount,
+      destination: withdrawal.destination,
+    });
+
+    return c.json({
+      motebit_id: motebitId,
+      withdrawal,
+    });
+  });
+
+  // GET /api/v1/agents/:motebitId/withdrawals — list withdrawal history
+  app.get("/api/v1/agents/:motebitId/withdrawals", (c) => {
+    const motebitId = c.req.param("motebitId");
+    const withdrawals = getWithdrawals(moteDb.db, motebitId, 50);
+    return c.json({ motebit_id: motebitId, withdrawals });
+  });
+
+  // GET /api/v1/admin/withdrawals/pending — list all pending withdrawals (admin)
+  app.get("/api/v1/admin/withdrawals/pending", (c) => {
+    const withdrawals = getPendingWithdrawals(moteDb.db);
+    return c.json({ withdrawals, count: withdrawals.length });
+  });
+
+  // POST /api/v1/admin/withdrawals/:withdrawalId/complete — mark withdrawal as completed (admin)
+  app.post("/api/v1/admin/withdrawals/:withdrawalId/complete", async (c) => {
+    const withdrawalId = c.req.param("withdrawalId");
+    const correlationId = c.get("correlationId" as never) as string;
+    const body = await c.req.json<{ payout_reference: string }>();
+
+    if (!body.payout_reference || typeof body.payout_reference !== "string") {
+      throw new HTTPException(400, { message: "payout_reference is required" });
+    }
+
+    const success = completeWithdrawal(moteDb.db, withdrawalId, body.payout_reference);
+    if (!success) {
+      throw new HTTPException(404, {
+        message: "Withdrawal not found or already completed/failed",
+      });
+    }
+
+    logger.info("withdrawal.admin.completed", {
+      correlationId,
+      withdrawalId,
+      payoutReference: body.payout_reference,
+    });
+
+    return c.json({ withdrawal_id: withdrawalId, status: "completed" });
+  });
+
+  // POST /api/v1/admin/withdrawals/:withdrawalId/fail — mark withdrawal as failed and refund (admin)
+  app.post("/api/v1/admin/withdrawals/:withdrawalId/fail", async (c) => {
+    const withdrawalId = c.req.param("withdrawalId");
+    const correlationId = c.get("correlationId" as never) as string;
+    const body = await c.req.json<{ reason: string }>();
+
+    if (!body.reason || typeof body.reason !== "string") {
+      throw new HTTPException(400, { message: "reason is required" });
+    }
+
+    const success = failWithdrawal(moteDb.db, withdrawalId, body.reason);
+    if (!success) {
+      throw new HTTPException(404, {
+        message: "Withdrawal not found or already completed/failed",
+      });
+    }
+
+    logger.info("withdrawal.admin.failed", {
+      correlationId,
+      withdrawalId,
+      reason: body.reason,
+    });
+
+    return c.json({ withdrawal_id: withdrawalId, status: "failed", refunded: true });
   });
 
   // GET /agent/:motebitId/capabilities — public (no auth)

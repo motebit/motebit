@@ -199,3 +199,180 @@ export function hasTransactionWithReference(
     .get(motebitId, referenceId) as Record<string, unknown> | undefined;
   return row !== undefined;
 }
+
+// === Withdrawals ===
+
+export interface WithdrawalRequest {
+  withdrawal_id: string;
+  motebit_id: string;
+  amount: number;
+  currency: string;
+  destination: string; // Wallet address, bank account ref, or "pending" for manual
+  status: "pending" | "processing" | "completed" | "failed" | "cancelled";
+  payout_reference: string | null; // External payout ID (Stripe transfer, tx hash, etc.)
+  requested_at: number;
+  completed_at: number | null;
+  failure_reason: string | null;
+}
+
+/** Create withdrawal tables. Idempotent. */
+export function createWithdrawalTables(db: DatabaseDriver): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS relay_withdrawals (
+      withdrawal_id TEXT PRIMARY KEY,
+      motebit_id TEXT NOT NULL,
+      amount REAL NOT NULL,
+      currency TEXT NOT NULL DEFAULT 'USD',
+      destination TEXT NOT NULL DEFAULT 'pending',
+      status TEXT NOT NULL DEFAULT 'pending',
+      payout_reference TEXT,
+      requested_at INTEGER NOT NULL,
+      completed_at INTEGER,
+      failure_reason TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_relay_withdrawals_motebit
+      ON relay_withdrawals (motebit_id, requested_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_relay_withdrawals_status
+      ON relay_withdrawals (status) WHERE status IN ('pending', 'processing');
+  `);
+}
+
+/**
+ * Request a withdrawal. Debits the virtual account immediately (funds held).
+ * Returns the withdrawal request, or null if insufficient balance.
+ */
+export function requestWithdrawal(
+  db: DatabaseDriver,
+  motebitId: string,
+  amount: number,
+  destination: string = "pending",
+): WithdrawalRequest | null {
+  const withdrawalId = crypto.randomUUID();
+  const now = Date.now();
+
+  // Debit account — returns null if insufficient balance
+  const newBalance = debitAccount(
+    db,
+    motebitId,
+    amount,
+    "withdrawal",
+    withdrawalId,
+    `Withdrawal request: ${amount} to ${destination}`,
+  );
+  if (newBalance === null) return null;
+
+  db.prepare(
+    `INSERT INTO relay_withdrawals
+       (withdrawal_id, motebit_id, amount, currency, destination, status, requested_at)
+     VALUES (?, ?, ?, 'USD', ?, 'pending', ?)`,
+  ).run(withdrawalId, motebitId, amount, destination, now);
+
+  logger.info("withdrawal.requested", {
+    motebitId,
+    withdrawalId,
+    amount,
+    destination,
+    balanceAfter: newBalance,
+  });
+
+  return {
+    withdrawal_id: withdrawalId,
+    motebit_id: motebitId,
+    amount,
+    currency: "USD",
+    destination,
+    status: "pending",
+    payout_reference: null,
+    requested_at: now,
+    completed_at: null,
+    failure_reason: null,
+  };
+}
+
+/**
+ * Complete a pending withdrawal (called by admin/operator after payout is confirmed).
+ * Returns true if the withdrawal was found and updated.
+ */
+export function completeWithdrawal(
+  db: DatabaseDriver,
+  withdrawalId: string,
+  payoutReference: string,
+): boolean {
+  const now = Date.now();
+  const info = db
+    .prepare(
+      `UPDATE relay_withdrawals
+       SET status = 'completed', payout_reference = ?, completed_at = ?
+       WHERE withdrawal_id = ? AND status IN ('pending', 'processing')`,
+    )
+    .run(payoutReference, now, withdrawalId);
+  if (info.changes > 0) {
+    logger.info("withdrawal.completed", { withdrawalId, payoutReference });
+  }
+  return info.changes > 0;
+}
+
+/**
+ * Fail a withdrawal and return funds to the agent's virtual account.
+ * Returns true if the withdrawal was found and refunded.
+ */
+export function failWithdrawal(db: DatabaseDriver, withdrawalId: string, reason: string): boolean {
+  const now = Date.now();
+  const withdrawal = db
+    .prepare(
+      "SELECT * FROM relay_withdrawals WHERE withdrawal_id = ? AND status IN ('pending', 'processing')",
+    )
+    .get(withdrawalId) as WithdrawalRequest | undefined;
+  if (!withdrawal) return false;
+
+  // Return funds to account
+  creditAccount(
+    db,
+    withdrawal.motebit_id,
+    withdrawal.amount,
+    "withdrawal",
+    withdrawalId,
+    `Withdrawal failed: ${reason}`,
+  );
+
+  db.prepare(
+    `UPDATE relay_withdrawals
+     SET status = 'failed', failure_reason = ?, completed_at = ?
+     WHERE withdrawal_id = ?`,
+  ).run(reason, now, withdrawalId);
+
+  logger.info("withdrawal.failed", {
+    withdrawalId,
+    motebitId: withdrawal.motebit_id,
+    amount: withdrawal.amount,
+    reason,
+  });
+
+  return true;
+}
+
+/**
+ * Get withdrawals for an agent.
+ */
+export function getWithdrawals(
+  db: DatabaseDriver,
+  motebitId: string,
+  limit: number = 50,
+): WithdrawalRequest[] {
+  return db
+    .prepare(
+      "SELECT * FROM relay_withdrawals WHERE motebit_id = ? ORDER BY requested_at DESC LIMIT ?",
+    )
+    .all(motebitId, limit) as WithdrawalRequest[];
+}
+
+/**
+ * Get all pending/processing withdrawals (admin view).
+ */
+export function getPendingWithdrawals(db: DatabaseDriver): WithdrawalRequest[] {
+  return db
+    .prepare(
+      "SELECT * FROM relay_withdrawals WHERE status IN ('pending', 'processing') ORDER BY requested_at ASC",
+    )
+    .all() as WithdrawalRequest[];
+}
