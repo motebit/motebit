@@ -22,7 +22,7 @@ import {
   publicKeyToDidKey,
 } from "@motebit/crypto";
 import type { KeyPair, VerifiableCredential } from "@motebit/crypto";
-import type { MotebitId, DeviceId } from "@motebit/sdk";
+import type { MotebitId, DeviceId, ReputationCredentialSubject } from "@motebit/sdk";
 
 // === Helpers ===
 
@@ -334,8 +334,7 @@ describe("Peer Credential E2E — Cross-Relay Portability", () => {
     // Generate 3 independent issuer keypairs (simulating 3 different agents)
     const issuers = await Promise.all([generateKeypair(), generateKeypair(), generateKeypair()]);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const credentials: VerifiableCredential<any>[] = [];
+    const credentials: VerifiableCredential<ReputationCredentialSubject>[] = [];
     for (let i = 0; i < issuers.length; i++) {
       const vc = await issueReputationCredential(
         {
