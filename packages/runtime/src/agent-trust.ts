@@ -115,8 +115,11 @@ export async function bumpTrustFromReceipt(
     await agentTrustStore.setAgentTrust(updated);
     agentGraph.invalidate();
 
-    // Issue peer reputation credential on every completed receipt (best-effort)
-    if (signingKeys && taskSucceeded) {
+    // Issue peer reputation credential on every completed receipt (best-effort).
+    // Skip self-delegation: if the delegating agent IS the worker, the credential
+    // is self-attestation and carries no trust signal. This prevents sybil farming
+    // where an operator delegates tasks between their own agents at zero cost.
+    if (signingKeys && taskSucceeded && remoteMotebitId !== motebitId) {
       try {
         const { issueReputationCredential, hexPublicKeyToDidKey } = await import("@motebit/crypto");
         let subjectDid = `did:motebit:${remoteMotebitId}`;
@@ -167,8 +170,9 @@ export async function bumpTrustFromReceipt(
     await agentTrustStore.setAgentTrust(record);
     agentGraph.invalidate();
 
-    // Issue peer reputation credential on first completed receipt (best-effort)
-    if (signingKeys && taskSucceeded) {
+    // Issue peer reputation credential on first completed receipt (best-effort).
+    // Skip self-delegation — same sybil defense as the existing-trust path.
+    if (signingKeys && taskSucceeded && remoteMotebitId !== motebitId) {
       try {
         const { issueReputationCredential } = await import("@motebit/crypto");
         const subjectDid = `did:motebit:${remoteMotebitId}`;

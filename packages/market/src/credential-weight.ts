@@ -97,6 +97,10 @@ export function aggregateCredentialReputation(
     const subject = vc.credentialSubject;
     const issuerDid = vc.issuer;
 
+    // 0. Self-attestation filter: ignore credentials where the issuer is the subject.
+    // These carry no trust signal — an agent vouching for itself is tautological.
+    if (issuerDid === subject.id) continue;
+
     // 1. Issuer authority: how much do we trust the attester?
     const issuerTrust = getIssuerTrust(issuerDid);
     if (issuerTrust < minTrust) continue;

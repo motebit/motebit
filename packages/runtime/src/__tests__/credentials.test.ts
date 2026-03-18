@@ -376,6 +376,49 @@ describe("Peer reputation credential issuance on verified receipts", () => {
   });
 });
 
+describe("Sybil defense — self-delegation credential suppression", () => {
+  it("does not issue reputation credential when delegator === worker", async () => {
+    const keys = await generateEd25519Keypair();
+    const { adapters, config } = createAdaptersWithTrust(keys);
+    const runtime = new MotebitRuntime(config, adapters);
+
+    // Self-delegation: motebitId delegates to itself
+    const selfReceipt = fakeReceipt(config.motebitId);
+    await runtime.bumpTrustFromReceipt(selfReceipt, true);
+
+    const creds = runtime.getIssuedCredentials();
+    const repCreds = creds.filter((c) => c.type.includes("AgentReputationCredential"));
+    expect(repCreds).toHaveLength(0);
+  });
+
+  it("still issues reputation credential for genuine delegation", async () => {
+    const keys = await generateEd25519Keypair();
+    const { adapters, config } = createAdaptersWithTrust(keys);
+    const runtime = new MotebitRuntime(config, adapters);
+
+    // Real delegation: different agent
+    await runtime.bumpTrustFromReceipt(fakeReceipt("remote-agent"), true);
+
+    const creds = runtime.getIssuedCredentials();
+    const repCreds = creds.filter((c) => c.type.includes("AgentReputationCredential"));
+    expect(repCreds).toHaveLength(1);
+  });
+
+  it("still updates trust record for self-delegation (just no credential)", async () => {
+    const keys = await generateEd25519Keypair();
+    const { adapters, trustStore, config } = createAdaptersWithTrust(keys);
+    const runtime = new MotebitRuntime(config, adapters);
+
+    await runtime.bumpTrustFromReceipt(fakeReceipt(config.motebitId), true);
+
+    // Trust record should still exist
+    const record = await trustStore.getAgentTrust(config.motebitId, config.motebitId);
+    expect(record).not.toBeNull();
+    expect(record!.interaction_count).toBe(1);
+    expect(record!.successful_tasks).toBe(1);
+  });
+});
+
 describe("Credential cache management", () => {
   it("getIssuedCredentials returns a copy", async () => {
     const keys = await generateEd25519Keypair();

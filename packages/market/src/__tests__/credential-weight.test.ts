@@ -308,3 +308,37 @@ describe("credential reputation in routing graph", () => {
     expect(edgeWith!.trust).toBeGreaterThan(edgeWithout!.trust);
   });
 });
+
+describe("Sybil defense — self-attestation filtering", () => {
+  it("ignores credentials where issuer === subject", () => {
+    // Agent vouching for itself — tautological, zero trust signal
+    const selfVC = makeRepVC("did:motebit:subject-1", { id: "did:motebit:subject-1" });
+    const result = aggregateCredentialReputation([selfVC], highTrust);
+    expect(result).toBeNull(); // Self-attestation filtered, no credentials left
+  });
+
+  it("keeps credentials where issuer !== subject", () => {
+    const peerVC = makeRepVC("did:motebit:peer-agent", { id: "did:motebit:subject-1" });
+    const result = aggregateCredentialReputation([peerVC], highTrust);
+    expect(result).not.toBeNull();
+    expect(result!.success_rate).toBeCloseTo(0.95);
+  });
+
+  it("filters self-attestation while keeping peer attestations in mixed set", () => {
+    const selfVC = makeRepVC("did:motebit:subject-1", {
+      id: "did:motebit:subject-1",
+      success_rate: 1.0,
+      task_count: 9999,
+    });
+    const peerVC = makeRepVC("did:motebit:honest-peer", {
+      id: "did:motebit:subject-1",
+      success_rate: 0.7,
+      task_count: 10,
+    });
+    const result = aggregateCredentialReputation([selfVC, peerVC], highTrust);
+    expect(result).not.toBeNull();
+    // Result should reflect the peer's 0.7, not the self-inflated 1.0
+    expect(result!.success_rate).toBeCloseTo(0.7);
+    expect(result!.issuer_count).toBe(1); // Only the peer counts
+  });
+});
