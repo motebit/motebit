@@ -1,7 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { generateKeypair } from "@motebit/crypto";
+import { generateKeypair, signKeySuccession, bytesToHex } from "@motebit/crypto";
 import { verifyIdentityFile as standaloneVerify } from "@motebit/verify";
-import { generate, parse, update, toHex } from "../index";
+import {
+  generate,
+  parse,
+  update,
+  rotate,
+  toHex,
+  verify as verifyFromIdentityFile,
+  verifyIdentityFile as verifyIdentityFileReexport,
+  publicKeyToDidKey,
+  hexPublicKeyToDidKey,
+} from "../index";
 
 // Use the legacy verifyIdentityFile for backward-compat result shape
 const verify = async (content: string) => standaloneVerify(content);
@@ -483,5 +493,453 @@ describe("cross-compatibility with @motebit/verify", () => {
     const result = await standaloneVerify(tampered);
     expect(result.valid).toBe(false);
     expect(result.identity).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Re-exports from @motebit/crypto and @motebit/verify (lines 14, 20)
+// ---------------------------------------------------------------------------
+
+describe("re-exports", () => {
+  it("re-exports publicKeyToDidKey from @motebit/crypto", () => {
+    expect(typeof publicKeyToDidKey).toBe("function");
+  });
+
+  it("re-exports hexPublicKeyToDidKey from @motebit/crypto", () => {
+    expect(typeof hexPublicKeyToDidKey).toBe("function");
+  });
+
+  it("re-exports parse from @motebit/verify", () => {
+    expect(typeof parse).toBe("function");
+  });
+
+  it("re-exports verify from @motebit/verify", () => {
+    expect(typeof verifyFromIdentityFile).toBe("function");
+  });
+
+  it("re-exports verifyIdentityFile from @motebit/verify", () => {
+    expect(typeof verifyIdentityFileReexport).toBe("function");
+  });
+
+  it("publicKeyToDidKey produces a did:key string", async () => {
+    const kp = await makeKeypairHex();
+    const did = publicKeyToDidKey(kp.publicKey);
+    expect(did).toMatch(/^did:key:z/);
+  });
+
+  it("hexPublicKeyToDidKey produces a did:key string", async () => {
+    const kp = await makeKeypairHex();
+    const did = hexPublicKeyToDidKey(kp.publicKeyHex);
+    expect(did).toMatch(/^did:key:z/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// generate() with minimal options — exercises all nullish coalescing defaults
+// (lines 156-186)
+// ---------------------------------------------------------------------------
+
+describe("generate() default values", () => {
+  it("fills all defaults when called with minimal options", async () => {
+    const kp = await makeKeypairHex();
+
+    const content = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        publicKeyHex: kp.publicKeyHex,
+        // No createdAt, governance, privacy, memory, devices — all defaults
+      },
+      kp.privateKey,
+    );
+
+    const parsed = parse(content);
+
+    // createdAt defaults to a valid ISO string (not the test constant)
+    expect(parsed.frontmatter.created_at).toBeTruthy();
+    expect(parsed.frontmatter.created_at).not.toBe(DEFAULTS.createdAt);
+
+    // governance defaults
+    expect(parsed.frontmatter.governance.trust_mode).toBe("guarded");
+    expect(parsed.frontmatter.governance.max_risk_auto).toBe("R1_DRAFT");
+    expect(parsed.frontmatter.governance.require_approval_above).toBe("R1_DRAFT");
+    expect(parsed.frontmatter.governance.deny_above).toBe("R4_MONEY");
+    expect(parsed.frontmatter.governance.operator_mode).toBe(false);
+
+    // privacy defaults
+    expect(parsed.frontmatter.privacy.default_sensitivity).toBe("personal");
+    expect(parsed.frontmatter.privacy.retention_days).toEqual({
+      none: 365,
+      personal: 90,
+      medical: 30,
+      financial: 30,
+      secret: 7,
+    });
+    expect(parsed.frontmatter.privacy.fail_closed).toBe(true);
+
+    // memory defaults
+    expect(parsed.frontmatter.memory.half_life_days).toBe(7);
+    expect(parsed.frontmatter.memory.confidence_threshold).toBe(0.3);
+    expect(parsed.frontmatter.memory.per_turn_limit).toBe(5);
+
+    // devices defaults to empty array
+    expect(parsed.frontmatter.devices).toEqual([]);
+
+    // Verify signature
+    const result = await standaloneVerify(content);
+    expect(result.valid).toBe(true);
+  });
+
+  it("uses provided createdAt over default", async () => {
+    const kp = await makeKeypairHex();
+    const customDate = "2025-06-15T12:00:00.000Z";
+
+    const content = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        publicKeyHex: kp.publicKeyHex,
+        createdAt: customDate,
+      },
+      kp.privateKey,
+    );
+
+    const parsed = parse(content);
+    expect(parsed.frontmatter.created_at).toBe(customDate);
+  });
+
+  it("partial governance uses defaults for missing fields", async () => {
+    const kp = await makeKeypairHex();
+
+    const content = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        publicKeyHex: kp.publicKeyHex,
+        governance: {
+          trust_mode: "minimal",
+          // max_risk_auto, require_approval_above, deny_above, operator_mode all default
+        },
+      },
+      kp.privateKey,
+    );
+
+    const parsed = parse(content);
+    expect(parsed.frontmatter.governance.trust_mode).toBe("minimal");
+    expect(parsed.frontmatter.governance.max_risk_auto).toBe("R1_DRAFT");
+    expect(parsed.frontmatter.governance.require_approval_above).toBe("R1_DRAFT");
+    expect(parsed.frontmatter.governance.deny_above).toBe("R4_MONEY");
+    expect(parsed.frontmatter.governance.operator_mode).toBe(false);
+
+    const result = await standaloneVerify(content);
+    expect(result.valid).toBe(true);
+  });
+
+  it("partial privacy uses defaults for missing fields", async () => {
+    const kp = await makeKeypairHex();
+
+    const content = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        publicKeyHex: kp.publicKeyHex,
+        privacy: {
+          default_sensitivity: "financial",
+          // retention_days and fail_closed default
+        },
+      },
+      kp.privateKey,
+    );
+
+    const parsed = parse(content);
+    expect(parsed.frontmatter.privacy.default_sensitivity).toBe("financial");
+    expect(parsed.frontmatter.privacy.retention_days).toEqual({
+      none: 365,
+      personal: 90,
+      medical: 30,
+      financial: 30,
+      secret: 7,
+    });
+    expect(parsed.frontmatter.privacy.fail_closed).toBe(true);
+  });
+
+  it("partial memory uses defaults for missing fields", async () => {
+    const kp = await makeKeypairHex();
+
+    const content = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        publicKeyHex: kp.publicKeyHex,
+        memory: {
+          half_life_days: 14,
+          // confidence_threshold and per_turn_limit default
+        },
+      },
+      kp.privateKey,
+    );
+
+    const parsed = parse(content);
+    expect(parsed.frontmatter.memory.half_life_days).toBe(14);
+    expect(parsed.frontmatter.memory.confidence_threshold).toBe(0.3);
+    expect(parsed.frontmatter.memory.per_turn_limit).toBe(5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// rotate() — key rotation with succession record (lines 240-259)
+// ---------------------------------------------------------------------------
+
+describe("rotate", () => {
+  it("rotates the key and appends a succession record", async () => {
+    const oldKp = await generateKeypair();
+    const newKp = await generateKeypair();
+
+    // Generate the initial identity file
+    const original = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        createdAt: DEFAULTS.createdAt,
+        publicKeyHex: toHex(oldKp.publicKey),
+      },
+      oldKp.privateKey,
+    );
+
+    // Create a real succession record
+    const successionRecord = await signKeySuccession(
+      oldKp.privateKey,
+      newKp.privateKey,
+      oldKp.publicKey,
+      newKp.publicKey,
+      "test key rotation",
+    );
+
+    // Rotate
+    const rotated = await rotate({
+      existingContent: original,
+      newPublicKey: newKp.publicKey,
+      newPrivateKey: newKp.privateKey,
+      successionRecord: {
+        old_public_key: successionRecord.old_public_key,
+        new_public_key: successionRecord.new_public_key,
+        timestamp: successionRecord.timestamp,
+        reason: successionRecord.reason,
+        old_key_signature: successionRecord.old_key_signature,
+        new_key_signature: successionRecord.new_key_signature,
+      },
+    });
+
+    // Verify the rotated file has valid signature with new key
+    const result = await standaloneVerify(rotated);
+    expect(result.valid).toBe(true);
+    expect(result.identity).not.toBeNull();
+
+    // Public key should be the new one
+    const parsed = parse(rotated);
+    expect(parsed.frontmatter.identity.public_key).toBe(bytesToHex(newKp.publicKey));
+
+    // Succession chain should have one record
+    expect(parsed.frontmatter.succession).toHaveLength(1);
+    expect(parsed.frontmatter.succession![0]!.old_public_key).toBe(successionRecord.old_public_key);
+    expect(parsed.frontmatter.succession![0]!.new_public_key).toBe(successionRecord.new_public_key);
+    expect(parsed.frontmatter.succession![0]!.reason).toBe("test key rotation");
+
+    // motebit_id is preserved
+    expect(parsed.frontmatter.motebit_id).toBe(DEFAULTS.motebitId);
+  });
+
+  it("appends to existing succession chain on second rotation", async () => {
+    const kp1 = await generateKeypair();
+    const kp2 = await generateKeypair();
+    const kp3 = await generateKeypair();
+
+    // Generate original
+    const original = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        createdAt: DEFAULTS.createdAt,
+        publicKeyHex: toHex(kp1.publicKey),
+      },
+      kp1.privateKey,
+    );
+
+    // First rotation: kp1 → kp2
+    const succession1 = await signKeySuccession(
+      kp1.privateKey,
+      kp2.privateKey,
+      kp1.publicKey,
+      kp2.publicKey,
+      "first rotation",
+    );
+
+    const rotated1 = await rotate({
+      existingContent: original,
+      newPublicKey: kp2.publicKey,
+      newPrivateKey: kp2.privateKey,
+      successionRecord: {
+        old_public_key: succession1.old_public_key,
+        new_public_key: succession1.new_public_key,
+        timestamp: succession1.timestamp,
+        reason: succession1.reason,
+        old_key_signature: succession1.old_key_signature,
+        new_key_signature: succession1.new_key_signature,
+      },
+    });
+
+    // Second rotation: kp2 → kp3
+    const succession2 = await signKeySuccession(
+      kp2.privateKey,
+      kp3.privateKey,
+      kp2.publicKey,
+      kp3.publicKey,
+      "second rotation",
+    );
+
+    const rotated2 = await rotate({
+      existingContent: rotated1,
+      newPublicKey: kp3.publicKey,
+      newPrivateKey: kp3.privateKey,
+      successionRecord: {
+        old_public_key: succession2.old_public_key,
+        new_public_key: succession2.new_public_key,
+        timestamp: succession2.timestamp,
+        reason: succession2.reason,
+        old_key_signature: succession2.old_key_signature,
+        new_key_signature: succession2.new_key_signature,
+      },
+    });
+
+    // Verify
+    const result = await standaloneVerify(rotated2);
+    expect(result.valid).toBe(true);
+
+    // Chain should have two records
+    const parsed = parse(rotated2);
+    expect(parsed.frontmatter.identity.public_key).toBe(bytesToHex(kp3.publicKey));
+    expect(parsed.frontmatter.succession).toHaveLength(2);
+    expect(parsed.frontmatter.succession![0]!.reason).toBe("first rotation");
+    expect(parsed.frontmatter.succession![1]!.reason).toBe("second rotation");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// serializeYaml coverage — nested objects, arrays, scalars (lines 86-103)
+// ---------------------------------------------------------------------------
+
+describe("serializeYaml branch coverage via generate()", () => {
+  it("serializes nested retention_days object correctly", async () => {
+    const kp = await makeKeypairHex();
+
+    const content = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        createdAt: DEFAULTS.createdAt,
+        publicKeyHex: kp.publicKeyHex,
+        privacy: {
+          default_sensitivity: "personal",
+          retention_days: { none: 100, personal: 50, medical: 20, financial: 15, secret: 3 },
+          fail_closed: true,
+        },
+      },
+      kp.privateKey,
+    );
+
+    // retention_days is a nested object — verifies the nested object branch
+    expect(content).toContain("retention_days:");
+    expect(content).toContain("none: 100");
+    expect(content).toContain("secret: 3");
+
+    const result = await standaloneVerify(content);
+    expect(result.valid).toBe(true);
+  });
+
+  it("serializes devices array with object items correctly", async () => {
+    const kp = await makeKeypairHex();
+
+    const content = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        createdAt: DEFAULTS.createdAt,
+        publicKeyHex: kp.publicKeyHex,
+        devices: [
+          {
+            device_id: "dev-1",
+            name: "Desktop",
+            public_key: kp.publicKeyHex,
+            registered_at: DEFAULTS.createdAt,
+          },
+          {
+            device_id: "dev-2",
+            name: "Mobile",
+            public_key: kp.publicKeyHex,
+            registered_at: DEFAULTS.createdAt,
+          },
+        ],
+      },
+      kp.privateKey,
+    );
+
+    // devices is an array with object items — verifies the array-of-objects branch
+    expect(content).toContain("devices:");
+    expect(content).toContain("- device_id:");
+    expect(content).toContain("dev-1");
+    expect(content).toContain("dev-2");
+
+    const parsed = parse(content);
+    expect(parsed.frontmatter.devices).toHaveLength(2);
+
+    const result = await standaloneVerify(content);
+    expect(result.valid).toBe(true);
+  });
+
+  it("serializes capabilities as array of scalars", async () => {
+    const kp = await makeKeypairHex();
+
+    const content = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        createdAt: DEFAULTS.createdAt,
+        publicKeyHex: kp.publicKeyHex,
+        service: {
+          type: "service",
+          service_name: "Test",
+          capabilities: ["cap_a", "cap_b", "cap_c"],
+        },
+      },
+      kp.privateKey,
+    );
+
+    // capabilities is an array of scalar strings — verifies the scalar array item branch
+    expect(content).toContain("capabilities:");
+    expect(content).toContain('- "cap_a"');
+    expect(content).toContain('- "cap_b"');
+    expect(content).toContain('- "cap_c"');
+
+    const result = await standaloneVerify(content);
+    expect(result.valid).toBe(true);
+  });
+
+  it("serializes top-level scalar fields (spec, motebit_id, etc.)", async () => {
+    const kp = await makeKeypairHex();
+
+    const content = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        createdAt: DEFAULTS.createdAt,
+        publicKeyHex: kp.publicKeyHex,
+      },
+      kp.privateKey,
+    );
+
+    // Top-level scalars hit the else branch in serializeYaml
+    expect(content).toContain('spec: "motebit/identity@1.0"');
+    expect(content).toContain(`motebit_id: "${DEFAULTS.motebitId}"`);
+    expect(content).toContain(`owner_id: "${DEFAULTS.ownerId}"`);
   });
 });

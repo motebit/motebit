@@ -20,6 +20,7 @@ import {
   verifyReceiptChain,
   signKeySuccession,
   verifyKeySuccession,
+  didKeyToPublicKey,
   type SignedTokenPayload,
   type SignableReceipt,
   type KnownKeys,
@@ -894,6 +895,113 @@ describe("verifyKeySuccession", () => {
 
     record.timestamp = record.timestamp + 1;
     const valid = await verifyKeySuccession(record);
+    expect(valid).toBe(false);
+  });
+
+  it("returns false for invalid hex in public keys (catch block)", async () => {
+    const record = {
+      old_public_key: "not-valid-hex",
+      new_public_key: "also-not-valid-hex",
+      timestamp: Date.now(),
+      old_key_signature: "aa".repeat(64),
+      new_key_signature: "bb".repeat(64),
+    };
+    const valid = await verifyKeySuccession(record);
+    expect(valid).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// didKeyToPublicKey error paths (index.ts lines 278-284)
+// ---------------------------------------------------------------------------
+
+describe("didKeyToPublicKey error paths", () => {
+  it("rejects did:key with wrong multicodec prefix", () => {
+    // Build a did:key with wrong prefix bytes (0x00, 0x00 instead of 0xed, 0x01)
+    const fakeBytes = new Uint8Array(34);
+    fakeBytes[0] = 0x00;
+    fakeBytes[1] = 0x00;
+    const encoded = `did:key:z${base58btcEncode(fakeBytes)}`;
+    expect(() => didKeyToPublicKey(encoded)).toThrow("multicodec prefix");
+  });
+
+  it("rejects did:key with wrong decoded length", () => {
+    // Build a did:key with only 20 bytes instead of 34
+    const shortBytes = new Uint8Array(20);
+    const encoded = `did:key:z${base58btcEncode(shortBytes)}`;
+    expect(() => didKeyToPublicKey(encoded)).toThrow("expected 34 bytes");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verify() catch block (index.ts lines 361-362)
+// ---------------------------------------------------------------------------
+
+describe("verify error handling", () => {
+  it("returns false when signature bytes are malformed (not 64 bytes)", async () => {
+    const kp = await generateKeypair();
+    const message = new TextEncoder().encode("test");
+    // Pass a too-short signature — @noble/ed25519 will throw
+    const badSig = new Uint8Array(10);
+    const valid = await verify(badSig, message, kp.publicKey);
+    expect(valid).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verifySignedToken error paths (index.ts lines 419-420, 429-430)
+// ---------------------------------------------------------------------------
+
+describe("verifySignedToken error paths", () => {
+  it("returns null when base64url payload is invalid (decode error)", async () => {
+    const kp = await generateKeypair();
+    // "!!!" is not valid base64url — atob will throw
+    const result = await verifySignedToken("!!!.!!!", kp.publicKey);
+    expect(result).toBeNull();
+  });
+
+  it("returns null when payload is valid base64 but not valid JSON", async () => {
+    const kp = await generateKeypair();
+    // Create a token where the payload is valid base64url but not JSON,
+    // and the signature is valid for that payload
+    const notJson = new TextEncoder().encode("this is not json");
+    const payloadB64 = btoa(String.fromCharCode(...notJson))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+    const sig = await sign(notJson, kp.privateKey);
+    const sigB64 = btoa(String.fromCharCode(...sig))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+    const token = `${payloadB64}.${sigB64}`;
+    const result = await verifySignedToken(token, kp.publicKey);
+    expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verifyExecutionReceipt catch block (index.ts lines 518-519)
+// ---------------------------------------------------------------------------
+
+describe("verifyExecutionReceipt error paths", () => {
+  it("returns false when signature is not valid base64url", async () => {
+    const kp = await generateKeypair();
+    const receipt: SignableReceipt = {
+      task_id: "task-001",
+      motebit_id: "mote-123",
+      device_id: "device-456",
+      submitted_at: 1700000000000,
+      completed_at: 1700000060000,
+      status: "completed",
+      result: "ok",
+      tools_used: [],
+      memories_formed: 0,
+      prompt_hash: "a".repeat(64),
+      result_hash: "b".repeat(64),
+      signature: "!!!not-valid-base64!!!",
+    };
+    const valid = await verifyExecutionReceipt(receipt, kp.publicKey);
     expect(valid).toBe(false);
   });
 });

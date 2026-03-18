@@ -220,6 +220,44 @@ describe("verifyReceiptSequence", () => {
 });
 
 // ---------------------------------------------------------------------------
+// verifyDelegation — error paths
+// ---------------------------------------------------------------------------
+
+describe("verifyDelegation error paths", () => {
+  it("returns false when signature is not valid base64url", async () => {
+    const kp = await generateKeypair();
+    const delegation: DelegationToken = {
+      delegator_id: "mote-alice",
+      delegator_public_key: toBase64Url(kp.publicKey),
+      delegate_id: "mote-bob",
+      delegate_public_key: toBase64Url(kp.publicKey),
+      scope: "web_search",
+      issued_at: Date.now(),
+      expires_at: Date.now() + 3600_000,
+      signature: "!!!not-valid-base64!!!",
+    };
+    const result = await verifyDelegation(delegation);
+    expect(result).toBe(false);
+  });
+
+  it("returns false when delegator_public_key is not valid base64url", async () => {
+    const kp = await generateKeypair();
+    const delegation: DelegationToken = {
+      delegator_id: "mote-alice",
+      delegator_public_key: "!!!bad-key!!!",
+      delegate_id: "mote-bob",
+      delegate_public_key: toBase64Url(kp.publicKey),
+      scope: "web_search",
+      issued_at: Date.now(),
+      expires_at: Date.now() + 3600_000,
+      signature: toBase64Url(new Uint8Array(64)),
+    };
+    const result = await verifyDelegation(delegation);
+    expect(result).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // verifyDelegationChain
 // ---------------------------------------------------------------------------
 
@@ -603,6 +641,63 @@ describe("signCollaborativeReceipt / verifyCollaborativeReceipt", () => {
     );
     expect(result2.valid).toBe(false);
     expect(result2.error).toContain("signature invalid");
+  });
+
+  it("rejects when participant motebit_id is not in knownKeys", async () => {
+    const initiatorKp = await generateKeypair();
+    const participantKp = await generateKeypair();
+
+    const participantReceipt = await signExecutionReceipt(
+      makeReceipt({ motebit_id: "participant-unknown" }),
+      participantKp.privateKey,
+    );
+
+    const collaborative = await signCollaborativeReceipt(
+      {
+        proposal_id: "prop-5",
+        plan_id: "plan-5",
+        participant_receipts: [participantReceipt],
+      },
+      initiatorKp.privateKey,
+    );
+
+    // knownKeys has a different motebit_id — "participant-unknown" is missing
+    const knownKeys = new Map<string, Uint8Array>();
+    knownKeys.set("some-other-agent", participantKp.publicKey);
+
+    const result = await verifyCollaborativeReceipt(
+      collaborative,
+      initiatorKp.publicKey,
+      knownKeys,
+    );
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("Unknown participant key");
+  });
+
+  it("rejects when initiator_signature is not valid base64url", async () => {
+    const initiatorKp = await generateKeypair();
+    const participantKp = await generateKeypair();
+
+    const participantReceipt = await signExecutionReceipt(
+      makeReceipt({ motebit_id: "participant-6" }),
+      participantKp.privateKey,
+    );
+
+    const collaborative = await signCollaborativeReceipt(
+      {
+        proposal_id: "prop-6",
+        plan_id: "plan-6",
+        participant_receipts: [participantReceipt],
+      },
+      initiatorKp.privateKey,
+    );
+
+    // Corrupt the initiator_signature to trigger decode failure
+    collaborative.initiator_signature = "!!!not-valid-base64!!!";
+
+    const result = await verifyCollaborativeReceipt(collaborative, initiatorKp.publicKey);
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("decode failed");
   });
 });
 

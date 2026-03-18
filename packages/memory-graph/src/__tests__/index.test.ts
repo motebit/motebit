@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   computeDecayedConfidence,
   cosineSimilarity,
@@ -1180,6 +1180,161 @@ describe("MemoryGraph", () => {
         scoringConfig: { similarityWeight: 0.1, confidenceWeight: 0.8, recencyWeight: 0.1 },
       });
       expect(results).toHaveLength(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // logConsolidation catch block (best-effort event logging failure)
+  // -------------------------------------------------------------------------
+
+  describe("logConsolidation error handling", () => {
+    it("swallows event store errors during consolidation logging", async () => {
+      // Seed an existing memory so consolidation doesn't skip the LLM call
+      await graph.formMemory(
+        { content: "existing fact", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 0, 0],
+      );
+
+      // Create a provider that returns ADD
+      const provider = {
+        classify: async () => ({
+          action: "add" as import("../consolidation").ConsolidationAction,
+          reason: "New info",
+        }),
+      };
+
+      // Spy on eventStore.append to throw after formMemory's own event succeeds
+      // The logConsolidation call is the second append within consolidateAndForm's ADD branch
+      let appendCallCount = 0;
+      const originalAppend = eventStore.append.bind(eventStore);
+      vi.spyOn(eventStore, "append").mockImplementation(async (entry) => {
+        appendCallCount++;
+        // Let the formMemory event through (call 2 — first is the seeded memory),
+        // but throw on the logConsolidation call (call 3)
+        if (appendCallCount === 3) {
+          throw new Error("Event store write failure");
+        }
+        return originalAppend(entry);
+      });
+
+      // Should not throw — logConsolidation swallows the error
+      const { node, decision } = await graph.consolidateAndForm(
+        { content: "new fact", confidence: 0.8, sensitivity: SensitivityLevel.None },
+        [0.95, 0.05, 0],
+        provider,
+      );
+
+      expect(node).not.toBeNull();
+      expect(decision.action).toBe("add");
+
+      vi.restoreAllMocks();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Graph expansion: temporal filter on neighbor + re-trim after expansion
+  // -------------------------------------------------------------------------
+
+  describe("graph expansion edge cases", () => {
+    it("skips expired neighbor nodes during graph expansion", async () => {
+      const nodeA = await graph.formMemory(
+        { content: "current A", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 0, 0],
+      );
+      const nodeB = await graph.formMemory(
+        { content: "expired neighbor B", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [0, 0, 1],
+      );
+      // Set valid_until to exactly now (<=now means expired per the code: valid_until <= now)
+      nodeB.valid_until = Date.now();
+      await storage.saveNode(nodeB);
+
+      await graph.link(nodeA.node_id, nodeB.node_id, RelationType.Related, 1.0, 1.0);
+
+      const results = await graph.retrieve([0.99, 0.01, 0], { limit: 10, expandEdges: true });
+      const ids = results.map((r) => r.node_id);
+
+      expect(ids).toContain(nodeA.node_id);
+      expect(ids).not.toContain(nodeB.node_id);
+    });
+
+    it("re-trims results to limit after graph expansion adds neighbors", async () => {
+      // Create 3 memories: A, B (linked to A), C (linked to A)
+      // With limit=2, after expansion adds B and C, it should trim back to 2
+      const nodeA = await graph.formMemory(
+        { content: "primary A", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 0, 0],
+      );
+      const nodeB = await graph.formMemory(
+        { content: "neighbor B", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [0, 1, 0],
+      );
+      const nodeC = await graph.formMemory(
+        { content: "neighbor C", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [0, 0, 1],
+      );
+
+      await graph.link(nodeA.node_id, nodeB.node_id, RelationType.Related, 1.0, 1.0);
+      await graph.link(nodeA.node_id, nodeC.node_id, RelationType.Related, 1.0, 1.0);
+
+      // limit=2: A is top result, expansion adds B and C, total=3, should trim to 2
+      const results = await graph.retrieve([0.99, 0.01, 0], {
+        limit: 2,
+        expandEdges: true,
+      });
+
+      expect(results).toHaveLength(2);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Co-retrieval edge strengthening (existing edge weight increment)
+  // -------------------------------------------------------------------------
+
+  describe("co-retrieval edge strengthening details", () => {
+    it("increments existing edge weight by 0.05 and caps at 1.0", async () => {
+      const nodeA = await graph.formMemory(
+        { content: "memory A", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 0, 0],
+      );
+      const nodeB = await graph.formMemory(
+        { content: "memory B", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [0.9, 0.1, 0],
+      );
+
+      // Pre-create an edge with weight close to cap
+      await graph.link(nodeA.node_id, nodeB.node_id, RelationType.Related, 0.97, 0.5);
+
+      // Co-retrieve — should strengthen by 0.05, capping at 1.0
+      await graph.retrieve([0.95, 0.05, 0], { strengthenCoRetrieved: true });
+
+      const edges = await storage.getEdges(nodeA.node_id);
+      const coEdge = edges.find((e) => e.relation_type === RelationType.Related);
+      expect(coEdge).toBeDefined();
+      // 0.97 + 0.05 = 1.02, capped at 1.0
+      expect(coEdge!.weight).toBe(1.0);
+    });
+
+    it("strengthens an edge found via reverse direction (target→source)", async () => {
+      const nodeA = await graph.formMemory(
+        { content: "memory A", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 0, 0],
+      );
+      const nodeB = await graph.formMemory(
+        { content: "memory B", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [0.9, 0.1, 0],
+      );
+
+      // Create edge B→A (reverse direction)
+      await graph.link(nodeB.node_id, nodeA.node_id, RelationType.Related, 0.3, 0.5);
+
+      // Co-retrieve — should find the existing edge and strengthen it
+      await graph.retrieve([0.95, 0.05, 0], { strengthenCoRetrieved: true });
+
+      const edges = await storage.getEdges(nodeA.node_id);
+      const coEdge = edges.find((e) => e.relation_type === RelationType.Related);
+      expect(coEdge).toBeDefined();
+      expect(coEdge!.weight).toBeCloseTo(0.35, 5); // 0.3 + 0.05
     });
   });
 });

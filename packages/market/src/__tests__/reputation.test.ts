@@ -98,4 +98,54 @@ describe("computeServiceReputation", () => {
     const rep = computeServiceReputation(MID, receipts, makeTrust());
     expect(rep.sub_scores.consistency).toBeGreaterThan(0.9);
   });
+
+  it("consistency defaults to 0.5 when fewer than 2 valid durations", () => {
+    const now = Date.now();
+    // Single receipt → only 1 duration → consistency stays at default 0.5
+    const receipts = [makeReceipt({ submitted_at: now - 2000, completed_at: now })];
+    const rep = computeServiceReputation(MID, receipts, makeTrust());
+    expect(rep.sub_scores.consistency).toBe(0.5);
+  });
+
+  it("consistency is low for highly variable durations", () => {
+    const now = Date.now();
+    const receipts = [
+      makeReceipt({ submitted_at: now - 1000, completed_at: now }), // 1s
+      makeReceipt({ submitted_at: now - 20000, completed_at: now }), // 20s
+      makeReceipt({ submitted_at: now - 500, completed_at: now }), // 0.5s
+      makeReceipt({ submitted_at: now - 30000, completed_at: now }), // 30s
+    ];
+    const rep = computeServiceReputation(MID, receipts, makeTrust());
+    // High CV (coefficient of variation) → low consistency
+    expect(rep.sub_scores.consistency).toBeLessThan(0.5);
+  });
+
+  it("speed is default 0.5-region when no valid durations (completed_at <= submitted_at)", () => {
+    const now = Date.now();
+    // Receipts where completed_at == submitted_at → no valid duration → avgDuration = 10000 default
+    const receipts = [
+      makeReceipt({ submitted_at: now, completed_at: now }),
+      makeReceipt({ submitted_at: now, completed_at: now }),
+    ];
+    const rep = computeServiceReputation(MID, receipts, makeTrust());
+    // avgDuration = 10000 → speed = 1 - 10000 / (10000 + 5000) = 1/3
+    expect(rep.sub_scores.speed).toBeCloseTo(1 / 3, 5);
+  });
+
+  it("handles receipts where completed_at equals submitted_at (zero duration filtered)", () => {
+    const now = Date.now();
+    const receipts = [
+      makeReceipt({ submitted_at: now, completed_at: now }), // 0 → filtered out
+      makeReceipt({ submitted_at: now - 3000, completed_at: now }), // 3s → valid
+    ];
+    const rep = computeServiceReputation(MID, receipts, makeTrust());
+    // Only the 3s receipt contributes to speed
+    expect(rep.sub_scores.speed).toBeCloseTo(1 - 3000 / (3000 + 5000), 5);
+  });
+
+  it("uses 0.1 trust when trustRecord is null and recent receipts exist", () => {
+    const rep = computeServiceReputation(MID, [makeReceipt()], null);
+    expect(rep.sub_scores.trust_level).toBe(0.1);
+    expect(rep.sample_size).toBe(1);
+  });
 });

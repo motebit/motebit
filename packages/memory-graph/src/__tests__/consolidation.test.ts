@@ -94,6 +94,28 @@ describe("parseConsolidationResponse", () => {
     expect(decision.action).toBe(ConsolidationAction.ADD);
   });
 
+  it("falls back to ADD when REINFORCE references nodeId not in validNodeIds", () => {
+    const raw = '{"action": "reinforce", "existingNodeId": "unknown-node", "reason": "Confirms"}';
+    const decision = parseConsolidationResponse(raw, validIds);
+    expect(decision.action).toBe(ConsolidationAction.ADD);
+    expect(decision.reason).toContain("Failed to parse");
+    expect(decision.existingNodeId).toBeUndefined();
+  });
+
+  it("falls back to ADD when NOOP references nodeId not in validNodeIds", () => {
+    const raw = '{"action": "noop", "existingNodeId": "bogus", "reason": "Duplicate"}';
+    const decision = parseConsolidationResponse(raw, validIds);
+    expect(decision.action).toBe(ConsolidationAction.ADD);
+    expect(decision.reason).toContain("Failed to parse");
+  });
+
+  it("sets existingNodeId on decision when UPDATE references a valid nodeId", () => {
+    const raw = '{"action": "update", "existingNodeId": "m2", "reason": "Supersedes"}';
+    const decision = parseConsolidationResponse(raw, validIds);
+    expect(decision.action).toBe(ConsolidationAction.UPDATE);
+    expect(decision.existingNodeId).toBe("m2");
+  });
+
   it("extracts JSON from surrounding text", () => {
     const raw =
       'Here is my analysis: {"action": "add", "reason": "Genuinely new"} Hope that helps!';

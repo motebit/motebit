@@ -13,6 +13,9 @@ import {
 } from "../semiring.js";
 import type { Semiring } from "../semiring.js";
 
+// Cover the barrel re-export (index.ts line 1+)
+import * as barrel from "../index.js";
+
 // ── Semiring Axiom Verification ─────────────────────────────────────
 // If the axioms don't hold, every algorithm built on top is wrong.
 
@@ -198,6 +201,19 @@ describe("recordSemiring", () => {
 });
 
 // ── Mapped Semiring ─────────────────────────────────────────────────
+
+describe("barrel re-export (index.ts)", () => {
+  it("exports all public symbols", () => {
+    expect(barrel.TrustSemiring).toBeDefined();
+    expect(barrel.CostSemiring).toBeDefined();
+    expect(barrel.WeightedDigraph).toBeDefined();
+    expect(barrel.optimalPaths).toBeDefined();
+    expect(barrel.ProvenanceSemiring).toBeDefined();
+    expect(barrel.buildAgentGraph).toBeDefined();
+    expect(barrel.addDelegationEdges).toBeDefined();
+    expect(barrel.RouteWeightSemiring).toBeDefined();
+  });
+});
 
 describe("mappedSemiring", () => {
   // Map cost semiring through milliseconds ↔ seconds conversion

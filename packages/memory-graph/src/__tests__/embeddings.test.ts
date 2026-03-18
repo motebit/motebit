@@ -36,6 +36,13 @@ describe("embedText (semantic)", () => {
     expect(vec).toHaveLength(EMBEDDING_DIMENSIONS);
     expect(vec.every((v) => v === 0)).toBe(true);
   });
+
+  it("empty string zero vector has correct dimensionality and all zeros", async () => {
+    const vec = await embedText("");
+    expect(vec).toHaveLength(384);
+    const norm = Math.sqrt(vec.reduce((sum, v) => sum + v * v, 0));
+    expect(norm).toBe(0);
+  });
 }, 120_000);
 
 describe("embedText (hash fallback when pipeline fails)", () => {
@@ -75,6 +82,25 @@ describe("embedText (hash fallback when pipeline fails)", () => {
     const a = await embedText("test input");
     const b = await embedText("test input");
     expect(a).toEqual(b);
+  });
+
+  it("fallback pads hash embedding (128d) to EMBEDDING_DIMENSIONS (384d) with zeros", async () => {
+    vi.mock("@xenova/transformers", () => {
+      throw new Error("Simulated download failure");
+    });
+    resetPipeline();
+
+    const vec = await embedText("some text");
+    expect(vec).toHaveLength(EMBEDDING_DIMENSIONS);
+
+    // The first 128 dimensions should have some non-zero values (from hash)
+    const hashPart = vec.slice(0, 128);
+    const hasNonZero = hashPart.some((v) => v !== 0);
+    expect(hasNonZero).toBe(true);
+
+    // Dimensions 128-383 should all be zero (padding)
+    const padPart = vec.slice(128);
+    expect(padPart.every((v) => v === 0)).toBe(true);
   });
 });
 

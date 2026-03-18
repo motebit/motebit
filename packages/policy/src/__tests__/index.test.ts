@@ -1679,3 +1679,407 @@ describe("PolicyGate — caller trust level", () => {
     expect(decision.requiresApproval).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 9. AuditLogger — queryStatsSince, redactSensitiveArgs, logInjection
+// ---------------------------------------------------------------------------
+describe("AuditLogger — uncovered paths", () => {
+  let sink: InMemoryAuditSink;
+  let logger: AuditLogger;
+
+  beforeEach(() => {
+    sink = new InMemoryAuditSink();
+    logger = new AuditLogger(sink);
+  });
+
+  describe("queryStatsSince", () => {
+    it("counts blocked entries (decision.allowed=false)", () => {
+      sink.append({
+        turnId: "t1",
+        callId: "c1",
+        tool: "shell_exec",
+        args: {},
+        decision: { allowed: false, requiresApproval: false, reason: "denied" },
+        timestamp: 1000,
+      });
+      const stats = sink.queryStatsSince(500);
+      expect(stats.blocked).toBe(1);
+      expect(stats.succeeded).toBe(0);
+      expect(stats.failed).toBe(0);
+      expect(stats.totalToolCalls).toBe(1);
+      expect(stats.distinctTurns).toBe(1);
+    });
+
+    it("counts succeeded entries (allowed + result.ok=true)", () => {
+      sink.append({
+        turnId: "t1",
+        callId: "c1",
+        tool: "web_search",
+        args: {},
+        decision: { allowed: true, requiresApproval: false },
+        result: { ok: true, durationMs: 50 },
+        timestamp: 1000,
+      });
+      const stats = sink.queryStatsSince(500);
+      expect(stats.succeeded).toBe(1);
+      expect(stats.blocked).toBe(0);
+      expect(stats.failed).toBe(0);
+    });
+
+    it("counts failed entries (allowed + result.ok=false)", () => {
+      sink.append({
+        turnId: "t1",
+        callId: "c1",
+        tool: "web_search",
+        args: {},
+        decision: { allowed: true, requiresApproval: false },
+        result: { ok: false, durationMs: 100 },
+        timestamp: 1000,
+      });
+      const stats = sink.queryStatsSince(500);
+      expect(stats.failed).toBe(1);
+      expect(stats.succeeded).toBe(0);
+      expect(stats.blocked).toBe(0);
+    });
+
+    it("counts mixed entries correctly across turns", () => {
+      sink.append({
+        turnId: "t1",
+        callId: "c1",
+        tool: "a",
+        args: {},
+        decision: { allowed: false, requiresApproval: false, reason: "blocked" },
+        timestamp: 1000,
+      });
+      sink.append({
+        turnId: "t2",
+        callId: "c2",
+        tool: "b",
+        args: {},
+        decision: { allowed: true, requiresApproval: false },
+        result: { ok: true, durationMs: 10 },
+        timestamp: 1001,
+      });
+      sink.append({
+        turnId: "t2",
+        callId: "c3",
+        tool: "c",
+        args: {},
+        decision: { allowed: true, requiresApproval: false },
+        result: { ok: false, durationMs: 20 },
+        timestamp: 1002,
+      });
+      // Allowed but no result yet (pending)
+      sink.append({
+        turnId: "t3",
+        callId: "c4",
+        tool: "d",
+        args: {},
+        decision: { allowed: true, requiresApproval: false },
+        timestamp: 1003,
+      });
+      const stats = sink.queryStatsSince(500);
+      expect(stats.blocked).toBe(1);
+      expect(stats.succeeded).toBe(1);
+      expect(stats.failed).toBe(1);
+      expect(stats.totalToolCalls).toBe(4);
+      expect(stats.distinctTurns).toBe(3);
+    });
+
+    it("filters by timestamp (ignores entries before afterTimestamp)", () => {
+      sink.append({
+        turnId: "t-old",
+        callId: "c-old",
+        tool: "old",
+        args: {},
+        decision: { allowed: true, requiresApproval: false },
+        result: { ok: true, durationMs: 1 },
+        timestamp: 100,
+      });
+      sink.append({
+        turnId: "t-new",
+        callId: "c-new",
+        tool: "new",
+        args: {},
+        decision: { allowed: true, requiresApproval: false },
+        result: { ok: true, durationMs: 1 },
+        timestamp: 200,
+      });
+      const stats = sink.queryStatsSince(150);
+      expect(stats.totalToolCalls).toBe(1);
+      expect(stats.succeeded).toBe(1);
+      expect(stats.distinctTurns).toBe(1);
+    });
+  });
+
+  describe("redactSensitiveArgs (via logDecision)", () => {
+    it("redacts args whose keys match sensitive patterns", () => {
+      const decision = { allowed: true, requiresApproval: false };
+      logger.logDecision(
+        "t1",
+        "c1",
+        "api_call",
+        {
+          apiKey: "sk-secret-value",
+          token: "bearer-abc",
+          password: "hunter2",
+          query: "normal-value",
+        },
+        decision,
+      );
+      const entries = logger.getAll();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]!.args.apiKey).toBe("[REDACTED]");
+      expect(entries[0]!.args.token).toBe("[REDACTED]");
+      expect(entries[0]!.args.password).toBe("[REDACTED]");
+      expect(entries[0]!.args.query).toBe("normal-value");
+    });
+
+    it("does not redact non-string values even with sensitive keys", () => {
+      const decision = { allowed: true, requiresApproval: false };
+      logger.logDecision(
+        "t1",
+        "c1",
+        "tool",
+        {
+          apiKey: 12345,
+          secret: true,
+        },
+        decision,
+      );
+      const entries = logger.getAll();
+      // Non-string values are not redacted
+      expect(entries[0]!.args.apiKey).toBe(12345);
+      expect(entries[0]!.args.secret).toBe(true);
+    });
+
+    it("does not redact empty string values with sensitive keys", () => {
+      const decision = { allowed: true, requiresApproval: false };
+      logger.logDecision(
+        "t1",
+        "c1",
+        "tool",
+        {
+          apiKey: "",
+        },
+        decision,
+      );
+      const entries = logger.getAll();
+      // Empty string not redacted (v.length > 0 check)
+      expect(entries[0]!.args.apiKey).toBe("");
+    });
+
+    it("matches various sensitive key patterns", () => {
+      const decision = { allowed: true, requiresApproval: false };
+      logger.logDecision(
+        "t1",
+        "c1",
+        "tool",
+        {
+          auth_header: "value1",
+          credential_id: "value2",
+          api_key: "value3",
+          query: "value4",
+        },
+        decision,
+      );
+      const entries = logger.getAll();
+      expect(entries[0]!.args.auth_header).toBe("[REDACTED]");
+      expect(entries[0]!.args.credential_id).toBe("[REDACTED]");
+      expect(entries[0]!.args.api_key).toBe("[REDACTED]");
+      expect(entries[0]!.args.query).toBe("value4");
+    });
+  });
+
+  describe("logInjection", () => {
+    it("logs injection event with blocked=true", () => {
+      const injection = {
+        detected: true,
+        patterns: ["ignore previous instructions"],
+        directiveDensity: 0.5,
+      };
+      logger.logInjection("t1", "c1", "web_fetch", { url: "http://evil.com" }, injection, true);
+      const entries = logger.getAll();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]!.decision.allowed).toBe(false);
+      expect(entries[0]!.decision.reason).toBe("injection_blocked");
+      expect(entries[0]!.injection).toBe(injection);
+    });
+
+    it("logs injection event with blocked=false (warned only)", () => {
+      const injection = {
+        detected: true,
+        patterns: ["suspicious pattern"],
+        directiveDensity: 0.3,
+      };
+      logger.logInjection("t1", "c1", "web_fetch", { url: "http://example.com" }, injection, false);
+      const entries = logger.getAll();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]!.decision.allowed).toBe(true);
+      expect(entries[0]!.decision.reason).toBe("injection_warned");
+      expect(entries[0]!.injection).toBe(injection);
+    });
+
+    it("logs injection with runId", () => {
+      const injection = { detected: true, patterns: ["test"], directiveDensity: 0.1 };
+      logger.logInjection("t1", "c1", "tool", {}, injection, true, "run-123");
+      const entries = logger.getAll();
+      expect(entries[0]!.runId).toBe("run-123");
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 10. MemoryGovernor — explainWhy coverage (sensitivity branches)
+// ---------------------------------------------------------------------------
+describe("MemoryGovernor — explainWhy sensitivity branches", () => {
+  function makeCandidate(
+    content: string,
+    confidence: number,
+    sensitivity: SensitivityLevel = SensitivityLevel.None,
+  ): MemoryCandidate {
+    return { content, confidence, sensitivity };
+  }
+
+  it("explains Medical sensitivity", () => {
+    const gov = new MemoryGovernor();
+    const decisions = gov.evaluate([
+      makeCandidate("User has allergies", 0.9, SensitivityLevel.Medical),
+    ]);
+    expect(decisions[0]!.memoryClass).toBe(MemoryClass.PERSISTENT);
+    expect(decisions[0]!.reason).toContain("health-related information");
+  });
+
+  it("explains Financial sensitivity", () => {
+    const gov = new MemoryGovernor();
+    const decisions = gov.evaluate([
+      makeCandidate("User budget is $5000", 0.9, SensitivityLevel.Financial),
+    ]);
+    expect(decisions[0]!.memoryClass).toBe(MemoryClass.PERSISTENT);
+    expect(decisions[0]!.reason).toContain("financial information");
+  });
+
+  it("explains None sensitivity (default branch)", () => {
+    const gov = new MemoryGovernor();
+    const decisions = gov.evaluate([
+      makeCandidate("User mentioned TypeScript", 0.9, SensitivityLevel.None),
+    ]);
+    expect(decisions[0]!.memoryClass).toBe(MemoryClass.PERSISTENT);
+    expect(decisions[0]!.reason).toContain("from conversation");
+  });
+
+  it("joins parts with high confidence + personal sensitivity", () => {
+    const gov = new MemoryGovernor();
+    const decisions = gov.evaluate([
+      makeCandidate("User likes coffee", 0.85, SensitivityLevel.Personal),
+    ]);
+    expect(decisions[0]!.reason).toBe(
+      "High confidence observation about personal preferences or details.",
+    );
+  });
+
+  it("joins parts with moderate confidence + none sensitivity", () => {
+    const gov = new MemoryGovernor();
+    const decisions = gov.evaluate([
+      makeCandidate("User mentioned something", 0.6, SensitivityLevel.None),
+    ]);
+    expect(decisions[0]!.reason).toBe("Moderate confidence observation from conversation.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 11. PolicyGate — createTurnContext and recordToolCall
+// ---------------------------------------------------------------------------
+describe("PolicyGate — turn context management", () => {
+  it("createTurnContext returns a new context with defaults", () => {
+    const gate = new PolicyGate();
+    const ctx = gate.createTurnContext();
+    expect(ctx.turnId).toBeDefined();
+    expect(ctx.turnId.length).toBeGreaterThan(0);
+    expect(ctx.toolCallCount).toBe(0);
+    expect(ctx.turnStartMs).toBeGreaterThan(0);
+    expect(ctx.costAccumulated).toBe(0);
+    expect(ctx.runId).toBeUndefined();
+  });
+
+  it("createTurnContext accepts optional runId", () => {
+    const gate = new PolicyGate();
+    const ctx = gate.createTurnContext("run-abc");
+    expect(ctx.runId).toBe("run-abc");
+    expect(ctx.toolCallCount).toBe(0);
+    expect(ctx.costAccumulated).toBe(0);
+  });
+
+  it("recordToolCall increments toolCallCount immutably", () => {
+    const gate = new PolicyGate();
+    const ctx = gate.createTurnContext();
+    const updated = gate.recordToolCall(ctx);
+    expect(updated.toolCallCount).toBe(1);
+    expect(ctx.toolCallCount).toBe(0); // original unchanged
+    expect(updated.turnId).toBe(ctx.turnId);
+  });
+
+  it("recordToolCall accumulates cost", () => {
+    const gate = new PolicyGate();
+    const ctx = gate.createTurnContext();
+    const after1 = gate.recordToolCall(ctx, 0.5);
+    const after2 = gate.recordToolCall(after1, 1.5);
+    expect(after1.costAccumulated).toBe(0.5);
+    expect(after2.costAccumulated).toBe(2.0);
+    expect(after2.toolCallCount).toBe(2);
+    expect(ctx.costAccumulated).toBe(0); // original unchanged
+  });
+
+  it("recordToolCall defaults cost to 0", () => {
+    const gate = new PolicyGate();
+    const ctx = gate.createTurnContext();
+    const updated = gate.recordToolCall(ctx);
+    expect(updated.costAccumulated).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 12. RedactionEngine — addPattern and redact with custom patterns
+// ---------------------------------------------------------------------------
+describe("RedactionEngine — custom patterns", () => {
+  it("addPattern registers a custom pattern that matches during redact", () => {
+    const engine = new RedactionEngine();
+    engine.addPattern(/\bCUSTOM_SECRET_\w+\b/g, "CUSTOM");
+    const { text, redactionCount } = engine.redact("Found CUSTOM_SECRET_abc123 in the data");
+    expect(text).toContain("[REDACTED:CUSTOM]");
+    expect(text).not.toContain("CUSTOM_SECRET_abc123");
+    expect(redactionCount).toBeGreaterThan(0);
+  });
+
+  it("addPattern does not affect standard patterns", () => {
+    const engine = new RedactionEngine();
+    engine.addPattern(/\bMY_PATTERN\b/g, "MINE");
+    // Standard patterns still work
+    const { text } = engine.redact("password: hunter2");
+    expect(text).toContain("[REDACTED:PASSWORD]");
+  });
+
+  it("custom pattern works in containsSecrets", () => {
+    const engine = new RedactionEngine();
+    engine.addPattern(/\bINTERNAL_TOKEN_\w+\b/g, "INTERNAL");
+    expect(engine.containsSecrets("Found INTERNAL_TOKEN_xyz")).toBe(true);
+    expect(engine.containsSecrets("Normal text")).toBe(false);
+  });
+
+  it("redact accumulates count across standard and custom patterns", () => {
+    const engine = new RedactionEngine();
+    engine.addPattern(/\bCUSTOM_\w+\b/g, "CUSTOM");
+    const { redactionCount } = engine.redact("password: abc CUSTOM_value");
+    expect(redactionCount).toBe(2);
+  });
+
+  it("multiple custom patterns all apply", () => {
+    const engine = new RedactionEngine();
+    engine.addPattern(/\bPATTERN_A\b/g, "A");
+    engine.addPattern(/\bPATTERN_B\b/g, "B");
+    const { text, redactionCount } = engine.redact("PATTERN_A and PATTERN_B");
+    expect(text).toContain("[REDACTED:A]");
+    expect(text).toContain("[REDACTED:B]");
+    expect(redactionCount).toBe(2);
+  });
+});

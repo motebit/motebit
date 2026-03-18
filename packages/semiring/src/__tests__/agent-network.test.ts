@@ -1,17 +1,20 @@
 import { describe, it, expect } from "vitest";
 import { asMotebitId, AgentTrustLevel } from "@motebit/sdk";
-import type { AgentTrustRecord, MotebitId } from "@motebit/sdk";
+import type { AgentTrustRecord, MotebitId, ExecutionReceipt } from "@motebit/sdk";
 import {
   buildAgentGraph,
+  addDelegationEdges,
   mostTrustedPath,
   cheapestPath,
   lowestRiskPath,
   rankReachableAgents,
   projectGraph,
+  RouteWeightSemiring,
 } from "../agent-network.js";
 import type { AgentProfile } from "../agent-network.js";
 import { TrustSemiring } from "../semiring.js";
 import { transitiveClosure } from "../traversal.js";
+import { WeightedDigraph } from "../graph.js";
 
 function makeTrustRecord(
   selfId: MotebitId,
@@ -309,5 +312,144 @@ describe("lowestRiskPath — regulatory risk routing", () => {
     const result = lowestRiskPath(graph, self, asMotebitId("zero-risk"));
     expect(result).not.toBeNull();
     expect(result!.risk).toBe(0); // semiring one = 0, identity
+  });
+});
+
+describe("addDelegationEdges", () => {
+  function makeReceipt(
+    motebitId: string,
+    status: "completed" | "failed" = "completed",
+    delegationReceipts?: ExecutionReceipt[],
+  ): ExecutionReceipt {
+    return {
+      task_id: `task-${motebitId}`,
+      motebit_id: asMotebitId(motebitId),
+      device_id: "dev-1" as any,
+      submitted_at: 1000,
+      completed_at: 2000,
+      status,
+      result: "ok",
+      tools_used: [],
+      memories_formed: 0,
+      prompt_hash: "abc",
+      result_hash: "def",
+      signature: "sig",
+      delegation_receipts: delegationReceipts,
+    };
+  }
+
+  it("adds edges from delegation receipts", () => {
+    const graph = new WeightedDigraph(RouteWeightSemiring);
+    graph.addNode(asMotebitId("parent"));
+
+    const receipt = makeReceipt("parent", "completed", [
+      makeReceipt("child-a", "completed"),
+      makeReceipt("child-b", "failed"),
+    ]);
+
+    const getTrust = (id: string) => (id.includes("child-a") ? 0.9 : 0.5);
+    const getLatency = (id: string) => (id.includes("child-a") ? 100 : 200);
+
+    addDelegationEdges(graph, receipt, getTrust, getLatency);
+
+    // Parent → child-a edge should exist
+    expect(graph.hasEdge(asMotebitId("parent"), asMotebitId("child-a"))).toBe(true);
+    const edgeA = graph.getEdge(asMotebitId("parent"), asMotebitId("child-a"));
+    expect(edgeA.trust).toBe(0.9);
+    expect(edgeA.reliability).toBe(0.9); // completed = 0.9
+    expect(edgeA.latency).toBe(100);
+
+    // Parent → child-b edge should exist with lower reliability
+    expect(graph.hasEdge(asMotebitId("parent"), asMotebitId("child-b"))).toBe(true);
+    const edgeB = graph.getEdge(asMotebitId("parent"), asMotebitId("child-b"));
+    expect(edgeB.trust).toBe(0.5);
+    expect(edgeB.reliability).toBe(0.3); // failed = 0.3
+  });
+
+  it("uses duration as latency fallback when getLatency returns 0", () => {
+    const graph = new WeightedDigraph(RouteWeightSemiring);
+    graph.addNode(asMotebitId("parent"));
+
+    const receipt = makeReceipt("parent", "completed", [makeReceipt("child", "completed")]);
+
+    addDelegationEdges(
+      graph,
+      receipt,
+      () => 0.8,
+      () => 0,
+    ); // getLatency returns 0
+
+    const edge = graph.getEdge(asMotebitId("parent"), asMotebitId("child"));
+    // latency || duration → 0 || 1000 = 1000 (duration = completed_at - submitted_at)
+    expect(edge.latency).toBe(1000);
+  });
+
+  it("recurses into sub-delegation receipts", () => {
+    const graph = new WeightedDigraph(RouteWeightSemiring);
+    graph.addNode(asMotebitId("root"));
+
+    // root delegates to hop1, hop1 delegates to hop2
+    const receipt = makeReceipt("root", "completed", [
+      makeReceipt("hop1", "completed", [makeReceipt("hop2", "completed")]),
+    ]);
+
+    addDelegationEdges(
+      graph,
+      receipt,
+      () => 0.8,
+      () => 150,
+    );
+
+    // root → hop1
+    expect(graph.hasEdge(asMotebitId("root"), asMotebitId("hop1"))).toBe(true);
+    // hop1 → hop2 (recursive)
+    expect(graph.hasEdge(asMotebitId("hop1"), asMotebitId("hop2"))).toBe(true);
+  });
+
+  it("is a no-op when delegation_receipts is undefined", () => {
+    const graph = new WeightedDigraph(RouteWeightSemiring);
+    graph.addNode(asMotebitId("solo"));
+
+    const receipt = makeReceipt("solo", "completed"); // no delegation_receipts
+    addDelegationEdges(
+      graph,
+      receipt,
+      () => 0.5,
+      () => 100,
+    );
+
+    expect(graph.edgeCount()).toBe(0);
+  });
+});
+
+describe("buildAgentGraph — trust_override and no trust_record", () => {
+  const self = asMotebitId("self");
+
+  it("uses trust_override when provided", () => {
+    const agents = [
+      makeAgent("overridden", AgentTrustLevel.FirstContact, self, { trust_override: 0.95 }),
+    ];
+    const graph = buildAgentGraph(self, agents);
+    const edge = graph.getEdge(self, asMotebitId("overridden"));
+    expect(edge.trust).toBe(0.95);
+  });
+
+  it("uses default 0.1 trust when no trust_record", () => {
+    const agents: AgentProfile[] = [
+      {
+        motebit_id: asMotebitId("unknown"),
+        trust_record: null,
+        listing: null,
+        latency_ms: null,
+        reliability: null,
+        is_online: true,
+      },
+    ];
+    const graph = buildAgentGraph(self, agents);
+    const edge = graph.getEdge(self, asMotebitId("unknown"));
+    expect(edge.trust).toBe(0.1);
+    // Defaults for null latency/reliability
+    expect(edge.latency).toBe(5000);
+    expect(edge.reliability).toBe(0.5);
   });
 });

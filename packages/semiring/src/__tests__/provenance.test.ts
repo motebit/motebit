@@ -69,6 +69,25 @@ describe("boundedProvenanceSemiring", () => {
     const result = sr.add(short, long);
     expect(result).toEqual([["a"]]);
   });
+
+  it("trims mul results when cross product exceeds maxPaths", () => {
+    const sr = boundedProvenanceSemiring(2);
+    // 3 × 2 = 6 paths, trimmed to 2
+    const a = [["x"], ["y"], ["z"]];
+    const b = [["1"], ["2"]];
+    const result = sr.mul(a, b);
+    expect(result.length).toBeLessThanOrEqual(2);
+    // Shortest paths have length 2 (each is a 1-element + 1-element concat)
+    for (const path of result) {
+      expect(path.length).toBe(2);
+    }
+  });
+
+  it("mul returns empty when either operand is empty", () => {
+    const sr = boundedProvenanceSemiring(5);
+    expect(sr.mul([], [["a"]])).toEqual([]);
+    expect(sr.mul([["a"]], [])).toEqual([]);
+  });
 });
 
 describe("annotatedSemiring — trust with provenance", () => {

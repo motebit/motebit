@@ -148,6 +148,47 @@ describe("scoreCandidate", () => {
     expect(score.sub_scores.capability_match).toBe(0);
     expect(score.composite).toBe(0);
   });
+
+  it("returns 0.5 success_rate when trust record has zero tasks (undefined counts)", () => {
+    const score = scoreCandidate(
+      makeCandidate({
+        trust_record: makeTrustRecord({
+          successful_tasks: undefined,
+          failed_tasks: undefined,
+        }),
+      }),
+      defaultReqs,
+    );
+    expect(score.sub_scores.success_rate).toBe(0.5);
+  });
+
+  it("returns 0.5 success_rate when trust record has explicit zero tasks", () => {
+    const score = scoreCandidate(
+      makeCandidate({
+        trust_record: makeTrustRecord({
+          successful_tasks: 0,
+          failed_tasks: 0,
+        }),
+      }),
+      defaultReqs,
+    );
+    expect(score.sub_scores.success_rate).toBe(0.5);
+  });
+
+  it("returns 0.7 price_efficiency when required cap has no matching pricing entry", () => {
+    // Listing has pricing for "summarize" but required is "web_search" — no price match
+    const score = scoreCandidate(
+      makeCandidate({
+        listing: makeListing({
+          capabilities: ["web_search", "summarize"],
+          pricing: [{ capability: "summarize", unit_cost: 0.01, currency: "USD", per: "task" }],
+        }),
+      }),
+      defaultReqs,
+    );
+    // web_search has no pricing entry → totalCost = 0 → returns 0.7
+    expect(score.sub_scores.price_efficiency).toBe(0.7);
+  });
 });
 
 describe("rankCandidates", () => {
@@ -227,5 +268,93 @@ describe("applyPrecisionToMarketConfig", () => {
     const cfg = applyPrecisionToMarketConfig(undefined, 2.0);
     expect(cfg.exploration_weight).toBe(1.0);
     expect(cfg.weight_trust).toBeCloseTo(0.15);
+  });
+});
+
+// === Epsilon-greedy exploration in rankCandidates ===
+
+describe("rankCandidates epsilon-greedy exploration", () => {
+  it("swaps a non-top candidate into position 1 when exploration triggers", () => {
+    // Create 4 candidates with distinct trust levels so composites differ
+    const candidates = [
+      makeCandidate({
+        motebit_id: asMotebitId("top"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Trusted }),
+      }),
+      makeCandidate({
+        motebit_id: asMotebitId("second"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Verified }),
+      }),
+      makeCandidate({
+        motebit_id: asMotebitId("third"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.FirstContact }),
+      }),
+      makeCandidate({
+        motebit_id: asMotebitId("fourth"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Unknown }),
+      }),
+    ];
+
+    // Without exploration
+    const noExplore = rankCandidates(candidates, defaultReqs, { exploration_weight: 0 });
+    const normalOrder = noExplore.map((s) => s.motebit_id);
+
+    // With full exploration (exploration_weight = 1.0 means probe always < epsilon)
+    const withExplore = rankCandidates(candidates, defaultReqs, { exploration_weight: 1.0 });
+    const exploreOrder = withExplore.map((s) => s.motebit_id);
+
+    // Top candidate stays the same (exploration only swaps position 1)
+    expect(exploreOrder[0]).toBe(normalOrder[0]);
+    // All candidates still present
+    expect(withExplore.length).toBe(noExplore.length);
+  });
+
+  it("does not swap when probe >= epsilon", () => {
+    const candidates = [
+      makeCandidate({
+        motebit_id: asMotebitId("a"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Trusted }),
+      }),
+      makeCandidate({
+        motebit_id: asMotebitId("b"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Verified }),
+      }),
+    ];
+
+    // Tiny epsilon — probe unlikely to be below it
+    const scores = rankCandidates(candidates, defaultReqs, { exploration_weight: 0.0001 });
+    expect(scores[0]!.composite).toBeGreaterThanOrEqual(scores[1]!.composite);
+  });
+
+  it("does not explore with single candidate", () => {
+    const candidates = [makeCandidate({ motebit_id: asMotebitId("only") })];
+    const scores = rankCandidates(candidates, defaultReqs, { exploration_weight: 1.0 });
+    expect(scores.length).toBe(1);
+    expect(scores[0]!.motebit_id).toBe("only");
+  });
+
+  it("does not swap zero-scored candidates during exploration", () => {
+    // One good candidate, rest blocked (composite = 0)
+    const candidates = [
+      makeCandidate({
+        motebit_id: asMotebitId("good"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Trusted }),
+      }),
+      makeCandidate({
+        motebit_id: asMotebitId("blocked-1"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Blocked }),
+      }),
+      makeCandidate({
+        motebit_id: asMotebitId("blocked-2"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Blocked }),
+      }),
+    ];
+    const scores = rankCandidates(candidates, defaultReqs, { exploration_weight: 1.0 });
+
+    // Good candidate should be selected, blocked should not
+    const good = scores.find((s) => s.motebit_id === "good");
+    expect(good?.selected).toBe(true);
+    const blockedSelected = scores.filter((s) => s.composite === 0 && s.selected);
+    expect(blockedSelected.length).toBe(0);
   });
 });

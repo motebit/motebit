@@ -363,3 +363,141 @@ describe("verify — verifiable presentations", () => {
     expect(r.credentials![0]!.valid).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// verifyDataIntegrity edge cases (exercised via verify())
+// ---------------------------------------------------------------------------
+
+describe("verify — data integrity proof edge cases", () => {
+  it("fails when proof type is not DataIntegrityProof", async () => {
+    const kp = await makeKeypair();
+    const vc = await makeSignedCredential(kp);
+
+    // Replace the proof type with something wrong
+    (vc.proof as Record<string, unknown>).type = "WrongProofType";
+
+    const result = await verify(vc);
+    expect(result.type).toBe("credential");
+    expect(result.valid).toBe(false);
+
+    const r = result as CredentialVerifyResult;
+    expect(r.errors![0]!.message).toContain("proof verification failed");
+  });
+
+  it("fails when proof cryptosuite is not eddsa-jcs-2022", async () => {
+    const kp = await makeKeypair();
+    const vc = await makeSignedCredential(kp);
+
+    // Replace the cryptosuite with something wrong
+    (vc.proof as Record<string, unknown>).cryptosuite = "wrong-suite";
+
+    const result = await verify(vc);
+    expect(result.type).toBe("credential");
+    expect(result.valid).toBe(false);
+
+    const r = result as CredentialVerifyResult;
+    expect(r.errors![0]!.message).toContain("proof verification failed");
+  });
+
+  it("fails when verificationMethod has an invalid did:key", async () => {
+    const kp = await makeKeypair();
+    const vc = await makeSignedCredential(kp);
+
+    // Replace the verificationMethod with an invalid DID
+    vc.proof.verificationMethod = "not-a-did:key:z123#z123";
+
+    const result = await verify(vc);
+    expect(result.type).toBe("credential");
+    expect(result.valid).toBe(false);
+
+    const r = result as CredentialVerifyResult;
+    expect(r.errors![0]!.message).toContain("proof verification failed");
+  });
+
+  it("fails when verificationMethod has a did:key with wrong multicodec prefix", async () => {
+    const kp = await makeKeypair();
+    const vc = await makeSignedCredential(kp);
+
+    // Build a did:key with wrong prefix bytes (0x00, 0x00 instead of 0xed, 0x01)
+    const wrongPrefix = new Uint8Array(34);
+    wrongPrefix[0] = 0x00;
+    wrongPrefix[1] = 0x00;
+    wrongPrefix.set(kp.publicKey, 2);
+    const wrongDid = `did:key:z${base58btcEncode(wrongPrefix)}`;
+    vc.proof.verificationMethod = `${wrongDid}#${wrongDid.slice("did:key:".length)}`;
+
+    const result = await verify(vc);
+    expect(result.type).toBe("credential");
+    expect(result.valid).toBe(false);
+  });
+
+  it("fails when proofValue is missing the 'z' multibase prefix", async () => {
+    const kp = await makeKeypair();
+    const vc = await makeSignedCredential(kp);
+
+    // Remove the "z" prefix from proofValue
+    vc.proof.proofValue = vc.proof.proofValue.slice(1);
+
+    const result = await verify(vc);
+    expect(result.type).toBe("credential");
+    expect(result.valid).toBe(false);
+
+    const r = result as CredentialVerifyResult;
+    expect(r.errors![0]!.message).toContain("proof verification failed");
+  });
+
+  it("fails when proofValue has invalid base58btc content after 'z'", async () => {
+    const kp = await makeKeypair();
+    const vc = await makeSignedCredential(kp);
+
+    // Set proofValue to "z" followed by invalid base58 characters
+    vc.proof.proofValue = "z!!!invalid-base58!!!";
+
+    const result = await verify(vc);
+    expect(result.type).toBe("credential");
+    expect(result.valid).toBe(false);
+  });
+
+  it("verifies the full data integrity proof path on a valid credential", async () => {
+    const kp = await makeKeypair();
+    const vc = await makeSignedCredential(kp);
+
+    const result = await verify(vc);
+    expect(result.type).toBe("credential");
+    expect(result.valid).toBe(true);
+
+    const r = result as CredentialVerifyResult;
+    expect(r.issuer).toMatch(/^did:key:z/);
+    expect(r.subject).toMatch(/^did:key:z/);
+    expect(r.errors).toBeUndefined();
+  });
+
+  it("verifies presentation passed as JSON string", async () => {
+    const kp = await makeKeypair();
+    const vc = await makeSignedCredential(kp);
+
+    const holderDid = publicKeyToDidKey(kp.publicKey);
+    const unsignedVP: Omit<VerifiablePresentation, "proof"> = {
+      "@context": ["https://www.w3.org/ns/credentials/v2"],
+      type: ["VerifiablePresentation"],
+      holder: holderDid,
+      verifiableCredential: [vc],
+    };
+
+    const proof = await signDataIntegrity(
+      unsignedVP as unknown as Record<string, unknown>,
+      kp.privateKey,
+      kp.publicKey,
+      "authentication",
+    );
+    const vp: VerifiablePresentation = { ...unsignedVP, proof };
+
+    const result = await verify(JSON.stringify(vp));
+    expect(result.type).toBe("presentation");
+    expect(result.valid).toBe(true);
+
+    const r = result as PresentationVerifyResult;
+    expect(r.holder).toBe(holderDid);
+    expect(r.credentials).toHaveLength(1);
+  });
+});

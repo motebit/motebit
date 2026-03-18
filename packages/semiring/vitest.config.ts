@@ -5,7 +5,7 @@ export default defineConfig({
     coverage: {
       include: ["src/**/*.ts"],
       exclude: ["src/__tests__/**"],
-      thresholds: { statements: 89, branches: 86, functions: 87, lines: 89 },
+      thresholds: { statements: 100, branches: 92, functions: 100, lines: 100 },
     },
   },
 });

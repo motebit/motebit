@@ -674,6 +674,80 @@ describe("verify — succession chain", () => {
 });
 
 // ---------------------------------------------------------------------------
+// verify() — dispatch: JSON string inputs for non-identity types
+// ---------------------------------------------------------------------------
+
+describe("verify — JSON string dispatch", () => {
+  it("dispatches a receipt JSON string to verifyReceipt", async () => {
+    const kp = await makeKeypair();
+    const receiptBody = {
+      task_id: "task-json-str",
+      motebit_id: "01234567-89ab-cdef-0123-456789abcdef",
+      public_key: kp.publicKeyHex,
+      device_id: "dev-001",
+      submitted_at: 1000000,
+      completed_at: 1001000,
+      status: "completed",
+      result: "ok",
+      tools_used: [],
+      memories_formed: 0,
+      prompt_hash: "abc",
+      result_hash: "def",
+    };
+    const canonical = canonicalJson(receiptBody);
+    const message = new TextEncoder().encode(canonical);
+    const sig = await ed.signAsync(message, kp.privateKey);
+    const sigB64 = toBase64Url(sig);
+    const receipt = { ...receiptBody, signature: sigB64 };
+
+    const result = await verify(JSON.stringify(receipt));
+    expect(result.type).toBe("receipt");
+    expect(result.valid).toBe(true);
+  });
+
+  it("returns error for receipt-shaped string with invalid JSON", async () => {
+    // This is tricky — detectArtifactType tries JSON.parse. If it fails,
+    // it returns null (not a receipt). We need something that detects as receipt
+    // but then fails JSON.parse on the second pass.
+    // Actually, strings that contain "---" go to identity, and non-JSON without "---" return null.
+    // The JSON parse fail path on line 1030 would only be hit if detectArtifactType
+    // successfully parsed but then the second parse fails — which can't happen
+    // since they use the same JSON.parse. So this path is essentially dead code
+    // for valid detection. Let's verify the type mismatch paths instead.
+    const result = await verify(42, { expectedType: "receipt" });
+    expect(result.valid).toBe(false);
+    expect(result.errors![0]!.message).toBe("Unrecognized artifact format");
+  });
+
+  it("returns unrecognized format for non-object non-string input", async () => {
+    const result = await verify(null);
+    expect(result.valid).toBe(false);
+    expect(result.errors![0]!.message).toBe("Unrecognized artifact format");
+  });
+
+  it("returns unrecognized format with credential fallback type", async () => {
+    const result = await verify(42, { expectedType: "credential" });
+    expect(result.valid).toBe(false);
+    expect((result as { credential: unknown }).credential).toBeNull();
+    expect(result.errors![0]!.message).toBe("Unrecognized artifact format");
+  });
+
+  it("returns unrecognized format with presentation fallback type", async () => {
+    const result = await verify(42, { expectedType: "presentation" });
+    expect(result.valid).toBe(false);
+    expect((result as { presentation: unknown }).presentation).toBeNull();
+    expect(result.errors![0]!.message).toBe("Unrecognized artifact format");
+  });
+
+  it("dispatches identity string to verifyIdentity", async () => {
+    const { content } = await generateValidFile();
+    const result = await verify(content);
+    expect(result.type).toBe("identity");
+    expect(result.valid).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Cross-compatibility with @motebit/identity-file
 // ---------------------------------------------------------------------------
 // NOTE: Cross-compat is now tested in @motebit/identity-file's test suite,

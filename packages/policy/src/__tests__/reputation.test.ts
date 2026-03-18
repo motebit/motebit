@@ -122,6 +122,56 @@ describe("computeReputationScore", () => {
     expect(score).toBeCloseTo(0.5, 2);
   });
 
+  it("handles undefined successful_tasks (defaults to 0)", () => {
+    const record = makeRecord({
+      successful_tasks: undefined as unknown as number,
+      failed_tasks: 5,
+      interaction_count: 10,
+      last_seen_at: NOW,
+    });
+    const score = computeReputationScore(record, NOW);
+    // successRate = (1+0)/(2+5) = 1/7 ≈ 0.143
+    expect(score).toBeGreaterThan(0);
+    expect(score).toBeLessThan(1);
+  });
+
+  it("handles undefined failed_tasks (defaults to 0)", () => {
+    const record = makeRecord({
+      successful_tasks: 10,
+      failed_tasks: undefined as unknown as number,
+      interaction_count: 10,
+      last_seen_at: NOW,
+    });
+    const score = computeReputationScore(record, NOW);
+    // successRate = (1+10)/(2+10) = 11/12 ≈ 0.917
+    expect(score).toBeGreaterThan(0.5);
+  });
+
+  it("handles both successful_tasks and failed_tasks undefined", () => {
+    const record = makeRecord({
+      successful_tasks: undefined as unknown as number,
+      failed_tasks: undefined as unknown as number,
+      interaction_count: 5,
+      last_seen_at: NOW,
+    });
+    const score = computeReputationScore(record, NOW);
+    // successRate = (1+0)/(2+0) = 0.5
+    expect(score).toBeGreaterThan(0);
+    expect(score).toBeLessThan(1);
+  });
+
+  it("uses Date.now() when no timestamp provided", () => {
+    const record = makeRecord({
+      interaction_count: 10,
+      successful_tasks: 5,
+      failed_tasks: 0,
+      last_seen_at: Date.now(),
+    });
+    const score = computeReputationScore(record);
+    expect(score).toBeGreaterThan(0);
+    expect(score).toBeLessThan(1);
+  });
+
   it("always returns a score in [0, 1]", () => {
     const cases: AgentTrustRecord[] = [
       makeRecord({ trust_level: AgentTrustLevel.Blocked }),

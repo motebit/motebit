@@ -187,6 +187,44 @@ describe("verify — execution receipts", () => {
     expect(r.delegations![0]!.valid).toBe(false);
   });
 
+  it("fails on receipt without public key but still verifies delegations", async () => {
+    const kpParent = await makeKeypair();
+    const kpChild = await makeKeypair();
+
+    // Create a valid child receipt
+    const childBody = makeReceiptBody(kpChild.publicKeyHex);
+    childBody.task_id = "task-child-no-parent-key";
+    const childReceipt = await signReceipt(childBody, kpChild.privateKey);
+
+    // Create parent without public_key but with delegation_receipts
+    const parentBody = makeReceiptBody(kpParent.publicKeyHex);
+    delete (parentBody as Record<string, unknown>).public_key;
+    parentBody.delegation_receipts = [childReceipt];
+    const parentReceipt = await signReceipt(parentBody, kpParent.privateKey);
+
+    const result = await verify(parentReceipt);
+    expect(result.type).toBe("receipt");
+    expect(result.valid).toBe(false);
+    expect(result.errors![0]!.message).toContain("No embedded public_key");
+
+    const r = result as ReceiptVerifyResult;
+    expect(r.delegations).toHaveLength(1);
+    expect(r.delegations![0]!.valid).toBe(true);
+  });
+
+  it("fails on receipt with invalid public key hex (wrong length)", async () => {
+    const kp = await makeKeypair();
+    const body = makeReceiptBody(kp.publicKeyHex);
+    // Set public_key to a hex string that's not 32 bytes
+    body.public_key = "abcd";
+    const receipt = await signReceipt(body, kp.privateKey);
+
+    const result = await verify(receipt);
+    expect(result.type).toBe("receipt");
+    expect(result.valid).toBe(false);
+    expect(result.errors![0]!.message).toContain("No embedded public_key");
+  });
+
   it("respects expectedType option", async () => {
     const kp = await makeKeypair();
     const receipt = await signReceipt(makeReceiptBody(kp.publicKeyHex), kp.privateKey);

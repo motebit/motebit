@@ -161,4 +161,61 @@ describe("settleOnReceipt", () => {
     // Invariant: fee + net = gross
     expect(result.platform_fee + result.amount_settled).toBeCloseTo(4999.99, 6);
   });
+
+  it("uses empty string for receipt_hash when result_hash is undefined", () => {
+    const receipt = makeReceipt();
+    delete (receipt as unknown as Record<string, unknown>).result_hash;
+    const result = settleOnReceipt(makeAllocation(), receipt, null, SID);
+    expect(result.receipt_hash).toBe("");
+    expect(result.status).toBe("completed");
+  });
+
+  it("includes ledger_hash as null when no ledger on refund", () => {
+    const result = settleOnReceipt(makeAllocation(), makeReceipt({ status: "failed" }), null, SID);
+    expect(result.ledger_hash).toBeNull();
+  });
+
+  it("includes ledger_hash from ledger on refund", () => {
+    const ledger = makeLedger([{ status: "completed" }]);
+    const result = settleOnReceipt(
+      makeAllocation(),
+      makeReceipt({ status: "denied" }),
+      ledger,
+      SID,
+    );
+    expect(result.ledger_hash).toBe("ledger-hash-1");
+    expect(result.status).toBe("refunded");
+    expect(result.amount_settled).toBe(0);
+  });
+
+  it("full settlement when ledger has zero steps", () => {
+    // Empty steps array → completed < total is false (0 < 0 is false) → full settlement
+    const ledger = makeLedger([]);
+    const result = settleOnReceipt(makeAllocation(), makeReceipt(), ledger, SID);
+    expect(result.status).toBe("completed");
+    expect(result.amount_settled).toBe(0.95);
+  });
+
+  it("full settlement when all steps completed (no partial)", () => {
+    const ledger = makeLedger([
+      { status: "completed" },
+      { status: "completed" },
+      { status: "completed" },
+    ]);
+    const result = settleOnReceipt(makeAllocation(), makeReceipt(), ledger, SID);
+    expect(result.status).toBe("completed");
+    // completed === total → no partial reduction
+    expect(result.platform_fee).toBe(0.05);
+    expect(result.amount_settled).toBe(0.95);
+  });
+
+  it("full settlement when all steps failed (completed = 0, no partial — goes full)", () => {
+    // When completed === 0, the partial branch requires completed > 0, so it doesn't trigger.
+    // This means the receipt status "completed" results in full settlement even though
+    // all ledger steps failed — the ledger only triggers partial if completed ∈ (0, total).
+    const ledger = makeLedger([{ status: "failed" }, { status: "failed" }]);
+    const result = settleOnReceipt(makeAllocation(), makeReceipt(), ledger, SID);
+    expect(result.status).toBe("completed");
+    expect(result.amount_settled).toBe(0.95);
+  });
 });

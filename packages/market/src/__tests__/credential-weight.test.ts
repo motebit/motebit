@@ -119,6 +119,56 @@ describe("aggregateCredentialReputation", () => {
     expect(result).not.toBeNull();
     expect(result!.issuer_count).toBe(1); // Only the reputation VC counted
   });
+
+  it("skips individual issuers below minTrust while keeping others", () => {
+    const trustedVC = makeRepVC("did:key:trusted", { success_rate: 0.9 });
+    const untrustedVC = makeRepVC("did:key:untrusted", { success_rate: 0.1 });
+
+    // Map: trusted issuer gets 0.9, untrusted gets 0.01 (below default min 0.05)
+    const getIssuerTrust = (did: string) => (did === "did:key:trusted" ? 0.9 : 0.01);
+
+    const result = aggregateCredentialReputation([trustedVC, untrustedVC], getIssuerTrust);
+
+    expect(result).not.toBeNull();
+    // Only the trusted issuer should contribute
+    expect(result!.issuer_count).toBe(1);
+    expect(result!.success_rate).toBeCloseTo(0.9);
+  });
+
+  it("skips all issuers below custom minTrust threshold", () => {
+    const vc1 = makeRepVC("did:key:a", { success_rate: 0.9 });
+    const vc2 = makeRepVC("did:key:b", { success_rate: 0.8 });
+
+    // Both issuers return 0.3, but minTrust is 0.5
+    const getIssuerTrust = () => 0.3;
+
+    const result = aggregateCredentialReputation([vc1, vc2], getIssuerTrust, {
+      minIssuerTrust: 0.5,
+    });
+
+    // All issuers below threshold → null
+    expect(result).toBeNull();
+  });
+
+  it("continues past low-trust issuers and aggregates remaining", () => {
+    const vc1 = makeRepVC("did:key:low-trust", { success_rate: 0.1 });
+    const vc2 = makeRepVC("did:key:medium-trust", { success_rate: 0.7 });
+    const vc3 = makeRepVC("did:key:high-trust", { success_rate: 0.95 });
+
+    const getIssuerTrust = (did: string) => {
+      if (did === "did:key:low-trust") return 0.01; // below min
+      if (did === "did:key:medium-trust") return 0.4;
+      return 0.9;
+    };
+
+    const result = aggregateCredentialReputation([vc1, vc2, vc3], getIssuerTrust);
+
+    expect(result).not.toBeNull();
+    // Low-trust issuer skipped, only medium and high contribute
+    expect(result!.issuer_count).toBe(2);
+    // Weighted toward high-trust issuer
+    expect(result!.success_rate).toBeGreaterThan(0.7);
+  });
 });
 
 // ── blendCredentialTrust ────────────────────────────────────────────

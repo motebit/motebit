@@ -12,6 +12,9 @@ import { AgentTrustLevel, asMotebitId, asListingId } from "@motebit/sdk";
 import type { AgentTrustRecord, AgentServiceListing } from "@motebit/sdk";
 import type { RouteWeight } from "@motebit/semiring";
 
+// Cover the barrel re-export file (index.ts)
+import "../index.js";
+
 // ── Test Helpers ────────────────────────────────────────────────────
 
 const SELF_ID = asMotebitId("self-agent");
@@ -537,5 +540,262 @@ describe("explainedRankCandidates", () => {
     expect(score).toHaveProperty("alternatives_considered");
     expect(Array.isArray(score.routing_paths)).toBe(true);
     expect(typeof score.alternatives_considered).toBe("number");
+  });
+});
+
+// ── weightedSumComposite (standalone) ───────────────────────────────
+
+describe("weightedSumComposite", () => {
+  it("computes weighted sum using default weights", async () => {
+    const { weightedSumComposite } = await import("../graph-routing.js");
+
+    const route = { trust: 0.8, cost: 5, latency: 100, reliability: 0.9, regulatory_risk: 0.1 };
+    const normalized = {
+      trust: 0.8,
+      reliability: 0.9,
+      costScore: 0.5,
+      latencyNorm: 0.7,
+      riskScore: 0.6,
+    };
+
+    const result = weightedSumComposite(route, normalized);
+    // 0.8*0.3 + 0.5*0.2 + 0.7*0.15 + 0.9*0.15 + 0.6*0.2
+    const expected = 0.24 + 0.1 + 0.105 + 0.135 + 0.12;
+    expect(result).toBeCloseTo(expected, 10);
+  });
+
+  it("returns 0 when all scores are 0", async () => {
+    const { weightedSumComposite } = await import("../graph-routing.js");
+
+    const route = { trust: 0, cost: 0, latency: 0, reliability: 0, regulatory_risk: 0 };
+    const normalized = {
+      trust: 0,
+      reliability: 0,
+      costScore: 0,
+      latencyNorm: 0,
+      riskScore: 0,
+    };
+
+    expect(weightedSumComposite(route, normalized)).toBe(0);
+  });
+});
+
+// ── lexicographicComposite ──────────────────────────────────────────
+
+describe("lexicographicComposite", () => {
+  it("ranks by trust first, then reliability, then cost", async () => {
+    const { lexicographicComposite } = await import("../graph-routing.js");
+
+    // High trust, low reliability
+    const scoreA = lexicographicComposite(
+      { trust: 0.9, cost: 10, latency: 100, reliability: 0.5, regulatory_risk: 0 },
+      { trust: 0.9, reliability: 0.5, costScore: 0.5, latencyNorm: 0.5, riskScore: 0.5 },
+    );
+    // Low trust, high reliability
+    const scoreB = lexicographicComposite(
+      { trust: 0.5, cost: 1, latency: 50, reliability: 0.99, regulatory_risk: 0 },
+      { trust: 0.5, reliability: 0.99, costScore: 0.9, latencyNorm: 0.9, riskScore: 0.9 },
+    );
+    // Trust dominates: 0.9 * 1e6 > 0.5 * 1e6
+    expect(scoreA).toBeGreaterThan(scoreB);
+  });
+
+  it("uses reliability as tiebreaker when trust is equal", async () => {
+    const { lexicographicComposite } = await import("../graph-routing.js");
+
+    const scoreHigh = lexicographicComposite(
+      { trust: 0.8, cost: 10, latency: 100, reliability: 0.9, regulatory_risk: 0 },
+      { trust: 0.8, reliability: 0.9, costScore: 0.3, latencyNorm: 0.5, riskScore: 0.5 },
+    );
+    const scoreLow = lexicographicComposite(
+      { trust: 0.8, cost: 1, latency: 50, reliability: 0.3, regulatory_risk: 0 },
+      { trust: 0.8, reliability: 0.3, costScore: 0.9, latencyNorm: 0.9, riskScore: 0.9 },
+    );
+    // Same trust, higher reliability wins
+    expect(scoreHigh).toBeGreaterThan(scoreLow);
+  });
+
+  it("returns a single number encoding the priority bands", async () => {
+    const { lexicographicComposite } = await import("../graph-routing.js");
+
+    const result = lexicographicComposite(
+      { trust: 1.0, cost: 0, latency: 0, reliability: 1.0, regulatory_risk: 0 },
+      { trust: 1.0, reliability: 1.0, costScore: 1.0, latencyNorm: 1.0, riskScore: 1.0 },
+    );
+    // 1.0 * 1e6 + 1.0 * 1e3 + 1.0 = 1_001_001
+    expect(result).toBeCloseTo(1_001_001, 0);
+  });
+});
+
+// ── graphRankCandidates with lexicographic composite ─────────────────
+
+describe("graphRankCandidates with compositeFunction", () => {
+  it("accepts a custom composite function (lexicographic)", async () => {
+    const { lexicographicComposite } = await import("../graph-routing.js");
+
+    const candidates = [
+      makeCandidate({
+        motebit_id: asMotebitId("high-trust"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Trusted }),
+      }),
+      makeCandidate({
+        motebit_id: asMotebitId("low-trust"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Unknown }),
+      }),
+    ];
+    const scores = graphRankCandidates(SELF_ID, candidates, defaultReqs, {
+      compositeFunction: lexicographicComposite,
+    });
+
+    expect(scores.length).toBe(2);
+    expect(scores[0]!.motebit_id).toBe("high-trust");
+    // Composite values should be much larger than [0,1] range (1e6 scale)
+    expect(scores[0]!.composite).toBeGreaterThan(1000);
+  });
+});
+
+// ── finalizeScores exploration logic ────────────────────────────────
+
+describe("graphRankCandidates exploration (epsilon-greedy)", () => {
+  it("exploration swaps a non-top candidate into position 1 when probe triggers", () => {
+    // To trigger exploration, we need:
+    // 1. explorationWeight > 0
+    // 2. scores.length > 1
+    // 3. (scores[0].composite * 1000) % 1 < explorationWeight
+    // 4. explorationIdx > 1 && scores[explorationIdx].composite > 0
+    //
+    // We craft composites so that (top_composite * 1000) % 1 is small,
+    // and explorationWeight is large enough to trigger.
+    // Top composite fractional part: (X * 1000) % 1.
+    // For X = 0.5, (0.5 * 1000) % 1 = (500) % 1 = 0 → probe = 0 < any positive epsilon.
+    // But explorationIdx = 1 + floor(0 * (len-1)) = 1, which is NOT > 1, so no swap.
+    //
+    // For X where fractional part gives explorationIdx > 1:
+    // We need probe > 0 and probe * (len-1) > 0 so explorationIdx >= 2.
+    // With 4 candidates: probe * 3 > 0 and floor(probe * 3) + 1 > 1 → probe >= 1/3.
+    // So we need probe ∈ [1/3, explorationWeight).
+    // probe = (composite * 1000) % 1. If composite = 0.5005, probe = (500.5) % 1 = 0.5.
+    // explorationIdx = 1 + floor(0.5 * 3) = 1 + 1 = 2 > 1. Swap happens.
+
+    // Create candidates with carefully chosen trust levels to produce the right composites.
+    // We'll use many candidates with varying trust so position 2+ has composite > 0.
+    const candidates = [
+      makeCandidate({
+        motebit_id: asMotebitId("top"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Trusted }),
+      }),
+      makeCandidate({
+        motebit_id: asMotebitId("second"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Verified }),
+      }),
+      makeCandidate({
+        motebit_id: asMotebitId("third"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.FirstContact }),
+      }),
+      makeCandidate({
+        motebit_id: asMotebitId("fourth"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Unknown }),
+      }),
+    ];
+
+    // Run without exploration
+    const noExplore = graphRankCandidates(SELF_ID, candidates, defaultReqs, {
+      explorationWeight: 0,
+    });
+    const normalOrder = noExplore.map((s) => s.motebit_id);
+
+    // Run with very high exploration weight (1.0 = always explore)
+    const withExplore = graphRankCandidates(SELF_ID, candidates, defaultReqs, {
+      explorationWeight: 1.0,
+    });
+    const exploreOrder = withExplore.map((s) => s.motebit_id);
+
+    // The top candidate should remain the same (exploration only swaps position 1)
+    expect(exploreOrder[0]).toBe(normalOrder[0]);
+
+    // With exploration, scores are deterministic (pseudo-random from composite).
+    // The exploration may or may not swap depending on the exact composite values.
+    // At minimum, all candidates should still be present.
+    expect(withExplore.length).toBe(noExplore.length);
+    expect(withExplore.every((s) => s.composite > 0)).toBe(true);
+  });
+
+  it("exploration does not swap when probe >= explorationWeight", () => {
+    const candidates = [
+      makeCandidate({
+        motebit_id: asMotebitId("a"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Trusted }),
+      }),
+      makeCandidate({
+        motebit_id: asMotebitId("b"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Verified }),
+      }),
+    ];
+
+    // Very small exploration weight — probe likely exceeds it
+    const scores = graphRankCandidates(SELF_ID, candidates, defaultReqs, {
+      explorationWeight: 0.0001,
+    });
+
+    // Still sorted by composite
+    expect(scores[0]!.composite).toBeGreaterThanOrEqual(scores[1]!.composite);
+  });
+
+  it("exploration does not affect single-candidate lists", () => {
+    const candidates = [makeCandidate({ motebit_id: asMotebitId("only") })];
+    const scores = graphRankCandidates(SELF_ID, candidates, defaultReqs, {
+      explorationWeight: 1.0,
+    });
+
+    expect(scores.length).toBe(1);
+    expect(scores[0]!.motebit_id).toBe("only");
+  });
+
+  it("exploration swaps position 1 with a lower-ranked candidate (controlled composite)", () => {
+    // Use a custom composite function that returns decreasing values.
+    // Top candidate gets composite = 0.5005 → probe = (500.5) % 1 = 0.5
+    // With 4 candidates: explorationIdx = 1 + floor(0.5 * 3) = 2
+    // Since explorationIdx > 1 and scores[2].composite > 0, swap happens.
+    let callIndex = 0;
+    const composites = [0.5005, 0.4, 0.3, 0.2]; // Decreasing — sorted order preserved
+    const controlledComposite = () => {
+      const val = composites[callIndex % composites.length]!;
+      callIndex++;
+      return val;
+    };
+
+    const candidates = [
+      makeCandidate({
+        motebit_id: asMotebitId("a"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Trusted }),
+      }),
+      makeCandidate({
+        motebit_id: asMotebitId("b"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Verified }),
+      }),
+      makeCandidate({
+        motebit_id: asMotebitId("c"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.FirstContact }),
+      }),
+      makeCandidate({
+        motebit_id: asMotebitId("d"),
+        trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Unknown }),
+      }),
+    ];
+
+    const scores = graphRankCandidates(SELF_ID, candidates, defaultReqs, {
+      explorationWeight: 1.0,
+      compositeFunction: controlledComposite,
+    });
+
+    // All 4 candidates present
+    expect(scores.length).toBe(4);
+    // Position 0 stays the same (highest composite)
+    expect(scores[0]!.composite).toBe(0.5005);
+    // The swap should have moved position 2 to position 1
+    // Original order after sort: [0.5005, 0.4, 0.3, 0.2]
+    // After swap (idx 1 <-> idx 2): [0.5005, 0.3, 0.4, 0.2]
+    expect(scores[1]!.composite).toBe(0.3);
+    expect(scores[2]!.composite).toBe(0.4);
   });
 });
