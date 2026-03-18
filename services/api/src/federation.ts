@@ -561,7 +561,9 @@ export interface FederationDeps {
   /** Called when a verified forwarded task arrives from a peer. */
   onTaskForwarded(
     task: VerifiedForwardedTask,
-  ): Promise<{ status: "routed" | "pending" }> | { status: "routed" | "pending" };
+  ):
+    | Promise<{ status: "routed" | "pending" | "duplicate"; task_id?: string }>
+    | { status: "routed" | "pending" | "duplicate"; task_id?: string };
 
   /** Called when a verified task result arrives from a peer. */
   onTaskResultReceived(result: VerifiedTaskResult): Promise<void>;
@@ -942,6 +944,10 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       payload: body.task_payload,
       routingChoice: body.routing_choice,
     });
+
+    if (result.status === "duplicate") {
+      return c.json({ task_id: body.task_id, status: "duplicate" }, 409);
+    }
 
     return c.json(
       { task_id: body.task_id, status: result.status },

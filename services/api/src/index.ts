@@ -1653,6 +1653,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       taskRouter.queryLocalAgents(capability, motebitId, limit),
 
     onTaskForwarded(verified) {
+      // Idempotency: reject duplicate task_id to prevent double-execution
+      // when the origin relay retries after a timeout.
+      if (taskQueue.has(verified.taskId)) {
+        return { status: "duplicate" as const, task_id: verified.taskId };
+      }
+
       const task: AgentTask = {
         task_id: verified.taskId,
         motebit_id: asMotebitId(verified.targetAgent),
@@ -2248,6 +2254,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     const requiredCaps = task.required_capabilities ?? [];
     const payload = JSON.stringify({ type: "task_request", task });
     let routed = false;
+    let federationAttempted = false;
     let routingChoice:
       | {
           selected_agent: string;
@@ -2350,6 +2357,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
               if (remoteAgentRelay.has(selId)) {
                 // Remote agent: forward task to peer relay
                 const peerEndpoint = remoteAgentRelay.get(selId)!;
+                federationAttempted = true;
                 try {
                   const forwardBody = {
                     task_id: taskId,
@@ -2385,8 +2393,18 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
                       targetAgent: selId,
                     });
                   }
-                } catch {
-                  // Federation forward failed — try next candidate or fall through to broadcast
+                } catch (fwdErr) {
+                  // Federation forward failed or timed out. Do NOT fall through to local
+                  // broadcast — the peer relay may have accepted the task before the timeout
+                  // fired, and broadcasting locally would cause double-execution.
+                  // The task stays in Pending; if the peer did accept, its receipt will
+                  // arrive via federation/v1/task/result.
+                  logger.warn("task.forward_failed", {
+                    correlationId: taskId,
+                    peerRelay: peerEndpoint,
+                    targetAgent: selId,
+                    error: fwdErr instanceof Error ? fwdErr.message : String(fwdErr),
+                  });
                 }
               } else {
                 // Local agent: route via WebSocket
@@ -2408,8 +2426,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       }
     }
 
-    // Phase 2: Broadcast fallback — original behavior
-    if (!routed) {
+    // Phase 2: Broadcast fallback — original behavior.
+    // Skip if a federation forward was attempted (even if it timed out) — the peer relay
+    // may have accepted the task, and broadcasting locally would cause double-execution.
+    if (!routed && !federationAttempted) {
       const peers = connections.get(motebitId);
       if (peers) {
         for (const peer of peers) {
