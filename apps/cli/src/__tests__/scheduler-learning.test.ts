@@ -4,8 +4,40 @@ import { createMotebitDatabase, type MotebitDatabase, type Goal } from "@motebit
 import { EventType, RiskLevel, SensitivityLevel } from "@motebit/sdk";
 import type { ToolDefinition, ToolHandler, MemoryNode } from "@motebit/sdk";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
+import type { TurnResult } from "@motebit/ai-core";
 import type { PlanEngine, PlanStoreAdapter } from "@motebit/planner";
 import { InMemoryPlanStore } from "@motebit/planner";
+
+function makeMockTurnResult(): TurnResult {
+  return {
+    response: "",
+    memoriesFormed: [],
+    memoriesRetrieved: [],
+    stateAfter: {
+      attention: 0,
+      processing: 0,
+      confidence: 0,
+      affect_valence: 0.5,
+      affect_arousal: 0,
+      social_distance: 0.5,
+      curiosity: 0,
+      trust_mode: 0,
+      battery_mode: 0,
+    },
+    cues: {
+      hover_distance: 0.4,
+      drift_amplitude: 0.02,
+      glow_intensity: 0,
+      eye_dilation: 0.5,
+      smile_curvature: 0,
+      speaking_activity: 0,
+    },
+    iterations: 1,
+    toolCallsSucceeded: 0,
+    toolCallsBlocked: 0,
+    toolCallsFailed: 0,
+  };
+}
 
 // Mock embedText — avoid loading HF pipeline in tests
 vi.mock("@motebit/memory-graph", async (importOriginal) => {
@@ -66,17 +98,21 @@ function createMockRuntime(
         await opts.onStream(registeredTools);
       }
       yield { type: "text" as const, text: opts.streamText ?? "goal done" };
-      yield { type: "result" as const, result: { memoriesFormed: [] } as any };
+      yield { type: "result" as const, result: makeMockTurnResult() };
     },
     async *resumeAfterApproval(_approved: boolean): AsyncGenerator<StreamChunk> {
       _hasPending = false;
-      yield { type: "result" as const, result: { memoriesFormed: [] } as any };
+      yield { type: "result" as const, result: makeMockTurnResult() };
     },
     events: {
       getLatestClock: vi.fn().mockResolvedValue(0),
-      append: vi.fn().mockImplementation(async (entry: any) => {
-        eventsAppended.push({ event_type: entry.event_type, payload: entry.payload });
-      }),
+      append: vi
+        .fn()
+        .mockImplementation(
+          async (entry: { event_type: string; payload: Record<string, unknown> }) => {
+            eventsAppended.push({ event_type: entry.event_type, payload: entry.payload });
+          },
+        ),
     },
     memory: memoryGraph,
     getToolRegistry: vi.fn().mockReturnValue({
@@ -356,7 +392,7 @@ describe("GoalScheduler — learning loop", () => {
           content: "[goal_learning] Health check takes ~5 seconds",
           embedding: [],
           confidence: 0.7,
-          sensitivity: "none" as any,
+          sensitivity: SensitivityLevel.None,
           created_at: Date.now(),
           last_accessed: Date.now(),
           half_life: 604800000,
@@ -369,7 +405,7 @@ describe("GoalScheduler — learning loop", () => {
           content: "[goal_outcome] Previous health check found slow DB queries",
           embedding: [],
           confidence: 0.6,
-          sensitivity: "none" as any,
+          sensitivity: SensitivityLevel.None,
           created_at: Date.now(),
           last_accessed: Date.now(),
           half_life: 604800000,

@@ -555,18 +555,20 @@ export function App(): React.ReactElement {
   );
 
   // === GL context ===
-  const onGLContextCreate = useCallback(async (gl: ExpoWebGLRenderingContext) => {
-    const a = app.current;
-    await a.init(gl);
+  const onGLContextCreate = useCallback((gl: ExpoWebGLRenderingContext) => {
+    void (async () => {
+      const a = app.current;
+      await a.init(gl);
 
-    let lastTime = 0;
-    const animate = (time: number): void => {
-      const dt = lastTime ? (time - lastTime) / 1000 : 0.016;
-      lastTime = time;
-      a.renderFrame(dt, time / 1000);
+      let lastTime = 0;
+      const animate = (time: number): void => {
+        const dt = lastTime ? (time - lastTime) / 1000 : 0.016;
+        lastTime = time;
+        a.renderFrame(dt, time / 1000);
+        animFrameRef.current = requestAnimationFrame(animate);
+      };
       animFrameRef.current = requestAnimationFrame(animate);
-    };
-    animFrameRef.current = requestAnimationFrame(animate);
+    })();
   }, []);
 
   // === Orbit gesture handlers ===
@@ -1465,7 +1467,6 @@ export function App(): React.ReactElement {
           onResponderMove={handleGLResponderMove}
           onResponderRelease={handleGLResponderRelease}
         >
-          {/* eslint-disable-next-line @typescript-eslint/no-misused-promises */}
           <GLView style={ds.glView} onContextCreate={onGLContextCreate} />
           {state && (
             <View style={ds.stateOverlay}>

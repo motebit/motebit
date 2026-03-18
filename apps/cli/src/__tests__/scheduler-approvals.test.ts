@@ -4,6 +4,38 @@ import { createMotebitDatabase, type MotebitDatabase, type Goal } from "@motebit
 import { EventType, RiskLevel } from "@motebit/sdk";
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
+import type { TurnResult } from "@motebit/ai-core";
+
+function makeMockTurnResult(): TurnResult {
+  return {
+    response: "",
+    memoriesFormed: [],
+    memoriesRetrieved: [],
+    stateAfter: {
+      attention: 0,
+      processing: 0,
+      confidence: 0,
+      affect_valence: 0.5,
+      affect_arousal: 0,
+      social_distance: 0.5,
+      curiosity: 0,
+      trust_mode: 0,
+      battery_mode: 0,
+    },
+    cues: {
+      hover_distance: 0.4,
+      drift_amplitude: 0.02,
+      glow_intensity: 0,
+      eye_dilation: 0.5,
+      smile_curvature: 0,
+      speaking_activity: 0,
+    },
+    iterations: 1,
+    toolCallsSucceeded: 0,
+    toolCallsBlocked: 0,
+    toolCallsFailed: 0,
+  };
+}
 
 interface MockRuntimeResult {
   runtime: MotebitRuntime;
@@ -48,7 +80,7 @@ function createMockRuntime(
         await opts.onStream(registeredTools);
       }
       yield { type: "text" as const, text: "done" };
-      yield { type: "result" as const, result: { memoriesFormed: [] } as any };
+      yield { type: "result" as const, result: makeMockTurnResult() };
     },
     async *resumeAfterApproval(approved: boolean): AsyncGenerator<StreamChunk> {
       _hasPending = false;
@@ -61,13 +93,17 @@ function createMockRuntime(
           result: "output",
         };
       }
-      yield { type: "result" as const, result: { memoriesFormed: [] } as any };
+      yield { type: "result" as const, result: makeMockTurnResult() };
     },
     events: {
       getLatestClock: vi.fn().mockResolvedValue(0),
-      append: vi.fn().mockImplementation(async (entry: any) => {
-        eventsAppended.push({ event_type: entry.event_type, payload: entry.payload });
-      }),
+      append: vi
+        .fn()
+        .mockImplementation(
+          async (entry: { event_type: string; payload: Record<string, unknown> }) => {
+            eventsAppended.push({ event_type: entry.event_type, payload: entry.payload });
+          },
+        ),
     },
     getToolRegistry: vi.fn().mockReturnValue({
       register: vi.fn().mockImplementation((def: ToolDefinition, handler: ToolHandler) => {
