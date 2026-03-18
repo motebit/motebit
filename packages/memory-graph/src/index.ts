@@ -368,7 +368,7 @@ export class MemoryGraph {
       motebit_id: this.motebitId,
       timestamp: now,
       event_type: EventType.MemoryFormed,
-      payload: { node_id: nodeId, content: candidate.content },
+      payload: { node_id: nodeId, content: candidate.content, sensitivity: candidate.sensitivity },
       version_clock: clock + 1,
       tombstoned: false,
     });

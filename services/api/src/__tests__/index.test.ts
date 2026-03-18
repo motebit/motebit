@@ -151,6 +151,106 @@ describe("Sync Relay", () => {
     expect(body.events.length).toBeGreaterThanOrEqual(2);
   });
 
+  // --- Sync: sensitivity redaction ---
+
+  it("GET /sync/:id/pull redacts content from sensitive memory_formed events", async () => {
+    const events: EventLogEntry[] = [
+      {
+        event_id: crypto.randomUUID(),
+        motebit_id: MOTEBIT_ID,
+        device_id: "test-device",
+        timestamp: Date.now(),
+        event_type: "memory_formed" as EventType,
+        payload: { node_id: "n1", content: "Medical diagnosis details", sensitivity: "medical" },
+        version_clock: 10,
+        tombstoned: false,
+      },
+      {
+        event_id: crypto.randomUUID(),
+        motebit_id: MOTEBIT_ID,
+        device_id: "test-device",
+        timestamp: Date.now(),
+        event_type: "memory_formed" as EventType,
+        payload: { node_id: "n2", content: "User likes jazz", sensitivity: "none" },
+        version_clock: 11,
+        tombstoned: false,
+      },
+      {
+        event_id: crypto.randomUUID(),
+        motebit_id: MOTEBIT_ID,
+        device_id: "test-device",
+        timestamp: Date.now(),
+        event_type: "memory_formed" as EventType,
+        payload: { node_id: "n3", content: "Bank account details", sensitivity: "financial" },
+        version_clock: 12,
+        tombstoned: false,
+      },
+    ];
+    await relay.app.request(`/sync/${MOTEBIT_ID}/push`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ events }),
+    });
+
+    const res = await relay.app.request(`/sync/${MOTEBIT_ID}/pull?after_clock=0`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { events: EventLogEntry[] };
+    const memEvents = body.events.filter((e) => e.event_type === "memory_formed");
+    expect(memEvents.length).toBe(3);
+
+    // None-sensitivity event: content preserved
+    const noneEvent = memEvents.find(
+      (e) => (e.payload as Record<string, unknown>).node_id === "n2",
+    );
+    expect((noneEvent!.payload as Record<string, unknown>).content).toBe("User likes jazz");
+
+    // Medical event: content redacted
+    const medEvent = memEvents.find((e) => (e.payload as Record<string, unknown>).node_id === "n1");
+    expect((medEvent!.payload as Record<string, unknown>).content).toBe("[REDACTED]");
+    expect((medEvent!.payload as Record<string, unknown>).redacted).toBe(true);
+
+    // Financial event: content redacted
+    const finEvent = memEvents.find((e) => (e.payload as Record<string, unknown>).node_id === "n3");
+    expect((finEvent!.payload as Record<string, unknown>).content).toBe("[REDACTED]");
+    expect((finEvent!.payload as Record<string, unknown>).redacted).toBe(true);
+  });
+
+  it("GET /sync/:id/pull preserves personal-sensitivity memory content", async () => {
+    const events: EventLogEntry[] = [
+      {
+        event_id: crypto.randomUUID(),
+        motebit_id: MOTEBIT_ID,
+        device_id: "test-device",
+        timestamp: Date.now(),
+        event_type: "memory_formed" as EventType,
+        payload: { node_id: "n4", content: "User prefers dark mode", sensitivity: "personal" },
+        version_clock: 20,
+        tombstoned: false,
+      },
+    ];
+    await relay.app.request(`/sync/${MOTEBIT_ID}/push`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ events }),
+    });
+
+    const res = await relay.app.request(`/sync/${MOTEBIT_ID}/pull?after_clock=0`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+
+    const body = (await res.json()) as { events: EventLogEntry[] };
+    const memEvent = body.events.find(
+      (e) =>
+        e.event_type === "memory_formed" && (e.payload as Record<string, unknown>).node_id === "n4",
+    );
+    expect((memEvent!.payload as Record<string, unknown>).content).toBe("User prefers dark mode");
+  });
+
   // --- Sync: Clock ---
 
   it("GET /sync/:id/clock returns 0 with no events", async () => {

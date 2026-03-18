@@ -1218,6 +1218,31 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     }),
   );
 
+  // --- Sync: sensitivity redaction for outbound events ---
+  // Memory-formed events with medical/financial/secret sensitivity must not have
+  // their content transmitted in cleartext through the relay. The node_id is
+  // preserved so the device knows a memory exists; content is stripped.
+  const SYNC_SAFE_SENSITIVITY = new Set(["none", "personal"]);
+  function redactSensitiveEvents(events: EventLogEntry[]): EventLogEntry[] {
+    return events.map((e) => {
+      if (e.event_type !== EventType.MemoryFormed) return e;
+      const payload = e.payload as Record<string, unknown> | undefined;
+      if (!payload) return e;
+      const sensitivity = (payload.sensitivity as string) ?? "none";
+      if (SYNC_SAFE_SENSITIVITY.has(sensitivity)) return e;
+      // Redact: strip content, preserve node_id and metadata
+      return {
+        ...e,
+        payload: {
+          ...payload,
+          content: "[REDACTED]",
+          redacted: true,
+          redacted_sensitivity: sensitivity,
+        },
+      };
+    });
+  }
+
   // --- Sync: push events (HTTP fallback) ---
   app.post("/sync/:motebitId/push", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
@@ -1247,11 +1272,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       accepted++;
     }
 
-    // Fan out to WebSocket clients, skipping the sender device
+    // Fan out to WebSocket clients, skipping the sender device.
+    // Redact sensitive memory content before fan-out.
     const senderDeviceId = c.req.header("x-device-id");
     const peers = connections.get(motebitId);
     if (peers) {
-      for (const event of body.events) {
+      const safeEvents = redactSensitiveEvents(body.events);
+      for (const event of safeEvents) {
         const payload = JSON.stringify({ type: "event", event });
         for (const peer of peers) {
           if (peer.deviceId !== senderDeviceId) {
@@ -1275,7 +1302,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       motebit_id: motebitId,
       after_version_clock: afterClock,
     });
-    return c.json({ motebit_id: motebitId, events, after_clock: afterClock });
+    return c.json({
+      motebit_id: motebitId,
+      events: redactSensitiveEvents(events),
+      after_clock: afterClock,
+    });
   });
 
   // --- Sync: latest clock ---
@@ -1987,13 +2018,23 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   });
 
   // --- Memory: list all nodes and edges ---
+  // Sensitivity-filtered: only None and Personal memories are returned by default.
+  // Medical, Financial, and Secret memories never cross the relay boundary in cleartext.
+  // Use ?sensitivity=all for admin diagnostic access (still requires auth).
   app.get("/api/v1/memory/:motebitId", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
-    const [memories, edges] = await Promise.all([
+    const sensitivityParam = c.req.query("sensitivity");
+    const [allMemories, edges] = await Promise.all([
       moteDb.memoryStorage.getAllNodes(motebitId),
       moteDb.memoryStorage.getAllEdges(motebitId),
     ]);
-    return c.json({ motebit_id: motebitId, memories, edges });
+    const DISPLAY_ALLOWED = new Set(["none", "personal"]);
+    const memories =
+      sensitivityParam === "all"
+        ? allMemories
+        : allMemories.filter((m) => DISPLAY_ALLOWED.has(m.sensitivity ?? "none"));
+    const redacted = allMemories.length - memories.length;
+    return c.json({ motebit_id: motebitId, memories, edges, redacted });
   });
 
   // --- Memory: tombstone a node (ownership-verified, branded IDs) ---
@@ -2057,7 +2098,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       motebit_id: motebitId,
       after_version_clock: afterClock,
     });
-    return c.json({ motebit_id: motebitId, events, after_clock: afterClock });
+    return c.json({
+      motebit_id: motebitId,
+      events: redactSensitiveEvents(events),
+      after_clock: afterClock,
+    });
   });
 
   // --- Identity: create ---
