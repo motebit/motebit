@@ -5,20 +5,20 @@ const root = resolve(import.meta.dirname, "..");
 
 // Known thresholds (from vitest.config.ts files)
 const thresholds = {
-  "packages/event-log": 95,
-  "packages/crypto": 90,
-  "packages/memory-graph": 92,
-  "packages/market": 90,
-  "packages/semiring": 88,
-  "packages/policy": 88,
-  "packages/verify": 88,
-  "packages/identity-file": 87,
-  "packages/planner": 85,
-  "packages/sync-engine": 80,
-  "packages/runtime": 77,
-  "packages/ai-core": 75,
+  "packages/event-log": 100,
+  "packages/crypto": 93,
+  "packages/memory-graph": 95,
+  "packages/market": 92,
+  "packages/semiring": 89,
+  "packages/policy": 89,
+  "packages/verify": 89,
+  "packages/identity-file": 88,
+  "packages/planner": 87,
+  "packages/sync-engine": 82,
+  "packages/runtime": 78,
+  "packages/ai-core": 76,
   "packages/persistence": 80,
-  "services/api": 67,
+  "services/api": 69,
 };
 
 /** @type {Array<{name: string, statements: number, branches: number, functions: number, lines: number}>} */
@@ -68,6 +68,9 @@ console.log("## Coverage Summary\n");
 console.log("| Package | Statements | Branches | Functions | Lines | Threshold | Status |");
 console.log("|---------|-----------|----------|-----------|-------|-----------|--------|");
 
+const RATCHET_GAP = 5;
+const ratchetCandidates = [];
+
 for (const r of results) {
   const threshold = thresholds[r.name];
   const thresholdStr = threshold != null ? `${threshold}%` : "—";
@@ -79,5 +82,21 @@ for (const r of results) {
       : "—";
   console.log(
     `| ${r.name} | ${r.statements}% | ${r.branches}% | ${r.functions}% | ${r.lines}% | ${thresholdStr} | ${status} |`,
+  );
+
+  if (threshold != null && r.statements >= threshold + RATCHET_GAP) {
+    ratchetCandidates.push({
+      name: r.name,
+      actual: r.statements,
+      threshold,
+      suggested: Math.floor(r.statements) - 3,
+    });
+  }
+}
+
+// Emit GitHub Actions warnings for ratchet candidates
+for (const c of ratchetCandidates) {
+  console.log(
+    `\n::warning::${c.name} coverage ${c.actual}% is ${RATCHET_GAP}+ points above threshold ${c.threshold}%. Consider ratcheting to ${c.suggested}%.`,
   );
 }
