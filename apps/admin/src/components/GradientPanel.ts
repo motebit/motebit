@@ -83,22 +83,22 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
     "div",
     { className: "gradient-chart-container" },
     h(
-      ResponsiveContainer as unknown as React.ComponentType<Record<string, unknown>>,
+      ResponsiveContainer as unknown as unknown as React.ComponentType<Record<string, unknown>>,
       { width: "100%", height: 220 },
       h(
-        LineChart as React.ComponentType<Record<string, unknown>>,
+        LineChart as unknown as React.ComponentType<Record<string, unknown>>,
         { data: chartData },
-        h(XAxis as React.ComponentType<Record<string, unknown>>, {
+        h(XAxis as unknown as React.ComponentType<Record<string, unknown>>, {
           dataKey: "time",
           stroke: "#8888aa",
           tick: { fill: "#8888aa", fontSize: 10 },
         }),
-        h(YAxis as React.ComponentType<Record<string, unknown>>, {
+        h(YAxis as unknown as React.ComponentType<Record<string, unknown>>, {
           domain: [0, 1],
           stroke: "#8888aa",
           tick: { fill: "#8888aa", fontSize: 11 },
         }),
-        h(Tooltip as React.ComponentType<Record<string, unknown>>, {
+        h(Tooltip as unknown as React.ComponentType<Record<string, unknown>>, {
           contentStyle: {
             background: "#16213e",
             border: "1px solid #0f3460",
@@ -106,7 +106,7 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
             fontSize: 12,
           },
         }),
-        h(Line as React.ComponentType<Record<string, unknown>>, {
+        h(Line as unknown as React.ComponentType<Record<string, unknown>>, {
           type: "monotone",
           dataKey: "gradient",
           stroke: "#2ecc71",
@@ -114,7 +114,7 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
           dot: false,
           name: "Gradient",
         }),
-        h(Line as React.ComponentType<Record<string, unknown>>, {
+        h(Line as unknown as React.ComponentType<Record<string, unknown>>, {
           type: "monotone",
           dataKey: "kd",
           stroke: "#3498db",
@@ -122,7 +122,7 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
           dot: false,
           name: "Knowledge Density",
         }),
-        h(Line as React.ComponentType<Record<string, unknown>>, {
+        h(Line as unknown as React.ComponentType<Record<string, unknown>>, {
           type: "monotone",
           dataKey: "kq",
           stroke: "#e67e22",
@@ -130,7 +130,7 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
           dot: false,
           name: "Knowledge Quality",
         }),
-        h(Line as React.ComponentType<Record<string, unknown>>, {
+        h(Line as unknown as React.ComponentType<Record<string, unknown>>, {
           type: "monotone",
           dataKey: "gc",
           stroke: "#9b59b6",
@@ -138,7 +138,7 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
           dot: false,
           name: "Graph Connectivity",
         }),
-        h(Line as React.ComponentType<Record<string, unknown>>, {
+        h(Line as unknown as React.ComponentType<Record<string, unknown>>, {
           type: "monotone",
           dataKey: "ts",
           stroke: "#1abc9c",
@@ -146,7 +146,7 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
           dot: false,
           name: "Temporal Stability",
         }),
-        h(Line as React.ComponentType<Record<string, unknown>>, {
+        h(Line as unknown as React.ComponentType<Record<string, unknown>>, {
           type: "monotone",
           dataKey: "rq",
           stroke: "#e74c3c",
@@ -154,7 +154,7 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
           dot: false,
           name: "Retrieval Quality",
         }),
-        h(Line as React.ComponentType<Record<string, unknown>>, {
+        h(Line as unknown as React.ComponentType<Record<string, unknown>>, {
           type: "monotone",
           dataKey: "ie",
           stroke: "#a78bfa",
@@ -162,7 +162,7 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
           dot: false,
           name: "Interaction Efficiency",
         }),
-        h(Line as React.ComponentType<Record<string, unknown>>, {
+        h(Line as unknown as React.ComponentType<Record<string, unknown>>, {
           type: "monotone",
           dataKey: "te",
           stroke: "#f472b6",
@@ -170,7 +170,7 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
           dot: false,
           name: "Tool Efficiency",
         }),
-        h(Line as React.ComponentType<Record<string, unknown>>, {
+        h(Line as unknown as React.ComponentType<Record<string, unknown>>, {
           type: "monotone",
           dataKey: "cp",
           stroke: "#f59e0b",

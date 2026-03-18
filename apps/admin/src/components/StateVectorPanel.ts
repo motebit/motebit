@@ -35,12 +35,12 @@ export function StateVectorPanel({ state, history }: StateVectorPanelProps): Rea
     "div",
     { className: "state-chart-container" },
     h(
-      ResponsiveContainer as unknown as React.ComponentType<Record<string, unknown>>,
+      ResponsiveContainer as unknown as unknown as React.ComponentType<Record<string, unknown>>,
       { width: "100%", height: 200 },
       h(
-        LineChart as React.ComponentType<Record<string, unknown>>,
+        LineChart as unknown as React.ComponentType<Record<string, unknown>>,
         { data: chartData },
-        h(XAxis as React.ComponentType<Record<string, unknown>>, {
+        h(XAxis as unknown as React.ComponentType<Record<string, unknown>>, {
           dataKey: "time",
           stroke: "#8888aa",
           tick: { fill: "#8888aa", fontSize: 11 },
@@ -52,12 +52,12 @@ export function StateVectorPanel({ state, history }: StateVectorPanelProps): Rea
             fontSize: 11,
           },
         }),
-        h(YAxis as React.ComponentType<Record<string, unknown>>, {
+        h(YAxis as unknown as React.ComponentType<Record<string, unknown>>, {
           domain: [-1, 1],
           stroke: "#8888aa",
           tick: { fill: "#8888aa", fontSize: 11 },
         }),
-        h(Tooltip as React.ComponentType<Record<string, unknown>>, {
+        h(Tooltip as unknown as React.ComponentType<Record<string, unknown>>, {
           contentStyle: {
             background: "#16213e",
             border: "1px solid #0f3460",
@@ -66,10 +66,10 @@ export function StateVectorPanel({ state, history }: StateVectorPanelProps): Rea
             fontSize: 12,
           },
         }),
-        h(Legend as React.ComponentType<Record<string, unknown>>, {
+        h(Legend as unknown as React.ComponentType<Record<string, unknown>>, {
           wrapperStyle: { fontSize: 11, color: "#e0e0e0" },
         }),
-        h(Line as React.ComponentType<Record<string, unknown>>, {
+        h(Line as unknown as unknown as React.ComponentType<Record<string, unknown>>, {
           type: "monotone",
           dataKey: "attention",
           stroke: "#e94560",
@@ -77,7 +77,7 @@ export function StateVectorPanel({ state, history }: StateVectorPanelProps): Rea
           dot: false,
           isAnimationActive: false,
         }),
-        h(Line as React.ComponentType<Record<string, unknown>>, {
+        h(Line as unknown as unknown as React.ComponentType<Record<string, unknown>>, {
           type: "monotone",
           dataKey: "confidence",
           stroke: "#4ade80",
@@ -85,7 +85,7 @@ export function StateVectorPanel({ state, history }: StateVectorPanelProps): Rea
           dot: false,
           isAnimationActive: false,
         }),
-        h(Line as React.ComponentType<Record<string, unknown>>, {
+        h(Line as unknown as unknown as React.ComponentType<Record<string, unknown>>, {
           type: "monotone",
           dataKey: "valence",
           stroke: "#60a5fa",
@@ -93,7 +93,7 @@ export function StateVectorPanel({ state, history }: StateVectorPanelProps): Rea
           dot: false,
           isAnimationActive: false,
         }),
-        h(Line as React.ComponentType<Record<string, unknown>>, {
+        h(Line as unknown as unknown as React.ComponentType<Record<string, unknown>>, {
           type: "monotone",
           dataKey: "curiosity",
           stroke: "#fbbf24",
