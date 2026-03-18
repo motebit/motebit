@@ -86,7 +86,12 @@ describe("generateIdentity", () => {
       ["deriveBits"],
     );
     const bits = await crypto.subtle.deriveBits(
-      { name: "PBKDF2", salt: salt as BufferSource, iterations: 600_000, hash: "SHA-256" },
+      {
+        name: "PBKDF2",
+        salt: salt as BufferSource,
+        iterations: Number(process.env["MOTEBIT_PBKDF2_ITERATIONS"] ?? 600_000),
+        hash: "SHA-256",
+      },
       keyMaterial,
       256,
     );

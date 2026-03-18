@@ -113,10 +113,16 @@ function generateSalt(): Uint8Array {
   return salt;
 }
 
+/** Default PBKDF2 iterations. Override via MOTEBIT_PBKDF2_ITERATIONS for tests. */
+const DEFAULT_PBKDF2_ITERATIONS =
+  typeof process !== "undefined" && process.env["MOTEBIT_PBKDF2_ITERATIONS"]
+    ? Number(process.env["MOTEBIT_PBKDF2_ITERATIONS"])
+    : 600_000;
+
 async function deriveKey(
   password: string,
   salt: Uint8Array,
-  iterations: number = 600_000,
+  iterations: number = DEFAULT_PBKDF2_ITERATIONS,
 ): Promise<Uint8Array> {
   const encoder = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey(
