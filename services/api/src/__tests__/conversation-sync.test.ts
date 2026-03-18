@@ -329,4 +329,42 @@ describe("Conversation Sync Endpoints", () => {
     });
     expect(res.status).toBe(401);
   });
+
+  // --- Validation ---
+
+  it("POST /sync/:id/plans returns 400 when plans is not an array", async () => {
+    const res = await relay.app.request(`/sync/${MOTEBIT_ID}/plans`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ plans: "not-an-array" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /sync/:id/plans returns 400 when plans field is missing", async () => {
+    const res = await relay.app.request(`/sync/${MOTEBIT_ID}/plans`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /sync/:id/plan-steps returns 400 when steps is not an array", async () => {
+    const res = await relay.app.request(`/sync/${MOTEBIT_ID}/plan-steps`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ steps: "not-an-array" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /sync/:id/plan-steps returns 400 when steps field is missing", async () => {
+    const res = await relay.app.request(`/sync/${MOTEBIT_ID}/plan-steps`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+  });
 });

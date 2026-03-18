@@ -18,7 +18,7 @@ const thresholds = {
   "packages/runtime": 78,
   "packages/ai-core": 76,
   "packages/persistence": 80,
-  "services/api": 69,
+  "services/api": 74,
 };
 
 /** @type {Array<{name: string, statements: number, branches: number, functions: number, lines: number}>} */

@@ -249,6 +249,8 @@ export interface SyncRelay {
     publicKeyHex: string;
     did: string;
   };
+  /** Database handle. Exposed for testing (plan store, audit sink, etc.). */
+  moteDb: MotebitDatabase;
 }
 
 // === Factory ===
@@ -4370,6 +4372,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       publicKeyHex: relayIdentity.publicKeyHex,
       did: relayIdentity.did,
     },
+    moteDb,
   };
 }
 

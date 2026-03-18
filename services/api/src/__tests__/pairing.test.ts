@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
@@ -376,5 +376,117 @@ describe("Pairing Protocol", () => {
   it("GET /pairing/:id/status returns 404 for non-existent session", async () => {
     const res = await relay.app.request("/pairing/non-existent-id/status");
     expect(res.status).toBe(404);
+  });
+
+  // --- Expired code ---
+
+  it("POST /pairing/claim rejects expired code", async () => {
+    const { authToken } = await setupIdentityAndDevice(relay);
+
+    const initRes = await relay.app.request("/pairing/initiate", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    const { pairing_code } = (await initRes.json()) as { pairing_code: string };
+
+    // Advance time past 5-minute TTL
+    const realNow = Date.now;
+    vi.spyOn(Date, "now").mockReturnValue(realNow() + 6 * 60 * 1000);
+
+    const keypairB = await generateKeypair();
+    const pubKeyB = bytesToHex(keypairB.publicKey);
+    const res = await relay.app.request("/pairing/claim", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pairing_code, device_name: "Mobile", public_key: pubKeyB }),
+    });
+    expect(res.status).toBe(410);
+
+    vi.restoreAllMocks();
+  });
+
+  // --- Error paths ---
+
+  it("GET /pairing/:id returns 404 for non-existent session", async () => {
+    const { authToken } = await setupIdentityAndDevice(relay);
+    const res = await relay.app.request("/pairing/non-existent-id", {
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("GET /pairing/:id returns 403 for wrong motebit owner", async () => {
+    const deviceA = await setupIdentityAndDevice(relay);
+    const deviceC = await setupIdentityAndDevice(relay);
+
+    const initRes = await relay.app.request("/pairing/initiate", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${deviceA.authToken}` },
+    });
+    const { pairing_id } = (await initRes.json()) as { pairing_id: string };
+
+    const res = await relay.app.request(`/pairing/${pairing_id}`, {
+      headers: { Authorization: `Bearer ${deviceC.authToken}` },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("POST /pairing/:id/approve returns 404 for non-existent session", async () => {
+    const { authToken } = await setupIdentityAndDevice(relay);
+    const res = await relay.app.request("/pairing/non-existent-id/approve", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("POST /pairing/:id/approve returns 409 when session is pending (not claimed)", async () => {
+    const { authToken } = await setupIdentityAndDevice(relay);
+
+    const initRes = await relay.app.request("/pairing/initiate", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    const { pairing_id } = (await initRes.json()) as { pairing_id: string };
+
+    // Try to approve without claiming first
+    const res = await relay.app.request(`/pairing/${pairing_id}/approve`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    expect(res.status).toBe(409);
+  });
+
+  it("POST /pairing/:id/deny returns 401 without auth", async () => {
+    const res = await relay.app.request("/pairing/fake-id/deny", {
+      method: "POST",
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("POST /pairing/:id/deny returns 404 for non-existent session", async () => {
+    const { authToken } = await setupIdentityAndDevice(relay);
+    const res = await relay.app.request("/pairing/non-existent-id/deny", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("POST /pairing/:id/deny returns 403 for wrong motebit owner", async () => {
+    const deviceA = await setupIdentityAndDevice(relay);
+    const deviceC = await setupIdentityAndDevice(relay);
+
+    const initRes = await relay.app.request("/pairing/initiate", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${deviceA.authToken}` },
+    });
+    const { pairing_id } = (await initRes.json()) as { pairing_id: string };
+
+    const res = await relay.app.request(`/pairing/${pairing_id}/deny`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${deviceC.authToken}` },
+    });
+    expect(res.status).toBe(403);
   });
 });
