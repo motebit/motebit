@@ -240,10 +240,11 @@ export async function rotateKey(opts: {
     opts.reason,
   );
 
-  // 6. Update the YAML: replace public_key, add succession record
-  // Replace the identity public_key
+  // 6. Update the YAML: replace ONLY the identity public_key, add succession record
+  // Target the exact old key value to avoid corrupting old_public_key / new_public_key
+  // in existing succession records (which contain the substring "public_key:").
   let updatedYaml = rawFrontmatter.replace(
-    /public_key:\s*"[0-9a-f]+"/g,
+    `public_key: "${oldPublicKeyHex}"`,
     `public_key: "${newPublicKeyHex}"`,
   );
 

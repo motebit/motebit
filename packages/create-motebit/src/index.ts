@@ -176,6 +176,9 @@ async function guidedScaffold(
     passphrase = process.env["MOTEBIT_PASSPHRASE"] ?? "";
     if (!passphrase) {
       console.log(`  ${red("!")} --yes requires MOTEBIT_PASSPHRASE environment variable.`);
+      console.log(
+        `    Set it: ${dim("MOTEBIT_PASSPHRASE=your-passphrase npx create-motebit --yes")}`,
+      );
       console.log();
       process.exit(1);
     }
@@ -348,7 +351,7 @@ async function guidedScaffold(
   saveConfig(config);
 
   // Output
-  const relDir = targetDir === "." ? `./${dirName}` : `./${dirName}`;
+  const relDir = targetDir === "." ? "." : `./${dirName}`;
   console.log();
   console.log(`  ${green("+")} Created ${bold(relDir)}`);
   console.log();
@@ -506,6 +509,9 @@ async function rotateCmd(
     oldPassphrase = process.env["MOTEBIT_PASSPHRASE"] ?? "";
     if (!oldPassphrase) {
       console.log(`  ${red("!")} --yes requires MOTEBIT_PASSPHRASE environment variable.`);
+      console.log(
+        `    Set it: ${dim("MOTEBIT_PASSPHRASE=your-passphrase npx create-motebit --yes")}`,
+      );
       console.log();
       process.exit(1);
       return;
@@ -552,13 +558,21 @@ async function rotateCmd(
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.log(`  ${red("!")} Rotation failed: ${msg}`);
+    const hint =
+      msg.includes("operation-specific") ||
+      msg.includes("OperationError") ||
+      msg.includes("decrypt")
+        ? "\n    Hint: wrong passphrase or corrupted key in config."
+        : "";
+    console.log(`  ${red("!")} Rotation failed: ${msg}${hint}`);
     console.log();
     process.exit(1);
     return;
   }
 
-  // 5. Write updated identity file
+  // 5. Backup then write updated identity file
+  const backupPath = `${filePath}.backup`;
+  writeFileSync(backupPath, content, "utf-8");
   writeFileSync(filePath, result.identityFileContent, "utf-8");
 
   // 6. Update config
@@ -570,7 +584,7 @@ async function rotateCmd(
   const reVerify = await verifyIdentityFile(result.identityFileContent);
   if (!reVerify.valid) {
     console.log(`  ${red("!")} Post-rotation verification failed: ${reVerify.error}`);
-    console.log(`    The identity file may be corrupted. Restore from backup.`);
+    console.log(`    The identity file may be corrupted. Restore from: ${backupPath}`);
     console.log();
     process.exit(1);
     return;
@@ -589,6 +603,7 @@ async function rotateCmd(
   }
   console.log();
   console.log(`  Identity file updated: ${dim(filePath)}`);
+  console.log(`  Backup saved:          ${dim(backupPath)}`);
   console.log(`  Config updated:        ${dim(configPath())}`);
   console.log();
 }

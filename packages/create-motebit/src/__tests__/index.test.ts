@@ -292,4 +292,85 @@ describe("create-motebit", () => {
     expect(stdout).toContain("new key");
     expect(stdout).toContain("scheduled rotation");
   });
+
+  it("double rotation preserves succession chain integrity", () => {
+    const subDir = "double-rotate-test";
+    run([subDir, "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-double",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+
+    const identityPath = join(testDir, subDir, "motebit.md");
+
+    // Read original public key
+    const original = readFileSync(identityPath, "utf-8");
+    const origKeyMatch = original.match(/public_key:\s*"([0-9a-f]+)"/);
+    expect(origKeyMatch).not.toBeNull();
+    const key0 = origKeyMatch![1]!;
+
+    // First rotation
+    run(["rotate", identityPath, "--yes", "--reason", "first"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-double",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+
+    const afterFirst = readFileSync(identityPath, "utf-8");
+    // Succession record should contain the original key as old_public_key
+    expect(afterFirst).toContain(`old_public_key: "${key0}"`);
+    // Extract key1
+    const key1Match = afterFirst.match(/^  public_key: "([0-9a-f]+)"/m);
+    expect(key1Match).not.toBeNull();
+    const key1 = key1Match![1]!;
+    expect(key1).not.toBe(key0);
+
+    // Second rotation
+    const { exitCode } = run(["rotate", identityPath, "--yes", "--reason", "second"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-double",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+    expect(exitCode).toBe(0);
+
+    const afterSecond = readFileSync(identityPath, "utf-8");
+
+    // First succession record must still have key0 as old_public_key (not corrupted)
+    expect(afterSecond).toContain(`old_public_key: "${key0}"`);
+    // First succession record must still have key1 as new_public_key
+    expect(afterSecond).toContain(`new_public_key: "${key1}"`);
+    // Second succession record must have key1 as old_public_key
+    // The identity public_key should be key2 (neither key0 nor key1)
+    const key2Match = afterSecond.match(/^  public_key: "([0-9a-f]+)"/m);
+    expect(key2Match).not.toBeNull();
+    const key2 = key2Match![1]!;
+    expect(key2).not.toBe(key0);
+    expect(key2).not.toBe(key1);
+
+    // Verify the file is still valid
+    const { exitCode: verifyExit } = run(["verify", identityPath]);
+    expect(verifyExit).toBe(0);
+  });
+
+  it("rotation creates backup file", () => {
+    const subDir = "backup-test";
+    run([subDir, "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-backup",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+
+    const identityPath = join(testDir, subDir, "motebit.md");
+    const backupPath = `${identityPath}.backup`;
+
+    // Rotate
+    run(["rotate", identityPath, "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-backup",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+
+    // Backup should exist with the original content
+    expect(existsSync(backupPath)).toBe(true);
+    const backup = readFileSync(backupPath, "utf-8");
+    const rotated = readFileSync(identityPath, "utf-8");
+    expect(backup).not.toBe(rotated);
+    // Backup should NOT contain succession (it's the pre-rotation version)
+    expect(backup).not.toContain("succession:");
+  });
 });
