@@ -1,6 +1,6 @@
 import type React from "react";
 import "./global.css";
-import { RootProvider } from "fumadocs-ui/provider";
+import { RootProvider } from "fumadocs-ui/provider/next";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {

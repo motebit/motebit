@@ -1,14 +1,7 @@
-import { docs } from "@/.source";
+// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument -- fumadocs-mdx generated source uses @ts-nocheck
+import { docs } from "@/.source/server";
 import { loader } from "fumadocs-core/source";
 
-const raw = docs.toFumadocsSource();
-
-// fumadocs-mdx returns files as a function; fumadocs-core expects an array.
-// Cast through unknown to call the function while preserving the generic type.
-const files =
-  typeof raw.files === "function" ? (raw.files as unknown as () => typeof raw.files)() : raw.files;
-
-export const source = loader({
+export const source = loader(docs.toFumadocsSource(), {
   baseUrl: "/docs",
-  source: { files },
 });
