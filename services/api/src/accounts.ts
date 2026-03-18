@@ -7,6 +7,7 @@
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
+import { canonicalJson, sign, toBase64Url } from "@motebit/crypto";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "accounts" });
@@ -261,6 +262,8 @@ export interface WithdrawalRequest {
   requested_at: number;
   completed_at: number | null;
   failure_reason: string | null;
+  relay_signature: string | null; // Ed25519 signature over canonical withdrawal receipt
+  relay_public_key: string | null; // Hex-encoded relay public key for independent verification
 }
 
 /** Create withdrawal tables. Idempotent. */
@@ -277,7 +280,9 @@ export function createWithdrawalTables(db: DatabaseDriver): void {
       payout_reference TEXT,
       requested_at INTEGER NOT NULL,
       completed_at INTEGER,
-      failure_reason TEXT
+      failure_reason TEXT,
+      relay_signature TEXT,
+      relay_public_key TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_relay_withdrawals_motebit
       ON relay_withdrawals (motebit_id, requested_at DESC);
@@ -286,6 +291,16 @@ export function createWithdrawalTables(db: DatabaseDriver): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_relay_withdrawals_idempotency
       ON relay_withdrawals (motebit_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
   `);
+
+  // Migration: add relay_signature and relay_public_key columns for existing DBs
+  const cols = db.prepare("PRAGMA table_info(relay_withdrawals)").all() as Array<{ name: string }>;
+  const colNames = new Set(cols.map((c) => c.name));
+  if (!colNames.has("relay_signature")) {
+    db.exec("ALTER TABLE relay_withdrawals ADD COLUMN relay_signature TEXT");
+  }
+  if (!colNames.has("relay_public_key")) {
+    db.exec("ALTER TABLE relay_withdrawals ADD COLUMN relay_public_key TEXT");
+  }
 }
 
 /**
@@ -354,30 +369,66 @@ export function requestWithdrawal(
     requested_at: now,
     completed_at: null,
     failure_reason: null,
+    relay_signature: null,
+    relay_public_key: null,
   };
 }
 
 /**
  * Complete a pending withdrawal (called by admin/operator after payout is confirmed).
+ * Optionally stores a relay-signed withdrawal receipt for independent verification.
+ * When a signature is provided, `completedAt` must match the timestamp used in the signed payload.
  * Returns true if the withdrawal was found and updated.
  */
 export function completeWithdrawal(
   db: DatabaseDriver,
   withdrawalId: string,
   payoutReference: string,
+  relaySignature?: string,
+  relayPublicKey?: string,
+  completedAt?: number,
 ): boolean {
-  const now = Date.now();
+  const now = completedAt ?? Date.now();
   const info = db
     .prepare(
       `UPDATE relay_withdrawals
-       SET status = 'completed', payout_reference = ?, completed_at = ?
+       SET status = 'completed', payout_reference = ?, completed_at = ?,
+           relay_signature = ?, relay_public_key = ?
        WHERE withdrawal_id = ? AND status IN ('pending', 'processing')`,
     )
-    .run(payoutReference, now, withdrawalId);
+    .run(payoutReference, now, relaySignature ?? null, relayPublicKey ?? null, withdrawalId);
   if (info.changes > 0) {
-    logger.info("withdrawal.completed", { withdrawalId, payoutReference });
+    logger.info("withdrawal.completed", {
+      withdrawalId,
+      payoutReference,
+      signed: !!relaySignature,
+    });
   }
   return info.changes > 0;
+}
+
+/**
+ * Sign a withdrawal receipt with the relay's Ed25519 private key.
+ * Uses canonical JSON + SHA-256 hash + Ed25519 signature — same pattern as ExecutionReceipt signing.
+ * Returns the base64url-encoded signature.
+ */
+export async function signWithdrawalReceipt(
+  withdrawal: {
+    withdrawal_id: string;
+    motebit_id: string;
+    amount: number;
+    currency: string;
+    destination: string;
+    payout_reference: string;
+    completed_at: number;
+    relay_id: string;
+  },
+  privateKey: Uint8Array,
+): Promise<string> {
+  const canonical = canonicalJson(withdrawal);
+  const message = new TextEncoder().encode(canonical);
+  const sig = await sign(message, privateKey);
+  return toBase64Url(sig);
 }
 
 /**
@@ -443,4 +494,98 @@ export function getPendingWithdrawals(db: DatabaseDriver): WithdrawalRequest[] {
       "SELECT * FROM relay_withdrawals WHERE status IN ('pending', 'processing') ORDER BY requested_at ASC",
     )
     .all() as WithdrawalRequest[];
+}
+
+// === Ledger Reconciliation ===
+
+export interface ReconciliationResult {
+  consistent: boolean;
+  errors: string[];
+}
+
+/**
+ * Verify ledger consistency across all virtual account tables.
+ *
+ * Checks:
+ * 1. Sum of all credits − sum of all debits = sum of all account balances
+ * 2. No negative balances exist
+ * 3. Every settled allocation has a matching settlement record
+ * 4. Every pending withdrawal has a corresponding debit transaction
+ * 5. Every completed withdrawal has a relay signature
+ */
+export function reconcileLedger(db: DatabaseDriver): ReconciliationResult {
+  const errors: string[] = [];
+
+  // 1. Balance equation: net transactions should equal sum of account balances
+  const txnSum = db
+    .prepare("SELECT COALESCE(SUM(amount), 0) as net FROM relay_transactions")
+    .get() as { net: number };
+  const balanceSum = db
+    .prepare("SELECT COALESCE(SUM(balance), 0) as total FROM relay_accounts")
+    .get() as { total: number };
+
+  // Compare with tolerance for floating point
+  if (Math.abs(txnSum.net - balanceSum.total) > 0.001) {
+    errors.push(
+      `Balance equation violated: transaction net ${txnSum.net.toFixed(4)} != account balance sum ${balanceSum.total.toFixed(4)}`,
+    );
+  }
+
+  // 2. No negative balances
+  const negativeAccounts = db
+    .prepare("SELECT motebit_id, balance FROM relay_accounts WHERE balance < -0.001")
+    .all() as Array<{ motebit_id: string; balance: number }>;
+  for (const acct of negativeAccounts) {
+    errors.push(
+      `Negative balance: agent ${acct.motebit_id} has balance ${acct.balance.toFixed(4)}`,
+    );
+  }
+
+  // 3. Every settled allocation has a matching settlement record
+  const settledWithoutSettlement = db
+    .prepare(
+      `SELECT a.allocation_id, a.task_id, a.motebit_id
+       FROM relay_allocations a
+       LEFT JOIN relay_settlements s ON s.allocation_id = a.allocation_id
+       WHERE a.status = 'settled' AND s.settlement_id IS NULL`,
+    )
+    .all() as Array<{ allocation_id: string; task_id: string; motebit_id: string }>;
+  for (const alloc of settledWithoutSettlement) {
+    errors.push(
+      `Settled allocation ${alloc.allocation_id} (task ${alloc.task_id}) has no matching settlement record`,
+    );
+  }
+
+  // 4. Every pending withdrawal has a corresponding debit transaction
+  const pendingWithdrawals = db
+    .prepare(
+      "SELECT withdrawal_id, motebit_id, amount FROM relay_withdrawals WHERE status IN ('pending', 'processing')",
+    )
+    .all() as Array<{ withdrawal_id: string; motebit_id: string; amount: number }>;
+  for (const w of pendingWithdrawals) {
+    const txn = db
+      .prepare(
+        "SELECT 1 FROM relay_transactions WHERE reference_id = ? AND type = 'withdrawal' AND motebit_id = ? LIMIT 1",
+      )
+      .get(w.withdrawal_id, w.motebit_id) as Record<string, unknown> | undefined;
+    if (!txn) {
+      errors.push(
+        `Pending withdrawal ${w.withdrawal_id} (agent ${w.motebit_id}) has no matching debit transaction`,
+      );
+    }
+  }
+
+  // 5. Every completed withdrawal has a relay signature
+  const unsignedCompleted = db
+    .prepare(
+      "SELECT withdrawal_id, motebit_id FROM relay_withdrawals WHERE status = 'completed' AND relay_signature IS NULL",
+    )
+    .all() as Array<{ withdrawal_id: string; motebit_id: string }>;
+  for (const w of unsignedCompleted) {
+    errors.push(
+      `Completed withdrawal ${w.withdrawal_id} (agent ${w.motebit_id}) has no relay signature`,
+    );
+  }
+
+  return { consistent: errors.length === 0, errors };
 }

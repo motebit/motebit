@@ -5,7 +5,15 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
-import { generateKeypair, bytesToHex, signExecutionReceipt } from "@motebit/crypto";
+import {
+  generateKeypair,
+  bytesToHex,
+  hexToBytes,
+  signExecutionReceipt,
+  canonicalJson,
+  verify,
+  fromBase64Url,
+} from "@motebit/crypto";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
 
 const API_TOKEN = "test-token";
@@ -526,7 +534,7 @@ describe("Virtual Accounts", () => {
     expect(body.withdrawals).toHaveLength(2);
   });
 
-  it("admin can complete a pending withdrawal", async () => {
+  it("admin can complete a pending withdrawal with signed receipt", async () => {
     const keypair = await generateKeypair();
     const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
 
@@ -552,8 +560,53 @@ describe("Virtual Accounts", () => {
       },
     );
     expect(completeRes.status).toBe(200);
-    const body = (await completeRes.json()) as { status: string };
+    const body = (await completeRes.json()) as {
+      status: string;
+      relay_signature: string;
+      relay_public_key: string;
+    };
     expect(body.status).toBe("completed");
+    expect(body.relay_signature).toBeDefined();
+    expect(typeof body.relay_signature).toBe("string");
+    expect(body.relay_public_key).toBeDefined();
+    expect(typeof body.relay_public_key).toBe("string");
+
+    // Verify the signature independently using the relay's public key
+    const relayPubKey = hexToBytes(body.relay_public_key);
+    const sig = fromBase64Url(body.relay_signature);
+
+    // Reconstruct the signed payload — we know the fields but not completed_at,
+    // so fetch the withdrawal to get the exact timestamp
+    const historyRes = await relay.app.request(`/api/v1/agents/${motebitId}/withdrawals`, {
+      headers: AUTH_HEADER,
+    });
+    const history = (await historyRes.json()) as {
+      withdrawals: Array<{
+        withdrawal_id: string;
+        completed_at: number;
+        destination: string;
+        amount: number;
+        currency: string;
+      }>;
+    };
+    const completedW = history.withdrawals.find(
+      (w) => w.withdrawal_id === withdrawal.withdrawal_id,
+    )!;
+
+    const receiptPayload = {
+      withdrawal_id: withdrawal.withdrawal_id,
+      motebit_id: motebitId,
+      amount: completedW.amount,
+      currency: completedW.currency,
+      destination: completedW.destination,
+      payout_reference: "stripe_transfer_xyz",
+      completed_at: completedW.completed_at,
+      relay_id: relay.relayIdentity.relayMotebitId,
+    };
+    const canonical = canonicalJson(receiptPayload);
+    const message = new TextEncoder().encode(canonical);
+    const valid = await verify(sig, message, relayPubKey);
+    expect(valid).toBe(true);
 
     // Balance should still be 50 (not refunded)
     const balance = await getBalance(relay, motebitId);
@@ -719,5 +772,176 @@ describe("Virtual Accounts", () => {
     expect(balance.balance).toBe(150); // 200 - 50 debited
     expect((balance as Record<string, unknown>).pending_withdrawals).toBe(50);
     expect((balance as Record<string, unknown>).pending_allocations).toBeDefined();
+  });
+
+  // --- Signed Withdrawal Receipts ---
+
+  it("completed withdrawal includes relay_signature in history", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+
+    await deposit(relay, motebitId, 100);
+
+    const withdrawRes = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ amount: 30 }),
+    });
+    const { withdrawal } = (await withdrawRes.json()) as {
+      withdrawal: { withdrawal_id: string };
+    };
+
+    // Complete it
+    await relay.app.request(`/api/v1/admin/withdrawals/${withdrawal.withdrawal_id}/complete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ payout_reference: "tx_abc123" }),
+    });
+
+    // Fetch history — completed withdrawal should have signature
+    const historyRes = await relay.app.request(`/api/v1/agents/${motebitId}/withdrawals`, {
+      headers: AUTH_HEADER,
+    });
+    const history = (await historyRes.json()) as {
+      withdrawals: Array<{
+        withdrawal_id: string;
+        relay_signature: string | null;
+        relay_public_key: string | null;
+        status: string;
+      }>;
+    };
+    const completed = history.withdrawals.find(
+      (w) => w.withdrawal_id === withdrawal.withdrawal_id,
+    )!;
+    expect(completed.status).toBe("completed");
+    expect(completed.relay_signature).toBeTruthy();
+    expect(completed.relay_public_key).toBeTruthy();
+  });
+
+  it("pending withdrawal has null relay_signature", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+
+    await deposit(relay, motebitId, 100);
+
+    await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ amount: 20 }),
+    });
+
+    const historyRes = await relay.app.request(`/api/v1/agents/${motebitId}/withdrawals`, {
+      headers: AUTH_HEADER,
+    });
+    const history = (await historyRes.json()) as {
+      withdrawals: Array<{ relay_signature: string | null }>;
+    };
+    expect(history.withdrawals[0]!.relay_signature).toBeNull();
+  });
+
+  // --- Ledger Reconciliation ---
+
+  it("reconciliation passes on consistent ledger", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+
+    // Simple deposit
+    await deposit(relay, motebitId, 100);
+
+    const res = await relay.app.request("/api/v1/admin/reconciliation", {
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { consistent: boolean; errors: string[] };
+    expect(body.consistent).toBe(true);
+    expect(body.errors).toHaveLength(0);
+  });
+
+  it("reconciliation passes after deposit + withdrawal + completion", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+
+    await deposit(relay, motebitId, 200);
+
+    // Request and complete a withdrawal
+    const withdrawRes = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ amount: 80 }),
+    });
+    const { withdrawal } = (await withdrawRes.json()) as {
+      withdrawal: { withdrawal_id: string };
+    };
+
+    await relay.app.request(`/api/v1/admin/withdrawals/${withdrawal.withdrawal_id}/complete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ payout_reference: "pay_ref_1" }),
+    });
+
+    const res = await relay.app.request("/api/v1/admin/reconciliation", {
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { consistent: boolean; errors: string[] };
+    expect(body.consistent).toBe(true);
+    expect(body.errors).toHaveLength(0);
+  });
+
+  it("reconciliation detects unsigned completed withdrawal", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+
+    await deposit(relay, motebitId, 100);
+
+    // Manually insert a completed withdrawal without a signature (simulating legacy data)
+    const wId = crypto.randomUUID();
+    relay.moteDb.db
+      .prepare(
+        `INSERT INTO relay_withdrawals
+       (withdrawal_id, motebit_id, amount, currency, destination, status, payout_reference, requested_at, completed_at)
+       VALUES (?, ?, 50, 'USD', 'legacy_addr', 'completed', 'old_ref', ?, ?)`,
+      )
+      .run(wId, motebitId, Date.now() - 10000, Date.now());
+
+    const res = await relay.app.request("/api/v1/admin/reconciliation", {
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { consistent: boolean; errors: string[] };
+    expect(body.consistent).toBe(false);
+    expect(body.errors.some((e) => e.includes("no relay signature"))).toBe(true);
+  });
+
+  it("reconciliation detects missing debit for pending withdrawal", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+
+    await deposit(relay, motebitId, 100);
+
+    // Manually insert a pending withdrawal without a corresponding debit transaction
+    const wId = crypto.randomUUID();
+    relay.moteDb.db
+      .prepare(
+        `INSERT INTO relay_withdrawals
+       (withdrawal_id, motebit_id, amount, currency, destination, status, requested_at)
+       VALUES (?, ?, 30, 'USD', 'orphan_addr', 'pending', ?)`,
+      )
+      .run(wId, motebitId, Date.now());
+
+    const res = await relay.app.request("/api/v1/admin/reconciliation", {
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { consistent: boolean; errors: string[] };
+    expect(body.consistent).toBe(false);
+    expect(body.errors.some((e) => e.includes("no matching debit transaction"))).toBe(true);
+  });
+
+  it("reconciliation requires admin auth", async () => {
+    const res = await relay.app.request("/api/v1/admin/reconciliation", {
+      headers: {},
+    });
+    expect(res.status).toBe(401);
   });
 });

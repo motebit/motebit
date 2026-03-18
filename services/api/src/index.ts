@@ -141,9 +141,11 @@ import {
   hasTransactionWithReference,
   requestWithdrawal,
   completeWithdrawal,
+  signWithdrawalReceipt,
   failWithdrawal,
   getWithdrawals,
   getPendingWithdrawals,
+  reconcileLedger,
 } from "./accounts.js";
 import { createPairingTables, registerPairingRoutes } from "./pairing.js";
 import {
@@ -933,6 +935,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   app.use("/api/v1/agents/:motebitId/balance", rateLimitMiddleware(readLimiter));
   app.use("/api/v1/agents/:motebitId/withdrawals", rateLimitMiddleware(readLimiter));
   app.use("/api/v1/admin/withdrawals/*", rateLimitMiddleware(writeLimiter));
+  app.use("/api/v1/admin/reconciliation", rateLimitMiddleware(expensiveLimiter));
 
   // Write endpoints: task submission, result, ledger (30 req/min)
   app.use("/agent/:motebitId/task", rateLimitMiddleware(writeLimiter));
@@ -2325,6 +2328,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     });
     // Admin withdrawal management — master token only
     app.use("/api/v1/admin/withdrawals/*", bearerAuth({ token: apiToken }));
+    // Admin reconciliation — master token only
+    app.use("/api/v1/admin/reconciliation", bearerAuth({ token: apiToken }));
   }
 
   // --- Spatial presence broadcast helper ---
@@ -3614,6 +3619,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   });
 
   // POST /api/v1/admin/withdrawals/:withdrawalId/complete — mark withdrawal as completed (admin)
+  // Signs a WithdrawalReceipt with the relay's Ed25519 key for independent verification.
   app.post("/api/v1/admin/withdrawals/:withdrawalId/complete", async (c) => {
     const withdrawalId = c.req.param("withdrawalId");
     const correlationId = c.get("correlationId" as never) as string;
@@ -3623,7 +3629,45 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       throw new HTTPException(400, { message: "payout_reference is required" });
     }
 
-    const success = completeWithdrawal(moteDb.db, withdrawalId, body.payout_reference);
+    // Look up the withdrawal to get fields for signing
+    const withdrawal = moteDb.db
+      .prepare(
+        "SELECT * FROM relay_withdrawals WHERE withdrawal_id = ? AND status IN ('pending', 'processing')",
+      )
+      .get(withdrawalId) as
+      | { motebit_id: string; amount: number; currency: string; destination: string }
+      | undefined;
+    if (!withdrawal) {
+      throw new HTTPException(404, {
+        message: "Withdrawal not found or already completed/failed",
+      });
+    }
+
+    // Sign the withdrawal receipt with the relay's Ed25519 key
+    const completedAt = Date.now();
+    const relayPublicKeyHex = bytesToHex(relayIdentity.publicKey);
+    const signature = await signWithdrawalReceipt(
+      {
+        withdrawal_id: withdrawalId,
+        motebit_id: withdrawal.motebit_id,
+        amount: withdrawal.amount,
+        currency: withdrawal.currency,
+        destination: withdrawal.destination,
+        payout_reference: body.payout_reference,
+        completed_at: completedAt,
+        relay_id: relayIdentity.relayMotebitId,
+      },
+      relayIdentity.privateKey,
+    );
+
+    const success = completeWithdrawal(
+      moteDb.db,
+      withdrawalId,
+      body.payout_reference,
+      signature,
+      relayPublicKeyHex,
+      completedAt,
+    );
     if (!success) {
       throw new HTTPException(404, {
         message: "Withdrawal not found or already completed/failed",
@@ -3634,9 +3678,15 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       correlationId,
       withdrawalId,
       payoutReference: body.payout_reference,
+      signed: true,
     });
 
-    return c.json({ withdrawal_id: withdrawalId, status: "completed" });
+    return c.json({
+      withdrawal_id: withdrawalId,
+      status: "completed",
+      relay_signature: signature,
+      relay_public_key: relayPublicKeyHex,
+    });
   });
 
   // POST /api/v1/admin/withdrawals/:withdrawalId/fail — mark withdrawal as failed and refund (admin)
@@ -3663,6 +3713,20 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     });
 
     return c.json({ withdrawal_id: withdrawalId, status: "failed", refunded: true });
+  });
+
+  // GET /api/v1/admin/reconciliation — verify ledger consistency (admin, expensive)
+  app.get("/api/v1/admin/reconciliation", (c) => {
+    const correlationId = c.get("correlationId" as never) as string;
+    const result = reconcileLedger(moteDb.db);
+
+    logger.info("admin.reconciliation", {
+      correlationId,
+      consistent: result.consistent,
+      errorCount: result.errors.length,
+    });
+
+    return c.json(result);
   });
 
   // GET /agent/:motebitId/capabilities — public (no auth)
