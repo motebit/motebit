@@ -87,6 +87,43 @@ export function getAccountBalance(db: DatabaseDriver, motebitId: string): Virtua
 }
 
 /**
+ * Get account balance with available/pending breakdown.
+ * available = balance (already debited for holds/withdrawals)
+ * pending_withdrawals = sum of pending/processing withdrawal amounts
+ * pending_allocations = sum of locked allocation amounts
+ */
+export function getAccountBalanceDetailed(
+  db: DatabaseDriver,
+  motebitId: string,
+): {
+  balance: number;
+  currency: string;
+  pending_withdrawals: number;
+  pending_allocations: number;
+} {
+  const account = getOrCreateAccount(db, motebitId);
+
+  const pendingW = db
+    .prepare(
+      "SELECT COALESCE(SUM(amount), 0) as total FROM relay_withdrawals WHERE motebit_id = ? AND status IN ('pending', 'processing')",
+    )
+    .get(motebitId) as { total: number };
+
+  const pendingA = db
+    .prepare(
+      "SELECT COALESCE(SUM(amount_locked), 0) as total FROM relay_allocations WHERE motebit_id = ? AND status = 'locked'",
+    )
+    .get(motebitId) as { total: number };
+
+  return {
+    balance: account.balance,
+    currency: account.currency,
+    pending_withdrawals: pendingW.total,
+    pending_allocations: pendingA.total,
+  };
+}
+
+/**
  * Credit an account (deposit, settlement_credit, allocation_release).
  * Creates the account if it doesn't exist.
  * Returns the new balance.
@@ -130,6 +167,10 @@ export function creditAccount(
 /**
  * Debit an account (allocation_hold, settlement_debit, withdrawal, fee).
  * Returns the new balance, or null if insufficient funds.
+ *
+ * Uses atomic UPDATE WHERE balance >= amount to prevent race conditions.
+ * Even though SQLite is single-writer, this pattern is correct if the
+ * relay ever moves to Postgres or a multi-process setup.
  */
 export function debitAccount(
   db: DatabaseDriver,
@@ -142,16 +183,23 @@ export function debitAccount(
   const now = Date.now();
   const transactionId = crypto.randomUUID();
 
-  const account = getOrCreateAccount(db, motebitId);
-  if (account.balance < amount) return null;
+  // Ensure account exists
+  getOrCreateAccount(db, motebitId);
 
-  const newBalance = account.balance - amount;
+  // Atomic: debit only if balance is sufficient — no read-then-write race
+  const info = db
+    .prepare(
+      "UPDATE relay_accounts SET balance = balance - ?, updated_at = ? WHERE motebit_id = ? AND balance >= ?",
+    )
+    .run(amount, now, motebitId, amount);
 
-  db.prepare("UPDATE relay_accounts SET balance = ?, updated_at = ? WHERE motebit_id = ?").run(
-    newBalance,
-    now,
-    motebitId,
-  );
+  if (info.changes === 0) return null;
+
+  // Read the new balance after the atomic update
+  const updated = db
+    .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
+    .get(motebitId) as { balance: number } | undefined;
+  const newBalance = updated?.balance ?? 0;
 
   db.prepare(
     `INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at)
@@ -225,6 +273,7 @@ export function createWithdrawalTables(db: DatabaseDriver): void {
       currency TEXT NOT NULL DEFAULT 'USD',
       destination TEXT NOT NULL DEFAULT 'pending',
       status TEXT NOT NULL DEFAULT 'pending',
+      idempotency_key TEXT,
       payout_reference TEXT,
       requested_at INTEGER NOT NULL,
       completed_at INTEGER,
@@ -234,23 +283,41 @@ export function createWithdrawalTables(db: DatabaseDriver): void {
       ON relay_withdrawals (motebit_id, requested_at DESC);
     CREATE INDEX IF NOT EXISTS idx_relay_withdrawals_status
       ON relay_withdrawals (status) WHERE status IN ('pending', 'processing');
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_relay_withdrawals_idempotency
+      ON relay_withdrawals (motebit_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
   `);
 }
 
 /**
  * Request a withdrawal. Debits the virtual account immediately (funds held).
  * Returns the withdrawal request, or null if insufficient balance.
+ *
+ * Supports idempotency: if `idempotencyKey` is provided and a withdrawal with
+ * that key already exists for this agent, the existing withdrawal is returned
+ * without creating a duplicate.
  */
 export function requestWithdrawal(
   db: DatabaseDriver,
   motebitId: string,
   amount: number,
   destination: string = "pending",
-): WithdrawalRequest | null {
+  idempotencyKey?: string,
+): WithdrawalRequest | null | { existing: WithdrawalRequest } {
+  // Idempotency check: if key provided and already used, return existing
+  if (idempotencyKey) {
+    const existing = db
+      .prepare("SELECT * FROM relay_withdrawals WHERE motebit_id = ? AND idempotency_key = ?")
+      .get(motebitId, idempotencyKey) as WithdrawalRequest | undefined;
+    if (existing) {
+      logger.info("withdrawal.idempotent", { motebitId, idempotencyKey });
+      return { existing };
+    }
+  }
+
   const withdrawalId = crypto.randomUUID();
   const now = Date.now();
 
-  // Debit account — returns null if insufficient balance
+  // Debit account — returns null if insufficient balance (atomic check)
   const newBalance = debitAccount(
     db,
     motebitId,
@@ -263,15 +330,16 @@ export function requestWithdrawal(
 
   db.prepare(
     `INSERT INTO relay_withdrawals
-       (withdrawal_id, motebit_id, amount, currency, destination, status, requested_at)
-     VALUES (?, ?, ?, 'USD', ?, 'pending', ?)`,
-  ).run(withdrawalId, motebitId, amount, destination, now);
+       (withdrawal_id, motebit_id, amount, currency, destination, status, idempotency_key, requested_at)
+     VALUES (?, ?, ?, 'USD', ?, 'pending', ?, ?)`,
+  ).run(withdrawalId, motebitId, amount, destination, idempotencyKey ?? null, now);
 
   logger.info("withdrawal.requested", {
     motebitId,
     withdrawalId,
     amount,
     destination,
+    idempotencyKey: idempotencyKey ?? null,
     balanceAfter: newBalance,
   });
 

@@ -134,6 +134,7 @@ import {
   createWithdrawalTables,
   getOrCreateAccount,
   getAccountBalance,
+  getAccountBalanceDetailed,
   creditAccount,
   debitAccount,
   getTransactions,
@@ -3510,6 +3511,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   });
 
   // GET /api/v1/agents/:motebitId/balance — query virtual account balance + recent transactions
+  // Returns balance breakdown: balance (current), pending_withdrawals, pending_allocations
   app.get("/api/v1/agents/:motebitId/balance", (c) => {
     const motebitId = c.req.param("motebitId");
     const account = getAccountBalance(moteDb.db, motebitId);
@@ -3519,55 +3521,82 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         motebit_id: motebitId,
         balance: 0,
         currency: "USD",
+        pending_withdrawals: 0,
+        pending_allocations: 0,
         transactions: [],
       });
     }
 
+    const detailed = getAccountBalanceDetailed(moteDb.db, motebitId);
     const transactions = getTransactions(moteDb.db, motebitId, 50);
 
     return c.json({
       motebit_id: motebitId,
-      balance: account.balance,
-      currency: account.currency,
+      balance: detailed.balance,
+      currency: detailed.currency,
+      pending_withdrawals: detailed.pending_withdrawals,
+      pending_allocations: detailed.pending_allocations,
       transactions,
     });
   });
 
   // POST /api/v1/agents/:motebitId/withdraw — request withdrawal from virtual account
+  // POST /api/v1/agents/:motebitId/withdraw — request withdrawal from virtual account
+  // Supports idempotency via Idempotency-Key header or body.idempotency_key
   app.post("/api/v1/agents/:motebitId/withdraw", async (c) => {
     const motebitId = c.req.param("motebitId");
     const correlationId = c.get("correlationId" as never) as string;
     const body = await c.req.json<{
       amount: number;
       destination?: string;
+      idempotency_key?: string;
     }>();
 
     if (typeof body.amount !== "number" || body.amount <= 0) {
       throw new HTTPException(400, { message: "amount must be a positive number" });
     }
 
-    const withdrawal = requestWithdrawal(
+    const idempotencyKey = body.idempotency_key ?? c.req.header("Idempotency-Key") ?? undefined;
+
+    const result = requestWithdrawal(
       moteDb.db,
       motebitId,
       body.amount,
       body.destination ?? "pending",
+      idempotencyKey,
     );
 
-    if (!withdrawal) {
+    if (result === null) {
       throw new HTTPException(402, { message: "Insufficient balance for withdrawal" });
+    }
+
+    // Idempotent replay — return existing withdrawal
+    if ("existing" in result) {
+      logger.info("withdrawal.endpoint.idempotent", {
+        correlationId,
+        motebitId,
+        withdrawalId: result.existing.withdrawal_id,
+        idempotencyKey,
+      });
+      return c.json({
+        motebit_id: motebitId,
+        withdrawal: result.existing,
+        idempotent: true,
+      });
     }
 
     logger.info("withdrawal.endpoint.requested", {
       correlationId,
       motebitId,
-      withdrawalId: withdrawal.withdrawal_id,
+      withdrawalId: result.withdrawal_id,
       amount: body.amount,
-      destination: withdrawal.destination,
+      destination: result.destination,
+      idempotencyKey: idempotencyKey ?? null,
     });
 
     return c.json({
       motebit_id: motebitId,
-      withdrawal,
+      withdrawal: result,
     });
   });
 

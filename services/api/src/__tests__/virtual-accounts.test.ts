@@ -628,4 +628,96 @@ describe("Virtual Accounts", () => {
     });
     expect(res.status).toBe(401);
   });
+
+  // --- Idempotency ---
+
+  it("withdrawal with idempotency key prevents duplicate debit", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+
+    await deposit(relay, motebitId, 100);
+    const idempotencyKey = `withdraw-${crypto.randomUUID()}`;
+
+    // First withdrawal
+    const res1 = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ amount: 40, idempotency_key: idempotencyKey }),
+    });
+    expect(res1.status).toBe(200);
+    const body1 = (await res1.json()) as { withdrawal: Record<string, unknown> };
+    expect(body1.withdrawal.amount).toBe(40);
+
+    // Second withdrawal with same key — should be idempotent
+    const res2 = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ amount: 40, idempotency_key: idempotencyKey }),
+    });
+    expect(res2.status).toBe(200);
+    const body2 = (await res2.json()) as {
+      withdrawal: Record<string, unknown>;
+      idempotent?: boolean;
+    };
+    expect(body2.idempotent).toBe(true);
+    expect(body2.withdrawal.withdrawal_id).toBe(body1.withdrawal.withdrawal_id);
+
+    // Balance should only be debited once
+    const balance = await getBalance(relay, motebitId);
+    expect(balance.balance).toBe(60); // 100 - 40, not 100 - 80
+  });
+
+  it("withdrawal idempotency key via header works", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+
+    await deposit(relay, motebitId, 100);
+    const key = `hdr-${crypto.randomUUID()}`;
+
+    await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": key,
+        ...AUTH_HEADER,
+      },
+      body: JSON.stringify({ amount: 25 }),
+    });
+
+    const res2 = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": key,
+        ...AUTH_HEADER,
+      },
+      body: JSON.stringify({ amount: 25 }),
+    });
+    const body = (await res2.json()) as { idempotent?: boolean };
+    expect(body.idempotent).toBe(true);
+
+    const balance = await getBalance(relay, motebitId);
+    expect(balance.balance).toBe(75);
+  });
+
+  // --- Balance model ---
+
+  it("balance includes pending_withdrawals and pending_allocations", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+
+    await deposit(relay, motebitId, 200);
+
+    // Request a withdrawal (pending)
+    await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ amount: 50 }),
+    });
+
+    const balance = await getBalance(relay, motebitId);
+    expect(balance.balance).toBe(150); // 200 - 50 debited
+    expect((balance as Record<string, unknown>).pending_withdrawals).toBe(50);
+    expect((balance as Record<string, unknown>).pending_allocations).toBeDefined();
+  });
 });
