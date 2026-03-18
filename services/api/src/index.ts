@@ -1008,6 +1008,25 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
             connections.set(motebitId, []);
           }
           connections.get(motebitId)!.push({ ws, deviceId, capabilities });
+
+          // Task recovery: re-dispatch any pending tasks for this agent to the
+          // newly connected device. Covers reconnection after disconnect (e.g.
+          // cellular→WiFi handoff) and federation-forwarded tasks that arrived
+          // while no device was connected.
+          for (const [, entry] of taskQueue) {
+            if (
+              entry.task.motebit_id === motebitId &&
+              entry.task.status === AgentTaskStatus.Pending &&
+              !entry.receipt
+            ) {
+              ws.send(JSON.stringify({ type: "task_request", task: entry.task }));
+              logger.info("task.recovery_on_reconnect", {
+                correlationId: entry.task.task_id,
+                motebitId,
+                deviceId,
+              });
+            }
+          }
         },
 
         // eslint-disable-next-line @typescript-eslint/no-misused-promises -- hono ws adapter supports async handlers

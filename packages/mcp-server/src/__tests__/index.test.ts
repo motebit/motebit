@@ -1112,7 +1112,13 @@ describe("McpServerAdapter — synthetic tool execution", () => {
   });
 
   it("motebit_task iterates generator and returns receipt", async () => {
-    const mockReceipt = { task_id: "t1", status: "completed", result: "done" };
+    const mockReceipt = {
+      task_id: "t1",
+      motebit_id: "m1",
+      signature: "sig1",
+      status: "completed",
+      result: "done",
+    };
     const handleAgentTask = async function* () {
       yield { type: "text" as const, text: "working..." };
       yield { type: "task_result" as const, receipt: mockReceipt };
@@ -1130,7 +1136,7 @@ describe("McpServerAdapter — synthetic tool execution", () => {
     expect(result.content[0]!.text).toContain("completed");
   });
 
-  it("motebit_task returns fallback when no receipt emitted", async () => {
+  it("motebit_task returns fallback with receipt_missing when no receipt emitted", async () => {
     const handleAgentTask = async function* () {
       yield { type: "text" as const, text: "just text" };
     };
@@ -1145,6 +1151,51 @@ describe("McpServerAdapter — synthetic tool execution", () => {
 
     expect(result.content[0]!.text).toContain("just text");
     expect(result.content[0]!.text).toContain("completed");
+    expect(result.content[0]!.text).toContain("receipt_missing");
+    expect(result.content[0]!.text).toContain("true");
+  });
+
+  it("motebit_task returns error for malformed receipt missing required fields", async () => {
+    const mockReceipt = { task_id: "t1", status: "completed" }; // missing motebit_id, signature
+    const handleAgentTask = async function* () {
+      yield { type: "task_result" as const, receipt: mockReceipt };
+    };
+    const deps = makeDeps({ handleAgentTask });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const handler = registrations.tools.get("motebit_task")!.handler;
+    const result = (await handler({ prompt: "do something" })) as {
+      content: Array<{ text: string }>;
+      isError?: boolean;
+    };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("malformed receipt");
+    expect(result.content[0]!.text).toContain("motebit_id");
+    expect(result.content[0]!.text).toContain("signature");
+  });
+
+  it("motebit_task times out when generator does not complete", async () => {
+    const handleAgentTask = async function* () {
+      yield { type: "text" as const, text: "start" };
+      // Simulate a generator that never finishes by waiting longer than timeout
+      await new Promise((resolve) => setTimeout(resolve, 10_000));
+      yield { type: "text" as const, text: "never reached" };
+    };
+    const deps = makeDeps({ handleAgentTask });
+    const adapter = new McpServerAdapter(makeConfig({ taskTimeoutMs: 50 }), deps);
+    await adapter.start();
+
+    const handler = registrations.tools.get("motebit_task")!.handler;
+    const result = (await handler({ prompt: "slow task" })) as {
+      content: Array<{ text: string }>;
+      isError?: boolean;
+    };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("timed out");
+    expect(result.content[0]!.text).toContain("50ms");
   });
 
   it("motebit_identity returns identityFileContent when provided", async () => {
@@ -1582,7 +1633,13 @@ describe("McpServerAdapter — motebit_task scope enforcement", () => {
   }
 
   it("motebit_task succeeds when required_capabilities are within delegated scope", async () => {
-    const mockReceipt = { task_id: "t1", status: "completed", result: "done" };
+    const mockReceipt = {
+      task_id: "t1",
+      motebit_id: "m1",
+      signature: "sig1",
+      status: "completed",
+      result: "done",
+    };
     const handleAgentTask = async function* () {
       yield { type: "task_result" as const, receipt: mockReceipt };
     };
@@ -1625,7 +1682,13 @@ describe("McpServerAdapter — motebit_task scope enforcement", () => {
   });
 
   it("motebit_task succeeds with wildcard scope delegation", async () => {
-    const mockReceipt = { task_id: "t2", status: "completed", result: "ok" };
+    const mockReceipt = {
+      task_id: "t2",
+      motebit_id: "m2",
+      signature: "sig2",
+      status: "completed",
+      result: "ok",
+    };
     const handleAgentTask = async function* () {
       yield { type: "task_result" as const, receipt: mockReceipt };
     };
@@ -1701,7 +1764,13 @@ describe("McpServerAdapter — motebit_task scope enforcement", () => {
   });
 
   it("motebit_task includes delegated_scope in receipt when delegation token provided", async () => {
-    const mockReceipt = { task_id: "t3", status: "completed", result: "scoped" };
+    const mockReceipt = {
+      task_id: "t3",
+      motebit_id: "m3",
+      signature: "sig3",
+      status: "completed",
+      result: "scoped",
+    };
     const handleAgentTask = async function* () {
       yield { type: "task_result" as const, receipt: mockReceipt };
     };
@@ -1721,7 +1790,13 @@ describe("McpServerAdapter — motebit_task scope enforcement", () => {
   });
 
   it("motebit_task works normally without delegation token (backward compat)", async () => {
-    const mockReceipt = { task_id: "t4", status: "completed", result: "no scope" };
+    const mockReceipt = {
+      task_id: "t4",
+      motebit_id: "m4",
+      signature: "sig4",
+      status: "completed",
+      result: "no scope",
+    };
     const handleAgentTask = async function* () {
       yield { type: "task_result" as const, receipt: mockReceipt };
     };

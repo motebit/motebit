@@ -1095,6 +1095,41 @@ describe("Delegation E2E", () => {
     expect(repCreds).toHaveLength(0);
   });
 
+  it("task recovery: pending task remains pollable after device disconnect", async () => {
+    // Submit a task while a device is connected
+    const workerWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+    relay.connections.set(MOTEBIT_ID, [
+      { ws: workerWs as never, deviceId: "worker-device", capabilities: ["stdio_mcp"] },
+    ]);
+
+    const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ prompt: "Recovery test task" }),
+    });
+    expect(taskRes.status).toBe(201);
+    const { task_id: taskId } = (await taskRes.json()) as { task_id: string };
+
+    // Device received the task via broadcast
+    expect(workerWs.send).toHaveBeenCalled();
+
+    // Simulate disconnect — remove all connections
+    relay.connections.delete(MOTEBIT_ID);
+
+    // Task should remain in queue and be pollable (pending, no receipt)
+    const pollRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task/${taskId}`, {
+      headers: AUTH_HEADER,
+    });
+    expect(pollRes.status).toBe(200);
+    const body = (await pollRes.json()) as {
+      task: { status: string; task_id: string };
+      receipt: null;
+    };
+    expect(body.task.status).toBe("pending");
+    expect(body.task.task_id).toBe(taskId);
+    expect(body.receipt).toBeNull();
+  });
+
   it("stale receipt: completed_at 2 hours after submitted_at is rejected with 400", async () => {
     const workerWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
     relay.connections.set(MOTEBIT_ID, [

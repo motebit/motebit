@@ -124,6 +124,8 @@ interface McpServerConfig {
   knownCallers?: Map<string, { publicKey: string; trustLevel: AgentTrustLevel }>;
   /** What type of motebit this server represents. Affects default inbound policy. */
   motebitType?: "personal" | "service" | "collaborative";
+  /** Timeout in milliseconds for motebit_task generator iteration (default: 300000 = 5 minutes). */
+  taskTimeoutMs?: number;
 }
 
 // === Risk → MCP annotation mapping ===
@@ -631,16 +633,80 @@ export class McpServerAdapter {
           let receipt: Record<string, unknown> | undefined;
           let responseText = "";
 
-          for await (const chunk of handleAgentTask(args.prompt)) {
-            if (chunk.type === "text") {
-              responseText += (chunk as { type: "text"; text: string }).text;
-            } else if (chunk.type === "task_result") {
-              receipt = (chunk as { type: "task_result"; receipt: Record<string, unknown> })
-                .receipt;
+          const timeoutMs = this.config.taskTimeoutMs ?? 300_000;
+          const timeoutError = Symbol("timeout");
+          const timeoutPromise = new Promise<typeof timeoutError>((resolve) =>
+            setTimeout(() => resolve(timeoutError), timeoutMs),
+          );
+
+          const gen = handleAgentTask(args.prompt);
+          let timedOut = false;
+          try {
+            // Race each iteration of the generator against the timeout
+            // eslint-disable-next-line no-constant-condition -- intentional manual iteration with race
+            while (true) {
+              const result = await Promise.race([gen.next(), timeoutPromise]);
+              if (result === timeoutError) {
+                timedOut = true;
+                break;
+              }
+              const iterResult = result as IteratorResult<
+                | { type: "text"; text: string }
+                | { type: "task_result"; receipt: Record<string, unknown> }
+                | { type: string; [key: string]: unknown }
+              >;
+              if (iterResult.done) break;
+              const chunk = iterResult.value;
+              if (chunk.type === "text") {
+                responseText += (chunk as { type: "text"; text: string }).text;
+              } else if (chunk.type === "task_result") {
+                receipt = (chunk as { type: "task_result"; receipt: Record<string, unknown> })
+                  .receipt;
+              }
+            }
+          } finally {
+            // Ensure generator is cleaned up on timeout
+            if (timedOut) {
+              void gen.return(undefined as never);
             }
           }
 
+          if (timedOut) {
+            this.deps.logToolCall("motebit_task", args, {
+              ok: false,
+              error: `task timed out after ${timeoutMs}ms`,
+            });
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: `Error: task timed out after ${timeoutMs}ms`,
+                },
+              ],
+              isError: true,
+            };
+          }
+
           if (receipt) {
+            // Validate receipt has required fields
+            const requiredFields = ["task_id", "motebit_id", "signature", "status"] as const;
+            const missing = requiredFields.filter((f) => receipt[f] == null);
+            if (missing.length > 0) {
+              this.deps.logToolCall("motebit_task", args, {
+                ok: false,
+                error: `malformed receipt: missing ${missing.join(", ")}`,
+              });
+              return {
+                content: [
+                  {
+                    type: "text" as const,
+                    text: `Error: malformed receipt — missing required fields: ${missing.join(", ")}`,
+                  },
+                ],
+                isError: true,
+              };
+            }
+
             // Include delegated_scope in receipt if delegation token was provided
             if (delegatedScope) {
               receipt.delegated_scope = delegatedScope;
@@ -650,7 +716,11 @@ export class McpServerAdapter {
           }
 
           this.deps.logToolCall("motebit_task", args, { ok: false, error: "no receipt" });
-          return fmt({ status: "completed", response: responseText });
+          return fmt({
+            status: "completed",
+            response: responseText,
+            receipt_missing: true,
+          });
         },
       );
     }

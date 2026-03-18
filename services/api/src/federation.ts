@@ -239,7 +239,14 @@ export async function initRelayIdentity(
           "Relay private key is encrypted but no passphrase provided (set MOTEBIT_RELAY_KEY_PASSPHRASE)",
         );
       }
-      privHex = decryptPrivateKey(existing.private_key_hex, passphrase);
+      try {
+        privHex = decryptPrivateKey(existing.private_key_hex, passphrase);
+      } catch (err: unknown) {
+        throw new Error(
+          "Failed to decrypt relay private key — check MOTEBIT_RELAY_KEY_PASSPHRASE. The passphrase may be incorrect or the key file may be corrupted.",
+          { cause: err },
+        );
+      }
     } else {
       privHex = existing.private_key_hex;
     }
@@ -259,7 +266,19 @@ export async function initRelayIdentity(
   const did = publicKeyToDidKey(keypair.publicKey);
   const relayMotebitId = `relay-${crypto.randomUUID()}`;
 
-  const storedPriv = passphrase ? encryptPrivateKey(privHex, passphrase) : privHex;
+  let storedPriv: string;
+  if (passphrase) {
+    try {
+      storedPriv = encryptPrivateKey(privHex, passphrase);
+    } catch (err: unknown) {
+      throw new Error(
+        "Failed to encrypt relay private key — MOTEBIT_RELAY_KEY_PASSPHRASE may contain invalid characters or a crypto error occurred.",
+        { cause: err },
+      );
+    }
+  } else {
+    storedPriv = privHex;
+  }
 
   // INSERT OR IGNORE: if another process inserted between our SELECT and INSERT,
   // this silently no-ops and we re-query to get the winner's identity.

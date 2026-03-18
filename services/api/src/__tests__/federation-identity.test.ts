@@ -77,8 +77,10 @@ describe("Relay Identity Encryption", () => {
     const passphrase = "correct-passphrase";
     await initRelayIdentity(db, passphrase);
 
-    // Attempt to load with wrong passphrase — should throw
-    await expect(initRelayIdentity(db, "wrong-passphrase")).rejects.toThrow();
+    // Attempt to load with wrong passphrase — should throw with actionable message
+    await expect(initRelayIdentity(db, "wrong-passphrase")).rejects.toThrow(
+      "Failed to decrypt relay private key",
+    );
   });
 
   it("encrypted key without passphrase throws descriptive error", async () => {
