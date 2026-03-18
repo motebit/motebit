@@ -127,8 +127,9 @@ export async function bumpTrustFromReceipt(
             // public_key may not be hex — fall back to did:motebit
           }
         }
-        const successRate =
-          updated.successful_tasks / Math.max(1, updated.successful_tasks + updated.failed_tasks);
+        const successful = updated.successful_tasks ?? 0;
+        const failed = updated.failed_tasks ?? 0;
+        const successRate = successful / Math.max(1, successful + failed);
         const avgLatency =
           receipt.completed_at && receipt.submitted_at
             ? receipt.completed_at - receipt.submitted_at
