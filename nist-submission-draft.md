@@ -23,6 +23,14 @@ We offer Motebit as a reference implementation and potential NCCoE technology co
 
 Motebit is deployed across five surfaces (desktop, CLI, mobile, web, admin dashboard), demonstrating agent architectures applicable to all three use cases identified in the concept paper: workforce efficiency (conversational agents with memory and tool use), security operations (audit-logged tool execution with sensitivity classification), and software development (MCP-integrated tool orchestration with signed execution receipts).
 
+**Which use-cases are in the near future?**
+
+Agent-to-agent delegation across organizational boundaries. Today, an enterprise agent calls tools within its own trust domain. The near-future shift is agents delegating tasks to agents operated by other organizations — a procurement agent requesting quotes from a vendor's agent, a compliance agent querying a regulator's agent. This requires cryptographic identity that is portable across trust domains, delegation receipts that prove chain-of-custody, and budget-gated settlement between parties. Motebit's relay federation specification (`motebit/relay-federation@1.0`) addresses this directly: cross-relay task routing via semiring-algebraic graph traversal, settlement chains with receipt co-signing, and circuit breakers for forward-path health.
+
+**What opportunities do agents present?**
+
+The core opportunity is compounding capability. An agent with persistent identity, accumulated trust, and governed memory becomes more useful over time — it knows the user's context, has earned trust from other agents, and carries verifiable credentials proving its track record. This is fundamentally different from stateless automation. The economic opportunity follows: agents that can prove their identity and execution history to third parties can participate in marketplaces, receive delegated work, and settle payments — an agentic economy built on cryptographic trust rather than platform lock-in.
+
 **What are the core characteristics of agentic architectures?**
 
 Motebit implements the agentic architecture depicted in Figure 1 of the concept paper:
