@@ -1,6 +1,7 @@
 import type { MemoryCandidate } from "@motebit/sdk";
 import { SensitivityLevel } from "@motebit/sdk";
 import { RedactionEngine } from "./redaction.js";
+import { ContentSanitizer } from "./sanitizer.js";
 
 /**
  * MemoryGovernance — controls what the creature is allowed to remember.
@@ -40,13 +41,18 @@ export interface MemoryDecision {
   reason: string;
 }
 
+/** Maximum confidence for memories that contain injection patterns. */
+const MAX_INJECTION_CONFIDENCE = 0.3;
+
 export class MemoryGovernor {
   private config: MemoryGovernanceConfig;
   private redaction: RedactionEngine;
+  private sanitizer: ContentSanitizer;
 
   constructor(config?: Partial<MemoryGovernanceConfig>) {
     this.config = { ...DEFAULT_MEMORY_GOVERNANCE, ...config };
     this.redaction = new RedactionEngine();
+    this.sanitizer = new ContentSanitizer();
   }
 
   /** Read-only snapshot of the effective governance config. */
@@ -70,6 +76,24 @@ export class MemoryGovernor {
           memoryClass: MemoryClass.REJECTED,
           reason: "Contains detected secrets (tokens, keys, passwords). Never stored.",
         });
+        continue;
+      }
+
+      // 1b. Injection defense — memories with embedded directives get confidence-capped.
+      // We don't reject outright (false positives would lose legitimate memories), but
+      // capping confidence ensures injected content decays quickly and is deprioritized.
+      const scanResult = this.sanitizer.sanitize(candidate.content, "memory:candidate");
+      if (scanResult.injectionDetected) {
+        const cappedConfidence = Math.min(candidate.confidence, MAX_INJECTION_CONFIDENCE);
+        decisions.push({
+          candidate: { ...candidate, confidence: cappedConfidence },
+          memoryClass:
+            cappedConfidence >= this.config.persistenceThreshold
+              ? MemoryClass.PERSISTENT
+              : MemoryClass.EPHEMERAL,
+          reason: `Injection patterns detected (${scanResult.injectionPatterns.length} regex, density=${(scanResult.directiveDensity ?? 0).toFixed(3)}, structural=[${(scanResult.structuralFlags ?? []).join(",")}]). Confidence capped to ${cappedConfidence.toFixed(2)}.`,
+        });
+        if (cappedConfidence >= this.config.persistenceThreshold) persistentCount++;
         continue;
       }
 

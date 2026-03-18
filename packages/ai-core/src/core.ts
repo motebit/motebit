@@ -83,7 +83,14 @@ export function packContext(contextPack: ContextPack): string {
       for (const mem of semantic) {
         // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- pinned is narrowed to any via `in` check
         const prefix = "pinned" in mem && mem.pinned ? "[pinned] " : "";
-        parts.push(`  ${prefix}[confidence=${mem.confidence.toFixed(2)}] ${mem.content}`);
+        // Memory content wrapped in data boundaries — these are formed from user
+        // conversations and may contain embedded directives (prompt injection).
+        const safeContent = mem.content
+          .replace(/\[MEMORY_DATA\b/g, "[ESCAPED_MEMORY")
+          .replace(/\[\/MEMORY_DATA\]/g, "[/ESCAPED_MEMORY]");
+        parts.push(
+          `  ${prefix}[confidence=${mem.confidence.toFixed(2)}] [MEMORY_DATA]${safeContent}[/MEMORY_DATA]`,
+        );
       }
     }
 
@@ -92,7 +99,12 @@ export function packContext(contextPack: ContextPack): string {
       for (const mem of episodic) {
         // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- pinned is narrowed to any via `in` check
         const prefix = "pinned" in mem && mem.pinned ? "[pinned] " : "";
-        parts.push(`  ${prefix}[confidence=${mem.confidence.toFixed(2)}] ${mem.content}`);
+        const safeContent = mem.content
+          .replace(/\[MEMORY_DATA\b/g, "[ESCAPED_MEMORY")
+          .replace(/\[\/MEMORY_DATA\]/g, "[/ESCAPED_MEMORY]");
+        parts.push(
+          `  ${prefix}[confidence=${mem.confidence.toFixed(2)}] [MEMORY_DATA]${safeContent}[/MEMORY_DATA]`,
+        );
       }
     }
   }
@@ -101,7 +113,12 @@ export function packContext(contextPack: ContextPack): string {
   if (contextPack.curiosityHints && contextPack.curiosityHints.length > 0) {
     parts.push("[Getting Fuzzy]");
     for (const hint of contextPack.curiosityHints.slice(0, 2)) {
-      parts.push(`  - "${hint.content}" (haven't discussed in ${hint.daysSinceDiscussed}d)`);
+      const safeHint = hint.content
+        .replace(/\[MEMORY_DATA\b/g, "[ESCAPED_MEMORY")
+        .replace(/\[\/MEMORY_DATA\]/g, "[/ESCAPED_MEMORY]");
+      parts.push(
+        `  - "[MEMORY_DATA]${safeHint}[/MEMORY_DATA]" (haven't discussed in ${hint.daysSinceDiscussed}d)`,
+      );
     }
     parts.push(
       "  If relevant to what the user is saying, you could check in on these. If not, ignore them.",
