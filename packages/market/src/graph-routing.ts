@@ -22,6 +22,7 @@ import {
 } from "@motebit/semiring";
 import type { RouteWeight, Annotated } from "@motebit/semiring";
 import type { CandidateProfile, TaskRequirements } from "./scoring.js";
+import { blendCredentialTrust } from "./credential-weight.js";
 
 // ── Shared Types ────────────────────────────────────────────────────
 
@@ -143,9 +144,10 @@ export function buildRoutingGraph(
     // Skip offline agents
     if (!candidate.is_online) continue;
 
-    const trust =
+    const staticTrust =
       candidate.chain_trust ??
       (candidate.trust_record ? trustLevelToScore(candidate.trust_record.trust_level) : 0.1);
+    const trust = blendCredentialTrust(staticTrust, candidate.credential_reputation ?? null);
 
     const cost = estimateCandidateCost(candidate);
     const latency = candidate.latency_stats?.avg_ms ?? 5000;

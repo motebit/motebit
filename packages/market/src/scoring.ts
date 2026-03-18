@@ -15,6 +15,8 @@ export interface CandidateProfile {
   is_online: boolean;
   /** Pre-composed chain trust score from delegation receipt tree. When set, overrides trust_record lookup. */
   chain_trust?: number;
+  /** Aggregated reputation from peer-issued credentials. When set, blended into trust edge weight. */
+  credential_reputation?: import("./credential-weight.js").CredentialReputation;
 }
 
 export interface TaskRequirements {

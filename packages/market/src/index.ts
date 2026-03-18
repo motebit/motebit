@@ -17,6 +17,12 @@ export type {
   RoutingWeights,
 } from "./graph-routing.js";
 export type { CandidateProfile, TaskRequirements } from "./scoring.js";
+export { aggregateCredentialReputation, blendCredentialTrust } from "./credential-weight.js";
+export type {
+  CredentialReputation,
+  CredentialWeightConfig,
+  ReputationVC,
+} from "./credential-weight.js";
 export { allocateBudget, estimateCost } from "./budget.js";
 export type { AllocationRequest } from "./budget.js";
 export { computeServiceReputation } from "./reputation.js";
