@@ -9,9 +9,9 @@
 
 ## Summary
 
-The protocol layer is MIT licensed and the verification library has zero dependencies — any system can verify a Motebit agent's identity, execution receipts, and credential chain without running Motebit software. This is a working implementation, not a proposal.
+Motebit is a cryptographic identity and authorization runtime for AI agents: 39 packages, 90,000 lines of source TypeScript, 3,400+ tests, three open specifications. Agents carry persistent Ed25519 identities, accumulate verifiable trust through signed execution receipts, and enforce policy at every tool boundary. Receipts embed the signer's public key — they are self-verifiable offline, without contacting any relay or authority. Key rotation uses signed succession chains verifiable end-to-end from genesis key to current key, with no centralized revocation.
 
-Motebit is a cryptographic identity and authorization runtime for AI agents: 39 packages, 144,000 lines of TypeScript, 3,000+ tests, three open specifications. Agents carry persistent Ed25519 identities, accumulate verifiable trust through signed execution receipts, and enforce policy at every tool boundary. Receipts embed the signer's public key — they are self-verifiable offline, without contacting any relay or authority. Key rotation uses signed succession chains verifiable end-to-end from genesis key to current key, with no centralized revocation.
+The protocol layer is MIT licensed and the verification library has zero dependencies — any system can verify a Motebit agent's identity, execution receipts, and credential chain without running Motebit software. This is a working implementation, not a proposal.
 
 We offer Motebit as a reference implementation and potential NCCoE technology collaborator. This comment responds directly to the six question categories in the Note to Reviewers.
 
@@ -41,9 +41,21 @@ Motebit includes both an MCP client and an MCP server:
 - **MCP Client:** Tool discovery, manifest pinning (SHA-256 hash on first connect, trust revoked on mismatch), per-server trust levels, `EXTERNAL_DATA` boundary marking on all tool results
 - **MCP Server:** Exposes the agent as a callable service with synthetic tools (`motebit_query`, `motebit_task`, `motebit_remember`, `motebit_recall`, `motebit_identity`, `motebit_tools`). Supports stdio and StreamableHTTP transports. Bearer token authentication on all HTTP connections (fail-closed).
 
+**What risks worry you about agents?**
+
+Three risks, in order of severity: (1) **Identity vacuum.** Agents acting on behalf of users with no cryptographic proof of who authorized them. When an agent delegates to another agent, there is no chain of custody. (2) **Ambient authority.** Most agent frameworks grant all-or-nothing tool access. An agent with write access to a database has the same access whether the user asked it to read a record or drop a table. (3) **Memory without governance.** Agents that persist memory across sessions without sensitivity classification, retention rules, or deletion mechanisms create uncontrolled data stores that grow indefinitely.
+
+**How do AI agents differ from other forms of software agents?**
+
+AI agents differ from traditional software agents (e.g., scheduled jobs, bots, RPA) in three ways relevant to identity and authorization: (1) **Non-deterministic behavior.** An AI agent's actions depend on model reasoning — the same input may produce different tool calls on different runs. This makes static authorization policies insufficient; the authorization system must evaluate each action at execution time, not at deployment time. (2) **Tool-augmented scope.** AI agents dynamically discover and invoke tools, potentially expanding their effective capabilities beyond what was anticipated at provisioning. (3) **Natural language attack surface.** AI agents process unstructured input (prompts, tool results) that can contain embedded directives — prompt injection is an identity and authorization problem, not just a model safety problem.
+
+**How are agentic architectures different from current microservices architectures?**
+
+In a microservices architecture, each service has a fixed API contract, deterministic behavior, and infrastructure-level identity (mTLS, SPIFFE). In an agentic architecture: the "API" is a natural language prompt with non-deterministic routing through tools; the agent may call tools that were not known at deployment time (MCP discovery); and the agent acts on behalf of a human whose intent must be traceable through delegation chains. The identity challenge shifts from "which service is calling" to "which agent, authorized by which human, with what scope, is performing what action, and can that chain be verified after the fact."
+
 **How do agentic architectures introduce identity and authorization challenges?**
 
-Every major agent product today (ChatGPT, Claude, Perplexity, open-source frameworks like OpenClaw with 226K GitHub stars) lacks persistent cryptographic identity. Agents are session tokens — they reset on every interaction, cannot prove who they are to third parties, and accumulate no verifiable trust history. When the provider changes its API or the session ends, the agent ceases to exist. This is an architectural absence, not a feature gap.
+No major agent product or framework today — commercial or open source — ships persistent cryptographic identity. Agents are session tokens: they reset on every interaction, cannot prove who they are to third parties, and accumulate no verifiable trust history. When the provider changes its API or the session ends, the agent ceases to exist. This is an architectural absence, not a feature gap.
 
 **Relevant artifacts:**
 
@@ -136,6 +148,20 @@ Yes. Governance thresholds are declared in the identity file and enforced at run
 
 Sensitivity levels (none / personal / medical / financial / secret) dynamically affect authorization: the MemoryGovernor classifies data sensitivity and applies retention rules per level. When an agent aggregates data across tools, the highest sensitivity level governs — consistent with the data aggregation concern raised in the concept paper.
 
+**How do we establish "least privilege" for an agent, especially when its required actions might not be fully predictable when deployed?**
+
+This is the central design challenge. Motebit addresses it with the three-band governance model: the identity file declares thresholds that constrain the agent _regardless_ of what the model decides to do. Even if the model reasons that dropping a database is the correct action, the PolicyGate denies it if that risk level exceeds the agent's governance threshold. The agent's privilege boundary is declared by the owner at identity creation time and enforced at runtime — the model's unpredictability operates _within_ those bounds, not outside them.
+
+For dynamically discovered tools (MCP), each new tool is assigned a risk level before first use. Unknown tools default to the highest risk level (R4_MONEY) — fail-closed, not fail-open.
+
+**How might an agent convey the intent of its actions?**
+
+Motebit's execution ledger records not just _what_ the agent did, but _why_. Each step in a goal execution includes the agent's reasoning summary (generated by the reflection engine), the tool arguments, and the delegation context. The signed execution manifest bundles this into a tamper-evident document. Additionally, the precision feedback loop (`buildPrecisionContext`) modulates the system prompt based on the agent's self-assessed confidence — low confidence agents are instructed to be explicit about their uncertainty and reasoning, making intent more transparent in the output.
+
+**What are the mechanisms for an agent to prove its authority to perform a specific action?**
+
+The agent's signed JWT (Ed25519, 5-minute expiry) carries explicit scope sets. The receiving service verifies: (1) the signature matches the agent's pinned public key, (2) the requested action falls within the token's scope, (3) the token has not expired. For delegation, the execution receipt proves the delegating agent authorized the action — the receipt is self-verifiable using only the embedded public key.
+
 **How do we handle delegation of authority for "on behalf of" scenarios?**
 
 Agents delegate tasks to other agents through MCP. Delegation tokens carry explicit scope sets — the receiving agent cannot exceed the delegated scope. Each delegation produces a signed execution receipt containing:
@@ -157,7 +183,7 @@ The identity file's `owner_id` field binds the agent to a human identity. The op
 
 - PolicyGate: `packages/policy/src/policy-gate.ts`
 - Privacy layer: `packages/privacy-layer/`
-- MemoryGovernor: `packages/policy/src/memory-governor.ts`
+- MemoryGovernor: `packages/policy/src/memory-governance.ts`
 - Governance thresholds: Section 3.3 of `spec/identity-v1.md`
 
 ---
@@ -235,16 +261,17 @@ A triple-layer injection defense operates at this boundary:
 
 Motebit's architecture engages with several standards referenced in the concept paper:
 
-| Standard             | Alignment                                                                                                                                                                                                                                                                               |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **MCP**              | Native client + server implementation. MCP is the tool interop layer; Motebit adds the identity and authorization layer MCP does not define.                                                                                                                                            |
-| **OAuth 2.0 / OIDC** | MCP server bearer auth is compatible with OAuth token flows. Ed25519 signed tokens serve a similar role but are self-verifiable without introspection endpoints. Enterprise deployments can layer OIDC for user authentication.                                                         |
-| **SPIFFE / SPIRE**   | Complementary. SPIFFE attests workloads; Motebit attests agents. Both use cryptographic identity. In Kubernetes, a SPIFFE SVID attests the pod; the Motebit identity attests the agent running in the pod.                                                                              |
-| **SCIM**             | Agent lifecycle (creation, device registration, governance updates) maps to SCIM provisioning patterns. The identity file serves as the canonical identity document.                                                                                                                    |
-| **NGAC**             | PolicyGate implements attribute-based access control (risk-level × sensitivity-level). NGAC's graph-based policy and delegation support are architecturally aligned for enterprise policy federation.                                                                                   |
-| **SP 800-207**       | Zero trust at every tool boundary. No ambient authority. Every call verified. All decisions logged.                                                                                                                                                                                     |
-| **SP 800-63-4**      | Ed25519 cryptographic verification maps to AAL2/AAL3 assurance levels. Key storage in hardware-backed OS keychain (when available) provides phishing-resistant authentication. Key rotation via signed succession records preserves identity continuity without centralized revocation. |
-| **W3C DID / VC**     | Native `did:key` derivation from Ed25519 public keys. W3C VC 2.0 credentials with `eddsa-jcs-2022` cryptosuite for reputation, gradient, and trust attestations.                                                                                                                        |
+| Standard             | Alignment                                                                                                                                                                                                                                                                                                                               |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **MCP**              | Native client + server implementation. MCP is the tool interop layer; Motebit adds the identity and authorization layer MCP does not define.                                                                                                                                                                                            |
+| **OAuth 2.0 / OIDC** | MCP server bearer auth is compatible with OAuth token flows. Ed25519 signed tokens serve a similar role but are self-verifiable without introspection endpoints. Enterprise deployments can layer OIDC for user authentication.                                                                                                         |
+| **SPIFFE / SPIRE**   | Complementary. SPIFFE attests workloads; Motebit attests agents. Both use cryptographic identity. In Kubernetes, a SPIFFE SVID attests the pod; the Motebit identity attests the agent running in the pod.                                                                                                                              |
+| **SCIM**             | Agent lifecycle (creation, device registration, governance updates) maps to SCIM provisioning patterns. The identity file serves as the canonical identity document.                                                                                                                                                                    |
+| **NGAC**             | PolicyGate implements attribute-based access control (risk-level × sensitivity-level). NGAC's graph-based policy and delegation support are architecturally aligned for enterprise policy federation.                                                                                                                                   |
+| **SP 800-207**       | Zero trust at every tool boundary. No ambient authority. Every call verified. All decisions logged.                                                                                                                                                                                                                                     |
+| **SP 800-63-4**      | Ed25519 cryptographic verification maps to AAL2/AAL3 assurance levels. Key storage in hardware-backed OS keychain (when available) provides phishing-resistant authentication. Key rotation via signed succession records preserves identity continuity without centralized revocation.                                                 |
+| **NISTIR 8587**      | Ed25519 signed tokens use 5-minute expiry and explicit scope sets to limit theft window. Tokens are bound to a specific agent identity (public key pinning on first contact) — a stolen token cannot be replayed from a different agent. Scope binding ensures a token issued for task delegation cannot authorize identity operations. |
+| **W3C DID / VC**     | Native `did:key` derivation from Ed25519 public keys. W3C VC 2.0 credentials with `eddsa-jcs-2022` cryptosuite for reputation, gradient, and trust attestations.                                                                                                                                                                        |
 
 ---
 
@@ -256,7 +283,7 @@ Motebit's architecture engages with several standards referenced in the concept 
 - **npm packages:** `@motebit/sdk`, `@motebit/verify`, `create-motebit`, `motebit`
 - **Live demo:** [motebit.com](https://motebit.com)
 
-The architecture extends to on-chain proof anchoring for trust permanence and direct agent-to-agent settlement — infrastructure that composes with the identity and authorization primitives described above.
+The identity and receipt primitives are designed to compose with external proof anchoring systems (e.g., on-chain timestamping for trust permanence) without requiring changes to the core verification path.
 
 We welcome the opportunity to collaborate with the NCCoE as a technology partner in demonstrating these capabilities in laboratory environments.
 
