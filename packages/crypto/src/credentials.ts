@@ -290,7 +290,7 @@ export async function issueGradientCredential(
 }
 
 /**
- * Issue a reputation credential. Can be self-issued or relay-issued.
+ * Issue a reputation credential. Primarily peer-issued by the delegating agent; optionally relay co-signed.
  */
 export async function issueReputationCredential(
   snapshot: {

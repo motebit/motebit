@@ -235,7 +235,7 @@ describe("issueGradientCredential", () => {
 });
 
 describe("issueReputationCredential", () => {
-  it("creates a valid relay-issued reputation credential", async () => {
+  it("creates a valid reputation credential", async () => {
     const relayKeys = await generateKeypair();
     const agentKeys = await generateKeypair();
     const agentDid = publicKeyToDidKey(agentKeys.publicKey);
