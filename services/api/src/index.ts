@@ -2805,7 +2805,34 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
             if (!hasAll) continue;
           }
           peer.ws.send(payload);
+          routed = true;
         }
+      }
+    }
+
+    // Phase 3: HTTP MCP fallback — when no WebSocket routed the task,
+    // find a registered agent with matching capabilities and forward via HTTP.
+    if (!routed && !federationAttempted && requiredCaps.length > 0) {
+      const now = Date.now();
+      const capFilter = requiredCaps[0]!;
+      const httpCandidate = moteDb.db
+        .prepare(
+          `SELECT r.motebit_id, r.endpoint_url FROM agent_registry r
+           WHERE r.expires_at > ? AND r.endpoint_url != ''
+             AND EXISTS (SELECT 1 FROM json_each(r.capabilities) WHERE value = ?)
+           LIMIT 1`,
+        )
+        .get(now, capFilter) as { motebit_id: string; endpoint_url: string } | undefined;
+      if (httpCandidate?.endpoint_url?.trim()) {
+        void forwardTaskViaMcp(
+          httpCandidate.endpoint_url,
+          taskId,
+          body.prompt,
+          httpCandidate.motebit_id,
+          taskQueue as Map<string, { task: { status: string }; receipt?: unknown }>,
+          logger,
+        );
+        routed = true;
       }
     }
 
