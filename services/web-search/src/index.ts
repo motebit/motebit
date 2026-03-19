@@ -54,6 +54,8 @@ function loadConfig() {
     publicUrl: process.env["MOTEBIT_PUBLIC_URL"],
     /** URL of a read-url service to sub-delegate URL reading (multi-hop). */
     delegateReadUrl: process.env["MOTEBIT_DELEGATE_READ_URL"],
+    /** Motebit ID of the sub-delegate (for relay task submission). */
+    delegateTargetId: process.env["MOTEBIT_DELEGATE_TARGET_ID"],
   };
 }
 
@@ -131,8 +133,44 @@ async function subDelegate(
   callerMotebitId: string,
   callerDeviceId: string,
   callerPrivateKey: Uint8Array,
+  /** Relay URL for budget allocation (optional — sub-delegates without budget if omitted). */
+  syncUrl?: string,
+  /** API token for relay calls. */
+  apiToken?: string,
+  /** Target motebit ID for relay task submission. */
+  targetMotebitId?: string,
 ): Promise<Record<string, unknown> | null> {
   try {
+    // Budget allocation: submit relay task for the sub-delegate (if relay configured)
+    let subRelayTaskId: string | undefined;
+    if (syncUrl && apiToken && targetMotebitId) {
+      try {
+        const relayHeaders: Record<string, string> = {
+          Authorization: `Bearer ${apiToken}`,
+          "Content-Type": "application/json",
+        };
+        const taskResp = await fetch(`${syncUrl}/agent/${targetMotebitId}/task`, {
+          method: "POST",
+          headers: relayHeaders,
+          body: JSON.stringify({
+            prompt,
+            submitted_by: callerMotebitId,
+            required_capabilities: ["read_url"],
+          }),
+        });
+        if (taskResp.ok) {
+          const taskBody = (await taskResp.json()) as { task_id: string };
+          subRelayTaskId = taskBody.task_id;
+          log(`sub-delegation relay task: ${subRelayTaskId.slice(0, 12)}…`);
+        } else {
+          log(`sub-delegation relay task failed: ${taskResp.status}`);
+        }
+      } catch (relayErr: unknown) {
+        const msg = relayErr instanceof Error ? relayErr.message : String(relayErr);
+        log(`sub-delegation relay task error: ${msg}`);
+      }
+    }
+
     // Create signed auth token for the remote service
     const token = await createSignedToken(
       {
@@ -200,10 +238,10 @@ async function subDelegate(
       body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
     });
 
-    // Call motebit_task
+    // Call motebit_task (with relay_task_id for budget binding if available)
     const taskResult = (await mcpCall("tools/call", {
       name: "motebit_task",
-      arguments: { prompt },
+      arguments: { prompt, ...(subRelayTaskId ? { relay_task_id: subRelayTaskId } : {}) },
     })) as { result?: { content?: Array<{ type: string; text?: string }> } } | null;
 
     if (!taskResult?.result?.content) return null;
@@ -357,6 +395,9 @@ async function main(): Promise<void> {
               motebitId,
               "web-search-service",
               privateKey,
+              config.syncUrl,
+              config.apiToken,
+              config.delegateTargetId,
             );
             if (charlieReceipt) {
               delegationReceipts = [charlieReceipt];

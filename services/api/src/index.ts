@@ -3188,6 +3188,150 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       }
     }
 
+    // Multi-hop settlement: settle nested delegation_receipts against their relay tasks.
+    // When Bob sub-delegates to Charlie and submits a relay task beforehand, the relay
+    // can find that task by relay_task_id in Charlie's receipt and settle it.
+    const delegationReceipts = receipt.delegation_receipts ?? [];
+    if (delegationReceipts.length > 0) {
+      logger.info("multihop.settlement.start", {
+        correlationId: taskId,
+        count: delegationReceipts.length,
+      });
+      for (const sub of delegationReceipts) {
+        const subRelayTaskId = (sub as unknown as Record<string, unknown>).relay_task_id;
+        if (typeof subRelayTaskId !== "string" || subRelayTaskId === "") continue;
+
+        try {
+          const subEntry = taskQueue.get(subRelayTaskId);
+          if (!subEntry) {
+            logger.warn("multihop.settlement.task_not_found", {
+              correlationId: taskId,
+              subTaskId: subRelayTaskId,
+              subAgent: sub.motebit_id,
+            });
+            continue;
+          }
+
+          // Verify the nested receipt's signature
+          let subPubKey: string | undefined;
+          const subReg = moteDb.db
+            .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+            .get(sub.motebit_id) as { public_key: string } | undefined;
+          if (subReg?.public_key) subPubKey = subReg.public_key;
+          else {
+            const subDevices = await identityManager.listDevices(asMotebitId(sub.motebit_id));
+            subPubKey = subDevices.find((d) => d.public_key)?.public_key;
+          }
+          if (!subPubKey) continue;
+
+          const subValid = await verifyExecutionReceipt(sub, hexToBytes(subPubKey));
+          if (!subValid) {
+            logger.warn("multihop.settlement.sig_invalid", {
+              correlationId: taskId,
+              subTaskId: subRelayTaskId,
+              subAgent: sub.motebit_id,
+            });
+            continue;
+          }
+
+          // Check relay_task_id binding
+          if (subRelayTaskId !== subRelayTaskId) continue; // tautology guard
+
+          // Settle the sub-task (same logic as main settlement, but for the inner receipt)
+          const subExisting = moteDb.db
+            .prepare(
+              "SELECT settlement_id FROM relay_settlements WHERE task_id = ? AND motebit_id = ?",
+            )
+            .get(subRelayTaskId, sub.motebit_id) as { settlement_id: string } | undefined;
+          if (subExisting) continue; // Already settled
+
+          const subUnitCost = getListingUnitCost(sub.motebit_id as string);
+          const subGross =
+            subEntry.price_snapshot ??
+            (subUnitCost > 0 ? subUnitCost / (1 - PLATFORM_FEE_RATE) : 0);
+          if (subGross <= 0) continue; // Free service, no settlement needed
+
+          const subSettlementId = asSettlementId(crypto.randomUUID());
+          const subAllocationId = asAllocationId(`x402-${subRelayTaskId}`);
+          const subAllocation: BudgetAllocation = {
+            allocation_id: subAllocationId,
+            goal_id: asGoalId(subRelayTaskId),
+            candidate_motebit_id: sub.motebit_id,
+            amount_locked: subGross,
+            currency: "USDC",
+            created_at: sub.submitted_at ?? Date.now(),
+            status: "settled",
+          };
+
+          const subSettlement = settleOnReceipt(subAllocation, sub, null, subSettlementId);
+
+          try {
+            moteDb.db.exec("BEGIN");
+            moteDb.db
+              .prepare(
+                `INSERT OR IGNORE INTO relay_settlements
+               (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              )
+              .run(
+                subSettlement.settlement_id,
+                subSettlement.allocation_id,
+                subRelayTaskId,
+                sub.motebit_id,
+                subSettlement.receipt_hash,
+                subSettlement.ledger_hash,
+                subSettlement.amount_settled,
+                subSettlement.platform_fee,
+                subSettlement.platform_fee_rate,
+                subSettlement.status,
+                subSettlement.settled_at,
+              );
+
+            // Mark allocation as settled
+            moteDb.db
+              .prepare(
+                "UPDATE relay_allocations SET status = 'settled', settled_at = ? WHERE task_id = ?",
+              )
+              .run(Date.now(), subRelayTaskId);
+
+            // Credit the sub-delegate (Charlie)
+            if (subSettlement.amount_settled > 0) {
+              creditAccount(
+                moteDb.db,
+                sub.motebit_id as string,
+                subSettlement.amount_settled,
+                "settlement_credit",
+                subSettlement.settlement_id,
+                `Payment for sub-delegated task ${subRelayTaskId}`,
+              );
+            }
+
+            moteDb.db.exec("COMMIT");
+            logger.info("multihop.settlement.created", {
+              correlationId: taskId,
+              subTaskId: subRelayTaskId,
+              subAgent: sub.motebit_id,
+              net: subSettlement.amount_settled,
+              fee: subSettlement.platform_fee,
+            });
+          } catch (txnErr) {
+            moteDb.db.exec("ROLLBACK");
+            logger.warn("multihop.settlement.failed", {
+              correlationId: taskId,
+              subTaskId: subRelayTaskId,
+              error: txnErr instanceof Error ? txnErr.message : String(txnErr),
+            });
+          }
+        } catch (subErr: unknown) {
+          logger.warn("multihop.settlement.sub_error", {
+            correlationId: taskId,
+            subRelayTaskId,
+            error: subErr instanceof Error ? subErr.message : String(subErr),
+          });
+        }
+      }
+    }
+
     // Record latency for routing intelligence
     if (receipt.completed_at && entry.task.submitted_at) {
       const elapsed = receipt.completed_at - entry.task.submitted_at;
