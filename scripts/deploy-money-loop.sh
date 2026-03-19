@@ -93,7 +93,7 @@ log "Bootstrapping web-search service identity..."
 cd "$ROOT_DIR/services/web-search"
 
 if [ ! -f "motebit.md" ]; then
-  MOTEBIT_PASSPHRASE="web-search-service" npx create-motebit . --service --yes
+  MOTEBIT_PASSPHRASE="${MOTEBIT_BOOTSTRAP_PASSPHRASE:?Set MOTEBIT_BOOTSTRAP_PASSPHRASE before running}" npx create-motebit . --service --yes
   ok "Created motebit.md identity"
 else
   ok "Identity file already exists"
