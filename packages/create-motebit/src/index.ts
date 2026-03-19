@@ -169,7 +169,8 @@ function makeAgentPackageJson(name: string): string {
 }
 
 function makeAgentTools(): string {
-  return `import type { ToolDefinition, ToolResult } from "@motebit/sdk";
+  const sdk = "@motebit/sdk";
+  return `import type { ToolDefinition, ToolResult } from "${sdk}";
 
 type ToolEntry = {
   definition: ToolDefinition;
