@@ -1,3 +1,4 @@
+pnpm audit
 pnpm turbo run build typecheck lint test:coverage --filter="...[origin/main]"
 pnpm format:check
 pnpm check-deps
