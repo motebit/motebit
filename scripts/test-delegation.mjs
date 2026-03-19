@@ -76,9 +76,22 @@ function signToken(payload, privBytes) {
   return `${b64}.${toB64Url(sig)}`;
 }
 
+/** Recursive canonical JSON — matches @motebit/crypto canonicalJson */
+function canonicalJson(val) {
+  if (val === null || val === undefined) return "null";
+  if (typeof val === "boolean" || typeof val === "number") return JSON.stringify(val);
+  if (typeof val === "string") return JSON.stringify(val);
+  if (Array.isArray(val)) return "[" + val.map(canonicalJson).join(",") + "]";
+  const entries = Object.keys(val).sort().map(k => {
+    if (val[k] === undefined) return null;
+    return JSON.stringify(k) + ":" + canonicalJson(val[k]);
+  }).filter(Boolean);
+  return "{" + entries.join(",") + "}";
+}
+
 function verifyReceipt(receipt, pubHex) {
   const { signature, ...body } = receipt;
-  const canonical = JSON.stringify(body, Object.keys(body).sort());
+  const canonical = canonicalJson(body);
   return crypto.verify(null, Buffer.from(canonical), makePubKey(pubHex), fromB64Url(signature));
 }
 
@@ -208,7 +221,7 @@ async function main() {
   ok(`${tools.length} tools available (motebit_task ✓)`);
 
   // 5. Submit task to relay (budget allocation + task queue entry)
-  const query = "motebit sovereign agent protocol";
+  const query = "search and read https://example.com";
   log(5, `Submitting task to relay for budget allocation...`);
 
   let relayTaskId;

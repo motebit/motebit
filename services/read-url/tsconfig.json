@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src"],
+  "references": [
+    { "path": "../../packages/sdk" },
+    { "path": "../../packages/crypto" },
+    { "path": "../../packages/identity-file" },
+    { "path": "../../packages/mcp-server" },
+    { "path": "../../packages/memory-graph" },
+    { "path": "../../packages/persistence" },
+    { "path": "../../packages/runtime" },
+    { "path": "../../packages/tools" }
+  ]
+}

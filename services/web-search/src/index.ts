@@ -29,7 +29,12 @@ import {
   governanceToPolicyConfig,
   parseRiskLevel,
 } from "@motebit/identity-file";
-import { verifySignedToken, signExecutionReceipt, hash as sha256 } from "@motebit/crypto";
+import {
+  verifySignedToken,
+  signExecutionReceipt,
+  hash as sha256,
+  createSignedToken,
+} from "@motebit/crypto";
 import { embedText } from "@motebit/memory-graph";
 
 // ---------------------------------------------------------------------------
@@ -47,6 +52,8 @@ function loadConfig() {
     apiToken: process.env["MOTEBIT_API_TOKEN"],
     braveApiKey: process.env["BRAVE_SEARCH_API_KEY"],
     publicUrl: process.env["MOTEBIT_PUBLIC_URL"],
+    /** URL of a read-url service to sub-delegate URL reading (multi-hop). */
+    delegateReadUrl: process.env["MOTEBIT_DELEGATE_READ_URL"],
   };
 }
 
@@ -111,6 +118,106 @@ function canonicalizeResults(raw: string, maxResults = 5): string {
     return JSON.stringify(normalized);
   } catch {
     return raw;
+  }
+}
+
+/**
+ * Sub-delegate a task to another service via raw MCP StreamableHTTP.
+ * Returns the parsed receipt from the remote service, or null on failure.
+ */
+async function subDelegate(
+  mcpUrl: string,
+  prompt: string,
+  callerMotebitId: string,
+  callerDeviceId: string,
+  callerPrivateKey: Uint8Array,
+): Promise<Record<string, unknown> | null> {
+  try {
+    // Create signed auth token for the remote service
+    const token = await createSignedToken(
+      {
+        mid: callerMotebitId,
+        did: callerDeviceId,
+        iat: Date.now(),
+        exp: Date.now() + 5 * 60 * 1000,
+        jti: crypto.randomUUID(),
+        aud: "task:submit",
+      },
+      callerPrivateKey,
+    );
+
+    const headers = (sid?: string): Record<string, string> => ({
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      Authorization: `Bearer motebit:${token}`,
+      ...(sid ? { "Mcp-Session-Id": sid } : {}),
+    });
+
+    let sessionId: string | undefined;
+    let reqId = 0;
+
+    // Helper: send MCP request, parse response (JSON or SSE)
+    const mcpCall = async (method: string, params: unknown): Promise<unknown> => {
+      const id = ++reqId;
+      const resp = await fetch(mcpUrl, {
+        method: "POST",
+        headers: headers(sessionId),
+        body: JSON.stringify({ jsonrpc: "2.0", method, params, id }),
+      });
+      const sid = resp.headers.get("mcp-session-id");
+      if (sid) sessionId = sid;
+      const ct = resp.headers.get("content-type") ?? "";
+      if (ct.includes("text/event-stream")) {
+        const text = await resp.text();
+        for (const line of text.split("\n")) {
+          if (line.startsWith("data: ")) {
+            try {
+              const parsed = JSON.parse(line.slice(6)) as { id?: number; result?: unknown };
+              if (parsed.id === id) return parsed;
+            } catch {
+              /* skip */
+            }
+          }
+        }
+        return null;
+      }
+      if (!resp.ok) return null;
+      return resp.json();
+    };
+
+    // Initialize MCP session
+    const init = (await mcpCall("initialize", {
+      protocolVersion: "2025-03-26",
+      capabilities: {},
+      clientInfo: { name: "bob-subdelegation", version: "0.1.0" },
+    })) as { result?: unknown } | null;
+    if (init == null || !("result" in (init as Record<string, unknown>))) return null;
+
+    // Send initialized notification
+    await fetch(mcpUrl, {
+      method: "POST",
+      headers: headers(sessionId),
+      body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+    });
+
+    // Call motebit_task
+    const taskResult = (await mcpCall("tools/call", {
+      name: "motebit_task",
+      arguments: { prompt },
+    })) as { result?: { content?: Array<{ type: string; text?: string }> } } | null;
+
+    if (!taskResult?.result?.content) return null;
+
+    const text = taskResult.result.content
+      .filter((c) => c.type === "text")
+      .map((c) => c.text ?? "")
+      .join("\n");
+    const cleaned = text.replace(/\n?\[motebit:[^\]]+\]\s*$/, "");
+    return JSON.parse(cleaned) as Record<string, unknown>;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log(`sub-delegation failed: ${msg}`);
+    return null;
   }
 }
 
@@ -215,7 +322,7 @@ async function main(): Promise<void> {
         const msg = err instanceof Error ? err.message : String(err);
         result = { ok: false, error: msg };
       }
-      const completedAt = Date.now();
+      const searchCompletedAt = Date.now();
 
       // Use data on success, error message on failure — never undefined
       const resultStr = result.ok
@@ -228,21 +335,57 @@ async function main(): Promise<void> {
       const promptHash = await sha256(enc.encode(prompt));
       const resultHash = await sha256(enc.encode(canonical));
 
+      // Multi-hop: sub-delegate URL reading to Charlie if configured
+      let delegationReceipts: Record<string, unknown>[] | undefined;
+      if (config.delegateReadUrl && result.ok) {
+        try {
+          // Extract a URL to sub-delegate: from search results, or from the prompt itself
+          let firstUrl: string | undefined;
+          try {
+            const parsed = JSON.parse(resultStr) as Array<{ url?: string; link?: string }>;
+            firstUrl = parsed[0]?.url ?? parsed[0]?.link;
+          } catch {
+            // Results aren't JSON — try extracting URL from prompt or result
+            const urlMatch = (prompt + " " + resultStr).match(/https?:\/\/[^\s"<>]+/);
+            if (urlMatch) firstUrl = urlMatch[0];
+          }
+          if (firstUrl) {
+            log(`sub-delegating read_url to ${config.delegateReadUrl}: ${firstUrl.slice(0, 60)}`);
+            const charlieReceipt = await subDelegate(
+              config.delegateReadUrl,
+              firstUrl,
+              motebitId,
+              "web-search-service",
+              privateKey,
+            );
+            if (charlieReceipt) {
+              delegationReceipts = [charlieReceipt];
+              log(`sub-delegation receipt: ${(charlieReceipt.signature as string)?.slice(0, 12)}…`);
+            }
+          }
+        } catch (subErr: unknown) {
+          // Sub-delegation is best-effort — don't block the main receipt
+          const subMsg = subErr instanceof Error ? subErr.message : String(subErr);
+          log(`sub-delegation skipped: ${subMsg}`);
+        }
+      }
+
       const receipt: Record<string, unknown> = {
         task_id: taskId,
         motebit_id: motebitId,
         device_id: "web-search-service",
         submitted_at: submittedAt,
-        completed_at: completedAt,
+        completed_at: delegationReceipts ? Date.now() : searchCompletedAt,
         status: result.ok ? ("completed" as const) : ("failed" as const),
         result: canonical,
-        tools_used: ["web_search"],
+        tools_used: ["web_search", ...(delegationReceipts ? ["read_url(delegated)"] : [])],
         memories_formed: 0,
         prompt_hash: promptHash,
         result_hash: resultHash,
         // Cryptographic binding to the relay's economic identity for this task.
-        // Included in the signed receipt — prevents cross-task replay attacks.
         ...(options?.relayTaskId ? { relay_task_id: options.relayTaskId } : {}),
+        // Nested receipts from sub-delegated work — chain of custody proof
+        ...(delegationReceipts ? { delegation_receipts: delegationReceipts } : {}),
       };
 
       const signed = await signExecutionReceipt(
