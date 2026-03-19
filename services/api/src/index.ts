@@ -772,7 +772,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   //   6. Latency recording
   //   7. Main settlement (settleOnReceipt) + virtual account credits
   //   8. Credential issuance (AgentReputationCredential)
-  //   9. WebSocket fan-out + spatial presence events
+  //   9. WebSocket fan-out
   //  10. Federation result forwarding
   //
   // Returns { verified: true } on success, { verified: false, reason } on failure.
@@ -3135,7 +3135,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       step_id: body.step_id,
     };
 
-    // Capture the submitter identity for spatial presence events and receipt fan-out.
+    // Capture the submitter identity for receipt fan-out and settlement.
     // Prefer callerMotebitId (from dualAuth signed token) over body.submitted_by.
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
     const submittedBy = callerMotebitId ?? body.submitted_by;
