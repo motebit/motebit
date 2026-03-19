@@ -8,7 +8,6 @@ import type {
   InjectionWarning,
   ApprovalQuorum,
 } from "@motebit/sdk";
-import { parseScopeSet } from "@motebit/crypto";
 import { classifyTool, isToolAllowed } from "./risk-model.js";
 import { BudgetEnforcer } from "./budget.js";
 import type { BudgetConfig } from "./budget.js";
@@ -16,6 +15,18 @@ import { RedactionEngine } from "./redaction.js";
 import { ContentSanitizer } from "./sanitizer.js";
 import { AuditLogger } from "./audit.js";
 import type { AuditLogSink } from "./audit.js";
+
+// === Scope Parsing (inlined to avoid cross-layer dependency on @motebit/crypto) ===
+
+function parseScopeSet(scope: string): Set<string> {
+  if (scope === "*") return new Set(["*"]);
+  return new Set(
+    scope
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0),
+  );
+}
 
 // === Policy Configuration ===
 

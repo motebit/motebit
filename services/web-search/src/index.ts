@@ -177,6 +177,7 @@ async function main(): Promise<void> {
   let handleAgentTask:
     | ((
         prompt: string,
+        options?: { delegatedScope?: string },
       ) => AsyncGenerator<
         | { type: "text"; text: string }
         | { type: "task_result"; receipt: Record<string, unknown> }
@@ -186,7 +187,7 @@ async function main(): Promise<void> {
 
   if (config.privateKeyHex) {
     const privateKey = fromHex(config.privateKeyHex);
-    handleAgentTask = async function* (prompt: string) {
+    handleAgentTask = async function* (prompt: string, _options?: { delegatedScope?: string }) {
       const taskId = crypto.randomUUID();
       const submittedAt = Date.now();
 

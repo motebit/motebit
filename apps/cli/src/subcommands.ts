@@ -1018,15 +1018,43 @@ export async function handleCredentials(config: CliConfig): Promise<void> {
       : localCount > 0
         ? `${localCount} local`
         : `${relayCount} relay`;
+  // Check revocation status via batch endpoint
+  const revokedSet = new Set<string>();
+  if (syncUrl && allCreds.length > 0) {
+    try {
+      const batchRes = await fetch(
+        `${syncUrl.replace(/\/$/, "")}/api/v1/credentials/batch-status`,
+        {
+          method: "POST",
+          headers: { ...headers, "Content-Type": "application/json" },
+          body: JSON.stringify({ credential_ids: allCreds.map((c) => c.credential_id) }),
+        },
+      );
+      if (batchRes.ok) {
+        const batchData = (await batchRes.json()) as {
+          results: Array<{ credential_id: string; revoked: boolean }>;
+        };
+        for (const r of batchData.results) {
+          if (r.revoked) revokedSet.add(r.credential_id);
+        }
+      }
+    } catch {
+      /* batch check failed — display without revocation status */
+    }
+  }
+
   console.log(`\nCredentials (${allCreds.length} — ${source}):\n`);
-  console.log("  ID        Type                         Issuer           Issued At");
-  console.log("  " + "-".repeat(80));
+  console.log(
+    "  ID        Type                         Issuer           Issued At           Status",
+  );
+  console.log("  " + "-".repeat(95));
   for (const cred of allCreds) {
     const id = cred.credential_id.slice(0, 8);
     const type = cred.credential_type.slice(0, 28).padEnd(28);
     const issuer = cred.credential.issuer.slice(0, 16);
     const issuedAt = new Date(cred.issued_at).toISOString().slice(0, 19);
-    console.log(`  ${id}  ${type} ${issuer} ${issuedAt}`);
+    const status = revokedSet.has(cred.credential_id) ? "REVOKED" : "active";
+    console.log(`  ${id}  ${type} ${issuer} ${issuedAt}  ${status}`);
   }
   console.log();
 }

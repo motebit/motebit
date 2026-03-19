@@ -933,6 +933,11 @@ export class DesktopApp {
     yield* this.runtime.resumeAfterApproval(approved);
   }
 
+  async *resolveApprovalVote(approved: boolean, approverId: string): AsyncGenerator<StreamChunk> {
+    if (!this.runtime) throw new Error("AI not initialized — call initAI() first");
+    yield* this.runtime.resolveApprovalVote(approved, approverId);
+  }
+
   // === Appearance ===
 
   setInteriorColor(presetName: string): void {

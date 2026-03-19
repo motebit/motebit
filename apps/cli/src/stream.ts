@@ -19,6 +19,7 @@ export async function consumeStream(
     tool_call_id: string;
     name: string;
     args: Record<string, unknown>;
+    quorum?: { required: number; approvers: string[]; collected: string[] };
   } | null = null;
 
   for await (const chunk of stream) {
@@ -36,7 +37,12 @@ export async function consumeStream(
         break;
 
       case "approval_request":
-        pendingApproval = { tool_call_id: chunk.tool_call_id, name: chunk.name, args: chunk.args };
+        pendingApproval = {
+          tool_call_id: chunk.tool_call_id,
+          name: chunk.name,
+          args: chunk.args,
+          quorum: chunk.quorum,
+        };
         break;
 
       case "injection_warning":
@@ -68,13 +74,17 @@ export async function consumeStream(
   // Handle approval request after stream ends -- deterministic resumption
   if (pendingApproval) {
     const argsPreview = JSON.stringify(pendingApproval.args).slice(0, 80);
+    const quorumInfo =
+      pendingApproval.quorum && pendingApproval.quorum.required > 1
+        ? ` [${pendingApproval.quorum.collected.length}/${pendingApproval.quorum.required} approvals]`
+        : "";
     const answer = await rlQuestion(
       rl,
-      `  [approval] ${pendingApproval.name}(${argsPreview})\n  Allow? (y/n) `,
+      `  [approval] ${pendingApproval.name}(${argsPreview})${quorumInfo}\n  Allow? (y/n) `,
     );
 
     const approved = answer.trim().toLowerCase() === "y";
     process.stdout.write("\nmote> ");
-    await consumeStream(runtime.resumeAfterApproval(approved), runtime, rl);
+    await consumeStream(runtime.resolveApprovalVote(approved, runtime.motebitId), runtime, rl);
   }
 }

@@ -266,6 +266,7 @@ function showApprovalCard(
   name: string,
   args: Record<string, unknown>,
   riskLevel: number | undefined,
+  quorum?: { required: number; approvers: string[]; collected: string[] },
 ): Promise<boolean> {
   return new Promise((resolve) => {
     const card = document.createElement("div");
@@ -281,6 +282,14 @@ function showApprovalCard(
       badge.className = `approval-risk-badge risk-${Math.min(riskLevel, 3)}`;
       badge.textContent = `Risk ${riskLevel}`;
       title.appendChild(badge);
+    }
+
+    if (quorum && quorum.required > 1) {
+      const qBadge = document.createElement("span");
+      qBadge.className = "approval-risk-badge";
+      qBadge.style.cssText = "background:#2196f3;color:#fff;margin-left:6px;";
+      qBadge.textContent = `${quorum.collected.length}/${quorum.required} approvals`;
+      title.appendChild(qBadge);
     }
 
     if (Object.keys(args).length > 0) {
@@ -512,9 +521,17 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
               firstChunkReceived = true;
               removeThinkingIndicator(thinkingEl);
             }
-            const approved = await showApprovalCard(chunk.name, chunk.args, chunk.risk_level);
+            const approved = await showApprovalCard(
+              chunk.name,
+              chunk.args,
+              chunk.risk_level,
+              chunk.quorum,
+            );
             // Resume the stream after approval decision
-            for await (const resumeChunk of ctx.app.resumeAfterApproval(approved)) {
+            for await (const resumeChunk of ctx.app.resolveApprovalVote(
+              approved,
+              ctx.app.motebitId,
+            )) {
               if (resumeChunk.type === "text") {
                 if (!bubble) {
                   bubble = document.createElement("div");

@@ -479,6 +479,11 @@ export class WebApp {
     yield* this.runtime.resumeAfterApproval(approved);
   }
 
+  async *resolveApprovalVote(approved: boolean, approverId: string): AsyncGenerator<StreamChunk> {
+    if (!this.runtime) return;
+    yield* this.runtime.resolveApprovalVote(approved, approverId);
+  }
+
   // === Sovereign Features ===
 
   async autoTitle(): Promise<string | null> {

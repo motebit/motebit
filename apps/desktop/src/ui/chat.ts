@@ -287,6 +287,7 @@ function showApprovalCard(
   name: string,
   args: Record<string, unknown>,
   riskLevel?: number,
+  quorum?: { required: number; approvers: string[]; collected: string[] },
 ): void {
   const card = document.createElement("div");
   card.className = "approval-card";
@@ -300,6 +301,15 @@ function showApprovalCard(
     badge.className = `approval-risk ${RISK_LABELS[riskLevel].cls}`;
     badge.textContent = RISK_LABELS[riskLevel].label;
     toolDiv.appendChild(badge);
+  }
+
+  // Quorum progress indicator
+  if (quorum && quorum.required > 1) {
+    const qBadge = document.createElement("span");
+    qBadge.className = "approval-risk";
+    qBadge.style.cssText = "background:var(--accent-blue,#2196f3);color:#fff;margin-left:6px;";
+    qBadge.textContent = `${quorum.collected.length}/${quorum.required} approvals`;
+    toolDiv.appendChild(qBadge);
   }
   card.appendChild(toolDiv);
 
@@ -352,7 +362,7 @@ async function consumeApproval(ctx: DesktopContext, approved: boolean): Promise<
 
   let accumulated = "";
   try {
-    for await (const chunk of ctx.app.resumeAfterApproval(approved)) {
+    for await (const chunk of ctx.app.resolveApprovalVote(approved, ctx.app.motebitId)) {
       if (chunk.type === "text") {
         accumulated += chunk.text;
         bubble.textContent = stripPartialActionTag(accumulated);
@@ -368,7 +378,7 @@ async function consumeApproval(ctx: DesktopContext, approved: boolean): Promise<
       } else if (chunk.type === "delegation_complete") {
         completeDelegationIndicator(chunk.server, chunk.tool, chunk.receipt);
       } else if (chunk.type === "approval_request") {
-        showApprovalCard(ctx, chunk.name, chunk.args, chunk.risk_level);
+        showApprovalCard(ctx, chunk.name, chunk.args, chunk.risk_level, chunk.quorum);
       } else if (chunk.type === "injection_warning") {
         addMessage("system", `Warning: suspicious content detected in ${chunk.tool_name} results`);
       }
@@ -459,7 +469,7 @@ async function consumeGoalApproval(ctx: DesktopContext, approved: boolean): Prom
           completeToolStatus(chunk.name);
         }
       } else if (chunk.type === "approval_request") {
-        showApprovalCard(ctx, chunk.name, chunk.args, chunk.risk_level);
+        showApprovalCard(ctx, chunk.name, chunk.args, chunk.risk_level, chunk.quorum);
       } else if (chunk.type === "injection_warning") {
         addMessage("system", `Warning: suspicious content detected in ${chunk.tool_name} results`);
       }
@@ -998,7 +1008,7 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
           completeDelegationIndicator(chunk.server, chunk.tool, chunk.receipt);
         } else if (chunk.type === "approval_request") {
           removeThinkingIndicator(thinkingEl);
-          showApprovalCard(ctx, chunk.name, chunk.args, chunk.risk_level);
+          showApprovalCard(ctx, chunk.name, chunk.args, chunk.risk_level, chunk.quorum);
         } else if (chunk.type === "injection_warning") {
           addMessage(
             "system",

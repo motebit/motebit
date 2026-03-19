@@ -87,6 +87,7 @@ export function AdminApp(): React.ReactElement {
   const [agentGraphNodeCount, setAgentGraphNodeCount] = useState(0);
   const [agentGraphEdgeCount, setAgentGraphEdgeCount] = useState(0);
   const [credentials, setCredentials] = useState<CredentialEntry[]>([]);
+  const [revokedCredIds, setRevokedCredIds] = useState<Set<string>>(new Set());
   const [budgetSummary, setBudgetSummary] = useState<{
     total_locked: number;
     total_settled: number;
@@ -163,6 +164,34 @@ export function AdminApp(): React.ReactElement {
         setAgentGraphNodeCount(agentGraphRes.node_count);
         setAgentGraphEdgeCount(agentGraphRes.edge_count);
         setCredentials(credRes.credentials);
+
+        // Check credential revocation status via batch endpoint
+        if (credRes.credentials.length > 0) {
+          try {
+            const batchRes = await fetch(`${config.apiUrl}/api/v1/credentials/batch-status`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${config.apiToken}`,
+              },
+              body: JSON.stringify({
+                credential_ids: credRes.credentials.map((c: CredentialEntry) => c.credential_id),
+              }),
+            });
+            if (batchRes.ok) {
+              const batchData = (await batchRes.json()) as {
+                results: Array<{ credential_id: string; revoked: boolean }>;
+              };
+              const revIds = new Set(
+                batchData.results.filter((r) => r.revoked).map((r) => r.credential_id),
+              );
+              setRevokedCredIds(revIds);
+            }
+          } catch {
+            /* batch check failed */
+          }
+        }
+
         if ("summary" in budgetRes && budgetRes.summary != null) {
           setBudgetSummary(budgetRes.summary as { total_locked: number; total_settled: number });
         }
@@ -305,6 +334,7 @@ export function AdminApp(): React.ReactElement {
     case "credentials":
       content = React.createElement(CredentialsPanel, {
         credentials,
+        revokedIds: revokedCredIds,
         budgetSummary,
         budgetAllocations,
         succession,

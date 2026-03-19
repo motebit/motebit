@@ -24,6 +24,7 @@ function resolveSubject(cred: CredentialEntry["credential"]): string {
 
 interface CredentialsPanelProps {
   credentials: CredentialEntry[];
+  revokedIds?: Set<string>;
   budgetSummary: { total_locked: number; total_settled: number } | null;
   budgetAllocations: BudgetAllocationEntry[];
   succession: SuccessionResponse | null;
@@ -34,6 +35,7 @@ interface CredentialsPanelProps {
 
 export function CredentialsPanel({
   credentials,
+  revokedIds,
   budgetSummary,
   budgetAllocations,
   succession,
@@ -142,18 +144,43 @@ export function CredentialsPanel({
       const subject = resolveSubject(c.credential);
       const issuerShort = issuer.length > 32 ? issuer.slice(0, 32) + "..." : issuer;
       const subjectShort = subject.length > 32 ? subject.slice(0, 32) + "..." : subject;
+      const isRevoked = revokedIds?.has(c.credential_id) ?? false;
 
       return React.createElement(
         "div",
-        { key: c.credential_id, className: "event-entry device-entry" },
+        {
+          key: c.credential_id,
+          className: "event-entry device-entry",
+          style: isRevoked ? { opacity: 0.5 } : undefined,
+        },
         React.createElement(
           "div",
           { className: "device-header" },
           React.createElement(
             "span",
-            { className: "device-name" },
+            {
+              className: "device-name",
+              style: isRevoked ? { textDecoration: "line-through" } : undefined,
+            },
             c.credential_id.slice(0, 12) + "...",
           ),
+          isRevoked
+            ? React.createElement(
+                "span",
+                {
+                  style: {
+                    color: "#f44336",
+                    fontWeight: "bold",
+                    fontSize: "11px",
+                    padding: "2px 6px",
+                    borderRadius: "3px",
+                    border: "1px solid #f44336",
+                    marginRight: "4px",
+                  },
+                },
+                "REVOKED",
+              )
+            : null,
           React.createElement(
             "span",
             {

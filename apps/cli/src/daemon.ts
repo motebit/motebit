@@ -309,7 +309,15 @@ export async function handleRun(config: CliConfig): Promise<void> {
           void (async () => {
             try {
               let receipt: import("@motebit/sdk").ExecutionReceipt | undefined;
-              for await (const chunk of runtime.handleAgentTask(task, privateKey, deviceId)) {
+              for await (const chunk of runtime.handleAgentTask(
+                task,
+                privateKey,
+                deviceId,
+                undefined,
+                {
+                  delegatedScope: task.delegated_scope,
+                },
+              )) {
                 if (chunk.type === "task_result") {
                   receipt = chunk.receipt;
                 }

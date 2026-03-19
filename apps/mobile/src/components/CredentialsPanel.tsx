@@ -88,6 +88,7 @@ export function CredentialsPanel({
   const colors = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [credentials, setCredentials] = useState<CredentialEntry[]>([]);
+  const [revokedIds, setRevokedIds] = useState<Set<string>>(new Set());
   const [budgetSummary, setBudgetSummary] = useState<BudgetSummary | null>(null);
   const [budgetAllocations, setBudgetAllocations] = useState<BudgetAllocation[]>([]);
   const [accountBalance, setAccountBalance] = useState<AccountBalance | null>(null);
@@ -127,6 +128,30 @@ export function CredentialsPanel({
           merged.push(c);
         }
       }
+      // Check revocation status via batch endpoint
+      if (merged.length > 0) {
+        try {
+          const batchRes = await fetch(`${syncUrl}/api/v1/credentials/batch-status`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ credential_ids: merged.map((c) => c.credential_id) }),
+          });
+          if (batchRes.ok) {
+            const batchData = (await batchRes.json()) as {
+              results: Array<{ credential_id: string; revoked: boolean }>;
+            };
+            const revIds = new Set(
+              batchData.results.filter((r) => r.revoked).map((r) => r.credential_id),
+            );
+            if (revIds.size > 0) {
+              setRevokedIds(revIds);
+            }
+          }
+        } catch {
+          /* batch check failed — display without revocation status */
+        }
+      }
+
       setCredentials(merged);
 
       // Fetch budget
@@ -304,10 +329,18 @@ export function CredentialsPanel({
             renderItem={({ item }) => {
               const color = TYPE_COLORS[item.credential_type] ?? "#616161";
               const issuer = resolveIssuer(item.credential);
+              const isRevoked = revokedIds.has(item.credential_id);
               return (
-                <View style={styles.credentialItem}>
+                <View style={[styles.credentialItem, isRevoked ? { opacity: 0.5 } : undefined]}>
                   <View style={styles.credentialHeader}>
                     <Text style={styles.credentialId}>{item.credential_id.slice(0, 12)}...</Text>
+                    {isRevoked && (
+                      <View style={[styles.credentialTypeBadge, { borderColor: "#f44336" }]}>
+                        <Text style={[styles.credentialTypeText, { color: "#f44336" }]}>
+                          REVOKED
+                        </Text>
+                      </View>
+                    )}
                     <View style={[styles.credentialTypeBadge, { borderColor: color }]}>
                       <Text style={[styles.credentialTypeText, { color }]}>
                         {item.credential_type}

@@ -1113,7 +1113,7 @@ export function App(): React.ReactElement {
         // Regular chat approval
         setIsProcessing(true);
         try {
-          await consumeStream(a.resumeAfterApproval(approved));
+          await consumeStream(a.resolveApprovalVote(approved, a.motebitId));
         } catch (err: unknown) {
           const errMsg = err instanceof Error ? err.message : String(err);
           addSystemMessage(`[Error: ${errMsg}]`);

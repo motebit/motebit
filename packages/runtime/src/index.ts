@@ -391,6 +391,7 @@ export type StreamChunk =
       name: string;
       args: Record<string, unknown>;
       risk_level?: number;
+      quorum?: { required: number; approvers: string[]; collected: string[] };
     }
   | { type: "injection_warning"; tool_name: string; patterns: string[] }
   | { type: "approval_expired"; tool_name: string }

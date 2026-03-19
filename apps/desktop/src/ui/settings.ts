@@ -363,8 +363,34 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         }
       }
       const creds = merged;
+
+      // Check revocation status for all credentials via batch endpoint
+      const revokedSet = new Set<string>();
+      if (creds.length > 0) {
+        try {
+          const batchRes = await fetch(`${syncUrl}/api/v1/credentials/batch-status`, {
+            method: "POST",
+            headers: { ...headers, "Content-Type": "application/json" },
+            body: JSON.stringify({ credential_ids: creds.map((c) => c.credential_id) }),
+          });
+          if (batchRes.ok) {
+            const batchData = (await batchRes.json()) as {
+              results: Array<{ credential_id: string; revoked: boolean }>;
+            };
+            for (const r of batchData.results) {
+              if (r.revoked) revokedSet.add(r.credential_id);
+            }
+          }
+        } catch {
+          /* batch check failed — display without revocation status */
+        }
+      }
+
       const countEl = document.getElementById("credentials-count") as HTMLElement;
-      countEl.textContent = `${creds.length} credential${creds.length !== 1 ? "s" : ""}`;
+      const revokedCount = revokedSet.size;
+      countEl.textContent =
+        `${creds.length} credential${creds.length !== 1 ? "s" : ""}` +
+        (revokedCount > 0 ? ` (${revokedCount} revoked)` : "");
 
       // Type badges
       const badgesEl = document.getElementById("credentials-type-badges") as HTMLElement;
@@ -391,16 +417,27 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       const listEl = document.getElementById("credentials-list") as HTMLElement;
       listEl.innerHTML = "";
       for (const c of creds.slice(0, 20)) {
+        const isRevoked = revokedSet.has(c.credential_id);
         const row = document.createElement("div");
         row.style.cssText =
-          "font-size:11px;padding:4px 0;border-bottom:1px solid var(--border-light);display:flex;justify-content:space-between;align-items:center;";
+          "font-size:11px;padding:4px 0;border-bottom:1px solid var(--border-light);display:flex;justify-content:space-between;align-items:center;" +
+          (isRevoked ? "opacity:0.5;text-decoration:line-through;" : "");
         const left = document.createElement("span");
         left.textContent = c.credential_id.slice(0, 12) + "...";
         left.style.color = "var(--text-secondary)";
-        const right = document.createElement("span");
+        const right = document.createElement("div");
+        right.style.cssText = "display:flex;gap:4px;align-items:center;";
+        if (isRevoked) {
+          const revBadge = document.createElement("span");
+          revBadge.style.cssText = "color:#f44336;font-size:9px;font-weight:600;";
+          revBadge.textContent = "REVOKED";
+          right.appendChild(revBadge);
+        }
+        const typeSpan = document.createElement("span");
         const color = typeColors[c.credential_type] ?? "#616161";
-        right.style.cssText = `color:${color};font-size:10px;font-weight:600;`;
-        right.textContent = c.credential_type;
+        typeSpan.style.cssText = `color:${color};font-size:10px;font-weight:600;`;
+        typeSpan.textContent = c.credential_type;
+        right.appendChild(typeSpan);
         row.appendChild(left);
         row.appendChild(right);
         listEl.appendChild(row);

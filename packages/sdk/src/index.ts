@@ -852,6 +852,8 @@ export interface AgentTask {
   claimed_by?: string;
   required_capabilities?: DeviceCapability[];
   step_id?: string;
+  /** Delegation scope — when set, restricts which tools the task can use. */
+  delegated_scope?: string;
 }
 
 export interface ExecutionReceipt {
