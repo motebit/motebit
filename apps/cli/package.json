@@ -1,6 +1,6 @@
 {
   "name": "motebit",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "type": "module",
   "description": "Sovereign AI agent — persistent identity, accumulated trust, governance at the boundary",
   "main": "./dist/index.js",
