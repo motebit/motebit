@@ -398,6 +398,43 @@ async function main(): Promise<void> {
       const message = err instanceof Error ? err.message : String(err);
       console.warn(`Sync failed (continuing offline): ${message}`);
     }
+
+    // Discover remote agents and populate service listings for interactive delegation
+    if (syncUrl) {
+      try {
+        const token = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+        const headers: Record<string, string> = {};
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        const resp = await fetch(`${syncUrl}/api/v1/agents/discover`, { headers });
+        if (resp.ok) {
+          const data = (await resp.json()) as {
+            agents: Array<{
+              motebit_id: string;
+              capabilities: string[];
+              endpoint_url?: string;
+            }>;
+          };
+          // Filter out self, populate service listings for agents with capabilities
+          const others = data.agents.filter(
+            (a) => a.motebit_id !== motebitId && a.capabilities.length > 0,
+          );
+          for (const agent of others) {
+            await runtime.registerServiceListing({
+              motebit_id: agent.motebit_id,
+              capabilities: agent.capabilities,
+              pricing: [],
+              sla: { max_latency_ms: 30_000, availability_guarantee: 0.99 },
+              description: agent.capabilities.join(", "),
+            });
+          }
+          if (others.length > 0) {
+            console.log(`Discovered ${others.length} agent(s) on the network`);
+          }
+        }
+      } catch {
+        // Discovery is best-effort — offline mode still works
+      }
+    }
   }
 
   const shutdown = async (): Promise<void> => {
