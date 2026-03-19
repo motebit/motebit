@@ -287,6 +287,8 @@ export interface ServiceServerConfig {
   syncUrl?: string;
   /** API token for relay authentication. */
   apiToken?: string;
+  /** Public endpoint URL for relay registration (default: http://localhost:<port>). */
+  publicEndpointUrl?: string;
 
   /** Called on startup with tool count and port. */
   onStart?: (port: number, toolCount: number) => void;
@@ -334,7 +336,7 @@ export async function startServiceServer(
       };
       if (config.apiToken) regHeaders["Authorization"] = `Bearer ${config.apiToken}`;
 
-      const endpointUrl = `http://localhost:${config.port}`;
+      const endpointUrl = config.publicEndpointUrl ?? `http://localhost:${config.port}`;
       const regResp = await fetch(`${config.syncUrl}/api/v1/agents/register`, {
         method: "POST",
         headers: regHeaders,

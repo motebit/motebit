@@ -42,6 +42,7 @@ function loadConfig() {
     syncUrl: process.env["MOTEBIT_SYNC_URL"],
     apiToken: process.env["MOTEBIT_API_TOKEN"],
     braveApiKey: process.env["BRAVE_SEARCH_API_KEY"],
+    publicUrl: process.env["MOTEBIT_PUBLIC_URL"],
   };
 }
 
@@ -249,6 +250,7 @@ async function main(): Promise<void> {
     motebitType: "service",
     syncUrl: config.syncUrl,
     apiToken: config.apiToken,
+    publicEndpointUrl: config.publicUrl,
     onStart: (port, toolCount) => {
       log(`MCP server running on http://localhost:${port} (SSE). ${toolCount} tools exposed.`);
       log(`Health endpoint: http://localhost:${port}/health`);
