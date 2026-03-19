@@ -458,6 +458,8 @@ export class MotebitRuntime {
   private mcpConfigs: McpServerConfig[];
   /** Maps tool names to motebit server names (only for motebit MCP adapters). */
   private motebitToolServers = new Map<string, string>();
+  /** Delegation receipts collected from interactive delegate_to_agent tool calls. */
+  private _interactiveDelegationReceipts: ExecutionReceipt[] = [];
   private keyring: KeyringAdapter | null;
   private toolAuditSink?: AuditLogSink;
   private externalToolSources = new Map<string, string[]>();
@@ -1328,13 +1330,14 @@ export class MotebitRuntime {
       this.conversation.restoreContext(savedCtx);
     }
 
-    // Drain delegation receipts from motebit MCP adapters
+    // Drain delegation receipts from motebit MCP adapters + interactive delegation tool
     const delegationReceipts: ExecutionReceipt[] = [];
     for (const adapter of this.mcpAdapters) {
       if (adapter.getAndResetDelegationReceipts) {
         delegationReceipts.push(...adapter.getAndResetDelegationReceipts());
       }
     }
+    delegationReceipts.push(...this.getAndResetInteractiveDelegationReceipts());
 
     // Bump trust from verified delegation receipts (best-effort)
     if (delegationReceipts.length > 0 && this.agentTrustStore != null) {
@@ -2399,5 +2402,171 @@ export class MotebitRuntime {
   async getServiceListing(): Promise<AgentServiceListing | null> {
     if (this.serviceListingStore == null) return null;
     return this.serviceListingStore.get(this.motebitId);
+  }
+
+  /**
+   * Enable interactive delegation: registers a `delegate_to_agent` tool so the
+   * AI can transparently delegate tasks to remote agents during normal conversation.
+   *
+   * The tool submits tasks to the relay via REST, polls for results, bumps trust
+   * on verified receipts, and returns the result as normal tool output.
+   */
+  enableInteractiveDelegation(config: {
+    syncUrl: string;
+    authToken: () => Promise<string>;
+    timeoutMs?: number;
+  }): void {
+    const TOOL_NAME = "delegate_to_agent";
+
+    // Avoid double-registration
+    if (this.toolRegistry.has(TOOL_NAME)) return;
+
+    const timeoutMs = config.timeoutMs ?? 120_000;
+    const motebitId = this.motebitId;
+    const bumpTrust = (receipt: ExecutionReceipt) => this.bumpTrustFromReceipt(receipt, true);
+    const stashReceipt = (receipt: ExecutionReceipt) =>
+      this._interactiveDelegationReceipts.push(receipt);
+
+    // Mark as delegation tool for processStream to emit delegation_start/complete
+    this.motebitToolServers.set(TOOL_NAME, "relay");
+
+    this.toolRegistry.register(
+      {
+        name: TOOL_NAME,
+        description:
+          "Delegate a task to a remote agent on the motebit network. " +
+          "The relay routes to the best capable agent based on trust and capabilities. " +
+          "Use when the user's request needs capabilities you don't have locally " +
+          "(web search, URL reading, specialized computation, etc.). " +
+          "Returns the agent's response text.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            prompt: {
+              type: "string",
+              description: "The task prompt to send to the remote agent.",
+            },
+            required_capabilities: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Capabilities the target agent must have (e.g. ['web_search', 'read_url']). " +
+                "Optional — if omitted, the relay routes based on the prompt alone.",
+            },
+          },
+          required: ["prompt"],
+        },
+      },
+      async (args: Record<string, unknown>) => {
+        const prompt = args.prompt as string;
+        const requiredCapabilities = args.required_capabilities as string[] | undefined;
+
+        // Build fresh auth header (signed token, 5-min expiry)
+        let authHeader: string;
+        try {
+          const token = await config.authToken();
+          authHeader = `Bearer ${token}`;
+        } catch (err: unknown) {
+          return {
+            ok: false,
+            error: `Auth failed: ${err instanceof Error ? err.message : String(err)}`,
+          };
+        }
+
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+          Authorization: authHeader,
+        };
+
+        // Submit task to relay
+        let taskId: string;
+        let targetMotebitId: string;
+        try {
+          const body: Record<string, unknown> = {
+            prompt,
+            submitted_by: motebitId,
+          };
+          if (requiredCapabilities && requiredCapabilities.length > 0) {
+            body.required_capabilities = requiredCapabilities;
+          }
+
+          const resp = await fetch(`${config.syncUrl}/agent/${motebitId}/task`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+          });
+
+          if (!resp.ok) {
+            const text = await resp.text();
+            return { ok: false, error: `Task submission failed (${resp.status}): ${text}` };
+          }
+
+          const data = (await resp.json()) as {
+            task_id: string;
+            status: string;
+            routing_choice?: Record<string, unknown>;
+          };
+          taskId = data.task_id;
+          // Tasks are stored under Alice's motebitId (the submitter/owner)
+          targetMotebitId = motebitId;
+        } catch (err: unknown) {
+          return {
+            ok: false,
+            error: `Submission error: ${err instanceof Error ? err.message : String(err)}`,
+          };
+        }
+
+        // Poll for result
+        const POLL_INTERVAL_MS = 2000;
+        const maxPolls = Math.ceil(timeoutMs / POLL_INTERVAL_MS);
+
+        for (let i = 0; i < maxPolls; i++) {
+          await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+
+          try {
+            const resp = await fetch(`${config.syncUrl}/agent/${targetMotebitId}/task/${taskId}`, {
+              headers,
+            });
+            if (!resp.ok) continue;
+
+            const data = (await resp.json()) as {
+              task: { status: string };
+              receipt: ExecutionReceipt | null;
+            };
+
+            if (data.receipt != null) {
+              // Bump trust (best-effort)
+              try {
+                await bumpTrust(data.receipt);
+              } catch {
+                // Best-effort
+              }
+
+              // Stash receipt for handleAgentTask to drain into delegation_receipts
+              stashReceipt(data.receipt);
+
+              return { ok: true, data: data.receipt.result ?? "Task completed (no result text)" };
+            }
+          } catch {
+            // Network hiccup — keep polling
+          }
+        }
+
+        return { ok: false, error: `Delegation timed out after ${timeoutMs / 1000}s` };
+      },
+    );
+
+    // Re-wire loop deps so the tool is visible to the agentic loop
+    this.wireLoopDeps();
+  }
+
+  /**
+   * Drain interactive delegation receipts (used by handleAgentTask to include
+   * in the parent receipt's delegation_receipts array).
+   */
+  getAndResetInteractiveDelegationReceipts(): ExecutionReceipt[] {
+    const receipts = this._interactiveDelegationReceipts.slice();
+    this._interactiveDelegationReceipts.length = 0;
+    return receipts;
   }
 }

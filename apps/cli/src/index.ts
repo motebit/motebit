@@ -1,7 +1,7 @@
 import * as readline from "node:readline";
 import { DEFAULT_CONFIG } from "@motebit/ai-core";
 import type { MotebitPersonalityConfig } from "@motebit/ai-core";
-import { deriveSyncEncryptionKey } from "@motebit/crypto";
+import { deriveSyncEncryptionKey, createSignedToken } from "@motebit/crypto";
 import { connectMcpServers } from "@motebit/mcp-client";
 import { formatBodyAwareness } from "@motebit/ai-core";
 import { parseCliArgs, printHelp, printVersion, printBanner, trimHistory } from "./args.js";
@@ -356,6 +356,30 @@ async function main(): Promise<void> {
 
   // Init runtime (renderer + MCP handled above)
   await runtime.init();
+
+  // Enable interactive delegation if relay + signing keys are available
+  const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? reloadedConfig.sync_url;
+  if (syncUrl && privateKeyBytes && deviceId) {
+    const pk = privateKeyBytes; // capture for closure
+    const did = deviceId;
+    runtime.enableInteractiveDelegation({
+      syncUrl,
+      authToken: async () => {
+        const now = Date.now();
+        return createSignedToken(
+          {
+            mid: motebitId,
+            did,
+            iat: now,
+            exp: now + 5 * 60 * 1000,
+            jti: crypto.randomUUID(),
+            aud: "task:submit",
+          },
+          pk,
+        );
+      },
+    });
+  }
 
   // Initial sync — only attempt if a remote sync URL was configured
   const hasSyncRemote =

@@ -45,6 +45,14 @@ export async function consumeStream(
         };
         break;
 
+      case "delegation_start":
+        process.stdout.write(`\n  [delegating to ${chunk.server}] ${chunk.tool}...`);
+        break;
+
+      case "delegation_complete":
+        process.stdout.write(` done\n`);
+        break;
+
       case "injection_warning":
         process.stdout.write(`\n  [warning] suspicious content in ${chunk.tool_name}\n`);
         break;
