@@ -110,11 +110,12 @@ describe("Market — Service Listings", () => {
     expect(listing.sla.max_latency_ms).toBe(3000);
   });
 
-  it("GET listing returns 404 when no listing exists", async () => {
+  it("GET listing returns 404 when agent registered without capabilities", async () => {
     const keypair = await generateKeypair();
     const pubKeyHex = bytesToHex(keypair.publicKey);
     const { motebitId } = await createIdentityAndDevice(relay, pubKeyHex);
-    await registerAgent(relay, motebitId);
+    // Register with empty capabilities — no auto-created listing
+    await registerAgent(relay, motebitId, []);
 
     const res = await relay.app.request(`/api/v1/agents/${motebitId}/listing`, {
       method: "GET",

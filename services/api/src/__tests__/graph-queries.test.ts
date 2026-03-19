@@ -97,8 +97,9 @@ describe("Graph Queries — Path To", () => {
   });
 
   it("returns 404 when no trusted path exists", async () => {
-    const source = await createAndRegisterAgent(relay);
-    const target = await createAndRegisterAgent(relay);
+    // Register without capabilities — no auto-created listing, so no routing graph entry
+    const source = await createAndRegisterAgent(relay, []);
+    const target = await createAndRegisterAgent(relay, []);
 
     const res = await relay.app.request(`/api/v1/agents/${source}/path-to/${target}`, {
       method: "GET",

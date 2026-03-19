@@ -461,3 +461,172 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     recordPeerForwardResult,
   };
 }
+
+// ---------------------------------------------------------------------------
+// HTTP MCP Task Forwarding
+// ---------------------------------------------------------------------------
+
+/** JSON-RPC response shape from MCP tool calls. */
+interface McpJsonRpcResponse {
+  id: number;
+  result?: {
+    content?: Array<{ type: string; text: string }>;
+  };
+  error?: { code: number; message: string };
+}
+
+/** Minimal receipt fields needed to validate ingestion. */
+interface ReceiptCandidate {
+  motebit_id: string;
+  signature: string;
+  task_id?: string;
+  status?: string;
+  result?: string;
+  [key: string]: unknown;
+}
+
+function isReceiptCandidate(v: unknown): v is ReceiptCandidate {
+  if (v == null || typeof v !== "object") return false;
+  const r = v as Record<string, unknown>;
+  return typeof r.signature === "string" && typeof r.motebit_id === "string";
+}
+
+/**
+ * Forward a task to an agent's MCP endpoint via HTTP StreamableHTTP.
+ * Called as fire-and-forget when no WebSocket connection is available.
+ * On success, stores the receipt in the task queue for polling.
+ */
+export async function forwardTaskViaMcp(
+  endpointUrl: string,
+  taskId: string,
+  prompt: string,
+  agentId: string,
+  taskQueue: Map<string, { task: { status: string }; receipt?: unknown }>,
+  logger: {
+    info: (msg: string, ctx: Record<string, unknown>) => void;
+    warn: (msg: string, ctx: Record<string, unknown>) => void;
+  },
+): Promise<void> {
+  const mcpEndpoint = endpointUrl.endsWith("/mcp") ? endpointUrl : `${endpointUrl}/mcp`;
+  const mcpHeaders: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json, text/event-stream",
+  };
+
+  try {
+    // Step 1: Initialize MCP session
+    const initResp = await fetch(mcpEndpoint, {
+      method: "POST",
+      headers: mcpHeaders,
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "relay-forward", version: "1.0.0" },
+        },
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const sessionId = initResp.headers.get("mcp-session-id");
+    if (sessionId) mcpHeaders["Mcp-Session-Id"] = sessionId;
+
+    // Step 2: Send initialized notification
+    await fetch(mcpEndpoint, {
+      method: "POST",
+      headers: mcpHeaders,
+      body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+      signal: AbortSignal.timeout(5000),
+    });
+
+    // Step 3: Call motebit_task
+    const taskResp = await fetch(mcpEndpoint, {
+      method: "POST",
+      headers: mcpHeaders,
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        id: 2,
+        params: { name: "motebit_task", arguments: { prompt, relay_task_id: taskId } },
+      }),
+      signal: AbortSignal.timeout(120000),
+    });
+
+    // Step 4: Parse JSON-RPC response (SSE or plain JSON)
+    const mcpResult = await parseMcpResponse(taskResp, 2);
+
+    // Step 5: Extract and ingest receipt
+    if (mcpResult?.result?.content) {
+      const textContent = mcpResult.result.content.find((c) => c.type === "text");
+      if (textContent?.text) {
+        const receiptData = extractReceipt(textContent.text);
+        if (receiptData) {
+          const qEntry = taskQueue.get(taskId);
+          if (qEntry) {
+            qEntry.task.status = "completed";
+            qEntry.receipt = receiptData;
+            logger.info("task.mcp_forward_completed", {
+              correlationId: taskId,
+              agent: agentId,
+              endpoint: mcpEndpoint,
+            });
+          }
+        } else {
+          logger.warn("task.mcp_forward_receipt_invalid", {
+            correlationId: taskId,
+            agent: agentId,
+            endpoint: mcpEndpoint,
+            textPreview: textContent.text.slice(0, 200),
+          });
+        }
+      }
+    }
+  } catch (err: unknown) {
+    logger.warn("task.mcp_forward_failed", {
+      correlationId: taskId,
+      agent: agentId,
+      endpoint: mcpEndpoint,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+async function parseMcpResponse(
+  resp: Response,
+  expectedId: number,
+): Promise<McpJsonRpcResponse | null> {
+  const ct = resp.headers.get("content-type") ?? "";
+  if (ct.includes("text/event-stream")) {
+    const text = await resp.text();
+    for (const line of text.split("\n")) {
+      if (line.startsWith("data: ")) {
+        try {
+          const parsed = JSON.parse(line.slice(6)) as McpJsonRpcResponse;
+          if (parsed.id === expectedId) return parsed;
+        } catch {
+          /* skip malformed SSE line */
+        }
+      }
+    }
+    return null;
+  }
+  if (resp.ok) {
+    return (await resp.json()) as McpJsonRpcResponse;
+  }
+  return null;
+}
+
+function extractReceipt(text: string): ReceiptCandidate | null {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (parsed == null || typeof parsed !== "object") return null;
+    const obj = parsed as Record<string, unknown>;
+    // Receipt may be nested under .receipt or at top level
+    const candidate = obj.receipt != null && typeof obj.receipt === "object" ? obj.receipt : obj;
+    return isReceiptCandidate(candidate) ? candidate : null;
+  } catch {
+    return null;
+  }
+}

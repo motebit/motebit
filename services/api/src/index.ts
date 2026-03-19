@@ -126,7 +126,7 @@ import {
 } from "./federation.js";
 import type { RelayIdentity } from "./federation.js";
 import { registerCredentialRoutes, getRelayKeypair } from "./credentials.js";
-import { createTaskRouter } from "./task-routing.js";
+import { createTaskRouter, forwardTaskViaMcp } from "./task-routing.js";
 import {
   createDataSyncTables,
   registerDataSyncRoutes,
@@ -2768,134 +2768,17 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
                       "SELECT endpoint_url FROM agent_registry WHERE motebit_id = ? AND expires_at > ?",
                     )
                     .get(selId, Date.now()) as { endpoint_url: string } | undefined;
-                  if (regRow?.endpoint_url) {
-                    // Fire-and-forget: call motebit_task on the agent's MCP endpoint
-                    // The agent will POST the receipt back to the relay
-                    const mcpEndpoint = regRow.endpoint_url.endsWith("/mcp")
-                      ? regRow.endpoint_url
-                      : `${regRow.endpoint_url}/mcp`;
-                    void (async () => {
-                      try {
-                        // Initialize MCP session
-                        const initResp = await fetch(mcpEndpoint, {
-                          method: "POST",
-                          headers: {
-                            "Content-Type": "application/json",
-                            Accept: "application/json, text/event-stream",
-                          },
-                          body: JSON.stringify({
-                            jsonrpc: "2.0",
-                            method: "initialize",
-                            id: 1,
-                            params: {
-                              protocolVersion: "2025-03-26",
-                              capabilities: {},
-                              clientInfo: { name: "relay-forward", version: "1.0.0" },
-                            },
-                          }),
-                          signal: AbortSignal.timeout(10000),
-                        });
-                        const sessionId = initResp.headers.get("mcp-session-id");
-                        const mcpHeaders: Record<string, string> = {
-                          "Content-Type": "application/json",
-                          Accept: "application/json, text/event-stream",
-                        };
-                        if (sessionId) mcpHeaders["Mcp-Session-Id"] = sessionId;
-
-                        // Send initialized notification
-                        await fetch(mcpEndpoint, {
-                          method: "POST",
-                          headers: mcpHeaders,
-                          body: JSON.stringify({
-                            jsonrpc: "2.0",
-                            method: "notifications/initialized",
-                          }),
-                          signal: AbortSignal.timeout(5000),
-                        });
-
-                        // Call motebit_task
-                        const taskResp = await fetch(mcpEndpoint, {
-                          method: "POST",
-                          headers: mcpHeaders,
-                          body: JSON.stringify({
-                            jsonrpc: "2.0",
-                            method: "tools/call",
-                            id: 2,
-                            params: {
-                              name: "motebit_task",
-                              arguments: {
-                                prompt: body.prompt,
-                                relay_task_id: taskId,
-                              },
-                            },
-                          }),
-                          signal: AbortSignal.timeout(120000),
-                        });
-
-                        // Parse receipt from SSE or JSON response
-                        const ct = taskResp.headers.get("content-type") ?? "";
-                        let mcpResult: Record<string, unknown> | null = null;
-                        if (ct.includes("text/event-stream")) {
-                          const text = await taskResp.text();
-                          for (const line of text.split("\n")) {
-                            if (line.startsWith("data: ")) {
-                              try {
-                                const parsed = JSON.parse(line.slice(6)) as Record<string, unknown>;
-                                if (parsed.id === 2) {
-                                  mcpResult = parsed;
-                                  break;
-                                }
-                              } catch {
-                                /* skip */
-                              }
-                            }
-                          }
-                        } else if (taskResp.ok) {
-                          mcpResult = (await taskResp.json()) as Record<string, unknown>;
-                        }
-
-                        // Extract receipt from tool result
-                        if (mcpResult?.result != null && typeof mcpResult.result === "object") {
-                          const toolResult = mcpResult.result as {
-                            content?: Array<{ type: string; text: string }>;
-                          };
-                          const textContent = toolResult.content?.find((c) => c.type === "text");
-                          if (textContent?.text) {
-                            try {
-                              const parsed = JSON.parse(textContent.text) as Record<
-                                string,
-                                unknown
-                              >;
-                              const receiptData = (
-                                parsed.receipt != null && typeof parsed.receipt === "object"
-                                  ? parsed.receipt
-                                  : parsed
-                              ) as Record<string, unknown>;
-                              if (
-                                typeof receiptData.signature === "string" &&
-                                typeof receiptData.motebit_id === "string"
-                              ) {
-                                // Ingest receipt as if it arrived via WebSocket
-                                const qEntry = taskQueue.get(taskId);
-                                if (qEntry) {
-                                  qEntry.task.status = AgentTaskStatus.Completed;
-                                  qEntry.receipt = receiptData as unknown as ExecutionReceipt;
-                                }
-                              }
-                            } catch {
-                              /* not JSON receipt */
-                            }
-                          }
-                        }
-                      } catch (mcpErr: unknown) {
-                        logger.warn("task.mcp_forward_failed", {
-                          correlationId: taskId,
-                          agent: selId,
-                          endpoint: mcpEndpoint,
-                          error: mcpErr instanceof Error ? mcpErr.message : String(mcpErr),
-                        });
-                      }
-                    })();
+                  if (regRow?.endpoint_url?.trim()) {
+                    void forwardTaskViaMcp(
+                      regRow.endpoint_url,
+                      taskId,
+                      body.prompt,
+                      selId,
+                      taskQueue as Map<string, { task: { status: string }; receipt?: unknown }>,
+                      logger,
+                    );
+                    // Mark as delivery-attempted, not delivery-completed.
+                    // The async MCP call may still be in flight.
                     routed = true;
                   }
                 }
@@ -4747,6 +4630,32 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         now,
         expiresAt,
       );
+
+    // Auto-create a default service listing if one doesn't exist.
+    // Registration populates agent_registry (for discovery); routing reads from
+    // relay_service_listings. Without this, registered agents are discoverable
+    // but never routed to — the scored routing loop finds zero candidates.
+    if (body.capabilities.length > 0) {
+      const existingListing = moteDb.db
+        .prepare("SELECT listing_id FROM relay_service_listings WHERE motebit_id = ?")
+        .get(motebitId) as { listing_id: string } | undefined;
+      if (!existingListing) {
+        const listingId = `ls-${crypto.randomUUID()}`;
+        moteDb.db
+          .prepare(
+            `INSERT INTO relay_service_listings
+             (listing_id, motebit_id, capabilities, pricing, sla_max_latency_ms, sla_availability, description, updated_at)
+             VALUES (?, ?, ?, '[]', 30000, 0.95, ?, ?)`,
+          )
+          .run(
+            listingId,
+            motebitId,
+            JSON.stringify(body.capabilities),
+            body.metadata?.name ?? body.capabilities.join(", "),
+            now,
+          );
+      }
+    }
 
     return c.json({ registered: true, motebit_id: motebitId, expires_at: expiresAt });
   });
