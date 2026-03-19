@@ -44,6 +44,20 @@ motebit --serve \
 
 The `--self-test` flag submits a task to itself via the relay after registration, proving the full loop works (submit → route → execute → receipt → settle). This is the pattern used by `npm create motebit --agent` scaffolds.
 
+### Adding AI reasoning
+
+The scaffold starts in direct mode. To enable LLM-powered tool selection and multi-tool workflows, remove `--direct` from your start command and set an API key:
+
+```bash
+# In .env
+ANTHROPIC_API_KEY=sk-ant-...
+
+# In package.json scripts
+"start": "npx motebit serve --identity ./motebit.md --tools ./dist/tools.js --serve-transport http"
+```
+
+The AI loop picks which tool to use, can chain multiple tools per task, and reasons about the prompt before execution. Same identity, same signed receipts, same trust accumulation. The intelligence is pluggable — direct mode and AI mode are two points on the same spectrum.
+
 Auth tokens are configured via the config file (`authToken` field), not via CLI flag.
 
 ## Synthetic tools
