@@ -9,7 +9,7 @@
 
 ## Summary
 
-Motebit is a cryptographic identity and authorization runtime for AI agents: 39 packages, 90,000 lines of source TypeScript, 3,400+ tests, three open specifications. Agents carry persistent Ed25519 identities, accumulate verifiable trust through signed execution receipts, and enforce policy at every tool boundary. Receipts embed the signer's public key — they are self-verifiable offline, without contacting any relay or authority. Key rotation uses signed succession chains verifiable end-to-end from genesis key to current key, with no centralized revocation.
+Motebit is a cryptographic identity and authorization runtime for AI agents: 40 packages, 85,000 lines of source TypeScript, 3,400+ tests, three open specifications. Agents carry persistent Ed25519 identities, accumulate verifiable trust through signed execution receipts, and enforce policy at every tool boundary. Receipts embed the signer's public key — they are self-verifiable offline, without contacting any relay or authority. Key rotation uses signed succession chains verifiable end-to-end from genesis key to current key, with no centralized revocation.
 
 The protocol layer is MIT licensed and the verification library has zero dependencies — any system can verify a Motebit agent's identity, execution receipts, and credential chain without running Motebit software. This is a working implementation, not a proposal.
 
