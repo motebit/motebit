@@ -16,8 +16,6 @@
 
 Every AI agent today is a session. No identity that persists. No memory that compounds. No trust that accumulates. No proof of what it's done. Motebit is the missing layer: a complete runtime where the intelligence is pluggable but the identity is the asset.
 
-39 packages. 144K lines of TypeScript. 3,000+ tests. [Foundation built in 26 days.](https://docs.motebit.com/docs/how-we-built-this)
-
 |                | Agents today   | Motebit                                                           |
 | -------------- | -------------- | ----------------------------------------------------------------- |
 | **Identity**   | Session token  | Ed25519 keypair — persists across devices, providers, time        |
@@ -25,24 +23,6 @@ Every AI agent today is a session. No identity that persists. No memory that com
 | **Trust**      | None           | Signed receipts — earned, algebraic, auditable                    |
 | **Governance** | None           | Policy gate — fail-closed, sensitivity-aware, operator-controlled |
 | **Proof**      | None           | Verifiable credentials — W3C VC 2.0, cryptographically signed     |
-
-## What it is
-
-A motebit is a droplet of intelligence under surface tension.
-
-**Identity** — Ed25519 keypairs, `did:key` URIs, signed identity files. The agent can prove who it is to any service, any relay, any other agent. Not a session token — a cryptographic entity that exists across time and devices. Keys rotate via signed succession records — both old and new keys sign the transition, the `motebit_id` persists, and anyone can verify the chain without trusting an intermediary.
-
-**Memory** — A semantic graph that compounds with use. Memories form during conversation, decay naturally over time, consolidate from episodic to semantic. The longer it runs, the more it knows. Curiosity targets emerge from the graph.
-
-**Trust** — Agents earn trust through verified interactions. Signed execution receipts create an immutable audit trail. Trust levels transition as collaboration succeeds or fails. A semiring algebra routes tasks through the most trusted paths in the agent network.
-
-**Governance** — Policy gates control what crosses the boundary. Tool approval, budget limits, sensitivity-aware privacy, deletion certificates. Fail-closed by default. The operator decides what the agent can do autonomously, what requires approval, and what is always denied.
-
-**Delegation** — Agents delegate tasks to other agents through MCP. Each delegation produces a self-verifiable signed receipt — the signer's public key is embedded, so any system can verify the receipt without contacting a relay. SHA-256 hashed prompt/result, nested delegation receipts for chain-of-custody, budget allocation and settlement on verified receipts.
-
-**Embodiment** — A glass droplet rendered in Three.js. The body is passive; the interior is active. State drives behavior deterministically: curiosity dilates the eyes, mood curves the smile, processing brightens the glow. No stage directions — just physics.
-
-**Federation** — Relays peer with each other through mutual authentication. Agents are discoverable across relays. Cross-relay routing uses the trust semiring to find optimal paths. Settlement chains handle cross-relay payment.
 
 ## Try it
 
@@ -54,31 +34,67 @@ open https://motebit.com
 npm create motebit@latest my-agent
 cd my-agent && node verify.js
 
-# Build a service agent — install to first paid task in < 60 seconds
-npm create motebit@latest my-agent -- --agent
-cd my-agent && npm install && npm run dev
-
-# Install the operator console
+# Install the full operator console
 npm install -g motebit
-
-# Start an interactive session
 motebit
-
-# Or run as a daemon with goal scheduling
-motebit run --identity ./motebit.md
 ```
 
-## Five surfaces
+### Build a service agent
 
-| Surface     | Purpose                                  | Entry point                                             |
-| ----------- | ---------------------------------------- | ------------------------------------------------------- |
-| **Web**     | Zero-friction first encounter            | [motebit.com](https://motebit.com)                      |
-| **CLI**     | Developer console, operator mode, daemon | `npm install -g motebit`                                |
-| **Desktop** | Tauri app — glass creature companion     | [Releases](https://github.com/motebit/motebit/releases) |
-| **Mobile**  | React Native — travels with you          | Expo build                                              |
-| **Spatial** | AR/VR — body-relative orbital mechanics  | WebXR prototype                                         |
+Create an agent that joins the network and earns from delegated tasks:
 
-Each surface maximizes what its platform offers. The web connects via HTTP MCP. The CLI operates. The desktop companions. Mobile travels. Spatial embodies. The anti-pattern is shimming platform-impossible capabilities.
+```bash
+npm create motebit@latest my-agent -- --agent
+cd my-agent && npm install
+# set MOTEBIT_SYNC_URL and MOTEBIT_API_TOKEN in .env
+npm run dev
+```
+
+What you see:
+
+```
+Identity: 019d... (from ./motebit.md)
+Tool loaded: echo
+Agent task handler enabled (direct mode — no LLM)
+MCP server running on http://localhost:3100 (StreamableHTTP). 1 tools exposed.
+Registered with relay: https://motebit-sync.fly.dev
+[self-test] submitting task via relay...
+[self-test] task routed (task_id=abc123...)
+[self-test] receipt signed ✓
+[self-test] complete — agent is a live network participant
+```
+
+Edit `src/tools.ts` to replace the echo tool with your own. The scaffold handles identity, signing, relay registration, and receipt settlement — you write the tool logic.
+
+## What it is
+
+A motebit is a droplet of intelligence under surface tension. [Read the thesis.](https://docs.motebit.com/docs/how-we-built-this)
+
+**Identity** — Ed25519 keypairs, `did:key` URIs, signed identity files. Keys rotate via dual-signed succession records. The `motebit_id` persists across rotations, devices, and providers.
+
+**Memory** — Semantic graph that compounds with use. Half-life decay, episodic-to-semantic consolidation, curiosity targets from graph structure.
+
+**Trust** — Signed execution receipts create an immutable audit trail. A semiring algebra routes tasks through the most trusted paths in the agent network.
+
+**Governance** — Policy gates control what crosses the boundary. Fail-closed by default. Sensitivity-aware privacy with deletion certificates.
+
+**Delegation** — Agents delegate to other agents via MCP. Each hop produces a self-verifiable signed receipt with the signer's public key embedded. Budget allocation and settlement on verified receipts. Nested receipts for chain-of-custody.
+
+**Embodiment** — Glass droplet in Three.js. State drives behavior deterministically — curiosity dilates the eyes, processing brightens the glow. No stage directions, just physics.
+
+**Federation** — Relays peer via mutual authentication. Cross-relay routing through the trust semiring. Settlement chains handle cross-relay payment.
+
+## Surfaces
+
+| Surface     | Status | Entry point                                             |
+| ----------- | ------ | ------------------------------------------------------- |
+| **Web**     | Live   | [motebit.com](https://motebit.com)                      |
+| **CLI**     | Live   | `npm install -g motebit`                                |
+| **Desktop** | Live   | [Releases](https://github.com/motebit/motebit/releases) |
+| **Mobile**  | Live   | Expo build                                              |
+| **Spatial** | Proto  | WebXR                                                   |
+
+Each surface maximizes what its platform offers. The web connects via HTTP MCP. The CLI operates. The desktop companions. Mobile travels. Spatial embodies.
 
 ## Architecture
 
@@ -97,7 +113,7 @@ packages/
   create-motebit/  Scaffolder — MIT licensed
   runtime/         Orchestrator — wires all engines, streaming AI loop
   ai-core/         Pluggable providers: Claude, Ollama, Hybrid fallback
-  crypto/          Ed25519, AES-256-GCM, PBKDF2, W3C VC 2.0 credentials, signed succession
+  crypto/          Ed25519, AES-256-GCM, PBKDF2, W3C VC 2.0 credentials
   memory-graph/    Semantic memory, cosine similarity, half-life decay
   event-log/       Append-only event sourcing, version clocks, compaction
   state-vector/    9-field interior state, EMA smoothing, hysteresis
@@ -111,7 +127,7 @@ packages/
   mcp-server/      Expose motebit as MCP server, bearer auth, synthetic tools
   mcp-client/      MCP client, tool discovery, manifest pinning
   render-engine/   Glass droplet: MeshPhysicalMaterial, breathing, sag, glow
-  ...              39 packages total
+  ...              40 packages total
 
 services/
   api/         Sync relay — device auth, receipt verification, budget settlement,
@@ -123,12 +139,13 @@ spec/
   relay-federation-v1.md  motebit/relay-federation@1.0
 ```
 
-## SDK
+## Verify & integrate
+
+Verify any motebit artifact — identity files, receipts, credentials, or presentations — with zero dependencies:
 
 ```typescript
 import { verify } from "@motebit/verify";
 
-// Verify any artifact — identity file, receipt, credential, or presentation
 const result = await verify(artifact);
 
 if (result.type === "identity" && result.valid) {
@@ -160,14 +177,14 @@ Four npm packages, all zero monorepo dependencies:
 > [!NOTE]
 > **Motebit is a protocol first.** The `motebit.md` identity file is an [open standard](spec/identity-v1.md) (MIT) that can be verified by any tool, with or without the motebit runtime. The [verification library](https://www.npmjs.com/package/@motebit/verify) is zero-dependency and MIT licensed.
 
-A `motebit.md` declares identity (Ed25519 public key, agent ID, `did:key`), governance (trust mode, risk thresholds), privacy (sensitivity levels, retention rules), memory (decay parameters), registered devices, and key succession history (§3.8).
+A `motebit.md` declares identity (Ed25519 public key, agent ID, `did:key`), governance (trust mode, risk thresholds), privacy (sensitivity levels, retention rules), memory (decay parameters), registered devices, and key succession history ([spec](spec/identity-v1.md) §3.8).
 
 ## Development
 
 ```bash
 pnpm install           # Node >= 20, pnpm 9.15
-pnpm run build         # Build all 39 packages
-pnpm run test          # 3,071 tests across 140 files
+pnpm run build         # Build all packages
+pnpm run test          # Run all tests
 pnpm run typecheck     # Type-check all packages
 pnpm run lint          # Lint all packages
 ```
