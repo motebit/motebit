@@ -625,7 +625,8 @@ export async function handleServe(config: CliConfig): Promise<void> {
   // Create runtime
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
-  const provider = createProvider(config, personalityConfig);
+  // Direct mode doesn't need an LLM — skip provider creation to avoid requiring an API key
+  const provider = config.direct ? undefined : createProvider(config, personalityConfig);
 
   const storage: StorageAdapters = {
     eventStore: moteDb.eventStore,
