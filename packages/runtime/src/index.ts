@@ -1249,6 +1249,20 @@ export class MotebitRuntime {
       const trimmed = this.conversation.trimmed();
       const knownAgents = await this.listTrustedAgents();
       const precisionCtx = buildPrecisionContext(this._precision);
+
+      // Build capabilities map from service listings for known agents
+      let agentCapabilities: Record<string, string[]> | undefined;
+      if (knownAgents.length > 0 && this.serviceListingStore) {
+        const listings = await this.serviceListingStore.list();
+        const capMap: Record<string, string[]> = {};
+        for (const listing of listings) {
+          if (listing.capabilities.length > 0) {
+            capMap[listing.motebit_id] = listing.capabilities;
+          }
+        }
+        if (Object.keys(capMap).length > 0) agentCapabilities = capMap;
+      }
+
       const stream = runTurnStreaming(this.loopDeps, text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
@@ -1256,6 +1270,7 @@ export class MotebitRuntime {
         sessionInfo: this.conversation.getSessionInfo() ?? undefined,
         curiosityHints: this.buildCuriosityHints(),
         knownAgents: knownAgents.length > 0 ? knownAgents : undefined,
+        agentCapabilities,
         precisionContext: precisionCtx || undefined,
         delegationScope: options?.delegationScope,
       });

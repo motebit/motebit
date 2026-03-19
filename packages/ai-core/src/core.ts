@@ -125,8 +125,9 @@ export function packContext(contextPack: ContextPack): string {
     );
   }
 
-  // Known agents — trust context so the AI knows its social network
+  // Known agents — trust context so the AI knows its social network and their capabilities
   if (contextPack.knownAgents && contextPack.knownAgents.length > 0) {
+    const capMap = contextPack.agentCapabilities ?? {};
     parts.push("[Agents I Know]");
     for (const agent of contextPack.knownAgents) {
       const tasks = (agent.successful_tasks ?? 0) + (agent.failed_tasks ?? 0);
@@ -138,8 +139,15 @@ export function packContext(contextPack: ContextPack): string {
         agent.remote_motebit_id.length > 12
           ? `${agent.remote_motebit_id.slice(0, 8)}…${agent.remote_motebit_id.slice(-4)}`
           : agent.remote_motebit_id;
+      const caps = capMap[agent.remote_motebit_id];
+      const capsStr = caps && caps.length > 0 ? ` | capabilities: ${caps.join(", ")}` : "";
       parts.push(
-        `  ${id}: ${agent.trust_level} | ${agent.interaction_count} interactions | tasks: ${successRate}% success | last seen ${timeAgo}`,
+        `  ${id}: ${agent.trust_level} | ${agent.interaction_count} interactions | tasks: ${successRate}% success${capsStr} | last seen ${timeAgo}`,
+      );
+    }
+    if (Object.keys(capMap).length > 0) {
+      parts.push(
+        "Use the delegate_to_agent tool to delegate tasks to these agents when you lack the needed capability locally.",
       );
     }
   }

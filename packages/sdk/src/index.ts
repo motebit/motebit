@@ -586,6 +586,8 @@ export interface ContextPack {
   curiosityHints?: Array<{ content: string; daysSinceDiscussed: number }>;
   /** Known agents this motebit has interacted with — trust levels, reputation, interaction history. */
   knownAgents?: AgentTrustRecord[];
+  /** Capabilities per agent ID — used to enrich [Agents I Know] so the AI knows what each agent can do. */
+  agentCapabilities?: Record<string, string[]>;
   /** Active inference precision context — modulates agent behavior based on intelligence gradient. */
   precisionContext?: string;
 }
