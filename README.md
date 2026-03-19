@@ -70,7 +70,7 @@ The scaffold starts in direct mode (no LLM). To add AI reasoning — letting the
 
 ## What it is
 
-A motebit is a droplet of intelligence under surface tension. [Read the thesis.](https://docs.motebit.com/docs/how-we-built-this)
+A motebit is a droplet of intelligence under surface tension. [Read the thesis.](https://docs.motebit.com/docs/introduction)
 
 **Identity** — Ed25519 keypairs, `did:key` URIs, signed identity files. Keys rotate via dual-signed succession records. The `motebit_id` persists across rotations, devices, and providers.
 
