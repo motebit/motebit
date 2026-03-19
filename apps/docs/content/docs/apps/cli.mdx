@@ -136,6 +136,9 @@ The CLI supports several subcommands beyond the default interactive REPL:
 | `--serve-transport <mode>` | `stdio` | Transport: `stdio` or `http` |
 | `--serve-port <port>` | `3100` | HTTP port (only with `--serve-transport http`) |
 | `--identity <path>` | — | Path to `motebit.md` (loads governance thresholds) |
+| `--tools <path>` | — | JS module exporting tool definitions (array of `{definition, handler}`) |
+| `--direct` | off | Direct tool execution — no AI loop, maps prompt to tool input |
+| `--self-test` | off | Run self-test task via relay after registration |
 | `--operator` | off | Enable operator mode for high-risk tools |
 
 ```bash
@@ -147,6 +150,10 @@ motebit serve --serve-transport http --serve-port 3100
 
 # With identity governance
 motebit serve --serve-transport http --identity ./motebit.md
+
+# With external tools in direct mode (no LLM needed)
+motebit serve --identity ./motebit.md --tools ./dist/tools.js \
+  --serve-transport http --direct --self-test
 ```
 
 In HTTP mode, the server registers with the sync relay (if configured) and sends a heartbeat every 5 minutes. Authentication is configured via the `authToken` field in `~/.motebit/config.json` — clients pass it as a bearer token.

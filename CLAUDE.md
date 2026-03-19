@@ -60,7 +60,7 @@ packages/
   mcp-server/      MCP server adapter — exposes motebit as callable agent, synthetic tools, HTTP bearer auth
   identity-file/   Generate, parse, verify motebit.md — cryptographically signed agent identity files (internal)
   verify/          Standalone public verifier for motebit.md — zero monorepo deps, MIT licensed
-  create-motebit/  Public CLI: `npm create motebit` — generates + verifies signed identity files, `npx create-motebit rotate [path]` for key rotation
+  create-motebit/  Public CLI: `npm create motebit` — generates + verifies signed identity files, `npm create motebit --agent` scaffolds runnable agent project (tools.ts + MCP server), `npx create-motebit rotate [path]` for key rotation
   browser-persistence/ IndexedDB adapters: events, memory, identity, audit, conversations, plans, agent trust, gradient snapshots
   planner/           PlanEngine: goal decomposition, reflection, plan adjustment
   voice/             Voice pipeline: VAD, STT, TTS adapters
@@ -144,7 +144,7 @@ Tauri app. Two key files for the UI layer:
 
 **Interactive delegation:** When relay + signing keys are available, the CLI registers `delegate_to_agent` as a tool in the agentic loop. The AI sees known agents' capabilities (from service listings), delegates transparently during normal conversation, and displays `[delegating to relay] delegate_to_agent...done` in the stream output. Receipts flow back for trust accumulation and multi-hop composition.
 
-**MCP server mode:** `motebit --serve` exposes the motebit as an MCP server. Supports stdio and HTTP (StreamableHTTP) transport. Synthetic tools: `motebit_query` (AI response with memory), `motebit_remember` (store memory, sensitivity-capped at "personal" for external callers), `motebit_recall` (semantic search, privacy-filtered), `motebit_task` (autonomous execution with signed `ExecutionReceipt`), `motebit_identity` (identity file or JSON), `motebit_tools` (capability discovery). All synthetic and proxied tools pass through PolicyGate. Optional HTTP bearer auth (`authToken` config). All results identity-tagged via `formatResult()`. Deps are optional — synthetic tools only registered when their backend callback is provided.
+**MCP server mode:** `motebit --serve` exposes the motebit as an MCP server. Supports stdio and HTTP (StreamableHTTP) transport. `--tools <path>` loads external tool definitions from a JS module (array of `{definition, handler}`). `--direct` enables direct tool execution without AI loop (bypasses LLM, maps prompt to first tool's required string parameter, signs receipt — same pattern as web-search service). `--self-test` runs a self-targeted task via relay after registration to prove the full loop (submit → route → execute → receipt → settle). Synthetic tools: `motebit_query` (AI response with memory), `motebit_remember` (store memory, sensitivity-capped at "personal" for external callers), `motebit_recall` (semantic search, privacy-filtered), `motebit_task` (autonomous execution with signed `ExecutionReceipt`), `motebit_identity` (identity file or JSON), `motebit_tools` (capability discovery). All synthetic and proxied tools pass through PolicyGate. Optional HTTP bearer auth (`authToken` config). All results identity-tagged via `formatResult()`. Deps are optional — synthetic tools only registered when their backend callback is provided.
 
 ## Mobile App
 

@@ -29,6 +29,21 @@ motebit --serve \
   --identity motebit.md
 ```
 
+### Direct mode (no LLM)
+
+For service agents that expose tools without an AI loop — bypasses the LLM entirely and maps the incoming prompt directly to the tool's first required string parameter. Combined with `--tools` to load external tool definitions:
+
+```bash
+motebit --serve \
+  --serve-transport http \
+  --identity motebit.md \
+  --tools ./dist/tools.js \
+  --direct \
+  --self-test
+```
+
+The `--self-test` flag submits a task to itself via the relay after registration, proving the full loop works (submit → route → execute → receipt → settle). This is the pattern used by `npm create motebit --agent` scaffolds.
+
 Auth tokens are configured via the config file (`authToken` field), not via CLI flag.
 
 ## Synthetic tools
