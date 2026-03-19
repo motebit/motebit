@@ -54,6 +54,10 @@ open https://motebit.com
 npm create motebit@latest my-agent
 cd my-agent && node verify.js
 
+# Build a service agent — install to first paid task in < 60 seconds
+npm create motebit@latest my-agent -- --agent
+cd my-agent && npm install && npm run dev
+
 # Install the operator console
 npm install -g motebit
 
@@ -144,12 +148,12 @@ import type { ExecutionReceipt, MotebitState, AgentTrustRecord } from "@motebit/
 
 Four npm packages, all zero monorepo dependencies:
 
-| Package                                                            | Description                                       | License |
-| ------------------------------------------------------------------ | ------------------------------------------------- | ------- |
-| [`create-motebit`](https://www.npmjs.com/package/create-motebit)   | `npm create motebit` — scaffold a signed identity | MIT     |
-| [`motebit`](https://www.npmjs.com/package/motebit)                 | CLI — REPL, daemon, operator console              | BSL-1.1 |
-| [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) | Signature verification — zero dependencies        | MIT     |
-| [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk)       | Protocol types — zero dependencies                | MIT     |
+| Package                                                            | Description                                                                      | License |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------- | ------- |
+| [`create-motebit`](https://www.npmjs.com/package/create-motebit)   | `npm create motebit` — scaffold identity or `--agent` for runnable service agent | MIT     |
+| [`motebit`](https://www.npmjs.com/package/motebit)                 | CLI — REPL, daemon, operator console                                             | BSL-1.1 |
+| [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) | Signature verification — zero dependencies                                       | MIT     |
+| [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk)       | Protocol types — zero dependencies                                               | MIT     |
 
 ## Specification
 
