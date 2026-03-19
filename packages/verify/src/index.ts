@@ -874,7 +874,11 @@ async function verifyDataIntegrity(
     return false;
   }
 
-  return ed.verifyAsync(signature, combined, publicKey);
+  try {
+    return await ed.verifyAsync(signature, combined, publicKey);
+  } catch {
+    return false;
+  }
 }
 
 const DEFAULT_CLOCK_SKEW_SECONDS = 60;
