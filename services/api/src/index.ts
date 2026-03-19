@@ -2776,6 +2776,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
                       selId,
                       taskQueue as Map<string, { task: { status: string }; receipt?: unknown }>,
                       logger,
+                      apiToken,
                     );
                     // Mark as delivery-attempted, not delivery-completed.
                     // The async MCP call may still be in flight.
@@ -2812,6 +2813,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
     // Phase 3: HTTP MCP fallback — when no WebSocket routed the task,
     // find a registered agent with matching capabilities and forward via HTTP.
+    logger.info("task.routing_state", {
+      correlationId: taskId,
+      routed,
+      federationAttempted,
+      requiredCaps,
+      phase3Eligible: !routed && !federationAttempted && requiredCaps.length > 0,
+    });
     if (!routed && !federationAttempted && requiredCaps.length > 0) {
       const now = Date.now();
       const capFilter = requiredCaps[0]!;
@@ -2831,6 +2839,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
           httpCandidate.motebit_id,
           taskQueue as Map<string, { task: { status: string }; receipt?: unknown }>,
           logger,
+          apiToken,
         );
         routed = true;
       }

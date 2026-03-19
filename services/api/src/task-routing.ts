@@ -506,12 +506,14 @@ export async function forwardTaskViaMcp(
     info: (msg: string, ctx: Record<string, unknown>) => void;
     warn: (msg: string, ctx: Record<string, unknown>) => void;
   },
+  apiToken?: string,
 ): Promise<void> {
   const mcpEndpoint = endpointUrl.endsWith("/mcp") ? endpointUrl : `${endpointUrl}/mcp`;
   const mcpHeaders: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json, text/event-stream",
   };
+  if (apiToken) mcpHeaders["Authorization"] = `Bearer ${apiToken}`;
 
   try {
     // Step 1: Initialize MCP session
