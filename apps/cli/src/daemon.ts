@@ -14,7 +14,7 @@ import {
   PlanSyncEngine,
   HttpPlanSyncAdapter,
 } from "@motebit/sync-engine";
-import type { AgentTask } from "@motebit/sdk";
+import type { AgentTask, ToolDefinition, ToolHandler } from "@motebit/sdk";
 import {
   EventType,
   RiskLevel,
@@ -602,13 +602,16 @@ export async function handleServe(config: CliConfig): Promise<void> {
   if (config.tools) {
     const { pathToFileURL } = await import("node:url");
     const resolved = path.resolve(config.tools);
-    const mod = await import(pathToFileURL(resolved).href);
+    const mod = (await import(pathToFileURL(resolved).href)) as {
+      default?: unknown;
+      tools?: unknown;
+    };
     const entries = mod.default ?? mod.tools;
     if (!Array.isArray(entries)) {
       console.error("Error: --tools module must export default array of { definition, handler }");
       process.exit(1);
     }
-    for (const entry of entries) {
+    for (const entry of entries as { definition: ToolDefinition; handler: ToolHandler }[]) {
       toolRegistry.register(entry.definition, entry.handler);
       log(`Tool loaded: ${entry.definition.name}`);
     }
