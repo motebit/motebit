@@ -8,6 +8,10 @@ dist/
 .env.local
 .env.*.local
 
+# Service identity files (per-deployment, contain encrypted private keys)
+services/*/motebit.md
+services/*/motebit.md.deploy
+
 # IDE
 .idea/
 .vscode/
