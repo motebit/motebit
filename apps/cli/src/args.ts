@@ -22,6 +22,9 @@ export interface CliConfig {
   destination: string | undefined;
   serveTransport: string | undefined;
   servePort: string | undefined;
+  tools: string | undefined;
+  selfTest: boolean;
+  direct: boolean;
   json: boolean;
   presentation: boolean;
   all?: boolean;
@@ -53,6 +56,9 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       destination: { type: "string" },
       "serve-transport": { type: "string" },
       "serve-port": { type: "string" },
+      tools: { type: "string" },
+      "self-test": { type: "boolean", default: false },
+      direct: { type: "boolean", default: false },
       json: { type: "boolean", default: false },
       presentation: { type: "boolean", default: false },
       all: { type: "boolean", default: false },
@@ -93,6 +99,9 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     destination: values.destination,
     serveTransport: values["serve-transport"],
     servePort: values["serve-port"],
+    tools: values.tools,
+    selfTest: values["self-test"],
+    direct: values.direct,
     json: values.json,
     presentation: values.presentation,
     all: values.all,
@@ -119,6 +128,9 @@ Commands:
   serve [--identity <path>] Start as MCP server (stdio by default)
     --serve-transport <mode>  Transport: "stdio" (default) or "http"
     --serve-port <port>       HTTP port (default: 3100)
+    --tools <path>            JS module exporting tool definitions (array of {definition, handler})
+    --direct                  Direct tool execution (no AI loop)
+    --self-test               Run self-test after relay registration
   goal add "<prompt>" --every <interval> [--once] [--wall-clock <duration>] [--project <id>]
                             Add a scheduled goal
   goal list                 List all scheduled goals with status

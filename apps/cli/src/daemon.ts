@@ -22,7 +22,13 @@ import {
   AgentTaskStatus,
   DeviceCapability,
 } from "@motebit/sdk";
-import { createSignedToken, verifySignedToken, secureErase } from "@motebit/crypto";
+import {
+  createSignedToken,
+  verifySignedToken,
+  secureErase,
+  signExecutionReceipt,
+  hash as sha256,
+} from "@motebit/crypto";
 import { verifyIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
 import { McpServerAdapter } from "@motebit/mcp-server";
 import { MemoryClass } from "@motebit/policy";
@@ -592,6 +598,22 @@ export async function handleServe(config: CliConfig): Promise<void> {
   const runtimeRef: { current: MotebitRuntime | null } = { current: null };
   const toolRegistry = buildToolRegistry(config, runtimeRef, motebitId);
 
+  // Load external tools from --tools module
+  if (config.tools) {
+    const { pathToFileURL } = await import("node:url");
+    const resolved = path.resolve(config.tools);
+    const mod = await import(pathToFileURL(resolved).href);
+    const entries = mod.default ?? mod.tools;
+    if (!Array.isArray(entries)) {
+      console.error("Error: --tools module must export default array of { definition, handler }");
+      process.exit(1);
+    }
+    for (const entry of entries) {
+      toolRegistry.register(entry.definition, entry.handler);
+      log(`Tool loaded: ${entry.definition.name}`);
+    }
+  }
+
   const mcpServers = (fullConfig.mcp_servers ?? []).map((s) => ({
     ...s,
     trusted: (fullConfig.mcp_trusted_servers ?? []).includes(s.name),
@@ -735,21 +757,114 @@ export async function handleServe(config: CliConfig): Promise<void> {
       const pkHex = await decryptPrivateKey(fullConfigForServe.cli_encrypted_key, passphrase);
       const privateKey = fromHex(pkHex);
 
-      deps.handleAgentTask = async function* (prompt: string) {
-        const task: AgentTask = {
-          task_id: crypto.randomUUID(),
-          motebit_id: motebitId,
-          prompt,
-          submitted_at: Date.now(),
-          submitted_by: "mcp_client",
-          status: AgentTaskStatus.Running,
-        };
+      if (config.direct) {
+        // Direct tool execution mode — bypass AI, execute tools directly
+        deps.handleAgentTask = async function* (
+          prompt: string,
+          options?: { delegatedScope?: string; relayTaskId?: string },
+        ) {
+          const taskId = crypto.randomUUID();
+          const submittedAt = Date.now();
 
-        for await (const chunk of runtime.handleAgentTask(task, privateKey, deviceId)) {
-          yield chunk;
-        }
-      };
-      log("Agent task handler enabled (private key loaded).");
+          // Find the tool to execute
+          const allTools = runtime.getToolRegistry().list();
+          const loadedTools = config.tools
+            ? allTools.filter(
+                (t) =>
+                  // Prefer externally loaded tools; fall back to first tool
+                  !["read_file", "write_file", "list_directory", "run_command"].includes(t.name),
+              )
+            : allTools;
+          const tool = loadedTools[0];
+          if (!tool) {
+            yield {
+              type: "task_result" as const,
+              receipt: {
+                task_id: taskId,
+                motebit_id: motebitId,
+                status: "failed",
+                result: "no tools available",
+              } as unknown as Record<string, unknown>,
+            };
+            return;
+          }
+
+          // Map prompt to the first required string parameter
+          const schema = tool.inputSchema as {
+            properties?: Record<string, { type?: string }>;
+            required?: string[];
+          };
+          const requiredProps = schema.required ?? [];
+          const stringParam =
+            requiredProps.find((k) => schema.properties?.[k]?.type === "string") ??
+            requiredProps[0] ??
+            Object.keys(schema.properties ?? {})[0];
+          const args: Record<string, unknown> = {};
+          if (stringParam) args[stringParam] = prompt;
+
+          let result: { ok: boolean; data?: unknown; error?: string };
+          try {
+            result = await runtime.getToolRegistry().execute(tool.name, args);
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            result = { ok: false, error: msg };
+          }
+          const completedAt = Date.now();
+
+          const resultStr = result.ok
+            ? typeof result.data === "string"
+              ? result.data
+              : JSON.stringify(result.data ?? null)
+            : (result.error ?? "error");
+          const enc = new TextEncoder();
+          const promptHash = await sha256(enc.encode(prompt));
+          const resultHash = await sha256(enc.encode(resultStr));
+
+          const receipt: Record<string, unknown> = {
+            task_id: taskId,
+            motebit_id: motebitId,
+            device_id: deviceId,
+            submitted_at: submittedAt,
+            completed_at: completedAt,
+            status: result.ok ? "completed" : "failed",
+            result: resultStr,
+            tools_used: [tool.name],
+            memories_formed: 0,
+            prompt_hash: promptHash,
+            result_hash: resultHash,
+            ...(options?.relayTaskId ? { relay_task_id: options.relayTaskId } : {}),
+          };
+
+          const signed = await signExecutionReceipt(
+            receipt as Parameters<typeof signExecutionReceipt>[0],
+            privateKey,
+          );
+          log(
+            `receipt=${signed.signature.slice(0, 12)}… tool=${tool.name} prompt="${prompt.slice(0, 60)}"`,
+          );
+          yield {
+            type: "task_result" as const,
+            receipt: signed as unknown as Record<string, unknown>,
+          };
+        };
+        log("Agent task handler enabled (direct mode — no LLM)");
+      } else {
+        deps.handleAgentTask = async function* (prompt: string) {
+          const task: AgentTask = {
+            task_id: crypto.randomUUID(),
+            motebit_id: motebitId,
+            prompt,
+            submitted_at: Date.now(),
+            submitted_by: "mcp_client",
+            status: AgentTaskStatus.Running,
+          };
+
+          for await (const chunk of runtime.handleAgentTask(task, privateKey, deviceId)) {
+            yield chunk;
+          }
+        };
+        log("Agent task handler enabled (private key loaded).");
+      }
     } catch {
       log("Warning: could not decrypt private key — motebit_task tool disabled");
     }
@@ -825,6 +940,72 @@ export async function handleServe(config: CliConfig): Promise<void> {
           },
           5 * 60 * 1000,
         );
+
+        // Self-test: submit a task to ourselves via the relay
+        if (config.selfTest) {
+          await (async () => {
+            try {
+              await new Promise((r) => setTimeout(r, 500));
+              const firstToolName = toolNames[0] ?? "echo";
+              log("[self-test] submitting task via relay...");
+
+              const taskResp = await fetch(`${syncUrl}/agent/${motebitId}/task`, {
+                method: "POST",
+                headers: regHeaders,
+                body: JSON.stringify({
+                  prompt: "self-test",
+                  submitted_by: motebitId,
+                  required_capabilities: [firstToolName],
+                }),
+              });
+              if (!taskResp.ok) {
+                const status = taskResp.status;
+                const body = await taskResp.text().catch(() => "");
+                log(
+                  `[self-test] failed — relay returned ${status}${body ? `: ${body.slice(0, 100)}` : ""}`,
+                );
+                if (status === 402) log("[self-test] hint: fund the agent's budget on the relay");
+                return;
+              }
+
+              const taskData = (await taskResp.json()) as { task_id?: string };
+              const taskId = taskData.task_id;
+              if (!taskId) {
+                log("[self-test] failed — no task_id in response");
+                return;
+              }
+              log(`[self-test] task routed (task_id=${taskId.slice(0, 8)}...)`);
+
+              // Poll for completion
+              const deadline = Date.now() + 30_000;
+              let settled = false;
+              while (Date.now() < deadline) {
+                await new Promise((r) => setTimeout(r, 2_000));
+                const pollResp = await fetch(`${syncUrl}/agent/${motebitId}/task/${taskId}`, {
+                  headers: regHeaders,
+                });
+                if (!pollResp.ok) continue;
+                const pollData = (await pollResp.json()) as { status?: string };
+                if (pollData.status === "completed" || pollData.status === "failed") {
+                  if (pollData.status === "completed") {
+                    log("[self-test] receipt signed \u2713");
+                    log("[self-test] complete — agent is a live network participant");
+                  } else {
+                    log(`[self-test] task ${pollData.status}`);
+                  }
+                  settled = true;
+                  break;
+                }
+              }
+              if (!settled) {
+                log("[self-test] timed out after 30s — the agent may still complete the task");
+              }
+            } catch (err: unknown) {
+              const errMsg = err instanceof Error ? err.message : String(err);
+              log(`[self-test] error: ${errMsg}`);
+            }
+          })();
+        }
       } else {
         log(`Registry registration failed: ${regResp.status}`);
       }

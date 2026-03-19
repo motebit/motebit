@@ -139,6 +139,231 @@ const GITIGNORE = `node_modules/
 *.key
 `;
 
+const AGENT_GITIGNORE = `node_modules/
+.env
+*.key
+dist/
+`;
+
+function makeAgentPackageJson(name: string): string {
+  const pkg = {
+    name,
+    version: "0.1.0",
+    private: true,
+    type: "module",
+    scripts: {
+      build: "tsc",
+      dev: "tsc && npx motebit serve --identity ./motebit.md --tools ./dist/tools.js --serve-transport http --direct --self-test",
+      start:
+        "npx motebit serve --identity ./motebit.md --tools ./dist/tools.js --serve-transport http --direct",
+    },
+    dependencies: {
+      "@motebit/sdk": "^0.3.0",
+    },
+    devDependencies: {
+      motebit: "^0.3.0",
+      typescript: "^5.7.0",
+    },
+  };
+  return JSON.stringify(pkg, null, 2) + "\n";
+}
+
+function makeAgentTools(): string {
+  return `import type { ToolDefinition, ToolResult } from "@motebit/sdk";
+
+type ToolEntry = {
+  definition: ToolDefinition;
+  handler: (args: Record<string, unknown>) => Promise<ToolResult>;
+};
+
+const tools: ToolEntry[] = [
+  {
+    definition: {
+      name: "echo",
+      description: "Echo the input text back. A minimal working tool to prove the agent loop.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          text: { type: "string", description: "Text to echo back" },
+        },
+        required: ["text"],
+      },
+    },
+    handler: async (args) => ({
+      ok: true,
+      data: String(args.text ?? ""),
+    }),
+  },
+];
+
+export default tools;
+`;
+}
+
+function makeAgentTsconfig(): string {
+  const config = {
+    compilerOptions: {
+      target: "ES2022",
+      module: "Node16",
+      moduleResolution: "Node16",
+      outDir: "dist",
+      rootDir: "src",
+      strict: true,
+      declaration: true,
+      esModuleInterop: true,
+      skipLibCheck: true,
+    },
+    include: ["src"],
+  };
+  return JSON.stringify(config, null, 2) + "\n";
+}
+
+function makeAgentEnvExample(): string {
+  return `# Relay connection (required for network participation)
+MOTEBIT_SYNC_URL=https://motebit-sync.fly.dev
+MOTEBIT_API_TOKEN=
+
+# Identity passphrase (set during creation)
+MOTEBIT_PASSPHRASE=
+
+# Optional: AI provider (for non-direct mode)
+# ANTHROPIC_API_KEY=sk-ant-...
+`;
+}
+
+// ---------------------------------------------------------------------------
+// guidedScaffold — interactive identity + project creation
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// agentScaffold — generate a runnable agent project
+// ---------------------------------------------------------------------------
+
+async function agentScaffold(targetDir: string, nonInteractive: boolean): Promise<void> {
+  console.log();
+  console.log(`  ${bold("create-motebit")} ${dim(`v${VERSION}`)} ${dim("--agent")}`);
+  console.log();
+
+  const absDir = resolve(targetDir);
+  let dirName = basename(absDir);
+
+  // Check for existing package.json
+  const pkgPath = join(absDir, "package.json");
+  if (existsSync(pkgPath)) {
+    console.log(`  ${red("!")} ${pkgPath} already exists.`);
+    console.log(`    Refusing to scaffold over an existing project.`);
+    console.log();
+    process.exit(1);
+  }
+
+  // Gather options
+  let passphrase: string;
+  let agentName: string;
+  let agentDescription: string;
+
+  if (nonInteractive) {
+    passphrase = process.env["MOTEBIT_PASSPHRASE"] ?? "";
+    if (!passphrase) {
+      console.log(`  ${red("!")} --yes requires MOTEBIT_PASSPHRASE environment variable.`);
+      console.log();
+      process.exit(1);
+    }
+    agentName = process.env["MOTEBIT_SERVICE_NAME"] ?? dirName;
+    agentDescription = process.env["MOTEBIT_SERVICE_DESCRIPTION"] ?? `${dirName} agent`;
+    if (targetDir === ".") dirName = "my-agent";
+  } else {
+    const rl = createRL();
+
+    if (targetDir === ".") {
+      dirName = await input(rl, "? Agent name", "my-agent");
+    }
+    agentName = await input(rl, "? Agent name (for identity)", dirName);
+    agentDescription = await input(rl, "? Agent description", `${agentName} agent`);
+
+    const envPassphrase = process.env["MOTEBIT_PASSPHRASE"];
+    if (envPassphrase) {
+      passphrase = envPassphrase;
+    } else {
+      passphrase = await password(rl, "? Set a passphrase for your agent's key: ");
+      if (!passphrase) {
+        rl.close();
+        console.log(`  ${red("!")} Passphrase cannot be empty.`);
+        console.log();
+        process.exit(1);
+      }
+      const confirm = await password(rl, "? Confirm passphrase: ");
+      if (confirm !== passphrase) {
+        rl.close();
+        console.log(`  ${red("!")} Passphrases do not match.`);
+        console.log();
+        process.exit(1);
+      }
+    }
+
+    rl.close();
+  }
+
+  // Generate service identity
+  console.log(`  Generating Ed25519 keypair...`);
+  const result = await generateIdentity({
+    name: dirName,
+    trustMode: "guarded",
+    passphrase,
+    service: {
+      type: "service",
+      service_name: agentName,
+      service_description: agentDescription,
+    },
+  });
+  console.log(`  Signing identity file...`);
+
+  // Create directory and files
+  mkdirSync(absDir, { recursive: true });
+  mkdirSync(join(absDir, "src"), { recursive: true });
+
+  writeFileSync(pkgPath, makeAgentPackageJson(dirName), "utf-8");
+  writeFileSync(join(absDir, "tsconfig.json"), makeAgentTsconfig(), "utf-8");
+  writeFileSync(join(absDir, "src", "tools.ts"), makeAgentTools(), "utf-8");
+  writeFileSync(join(absDir, ".env.example"), makeAgentEnvExample(), "utf-8");
+  writeFileSync(join(absDir, ".gitignore"), AGENT_GITIGNORE, "utf-8");
+  writeFileSync(join(absDir, "motebit.md"), result.identityFileContent, "utf-8");
+
+  // Save identity to config
+  const config = loadConfig();
+  config.name = dirName;
+  config.motebit_id = result.motebitId;
+  config.device_id = result.deviceId;
+  config.device_public_key = result.publicKeyHex;
+  config.cli_encrypted_key = result.encryptedKey;
+  saveConfig(config);
+
+  // Output
+  const relDir = targetDir === "." ? "." : `./${dirName}`;
+  console.log();
+  console.log(`  ${green("+")} Agent created: ${bold(relDir)}`);
+  console.log();
+  console.log(`    motebit.md         ${dim("Signed agent identity")}`);
+  console.log(`    src/tools.ts       ${dim("Tool definitions (edit this)")}`);
+  console.log(`    tsconfig.json      ${dim("TypeScript config")}`);
+  console.log(`    package.json       ${dim("Node project with dev/start scripts")}`);
+  console.log(`    .env.example       ${dim("Environment variable template")}`);
+  console.log(`    .gitignore         ${dim("Secrets + dist excluded")}`);
+  console.log();
+  console.log(`  Motebit ID: ${cyan(result.motebitId)}`);
+  console.log();
+  console.log(`  ${bold("Next steps:")}`);
+  console.log();
+  if (targetDir !== ".") {
+    console.log(`    cd ${dirName}`);
+  }
+  console.log(`    npm install`);
+  console.log(`    cp .env.example .env   ${dim("# set MOTEBIT_SYNC_URL and MOTEBIT_API_TOKEN")}`);
+  console.log(`    npm run dev`);
+  console.log();
+  console.log(`  Edit ${cyan("src/tools.ts")} to add your own tools.`);
+  console.log();
+}
+
 // ---------------------------------------------------------------------------
 // guidedScaffold — interactive identity + project creation
 // ---------------------------------------------------------------------------
@@ -626,6 +851,7 @@ function printHelp(): void {
   ${bold("Options:")}
 
     -y, --yes             Non-interactive mode (requires MOTEBIT_PASSPHRASE env var)
+    --agent               Create a runnable agent project (tools.ts + MCP server)
     --service             Create a service motebit identity (prompts for service fields)
     --reason "..."        Reason for key rotation (used with rotate)
     -v, --version         Print version
@@ -697,9 +923,15 @@ async function main(): Promise<void> {
   }
 
   // Default: guided scaffold
+  const agentMode = args.includes("--agent");
   const serviceMode = args.includes("--service");
   const targetDir = command ?? ".";
-  await guidedScaffold(targetDir, nonInteractive, serviceMode);
+
+  if (agentMode) {
+    await agentScaffold(targetDir, nonInteractive);
+  } else {
+    await guidedScaffold(targetDir, nonInteractive, serviceMode);
+  }
 }
 
 main().catch((err: unknown) => {
