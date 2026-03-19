@@ -1360,24 +1360,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       }
     }
 
-    // --- Spatial presence events ---
-    const receiptStatus = receipt.status === "completed" ? "completed" : "failed";
-    const spatialSubmittedBy = entry.submitted_by ?? entry.task.submitted_by;
-    if (spatialSubmittedBy) {
-      broadcastToMotebit(spatialSubmittedBy, {
-        type: "delegation_returning",
-        task_id: taskId,
-        target_motebit_id: motebitId,
-        status: receiptStatus,
-        receipt_verified: true,
-      });
-    }
-    broadcastToMotebit(motebitId, {
-      type: "delegation_visitor_departing",
-      task_id: taskId,
-      source_motebit_id: spatialSubmittedBy ?? null,
-    });
-
     // --- Federation result forwarding ---
     if (entry.origin_relay) {
       try {
@@ -3110,22 +3092,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // --- Spatial presence broadcast helper ---
 
-  /**
-   * Send a WebSocket event to all connections for a specific motebit_id.
-   * Used for spatial presence events (AR/VR delegation animations).
-   */
-  function broadcastToMotebit(targetMotebitId: string, message: Record<string, unknown>): void {
-    const targetConnections = connections.get(targetMotebitId);
-    if (targetConnections) {
-      const data = JSON.stringify(message);
-      for (const conn of targetConnections) {
-        if (conn.ws.readyState === 1) {
-          conn.ws.send(data);
-        }
-      }
-    }
-  }
-
   // --- Task submission with scored routing ---
 
   app.post("/agent/:motebitId/task", async (c) => {
@@ -3552,24 +3518,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         routed = true;
       }
     }
-
-    // Spatial presence events — notify both parties for AR/VR delegation animation.
-    // delegation_departed → submitter's spatial app: "your motebit has left"
-    // delegation_arrived  → worker's spatial app:    "a visitor motebit has arrived"
-    if (submittedBy) {
-      broadcastToMotebit(submittedBy, {
-        type: "delegation_departed",
-        task_id: taskId,
-        target_motebit_id: motebitId,
-        submitted_by: submittedBy,
-      });
-    }
-    broadcastToMotebit(motebitId, {
-      type: "delegation_arrived",
-      task_id: taskId,
-      source_motebit_id: submittedBy ?? null,
-      prompt: body.prompt.slice(0, 100),
-    });
 
     return c.json(
       { task_id: taskId, status: task.status, routing_choice: routingChoice ?? null },

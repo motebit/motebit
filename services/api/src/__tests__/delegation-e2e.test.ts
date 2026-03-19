@@ -268,8 +268,7 @@ describe("Delegation E2E", () => {
     });
     expect(res.status).toBe(201);
 
-    // Both devices share the same motebit — delegation_arrived goes to all connections.
-    // Only Device B (capable) should receive task_request; Device A gets only spatial events.
+    // Only Device B (capable) should receive task_request; Device A should not.
     const aMessages = deviceA.send.mock.calls.map(
       (c) => JSON.parse(c[0] as string) as { type: string },
     );
