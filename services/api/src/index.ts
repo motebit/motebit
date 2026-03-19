@@ -2754,13 +2754,150 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
                   });
                 }
               } else {
-                // Local agent: route via WebSocket
+                // Local agent: route via WebSocket first, HTTP MCP fallback
                 const localPeers = connections.get(selId);
-                if (localPeers) {
+                if (localPeers && localPeers.length > 0) {
                   for (const peer of localPeers) {
                     peer.ws.send(payload);
                   }
                   routed = true;
+                } else {
+                  // No WebSocket — try HTTP MCP forwarding via registered endpoint_url
+                  const regRow = moteDb.db
+                    .prepare(
+                      "SELECT endpoint_url FROM agent_registry WHERE motebit_id = ? AND expires_at > ?",
+                    )
+                    .get(selId, Date.now()) as { endpoint_url: string } | undefined;
+                  if (regRow?.endpoint_url) {
+                    // Fire-and-forget: call motebit_task on the agent's MCP endpoint
+                    // The agent will POST the receipt back to the relay
+                    const mcpEndpoint = regRow.endpoint_url.endsWith("/mcp")
+                      ? regRow.endpoint_url
+                      : `${regRow.endpoint_url}/mcp`;
+                    void (async () => {
+                      try {
+                        // Initialize MCP session
+                        const initResp = await fetch(mcpEndpoint, {
+                          method: "POST",
+                          headers: {
+                            "Content-Type": "application/json",
+                            Accept: "application/json, text/event-stream",
+                          },
+                          body: JSON.stringify({
+                            jsonrpc: "2.0",
+                            method: "initialize",
+                            id: 1,
+                            params: {
+                              protocolVersion: "2025-03-26",
+                              capabilities: {},
+                              clientInfo: { name: "relay-forward", version: "1.0.0" },
+                            },
+                          }),
+                          signal: AbortSignal.timeout(10000),
+                        });
+                        const sessionId = initResp.headers.get("mcp-session-id");
+                        const mcpHeaders: Record<string, string> = {
+                          "Content-Type": "application/json",
+                          Accept: "application/json, text/event-stream",
+                        };
+                        if (sessionId) mcpHeaders["Mcp-Session-Id"] = sessionId;
+
+                        // Send initialized notification
+                        await fetch(mcpEndpoint, {
+                          method: "POST",
+                          headers: mcpHeaders,
+                          body: JSON.stringify({
+                            jsonrpc: "2.0",
+                            method: "notifications/initialized",
+                          }),
+                          signal: AbortSignal.timeout(5000),
+                        });
+
+                        // Call motebit_task
+                        const taskResp = await fetch(mcpEndpoint, {
+                          method: "POST",
+                          headers: mcpHeaders,
+                          body: JSON.stringify({
+                            jsonrpc: "2.0",
+                            method: "tools/call",
+                            id: 2,
+                            params: {
+                              name: "motebit_task",
+                              arguments: {
+                                prompt: body.prompt,
+                                relay_task_id: taskId,
+                              },
+                            },
+                          }),
+                          signal: AbortSignal.timeout(120000),
+                        });
+
+                        // Parse receipt from SSE or JSON response
+                        const ct = taskResp.headers.get("content-type") ?? "";
+                        let mcpResult: Record<string, unknown> | null = null;
+                        if (ct.includes("text/event-stream")) {
+                          const text = await taskResp.text();
+                          for (const line of text.split("\n")) {
+                            if (line.startsWith("data: ")) {
+                              try {
+                                const parsed = JSON.parse(line.slice(6)) as Record<string, unknown>;
+                                if (parsed.id === 2) {
+                                  mcpResult = parsed;
+                                  break;
+                                }
+                              } catch {
+                                /* skip */
+                              }
+                            }
+                          }
+                        } else if (taskResp.ok) {
+                          mcpResult = (await taskResp.json()) as Record<string, unknown>;
+                        }
+
+                        // Extract receipt from tool result
+                        if (mcpResult?.result != null && typeof mcpResult.result === "object") {
+                          const toolResult = mcpResult.result as {
+                            content?: Array<{ type: string; text: string }>;
+                          };
+                          const textContent = toolResult.content?.find((c) => c.type === "text");
+                          if (textContent?.text) {
+                            try {
+                              const parsed = JSON.parse(textContent.text) as Record<
+                                string,
+                                unknown
+                              >;
+                              const receiptData = (
+                                parsed.receipt != null && typeof parsed.receipt === "object"
+                                  ? parsed.receipt
+                                  : parsed
+                              ) as Record<string, unknown>;
+                              if (
+                                typeof receiptData.signature === "string" &&
+                                typeof receiptData.motebit_id === "string"
+                              ) {
+                                // Ingest receipt as if it arrived via WebSocket
+                                const qEntry = taskQueue.get(taskId);
+                                if (qEntry) {
+                                  qEntry.task.status = AgentTaskStatus.Completed;
+                                  qEntry.receipt = receiptData as unknown as ExecutionReceipt;
+                                }
+                              }
+                            } catch {
+                              /* not JSON receipt */
+                            }
+                          }
+                        }
+                      } catch (mcpErr: unknown) {
+                        logger.warn("task.mcp_forward_failed", {
+                          correlationId: taskId,
+                          agent: selId,
+                          endpoint: mcpEndpoint,
+                          error: mcpErr instanceof Error ? mcpErr.message : String(mcpErr),
+                        });
+                      }
+                    })();
+                    routed = true;
+                  }
                 }
               }
             }
