@@ -10,5 +10,3 @@
 **/__stubs__
 apps/
 services/proxy/
-services/summarize/
-services/web-search/

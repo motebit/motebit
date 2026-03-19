@@ -58,14 +58,18 @@ log "Deploying relay to motebit-sync.fly.dev..."
 cd "$ROOT_DIR"
 
 # Create the app if it doesn't exist
-fly apps list | grep -q "motebit-sync" || fly apps create motebit-sync --org personal
+fly apps list 2>/dev/null | grep -q "motebit-sync" || fly apps create motebit-sync --org personal 2>/dev/null || true
 
 # Create volume if it doesn't exist
 fly volumes list -a motebit-sync 2>/dev/null | grep -q "motebit_data" || \
-  fly volumes create motebit_data --region sjc --size 1 -a motebit-sync
+  fly volumes create motebit_data --region sjc --size 1 -a motebit-sync -y
 
 # Set secrets
-fly secrets set MOTEBIT_API_TOKEN="$API_TOKEN" -a motebit-sync
+X402_ADDRESS="${X402_PAY_TO_ADDRESS:-0xB786DbF50582c22B570DA5d5b86d2EF3Df17d5A5}"
+fly secrets set \
+  MOTEBIT_API_TOKEN="$API_TOKEN" \
+  X402_PAY_TO_ADDRESS="$X402_ADDRESS" \
+  -a motebit-sync
 
 # Deploy
 fly deploy -a motebit-sync --config services/api/fly.toml --dockerfile services/api/Dockerfile
@@ -125,11 +129,11 @@ log "Deploying web-search service to motebit-web-search.fly.dev..."
 cd "$ROOT_DIR"
 
 # Create the app if it doesn't exist
-fly apps list | grep -q "motebit-web-search" || fly apps create motebit-web-search --org personal
+fly apps list 2>/dev/null | grep -q "motebit-web-search" || fly apps create motebit-web-search --org personal 2>/dev/null || true
 
 # Create volume if it doesn't exist
 fly volumes list -a motebit-web-search 2>/dev/null | grep -q "web_search_data" || \
-  fly volumes create web_search_data --region sjc --size 1 -a motebit-web-search
+  fly volumes create web_search_data --region sjc --size 1 -a motebit-web-search -y
 
 # Set secrets
 fly secrets set \
@@ -142,8 +146,8 @@ fly secrets set \
 # Copy identity file into the build context
 cp services/web-search/motebit.md services/web-search/motebit.md.deploy 2>/dev/null || true
 
-# Deploy
-fly deploy -a motebit-web-search --config services/web-search/fly.toml --dockerfile services/web-search/Dockerfile
+# Deploy (build context = repo root so Dockerfile can COPY packages/ and services/web-search/)
+fly deploy . -a motebit-web-search --config services/web-search/fly.toml --dockerfile services/web-search/Dockerfile
 
 ok "Web-search service deployed at $WEB_SEARCH_URL"
 

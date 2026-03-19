@@ -631,6 +631,9 @@ importers:
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -659,6 +662,9 @@ importers:
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       fake-indexeddb:
         specifier: ^6.0.0
         version: 6.2.5
@@ -681,6 +687,9 @@ importers:
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -727,6 +736,9 @@ importers:
         specifier: ^1.6.0
         version: 1.8.0
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -740,6 +752,9 @@ importers:
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -759,6 +774,9 @@ importers:
         specifier: workspace:*
         version: link:../verify
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -775,6 +793,9 @@ importers:
         specifier: workspace:*
         version: link:../semiring
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -797,6 +818,9 @@ importers:
         specifier: workspace:*
         version: link:../tools
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -847,6 +871,9 @@ importers:
         specifier: ^2.17.2
         version: 2.17.2
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -885,6 +912,9 @@ importers:
       '@types/better-sqlite3':
         specifier: ^7.6.0
         version: 7.6.13
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -920,6 +950,9 @@ importers:
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -933,6 +966,9 @@ importers:
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -955,6 +991,9 @@ importers:
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -974,6 +1013,9 @@ importers:
         specifier: ^0.170.0
         version: 0.170.0
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       '@types/three':
         specifier: ^0.170.0
         version: 0.170.0
@@ -1032,6 +1074,9 @@ importers:
         specifier: workspace:*
         version: link:../sync-engine
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -1041,6 +1086,9 @@ importers:
 
   packages/sdk:
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -1054,6 +1102,9 @@ importers:
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -1070,6 +1121,9 @@ importers:
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -1089,6 +1143,9 @@ importers:
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -1102,6 +1159,9 @@ importers:
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -1118,6 +1178,9 @@ importers:
         specifier: ^1.6.0
         version: 1.8.0
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -1127,6 +1190,9 @@ importers:
 
   packages/voice:
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
