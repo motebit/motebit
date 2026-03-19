@@ -476,7 +476,7 @@ interface McpJsonRpcResponse {
 }
 
 /** Minimal receipt fields needed to validate ingestion. */
-interface ReceiptCandidate {
+export interface ReceiptCandidate {
   motebit_id: string;
   signature: string;
   task_id?: string;
@@ -507,6 +507,7 @@ export async function forwardTaskViaMcp(
     warn: (msg: string, ctx: Record<string, unknown>) => void;
   },
   apiToken?: string,
+  onReceipt?: (receipt: ReceiptCandidate) => Promise<void>,
 ): Promise<void> {
   const mcpEndpoint = endpointUrl.endsWith("/mcp") ? endpointUrl : `${endpointUrl}/mcp`;
   const mcpHeaders: Record<string, string> = {
@@ -574,6 +575,19 @@ export async function forwardTaskViaMcp(
               agent: agentId,
               endpoint: mcpEndpoint,
             });
+            // Invoke settlement callback (orchestration layer handles economics)
+            if (onReceipt) {
+              try {
+                await onReceipt(receiptData);
+              } catch (settlementErr) {
+                logger.warn("task.mcp_forward_settlement_failed", {
+                  correlationId: taskId,
+                  agent: agentId,
+                  error:
+                    settlementErr instanceof Error ? settlementErr.message : String(settlementErr),
+                });
+              }
+            }
           }
         } else {
           logger.warn("task.mcp_forward_receipt_invalid", {

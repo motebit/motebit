@@ -126,7 +126,7 @@ import {
 } from "./federation.js";
 import type { RelayIdentity } from "./federation.js";
 import { registerCredentialRoutes, getRelayKeypair } from "./credentials.js";
-import { createTaskRouter, forwardTaskViaMcp } from "./task-routing.js";
+import { createTaskRouter, forwardTaskViaMcp, type ReceiptCandidate } from "./task-routing.js";
 import {
   createDataSyncTables,
   registerDataSyncRoutes,
@@ -599,6 +599,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       x402_network?: string;
       /** When set, this task was forwarded from a peer relay and the result should be returned there. */
       origin_relay?: string;
+      /** Set to true after receipt settlement completes — prevents double-settlement if receipt arrives via both MCP forward and late WebSocket reconnect. */
+      settled?: boolean;
     }
   >();
 
@@ -755,6 +757,699 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     } catch {
       return null;
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Unified receipt ingestion pipeline
+  // ---------------------------------------------------------------------------
+  // ALL receipts — regardless of transport (HTTP POST, MCP forward, WebSocket,
+  // federation) — flow through this single function. It handles:
+  //   1. Idempotency (DB settlement check + in-memory settled flag)
+  //   2. Ed25519 signature verification
+  //   3. Trust record update (evaluateTrustTransition)
+  //   4. Delegation edge caching (multi-hop routing intelligence)
+  //   5. Multi-hop settlement (nested delegation_receipts)
+  //   6. Latency recording
+  //   7. Main settlement (settleOnReceipt) + virtual account credits
+  //   8. Credential issuance (AgentReputationCredential)
+  //   9. WebSocket fan-out + spatial presence events
+  //  10. Federation result forwarding
+  //
+  // Returns { verified: true } on success, { verified: false, reason } on failure.
+  // Callers decide how to surface the failure (HTTP 403, log warning, etc.).
+  async function handleReceiptIngestion(
+    receipt: ExecutionReceipt,
+    taskId: string,
+    motebitId: string,
+    entry: typeof taskQueue extends Map<string, infer V> ? V : never,
+  ): Promise<
+    | { verified: true; credential_id: string | null; already_settled?: boolean }
+    | { verified: false; reason: string }
+  > {
+    // --- Idempotency: in-memory flag ---
+    if (entry.settled) {
+      logger.info("settlement.already_settled_memory", { correlationId: taskId });
+      return { verified: true, credential_id: null, already_settled: true };
+    }
+
+    // --- Ed25519 verification ---
+    let pubKeyHex: string | undefined;
+    const regRow = moteDb.db
+      .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+      .get(receipt.motebit_id) as { public_key: string } | undefined;
+    if (regRow?.public_key) {
+      pubKeyHex = regRow.public_key;
+    } else {
+      const devices = await identityManager.listDevices(asMotebitId(receipt.motebit_id as string));
+      const device =
+        (receipt.device_id != null
+          ? devices.find((d) => d.device_id === receipt.device_id)
+          : undefined) ?? devices.find((d) => d.public_key);
+      if (device?.public_key) {
+        pubKeyHex = device.public_key;
+      }
+    }
+
+    if (!pubKeyHex) {
+      const executingId = receipt.motebit_id as string;
+      logger.error("receipt.verification_failed", {
+        correlationId: taskId,
+        executingAgentId: executingId,
+        reason: "no public key found for executing agent",
+      });
+      return { verified: false, reason: `no public key on file for agent ${executingId}` };
+    }
+
+    const receiptValid = await verifyExecutionReceipt(receipt, hexToBytes(pubKeyHex));
+    if (!receiptValid) {
+      logger.error("receipt.verification_failed", {
+        correlationId: taskId,
+        reason: "invalid Ed25519 signature",
+      });
+      return { verified: false, reason: "invalid Ed25519 signature" };
+    }
+
+    logger.info("receipt.verified", {
+      correlationId: taskId,
+      status: receipt.status,
+      motebitId: receipt.motebit_id as string,
+    });
+
+    // --- Idempotency: DB settlement check ---
+    const existingSettlement = moteDb.db
+      .prepare("SELECT settlement_id FROM relay_settlements WHERE task_id = ? AND motebit_id = ?")
+      .get(taskId, motebitId) as { settlement_id: string } | undefined;
+    if (existingSettlement) {
+      entry.settled = true;
+      logger.info("settlement.duplicate", { correlationId: taskId });
+      return { verified: true, credential_id: null, already_settled: true };
+    }
+
+    // --- Trust record update ---
+    const taskSubmitter = entry.submitted_by ?? entry.task.submitted_by;
+    const isSelfDelegation =
+      taskSubmitter != null && taskSubmitter === (receipt.motebit_id as string);
+    if (isSelfDelegation) {
+      logger.info("trust.self_delegation_skipped", {
+        correlationId: taskId,
+        motebitId,
+        reason: "submitter === executor — no trust signal or credential issued",
+      });
+    }
+    if (!isSelfDelegation) {
+      try {
+        const executingAgentId = receipt.motebit_id as string;
+        const taskSucceeded = receipt.status === "completed";
+        const taskFailed = receipt.status === "failed";
+        const now = Date.now();
+
+        const existing = await moteDb.agentTrustStore.getAgentTrust(motebitId, executingAgentId);
+
+        if (existing) {
+          const updated: AgentTrustRecord = {
+            ...existing,
+            last_seen_at: now,
+            interaction_count: existing.interaction_count + 1,
+            successful_tasks: (existing.successful_tasks ?? 0) + (taskSucceeded ? 1 : 0),
+            failed_tasks: (existing.failed_tasks ?? 0) + (taskFailed ? 1 : 0),
+          };
+          const newLevel = evaluateTrustTransition(updated);
+          if (newLevel != null) {
+            const previousLevel = existing.trust_level;
+            updated.trust_level = newLevel;
+            try {
+              const clock = await eventStore.getLatestClock(asMotebitId(motebitId));
+              await eventStore.append({
+                event_id: crypto.randomUUID(),
+                motebit_id: asMotebitId(motebitId),
+                timestamp: now,
+                event_type: EventType.TrustLevelChanged,
+                payload: {
+                  remote_motebit_id: executingAgentId,
+                  previous_level: previousLevel,
+                  new_level: newLevel,
+                  successful_tasks: updated.successful_tasks,
+                  failed_tasks: updated.failed_tasks,
+                  source: "relay_receipt_verification",
+                },
+                version_clock: clock + 1,
+                tombstoned: false,
+              });
+            } catch {
+              // Event emission is best-effort
+            }
+          }
+          await moteDb.agentTrustStore.setAgentTrust(updated);
+        } else {
+          await moteDb.agentTrustStore.setAgentTrust({
+            motebit_id: asMotebitId(motebitId),
+            remote_motebit_id: asMotebitId(executingAgentId),
+            trust_level: AgentTrustLevel.FirstContact,
+            first_seen_at: now,
+            last_seen_at: now,
+            interaction_count: 1,
+            successful_tasks: taskSucceeded ? 1 : 0,
+            failed_tasks: taskFailed ? 1 : 0,
+          });
+        }
+      } catch {
+        // Trust update is best-effort — don't block receipt delivery
+      }
+    }
+
+    // --- Delegation edge caching ---
+    if (receipt.delegation_receipts && receipt.delegation_receipts.length > 0) {
+      try {
+        const insertEdge = moteDb.db.prepare(
+          `INSERT INTO relay_delegation_edges
+           (from_motebit_id, to_motebit_id, trust, cost, latency_ms, reliability, regulatory_risk, recorded_at, receipt_hash)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        );
+
+        const walkReceipts = async (
+          parentMotebitId: string,
+          receipts: ExecutionReceipt[],
+        ): Promise<void> => {
+          for (const sub of receipts) {
+            if (sub.signature) {
+              let subPubKey: string | undefined;
+              const subReg = moteDb.db
+                .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+                .get(sub.motebit_id) as { public_key: string } | undefined;
+              if (subReg?.public_key) {
+                subPubKey = subReg.public_key;
+              } else {
+                const subDevices = await identityManager.listDevices(asMotebitId(sub.motebit_id));
+                subPubKey = subDevices.find((d) => d.public_key)?.public_key;
+              }
+              if (subPubKey) {
+                const subValid = await verifyExecutionReceipt(sub, hexToBytes(subPubKey));
+                if (!subValid) {
+                  logger.warn("delegation_receipt.signature_invalid", {
+                    correlationId: taskId,
+                    parentAgent: parentMotebitId,
+                    delegatedAgent: sub.motebit_id,
+                  });
+                  continue;
+                }
+              }
+            }
+
+            const latency =
+              sub.completed_at && sub.submitted_at ? sub.completed_at - sub.submitted_at : 5000;
+            const reliability = sub.status === "completed" ? 0.9 : 0.3;
+            const trustRow = moteDb.db
+              .prepare(
+                "SELECT trust_level FROM agent_trust WHERE motebit_id = ? AND remote_motebit_id = ?",
+              )
+              .get(motebitId, sub.motebit_id) as { trust_level: string } | undefined;
+            const trust = trustRow
+              ? trustLevelToScore(trustRow.trust_level as AgentTrustLevel)
+              : 0.1;
+
+            insertEdge.run(
+              parentMotebitId,
+              sub.motebit_id,
+              trust,
+              0,
+              latency > 0 ? latency : 5000,
+              reliability,
+              0,
+              Date.now(),
+              sub.result_hash ?? null,
+            );
+
+            if (sub.delegation_receipts && sub.delegation_receipts.length > 0) {
+              await walkReceipts(sub.motebit_id as string, sub.delegation_receipts);
+            }
+          }
+        };
+
+        await walkReceipts(receipt.motebit_id as string, receipt.delegation_receipts);
+      } catch {
+        // Best-effort edge caching
+      }
+    }
+
+    // --- Multi-hop settlement ---
+    const delegationReceipts = receipt.delegation_receipts ?? [];
+    if (delegationReceipts.length > 0) {
+      logger.info("multihop.settlement.start", {
+        correlationId: taskId,
+        count: delegationReceipts.length,
+      });
+      for (const sub of delegationReceipts) {
+        const subRelayTaskId = (sub as unknown as Record<string, unknown>).relay_task_id;
+        if (typeof subRelayTaskId !== "string" || subRelayTaskId === "") continue;
+
+        try {
+          const subEntry = taskQueue.get(subRelayTaskId);
+          if (!subEntry) {
+            logger.warn("multihop.settlement.task_not_found", {
+              correlationId: taskId,
+              subTaskId: subRelayTaskId,
+              subAgent: sub.motebit_id,
+            });
+            continue;
+          }
+
+          let subPubKey: string | undefined;
+          const subReg = moteDb.db
+            .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+            .get(sub.motebit_id) as { public_key: string } | undefined;
+          if (subReg?.public_key) subPubKey = subReg.public_key;
+          else {
+            const subDevices = await identityManager.listDevices(asMotebitId(sub.motebit_id));
+            subPubKey = subDevices.find((d) => d.public_key)?.public_key;
+          }
+          if (!subPubKey) continue;
+
+          const subValid = await verifyExecutionReceipt(sub, hexToBytes(subPubKey));
+          if (!subValid) {
+            logger.warn("multihop.settlement.sig_invalid", {
+              correlationId: taskId,
+              subTaskId: subRelayTaskId,
+              subAgent: sub.motebit_id,
+            });
+            continue;
+          }
+
+          const subExisting = moteDb.db
+            .prepare(
+              "SELECT settlement_id FROM relay_settlements WHERE task_id = ? AND motebit_id = ?",
+            )
+            .get(subRelayTaskId, sub.motebit_id) as { settlement_id: string } | undefined;
+          if (subExisting) continue;
+
+          const subUnitCost = getListingUnitCost(sub.motebit_id as string);
+          const subGross =
+            subEntry.price_snapshot ??
+            (subUnitCost > 0 ? subUnitCost / (1 - PLATFORM_FEE_RATE) : 0);
+          if (subGross <= 0) continue;
+
+          const subSettlementId = asSettlementId(crypto.randomUUID());
+          const subAllocationId = asAllocationId(`x402-${subRelayTaskId}`);
+          const subAllocation: BudgetAllocation = {
+            allocation_id: subAllocationId,
+            goal_id: asGoalId(subRelayTaskId),
+            candidate_motebit_id: sub.motebit_id,
+            amount_locked: subGross,
+            currency: "USDC",
+            created_at: sub.submitted_at ?? Date.now(),
+            status: "settled",
+          };
+
+          const subSettlement = settleOnReceipt(subAllocation, sub, null, subSettlementId);
+
+          try {
+            moteDb.db.exec("BEGIN");
+            moteDb.db
+              .prepare(
+                `INSERT OR IGNORE INTO relay_settlements
+               (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              )
+              .run(
+                subSettlement.settlement_id,
+                subSettlement.allocation_id,
+                subRelayTaskId,
+                sub.motebit_id,
+                subSettlement.receipt_hash,
+                subSettlement.ledger_hash,
+                subSettlement.amount_settled,
+                subSettlement.platform_fee,
+                subSettlement.platform_fee_rate,
+                subSettlement.status,
+                subSettlement.settled_at,
+              );
+
+            moteDb.db
+              .prepare(
+                "UPDATE relay_allocations SET status = 'settled', settled_at = ? WHERE task_id = ?",
+              )
+              .run(Date.now(), subRelayTaskId);
+
+            if (subSettlement.amount_settled > 0) {
+              creditAccount(
+                moteDb.db,
+                sub.motebit_id as string,
+                subSettlement.amount_settled,
+                "settlement_credit",
+                subSettlement.settlement_id,
+                `Payment for sub-delegated task ${subRelayTaskId}`,
+              );
+            }
+
+            moteDb.db.exec("COMMIT");
+            logger.info("multihop.settlement.created", {
+              correlationId: taskId,
+              subTaskId: subRelayTaskId,
+              subAgent: sub.motebit_id,
+              net: subSettlement.amount_settled,
+              fee: subSettlement.platform_fee,
+            });
+          } catch (txnErr) {
+            moteDb.db.exec("ROLLBACK");
+            logger.warn("multihop.settlement.failed", {
+              correlationId: taskId,
+              subTaskId: subRelayTaskId,
+              error: txnErr instanceof Error ? txnErr.message : String(txnErr),
+            });
+          }
+        } catch (subErr: unknown) {
+          logger.warn("multihop.settlement.sub_error", {
+            correlationId: taskId,
+            subRelayTaskId,
+            error: subErr instanceof Error ? subErr.message : String(subErr),
+          });
+        }
+      }
+    }
+
+    // --- Latency recording ---
+    if (receipt.completed_at && entry.task.submitted_at) {
+      const elapsed = receipt.completed_at - entry.task.submitted_at;
+      if (elapsed > 0 && receipt.motebit_id != null) {
+        try {
+          moteDb.db
+            .prepare(
+              `INSERT INTO relay_latency_stats (motebit_id, remote_motebit_id, latency_ms, recorded_at)
+               VALUES (?, ?, ?, ?)`,
+            )
+            .run(motebitId, receipt.motebit_id, elapsed, Date.now());
+        } catch {
+          // Best-effort latency recording
+        }
+      }
+    }
+
+    // --- Main settlement + credential issuance ---
+    let credential_id: string | null = null;
+    {
+      try {
+        const persistentAlloc = moteDb.db
+          .prepare("SELECT * FROM relay_allocations WHERE task_id = ? AND status = 'locked'")
+          .get(taskId) as
+          | { allocation_id: string; amount_locked: number; motebit_id: string }
+          | undefined;
+
+        const fallbackUnitCost = getListingUnitCost(receipt.motebit_id as string);
+        const grossAmount =
+          persistentAlloc?.amount_locked ??
+          entry.price_snapshot ??
+          (fallbackUnitCost > 0 ? fallbackUnitCost / (1 - PLATFORM_FEE_RATE) : 0);
+
+        const settlementId = asSettlementId(crypto.randomUUID());
+        const allocationId = persistentAlloc
+          ? asAllocationId(persistentAlloc.allocation_id)
+          : asAllocationId(`x402-${taskId}`);
+        const allocation: BudgetAllocation = {
+          allocation_id: allocationId,
+          goal_id: asGoalId(taskId),
+          candidate_motebit_id: receipt.motebit_id,
+          amount_locked: grossAmount,
+          currency: "USDC",
+          created_at: receipt.submitted_at ?? Date.now(),
+          status: "settled",
+        };
+
+        const settlement = settleOnReceipt(allocation, receipt, null, settlementId);
+
+        let credentialRow: {
+          credential_id: string;
+          subject: string;
+          issuer: string;
+          type: string;
+          json: string;
+          issued_at: number;
+        } | null = null;
+
+        if (issueCredentials && receipt.status === "completed" && !isSelfDelegation) {
+          const latencyRows = moteDb.db
+            .prepare(
+              "SELECT latency_ms FROM relay_latency_stats WHERE remote_motebit_id = ? ORDER BY recorded_at DESC LIMIT 100",
+            )
+            .all(receipt.motebit_id as string) as Array<{ latency_ms: number }>;
+          const avgLatency =
+            latencyRows.length > 0
+              ? latencyRows.reduce((a, r) => a + r.latency_ms, 0) / latencyRows.length
+              : receipt.completed_at && receipt.submitted_at
+                ? receipt.completed_at - receipt.submitted_at
+                : 0;
+
+          const subjectDid = pubKeyHex
+            ? hexPublicKeyToDidKey(pubKeyHex)
+            : `did:motebit:${receipt.motebit_id as string}`;
+
+          const relayKeys = getRelayKeypair(relayIdentity);
+          const vc = await issueReputationCredential(
+            {
+              success_rate: 1.0,
+              avg_latency_ms: avgLatency,
+              task_count: latencyRows.length + 1,
+              trust_score: 1.0,
+              availability: 1.0,
+              measured_at: Date.now(),
+            },
+            relayKeys.privateKey,
+            relayKeys.publicKey,
+            subjectDid,
+          );
+
+          const credType =
+            vc.type.find((t) => t !== "VerifiableCredential") ?? "VerifiableCredential";
+          credentialRow = {
+            credential_id: crypto.randomUUID(),
+            subject: receipt.motebit_id as string,
+            issuer: vc.issuer,
+            type: credType,
+            json: JSON.stringify(vc),
+            issued_at: Date.now(),
+          };
+        }
+
+        moteDb.db.exec("BEGIN");
+        try {
+          moteDb.db
+            .prepare(
+              `INSERT OR IGNORE INTO relay_settlements
+               (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, x402_tx_hash, x402_network)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              settlement.settlement_id,
+              settlement.allocation_id,
+              taskId,
+              motebitId,
+              settlement.receipt_hash,
+              settlement.ledger_hash,
+              settlement.amount_settled,
+              settlement.platform_fee,
+              settlement.platform_fee_rate,
+              settlement.status,
+              settlement.settled_at,
+              entry.x402_tx_hash ?? null,
+              entry.x402_network ?? null,
+            );
+
+          if (persistentAlloc) {
+            moteDb.db
+              .prepare(
+                "UPDATE relay_allocations SET status = 'settled', settled_at = ? WHERE task_id = ?",
+              )
+              .run(Date.now(), taskId);
+          }
+
+          {
+            const workerMotebitId = receipt.motebit_id as string;
+
+            if (settlement.status === "refunded") {
+              const delegatorId = entry.submitted_by ?? entry.task.submitted_by ?? motebitId;
+              creditAccount(
+                moteDb.db,
+                delegatorId,
+                settlement.amount_settled + settlement.platform_fee,
+                "allocation_release",
+                settlement.settlement_id,
+                `Refund for task ${taskId} (${receipt.status})`,
+              );
+            } else {
+              if (settlement.amount_settled > 0) {
+                creditAccount(
+                  moteDb.db,
+                  workerMotebitId,
+                  settlement.amount_settled,
+                  "settlement_credit",
+                  settlement.settlement_id,
+                  `Payment for task ${taskId}`,
+                );
+              }
+
+              if (settlement.status === "partial" && persistentAlloc) {
+                const grossSettled = settlement.amount_settled + settlement.platform_fee;
+                const remainder = persistentAlloc.amount_locked - grossSettled;
+                if (remainder > 0) {
+                  const delegatorId = entry.submitted_by ?? entry.task.submitted_by ?? motebitId;
+                  creditAccount(
+                    moteDb.db,
+                    delegatorId,
+                    remainder,
+                    "allocation_release",
+                    settlement.settlement_id,
+                    `Partial release for task ${taskId}`,
+                  );
+                }
+              }
+            }
+          }
+
+          if (credentialRow) {
+            moteDb.db
+              .prepare(
+                `INSERT INTO relay_credentials (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at)
+                 VALUES (?, ?, ?, ?, ?, ?)`,
+              )
+              .run(
+                credentialRow.credential_id,
+                credentialRow.subject,
+                credentialRow.issuer,
+                credentialRow.type,
+                credentialRow.json,
+                credentialRow.issued_at,
+              );
+            credential_id = credentialRow.credential_id;
+          }
+
+          moteDb.db.exec("COMMIT");
+          logger.info("settlement.created", {
+            correlationId: taskId,
+            gross: settlement.amount_settled + settlement.platform_fee,
+            fee: settlement.platform_fee,
+            net: settlement.amount_settled,
+            x402TxHash: entry.x402_tx_hash ?? null,
+          });
+          if (credentialRow) {
+            logger.info("credential.issued", {
+              correlationId: taskId,
+              motebitId: credentialRow.subject,
+              type: credentialRow.type,
+            });
+          }
+        } catch (txnErr) {
+          moteDb.db.exec("ROLLBACK");
+          throw txnErr;
+        }
+      } catch (settlementErr) {
+        logger.warn("settlement.failed", {
+          correlationId: taskId,
+          error: settlementErr instanceof Error ? settlementErr.message : String(settlementErr),
+        });
+        // Best-effort settlement — don't block receipt delivery on accounting errors
+      }
+    }
+
+    // Mark settled in memory
+    entry.settled = true;
+
+    // --- WebSocket fan-out ---
+    const peers = connections.get(motebitId);
+    if (peers) {
+      const payload = JSON.stringify({ type: "task_result", task_id: taskId, receipt });
+      for (const peer of peers) {
+        peer.ws.send(payload);
+      }
+    }
+
+    // --- Spatial presence events ---
+    const receiptStatus = receipt.status === "completed" ? "completed" : "failed";
+    const spatialSubmittedBy = entry.submitted_by ?? entry.task.submitted_by;
+    if (spatialSubmittedBy) {
+      broadcastToMotebit(spatialSubmittedBy, {
+        type: "delegation_returning",
+        task_id: taskId,
+        target_motebit_id: motebitId,
+        status: receiptStatus,
+        receipt_verified: true,
+      });
+    }
+    broadcastToMotebit(motebitId, {
+      type: "delegation_visitor_departing",
+      task_id: taskId,
+      source_motebit_id: spatialSubmittedBy ?? null,
+    });
+
+    // --- Federation result forwarding ---
+    if (entry.origin_relay) {
+      try {
+        const originPeer = moteDb.db
+          .prepare("SELECT endpoint_url, public_key FROM relay_peers WHERE peer_relay_id = ?")
+          .get(entry.origin_relay) as { endpoint_url: string } | undefined;
+        if (originPeer) {
+          const resultBody = {
+            task_id: taskId,
+            origin_relay: relayIdentity.relayMotebitId,
+            receipt,
+            timestamp: Date.now(),
+          };
+          const resultBytes = new TextEncoder().encode(canonicalJson(resultBody));
+          const resultSig = await sign(resultBytes, relayIdentity.privateKey);
+
+          await fetch(`${originPeer.endpoint_url}/federation/v1/task/result`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Correlation-ID": taskId },
+            body: JSON.stringify({ ...resultBody, signature: bytesToHex(resultSig) }),
+            signal: AbortSignal.timeout(10000),
+          });
+        }
+      } catch {
+        // Best-effort federation result return — receipt is already stored locally
+      }
+
+      // Update trust for the originating relay
+      try {
+        const peerRow = moteDb.db
+          .prepare(
+            "SELECT trust_level, successful_forwards, failed_forwards FROM relay_peers WHERE peer_relay_id = ?",
+          )
+          .get(entry.origin_relay) as
+          | { trust_level: string; successful_forwards: number; failed_forwards: number }
+          | undefined;
+
+        if (peerRow) {
+          const isSuccess = receipt.status === "completed";
+          const newSuccessful = peerRow.successful_forwards + (isSuccess ? 1 : 0);
+          const newFailed = peerRow.failed_forwards + (isSuccess ? 0 : 1);
+
+          const trustRecord: AgentTrustRecord = {
+            motebit_id: asMotebitId(relayIdentity.relayMotebitId),
+            remote_motebit_id: asMotebitId(entry.origin_relay),
+            trust_level: peerRow.trust_level as AgentTrustLevel,
+            first_seen_at: 0,
+            last_seen_at: Date.now(),
+            interaction_count: newSuccessful + newFailed,
+            successful_tasks: newSuccessful,
+            failed_tasks: newFailed,
+          };
+
+          const newLevel = evaluateTrustTransition(trustRecord);
+          const trustLevel = newLevel ?? peerRow.trust_level;
+          const trustScore = trustLevelToScore(trustLevel as AgentTrustLevel);
+
+          moteDb.db
+            .prepare(
+              `UPDATE relay_peers SET
+              successful_forwards = ?, failed_forwards = ?,
+              trust_level = ?, trust_score = ?
+              WHERE peer_relay_id = ?`,
+            )
+            .run(newSuccessful, newFailed, trustLevel, trustScore, entry.origin_relay);
+        }
+      } catch {
+        // Best-effort trust update
+      }
+    }
+
+    return { verified: true, credential_id };
   }
 
   // Capture x402 settlement proof so the task handler can link it to the task queue entry.
@@ -2756,12 +3451,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
               } else {
                 // Local agent: route via WebSocket first, HTTP MCP fallback
                 const localPeers = connections.get(selId);
-                logger.info("task.routing_local", {
-                  correlationId: taskId,
-                  agent: selId,
-                  hasWsPeers: localPeers != null && localPeers.length > 0,
-                  peerCount: localPeers?.length ?? 0,
-                });
                 if (localPeers && localPeers.length > 0) {
                   for (const peer of localPeers) {
                     peer.ws.send(payload);
@@ -2783,6 +3472,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
                       taskQueue as Map<string, { task: { status: string }; receipt?: unknown }>,
                       logger,
                       apiToken,
+                      async (receiptCandidate: ReceiptCandidate) => {
+                        const mcpEntry = taskQueue.get(taskId);
+                        if (!mcpEntry || mcpEntry.settled) return;
+                        await handleReceiptIngestion(
+                          receiptCandidate as unknown as ExecutionReceipt,
+                          taskId,
+                          mcpEntry.task.motebit_id,
+                          mcpEntry,
+                        );
+                      },
                     );
                     // Mark as delivery-attempted, not delivery-completed.
                     // The async MCP call may still be in flight.
@@ -2819,13 +3518,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
     // Phase 3: HTTP MCP fallback — when no WebSocket routed the task,
     // find a registered agent with matching capabilities and forward via HTTP.
-    logger.info("task.routing_state", {
-      correlationId: taskId,
-      routed,
-      federationAttempted,
-      requiredCaps,
-      phase3Eligible: !routed && !federationAttempted && requiredCaps.length > 0,
-    });
     if (!routed && !federationAttempted && requiredCaps.length > 0) {
       const now = Date.now();
       const capFilter = requiredCaps[0]!;
@@ -2846,6 +3538,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
           taskQueue as Map<string, { task: { status: string }; receipt?: unknown }>,
           logger,
           apiToken,
+          async (receiptCandidate: ReceiptCandidate) => {
+            const mcpEntry = taskQueue.get(taskId);
+            if (!mcpEntry || mcpEntry.settled) return;
+            await handleReceiptIngestion(
+              receiptCandidate as unknown as ExecutionReceipt,
+              taskId,
+              mcpEntry.task.motebit_id,
+              mcpEntry,
+            );
+          },
         );
         routed = true;
       }
@@ -3023,58 +3725,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       }
     }
 
-    // Cryptographic verification: resolve executing agent's public key and verify Ed25519 signature.
-    // Try agent_registry first (service agents), then fall back to device records (personal agents).
-    let pubKeyHex: string | undefined;
-    const regRow = moteDb.db
-      .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
-      .get(receipt.motebit_id) as { public_key: string } | undefined;
-    if (regRow?.public_key) {
-      pubKeyHex = regRow.public_key;
-    } else {
-      // Fall back to device-level key lookup — try exact device_id match first,
-      // then any device with a key (covers cross-device delegation where device_id may differ)
-      const devices = await identityManager.listDevices(asMotebitId(receipt.motebit_id as string));
-      const device =
-        (receipt.device_id != null
-          ? devices.find((d) => d.device_id === receipt.device_id)
-          : undefined) ?? devices.find((d) => d.public_key);
-      if (device?.public_key) {
-        pubKeyHex = device.public_key;
-      }
-    }
-
-    if (!pubKeyHex) {
-      const executingId = receipt.motebit_id as string;
-      logger.error("receipt.verification_failed", {
-        correlationId: taskId,
-        executingAgentId: executingId,
-        reason: "no public key found for executing agent",
-      });
-      throw new HTTPException(403, {
-        message: `Receipt verification failed: no public key on file for agent ${executingId}. The executing agent must register with the relay before submitting receipts (POST /api/v1/agents/:id/register or sync via WebSocket).`,
-      });
-    }
-
-    const receiptValid = await verifyExecutionReceipt(receipt, hexToBytes(pubKeyHex));
-    if (!receiptValid) {
-      logger.error("receipt.verification_failed", {
-        correlationId: taskId,
-        reason: "invalid Ed25519 signature",
-      });
-      throw new HTTPException(403, {
-        message: "Receipt verification failed: invalid Ed25519 signature",
-      });
-    }
-
-    logger.info("receipt.received", {
-      correlationId: taskId,
-      status: receipt.status,
-      motebitId: receipt.motebit_id as string,
-    });
-
+    // Update task status and store receipt before settlement
     entry.receipt = receipt;
-    // Extend TTL so recovery polling has a full window after completion
     entry.expiresAt = Math.max(entry.expiresAt, Date.now() + TASK_TTL_MS);
     entry.task.status =
       receipt.status === "completed"
@@ -3083,665 +3735,18 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
           ? AgentTaskStatus.Denied
           : AgentTaskStatus.Failed;
 
-    // Idempotency: if this task+agent already has a settlement, skip all side effects
-    const existingSettlement = moteDb.db
-      .prepare("SELECT settlement_id FROM relay_settlements WHERE task_id = ? AND motebit_id = ?")
-      .get(taskId, motebitId) as { settlement_id: string } | undefined;
-    if (existingSettlement) {
-      // Already settled — return success (idempotent) without duplicate trust/settlement/credential
-      logger.info("settlement.duplicate", { correlationId: taskId });
+    // Unified receipt ingestion: Ed25519 verification → settlement → trust → credentials
+    const ingestionResult = await handleReceiptIngestion(receipt, taskId, motebitId, entry);
+    if (!ingestionResult.verified) {
+      throw new HTTPException(403, {
+        message: `Receipt verification failed: ${ingestionResult.reason}`,
+      });
+    }
+
+    if (ingestionResult.already_settled) {
       return c.json({ status: "already_settled" });
     }
-
-    // Update trust record: increment task counts and evaluate level transitions.
-    // This is the feedback loop that feeds the semiring computation graph.
-    // Skip self-delegation: submitter === executor produces no trust signal.
-    // Compare the task SUBMITTER (who delegated) with the EXECUTOR (who ran it),
-    // not the URL path param (task target) which equals executor in normal routing.
-    const taskSubmitter = entry.submitted_by ?? entry.task.submitted_by;
-    const isSelfDelegation =
-      taskSubmitter != null && taskSubmitter === (receipt.motebit_id as string);
-    if (isSelfDelegation) {
-      logger.info("trust.self_delegation_skipped", {
-        correlationId: taskId,
-        motebitId,
-        reason: "submitter === executor — no trust signal or credential issued",
-      });
-    }
-    if (!isSelfDelegation) {
-      try {
-        const executingAgentId = receipt.motebit_id as string;
-        const taskSucceeded = receipt.status === "completed";
-        const taskFailed = receipt.status === "failed";
-        const now = Date.now();
-
-        const existing = await moteDb.agentTrustStore.getAgentTrust(motebitId, executingAgentId);
-
-        if (existing) {
-          const updated: AgentTrustRecord = {
-            ...existing,
-            last_seen_at: now,
-            interaction_count: existing.interaction_count + 1,
-            successful_tasks: (existing.successful_tasks ?? 0) + (taskSucceeded ? 1 : 0),
-            failed_tasks: (existing.failed_tasks ?? 0) + (taskFailed ? 1 : 0),
-          };
-          const newLevel = evaluateTrustTransition(updated);
-          if (newLevel != null) {
-            const previousLevel = existing.trust_level;
-            updated.trust_level = newLevel;
-            // Emit trust transition event for audit trail (sibling of runtime's bumpTrustFromReceipt)
-            try {
-              const clock = await eventStore.getLatestClock(asMotebitId(motebitId));
-              await eventStore.append({
-                event_id: crypto.randomUUID(),
-                motebit_id: asMotebitId(motebitId),
-                timestamp: now,
-                event_type: EventType.TrustLevelChanged,
-                payload: {
-                  remote_motebit_id: executingAgentId,
-                  previous_level: previousLevel,
-                  new_level: newLevel,
-                  successful_tasks: updated.successful_tasks,
-                  failed_tasks: updated.failed_tasks,
-                  source: "relay_receipt_verification",
-                },
-                version_clock: clock + 1,
-                tombstoned: false,
-              });
-            } catch {
-              // Event emission is best-effort
-            }
-          }
-          await moteDb.agentTrustStore.setAgentTrust(updated);
-        } else {
-          // First verified interaction — initialize at FirstContact
-          await moteDb.agentTrustStore.setAgentTrust({
-            motebit_id: asMotebitId(motebitId),
-            remote_motebit_id: asMotebitId(executingAgentId),
-            trust_level: AgentTrustLevel.FirstContact,
-            first_seen_at: now,
-            last_seen_at: now,
-            interaction_count: 1,
-            successful_tasks: taskSucceeded ? 1 : 0,
-            failed_tasks: taskFailed ? 1 : 0,
-          });
-        }
-      } catch {
-        // Trust update is best-effort — don't block receipt delivery
-      }
-    }
-
-    // Cache delegation edges for multi-hop routing intelligence.
-    // When agent B delegates to C, the edge B→C is stored so future
-    // routing queries can discover multi-hop paths (A→B→C) even if
-    // A has never directly interacted with C.
-    if (receipt.delegation_receipts && receipt.delegation_receipts.length > 0) {
-      try {
-        const insertEdge = moteDb.db.prepare(
-          `INSERT INTO relay_delegation_edges
-           (from_motebit_id, to_motebit_id, trust, cost, latency_ms, reliability, regulatory_risk, recorded_at, receipt_hash)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        );
-
-        const walkReceipts = async (
-          parentMotebitId: string,
-          receipts: ExecutionReceipt[],
-        ): Promise<void> => {
-          for (const sub of receipts) {
-            // Verify nested receipt signature before trusting its data.
-            // Without this, a parent agent could forge delegation_receipts.
-            if (sub.signature) {
-              let subPubKey: string | undefined;
-              const subReg = moteDb.db
-                .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
-                .get(sub.motebit_id) as { public_key: string } | undefined;
-              if (subReg?.public_key) {
-                subPubKey = subReg.public_key;
-              } else {
-                const subDevices = await identityManager.listDevices(asMotebitId(sub.motebit_id));
-                subPubKey = subDevices.find((d) => d.public_key)?.public_key;
-              }
-              if (subPubKey) {
-                const subValid = await verifyExecutionReceipt(sub, hexToBytes(subPubKey));
-                if (!subValid) {
-                  logger.warn("delegation_receipt.signature_invalid", {
-                    correlationId: taskId,
-                    parentAgent: parentMotebitId,
-                    delegatedAgent: sub.motebit_id,
-                  });
-                  continue; // Skip unverified nested receipt — don't insert edge
-                }
-              }
-            }
-
-            const latency =
-              sub.completed_at && sub.submitted_at ? sub.completed_at - sub.submitted_at : 5000;
-            const reliability = sub.status === "completed" ? 0.9 : 0.3;
-            const trustRow = moteDb.db
-              .prepare(
-                "SELECT trust_level FROM agent_trust WHERE motebit_id = ? AND remote_motebit_id = ?",
-              )
-              .get(motebitId, sub.motebit_id) as { trust_level: string } | undefined;
-            const trust = trustRow
-              ? trustLevelToScore(trustRow.trust_level as AgentTrustLevel)
-              : 0.1;
-
-            insertEdge.run(
-              parentMotebitId,
-              sub.motebit_id,
-              trust,
-              0,
-              latency > 0 ? latency : 5000,
-              reliability,
-              0,
-              Date.now(),
-              sub.result_hash ?? null,
-            );
-
-            if (sub.delegation_receipts && sub.delegation_receipts.length > 0) {
-              await walkReceipts(sub.motebit_id as string, sub.delegation_receipts);
-            }
-          }
-        };
-
-        await walkReceipts(receipt.motebit_id as string, receipt.delegation_receipts);
-      } catch {
-        // Best-effort edge caching
-      }
-    }
-
-    // Multi-hop settlement: settle nested delegation_receipts against their relay tasks.
-    // When Bob sub-delegates to Charlie and submits a relay task beforehand, the relay
-    // can find that task by relay_task_id in Charlie's receipt and settle it.
-    const delegationReceipts = receipt.delegation_receipts ?? [];
-    if (delegationReceipts.length > 0) {
-      logger.info("multihop.settlement.start", {
-        correlationId: taskId,
-        count: delegationReceipts.length,
-      });
-      for (const sub of delegationReceipts) {
-        const subRelayTaskId = (sub as unknown as Record<string, unknown>).relay_task_id;
-        if (typeof subRelayTaskId !== "string" || subRelayTaskId === "") continue;
-
-        try {
-          const subEntry = taskQueue.get(subRelayTaskId);
-          if (!subEntry) {
-            logger.warn("multihop.settlement.task_not_found", {
-              correlationId: taskId,
-              subTaskId: subRelayTaskId,
-              subAgent: sub.motebit_id,
-            });
-            continue;
-          }
-
-          // Verify the nested receipt's signature
-          let subPubKey: string | undefined;
-          const subReg = moteDb.db
-            .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
-            .get(sub.motebit_id) as { public_key: string } | undefined;
-          if (subReg?.public_key) subPubKey = subReg.public_key;
-          else {
-            const subDevices = await identityManager.listDevices(asMotebitId(sub.motebit_id));
-            subPubKey = subDevices.find((d) => d.public_key)?.public_key;
-          }
-          if (!subPubKey) continue;
-
-          const subValid = await verifyExecutionReceipt(sub, hexToBytes(subPubKey));
-          if (!subValid) {
-            logger.warn("multihop.settlement.sig_invalid", {
-              correlationId: taskId,
-              subTaskId: subRelayTaskId,
-              subAgent: sub.motebit_id,
-            });
-            continue;
-          }
-
-          // Check relay_task_id binding
-          if (subRelayTaskId !== subRelayTaskId) continue; // tautology guard
-
-          // Settle the sub-task (same logic as main settlement, but for the inner receipt)
-          const subExisting = moteDb.db
-            .prepare(
-              "SELECT settlement_id FROM relay_settlements WHERE task_id = ? AND motebit_id = ?",
-            )
-            .get(subRelayTaskId, sub.motebit_id) as { settlement_id: string } | undefined;
-          if (subExisting) continue; // Already settled
-
-          const subUnitCost = getListingUnitCost(sub.motebit_id as string);
-          const subGross =
-            subEntry.price_snapshot ??
-            (subUnitCost > 0 ? subUnitCost / (1 - PLATFORM_FEE_RATE) : 0);
-          if (subGross <= 0) continue; // Free service, no settlement needed
-
-          const subSettlementId = asSettlementId(crypto.randomUUID());
-          const subAllocationId = asAllocationId(`x402-${subRelayTaskId}`);
-          const subAllocation: BudgetAllocation = {
-            allocation_id: subAllocationId,
-            goal_id: asGoalId(subRelayTaskId),
-            candidate_motebit_id: sub.motebit_id,
-            amount_locked: subGross,
-            currency: "USDC",
-            created_at: sub.submitted_at ?? Date.now(),
-            status: "settled",
-          };
-
-          const subSettlement = settleOnReceipt(subAllocation, sub, null, subSettlementId);
-
-          try {
-            moteDb.db.exec("BEGIN");
-            moteDb.db
-              .prepare(
-                `INSERT OR IGNORE INTO relay_settlements
-               (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              )
-              .run(
-                subSettlement.settlement_id,
-                subSettlement.allocation_id,
-                subRelayTaskId,
-                sub.motebit_id,
-                subSettlement.receipt_hash,
-                subSettlement.ledger_hash,
-                subSettlement.amount_settled,
-                subSettlement.platform_fee,
-                subSettlement.platform_fee_rate,
-                subSettlement.status,
-                subSettlement.settled_at,
-              );
-
-            // Mark allocation as settled
-            moteDb.db
-              .prepare(
-                "UPDATE relay_allocations SET status = 'settled', settled_at = ? WHERE task_id = ?",
-              )
-              .run(Date.now(), subRelayTaskId);
-
-            // Credit the sub-delegate (Charlie)
-            if (subSettlement.amount_settled > 0) {
-              creditAccount(
-                moteDb.db,
-                sub.motebit_id as string,
-                subSettlement.amount_settled,
-                "settlement_credit",
-                subSettlement.settlement_id,
-                `Payment for sub-delegated task ${subRelayTaskId}`,
-              );
-            }
-
-            moteDb.db.exec("COMMIT");
-            logger.info("multihop.settlement.created", {
-              correlationId: taskId,
-              subTaskId: subRelayTaskId,
-              subAgent: sub.motebit_id,
-              net: subSettlement.amount_settled,
-              fee: subSettlement.platform_fee,
-            });
-          } catch (txnErr) {
-            moteDb.db.exec("ROLLBACK");
-            logger.warn("multihop.settlement.failed", {
-              correlationId: taskId,
-              subTaskId: subRelayTaskId,
-              error: txnErr instanceof Error ? txnErr.message : String(txnErr),
-            });
-          }
-        } catch (subErr: unknown) {
-          logger.warn("multihop.settlement.sub_error", {
-            correlationId: taskId,
-            subRelayTaskId,
-            error: subErr instanceof Error ? subErr.message : String(subErr),
-          });
-        }
-      }
-    }
-
-    // Record latency for routing intelligence
-    if (receipt.completed_at && entry.task.submitted_at) {
-      const elapsed = receipt.completed_at - entry.task.submitted_at;
-      if (elapsed > 0 && receipt.motebit_id != null) {
-        try {
-          moteDb.db
-            .prepare(
-              `INSERT INTO relay_latency_stats (motebit_id, remote_motebit_id, latency_ms, recorded_at)
-               VALUES (?, ?, ?, ?)`,
-            )
-            .run(motebitId, receipt.motebit_id, elapsed, Date.now());
-        } catch {
-          // Best-effort latency recording
-        }
-      }
-    }
-
-    // Settlement audit: record the receipt settlement with platform fee.
-    // x402 handles the actual on-chain money movement; this is the relay's ledger.
-    //
-    // Uses the price_snapshot captured at task submission time so the relay's
-    // accounting matches what x402 actually charged. If the agent changed pricing
-    // between submission and receipt delivery, we settle at the original price.
-    //
-    // Consumes the persistent allocation if one exists (prevents double-settlement).
-    //
-    // Settlement and credential issuance are wrapped in a single SQLite transaction
-    // so that if settlement DB insert fails, the credential is not issued either.
-    // This prevents orphaned credentials for unrecorded settlements.
-    let credential_id: string | null = null;
-    {
-      try {
-        // Check for a persistent allocation created at task submission time.
-        // If the allocation is already settled/released, skip re-settlement.
-        const persistentAlloc = moteDb.db
-          .prepare("SELECT * FROM relay_allocations WHERE task_id = ? AND status = 'locked'")
-          .get(taskId) as
-          | { allocation_id: string; amount_locked: number; motebit_id: string }
-          | undefined;
-
-        // Gross amount = what x402 charged the caller (unit_cost + platform fee).
-        // Prefers the persistent allocation amount, then the in-memory snapshot,
-        // then falls back to current listing price for legacy tasks.
-        const fallbackUnitCost = getListingUnitCost(receipt.motebit_id as string);
-        const grossAmount =
-          persistentAlloc?.amount_locked ??
-          entry.price_snapshot ??
-          (fallbackUnitCost > 0 ? fallbackUnitCost / (1 - PLATFORM_FEE_RATE) : 0);
-
-        const settlementId = asSettlementId(crypto.randomUUID());
-        const allocationId = persistentAlloc
-          ? asAllocationId(persistentAlloc.allocation_id)
-          : asAllocationId(`x402-${taskId}`);
-        const allocation: BudgetAllocation = {
-          allocation_id: allocationId,
-          goal_id: asGoalId(taskId),
-          candidate_motebit_id: receipt.motebit_id,
-          amount_locked: grossAmount,
-          currency: "USDC",
-          created_at: receipt.submitted_at ?? Date.now(),
-          status: "settled",
-        };
-
-        const settlement = settleOnReceipt(allocation, receipt, null, settlementId);
-
-        // Prepare credential data outside the transaction (credential issuance is async).
-        // Only issue credential for completed receipts when relay credential issuance is enabled.
-        // By default, reputation credentials are peer-issued by the delegating agent.
-        let credentialRow: {
-          credential_id: string;
-          subject: string;
-          issuer: string;
-          type: string;
-          json: string;
-          issued_at: number;
-        } | null = null;
-
-        if (issueCredentials && receipt.status === "completed" && !isSelfDelegation) {
-          const latencyRows = moteDb.db
-            .prepare(
-              "SELECT latency_ms FROM relay_latency_stats WHERE remote_motebit_id = ? ORDER BY recorded_at DESC LIMIT 100",
-            )
-            .all(receipt.motebit_id as string) as Array<{ latency_ms: number }>;
-          const avgLatency =
-            latencyRows.length > 0
-              ? latencyRows.reduce((a, r) => a + r.latency_ms, 0) / latencyRows.length
-              : receipt.completed_at && receipt.submitted_at
-                ? receipt.completed_at - receipt.submitted_at
-                : 0;
-
-          const subjectDid = pubKeyHex
-            ? hexPublicKeyToDidKey(pubKeyHex)
-            : `did:motebit:${receipt.motebit_id as string}`;
-
-          const relayKeys = getRelayKeypair(relayIdentity);
-          const vc = await issueReputationCredential(
-            {
-              success_rate: 1.0,
-              avg_latency_ms: avgLatency,
-              task_count: latencyRows.length + 1,
-              trust_score: 1.0,
-              availability: 1.0,
-              measured_at: Date.now(),
-            },
-            relayKeys.privateKey,
-            relayKeys.publicKey,
-            subjectDid,
-          );
-
-          const credType =
-            vc.type.find((t) => t !== "VerifiableCredential") ?? "VerifiableCredential";
-          credentialRow = {
-            credential_id: crypto.randomUUID(),
-            subject: receipt.motebit_id as string,
-            issuer: vc.issuer,
-            type: credType,
-            json: JSON.stringify(vc),
-            issued_at: Date.now(),
-          };
-        }
-
-        // Atomic transaction: settlement + credential (if applicable) + allocation update.
-        // If settlement INSERT fails, credential is not issued — prevents orphaned credentials.
-        // Uses BEGIN/COMMIT/ROLLBACK since DatabaseDriver doesn't expose .transaction().
-        moteDb.db.exec("BEGIN");
-        try {
-          moteDb.db
-            .prepare(
-              `INSERT OR IGNORE INTO relay_settlements
-               (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, x402_tx_hash, x402_network)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            )
-            .run(
-              settlement.settlement_id,
-              settlement.allocation_id,
-              taskId,
-              motebitId,
-              settlement.receipt_hash,
-              settlement.ledger_hash,
-              settlement.amount_settled,
-              settlement.platform_fee,
-              settlement.platform_fee_rate,
-              settlement.status,
-              settlement.settled_at,
-              entry.x402_tx_hash ?? null,
-              entry.x402_network ?? null,
-            );
-
-          // Mark the persistent allocation as settled so it cannot be double-spent
-          if (persistentAlloc) {
-            moteDb.db
-              .prepare(
-                "UPDATE relay_allocations SET status = 'settled', settled_at = ? WHERE task_id = ?",
-              )
-              .run(Date.now(), taskId);
-          }
-
-          // Virtual account settlement: credit the worker, handle refund/partial release.
-          // The delegator was already debited at task submission (allocation_hold).
-          // The platform fee is the difference — not credited to anyone.
-          {
-            const workerMotebitId = receipt.motebit_id as string;
-
-            if (settlement.status === "refunded") {
-              // Full refund: release the held amount back to the delegator
-              const delegatorId = entry.submitted_by ?? entry.task.submitted_by ?? motebitId;
-              creditAccount(
-                moteDb.db,
-                delegatorId,
-                settlement.amount_settled + settlement.platform_fee, // gross = full lock amount
-                "allocation_release",
-                settlement.settlement_id,
-                `Refund for task ${taskId} (${receipt.status})`,
-              );
-            } else {
-              // Completed or partial: credit worker with net amount (after platform fee)
-              if (settlement.amount_settled > 0) {
-                creditAccount(
-                  moteDb.db,
-                  workerMotebitId,
-                  settlement.amount_settled,
-                  "settlement_credit",
-                  settlement.settlement_id,
-                  `Payment for task ${taskId}`,
-                );
-              }
-
-              // If partial settlement, release the unused portion back to the delegator
-              if (settlement.status === "partial" && persistentAlloc) {
-                const grossSettled = settlement.amount_settled + settlement.platform_fee;
-                const remainder = persistentAlloc.amount_locked - grossSettled;
-                if (remainder > 0) {
-                  const delegatorId = entry.submitted_by ?? entry.task.submitted_by ?? motebitId;
-                  creditAccount(
-                    moteDb.db,
-                    delegatorId,
-                    remainder,
-                    "allocation_release",
-                    settlement.settlement_id,
-                    `Partial release for task ${taskId}`,
-                  );
-                }
-              }
-            }
-          }
-
-          if (credentialRow) {
-            moteDb.db
-              .prepare(
-                `INSERT INTO relay_credentials (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at)
-                 VALUES (?, ?, ?, ?, ?, ?)`,
-              )
-              .run(
-                credentialRow.credential_id,
-                credentialRow.subject,
-                credentialRow.issuer,
-                credentialRow.type,
-                credentialRow.json,
-                credentialRow.issued_at,
-              );
-            credential_id = credentialRow.credential_id;
-          }
-
-          moteDb.db.exec("COMMIT");
-          logger.info("settlement.created", {
-            correlationId: taskId,
-            gross: settlement.amount_settled + settlement.platform_fee,
-            fee: settlement.platform_fee,
-            net: settlement.amount_settled,
-            x402TxHash: entry.x402_tx_hash ?? null,
-          });
-          if (credentialRow) {
-            logger.info("credential.issued", {
-              correlationId: taskId,
-              motebitId: credentialRow.subject,
-              type: credentialRow.type,
-            });
-          }
-        } catch (txnErr) {
-          moteDb.db.exec("ROLLBACK");
-          throw txnErr;
-        }
-      } catch {
-        // Best-effort settlement audit — don't block receipt delivery on accounting errors
-      }
-    }
-
-    // Fan out task_result to all connected devices
-    const peers = connections.get(motebitId);
-    if (peers) {
-      const payload = JSON.stringify({ type: "task_result", task_id: taskId, receipt });
-      for (const peer of peers) {
-        peer.ws.send(payload);
-      }
-    }
-
-    // Spatial presence events — notify both parties for AR/VR return animation.
-    // delegation_returning         → submitter's spatial app: "your motebit is coming home"
-    // delegation_visitor_departing → worker's spatial app:    "the visitor is leaving"
-    const receiptStatus = receipt.status === "completed" ? "completed" : "failed";
-    const taskSubmittedBy = entry.submitted_by ?? entry.task.submitted_by;
-    if (taskSubmittedBy) {
-      broadcastToMotebit(taskSubmittedBy, {
-        type: "delegation_returning",
-        task_id: taskId,
-        target_motebit_id: motebitId,
-        status: receiptStatus,
-        receipt_verified: true, // We only reach this point after successful Ed25519 verification
-      });
-    }
-    broadcastToMotebit(motebitId, {
-      type: "delegation_visitor_departing",
-      task_id: taskId,
-      source_motebit_id: taskSubmittedBy ?? null,
-    });
-
-    // Phase 4: If this task was forwarded from a peer relay, return the result
-    if (entry.origin_relay) {
-      try {
-        const originPeer = moteDb.db
-          .prepare("SELECT endpoint_url, public_key FROM relay_peers WHERE peer_relay_id = ?")
-          .get(entry.origin_relay) as { endpoint_url: string } | undefined;
-        if (originPeer) {
-          const resultBody = {
-            task_id: taskId,
-            origin_relay: relayIdentity.relayMotebitId,
-            receipt,
-            timestamp: Date.now(),
-          };
-          const resultBytes = new TextEncoder().encode(canonicalJson(resultBody));
-          const resultSig = await sign(resultBytes, relayIdentity.privateKey);
-
-          await fetch(`${originPeer.endpoint_url}/federation/v1/task/result`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "X-Correlation-ID": taskId },
-            body: JSON.stringify({ ...resultBody, signature: bytesToHex(resultSig) }),
-            signal: AbortSignal.timeout(10000),
-          });
-        }
-      } catch {
-        // Best-effort federation result return — receipt is already stored locally
-      }
-
-      // Phase 5: Update trust for the originating relay (peer side trust accumulation)
-      try {
-        const peerRow = moteDb.db
-          .prepare(
-            "SELECT trust_level, successful_forwards, failed_forwards FROM relay_peers WHERE peer_relay_id = ?",
-          )
-          .get(entry.origin_relay) as
-          | { trust_level: string; successful_forwards: number; failed_forwards: number }
-          | undefined;
-
-        if (peerRow) {
-          const isSuccess = receipt.status === "completed";
-          const newSuccessful = peerRow.successful_forwards + (isSuccess ? 1 : 0);
-          const newFailed = peerRow.failed_forwards + (isSuccess ? 0 : 1);
-
-          const trustRecord: AgentTrustRecord = {
-            motebit_id: asMotebitId(relayIdentity.relayMotebitId),
-            remote_motebit_id: asMotebitId(entry.origin_relay),
-            trust_level: peerRow.trust_level as AgentTrustLevel,
-            first_seen_at: 0,
-            last_seen_at: Date.now(),
-            interaction_count: newSuccessful + newFailed,
-            successful_tasks: newSuccessful,
-            failed_tasks: newFailed,
-          };
-
-          const newLevel = evaluateTrustTransition(trustRecord);
-          const trustLevel = newLevel ?? peerRow.trust_level;
-          const trustScore = trustLevelToScore(trustLevel as AgentTrustLevel);
-
-          moteDb.db
-            .prepare(
-              `UPDATE relay_peers SET
-              successful_forwards = ?, failed_forwards = ?,
-              trust_level = ?, trust_score = ?
-              WHERE peer_relay_id = ?`,
-            )
-            .run(newSuccessful, newFailed, trustLevel, trustScore, entry.origin_relay);
-        }
-      } catch {
-        // Best-effort trust update
-      }
-    }
-
-    return c.json({ status: entry.task.status, credential_id });
+    return c.json({ status: entry.task.status, credential_id: ingestionResult.credential_id });
   });
 
   // GET /agent/:motebitId/settlements — settlement history for this agent
