@@ -60,9 +60,6 @@ const satSlider = document.getElementById("sat-slider") as HTMLInputElement | nu
 // Voice indicator
 const voiceIndicator = document.getElementById("voice-indicator") as HTMLElement;
 
-// Gaze overlay (reserved for future presence visualization)
-const gazeOverlay = document.getElementById("gaze-overlay");
-
 // === State ===
 
 const app = new SpatialApp();
@@ -448,7 +445,6 @@ function startFlatPreview(): void {
     const time = now / 1000;
 
     app.renderFrame(dt, time);
-    updateDelegationIndicator();
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
@@ -502,12 +498,6 @@ async function startAR(): Promise<void> {
     // Gaze-based attention: check if user is looking at the local creature
     updateGazeAttention(camera, headPos);
 
-    // Check gaze against visitors and ghost
-    updatePresenceGaze(camera, headPos);
-
-    // Update delegation active indicator
-    updateDelegationIndicator();
-
     // Hand gesture recognition (requires XRFrame + hand-tracking feature)
     const session = renderer.xr.getSession();
     const refSpace = renderer.xr.getReferenceSpace();
@@ -539,7 +529,6 @@ async function startAR(): Promise<void> {
       app.dynamics.reset();
       app.gestures.reset();
       lastGazeHit = false;
-      hideGazeOverlay();
     });
   }
 }
@@ -601,22 +590,6 @@ function updateGazeAttention(
 
   lastGazeHit = gazeHit;
 }
-
-// === Gaze & Delegation Overlays (reserved for future presence visualization) ===
-
-function updatePresenceGaze(
-  _camera: {
-    matrixWorld: { elements: ArrayLike<number> };
-    position: { x: number; y: number; z: number };
-  },
-  _headPos: [number, number, number],
-): void {}
-
-function hideGazeOverlay(): void {
-  gazeOverlay?.classList.add("hidden");
-}
-
-function updateDelegationIndicator(): void {}
 
 // === Credentials ===
 

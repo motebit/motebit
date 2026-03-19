@@ -311,98 +311,6 @@
 
     .voice-indicator.hidden { display: none; }
 
-    /* === Gaze Overlay === */
-
-    .gaze-overlay {
-      position: fixed;
-      z-index: 6;
-      pointer-events: none;
-      padding: 10px 14px;
-      background: rgba(10, 10, 15, 0.82);
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      border-radius: 10px;
-      backdrop-filter: blur(12px);
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      min-width: 140px;
-      opacity: 0;
-      transition: opacity 0.2s ease;
-    }
-
-    .gaze-overlay.visible {
-      opacity: 1;
-    }
-
-    .gaze-overlay.hidden { display: none; }
-
-    .gaze-agent-id {
-      font-size: 12px;
-      font-weight: 600;
-      letter-spacing: 0.04em;
-      color: #e0e0e8;
-      font-variant-numeric: tabular-nums;
-    }
-
-    .gaze-agent-trust {
-      font-size: 11px;
-      opacity: 0.55;
-      letter-spacing: 0.05em;
-    }
-
-    .gaze-agent-caps {
-      font-size: 11px;
-      opacity: 0.4;
-      letter-spacing: 0.03em;
-    }
-
-    /* === Delegation Active Indicator === */
-    /* Subtle amber pulse in the corner when your motebit is away on a task. */
-
-    .delegation-indicator {
-      position: fixed;
-      top: 20px;
-      right: 20px;
-      z-index: 7;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 12px;
-      font-size: 11px;
-      letter-spacing: 0.07em;
-      text-transform: uppercase;
-      color: rgba(255, 186, 80, 0.85);
-      border: 1px solid rgba(255, 186, 80, 0.2);
-      border-radius: 14px;
-      background: rgba(255, 140, 0, 0.07);
-      backdrop-filter: blur(8px);
-      opacity: 0;
-      transition: opacity 0.4s ease;
-      pointer-events: none;
-    }
-
-    .delegation-indicator.active {
-      opacity: 1;
-    }
-
-    .delegation-indicator.hidden {
-      display: none;
-    }
-
-    .delegation-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: rgba(255, 186, 80, 0.8);
-      animation: delegation-pulse 2.4s ease-in-out infinite;
-      flex-shrink: 0;
-    }
-
-    @keyframes delegation-pulse {
-      0%, 100% { opacity: 0.4; transform: scale(1); }
-      50%       { opacity: 1;   transform: scale(1.4); }
-    }
-
     .voice-dot {
       width: 6px;
       height: 6px;
@@ -629,21 +537,6 @@
   <div class="voice-indicator hidden" id="voice-indicator">
     <span class="voice-dot"></span>
     listening
-  </div>
-
-  <!-- Gaze overlay — shown when looking at a visitor or the ghost -->
-  <!-- For visitors: shows their motebit_id, trust level, and task.    -->
-  <!-- For the ghost: shows "Your agent is away — delegated to {target}" -->
-  <div class="gaze-overlay hidden" id="gaze-overlay">
-    <div class="gaze-agent-id" id="gaze-agent-id"></div>
-    <div class="gaze-agent-trust" id="gaze-agent-trust"></div>
-    <div class="gaze-agent-caps" id="gaze-agent-caps"></div>
-  </div>
-
-  <!-- Delegation active indicator — shown when your motebit is away on a task -->
-  <div class="delegation-indicator hidden" id="delegation-indicator">
-    <span class="delegation-dot"></span>
-    <span id="delegation-label">away</span>
   </div>
 
   <script type="module" src="/src/app.ts"></script>
