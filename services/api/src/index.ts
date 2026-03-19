@@ -4615,10 +4615,20 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   });
 
   // POST /api/v1/agents/heartbeat — refresh TTL
-  app.post("/api/v1/agents/heartbeat", (c) => {
+  app.post("/api/v1/agents/heartbeat", async (c) => {
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
-    if (!callerMotebitId) {
-      throw new HTTPException(400, { message: "Cannot determine motebit_id from token" });
+    // Fall back to body.motebit_id for master-token callers (services use API token, not signed tokens)
+    let motebitId = callerMotebitId;
+    if (!motebitId) {
+      try {
+        const body = await c.req.json<{ motebit_id?: string }>();
+        motebitId = body.motebit_id;
+      } catch {
+        // No body — that's fine if callerMotebitId was set
+      }
+    }
+    if (!motebitId) {
+      throw new HTTPException(400, { message: "Cannot determine motebit_id from token or body" });
     }
 
     const now = Date.now();
@@ -4630,7 +4640,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       UPDATE agent_registry SET last_heartbeat = ?, expires_at = ? WHERE motebit_id = ?
     `,
       )
-      .run(now, expiresAt, callerMotebitId);
+      .run(now, expiresAt, motebitId);
 
     if (result.changes === 0) {
       throw new HTTPException(404, { message: "Agent not registered" });

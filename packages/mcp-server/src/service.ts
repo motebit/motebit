@@ -408,6 +408,7 @@ export async function startServiceServer(
               await fetch(`${config.syncUrl}/api/v1/agents/heartbeat`, {
                 method: "POST",
                 headers: regHeaders,
+                body: JSON.stringify({ motebit_id: deps.motebitId }),
               });
             } catch {
               // Best-effort heartbeat
