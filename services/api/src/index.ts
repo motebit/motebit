@@ -3090,8 +3090,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     app.use("/api/v1/admin/reconciliation", bearerAuth({ token: apiToken }));
   }
 
-  // --- Spatial presence broadcast helper ---
-
   // --- Task submission with scored routing ---
 
   app.post("/agent/:motebitId/task", async (c) => {
