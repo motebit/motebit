@@ -46,7 +46,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
-    "sql.js": "^1.11.0"
+    "sql.js": "^1.11.0",
+    "ws": "^8.18.0"
   },
   "optionalDependencies": {
     "better-sqlite3": "^11.0.0",

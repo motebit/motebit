@@ -1,6 +1,17 @@
 import type { EventLogEntry } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 
+// Resolve WebSocket: use the global (Node 22+, browsers) or fall back to the `ws` package (Node 20).
+// globalThis.WebSocket is checked every time (tests may mock it). The `ws` import result is cached.
+let _wsPackage: typeof globalThis.WebSocket | undefined;
+async function resolveWebSocket(): Promise<typeof globalThis.WebSocket> {
+  if (typeof globalThis.WebSocket !== "undefined") return globalThis.WebSocket;
+  if (_wsPackage) return _wsPackage;
+  const ws = await import("ws");
+  _wsPackage = (ws.default ?? ws) as unknown as typeof globalThis.WebSocket;
+  return _wsPackage;
+}
+
 export interface WebSocketAdapterConfig {
   /** WebSocket URL, e.g. "ws://localhost:3000/sync/my-mote" */
   url: string;
@@ -77,7 +88,17 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       url += `${sep}capabilities=${encodeURIComponent(this.config.capabilities.join(","))}`;
     }
 
-    this.ws = new WebSocket(url);
+    // Resolve WebSocket impl (async for Node <22 where ws must be imported).
+    // If globalThis.WebSocket exists (Node 22+, browsers, tests), use it synchronously.
+    // Otherwise, import ws and re-enter connect().
+    if (typeof globalThis.WebSocket !== "undefined") {
+      this.ws = new globalThis.WebSocket(url);
+    } else if (_wsPackage) {
+      this.ws = new _wsPackage(url) as unknown as WebSocket;
+    } else {
+      void resolveWebSocket().then(() => this.connect());
+      return;
+    }
 
     this.ws.onopen = () => {
       this.connected = true;
@@ -165,7 +186,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
    * Used by agent protocol for task_claim messages.
    */
   sendRaw(data: string): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.ws || this.ws.readyState !== 1 /* WebSocket.OPEN */) return;
     this.ws.send(data);
   }
 
@@ -228,7 +249,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   }
 
   private sendPush(events: EventLogEntry[]): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.ws || this.ws.readyState !== 1 /* WebSocket.OPEN */) return;
     this.ws.send(JSON.stringify({ type: "push", events }));
   }
 

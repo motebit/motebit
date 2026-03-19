@@ -754,12 +754,14 @@ export async function handleServe(config: CliConfig): Promise<void> {
   // Wire handleAgentTask if private key is available
   const fullConfigForServe = loadFullConfig();
   const deviceId = fullConfigForServe.device_id ?? "unknown";
+  let servePrivateKey: Uint8Array | undefined;
 
   if (fullConfigForServe.cli_encrypted_key) {
     try {
       const passphrase = await promptPassphrase("Passphrase (for agent signing): ");
       const pkHex = await decryptPrivateKey(fullConfigForServe.cli_encrypted_key, passphrase);
       const privateKey = fromHex(pkHex);
+      servePrivateKey = privateKey;
 
       if (config.direct) {
         // Direct tool execution mode — bypass AI, execute tools directly
@@ -904,11 +906,95 @@ export async function handleServe(config: CliConfig): Promise<void> {
     log(`Policy: ${config.operator ? "operator" : "ambient"} mode.`);
   }
 
-  // Register with discovery relay (HTTP transport only)
+  // Connect to relay (HTTP transport only): WebSocket for task dispatch + HTTP registration
   // Fallback chain: CLI arg > env var > config file
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  let serveWsAdapter: WebSocketEventStoreAdapter | null = null;
   const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig.sync_url;
   if (transport === "http" && syncUrl) {
+    // Wire WebSocket for task dispatch (same adapter as daemon mode)
+    const masterToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+
+    if (servePrivateKey && deps.handleAgentTask) {
+      const wsUrl = syncUrl.replace(/^http/, "ws") + `/ws/sync/${motebitId}`;
+
+      // Mint a signed auth token if we have device_id + private key
+      let wsAuthToken = masterToken;
+      if (fullConfigForServe.device_id) {
+        try {
+          wsAuthToken = await createSignedToken(
+            {
+              mid: motebitId,
+              did: fullConfigForServe.device_id,
+              iat: Date.now(),
+              exp: Date.now() + 5 * 60 * 1000,
+              jti: crypto.randomUUID(),
+              aud: "sync",
+            },
+            servePrivateKey,
+          );
+        } catch {
+          // Fall back to master token
+        }
+      }
+
+      const httpAdapter = new HttpEventStoreAdapter({
+        baseUrl: syncUrl,
+        motebitId,
+        authToken: masterToken,
+      });
+
+      serveWsAdapter = new WebSocketEventStoreAdapter({
+        url: wsUrl,
+        motebitId,
+        authToken: wsAuthToken,
+        capabilities: [DeviceCapability.HttpMcp],
+        httpFallback: httpAdapter,
+        localStore: moteDb.eventStore,
+      });
+
+      // Handle task dispatch — same pattern as daemon mode
+      const handleTask = deps.handleAgentTask.bind(deps);
+      serveWsAdapter.onCustomMessage((msg) => {
+        if (msg.type !== "task_request" || !msg.task) return;
+        const task = msg.task as AgentTask;
+        log(
+          `Agent task received: ${task.task_id.slice(0, 8)}... prompt: "${task.prompt.slice(0, 80)}"`,
+        );
+        serveWsAdapter!.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
+        void (async () => {
+          try {
+            let receipt: Record<string, unknown> | undefined;
+            for await (const chunk of handleTask(task.prompt, {
+              relayTaskId: task.task_id,
+            })) {
+              if (chunk.type === "task_result") {
+                receipt = (chunk as { receipt: Record<string, unknown> }).receipt;
+              }
+            }
+            if (receipt) {
+              const resultHeaders: Record<string, string> = {
+                "Content-Type": "application/json",
+              };
+              if (masterToken) resultHeaders["Authorization"] = `Bearer ${masterToken}`;
+              await fetch(`${syncUrl}/agent/${motebitId}/task/${task.task_id}/result`, {
+                method: "POST",
+                headers: resultHeaders,
+                body: JSON.stringify(receipt),
+              });
+              log(`Agent task ${task.task_id.slice(0, 8)}... completed`);
+            }
+          } catch (err: unknown) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            log(`Agent task ${task.task_id.slice(0, 8)}... error: ${errMsg}`);
+          }
+        })();
+      });
+
+      serveWsAdapter.connect();
+      log("Task dispatch: connected (WebSocket)");
+    }
+
     try {
       const toolNames = runtime
         .getToolRegistry()
@@ -916,7 +1002,6 @@ export async function handleServe(config: CliConfig): Promise<void> {
         .map((t) => t.name);
 
       const regHeaders: Record<string, string> = { "Content-Type": "application/json" };
-      const masterToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
       if (masterToken) regHeaders["Authorization"] = `Bearer ${masterToken}`;
 
       const endpointUrl = `http://localhost:${port}`;
@@ -950,7 +1035,8 @@ export async function handleServe(config: CliConfig): Promise<void> {
           await (async () => {
             try {
               await new Promise((r) => setTimeout(r, 500));
-              const firstToolName = toolNames[0] ?? "echo";
+              // Use the last tool name — externally loaded tools are registered after builtins
+              const firstToolName = toolNames[toolNames.length - 1] ?? "echo";
               log("[self-test] submitting task via relay...");
 
               const taskResp = await fetch(`${syncUrl}/agent/${motebitId}/task`, {
@@ -1036,6 +1122,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
           // Best-effort deregistration
         }
       }
+      serveWsAdapter?.disconnect();
       await mcpServer.stop();
       runtime.stop();
       moteDb.close();
