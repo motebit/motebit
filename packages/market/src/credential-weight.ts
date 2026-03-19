@@ -18,6 +18,7 @@ import { VC_TYPE_REPUTATION } from "@motebit/sdk";
  * Only the fields needed for aggregation: type, issuer, validFrom, credentialSubject.
  */
 export interface ReputationVC {
+  id?: string;
   type: string[];
   issuer: string;
   validFrom?: string;
@@ -51,6 +52,8 @@ export interface CredentialWeightConfig {
   sampleSaturationK?: number;
   /** Minimum issuer trust to consider a credential (skip unknown/untrusted issuers). Default: 0.05. */
   minIssuerTrust?: number;
+  /** Optional revocation check — returns true if the credential ID has been revoked. */
+  checkRevoked?: (credentialId: string) => boolean;
 }
 
 const DEFAULT_FRESHNESS_HALF_LIFE_MS = 24 * 60 * 60 * 1000; // 24h
@@ -100,6 +103,9 @@ export function aggregateCredentialReputation(
     // 0. Self-attestation filter: ignore credentials where the issuer is the subject.
     // These carry no trust signal — an agent vouching for itself is tautological.
     if (issuerDid === subject.id) continue;
+
+    // 0b. Revocation check: skip revoked credentials.
+    if (config?.checkRevoked && vc.id && config.checkRevoked(vc.id)) continue;
 
     // 1. Issuer authority: how much do we trust the attester?
     const issuerTrust = getIssuerTrust(issuerDid);

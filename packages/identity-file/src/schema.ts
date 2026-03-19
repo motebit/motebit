@@ -25,6 +25,12 @@ export interface MotebitIdentityFile {
     require_approval_above: string;
     deny_above: string;
     operator_mode: boolean;
+    /** Optional multi-party approval quorum. */
+    approval_quorum?: {
+      threshold: number;
+      approvers: string[];
+      risk_floor?: string;
+    };
   };
 
   privacy: {

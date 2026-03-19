@@ -291,6 +291,11 @@ export interface GovernancePolicyConfig {
   maxRiskAuto: RiskLevel;
   requireApprovalAbove: RiskLevel;
   denyAbove: RiskLevel;
+  approvalQuorum?: {
+    threshold: number;
+    approvers: string[];
+    risk_floor?: string;
+  };
 }
 
 export function governanceToPolicyConfig(
@@ -301,5 +306,6 @@ export function governanceToPolicyConfig(
     maxRiskAuto: parseRiskLevel(gov.max_risk_auto),
     requireApprovalAbove: parseRiskLevel(gov.require_approval_above),
     denyAbove: parseRiskLevel(gov.deny_above),
+    ...(gov.approval_quorum ? { approvalQuorum: gov.approval_quorum } : {}),
   };
 }

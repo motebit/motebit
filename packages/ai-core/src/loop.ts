@@ -183,6 +183,8 @@ export interface TurnOptions {
   knownAgents?: import("@motebit/sdk").AgentTrustRecord[];
   /** Active inference precision context string — injected into system prompt to modulate behavior. */
   precisionContext?: string;
+  /** Delegation scope — restricts tool calls to tools within this scope set. */
+  delegationScope?: string;
 }
 
 export type AgenticChunk =
@@ -194,6 +196,7 @@ export type AgenticChunk =
       name: string;
       args: Record<string, unknown>;
       risk_level?: number;
+      quorum?: { required: number; approvers: string[]; collected: string[] };
     }
   | { type: "injection_warning"; tool_name: string; patterns: string[] }
   | { type: "result"; result: TurnResult };
@@ -271,6 +274,9 @@ export async function* runTurnStreaming(
     rawToolDefs && deps.policyGate ? deps.policyGate.filterTools(rawToolDefs) : rawToolDefs;
 
   let turnCtx = deps.policyGate?.createTurnContext(options?.runId);
+  if (turnCtx && options?.delegationScope !== undefined) {
+    turnCtx = { ...turnCtx, delegationScope: options.delegationScope };
+  }
 
   const conversationHistory: ConversationMessage[] = [...(options?.conversationHistory ?? [])];
 
@@ -380,6 +386,7 @@ export async function* runTurnStreaming(
             name: toolCall.name,
             args: toolCall.args,
             risk_level: profile.risk,
+            ...(decision.quorum ? { quorum: decision.quorum } : {}),
           };
           conversationHistory.push({
             role: "tool",

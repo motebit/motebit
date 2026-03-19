@@ -469,6 +469,7 @@ export class MotebitRuntime {
     args: Record<string, unknown>;
     userMessage: string;
     runId?: string;
+    quorum?: { required: number; approvers: string[]; collected: string[] };
   } | null = null;
   private approvalTimeoutMs: number;
   private taskRouter: TaskRouter | null;
@@ -493,6 +494,7 @@ export class MotebitRuntime {
   private _issuedCredentials: import("@motebit/crypto").VerifiableCredential<AnyCredentialSubject>[] =
     [];
   private _credentialStore: import("@motebit/sdk").CredentialStoreAdapter | null = null;
+  private approvalStore: import("@motebit/sdk").ApprovalStoreAdapter | null = null;
   private _signingKeysErased = false;
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
@@ -580,6 +582,9 @@ export class MotebitRuntime {
 
     // Credential persistence — persists issued VCs across restarts
     this._credentialStore = adapters.storage.credentialStore ?? null;
+
+    // Approval store — persistence-backed quorum state (source of truth for multi-party approval)
+    this.approvalStore = adapters.storage.approvalStore ?? null;
 
     // Agent graph — algebraic routing substrate
     // The credential store adapter reads from persistent storage (survives restart)
@@ -1224,7 +1229,11 @@ export class MotebitRuntime {
     }
   }
 
-  async *sendMessageStreaming(text: string, runId?: string): AsyncGenerator<StreamChunk> {
+  async *sendMessageStreaming(
+    text: string,
+    runId?: string,
+    options?: { delegationScope?: string },
+  ): AsyncGenerator<StreamChunk> {
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
     if (this._isProcessing) throw new Error("Already processing a message");
 
@@ -1245,6 +1254,7 @@ export class MotebitRuntime {
         curiosityHints: this.buildCuriosityHints(),
         knownAgents: knownAgents.length > 0 ? knownAgents : undefined,
         precisionContext: precisionCtx || undefined,
+        delegationScope: options?.delegationScope,
       });
       // Session info applies only to the first message after resume
       this.conversation.clearSessionInfo();
@@ -1265,6 +1275,7 @@ export class MotebitRuntime {
     privateKey: Uint8Array,
     deviceId: string,
     publicKey?: Uint8Array,
+    options?: { delegatedScope?: string },
   ): AsyncGenerator<StreamChunk> {
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
 
@@ -1282,7 +1293,9 @@ export class MotebitRuntime {
     let status: "completed" | "failed" | "denied" = "completed";
 
     try {
-      const stream = this.sendMessageStreaming(task.prompt);
+      const stream = this.sendMessageStreaming(task.prompt, undefined, {
+        delegationScope: options?.delegatedScope,
+      });
 
       for await (const chunk of stream) {
         if (abortController.signal.aborted) {
@@ -1592,9 +1605,64 @@ export class MotebitRuntime {
     return this._pendingApproval !== null;
   }
 
-  get pendingApprovalInfo(): { toolName: string; args: Record<string, unknown> } | null {
+  get pendingApprovalInfo(): {
+    toolName: string;
+    args: Record<string, unknown>;
+    quorum?: { required: number; approvers: string[]; collected: string[] };
+  } | null {
     if (!this._pendingApproval) return null;
-    return { toolName: this._pendingApproval.toolName, args: this._pendingApproval.args };
+    return {
+      toolName: this._pendingApproval.toolName,
+      args: this._pendingApproval.args,
+      quorum: this._pendingApproval.quorum,
+    };
+  }
+
+  /**
+   * Record a single approval vote for multi-party (quorum) approval.
+   * - If no quorum is configured, delegates to resumeAfterApproval (backward compat).
+   * - A deny vote immediately denies (fail-closed).
+   * - Duplicate votes are ignored.
+   * - Quorum state is persisted in the approval store (source of truth),
+   *   not held in mutable runtime memory.
+   */
+  async *resolveApprovalVote(approved: boolean, approverId: string): AsyncGenerator<StreamChunk> {
+    if (!this._pendingApproval) throw new Error("No pending approval to vote on");
+
+    // No quorum — single-approval behavior
+    if (!this._pendingApproval.quorum) {
+      yield* this.resumeAfterApproval(approved);
+      return;
+    }
+
+    // Deny vote = immediate deny (fail-closed)
+    if (!approved) {
+      yield* this.resumeAfterApproval(false);
+      return;
+    }
+
+    // Delegate to persistence store — it is the source of truth for quorum state.
+    // Runtime is a pure observer: read from store, never mutate local quorum state.
+    if (this.approvalStore) {
+      const result = this.approvalStore.collectApproval(
+        this._pendingApproval.toolCallId,
+        approverId,
+      );
+
+      if (result.met) {
+        yield* this.resumeAfterApproval(true);
+      }
+      // Otherwise: still waiting for more votes — runtime does not touch local state
+    } else {
+      // Fallback for environments without persistence (tests, in-memory).
+      // Still correct: single-process, single-runtime — no drift risk.
+      const quorum = this._pendingApproval.quorum;
+      if (quorum.collected.includes(approverId)) return;
+      quorum.collected.push(approverId);
+      if (quorum.collected.length >= quorum.required) {
+        yield* this.resumeAfterApproval(true);
+      }
+    }
   }
 
   /**
@@ -1715,7 +1783,18 @@ export class MotebitRuntime {
           args: chunk.args,
           userMessage,
           runId,
+          quorum: chunk.quorum,
         };
+
+        // Persist quorum metadata to the approval store (source of truth)
+        if (chunk.quorum && this.approvalStore) {
+          this.approvalStore.setQuorum(
+            chunk.tool_call_id,
+            chunk.quorum.required,
+            chunk.quorum.approvers,
+          );
+        }
+
         this.startApprovalTimeout();
         this.state.pushUpdate({ processing: 0.5 });
       }

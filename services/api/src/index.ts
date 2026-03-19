@@ -104,6 +104,7 @@ import {
   issueReputationCredential,
   verifyKeySuccession,
   sign,
+  verify,
   canonicalJson,
   bytesToHex,
   hexToBytes,
@@ -119,6 +120,8 @@ import {
   registerFederationRoutes,
   startHeartbeatLoop,
   startSettlementRetryLoop,
+  insertRevocationEvent,
+  cleanupRevocationEvents,
 } from "./federation.js";
 import type { RelayIdentity } from "./federation.js";
 import { registerCredentialRoutes, getRelayKeypair } from "./credentials.js";
@@ -535,9 +538,17 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         credential_id TEXT PRIMARY KEY,
         motebit_id TEXT NOT NULL,
         revoked_at TEXT DEFAULT (datetime('now')),
-        reason TEXT
+        reason TEXT,
+        revoked_by TEXT
       );
   `);
+
+  // Migration: add revoked_by column if missing
+  try {
+    moteDb.db.exec("ALTER TABLE relay_revoked_credentials ADD COLUMN revoked_by TEXT");
+  } catch {
+    /* column may already exist */
+  }
 
   // Add revoked column to agent_registry (column-exists check pattern)
   try {
@@ -548,6 +559,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // Startup cleanup: purge expired blacklist entries
   moteDb.db.prepare("DELETE FROM relay_token_blacklist WHERE expires_at < ?").run(Date.now());
+
+  // Startup cleanup: purge revocation events older than 7 days
+  cleanupRevocationEvents(moteDb.db);
 
   // --- Revocation callback helpers ---
 
@@ -959,11 +973,19 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // Public endpoints: credential verification, credential status (20 req/min)
   app.use("/api/v1/credentials/verify", rateLimitMiddleware(publicLimiter));
   app.use("/api/v1/credentials/:credentialId/status", rateLimitMiddleware(publicLimiter));
+  app.use("/api/v1/credentials/batch-status", rateLimitMiddleware(readLimiter));
 
   // Write endpoints: revocation (30 req/min)
   app.use("/api/v1/agents/:motebitId/revoke-tokens", rateLimitMiddleware(writeLimiter));
   app.use("/api/v1/agents/:motebitId/revoke-credential", rateLimitMiddleware(writeLimiter));
   app.use("/api/v1/agents/:motebitId/revoke", rateLimitMiddleware(writeLimiter));
+
+  // Approval quorum endpoints (write tier for votes, read tier for status)
+  app.use(
+    "/api/v1/agents/:motebitId/approvals/:approvalId/vote",
+    rateLimitMiddleware(writeLimiter),
+  );
+  app.use("/api/v1/agents/:motebitId/approvals/:approvalId", rateLimitMiddleware(readLimiter));
 
   // Expensive endpoints: presentation bundling, bootstrap (10 req/min)
   app.use("/api/v1/agents/:motebitId/presentation", rateLimitMiddleware(expensiveLimiter));
@@ -1478,6 +1500,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       if (
         c.req.path.startsWith("/api/v1/agents") ||
         c.req.path.startsWith("/api/v1/credentials/verify") ||
+        c.req.path.startsWith("/api/v1/credentials/batch-status") ||
         c.req.path.match(/\/api\/v1\/credentials\/[^/]+\/status/) ||
         c.req.path.startsWith("/api/v1/stripe/")
       ) {
@@ -4287,6 +4310,15 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         oldKey: existingAgent.public_key.slice(0, 16) + "...",
         newKey: publicKey.slice(0, 16) + "...",
       });
+
+      // Emit key rotation event for federation propagation
+      try {
+        await insertRevocationEvent(moteDb.db, relayIdentity, "key_rotated", motebitId, {
+          newPublicKey: publicKey,
+        });
+      } catch {
+        /* best-effort */
+      }
     }
 
     const now = Date.now();
@@ -4611,14 +4643,340 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   });
 
   // POST /api/v1/agents/:motebitId/revoke — mark agent identity as revoked
-  app.post("/api/v1/agents/:motebitId/revoke", (c) => {
+  app.post("/api/v1/agents/:motebitId/revoke", async (c) => {
     const motebitId = c.req.param("motebitId");
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
     if (callerMotebitId && callerMotebitId !== motebitId) {
       throw new HTTPException(403, { message: "Cannot revoke another agent" });
     }
     moteDb.db.prepare("UPDATE agent_registry SET revoked = 1 WHERE motebit_id = ?").run(motebitId);
+    // Emit revocation event for federation propagation
+    try {
+      await insertRevocationEvent(moteDb.db, relayIdentity, "agent_revoked", motebitId);
+    } catch {
+      /* best-effort — revocation still succeeded locally */
+    }
     return c.json({ ok: true, motebit_id: motebitId, revoked: true });
+  });
+
+  // === Multi-Party Approval Quorum ===
+
+  // Approval votes table
+  moteDb.db.exec(`
+    CREATE TABLE IF NOT EXISTS relay_approval_votes (
+      vote_id TEXT PRIMARY KEY,
+      approval_id TEXT NOT NULL,
+      approver_id TEXT NOT NULL,
+      approved INTEGER NOT NULL,
+      signature TEXT NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+    CREATE INDEX IF NOT EXISTS idx_approval_votes_approval ON relay_approval_votes(approval_id);
+  `);
+
+  // Approval metadata table — stores quorum config so relay is authoritative
+  moteDb.db.exec(`
+    CREATE TABLE IF NOT EXISTS relay_approval_metadata (
+      approval_id TEXT PRIMARY KEY,
+      motebit_id TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      args_hash TEXT NOT NULL,
+      quorum_required INTEGER NOT NULL DEFAULT 1,
+      quorum_approvers TEXT NOT NULL DEFAULT '[]',
+      quorum_hash TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+  `);
+
+  // Migration: add quorum_hash column if missing
+  try {
+    moteDb.db.exec(
+      "ALTER TABLE relay_approval_metadata ADD COLUMN quorum_hash TEXT NOT NULL DEFAULT ''",
+    );
+  } catch {
+    /* column may already exist */
+  }
+
+  /**
+   * Compute a deterministic quorum hash from config.
+   * Normalizes approver list (sorted) so ["A","B"] === ["B","A"].
+   * Computed once at creation, persisted, never recomputed.
+   */
+  async function computeQuorumHash(required: number, approvers: string[]): Promise<string> {
+    const normalized = [...approvers].sort();
+    const canonical = canonicalJson({ quorum_required: required, quorum_approvers: normalized });
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+    return bytesToHex(new Uint8Array(buf));
+  }
+
+  // POST /api/v1/agents/:motebitId/approvals — register an approval request with quorum metadata.
+  // Immutable after creation: resubmitting the same approval_id with different config is rejected.
+  // Identical resubmission is idempotent (safe for retries).
+  app.post("/api/v1/agents/:motebitId/approvals", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const body = await c.req.json<{
+      approval_id: string;
+      tool_name: string;
+      args_hash: string;
+      quorum_required: number;
+      quorum_approvers: string[];
+    }>();
+    if (!body.approval_id || !body.tool_name || !body.args_hash) {
+      throw new HTTPException(400, {
+        message: "approval_id, tool_name, and args_hash are required",
+      });
+    }
+
+    const quorumRequired = body.quorum_required ?? 1;
+    const quorumApprovers = JSON.stringify(body.quorum_approvers ?? []);
+
+    // Check for existing approval — immutable after creation
+    const existing = moteDb.db
+      .prepare(
+        "SELECT motebit_id, tool_name, args_hash, quorum_required, quorum_approvers, quorum_hash FROM relay_approval_metadata WHERE approval_id = ?",
+      )
+      .get(body.approval_id) as
+      | {
+          motebit_id: string;
+          tool_name: string;
+          args_hash: string;
+          quorum_required: number;
+          quorum_approvers: string;
+          quorum_hash: string;
+        }
+      | undefined;
+
+    if (existing != null) {
+      // Idempotent: identical resubmission is accepted (safe for retries)
+      if (
+        existing.motebit_id === motebitId &&
+        existing.tool_name === body.tool_name &&
+        existing.args_hash === body.args_hash &&
+        existing.quorum_required === quorumRequired &&
+        existing.quorum_approvers === quorumApprovers
+      ) {
+        return c.json({
+          ok: true,
+          approval_id: body.approval_id,
+          quorum_hash: existing.quorum_hash,
+          idempotent: true,
+        });
+      }
+      // Different config → reject (immutability guarantee)
+      throw new HTTPException(409, {
+        message:
+          "Approval already exists with different configuration — approval metadata is immutable after creation",
+      });
+    }
+
+    const qHash = await computeQuorumHash(quorumRequired, body.quorum_approvers ?? []);
+
+    moteDb.db
+      .prepare(
+        "INSERT INTO relay_approval_metadata (approval_id, motebit_id, tool_name, args_hash, quorum_required, quorum_approvers, quorum_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        body.approval_id,
+        motebitId,
+        body.tool_name,
+        body.args_hash,
+        quorumRequired,
+        quorumApprovers,
+        qHash,
+      );
+
+    return c.json({ ok: true, approval_id: body.approval_id, quorum_hash: qHash });
+  });
+
+  // POST /api/v1/agents/:motebitId/approvals/:approvalId/vote — submit an Ed25519-signed vote
+  app.post("/api/v1/agents/:motebitId/approvals/:approvalId/vote", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const approvalId = c.req.param("approvalId");
+    const body = await c.req.json<{
+      approver_id: string;
+      approved: boolean;
+      signature: string;
+    }>();
+
+    if (!body.approver_id || body.approved == null || !body.signature) {
+      throw new HTTPException(400, {
+        message: "approver_id, approved, and signature are required",
+      });
+    }
+
+    // 1. Load approval metadata — relay is authoritative
+    const approval = moteDb.db
+      .prepare("SELECT * FROM relay_approval_metadata WHERE approval_id = ?")
+      .get(approvalId) as
+      | {
+          approval_id: string;
+          motebit_id: string;
+          tool_name: string;
+          args_hash: string;
+          quorum_required: number;
+          quorum_approvers: string;
+          quorum_hash: string;
+          status: string;
+        }
+      | undefined;
+    if (!approval) {
+      throw new HTTPException(404, { message: "Approval not found" });
+    }
+
+    // 1b. Reject legacy approvals missing quorum_hash (pre-migration rows)
+    if (!approval.quorum_hash) {
+      throw new HTTPException(500, {
+        message: "Approval missing quorum_hash — created before migration. Re-register to fix.",
+      });
+    }
+
+    // 2. Terminal state — deny is permanent, no further votes accepted
+    if (approval.status === "denied") {
+      throw new HTTPException(409, {
+        message: "Approval already denied — no further votes accepted",
+      });
+    }
+    if (approval.status === "approved") {
+      throw new HTTPException(409, {
+        message: "Approval already met quorum — no further votes needed",
+      });
+    }
+
+    // 3. Validate motebitId matches (path param must match stored approval)
+    if (approval.motebit_id !== motebitId) {
+      throw new HTTPException(403, { message: "Approval does not belong to this agent" });
+    }
+
+    // 4. Approver authorization — must be in the quorum approvers list
+    const authorizedApprovers = JSON.parse(approval.quorum_approvers) as string[];
+    if (authorizedApprovers.length > 0 && !authorizedApprovers.includes(body.approver_id)) {
+      throw new HTTPException(403, { message: "Approver is not authorized for this quorum" });
+    }
+
+    // 5. Verify Ed25519 signature — canonical JSON with domain separation.
+    // Bound to agent, approval, args hash, action, AND quorum definition.
+    // quorum_hash is persisted at creation (computed once, normalized, never recomputed).
+    // This cryptographically binds the vote to the exact quorum definition.
+    const encoder = new TextEncoder();
+    const votePayload = canonicalJson({
+      type: "approval_vote",
+      motebit_id: motebitId,
+      approval_id: approvalId,
+      args_hash: approval.args_hash,
+      quorum_hash: approval.quorum_hash,
+      approver_id: body.approver_id,
+      decision: body.approved ? "approve" : "deny",
+    });
+
+    const approverAgent = moteDb.db
+      .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+      .get(body.approver_id) as { public_key: string } | undefined;
+    if (!approverAgent) {
+      throw new HTTPException(404, { message: "Approver agent not found" });
+    }
+
+    const valid = await verify(
+      hexToBytes(body.signature),
+      encoder.encode(votePayload),
+      hexToBytes(approverAgent.public_key),
+    );
+    if (!valid) {
+      throw new HTTPException(403, { message: "Vote signature verification failed" });
+    }
+
+    // 6. Duplicate vote check
+    const existing = moteDb.db
+      .prepare("SELECT 1 FROM relay_approval_votes WHERE approval_id = ? AND approver_id = ?")
+      .get(approvalId, body.approver_id) as Record<string, unknown> | undefined;
+    if (existing != null) {
+      return c.json({ ok: true, duplicate: true, approval_id: approvalId });
+    }
+
+    // 7. Record vote
+    const voteId = `vote-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    moteDb.db
+      .prepare(
+        "INSERT INTO relay_approval_votes (vote_id, approval_id, approver_id, approved, signature) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(voteId, approvalId, body.approver_id, body.approved ? 1 : 0, body.signature);
+
+    // 8. Deny = terminal state — mark approval as denied, reject all future votes
+    if (!body.approved) {
+      moteDb.db
+        .prepare("UPDATE relay_approval_metadata SET status = 'denied' WHERE approval_id = ?")
+        .run(approvalId);
+      return c.json({
+        ok: true,
+        approval_id: approvalId,
+        vote_id: voteId,
+        status: "denied",
+        reason: "Deny vote received — approval terminated (fail-closed)",
+      });
+    }
+
+    // 9. Count approved votes and check quorum
+    const approvedCount = (
+      moteDb.db
+        .prepare(
+          "SELECT COUNT(*) as cnt FROM relay_approval_votes WHERE approval_id = ? AND approved = 1",
+        )
+        .get(approvalId) as { cnt: number }
+    ).cnt;
+
+    const quorumMet = approvedCount >= approval.quorum_required;
+    if (quorumMet) {
+      moteDb.db
+        .prepare("UPDATE relay_approval_metadata SET status = 'approved' WHERE approval_id = ?")
+        .run(approvalId);
+    }
+
+    return c.json({
+      ok: true,
+      approval_id: approvalId,
+      vote_id: voteId,
+      approved_count: approvedCount,
+      quorum_required: approval.quorum_required,
+      quorum_met: quorumMet,
+      status: quorumMet ? "approved" : "pending",
+    });
+  });
+
+  // GET /api/v1/agents/:motebitId/approvals/:approvalId — quorum progress status
+  app.get("/api/v1/agents/:motebitId/approvals/:approvalId", (c) => {
+    const motebitId = c.req.param("motebitId");
+    const approvalId = c.req.param("approvalId");
+
+    const approval = moteDb.db
+      .prepare("SELECT * FROM relay_approval_metadata WHERE approval_id = ? AND motebit_id = ?")
+      .get(approvalId, motebitId) as
+      | {
+          quorum_required: number;
+          quorum_approvers: string;
+          quorum_hash: string;
+          status: string;
+        }
+      | undefined;
+
+    const votes = moteDb.db
+      .prepare(
+        "SELECT approver_id, approved, created_at FROM relay_approval_votes WHERE approval_id = ?",
+      )
+      .all(approvalId) as Array<{ approver_id: string; approved: number; created_at: number }>;
+
+    const approvedVotes = votes.filter((v) => v.approved === 1).map((v) => v.approver_id);
+    const deniedVotes = votes.filter((v) => v.approved === 0).map((v) => v.approver_id);
+
+    return c.json({
+      approval_id: approvalId,
+      status: approval?.status ?? "unknown",
+      quorum_required: approval?.quorum_required ?? 1,
+      quorum_hash: approval?.quorum_hash,
+      approved_by: approvedVotes,
+      denied_by: deniedVotes,
+      total_votes: votes.length,
+      quorum_met: approval != null && approvedVotes.length >= approval.quorum_required,
+    });
   });
 
   // === Market Endpoints ===

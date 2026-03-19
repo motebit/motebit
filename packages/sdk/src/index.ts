@@ -484,11 +484,23 @@ export interface ToolRiskProfile {
   requiresApproval: boolean;
 }
 
+/** M-of-N approval quorum configuration. */
+export interface ApprovalQuorum {
+  /** Number of approvals required (M). */
+  threshold: number;
+  /** Authorized approver identifiers. */
+  approvers: string[];
+  /** Minimum risk level that triggers quorum (optional — default: all approval-required tools). */
+  risk_floor?: string;
+}
+
 export interface PolicyDecision {
   allowed: boolean;
   requiresApproval: boolean;
   reason?: string;
   budgetRemaining?: { calls: number; timeMs: number; cost: number };
+  /** When quorum is required, contains the quorum metadata. */
+  quorum?: { required: number; approvers: string[]; collected: string[] };
 }
 
 export interface TurnContext {
@@ -503,6 +515,8 @@ export interface TurnContext {
   callerTrustLevel?: AgentTrustLevel;
   /** Type of the remote motebit making the call (personal/service/collaborative). */
   remoteMotebitType?: string;
+  /** Delegation scope — when set, only tools within this scope are allowed. */
+  delegationScope?: string;
 }
 
 export interface InjectionWarning {
@@ -1483,6 +1497,13 @@ export interface CredentialStoreAdapter {
   list(motebitId: string, type?: string, limit?: number): StoredCredential[];
 }
 
+export interface ApprovalStoreAdapter {
+  /** Collect a quorum approval vote. Returns whether threshold is met and collected voter IDs. */
+  collectApproval(approvalId: string, approverId: string): { met: boolean; collected: string[] };
+  /** Set quorum metadata on a pending approval item. */
+  setQuorum(approvalId: string, required: number, approvers: string[]): void;
+}
+
 export interface StorageAdapters {
   eventStore: EventStoreAdapter;
   memoryStorage: MemoryStorageAdapter;
@@ -1499,4 +1520,5 @@ export interface StorageAdapters {
   settlementStore?: SettlementStoreAdapter;
   latencyStatsStore?: LatencyStatsStoreAdapter;
   credentialStore?: CredentialStoreAdapter;
+  approvalStore?: ApprovalStoreAdapter;
 }

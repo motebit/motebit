@@ -71,6 +71,16 @@ export interface VerifiedTaskResult {
   receipt: ExecutionReceipt;
 }
 
+/** Revocation event propagated via federation heartbeat. */
+export interface RevocationEvent {
+  type: "agent_revoked" | "key_rotated" | "credential_revoked";
+  motebit_id: string;
+  credential_id?: string;
+  new_public_key?: string;
+  timestamp: number;
+  signature: string;
+}
+
 /** Verified settlement from a peer relay. Signature already checked. */
 export interface VerifiedSettlement {
   taskId: string;
@@ -154,6 +164,21 @@ export function createFederationTables(db: DatabaseDriver): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_fed_settlements_dedup ON relay_federation_settlements(task_id, upstream_relay_id);
   `);
 
+  // Revocation events for federation propagation
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS relay_revocation_events (
+      event_id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      motebit_id TEXT NOT NULL,
+      credential_id TEXT,
+      new_public_key TEXT,
+      timestamp INTEGER NOT NULL,
+      signature TEXT NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+    CREATE INDEX IF NOT EXISTS idx_revocation_events_ts ON relay_revocation_events(timestamp);
+  `);
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS relay_settlement_retries (
       retry_id TEXT PRIMARY KEY,
@@ -170,6 +195,133 @@ export function createFederationTables(db: DatabaseDriver): void {
     );
     CREATE INDEX IF NOT EXISTS idx_settlement_retries_next ON relay_settlement_retries(next_retry_at) WHERE status = 'pending';
   `);
+}
+
+// === Revocation Event Helpers ===
+
+const REVOCATION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+/** Insert a revocation event — called when an agent is revoked, key is rotated, or credential is revoked. */
+export async function insertRevocationEvent(
+  db: DatabaseDriver,
+  relayIdentity: RelayIdentity,
+  type: RevocationEvent["type"],
+  motebitId: string,
+  opts?: { credentialId?: string; newPublicKey?: string },
+): Promise<RevocationEvent> {
+  const timestamp = Date.now();
+  const encoder = new TextEncoder();
+  const payload = `revocation:${type}:${motebitId}:${timestamp}`;
+  const sig = await sign(encoder.encode(payload), relayIdentity.privateKey);
+  const signatureHex = bytesToHex(sig);
+  const eventId = `rev-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  db.prepare(
+    "INSERT INTO relay_revocation_events (event_id, type, motebit_id, credential_id, new_public_key, timestamp, signature) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  ).run(
+    eventId,
+    type,
+    motebitId,
+    opts?.credentialId ?? null,
+    opts?.newPublicKey ?? null,
+    timestamp,
+    signatureHex,
+  );
+
+  return {
+    type,
+    motebit_id: motebitId,
+    credential_id: opts?.credentialId,
+    new_public_key: opts?.newPublicKey,
+    timestamp,
+    signature: signatureHex,
+  };
+}
+
+/** Query revocation events since a given timestamp. */
+export function getRevocationEventsSince(db: DatabaseDriver, sinceTs: number): RevocationEvent[] {
+  return db
+    .prepare(
+      "SELECT type, motebit_id, credential_id, new_public_key, timestamp, signature FROM relay_revocation_events WHERE timestamp > ? ORDER BY timestamp ASC",
+    )
+    .all(sinceTs) as RevocationEvent[];
+}
+
+/** Clean up revocation events older than TTL (7 days). */
+export function cleanupRevocationEvents(db: DatabaseDriver): number {
+  const cutoff = Date.now() - REVOCATION_TTL_MS;
+  const result = db.prepare("DELETE FROM relay_revocation_events WHERE timestamp < ?").run(cutoff);
+  return (result as { changes: number }).changes;
+}
+
+/** Process incoming revocation events from a peer relay. */
+export async function processIncomingRevocations(
+  db: DatabaseDriver,
+  events: RevocationEvent[],
+  peerPublicKey: Uint8Array,
+): Promise<{ processed: number; rejected: number }> {
+  const encoder = new TextEncoder();
+  let processed = 0;
+  let rejected = 0;
+
+  for (const event of events) {
+    // Verify peer signature
+    const payload = `revocation:${event.type}:${event.motebit_id}:${event.timestamp}`;
+    const valid = await verify(hexToBytes(event.signature), encoder.encode(payload), peerPublicKey);
+    if (!valid) {
+      rejected++;
+      logger.warn("federation.revocation.invalid_signature", {
+        type: event.type,
+        motebitId: event.motebit_id,
+      });
+      continue;
+    }
+
+    switch (event.type) {
+      case "agent_revoked": {
+        // Mark agent as revoked in local cache if it exists
+        try {
+          db.prepare("UPDATE agent_registry SET revoked = 1 WHERE motebit_id = ?").run(
+            event.motebit_id,
+          );
+        } catch {
+          /* agent may not exist locally */
+        }
+        processed++;
+        break;
+      }
+      case "key_rotated": {
+        // Update pinned public key if we have this agent
+        if (event.new_public_key) {
+          try {
+            db.prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?").run(
+              event.new_public_key,
+              event.motebit_id,
+            );
+          } catch {
+            /* agent may not exist locally */
+          }
+        }
+        processed++;
+        break;
+      }
+      case "credential_revoked": {
+        // Store credential revocation
+        if (event.credential_id) {
+          db.prepare(
+            "INSERT OR IGNORE INTO relay_revoked_credentials (credential_id, motebit_id, reason, revoked_by) VALUES (?, ?, 'Revoked via federation', 'federation')",
+          ).run(event.credential_id, event.motebit_id);
+        }
+        processed++;
+        break;
+      }
+      default:
+        // Unknown event type — safely ignore
+        break;
+    }
+  }
+
+  return { processed, rejected };
 }
 
 // === Private Key Encryption (AES-256-GCM) ===
@@ -358,6 +510,15 @@ export async function sendHeartbeats(
 
   const results = await Promise.allSettled(
     peers.map(async (peer) => {
+      // Collect revocation events since this peer's last heartbeat
+      const lastHb =
+        (
+          db
+            .prepare("SELECT last_heartbeat_at FROM relay_peers WHERE peer_relay_id = ?")
+            .get(peer.peer_relay_id) as { last_heartbeat_at: number | null } | undefined
+        )?.last_heartbeat_at ?? 0;
+      const revocations = getRevocationEventsSince(db, lastHb);
+
       const resp = await fetch(`${peer.endpoint_url}/federation/v1/peer/heartbeat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -366,6 +527,7 @@ export async function sendHeartbeats(
           timestamp,
           agent_count: agentCount,
           signature: signatureHex,
+          ...(revocations.length > 0 ? { revocations } : {}),
         }),
         signal: AbortSignal.timeout(10_000),
       });
@@ -725,8 +887,9 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       timestamp?: number;
       agent_count?: number;
       signature?: string;
+      revocations?: RevocationEvent[];
     }>();
-    const { relay_id, timestamp, agent_count, signature: sig } = body;
+    const { relay_id, timestamp, agent_count, signature: sig, revocations } = body;
     if (!relay_id || timestamp == null || agent_count == null || !sig) {
       throw new HTTPException(400, {
         message: "relay_id, timestamp, agent_count, and signature are required",
@@ -763,6 +926,31 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     db.prepare(
       `UPDATE relay_peers SET last_heartbeat_at = ?, missed_heartbeats = 0, agent_count = ?, state = ? WHERE peer_relay_id = ?`,
     ).run(now, agent_count, peer.state === "suspended" ? "active" : peer.state, relay_id);
+
+    // Process incoming revocation events (best-effort)
+    if (revocations && Array.isArray(revocations) && revocations.length > 0) {
+      try {
+        const peerPubKey = hexToBytes(peer.public_key);
+        const result = await processIncomingRevocations(db, revocations, peerPubKey);
+        if (result.rejected > 0) {
+          logger.warn("federation.revocation.rejected", {
+            peerId: relay_id,
+            rejected: result.rejected,
+          });
+        }
+        if (result.processed > 0) {
+          logger.info("federation.revocation.processed", {
+            peerId: relay_id,
+            processed: result.processed,
+          });
+        }
+      } catch (err) {
+        logger.warn("federation.revocation.error", {
+          peerId: relay_id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
 
     const ourTimestamp = Date.now();
     const localAgentCount = (

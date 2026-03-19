@@ -79,6 +79,7 @@ interface MotebitServerDeps {
   storeMemory?(content: string, sensitivity?: string): Promise<{ node_id: string }>;
   handleAgentTask?(
     prompt: string,
+    options?: { delegatedScope?: string },
   ): AsyncGenerator<
     | { type: "text"; text: string }
     | { type: "task_result"; receipt: Record<string, unknown> }
@@ -639,7 +640,7 @@ export class McpServerAdapter {
             setTimeout(() => resolve(timeoutError), timeoutMs),
           );
 
-          const gen = handleAgentTask(args.prompt);
+          const gen = handleAgentTask(args.prompt, { delegatedScope });
           let timedOut = false;
           try {
             // Race each iteration of the generator against the timeout

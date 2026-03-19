@@ -6,7 +6,9 @@ import type {
   PolicyDecision,
   TurnContext,
   InjectionWarning,
+  ApprovalQuorum,
 } from "@motebit/sdk";
+import { parseScopeSet } from "@motebit/crypto";
 import { classifyTool, isToolAllowed } from "./risk-model.js";
 import { BudgetEnforcer } from "./budget.js";
 import type { BudgetConfig } from "./budget.js";
@@ -51,6 +53,9 @@ export interface PolicyConfig {
 
   /** Per-tool risk overrides (tool name → risk level). */
   riskOverrides?: Record<string, RiskLevel>;
+
+  /** Multi-party approval quorum configuration (opt-in). */
+  approvalQuorum?: ApprovalQuorum;
 }
 
 export const DEFAULT_POLICY: PolicyConfig = {
@@ -197,7 +202,21 @@ export class PolicyGate {
       return decision;
     }
 
-    // 2. Risk level check — three-band governance when thresholds are set
+    // 2. Delegation scope enforcement — fail-closed
+    if (ctx.delegationScope !== undefined) {
+      const scopeSet = parseScopeSet(ctx.delegationScope);
+      if (!scopeSet.has("*") && !scopeSet.has(tool.name)) {
+        const decision: PolicyDecision = {
+          allowed: false,
+          requiresApproval: false,
+          reason: `Tool "${tool.name}" is outside delegated scope "${ctx.delegationScope}"`,
+        };
+        this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision, ctx.runId);
+        return decision;
+      }
+    }
+
+    // 3. Risk level check — three-band governance when thresholds are set
     const hasBands =
       this.config.requireApprovalAbove !== undefined && this.config.denyAbove !== undefined;
 
@@ -352,6 +371,22 @@ export class PolicyGate {
     }
     // collaborative: use standard policy (no adjustment), logged via normal audit
 
+    // 9. Multi-party approval quorum — attach quorum metadata when configured
+    const quorum = this.config.approvalQuorum;
+    let quorumMeta: PolicyDecision["quorum"];
+    if (needsApproval && quorum && quorum.threshold > 1) {
+      // Check risk floor — only apply quorum at or above the configured risk level
+      const meetsFloor =
+        !quorum.risk_floor || profile.risk >= this.parseRiskFloor(quorum.risk_floor);
+      if (meetsFloor) {
+        quorumMeta = {
+          required: quorum.threshold,
+          approvers: quorum.approvers,
+          collected: [],
+        };
+      }
+    }
+
     const decision: PolicyDecision = {
       allowed: true,
       requiresApproval: needsApproval,
@@ -360,6 +395,7 @@ export class PolicyGate {
         timeMs: budgetResult.remaining.timeMs,
         cost: budgetResult.remaining.cost,
       },
+      ...(quorumMeta ? { quorum: quorumMeta } : {}),
     };
 
     this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision, ctx.runId);
@@ -441,6 +477,18 @@ export class PolicyGate {
    */
   containsSecrets(text: string): boolean {
     return this.redaction.containsSecrets(text);
+  }
+
+  /** Parse a risk floor string (e.g. "R2_WRITE") into a RiskLevel enum value. */
+  private parseRiskFloor(floor: string): RiskLevel {
+    const map: Record<string, RiskLevel> = {
+      R0_READ: RiskLevel.R0_READ,
+      R1_DRAFT: RiskLevel.R1_DRAFT,
+      R2_WRITE: RiskLevel.R2_WRITE,
+      R3_EXECUTE: RiskLevel.R3_EXECUTE,
+      R4_MONEY: RiskLevel.R4_MONEY,
+    };
+    return map[floor] ?? RiskLevel.R0_READ;
   }
 
   // === Turn Management ===

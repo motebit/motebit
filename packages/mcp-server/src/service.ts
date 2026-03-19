@@ -117,6 +117,7 @@ export interface WireServerDepsOptions {
    */
   handleAgentTask?: (
     prompt: string,
+    options?: { delegatedScope?: string },
   ) => AsyncGenerator<
     | { type: "text"; text: string }
     | { type: "task_result"; receipt: Record<string, unknown> }

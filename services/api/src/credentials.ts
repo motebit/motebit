@@ -20,6 +20,7 @@ import type { DatabaseDriver } from "@motebit/persistence";
 import type { IdentityManager } from "@motebit/core-identity";
 import type { Hono } from "hono";
 import type { RelayIdentity } from "./federation.js";
+import { insertRevocationEvent } from "./federation.js";
 
 export interface CredentialDeps {
   db: DatabaseDriver;
@@ -185,20 +186,95 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
   });
 
   // POST /api/v1/agents/:motebitId/revoke-credential — revoke a verifiable credential
+  // Allowed when caller is the subject OR the issuer of the credential.
   app.post("/api/v1/agents/:motebitId/revoke-credential", async (c) => {
     const motebitId = c.req.param("motebitId");
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
-    if (callerMotebitId && callerMotebitId !== motebitId) {
-      throw new HTTPException(403, { message: "Cannot revoke credentials for another agent" });
-    }
+
     const body = await c.req.json<{ credential_id: string; reason?: string }>();
     if (!body.credential_id) {
       throw new HTTPException(400, { message: "credential_id is required" });
     }
+
+    // Determine caller DID for issuer check
+    let callerDid: string | undefined;
+    if (callerMotebitId) {
+      const identity = await identityManager.load(asMotebitId(callerMotebitId));
+      const devices = identity
+        ? await identityManager.listDevices(asMotebitId(callerMotebitId))
+        : [];
+      if (devices[0]?.public_key) {
+        callerDid = hexPublicKeyToDidKey(devices[0].public_key);
+      }
+    }
+
+    // Check authorization: caller must be the subject OR the issuer
+    const isSubject = !callerMotebitId || callerMotebitId === motebitId;
+    let isIssuer = false;
+    if (!isSubject && callerDid) {
+      const credRow = db
+        .prepare("SELECT issuer_did FROM relay_credentials WHERE credential_id = ?")
+        .get(body.credential_id) as { issuer_did: string } | undefined;
+      isIssuer = credRow?.issuer_did === callerDid;
+    }
+
+    if (!isSubject && !isIssuer) {
+      throw new HTTPException(403, { message: "Only the credential subject or issuer can revoke" });
+    }
+
+    const revokedBy = callerMotebitId ?? motebitId;
     db.prepare(
-      "INSERT OR REPLACE INTO relay_revoked_credentials (credential_id, motebit_id, reason) VALUES (?, ?, ?)",
-    ).run(body.credential_id, motebitId, body.reason ?? null);
+      "INSERT OR REPLACE INTO relay_revoked_credentials (credential_id, motebit_id, reason, revoked_by) VALUES (?, ?, ?, ?)",
+    ).run(body.credential_id, motebitId, body.reason ?? null, revokedBy);
+
+    // Emit revocation event for federation propagation
+    try {
+      await insertRevocationEvent(db, relayIdentity, "credential_revoked", motebitId, {
+        credentialId: body.credential_id,
+      });
+    } catch {
+      /* best-effort — revocation still succeeded locally */
+    }
+
     return c.json({ ok: true, credential_id: body.credential_id });
+  });
+
+  // POST /api/v1/credentials/batch-status — batch credential revocation status check
+  app.post("/api/v1/credentials/batch-status", async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      throw new HTTPException(400, { message: "Invalid JSON body" });
+    }
+    const { credential_ids } = body as { credential_ids?: string[] };
+    if (!Array.isArray(credential_ids) || credential_ids.length === 0) {
+      throw new HTTPException(400, { message: "credential_ids array is required" });
+    }
+    if (credential_ids.length > 100) {
+      throw new HTTPException(400, { message: "Maximum 100 credential_ids per request" });
+    }
+
+    const placeholders = credential_ids.map(() => "?").join(",");
+    const rows = db
+      .prepare(
+        `SELECT credential_id, revoked_at, reason FROM relay_revoked_credentials WHERE credential_id IN (${placeholders})`,
+      )
+      .all(...credential_ids) as Array<{
+      credential_id: string;
+      revoked_at: string;
+      reason: string | null;
+    }>;
+
+    const revokedMap = new Map(rows.map((r) => [r.credential_id, r]));
+    const results = credential_ids.map((id) => {
+      const row = revokedMap.get(id);
+      return row
+        ? { credential_id: id, revoked: true, revoked_at: row.revoked_at, reason: row.reason ?? "" }
+        : { credential_id: id, revoked: false };
+    });
+
+    return c.json({ results });
   });
 
   // GET /api/v1/credentials/:credentialId/status — public credential revocation status

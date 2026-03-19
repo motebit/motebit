@@ -309,6 +309,46 @@ describe("credential reputation in routing graph", () => {
   });
 });
 
+describe("Revocation-aware credential aggregation", () => {
+  it("skips revoked credentials when checkRevoked callback is provided", () => {
+    const vc1 = { ...makeRepVC("did:key:issuer-a"), id: "cred-1" };
+    const vc2 = { ...makeRepVC("did:key:issuer-b"), id: "cred-2" };
+
+    const revoked = new Set(["cred-1"]);
+    const result = aggregateCredentialReputation([vc1, vc2], highTrust, {
+      checkRevoked: (id) => revoked.has(id),
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.issuer_count).toBe(1); // Only cred-2 counted
+  });
+
+  it("works without checkRevoked callback (backward compat)", () => {
+    const vc = { ...makeRepVC("did:key:issuer"), id: "cred-1" };
+    const result = aggregateCredentialReputation([vc], highTrust);
+    expect(result).not.toBeNull();
+    expect(result!.issuer_count).toBe(1);
+  });
+
+  it("skips credentials without id even with checkRevoked set", () => {
+    const vc = makeRepVC("did:key:issuer"); // no id field
+    const result = aggregateCredentialReputation([vc], highTrust, {
+      checkRevoked: () => true, // would revoke everything with an id
+    });
+    expect(result).not.toBeNull(); // id-less VC not checked
+  });
+
+  it("returns null when all credentials are revoked", () => {
+    const vc1 = { ...makeRepVC("did:key:issuer-a"), id: "cred-1" };
+    const vc2 = { ...makeRepVC("did:key:issuer-b"), id: "cred-2" };
+
+    const result = aggregateCredentialReputation([vc1, vc2], highTrust, {
+      checkRevoked: () => true,
+    });
+    expect(result).toBeNull();
+  });
+});
+
 describe("Sybil defense — self-attestation filtering", () => {
   it("ignores credentials where issuer === subject", () => {
     // Agent vouching for itself — tautological, zero trust signal

@@ -916,6 +916,9 @@ importers:
 
   packages/policy:
     dependencies:
+      '@motebit/crypto':
+        specifier: workspace:*
+        version: link:../crypto
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk

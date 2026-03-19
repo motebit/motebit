@@ -1255,6 +1255,7 @@ function rowToApproval(row: ApprovalRow): ApprovalItem {
 }
 
 export class SqliteApprovalStore {
+  private db: DatabaseDriver;
   private stmtAdd: PreparedStatement;
   private stmtGet: PreparedStatement;
   private stmtListPending: PreparedStatement;
@@ -1263,6 +1264,7 @@ export class SqliteApprovalStore {
   private stmtExpireStale: PreparedStatement;
 
   constructor(db: DatabaseDriver) {
+    this.db = db;
     this.stmtAdd = db.prepare(
       `INSERT OR REPLACE INTO approval_queue
        (approval_id, motebit_id, goal_id, tool_name, args_preview, args_hash, risk_level, status, created_at, expires_at, resolved_at, denied_reason)
@@ -1323,6 +1325,37 @@ export class SqliteApprovalStore {
   expireStale(now: number): number {
     const info = this.stmtExpireStale.run(now, now);
     return info.changes;
+  }
+
+  /** Set quorum metadata on a pending approval item. */
+  setQuorum(approvalId: string, required: number, approvers: string[]): void {
+    this.db
+      .prepare(
+        "UPDATE approval_queue SET quorum_required = ?, quorum_approvers = ? WHERE approval_id = ?",
+      )
+      .run(required, JSON.stringify(approvers), approvalId);
+  }
+
+  /** Collect an approval vote. Returns { met, collected } where met=true means quorum reached. */
+  collectApproval(approvalId: string, approverId: string): { met: boolean; collected: string[] } {
+    const row = this.db
+      .prepare("SELECT quorum_required, quorum_collected FROM approval_queue WHERE approval_id = ?")
+      .get(approvalId) as { quorum_required: number; quorum_collected: string } | undefined;
+
+    if (!row) return { met: false, collected: [] };
+
+    const collected: string[] = JSON.parse(row.quorum_collected) as string[];
+    if (collected.includes(approverId)) {
+      // Duplicate vote — ignore, return current state
+      return { met: collected.length >= row.quorum_required, collected };
+    }
+
+    collected.push(approverId);
+    this.db
+      .prepare("UPDATE approval_queue SET quorum_collected = ? WHERE approval_id = ?")
+      .run(JSON.stringify(collected), approvalId);
+
+    return { met: collected.length >= row.quorum_required, collected };
   }
 }
 
@@ -2674,6 +2707,22 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
       "CREATE INDEX IF NOT EXISTS idx_creds_type ON issued_credentials(credential_type)",
     );
     driver.pragma("user_version = 29");
+  }
+
+  if (userVersion < 30) {
+    migrateExec(
+      driver,
+      "ALTER TABLE approval_queue ADD COLUMN quorum_required INTEGER NOT NULL DEFAULT 1",
+    );
+    migrateExec(
+      driver,
+      "ALTER TABLE approval_queue ADD COLUMN quorum_approvers TEXT NOT NULL DEFAULT '[]'",
+    );
+    migrateExec(
+      driver,
+      "ALTER TABLE approval_queue ADD COLUMN quorum_collected TEXT NOT NULL DEFAULT '[]'",
+    );
+    driver.pragma("user_version = 30");
   }
 
   const eventStore = new SqliteEventStore(driver);
