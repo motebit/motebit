@@ -121,6 +121,60 @@ describe("create-motebit", () => {
     expect(config.default_provider).toBe("anthropic");
   });
 
+  // -- agent scaffold --
+
+  it("scaffolds agent project with --agent --yes", () => {
+    const subDir = "test-service";
+    const { stdout, exitCode } = run([subDir, "--agent", "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-123",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Agent created");
+
+    const projectDir = join(testDir, subDir);
+
+    // Agent-specific files
+    expect(existsSync(join(projectDir, "src", "tools.ts"))).toBe(true);
+    expect(existsSync(join(projectDir, "tsconfig.json"))).toBe(true);
+    expect(existsSync(join(projectDir, "motebit.md"))).toBe(true);
+    expect(existsSync(join(projectDir, "package.json"))).toBe(true);
+    expect(existsSync(join(projectDir, ".env.example"))).toBe(true);
+    expect(existsSync(join(projectDir, ".gitignore"))).toBe(true);
+
+    // package.json has agent scripts
+    const pkg = JSON.parse(readFileSync(join(projectDir, "package.json"), "utf-8"));
+    expect(pkg.scripts.dev).toContain("--direct");
+    expect(pkg.scripts.dev).toContain("--self-test");
+    expect(pkg.scripts.dev).toContain("--tools");
+    expect(pkg.scripts.start).toContain("--direct");
+    expect(pkg.dependencies).toHaveProperty("@motebit/sdk");
+    expect(pkg.devDependencies).toHaveProperty("motebit");
+
+    // tools.ts has echo tool
+    const tools = readFileSync(join(projectDir, "src", "tools.ts"), "utf-8");
+    expect(tools).toContain("echo");
+    expect(tools).toContain("ToolDefinition");
+
+    // tsconfig targets ES2022 + Node16
+    const tsconfig = JSON.parse(readFileSync(join(projectDir, "tsconfig.json"), "utf-8"));
+    expect(tsconfig.compilerOptions.module).toBe("Node16");
+
+    // motebit.md is a service identity
+    const identity = readFileSync(join(projectDir, "motebit.md"), "utf-8");
+    expect(identity).toContain("motebit/identity@1.0");
+    expect(identity).toContain('type: "service"');
+
+    // .gitignore includes dist/
+    const gi = readFileSync(join(projectDir, ".gitignore"), "utf-8");
+    expect(gi).toContain("dist/");
+
+    // .env.example has relay vars
+    const env = readFileSync(join(projectDir, ".env.example"), "utf-8");
+    expect(env).toContain("MOTEBIT_SYNC_URL");
+    expect(env).toContain("MOTEBIT_API_TOKEN");
+  });
+
   it("--yes without MOTEBIT_PASSPHRASE fails", () => {
     const { exitCode, stdout } = run(["my-agent", "--yes"], testDir, {
       MOTEBIT_PASSPHRASE: "",

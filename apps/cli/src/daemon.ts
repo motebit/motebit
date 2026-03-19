@@ -829,6 +829,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
           const signed = await signExecutionReceipt(
             receipt as Parameters<typeof signExecutionReceipt>[0],
             privateKey,
+            publicKeyHex ? fromHex(publicKeyHex) : undefined,
           );
           log(
             `receipt=${signed.signature.slice(0, 12)}… tool=${tool.name} prompt="${prompt.slice(0, 60)}"`,

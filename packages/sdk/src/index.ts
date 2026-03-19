@@ -873,6 +873,8 @@ export interface ExecutionReceipt {
   prompt_hash: string;
   result_hash: string;
   delegation_receipts?: ExecutionReceipt[];
+  /** Cryptographic binding to the relay's economic identity for this task. */
+  relay_task_id?: string;
   /** Scope from the delegation token that authorized this execution, if any. */
   delegated_scope?: string;
   signature: string;

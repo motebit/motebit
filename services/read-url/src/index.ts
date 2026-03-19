@@ -167,6 +167,7 @@ async function main(): Promise<void> {
       const signed = await signExecutionReceipt(
         receipt as Parameters<typeof signExecutionReceipt>[0],
         privateKey,
+        fromHex(publicKeyHex),
       );
       log(`receipt=${signed.signature.slice(0, 12)}… url="${prompt.slice(0, 60)}"`);
       yield { type: "task_result" as const, receipt: signed as unknown as Record<string, unknown> };
