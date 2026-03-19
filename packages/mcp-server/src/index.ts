@@ -79,7 +79,7 @@ interface MotebitServerDeps {
   storeMemory?(content: string, sensitivity?: string): Promise<{ node_id: string }>;
   handleAgentTask?(
     prompt: string,
-    options?: { delegatedScope?: string },
+    options?: { delegatedScope?: string; relayTaskId?: string },
   ): AsyncGenerator<
     | { type: "text"; text: string }
     | { type: "task_result"; receipt: Record<string, unknown> }
@@ -567,11 +567,18 @@ export class McpServerAdapter {
             .unknown()
             .optional()
             .describe('Array of capability names required for this task (e.g. ["web_search"])'),
+          relay_task_id: z
+            .string()
+            .optional()
+            .describe(
+              "Relay-assigned task ID for economic binding — included in the signed receipt",
+            ),
         },
         async (args: {
           prompt: string;
           delegation_token?: string;
           required_capabilities?: unknown;
+          relay_task_id?: string;
         }) => {
           const denied = this.validateSyntheticTool(toolDef, args);
           if (denied) return denied;
@@ -640,7 +647,10 @@ export class McpServerAdapter {
             setTimeout(() => resolve(timeoutError), timeoutMs),
           );
 
-          const gen = handleAgentTask(args.prompt, { delegatedScope });
+          const gen = handleAgentTask(args.prompt, {
+            delegatedScope,
+            relayTaskId: args.relay_task_id,
+          });
           let timedOut = false;
           try {
             // Race each iteration of the generator against the timeout
@@ -982,6 +992,12 @@ export class McpServerAdapter {
     const pubKeyBytes = hexToBytes(publicKeyHex);
     const payload = await this.deps.verifySignedToken(token, pubKeyBytes);
     if (!payload) return null;
+
+    // Token signature verified — caller is cryptographically proven.
+    // Upgrade FirstContact/Unknown to Verified (the signature IS verification).
+    if (trustLevel === AgentTrustLevel.FirstContact || trustLevel === AgentTrustLevel.Unknown) {
+      trustLevel = AgentTrustLevel.Verified;
+    }
 
     // Notify caller verified
     if (this.deps.onCallerVerified) {

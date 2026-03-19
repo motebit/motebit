@@ -24,7 +24,11 @@ import {
 } from "@motebit/tools";
 import type { SearchProvider } from "@motebit/tools";
 import { wireServerDeps, startServiceServer } from "@motebit/mcp-server";
-import { verifyIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
+import {
+  verifyIdentityFile,
+  governanceToPolicyConfig,
+  parseRiskLevel,
+} from "@motebit/identity-file";
 import { verifySignedToken, signExecutionReceipt, hash as sha256 } from "@motebit/crypto";
 import { embedText } from "@motebit/memory-graph";
 
@@ -164,8 +168,17 @@ async function main(): Promise<void> {
     agentTrustStore: moteDb.agentTrustStore,
   };
 
-  const policyOverrides =
-    identity.governance != null ? governanceToPolicyConfig(identity.governance) : {};
+  const govConfig =
+    identity.governance != null ? governanceToPolicyConfig(identity.governance) : null;
+
+  // Service motebit: auto-approve its own tools (web_search, read_url, motebit_task)
+  // The identity file may have conservative personal governance defaults — override
+  // for service mode where all registered tools are pre-approved read-only operations.
+  const policyOverrides = {
+    ...(govConfig ?? {}),
+    maxRiskAuto: parseRiskLevel("R3_EXECUTE"),
+    requireApprovalAbove: parseRiskLevel("R3_EXECUTE"),
+  };
 
   const runtime = new MotebitRuntime(
     { motebitId, policy: { ...policyOverrides } },
@@ -188,7 +201,10 @@ async function main(): Promise<void> {
 
   if (config.privateKeyHex) {
     const privateKey = fromHex(config.privateKeyHex);
-    handleAgentTask = async function* (prompt: string, _options?: { delegatedScope?: string }) {
+    handleAgentTask = async function* (
+      prompt: string,
+      options?: { delegatedScope?: string; relayTaskId?: string },
+    ) {
       const taskId = crypto.randomUUID();
       const submittedAt = Date.now();
 
@@ -212,7 +228,7 @@ async function main(): Promise<void> {
       const promptHash = await sha256(enc.encode(prompt));
       const resultHash = await sha256(enc.encode(canonical));
 
-      const receipt = {
+      const receipt: Record<string, unknown> = {
         task_id: taskId,
         motebit_id: motebitId,
         device_id: "web-search-service",
@@ -224,9 +240,15 @@ async function main(): Promise<void> {
         memories_formed: 0,
         prompt_hash: promptHash,
         result_hash: resultHash,
+        // Cryptographic binding to the relay's economic identity for this task.
+        // Included in the signed receipt — prevents cross-task replay attacks.
+        ...(options?.relayTaskId ? { relay_task_id: options.relayTaskId } : {}),
       };
 
-      const signed = await signExecutionReceipt(receipt, privateKey);
+      const signed = await signExecutionReceipt(
+        receipt as Parameters<typeof signExecutionReceipt>[0],
+        privateKey,
+      );
       log(`receipt=${signed.signature.slice(0, 12)}… query="${prompt.slice(0, 60)}"`);
       yield { type: "task_result" as const, receipt: signed as unknown as Record<string, unknown> };
     };
@@ -241,6 +263,8 @@ async function main(): Promise<void> {
     embedText,
     verifySignedToken,
     handleAgentTask,
+    syncUrl: config.syncUrl,
+    apiToken: config.apiToken,
   });
 
   await startServiceServer(deps, {

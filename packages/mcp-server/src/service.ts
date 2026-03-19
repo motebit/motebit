@@ -117,7 +117,7 @@ export interface WireServerDepsOptions {
    */
   handleAgentTask?: (
     prompt: string,
-    options?: { delegatedScope?: string },
+    options?: { delegatedScope?: string; relayTaskId?: string },
   ) => AsyncGenerator<
     | { type: "text"; text: string }
     | { type: "task_result"; receipt: Record<string, unknown> }
@@ -126,6 +126,11 @@ export interface WireServerDepsOptions {
 
   /** If provided, wires sendMessage for motebit_query synthetic tool. */
   sendMessage?: (text: string) => Promise<{ response: string; memoriesFormed: number }>;
+
+  /** Relay URL for remote key resolution (fallback when local trust store has no record). */
+  syncUrl?: string;
+  /** API token for relay calls (key resolution, etc.). */
+  apiToken?: string;
 }
 
 export function wireServerDeps(
@@ -224,24 +229,71 @@ export function wireServerDeps(
     deps.verifySignedToken = opts.verifySignedToken;
   }
 
-  // Optional: caller key resolution (from agent trust store)
-  if (runtime.getAgentTrust) {
-    const getAgentTrust = runtime.getAgentTrust.bind(runtime);
-    deps.resolveCallerKey = async (callerMotebitId: string) => {
-      const record = await getAgentTrust(callerMotebitId);
-      if (!record || !record.public_key) return null;
-      const trustMap: Record<string, AgentTrustLevel> = {
-        [AgentTrustLevel.Unknown]: AgentTrustLevel.Unknown,
-        [AgentTrustLevel.FirstContact]: AgentTrustLevel.FirstContact,
-        [AgentTrustLevel.Verified]: AgentTrustLevel.Verified,
-        [AgentTrustLevel.Trusted]: AgentTrustLevel.Trusted,
-        [AgentTrustLevel.Blocked]: AgentTrustLevel.Blocked,
+  // Caller key resolution: local trust store → relay fallback
+  {
+    const getAgentTrust = runtime.getAgentTrust?.bind(runtime);
+    const syncUrl = opts.syncUrl?.replace(/\/+$/, "");
+    const apiToken = opts.apiToken;
+
+    // Track relay-confirmed callers so local FirstContact records get upgraded
+    const relayConfirmedCallers = new Set<string>();
+
+    if (getAgentTrust || syncUrl) {
+      deps.resolveCallerKey = async (callerMotebitId: string) => {
+        // 1. Try local trust store first
+        if (getAgentTrust) {
+          const record = await getAgentTrust(callerMotebitId);
+          if (record?.public_key) {
+            const trustMap: Record<string, AgentTrustLevel> = {
+              [AgentTrustLevel.Unknown]: AgentTrustLevel.Unknown,
+              [AgentTrustLevel.FirstContact]: AgentTrustLevel.FirstContact,
+              [AgentTrustLevel.Verified]: AgentTrustLevel.Verified,
+              [AgentTrustLevel.Trusted]: AgentTrustLevel.Trusted,
+              [AgentTrustLevel.Blocked]: AgentTrustLevel.Blocked,
+            };
+            let trustLevel = trustMap[record.trust_level] ?? AgentTrustLevel.Unknown;
+            // Upgrade FirstContact → Verified for callers whose key was confirmed by the relay
+            if (
+              trustLevel === AgentTrustLevel.FirstContact &&
+              relayConfirmedCallers.has(callerMotebitId)
+            ) {
+              trustLevel = AgentTrustLevel.Verified;
+            }
+            return {
+              publicKey: record.public_key,
+              trustLevel,
+            };
+          }
+        }
+
+        // 2. Relay fallback — look up device public key
+        if (syncUrl) {
+          try {
+            const headers: Record<string, string> = {};
+            if (apiToken) headers["Authorization"] = `Bearer ${apiToken}`;
+            const resp = await fetch(`${syncUrl}/api/v1/devices/${callerMotebitId}`, { headers });
+            if (resp.ok) {
+              const raw: unknown = await resp.json();
+              const arr = Array.isArray(raw)
+                ? (raw as Array<{ public_key?: string }>)
+                : (((raw as Record<string, unknown>).devices as Array<{ public_key?: string }>) ??
+                  []);
+              const key = arr.find((d) => d.public_key)?.public_key;
+              if (key) {
+                // Relay confirmed this public key — mark as relay-verified so subsequent
+                // lookups from local trust store upgrade FirstContact → Verified.
+                relayConfirmedCallers.add(callerMotebitId);
+                return { publicKey: key, trustLevel: AgentTrustLevel.Verified };
+              }
+            }
+          } catch {
+            // Relay unreachable — fail closed
+          }
+        }
+
+        return null;
       };
-      return {
-        publicKey: record.public_key,
-        trustLevel: trustMap[record.trust_level] ?? AgentTrustLevel.Unknown,
-      };
-    };
+    }
   }
 
   // Optional: callback on caller verification
@@ -342,6 +394,7 @@ export async function startServiceServer(
         headers: regHeaders,
         body: JSON.stringify({
           motebit_id: deps.motebitId,
+          public_key: deps.publicKeyHex ?? "",
           endpoint_url: endpointUrl,
           capabilities: toolNames,
           metadata: { name: serverName },

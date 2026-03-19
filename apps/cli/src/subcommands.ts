@@ -1509,19 +1509,19 @@ export async function handleRegister(config: CliConfig): Promise<void> {
     }
   }
 
-  // Step 1: Register device (public key binding) with the relay
-  const registerBody: Record<string, string> = {
+  // Step 1: Bootstrap identity + device on relay (creates identity if new, idempotent if same key)
+  const bootstrapBody = {
     motebit_id: motebitId,
-    device_name: deviceId,
+    device_id: deviceId,
     public_key: publicKeyHex,
   };
 
   let registerResp: Response;
   try {
-    registerResp = await fetch(`${syncUrl}/device/register`, {
+    registerResp = await fetch(`${syncUrl}/api/v1/agents/bootstrap`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(registerBody),
+      body: JSON.stringify(bootstrapBody),
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1529,10 +1529,7 @@ export async function handleRegister(config: CliConfig): Promise<void> {
     process.exit(1);
   }
 
-  // 404 means the relay has no record of this identity yet — that's expected for a
-  // fresh registration before any sync events have been pushed.  Treat it as a soft
-  // failure and continue so the operator can still set up the sync URL locally.
-  if (!registerResp.ok && registerResp.status !== 404) {
+  if (!registerResp.ok) {
     const text = await registerResp.text();
     console.error(
       `Error: relay registration failed (${registerResp.status}): ${text.slice(0, 200)}`,
@@ -1540,7 +1537,8 @@ export async function handleRegister(config: CliConfig): Promise<void> {
     process.exit(1);
   }
 
-  const registered = registerResp.ok;
+  const bootstrapResult = (await registerResp.json()) as { registered: boolean };
+  const registered = true;
 
   // Step 2: Verify registration succeeded by minting a signed token and calling /health
   if (registered && privateKeyBytes) {
@@ -1576,14 +1574,12 @@ export async function handleRegister(config: CliConfig): Promise<void> {
     console.log(`Saved sync URL: ${syncUrl}`);
   }
 
-  if (registered) {
-    console.log(`Registered ${motebitId.slice(0, 8)}... with relay at ${syncUrl}`);
+  if (bootstrapResult.registered) {
+    console.log(`Created + registered ${motebitId.slice(0, 8)}... with relay at ${syncUrl}`);
   } else {
-    // 404: relay doesn't have this identity yet (first ever sync)
     console.log(
-      `Identity ${motebitId.slice(0, 8)}... not yet on relay — sync URL saved to config.`,
+      `Registered ${motebitId.slice(0, 8)}... with relay at ${syncUrl} (identity already existed)`,
     );
-    console.log(`Run the REPL with --sync-url ${syncUrl} to push your events, then re-register.`);
   }
 
   // Erase temporary private key bytes

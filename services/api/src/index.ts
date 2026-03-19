@@ -108,6 +108,7 @@ import {
   canonicalJson,
   bytesToHex,
   hexToBytes,
+  hash as sha256Hash,
 } from "@motebit/crypto";
 /* eslint-enable no-restricted-imports */
 import type { KeySuccessionRecord } from "@motebit/crypto";
@@ -2895,6 +2896,35 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       }
     }
 
+    // Task-receipt binding (dual invariant):
+    // 1. Primary: relay_task_id — cryptographic binding to the economic identity of the task.
+    //    The relay_task_id is included in the signed receipt, so tampering breaks the signature.
+    // 2. Secondary: prompt_hash — semantic binding to the task content.
+    //    Guards against prompt collision when relay_task_id is absent (legacy receipts).
+    const receiptRelayTaskId = (receipt as unknown as Record<string, unknown>).relay_task_id;
+    if (typeof receiptRelayTaskId === "string" && receiptRelayTaskId !== "") {
+      if (receiptRelayTaskId !== taskId) {
+        throw new HTTPException(400, {
+          message: `Receipt relay_task_id "${receiptRelayTaskId}" does not match task "${taskId}" — receipt is bound to a different economic contract`,
+        });
+      }
+    } else if (
+      receipt.prompt_hash &&
+      typeof receipt.prompt_hash === "string" &&
+      entry.task.prompt
+    ) {
+      // Soft check: log mismatch but don't reject legacy receipts without relay_task_id.
+      // relay_task_id is the hard binding; prompt_hash is observability-only for legacy callers.
+      const expectedHash = await sha256Hash(new TextEncoder().encode(entry.task.prompt));
+      if (receipt.prompt_hash !== expectedHash) {
+        logger.warn("receipt.prompt_hash_mismatch", {
+          correlationId: taskId,
+          reason:
+            "receipt prompt_hash does not match task prompt — relay_task_id binding not present",
+        });
+      }
+    }
+
     // Cryptographic verification: resolve executing agent's public key and verify Ed25519 signature.
     // Try agent_registry first (service agents), then fall back to device records (personal agents).
     let pubKeyHex: string | undefined;
@@ -3937,14 +3967,27 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       return c.json({ valid: false, reason: "motebit_id mismatch" });
     }
 
-    // Find the device's public key
-    const devices = await identityManager.listDevices(motebitId);
-    const device = devices.find((d) => d.device_id === receipt.device_id);
-    if (!device || !device.public_key) {
-      return c.json({ valid: false, reason: "Device or public key not found" });
+    // Resolve public key: agent_registry (service agents) > device records (personal agents)
+    let pubKeyHex: string | undefined;
+    const regRow = moteDb.db
+      .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+      .get(motebitId as string) as { public_key: string } | undefined;
+    if (regRow?.public_key) {
+      pubKeyHex = regRow.public_key;
+    } else {
+      const devices = await identityManager.listDevices(motebitId);
+      const device =
+        (receipt.device_id != null
+          ? devices.find((d) => d.device_id === receipt.device_id)
+          : undefined) ?? devices.find((d) => d.public_key);
+      if (device?.public_key) pubKeyHex = device.public_key;
     }
 
-    const pubKeyBytes = hexToBytes(device.public_key);
+    if (!pubKeyHex) {
+      return c.json({ valid: false, reason: "No public key on file for this agent" });
+    }
+
+    const pubKeyBytes = hexToBytes(pubKeyHex);
     const valid = await verifyExecutionReceipt(receipt, pubKeyBytes);
     return c.json({ valid });
   });
@@ -4227,6 +4270,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       endpoint_url: string;
       capabilities: string[];
       metadata?: { name?: string; description?: string };
+      public_key?: string;
     }>();
     const motebitId = callerMotebitId ?? body.motebit_id;
     if (!motebitId || typeof motebitId !== "string") {
@@ -4242,10 +4286,19 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       });
     }
 
-    // Look up public key from devices
-    const devices = await identityManager.listDevices(motebitId);
-    const deviceWithKey = devices.find((d) => d.public_key);
-    const publicKey = deviceWithKey ? deviceWithKey.public_key : "";
+    // Resolve public key: request body > device records > empty
+    let publicKey = "";
+    if (
+      body.public_key &&
+      typeof body.public_key === "string" &&
+      /^[0-9a-f]{64}$/i.test(body.public_key)
+    ) {
+      publicKey = body.public_key;
+    } else {
+      const devices = await identityManager.listDevices(motebitId);
+      const deviceWithKey = devices.find((d) => d.public_key);
+      publicKey = deviceWithKey ? deviceWithKey.public_key : "";
+    }
 
     // --- Succession chain validation on re-registration ---
     // If the agent already has a stored public key and the new key differs,
