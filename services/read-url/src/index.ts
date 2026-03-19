@@ -84,7 +84,15 @@ async function main(): Promise<void> {
     stateSnapshot: moteDb.stateSnapshot,
     toolAuditSink: moteDb.toolAuditSink,
     conversationStore: moteDb.conversationStore,
+    planStore: moteDb.planStore,
+    gradientStore: moteDb.gradientStore as unknown as StorageAdapters["gradientStore"],
     agentTrustStore: moteDb.agentTrustStore,
+    serviceListingStore: moteDb.serviceListingStore,
+    budgetAllocationStore: moteDb.budgetAllocationStore,
+    settlementStore: moteDb.settlementStore,
+    latencyStatsStore: moteDb.latencyStatsStore,
+    credentialStore: moteDb.credentialStore,
+    approvalStore: moteDb.approvalStore,
   };
 
   const govConfig =

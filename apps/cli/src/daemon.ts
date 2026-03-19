@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { MotebitRuntime, NullRenderer } from "@motebit/runtime";
 import { embedText } from "@motebit/memory-graph";
-import type { StorageAdapters } from "@motebit/runtime";
+
 import type { MotebitPersonalityConfig } from "@motebit/ai-core";
 import { DEFAULT_CONFIG } from "@motebit/ai-core";
 import { openMotebitDatabase } from "@motebit/persistence";
@@ -41,7 +41,12 @@ import { GoalScheduler } from "./scheduler.js";
 import type { CliConfig } from "./args.js";
 import { loadFullConfig, extractPersonality } from "./config.js";
 import { fromHex, decryptPrivateKey, promptPassphrase } from "./identity.js";
-import { getDbPath, createProvider, buildToolRegistry } from "./runtime-factory.js";
+import {
+  getDbPath,
+  createProvider,
+  buildToolRegistry,
+  buildStorageAdapters,
+} from "./runtime-factory.js";
 
 export async function handleRun(config: CliConfig): Promise<void> {
   const identityPath =
@@ -124,16 +129,6 @@ export async function handleRun(config: CliConfig): Promise<void> {
   const moteDb = await openMotebitDatabase(dbPath);
   const provider = createProvider(config, personalityConfig);
 
-  const storage: StorageAdapters = {
-    eventStore: moteDb.eventStore,
-    memoryStorage: moteDb.memoryStorage,
-    identityStorage: moteDb.identityStorage,
-    auditLog: moteDb.auditLog,
-    stateSnapshot: moteDb.stateSnapshot,
-    toolAuditSink: moteDb.toolAuditSink,
-    conversationStore: moteDb.conversationStore,
-  };
-
   const runtime = new MotebitRuntime(
     {
       motebitId,
@@ -147,7 +142,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
       },
     },
     {
-      storage,
+      storage: buildStorageAdapters(moteDb),
       renderer: new NullRenderer(),
       ai: provider,
       tools: toolRegistry,
@@ -628,16 +623,6 @@ export async function handleServe(config: CliConfig): Promise<void> {
   // Direct mode doesn't need an LLM — skip provider creation to avoid requiring an API key
   const provider = config.direct ? undefined : createProvider(config, personalityConfig);
 
-  const storage: StorageAdapters = {
-    eventStore: moteDb.eventStore,
-    memoryStorage: moteDb.memoryStorage,
-    identityStorage: moteDb.identityStorage,
-    auditLog: moteDb.auditLog,
-    stateSnapshot: moteDb.stateSnapshot,
-    toolAuditSink: moteDb.toolAuditSink,
-    conversationStore: moteDb.conversationStore,
-  };
-
   const runtime = new MotebitRuntime(
     {
       motebitId,
@@ -649,7 +634,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
       },
     },
     {
-      storage,
+      storage: buildStorageAdapters(moteDb),
       renderer: new NullRenderer(),
       ai: provider,
       tools: toolRegistry,

@@ -60,6 +60,35 @@ export function getApiKey(): string {
   return key;
 }
 
+/**
+ * Map MotebitDatabase → StorageAdapters with ALL available stores.
+ * Eliminates the silent divergence where daemon/serve/services each
+ * cherry-picked a different subset and silently dropped trust, gradient,
+ * credential, and settlement signals.
+ */
+export function buildStorageAdapters(moteDb: MotebitDatabase): StorageAdapters {
+  return {
+    eventStore: moteDb.eventStore,
+    memoryStorage: moteDb.memoryStorage,
+    identityStorage: moteDb.identityStorage,
+    auditLog: moteDb.auditLog,
+    stateSnapshot: moteDb.stateSnapshot,
+    toolAuditSink: moteDb.toolAuditSink,
+    conversationStore: moteDb.conversationStore,
+    planStore: moteDb.planStore,
+    // SqliteGradientStore.latest() returns Record<string, unknown> stats; runtime expects typed stats.
+    // Structurally compatible at runtime — the columns are correct, just the TS return type is looser.
+    gradientStore: moteDb.gradientStore as unknown as NonNullable<StorageAdapters["gradientStore"]>,
+    agentTrustStore: moteDb.agentTrustStore,
+    serviceListingStore: moteDb.serviceListingStore,
+    budgetAllocationStore: moteDb.budgetAllocationStore,
+    settlementStore: moteDb.settlementStore,
+    latencyStatsStore: moteDb.latencyStatsStore,
+    credentialStore: moteDb.credentialStore,
+    approvalStore: moteDb.approvalStore,
+  };
+}
+
 export function getDbPath(override?: string): string {
   if (override != null && override !== "") return override;
   const envPath = process.env["MOTEBIT_DB_PATH"];
