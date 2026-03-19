@@ -1,2 +1,3 @@
 pnpm turbo run build typecheck lint test --filter="...[origin/main]"
 pnpm format:check
+pnpm check-deps
