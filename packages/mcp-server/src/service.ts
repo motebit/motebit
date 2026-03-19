@@ -346,6 +346,8 @@ export interface ServiceServerConfig {
   onStart?: (port: number, toolCount: number) => void;
   /** Called on shutdown. */
   onStop?: () => void;
+  /** Optional logger — scaffold is silent when omitted. */
+  log?: (msg: string) => void;
 }
 
 export interface ServiceHandle {
@@ -389,17 +391,25 @@ export async function startServiceServer(
       if (config.apiToken) regHeaders["Authorization"] = `Bearer ${config.apiToken}`;
 
       const endpointUrl = config.publicEndpointUrl ?? `http://localhost:${config.port}`;
+      const regBody = {
+        motebit_id: deps.motebitId,
+        public_key: deps.publicKeyHex ?? "",
+        endpoint_url: endpointUrl,
+        capabilities: toolNames,
+        metadata: { name: serverName },
+      };
       const regResp = await fetch(`${config.syncUrl}/api/v1/agents/register`, {
         method: "POST",
         headers: regHeaders,
-        body: JSON.stringify({
-          motebit_id: deps.motebitId,
-          public_key: deps.publicKeyHex ?? "",
-          endpoint_url: endpointUrl,
-          capabilities: toolNames,
-          metadata: { name: serverName },
-        }),
+        body: JSON.stringify(regBody),
       });
+      if (regResp.ok) {
+        config.log?.(`Registered with relay (capabilities: ${toolNames.join(", ")})`);
+      } else {
+        config.log?.(
+          `Relay registration failed: ${regResp.status} ${await regResp.text().catch(() => "")}`,
+        );
+      }
       if (regResp.ok) {
         heartbeatTimer = setInterval(
           // eslint-disable-next-line @typescript-eslint/no-misused-promises -- fire-and-forget heartbeat
@@ -417,8 +427,8 @@ export async function startServiceServer(
           5 * 60 * 1000,
         );
       }
-    } catch {
-      // Best-effort relay registration
+    } catch (err: unknown) {
+      config.log?.(`Relay registration error: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

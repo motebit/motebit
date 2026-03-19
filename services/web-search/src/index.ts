@@ -468,6 +468,7 @@ async function main(): Promise<void> {
       runtime.stop();
       moteDb.close();
     },
+    log,
   });
 }
 
