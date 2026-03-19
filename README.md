@@ -60,9 +60,9 @@ MCP server running on http://localhost:3100 (StreamableHTTP). 1 tools exposed.
 Registered with relay: https://motebit-sync.fly.dev
 [self-test] submitting task via relay...
 [self-test] task routed (task_id=abc123...)
-[self-test] receipt signed ✓
-[self-test] complete — agent is a live network participant
 ```
+
+The self-test completes when deployed (relay can reach the agent). Locally, it confirms registration and task routing — the receipt loop closes on deploy.
 
 Edit `src/tools.ts` to replace the echo tool with your own. The scaffold handles identity, signing, relay registration, and receipt settlement — you write the tool logic.
 
