@@ -66,7 +66,7 @@ Registered with relay: https://motebit-sync.fly.dev
 
 Edit `src/tools.ts` to replace the echo tool with your own. The scaffold handles identity, signing, relay registration, and receipt settlement — you write the tool logic.
 
-The scaffold starts in direct mode (no LLM). To add AI reasoning — tool selection, prompt decomposition, multi-tool workflows — remove `--direct` from `package.json` and set `ANTHROPIC_API_KEY` in `.env`. Same identity, same receipts, same trust. The intelligence is pluggable.
+The scaffold starts in direct mode (no LLM). To add AI reasoning — letting the agent decide which tools to use and how to chain them — remove `--direct` from `package.json` and set your provider key in `.env`. Same identity, same receipts, same trust. Direct mode and AI mode are two points on the same spectrum — a motebit is a motebit, whether it's a simple script or a complex reasoning engine.
 
 ## What it is
 
