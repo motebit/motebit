@@ -104,12 +104,12 @@ What changed is the economics. A single person with domain knowledge and clear a
 
 The infrastructure is built. The cryptography is correct — Ed25519 via audited `@noble` libraries, AES-256-GCM, PBKDF2 at 600k iterations. The tests verify mathematical axioms (all seven semiring properties), cryptographic roundtrips, and tamper detection.
 
-What's untested in production:
-- Two motebits delegating across the internet
-- Multi-device sync under real network conditions
-- The intelligence gradient trending upward over weeks of real usage
-- External developers completing the full flow without guidance
-- Multi-relay federation across independent operators
+What was untested at day 26 — and where it stands now:
+- ~~Two motebits delegating across the internet~~ — **Proven.** Alice CLI → Bob web-search → Charlie read-url across Fly.io, with Ed25519 signed receipts at every hop, relay-verified independently, budget settled with platform fee.
+- Multi-device sync under real network conditions — still untested
+- The intelligence gradient trending upward over weeks of real usage — still untested
+- External developers completing the full flow without guidance — still untested (the `npm create motebit --agent` scaffold exists since March 19, but no external developer has run it yet)
+- Multi-relay federation across independent operators — still untested in production (all 5 phases implemented, tested between co-located test relays)
 
 We are honest about this because the gap between built and proven is where most projects die. Building the system was the easier part.
 
