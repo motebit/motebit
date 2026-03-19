@@ -5,3 +5,4 @@ dist
 .source
 *.tsbuildinfo
 pnpm-lock.yaml
+**/motebit.md
