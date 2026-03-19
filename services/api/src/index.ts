@@ -2756,6 +2756,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
               } else {
                 // Local agent: route via WebSocket first, HTTP MCP fallback
                 const localPeers = connections.get(selId);
+                logger.info("task.routing_local", {
+                  correlationId: taskId,
+                  agent: selId,
+                  hasWsPeers: localPeers != null && localPeers.length > 0,
+                  peerCount: localPeers?.length ?? 0,
+                });
                 if (localPeers && localPeers.length > 0) {
                   for (const peer of localPeers) {
                     peer.ws.send(payload);

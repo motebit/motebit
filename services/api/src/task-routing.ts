@@ -621,8 +621,10 @@ async function parseMcpResponse(
 }
 
 function extractReceipt(text: string): ReceiptCandidate | null {
+  // Strip identity tag appended by formatResult (e.g. "\n[motebit:019d03fd key:7e08e3c0]")
+  const stripped = text.replace(/\n\[motebit:[^\]]*\]\s*$/, "").trim();
   try {
-    const parsed: unknown = JSON.parse(text);
+    const parsed: unknown = JSON.parse(stripped);
     if (parsed == null || typeof parsed !== "object") return null;
     const obj = parsed as Record<string, unknown>;
     // Receipt may be nested under .receipt or at top level
