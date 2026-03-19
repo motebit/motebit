@@ -1457,6 +1457,9 @@ export class MotebitRuntime {
       memories_formed: memoriesFormed,
       prompt_hash: promptHash,
       result_hash: resultHash,
+      // Relay task ID binding — task.task_id IS the relay-assigned ID for WebSocket tasks.
+      // Including it explicitly as relay_task_id enables the relay's binding check.
+      relay_task_id: task.task_id,
     };
     if (delegationReceipts.length > 0) {
       receiptBody.delegation_receipts = delegationReceipts;

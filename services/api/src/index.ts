@@ -1887,6 +1887,42 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       const entry = taskQueue.get(verified.taskId);
       if (!entry) throw new HTTPException(404, { message: "Task not found or expired" });
 
+      // Verify executing agent's Ed25519 receipt signature (sibling of direct receipt path).
+      // Without this, a malicious peer relay could forge or tamper with receipts.
+      if (verified.receipt.signature) {
+        let pubKeyHex: string | undefined;
+        const regRow = moteDb.db
+          .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+          .get(verified.receipt.motebit_id) as { public_key: string } | undefined;
+        if (regRow?.public_key) {
+          pubKeyHex = regRow.public_key;
+        } else {
+          const devices = await identityManager.listDevices(
+            asMotebitId(verified.receipt.motebit_id),
+          );
+          const device = devices.find((d) => d.public_key);
+          if (device?.public_key) pubKeyHex = device.public_key;
+        }
+        if (pubKeyHex) {
+          const sigValid = await verifyExecutionReceipt(verified.receipt, hexToBytes(pubKeyHex));
+          if (!sigValid) {
+            logger.error("federation.receipt_signature_invalid", {
+              correlationId: verified.taskId,
+              executingAgent: verified.receipt.motebit_id,
+              originRelay: verified.originRelay,
+            });
+            throw new HTTPException(403, {
+              message: "Federated receipt signature verification failed",
+            });
+          }
+        } else {
+          logger.warn("federation.receipt_key_missing", {
+            correlationId: verified.taskId,
+            executingAgent: verified.receipt.motebit_id,
+          });
+        }
+      }
+
       // Update task
       entry.receipt = verified.receipt;
       entry.expiresAt = Math.max(entry.expiresAt, Date.now() + TASK_TTL_MS);
@@ -3085,8 +3121,37 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         );
 
-        const walkReceipts = (parentMotebitId: string, receipts: ExecutionReceipt[]): void => {
+        const walkReceipts = async (
+          parentMotebitId: string,
+          receipts: ExecutionReceipt[],
+        ): Promise<void> => {
           for (const sub of receipts) {
+            // Verify nested receipt signature before trusting its data.
+            // Without this, a parent agent could forge delegation_receipts.
+            if (sub.signature) {
+              let subPubKey: string | undefined;
+              const subReg = moteDb.db
+                .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+                .get(sub.motebit_id) as { public_key: string } | undefined;
+              if (subReg?.public_key) {
+                subPubKey = subReg.public_key;
+              } else {
+                const subDevices = await identityManager.listDevices(asMotebitId(sub.motebit_id));
+                subPubKey = subDevices.find((d) => d.public_key)?.public_key;
+              }
+              if (subPubKey) {
+                const subValid = await verifyExecutionReceipt(sub, hexToBytes(subPubKey));
+                if (!subValid) {
+                  logger.warn("delegation_receipt.signature_invalid", {
+                    correlationId: taskId,
+                    parentAgent: parentMotebitId,
+                    delegatedAgent: sub.motebit_id,
+                  });
+                  continue; // Skip unverified nested receipt — don't insert edge
+                }
+              }
+            }
+
             const latency =
               sub.completed_at && sub.submitted_at ? sub.completed_at - sub.submitted_at : 5000;
             const reliability = sub.status === "completed" ? 0.9 : 0.3;
@@ -3112,12 +3177,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
             );
 
             if (sub.delegation_receipts && sub.delegation_receipts.length > 0) {
-              walkReceipts(sub.motebit_id as string, sub.delegation_receipts);
+              await walkReceipts(sub.motebit_id as string, sub.delegation_receipts);
             }
           }
         };
 
-        walkReceipts(receipt.motebit_id as string, receipt.delegation_receipts);
+        await walkReceipts(receipt.motebit_id as string, receipt.delegation_receipts);
       } catch {
         // Best-effort edge caching
       }
