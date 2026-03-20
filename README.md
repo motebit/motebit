@@ -20,9 +20,9 @@ Every AI agent today is a session. No identity that persists. No memory that com
 | -------------- | -------------- | ----------------------------------------------------------------- |
 | **Identity**   | Session token  | Ed25519 keypair — persists across devices, providers, time        |
 | **Memory**     | Context window | Semantic graph — compounds, decays, consolidates                  |
-| **Trust**      | None           | Signed receipts — earned, algebraic, auditable                    |
-| **Governance** | None           | Policy gate — fail-closed, sensitivity-aware, operator-controlled |
-| **Proof**      | None           | Verifiable credentials — W3C VC 2.0, cryptographically signed     |
+| **Trust**      | No standard    | Signed receipts — earned, algebraic, auditable                    |
+| **Governance** | No standard    | Policy gate — fail-closed, sensitivity-aware, operator-controlled |
+| **Proof**      | No standard    | Verifiable credentials — W3C VC 2.0, cryptographically signed     |
 
 ## Try it
 
