@@ -145,9 +145,10 @@ describe("create-motebit", () => {
     // package.json has agent scripts
     const pkg = JSON.parse(readFileSync(join(projectDir, "package.json"), "utf-8"));
     expect(pkg.scripts.dev).toContain("--direct");
-    expect(pkg.scripts.dev).toContain("--self-test");
+    expect(pkg.scripts.dev).not.toContain("--self-test");
     expect(pkg.scripts.dev).toContain("--tools");
     expect(pkg.scripts.start).toContain("--direct");
+    expect(pkg.scripts.start).toContain("--self-test");
     expect(pkg.dependencies).toHaveProperty("@motebit/sdk");
     expect(pkg.devDependencies).toHaveProperty("motebit");
 
