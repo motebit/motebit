@@ -129,7 +129,7 @@ packages/
   mcp-server/      Expose motebit as MCP server, bearer auth, synthetic tools
   mcp-client/      MCP client, tool discovery, manifest pinning
   render-engine/   Glass droplet: MeshPhysicalMaterial, breathing, sag, glow
-  ...              40 packages total
+  ...
 
 services/
   api/         Sync relay — device auth, receipt verification, budget settlement,
@@ -140,6 +140,8 @@ spec/
   execution-ledger-v1.md  motebit/execution-ledger@1.0
   relay-federation-v1.md  motebit/relay-federation@1.0
 ```
+
+40 pnpm workspaces across packages, apps, services, and the repo root.
 
 ## Verify & integrate
 
