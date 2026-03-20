@@ -1,0 +1,36 @@
+app = "motebit-embed"
+primary_region = "sjc"
+kill_signal = "SIGINT"
+kill_timeout = 5
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  MOTEBIT_PORT = "3200"
+
+[http_service]
+  internal_port = 3200
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 100
+    soft_limit = 80
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
+
+  [[http_service.checks]]
+    interval = "15s"
+    grace_period = "120s"
+    method = "GET"
+    path = "/health"
+    protocol = "http"
+    timeout = "2s"
