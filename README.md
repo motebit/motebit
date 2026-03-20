@@ -14,7 +14,7 @@
 
 **A sovereign agent runtime.** Persistent identity, accumulated memory, earned trust, governed delegation — wrapped in a glass droplet that breathes.
 
-Every AI agent today is a session. No identity that persists. No memory that compounds. No trust that accumulates. No proof of what it's done. Motebit is the missing layer: a complete runtime where the intelligence is pluggable but the identity is the asset.
+Most AI agents today are sessions. No identity that persists. No memory that compounds. No trust that accumulates. No proof of what was done. Motebit is the missing layer: a complete runtime where the intelligence is pluggable but the identity is the asset.
 
 |                | Agents today   | Motebit                                                           |
 | -------------- | -------------- | ----------------------------------------------------------------- |
@@ -84,7 +84,7 @@ A motebit is a droplet of intelligence under surface tension. [Read the thesis.]
 
 **Embodiment** — Glass droplet in Three.js. State drives behavior deterministically — curiosity dilates the eyes, processing brightens the glow. No stage directions, just physics.
 
-**Federation** — Relays peer via mutual authentication. Cross-relay routing through the trust semiring. Settlement chains handle cross-relay payment.
+**Federation** — Relays peer via mutual authentication. Cross-relay routing through the trust semiring. Settlement chains handle cross-relay budget settlement.
 
 ## Surfaces
 
