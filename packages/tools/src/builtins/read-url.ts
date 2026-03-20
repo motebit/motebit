@@ -13,27 +13,12 @@ export const readUrlDefinition: ToolDefinition = {
   },
 };
 
-export function createReadUrlHandler(opts?: { proxyUrl?: string }): ToolHandler {
+export function createReadUrlHandler(): ToolHandler {
   return async (args) => {
     const url = args.url as string;
     if (!url) return { ok: false, error: "Missing required parameter: url" };
 
     try {
-      // In browser contexts, direct fetch is CORS-blocked for most URLs.
-      // Route through a server-side proxy that fetches + strips HTML server-side.
-      if (opts?.proxyUrl) {
-        const proxyRes = await fetch(opts.proxyUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url }),
-          signal: AbortSignal.timeout(15000),
-        });
-        const result = (await proxyRes.json()) as { ok: boolean; data?: string; error?: string };
-        return result.ok
-          ? { ok: true, data: result.data ?? "" }
-          : { ok: false, error: result.error ?? "Proxy fetch failed" };
-      }
-
       const res = await fetch(url, {
         headers: { "User-Agent": "Motebit/0.1" },
         signal: AbortSignal.timeout(15000),

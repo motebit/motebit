@@ -153,9 +153,9 @@ function makeAgentPackageJson(name: string): string {
     type: "module",
     scripts: {
       build: "tsc",
-      dev: "tsc && npx motebit serve --identity ./motebit.md --tools ./dist/tools.js --serve-transport http --direct",
+      dev: "tsc && npx motebit serve --identity ./motebit.md --tools ./dist/tools.js --serve-transport http --direct --self-test",
       start:
-        "npx motebit serve --identity ./motebit.md --tools ./dist/tools.js --serve-transport http --direct --self-test",
+        "npx motebit serve --identity ./motebit.md --tools ./dist/tools.js --serve-transport http --direct",
     },
     dependencies: {
       "@motebit/sdk": "^0.3.0",

@@ -10,13 +10,7 @@ import { ConsolidationAction } from "./consolidation.js";
 import type { ConsolidationProvider, ConsolidationDecision } from "./consolidation.js";
 import type { EventStore } from "@motebit/event-log";
 
-export {
-  embedText,
-  embedTextHash,
-  EMBEDDING_DIMENSIONS,
-  resetPipeline,
-  setRemoteEmbedUrl,
-} from "./embeddings.js";
+export { embedText, embedTextHash, EMBEDDING_DIMENSIONS, resetPipeline } from "./embeddings.js";
 export {
   ConsolidationAction,
   buildConsolidationPrompt,

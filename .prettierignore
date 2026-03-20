@@ -6,4 +6,3 @@ dist
 *.tsbuildinfo
 pnpm-lock.yaml
 **/motebit.md
-services/proxy/tsconfig.json

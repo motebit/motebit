@@ -1,7 +1,4 @@
-# Skip on tag pushes (changesets pushes 4 tags in parallel → lock conflicts)
-if git symbolic-ref -q HEAD >/dev/null 2>&1; then
-  pnpm audit
-  pnpm turbo run build typecheck lint test:coverage --filter="...[origin/main]"
-  pnpm format:check
-  pnpm check-deps
-fi
+pnpm audit
+pnpm turbo run build typecheck lint test:coverage --filter="...[origin/main]"
+pnpm format:check
+pnpm check-deps

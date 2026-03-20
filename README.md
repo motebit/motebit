@@ -14,15 +14,15 @@
 
 **A sovereign agent runtime.** Persistent identity, accumulated memory, earned trust, governed delegation — wrapped in a glass droplet that breathes.
 
-Most AI agents today are sessions. No identity that persists. No memory that compounds. No trust that accumulates. No proof of what was done. Motebit is the missing layer: a complete runtime where the intelligence is pluggable but the identity is the asset.
+Every AI agent today is a session. No identity that persists. No memory that compounds. No trust that accumulates. No proof of what it's done. Motebit is the missing layer: a complete runtime where the intelligence is pluggable but the identity is the asset.
 
 |                | Agents today   | Motebit                                                           |
 | -------------- | -------------- | ----------------------------------------------------------------- |
 | **Identity**   | Session token  | Ed25519 keypair — persists across devices, providers, time        |
 | **Memory**     | Context window | Semantic graph — compounds, decays, consolidates                  |
-| **Trust**      | No standard    | Signed receipts — earned, algebraic, auditable                    |
-| **Governance** | No standard    | Policy gate — fail-closed, sensitivity-aware, operator-controlled |
-| **Proof**      | No standard    | Verifiable credentials — W3C VC 2.0, cryptographically signed     |
+| **Trust**      | None           | Signed receipts — earned, algebraic, auditable                    |
+| **Governance** | None           | Policy gate — fail-closed, sensitivity-aware, operator-controlled |
+| **Proof**      | None           | Verifiable credentials — W3C VC 2.0, cryptographically signed     |
 
 ## Try it
 
@@ -58,9 +58,13 @@ Tool loaded: echo
 Agent task handler enabled (direct mode — no LLM)
 MCP server running on http://localhost:3100 (StreamableHTTP). 1 tools exposed.
 Registered with relay: https://motebit-sync.fly.dev
+[self-test] submitting task via relay...
+[self-test] task routed (task_id=abc123...)
 ```
 
-Your agent is live and discoverable. Edit `src/tools.ts` to replace the echo tool with your own. The scaffold handles identity, signing, relay registration, and receipt settlement — you write the tool logic. When deployed, `npm run start` includes a self-test that verifies the full receipt loop end-to-end.
+The self-test completes when deployed (relay can reach the agent). Locally, it confirms registration and task routing — the receipt loop closes on deploy.
+
+Edit `src/tools.ts` to replace the echo tool with your own. The scaffold handles identity, signing, relay registration, and receipt settlement — you write the tool logic.
 
 The scaffold starts in direct mode (no LLM). To add AI reasoning — letting the agent decide which tools to use and how to chain them — remove `--direct` from `package.json` and set your provider key in `.env`. Same identity, same receipts, same trust. Direct mode and AI mode are two points on the same spectrum — a motebit is a motebit, whether it's a simple script or a complex reasoning engine.
 
@@ -80,7 +84,7 @@ A motebit is a droplet of intelligence under surface tension. [Read the thesis.]
 
 **Embodiment** — Glass droplet in Three.js. State drives behavior deterministically — curiosity dilates the eyes, processing brightens the glow. No stage directions, just physics.
 
-**Federation** — Relays peer via mutual authentication. Cross-relay routing through the trust semiring. Settlement chains handle cross-relay budget settlement.
+**Federation** — Relays peer via mutual authentication. Cross-relay routing through the trust semiring. Settlement chains handle cross-relay payment.
 
 ## Surfaces
 
@@ -125,7 +129,7 @@ packages/
   mcp-server/      Expose motebit as MCP server, bearer auth, synthetic tools
   mcp-client/      MCP client, tool discovery, manifest pinning
   render-engine/   Glass droplet: MeshPhysicalMaterial, breathing, sag, glow
-  ...
+  ...              40 packages total
 
 services/
   api/         Sync relay — device auth, receipt verification, budget settlement,
@@ -136,8 +140,6 @@ spec/
   execution-ledger-v1.md  motebit/execution-ledger@1.0
   relay-federation-v1.md  motebit/relay-federation@1.0
 ```
-
-40 pnpm workspaces across packages, apps, services, and the repo root.
 
 ## Verify & integrate
 
