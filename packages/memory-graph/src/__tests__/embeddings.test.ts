@@ -1,5 +1,11 @@
 import { describe, it, expect, afterAll, afterEach, vi } from "vitest";
-import { embedText, embedTextHash, EMBEDDING_DIMENSIONS, resetPipeline } from "../embeddings";
+import {
+  embedText,
+  embedTextHash,
+  EMBEDDING_DIMENSIONS,
+  resetPipeline,
+  setRemoteEmbedUrl,
+} from "../embeddings";
 import { cosineSimilarity } from "../index";
 
 describe("embedText (semantic)", () => {
@@ -101,6 +107,61 @@ describe("embedText (hash fallback when pipeline fails)", () => {
     // Dimensions 128-383 should all be zero (padding)
     const padPart = vec.slice(128);
     expect(padPart.every((v) => v === 0)).toBe(true);
+  });
+});
+
+describe("setRemoteEmbedUrl (remote backend)", () => {
+  afterEach(() => {
+    setRemoteEmbedUrl(null);
+    resetPipeline();
+    vi.restoreAllMocks();
+  });
+
+  it("uses remote backend when configured", async () => {
+    const mockEmbedding = new Array<number>(384).fill(0.1);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, embeddings: [mockEmbedding] }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    setRemoteEmbedUrl("https://example.com/v1/embed");
+    const vec = await embedText("hello");
+
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(vec).toEqual(mockEmbedding);
+  });
+
+  it("falls back to local model when remote fails", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network error"));
+
+    setRemoteEmbedUrl("https://example.com/v1/embed");
+    const vec = await embedText("hello");
+
+    // Should still return a valid embedding from local model/hash fallback
+    expect(vec).toHaveLength(EMBEDDING_DIMENSIONS);
+  });
+
+  it("skips remote when url is null", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    setRemoteEmbedUrl(null);
+    const vec = await embedText("hello");
+
+    // fetch should be called 0 times for embed (may be called by pipeline)
+    const embedCalls = fetchSpy.mock.calls.filter(
+      (call) => typeof call[0] === "string" && call[0].includes("/v1/embed"),
+    );
+    expect(embedCalls).toHaveLength(0);
+    expect(vec).toHaveLength(EMBEDDING_DIMENSIONS);
+  });
+
+  it("still returns zero vector for empty string with remote configured", async () => {
+    setRemoteEmbedUrl("https://example.com/v1/embed");
+    const vec = await embedText("");
+
+    expect(vec).toHaveLength(EMBEDDING_DIMENSIONS);
+    expect(vec.every((v) => v === 0)).toBe(true);
   });
 });
 
