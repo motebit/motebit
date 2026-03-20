@@ -81,7 +81,9 @@ async function embedOne(text: string): Promise<number[]> {
   if (existing) return existing;
 
   const promise = (async () => {
-    const output = await pipeline!(text, { pooling: "mean", normalize: true });
+    const p = pipeline;
+    if (!p) throw new Error("Model not loaded");
+    const output = await p(text, { pooling: "mean", normalize: true });
     const vec = Array.from(output.data);
     cacheSet(text, vec);
     return vec;
