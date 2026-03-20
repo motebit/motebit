@@ -1,5 +1,5 @@
 // CORS gateway for the embed service on Fly.io.
-// Browser → proxy (CORS) → embed service (internal).
+// Browser → proxy (CORS) → embed service (internal, motebit-embed.fly.dev).
 export const runtime = "edge";
 
 import { type NextRequest, NextResponse } from "next/server";
