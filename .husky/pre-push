@@ -1,3 +1,6 @@
+# Skip in CI (release workflow already runs build+test before pushing)
+[ -n "$CI" ] && exit 0
+
 # Skip on tag pushes (changesets pushes 4 tags in parallel → lock conflicts)
 if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   pnpm audit

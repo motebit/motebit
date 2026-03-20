@@ -87,7 +87,7 @@ describe("create-motebit", () => {
     // package.json has correct content
     const pkg = JSON.parse(readFileSync(join(projectDir, "package.json"), "utf-8"));
     expect(pkg.dependencies).toHaveProperty("@motebit/verify");
-    expect(pkg.dependencies["@motebit/verify"]).toBe("^0.5.0");
+    expect(pkg.dependencies["@motebit/verify"]).toBe(`^${VERSION}`);
     expect(pkg.scripts.verify).toContain("create-motebit verify");
     expect(pkg.type).toBe("module");
     expect(pkg.private).toBe(true);
