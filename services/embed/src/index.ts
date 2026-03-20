@@ -1,13 +1,52 @@
 /**
  * Embedding service — stateless compute. Loads all-MiniLM-L6-v2 ONNX model
  * at boot, serves POST /v1/embed. No MCP, no identity, no persistence.
+ *
+ * Embeddings are deterministic (same text → same vector), so:
+ * - LRU cache eliminates redundant inference for repeated texts
+ * - In-flight deduplication coalesces concurrent identical requests
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createHash } from "node:crypto";
 
 const PORT = parseInt(process.env.MOTEBIT_PORT ?? "3200", 10);
 const MAX_TEXTS = 16;
 const MAX_TEXT_LENGTH = 2000;
+const CACHE_MAX_ENTRIES = 10_000;
+
+// --- Embedding cache (LRU) ---
+
+const cache = new Map<string, number[]>();
+
+function cacheKey(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+function cacheGet(text: string): number[] | undefined {
+  const key = cacheKey(text);
+  const vec = cache.get(key);
+  if (vec) {
+    // Move to end (most recently used)
+    cache.delete(key);
+    cache.set(key, vec);
+  }
+  return vec;
+}
+
+function cacheSet(text: string, vec: number[]): void {
+  const key = cacheKey(text);
+  cache.set(key, vec);
+  // Evict oldest if over limit
+  if (cache.size > CACHE_MAX_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+}
+
+// --- In-flight deduplication ---
+
+const inflight = new Map<string, Promise<number[]>>();
 
 // --- Model loading ---
 
@@ -28,18 +67,36 @@ async function loadModel(): Promise<void> {
   console.log(`[embed] model loaded in ${Date.now() - start}ms`);
 }
 
-async function embed(texts: string[]): Promise<number[][]> {
+async function embedOne(text: string): Promise<number[]> {
   if (!pipeline) throw new Error("Model not loaded");
-  const results: number[][] = [];
-  for (const text of texts) {
-    if (text === "") {
-      results.push(new Array<number>(384).fill(0));
-      continue;
-    }
-    const output = await pipeline(text, { pooling: "mean", normalize: true });
-    results.push(Array.from(output.data));
+  if (text === "") return new Array<number>(384).fill(0);
+
+  // Cache hit
+  const cached = cacheGet(text);
+  if (cached) return cached;
+
+  // Deduplicate concurrent identical requests
+  const key = cacheKey(text);
+  const existing = inflight.get(key);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    const output = await pipeline!(text, { pooling: "mean", normalize: true });
+    const vec = Array.from(output.data);
+    cacheSet(text, vec);
+    return vec;
+  })();
+
+  inflight.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    inflight.delete(key);
   }
-  return results;
+}
+
+async function embed(texts: string[]): Promise<number[][]> {
+  return Promise.all(texts.map(embedOne));
 }
 
 // --- HTTP server ---
@@ -110,7 +167,7 @@ const server = createServer((req, res) => {
   const url = req.url ?? "/";
 
   if (url === "/health" && req.method === "GET") {
-    json(res, 200, { ok: true, model: pipeline !== null });
+    json(res, 200, { ok: true, model: pipeline !== null, cache_size: cache.size });
     return;
   }
 
