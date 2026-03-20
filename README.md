@@ -14,15 +14,15 @@
 
 **A sovereign agent runtime.** Persistent identity, accumulated memory, earned trust, governed delegation — wrapped in a glass droplet that breathes.
 
-Every AI agent today is a session. No identity that persists. No memory that compounds. No trust that accumulates. No proof of what it's done. Motebit is the missing layer: a complete runtime where the intelligence is pluggable but the identity is the asset.
+Most AI agents today are sessions. No identity that persists. No memory that compounds. No trust that accumulates. No proof of what was done. Motebit is the missing layer: a complete runtime where the intelligence is pluggable but the identity is the asset.
 
 |                | Agents today   | Motebit                                                           |
 | -------------- | -------------- | ----------------------------------------------------------------- |
 | **Identity**   | Session token  | Ed25519 keypair — persists across devices, providers, time        |
 | **Memory**     | Context window | Semantic graph — compounds, decays, consolidates                  |
-| **Trust**      | None           | Signed receipts — earned, algebraic, auditable                    |
-| **Governance** | None           | Policy gate — fail-closed, sensitivity-aware, operator-controlled |
-| **Proof**      | None           | Verifiable credentials — W3C VC 2.0, cryptographically signed     |
+| **Trust**      | No standard    | Signed receipts — earned, algebraic, auditable                    |
+| **Governance** | No standard    | Policy gate — fail-closed, sensitivity-aware, operator-controlled |
+| **Proof**      | No standard    | Verifiable credentials — W3C VC 2.0, cryptographically signed     |
 
 ## Try it
 
@@ -84,7 +84,7 @@ A motebit is a droplet of intelligence under surface tension. [Read the thesis.]
 
 **Embodiment** — Glass droplet in Three.js. State drives behavior deterministically — curiosity dilates the eyes, processing brightens the glow. No stage directions, just physics.
 
-**Federation** — Relays peer via mutual authentication. Cross-relay routing through the trust semiring. Settlement chains handle cross-relay payment.
+**Federation** — Relays peer via mutual authentication. Cross-relay routing through the trust semiring. Settlement chains handle cross-relay budget settlement.
 
 ## Surfaces
 

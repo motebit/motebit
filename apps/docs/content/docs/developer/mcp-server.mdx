@@ -42,7 +42,7 @@ motebit --serve \
   --self-test
 ```
 
-The `--self-test` flag submits a task to itself via the relay after registration, proving the full loop works (submit → route → execute → receipt → settle). This is the pattern used by `npm create motebit --agent` scaffolds.
+The `--self-test` flag submits a task to itself via the relay after registration, proving the full loop works (submit → route → execute → receipt → settle). The `npm create motebit --agent` scaffold includes `--self-test` in the production `start` script (not `dev`, since the relay can't reach localhost).
 
 ### Adding AI reasoning
 
