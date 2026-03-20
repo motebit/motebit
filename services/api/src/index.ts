@@ -321,6 +321,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // Emergency freeze: runtime toggle for kill switch. When true, all state-mutating
   // operations (POST/PUT/PATCH/DELETE) return 503. Reads remain available.
   let emergencyFreeze = config.emergencyFreeze ?? false;
+  let freezeReason: string | null = config.emergencyFreeze ? "startup" : null;
 
   const stripeClient = stripeConfig ? new Stripe(stripeConfig.secretKey) : null;
 
@@ -1916,6 +1917,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     c.json({
       status: emergencyFreeze ? "frozen" : "ok",
       frozen: emergencyFreeze,
+      ...(emergencyFreeze && freezeReason ? { freeze_reason: freezeReason } : {}),
       timestamp: Date.now(),
     }),
   );
@@ -4239,19 +4241,41 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // --- Emergency Freeze Admin Endpoints ---
 
   // POST /api/v1/admin/freeze — activate emergency freeze (block all writes)
-  app.post("/api/v1/admin/freeze", (c) => {
+  app.post("/api/v1/admin/freeze", async (c) => {
+    const body = await c.req.json<{ reason?: string }>().catch(() => ({}) as { reason?: string });
+    const reason = typeof body.reason === "string" ? body.reason.trim() : "";
+    if (!reason) {
+      throw new HTTPException(400, { message: "reason is required" });
+    }
+
     emergencyFreeze = true;
+    freezeReason = reason;
+
+    // Hash token for forensic traceability without credential leakage
+    const authHeader = c.req.header("authorization") ?? "";
+    const tokenHash = (await sha256Hash(new TextEncoder().encode(authHeader))).slice(0, 12);
+
     logger.warn("admin.emergency_freeze.activated", {
       correlationId: c.get("correlationId" as never) as string,
+      reason,
+      actor: tokenHash,
     });
-    return c.json({ status: "frozen", message: "All write operations suspended" });
+    return c.json({ status: "frozen", message: "All write operations suspended", reason });
   });
 
   // POST /api/v1/admin/unfreeze — deactivate emergency freeze (resume writes)
-  app.post("/api/v1/admin/unfreeze", (c) => {
+  app.post("/api/v1/admin/unfreeze", async (c) => {
+    const previousReason = freezeReason;
     emergencyFreeze = false;
+    freezeReason = null;
+
+    const authHeader = c.req.header("authorization") ?? "";
+    const tokenHash = (await sha256Hash(new TextEncoder().encode(authHeader))).slice(0, 12);
+
     logger.info("admin.emergency_freeze.deactivated", {
       correlationId: c.get("correlationId" as never) as string,
+      previousReason,
+      actor: tokenHash,
     });
     return c.json({ status: "active", message: "Write operations resumed" });
   });
