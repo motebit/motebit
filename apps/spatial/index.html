@@ -446,6 +446,16 @@
           <input type="text" id="model-input" placeholder="Default" />
         </div>
 
+        <div class="form-group">
+          <label for="settings-max-tokens">Response Length</label>
+          <select id="settings-max-tokens">
+            <option value="1024">Short (1k)</option>
+            <option value="4096" selected>Normal (4k)</option>
+            <option value="8192">Long (8k)</option>
+            <option value="16384">Maximum (16k)</option>
+          </select>
+        </div>
+
         <!-- Voice -->
         <div class="settings-section">Voice</div>
         <div class="toggle-group">

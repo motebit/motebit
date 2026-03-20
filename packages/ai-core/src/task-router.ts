@@ -55,7 +55,7 @@ export interface TaskRouterConfig {
  *
  * Each task type can specify its own model, temperature, and maxTokens.
  * Unspecified fields fall back to the default config, which in turn falls
- * back to sensible defaults (temperature 0.7, maxTokens 1024).
+ * back to sensible defaults (temperature 0.7, maxTokens 4096).
  */
 export class TaskRouter {
   constructor(private config: TaskRouterConfig) {}
@@ -69,7 +69,7 @@ export class TaskRouter {
     return {
       model: override?.model ?? this.config.default.model,
       temperature: override?.temperature ?? this.config.default.temperature ?? 0.7,
-      maxTokens: override?.maxTokens ?? this.config.default.maxTokens ?? 1024,
+      maxTokens: override?.maxTokens ?? this.config.default.maxTokens ?? 4096,
     };
   }
 }
@@ -139,7 +139,7 @@ export async function withTaskConfig<T>(
       provider.setTemperature(savedTemperature ?? 0.7);
     }
     if (typeof provider.setMaxTokens === "function") {
-      provider.setMaxTokens(savedMaxTokens ?? 1024);
+      provider.setMaxTokens(savedMaxTokens ?? 4096);
     }
   }
 }

@@ -98,7 +98,7 @@ describe("TaskRouter.resolve()", () => {
     expect(config).toEqual({
       model: "claude-sonnet-4-5-20250929",
       temperature: 0.7, // built-in default
-      maxTokens: 1024, // built-in default
+      maxTokens: 4096, // built-in default
     });
   });
 

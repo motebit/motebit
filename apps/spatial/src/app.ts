@@ -84,6 +84,7 @@ interface SpatialSettings {
   colorPreset: string;
   customHue: number;
   customSaturation: number;
+  maxTokens: number;
 }
 
 function loadSettings(): SpatialSettings {
@@ -105,6 +106,7 @@ function loadSettings(): SpatialSettings {
         colorPreset: parsed.colorPreset ?? "moonlight",
         customHue: parsed.customHue ?? 220,
         customSaturation: parsed.customSaturation ?? 0.7,
+        maxTokens: parsed.maxTokens ?? 4096,
       };
     }
   } catch {
@@ -124,6 +126,7 @@ function loadSettings(): SpatialSettings {
     colorPreset: "moonlight",
     customHue: 220,
     customSaturation: 0.7,
+    maxTokens: 4096,
   };
 }
 
@@ -159,6 +162,10 @@ async function init(): Promise<void> {
   if (proactiveToggle) proactiveToggle.checked = settings.proactiveEnabled;
   if (relayUrlInput) relayUrlInput.value = settings.relayUrl;
   if (showNetworkToggle) showNetworkToggle.checked = settings.showNetwork;
+  const maxTokensSelect = document.getElementById(
+    "settings-max-tokens",
+  ) as HTMLSelectElement | null;
+  if (maxTokensSelect) maxTokensSelect.value = String(settings.maxTokens);
   updateProviderUI(settings.provider);
   buildColorSwatches(settings);
 
@@ -185,6 +192,7 @@ async function tryInitAI(settings: SpatialSettings): Promise<boolean> {
     provider: settings.provider,
     model: settings.model || undefined,
     apiKey: settings.apiKey || undefined,
+    maxTokens: settings.maxTokens,
   };
 
   const ok = await app.initAI(config);
@@ -406,6 +414,10 @@ settingsSave?.addEventListener(
         colorPreset: activeColorPreset,
         customHue: hueSlider ? parseFloat(hueSlider.value) : 220,
         customSaturation: satSlider ? parseFloat(satSlider.value) / 100 : 0.7,
+        maxTokens: parseInt(
+          (document.getElementById("settings-max-tokens") as HTMLSelectElement)?.value ?? "4096",
+          10,
+        ),
       };
       saveSettings(settings);
 
