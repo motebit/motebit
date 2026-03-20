@@ -942,7 +942,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
       // Handle task dispatch — same pattern as daemon mode
       const handleTask = deps.handleAgentTask.bind(deps);
       serveWsAdapter.onCustomMessage((msg) => {
-        if (msg.type !== "task_request" || !msg.task) return;
+        if (msg.type !== "task_request" || msg.task == null) return;
         const task = msg.task as AgentTask;
         log(
           `Agent task received: ${task.task_id.slice(0, 8)}... prompt: "${task.prompt.slice(0, 80)}"`,

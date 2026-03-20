@@ -8,41 +8,9 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { createHash } from "node:crypto";
+import { cache, cacheKey, cacheGet, cacheSet, validateEmbedRequest } from "./cache.js";
 
 const PORT = parseInt(process.env.MOTEBIT_PORT ?? "3200", 10);
-const MAX_TEXTS = 16;
-const MAX_TEXT_LENGTH = 2000;
-const CACHE_MAX_ENTRIES = 10_000;
-
-// --- Embedding cache (LRU) ---
-
-const cache = new Map<string, number[]>();
-
-function cacheKey(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
-}
-
-function cacheGet(text: string): number[] | undefined {
-  const key = cacheKey(text);
-  const vec = cache.get(key);
-  if (vec) {
-    // Move to end (most recently used)
-    cache.delete(key);
-    cache.set(key, vec);
-  }
-  return vec;
-}
-
-function cacheSet(text: string, vec: number[]): void {
-  const key = cacheKey(text);
-  cache.set(key, vec);
-  // Evict oldest if over limit
-  if (cache.size > CACHE_MAX_ENTRIES) {
-    const oldest = cache.keys().next().value;
-    if (oldest !== undefined) cache.delete(oldest);
-  }
-}
 
 // --- In-flight deduplication ---
 
@@ -82,7 +50,7 @@ async function embedOne(text: string): Promise<number[]> {
 
   const promise = (async () => {
     const p = pipeline;
-    if (!p) throw new Error("Model not loaded");
+    if (p == null) throw new Error("Model not loaded");
     const output = await p(text, { pooling: "mean", normalize: true });
     const vec = Array.from(output.data);
     cacheSet(text, vec);
@@ -136,28 +104,22 @@ async function handleEmbed(req: IncomingMessage, res: ServerResponse): Promise<v
     return;
   }
 
-  let body: { texts?: unknown };
+  let body: unknown;
   try {
-    body = JSON.parse(await readBody(req)) as { texts?: unknown };
+    body = JSON.parse(await readBody(req));
   } catch {
     json(res, 400, { ok: false, error: "invalid json" });
     return;
   }
 
-  const texts = body.texts;
-  if (!Array.isArray(texts) || texts.length === 0) {
-    json(res, 400, { ok: false, error: "missing texts array" });
+  const result = validateEmbedRequest(body);
+  if ("error" in result) {
+    json(res, result.status, { ok: false, error: result.error });
     return;
   }
-  if (texts.length > MAX_TEXTS) {
-    json(res, 400, { ok: false, error: `max ${MAX_TEXTS} texts per request` });
-    return;
-  }
-
-  const cleaned = texts.map((t) => (typeof t === "string" ? t.slice(0, MAX_TEXT_LENGTH) : ""));
 
   try {
-    const embeddings = await embed(cleaned);
+    const embeddings = await embed(result.texts);
     json(res, 200, { ok: true, embeddings });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
