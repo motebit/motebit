@@ -295,7 +295,10 @@ export class WebApp {
     const registry = this.runtime.getToolRegistry();
 
     registry.register(webSearchDefinition, createWebSearchHandler(new DuckDuckGoSearchProvider()));
-    registry.register(readUrlDefinition, createReadUrlHandler());
+    registry.register(
+      readUrlDefinition,
+      createReadUrlHandler({ proxyUrl: "https://api.motebit.com/v1/fetch" }),
+    );
     registry.register(
       recallMemoriesDefinition,
       createRecallMemoriesHandler(async (query, limit) => {
