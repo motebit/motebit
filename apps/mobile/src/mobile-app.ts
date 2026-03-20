@@ -158,6 +158,7 @@ export interface MobileSettings {
   voiceAutoSend: boolean;
   voiceResponseEnabled: boolean;
   neuralVadEnabled: boolean;
+  maxTokens: number;
 }
 
 const DEFAULT_SETTINGS: MobileSettings = {
@@ -178,6 +179,7 @@ const DEFAULT_SETTINGS: MobileSettings = {
   voiceAutoSend: true,
   voiceResponseEnabled: true,
   neuralVadEnabled: true,
+  maxTokens: 4096,
 };
 
 const SETTINGS_KEY = "@motebit/settings";

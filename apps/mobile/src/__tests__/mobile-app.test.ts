@@ -377,6 +377,7 @@ describe("MobileApp.settings", () => {
       voiceAutoSend: false,
       voiceResponseEnabled: true,
       neuralVadEnabled: true,
+      maxTokens: 4096,
       customHue: 220,
       customSaturation: 0.7,
     };

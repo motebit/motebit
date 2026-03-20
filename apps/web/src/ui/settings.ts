@@ -40,6 +40,7 @@ const webllmStatus = document.getElementById("webllm-status") as HTMLDivElement;
 const webllmProgress = document.getElementById("webllm-progress") as HTMLDivElement;
 const webllmProgressFill = document.getElementById("webllm-progress-fill") as HTMLDivElement;
 const webllmProgressText = document.getElementById("webllm-progress-text") as HTMLDivElement;
+const maxTokensSelect = document.getElementById("max-tokens-select") as HTMLSelectElement;
 
 // === State ===
 
@@ -203,6 +204,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     const config = ctx.getConfig();
     if (config) {
       switchProviderTab(config.type);
+      maxTokensSelect.value = String(config.maxTokens ?? 4096);
       switch (config.type) {
         case "anthropic":
           anthropicApiKey.value = config.apiKey ?? "";
@@ -258,6 +260,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   // Save button
   document.getElementById("settings-save")?.addEventListener("click", () => {
     // Build provider config from current tab
+    const maxTokens = parseInt(maxTokensSelect.value, 10) || undefined;
     let config: ProviderConfig;
     switch (activeProviderTab) {
       case "anthropic":
@@ -265,16 +268,27 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
           type: "anthropic",
           apiKey: anthropicApiKey.value.trim(),
           model: anthropicModel.value,
+          maxTokens,
         };
         break;
       case "openai":
-        config = { type: "openai", apiKey: openaiApiKey.value.trim(), model: openaiModel.value };
+        config = {
+          type: "openai",
+          apiKey: openaiApiKey.value.trim(),
+          model: openaiModel.value,
+          maxTokens,
+        };
         break;
       case "ollama":
-        config = { type: "ollama", model: ollamaModel.value, baseUrl: ollamaBaseUrl.value.trim() };
+        config = {
+          type: "ollama",
+          model: ollamaModel.value,
+          baseUrl: ollamaBaseUrl.value.trim(),
+          maxTokens,
+        };
         break;
       case "webllm":
-        config = { type: "webllm", model: webllmModel.value };
+        config = { type: "webllm", model: webllmModel.value, maxTokens };
         break;
       default:
         config = { type: "anthropic", model: "claude-sonnet-4-20250514" };

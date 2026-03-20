@@ -224,6 +224,9 @@ async function main(): Promise<void> {
   ) {
     config.model = personalityConfig.default_model;
   }
+  if (fullConfig.max_tokens != null && !process.argv.includes("--max-tokens")) {
+    config.maxTokens = fullConfig.max_tokens;
+  }
 
   // Fail fast if API key is missing (before expensive passphrase/PBKDF2 flow)
   if (config.provider !== "ollama") {

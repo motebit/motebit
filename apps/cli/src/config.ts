@@ -20,6 +20,7 @@ export interface FullConfig {
   default_provider?: "anthropic" | "ollama";
   default_model?: string;
   temperature?: number;
+  max_tokens?: number;
   // Identity (written on first launch)
   motebit_id?: string;
   device_id?: string;
