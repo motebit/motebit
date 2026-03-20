@@ -30,7 +30,7 @@ export function OPTIONS(request: NextRequest): NextResponse {
 }
 
 const HF_MODEL = "sentence-transformers/all-MiniLM-L6-v2";
-const HF_API_URL = `https://api-inference.huggingface.co/pipeline/feature-extraction/${HF_MODEL}`;
+const HF_API_URL = `https://router.huggingface.co/pipeline/feature-extraction/${HF_MODEL}`;
 const MAX_TEXTS = 16;
 const MAX_TEXT_LENGTH = 2000;
 
