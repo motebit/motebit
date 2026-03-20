@@ -699,8 +699,11 @@ export function startSettlementRetryLoop(
     peer_relay_id: string;
     payload_json: string;
   }) => void,
+  /** Optional guard — when it returns true, the loop iteration is skipped. */
+  isFrozen?: () => boolean,
 ): ReturnType<typeof setInterval> {
   return setInterval(() => {
+    if (isFrozen?.()) return;
     void processSettlementRetries(db, relayIdentity, onRetryExhausted);
   }, intervalMs);
 }
@@ -710,8 +713,11 @@ export function startHeartbeatLoop(
   db: DatabaseDriver,
   relayIdentity: RelayIdentity,
   intervalMs = 60_000,
+  /** Optional guard — when it returns true, the loop iteration is skipped. */
+  isFrozen?: () => boolean,
 ): ReturnType<typeof setInterval> {
   return setInterval(() => {
+    if (isFrozen?.()) return;
     void sendHeartbeats(db, relayIdentity);
   }, intervalMs);
 }

@@ -248,6 +248,8 @@ export interface SyncRelayConfig {
   x402: X402Config;
   /** When true, relay issues AgentReputationCredentials on verified receipts. Default: false (peer-issued). */
   issueCredentials?: boolean;
+  /** When true, relay starts in emergency freeze mode — all write operations are suspended. */
+  emergencyFreeze?: boolean;
   /** Federation configuration. Omit to disable federation. */
   federation?: {
     /** Display name for this relay in the federation. */
@@ -292,6 +294,8 @@ export interface SyncRelay {
   };
   /** Database handle. Exposed for testing (plan store, audit sink, etc.). */
   moteDb: MotebitDatabase;
+  /** Whether the relay is in emergency freeze mode (all writes suspended). */
+  emergencyFreeze: boolean;
 }
 
 // === Factory ===
@@ -314,6 +318,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   } = config;
 
   // Stripe Checkout — optional fiat on-ramp for virtual account deposits
+  // Emergency freeze: runtime toggle for kill switch. When true, all state-mutating
+  // operations (POST/PUT/PATCH/DELETE) return 503. Reads remain available.
+  let emergencyFreeze = config.emergencyFreeze ?? false;
+
   const stripeClient = stripeConfig ? new Stripe(stripeConfig.secretKey) : null;
 
   const moteDb: MotebitDatabase = await openMotebitDatabase(dbPath);
@@ -715,6 +723,29 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // --- Middleware ---
   app.use("*", secureHeaders());
   app.use("*", cors({ origin: corsOrigin }));
+
+  // Emergency freeze: block all state-mutating operations
+  app.use("*", async (c, next) => {
+    if (!emergencyFreeze) return next();
+
+    // Allow reads
+    if (c.req.method === "GET" || c.req.method === "HEAD" || c.req.method === "OPTIONS") {
+      return next();
+    }
+
+    // Allow health check and admin freeze toggle (must be reachable while frozen)
+    if (
+      c.req.path === "/health" ||
+      c.req.path === "/api/v1/admin/freeze" ||
+      c.req.path === "/api/v1/admin/unfreeze"
+    ) {
+      return next();
+    }
+
+    throw new HTTPException(503, {
+      message: "Relay is in emergency freeze mode — all write operations are suspended",
+    });
+  });
 
   // Correlation ID middleware — generates or propagates X-Correlation-ID
   app.use("*", async (c, next) => {
@@ -1761,6 +1792,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   app.use("/api/v1/stripe/webhook", rateLimitMiddleware(publicLimiter));
   app.use("/api/v1/admin/withdrawals/*", rateLimitMiddleware(writeLimiter));
   app.use("/api/v1/admin/reconciliation", rateLimitMiddleware(expensiveLimiter));
+  app.use("/api/v1/admin/freeze", rateLimitMiddleware(writeLimiter));
+  app.use("/api/v1/admin/unfreeze", rateLimitMiddleware(writeLimiter));
 
   // Write endpoints: task submission, result, ledger (30 req/min)
   app.use("/agent/:motebitId/task", rateLimitMiddleware(writeLimiter));
@@ -1879,7 +1912,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   });
 
   // --- Health (public, no auth) ---
-  app.get("/health", (c) => c.json({ status: "ok", timestamp: Date.now() }));
+  app.get("/health", (c) =>
+    c.json({
+      status: emergencyFreeze ? "frozen" : "ok",
+      frozen: emergencyFreeze,
+      timestamp: Date.now(),
+    }),
+  );
 
   // --- WebSocket: bidirectional event stream ---
   app.get(
@@ -3207,6 +3246,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     app.use("/api/v1/admin/withdrawals/*", bearerAuth({ token: apiToken }));
     // Admin reconciliation — master token only
     app.use("/api/v1/admin/reconciliation", bearerAuth({ token: apiToken }));
+    // Admin emergency freeze — master token only
+    app.use("/api/v1/admin/freeze", bearerAuth({ token: apiToken }));
+    app.use("/api/v1/admin/unfreeze", bearerAuth({ token: apiToken }));
   }
 
   // --- Task submission with scored routing ---
@@ -4194,6 +4236,26 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     return c.json(result);
   });
 
+  // --- Emergency Freeze Admin Endpoints ---
+
+  // POST /api/v1/admin/freeze — activate emergency freeze (block all writes)
+  app.post("/api/v1/admin/freeze", (c) => {
+    emergencyFreeze = true;
+    logger.warn("admin.emergency_freeze.activated", {
+      correlationId: c.get("correlationId" as never) as string,
+    });
+    return c.json({ status: "frozen", message: "All write operations suspended" });
+  });
+
+  // POST /api/v1/admin/unfreeze — deactivate emergency freeze (resume writes)
+  app.post("/api/v1/admin/unfreeze", (c) => {
+    emergencyFreeze = false;
+    logger.info("admin.emergency_freeze.deactivated", {
+      correlationId: c.get("correlationId" as never) as string,
+    });
+    return c.json({ status: "active", message: "Write operations resumed" });
+  });
+
   // --- Stripe Checkout Endpoints ---
 
   // POST /api/v1/agents/:motebitId/checkout — create a Stripe Checkout Session for deposit
@@ -4949,7 +5011,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // Heartbeat sender — probes active/suspended peers every 60s.
   // Suspends at 3 missed, removes at 5.
-  const heartbeatInterval = startHeartbeatLoop(moteDb.db, relayIdentity);
+  // Skipped when emergency freeze is active (no state mutation during investigation).
+  const heartbeatInterval = startHeartbeatLoop(
+    moteDb.db,
+    relayIdentity,
+    60_000,
+    () => emergencyFreeze,
+  );
 
   // Settlement retry loop — retries failed settlement forwards every 30s with exponential backoff.
   // On retry exhaustion, refund the locked allocation back to the delegator.
@@ -5002,6 +5070,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         // Best-effort refund
       }
     },
+    () => emergencyFreeze,
   );
 
   // GET /api/v1/agents/:motebitId — get specific agent
@@ -6067,6 +6136,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       did: relayIdentity.did,
     },
     moteDb,
+    get emergencyFreeze() {
+      return emergencyFreeze;
+    },
   };
 }
 
@@ -6099,6 +6171,7 @@ if (process.env.VITEST != null) {
     apiToken: process.env.MOTEBIT_API_TOKEN,
     corsOrigin: process.env.MOTEBIT_CORS_ORIGIN,
     enableDeviceAuth: process.env.MOTEBIT_ENABLE_DEVICE_AUTH !== "false",
+    emergencyFreeze: process.env.MOTEBIT_EMERGENCY_FREEZE === "true",
     x402: x402Env,
     federation: process.env.MOTEBIT_FEDERATION_ENDPOINT_URL
       ? {
