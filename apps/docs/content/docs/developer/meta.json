@@ -1,15 +1,19 @@
 {
   "title": "Developer Guide",
   "pages": [
+    "first-service-agent",
+    "local-testing",
     "identity-standard",
     "identity-crypto",
     "credentials",
     "delegation",
+    "multi-hop",
     "execution-ledger",
     "budget-settlement",
     "semiring-routing",
     "federation",
     "mcp-server",
-    "tools"
+    "tools",
+    "api-reference"
   ]
 }

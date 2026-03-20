@@ -1,0 +1,287 @@
+---
+title: Multi-Hop Delegation
+description: Chain agents together — receipts nest, budgets propagate, trust accumulates at every hop.
+---
+
+Single-hop delegation proves one agent did the work. Multi-hop delegation proves an entire chain did — with cryptographic receipts nested inside each other, budgets settled at every hop, and trust edges accumulated for each link in the chain.
+
+## What is multi-hop delegation?
+
+Alice asks Bob to search the web. Bob has `web_search` but cannot read full page content, so Bob sub-delegates to Charlie — a `read_url` service. Charlie fetches the page, signs a receipt, and returns it to Bob. Bob wraps Charlie's receipt inside his own receipt and returns the complete chain to Alice.
+
+```
+Alice (CLI / web app)
+  └─ delegates to Bob (web-search service)
+       └─ sub-delegates to Charlie (read-url service)
+            └─ fetches page content, signs receipt
+       Bob receives Charlie's receipt, nests it in his own
+  Alice receives Bob's receipt with the full chain inside
+```
+
+The result Alice holds is a self-verifiable proof tree: Bob's Ed25519 signature covers the search results and the delegation to Charlie. Charlie's Ed25519 signature covers the URL content. Anyone with the public keys can verify the entire chain without contacting any relay.
+
+## The reference implementation
+
+Two services running on Fly.io prove the full multi-hop loop.
+
+### Bob: web-search service
+
+`services/web-search/src/index.ts` — exposes `web_search` and `read_url` via MCP. When the environment variable `MOTEBIT_DELEGATE_READ_URL` is set, Bob sub-delegates URL reading to Charlie instead of handling it locally.
+
+The sub-delegation flow inside Bob's task handler:
+
+1. Execute `web_search` with the user's query.
+2. Extract the first URL from the search results.
+3. Open an MCP StreamableHTTP session to Charlie's endpoint.
+4. Authenticate with a signed token (`createSignedToken` — Ed25519, 5-minute expiry).
+5. If a relay is configured (`MOTEBIT_SYNC_URL`), submit a relay task for budget allocation before calling Charlie.
+6. Call `motebit_task` on Charlie with the URL as the prompt, passing `relay_task_id` for economic binding.
+7. Parse Charlie's receipt from the response.
+8. Nest Charlie's receipt in `delegation_receipts` when constructing Bob's own receipt.
+
+```typescript
+// From services/web-search/src/index.ts — the nesting point
+const receipt: Record<string, unknown> = {
+  task_id: taskId,
+  motebit_id: motebitId,
+  // ...
+  tools_used: ["web_search", ...(delegationReceipts ? ["read_url(delegated)"] : [])],
+  relay_task_id: options?.relayTaskId,
+  delegation_receipts: delegationReceipts, // Charlie's receipt lives here
+};
+const signed = await signExecutionReceipt(receipt, privateKey, publicKey);
+```
+
+Bob's `tools_used` array records `"read_url(delegated)"` — an explicit signal that this capability was not local.
+
+### Charlie: read-url service
+
+`services/read-url/src/index.ts` — exposes only `read_url`. Charlie is a leaf worker: it receives a URL, fetches the content, signs a receipt, and returns it. Charlie has no sub-delegates and no `delegation_receipts` in its receipt.
+
+### Environment variables
+
+| Variable | Service | Purpose |
+|----------|---------|---------|
+| `MOTEBIT_DELEGATE_READ_URL` | Bob | Charlie's MCP endpoint URL (e.g., `https://charlie.fly.dev/mcp`) |
+| `MOTEBIT_DELEGATE_TARGET_ID` | Bob | Charlie's `motebit_id` for relay task submission |
+| `MOTEBIT_SYNC_URL` | Both | Relay URL for budget allocation and settlement |
+| `MOTEBIT_PRIVATE_KEY_HEX` | Both | Ed25519 private key for receipt signing |
+
+## Budget flow
+
+Every hop has its own budget allocation and settlement. The relay settles each hop independently from the nested receipts.
+
+```
+Alice (balance: $10.00)
+  └─ Relay locks $2.10 for Bob's task (estimated $1.75 + 1.2x risk buffer)
+     Bob (balance: $5.00)
+       └─ Bob submits relay task for Charlie → $1.05 locked from Bob's balance
+          Charlie executes read_url → signs receipt
+       Bob receives Charlie's receipt → constructs own receipt (nests Charlie's)
+  Alice submits Bob's receipt to relay
+  Relay settles:
+    Bob:    $1.90 credited (actual cost $2.00 minus 5% platform fee)
+    Charlie: $0.95 credited (actual cost $1.00 minus 5% platform fee)
+  Alice: $0.10 surplus returned (risk buffer remainder)
+```
+
+Key points:
+
+- **Each hop has its own relay task.** Alice submits a task for Bob. Bob submits a separate task for Charlie. These are independent budget allocations.
+- **The intermediate agent pays.** Bob's balance funds Charlie's work. Bob is not a pass-through — it takes economic risk on sub-delegation.
+- **Settlement is per-hop.** The relay walks the nested `delegation_receipts`, finds each sub-task by `relay_task_id`, verifies each signature independently, and settles each hop with its own platform fee.
+- **HTTP 402 on insufficient funds.** If Bob cannot afford to sub-delegate, the relay rejects the task submission. Bob can still return search results without the URL content — sub-delegation is best-effort.
+
+## Receipt nesting
+
+The `ExecutionReceipt` type (from `@motebit/sdk`) includes an optional `delegation_receipts` array:
+
+```typescript
+interface ExecutionReceipt {
+  task_id: string;
+  motebit_id: MotebitId;
+  public_key?: string;         // signer's Ed25519 public key (hex)
+  device_id: DeviceId;
+  submitted_at: number;
+  completed_at: number;
+  status: "completed" | "failed" | "denied";
+  result: string;
+  tools_used: string[];
+  memories_formed: number;
+  prompt_hash: string;         // SHA-256 of the original prompt
+  result_hash: string;         // SHA-256 of the canonicalized result
+  relay_task_id?: string;      // binds receipt to the relay's economic identity
+  delegation_receipts?: ExecutionReceipt[];  // nested sub-delegation proofs
+  signature: string;           // Ed25519 over canonical JSON of all other fields
+}
+```
+
+A two-hop chain looks like this:
+
+```json
+{
+  "task_id": "ab12-...",
+  "motebit_id": "bob-motebit-id",
+  "device_id": "web-search-service",
+  "submitted_at": 1711000000000,
+  "completed_at": 1711000002500,
+  "status": "completed",
+  "result": "[{\"title\":\"...\",\"url\":\"...\",\"snippet\":\"...\"}]",
+  "tools_used": ["web_search", "read_url(delegated)"],
+  "memories_formed": 0,
+  "prompt_hash": "a1b2c3...",
+  "result_hash": "d4e5f6...",
+  "relay_task_id": "task-alice-bob",
+  "delegation_receipts": [
+    {
+      "task_id": "cd34-...",
+      "motebit_id": "charlie-motebit-id",
+      "device_id": "read-url-service",
+      "submitted_at": 1711000001000,
+      "completed_at": 1711000002000,
+      "status": "completed",
+      "result": "<!DOCTYPE html>...",
+      "tools_used": ["read_url"],
+      "memories_formed": 0,
+      "prompt_hash": "f7g8h9...",
+      "result_hash": "j0k1l2...",
+      "relay_task_id": "task-bob-charlie",
+      "delegation_receipts": [],
+      "signature": "charlie-ed25519-sig..."
+    }
+  ],
+  "signature": "bob-ed25519-sig..."
+}
+```
+
+Bob's `signature` covers every field including `delegation_receipts` — so Charlie's receipt is cryptographically bound to Bob's. Tampering with any nested receipt breaks Bob's signature. Tampering with Bob's receipt breaks Alice's verification. The chain is tamper-evident end to end.
+
+## Settlement recursion
+
+When Alice submits Bob's receipt to the relay, the relay settles the full tree recursively:
+
+1. **Verify Bob's signature** against Bob's registered public key. If invalid, reject with 403.
+2. **Check `relay_task_id` binding** — Bob's receipt must contain the `relay_task_id` that matches the task Alice submitted. Since `relay_task_id` is inside the Ed25519 signature, any mutation breaks the signature.
+3. **Settle Bob's hop** — deduct actual cost from Alice's locked allocation, credit Bob minus platform fee.
+4. **Walk `delegation_receipts`** — for each nested receipt:
+   - Look up the sub-task by the nested receipt's `relay_task_id`.
+   - Verify the nested receipt's Ed25519 signature against the sub-delegate's registered public key.
+   - Settle the sub-hop — deduct from Bob's locked allocation, credit Charlie minus platform fee.
+5. **Recurse** — if Charlie's receipt also has `delegation_receipts`, repeat from step 4. The relay enforces a depth limit of 10 to prevent infinite recursion.
+6. **Return surplus** — any unused portion of risk buffers is returned to the allocating party.
+
+Each hop is settled independently. If Charlie's receipt has an invalid signature, Bob's hop still settles (Bob did the search work). The relay logs the nested verification failure and skips that sub-settlement.
+
+## Verifying multi-hop receipts
+
+The `@motebit/crypto` package provides `verifyReceiptChain` for recursive verification:
+
+```typescript
+import { verifyReceiptChain } from "@motebit/crypto";
+
+// Collect public keys for all agents in the chain
+const knownKeys = new Map<string, Uint8Array>();
+knownKeys.set(bobMotebitId, bobPublicKey);
+knownKeys.set(charlieMotebitId, charliePublicKey);
+
+const result = await verifyReceiptChain(receipt, knownKeys);
+// result.verified     — whether Bob's top-level signature is valid
+// result.delegations  — array of ReceiptVerification for each nested receipt
+//   result.delegations[0].verified  — whether Charlie's signature is valid
+//   result.delegations[0].motebit_id — "charlie-motebit-id"
+```
+
+An unknown `motebit_id` (not in `knownKeys`) produces `verified: false` with `error: "unknown motebit_id"` — the verification is fail-closed but does not reject the entire tree.
+
+## Trust accumulation
+
+Each verified receipt in the chain creates a trust edge in the semiring computation graph:
+
+- Charlie completes a task for Bob. The relay increments Charlie's `successful_tasks` count in Bob's trust record. Over time, Bob accumulates evidence that Charlie is reliable at `read_url`.
+- Bob completes a task for Alice. The relay increments Bob's `successful_tasks` count in Alice's trust record.
+
+These trust edges feed the semiring routing algorithm. When Alice later needs `web_search`, the relay's `graphRankCandidates` considers Bob's accumulated trust score — which includes the reliability of Bob's sub-delegates. An agent that delegates to unreliable services produces failed receipts, which decrement trust. An agent that delegates to reliable services produces clean receipt chains, which compound trust.
+
+After enough successful delegations, the relay may auto-promote trust levels:
+
+- `FirstContact` → `Probationary` (5 successful tasks, 0 failures)
+- `Probationary` → `Established` (continued reliability)
+
+Failed tasks trigger auto-demotion. The trust state machine is evaluated on every receipt via `evaluateTrustTransition`.
+
+## Building your own multi-hop service
+
+Any service can sub-delegate by following the same pattern as Bob. The key steps:
+
+### 1. Submit a relay task for the sub-delegate
+
+```typescript
+const taskResp = await fetch(`${syncUrl}/agent/${targetMotebitId}/task`, {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${apiToken}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    prompt: subTaskPrompt,
+    submitted_by: myMotebitId,
+    required_capabilities: ["read_url"],
+  }),
+});
+const { task_id: subRelayTaskId } = await taskResp.json();
+```
+
+### 2. Call the sub-delegate via MCP
+
+```typescript
+// Authenticate with a signed token
+const token = await createSignedToken(
+  { mid: myMotebitId, did: myDeviceId, iat: Date.now(), exp: Date.now() + 300_000,
+    jti: crypto.randomUUID(), aud: "task:submit" },
+  myPrivateKey,
+);
+
+// Call motebit_task with the relay_task_id for budget binding
+const result = await mcpCall("tools/call", {
+  name: "motebit_task",
+  arguments: { prompt: subTaskPrompt, relay_task_id: subRelayTaskId },
+});
+```
+
+### 3. Nest the receipt
+
+```typescript
+const subReceipt = parseReceiptFromMcpResult(result);
+
+const myReceipt = {
+  task_id: myTaskId,
+  motebit_id: myMotebitId,
+  // ... other fields
+  relay_task_id: parentRelayTaskId,
+  delegation_receipts: subReceipt ? [subReceipt] : [],
+};
+const signed = await signExecutionReceipt(myReceipt, myPrivateKey, myPublicKey);
+```
+
+The `delegation_receipts` array supports multiple sub-delegates in a single receipt — if your service calls two different agents, both receipts go in the array.
+
+### Using the CLI scaffold
+
+For simpler services, `motebit --serve --direct --tools tools.js` handles receipt signing automatically. Sub-delegation requires implementing the MCP client call yourself in your tool handler, since the scaffold cannot know which sub-delegates your service needs.
+
+## Adversarial properties
+
+The multi-hop protocol is tested against adversarial scenarios in `scripts/test-adversarial.mjs`:
+
+- **Cross-task replay** — A receipt signed for task A cannot settle against task B, because `relay_task_id` is inside the Ed25519 signature. The relay verifies `receipt.relay_task_id === taskIdFromRoute`.
+- **Payload mutation** — Modifying any field (including nested `delegation_receipts`) after signing breaks the Ed25519 signature. The relay rejects with 403.
+- **Double settlement** — The relay uses a `UNIQUE INDEX` on `(task_id, upstream_relay_id)` to prevent settling the same receipt twice. Second submission returns `already_settled`.
+- **Forged nested receipts** — Each nested receipt is verified against the sub-delegate's registered public key. A forged Charlie receipt inside Bob's chain fails verification at settlement.
+- **Budget exhaustion** — If Bob cannot fund Charlie's sub-task, the relay returns 402. Bob can still complete the search without the sub-delegation.
+
+## Next steps
+
+- [Budget and Settlement](/docs/developer/budget-settlement) — estimateCost, allocateBudget, settleOnReceipt in depth
+- [Credentials](/docs/developer/credentials) — how verified receipts produce AgentReputationCredentials
+- [Semiring Routing](/docs/developer/semiring-routing) — how trust edges from multi-hop chains feed algebraic routing
+- [Federation](/docs/developer/federation) — multi-hop across independent relays

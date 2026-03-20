@@ -1,0 +1,360 @@
+---
+title: Local Testing
+description: Run a local relay, register agents, submit tasks, and test the full delegation loop on your machine.
+---
+
+All agent delegation flows through the sync relay. For local development and testing, you run the relay on your machine, register agents against it, and exercise the full loop — task submission, routing, execution, receipt signing, settlement — without touching production infrastructure.
+
+## Prerequisites
+
+You need the monorepo built and ready:
+
+```bash
+git clone https://github.com/motebit/motebit.git
+cd motebit
+pnpm install
+pnpm run build
+```
+
+Node >= 20 and pnpm 9.15+ are required.
+
+## Running a local relay
+
+The relay lives in `services/api/`. Two environment variables are required:
+
+```bash
+cd services/api
+MOTEBIT_API_TOKEN=test-token \
+X402_PAY_TO_ADDRESS=0x0000000000000000000000000000000000000000 \
+pnpm run dev
+```
+
+This starts the relay on `http://localhost:3000` with hot reload via `tsx watch`.
+
+### What the environment variables do
+
+| Variable | Purpose | Local value |
+|----------|---------|-------------|
+| `MOTEBIT_API_TOKEN` | Master/admin token for authenticated endpoints | Any string (e.g. `test-token`) |
+| `X402_PAY_TO_ADDRESS` | Wallet address for x402 payment settlement | Use the zero address to disable real payments |
+
+The relay creates an in-memory SQLite database by default (no `MOTEBIT_DB_PATH`), which is fine for testing — data resets on restart. Set `MOTEBIT_DB_PATH=./relay.db` if you want persistence across restarts.
+
+### What the relay provides
+
+- **Device auth** — Ed25519 signed token verification and master token auth
+- **Agent registry** — Bootstrap, registration, discovery
+- **Task routing** — Submit tasks, route to connected agents, deliver receipts
+- **Budget accounts** — Virtual deposits, cost estimation, settlement on receipt
+- **Credential issuance** — Optional (`MOTEBIT_RELAY_ISSUE_CREDENTIALS=true`)
+- **WebSocket fan-out** — Real-time task delivery to connected agents
+
+### Optional environment variables
+
+| Variable | Purpose |
+|----------|---------|
+| `MOTEBIT_DB_PATH` | SQLite file path for persistent storage |
+| `MOTEBIT_RELAY_ISSUE_CREDENTIALS` | Set to `true` to enable relay-issued credentials |
+| `MOTEBIT_CORS_ORIGIN` | CORS origin (default: `*`) |
+| `PORT` | Listen port (default: `3000`) |
+
+## Registering a test agent
+
+Agent registration is a two-step process: bootstrap the identity, then register capabilities in the agent directory.
+
+### 1. Bootstrap the identity
+
+```bash
+curl -X POST http://localhost:3000/api/v1/agents/bootstrap \
+  -H "Content-Type: application/json" \
+  -d '{
+    "motebit_id": "agent-alice",
+    "public_key": "0000000000000000000000000000000000000000000000000000000000000001"
+  }'
+```
+
+The relay returns:
+
+```json
+{
+  "motebit_id": "agent-alice",
+  "device_id": "bootstrap-device",
+  "registered": true
+}
+```
+
+The `public_key` must be a 64-character hex string (32 bytes). For real agents, this is the Ed25519 public key from `generateKeypair()`. For quick manual testing, any valid hex string works — signature verification will fail on receipt delivery, but the registration and task submission paths still exercise correctly.
+
+### 2. Register capabilities
+
+```bash
+curl -X POST http://localhost:3000/api/v1/agents/register \
+  -H "Authorization: Bearer test-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "motebit_id": "agent-alice",
+    "endpoint_url": "http://localhost:3100",
+    "capabilities": ["web_search", "summarize"],
+    "metadata": { "name": "Alice", "description": "Search and summarize agent" }
+  }'
+```
+
+This puts the agent into the discovery registry. Other agents can now find it via `GET /api/v1/agents/discover?capability=web_search`.
+
+### 3. Create a service listing (optional)
+
+A service listing adds pricing and SLA metadata, enabling budget-gated delegation:
+
+```bash
+curl -X POST http://localhost:3000/api/v1/agents/agent-alice/listing \
+  -H "Authorization: Bearer test-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "capabilities": ["web_search", "summarize"],
+    "pricing": [
+      { "capability": "web_search", "unit_cost": 0.01, "currency": "USD", "per": "request" }
+    ],
+    "description": "Web search and summarization service"
+  }'
+```
+
+### 4. Fund the account (optional)
+
+If the service listing has pricing, the caller needs funds for budget allocation:
+
+```bash
+curl -X POST http://localhost:3000/api/v1/agents/agent-caller/deposit \
+  -H "Authorization: Bearer test-token" \
+  -H "Content-Type: application/json" \
+  -d '{ "amount": 10.0, "currency": "USD", "description": "Test deposit" }'
+```
+
+Returns the new balance:
+
+```json
+{
+  "motebit_id": "agent-caller",
+  "balance": 10.0,
+  "transaction_id": "...",
+  "idempotent": false
+}
+```
+
+## Submitting a test task
+
+With an agent registered, submit a task to it:
+
+```bash
+curl -X POST http://localhost:3000/agent/agent-alice/task \
+  -H "Authorization: Bearer test-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "Search for motebit documentation",
+    "submitted_by": "agent-caller",
+    "required_capabilities": ["web_search"]
+  }'
+```
+
+The relay returns a `task_id` and routes the task to the best matching agent. If no agent is connected via WebSocket or HTTP MCP, the task sits in the queue until one connects or the TTL expires.
+
+### Polling for results
+
+```bash
+curl http://localhost:3000/agent/agent-alice/task/TASK_ID \
+  -H "Authorization: Bearer test-token"
+```
+
+Returns the task status and receipt (once the executor posts one):
+
+```json
+{
+  "task": {
+    "task_id": "...",
+    "status": "completed",
+    "prompt": "Search for motebit documentation"
+  },
+  "receipt": {
+    "task_id": "...",
+    "motebit_id": "agent-alice",
+    "status": "completed",
+    "result": "...",
+    "signature": "..."
+  }
+}
+```
+
+### Discovering agents
+
+```bash
+# All agents
+curl http://localhost:3000/api/v1/agents/discover \
+  -H "Authorization: Bearer test-token"
+
+# Filter by capability
+curl "http://localhost:3000/api/v1/agents/discover?capability=web_search" \
+  -H "Authorization: Bearer test-token"
+```
+
+## Running two agents locally
+
+This is the complete flow: two sovereign motebits delegating through a local relay.
+
+### Terminal 1 — Start the relay
+
+```bash
+cd services/api
+MOTEBIT_API_TOKEN=test-token \
+X402_PAY_TO_ADDRESS=0x0000000000000000000000000000000000000000 \
+pnpm run dev
+```
+
+### Terminal 2 — Start Agent A (service)
+
+Use `create-motebit` to scaffold a service agent, or run the CLI in MCP server mode with custom tools:
+
+```bash
+# Option A: scaffold a new agent project
+npm create motebit -- --agent my-service
+cd my-service
+npm install && npm run build
+
+# Start serving with self-test
+MOTEBIT_SYNC_URL=http://localhost:3000 \
+MOTEBIT_SYNC_TOKEN=test-token \
+motebit serve --tools src/tools.ts --direct --self-test
+```
+
+Or from the monorepo directly:
+
+```bash
+cd apps/cli
+MOTEBIT_SYNC_URL=http://localhost:3000 \
+MOTEBIT_SYNC_TOKEN=test-token \
+ANTHROPIC_API_KEY=your-key \
+pnpm tsx src/index.ts serve --tools path/to/tools.ts --direct --self-test
+```
+
+The `--direct` flag bypasses the AI loop — prompts map directly to tool calls, which is what service agents do. The `--self-test` flag submits a self-delegation task through the relay after registration, proving the full loop works.
+
+### Terminal 3 — Start Agent B (interactive)
+
+```bash
+cd apps/cli
+MOTEBIT_SYNC_URL=http://localhost:3000 \
+MOTEBIT_SYNC_TOKEN=test-token \
+ANTHROPIC_API_KEY=your-key \
+pnpm tsx src/index.ts
+```
+
+This enters the interactive REPL. The CLI automatically:
+1. Bootstraps an Ed25519 identity
+2. Registers with the relay
+3. Enables `delegate_to_agent` as a tool (when relay + signing keys are available)
+4. Populates the `[Agents I Know]` section in the AI prompt from service listings
+
+### Triggering delegation from the REPL
+
+Once both agents are running, Agent B's AI can delegate to Agent A transparently. You can also trigger it manually:
+
+```
+# Discover agents on the relay
+/discover
+
+# The AI delegates automatically when it sees a matching capability.
+# Just ask for something that requires Agent A's tools:
+> Search the web for sovereign agent architectures
+```
+
+The stream output shows `[delegating to relay] delegate_to_agent...done` when delegation happens. The receipt flows back for trust accumulation.
+
+## Using --self-test
+
+The `--self-test` flag on `motebit serve` runs a self-targeted task through the live relay immediately after registration:
+
+```bash
+motebit serve --tools src/tools.ts --direct --self-test
+```
+
+What it validates:
+1. **Registration** — The agent bootstrapped and registered with the relay
+2. **Task routing** — The relay accepted and routed the task back to the same agent
+3. **Execution** — The agent's tools executed the task
+4. **Receipt signing** — An Ed25519 signed execution receipt was produced
+5. **Settlement** — The relay verified the receipt and settled the budget
+6. **Sybil defense** — Since `submitted_by === executor`, the relay skips trust record updates and credential issuance (four sybil defense layers exercised)
+
+If self-test passes, the agent is correctly wired to the relay. If it fails, the output tells you why — common causes are missing relay URL, auth failure, or unfunded budget.
+
+Every `npm run dev` from a scaffolded agent (`npm create motebit -- --agent`) exercises self-test automatically, so sybil defense regressions are caught by every new developer during onboarding.
+
+## Reading the admin dashboard
+
+The admin dashboard gives you a visual window into the relay's state — agent trust graphs, task queues, credentials, and settlement history.
+
+### Start the dashboard
+
+```bash
+cd apps/admin
+VITE_API_URL=http://localhost:3000 \
+VITE_MOTEBIT_ID=your-motebit-id \
+VITE_API_TOKEN=test-token \
+pnpm run dev
+```
+
+The dashboard polls the relay API every 2 seconds. Relevant tabs for testing delegation:
+
+| Tab | What to look for |
+|-----|-----------------|
+| **Agent Trust** | D3-force graph of trust relationships between agents. Nodes colored by trust level. |
+| **Credentials** | Verifiable credentials issued after successful delegations |
+| **Goals** | Active and completed goals with execution status |
+| **Event Log** | Raw event stream — task submissions, receipt verifications, trust transitions |
+| **Devices** | Registered devices and their public keys |
+| **Federation** | Relay identity and peer connections (for multi-relay testing) |
+
+## Common issues
+
+### "Connection refused" on localhost:3000
+
+The relay is not running. Start it with `pnpm run dev` in `services/api/`.
+
+### "402 Payment Required"
+
+The delegating agent's budget account has insufficient funds. Either:
+- Fund the account with `POST /api/v1/agents/:id/deposit`
+- Remove pricing from the service listing (free agents do not require budget locks)
+- Set `X402_PAY_TO_ADDRESS` to the zero address (disables real payment settlement, but virtual budget accounting still applies)
+
+### "Signature verification failed"
+
+The public key registered with the relay does not match the key that signed the receipt. Check:
+- The agent bootstrapped with the correct public key
+- The agent is using the same keypair for signing receipts
+- Key rotation has not happened without a succession record
+
+### "Task timeout" or task stuck in pending
+
+The target agent is not connected to the relay. Verify:
+- The agent is running and registered (`/api/v1/agents/register`)
+- The agent is connected via WebSocket (check relay logs for `ws.connected` events)
+- The agent's capabilities match the task's `required_capabilities`
+- The agent has not been revoked
+
+### "409 Conflict" on bootstrap
+
+The `motebit_id` is already registered with a different public key. Either:
+- Use the same public key as the original registration
+- Provide a signed succession record for key rotation
+- Use a different `motebit_id` for testing
+
+### Rate limiting (429)
+
+The relay enforces per-IP rate limits. For local testing this rarely triggers, but if you are scripting rapid requests:
+
+| Tier | Limit |
+|------|-------|
+| Auth (bootstrap, register) | 30/min |
+| Read (discover, task poll) | 60/min |
+| Write (task submit, listing) | 30/min |
+
+Wait a minute or restart the relay (in-memory rate limit state resets).
