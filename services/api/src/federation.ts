@@ -39,6 +39,16 @@ export interface RelayIdentity {
 export interface FederationConfig {
   displayName?: string;
   endpointUrl?: string;
+  /** Enable/disable federation entirely. Default: true when endpointUrl is set. */
+  enabled?: boolean;
+  /** Maximum number of active peers. Default: 50. */
+  maxPeers?: number;
+  /** Auto-accept incoming peering proposals. Default: false (require manual confirm). */
+  autoAcceptPeers?: boolean;
+  /** Allowlist of relay IDs that can peer. Empty = allow any. */
+  allowedPeers?: string[];
+  /** Blocklist of relay IDs that cannot peer. Takes precedence over allowlist. */
+  blockedPeers?: string[];
 }
 
 export interface AgentInfo {
@@ -802,6 +812,50 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     }
   }
 
+  // ── Federation governance enforcement ──
+
+  // Resolve effective federation enabled state: explicit config wins,
+  // otherwise enabled when endpointUrl is set.
+  const federationEnabled =
+    federationConfig?.enabled !== undefined
+      ? federationConfig.enabled
+      : federationConfig?.endpointUrl != null;
+
+  const maxPeers = federationConfig?.maxPeers ?? 50;
+
+  /** Throw 403 if federation is explicitly disabled. */
+  function checkFederationEnabled(): void {
+    if (!federationEnabled) {
+      throw new HTTPException(403, { message: "Federation is disabled on this relay" });
+    }
+  }
+
+  /** Throw 403 if the peer is blocked or not in the allowlist. */
+  function checkPeerPolicy(relayId: string): void {
+    if (federationConfig?.blockedPeers?.includes(relayId)) {
+      throw new HTTPException(403, { message: "Peer is blocked" });
+    }
+    if (
+      federationConfig?.allowedPeers &&
+      federationConfig.allowedPeers.length > 0 &&
+      !federationConfig.allowedPeers.includes(relayId)
+    ) {
+      throw new HTTPException(403, { message: "Peer is not in allowlist" });
+    }
+  }
+
+  /** Throw 503 if the maximum number of active peers has been reached. */
+  function checkMaxPeers(): void {
+    const count = (
+      db.prepare("SELECT COUNT(*) as cnt FROM relay_peers WHERE state = 'active'").get() as {
+        cnt: number;
+      }
+    ).cnt;
+    if (count >= maxPeers) {
+      throw new HTTPException(503, { message: "Maximum peer limit reached" });
+    }
+  }
+
   // ── Phase 1: Identity ──
 
   app.get("/federation/v1/identity", (c) => {
@@ -830,7 +884,10 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     if (!endpoint_url) throw new HTTPException(400, { message: "endpoint_url is required" });
     if (!nonce) throw new HTTPException(400, { message: "nonce is required" });
 
+    checkFederationEnabled();
+    checkPeerPolicy(relay_id);
     checkPeerLimit(relay_id);
+    checkMaxPeers();
 
     const existing = db
       .prepare("SELECT state FROM relay_peers WHERE peer_relay_id = ?")
@@ -875,6 +932,8 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       throw new HTTPException(400, { message: "relay_id and challenge_response are required" });
     }
 
+    checkFederationEnabled();
+    checkPeerPolicy(relay_id);
     checkPeerLimit(relay_id);
 
     const peer = db
@@ -1046,6 +1105,11 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       throw new HTTPException(400, { message: "Invalid federation query" });
     }
 
+    // Silent no-op when federation is disabled — return empty results, don't error
+    if (!federationEnabled) {
+      return c.json({ agents: [] });
+    }
+
     checkPeerLimit(body.origin_relay);
 
     // Dedup
@@ -1149,6 +1213,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       throw new HTTPException(400, { message: "Missing required fields" });
     }
 
+    checkFederationEnabled();
     checkPeerLimit(body.origin_relay);
 
     // Federation owns: peer validation + signature verification + timestamp drift check

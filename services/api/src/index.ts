@@ -254,6 +254,16 @@ export interface SyncRelayConfig {
     displayName?: string;
     /** Public endpoint URL for this relay (how peers reach us). */
     endpointUrl?: string;
+    /** Enable/disable federation entirely. Default: true when endpointUrl is set. */
+    enabled?: boolean;
+    /** Maximum number of active peers. Default: 50. */
+    maxPeers?: number;
+    /** Auto-accept incoming peering proposals. Default: false. */
+    autoAcceptPeers?: boolean;
+    /** Allowlist of relay IDs that can peer. Empty = allow any. */
+    allowedPeers?: string[];
+    /** Blocklist of relay IDs that cannot peer. Takes precedence over allowlist. */
+    blockedPeers?: string[];
   };
   /** Stripe Checkout configuration. Omit to disable Stripe deposits. */
   stripe?: {
@@ -6094,6 +6104,17 @@ if (process.env.VITEST != null) {
       ? {
           endpointUrl: process.env.MOTEBIT_FEDERATION_ENDPOINT_URL,
           displayName: process.env.MOTEBIT_FEDERATION_DISPLAY_NAME,
+          enabled: process.env.MOTEBIT_FEDERATION_ENABLED !== "false",
+          maxPeers: process.env.MOTEBIT_FEDERATION_MAX_PEERS
+            ? parseInt(process.env.MOTEBIT_FEDERATION_MAX_PEERS, 10)
+            : undefined,
+          autoAcceptPeers: process.env.MOTEBIT_FEDERATION_AUTO_ACCEPT === "true",
+          allowedPeers: process.env.MOTEBIT_FEDERATION_ALLOWED_PEERS
+            ? process.env.MOTEBIT_FEDERATION_ALLOWED_PEERS.split(",").map((s) => s.trim())
+            : undefined,
+          blockedPeers: process.env.MOTEBIT_FEDERATION_BLOCKED_PEERS
+            ? process.env.MOTEBIT_FEDERATION_BLOCKED_PEERS.split(",").map((s) => s.trim())
+            : undefined,
         }
       : undefined,
     stripe:
