@@ -72,7 +72,7 @@ export class WebLLMProvider implements StreamingProvider {
   ) {
     this._model = model;
     this._temperature = opts?.temperature ?? 0.7;
-    this._maxTokens = opts?.maxTokens ?? 1024;
+    this._maxTokens = opts?.maxTokens ?? 4096;
     this.onProgress = opts?.onProgress;
   }
 
