@@ -207,6 +207,17 @@ export class IdbConversationStore implements ConversationStoreAdapter {
     }>
   >();
 
+  /** Load messages for a specific conversation into the sync cache. */
+  async preloadConversation(conversationId: string): Promise<void> {
+    if (this._messageCache.has(conversationId)) return;
+    const tx = this.db.transaction("conversation_messages", "readonly");
+    const msgStore = tx.objectStore("conversation_messages");
+    const msgIndex = msgStore.index("conversation_id");
+    const msgs = (await idbRequest(msgIndex.getAll(conversationId))) as MessageRecord[];
+    msgs.sort((a, b) => a.createdAt - b.createdAt);
+    this._messageCache.set(conversationId, msgs);
+  }
+
   /** Preload conversation data from IDB into sync caches. Call before runtime construction. */
   async preload(motebitId: string): Promise<void> {
     const tx = this.db.transaction(["conversations", "conversation_messages"], "readonly");

@@ -2,9 +2,35 @@
  * Text embeddings — semantic (async, model-backed) and hash-based (sync, deterministic fallback).
  */
 
-// === Semantic embeddings via @xenova/transformers ===
+// === Semantic embeddings via @xenova/transformers (or remote proxy) ===
 
 export const EMBEDDING_DIMENSIONS = 384;
+
+// Remote embedding backend — when configured, embedText() calls this URL instead
+// of loading the local ONNX model. Used by the web app to route through the proxy.
+let remoteEmbedUrl: string | null = null;
+
+/**
+ * Configure a remote embedding backend. When set, embedText() POSTs to this URL
+ * instead of loading @xenova/transformers locally. Pass null to disable.
+ */
+export function setRemoteEmbedUrl(url: string | null): void {
+  remoteEmbedUrl = url;
+}
+
+async function remoteEmbed(text: string): Promise<number[]> {
+  const res = await fetch(remoteEmbedUrl!, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ texts: [text] }),
+    signal: AbortSignal.timeout(10000),
+  });
+  const data = (await res.json()) as { ok: boolean; embeddings?: number[][]; error?: string };
+  if (!data.ok || !data.embeddings?.[0]) {
+    throw new Error(data.error ?? "Remote embedding failed");
+  }
+  return data.embeddings[0];
+}
 
 type Pipeline = (
   text: string,
@@ -47,6 +73,15 @@ export function resetPipeline(): void {
 export async function embedText(text: string): Promise<number[]> {
   if (text === "") {
     return new Array<number>(EMBEDDING_DIMENSIONS).fill(0);
+  }
+
+  // Remote backend (browser via proxy)
+  if (remoteEmbedUrl) {
+    try {
+      return await remoteEmbed(text);
+    } catch {
+      // Fall through to local model / hash fallback
+    }
   }
 
   try {

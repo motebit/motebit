@@ -37,6 +37,7 @@ import {
   createListEventsHandler,
   DuckDuckGoSearchProvider,
 } from "@motebit/tools/web-safe";
+import { embedText, setRemoteEmbedUrl } from "@motebit/memory-graph";
 import { CursorPresence } from "./cursor-presence";
 import { createProvider, WebLLMProvider } from "./providers";
 import type { ProviderConfig } from "./storage";
@@ -59,27 +60,6 @@ export const COLOR_PRESETS: Record<string, InteriorColor> = {
 
 // Re-export provider utilities
 export { createProvider, WebLLMProvider };
-
-// Simple hash-based text embedding for memory retrieval (no ONNX model needed)
-const HASH_DIM = 64;
-function hashEmbed(text: string): number[] {
-  const vec = new Array<number>(HASH_DIM).fill(0);
-  const words = text
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((w) => w.length > 0);
-  for (const w of words) {
-    let h = 0;
-    for (let i = 0; i < w.length; i++) h = ((h << 5) - h + w.charCodeAt(i)) | 0;
-    const idx = ((h % HASH_DIM) + HASH_DIM) % HASH_DIM;
-    vec[idx] = (vec[idx] ?? 0) + 1;
-  }
-  let norm = 0;
-  for (let i = 0; i < HASH_DIM; i++) norm += vec[i]! * vec[i]!;
-  norm = Math.sqrt(norm);
-  if (norm > 0) for (let i = 0; i < HASH_DIM; i++) vec[i] = vec[i]! / norm;
-  return vec;
-}
 
 // Legacy Tier 1 localStorage key — will be migrated to cryptographic identity
 const LEGACY_MOTEBIT_ID_KEY = "motebit-web-id";
@@ -113,6 +93,7 @@ export class WebApp {
   private keyStore = new EncryptedKeyStore();
   private mcpAdapters = new Map<string, McpClientAdapter>();
   private _mcpServers: McpServerConfig[] = [];
+  private _convStore: IdbConversationStore | null = null;
   private cuesTickInterval: ReturnType<typeof setInterval> | null = null;
   private housekeepingInterval: ReturnType<typeof setInterval> | null = null;
   private idleCues: BehaviorCues = {
@@ -131,6 +112,9 @@ export class WebApp {
   }
 
   async bootstrap(): Promise<void> {
+    // Configure semantic embeddings via proxy (browser can't load ONNX model locally)
+    setRemoteEmbedUrl("https://api.motebit.com/v1/embed");
+
     // Open IndexedDB storage
     const storage = await createBrowserStorage();
 
@@ -176,6 +160,7 @@ export class WebApp {
 
     // Preload caches for sync access
     const convStore = storage.conversationStore as IdbConversationStore;
+    this._convStore = convStore;
     await convStore.preload(this._motebitId);
     const planStore = storage.planStore as IdbPlanStore;
     this._planStore = planStore;
@@ -295,12 +280,15 @@ export class WebApp {
     const registry = this.runtime.getToolRegistry();
 
     registry.register(webSearchDefinition, createWebSearchHandler(new DuckDuckGoSearchProvider()));
-    registry.register(readUrlDefinition, createReadUrlHandler());
+    registry.register(
+      readUrlDefinition,
+      createReadUrlHandler({ proxyUrl: "https://api.motebit.com/v1/fetch" }),
+    );
     registry.register(
       recallMemoriesDefinition,
       createRecallMemoriesHandler(async (query, limit) => {
         if (!this.runtime) return [];
-        const embedding = hashEmbed(query);
+        const embedding = await embedText(query);
         const nodes = await this.runtime.memory.retrieve(embedding, { limit });
         return nodes.map((n) => ({ content: n.content, confidence: n.confidence }));
       }),
@@ -429,8 +417,10 @@ export class WebApp {
     this.runtime?.resetConversation();
   }
 
-  loadConversationById(id: string): ConversationMessage[] {
+  async loadConversationById(id: string): Promise<ConversationMessage[]> {
     if (!this.runtime) return [];
+    // Preload messages from IDB into sync cache before loading
+    if (this._convStore) await this._convStore.preloadConversation(id);
     this.runtime.loadConversation(id);
     return this.runtime.getConversationHistory();
   }

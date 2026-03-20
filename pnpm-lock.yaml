@@ -547,6 +547,9 @@ importers:
       '@motebit/mcp-client':
         specifier: workspace:*
         version: link:../../packages/mcp-client
+      '@motebit/memory-graph':
+        specifier: workspace:*
+        version: link:../../packages/memory-graph
       '@motebit/planner':
         specifier: workspace:*
         version: link:../../packages/planner
