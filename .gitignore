@@ -34,6 +34,7 @@ coverage/
 *.tgz
 *.map
 vite.config.ts.timestamp-*
+vitest.config.ts.timestamp-*
 .next/
 next-env.d.ts
 
