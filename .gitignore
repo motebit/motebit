@@ -35,6 +35,7 @@ coverage/
 *.map
 vite.config.ts.timestamp-*
 vitest.config.ts.timestamp-*
+tsup.config.bundled_*
 .next/
 next-env.d.ts
 

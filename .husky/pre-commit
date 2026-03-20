@@ -1,1 +1,34 @@
 npx lint-staged --no-stash
+
+# Auto-generate changeset if published packages have staged changes and no changeset exists
+PUBLISHED="packages/sdk packages/verify packages/create-motebit apps/cli"
+NEEDS_CHANGESET=false
+
+for pkg in $PUBLISHED; do
+  if git diff --cached --name-only | grep -q "^${pkg}/"; then
+    NEEDS_CHANGESET=true
+    break
+  fi
+done
+
+if [ "$NEEDS_CHANGESET" = true ]; then
+  if ! git diff --cached --name-only | grep -q "^\.changeset/.*\.md$"; then
+    CHANGESET_ID=$(openssl rand -hex 4)
+    CHANGESET_FILE=".changeset/${CHANGESET_ID}.md"
+
+    cat > "$CHANGESET_FILE" << 'EOF'
+---
+"@motebit/sdk": patch
+"@motebit/verify": patch
+"create-motebit": patch
+"motebit": patch
+---
+
+auto-generated patch bump
+EOF
+
+    git add "$CHANGESET_FILE"
+    echo "Auto-generated changeset: ${CHANGESET_FILE} (patch)"
+    echo "  For minor/major: run 'pnpm changeset' before committing."
+  fi
+fi
