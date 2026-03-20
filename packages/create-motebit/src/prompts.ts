@@ -38,35 +38,46 @@ export function password(rl: readline.Interface, message: string): Promise<strin
   return new Promise((resolve) => {
     stdout.write(`  ${message}`);
 
+    // Pause readline to prevent it from consuming stdin
+    rl.pause();
+
     stdin.setRawMode(true);
     stdin.resume();
     stdin.setEncoding("utf8");
 
     let value = "";
+    let len = 0;
 
     const onData = (ch: string) => {
       const c = ch.toString();
 
       if (c === "\n" || c === "\r" || c === "\u0004") {
         // Enter or Ctrl-D
-        stdin.setRawMode(false);
         stdin.removeListener("data", onData);
+        stdin.setRawMode(false);
+        stdin.pause();
         stdout.write("\n");
+        rl.resume();
         resolve(value);
       } else if (c === "\u0003") {
         // Ctrl-C
-        stdin.setRawMode(false);
         stdin.removeListener("data", onData);
+        stdin.setRawMode(false);
+        stdin.pause();
         stdout.write("\n");
+        rl.resume();
         process.exit(130);
       } else if (c === "\u007F" || c === "\b") {
         // Backspace
-        if (value.length > 0) {
+        if (len > 0) {
           value = value.slice(0, -1);
-          stdout.write("\b \b");
+          len--;
+          // Clear the character: move back, overwrite with space, move back
+          stdout.write("\x1b[1D \x1b[1D");
         }
       } else if (c.charCodeAt(0) >= 32) {
         value += c;
+        len++;
         stdout.write("*");
       }
     };
