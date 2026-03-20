@@ -5,6 +5,10 @@
     "version": "1.0.0",
     "scheme": "motebit",
     "platforms": ["ios", "android"],
-    "newArchEnabled": false
+    "newArchEnabled": false,
+    "ios": {
+      "bundleIdentifier": "com.tysm.motebit"
+    },
+    "plugins": ["expo-sqlite"]
   }
 }

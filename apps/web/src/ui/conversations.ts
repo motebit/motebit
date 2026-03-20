@@ -109,10 +109,11 @@ export function initConversations(
 
       item.appendChild(metaDiv);
 
-      item.addEventListener("click", async () => {
-        await ctx.app.loadConversationById(entry.conversationId);
-        close();
-        callbacks.onLoad();
+      item.addEventListener("click", () => {
+        void ctx.app.loadConversationById(entry.conversationId).then(() => {
+          close();
+          callbacks.onLoad();
+        });
       });
 
       convList.appendChild(item);

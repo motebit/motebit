@@ -87,7 +87,7 @@ describe("create-motebit", () => {
     // package.json has correct content
     const pkg = JSON.parse(readFileSync(join(projectDir, "package.json"), "utf-8"));
     expect(pkg.dependencies).toHaveProperty("@motebit/verify");
-    expect(pkg.dependencies["@motebit/verify"]).toBe("^0.4.0");
+    expect(pkg.dependencies["@motebit/verify"]).toBe("^0.5.0");
     expect(pkg.scripts.verify).toContain("create-motebit verify");
     expect(pkg.type).toBe("module");
     expect(pkg.private).toBe(true);
@@ -145,9 +145,10 @@ describe("create-motebit", () => {
     // package.json has agent scripts
     const pkg = JSON.parse(readFileSync(join(projectDir, "package.json"), "utf-8"));
     expect(pkg.scripts.dev).toContain("--direct");
-    expect(pkg.scripts.dev).toContain("--self-test");
+    expect(pkg.scripts.dev).not.toContain("--self-test");
     expect(pkg.scripts.dev).toContain("--tools");
     expect(pkg.scripts.start).toContain("--direct");
+    expect(pkg.scripts.start).toContain("--self-test");
     expect(pkg.dependencies).toHaveProperty("@motebit/sdk");
     expect(pkg.devDependencies).toHaveProperty("motebit");
 
