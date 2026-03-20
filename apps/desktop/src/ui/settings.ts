@@ -91,6 +91,8 @@ const ANTHROPIC_MODELS = [
   "claude-opus-4-20250514",
 ];
 
+const OPENAI_MODELS = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"];
+
 const OLLAMA_MODELS = [
   "llama3.2",
   "llama3.1",
@@ -101,6 +103,8 @@ const OLLAMA_MODELS = [
   "phi3",
   "qwen2",
 ];
+
+const PROXY_MODELS = ["claude-sonnet-4-20250514"];
 
 // === Approval Presets ===
 
@@ -169,7 +173,20 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
   function populateModelSelect(provider: string, currentModel?: string): void {
     settingsModelSelect.innerHTML = "";
-    const models = provider === "anthropic" ? ANTHROPIC_MODELS : OLLAMA_MODELS;
+    const models =
+      provider === "openai"
+        ? OPENAI_MODELS
+        : provider === "ollama"
+          ? OLLAMA_MODELS
+          : provider === "proxy"
+            ? PROXY_MODELS
+            : ANTHROPIC_MODELS;
+
+    // Show/hide API key field based on provider (hidden for ollama and proxy)
+    const apiKeyField = settingsApiKey.closest(".settings-field") as HTMLElement | null;
+    if (apiKeyField) {
+      apiKeyField.style.display = provider === "ollama" || provider === "proxy" ? "none" : "";
+    }
 
     for (const model of models) {
       const opt = document.createElement("option");

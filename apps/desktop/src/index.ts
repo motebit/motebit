@@ -191,7 +191,7 @@ export interface TauriCommands {
 // === Desktop AI Config ===
 
 export interface DesktopAIConfig {
-  provider: "anthropic" | "ollama";
+  provider: "anthropic" | "ollama" | "openai" | "proxy";
   model?: string;
   apiKey?: string;
   personalityConfig?: MotebitPersonalityConfig;
@@ -622,10 +622,10 @@ export class DesktopApp {
     return this.runtime?.currentModel ?? null;
   }
 
-  /** The active provider type: "anthropic", "ollama", or null if not initialized. */
-  private _activeProvider: "anthropic" | "ollama" | null = null;
+  /** The active provider type or null if not initialized. */
+  private _activeProvider: "anthropic" | "ollama" | "openai" | "proxy" | null = null;
 
-  get currentProvider(): "anthropic" | "ollama" | null {
+  get currentProvider(): "anthropic" | "ollama" | "openai" | "proxy" | null {
     return this._activeProvider;
   }
 
@@ -657,6 +657,30 @@ export class DesktopApp {
       const base_url = config.isTauri ? DEFAULT_OLLAMA_URL : "/api/ollama";
       provider = new OllamaProvider({ model, base_url, max_tokens: config.maxTokens, temperature });
       this._activeProvider = "ollama";
+    } else if (config.provider === "openai") {
+      if (config.apiKey == null || config.apiKey === "") return false;
+      const model = config.model != null && config.model !== "" ? config.model : "gpt-4o";
+      const base_url = config.isTauri ? "https://api.openai.com/v1" : "/api/openai";
+      provider = new CloudProvider({
+        provider: "openai",
+        api_key: config.apiKey,
+        model,
+        base_url,
+        max_tokens: config.maxTokens,
+        temperature,
+      });
+      this._activeProvider = "openai";
+    } else if (config.provider === "proxy") {
+      const model = "claude-sonnet-4-20250514";
+      provider = new CloudProvider({
+        provider: "anthropic",
+        api_key: "",
+        model,
+        base_url: "https://api.motebit.com",
+        max_tokens: config.maxTokens,
+        temperature,
+      });
+      this._activeProvider = "proxy";
     } else {
       if (config.apiKey == null || config.apiKey === "") return false;
       const model =

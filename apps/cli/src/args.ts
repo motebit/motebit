@@ -4,7 +4,7 @@ import { parseArgs } from "node:util";
 import { VERSION } from "./config.js";
 
 export interface CliConfig {
-  provider: "anthropic" | "ollama";
+  provider: "anthropic" | "openai" | "ollama";
   model: string;
   dbPath: string | undefined;
   noStream: boolean;
@@ -72,11 +72,16 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
   });
 
   const provider = values.provider;
-  if (provider !== "anthropic" && provider !== "ollama") {
-    throw new Error(`Unknown provider "${provider}". Use "anthropic" or "ollama".`);
+  if (provider !== "anthropic" && provider !== "openai" && provider !== "ollama") {
+    throw new Error(`Unknown provider "${provider}". Use "anthropic", "openai", or "ollama".`);
   }
 
-  const defaultModel = provider === "ollama" ? "llama3.2" : "claude-sonnet-4-5-20250929";
+  const defaultModel =
+    provider === "ollama"
+      ? "llama3.2"
+      : provider === "openai"
+        ? "gpt-4o"
+        : "claude-sonnet-4-5-20250929";
   const allowedPaths =
     values["allowed-paths"] != null && values["allowed-paths"] !== ""
       ? values["allowed-paths"].split(",").map((p) => p.trim())
@@ -151,7 +156,7 @@ Commands:
   approvals deny <id> [--reason <text>]  Deny a pending tool call
 
 Options:
-  --provider <name>       AI provider: "anthropic" or "ollama" (default: anthropic)
+  --provider <name>       AI provider: "anthropic", "openai", or "ollama" (default: anthropic)
   --model <model>         AI model to use (default depends on provider)
   --db-path <path>        Database file path (default: ~/.motebit/motebit.db)
   --no-stream             Disable streaming (use blocking mode)
@@ -168,6 +173,8 @@ Options:
 Providers:
   anthropic               Uses Anthropic API (requires ANTHROPIC_API_KEY)
                           Default model: claude-sonnet-4-5-20250929
+  openai                  Uses OpenAI API (requires OPENAI_API_KEY)
+                          Default model: gpt-4o
   ollama                  Uses local Ollama server (no API key needed)
                           Default model: llama3.2
 

@@ -71,7 +71,7 @@ let lastGazeHit = false;
 // === Settings persistence ===
 
 interface SpatialSettings {
-  provider: "anthropic" | "ollama";
+  provider: "anthropic" | "ollama" | "openai";
   apiKey: string;
   model: string;
   voiceEnabled: boolean;
@@ -236,12 +236,17 @@ function showMainOverlay(): void {
 // === Settings UI ===
 
 providerSelect?.addEventListener("change", () => {
-  updateProviderUI(providerSelect.value as "anthropic" | "ollama");
+  updateProviderUI(providerSelect.value as "anthropic" | "ollama" | "openai");
 });
 
 function updateProviderUI(provider: string): void {
   if (apiKeyGroup != null) {
-    apiKeyGroup.style.display = provider === "anthropic" ? "block" : "none";
+    apiKeyGroup.style.display =
+      provider === "anthropic" || provider === "openai" ? "block" : "none";
+  }
+  // Update placeholder text based on provider
+  if (apiKeyInput != null) {
+    apiKeyInput.placeholder = provider === "openai" ? "sk-..." : "sk-ant-...";
   }
 }
 
@@ -401,7 +406,7 @@ settingsSave?.addEventListener(
     void (async (e: Event) => {
       e.preventDefault();
       const settings: SpatialSettings = {
-        provider: providerSelect.value as "anthropic" | "ollama",
+        provider: providerSelect.value as "anthropic" | "ollama" | "openai",
         apiKey: apiKeyInput.value.trim(),
         model: modelInput.value.trim(),
         voiceEnabled: voiceToggle.checked,
@@ -426,7 +431,7 @@ settingsSave?.addEventListener(
       app.setNetworkSettings({ relayUrl: settings.relayUrl, showNetwork: settings.showNetwork });
 
       if (!(await tryInitAI(settings))) {
-        statusEl.textContent = "API key required for Anthropic";
+        statusEl.textContent = `API key required for ${settings.provider === "openai" ? "OpenAI" : "Anthropic"}`;
         return;
       }
 

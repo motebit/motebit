@@ -141,7 +141,7 @@ export const APPROVAL_PRESET_CONFIGS: Record<string, ApprovalPresetConfig> = {
 // === Settings ===
 
 export interface MobileSettings {
-  provider: "ollama" | "anthropic" | "hybrid";
+  provider: "ollama" | "anthropic" | "openai" | "hybrid" | "proxy";
   model: string;
   ollamaEndpoint: string;
   colorPreset: string;
@@ -188,7 +188,7 @@ const IDENTITY_FILE_KEY = "@motebit/identity_file";
 // === AI Config ===
 
 export interface MobileAIConfig {
-  provider: "ollama" | "anthropic" | "hybrid";
+  provider: "ollama" | "anthropic" | "openai" | "hybrid" | "proxy";
   model?: string;
   apiKey?: string;
   ollamaEndpoint?: string;
@@ -403,6 +403,25 @@ export class MobileApp {
       const model = config.model ?? "llama3.2";
       const base_url = config.ollamaEndpoint ?? DEFAULT_OLLAMA_URL;
       provider = new OllamaProvider({ model, base_url, max_tokens: config.maxTokens });
+    } else if (config.provider === "openai") {
+      if (config.apiKey == null || config.apiKey === "") return false;
+      const model = config.model ?? "gpt-4o";
+      provider = new CloudProvider({
+        provider: "openai",
+        api_key: config.apiKey,
+        model,
+        base_url: "https://api.openai.com/v1",
+        max_tokens: config.maxTokens,
+      });
+    } else if (config.provider === "proxy") {
+      const model = "claude-sonnet-4-20250514";
+      provider = new CloudProvider({
+        provider: "anthropic",
+        api_key: "",
+        model,
+        base_url: "https://api.motebit.com",
+        max_tokens: config.maxTokens,
+      });
     } else if (config.provider === "hybrid") {
       if (config.apiKey == null || config.apiKey === "") return false;
       const model = config.model ?? "claude-sonnet-4-20250514";

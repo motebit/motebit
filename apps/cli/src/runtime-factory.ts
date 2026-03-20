@@ -48,13 +48,15 @@ import type { McpServerConfig } from "@motebit/mcp-client";
 import type { CliConfig } from "./args.js";
 import { CONFIG_DIR, loadFullConfig } from "./config.js";
 
-export function getApiKey(): string {
-  const key = process.env["ANTHROPIC_API_KEY"];
+export function getApiKey(provider: "anthropic" | "openai" = "anthropic"): string {
+  const envVar = provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+  const key = process.env[envVar];
   if (key == null || key === "") {
-    console.error(
-      "Error: ANTHROPIC_API_KEY environment variable is not set.\n" +
-        "Set it with: export ANTHROPIC_API_KEY=sk-ant-...",
-    );
+    const hint =
+      provider === "openai"
+        ? "Set it with: export OPENAI_API_KEY=sk-..."
+        : "Set it with: export ANTHROPIC_API_KEY=sk-ant-...";
+    console.error(`Error: ${envVar} environment variable is not set.\n${hint}`);
     process.exit(1);
   }
   return key;
@@ -112,7 +114,19 @@ export function createProvider(
     });
   }
 
-  const apiKey = getApiKey();
+  if (config.provider === "openai") {
+    const apiKey = getApiKey("openai");
+    return new CloudProvider({
+      provider: "openai",
+      api_key: apiKey,
+      model: config.model,
+      max_tokens: config.maxTokens,
+      temperature,
+      personalityConfig,
+    });
+  }
+
+  const apiKey = getApiKey("anthropic");
   return new CloudProvider({
     provider: "anthropic",
     api_key: apiKey,

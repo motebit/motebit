@@ -73,7 +73,7 @@ import { EncryptedKeyStore } from "./encrypted-keystore";
 // === Configuration ===
 
 export interface SpatialAIConfig {
-  provider: "anthropic" | "ollama";
+  provider: "anthropic" | "ollama" | "openai";
   model?: string;
   apiKey?: string;
   maxTokens?: number;
@@ -408,6 +408,17 @@ export class SpatialApp {
       provider = new OllamaProvider({
         model,
         base_url: DEFAULT_OLLAMA_URL,
+        max_tokens: config.maxTokens,
+        temperature,
+      });
+    } else if (config.provider === "openai") {
+      if (config.apiKey == null || config.apiKey === "") return false;
+      const model = config.model != null && config.model !== "" ? config.model : "gpt-4o";
+      provider = new CloudProvider({
+        provider: "openai",
+        api_key: config.apiKey,
+        model,
+        base_url: "https://api.openai.com/v1",
         max_tokens: config.maxTokens,
         temperature,
       });

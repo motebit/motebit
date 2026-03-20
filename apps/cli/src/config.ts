@@ -17,7 +17,7 @@ export interface FullConfig {
   // Personality (existing)
   name?: string;
   personality_notes?: string;
-  default_provider?: "anthropic" | "ollama";
+  default_provider?: "anthropic" | "openai" | "ollama";
   default_model?: string;
   temperature?: number;
   max_tokens?: number;

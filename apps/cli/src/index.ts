@@ -212,7 +212,7 @@ async function main(): Promise<void> {
   };
 
   if (personalityConfig.default_provider && !process.argv.includes("--provider")) {
-    const validProviders = ["anthropic", "ollama"] as const;
+    const validProviders = ["anthropic", "openai", "ollama"] as const;
     if (validProviders.includes(personalityConfig.default_provider)) {
       config.provider = personalityConfig.default_provider!;
     }
@@ -229,12 +229,21 @@ async function main(): Promise<void> {
   }
 
   // Fail fast if API key is missing (before expensive passphrase/PBKDF2 flow)
-  if (config.provider !== "ollama") {
+  if (config.provider === "anthropic") {
     const key = process.env["ANTHROPIC_API_KEY"];
     if (key == null || key === "") {
       console.error(
         "Error: ANTHROPIC_API_KEY environment variable is not set.\n" +
           "Set it with: export ANTHROPIC_API_KEY=sk-ant-...",
+      );
+      return;
+    }
+  } else if (config.provider === "openai") {
+    const key = process.env["OPENAI_API_KEY"];
+    if (key == null || key === "") {
+      console.error(
+        "Error: OPENAI_API_KEY environment variable is not set.\n" +
+          "Set it with: export OPENAI_API_KEY=sk-...",
       );
       return;
     }

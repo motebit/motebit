@@ -175,9 +175,15 @@ export function SettingsModal({
   useEffect(() => {
     setDraft(settings);
     // Load stored API keys
-    void SecureStore.getItemAsync("motebit_anthropic_api_key").then((k) => {
-      if (k != null && k !== "") setApiKey(k);
-    });
+    if (settings.provider === "openai") {
+      void SecureStore.getItemAsync("motebit_openai_provider_key").then((k) => {
+        if (k != null && k !== "") setApiKey(k);
+      });
+    } else {
+      void SecureStore.getItemAsync("motebit_anthropic_api_key").then((k) => {
+        if (k != null && k !== "") setApiKey(k);
+      });
+    }
     void SecureStore.getItemAsync("motebit_openai_api_key").then((k) => {
       if (k != null && k !== "") setOpenaiKey(k);
     });
@@ -191,6 +197,9 @@ export function SettingsModal({
     // Store API keys securely (not in AsyncStorage)
     if ((draft.provider === "anthropic" || draft.provider === "hybrid") && apiKey) {
       await SecureStore.setItemAsync("motebit_anthropic_api_key", apiKey);
+    }
+    if (draft.provider === "openai" && apiKey) {
+      await SecureStore.setItemAsync("motebit_openai_provider_key", apiKey);
     }
     if (openaiKey) {
       await SecureStore.setItemAsync("motebit_openai_api_key", openaiKey);
@@ -223,7 +232,12 @@ export function SettingsModal({
       aiConfig = {
         provider: draft.provider,
         model: draft.model,
-        apiKey: draft.provider === "anthropic" || draft.provider === "hybrid" ? apiKey : undefined,
+        apiKey:
+          draft.provider === "anthropic" || draft.provider === "hybrid"
+            ? apiKey
+            : draft.provider === "openai"
+              ? apiKey
+              : undefined,
         ollamaEndpoint:
           draft.provider === "ollama" || draft.provider === "hybrid"
             ? draft.ollamaEndpoint
@@ -315,7 +329,12 @@ export function SettingsModal({
               onChangeProvider={(p) =>
                 updateDraft({
                   provider: p,
-                  model: p === "ollama" ? "llama3.2" : "claude-sonnet-4-20250514",
+                  model:
+                    p === "ollama"
+                      ? "llama3.2"
+                      : p === "openai"
+                        ? "gpt-4o"
+                        : "claude-sonnet-4-20250514",
                 })
               }
               onChangeModel={(m) => updateDraft({ model: m })}
@@ -670,7 +689,7 @@ function IntelligenceTab({
   onChangeNeuralVadEnabled,
   onChangeMaxTokens,
 }: {
-  provider: "ollama" | "anthropic" | "hybrid";
+  provider: "ollama" | "anthropic" | "openai" | "hybrid" | "proxy";
   model: string;
   apiKey: string;
   ollamaEndpoint: string;
@@ -681,7 +700,7 @@ function IntelligenceTab({
   openaiKey: string;
   neuralVadEnabled: boolean;
   maxTokens: number;
-  onChangeProvider: (p: "ollama" | "anthropic" | "hybrid") => void;
+  onChangeProvider: (p: "ollama" | "anthropic" | "openai" | "hybrid" | "proxy") => void;
   onChangeModel: (m: string) => void;
   onChangeApiKey: (k: string) => void;
   onChangeOllamaEndpoint: (e: string) => void;
@@ -718,12 +737,30 @@ function IntelligenceTab({
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
+          style={[styles.radioItem, provider === "openai" && styles.radioActive]}
+          onPress={() => onChangeProvider("openai")}
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.radioText, provider === "openai" && styles.radioTextActive]}>
+            OpenAI (Cloud)
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
           style={[styles.radioItem, provider === "hybrid" && styles.radioActive]}
           onPress={() => onChangeProvider("hybrid")}
           activeOpacity={0.7}
         >
           <Text style={[styles.radioText, provider === "hybrid" && styles.radioTextActive]}>
             Hybrid (Cloud + Ollama fallback)
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.radioItem, provider === "proxy" && styles.radioActive]}
+          onPress={() => onChangeProvider("proxy")}
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.radioText, provider === "proxy" && styles.radioTextActive]}>
+            Motebit (free)
           </Text>
         </TouchableOpacity>
       </View>
@@ -761,6 +798,22 @@ function IntelligenceTab({
             value={apiKey}
             onChangeText={onChangeApiKey}
             placeholder="sk-ant-..."
+            placeholderTextColor={colors.inputPlaceholder}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </>
+      )}
+
+      {provider === "openai" && (
+        <>
+          <Text style={styles.sectionTitle}>OpenAI API Key</Text>
+          <TextInput
+            style={styles.textField}
+            value={apiKey}
+            onChangeText={onChangeApiKey}
+            placeholder="sk-..."
             placeholderTextColor={colors.inputPlaceholder}
             secureTextEntry
             autoCapitalize="none"

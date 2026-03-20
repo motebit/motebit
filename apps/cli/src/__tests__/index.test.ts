@@ -37,8 +37,14 @@ describe("parseCliArgs", () => {
     expect(config.model).toBe("mistral");
   });
 
+  it("parses openai provider", () => {
+    const config = parseCliArgs(["--provider", "openai"]);
+    expect(config.provider).toBe("openai");
+    expect(config.model).toBe("gpt-4o");
+  });
+
   it("throws on unknown provider", () => {
-    expect(() => parseCliArgs(["--provider", "openai"])).toThrow('Unknown provider "openai"');
+    expect(() => parseCliArgs(["--provider", "gemini"])).toThrow('Unknown provider "gemini"');
   });
 
   it("parses --model flag", () => {
