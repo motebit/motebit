@@ -1,6 +1,6 @@
-// Node.js serverless function (not edge) — needs @xenova/transformers WASM runtime.
-// Lazy-loads the model on first request, cached across invocations within the same
-// serverless instance. Cold start ~2-3s, warm requests ~10-50ms.
+// Embedding endpoint — routes to HuggingFace Inference API for semantic embeddings.
+// Edge-compatible, no local model loading, no native deps.
+export const runtime = "edge";
 
 import { type NextRequest, NextResponse } from "next/server";
 
@@ -29,32 +29,8 @@ export function OPTIONS(request: NextRequest): NextResponse {
   return new NextResponse(null, { status: 204, headers: corsHeaders(origin) });
 }
 
-// Lazy-loaded pipeline singleton
-type Pipeline = (
-  text: string,
-  options: { pooling: string; normalize: boolean },
-) => Promise<{ data: Float32Array }>;
-
-let pipelineInstance: Pipeline | null = null;
-let pipelineLoading: Promise<Pipeline> | null = null;
-
-async function getPipeline(): Promise<Pipeline> {
-  if (pipelineInstance) return pipelineInstance;
-  if (pipelineLoading) return pipelineLoading;
-
-  pipelineLoading = (async () => {
-    const { pipeline } = await import("@xenova/transformers");
-    const p = (await pipeline(
-      "feature-extraction",
-      "Xenova/all-MiniLM-L6-v2",
-    )) as unknown as Pipeline;
-    pipelineInstance = p;
-    return p;
-  })();
-
-  return pipelineLoading;
-}
-
+const HF_MODEL = "sentence-transformers/all-MiniLM-L6-v2";
+const HF_API_URL = `https://api-inference.huggingface.co/pipeline/feature-extraction/${HF_MODEL}`;
 const MAX_TEXTS = 16;
 const MAX_TEXT_LENGTH = 2000;
 
@@ -92,19 +68,37 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const cleaned = texts.map((t) => (typeof t === "string" ? t.slice(0, MAX_TEXT_LENGTH) : ""));
 
   try {
-    const extractor = await getPipeline();
-    const embeddings: number[][] = [];
+    // HuggingFace Inference API accepts batch input and returns batch embeddings.
+    // The free tier has rate limits but no API key required for popular models.
+    const hfRes = await fetch(HF_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(process.env.HF_TOKEN ? { Authorization: `Bearer ${process.env.HF_TOKEN}` } : {}),
+      },
+      body: JSON.stringify({ inputs: cleaned, options: { wait_for_model: true } }),
+      signal: AbortSignal.timeout(30000),
+    });
 
-    for (const text of cleaned) {
-      if (text === "") {
-        embeddings.push(new Array<number>(384).fill(0));
-        continue;
-      }
-      const output = await extractor(text, { pooling: "mean", normalize: true });
-      embeddings.push(Array.from(output.data));
+    if (!hfRes.ok) {
+      const errText = await hfRes.text();
+      return NextResponse.json(
+        { ok: false, error: `HF API ${hfRes.status}: ${errText.slice(0, 200)}` },
+        { headers: cors },
+      );
     }
 
-    return NextResponse.json({ ok: true, embeddings }, { headers: cors });
+    const embeddings = (await hfRes.json()) as number[][];
+
+    // L2-normalize each vector (HF API returns unnormalized)
+    const normalized = embeddings.map((vec) => {
+      let norm = 0;
+      for (const v of vec) norm += v * v;
+      norm = Math.sqrt(norm);
+      return norm > 0 ? vec.map((v) => v / norm) : vec;
+    });
+
+    return NextResponse.json({ ok: true, embeddings: normalized }, { headers: cors });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ ok: false, error: `Embedding error: ${msg}` }, { headers: cors });
