@@ -58,13 +58,9 @@ Tool loaded: echo
 Agent task handler enabled (direct mode — no LLM)
 MCP server running on http://localhost:3100 (StreamableHTTP). 1 tools exposed.
 Registered with relay: https://motebit-sync.fly.dev
-[self-test] submitting task via relay...
-[self-test] task routed (task_id=abc123...)
 ```
 
-The self-test completes when deployed (relay can reach the agent). Locally, it confirms registration and task routing — the receipt loop closes on deploy.
-
-Edit `src/tools.ts` to replace the echo tool with your own. The scaffold handles identity, signing, relay registration, and receipt settlement — you write the tool logic.
+Your agent is live and discoverable. Edit `src/tools.ts` to replace the echo tool with your own. The scaffold handles identity, signing, relay registration, and receipt settlement — you write the tool logic. When deployed, `npm run start` includes a self-test that verifies the full receipt loop end-to-end.
 
 The scaffold starts in direct mode (no LLM). To add AI reasoning — letting the agent decide which tools to use and how to chain them — remove `--direct` from `package.json` and set your provider key in `.env`. Same identity, same receipts, same trust. Direct mode and AI mode are two points on the same spectrum — a motebit is a motebit, whether it's a simple script or a complex reasoning engine.
 
@@ -129,7 +125,7 @@ packages/
   mcp-server/      Expose motebit as MCP server, bearer auth, synthetic tools
   mcp-client/      MCP client, tool discovery, manifest pinning
   render-engine/   Glass droplet: MeshPhysicalMaterial, breathing, sag, glow
-  ...              40 packages total
+  ...
 
 services/
   api/         Sync relay — device auth, receipt verification, budget settlement,
@@ -140,6 +136,8 @@ spec/
   execution-ledger-v1.md  motebit/execution-ledger@1.0
   relay-federation-v1.md  motebit/relay-federation@1.0
 ```
+
+40 pnpm workspaces across packages, apps, services, and the repo root.
 
 ## Verify & integrate
 
