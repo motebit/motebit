@@ -583,6 +583,13 @@ const RETRY_BACKOFF_MS = [30_000, 120_000, 480_000, 1_920_000, 7_200_000];
 export async function processSettlementRetries(
   db: DatabaseDriver,
   relayIdentity: RelayIdentity,
+  onRetryExhausted?: (retry: {
+    retry_id: string;
+    settlement_id: string;
+    task_id: string;
+    peer_relay_id: string;
+    payload_json: string;
+  }) => void,
 ): Promise<void> {
   const now = Date.now();
   const pending = db
@@ -647,6 +654,18 @@ export async function processSettlementRetries(
         db.prepare(
           "UPDATE relay_settlement_retries SET status = 'failed', attempts = ?, last_error = ? WHERE retry_id = ?",
         ).run(newAttempts, errorMsg, retry.retry_id);
+        // Auto-refund on exhaustion
+        if (onRetryExhausted) {
+          try {
+            onRetryExhausted(retry);
+          } catch (refundErr) {
+            logger.warn("settlement.retry.refund_failed", {
+              retryId: retry.retry_id,
+              taskId: retry.task_id,
+              error: refundErr instanceof Error ? refundErr.message : String(refundErr),
+            });
+          }
+        }
       } else {
         const backoffMs = RETRY_BACKOFF_MS[Math.min(newAttempts - 1, RETRY_BACKOFF_MS.length - 1)]!;
         const nextRetry = Date.now() + backoffMs;
@@ -663,9 +682,16 @@ export function startSettlementRetryLoop(
   db: DatabaseDriver,
   relayIdentity: RelayIdentity,
   intervalMs = 30_000,
+  onRetryExhausted?: (retry: {
+    retry_id: string;
+    settlement_id: string;
+    task_id: string;
+    peer_relay_id: string;
+    payload_json: string;
+  }) => void,
 ): ReturnType<typeof setInterval> {
   return setInterval(() => {
-    void processSettlementRetries(db, relayIdentity);
+    void processSettlementRetries(db, relayIdentity, onRetryExhausted);
   }, intervalMs);
 }
 

@@ -41,7 +41,26 @@ export interface TaskRouter {
   fetchFederatedCandidates(
     requiredCaps: string[],
     callerMotebitId?: string,
-  ): Promise<{ profile: CandidateProfile; _source_relay_endpoint: string }[]>;
+  ): Promise<{
+    candidates: { profile: CandidateProfile; _source_relay_endpoint: string }[];
+    federationEdges: Array<{
+      from: string;
+      to: string;
+      weight: {
+        trust: number;
+        cost: number;
+        latency: number;
+        reliability: number;
+        regulatory_risk: number;
+      };
+    }>;
+    peerRelayNodes: Array<{
+      peerRelayId: string;
+      trust: number;
+      latency: number;
+      reliability: number;
+    }>;
+  }>;
   queryLocalAgents(
     capability?: string,
     motebitId?: string,
@@ -220,23 +239,64 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
 
   /**
    * Fetch candidate profiles from active peer relays via federation discovery.
-   * Returns CandidateProfile[] with chain_trust composed from peer relay trust
-   * and the reported agent trust. Failures are gracefully ignored (best-effort).
+   * Returns candidates, federation topology edges (peerRelay → agent), and peer
+   * relay node metadata so the caller can build selfId → peerRelay edges.
+   * The semiring graph composes trust multiplicatively along paths automatically —
+   * chain_trust is left undefined on federated profiles.
    */
   async function fetchFederatedCandidates(
     requiredCaps: string[],
     _callerMotebitId?: string,
-  ): Promise<{ profile: CandidateProfile; _source_relay_endpoint: string }[]> {
+  ): Promise<{
+    candidates: { profile: CandidateProfile; _source_relay_endpoint: string }[];
+    federationEdges: Array<{
+      from: string;
+      to: string;
+      weight: {
+        trust: number;
+        cost: number;
+        latency: number;
+        reliability: number;
+        regulatory_risk: number;
+      };
+    }>;
+    peerRelayNodes: Array<{
+      peerRelayId: string;
+      trust: number;
+      latency: number;
+      reliability: number;
+    }>;
+  }> {
     const peers = db
       .prepare(
         "SELECT peer_relay_id, endpoint_url, trust_score FROM relay_peers WHERE state = 'active'",
       )
       .all() as Array<{ peer_relay_id: string; endpoint_url: string; trust_score: number }>;
 
-    if (peers.length === 0) return [];
+    if (peers.length === 0) return { candidates: [], federationEdges: [], peerRelayNodes: [] };
 
     const queryId = crypto.randomUUID();
     const visited = [relayIdentity.relayMotebitId];
+
+    // Collect peer relay nodes for the caller to create selfId → peerRelayId edges
+    const peerRelayNodes: Array<{
+      peerRelayId: string;
+      trust: number;
+      latency: number;
+      reliability: number;
+    }> = [];
+
+    const allFederationEdges: Array<{
+      from: string;
+      to: string;
+      weight: {
+        trust: number;
+        cost: number;
+        latency: number;
+        reliability: number;
+        regulatory_risk: number;
+      };
+    }> = [];
 
     const promises = peers.map(async (peer) => {
       try {
@@ -268,8 +328,16 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
         const MAX_CANDIDATES_PER_PEER = 50;
         const agents = (data.agents ?? []).slice(0, MAX_CANDIDATES_PER_PEER);
 
-        // Convert discovery results to CandidateProfile with chain trust
         const peerTrust = peer.trust_score ?? 0.5;
+
+        // Register this peer relay as a node for the topology
+        peerRelayNodes.push({
+          peerRelayId: peer.peer_relay_id,
+          trust: peerTrust,
+          latency: 200, // Default cross-relay latency estimate
+          reliability: 0.99,
+        });
+
         const results: { profile: CandidateProfile; _source_relay_endpoint: string }[] = [];
 
         for (const agent of agents) {
@@ -280,9 +348,19 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
           // Skip agents that are local (already covered by local candidate search)
           if (agent.source_relay === relayIdentity.relayMotebitId) continue;
 
-          // Compose chain trust: local->peer relay trust x peer relay's trust in agent (default 0.5)
-          const agentTrust = 0.5; // Default -- peer relay doesn't expose per-agent trust in discovery
-          const chainTrust = peerTrust * agentTrust;
+          // Create peerRelayId → agentId edge for the semiring graph.
+          // Default agent trust 0.5 since peer relay doesn't expose per-agent trust in discovery.
+          allFederationEdges.push({
+            from: peer.peer_relay_id,
+            to: agent.motebit_id,
+            weight: {
+              trust: 0.5,
+              cost: 0,
+              latency: 0,
+              reliability: 0.99,
+              regulatory_risk: 0,
+            },
+          });
 
           results.push({
             profile: {
@@ -300,7 +378,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
               },
               latency_stats: null, // No local latency data for remote agents
               is_online: true, // Peer discovery returned them, assume available
-              chain_trust: chainTrust,
+              chain_trust: undefined, // Let the semiring graph compose trust along paths
             },
             _source_relay_endpoint: peer.endpoint_url,
           });
@@ -315,7 +393,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
 
     const settled = await Promise.allSettled(promises);
     const MAX_TOTAL_FEDERATED = 100;
-    return settled
+    const candidates = settled
       .filter(
         (
           r,
@@ -325,6 +403,8 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
       )
       .flatMap((r) => r.value)
       .slice(0, MAX_TOTAL_FEDERATED);
+
+    return { candidates, federationEdges: allFederationEdges, peerRelayNodes };
   }
 
   // Helper: query local agent_registry -- shared by discover endpoint and federation handler

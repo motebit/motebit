@@ -160,6 +160,7 @@ import {
   computeTrustClosure,
   findTrustedRoute,
   buildRoutingGraph,
+  allocateBudget,
 } from "@motebit/market";
 import type { CandidateProfile } from "@motebit/market";
 import type { CapabilityPrice, BudgetAllocation, AgentTrustRecord } from "@motebit/sdk";
@@ -991,26 +992,37 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       }
     }
 
-    // --- Multi-hop settlement ---
+    // --- Multi-hop settlement (recursive) ---
     const delegationReceipts = receipt.delegation_receipts ?? [];
     if (delegationReceipts.length > 0) {
-      logger.info("multihop.settlement.start", {
-        correlationId: taskId,
-        count: delegationReceipts.length,
-      });
-      for (const sub of delegationReceipts) {
+      const MAX_SETTLEMENT_DEPTH = 10;
+
+      const settleSubReceipt = async (
+        sub: ExecutionReceipt,
+        parentTaskId: string,
+        depth: number,
+      ): Promise<void> => {
+        if (depth > MAX_SETTLEMENT_DEPTH) {
+          logger.warn("multihop.settlement.depth_limit", {
+            correlationId: parentTaskId,
+            subAgent: sub.motebit_id,
+            depth,
+          });
+          return;
+        }
+
         const subRelayTaskId = (sub as unknown as Record<string, unknown>).relay_task_id;
-        if (typeof subRelayTaskId !== "string" || subRelayTaskId === "") continue;
+        if (typeof subRelayTaskId !== "string" || subRelayTaskId === "") return;
 
         try {
           const subEntry = taskQueue.get(subRelayTaskId);
           if (!subEntry) {
             logger.warn("multihop.settlement.task_not_found", {
-              correlationId: taskId,
+              correlationId: parentTaskId,
               subTaskId: subRelayTaskId,
               subAgent: sub.motebit_id,
             });
-            continue;
+            return;
           }
 
           let subPubKey: string | undefined;
@@ -1022,16 +1034,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
             const subDevices = await identityManager.listDevices(asMotebitId(sub.motebit_id));
             subPubKey = subDevices.find((d) => d.public_key)?.public_key;
           }
-          if (!subPubKey) continue;
+          if (!subPubKey) return;
 
           const subValid = await verifyExecutionReceipt(sub, hexToBytes(subPubKey));
           if (!subValid) {
             logger.warn("multihop.settlement.sig_invalid", {
-              correlationId: taskId,
+              correlationId: parentTaskId,
               subTaskId: subRelayTaskId,
               subAgent: sub.motebit_id,
             });
-            continue;
+            return;
           }
 
           const subExisting = moteDb.db
@@ -1039,13 +1051,27 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
               "SELECT settlement_id FROM relay_settlements WHERE task_id = ? AND motebit_id = ?",
             )
             .get(subRelayTaskId, sub.motebit_id) as { settlement_id: string } | undefined;
-          if (subExisting) continue;
+          if (subExisting) {
+            // Already settled at this level — still recurse into nested receipts
+            const nestedReceipts = sub.delegation_receipts ?? [];
+            for (const nested of nestedReceipts) {
+              await settleSubReceipt(nested, parentTaskId, depth + 1);
+            }
+            return;
+          }
 
           const subUnitCost = getListingUnitCost(sub.motebit_id as string);
           const subGross =
             subEntry.price_snapshot ??
             (subUnitCost > 0 ? subUnitCost / (1 - PLATFORM_FEE_RATE) : 0);
-          if (subGross <= 0) continue;
+          if (subGross <= 0) {
+            // No cost — still recurse into nested receipts
+            const nestedReceipts = sub.delegation_receipts ?? [];
+            for (const nested of nestedReceipts) {
+              await settleSubReceipt(nested, parentTaskId, depth + 1);
+            }
+            return;
+          }
 
           const subSettlementId = asSettlementId(crypto.randomUUID());
           const subAllocationId = asAllocationId(`x402-${subRelayTaskId}`);
@@ -1102,27 +1128,42 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
             moteDb.db.exec("COMMIT");
             logger.info("multihop.settlement.created", {
-              correlationId: taskId,
+              correlationId: parentTaskId,
               subTaskId: subRelayTaskId,
               subAgent: sub.motebit_id,
               net: subSettlement.amount_settled,
               fee: subSettlement.platform_fee,
+              depth,
             });
           } catch (txnErr) {
             moteDb.db.exec("ROLLBACK");
             logger.warn("multihop.settlement.failed", {
-              correlationId: taskId,
+              correlationId: parentTaskId,
               subTaskId: subRelayTaskId,
               error: txnErr instanceof Error ? txnErr.message : String(txnErr),
             });
           }
         } catch (subErr: unknown) {
           logger.warn("multihop.settlement.sub_error", {
-            correlationId: taskId,
+            correlationId: parentTaskId,
             subRelayTaskId,
             error: subErr instanceof Error ? subErr.message : String(subErr),
           });
         }
+
+        // Recurse into nested delegation_receipts
+        const nestedReceipts = sub.delegation_receipts ?? [];
+        for (const nested of nestedReceipts) {
+          await settleSubReceipt(nested, parentTaskId, depth + 1);
+        }
+      };
+
+      logger.info("multihop.settlement.start", {
+        correlationId: taskId,
+        count: delegationReceipts.length,
+      });
+      for (const sub of delegationReceipts) {
+        await settleSubReceipt(sub, taskId, 1);
       }
     }
 
@@ -1155,8 +1196,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
         const fallbackUnitCost = getListingUnitCost(receipt.motebit_id as string);
         const grossAmount =
-          persistentAlloc?.amount_locked ??
           entry.price_snapshot ??
+          persistentAlloc?.amount_locked ??
           (fallbackUnitCost > 0 ? fallbackUnitCost / (1 - PLATFORM_FEE_RATE) : 0);
 
         const settlementId = asSettlementId(crypto.randomUUID());
@@ -1321,6 +1362,30 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
           }
 
           moteDb.db.exec("COMMIT");
+
+          // Release surplus from risk buffer back to delegator
+          if (persistentAlloc && persistentAlloc.amount_locked > grossAmount) {
+            const surplus = persistentAlloc.amount_locked - grossAmount;
+            const delegatorId = entry.submitted_by ?? entry.task.submitted_by ?? motebitId;
+            try {
+              creditAccount(
+                moteDb.db,
+                delegatorId,
+                surplus,
+                "allocation_release",
+                settlement.settlement_id,
+                `Risk buffer surplus release for task ${taskId}`,
+              );
+              logger.info("settlement.surplus_released", {
+                correlationId: taskId,
+                surplus,
+                delegator: delegatorId,
+              });
+            } catch {
+              // Best-effort surplus release — don't block receipt delivery
+            }
+          }
+
           logger.info("settlement.created", {
             correlationId: taskId,
             gross: settlement.amount_settled + settlement.platform_fee,
@@ -1440,7 +1505,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   let lastSettleNetwork: string | undefined;
 
   {
-    const { paymentMiddleware, x402ResourceServer } = await import("@x402/hono");
+    const { paymentMiddlewareFromHTTPServer, x402HTTPResourceServer, x402ResourceServer } =
+      await import("@x402/hono");
     const { ExactEvmScheme } = await import("@x402/evm/exact/server");
     const { HTTPFacilitatorClient } = await import("@x402/core/server");
 
@@ -1466,41 +1532,64 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     // Node's single-threaded model — no interleaving between set and read.
     let currentPricing: { unitCost: number; payTo: string } | null = null;
 
-    const x402Gate = paymentMiddleware(
-      {
-        "POST /agent/*/task": {
-          accepts: {
-            scheme: "exact",
-            network,
-            price: () => {
-              if (!currentPricing) return "$0";
-              const gross = currentPricing.unitCost / (1 - PLATFORM_FEE_RATE);
-              return `$${gross.toFixed(6)}`;
-            },
-            payTo: () => {
-              return currentPricing?.payTo ?? x402Config.payToAddress;
-            },
+    const x402Routes = {
+      "POST /agent/*/task": {
+        accepts: {
+          scheme: "exact" as const,
+          network,
+          price: () => {
+            if (!currentPricing) return "$0";
+            const gross = currentPricing.unitCost / (1 - PLATFORM_FEE_RATE);
+            return `$${gross.toFixed(6)}`;
           },
-          description: "Submit a task to a motebit agent",
-          mimeType: "application/json",
-          unpaidResponseBody: (ctx) => {
-            const agentId = extractMotebitIdFromPath(ctx.path);
-            return {
-              contentType: "application/json",
-              body: {
-                error: "payment_required",
-                message: "Task submission requires USDC payment via x402",
-                agent: agentId,
-                estimated_cost: currentPricing?.unitCost ?? 0,
-                platform_fee_rate: PLATFORM_FEE_RATE,
-                network: x402Config.network,
-              },
-            };
+          payTo: () => {
+            return currentPricing?.payTo ?? x402Config.payToAddress;
           },
         },
+        description: "Submit a task to a motebit agent",
+        mimeType: "application/json",
+        unpaidResponseBody: (ctx: { path: string }) => {
+          const agentId = extractMotebitIdFromPath(ctx.path);
+          return {
+            contentType: "application/json",
+            body: {
+              error: "payment_required",
+              message: "Task submission requires USDC payment via x402",
+              agent: agentId,
+              estimated_cost: currentPricing?.unitCost ?? 0,
+              platform_fee_rate: PLATFORM_FEE_RATE,
+              network: x402Config.network,
+            },
+          };
+        },
       },
-      resourceServer,
+    };
+
+    // Construct HTTP server ourselves so we control initialization lifecycle.
+    // syncFacilitatorOnStart=false prevents an unhandled rejection when the
+    // facilitator is unreachable (test env, cold start, network partition).
+    // We fire initialization manually with .catch() so the promise rejection
+    // is always handled. The x402 gate is fail-closed: if the facilitator
+    // is unreachable, paid requests get 402 (correct behavior). Virtual
+    // account bypass still works regardless.
+    const httpServer = new x402HTTPResourceServer(resourceServer, x402Routes);
+    let x402Initialized = false;
+    const x402InitPromise = httpServer
+      .initialize()
+      .then(() => {
+        x402Initialized = true;
+      })
+      .catch((err: unknown) =>
+        logger.warn("x402.facilitator.init_failed", {
+          error: err instanceof Error ? err.message : String(err),
+          facilitator: x402Config.facilitatorUrl ?? "https://x402.org/facilitator",
+        }),
+      );
+    const x402Gate = paymentMiddlewareFromHTTPServer(
+      httpServer,
       { testnet: x402Config.testnet ?? true },
+      undefined, // paywall
+      false, // syncFacilitatorOnStart — already initialized above with error handling
     );
 
     // Wrap x402: single getAgentPricing() call per request.
@@ -1560,6 +1649,26 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         // Parse failed — fall through to x402
       }
 
+      // Guard: if facilitator is unreachable, the x402 gate throws (500) instead
+      // of returning a proper 402. Only task submission (/agent/*/task, no further
+      // path segments) goes through x402 — receipt endpoints pass through to next().
+      const isExactTaskSubmission = /\/agent\/[^/]+\/task$/.test(c.req.path);
+      if (isExactTaskSubmission) {
+        await x402InitPromise;
+        if (!x402Initialized) {
+          return c.json(
+            {
+              error: "payment_required",
+              message:
+                "Payment facilitator unavailable — deposit to virtual account or retry later",
+              estimated_cost: currentPricing?.unitCost ?? 0,
+              platform_fee_rate: PLATFORM_FEE_RATE,
+              network: x402Config.network,
+            },
+            402,
+          );
+        }
+      }
       // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
       return x402Gate(c, next);
     });
@@ -3210,14 +3319,27 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         const account = getAccountBalance(moteDb.db, delegatorId);
         const virtualBalance = account?.balance ?? 0;
 
-        if (virtualBalance >= priceSnapshot) {
-          // Sufficient virtual balance — create allocation hold
+        // Use allocateBudget to compute lock amount with risk buffer
+        const allocation = allocateBudget(
+          {
+            goal_id: asGoalId(taskId),
+            candidate_motebit_id: asMotebitId(motebitId),
+            estimated_cost: priceSnapshot,
+            currency: "USDC",
+            risk_factor: 1.0, // 1.2× buffer
+          },
+          virtualBalance,
+          asAllocationId(`x402-${taskId}`),
+        );
+
+        if (allocation) {
+          // Lock the risk-buffered amount
           moteDb.db.exec("BEGIN");
           try {
             debitAccount(
               moteDb.db,
               delegatorId,
-              priceSnapshot,
+              allocation.amount_locked, // Uses risk-buffered amount
               "allocation_hold",
               `x402-${taskId}`,
               `Hold for task ${taskId} to ${motebitId}`,
@@ -3226,7 +3348,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
               .prepare(
                 "INSERT OR IGNORE INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, ?, 'locked', ?)",
               )
-              .run(`x402-${taskId}`, taskId, motebitId, priceSnapshot, now);
+              .run(`x402-${taskId}`, taskId, motebitId, allocation.amount_locked, now);
             moteDb.db.exec("COMMIT");
           } catch (holdErr) {
             moteDb.db.exec("ROLLBACK");
@@ -3298,12 +3420,32 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         // Phase 4: Fetch federated candidates from active peer relays (best-effort, non-blocking)
         let federatedCandidates: { profile: CandidateProfile; _source_relay_endpoint: string }[] =
           [];
+        let federationEdges: Array<{
+          from: string;
+          to: string;
+          weight: {
+            trust: number;
+            cost: number;
+            latency: number;
+            reliability: number;
+            regulatory_risk: number;
+          };
+        }> = [];
+        let peerRelayNodes: Array<{
+          peerRelayId: string;
+          trust: number;
+          latency: number;
+          reliability: number;
+        }> = [];
         const remoteAgentRelay = new Map<string, string>(); // remote agent motebit_id → peer relay endpoint_url
         try {
-          federatedCandidates = await taskRouter.fetchFederatedCandidates(
+          const fedResult = await taskRouter.fetchFederatedCandidates(
             requiredCaps,
             callerMotebitId,
           );
+          federatedCandidates = fedResult.candidates;
+          federationEdges = fedResult.federationEdges;
+          peerRelayNodes = fedResult.peerRelayNodes;
           for (const fc of federatedCandidates) {
             // Filter out excluded agents from federated results too
             if (!excludeSet.has(fc.profile.motebit_id as string)) {
@@ -3327,6 +3469,23 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
               ? Math.max(0, Math.min(1, body.exploration_drive))
               : undefined;
           const peerEdges = taskRouter.fetchPeerEdges();
+
+          // Build selfId → peerRelay edges and merge with peerRelay → agent edges
+          // so the semiring graph composes trust multiplicatively along the full path
+          const selfId = callerMotebitId ?? motebitId;
+          const federationPeerEdges = peerRelayNodes.map((node) => ({
+            from: selfId,
+            to: node.peerRelayId,
+            weight: {
+              trust: node.trust,
+              cost: 0,
+              latency: node.latency,
+              reliability: node.reliability,
+              regulatory_risk: 0,
+            },
+          }));
+          const allPeerEdges = [...peerEdges, ...federationPeerEdges, ...federationEdges];
+
           const ranked = explainedRankCandidates(
             asMotebitId(callerMotebitId ?? motebitId),
             allProfiles,
@@ -3337,7 +3496,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
             {
               maxCandidates: 10,
               explorationWeight,
-              peerEdges,
+              peerEdges: allPeerEdges,
             },
           );
           const selected = ranked.filter((r) => r.selected && r.composite > 0);
@@ -4783,7 +4942,57 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const heartbeatInterval = startHeartbeatLoop(moteDb.db, relayIdentity);
 
   // Settlement retry loop — retries failed settlement forwards every 30s with exponential backoff.
-  const settlementRetryInterval = startSettlementRetryLoop(moteDb.db, relayIdentity);
+  // On retry exhaustion, refund the locked allocation back to the delegator.
+  const settlementRetryInterval = startSettlementRetryLoop(
+    moteDb.db,
+    relayIdentity,
+    30_000,
+    (retry) => {
+      try {
+        const alloc = moteDb.db
+          .prepare(
+            "SELECT allocation_id, task_id, motebit_id, amount_locked FROM relay_allocations WHERE task_id = ? AND status = 'locked'",
+          )
+          .get(retry.task_id) as
+          | { allocation_id: string; task_id: string; motebit_id: string; amount_locked: number }
+          | undefined;
+
+        if (!alloc) return; // No locked allocation — nothing to refund
+
+        // Look up submitter from task queue for delegator identification
+        const taskEntry = taskQueue.get(retry.task_id);
+        const delegatorId = taskEntry?.submitted_by ?? alloc.motebit_id;
+
+        moteDb.db.exec("BEGIN");
+        try {
+          creditAccount(
+            moteDb.db,
+            delegatorId,
+            alloc.amount_locked,
+            "allocation_release",
+            alloc.allocation_id,
+            `Retry exhaustion refund for task ${retry.task_id}`,
+          );
+          moteDb.db
+            .prepare(
+              "UPDATE relay_allocations SET status = 'released', released_at = ? WHERE allocation_id = ?",
+            )
+            .run(Date.now(), alloc.allocation_id);
+          moteDb.db.exec("COMMIT");
+          logger.info("settlement.retry.refunded", {
+            taskId: retry.task_id,
+            allocationId: alloc.allocation_id,
+            amount: alloc.amount_locked,
+            delegator: delegatorId,
+          });
+        } catch {
+          moteDb.db.exec("ROLLBACK");
+        }
+      } catch {
+        // Best-effort refund
+      }
+    },
+  );
 
   // GET /api/v1/agents/:motebitId — get specific agent
   app.get("/api/v1/agents/:motebitId", (c) => {
