@@ -201,6 +201,23 @@ export async function handleRun(config: CliConfig): Promise<void> {
       }
     }
 
+    // Register device with relay so other agents can resolve our public key
+    if (privKeyBytes && fullConfig.device_id && fullConfig.device_public_key) {
+      try {
+        await fetch(`${syncUrl}/api/v1/agents/bootstrap`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            motebit_id: motebitId,
+            device_id: fullConfig.device_id,
+            public_key: fullConfig.device_public_key,
+          }),
+        });
+      } catch {
+        // Best-effort — relay may be unreachable
+      }
+    }
+
     // Set up WebSocket adapter for real-time task dispatch
     const wsUrl = syncUrl.replace(/^http/, "ws") + `/ws/sync/${motebitId}`;
 

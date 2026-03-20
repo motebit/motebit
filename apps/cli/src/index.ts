@@ -411,6 +411,30 @@ async function main(): Promise<void> {
       console.warn(`Sync failed (continuing offline): ${message}`);
     }
 
+    // Register device with relay so other agents can resolve our public key
+    if (syncUrl && privateKeyBytes && deviceId && reloadedConfig.device_public_key) {
+      try {
+        const resp = await fetch(`${syncUrl}/api/v1/agents/bootstrap`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            motebit_id: motebitId,
+            device_id: deviceId,
+            public_key: reloadedConfig.device_public_key,
+          }),
+        });
+        if (!resp.ok && resp.status !== 200 && resp.status !== 201) {
+          const body = await resp.text();
+          // 409 = already registered with same key, that's fine
+          if (resp.status !== 409) {
+            console.warn(`Device registration: ${resp.status} ${body}`);
+          }
+        }
+      } catch {
+        // Best-effort — relay may be unreachable
+      }
+    }
+
     // Discover remote agents and populate service listings for interactive delegation
     if (syncUrl) {
       try {
