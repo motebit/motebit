@@ -183,8 +183,8 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
             : ANTHROPIC_MODELS;
 
     // Show/hide API key field based on provider (hidden for ollama and proxy)
-    const apiKeyField = settingsApiKey.closest(".settings-field") as HTMLElement | null;
-    if (apiKeyField) {
+    const apiKeyField = settingsApiKey.closest<HTMLElement>(".settings-field");
+    if (apiKeyField != null) {
       apiKeyField.style.display = provider === "ollama" || provider === "proxy" ? "none" : "";
     }
 
