@@ -506,11 +506,19 @@ async function main() {
 
   test("Modifying receipt result after signing breaks verification");
   {
-    const { receipt, relayTaskId } = await delegateOnce("payload mutation test");
+    const { receipt } = await delegateOnce("payload mutation test");
 
-    const mutated = { ...receipt, result: "INJECTED FAKE RESULT" };
+    // Submit mutated receipt to a FRESH unsettled task so the idempotency
+    // guard doesn't short-circuit before the signature check fires.
+    const freshTask = await submitRelayTask("payload mutation fresh target");
 
-    const resp = await fetch(`${RELAY}/agent/${BOB_ID}/task/${relayTaskId}/result`, {
+    const mutated = {
+      ...receipt,
+      result: "INJECTED FAKE RESULT",
+      relay_task_id: freshTask.task_id, // bind to fresh task so relay_task_id check passes
+    };
+
+    const resp = await fetch(`${RELAY}/agent/${BOB_ID}/task/${freshTask.task_id}/result`, {
       method: "POST",
       headers: { Authorization: `Bearer ${API_TOKEN}`, "Content-Type": "application/json" },
       body: JSON.stringify(mutated),

@@ -53,9 +53,6 @@ infra/secrets/
 .vercel
 
 # Internal strategy docs (keep local, not public)
-COMPETITIVE_LANDSCAPE.md
-OPENCLAW_ZEROCLAW_GITHUB_RESEARCH.md
-THE_AGENTIC_WAVE.md
-THE_THESIS_POST.md
-X_STRATEGY.md
+# Internal docs (local only, never public)
 docs/ops/
+docs/strategy/
