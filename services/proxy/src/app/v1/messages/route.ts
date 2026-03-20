@@ -177,7 +177,7 @@ export async function POST(request: Request): Promise<Response> {
     system: body.system,
     max_tokens: isBYOK
       ? (body.max_tokens as number) || 4096
-      : Math.min((body.max_tokens as number) || 1024, 2048),
+      : Math.min((body.max_tokens as number) || 4096, 4096),
     temperature: body.temperature,
     stream: true,
   };

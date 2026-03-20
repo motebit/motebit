@@ -76,6 +76,7 @@ export interface SpatialAIConfig {
   provider: "anthropic" | "ollama";
   model?: string;
   apiKey?: string;
+  maxTokens?: number;
   personalityConfig?: MotebitPersonalityConfig;
 }
 
@@ -407,7 +408,7 @@ export class SpatialApp {
       provider = new OllamaProvider({
         model,
         base_url: DEFAULT_OLLAMA_URL,
-        max_tokens: 1024,
+        max_tokens: config.maxTokens,
         temperature,
       });
     } else {
@@ -418,7 +419,7 @@ export class SpatialApp {
         provider: "anthropic",
         api_key: config.apiKey,
         model,
-        max_tokens: 1024,
+        max_tokens: config.maxTokens,
         temperature,
       });
     }

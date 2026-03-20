@@ -196,6 +196,7 @@ export interface DesktopAIConfig {
   apiKey?: string;
   personalityConfig?: MotebitPersonalityConfig;
   isTauri: boolean;
+  maxTokens?: number;
   invoke?: InvokeFn;
   syncUrl?: string;
   syncMasterToken?: string;
@@ -654,7 +655,7 @@ export class DesktopApp {
     if (config.provider === "ollama") {
       const model = config.model != null && config.model !== "" ? config.model : "llama3.2";
       const base_url = config.isTauri ? DEFAULT_OLLAMA_URL : "/api/ollama";
-      provider = new OllamaProvider({ model, base_url, max_tokens: 1024, temperature });
+      provider = new OllamaProvider({ model, base_url, max_tokens: config.maxTokens, temperature });
       this._activeProvider = "ollama";
     } else {
       if (config.apiKey == null || config.apiKey === "") return false;
@@ -666,7 +667,7 @@ export class DesktopApp {
         api_key: config.apiKey,
         model,
         base_url,
-        max_tokens: 1024,
+        max_tokens: config.maxTokens,
         temperature,
       });
       this._activeProvider = "anthropic";

@@ -25,6 +25,7 @@ export interface CliConfig {
   tools: string | undefined;
   selfTest: boolean;
   direct: boolean;
+  maxTokens?: number;
   json: boolean;
   presentation: boolean;
   all?: boolean;

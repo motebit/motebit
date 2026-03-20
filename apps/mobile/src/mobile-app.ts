@@ -190,6 +190,7 @@ export interface MobileAIConfig {
   model?: string;
   apiKey?: string;
   ollamaEndpoint?: string;
+  maxTokens?: number;
 }
 
 // === Bootstrap Result ===
@@ -399,7 +400,7 @@ export class MobileApp {
     if (config.provider === "ollama") {
       const model = config.model ?? "llama3.2";
       const base_url = config.ollamaEndpoint ?? DEFAULT_OLLAMA_URL;
-      provider = new OllamaProvider({ model, base_url, max_tokens: 1024 });
+      provider = new OllamaProvider({ model, base_url, max_tokens: config.maxTokens });
     } else if (config.provider === "hybrid") {
       if (config.apiKey == null || config.apiKey === "") return false;
       const model = config.model ?? "claude-sonnet-4-20250514";
@@ -409,12 +410,12 @@ export class MobileApp {
           api_key: config.apiKey,
           model,
           base_url: "https://api.anthropic.com",
-          max_tokens: 1024,
+          max_tokens: config.maxTokens,
         },
         ollama: {
           model: "llama3.2",
           base_url: config.ollamaEndpoint ?? DEFAULT_OLLAMA_URL,
-          max_tokens: 1024,
+          max_tokens: config.maxTokens,
         },
         fallback_to_local: true,
       });
@@ -426,7 +427,7 @@ export class MobileApp {
         api_key: config.apiKey,
         model,
         base_url: "https://api.anthropic.com",
-        max_tokens: 1024,
+        max_tokens: config.maxTokens,
       });
     }
 

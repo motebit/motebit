@@ -106,7 +106,7 @@ export function createProvider(
   if (config.provider === "ollama") {
     return new OllamaProvider({
       model: config.model,
-      max_tokens: 1024,
+      max_tokens: config.maxTokens,
       temperature,
       personalityConfig,
     });
@@ -117,7 +117,7 @@ export function createProvider(
     provider: "anthropic",
     api_key: apiKey,
     model: config.model,
-    max_tokens: 1024,
+    max_tokens: config.maxTokens,
     temperature,
     personalityConfig,
   });

@@ -475,7 +475,7 @@ export class CloudProvider implements StreamingProvider {
 
     const body: Record<string, unknown> = {
       model: this.config.model,
-      max_tokens: this.config.max_tokens ?? 1024,
+      max_tokens: this.config.max_tokens ?? 4096,
       temperature: this.config.temperature ?? 0.7,
       system: systemPrompt,
       messages,
@@ -517,7 +517,7 @@ export class CloudProvider implements StreamingProvider {
 
     const body: Record<string, unknown> = {
       model: this.config.model,
-      max_tokens: this.config.max_tokens ?? 1024,
+      max_tokens: this.config.max_tokens ?? 4096,
       temperature: this.config.temperature ?? 0.7,
       system: systemPrompt,
       messages,
@@ -872,7 +872,7 @@ export class OllamaProvider implements StreamingProvider {
       stream: false,
       options: {
         temperature: this.config.temperature ?? 0.7,
-        num_predict: this.config.max_tokens ?? 1024,
+        num_predict: this.config.max_tokens ?? 4096,
       },
     };
 
@@ -947,7 +947,7 @@ export class OllamaProvider implements StreamingProvider {
       stream: true,
       options: {
         temperature: this.config.temperature ?? 0.7,
-        num_predict: this.config.max_tokens ?? 1024,
+        num_predict: this.config.max_tokens ?? 4096,
       },
     };
 
