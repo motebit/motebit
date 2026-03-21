@@ -71,6 +71,15 @@ const LOCAL_ONLY_TOOLS = new Set([
 ]);
 let isServing = false;
 
+/** Resolve the relay sync URL from config, env, or saved config. */
+function getRelaySyncUrl(
+  config: CliConfig,
+  fullConfig?: FullConfig,
+  fallback?: string,
+): string | undefined {
+  return config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig?.sync_url ?? fallback;
+}
+
 /** Get an auth token for relay API calls — prefers master token, falls back to signed device token. */
 async function getRelayToken(
   config: CliConfig,
@@ -95,6 +104,19 @@ async function getRelayToken(
     );
   }
   return undefined;
+}
+
+/** Build relay request headers with auth. Optional content-type for POST/PUT. */
+async function makeRelayHeaders(
+  config: CliConfig,
+  repl?: ReplContext,
+  opts?: { aud?: string; json?: boolean },
+): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {};
+  if (opts?.json) headers["Content-Type"] = "application/json";
+  const token = await getRelayToken(config, repl, opts?.aud);
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  return headers;
 }
 
 export async function handleSlashCommand(
@@ -372,7 +394,7 @@ export async function handleSlashCommand(
 
       // Conversation sync
       if (repl) {
-        const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig?.sync_url;
+        const syncUrl = getRelaySyncUrl(config, fullConfig);
         if (syncUrl != null && syncUrl !== "") {
           try {
             console.log("Syncing conversations...");
@@ -490,9 +512,7 @@ export async function handleSlashCommand(
 
       // 3. Discover agents
       try {
-        const token = await getRelayToken(config, repl);
-        const headers: Record<string, string> = {};
-        if (token) headers["Authorization"] = `Bearer ${token}`;
+        const headers = await makeRelayHeaders(config, repl);
         const resp = await fetch(`${connectUrl}/api/v1/agents/discover`, { headers });
         if (resp.ok) {
           const data = (await resp.json()) as {
@@ -597,12 +617,10 @@ export async function handleSlashCommand(
         console.log(dim(`  ${exposedTools.length} tools exposed. Accepting incoming delegations.`));
 
         // Register with relay if connected
-        const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig?.sync_url;
+        const syncUrl = getRelaySyncUrl(config, fullConfig);
         if (syncUrl && pubHex) {
           try {
-            const token = await getRelayToken(config, repl);
-            const headers: Record<string, string> = { "Content-Type": "application/json" };
-            if (token) headers["Authorization"] = `Bearer ${token}`;
+            const headers = await makeRelayHeaders(config, repl, { json: true });
             await fetch(`${syncUrl}/api/v1/agents/register`, {
               method: "POST",
               headers,
@@ -1176,7 +1194,7 @@ export async function handleSlashCommand(
       }
 
       // Relay-based discovery: no argument or capability filter
-      const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig?.sync_url;
+      const syncUrl = getRelaySyncUrl(config, fullConfig);
       if (!syncUrl) {
         console.log("No sync URL configured. Set --sync-url or MOTEBIT_SYNC_URL.");
         break;
@@ -1184,9 +1202,7 @@ export async function handleSlashCommand(
       try {
         const capParam = discoverArg || undefined;
         const queryStr = capParam ? `?capability=${encodeURIComponent(capParam)}` : "";
-        const token = await getRelayToken(config, repl);
-        const headers: Record<string, string> = {};
-        if (token) headers["Authorization"] = `Bearer ${token}`;
+        const headers = await makeRelayHeaders(config, repl);
         const resp = await fetch(`${syncUrl}/api/v1/agents/discover${queryStr}`, { headers });
         if (!resp.ok) {
           console.log(`Discovery failed: ${resp.status} ${resp.statusText}`);
@@ -1364,20 +1380,14 @@ export async function handleSlashCommand(
         break;
       }
 
-      const syncUrl =
-        config.syncUrl ??
-        process.env["MOTEBIT_SYNC_URL"] ??
-        fullConfig?.sync_url ??
-        "https://motebit-sync.fly.dev";
+      const syncUrl = getRelaySyncUrl(config, fullConfig, "https://motebit-sync.fly.dev");
 
       // Resolve prefix to full motebit ID if needed (UUID is 36 chars)
       let targetMotebitId = rawTargetId;
       const UUID_LENGTH = 36;
       if (rawTargetId.length < UUID_LENGTH) {
         try {
-          const token = await getRelayToken(config, repl);
-          const discoverHeaders: Record<string, string> = {};
-          if (token) discoverHeaders["Authorization"] = `Bearer ${token}`;
+          const discoverHeaders = await makeRelayHeaders(config, repl);
           const discoverResp = await fetch(`${syncUrl}/api/v1/agents/discover`, {
             headers: discoverHeaders,
           });
@@ -1408,36 +1418,10 @@ export async function handleSlashCommand(
         }
       }
 
-      // Build a signed device token (5-min expiry)
-      let authHeader: string | undefined;
-      if (repl.privateKeyBytes && repl.deviceId) {
-        try {
-          const now = Date.now();
-          const signedToken = await createSignedToken(
-            {
-              mid: repl.motebitId,
-              did: repl.deviceId,
-              iat: now,
-              exp: now + 5 * 60 * 1000,
-              jti: crypto.randomUUID(),
-              aud: "task:submit",
-            },
-            repl.privateKeyBytes,
-          );
-          authHeader = `Bearer ${signedToken}`;
-        } catch (err: unknown) {
-          const message = err instanceof Error ? err.message : String(err);
-          console.log(`Failed to create signed token: ${message}`);
-          break;
-        }
-      } else {
-        // Fall back to static sync token
-        const syncToken = await getRelayToken(config, repl);
-        if (syncToken) authHeader = `Bearer ${syncToken}`;
-      }
-
-      const delegateHeaders: Record<string, string> = { "Content-Type": "application/json" };
-      if (authHeader) delegateHeaders["Authorization"] = authHeader;
+      const delegateHeaders = await makeRelayHeaders(config, repl, {
+        aud: "task:submit",
+        json: true,
+      });
 
       // Submit the task
       let taskId: string;
@@ -1573,41 +1557,9 @@ export async function handleSlashCommand(
         break;
       }
 
-      const proposeSyncUrl =
-        config.syncUrl ??
-        process.env["MOTEBIT_SYNC_URL"] ??
-        fullConfig?.sync_url ??
-        "https://motebit-sync.fly.dev";
+      const proposeSyncUrl = getRelaySyncUrl(config, fullConfig, "https://motebit-sync.fly.dev");
 
-      // Build signed auth token
-      let proposeAuthHeader: string | undefined;
-      if (repl.privateKeyBytes && repl.deviceId) {
-        try {
-          const now = Date.now();
-          const signedToken = await createSignedToken(
-            {
-              mid: repl.motebitId,
-              did: repl.deviceId,
-              iat: now,
-              exp: now + 5 * 60 * 1000,
-              jti: crypto.randomUUID(),
-              aud: "proposal",
-            },
-            repl.privateKeyBytes,
-          );
-          proposeAuthHeader = `Bearer ${signedToken}`;
-        } catch (err: unknown) {
-          const message = err instanceof Error ? err.message : String(err);
-          console.log(`Failed to create signed token: ${message}`);
-          break;
-        }
-      } else {
-        const syncToken = await getRelayToken(config, repl);
-        if (syncToken) proposeAuthHeader = `Bearer ${syncToken}`;
-      }
-
-      const proposeHeaders: Record<string, string> = { "Content-Type": "application/json" };
-      if (proposeAuthHeader) proposeHeaders["Authorization"] = proposeAuthHeader;
+      const proposeHeaders = await makeRelayHeaders(config, repl, { aud: "proposal", json: true });
 
       // Simple decomposition: distribute goal steps round-robin across participants.
       // Each participant gets a step: research, implementation, verification, etc.
@@ -1690,39 +1642,9 @@ export async function handleSlashCommand(
         break;
       }
 
-      const proposalsSyncUrl =
-        config.syncUrl ??
-        process.env["MOTEBIT_SYNC_URL"] ??
-        fullConfig?.sync_url ??
-        "https://motebit-sync.fly.dev";
+      const proposalsSyncUrl = getRelaySyncUrl(config, fullConfig, "https://motebit-sync.fly.dev");
 
-      let proposalsAuthHeader: string | undefined;
-      if (repl.privateKeyBytes && repl.deviceId) {
-        try {
-          const now = Date.now();
-          const signedToken = await createSignedToken(
-            {
-              mid: repl.motebitId,
-              did: repl.deviceId,
-              iat: now,
-              exp: now + 5 * 60 * 1000,
-              jti: crypto.randomUUID(),
-              aud: "proposal",
-            },
-            repl.privateKeyBytes,
-          );
-          proposalsAuthHeader = `Bearer ${signedToken}`;
-        } catch {
-          // Fall back to static token
-        }
-      }
-      if (!proposalsAuthHeader) {
-        const syncToken = await getRelayToken(config, repl);
-        if (syncToken) proposalsAuthHeader = `Bearer ${syncToken}`;
-      }
-
-      const proposalsHeaders: Record<string, string> = {};
-      if (proposalsAuthHeader) proposalsHeaders["Authorization"] = proposalsAuthHeader;
+      const proposalsHeaders = await makeRelayHeaders(config, repl, { aud: "proposal" });
 
       try {
         const resp = await fetch(`${proposalsSyncUrl}/api/v1/proposals`, {
@@ -1782,39 +1704,9 @@ export async function handleSlashCommand(
         break;
       }
 
-      const proposalSyncUrl =
-        config.syncUrl ??
-        process.env["MOTEBIT_SYNC_URL"] ??
-        fullConfig?.sync_url ??
-        "https://motebit-sync.fly.dev";
+      const proposalSyncUrl = getRelaySyncUrl(config, fullConfig, "https://motebit-sync.fly.dev");
 
-      let proposalAuthHeader: string | undefined;
-      if (repl.privateKeyBytes && repl.deviceId) {
-        try {
-          const now = Date.now();
-          const signedToken = await createSignedToken(
-            {
-              mid: repl.motebitId,
-              did: repl.deviceId,
-              iat: now,
-              exp: now + 5 * 60 * 1000,
-              jti: crypto.randomUUID(),
-              aud: "proposal",
-            },
-            repl.privateKeyBytes,
-          );
-          proposalAuthHeader = `Bearer ${signedToken}`;
-        } catch {
-          // Fall back to static token
-        }
-      }
-      if (!proposalAuthHeader) {
-        const syncToken = await getRelayToken(config, repl);
-        if (syncToken) proposalAuthHeader = `Bearer ${syncToken}`;
-      }
-
-      const proposalHeaders: Record<string, string> = { "Content-Type": "application/json" };
-      if (proposalAuthHeader) proposalHeaders["Authorization"] = proposalAuthHeader;
+      const proposalHeaders = await makeRelayHeaders(config, repl, { aud: "proposal", json: true });
 
       // First, fetch the proposal details
       type ProposalDetail = {
@@ -1984,7 +1876,7 @@ export async function handleSlashCommand(
     }
 
     case "balance": {
-      const balSyncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig?.sync_url;
+      const balSyncUrl = getRelaySyncUrl(config, fullConfig);
       if (!balSyncUrl) {
         console.log("No sync URL configured. Set --sync-url or MOTEBIT_SYNC_URL.");
         break;
@@ -1994,9 +1886,7 @@ export async function handleSlashCommand(
         break;
       }
       try {
-        const balToken = await getRelayToken(config, repl);
-        const balHeaders: Record<string, string> = {};
-        if (balToken) balHeaders["Authorization"] = `Bearer ${balToken}`;
+        const balHeaders = await makeRelayHeaders(config, repl);
         const balResp = await fetch(
           `${balSyncUrl.replace(/\/+$/, "")}/api/v1/agents/${repl.motebitId}/balance`,
           { headers: balHeaders },
@@ -2035,7 +1925,7 @@ export async function handleSlashCommand(
     }
 
     case "withdraw": {
-      const wdSyncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig?.sync_url;
+      const wdSyncUrl = getRelaySyncUrl(config, fullConfig);
       if (!wdSyncUrl) {
         console.log("No sync URL configured. Set --sync-url or MOTEBIT_SYNC_URL.");
         break;
@@ -2057,9 +1947,7 @@ export async function handleSlashCommand(
       }
       const wdDest = wdParts[1] ?? undefined;
       try {
-        const wdToken = await getRelayToken(config, repl);
-        const wdHeaders: Record<string, string> = { "Content-Type": "application/json" };
-        if (wdToken) wdHeaders["Authorization"] = `Bearer ${wdToken}`;
+        const wdHeaders = await makeRelayHeaders(config, repl, { json: true });
         const wdBody: Record<string, unknown> = { amount: wdAmount };
         if (wdDest) wdBody["destination"] = wdDest;
         const wdResp = await fetch(
@@ -2092,7 +1980,7 @@ export async function handleSlashCommand(
     }
 
     case "deposits": {
-      const depSyncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig?.sync_url;
+      const depSyncUrl = getRelaySyncUrl(config, fullConfig);
       if (!depSyncUrl) {
         console.log("No sync URL configured. Set --sync-url or MOTEBIT_SYNC_URL.");
         break;
@@ -2102,9 +1990,7 @@ export async function handleSlashCommand(
         break;
       }
       try {
-        const depToken = await getRelayToken(config, repl);
-        const depHeaders: Record<string, string> = {};
-        if (depToken) depHeaders["Authorization"] = `Bearer ${depToken}`;
+        const depHeaders = await makeRelayHeaders(config, repl);
         const depResp = await fetch(
           `${depSyncUrl.replace(/\/+$/, "")}/api/v1/agents/${repl.motebitId}/balance`,
           { headers: depHeaders },
