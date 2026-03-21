@@ -2451,6 +2451,7 @@ function migrateExec(driver: DatabaseDriver, sql: string): void {
 /** Run schema creation and migrations on a DatabaseDriver, return MotebitDatabase. */
 export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): MotebitDatabase {
   driver.pragma("journal_mode = WAL");
+  driver.pragma("wal_autocheckpoint = 1000");
   driver.pragma("foreign_keys = ON");
 
   const userVersion = (driver.pragma("user_version") as { user_version: number }[])[0]!

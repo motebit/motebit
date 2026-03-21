@@ -75,6 +75,7 @@ export interface ServiceMemoryGraph {
 /** Minimal event store interface. */
 export interface ServiceEventStore {
   append(entry: EventLogEntry): Promise<void>;
+  appendWithClock?(entry: Omit<EventLogEntry, "version_clock">): Promise<number>;
 }
 
 /** The runtime-shaped object we wire from. */
@@ -171,7 +172,7 @@ export function wireServerDeps(
     },
 
     logToolCall: (name, args, result) => {
-      const entry: EventLogEntry = {
+      const entry = {
         event_id: crypto.randomUUID(),
         motebit_id: motebitId,
         timestamp: Date.now(),
@@ -182,10 +183,13 @@ export function wireServerDeps(
           ok: result.ok,
           source: "mcp_server",
         },
-        version_clock: 0,
         tombstoned: false,
       };
-      void runtime.events.append(entry).catch(() => {});
+      if (runtime.events.appendWithClock) {
+        void runtime.events.appendWithClock(entry).catch(() => {});
+      } else {
+        void runtime.events.append({ ...entry, version_clock: 0 } as EventLogEntry).catch(() => {});
+      }
     },
 
     identityFileContent: opts.identityFileContent,

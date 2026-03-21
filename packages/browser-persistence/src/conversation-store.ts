@@ -293,6 +293,15 @@ export class IdbConversationStore implements ConversationStoreAdapter {
     this._messageCache.set(conversationId, msgs);
   }
 
+  /** Preload messages for all cached conversations. Call before sync to ensure
+   *  getMessagesSince() returns locally-modified messages for push. */
+  async preloadAllMessages(): Promise<void> {
+    const cached = [...this._conversationListCache.values()].flat();
+    for (const conv of cached) {
+      await this.preloadConversation(conv.conversationId);
+    }
+  }
+
   /** Preload conversation data from IDB into sync caches. Call before runtime construction. */
   async preload(motebitId: string): Promise<void> {
     const tx = this.db.transaction(["conversations", "conversation_messages"], "readonly");

@@ -113,4 +113,22 @@ describe("InMemoryToolRegistry", () => {
     expect(reg.get("safe")?.requiresApproval).toBe(false);
     expect(reg.get("dangerous")?.requiresApproval).toBe(true);
   });
+
+  it("replace() overwrites existing handler", async () => {
+    const reg = new InMemoryToolRegistry();
+    reg.register(makeTool("a"), async () => ({ ok: true, data: "original" }));
+
+    reg.replace(makeTool("a"), async () => ({ ok: true, data: "replaced" }));
+    const result = await reg.execute("a", {});
+    expect(result.data).toBe("replaced");
+  });
+
+  it("replace() registers new tool if not present", async () => {
+    const reg = new InMemoryToolRegistry();
+    reg.replace(makeTool("new"), async () => ({ ok: true, data: "fresh" }));
+
+    expect(reg.has("new")).toBe(true);
+    const result = await reg.execute("new", {});
+    expect(result.data).toBe("fresh");
+  });
 });

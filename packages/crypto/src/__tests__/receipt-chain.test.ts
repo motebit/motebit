@@ -383,6 +383,30 @@ describe("verifyDelegationChain", () => {
     const tampered: DelegationToken = { ...delegation, delegate_id: "mote-imposter" };
     expect(await verifyDelegation(tampered)).toBe(false);
   });
+
+  it("verifyDelegation rejects expired tokens by default", async () => {
+    const kpAlice = await generateKeypair();
+    const kpService = await generateKeypair();
+
+    const expired: DelegationToken = await signDelegation(
+      {
+        delegator_id: "mote-alice",
+        delegator_public_key: toBase64Url(kpAlice.publicKey),
+        delegate_id: "mote-web-search",
+        delegate_public_key: toBase64Url(kpService.publicKey),
+        scope: "web_search",
+        issued_at: Date.now() - 7200_000,
+        expires_at: Date.now() - 3600_000, // expired 1 hour ago
+      },
+      kpAlice.privateKey,
+    );
+
+    // Default: checkExpiry=true — reject expired
+    expect(await verifyDelegation(expired)).toBe(false);
+
+    // Explicit checkExpiry=false — accept for historical verification
+    expect(await verifyDelegation(expired, { checkExpiry: false })).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

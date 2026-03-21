@@ -865,6 +865,8 @@ export class WebApp {
 
     // Wire conversation sync — push/pull conversations to relay for cross-device visibility
     if (this._convStore) {
+      // Preload all conversation messages so sync push includes locally-modified data
+      await this._convStore.preloadAllMessages();
       const convSyncStore = new IdbConversationSyncStore(this._convStore, this._motebitId);
       this._conversationSyncEngine = new ConversationSyncEngine(convSyncStore, this._motebitId);
       this._conversationSyncEngine.connectRemote(
@@ -893,6 +895,12 @@ export class WebApp {
     this._wsTokenRefreshTimer = setInterval(() => {
       void (async () => {
         try {
+          // Unsubscribe old event handler before disconnect to prevent
+          // orphaned callbacks firing during the refresh window.
+          if (this._wsUnsubOnEvent) {
+            this._wsUnsubOnEvent();
+            this._wsUnsubOnEvent = null;
+          }
           wsAdapter.disconnect();
           const freshToken = await this.createSyncToken();
           if (freshToken == null) return;
@@ -917,7 +925,6 @@ export class WebApp {
           });
           this.runtime?.setDelegationAdapter(freshDelegation);
 
-          if (this._wsUnsubOnEvent) this._wsUnsubOnEvent();
           this._wsUnsubOnEvent = freshWs.onEvent((raw) => {
             void (async () => {
               if (!localEventStore) return;
