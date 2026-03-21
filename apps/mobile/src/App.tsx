@@ -990,6 +990,139 @@ export function App(): React.ReactElement {
           }
           break;
         }
+        case "agents":
+          void (async () => {
+            try {
+              const agents = await a.listTrustedAgents();
+              if (agents.length === 0) {
+                addSystemMessage("No known agents.");
+              } else {
+                const lines = agents.map(
+                  (ag) =>
+                    `  ${ag.motebit_id.slice(0, 8)}... [${ag.trust_level}] — ${ag.successful_tasks ?? 0}/${(ag.successful_tasks ?? 0) + (ag.failed_tasks ?? 0)} tasks`,
+                );
+                addSystemMessage(`Known agents (${agents.length}):\n${lines.join("\n")}`);
+              }
+            } catch (err: unknown) {
+              addSystemMessage(`Error: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          })();
+          break;
+        case "discover":
+          void (async () => {
+            try {
+              const data = (await a.relayFetch("/api/v1/agents/discover")) as {
+                agents: Array<{ motebit_id: string; capabilities: string[] }>;
+              };
+              const agents = data.agents ?? [];
+              if (agents.length === 0) {
+                addSystemMessage("No agents found on relay.");
+              } else {
+                const lines = agents
+                  .slice(0, 15)
+                  .map(
+                    (ag) =>
+                      `  ${ag.motebit_id.slice(0, 8)}... — ${(ag.capabilities ?? []).join(", ") || "no caps"}`,
+                  );
+                addSystemMessage(`Discovered agents (${agents.length}):\n${lines.join("\n")}`);
+              }
+            } catch (err: unknown) {
+              addSystemMessage(
+                `Discovery error: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          })();
+          break;
+        case "balance":
+          void (async () => {
+            try {
+              const data = (await a.relayFetch(`/api/v1/agents/${a.motebitId}/balance`)) as {
+                balance: number;
+                pending_allocations: number;
+                currency: string;
+              };
+              addSystemMessage(
+                `Balance: ${data.balance} ${data.currency ?? "USDC"}\nPending: ${data.pending_allocations ?? 0}`,
+              );
+            } catch (err: unknown) {
+              addSystemMessage(
+                `Balance error: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          })();
+          break;
+        case "deposits":
+          void (async () => {
+            try {
+              const data = (await a.relayFetch(`/api/v1/agents/${a.motebitId}/balance`)) as {
+                transactions?: Array<{ type: string; amount: number; created_at: number }>;
+              };
+              const deposits = (data.transactions ?? []).filter((t) => t.type === "deposit");
+              if (deposits.length === 0) {
+                addSystemMessage("No deposits yet.");
+              } else {
+                const lines = deposits
+                  .slice(0, 10)
+                  .map(
+                    (d) => `  ${new Date(d.created_at).toLocaleDateString()} — ${d.amount} USDC`,
+                  );
+                addSystemMessage(`Recent deposits:\n${lines.join("\n")}`);
+              }
+            } catch (err: unknown) {
+              addSystemMessage(
+                `Deposits error: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          })();
+          break;
+        case "approvals": {
+          const pending = a.hasPendingApproval ? a.pendingApprovalInfo : null;
+          if (!pending) {
+            addSystemMessage("No pending approvals.");
+          } else {
+            addSystemMessage(
+              `Pending approval: ${pending.toolName}\nArgs: ${JSON.stringify(pending.args, null, 2)}`,
+            );
+          }
+          break;
+        }
+        case "proposals":
+          void (async () => {
+            try {
+              const data = (await a.relayFetch(`/api/v1/agents/${a.motebitId}/proposals`)) as {
+                proposals: Array<{ proposal_id: string; status: string; goal: string }>;
+              };
+              const proposals = data.proposals ?? [];
+              if (proposals.length === 0) {
+                addSystemMessage("No active proposals.");
+              } else {
+                const lines = proposals
+                  .slice(0, 10)
+                  .map(
+                    (p) =>
+                      `  ${p.proposal_id.slice(0, 8)}... [${p.status}] — ${(p.goal ?? "").slice(0, 60)}`,
+                  );
+                addSystemMessage(`Proposals (${proposals.length}):\n${lines.join("\n")}`);
+              }
+            } catch (err: unknown) {
+              addSystemMessage(
+                `Proposals error: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          })();
+          break;
+        case "withdraw":
+          addSystemMessage("Withdrawals require secure signing. Use CLI: motebit withdraw");
+          break;
+        case "delegate":
+          addSystemMessage(
+            "Delegation happens transparently during conversation when connected to a relay. " +
+              "To delegate manually, use CLI: motebit delegate <agent-id> <prompt>",
+          );
+          break;
+        case "propose":
+          addSystemMessage("Collaborative proposals use CLI: motebit propose <agent-ids> <goal>");
+          break;
         case "help":
           addSystemMessage(
             "Available commands:\n" +
@@ -1003,6 +1136,12 @@ export function App(): React.ReactElement {
               "/curious — curiosity targets\n" +
               "/reflect — trigger reflection\n" +
               "/gradient — intelligence gradient\n" +
+              "/agents — list known agents\n" +
+              "/discover — discover agents on relay\n" +
+              "/balance — show account balance\n" +
+              "/deposits — show deposit history\n" +
+              "/approvals — pending approvals\n" +
+              "/proposals — active proposals\n" +
               "/forget <nodeId> — delete a memory\n" +
               "/clear — clear conversation\n" +
               "/tools — list registered tools\n" +
@@ -1011,6 +1150,9 @@ export function App(): React.ReactElement {
               "/sync — sync with relay\n" +
               "/export — export all data\n" +
               "/settings — open settings\n" +
+              "/delegate — delegate to agent (CLI)\n" +
+              "/propose — propose collab plan (CLI)\n" +
+              "/withdraw — request withdrawal (CLI)\n" +
               "/help — show this message",
           );
           break;

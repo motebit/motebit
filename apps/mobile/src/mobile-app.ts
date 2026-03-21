@@ -970,6 +970,34 @@ export class MobileApp {
     return this.runtime.memory.exportAll();
   }
 
+  async listTrustedAgents() {
+    if (!this.runtime) return [];
+    return this.runtime.listTrustedAgents();
+  }
+
+  get hasPendingApproval(): boolean {
+    return this.runtime?.hasPendingApproval ?? false;
+  }
+
+  get pendingApprovalInfo(): { toolName: string; args: Record<string, unknown> } | null {
+    return this.runtime?.pendingApprovalInfo ?? null;
+  }
+
+  /** Fetch from relay API with signed token auth. */
+  async relayFetch(path: string): Promise<unknown> {
+    const syncUrl = await this.getSyncUrl();
+    if (!syncUrl) throw new Error("No relay configured — connect in Settings > Sync");
+    const token = await this.createSyncToken();
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await fetch(`${syncUrl}${path}`, { headers });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`${res.status}: ${text}`);
+    }
+    return res.json() as Promise<unknown>;
+  }
+
   subscribe(fn: (state: MotebitState) => void): () => void {
     if (!this.runtime) return () => {};
     return this.runtime.subscribe(fn);
