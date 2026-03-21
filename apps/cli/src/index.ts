@@ -1,4 +1,5 @@
 import * as readline from "node:readline";
+import { Transform } from "node:stream";
 import { DEFAULT_CONFIG } from "@motebit/ai-core";
 import type { MotebitPersonalityConfig } from "@motebit/ai-core";
 import { deriveSyncEncryptionKey, createSignedToken } from "@motebit/crypto";
@@ -292,13 +293,59 @@ async function main(): Promise<void> {
 
   // Create readline AFTER passphrase is resolved — creating it before
   // would cause it to echo keystrokes during raw-mode passphrase masking.
+  //
+  // Bracketed paste handling: modern terminals wrap pasted content in
+  // \x1b[200~ ... \x1b[201~. Without handling, newlines in pasted text
+  // cause readline to submit prematurely (the remaining paste text gets
+  // queued to the next prompt). This Transform stream strips the brackets
+  // and replaces newlines with spaces during paste.
+  const PASTE_OPEN = "\x1b[200~";
+  const PASTE_CLOSE = "\x1b[201~";
+  let pasteMode = false;
+  const pasteFilter = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      let str = chunk.toString("utf8");
+      // Process paste brackets
+      while (str.length > 0) {
+        if (pasteMode) {
+          const closeIdx = str.indexOf(PASTE_CLOSE);
+          if (closeIdx === -1) {
+            // Still in paste — replace newlines, pass through
+            this.push(str.replace(/\r?\n/g, " "));
+            str = "";
+          } else {
+            // End of paste — process remaining pasted text, strip close bracket
+            const pasted = str.slice(0, closeIdx).replace(/\r?\n/g, " ");
+            this.push(pasted);
+            str = str.slice(closeIdx + PASTE_CLOSE.length);
+            pasteMode = false;
+          }
+        } else {
+          const openIdx = str.indexOf(PASTE_OPEN);
+          if (openIdx === -1) {
+            // Not pasting — pass through as-is
+            this.push(str);
+            str = "";
+          } else {
+            // Start of paste — pass pre-paste text, strip open bracket
+            this.push(str.slice(0, openIdx));
+            str = str.slice(openIdx + PASTE_OPEN.length);
+            pasteMode = true;
+          }
+        }
+      }
+      callback();
+    },
+  });
+  process.stdin.pipe(pasteFilter);
+  // Enable bracketed paste mode on the terminal
+  if (process.stdout.isTTY) {
+    process.stdout.write("\x1b[?2004h");
+  }
+
   const rl = readline.createInterface({
-    input: process.stdin,
+    input: pasteFilter,
     output: process.stdout,
-    // Reduce escape code timeout from default 500ms to 50ms.
-    // The default causes paste + backspace within 500ms to be interpreted as
-    // an incomplete escape sequence, corrupting the line buffer and causing
-    // premature submission.
     escapeCodeTimeout: 50,
   });
 
@@ -482,6 +529,10 @@ async function main(): Promise<void> {
   }
 
   const shutdown = async (): Promise<void> => {
+    // Disable bracketed paste mode before exit
+    if (process.stdout.isTTY) {
+      process.stdout.write("\x1b[?2004l");
+    }
     runtime.stop();
     // Disconnect MCP servers
     await Promise.allSettled(mcpAdapters.map((a) => a.disconnect()));
