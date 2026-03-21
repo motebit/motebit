@@ -56,6 +56,10 @@ function formatState(state: Record<string, unknown>): string {
   return lines.join("\n");
 }
 
+// Tools excluded from network exposure when /serve is active.
+const LOCAL_ONLY_TOOLS = new Set(["read_file"]);
+let isServing = false;
+
 /** Get an auth token for relay API calls — prefers master token, falls back to signed device token. */
 async function getRelayToken(
   config: CliConfig,
@@ -508,7 +512,6 @@ Available commands:
 
       // Security: exclude local-only tools from network exposure.
       // read_file gives filesystem access — safe for local REPL, dangerous for remote callers.
-      const LOCAL_ONLY_TOOLS = new Set(["read_file"]);
       const origListTools = serveDeps.listTools.bind(serveDeps);
       serveDeps.listTools = () => origListTools().filter((t) => !LOCAL_ONLY_TOOLS.has(t.name));
       const origFilterTools = serveDeps.filterTools.bind(serveDeps);
@@ -545,6 +548,7 @@ Available commands:
         };
         const mcpServer = new McpServerAdapter(serverConfig, serveDeps);
         await mcpServer.start();
+        isServing = true;
 
         const exposedTools = serveDeps.listTools();
         console.log(`  MCP server running on http://localhost:${port}`);
@@ -583,9 +587,15 @@ Available commands:
       if (tools.length === 0) {
         console.log("No tools registered.");
       } else {
-        console.log(`\nRegistered tools (${tools.length}):\n`);
+        const networkCount = tools.filter((t) => !LOCAL_ONLY_TOOLS.has(t.name)).length;
+        const label = isServing
+          ? `\nRegistered tools (${tools.length}, ${networkCount} network-exposed):\n`
+          : `\nRegistered tools (${tools.length}):\n`;
+        console.log(label);
         for (const tool of tools) {
-          console.log(`  ${tool.name.padEnd(24)} ${tool.description.slice(0, 60)}`);
+          const local = LOCAL_ONLY_TOOLS.has(tool.name);
+          const marker = isServing ? (local ? "\u25CB [local]   " : "\u25CF [network] ") : "  ";
+          console.log(`${marker}${tool.name.padEnd(24)} ${tool.description.slice(0, 60)}`);
         }
       }
       break;
