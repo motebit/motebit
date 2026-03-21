@@ -15,7 +15,7 @@ import { type CliConfig, termWidth } from "./args.js";
 import type { FullConfig } from "./config.js";
 import { saveFullConfig } from "./config.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
-import { green, dim, cyan, success } from "./colors.js";
+import { green, yellow, red, dim, cyan, command, success } from "./colors.js";
 import {
   SqliteConversationSyncStoreAdapter,
   SqlitePlanSyncStoreAdapter,
@@ -106,57 +106,85 @@ export async function handleSlashCommand(
   repl?: ReplContext,
 ): Promise<void> {
   switch (cmd) {
-    case "help":
+    case "help": {
+      const helpEntries: [string, string, string][] = [
+        ["/help", command("/help"), "Show this help"],
+        ["/memories", command("/memories"), "List all memories"],
+        ["/graph", command("/graph"), "Memory graph stats — compounding health"],
+        ["/curious", command("/curious"), "Show decaying memories the agent is curious about"],
+        ["/state", command("/state"), "Show current state vector"],
+        ["/forget <nodeId>", command("/forget") + " <nodeId>", "Delete a memory by ID"],
+        ["/export", command("/export"), "Export all memories and state as JSON"],
+        ["/clear", command("/clear"), "Clear conversation history"],
+        ["/summarize", command("/summarize"), "Summarize current conversation"],
+        ["/conversations", command("/conversations"), "List recent conversations"],
+        ["/conversation <id>", command("/conversation") + " <id>", "Load a past conversation"],
+        ["/model <name>", command("/model") + " <name>", "Switch AI model"],
+        ["/connect <url>", command("/connect") + " <url>", "Connect to a relay"],
+        ["/serve [port]", command("/serve") + " [port]", "Start MCP server — accept delegations"],
+        ["/sync", command("/sync"), "Sync events and conversations"],
+        ["/tools", command("/tools"), "List registered tools"],
+        ["/goals", command("/goals"), "List all scheduled goals"],
+        [
+          '/goal add "<prompt>" --every <interval>',
+          command("/goal add") + ' "<prompt>" --every <interval>',
+          "Add a scheduled goal",
+        ],
+        ["/goal remove <id>", command("/goal remove") + " <id>", "Remove a goal"],
+        ["/goal pause <id>", command("/goal pause") + " <id>", "Pause a goal"],
+        ["/goal resume <id>", command("/goal resume") + " <id>", "Resume a paused goal"],
+        ["/goal outcomes <id>", command("/goal outcomes") + " <id>", "Show execution history"],
+        ["/approvals", command("/approvals"), "Show pending approval queue"],
+        ["/balance", command("/balance"), "Show balance and transactions"],
+        ["/withdraw <amount>", command("/withdraw") + " <amount>", "Request a withdrawal"],
+        ["/deposits", command("/deposits"), "Show recent deposit transactions"],
+        ["/reflect", command("/reflect"), "Trigger reflection — see what the agent learned"],
+        ["/mcp list", command("/mcp list"), "List MCP servers and trust status"],
+        ["/mcp add <name> <url>", command("/mcp add") + " <name> <url>", "Add an HTTP MCP server"],
+        ["/mcp remove <name>", command("/mcp remove") + " <name>", "Remove an MCP server"],
+        ["/mcp trust <name>", command("/mcp trust") + " <name>", "Trust an MCP server"],
+        ["/mcp untrust <name>", command("/mcp untrust") + " <name>", "Untrust an MCP server"],
+        ["/agents", command("/agents"), "List agents with trust and reputation"],
+        ["/agents info <id>", command("/agents info") + " <id>", "Full trust record detail"],
+        [
+          "/agents trust <id> <level>",
+          command("/agents trust") + " <id> <level>",
+          "Set trust level",
+        ],
+        ["/agents block <id>", command("/agents block") + " <id>", "Shorthand for Blocked"],
+        ["/discover [cap]", command("/discover") + " [cap]", "Discover agents on the relay"],
+        [
+          "/delegate <id> <prompt>",
+          command("/delegate") + " <id> <prompt>",
+          "Delegate a task via relay",
+        ],
+        [
+          "/propose <ids> <goal>",
+          command("/propose") + " <ids> <goal>",
+          "Propose a collaborative plan",
+        ],
+        ["/proposals", command("/proposals"), "List active proposals"],
+        [
+          "/proposal <id> [accept|reject|counter]",
+          command("/proposal") + " <id> [accept|reject|counter]",
+          "Respond to a proposal",
+        ],
+        ["/operator", command("/operator"), "Show operator mode status"],
+      ];
+      const col = Math.max(...helpEntries.map(([p]) => p.length)) + 2;
+      const line = (plain: string, styled: string, desc: string) => {
+        const gap = " ".repeat(Math.max(1, col - plain.length));
+        return desc ? `  ${styled}${gap}${dim(desc)}` : `  ${styled}`;
+      };
+      console.log("\nAvailable commands:");
+      for (const [plain, styled, desc] of helpEntries) {
+        console.log(line(plain, styled, desc));
+      }
       console.log(
-        `
-Available commands:
-  /help              Show this help
-  /memories          List all memories
-  /graph             Memory graph stats — compounding health
-  /curious           Show decaying memories the agent is curious about
-  /state             Show current state vector
-  /forget <nodeId>   Delete a memory by ID
-  /export            Export all memories and state as JSON
-  /clear             Clear conversation history
-  /summarize         Summarize current conversation
-  /conversations     List recent conversations
-  /conversation <id> Load a past conversation
-  /model <name>      Switch AI model
-  /connect <url>     Connect to a relay (register, discover agents, enable delegation)
-  /serve [port]      Start MCP server (default port 3100) — accept incoming delegations
-  /sync              Sync events and conversations with remote server
-  /tools             List registered tools
-  /goals             List all scheduled goals
-  /goal add "<prompt>" --every <interval> [--once]
-  /goal remove <id>  Remove a goal
-  /goal pause <id>   Pause a goal
-  /goal resume <id>  Resume a paused goal
-  /goal outcomes <id> Show execution history
-  /approvals         Show pending approval queue
-  /balance           Show virtual account balance and recent transactions
-  /withdraw <amount> [destination]  Request a withdrawal
-  /deposits          Show recent deposit transactions
-  /reflect           Trigger reflection — see what the agent learned
-  /mcp list          List MCP servers and trust status
-  /mcp add <name> <url> [--motebit]  Add an HTTP MCP server
-  /mcp remove <name> Remove an MCP server
-  /mcp trust <name>  Trust an MCP server
-  /mcp untrust <name> Untrust an MCP server
-  /agents            List known agents with trust levels and reputation
-  /agents info <id>  Full trust record detail for an agent
-  /agents trust <id> <level>  Set trust level (first_contact|verified|trusted|blocked)
-  /agents block <id> Shorthand for setting Blocked
-  /discover [cap]    Discover agents on the relay (optional capability filter)
-  /discover dom.com  Discover motebit at domain via DNS/well-known
-  /delegate <id> <prompt>  Delegate a task to another motebit via the relay
-  /propose <ids> <goal>  Propose a collaborative plan to comma-separated motebit IDs
-  /proposals         List active proposals (sent and received)
-  /proposal <id> [accept|reject|counter]  View or respond to a proposal
-  /operator          Show operator mode status
-  quit, exit         Exit
-`.trim(),
+        `  ${dim("quit, exit")}${" ".repeat(Math.max(1, col - "quit, exit".length))}${dim("Exit")}\n`,
       );
       break;
+    }
 
     case "memories": {
       const data = await runtime.memory.exportAll();
@@ -601,12 +629,24 @@ Available commands:
       if (tools.length === 0) {
         console.log("No tools registered.");
       } else {
+        // Short human descriptions for built-in tools
+        const shortDesc: Record<string, string> = {
+          read_file: "Read a local file",
+          web_search: "Search the web",
+          read_url: "Fetch content from a URL",
+          recall_memories: "Search memory graph",
+          list_events: "Query recent activity",
+          create_sub_goal: "Create a child sub-goal",
+          complete_goal: "Mark goal as completed",
+          report_progress: "Log a progress observation",
+          delegate_to_agent: "Delegate a task to a remote agent",
+        };
         const networkCount = tools.filter((t) => !LOCAL_ONLY_TOOLS.has(t.name)).length;
         const label = isServing
           ? `\nRegistered tools (${tools.length}, ${networkCount} network-exposed):\n`
           : `\nRegistered tools (${tools.length}):\n`;
         console.log(label);
-        const cols = termWidth() + 4; // termWidth is inner, add border back
+        const col = Math.max(...tools.map((t) => t.name.length)) + 2;
         for (const tool of tools) {
           const local = LOCAL_ONLY_TOOLS.has(tool.name);
           const marker = isServing
@@ -614,18 +654,9 @@ Available commands:
               ? dim("\u25CB [local]   ")
               : green("\u25CF [network] ")
             : "  ";
-          const plainMarker = isServing
-            ? local
-              ? "\u25CB [local]   "
-              : "\u25CF [network] "
-            : "  ";
-          const prefix = plainMarker + tool.name.padEnd(24) + " ";
-          const descMax = Math.max(20, cols - prefix.length);
-          const descText =
-            tool.description.length > descMax
-              ? tool.description.slice(0, descMax - 1) + "\u2026"
-              : tool.description;
-          console.log(`${marker}${cyan(tool.name.padEnd(24))} ${dim(descText)}`);
+          const gap = " ".repeat(Math.max(1, col - tool.name.length));
+          const desc = shortDesc[tool.name] ?? tool.description.split(".")[0];
+          console.log(`${marker}${cyan(tool.name)}${gap}${dim(desc)}`);
         }
       }
       break;
@@ -940,6 +971,7 @@ Available commands:
           console.log("No MCP servers configured.");
         } else {
           console.log(`\nMCP servers (${servers.length}):\n`);
+          const nameCol = Math.max(...servers.map((s) => s.name.length)) + 2;
           for (const s of servers) {
             const isTrusted = trusted.includes(s.name);
             const transport = s.transport ?? "stdio";
@@ -950,8 +982,13 @@ Available commands:
                 ? " motebit:verified"
                 : " motebit:unverified"
               : "";
+            const nameGap = " ".repeat(Math.max(1, nameCol - s.name.length));
+            const trustLabel = isTrusted
+              ? green("trusted".padEnd(12))
+              : dim("untrusted".padEnd(12));
+            const connLabel = connected === "connected" ? green(connected) : dim(connected);
             console.log(
-              `  ${s.name.padEnd(20)} ${transport.padEnd(6)} ${(isTrusted ? "trusted" : "untrusted").padEnd(10)} ${connected}${motebitStatus}`,
+              `  ${cyan(s.name)}${nameGap}${dim(transport.padEnd(8))}${trustLabel} ${connLabel}${dim(motebitStatus)}`,
             );
           }
         }
@@ -1200,17 +1237,16 @@ Available commands:
           const totalTasks = successful + failed;
           const taskStr = totalTasks > 0 ? `tasks:${successful}/${totalTasks}` : "tasks:0";
           const ago = formatTimeAgo(Date.now() - r.last_seen_at);
-          const levelColor =
+          const levelFn =
             r.trust_level === AgentTrustLevel.Trusted
-              ? "\x1b[32m" // green
+              ? green
               : r.trust_level === AgentTrustLevel.Verified
-                ? "\x1b[33m" // yellow
+                ? yellow
                 : r.trust_level === AgentTrustLevel.Blocked
-                  ? "\x1b[31m" // red
-                  : "\x1b[2m"; // dim
-          const reset = "\x1b[0m";
+                  ? red
+                  : dim;
           console.log(
-            `  ${r.remote_motebit_id.slice(0, 12)}  ${levelColor}${r.trust_level.padEnd(13)}${reset} rep:${rep.toFixed(2)}  ${taskStr.padEnd(12)} interactions:${r.interaction_count}  last seen ${ago}`,
+            `  ${cyan(r.remote_motebit_id.slice(0, 12))}  ${levelFn(r.trust_level.padEnd(13))} ${dim(`rep:${rep.toFixed(2)}`)}  ${dim(taskStr.padEnd(12))} ${dim(`interactions:${r.interaction_count}`)}  ${dim(`last seen ${ago}`)}`,
           );
         }
       } else {
@@ -2127,6 +2163,8 @@ Available commands:
     }
 
     default:
-      console.log(`Unknown command: /${cmd}. Type /help for available commands.`);
+      console.log(
+        `Unknown command: ${command("/" + cmd)}. Type ${command("/help")} for available commands.`,
+      );
   }
 }

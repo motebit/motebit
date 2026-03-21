@@ -55,6 +55,9 @@ export const success = green;
 /** Prompt text — the "you>" and "mote>" prefixes. */
 export const prompt = bold;
 
+/** Slash commands — typed references the user can invoke. */
+export const command = cyan;
+
 /** Banner border and decoration. */
 export const border = dim;
 
