@@ -363,4 +363,105 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
       relay_did: publicKeyToDidKey(relayKeys.publicKey),
     });
   });
+
+  // POST /api/v1/agents/:motebitId/credentials/submit — peer submits collected credentials for relay indexing.
+  // This is the pipe between peer-issued credentials and relay routing. Peers earn credentials
+  // from other peers via direct interaction; they submit them here so the relay can factor them
+  // into routing decisions via aggregateCredentialReputation(). The relay does NOT issue these —
+  // it indexes what peers produce.
+  //
+  // Each credential is verified (Ed25519 signature check) before storage. Self-issued credentials
+  // (issuer === subject) are rejected — they carry no trust signal and the sybil defense layer
+  // would filter them anyway, but rejecting at ingestion is cleaner.
+  app.post("/api/v1/agents/:motebitId/credentials/submit", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+
+    // Only the subject agent can submit credentials about itself
+    if (callerMotebitId && callerMotebitId !== motebitId) {
+      throw new HTTPException(403, {
+        message: "Only the credential subject can submit credentials for indexing",
+      });
+    }
+
+    const body = await c.req.json<{ credentials: VerifiableCredential[] }>();
+    if (!Array.isArray(body.credentials) || body.credentials.length === 0) {
+      throw new HTTPException(400, {
+        message: "credentials array is required and must be non-empty",
+      });
+    }
+    if (body.credentials.length > 50) {
+      throw new HTTPException(400, { message: "Maximum 50 credentials per submission" });
+    }
+
+    let accepted = 0;
+    let rejected = 0;
+    const errors: string[] = [];
+
+    for (const vc of body.credentials) {
+      // Basic shape check
+      if (
+        !vc ||
+        !Array.isArray(vc["@context"]) ||
+        !Array.isArray(vc.type) ||
+        !vc.issuer ||
+        !vc.credentialSubject ||
+        !vc.proof
+      ) {
+        rejected++;
+        errors.push("invalid credential shape");
+        continue;
+      }
+
+      // Self-attestation rejection: issuer === subject carries no trust signal
+      const subjectId =
+        typeof vc.credentialSubject === "object" && "id" in vc.credentialSubject
+          ? (vc.credentialSubject as { id: string }).id
+          : undefined;
+      if (subjectId && vc.issuer === subjectId) {
+        rejected++;
+        errors.push("self-issued credential rejected");
+        continue;
+      }
+
+      // Verify Ed25519 signature — don't index unverified credentials
+      const valid = await verifyVerifiableCredential(vc);
+      if (!valid) {
+        rejected++;
+        errors.push("signature verification failed");
+        continue;
+      }
+
+      // Check for revocation
+      const vcAny = vc as unknown as Record<string, unknown>;
+      const credId = typeof vcAny.id === "string" ? vcAny.id : `submitted-${crypto.randomUUID()}`;
+      const revokedRow = db
+        .prepare("SELECT 1 FROM relay_revoked_credentials WHERE credential_id = ?")
+        .get(credId);
+      if (revokedRow) {
+        rejected++;
+        errors.push("credential is revoked");
+        continue;
+      }
+
+      // Determine credential type
+      const credType = vc.type.find((t: string) => t !== "VerifiableCredential") ?? "Unknown";
+      const issuerDid = typeof vc.issuer === "string" ? vc.issuer : "";
+
+      // Upsert: if credential_id already exists, skip (idempotent)
+      try {
+        db.prepare(
+          `INSERT OR IGNORE INTO relay_credentials
+           (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        ).run(credId, motebitId, issuerDid, credType, JSON.stringify(vc), Date.now());
+        accepted++;
+      } catch {
+        rejected++;
+        errors.push("storage error");
+      }
+    }
+
+    return c.json({ accepted, rejected, errors: errors.length > 0 ? errors : undefined });
+  });
 }

@@ -42,6 +42,7 @@
  *   POST /api/v1/agents/:motebitId/listing              — register/update service listing
  *   GET  /api/v1/agents/:motebitId/listing              — get service listing
  *   GET  /api/v1/agents/:motebitId/credentials?type=&limit=  — credentials issued to agent
+ *   POST /api/v1/agents/:motebitId/credentials/submit        — peer submits collected credentials for relay indexing
  *   POST /api/v1/agents/:motebitId/presentation?type=  — bundle credentials into signed VP
  *   POST /agent/:motebitId/ledger                       — submit signed execution ledger
  *   GET  /agent/:motebitId/ledger/:goalId               — retrieve signed execution ledger
@@ -1824,6 +1825,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   app.use("/api/v1/agents/deregister", rateLimitMiddleware(authLimiter));
   app.use("/api/v1/agents/:motebitId/rotate-key", rateLimitMiddleware(writeLimiter));
   app.use("/api/v1/agents/:motebitId/succession", rateLimitMiddleware(readLimiter));
+
+  // Credential submission: write-rate (peers push collected credentials for relay indexing)
+  app.use("/api/v1/agents/:motebitId/credentials/submit", rateLimitMiddleware(writeLimiter));
 
   // Read endpoints: discover, credentials, capabilities, listings (60 req/min)
   app.use("/api/v1/agents/discover", rateLimitMiddleware(readLimiter));

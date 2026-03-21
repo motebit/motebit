@@ -242,6 +242,109 @@ describe("Peer Credential E2E — Delegation Loop", () => {
     });
     expect(res.status).toBe(403);
   });
+
+  it("peer submits collected credentials to relay for indexing", async () => {
+    const subjectDid = hexPublicKeyToDidKey(bytesToHex(keypairB.publicKey));
+    const vc = await issueReputationCredential(
+      {
+        success_rate: 0.95,
+        avg_latency_ms: 800,
+        task_count: 10,
+        trust_score: 0.9,
+        availability: 1.0,
+        measured_at: Date.now(),
+      },
+      keypairA.privateKey,
+      keypairA.publicKey,
+      subjectDid,
+    );
+
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB, "credentials");
+    const submitRes = await relay.app.request(`/api/v1/agents/${motebitIdB}/credentials/submit`, {
+      method: "POST",
+      headers: { ...JSON_HEADERS, ...AUTH(tokenB) },
+      body: JSON.stringify({ credentials: [vc] }),
+    });
+    expect(submitRes.status).toBe(200);
+    const submitBody = (await submitRes.json()) as { accepted: number; rejected: number };
+    expect(submitBody.accepted).toBe(1);
+    expect(submitBody.rejected).toBe(0);
+
+    // Verify the credential now appears in the relay's credential store
+    const credRes = await relay.app.request(`/api/v1/agents/${motebitIdB}/credentials`, {
+      headers: AUTH(MASTER_TOKEN),
+    });
+    const credBody = (await credRes.json()) as { credentials: unknown[] };
+    expect(credBody.credentials.length).toBeGreaterThan(0);
+  });
+
+  it("rejects self-issued credentials on submission", async () => {
+    const subjectDid = hexPublicKeyToDidKey(bytesToHex(keypairB.publicKey));
+    const selfVC = await issueReputationCredential(
+      {
+        success_rate: 1.0,
+        avg_latency_ms: 100,
+        task_count: 999,
+        trust_score: 1.0,
+        availability: 1.0,
+        measured_at: Date.now(),
+      },
+      keypairB.privateKey,
+      keypairB.publicKey,
+      subjectDid,
+    );
+
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB, "credentials");
+    const submitRes = await relay.app.request(`/api/v1/agents/${motebitIdB}/credentials/submit`, {
+      method: "POST",
+      headers: { ...JSON_HEADERS, ...AUTH(tokenB) },
+      body: JSON.stringify({ credentials: [selfVC] }),
+    });
+    expect(submitRes.status).toBe(200);
+    const body = (await submitRes.json()) as {
+      accepted: number;
+      rejected: number;
+      errors: string[];
+    };
+    expect(body.accepted).toBe(0);
+    expect(body.rejected).toBe(1);
+    expect(body.errors).toContain("self-issued credential rejected");
+  });
+
+  it("rejects credentials with invalid signatures on submission", async () => {
+    const subjectDid = hexPublicKeyToDidKey(bytesToHex(keypairB.publicKey));
+    const vc = await issueReputationCredential(
+      {
+        success_rate: 0.8,
+        avg_latency_ms: 500,
+        task_count: 5,
+        trust_score: 0.8,
+        availability: 1.0,
+        measured_at: Date.now(),
+      },
+      keypairA.privateKey,
+      keypairA.publicKey,
+      subjectDid,
+    );
+
+    const tampered = { ...vc, validFrom: "2099-01-01T00:00:00Z" };
+
+    const tokenB = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB, "credentials");
+    const submitRes = await relay.app.request(`/api/v1/agents/${motebitIdB}/credentials/submit`, {
+      method: "POST",
+      headers: { ...JSON_HEADERS, ...AUTH(tokenB) },
+      body: JSON.stringify({ credentials: [tampered] }),
+    });
+    expect(submitRes.status).toBe(200);
+    const body = (await submitRes.json()) as {
+      accepted: number;
+      rejected: number;
+      errors: string[];
+    };
+    expect(body.accepted).toBe(0);
+    expect(body.rejected).toBe(1);
+    expect(body.errors).toContain("signature verification failed");
+  });
 });
 
 // ==========================================================================
