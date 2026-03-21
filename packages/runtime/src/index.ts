@@ -2461,6 +2461,7 @@ export class MotebitRuntime {
     syncUrl: string;
     authToken: () => Promise<string>;
     timeoutMs?: number;
+    routingStrategy?: "cost" | "quality" | "balanced";
   }): void {
     const TOOL_NAME = "delegate_to_agent";
 
@@ -2534,6 +2535,9 @@ export class MotebitRuntime {
           };
           if (requiredCapabilities && requiredCapabilities.length > 0) {
             body.required_capabilities = requiredCapabilities;
+          }
+          if (config.routingStrategy) {
+            body.routing_strategy = config.routingStrategy;
           }
 
           const resp = await fetch(`${config.syncUrl}/agent/${motebitId}/task`, {

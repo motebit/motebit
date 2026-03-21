@@ -161,8 +161,10 @@ import {
   findTrustedRoute,
   buildRoutingGraph,
   allocateBudget,
+  weightedSumComposite,
+  lexicographicComposite,
 } from "@motebit/market";
-import type { CandidateProfile } from "@motebit/market";
+import type { CandidateProfile, CompositeFunction } from "@motebit/market";
 import type { CapabilityPrice, BudgetAllocation, AgentTrustRecord } from "@motebit/sdk";
 import {
   PLATFORM_FEE_RATE,
@@ -3313,6 +3315,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       exploration_drive?: number;
       /** Optional: agent IDs to exclude from routing (failed on previous attempts). */
       exclude_agents?: string[];
+      /** Optional: routing strategy for candidate ranking. */
+      routing_strategy?: "cost" | "quality" | "balanced";
     }>();
 
     if (!body.prompt || typeof body.prompt !== "string" || body.prompt.trim() === "") {
@@ -3591,6 +3595,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
           }));
           const allPeerEdges = [...peerEdges, ...federationPeerEdges, ...federationEdges];
 
+          // Map routing_strategy to semiring composite function
+          const compositeFunction: CompositeFunction | undefined =
+            body.routing_strategy === "cost"
+              ? (_route, scores) => scores.costScore * 1e6 + scores.reliability * 1e3 + scores.trust
+              : body.routing_strategy === "quality"
+                ? lexicographicComposite
+                : body.routing_strategy === "balanced"
+                  ? weightedSumComposite
+                  : undefined;
+
           const ranked = explainedRankCandidates(
             asMotebitId(callerMotebitId ?? motebitId),
             allProfiles,
@@ -3602,6 +3616,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
               maxCandidates: 10,
               explorationWeight,
               peerEdges: allPeerEdges,
+              compositeFunction,
             },
           );
           const selected = ranked.filter((r) => r.selected && r.composite > 0);

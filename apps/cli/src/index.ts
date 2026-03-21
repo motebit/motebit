@@ -389,6 +389,7 @@ async function main(): Promise<void> {
           pk,
         );
       },
+      routingStrategy: config.routingStrategy,
     });
   }
 

@@ -32,6 +32,8 @@ export interface RelayDelegationConfig {
   onCustomMessage: (cb: (msg: { type: string; [key: string]: unknown }) => void) => () => void;
   /** Optional: returns agent's current exploration drive [0-1] from intelligence gradient, passed to relay for routing. */
   getExplorationDrive?: () => number | undefined;
+  /** Routing strategy for agent selection: cost, quality, or balanced. */
+  routingStrategy?: "cost" | "quality" | "balanced";
   /** Max retry attempts on delegation failure (default 2, so up to 3 total attempts). */
   maxDelegationRetries?: number;
   /** Called on each failed delegation attempt — lets the caller record failures for trust demotion. */
@@ -115,6 +117,9 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
       step_id: step.step_id,
       exploration_drive: this.config.getExplorationDrive?.(),
     };
+    if (this.config.routingStrategy) {
+      body.routing_strategy = this.config.routingStrategy;
+    }
     if (excludeAgents.length > 0) {
       body.exclude_agents = excludeAgents;
     }

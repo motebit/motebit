@@ -27,6 +27,7 @@ export interface CliConfig {
   selfTest: boolean;
   direct: boolean;
   maxTokens?: number;
+  routingStrategy?: "cost" | "quality" | "balanced";
   json: boolean;
   presentation: boolean;
   all?: boolean;
@@ -61,6 +62,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       tools: { type: "string" },
       "self-test": { type: "boolean", default: false },
       "max-tokens": { type: "string" },
+      "routing-strategy": { type: "string" },
       direct: { type: "boolean", default: false },
       json: { type: "boolean", default: false },
       presentation: { type: "boolean", default: false },
@@ -117,6 +119,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     tools: values.tools,
     selfTest: values["self-test"],
     maxTokens: values["max-tokens"] != null ? parseInt(values["max-tokens"], 10) : undefined,
+    routingStrategy: parseRoutingStrategy(values["routing-strategy"]),
     direct: values.direct,
     json: values.json,
     presentation: values.presentation,
@@ -125,6 +128,14 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     help: values.help,
     positionals,
   };
+}
+
+function parseRoutingStrategy(
+  value: string | undefined,
+): "cost" | "quality" | "balanced" | undefined {
+  if (value == null || value === "") return undefined;
+  if (value === "cost" || value === "quality" || value === "balanced") return value;
+  throw new Error(`Unknown routing strategy "${value}". Use "cost", "quality", or "balanced".`);
 }
 
 export function printHelp(): void {
