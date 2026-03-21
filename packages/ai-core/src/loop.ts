@@ -289,8 +289,28 @@ export async function* runTurnStreaming(
   let toolCallsBlocked = 0;
   let toolCallsFailed = 0;
 
+  // Behavioral constraint: track consecutive identical tool calls to prevent
+  // pathological loops (e.g. recall → recall → recall × 10). After 2 consecutive
+  // calls to the same tool, that tool is excluded from the next iteration and the
+  // LLM is forced to synthesize a response.
+  let lastToolName = "";
+  let consecutiveSameToolCalls = 0;
+  const MAX_CONSECUTIVE_SAME_TOOL = 2;
+
+  // Retrieval tools that should force synthesis after use — the LLM must respond
+  // with text after retrieving, not re-enter the planning loop.
+  const RETRIEVAL_TOOLS = new Set(["recall_memories"]);
+  let forcesynthesis = false;
+
   while (iteration < MAX_TOOL_ITERATIONS) {
     iteration++;
+
+    // When forced synthesis is active, strip tools so the LLM MUST produce text.
+    // This enforces the plan → tool → synthesize → terminate state machine.
+    const iterationToolDefs = forcesynthesis ? undefined : toolDefs;
+    if (forcesynthesis) {
+      forcesynthesis = false; // consume the flag — one forced synthesis per trigger
+    }
 
     const contextPack = {
       recent_events: recentEvents,
@@ -304,7 +324,7 @@ export async function* runTurnStreaming(
             : undefined
           : conversationHistory,
       behavior_cues: options?.previousCues,
-      tools: toolDefs,
+      tools: iterationToolDefs,
       sessionInfo: options?.sessionInfo,
       curiosityHints: iteration === 1 ? options?.curiosityHints : undefined,
       knownAgents: iteration === 1 ? options?.knownAgents : undefined,
@@ -577,6 +597,37 @@ export async function* runTurnStreaming(
     // If all tool calls were blocked (denied or approval-gated), don't loop again
     if (allBlocked) {
       break;
+    }
+
+    // Behavioral constraint enforcement: detect consecutive identical tool calls
+    // and retrieval tools that should force synthesis.
+    const calledTools = aiResponse.tool_calls.map((tc) => tc.name);
+    const uniqueTools = new Set(calledTools);
+
+    if (uniqueTools.size === 1 && calledTools.length > 0) {
+      const toolName = calledTools[0]!;
+      if (toolName === lastToolName) {
+        consecutiveSameToolCalls++;
+      } else {
+        consecutiveSameToolCalls = 1;
+        lastToolName = toolName;
+      }
+      // After MAX_CONSECUTIVE_SAME_TOOL identical iterations, force synthesis
+      if (consecutiveSameToolCalls >= MAX_CONSECUTIVE_SAME_TOOL) {
+        forcesynthesis = true;
+      }
+      // Retrieval tools always force synthesis on next iteration
+      if (RETRIEVAL_TOOLS.has(toolName)) {
+        forcesynthesis = true;
+      }
+    } else if (calledTools.length > 0) {
+      // Multiple different tools — reset tracking
+      consecutiveSameToolCalls = 0;
+      lastToolName = "";
+      // If any retrieval tool was used, force synthesis
+      if (calledTools.some((name) => RETRIEVAL_TOOLS.has(name))) {
+        forcesynthesis = true;
+      }
     }
   }
 
