@@ -383,6 +383,8 @@ export interface RuntimeConfig {
   episodicConsolidation?: boolean;
   /** Ed25519 signing keys for issuing verifiable credentials (gradient, trust). */
   signingKeys?: { privateKey: Uint8Array; publicKey: Uint8Array };
+  /** Optional structured logger. Falls back to console.warn for best-effort diagnostics. */
+  logger?: { warn(message: string, context?: Record<string, unknown>): void };
 }
 
 // === Stream Chunk ===
@@ -504,6 +506,7 @@ export class MotebitRuntime {
   private _credentialStore: import("@motebit/sdk").CredentialStoreAdapter | null = null;
   private approvalStore: import("@motebit/sdk").ApprovalStoreAdapter | null = null;
   private _signingKeysErased = false;
+  private _logger: { warn(message: string, context?: Record<string, unknown>): void };
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
     this.motebitId = config.motebitId;
@@ -514,6 +517,9 @@ export class MotebitRuntime {
     this.episodicConsolidation = config.episodicConsolidation ?? false;
     this._precision = NEUTRAL_PRECISION;
     this._signingKeys = config.signingKeys ?? null;
+    this._logger = config.logger ?? {
+      warn: (msg, ctx) => console.warn(`[motebit] ${msg}`, ctx ? JSON.stringify(ctx) : ""),
+    };
     this.renderer = adapters.renderer;
     this.provider = adapters.ai ?? null;
     this.stateSnapshot = adapters.storage.stateSnapshot;
@@ -821,10 +827,9 @@ export class MotebitRuntime {
         privateKey,
       );
     } catch (err: unknown) {
-      console.warn(
-        "[motebit] manifest construction failed:",
-        err instanceof Error ? err.message : String(err),
-      );
+      this._logger.warn("manifest construction failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -1435,10 +1440,9 @@ export class MotebitRuntime {
         }
       } catch (err: unknown) {
         // Trust bumping is best-effort — don't break the task
-        console.warn(
-          "[motebit] trust bump failed:",
-          err instanceof Error ? err.message : String(err),
-        );
+        this._logger.warn("trust bump failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
 
@@ -1447,10 +1451,9 @@ export class MotebitRuntime {
       try {
         await this.agentGraph.addReceiptEdges(dr);
       } catch (err: unknown) {
-        console.warn(
-          "[motebit] graph edge update failed:",
-          err instanceof Error ? err.message : String(err),
-        );
+        this._logger.warn("graph edge update failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
 
@@ -1463,10 +1466,9 @@ export class MotebitRuntime {
             await this.latencyStatsStore.record(this.motebitId, dr.motebit_id, latency);
           }
         } catch (err: unknown) {
-          console.warn(
-            "[motebit] latency recording failed:",
-            err instanceof Error ? err.message : String(err),
-          );
+          this._logger.warn("latency recording failed", {
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       }
     }
@@ -2090,10 +2092,9 @@ export class MotebitRuntime {
         }
       }
     } catch (err: unknown) {
-      console.warn(
-        "[motebit] compaction failed:",
-        err instanceof Error ? err.message : String(err),
-      );
+      this._logger.warn("compaction failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -2243,10 +2244,9 @@ export class MotebitRuntime {
         );
         if (vc) this._persistCredential(vc);
       } catch (err: unknown) {
-        console.warn(
-          "[motebit] gradient credential issuance failed:",
-          err instanceof Error ? err.message : String(err),
-        );
+        this._logger.warn("gradient credential issuance failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
 
@@ -2318,10 +2318,9 @@ export class MotebitRuntime {
           issued_at: Date.now(),
         });
       } catch (err: unknown) {
-        console.warn(
-          "[motebit] credential persistence failed:",
-          err instanceof Error ? err.message : String(err),
-        );
+        this._logger.warn("credential persistence failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
   }

@@ -371,9 +371,10 @@ export function decryptPrivateKey(encrypted: string, passphrase: string): string
   return decrypted.toString("utf8");
 }
 
-/** Check if a stored value is in encrypted format (contains `:` separators) vs plaintext hex. */
+/** Check if a stored value is in encrypted format (`{salt}:{iv}:{ciphertext+tag}` hex) vs plaintext hex. */
 export function isEncryptedFormat(value: string): boolean {
-  return value.includes(":");
+  const parts = value.split(":");
+  return parts.length === 3 && parts.every((p) => p.length > 0 && p.length % 2 === 0);
 }
 
 // === Relay Identity ===

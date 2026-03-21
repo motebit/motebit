@@ -192,8 +192,7 @@ function parseTokenPayloadUnsafe(
 }
 
 /** Verify a signed token against a specific device's public key. O(1) lookup by did.
- *  When `expectedAudience` is provided, rejects tokens whose `aud` claim doesn't match
- *  (closes cross-endpoint replay vulnerability).
+ *  Rejects tokens whose `aud` claim doesn't match `expectedAudience` (cross-endpoint replay prevention).
  *  Optional blacklistCheck callback rejects tokens whose jti appears in the token blacklist.
  *  Optional agentRevokedCheck callback rejects tokens for revoked agents.
  */
@@ -201,7 +200,7 @@ async function verifySignedTokenForDevice(
   token: string,
   motebitId: string,
   identityManager: IdentityManager,
-  expectedAudience?: string,
+  expectedAudience: string,
   blacklistCheck?: (jti: string, motebitId: string) => boolean,
   agentRevokedCheck?: (motebitId: string) => boolean,
 ): Promise<boolean> {
@@ -221,8 +220,8 @@ async function verifySignedTokenForDevice(
   const payload = await verifySignedToken(token, pubKeyBytes);
   if (payload === null || payload.mid !== motebitId) return false;
 
-  // Audience binding: reject tokens scoped to a different endpoint
-  if (expectedAudience != null && payload.aud !== expectedAudience) return false;
+  // Audience binding: reject tokens missing aud or scoped to a different endpoint
+  if (payload.aud !== expectedAudience) return false;
 
   return true;
 }
@@ -606,6 +605,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // In-memory agent task queue: task_id → { task, receipt?, expiresAt, submitted_by?, price_snapshot?, origin_relay? }
   const TASK_TTL_MS = 10 * 60 * 1000; // 10 minutes
   const MAX_TASK_QUEUE_SIZE = 100_000; // Hard cap prevents memory exhaustion from task flooding
+  const MAX_TASKS_PER_SUBMITTER = 1_000; // Per-agent cap prevents fair-share starvation under flood
   const taskQueue = new Map<
     string,
     {
@@ -3222,7 +3222,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   async function dualAuth(
     c: Parameters<Parameters<typeof app.use>[1]>[0],
     next: () => Promise<void>,
-    expectedAudience?: string,
+    expectedAudience: string,
   ): Promise<Response | void> {
     const authHeader = c.req.header("authorization");
     if (authHeader == null || !authHeader.startsWith("Bearer ")) {
@@ -3380,6 +3380,24 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     // Reject if task queue is at capacity (prevents memory exhaustion from flooding)
     if (taskQueue.size >= MAX_TASK_QUEUE_SIZE) {
       throw new HTTPException(503, { message: "Task queue at capacity — try again later" });
+    }
+
+    // Per-submitter fairness: prevent a single agent from monopolizing queue capacity
+    if (submittedBy) {
+      let submitterCount = 0;
+      for (const entry of taskQueue.values()) {
+        if (entry.submitted_by === submittedBy) submitterCount++;
+        if (submitterCount >= MAX_TASKS_PER_SUBMITTER) {
+          logger.warn("task.per_submitter_limit", {
+            correlationId: taskId,
+            submittedBy,
+            limit: MAX_TASKS_PER_SUBMITTER,
+          });
+          throw new HTTPException(429, {
+            message: "Too many pending tasks for this agent",
+          });
+        }
+      }
     }
 
     taskQueue.set(taskId, {

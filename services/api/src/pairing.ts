@@ -39,7 +39,7 @@ export interface PairingDeps {
     token: string,
     motebitId: string,
     identityManager: IdentityManager,
-    expectedAudience?: string,
+    expectedAudience: string,
     blacklistCheck?: (jti: string, motebitId: string) => boolean,
     agentRevokedCheck?: (motebitId: string) => boolean,
   ) => Promise<boolean>;
