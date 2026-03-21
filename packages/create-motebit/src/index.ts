@@ -583,7 +583,7 @@ async function guidedScaffold(
             regenPassphrase,
           );
           identityFileContent = await regenerateIdentityFile({
-            motebitId: existingConfig.motebit_id!,
+            motebitId: existingConfig.motebit_id,
             deviceId: existingConfig.device_id,
             name: dirName,
             publicKeyHex: existingConfig.device_public_key,
