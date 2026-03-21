@@ -1172,8 +1172,12 @@ export class McpServerAdapter {
       res.end("not found");
     });
 
-    await new Promise<void>((resolve) => {
-      this.httpServer!.listen(port, () => resolve());
+    await new Promise<void>((resolve, reject) => {
+      this.httpServer!.once("error", reject);
+      this.httpServer!.listen(port, () => {
+        this.httpServer!.removeListener("error", reject);
+        resolve();
+      });
     });
   }
 }
