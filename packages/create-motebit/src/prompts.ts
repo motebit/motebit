@@ -43,7 +43,7 @@ export function password(rl: readline.Interface, message: string): Promise<strin
   const muted = new Writable({ write: (_c, _e, cb) => cb() });
 
   return new Promise((resolve) => {
-    stdout.write(`  ${message}`);
+    stdout.write(`  ${message}\x1b[2m(Tab to show/hide)\x1b[22m `);
 
     rl.pause();
 
@@ -57,6 +57,16 @@ export function password(rl: readline.Interface, message: string): Promise<strin
 
     let value = "";
     let len = 0;
+    let visible = false;
+
+    /** Redraw the current input as masked or plaintext. */
+    const redraw = () => {
+      if (len > 0) {
+        stdout.write(`\x1b[${len}D`);
+      }
+      stdout.write("\x1b[K");
+      stdout.write(visible ? value : "*".repeat(len));
+    };
 
     const restore = () => {
       stdin.removeListener("data", onData);
@@ -76,6 +86,9 @@ export function password(rl: readline.Interface, message: string): Promise<strin
       } else if (c === "\u0003") {
         restore();
         process.exit(130);
+      } else if (c === "\t") {
+        visible = !visible;
+        redraw();
       } else if (c === "\u007F" || c === "\b") {
         if (len > 0) {
           value = value.slice(0, -1);
@@ -85,7 +98,7 @@ export function password(rl: readline.Interface, message: string): Promise<strin
       } else if (c.charCodeAt(0) >= 32) {
         value += c;
         len++;
-        stdout.write("*");
+        stdout.write(visible ? c : "*");
       }
     };
 

@@ -58,7 +58,7 @@ export function promptPassphrase(
   // Creating and closing a second readline.createInterface on process.stdin
   // closes stdin itself, killing the REPL that uses the original rl.
   return new Promise((resolve) => {
-    stdout.write(promptText);
+    stdout.write(promptText + "\x1b[2m(Tab to show/hide)\x1b[22m ");
 
     // Pause the caller's rl if provided (prevents it from consuming stdin)
     const callerRl = typeof rlOrPrompt !== "string" ? rlOrPrompt : null;
@@ -69,6 +69,17 @@ export function promptPassphrase(
     stdin.setEncoding("utf8");
 
     let value = "";
+    let visible = false;
+
+    /** Redraw the current input as masked or plaintext. */
+    const redraw = () => {
+      // Move cursor back to start of input, clear to end of line, rewrite
+      if (value.length > 0) {
+        stdout.write(`\x1b[${value.length}D`); // move back
+      }
+      stdout.write("\x1b[K"); // clear to end of line
+      stdout.write(visible ? value : "*".repeat(value.length));
+    };
 
     const onData = (ch: string) => {
       const c = ch.toString();
@@ -85,6 +96,10 @@ export function promptPassphrase(
         stdin.setRawMode(false);
         stdout.write("\n");
         process.exit(130);
+      } else if (c === "\t") {
+        // Tab toggles visibility
+        visible = !visible;
+        redraw();
       } else if (c === "\u007F" || c === "\b") {
         if (value.length > 0) {
           value = value.slice(0, -1);
@@ -92,7 +107,7 @@ export function promptPassphrase(
         }
       } else if (c.charCodeAt(0) >= 32) {
         value += c;
-        stdout.write("*");
+        stdout.write(visible ? c : "*");
       }
     };
 
