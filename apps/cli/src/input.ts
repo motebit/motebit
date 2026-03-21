@@ -49,6 +49,7 @@ export function readInput(promptText: string): Promise<string> {
     let pasteBuffer = "";
     let inPaste = false;
     let pasteLineCount = 0;
+    let lastEscTime = 0;
 
     const promptVisibleLen = visibleLength(promptText);
     let lastDisplayLen = 0; // track visible length of last display for wrapping calc
@@ -124,7 +125,17 @@ export function readInput(promptText: string): Promise<string> {
             redrawLine(value);
           }
         } else if (c === "\x1b") {
-          // Start of escape sequence — skip remaining bytes in this chunk
+          const now = Date.now();
+          if (now - lastEscTime < 300) {
+            // Double-tap Escape — clear input
+            value = "";
+            pasteBuffer = "";
+            redrawLine("");
+            lastEscTime = 0;
+          } else {
+            lastEscTime = now;
+          }
+          // Skip remaining bytes in this chunk (escape sequence like arrow keys)
           return;
         } else if (c.charCodeAt(0) >= 32) {
           // Printable character
