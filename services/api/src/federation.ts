@@ -791,8 +791,16 @@ export interface FederationDeps {
   onTaskForwarded(
     task: VerifiedForwardedTask,
   ):
-    | Promise<{ status: "routed" | "pending" | "duplicate"; task_id?: string }>
-    | { status: "routed" | "pending" | "duplicate"; task_id?: string };
+    | Promise<{
+        status: "routed" | "pending" | "duplicate" | "rejected";
+        task_id?: string;
+        reason?: string;
+      }>
+    | {
+        status: "routed" | "pending" | "duplicate" | "rejected";
+        task_id?: string;
+        reason?: string;
+      };
 
   /** Called when a verified task result arrives from a peer. */
   onTaskResultReceived(result: VerifiedTaskResult): Promise<void>;
@@ -1257,6 +1265,9 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
     if (result.status === "duplicate") {
       return c.json({ task_id: body.task_id, status: "duplicate" }, 409);
+    }
+    if (result.status === "rejected") {
+      return c.json({ task_id: body.task_id, status: "rejected", reason: result.reason }, 429);
     }
 
     return c.json(

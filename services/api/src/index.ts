@@ -2737,6 +2737,27 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         return { status: "duplicate" as const, task_id: verified.taskId };
       }
 
+      // Global queue capacity check (sibling of direct task submission path)
+      if (taskQueue.size >= MAX_TASK_QUEUE_SIZE) {
+        return { status: "rejected" as const, reason: "queue_full" };
+      }
+
+      // Per-submitter fairness (sibling of direct task submission path)
+      const federatedSubmitter = verified.payload.submitted_by ?? `relay:${verified.originRelay}`;
+      let submitterCount = 0;
+      for (const entry of taskQueue.values()) {
+        if (entry.submitted_by === federatedSubmitter) submitterCount++;
+        if (submitterCount >= MAX_TASKS_PER_SUBMITTER) {
+          logger.warn("task.per_submitter_limit_federation", {
+            correlationId: verified.taskId,
+            submittedBy: federatedSubmitter,
+            originRelay: verified.originRelay,
+            limit: MAX_TASKS_PER_SUBMITTER,
+          });
+          return { status: "rejected" as const, reason: "per_submitter_limit" };
+        }
+      }
+
       const task: AgentTask = {
         task_id: verified.taskId,
         motebit_id: asMotebitId(verified.targetAgent),

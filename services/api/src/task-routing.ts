@@ -184,6 +184,14 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
         )
       : null;
 
+    // Revocation check for credential aggregation — filters out revoked VCs.
+    const revokedStmt = db.prepare(
+      "SELECT 1 FROM relay_revoked_credentials WHERE credential_id = ?",
+    );
+    function checkRevoked(credentialId: string): boolean {
+      return revokedStmt.get(credentialId) != null;
+    }
+
     function getIssuerTrust(issuerDid: string): number {
       if (!callerMotebitId || !issuerTrustStmt) return 0.3;
       try {
@@ -255,7 +263,8 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
             })
             .filter((vc): vc is ReputationVC => vc != null);
           if (vcs.length > 0) {
-            credential_reputation = aggregateCredentialReputation(vcs, getIssuerTrust) ?? undefined;
+            credential_reputation =
+              aggregateCredentialReputation(vcs, getIssuerTrust, { checkRevoked }) ?? undefined;
           }
         }
       } catch {
