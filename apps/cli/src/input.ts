@@ -7,6 +7,12 @@
 
 import { dim } from "./colors.js";
 
+/** Strip ANSI escape codes to get visible character count. */
+function visibleLength(s: string): number {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b\[[0-9;]*m/g, "").length;
+}
+
 const PASTE_OPEN = "\x1b[200~";
 const PASTE_CLOSE = "\x1b[201~";
 
@@ -28,32 +34,38 @@ export function disableBracketedPaste(): void {
  * Read a line of input with bracketed paste support.
  * Shows the prompt, handles typing and paste, returns on Enter.
  */
-export function readInput(
-  promptText: string,
-  callerRl?: { pause: () => void; resume: () => void },
-): Promise<string> {
+export function readInput(promptText: string): Promise<string> {
   return new Promise((resolve) => {
     const stdin = process.stdin;
     const stdout = process.stdout;
 
-    // Pause readline if active (prevents it from consuming stdin)
-    callerRl?.pause();
-
-    process.stdout.write(promptText);
-
     stdin.setRawMode(true);
     stdin.resume();
     stdin.setEncoding("utf8");
+
+    process.stdout.write(promptText);
 
     let value = "";
     let pasteBuffer = "";
     let inPaste = false;
     let pasteLineCount = 0;
 
-    /** Clear current visible input and rewrite. */
+    const promptVisibleLen = visibleLength(promptText);
+    let lastDisplayLen = 0; // track visible length of last display for wrapping calc
+
+    /** Clear displayed content (including wrapped lines) and rewrite from prompt. */
     const redrawLine = (text: string) => {
-      // Move to start of input, clear to end of line, rewrite
-      stdout.write("\r" + promptText + text + "\x1b[K");
+      const cols = stdout.columns || 80;
+      // How many terminal lines did the previous display occupy?
+      const prevTotal = promptVisibleLen + lastDisplayLen;
+      const wrappedLines = Math.max(0, Math.ceil(prevTotal / cols) - 1);
+      // Move cursor up to the prompt line
+      if (wrappedLines > 0) {
+        stdout.write(`\x1b[${wrappedLines}A`);
+      }
+      // Go to column 0, clear everything from here to end of screen, rewrite
+      stdout.write(`\r\x1b[J${promptText}${text}`);
+      lastDisplayLen = visibleLength(text);
     };
 
     const finish = () => {
@@ -61,7 +73,6 @@ export function readInput(
       stdin.setRawMode(false);
       stdin.pause();
       stdout.write("\n");
-      callerRl?.resume();
 
       if (pasteBuffer) {
         // Pasted text — return full content with newlines replaced by spaces
@@ -104,7 +115,6 @@ export function readInput(
           stdin.removeListener("data", onData);
           stdin.setRawMode(false);
           stdout.write("\n");
-          callerRl?.resume();
           resolve("");
           return;
         } else if (c === "\u007F" || c === "\b") {
@@ -120,6 +130,7 @@ export function readInput(
           // Printable character
           value += c;
           stdout.write(c);
+          lastDisplayLen = value.length;
         }
       }
     };

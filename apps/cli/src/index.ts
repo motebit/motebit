@@ -291,14 +291,22 @@ async function main(): Promise<void> {
     }
   }
 
-  // Create readline AFTER passphrase is resolved — creating it before
-  // would cause it to echo keystrokes during raw-mode passphrase masking.
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    escapeCodeTimeout: 50,
-  });
   enableBracketedPaste();
+
+  // Readline is created lazily — only when the approval flow in consumeStream
+  // needs it. Keeping readline connected to stdin at all times interferes with
+  // raw-mode input (readInput) by echoing paste content before the handler sees it.
+  let rl: readline.Interface | null = null;
+  const getOrCreateRl = (): readline.Interface => {
+    if (!rl) {
+      rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+        escapeCodeTimeout: 50,
+      });
+    }
+    return rl;
+  };
 
   // Bootstrap identity — need DB first for identity storage
   const dbPath = getDbPath(config.dbPath);
@@ -512,7 +520,7 @@ async function main(): Promise<void> {
   console.log();
 
   const prompt = (): void => {
-    readInput(promptColor("you>") + " ", rl).then(
+    readInput(promptColor("you>") + " ").then(
       (line) => void handleLine(line),
       () => {}, // Ignore errors (e.g. stdin closed)
     );
@@ -524,7 +532,7 @@ async function main(): Promise<void> {
     if (trimmed === "quit" || trimmed === "exit") {
       console.log("Goodbye!");
       await shutdown();
-      rl.close();
+      rl?.close();
       return;
     }
 
@@ -571,7 +579,11 @@ async function main(): Promise<void> {
         console.log();
       } else {
         process.stdout.write("\n" + promptColor("mote>") + " ");
-        await consumeStream(runtime.sendMessageStreaming(trimmed, chatRunId), runtime, rl);
+        const streamRl = getOrCreateRl();
+        await consumeStream(runtime.sendMessageStreaming(trimmed, chatRunId), runtime, streamRl);
+        // Close readline after each stream so it doesn't interfere with next readInput
+        streamRl.close();
+        rl = null;
       }
       // Best-effort auto-title after enough messages
       void runtime.autoTitle();
