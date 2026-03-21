@@ -54,6 +54,32 @@ function formatState(state: Record<string, unknown>): string {
   return lines.join("\n");
 }
 
+/** Get an auth token for relay API calls — prefers master token, falls back to signed device token. */
+async function getRelayToken(
+  config: CliConfig,
+  repl?: ReplContext,
+  aud = "sync",
+): Promise<string | undefined> {
+  const master =
+    config.syncToken ?? process.env["MOTEBIT_API_TOKEN"] ?? process.env["MOTEBIT_SYNC_TOKEN"];
+  if (master) return master;
+  if (repl?.privateKeyBytes && repl?.deviceId) {
+    const now = Date.now();
+    return createSignedToken(
+      {
+        mid: repl.motebitId,
+        did: repl.deviceId,
+        iat: now,
+        exp: now + 5 * 60 * 1000,
+        jti: crypto.randomUUID(),
+        aud,
+      },
+      repl.privateKeyBytes,
+    );
+  }
+  return undefined;
+}
+
 export async function handleSlashCommand(
   cmd: string,
   args: string,
@@ -308,7 +334,7 @@ Available commands:
               repl.moteDb.conversationStore,
             );
             const convSyncEngine = new ConversationSyncEngine(convStoreAdapter, repl.motebitId);
-            const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
+            const syncToken = await getRelayToken(config, repl);
             convSyncEngine.connectRemote(
               new HttpConversationSyncAdapter({
                 baseUrl: syncUrl,
@@ -417,7 +443,7 @@ Available commands:
 
       // 3. Discover agents
       try {
-        const token = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+        const token = await getRelayToken(config, repl);
         const headers: Record<string, string> = {};
         if (token) headers["Authorization"] = `Bearer ${token}`;
         const resp = await fetch(`${connectUrl}/api/v1/agents/discover`, { headers });
@@ -983,7 +1009,7 @@ Available commands:
       try {
         const capParam = discoverArg || undefined;
         const queryStr = capParam ? `?capability=${encodeURIComponent(capParam)}` : "";
-        const token = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+        const token = await getRelayToken(config, repl);
         const headers: Record<string, string> = {};
         if (token) headers["Authorization"] = `Bearer ${token}`;
         const resp = await fetch(`${syncUrl}/api/v1/agents/discover${queryStr}`, { headers });
@@ -1175,7 +1201,7 @@ Available commands:
       const UUID_LENGTH = 36;
       if (rawTargetId.length < UUID_LENGTH) {
         try {
-          const token = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+          const token = await getRelayToken(config, repl);
           const discoverHeaders: Record<string, string> = {};
           if (token) discoverHeaders["Authorization"] = `Bearer ${token}`;
           const discoverResp = await fetch(`${syncUrl}/api/v1/agents/discover`, {
@@ -1232,7 +1258,7 @@ Available commands:
         }
       } else {
         // Fall back to static sync token
-        const syncToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+        const syncToken = await getRelayToken(config, repl);
         if (syncToken) authHeader = `Bearer ${syncToken}`;
       }
 
@@ -1402,7 +1428,7 @@ Available commands:
           break;
         }
       } else {
-        const syncToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+        const syncToken = await getRelayToken(config, repl);
         if (syncToken) proposeAuthHeader = `Bearer ${syncToken}`;
       }
 
@@ -1517,7 +1543,7 @@ Available commands:
         }
       }
       if (!proposalsAuthHeader) {
-        const syncToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+        const syncToken = await getRelayToken(config, repl);
         if (syncToken) proposalsAuthHeader = `Bearer ${syncToken}`;
       }
 
@@ -1609,7 +1635,7 @@ Available commands:
         }
       }
       if (!proposalAuthHeader) {
-        const syncToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+        const syncToken = await getRelayToken(config, repl);
         if (syncToken) proposalAuthHeader = `Bearer ${syncToken}`;
       }
 
@@ -1794,7 +1820,7 @@ Available commands:
         break;
       }
       try {
-        const balToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+        const balToken = await getRelayToken(config, repl);
         const balHeaders: Record<string, string> = {};
         if (balToken) balHeaders["Authorization"] = `Bearer ${balToken}`;
         const balResp = await fetch(
@@ -1857,7 +1883,7 @@ Available commands:
       }
       const wdDest = wdParts[1] ?? undefined;
       try {
-        const wdToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+        const wdToken = await getRelayToken(config, repl);
         const wdHeaders: Record<string, string> = { "Content-Type": "application/json" };
         if (wdToken) wdHeaders["Authorization"] = `Bearer ${wdToken}`;
         const wdBody: Record<string, unknown> = { amount: wdAmount };
@@ -1902,7 +1928,7 @@ Available commands:
         break;
       }
       try {
-        const depToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+        const depToken = await getRelayToken(config, repl);
         const depHeaders: Record<string, string> = {};
         if (depToken) depHeaders["Authorization"] = `Bearer ${depToken}`;
         const depResp = await fetch(
