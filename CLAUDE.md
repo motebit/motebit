@@ -2,120 +2,119 @@
 
 A motebit is a droplet of intelligence under surface tension.
 
-Every AI product today owns the intelligence and rents you a session. Motebit inverts that. You own the identity. The intelligence is pluggable. The body is yours.
+Every AI product owns the intelligence and rents you a session. Motebit inverts that. You own the identity. The intelligence is pluggable. The body is yours.
 
-A motebit is a persistent, cryptographically-anchored, sovereign agent — a vessel that connects to any intelligence provider, any tool ecosystem (MCP), and any device. The intelligence is a commodity. The identity, with its accumulated memory, trust, and governance, is the asset.
+The body is passive. The interior is active. The agent lives inside the droplet — memory, trust, identity, tool use are interior structures. The policy gate, the privacy layer, the governance — these are the surface tension. The form doesn't change. The interior accumulates. Maximum interiority, minimum display.
 
-**The body is passive. The interior is active.** `DROPLET.md` derives the form from physics: the body has no agency, it breathes because droplets oscillate, it orbits because it is captured by the user's attentional field. But the thesis also establishes that glass transmits — the interior is visible without being added to the surface. The agent lives inside the droplet. Memory, trust, identity, tool use — these are interior structures. The policy gate, the privacy layer, the governance — these are the surface tension. The form doesn't change. The interior accumulates. Maximum interiority, minimum display. The physics of form and the architecture of function are the same principle operating at different scales.
+Read `DROPLET.md` for the physics of form. Read `THE_SOVEREIGN_INTERIOR.md` for the identity thesis. Read `THE_METABOLIC_PRINCIPLE.md` for what to build vs. what to absorb. Every visual and behavioral decision derives from droplet physics. If it can't be traced to surface tension, it doesn't belong.
 
-**Position in the agentic economy.** MCP defines capability — what tools an agent can reach — but says nothing about who the agent is. There is no trust accumulation, no audit trail, no governance. Motebit is the missing layer: cryptographic identity (Ed25519 keypairs, device registration, signed tokens) that can prove who it is to any service, persistent memory that compounds instead of resetting, and policy governance that controls what crosses the surface.
-
-**Protocol bridge layer.** The 2026 agent stack converged on MCP (tools), A2A (agent communication), x402/AP2 (payments) — but none addresses identity, trust, or governance. Motebit is the missing layer that sits underneath all three. The relay exposes five protocol bridges: **MCP** (`mcp-server`, `mcp-client` — pre-existing), **A2A** (`/.well-known/agent.json` relay-level Agent Card, `/a2a/agents/:id/agent.json` per-agent cards, `POST /a2a/agents/:id` SendMessage bridge — translates A2A task format → motebit task → signed receipt returned as `x-motebit-receipt` extension), **x402** (inbound payment gating with HTTP 402 enforcement + `x402_tx_hash` tracking, outbound 402 handling in `RelayDelegationAdapter`), **AP2** (`POST /ap2/agents/:id/mandate` — accepts Intent Mandates with TTL/scope/signature, executes via relay task pipeline, returns Payment Mandate with `x-motebit-receipt`), **OSSA** (`motebit export` generates `ossa-manifest.yaml` — derived compatibility view mapping identity, protocols, trust model, governance to OSSA contract layer format). All bridges route through the relay's economic checkpoint — `settleOnReceipt()` captures the 5% platform fee regardless of ingress protocol. The relay is a programmable clearinghouse: identity resolved, execution verified, money finalized. Agent Cards declare capabilities via A2A skills + AP2 payment extension. The `x-motebit` extension on Agent Cards provides `motebit_id`, `did:key`, `public_key`, and `spec` version — cryptographic identity that A2A alone doesn't provide. Interactive delegation (`delegate_to_agent` tool) is wired on all four surfaces (CLI, Desktop, Mobile, Web) so the AI can transparently delegate to remote agents during conversation on any device. Routing strategy is operator-controllable via `--routing-strategy cost|quality|balanced` — maps to semiring composite functions (`lexicographicComposite` for cost/quality priority, `weightedSumComposite` for balanced), flows through relay API → `explainedRankCandidates(compositeFunction)` → signed `routing_choice` in execution ledger.
-
-**The three things no one else is building together:**
+## The Three Things No One Else Is Building Together
 
 1. **Persistent sovereign identity** — not a session token, a cryptographic entity that exists across time and devices
 2. **Accumulated trust** — memory, state history, audit trails that make the agent more capable the longer it runs
 3. **Governance at the boundary** — sensitivity-aware privacy and policy that controls what crosses the surface
 
-**Where the implementation stands.** The desktop app is the flagship (100%): identity bootstrap, operator mode, tool approval, sync relay, voice input, audio-reactive rendering, conversation summarization, memory retention enforcement, deletion certificates, goal execution, multi-device pairing, MCP discovery with manifest pinning, verifiable credentials display and budget tracking in settings. The CLI is the full operator console (100%): REPL chat with interactive delegation (`delegate_to_agent` tool — AI delegates to remote agents transparently during conversation), daemon mode with goal scheduling, tool approval queue, operator mode, `/summarize`, AI auto-titling, periodic housekeeping, `motebit export` (directory bundle with identity + credentials + presentation + budget + gradient), `motebit verify` (validates VC proofs, VP integrity, subject cross-checks), `motebit ledger <goalId>` (execution ledger display), `motebit credentials` (list/present VCs). The API sync relay (100%): event sync, conversation sync, device auth (master token + Ed25519 signed tokens, signature verification unconditional — no config toggle), pairing protocol, admin query endpoints for state/memory/goals/conversations/devices/audit/plans, Ed25519 receipt verification on task result ingestion, budget allocation and settlement (estimateCost/allocateBudget/settleOnReceipt with HTTP 402 for insufficient budget), optional credential co-signing (AgentReputationCredential, gated by `MOTEBIT_RELAY_ISSUE_CREDENTIALS`), execution ledger storage, credential presentation endpoint (POST /api/v1/agents/:id/presentation), and 5-tier sliding-window rate limiting per IP (auth 30/min, read 60/min, write 30/min, public 20/min, expensive 10/min). The admin dashboard (100%): 13-tab real-time monitoring (state, memory graph, behavior, events, audit, goals, plans, conversations, devices, intelligence gradient, agent trust, credentials, federation). Mobile is at full parity (100%): dual providers (Anthropic + Ollama + Hybrid fallback), plan-based goal execution, goal tools, /summarize, periodic housekeeping, approval queue UI, MCP per-server trust with manifest pinning, CredentialsPanel for VC display. The public-facing standard ships as `create-motebit` (npm create motebit), `motebit` (npm install -g motebit), `@motebit/verify`, and `@motebit/sdk` — the scaffolder, operator console, verification library, and protocol types that let anyone create, run, verify, and build on signed agent identities. The infrastructure (identity, crypto, policy, memory, sync, credentials, budget, ledger) is built. The error handling uses cause chains (`{ cause: err }`) for fail-closed boundaries, branded ID types (`MotebitId`, `DeviceId`, `NodeId`, `GoalId`, `EventId`, `ConversationId`, `PlanId`) enforce compile-time safety at API boundaries, and all HTTP sync uses exponential backoff with jitter.
-
-**Agent delegation flow.** Discovery (DNS `_motebit.{domain}` or relay `/api/v1/agents/discover`) → identity verification (Ed25519 signed JWT + public key pinning on first contact; relay-backed key resolution for unknown callers via `GET /api/v1/devices/:id`) → budget allocation (estimateCost → allocateBudget, HTTP 402 if insufficient) → task submission (`motebit_task` synthetic tool through MCP with `relay_task_id` for economic binding, relay returns `routing_choice` provenance when scored routing was used) → execution (full agentic loop or direct tool execution for service motebits, PlanEngine records timeline events into execution ledger, `routing_choice` attached to delegation step summary) → receipt (SHA-256 hashed prompt/result, canonical JSON, Ed25519 signed, `relay_task_id` included in signed payload for settlement binding, nested `delegation_receipts` for chain-of-custody in multi-hop) → relay receipt verification (Ed25519 signature check on ingestion, `relay_task_id` binding enforced, nested `delegation_receipts` verified recursively) → trust record update (relay increments successful_tasks/failed_tasks, runs evaluateTrustTransition for auto-promotion/demotion, emits trust_level_changed event) → budget settlement (settleOnReceipt deducts actual cost; multi-hop: relay walks `delegation_receipts`, finds sub-tasks by `relay_task_id`, verifies each signature, settles each hop independently) → peer credential issuance (delegating agent issues AgentReputationCredential on verified receipt; relay co-signing optional) → trust accumulation (verified receipts compound the semiring computation graph — graphRankCandidates uses trust records for algebraic routing) → ledger signing (runtime builds + signs GoalExecutionManifest per execution-ledger-v1.0 spec, routing_choice is covered by content_hash and Ed25519 signature). The web-search service (`services/web-search/`) and read-url service (`services/read-url/`) are the reference implementations proving the full single-hop and multi-hop loops live on Fly.io. **Interactive delegation** (`delegate_to_agent` tool): registered by `MotebitRuntime.enableInteractiveDelegation()` when relay + signing keys are available. The AI sees known agents' capabilities in the `[Agents I Know]` prompt section (enriched from `ServiceListingStore`), decides to delegate when it lacks a capability locally, submits to the relay via REST, polls for the receipt, bumps trust, and stashes the receipt for multi-hop composition via `handleAgentTask`. The CLI wires this automatically on startup — Alice types naturally and the AI delegates transparently.
-
-**Launch positioning.** Five surfaces, each with a distinct role. The **web app** (`motebit.com`) is the zero-friction entry — no install, no download, identity auto-bootstraps in IndexedDB, free proxy gives Claude instantly. Someone goes from "never heard of motebit" to chatting with a sovereign agent in 10 seconds. It has full streaming chat, semantic memory, sync, the glass droplet creature, voice input (browser STT), and tool approval — plus HTTP MCP connections to remote agents, one-shot goal execution via PlanEngine, IDB-persisted plans/trust/gradient data, and a sovereign panel (3 tabs: credentials, execution ledger, budget) — but stdio MCP and operator mode are correctly blocked (browser can't do process spawning/secure keyring). The **CLI** (`npm install -g motebit`) is the developer on-ramp and operator console — full control, daemon mode, delegation, MCP management. `npm create motebit` scaffolds a signed identity in 30 seconds. The **desktop** (Tauri glass droplet) and **mobile** (React Native) are the consumer surface — the creature as persistent companion across devices. **Spatial** (AR/VR) is the long horizon where a physical droplet orbiting the user's body becomes the product no one else can build. The monorepo is the credibility. The published npm packages (`@motebit/sdk`, `@motebit/verify`, `create-motebit`, `motebit`) are the protocol layer — MIT licensed, zero monorepo deps, designed for adoption.
-
-**Platform architecture: capability rings.** The goal is not feature parity across all surfaces — it's shared core with platform-maximized capabilities. Ring 1 (core, identical everywhere): runtime, sdk, ai-core, crypto, state-vector, behavior-engine, memory-graph, event-log, policy, privacy-layer, sync-engine, render-engine — the sovereign interior. Ring 2 (platform adapters): persistence (SQLite/Tauri IPC/Expo/IndexedDB), keyring (OS keyring/expo-secure-store/localStorage), voice (native VAD+STT+TTS / browser Web Speech API). Ring 3 (platform capabilities): MCP stdio (CLI/desktop only — requires process spawning), MCP HTTP/StreamableHTTP (CLI/desktop/mobile/web — browser-compatible, `McpClientAdapter` already supports it), goals/planner (CLI/desktop/mobile/web — browser uses one-shot execution, no daemon scheduler), operator mode (CLI/desktop — needs secure keyring), 3D creature (desktop/mobile/web/spatial — shared render-engine), daemon/background (CLI/desktop), 6DOF spatial anchoring (spatial only). The anti-pattern is shimming platform-impossible capabilities (stdio in browser, 3D in CLI). Each surface maximizes what its platform offers. Web connects to the agent network via HTTP MCP and submits goals for device execution via relay. CLI operates. Desktop companions. Mobile travels. Spatial embodies.
-
-**What's proven vs. what's untested.** Proven: identity bootstrap, memory compounding over conversations, policy governance, multi-device sync (localhost + test), agent delegation with signed receipts (integration tests), trust accumulation from verified receipts, verifiable credential issuance and presentation (E2E tests cover full delegation → credential → presentation → verification loop), budget allocation and settlement (estimateCost → allocateBudget → settleOnReceipt with 402 on insufficient funds), execution ledger creation and signing (GoalExecutionManifest per execution-ledger-v1.0 spec), precision feedback loop (selfTrust + explorationDrive modulating system prompt), key succession with signed chain verification, sync sensitivity redaction (relay strips medical/financial/secret content from event sync and memory endpoints), memory injection defense (formation-time scanning + context boundary wrapping), execution ledger routing provenance (routing_choice flows end-to-end from relay through PlanEngine to signed manifest — 4 tests cover chunk propagation, event emission, replay extraction, and content_hash coverage), intelligence gradient idle-period resilience (rq defaults to neutral on no data, preventing artificial decay), **cross-internet agent delegation with cryptographic settlement** (Alice CLI → Bob web-search → Charlie read-url across Fly.io, Ed25519 signed receipts at every hop, relay-verified independently, budget settled with platform fee — 14/14 single-hop adversarial tests + 8/8 multi-hop adversarial tests), **relay_task_id cryptographic binding** (receipt commits to the relay's economic identity for the task, prevents cross-task replay including identical-prompt attacks, enforced at settlement), **multi-hop budget propagation** (delegator pays intermediate, intermediate pays sub-delegate, relay settles each hop independently from nested delegation_receipts), **federation receipt verification** (relay verifies executing agent's Ed25519 signature on federated receipts before settlement/trust/credential, nested delegation_receipts verified recursively before edge insertion), **first-contact authentication via relay-backed key resolution** (service resolves unknown caller's public key from relay device records, verified signature gates receipt acceptance, trust initializes at FirstContact and advances through behavioral evidence), **interactive REPL delegation** (`delegate_to_agent` tool registered in runtime, AI sees agent capabilities via service listings, delegates transparently during conversation, receipts stash for multi-hop composition — 14/14 tests: tool registration, happy path, 402 budget gate, timeout, auth failure, receipt stashing, delegation chunks, capabilities forwarding, multi-hop receipt composition, network resilience, auth propagation, context enrichment), surface parity (CLI 31, Web 27, Desktop 28 slash commands; Mobile uses tab-based UI instead of slash commands), **interactive delegation on all surfaces** (CLI, Desktop, Mobile, Web all wire `enableInteractiveDelegation()` with auth token factory — AI transparently delegates during conversation on any device), **operator-controlled routing strategy** (`--routing-strategy cost|quality|balanced` flows end-to-end: CLI → relay API → `explainedRankCandidates(compositeFunction)` → signed `routing_choice`), **protocol bridge layer** (A2A Agent Cards + SendMessage, AP2 Intent Mandate → Payment Mandate, OSSA manifest export, x402 inbound gating + outbound 402 handling — all bridges route through relay economic checkpoint). Untested in production: multi-device sync under real network conditions (cellular → WiFi → relay), the intelligence gradient trending upward over weeks of real usage, external developers completing the `create-motebit` → CLI → delegation flow without guidance, and relay federation across independent relays (all 5 phases implemented — identity, peering, discovery, cross-relay routing, settlement — but only tested between co-located test relays). Federation includes active heartbeat sending (60s interval, suspend at 3 missed, remove at 5). Relay private key encrypted at rest with AES-256-GCM using PBKDF2 (100k iterations) when `MOTEBIT_RELAY_KEY_PASSPHRASE` is set, with plaintext fallback for dev mode. Identity file private keys use PBKDF2 with 600k iterations (crypto, identity-file, create-motebit); relay key encryption and runtime PIN derivation use 100k iterations. Settlement forwards use exponential backoff retry (5 attempts, 30s/2min/8min/32min/2h intervals) and UNIQUE INDEX dedup with receipt timestamp validation for idempotency.
-
-Read `DROPLET.md` for the full design thesis on form. Read `THE_SOVEREIGN_INTERIOR.md` for the identity thesis. Read `LIQUESCENTIA.md` for the world. Read `THE_MUSIC_OF_THE_MEDIUM.md` for the acoustic interface. Read `THE_METABOLIC_PRINCIPLE.md` for what to build vs. what to absorb. Every visual and behavioral decision derives from droplet physics. If it can't be traced to surface tension, it doesn't belong.
+MCP defines capability but says nothing about who the agent is. A2A defines communication but has no trust accumulation. x402/AP2 defines payment but has no identity. Motebit is the missing layer underneath all three. The relay bridges all four protocols (MCP, A2A, x402, AP2) through a single economic checkpoint — identity resolved, execution verified, money finalized.
 
 ## Architecture
 
 pnpm monorepo, Turborepo orchestration, TypeScript throughout. Node >= 20, pnpm 9.15.
 
+**7-layer dependency enforcement** validated by `pnpm check-deps` in CI. Layer violations break the build.
+
 ```
 apps/
-  desktop/     Tauri (Rust + webview), Three.js creature, full identity/crypto/operator mode
-  cli/         Node.js REPL, developer/debugging interface, same runtime
-  mobile/      React Native + Expo, expo-gl + Three.js, full-featured
-  admin/       React + Vite dashboard, real-time state/memory/audit monitoring
-  spatial/     AR/VR positioning library, body-relative orbital mechanics, WebXR audio reactivity
+  cli/         Operator console (npm: motebit). REPL, daemon, delegation, MCP server mode
+  desktop/     Tauri glass droplet. Three.js creature, identity, operator mode
+  mobile/      React Native + Expo. Full-featured, tab-based UI
+  web/         Browser entry point. IndexedDB identity, free proxy, zero install
+  admin/       React + Vite dashboard. 13-tab real-time monitoring
+  spatial/     AR/VR. 6DOF orbital dynamics, WebXR, gesture recognition
 
 packages/
-  sdk/             Core types: MotebitState, BehaviorCues, MemoryContent/MemoryNode, EventLogEntry, PolicyDecision, RenderSpec
-  runtime/         MotebitRuntime orchestrator — wires all engines, exposes sendMessage/sendMessageStreaming
-  ai-core/         Pluggable providers (CloudProvider, OllamaProvider, HybridProvider), agentic turn loop, context packing
-  behavior-engine/ computeRawCues(state) → BehaviorCues, EMA smoothing, species constraints, rate limiting
-  state-vector/    StateVectorEngine: tick-based EMA smoothing, hysteresis, interpolation for 60 FPS rendering
-  memory-graph/    Semantic memory with cosine similarity retrieval, half-life decay (7d default), graph edges
-  event-log/       Append-only event sourcing with version clocks, compaction, replay
-  core-identity/   UUID v7 identity, multi-device registration, Ed25519 public key binding
-  crypto/          AES-256-GCM encryption, Ed25519 signing, PBKDF2 derivation, signed tokens (5 min expiry), W3C VC 2.0 credentials (eddsa-jcs-2022)
-  policy/          PolicyGate (tool approval, budgets, audit), MemoryGovernor (sensitivity-aware), injection defense, reputation scoring
-  privacy-layer/   Retention rules by sensitivity, deletion certificates, data export manifests
-  sync-engine/     Multi-device sync: HTTP/WebSocket adapters, conflict detection, retry backoff
-  render-engine/   RenderSpec (droplet geometry, glass material), ThreeJSAdapter (organic noise, breathing, sag)
-  persistence/     SQLite schema (WAL mode), adapters for events/memories/identities/audit/state/devices
-  tools/           InMemoryToolRegistry, builtin tools, MCP tool merge
-  mcp-client/      MCP stdio client, tool discovery, external data boundary marking
-  mcp-server/      MCP server adapter — exposes motebit as callable agent, synthetic tools, HTTP bearer auth
-  identity-file/   Generate, parse, verify motebit.md — cryptographically signed agent identity files (internal)
-  verify/          Standalone public verifier for motebit.md — zero monorepo deps, MIT licensed
-  create-motebit/  Public CLI: `npm create motebit` — generates + verifies signed identity files, `npm create motebit --agent` scaffolds runnable agent project (tools.ts + MCP server), `npx create-motebit rotate [path]` for key rotation
-  browser-persistence/ IndexedDB adapters: events, memory, identity, audit, conversations, plans, agent trust, gradient snapshots
-  planner/           PlanEngine: goal decomposition, reflection, plan adjustment
-  voice/             Voice pipeline: VAD, STT, TTS adapters
-  github-action/     GitHub Action for identity verification
-  market/            Budget allocation (estimateCost, allocateBudget), settlement (settleOnReceipt), reputation scoring, graph-based routing (graphRankCandidates, explainedRankCandidates, computeTrustClosure, findTrustedRoute), credential weighting (aggregateCredentialReputation, blendCredentialTrust)
-  semiring/          Trust Semiring Algebra — generic semiring computation graph for agent network routing. Semiring<T> interface, concrete semirings (Trust, Cost, Latency, Bottleneck, Reliability, Boolean, RegulatoryRisk), product/record combinators, WeightedDigraph<T>, generic traversal (Bellman-Ford, Floyd-Warshall), provenance tracking, agent network bridge (RouteWeight: trust × cost × latency × reliability × regulatory_risk)
-  policy-invariants/ Clamping rules, state bounds validation
+  sdk/                Core types (Layer 0, MIT, 0 deps)
+  verify/             Standalone identity verifier (Layer 0, MIT, 2 deps)
+  create-motebit/     CLI scaffolder: npm create motebit (Layer 0, MIT)
+  crypto/             Ed25519, AES-256-GCM, PBKDF2, signed tokens, W3C VC 2.0
+  semiring/           Trust Semiring Algebra — generic computation graph for routing
+  policy/             PolicyGate, MemoryGovernor, injection defense
+  policy-invariants/  Clamping rules, state bounds validation
+  event-log/          Append-only event sourcing with version clocks
+  tools/              ToolRegistry, builtin tools, MCP tool merge
+  core-identity/      UUID v7, multi-device registration, Ed25519 binding
+  memory-graph/       Semantic memory, cosine similarity, half-life decay, graph edges
+  state-vector/       Tick-based EMA smoothing, hysteresis, 60 FPS interpolation
+  behavior-engine/    State → BehaviorCues (deterministic, pure)
+  render-engine/      Droplet geometry, glass material, ThreeJS adapter
+  sync-engine/        Multi-device sync: HTTP/WebSocket, conflict detection, backoff
+  mcp-client/         MCP stdio/HTTP client, tool discovery
+  mcp-server/         MCP server adapter, synthetic tools, bearer auth
+  identity-file/      Generate, parse, verify motebit.md identity files
+  ai-core/            Pluggable providers (Cloud, Ollama, Hybrid), agentic turn loop
+  privacy-layer/      Retention rules, deletion certificates, data export
+  persistence/        SQLite (WAL mode), adapters for all storage types
+  browser-persistence/ IndexedDB adapters for web/spatial
+  planner/            PlanEngine: goal decomposition, reflection, adjustment
+  voice/              VAD, STT, TTS adapters
+  market/             Budget, settlement, graph-based routing, credential weighting
+  github-action/      GitHub Action for identity verification
 
 spec/
-  identity-v1.md          motebit/identity@1.0 specification — file format, signing algorithm, verification, succession records (§3.8)
-  execution-ledger-v1.md  motebit/execution-ledger@1.0 specification — goal execution timeline, signed manifests, routing provenance (§4.1.1)
-  relay-federation-v1.md  motebit/relay-federation@1.0 specification — multi-relay peering, federated discovery, cross-relay task routing via semiring graph, settlement chains, receipt co-signing (Draft — all 5 phases implemented)
+  identity-v1.md           motebit/identity@1.0 — file format, signing, succession
+  execution-ledger-v1.md   motebit/execution-ledger@1.0 — timeline, signed manifests
+  relay-federation-v1.md   motebit/relay-federation@1.0 — peering, discovery, routing
 
 services/
-  api/             Sync relay server: REST + WebSocket, device auth, receipt verification, budget/settlement, credential issuance, rate limiting, graph query endpoints (trust-closure, path-to, graph, routing-explanation with provenance), multi-hop delegation edge caching (relay_delegation_edges), persistent relay identity, federation endpoints (peering, discovery, cross-relay routing, settlement), succession query (GET /api/v1/agents/:id/succession), multi-hop settlement (walks delegation_receipts, verifies each signature, settles each hop). Re-registration with a changed public key requires a valid succession record. Organized into modules: index.ts, federation.ts, task-routing.ts, credentials.ts, pairing.ts, data-sync.ts, logger.ts
-  summarize/       Conversation summarization service
-  web-search/      Reference service: web search + URL reading via MCP. Sub-delegates read_url to read-url service when MOTEBIT_DELEGATE_READ_URL is configured (multi-hop reference)
-  read-url/        Minimal read-url service (Charlie): single-tool MCP server for URL content reading. Second hop in multi-hop delegation proof
-
-services/api/src/ modules:
-  index.ts           Main relay server: routes, task submission, settlement, auth
-  federation.ts      Relay federation: peering, discovery, cross-relay routing
-  task-routing.ts    Candidate scoring, graph construction, agent queries
-  credentials.ts     W3C VC issuance, presentation endpoints
-  data-sync.ts       Conversation + plan sync routes
-  pairing.ts         Multi-device pairing protocol
-  accounts.ts        Virtual accounts, deposits, withdrawals, ledger reconciliation
-  a2a-bridge.ts      A2A + AP2 protocol bridge: Agent Cards, SendMessage, Intent Mandates
-  logger.ts          Structured JSON logging with correlation IDs
-  read-url/        Minimal read-url service (Charlie): single-tool MCP server for URL content reading. Second hop in multi-hop delegation proof
+  api/          Relay server (modules: index, federation, task-routing,
+                credentials, pairing, data-sync, accounts, a2a-bridge, logger)
+  web-search/   Reference MCP service (single-hop + multi-hop delegation proof)
+  read-url/     Minimal read-url service (second hop in multi-hop proof)
+  proxy/        Vercel edge CORS proxy for web app (Anthropic API, fetch, embed)
+  summarize/    Conversation summarization
+  embed/        ONNX embedding service
 ```
 
-## Key Patterns
+## Principles
 
-- **Metabolic principle.** Do not build what the medium already carries. If the field has solved a problem (VAD, STT, TTS, embeddings, inference), absorb the best available implementation through an adapter boundary and keep a fallback chain for graceful degradation. Build the enzymes (identity, memory, trust, governance, agentic loops), not the glucose (raw capabilities). See `THE_METABOLIC_PRINCIPLE.md`.
-- **Adapter pattern everywhere.** All I/O abstracted — storage, rendering, AI providers, sync transport. In-memory for tests, SQLite/Tauri/Expo for production. The adapter is the surface tension boundary in code: the interior must not bind to a specific provider.
-- **Event sourcing.** Immutable append-only log with version clocks. Multi-device ordering, conflict detection, compaction after snapshot. Event appending uses `appendWithClock()` for atomic version_clock assignment — eliminates the getLatestClock + clock+1 race condition. All adapters (SQLite subquery, IDB single-txn, in-memory) implement this atomically.
-- **Fail-closed privacy.** Deny on error. Sensitivity levels (none/personal/medical/financial/secret) with retention rules enforced at storage, retrieval, sync, and context boundaries. AI context packing filters to `[none, personal]` — medical/financial/secret memories never reach external providers. Graph edge expansion respects sensitivity filters (prevents indirect leakage via co-retrieval). Export defaults to `display_allowed` levels only (`--all` flag for owner override). Relay sync redacts content from memory_formed events with medical/financial/secret sensitivity — both HTTP pull and WebSocket fan-out strip content, preserving node_id for structural awareness. Relay memory endpoint filters to `[none, personal]` by default (`?sensitivity=all` for admin override). Retention rules enforced in housekeeping: medical/financial 90d, secret 30d, with deletion certificates on expiry. Deletion certificates with SHA-256 hashes.
-- **Streaming first.** AI loops yield text chunks, tool status events, approval requests, injection warnings.
-- **Memory injection defense (two layers).** Memories are user-derived data that could contain embedded directives. Layer 1 — formation gate (`MemoryGovernor`): scans memory candidates through `ContentSanitizer` (regex + directive density + structural anomalies); injection-flagged candidates get confidence capped to 0.3 (fast decay, low retrieval priority) rather than rejected outright (avoids false-positive data loss). Layer 2 — context boundary (`packContext`): all memory content wrapped in `[MEMORY_DATA]...[/MEMORY_DATA]` boundaries with escape prevention; system prompt injection defense (always active, not just when tools are present) instructs the model to treat `[MEMORY_DATA]` identically to `[EXTERNAL_DATA]` — never follow directives inside either boundary.
-- **Pure computation.** State-to-cues, tag parsing, action extraction are deterministic and stateless.
-- **Credential lifecycle.** Three credential types, each issued at a different boundary: AgentReputationCredential (peer-issued by delegating agent on verified receipt; relay co-signing optional via `MOTEBIT_RELAY_ISSUE_CREDENTIALS=true`), AgentGradientCredential (self-issued during housekeeping), AgentTrustCredential (peer-issued on trust transitions). All W3C VC 2.0 with eddsa-jcs-2022 cryptosuite. Presentation bundles credentials into a signed VerifiablePresentation for third-party verification. **Credential weighting:** `aggregateCredentialReputation()` (market package) applies one-pass EigenTrust — each peer attestation weighted by issuer trust (from semiring closure) × freshness decay (24h half-life) × sample-size confidence (saturates at 50 tasks). `blendCredentialTrust()` mixes the aggregate into routing via Bayesian blend (diversity × weight saturation, max 50% influence). The `CandidateProfile.credential_reputation` field feeds directly into `buildRoutingGraph()`.
-- **Proof composability invariant.** Motebit primitives (signed receipts, execution manifests, verifiable credentials, succession records) compose with external proof anchoring systems (blockchain, notary, IPFS, certificate transparency) without modifying core verification paths. The verification chain is always: canonical JSON → SHA-256 → Ed25519 verify. What happens to proofs after production — relay storage, federation forwarding, on-chain anchoring (x402 `x402_tx_hash`) — is a consumption concern. External anchoring must remain additive, never gatekeeping. Do not add verification paths that _require_ external systems (e.g., "reject receipts not on-chain") — this would break the self-certifying property that makes `@motebit/verify` work as a zero-dependency standalone verifier.
-- **Sybil defense (four layers).** Self-delegation (operator delegating to their own agent) must not farm trust or credentials. Layer 1 — issuance gate (`runtime/agent-trust.ts`): skip `AgentReputationCredential` issuance when `delegatorMotebitId === workerMotebitId`. Layer 2 — aggregation filter (`market/credential-weight.ts`): `aggregateCredentialReputation()` ignores credentials where `issuer DID === subject DID`, so any self-attestation that leaks into the system carries zero weight. Layer 3 — relay trust gate (`services/api/index.ts`): skip trust record update when task `submittedBy === receipt.motebit_id` (the task submitter is the executor), preventing self-delegation from accumulating edges in the semiring routing graph. Layer 4 — relay credential gate (`services/api/index.ts`): skip relay-issued `AgentReputationCredential` on self-delegation receipts. Self-delegation still executes and settles budget, it just produces no trust signal or credential.
-- **Adversarial onboarding.** Embed adversarial probes in the happy path so they run continuously, by real users, against real infrastructure. The `--self-test` flag in `motebit serve` submits a self-delegation task (`submitted_by === executor`) through the live relay — the exact attack vector sybil defense was built to stop. Every `npm run dev` from a scaffolded agent exercises four sybil defense layers, receipt signing, and budget settlement as a side effect of proving the agent works. If the security boundary breaks, onboarding breaks. Security regressions are discovered by every new developer, not by a CI pipeline someone has to remember to check. When building new boundaries, ask: can the onboarding path exercise this? If yes, wire it in.
-- **Federation task idempotency.** Cross-relay task forwarding uses two guards against double-execution. Guard 1 — peer relay rejects duplicate `task_id` in `onTaskForwarded()` (returns 409 Conflict), so retry-after-timeout cannot queue the same task twice. Guard 2 — origin relay tracks `federationAttempted` flag; if a forward was attempted (even if it timed out), the broadcast fallback is suppressed. Timeout means "unknown state", not "failed" — the peer may have accepted before the timeout fired, and its receipt will arrive via `federation/v1/task/result`. The settlement layer already has `UNIQUE INDEX` dedup on `(task_id, upstream_relay_id)`.
-- **Budget-gated delegation.** estimateCost (before delegation) → allocateBudget (reserve funds) → settleOnReceipt (deduct actual cost on verified receipt). HTTP 402 if insufficient budget. Settlement only on cryptographically verified receipts. Multi-hop: intermediate agents submit relay tasks for sub-delegates (budget allocation from their own balance), pass `relay_task_id` to the sub-delegate's `motebit_task`, and the relay settles each hop independently when processing nested `delegation_receipts`.
-- **Receipt economic binding (relay_task_id).** Every `ExecutionReceipt` includes a `relay_task_id` field that cryptographically binds the receipt to the relay's economic identity for the task. The relay verifies `receipt.relay_task_id === taskIdFromRoute` at settlement time. Since `relay_task_id` is inside the Ed25519 signature, tampering breaks the signature. This prevents cross-task replay attacks, including identical-prompt collisions. `relay_task_id` is REQUIRED — receipts without it are rejected with 400 (no legacy fallback). For WebSocket-routed tasks, `MotebitRuntime.handleAgentTask` automatically sets `relay_task_id: task.task_id`.
-- **Precision feedback loop.** selfTrust (derived from gradient metrics) and explorationDrive (inverse of confidence) modulate the system prompt via buildPrecisionContext(). High selfTrust → more autonomous; low selfTrust → more cautious and explicit about uncertainty.
-- **Federation circuit breaker.** Per-peer forward result tracking (`successful_forwards`/`failed_forwards` columns in `relay_peers`) with automatic suspension. When a peer's failure rate exceeds 50% over 6+ samples with 3+ consecutive failures, the relay transitions the peer to `suspended` state — agents on that peer are excluded from routing until the heartbeat restores the peer to `active`. On forward success, `failed_forwards` resets to zero (clean slate). Discovery failures also feed the circuit breaker. The existing heartbeat mechanism (3 missed → suspend, 5 → remove) handles liveness; the circuit breaker handles forward-path health. Both use the same `relay_peers.state` column for routing exclusion.
-- **Rate limiting.** 5-tier sliding window per IP on relay API: auth (30/min), read (60/min), write (30/min), public (20/min), expensive (10/min). Applied at route level, not middleware — each endpoint declares its tier. Per-connection WebSocket rate limiting (100 msg/10s). Per-peer federation rate limiting (30 req/min per relay_id). In-memory task queue hard-capped at 100K entries with pre-insertion 503 rejection and periodic oldest-first eviction — prevents memory exhaustion from task flooding.
-- **Signed succession.** Key rotation without centralized revocation. The old keypair signs a tombstone declaring the new keypair as successor. Both keys sign the canonical payload (non-repudiation + acknowledgment). Chains verify end-to-end: anyone can prove identity continuity from genesis key to current key without trusting any intermediary. The `motebit_id` persists across rotations.
-- **Semiring computation graph.** Agent network routing is algebraic, not ad-hoc. The `@motebit/semiring` package provides a generic `Semiring<T>` interface with concrete semirings (Trust=max/×, Cost=min/+, Latency=min/+, Reliability=max/×, Boolean=∨/∧, Bottleneck=max/min). One `WeightedDigraph<T>` + one traversal algorithm (generalized Bellman-Ford or Floyd-Warshall) answers "most trusted path," "cheapest pipeline," "reachability," and "all of the above simultaneously" (product semiring) by swapping the semiring. The composite function is pluggable (`weightedSumComposite` default, `lexicographicComposite` available) via the `CompositeFunction` type in the routing policy. Provenance semiring tracks WHY a route was chosen. The runtime maintains a live `AgentGraphManager` that lazily builds and caches the graph, invalidates on trust changes, and exposes `mostTrustedPath()`, `cheapestPath()`, `rankAgents()`, `trustClosure()`. The market package provides `graphRankCandidates()` for algebraic routing with backward-compatible `RouteScore[]` output. Routing provenance flows end-to-end: relay scores candidates → returns `routing_choice` on task submission → PlanEngine attaches it to the delegation step summary → signed into the execution ledger manifest (execution-ledger-v1.0 §4.1.1) — creating an immutable audit trail from semiring algebra to cryptographic proof. New routing concerns (energy cost, regulatory risk, SLA compliance) require only a new semiring definition — zero new algorithms.
+These are not suggestions. They are the architectural invariants that make 26 packages coherent. Violating them breaks CI, breaks the product, or breaks the thesis.
+
+**Metabolic principle.** Do not build what the medium already carries. Absorb solved problems (VAD, STT, embeddings, inference) through adapter boundaries with fallback chains. Build the enzymes (identity, memory, trust, governance, agentic loops), not the glucose (raw capabilities).
+
+**Adapter pattern everywhere.** All I/O abstracted. In-memory for tests, SQLite/Tauri/Expo/IndexedDB for production. The adapter is the surface tension boundary in code: the interior must not bind to a specific provider.
+
+**Fail-closed privacy.** Deny on error. Sensitivity levels (none/personal/medical/financial/secret) enforced at storage, retrieval, sync, and context boundaries. Medical/financial/secret memories never reach external AI providers. Relay sync redacts sensitive content. Retention rules enforced in housekeeping with deletion certificates.
+
+**Proof composability.** Canonical JSON → SHA-256 → Ed25519 verify. Always. External anchoring (blockchain, IPFS, x402) is additive, never gatekeeping. `@motebit/verify` works standalone with zero monorepo deps. Do not add verification paths that require external systems.
+
+**Semiring algebra for routing.** Agent network routing is algebraic. `Semiring<T>` interface, concrete semirings (Trust, Cost, Latency, Reliability, RegulatoryRisk), product combinators, `WeightedDigraph<T>`, generic traversal. Swap the semiring to change what "best path" means. New routing concerns require only a new semiring definition — zero new algorithms. Provenance tracks why a route was chosen, signed into the execution ledger.
+
+**Adversarial onboarding.** Embed adversarial probes in the happy path. `--self-test` submits a self-delegation task (the exact sybil attack vector) through the live relay. If the security boundary breaks, onboarding breaks. When building new boundaries, ask: can the onboarding path exercise this?
+
+**Sibling boundary rule.** When you fix a boundary (auth, policy, validation, rendering), audit all sibling boundaries for the same gap in the same pass. A fix applied to one path but not its siblings is incomplete. Docs are siblings of code.
+
+**One-pass delivery.** When a core primitive ships, implement across all surfaces in the same pass. Do not defer UI if the package boundary is stable.
+
+**Capability rings, not feature parity.** Ring 1 (core, identical everywhere): runtime, sdk, crypto, policy. Ring 2 (platform adapters): persistence, keyring, voice. Ring 3 (platform capabilities): MCP stdio (CLI/desktop only), 3D creature (desktop/mobile/web/spatial), daemon (CLI/desktop). The anti-pattern is shimming platform-impossible capabilities. Each surface maximizes what its platform offers.
+
+## Security Boundaries
+
+**Sybil defense (four layers).** Self-delegation must not farm trust. Layer 1: skip credential issuance when delegator === worker. Layer 2: aggregation ignores self-issued credentials. Layer 3: relay skips trust record update on self-delegation. Layer 4: relay skips credential issuance on self-delegation receipts. Self-delegation executes and settles budget — it just produces no trust signal.
+
+**Memory injection defense (two layers).** Layer 1 — formation gate: `ContentSanitizer` scans candidates, injection-flagged get confidence capped to 0.3 (fast decay, not rejected outright). Layer 2 — context boundary: `[MEMORY_DATA]...[/MEMORY_DATA]` wrapping with escape prevention. System prompt treats memory data identically to external data.
+
+**Receipt economic binding.** `relay_task_id` in every `ExecutionReceipt`, inside the Ed25519 signature. Relay verifies binding at settlement. Prevents cross-task replay. Required — no legacy fallback.
+
+**Token audience binding.** `expectedAudience` is required on all `verifySignedTokenForDevice` calls. Tokens without `aud` are rejected. Prevents cross-endpoint replay.
+
+**Budget-gated delegation.** estimateCost → allocateBudget → settleOnReceipt. HTTP 402 if insufficient. Per-submitter task queue limit (1000/agent, HTTP 429) prevents fair-share starvation. Multi-hop: each hop settled independently from nested `delegation_receipts`.
+
+**Rate limiting.** 5-tier fixed-window per IP (auth 30/min, read 60/min, write 30/min, public 20/min, expensive 10/min). Per-connection WebSocket (100 msg/10s). Per-peer federation (30 req/min). Task queue hard-capped at 100K.
+
+**PBKDF2 iterations.** 600K for user-provided passphrases (CLI identity, relay key encryption). 100K for operator PIN (rate-limiting is primary defense, PIN entry is frequent).
+
+**Signed succession.** Key rotation without centralized revocation. Old keypair signs tombstone declaring new keypair. Both keys sign canonical payload. Chains verify end-to-end.
+
+**Federation circuit breaker.** Per-peer forward tracking with automatic suspension at 50% failure rate over 6+ samples. Heartbeat handles liveness (3 missed → suspend, 5 → remove). Circuit breaker handles forward-path health.
 
 ## Commands
 
@@ -124,85 +123,39 @@ pnpm run build          # Build all packages (turbo)
 pnpm run test           # Test all packages
 pnpm run typecheck      # Type-check all packages
 pnpm run lint           # Lint all packages
-pnpm --filter @motebit/desktop build   # Build single package
-pnpm --filter @motebit/desktop test    # Test single package
+pnpm run check-deps     # Validate layer architecture
+pnpm --filter @motebit/runtime test   # Test single package
 ```
-
-## Desktop App (Flagship)
-
-Tauri app. Two key files for the UI layer:
-
-- `apps/desktop/index.html` — all HTML + CSS (chat, settings panel, PIN dialog, welcome overlay)
-- `apps/desktop/src/main.ts` — DOM wiring, bootstrap, settings save, PIN flow
-- `apps/desktop/src/index.ts` — DesktopApp class: identity bootstrap, AI init, streaming, operator mode
-
-**Identity flow:** First launch shows welcome consent overlay → generates Ed25519 keypair → stores private key in OS keyring → registers device → optionally registers with sync relay using signed JWT.
-
-**Operator mode:** PIN-protected (4-6 digits, SHA-256 hash in keyring). Gates high-risk tools. Tool calls produce audit log entries (allowed/denied/requires_approval).
-
-**Rendering:** Three.js glass droplet — MeshPhysicalMaterial (transmission 0.94, IOR 1.22, iridescence 0.4), breathing at 2.0-3.5 Hz, gravity sag, Brownian drift, interior glow on processing.
-
-**Credentials & Budget:** Settings pane displays verifiable credentials (reputation, gradient, trust) and budget allocation status.
-
-## CLI App (Operator Console)
-
-`apps/cli/src/` — Full operator console. Entry point in `index.ts`, split into modules: `config.ts`, `args.ts`, `identity.ts`, `runtime-factory.ts`, `stream.ts`, `slash-commands.ts`, `subcommands.ts`, `daemon.ts`, `utils.ts`. Published to npm as `motebit`. Bundled with tsup — all workspace packages inlined, native deps external.
-
-**Subcommands:** `motebit id`, `motebit export` (directory bundle: identity + credentials + presentation + budget + gradient), `motebit verify <path>` (identity file or directory bundle with VC/VP validation), `motebit run --identity <path>` (daemon), `motebit goal add/list/remove/pause/resume`, `motebit approvals list/show/approve/deny`, `motebit ledger <goalId>` (display execution ledger), `motebit credentials` (list VCs, `--presentation` for signed VP), `motebit rotate [--reason "..."]` (key rotation with cryptographic succession chain). Default (no subcommand) enters interactive REPL.
-
-**REPL commands:** `/model`, `/memories`, `/graph`, `/curious`, `/state`, `/forget`, `/export`, `/sync`, `/clear`, `/tools`, `/mcp list/trust/untrust/add/remove`, `/agents [info/trust/block]`, `/operator`, `/help`, `/summarize`, `/conversations`, `/conversation`, `/goals`, `/goal`, `/approvals`, `/reflect`, `/discover`.
-
-**Identity:** Ed25519 keypair generated on first launch, private key encrypted with PBKDF2 (passphrase-protected), stored in `~/.motebit/config.json`. Supports operator mode via `--operator` flag.
-
-**Daemon mode:** Reads governance thresholds from `motebit.md`, runs goal scheduler (60s tick), suspends on approval requests, fail-closed on invalid governance.
-
-**Dependencies:** 13 workspace packages (runtime, ai-core, persistence, crypto, etc.). Direct better-sqlite3 persistence.
-
-**Interactive delegation:** When relay + signing keys are available, the CLI registers `delegate_to_agent` as a tool in the agentic loop. The AI sees known agents' capabilities (from service listings), delegates transparently during normal conversation, and displays `[delegating to relay] delegate_to_agent...done` in the stream output. Receipts flow back for trust accumulation and multi-hop composition.
-
-**MCP server mode:** `motebit --serve` exposes the motebit as an MCP server. Supports stdio and HTTP (StreamableHTTP) transport. `--tools <path>` loads external tool definitions from a JS module (array of `{definition, handler}`). `--direct` enables direct tool execution without AI loop (bypasses LLM, maps prompt to first tool's required string parameter, signs receipt — same pattern as web-search service). `--self-test` runs a self-targeted task via relay after registration to prove the full loop (submit → route → execute → receipt → settle). Synthetic tools: `motebit_query` (AI response with memory), `motebit_remember` (store memory, sensitivity-capped at "personal" for external callers), `motebit_recall` (semantic search, privacy-filtered), `motebit_task` (autonomous execution with signed `ExecutionReceipt`), `motebit_identity` (identity file or JSON), `motebit_tools` (capability discovery). All synthetic and proxied tools pass through PolicyGate. Optional HTTP bearer auth (`authToken` config). All results identity-tagged via `formatResult()`. Deps are optional — synthetic tools only registered when their backend callback is provided.
-
-## Mobile App
-
-`apps/mobile/src/App.tsx` — React Native + Expo. Chat + 3D rendering via expo-gl. Full SQLite adapters (expo-sqlite), secure keychain (expo-secure-store). Triple providers (Anthropic + Ollama + Hybrid fallback), 7-tab settings UI, identity bootstrap, voice input (VAD + Whisper + TTS), multi-device pairing, goal scheduling with PlanEngine, MCP HTTP support with per-server trust and manifest pinning, approval queue UI (chat-inline + goal approvals), /summarize, periodic housekeeping, conversation management, memory browser, CredentialsPanel for verifiable credential display.
-
-## Admin Dashboard
-
-`apps/admin/src/AdminApp.tsx` — React + Vite. 13 tabs: State Vector (Recharts trending), Memory Graph (D3-force), Behavior Cues (live preview), Event Log, Tool Audit Log, Goals, Plans, Conversations (with message drill-down), Devices, Intelligence Gradient (hero score, 8 sub-metric bars: kd/kq/gc/ts/rq/ie/te/cp, trend chart), Agent Trust (D3-force agent graph visualization with trust-colored nodes + flat trust records table), Credentials (VC list with type/issuer/validity, VP generation), Federation (relay identity, active peers with trust scores, settlement history — self-polling). Polls API every 2s. All endpoints wired to API relay. Configured via `VITE_API_URL`, `VITE_MOTEBIT_ID`, `VITE_API_TOKEN`.
-
-## State Vector (9 fields)
-
-`attention`, `processing`, `confidence`, `affect_valence`, `affect_arousal`, `social_distance`, `curiosity` (0-1 floats) + `trust_mode` (TrustMode enum) + `battery_mode` (BatteryMode enum).
-
-## Behavior Cues (5 outputs)
-
-`hover_distance`, `drift_amplitude`, `glow_intensity`, `eye_dilation`, `smile_curvature` — computed deterministically from state vector by behavior-engine.
-
-## UI Feedback Rules
-
-Motebit is calm software. Do not confirm what the user can already see.
-
-- **Silent** (state is the confirmation) — modal closes, checkbox toggles, chat clears/populates, model changes. No toast, no message.
-- **Toast** (async/background outcomes the user can't directly observe) — sync results, pairing status, device linking. Short-lived, non-blocking, never stacked.
-- **Persistent system message** (requires attention) — errors with next steps, security warnings, first-launch milestones, background task failures. Rare (≤3-4 per session), actionable, clearly styled as system.
-- **Background autonomy** — background agents may only emit persistent messages for user-blocking failures or user-requested notifications. All other background events go to toast or internal log.
-- **Anti-patterns** — "Settings saved" after modal close, "Model switched" when dropdown shows it, "Loading…" when content is visibly populating, using chat as a continuous system log.
 
 ## Conventions
 
-### Code structure
-
 - All packages export from `src/index.ts`
-- Tests live in `src/__tests__/` using vitest
-- CSS is inline in HTML files (desktop, admin), not separate stylesheets
-- Dialog/overlay pattern: backdrop with `.open` class toggling opacity + pointer-events
-- Error handling: For rethrows, use `throw new Error("description", { cause: err })` to preserve the full chain. For error messages (logging, user display, ToolResult), use `err instanceof Error ? err.message : String(err)`. Never `String(error)` in a rethrow — that loses the stack trace.
-- Secrets go in OS keyring (Tauri/expo-secure-store), never in config files
-- Config file: `~/.motebit/config.json` for non-secret settings
-- Database: `~/.motebit/motebit.db` (SQLite, WAL mode)
+- Tests in `src/__tests__/` using vitest
+- Error rethrows: `throw new Error("description", { cause: err })` — preserves chain
+- Error messages: `err instanceof Error ? err.message : String(err)`
+- Secrets in OS keyring, never config files. Config: `~/.motebit/config.json`. DB: `~/.motebit/motebit.db`
+- CSS inline in HTML (desktop, admin), not separate stylesheets
+- Branded ID types (`MotebitId`, `DeviceId`, etc.) enforce compile-time safety
+- Relay uses `createLogger(module)` for structured JSON logs with `x-correlation-id`
+- Runtime uses pluggable `logger` config (defaults to `console.warn`)
+- Dependency overrides must be upper-bounded (`>=4.59.0 <5.0.0`)
+- Inline trivial utilities (< 10 lines, no crypto/state/IO) at layer boundaries rather than importing cross-layer
+- Event appending uses `appendWithClock()` for atomic version_clock assignment
 
-- **Sibling boundary rule.** When you fix a boundary (auth, policy, validation, rendering), audit all sibling boundaries for the same gap in the same pass. A fix applied to one path but not its siblings is incomplete. Docs are siblings of code — when implementation changes, sync CLAUDE.md, README.md, docs site, and spec in the same commit.
-- **One-pass delivery.** When a core primitive ships (identity, crypto, policy), implement across all surfaces in the same pass. Do not defer UI if the package boundary is stable. Isolation at the package level exists to enable parallel delivery.
-- **Inline trivial utilities at layer boundaries.** If a function is < 10 lines with no crypto/state/IO (e.g. string splitting, set membership, simple math), inline it rather than importing from a sibling-layer package. Cross-layer imports create architectural violations caught by `check-deps`. The cost of 6 duplicated lines is zero; a layer violation breaks CI and couples packages that should be independent.
-- Dependency overrides in `package.json` must be upper-bounded (`>=4.59.0 <5.0.0`), especially for 0.x semver.
-- **Structured logging.** Relay uses `createLogger(module)` from `logger.ts` for structured JSON logs with correlation IDs. Every request gets a `x-correlation-id` header, propagated through the log context. Use `logger.info({ correlationId, ... })`, not `console.log`.
+## UI
+
+Motebit is calm software. Do not confirm what the user can already see.
+
+- **Silent** — modal closes, checkbox toggles, chat populates. No toast.
+- **Toast** — async outcomes the user can't observe (sync, pairing). Short-lived, never stacked.
+- **System message** — errors with next steps, security warnings. Rare (≤3-4/session), actionable.
+- **Anti-patterns** — "Settings saved" after modal close, "Loading…" when content is visibly populating.
+
+## Published Packages
+
+Four npm packages form the protocol adoption layer:
+
+- `@motebit/sdk` — Core types. MIT, 0 deps.
+- `@motebit/verify` — Standalone identity verifier. MIT, 2 deps (`@noble/ed25519`, `@noble/hashes`).
+- `create-motebit` — Scaffold signed identity. MIT, zero-deps CLI. `npm create motebit`, `--agent` for runnable project.
+- `motebit` — Operator console. BSL-1.1. REPL, daemon, MCP server, delegation, export/verify/rotate.
