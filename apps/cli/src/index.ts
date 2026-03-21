@@ -249,16 +249,14 @@ async function main(): Promise<void> {
     }
   }
 
-  // Create readline early for passphrase prompts
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-
-  // Resolve passphrase for key encryption
+  // Resolve passphrase BEFORE creating readline — a readline on stdin
+  // echoes keystrokes even when paused, which corrupts raw-mode masking.
   const envPassphrase = process.env["MOTEBIT_PASSPHRASE"];
   let passphrase: string;
 
   if (fullConfig.cli_encrypted_key) {
     // Existing encrypted key — need passphrase to decrypt
-    passphrase = envPassphrase ?? (await promptPassphrase(rl, "Passphrase: "));
+    passphrase = envPassphrase ?? (await promptPassphrase("Passphrase: "));
     try {
       await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
     } catch {
@@ -266,17 +264,14 @@ async function main(): Promise<void> {
       console.error(
         "  Run `npm create motebit` to generate a new identity, or set MOTEBIT_PASSPHRASE env var.",
       );
-      rl.close();
       process.exit(1);
     }
   } else if (fullConfig.cli_private_key != null && fullConfig.cli_private_key !== "") {
     // Migration: plaintext key exists — encrypt it
     console.log("Migrating private key to encrypted storage...");
-    passphrase =
-      envPassphrase ?? (await promptPassphrase(rl, "Set a passphrase for key encryption: "));
+    passphrase = envPassphrase ?? (await promptPassphrase("Set a passphrase for key encryption: "));
     if (passphrase === "") {
       console.error("Error: passphrase cannot be empty.");
-      rl.close();
       process.exit(1);
     }
     fullConfig.cli_encrypted_key = await encryptPrivateKey(fullConfig.cli_private_key, passphrase);
@@ -287,13 +282,16 @@ async function main(): Promise<void> {
   } else {
     // First launch — prompt for new passphrase
     passphrase =
-      envPassphrase ?? (await promptPassphrase(rl, "Set a passphrase for your mote's key: "));
+      envPassphrase ?? (await promptPassphrase("Set a passphrase for your mote's key: "));
     if (!passphrase) {
       console.error("Error: passphrase cannot be empty.");
-      rl.close();
       process.exit(1);
     }
   }
+
+  // Create readline AFTER passphrase is resolved — creating it before
+  // would cause it to echo keystrokes during raw-mode passphrase masking.
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
   // Bootstrap identity — need DB first for identity storage
   const dbPath = getDbPath(config.dbPath);
