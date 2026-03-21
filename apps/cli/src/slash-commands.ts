@@ -160,7 +160,7 @@ function styleUsage(usage: string): string {
   // leave <args>, [opts], "--flags", and quoted strings unstyled.
   return usage.replace(
     /^(\/\S+(?:\s+(?:add|remove|pause|resume|outcomes|list|trust|untrust|block|info))?)(.*)/,
-    (_, cmd, rest) => command(cmd) + rest,
+    (_: string, cmd: string, rest: string) => command(cmd) + rest,
   );
 }
 
