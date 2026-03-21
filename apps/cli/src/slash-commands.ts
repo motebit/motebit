@@ -58,7 +58,7 @@ function formatState(state: Record<string, unknown>): string {
 async function getRelayToken(
   config: CliConfig,
   repl?: ReplContext,
-  aud = "sync",
+  aud = "admin:query",
 ): Promise<string | undefined> {
   const master =
     config.syncToken ?? process.env["MOTEBIT_API_TOKEN"] ?? process.env["MOTEBIT_SYNC_TOKEN"];
@@ -334,7 +334,7 @@ Available commands:
               repl.moteDb.conversationStore,
             );
             const convSyncEngine = new ConversationSyncEngine(convStoreAdapter, repl.motebitId);
-            const syncToken = await getRelayToken(config, repl);
+            const syncToken = await getRelayToken(config, repl, "sync");
             convSyncEngine.connectRemote(
               new HttpConversationSyncAdapter({
                 baseUrl: syncUrl,
