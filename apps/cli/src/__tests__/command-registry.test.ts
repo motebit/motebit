@@ -9,7 +9,7 @@ describe("command registry", () => {
     COMMANDS.map((c) => {
       // "/goal add ..." → "goal", "/help" → "help"
       const match = c.usage.match(/^\/(\S+)/);
-      return match ? match[1] : "";
+      return match ? match[1]! : "";
     }),
   );
 
@@ -19,7 +19,7 @@ describe("command registry", () => {
   const switchCases = new Set<string>();
   let match: RegExpExecArray | null;
   while ((match = casePattern.exec(source)) !== null) {
-    switchCases.add(match[1]);
+    switchCases.add(match[1]!);
   }
 
   it("every switch case has a COMMANDS registry entry", () => {

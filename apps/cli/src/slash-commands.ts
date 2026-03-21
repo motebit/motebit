@@ -122,7 +122,7 @@ async function makeRelayHeaders(
 /** Parse subcommand from args string: "/goal add foo" → { sub: "add", rest: "foo" } */
 function parseSub(args: string): { sub: string; rest: string } {
   const m = args.match(/^(\S+)\s*([\s\S]*)$/);
-  return m ? { sub: m[1], rest: m[2].trim() } : { sub: "", rest: "" };
+  return m ? { sub: m[1]!, rest: (m[2] ?? "").trim() } : { sub: "", rest: "" };
 }
 
 type RelayResult<T> =
@@ -656,7 +656,7 @@ export async function handleSlashCommand(
               : green("\u25CF [network] ")
             : "  ";
           const gap = " ".repeat(Math.max(1, col - tool.name.length));
-          const desc = shortDesc[tool.name] ?? tool.description.split(".")[0];
+          const desc = shortDesc[tool.name] ?? tool.description.split(".")[0] ?? tool.description;
           console.log(`${marker}${cyan(tool.name)}${gap}${dim(desc)}`);
         }
       }
@@ -996,7 +996,7 @@ export async function handleSlashCommand(
           break;
         }
         // Parse: /mcp add <name> <url> [--motebit]
-        const addArgs = subArgs;
+        const addArgs = serverName.split(/\s+/);
         const motebitFlag = addArgs.includes("--motebit");
         const filtered = addArgs.filter((a) => a !== "--motebit");
         const addName = filtered[0];
@@ -1090,7 +1090,7 @@ export async function handleSlashCommand(
           console.log("REPL context not available.");
           break;
         }
-        const removeName = subArgs[0];
+        const removeName = serverName;
         if (!removeName) {
           console.log("Usage: /mcp remove <name>");
           break;
