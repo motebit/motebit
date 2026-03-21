@@ -7,10 +7,12 @@
  */
 
 import type { CandidateProfile, TaskRequirements } from "@motebit/market";
+import { aggregateCredentialReputation } from "@motebit/market";
+import type { ReputationVC } from "@motebit/market";
 import type { CapabilityPrice, AgentTrustRecord } from "@motebit/sdk";
-import { asMotebitId, asListingId, AgentTrustLevel } from "@motebit/sdk";
+import { asMotebitId, asListingId, AgentTrustLevel, trustLevelToScore } from "@motebit/sdk";
 import type { ListingId } from "@motebit/sdk";
-import { hexPublicKeyToDidKey } from "@motebit/crypto";
+import { hexPublicKeyToDidKey, didKeyToPublicKey, bytesToHex } from "@motebit/crypto";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity, FederationConfig } from "./federation.js";
 
@@ -167,6 +169,36 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
        ORDER BY recorded_at DESC LIMIT 100`,
     );
 
+    // Credential aggregation: fetch peer-issued reputation VCs for each candidate.
+    // The issuer trust callback resolves did:key URIs to trust scores from agent_trust.
+    const credStmt = db.prepare(
+      `SELECT credential_json FROM relay_credentials
+       WHERE subject_motebit_id = ? AND credential_type = 'AgentReputationCredential'
+       ORDER BY issued_at DESC LIMIT 50`,
+    );
+    const issuerTrustStmt = callerMotebitId
+      ? db.prepare(
+          `SELECT trust_level FROM agent_trust WHERE motebit_id = ? AND remote_motebit_id = (
+             SELECT motebit_id FROM agent_registry WHERE public_key = ? LIMIT 1
+           )`,
+        )
+      : null;
+
+    function getIssuerTrust(issuerDid: string): number {
+      if (!callerMotebitId || !issuerTrustStmt) return 0.3;
+      try {
+        const pubBytes = didKeyToPublicKey(issuerDid);
+        const pubHex = bytesToHex(pubBytes);
+        const row = issuerTrustStmt.get(callerMotebitId, pubHex) as
+          | { trust_level: string }
+          | undefined;
+        if (!row) return 0.1;
+        return trustLevelToScore(row.trust_level as AgentTrustLevel);
+      } catch {
+        return 0.3; // Fallback for non-did:key issuers or lookup failures
+      }
+    }
+
     const profiles: CandidateProfile[] = listingRows.map((row) => {
       const mid = row.motebit_id as string;
       const isOnline =
@@ -208,6 +240,28 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
         }
       }
 
+      // Aggregate peer-issued credentials for this candidate
+      let credential_reputation: CandidateProfile["credential_reputation"];
+      try {
+        const credRows = credStmt.all(mid) as Array<{ credential_json: string }>;
+        if (credRows.length > 0) {
+          const vcs = credRows
+            .map((r) => {
+              try {
+                return JSON.parse(r.credential_json) as ReputationVC;
+              } catch {
+                return null;
+              }
+            })
+            .filter((vc): vc is ReputationVC => vc != null);
+          if (vcs.length > 0) {
+            credential_reputation = aggregateCredentialReputation(vcs, getIssuerTrust) ?? undefined;
+          }
+        }
+      } catch {
+        // Best-effort: credential aggregation failure doesn't block routing
+      }
+
       return {
         motebit_id: asMotebitId(mid),
         trust_record,
@@ -226,6 +280,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
         },
         latency_stats: latencyStats,
         is_online: isOnline,
+        credential_reputation,
       } satisfies CandidateProfile;
     });
 

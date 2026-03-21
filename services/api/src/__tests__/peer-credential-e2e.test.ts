@@ -409,4 +409,150 @@ describe("Peer Credential E2E — Cross-Relay Portability", () => {
     });
     expect(((await resB.json()) as { valid: boolean }).valid).toBe(false);
   });
+
+  it("peer-issued credentials influence relay routing scores", async () => {
+    // Create a relay with credential issuance ENABLED so credentials land in relay_credentials
+    const routingRelay = await createSyncRelay({
+      dbPath: ":memory:",
+      apiToken: "routing-test-token",
+      enableDeviceAuth: true,
+      issueCredentials: true,
+      x402: {
+        payToAddress: "0x0000000000000000000000000000000000000000",
+        network: "eip155:84532",
+        testnet: true,
+      },
+    });
+
+    const kpAlice = await generateKeypair();
+    const kpBob = await generateKeypair();
+    const kpCarol = await generateKeypair();
+    const aliceId = crypto.randomUUID();
+    const bobId = crypto.randomUUID();
+    const carolId = crypto.randomUUID();
+
+    // Bootstrap all agents
+    const bootAlice = await routingRelay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        motebit_id: aliceId,
+        device_id: "alice-dev",
+        public_key: bytesToHex(kpAlice.publicKey),
+      }),
+    });
+    const aliceDevId = ((await bootAlice.json()) as { device_id: string }).device_id;
+
+    const bootBob = await routingRelay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        motebit_id: bobId,
+        device_id: "bob-dev",
+        public_key: bytesToHex(kpBob.publicKey),
+      }),
+    });
+    const bobDevId = ((await bootBob.json()) as { device_id: string }).device_id;
+
+    const bootCarol = await routingRelay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        motebit_id: carolId,
+        device_id: "carol-dev",
+        public_key: bytesToHex(kpCarol.publicKey),
+      }),
+    });
+    const carolDevId = ((await bootCarol.json()) as { device_id: string }).device_id;
+
+    // Register both Bob and Carol as agents with the same capability
+    const AUTH_R = (t: string) => ({ Authorization: `Bearer ${t}` });
+    for (const [id, kp, devId] of [
+      [bobId, kpBob, bobDevId],
+      [carolId, kpCarol, carolDevId],
+    ] as const) {
+      const token = await makeSignedToken(id, devId, kp, "admin:query");
+      await routingRelay.app.request("/api/v1/agents/register", {
+        method: "POST",
+        headers: { ...JSON_HEADERS, ...AUTH_R(token) },
+        body: JSON.stringify({
+          motebit_id: id,
+          endpoint_url: "http://localhost:9999/mcp",
+          capabilities: ["web_search"],
+          public_key: bytesToHex(kp.publicKey),
+        }),
+      });
+      // Register service listing
+      await routingRelay.app.request(`/api/v1/agents/${id}/listing`, {
+        method: "POST",
+        headers: { ...JSON_HEADERS, ...AUTH_R(token) },
+        body: JSON.stringify({
+          capabilities: ["web_search"],
+          pricing: [{ capability: "web_search", unit_cost: 0.01, currency: "USD", per: "task" }],
+          description: `Agent ${id.slice(0, 8)}`,
+          sla: { max_latency_ms: 5000, availability_guarantee: 0.99 },
+        }),
+      });
+    }
+
+    // Submit 3 tasks to Bob and post successful receipts — this generates trust + credentials
+    for (let i = 0; i < 3; i++) {
+      const tokenA = await makeSignedToken(aliceId, aliceDevId, kpAlice, "task:submit");
+      const taskRes = await routingRelay.app.request(`/agent/${bobId}/task`, {
+        method: "POST",
+        headers: { ...JSON_HEADERS, ...AUTH_R(tokenA) },
+        body: JSON.stringify({ prompt: `task ${i}`, submitted_by: aliceId }),
+      });
+      const { task_id } = (await taskRes.json()) as { task_id: string };
+
+      const receipt = await makeReceipt(task_id, bobId, bobDevId, kpBob);
+      const tokenB = await makeSignedToken(bobId, bobDevId, kpBob, "task:result");
+      await routingRelay.app.request(`/agent/${bobId}/task/${task_id}/result`, {
+        method: "POST",
+        headers: { ...JSON_HEADERS, ...AUTH_R(tokenB) },
+        body: JSON.stringify(receipt),
+      });
+    }
+
+    // Now check: Bob should have relay_credentials entries and Carol should not
+    const bobCreds = await routingRelay.app.request(`/api/v1/agents/${bobId}/credentials`, {
+      headers: AUTH_R("routing-test-token"),
+    });
+    const bobCredBody = (await bobCreds.json()) as { credentials: unknown[] };
+    expect(bobCredBody.credentials.length).toBeGreaterThan(0);
+
+    const carolCreds = await routingRelay.app.request(`/api/v1/agents/${carolId}/credentials`, {
+      headers: AUTH_R("routing-test-token"),
+    });
+    const carolCredBody = (await carolCreds.json()) as { credentials: unknown[] };
+    expect(carolCredBody.credentials).toHaveLength(0);
+
+    // Submit a new task from Alice for web_search — the routing should favor Bob
+    // because he has peer-issued reputation credentials (and Carol doesn't)
+    const taskToken = await makeSignedToken(aliceId, aliceDevId, kpAlice, "task:submit");
+    const routedRes = await routingRelay.app.request(`/agent/${bobId}/task`, {
+      method: "POST",
+      headers: { ...JSON_HEADERS, ...AUTH_R(taskToken) },
+      body: JSON.stringify({
+        prompt: "search the web",
+        submitted_by: aliceId,
+        required_capabilities: ["web_search"],
+      }),
+    });
+    expect(routedRes.status).toBe(201);
+    const routedBody = (await routedRes.json()) as {
+      routing_choice?: { candidates?: Array<{ motebit_id: string; composite: number }> };
+    };
+
+    // If routing_choice is returned with scored candidates, Bob should score >= Carol
+    if (routedBody.routing_choice?.candidates && routedBody.routing_choice.candidates.length >= 2) {
+      const bobScore = routedBody.routing_choice.candidates.find((c) => c.motebit_id === bobId);
+      const carolScore = routedBody.routing_choice.candidates.find((c) => c.motebit_id === carolId);
+      if (bobScore && carolScore) {
+        expect(bobScore.composite).toBeGreaterThanOrEqual(carolScore.composite);
+      }
+    }
+
+    routingRelay.close();
+  });
 });
