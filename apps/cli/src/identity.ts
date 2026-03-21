@@ -88,6 +88,13 @@ export function promptPassphrase(
         stdin.removeListener("data", onData);
         stdin.setRawMode(false);
         stdin.pause();
+        // Always mask before newline — prevents plaintext from staying in scroll history
+        // even if user toggled to visible mode while typing
+        if (visible && value.length > 0) {
+          stdout.write(`\x1b[${value.length}D`);
+          stdout.write("\x1b[K");
+          stdout.write("*".repeat(value.length));
+        }
         stdout.write("\n");
         callerRl?.resume();
         resolve(value);

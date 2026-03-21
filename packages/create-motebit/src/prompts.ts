@@ -73,6 +73,12 @@ export function password(rl: readline.Interface, message: string): Promise<strin
       stdin.setRawMode(false);
       stdin.pause();
       pwRl.close();
+      // Always mask before newline — prevents plaintext from staying in scroll history
+      if (visible && len > 0) {
+        stdout.write(`\x1b[${len}D`);
+        stdout.write("\x1b[K");
+        stdout.write("*".repeat(len));
+      }
       stdout.write("\n");
       rl.resume();
     };
