@@ -574,6 +574,8 @@ export interface ToolRegistry {
   register(tool: ToolDefinition, handler: ToolHandler): void;
   /** Replace the handler for an existing tool, or register if new. */
   replace?(tool: ToolDefinition, handler: ToolHandler): void;
+  /** Remove a tool from the registry. Returns true if it existed. */
+  unregister?(name: string): boolean;
 }
 
 // === AI Provider ===

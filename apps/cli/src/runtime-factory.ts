@@ -39,9 +39,6 @@ import {
   createRecallMemoriesHandler,
   listEventsDefinition,
   createListEventsHandler,
-  createSubGoalDefinition,
-  completeGoalDefinition,
-  reportProgressDefinition,
   BraveSearchProvider,
   DuckDuckGoSearchProvider,
   FallbackSearchProvider,
@@ -215,17 +212,9 @@ export function buildToolRegistry(
   registry.register(recallMemoriesDefinition, createRecallMemoriesHandler(memorySearchFn));
   registry.register(listEventsDefinition, createListEventsHandler(eventQueryFn));
 
-  // Goal execution tools — registered as stubs so the AI knows they exist.
-  // In daemon mode, GoalScheduler.registerGoalTools() replaces these with full
-  // implementations that have access to the goalStore and currentGoalId context.
-  const goalStubHandler = () =>
-    Promise.resolve({
-      ok: false,
-      error: "No active goal context — goal tools are available during daemon mode goal execution.",
-    });
-  registry.register(createSubGoalDefinition, goalStubHandler);
-  registry.register(completeGoalDefinition, goalStubHandler);
-  registry.register(reportProgressDefinition, goalStubHandler);
+  // Goal execution tools (create_sub_goal, complete_goal, report_progress) are NOT
+  // registered here. They are registered/unregistered by GoalScheduler around each
+  // goal run so the model only sees them when they can actually be used.
 
   // Operator-only (R2+): write files, execute shell commands
   if (config.operator) {

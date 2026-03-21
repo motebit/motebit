@@ -15,6 +15,11 @@ export class InMemoryToolRegistry implements ToolRegistry {
     this.tools.set(tool.name, { definition: tool, handler });
   }
 
+  /** Remove a tool from the registry. Returns true if it existed. */
+  unregister(name: string): boolean {
+    return this.tools.delete(name);
+  }
+
   list(): ToolDefinition[] {
     return [...this.tools.values()].map((t) => t.definition);
   }

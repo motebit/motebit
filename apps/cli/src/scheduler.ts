@@ -66,7 +66,6 @@ export class GoalScheduler {
   start(tickMs = 60_000): void {
     if (this.timer) return;
     this.cleanupOrphanedApprovals();
-    this.registerGoalTools();
     this.ensureMaintenanceGoal();
     this.timer = setInterval(() => {
       void this.tick();
@@ -252,11 +251,18 @@ export class GoalScheduler {
       return { ok: true, data: `Progress recorded: ${note}` };
     };
 
-    // Replace stub handlers registered by buildToolRegistry with full implementations
-    // that have access to goalStore, currentGoalId, and event logging.
+    // Register goal tools with full implementations.
+    // These are only visible to the model during active goal execution.
     registry.replace(createSubGoalDefinition, createSubGoalHandler);
     registry.replace(completeGoalDefinition, completeGoalHandler);
     registry.replace(reportProgressDefinition, reportProgressHandler);
+  }
+
+  private unregisterGoalTools(): void {
+    const registry = this.runtime.getToolRegistry();
+    registry.unregister?.("create_sub_goal");
+    registry.unregister?.("complete_goal");
+    registry.unregister?.("report_progress");
   }
 
   private buildGoalContext(goal: Goal, outcomes: GoalOutcome[], subGoals: Goal[]): string {
@@ -444,6 +450,7 @@ export class GoalScheduler {
         const enrichedPrompt = this.buildGoalContext(goal, outcomes, subGoals);
 
         this.currentGoalId = goal.goal_id;
+        this.registerGoalTools();
 
         // Generate a stable runId for this goal execution (= outcome_id for audit correlation)
         const runId = crypto.randomUUID();
@@ -547,6 +554,7 @@ export class GoalScheduler {
           }
         } finally {
           this.currentGoalId = null;
+          this.unregisterGoalTools();
         }
       }
       // Phase 5: periodic memory housekeeping (every 10 ticks ≈ 10 min at default 60s)
