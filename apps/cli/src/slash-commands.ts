@@ -300,7 +300,7 @@ Available commands:
 
       // Conversation sync
       if (repl) {
-        const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
+        const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig?.sync_url;
         if (syncUrl != null && syncUrl !== "") {
           try {
             console.log("Syncing conversations...");
@@ -975,7 +975,7 @@ Available commands:
       }
 
       // Relay-based discovery: no argument or capability filter
-      const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
+      const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig?.sync_url;
       if (!syncUrl) {
         console.log("No sync URL configured. Set --sync-url or MOTEBIT_SYNC_URL.");
         break;
@@ -1165,7 +1165,10 @@ Available commands:
       }
 
       const syncUrl =
-        config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? "https://motebit-sync.fly.dev";
+        config.syncUrl ??
+        process.env["MOTEBIT_SYNC_URL"] ??
+        fullConfig?.sync_url ??
+        "https://motebit-sync.fly.dev";
 
       // Resolve prefix to full motebit ID if needed (UUID is 36 chars)
       let targetMotebitId = rawTargetId;
@@ -1371,7 +1374,10 @@ Available commands:
       }
 
       const proposeSyncUrl =
-        config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? "https://motebit-sync.fly.dev";
+        config.syncUrl ??
+        process.env["MOTEBIT_SYNC_URL"] ??
+        fullConfig?.sync_url ??
+        "https://motebit-sync.fly.dev";
 
       // Build signed auth token
       let proposeAuthHeader: string | undefined;
@@ -1485,7 +1491,10 @@ Available commands:
       }
 
       const proposalsSyncUrl =
-        config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? "https://motebit-sync.fly.dev";
+        config.syncUrl ??
+        process.env["MOTEBIT_SYNC_URL"] ??
+        fullConfig?.sync_url ??
+        "https://motebit-sync.fly.dev";
 
       let proposalsAuthHeader: string | undefined;
       if (repl.privateKeyBytes && repl.deviceId) {
@@ -1574,7 +1583,10 @@ Available commands:
       }
 
       const proposalSyncUrl =
-        config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? "https://motebit-sync.fly.dev";
+        config.syncUrl ??
+        process.env["MOTEBIT_SYNC_URL"] ??
+        fullConfig?.sync_url ??
+        "https://motebit-sync.fly.dev";
 
       let proposalAuthHeader: string | undefined;
       if (repl.privateKeyBytes && repl.deviceId) {
