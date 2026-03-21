@@ -80,6 +80,50 @@ interface A2ATask {
 }
 
 // ---------------------------------------------------------------------------
+// AP2 Types (Google Agent Payments Protocol — V0.1)
+// ---------------------------------------------------------------------------
+
+/** AP2 Intent Mandate — authorizes an agent to act in human-not-present scenarios. */
+interface AP2IntentMandate {
+  type: "intent_mandate";
+  /** Shopping intent: product categories, SKUs, purchase criteria */
+  intent: string;
+  /** Prompt playback: agent's understanding of what the user wants */
+  prompt_playback?: string;
+  /** Chargeable payment methods (list or category) */
+  payment_methods?: string[];
+  /** Maximum authorized amount */
+  max_amount?: { currency: string; value: number };
+  /** Time-to-live in milliseconds */
+  ttl_ms?: number;
+  /** Cryptographic signature (algorithm left open by AP2 spec) */
+  signature?: string;
+  /** Signer's public key or DID */
+  signer?: string;
+  /** ISO 8601 timestamp */
+  timestamp: string;
+}
+
+/** AP2 Payment Mandate — proof of completed transaction for ecosystem visibility. */
+interface AP2PaymentMandate {
+  type: "payment_mandate";
+  payment_mandate_id: string;
+  /** Original task/order ID */
+  payment_details_id: string;
+  /** Total amount */
+  total: { currency: string; value: number };
+  /** Agent presence: human_present or human_not_present */
+  modality: "human_present" | "human_not_present";
+  /** Merchant/service agent identity */
+  merchant_agent: string;
+  /** User authorization token (JWT or signed blob) */
+  user_authorization?: string;
+  timestamp: string;
+  /** Motebit extension: the signed ExecutionReceipt that proves the work was done */
+  "x-motebit-receipt"?: unknown;
+}
+
+// ---------------------------------------------------------------------------
 // Bridge Registration
 // ---------------------------------------------------------------------------
 
@@ -118,6 +162,13 @@ export function registerA2ARoutes(app: Hono, db: DatabaseDriver, config: A2ABrid
           name: "Agent Discovery",
           description: "Discover available agents by capability across the federated network.",
           tags: ["discovery", "federation"],
+        },
+        {
+          id: "ap2_payment",
+          name: "AP2 Payment",
+          description:
+            "Accept AP2 Intent Mandates for authorized agent commerce. Returns AP2 Payment Mandates with signed execution receipts.",
+          tags: ["payments", "ap2", "commerce"],
         },
       ],
       securitySchemes: [
@@ -353,6 +404,120 @@ export function registerA2ARoutes(app: Hono, db: DatabaseDriver, config: A2ABrid
         } satisfies A2ATask,
         500,
       );
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // AP2 Protocol Bridge — Agent Payments Protocol (Google, V0.1)
+  // ---------------------------------------------------------------------------
+  //
+  // Maps AP2 mandates to motebit primitives:
+  //   Intent Mandate  → DelegationToken (signed authorization + scope + TTL)
+  //   Payment Mandate ← ExecutionReceipt (signed proof of execution)
+  //
+  // The relay remains the economic checkpoint — AP2 mandates authorize tasks
+  // that flow through the standard task submission pipeline with 5% fee.
+
+  /**
+   * POST /ap2/agents/:motebitId/mandate — Submit an AP2 Intent Mandate.
+   *
+   * Translates the mandate into a motebit task, routes through the relay,
+   * and returns an AP2 Payment Mandate with the signed ExecutionReceipt.
+   */
+  app.post("/ap2/agents/:motebitId/mandate", async (c) => {
+    const motebitId = c.req.param("motebitId");
+
+    const mandate = await c.req.json<AP2IntentMandate>();
+
+    if (mandate.type !== "intent_mandate") {
+      return c.json({ error: "Expected type: intent_mandate" }, 400);
+    }
+    if (!mandate.intent || typeof mandate.intent !== "string") {
+      return c.json({ error: "Missing or empty intent field" }, 400);
+    }
+
+    // Check TTL — reject expired mandates
+    if (mandate.ttl_ms != null) {
+      const mandateTime = new Date(mandate.timestamp).getTime();
+      if (!Number.isFinite(mandateTime)) {
+        return c.json({ error: "Invalid timestamp" }, 400);
+      }
+      if (Date.now() > mandateTime + mandate.ttl_ms) {
+        return c.json({ error: "Intent mandate has expired (TTL exceeded)" }, 400);
+      }
+    }
+
+    // Map Intent Mandate → motebit task
+    const prompt = mandate.prompt_playback ?? mandate.intent;
+    const authHeader = c.req.header("Authorization");
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (authHeader) headers["Authorization"] = authHeader;
+
+    const taskBody: Record<string, unknown> = {
+      prompt,
+      submitted_by: `ap2:${mandate.signer ?? "unknown"}`,
+    };
+
+    // Forward budget constraint from mandate
+    if (mandate.max_amount != null) {
+      taskBody.wall_clock_ms = mandate.ttl_ms ?? 300_000;
+    }
+
+    try {
+      const resp = await fetch(`${relayUrl}/agent/${motebitId}/task`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(taskBody),
+      });
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        if (resp.status === 402) {
+          return c.json(
+            {
+              error: "payment_required",
+              message: "Insufficient budget for mandate execution",
+              mandate_id: mandate.intent.slice(0, 32),
+            },
+            402,
+          );
+        }
+        return c.json({ error: text }, resp.status as 400);
+      }
+
+      const result = (await resp.json()) as {
+        task_id: string;
+        status: string;
+        result?: string;
+        receipt?: Record<string, unknown>;
+        routing_choice?: unknown;
+      };
+
+      // Build AP2 Payment Mandate from execution result
+      const paymentMandate: AP2PaymentMandate = {
+        type: "payment_mandate",
+        payment_mandate_id: `pm_${result.task_id}`,
+        payment_details_id: result.task_id,
+        total: mandate.max_amount ?? { currency: "USDC", value: 0 },
+        modality: "human_not_present",
+        merchant_agent: `motebit:${motebitId.slice(0, 8)}`,
+        timestamp: new Date().toISOString(),
+      };
+
+      // Attach motebit receipt — cryptographic proof that AP2 can't provide alone
+      if (result.receipt != null) {
+        paymentMandate["x-motebit-receipt"] = result.receipt;
+      }
+
+      return c.json({
+        status: result.status === "completed" ? "completed" : "failed",
+        task_id: result.task_id,
+        result: result.result,
+        payment_mandate: paymentMandate,
+        routing_choice: result.routing_choice,
+      });
+    } catch (err: unknown) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
     }
   });
 }
