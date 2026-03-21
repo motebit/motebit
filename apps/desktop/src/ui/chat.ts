@@ -902,6 +902,347 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
         addMessage("system", formatHelpText());
         break;
 
+      case "graph":
+        void (async () => {
+          try {
+            const stats = await ctx.app.getMemoryGraphStats();
+            if (!stats) {
+              addMessage("system", "Memory graph not available (AI not initialized)");
+            } else {
+              addMessage(
+                "system",
+                `Memory graph:\n  Nodes: ${stats.nodes}\n  Edges: ${stats.edges}\n  Pinned: ${stats.pinned}`,
+              );
+            }
+          } catch (err: unknown) {
+            addMessage("system", `Error: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        })();
+        break;
+
+      case "curious": {
+        const targets = ctx.app.getCuriosityTargets();
+        if (targets.length === 0) {
+          addMessage("system", "No curiosity targets");
+        } else {
+          const lines = [`${targets.length} curiosity target${targets.length === 1 ? "" : "s"}:`];
+          for (const t of targets) {
+            const label =
+              t.node.content.length > 60 ? t.node.content.slice(0, 60) + "..." : t.node.content;
+            lines.push(`  ${label} (score: ${t.curiosityScore.toFixed(2)})`);
+          }
+          addMessage("system", lines.join("\n"));
+        }
+        break;
+      }
+
+      case "reflect":
+        void (async () => {
+          try {
+            addMessage("system", "Reflecting...");
+            const result = await ctx.app.reflect();
+            const lines: string[] = [];
+            if (result.selfAssessment) lines.push(`Assessment: ${result.selfAssessment}`);
+            if (result.insights.length > 0) {
+              lines.push("Insights:");
+              for (const i of result.insights) lines.push(`  - ${i}`);
+            }
+            if (result.planAdjustments.length > 0) {
+              lines.push("Adjustments:");
+              for (const a of result.planAdjustments) lines.push(`  - ${a}`);
+            }
+            addMessage("system", lines.join("\n") || "No reflection output");
+          } catch (err: unknown) {
+            addMessage(
+              "system",
+              `Reflection failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        })();
+        break;
+
+      case "gradient": {
+        const g = ctx.app.getGradient();
+        if (!g) {
+          addMessage("system", "No gradient data yet (computed during housekeeping)");
+        } else {
+          const lines = [
+            `Intelligence gradient: ${g.gradient.toFixed(3)} (delta: ${g.delta >= 0 ? "+" : ""}${g.delta.toFixed(3)})`,
+            `  kd (knowledge density):     ${g.knowledge_density.toFixed(3)}`,
+            `  kq (knowledge quality):      ${g.knowledge_quality.toFixed(3)}`,
+            `  gc (graph connectivity):     ${g.graph_connectivity.toFixed(3)}`,
+            `  ts (temporal stability):     ${g.temporal_stability.toFixed(3)}`,
+            `  rq (retrieval quality):      ${g.retrieval_quality.toFixed(3)}`,
+            `  ie (interaction efficiency): ${g.interaction_efficiency.toFixed(3)}`,
+            `  te (tool efficiency):        ${g.tool_efficiency.toFixed(3)}`,
+            `  cp (curiosity pressure):     ${g.curiosity_pressure.toFixed(3)}`,
+          ];
+          addMessage("system", lines.join("\n"));
+        }
+        break;
+      }
+
+      case "agents":
+        void (async () => {
+          try {
+            const agents = await ctx.app.listTrustedAgents();
+            if (agents.length === 0) {
+              addMessage("system", "No known agents");
+            } else {
+              const lines = [`${agents.length} known agent${agents.length === 1 ? "" : "s"}:`];
+              for (const a of agents) {
+                lines.push(
+                  `  ${a.remote_motebit_id} [${a.trust_level}] (${a.interaction_count} interactions)`,
+                );
+              }
+              addMessage("system", lines.join("\n"));
+            }
+          } catch (err: unknown) {
+            addMessage("system", `Error: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        })();
+        break;
+
+      case "discover": {
+        const discoverConfig = ctx.getConfig();
+        if (!discoverConfig?.syncUrl) {
+          addMessage("system", "No relay configured");
+          break;
+        }
+        void (async () => {
+          try {
+            const invoke = discoverConfig.invoke;
+            if (!invoke) {
+              addMessage("system", "No Tauri invoke available");
+              return;
+            }
+            const keypair = await ctx.app.getDeviceKeypair(invoke);
+            if (!keypair) {
+              addMessage("system", "No device keypair");
+              return;
+            }
+            const token = await ctx.app.createSyncToken(keypair.privateKey);
+            const res = await fetch(`${discoverConfig.syncUrl}/api/v1/agents/discover`, {
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            });
+            if (!res.ok) throw new Error(`${res.status}`);
+            const data = (await res.json()) as {
+              agents?: Array<{ motebit_id: string; capabilities?: string[] }>;
+            };
+            const agents = data.agents ?? [];
+            if (agents.length === 0) {
+              addMessage("system", "No agents discovered on relay");
+            } else {
+              const lines = [`${agents.length} agent${agents.length === 1 ? "" : "s"} on relay:`];
+              for (const a of agents) {
+                const caps = a.capabilities?.join(", ") ?? "none";
+                lines.push(`  ${a.motebit_id} (${caps})`);
+              }
+              addMessage("system", lines.join("\n"));
+            }
+          } catch (err: unknown) {
+            addMessage(
+              "system",
+              `Discovery error: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        })();
+        break;
+      }
+
+      case "approvals": {
+        const pending = ctx.app.hasPendingApproval();
+        if (!pending) {
+          addMessage("system", "No pending approvals");
+        } else {
+          const info = ctx.app.pendingApprovalInfo;
+          if (info) {
+            addMessage(
+              "system",
+              `Pending approval:\n  Tool: ${info.toolName}\n  Args: ${JSON.stringify(info.args)}`,
+            );
+          } else {
+            addMessage("system", "Approval pending (no details available)");
+          }
+        }
+        break;
+      }
+
+      case "balance": {
+        const balanceConfig = ctx.getConfig();
+        if (!balanceConfig?.syncUrl) {
+          addMessage("system", "No relay configured");
+          break;
+        }
+        void (async () => {
+          try {
+            const invoke = balanceConfig.invoke;
+            if (!invoke) {
+              addMessage("system", "No Tauri invoke available");
+              return;
+            }
+            const keypair = await ctx.app.getDeviceKeypair(invoke);
+            if (!keypair) {
+              addMessage("system", "No device keypair");
+              return;
+            }
+            const token = await ctx.app.createSyncToken(keypair.privateKey);
+            const res = await fetch(
+              `${balanceConfig.syncUrl}/api/v1/agents/${ctx.app.motebitId}/balance`,
+              {
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+              },
+            );
+            if (!res.ok) throw new Error(`${res.status}`);
+            const data = (await res.json()) as {
+              balance?: number;
+              currency?: string;
+              pending_allocations?: number;
+            };
+            addMessage(
+              "system",
+              `Balance: ${data.balance ?? 0} ${data.currency ?? "USDC"}\nPending: ${data.pending_allocations ?? 0}`,
+            );
+          } catch (err: unknown) {
+            addMessage(
+              "system",
+              `Balance error: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        })();
+        break;
+      }
+
+      case "deposits": {
+        const depositsConfig = ctx.getConfig();
+        if (!depositsConfig?.syncUrl) {
+          addMessage("system", "No relay configured");
+          break;
+        }
+        void (async () => {
+          try {
+            const invoke = depositsConfig.invoke;
+            if (!invoke) {
+              addMessage("system", "No Tauri invoke available");
+              return;
+            }
+            const keypair = await ctx.app.getDeviceKeypair(invoke);
+            if (!keypair) {
+              addMessage("system", "No device keypair");
+              return;
+            }
+            const token = await ctx.app.createSyncToken(keypair.privateKey);
+            const res = await fetch(
+              `${depositsConfig.syncUrl}/api/v1/agents/${ctx.app.motebitId}/deposits`,
+              {
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+              },
+            );
+            if (!res.ok) throw new Error(`${res.status}`);
+            const data = (await res.json()) as {
+              deposits?: Array<{ amount: number; timestamp: number; source?: string }>;
+            };
+            const deps = data.deposits ?? [];
+            if (deps.length === 0) {
+              addMessage("system", "No deposit history");
+            } else {
+              const lines = [`${deps.length} deposit${deps.length === 1 ? "" : "s"}:`];
+              for (const d of deps) {
+                const date = new Date(d.timestamp).toLocaleDateString();
+                lines.push(`  ${d.amount} ${d.source ? `(${d.source})` : ""} — ${date}`);
+              }
+              addMessage("system", lines.join("\n"));
+            }
+          } catch (err: unknown) {
+            addMessage(
+              "system",
+              `Deposits error: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        })();
+        break;
+      }
+
+      case "proposals": {
+        const proposalsConfig = ctx.getConfig();
+        if (!proposalsConfig?.syncUrl) {
+          addMessage("system", "No relay configured");
+          break;
+        }
+        void (async () => {
+          try {
+            const invoke = proposalsConfig.invoke;
+            if (!invoke) {
+              addMessage("system", "No Tauri invoke available");
+              return;
+            }
+            const keypair = await ctx.app.getDeviceKeypair(invoke);
+            if (!keypair) {
+              addMessage("system", "No device keypair");
+              return;
+            }
+            const token = await ctx.app.createSyncToken(keypair.privateKey);
+            const res = await fetch(
+              `${proposalsConfig.syncUrl}/api/v1/agents/${ctx.app.motebitId}/proposals`,
+              {
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+              },
+            );
+            if (!res.ok) throw new Error(`${res.status}`);
+            const data = (await res.json()) as {
+              proposals?: Array<{ id: string; status: string; description?: string }>;
+            };
+            const props = data.proposals ?? [];
+            if (props.length === 0) {
+              addMessage("system", "No active proposals");
+            } else {
+              const lines = [`${props.length} proposal${props.length === 1 ? "" : "s"}:`];
+              for (const p of props) {
+                lines.push(`  ${p.id} [${p.status}] ${p.description ?? ""}`);
+              }
+              addMessage("system", lines.join("\n"));
+            }
+          } catch (err: unknown) {
+            addMessage(
+              "system",
+              `Proposals error: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        })();
+        break;
+      }
+
+      case "delegate":
+        addMessage(
+          "system",
+          "Delegation happens transparently via AI. Use CLI for manual: motebit delegate <id> <prompt>",
+        );
+        break;
+
+      case "propose":
+        addMessage("system", "Use CLI: motebit propose <ids> <goal>");
+        break;
+
+      case "withdraw":
+        addMessage("system", "Use CLI: motebit withdraw");
+        break;
+
+      case "mcp": {
+        const mcpServers = ctx.app.getMcpStatus();
+        if (mcpServers.length === 0) {
+          addMessage("system", "No MCP servers configured");
+        } else {
+          const lines = [`${mcpServers.length} MCP server${mcpServers.length === 1 ? "" : "s"}:`];
+          for (const s of mcpServers) {
+            const status = s.connected ? "connected" : "disconnected";
+            const trust = s.trusted ? ", trusted" : "";
+            lines.push(`  ${s.name} (${s.transport}, ${status}${trust})`);
+          }
+          addMessage("system", lines.join("\n"));
+        }
+        break;
+      }
+
       default:
         addMessage("system", `Unknown command: /${command}`);
     }

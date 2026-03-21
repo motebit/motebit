@@ -1166,6 +1166,43 @@ export class DesktopApp {
     }));
   }
 
+  // === Curiosity, Gradient, Reflection, Agents, Approvals ===
+
+  getCuriosityTargets() {
+    if (!this.runtime) return [];
+    return this.runtime.getCuriosityTargets();
+  }
+
+  async getMemoryGraphStats() {
+    if (!this.runtime) return null;
+    const { nodes, edges } = await this.runtime.memory.exportAll();
+    const active = nodes.filter((n) => !n.tombstoned);
+    const pinned = active.filter((n) => n.pinned);
+    return { nodes: active.length, edges: edges.length, pinned: pinned.length };
+  }
+
+  getGradient() {
+    return this.runtime?.getGradient() ?? null;
+  }
+
+  async reflect() {
+    if (!this.runtime) throw new Error("AI not initialized");
+    return this.runtime.reflect();
+  }
+
+  async listTrustedAgents() {
+    if (!this.runtime) return [];
+    return this.runtime.listTrustedAgents();
+  }
+
+  hasPendingApproval(): boolean {
+    return this.runtime?.hasPendingApproval ?? false;
+  }
+
+  get pendingApprovalInfo() {
+    return this.runtime?.pendingApprovalInfo ?? null;
+  }
+
   // === Identity ===
 
   getIdentityInfo(): { motebitId: string; deviceId: string; publicKey: string; did: string } {

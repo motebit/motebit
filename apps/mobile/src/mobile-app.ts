@@ -18,7 +18,10 @@ import type {
   InteriorColor,
   PolicyConfig,
   MemoryGovernanceConfig,
+  ReflectionResult,
+  CuriosityTarget,
 } from "@motebit/runtime";
+import type { GradientSnapshot } from "@motebit/runtime";
 import {
   CloudProvider,
   OllamaProvider,
@@ -944,6 +947,27 @@ export class MobileApp {
 
   getCues(): BehaviorCues | null {
     return this.runtime?.getCues() ?? null;
+  }
+
+  getCuriosityTargets(): CuriosityTarget[] {
+    return this.runtime?.getCuriosityTargets() ?? [];
+  }
+
+  async reflect(): Promise<ReflectionResult> {
+    if (!this.runtime) throw new Error("Runtime not initialized");
+    return this.runtime.reflect();
+  }
+
+  getGradient(): GradientSnapshot | null {
+    return this.runtime?.getGradient() ?? null;
+  }
+
+  async getMemoryGraphStats(): Promise<{
+    nodes: MemoryNode[];
+    edges: Array<{ source_id: string; target_id: string; relation_type: string }>;
+  }> {
+    if (!this.runtime) throw new Error("Runtime not initialized");
+    return this.runtime.memory.exportAll();
   }
 
   subscribe(fn: (state: MotebitState) => void): () => void {

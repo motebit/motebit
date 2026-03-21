@@ -32,6 +32,20 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "summarize", description: "Summarize current conversation" },
   { name: "sync", description: "Sync with relay server" },
   { name: "help", description: "Show available commands" },
+  { name: "graph", description: "Memory graph stats" },
+  { name: "curious", description: "Show curiosity targets" },
+  { name: "reflect", description: "Trigger self-reflection" },
+  { name: "gradient", description: "Intelligence gradient" },
+  { name: "agents", description: "List known agents" },
+  { name: "discover", description: "Discover agents on relay" },
+  { name: "approvals", description: "Show pending approvals" },
+  { name: "balance", description: "Show account balance" },
+  { name: "deposits", description: "Show deposit history" },
+  { name: "proposals", description: "List active proposals" },
+  { name: "delegate", description: "Delegate task to agent" },
+  { name: "propose", description: "Propose collaborative plan" },
+  { name: "withdraw", description: "Request withdrawal" },
+  { name: "mcp", description: "MCP server management" },
 ];
 
 /** Map of command name to definition for O(1) lookup. */

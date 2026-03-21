@@ -35,6 +35,7 @@ const GLView = _GLView as unknown as typeof _GLView &
 import type { ExpoWebGLRenderingContext } from "expo-gl";
 import * as SecureStore from "expo-secure-store";
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";
+import { MemoryType } from "@motebit/sdk";
 import type { StreamChunk } from "@motebit/runtime";
 import { stripTags, stripPartialActionTag } from "@motebit/ai-core";
 import type { TTSProvider, STTProvider } from "@motebit/voice";
@@ -859,6 +860,136 @@ export function App(): React.ReactElement {
         case "operator":
           showToast(a.isOperatorMode ? "Operator mode: ON" : "Operator mode: OFF");
           break;
+        case "graph":
+          void (async () => {
+            try {
+              const { nodes, edges } = await a.getMemoryGraphStats();
+              const live = nodes.filter((n) => !n.tombstoned);
+              if (live.length === 0) {
+                addSystemMessage("No memories in graph.");
+                return;
+              }
+              const DAY = 86_400_000;
+              const liveIds = new Set(live.map((n) => n.node_id));
+              const liveEdges = edges.filter(
+                (e) => liveIds.has(e.source_id) || liveIds.has(e.target_id),
+              );
+              const sem = live.filter(
+                (n) => (n.memory_type ?? MemoryType.Semantic) === MemoryType.Semantic,
+              ).length;
+              const epi = live.filter((n) => n.memory_type === MemoryType.Episodic).length;
+              const pinned = live.filter((n) => n.pinned).length;
+              const avgHalfLife = live.reduce((s, n) => s + n.half_life, 0) / live.length;
+              const compounded = live.filter((n) => n.half_life > 30 * DAY).length;
+              const avgConf = live.reduce((s, n) => s + n.confidence, 0) / live.length;
+              const edgeTypes = new Map<string, number>();
+              for (const e of liveEdges) {
+                edgeTypes.set(e.relation_type, (edgeTypes.get(e.relation_type) ?? 0) + 1);
+              }
+              let msg =
+                `Memory Graph:\n` +
+                `  Nodes: ${live.length} (${sem} semantic, ${epi} episodic, ${pinned} pinned)\n` +
+                `  Edges: ${liveEdges.length}`;
+              if (edgeTypes.size > 0) {
+                const parts = Array.from(edgeTypes.entries())
+                  .map(([t, c]) => `${c} ${t}`)
+                  .join(", ");
+                msg += `\n           ${parts}`;
+              }
+              msg +=
+                `\n  Avg conf: ${avgConf.toFixed(2)}` +
+                `\n  Avg half: ${Math.round(avgHalfLife / DAY)}d` +
+                `\n  Compounded: ${compounded} (half-life > 30d)` +
+                `\n  Density: ${(liveEdges.length / live.length).toFixed(2)} edges/node`;
+              const gradient = a.getGradient();
+              if (gradient) {
+                const delta =
+                  gradient.delta >= 0 ? `+${gradient.delta.toFixed(4)}` : gradient.delta.toFixed(4);
+                msg += `\n  Gradient: ${gradient.gradient.toFixed(4)} (${delta})`;
+              }
+              addSystemMessage(msg);
+            } catch (err: unknown) {
+              const msg = err instanceof Error ? err.message : String(err);
+              addSystemMessage(`Error: ${msg}`);
+            }
+          })();
+          break;
+        case "curious": {
+          const targets = a.getCuriosityTargets();
+          if (targets.length === 0) {
+            addSystemMessage("No curiosity targets — all memories are healthy or too far gone.");
+          } else {
+            const DAY_MS = 86_400_000;
+            const lines = targets.map((t) => {
+              const ageDays = Math.round((Date.now() - t.node.created_at) / DAY_MS);
+              const halfDays = Math.round(t.node.half_life / DAY_MS);
+              return (
+                `  ${t.node.node_id.slice(0, 8)}  score=${t.curiosityScore.toFixed(3)}  ` +
+                `conf=${t.node.confidence.toFixed(2)}\u2192${t.decayedConfidence.toFixed(2)}  ` +
+                `age=${ageDays}d  half=${halfDays}d\n` +
+                `             ${t.node.content}`
+              );
+            });
+            addSystemMessage(
+              `Curiosity targets (${targets.length}):\n\n` +
+                lines.join("\n") +
+                "\n\nThese memories are fading. Confirm or update them to reinforce.",
+            );
+          }
+          break;
+        }
+        case "reflect":
+          void (async () => {
+            try {
+              addSystemMessage("Reflecting...");
+              const reflection = await a.reflect();
+              let msg = "";
+              if (reflection.insights.length > 0) {
+                msg += "Insights:\n" + reflection.insights.map((i) => `  - ${i}`).join("\n");
+              }
+              if (reflection.planAdjustments.length > 0) {
+                msg +=
+                  (msg ? "\n\n" : "") +
+                  "Adjustments:\n" +
+                  reflection.planAdjustments.map((adj) => `  - ${adj}`).join("\n");
+              }
+              if (reflection.selfAssessment) {
+                msg += (msg ? "\n\n" : "") + `Self-assessment: ${reflection.selfAssessment}`;
+              }
+              if (reflection.insights.length > 0) {
+                msg += `\n\n  [${reflection.insights.length} insight(s) stored as memories]`;
+              }
+              if (msg) {
+                addSystemMessage(msg);
+              } else {
+                addSystemMessage("Reflection completed with no insights.");
+              }
+            } catch (err: unknown) {
+              const msg = err instanceof Error ? err.message : String(err);
+              addSystemMessage(`Reflection failed: ${msg}`);
+            }
+          })();
+          break;
+        case "gradient": {
+          const grad = a.getGradient();
+          if (!grad) {
+            addSystemMessage("No gradient data yet (computed during housekeeping).");
+          } else {
+            const delta = grad.delta >= 0 ? `+${grad.delta.toFixed(4)}` : grad.delta.toFixed(4);
+            addSystemMessage(
+              `Intelligence Gradient: ${grad.gradient.toFixed(4)} (${delta})\n\n` +
+                `  kd: ${grad.knowledge_density.toFixed(3)}  ` +
+                `kq: ${grad.knowledge_quality.toFixed(3)}  ` +
+                `gc: ${grad.graph_connectivity.toFixed(3)}\n` +
+                `  ts: ${grad.temporal_stability.toFixed(3)}  ` +
+                `rq: ${grad.retrieval_quality.toFixed(3)}  ` +
+                `ie: ${grad.interaction_efficiency.toFixed(3)}\n` +
+                `  te: ${grad.tool_efficiency.toFixed(3)}  ` +
+                `cp: ${grad.curiosity_pressure.toFixed(3)}`,
+            );
+          }
+          break;
+        }
         case "help":
           addSystemMessage(
             "Available commands:\n" +
@@ -868,6 +999,10 @@ export function App(): React.ReactElement {
               "/new — start a new conversation\n" +
               "/memories — browse memories\n" +
               "/state — show current state vector\n" +
+              "/graph — memory graph stats\n" +
+              "/curious — curiosity targets\n" +
+              "/reflect — trigger reflection\n" +
+              "/gradient — intelligence gradient\n" +
               "/forget <nodeId> — delete a memory\n" +
               "/clear — clear conversation\n" +
               "/tools — list registered tools\n" +
