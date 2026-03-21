@@ -3,6 +3,7 @@
 import * as readline from "node:readline";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import { formatBodyAwareness } from "@motebit/ai-core";
+import { action, meta, warn, dim, prompt as promptColor } from "./colors.js";
 
 export function rlQuestion(rl: readline.Interface, prompt: string): Promise<string> {
   return new Promise((resolve) => {
@@ -30,9 +31,9 @@ export async function consumeStream(
 
       case "tool_status":
         if (chunk.status === "calling") {
-          process.stdout.write(`\n  [tool] ${chunk.name}...`);
+          process.stdout.write(`\n  ${action("●")} ${action(chunk.name)}${meta("...")}`);
         } else {
-          process.stdout.write(" done\n");
+          process.stdout.write(meta(" done") + "\n");
         }
         break;
 
@@ -46,15 +47,19 @@ export async function consumeStream(
         break;
 
       case "delegation_start":
-        process.stdout.write(`\n  [delegating to ${chunk.server}] ${chunk.tool}...`);
+        process.stdout.write(
+          `\n  ${action("●")} ${dim("[delegating]")} ${action(chunk.tool)}${meta("...")}`,
+        );
         break;
 
       case "delegation_complete":
-        process.stdout.write(` done\n`);
+        process.stdout.write(meta(" done") + "\n");
         break;
 
       case "injection_warning":
-        process.stdout.write(`\n  [warning] suspicious content in ${chunk.tool_name}\n`);
+        process.stdout.write(
+          `\n  ${warn("⚠")} ${warn("suspicious content in " + chunk.tool_name)}\n`,
+        );
         break;
 
       case "result": {
@@ -63,16 +68,20 @@ export async function consumeStream(
 
         if (result.memoriesFormed.length > 0) {
           console.log(
-            `  [memories: ${result.memoriesFormed.map((m: { content: string }) => m.content).join(", ")}]`,
+            meta(
+              `  [memories: ${result.memoriesFormed.map((m: { content: string }) => m.content).join(", ")}]`,
+            ),
           );
         }
 
         const s = result.stateAfter;
         console.log(
-          `  [state: attention=${s.attention.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} curiosity=${s.curiosity.toFixed(2)}]`,
+          meta(
+            `  [state: attention=${s.attention.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} curiosity=${s.curiosity.toFixed(2)}]`,
+          ),
         );
         const bodyLine = formatBodyAwareness(result.cues);
-        if (bodyLine) console.log(`  ${bodyLine}`);
+        if (bodyLine) console.log(meta(`  ${bodyLine}`));
         console.log();
         break;
       }
@@ -88,11 +97,11 @@ export async function consumeStream(
         : "";
     const answer = await rlQuestion(
       rl,
-      `  [approval] ${pendingApproval.name}(${argsPreview})${quorumInfo}\n  Allow? (y/n) `,
+      `  ${warn("?")} ${pendingApproval.name}(${argsPreview})${quorumInfo}\n  Allow? (y/n) `,
     );
 
     const approved = answer.trim().toLowerCase() === "y";
-    process.stdout.write("\nmote> ");
+    process.stdout.write("\n" + promptColor("mote>") + " ");
     await consumeStream(runtime.resolveApprovalVote(approved, runtime.motebitId), runtime, rl);
   }
 }

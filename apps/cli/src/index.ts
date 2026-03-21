@@ -21,6 +21,7 @@ import {
   openMotebitDatabase,
 } from "./runtime-factory.js";
 import { consumeStream } from "./stream.js";
+import { prompt as promptColor, meta, error as errorColor, dim, success } from "./colors.js";
 import { isSlashCommand, parseSlashCommand, handleSlashCommand } from "./slash-commands.js";
 import type { ReplContext } from "./slash-commands.js";
 import {
@@ -398,9 +399,9 @@ async function main(): Promise<void> {
     (reloadedConfig.sync_url != null && reloadedConfig.sync_url !== "");
   if (hasSyncRemote) {
     try {
-      console.log("Syncing...");
+      console.log(dim("Syncing..."));
       const result = await runtime.sync.sync();
-      console.log(`Synced: pulled ${result.pulled} events, pushed ${result.pushed} events`);
+      console.log(dim(`Synced: pulled ${result.pulled} events, pushed ${result.pushed} events`));
       if (result.conflicts.length > 0) {
         console.log(`  [${result.conflicts.length} conflicts detected]`);
       }
@@ -462,7 +463,7 @@ async function main(): Promise<void> {
             });
           }
           if (others.length > 0) {
-            console.log(`Discovered ${others.length} agent(s) on the network`);
+            console.log(success(`Discovered ${others.length} agent(s) on the network`));
           }
         }
       } catch {
@@ -503,7 +504,7 @@ async function main(): Promise<void> {
   console.log();
 
   const prompt = (): void => {
-    rl.question("you> ", (line) => {
+    rl.question(promptColor("you>") + " ", (line) => {
       void handleLine(line);
     });
   };
@@ -542,28 +543,32 @@ async function main(): Promise<void> {
       if (config.noStream) {
         const result = await runtime.sendMessage(trimmed, chatRunId);
 
-        console.log(`\nmote> ${result.response}\n`);
+        console.log(`\n${promptColor("mote>")} ${result.response}\n`);
 
         if (result.memoriesFormed.length > 0) {
-          console.log(`  [memories: ${result.memoriesFormed.map((m) => m.content).join(", ")}]`);
+          console.log(
+            meta(`  [memories: ${result.memoriesFormed.map((m) => m.content).join(", ")}]`),
+          );
         }
 
         const s = result.stateAfter;
         console.log(
-          `  [state: attention=${s.attention.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} curiosity=${s.curiosity.toFixed(2)}]`,
+          meta(
+            `  [state: attention=${s.attention.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} curiosity=${s.curiosity.toFixed(2)}]`,
+          ),
         );
         const bodyLine = formatBodyAwareness(result.cues);
-        if (bodyLine) console.log(`  ${bodyLine}`);
+        if (bodyLine) console.log(meta(`  ${bodyLine}`));
         console.log();
       } else {
-        process.stdout.write("\nmote> ");
+        process.stdout.write("\n" + promptColor("mote>") + " ");
         await consumeStream(runtime.sendMessageStreaming(trimmed, chatRunId), runtime, rl);
       }
       // Best-effort auto-title after enough messages
       void runtime.autoTitle();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error(`\n  [error: ${message}]\n`);
+      console.error(`\n  ${errorColor("[error: " + message + "]")}\n`);
     }
 
     prompt();

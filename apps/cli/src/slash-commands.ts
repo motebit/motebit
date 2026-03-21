@@ -15,6 +15,7 @@ import { type CliConfig, termWidth } from "./args.js";
 import type { FullConfig } from "./config.js";
 import { saveFullConfig } from "./config.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
+import { green, dim, cyan, success } from "./colors.js";
 import {
   SqliteConversationSyncStoreAdapter,
   SqlitePlanSyncStoreAdapter,
@@ -401,7 +402,7 @@ Available commands:
       }
 
       const connectUrl = args.trim().replace(/\/+$/, ""); // strip trailing slashes
-      console.log(`Connecting to ${connectUrl}...`);
+      console.log(dim(`Connecting to ${connectUrl}...`));
 
       // 1. Register device with relay (bootstrap)
       try {
@@ -419,7 +420,7 @@ Available commands:
           console.log(`  Registration failed: ${resp.status} ${body}`);
           break;
         }
-        console.log("  Registered with relay.");
+        console.log(success("  Registered with relay."));
       } catch (err: unknown) {
         console.log(`  Cannot reach relay: ${err instanceof Error ? err.message : String(err)}`);
         break;
@@ -446,7 +447,7 @@ Available commands:
           );
         },
       });
-      console.log("  Interactive delegation enabled.");
+      console.log(success("  Interactive delegation enabled."));
 
       // 3. Discover agents
       try {
@@ -470,7 +471,9 @@ Available commands:
               description: agent.capabilities.join(", "),
             });
           }
-          console.log(`  Discovered ${others.length} agent${others.length === 1 ? "" : "s"}.`);
+          console.log(
+            success(`  Discovered ${others.length} agent${others.length === 1 ? "" : "s"}.`),
+          );
         }
       } catch {
         console.log("  Agent discovery skipped (relay may not support it).");
@@ -483,7 +486,7 @@ Available commands:
         console.log("  Saved relay URL to config.");
       }
 
-      console.log(`  Connected to ${connectUrl}`);
+      console.log(green(`  Connected to ${connectUrl}`));
       break;
     }
 
@@ -551,8 +554,8 @@ Available commands:
         isServing = true;
 
         const exposedTools = serveDeps.listTools();
-        console.log(`  MCP server running on http://localhost:${port}`);
-        console.log(`  ${exposedTools.length} tools exposed. Accepting incoming delegations.`);
+        console.log(success(`  MCP server running on http://localhost:${port}`));
+        console.log(dim(`  ${exposedTools.length} tools exposed. Accepting incoming delegations.`));
 
         // Register with relay if connected
         const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig?.sync_url;
@@ -571,7 +574,7 @@ Available commands:
                 capabilities: exposedTools.map((t) => t.name),
               }),
             });
-            console.log("  Registered as service agent on relay.");
+            console.log(success("  Registered as service agent on relay."));
           } catch {
             console.log("  Relay registration skipped (relay unreachable).");
           }
@@ -595,14 +598,23 @@ Available commands:
         const cols = termWidth() + 4; // termWidth is inner, add border back
         for (const tool of tools) {
           const local = LOCAL_ONLY_TOOLS.has(tool.name);
-          const marker = isServing ? (local ? "\u25CB [local]   " : "\u25CF [network] ") : "  ";
-          const prefix = marker + tool.name.padEnd(24) + " ";
+          const marker = isServing
+            ? local
+              ? dim("\u25CB [local]   ")
+              : green("\u25CF [network] ")
+            : "  ";
+          const plainMarker = isServing
+            ? local
+              ? "\u25CB [local]   "
+              : "\u25CF [network] "
+            : "  ";
+          const prefix = plainMarker + tool.name.padEnd(24) + " ";
           const descMax = Math.max(20, cols - prefix.length);
-          const desc =
+          const descText =
             tool.description.length > descMax
               ? tool.description.slice(0, descMax - 1) + "\u2026"
               : tool.description;
-          console.log(`${prefix}${desc}`);
+          console.log(`${marker}${cyan(tool.name.padEnd(24))} ${dim(descText)}`);
         }
       }
       break;
@@ -1150,7 +1162,7 @@ Available commands:
             const caps =
               agent.capabilities.length > 0 ? agent.capabilities.slice(0, 5).join(", ") : "none";
             console.log(
-              `  ${agent.motebit_id.slice(0, 12).padEnd(14)} ${agent.endpoint_url.padEnd(30)} [${caps}]`,
+              `  ${cyan(agent.motebit_id.slice(0, 12).padEnd(14))} ${agent.endpoint_url.padEnd(30)} ${dim("[" + caps + "]")}`,
             );
           }
         }

@@ -2,6 +2,7 @@
 
 import { parseArgs } from "node:util";
 import { VERSION } from "./config.js";
+import { bold, dim, cyan, green } from "./colors.js";
 
 export interface CliConfig {
   provider: "anthropic" | "openai" | "ollama";
@@ -231,28 +232,41 @@ export function printBanner(opts: {
   operator: boolean;
 }): void {
   const W = termWidth();
-  const pad = (s: string) => s + " ".repeat(Math.max(0, W - s.length));
+  const pad = (s: string, visibleLen: number) => s + " ".repeat(Math.max(0, W - visibleLen));
+  const padPlain = (s: string) => s + " ".repeat(Math.max(0, W - s.length));
   const clip = (s: string, max: number) => (s.length > max ? s.slice(0, max - 1) + "\u2026" : s);
   const id = opts.motebitId.slice(0, 8);
   const maxInfo = Math.max(10, W - 24); // 24 = creature art width
   const model = opts.model.replace(/^claude-/, "");
   const providerInfo = clip(`${opts.provider} \u00b7 ${model}`, maxInfo);
-  const toolGoal = `${opts.toolCount} tools \u00b7 ${opts.goalCount} goals`;
+  const toolGoalPlain = `${opts.toolCount} tools \u00b7 ${opts.goalCount} goals`;
   const op = opts.operator ? " \u00b7 operator" : "";
-  const header = `\u2500 motebit v${VERSION} `;
-  const headerPad = "\u2500".repeat(Math.max(0, W - header.length));
+  const toolGoalClipped = clip(toolGoalPlain + op, maxInfo);
+  const headerPlain = `\u2500 motebit v${VERSION} `;
+  const headerPad = "\u2500".repeat(Math.max(0, W - headerPlain.length));
+  const header = `\u2500 ${bold("motebit")}${dim(" v" + VERSION)} `;
 
-  console.log(`  \u256d${header}${headerPad}\u256e`);
-  console.log(`  \u2502${pad("")}\u2502`);
-  console.log(`  \u2502${pad("          .")}\u2502`);
-  console.log(`  \u2502${pad(`        .:::.          ${id}`)}\u2502`);
-  console.log(`  \u2502${pad(`       .:::::.         ${providerInfo}`)}\u2502`);
-  console.log(`  \u2502${pad(`       :::::::         ${clip(toolGoal + op, maxInfo)}`)}\u2502`);
-  console.log(`  \u2502${pad("       ':::::'")}\u2502`);
-  console.log(`  \u2502${pad("         '''")}\u2502`);
-  console.log(`  \u2502${pad("")}\u2502`);
-  console.log(`  \u2502${pad("   /help for commands \u00b7 /goals to manage")}\u2502`);
-  console.log(`  \u2570${"\u2500".repeat(W)}\u256f`);
+  const b = dim; // border shorthand
+  console.log(`  ${b("\u256d")}${header}${b(headerPad)}${b("\u256e")}`);
+  console.log(`  ${b("\u2502")}${padPlain("")}${b("\u2502")}`);
+  console.log(`  ${b("\u2502")}${padPlain("          .")}${b("\u2502")}`);
+  console.log(
+    `  ${b("\u2502")}${pad(`        .:::.          ${cyan(id)}`, `        .:::.          ${id}`.length)}${b("\u2502")}`,
+  );
+  console.log(
+    `  ${b("\u2502")}${padPlain(`       .:::::.         ${providerInfo}`)}${b("\u2502")}`,
+  );
+  console.log(
+    `  ${b("\u2502")}${pad(`       :::::::         ${green(toolGoalClipped)}`, `       :::::::         ${toolGoalClipped}`.length)}${b("\u2502")}`,
+  );
+  console.log(`  ${b("\u2502")}${padPlain("       ':::::'")}` + b("\u2502"));
+  console.log(`  ${b("\u2502")}${padPlain("         '''")}${b("\u2502")}`);
+  console.log(`  ${b("\u2502")}${padPlain("")}${b("\u2502")}`);
+  const helpPlain = "   /help for commands \u00b7 /goals to manage";
+  console.log(
+    `  ${b("\u2502")}${pad(`   ${dim("/help for commands \u00b7 /goals to manage")}`, helpPlain.length)}${b("\u2502")}`,
+  );
+  console.log(`  ${b("\u2570")}${b("\u2500".repeat(W))}${b("\u256f")}`);
 }
 
 export function trimHistory(
