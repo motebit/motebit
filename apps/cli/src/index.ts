@@ -292,7 +292,15 @@ async function main(): Promise<void> {
 
   // Create readline AFTER passphrase is resolved — creating it before
   // would cause it to echo keystrokes during raw-mode passphrase masking.
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    // Reduce escape code timeout from default 500ms to 50ms.
+    // The default causes paste + backspace within 500ms to be interpreted as
+    // an incomplete escape sequence, corrupting the line buffer and causing
+    // premature submission.
+    escapeCodeTimeout: 50,
+  });
 
   // Bootstrap identity — need DB first for identity storage
   const dbPath = getDbPath(config.dbPath);

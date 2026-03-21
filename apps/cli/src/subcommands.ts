@@ -124,7 +124,11 @@ export async function handleDoctor(): Promise<void> {
 
 export async function handleExport(config: CliConfig): Promise<void> {
   const fullConfig = loadFullConfig();
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    escapeCodeTimeout: 50,
+  });
 
   // Resolve passphrase
   const envPassphrase = process.env["MOTEBIT_PASSPHRASE"];
@@ -1879,7 +1883,11 @@ export async function handleRotate(config: CliConfig): Promise<void> {
     process.exit(1);
   }
 
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    escapeCodeTimeout: 50,
+  });
   const envPassphrase = process.env["MOTEBIT_PASSPHRASE"];
   let passphrase: string;
   if (envPassphrase != null && envPassphrase !== "") {

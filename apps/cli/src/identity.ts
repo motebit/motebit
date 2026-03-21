@@ -84,6 +84,12 @@ export function promptPassphrase(
     const onData = (ch: string) => {
       const c = ch.toString();
 
+      // Skip escape sequences (e.g. bracketed paste markers, arrow keys).
+      // In raw mode, these arrive as multi-byte strings starting with \x1b.
+      if (c.length > 1 && c.charCodeAt(0) === 0x1b) {
+        return;
+      }
+
       if (c === "\n" || c === "\r" || c === "\u0004") {
         stdin.removeListener("data", onData);
         stdin.setRawMode(false);
@@ -112,9 +118,17 @@ export function promptPassphrase(
           value = value.slice(0, -1);
           stdout.write("\x1b[1D \x1b[1D");
         }
-      } else if (c.charCodeAt(0) >= 32) {
+      } else if (c.length === 1 && c.charCodeAt(0) >= 32) {
         value += c;
         stdout.write(visible ? c : "*");
+      } else if (c.length > 1 && c.charCodeAt(0) >= 32) {
+        // Pasted multi-character chunk — process each character
+        for (const char of c) {
+          if (char.charCodeAt(0) >= 32) {
+            value += char;
+            stdout.write(visible ? char : "*");
+          }
+        }
       }
     };
 
