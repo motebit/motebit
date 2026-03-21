@@ -1,15 +1,15 @@
-name: Deploy Sync Relay
+name: Deploy Read URL Service
 
 on:
   push:
     branches: [main]
     paths:
-      - "services/api/**"
+      - "services/read-url/**"
       - "packages/**"
   workflow_dispatch:
 
 concurrency:
-  group: deploy-relay-${{ github.ref }}
+  group: deploy-read-url-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -24,6 +24,6 @@ jobs:
       - uses: superfly/flyctl-actions/setup-flyctl@63da3ecc5e2793b98a3f2519b3d75d4f4c11cec2 # master
 
       - name: Deploy to Fly.io
-        run: flyctl deploy --config services/api/fly.toml --remote-only
+        run: flyctl deploy --config services/read-url/fly.toml --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
