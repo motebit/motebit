@@ -486,7 +486,15 @@ function computeReliability(candidate: CandidateProfile): number {
   const f = candidate.trust_record.failed_tasks ?? 0;
   const total = s + f;
   if (total === 0) return 0.5;
-  return s / total;
+  let reliability = s / total;
+  // Quality modulation: agents with enough samples and low avg_quality
+  // get up to 30% reliability reduction. No new semiring dimension needed.
+  const quality = candidate.trust_record.avg_quality ?? 1.0;
+  const qualitySamples = candidate.trust_record.quality_sample_count ?? 0;
+  if (qualitySamples >= 3) {
+    reliability = reliability * (0.7 + 0.3 * quality);
+  }
+  return reliability;
 }
 
 function computeCapabilityMatch(

@@ -46,13 +46,35 @@ export async function bumpTrustFromReceipt(
   const taskSucceeded = receipt.status === "completed";
   const taskFailed = receipt.status === "failed";
 
+  // Quality gate: a "completed" receipt with very low quality (empty result,
+  // no tool usage) is reclassified as a failure. Distinguishes "good work"
+  // from "merely valid work."
+  let resultQuality = 1.0;
+  if (taskSucceeded) {
+    const resultStr = typeof receipt.result === "string" ? receipt.result : "";
+    const lengthScore = Math.min(resultStr.length, 500) / 500;
+    const toolScore = Math.min(receipt.tools_used?.length ?? 0, 3) / 3;
+    const latencyMs = (receipt.completed_at ?? 0) - (receipt.submitted_at ?? 0);
+    const latencyScore = latencyMs > 0 ? Math.min(Math.max(latencyMs, 500), 5000) / 5000 : 0.5;
+    resultQuality = 0.6 * lengthScore + 0.3 * toolScore + 0.1 * latencyScore;
+  }
+  const effectiveSuccess = taskSucceeded && resultQuality >= 0.2;
+  const effectiveFailure = taskFailed || (taskSucceeded && resultQuality < 0.2);
+
   if (existing != null) {
+    // Quality EMA update
+    const alpha = 0.3;
+    const prevQuality = existing.avg_quality ?? 1.0;
+    const newQuality = alpha * resultQuality + (1 - alpha) * prevQuality;
+
     const updated: AgentTrustRecord = {
       ...existing,
       last_seen_at: now,
       interaction_count: existing.interaction_count + 1,
-      successful_tasks: (existing.successful_tasks ?? 0) + (taskSucceeded ? 1 : 0),
-      failed_tasks: (existing.failed_tasks ?? 0) + (taskFailed ? 1 : 0),
+      successful_tasks: (existing.successful_tasks ?? 0) + (effectiveSuccess ? 1 : 0),
+      failed_tasks: (existing.failed_tasks ?? 0) + (effectiveFailure ? 1 : 0),
+      avg_quality: newQuality,
+      quality_sample_count: (existing.quality_sample_count ?? 0) + 1,
     };
     // Evaluate trust level transition (promotion or demotion)
     const { evaluateTrustTransition } = await import("@motebit/sdk");
@@ -117,7 +139,7 @@ export async function bumpTrustFromReceipt(
     // Skip self-delegation: if the delegating agent IS the worker, the credential
     // is self-attestation and carries no trust signal. This prevents sybil farming
     // where an operator delegates tasks between their own agents at zero cost.
-    if (signingKeys && taskSucceeded && remoteMotebitId !== motebitId) {
+    if (signingKeys && effectiveSuccess && remoteMotebitId !== motebitId) {
       try {
         const { issueReputationCredential, hexPublicKeyToDidKey } = await import("@motebit/crypto");
         let subjectDid = `did:motebit:${remoteMotebitId}`;
@@ -162,15 +184,17 @@ export async function bumpTrustFromReceipt(
       first_seen_at: now,
       last_seen_at: now,
       interaction_count: 1,
-      successful_tasks: taskSucceeded ? 1 : 0,
-      failed_tasks: taskFailed ? 1 : 0,
+      successful_tasks: effectiveSuccess ? 1 : 0,
+      failed_tasks: effectiveFailure ? 1 : 0,
+      avg_quality: resultQuality,
+      quality_sample_count: 1,
     };
     await agentTrustStore.setAgentTrust(record);
     agentGraph.invalidate();
 
     // Issue peer reputation credential on first completed receipt (best-effort).
     // Skip self-delegation — same sybil defense as the existing-trust path.
-    if (signingKeys && taskSucceeded && remoteMotebitId !== motebitId) {
+    if (signingKeys && effectiveSuccess && remoteMotebitId !== motebitId) {
       try {
         const { issueReputationCredential } = await import("@motebit/crypto");
         const subjectDid = `did:motebit:${remoteMotebitId}`;

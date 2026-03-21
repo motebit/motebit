@@ -124,6 +124,10 @@ export interface AgentTrustRecord {
   successful_tasks?: number;
   failed_tasks?: number;
   notes?: string;
+  /** Exponential moving average of result quality [0, 1]. */
+  avg_quality?: number;
+  /** Number of quality samples collected. */
+  quality_sample_count?: number;
 }
 
 // ── Trust Semiring Algebra ──────────────────────────────────────────
