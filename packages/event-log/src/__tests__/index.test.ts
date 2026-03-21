@@ -133,6 +133,166 @@ describe("InMemoryEventStore", () => {
 });
 
 // ---------------------------------------------------------------------------
+// InMemoryEventStore.appendWithClock
+// ---------------------------------------------------------------------------
+
+describe("InMemoryEventStore.appendWithClock", () => {
+  let store: InMemoryEventStore;
+
+  beforeEach(() => {
+    store = new InMemoryEventStore();
+  });
+
+  it("assigns clock 1 for the first event", async () => {
+    const clock = await store.appendWithClock({
+      event_id: "e1",
+      motebit_id: "m1",
+      timestamp: Date.now(),
+      event_type: EventType.StateUpdated,
+      payload: {},
+      tombstoned: false,
+    });
+    expect(clock).toBe(1);
+  });
+
+  it("assigns incrementing clocks", async () => {
+    const c1 = await store.appendWithClock({
+      event_id: "e1",
+      motebit_id: "m1",
+      timestamp: Date.now(),
+      event_type: EventType.StateUpdated,
+      payload: {},
+      tombstoned: false,
+    });
+    const c2 = await store.appendWithClock({
+      event_id: "e2",
+      motebit_id: "m1",
+      timestamp: Date.now(),
+      event_type: EventType.StateUpdated,
+      payload: {},
+      tombstoned: false,
+    });
+    expect(c1).toBe(1);
+    expect(c2).toBe(2);
+  });
+
+  it("deduplicates on event_id and returns existing clock", async () => {
+    const c1 = await store.appendWithClock({
+      event_id: "dup",
+      motebit_id: "m1",
+      timestamp: Date.now(),
+      event_type: EventType.StateUpdated,
+      payload: {},
+      tombstoned: false,
+    });
+    const c2 = await store.appendWithClock({
+      event_id: "dup",
+      motebit_id: "m1",
+      timestamp: Date.now(),
+      event_type: EventType.StateUpdated,
+      payload: { extra: true },
+      tombstoned: false,
+    });
+    expect(c1).toBe(1);
+    expect(c2).toBe(1); // deduplicated, returns existing clock
+    expect((await store.query({})).length).toBe(1);
+  });
+
+  it("isolates clocks per motebit_id", async () => {
+    const c1 = await store.appendWithClock({
+      event_id: "e1",
+      motebit_id: "m1",
+      timestamp: Date.now(),
+      event_type: EventType.StateUpdated,
+      payload: {},
+      tombstoned: false,
+    });
+    const c2 = await store.appendWithClock({
+      event_id: "e2",
+      motebit_id: "m2",
+      timestamp: Date.now(),
+      event_type: EventType.StateUpdated,
+      payload: {},
+      tombstoned: false,
+    });
+    expect(c1).toBe(1);
+    expect(c2).toBe(1); // separate motebit_id starts at 1
+  });
+});
+
+// ---------------------------------------------------------------------------
+// EventStore.appendWithClock
+// ---------------------------------------------------------------------------
+
+describe("EventStore.appendWithClock", () => {
+  it("delegates to adapter.appendWithClock when available", async () => {
+    const eventStore = new EventStore(new InMemoryEventStore());
+    const clock = await eventStore.appendWithClock({
+      event_id: "e1",
+      motebit_id: "m1",
+      timestamp: Date.now(),
+      event_type: EventType.StateUpdated,
+      payload: {},
+      tombstoned: false,
+    });
+    expect(clock).toBe(1);
+  });
+
+  it("rejects empty event_id", async () => {
+    const eventStore = new EventStore(new InMemoryEventStore());
+    await expect(
+      eventStore.appendWithClock({
+        event_id: "",
+        motebit_id: "m1",
+        timestamp: Date.now(),
+        event_type: EventType.StateUpdated,
+        payload: {},
+        tombstoned: false,
+      }),
+    ).rejects.toThrow("event_id must not be empty");
+  });
+
+  it("rejects empty motebit_id", async () => {
+    const eventStore = new EventStore(new InMemoryEventStore());
+    await expect(
+      eventStore.appendWithClock({
+        event_id: "e1",
+        motebit_id: "",
+        timestamp: Date.now(),
+        event_type: EventType.StateUpdated,
+        payload: {},
+        tombstoned: false,
+      }),
+    ).rejects.toThrow("motebit_id must not be empty");
+  });
+
+  it("falls back to getLatestClock+append when adapter lacks appendWithClock", async () => {
+    const events: EventLogEntry[] = [];
+    const minimal: EventStoreAdapter = {
+      append: async (entry) => {
+        events.push(entry);
+      },
+      query: async () => events,
+      getLatestClock: async () => events.length,
+      tombstone: async () => {},
+      // no appendWithClock — forces fallback
+    };
+    const eventStore = new EventStore(minimal);
+    const clock = await eventStore.appendWithClock({
+      event_id: "e1",
+      motebit_id: "m1",
+      timestamp: Date.now(),
+      event_type: EventType.StateUpdated,
+      payload: {},
+      tombstoned: false,
+    });
+    expect(clock).toBe(1);
+    expect(events.length).toBe(1);
+    expect(events[0]!.version_clock).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // EventStore (high-level wrapper)
 // ---------------------------------------------------------------------------
 

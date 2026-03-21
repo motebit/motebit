@@ -4,6 +4,23 @@
 import type { ChatAPI } from "./chat";
 import { addMessage } from "./chat";
 import type { WebContext } from "../types";
+import { loadSyncUrl } from "../storage";
+
+// --- Relay fetch helper (inlined from sovereign-panels) ---
+
+async function relayFetch(ctx: WebContext, path: string): Promise<unknown> {
+  const syncUrl = loadSyncUrl();
+  if (!syncUrl) throw new Error("No relay URL configured — connect in Settings first");
+  const token = await ctx.app.createSyncToken();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(`${syncUrl}${path}`, { headers });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`${res.status}: ${text}`);
+  }
+  return res.json() as Promise<unknown>;
+}
 
 interface SlashCommandDef {
   name: string;
@@ -30,6 +47,14 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "export", description: "Export identity + memories" },
   { name: "forget", description: "Delete a memory by keyword" },
   { name: "gradient", description: "Intelligence gradient" },
+  { name: "balance", description: "Show account balance" },
+  { name: "discover", description: "Discover agents on relay" },
+  { name: "delegate", description: "Delegate task to agent" },
+  { name: "approvals", description: "Show pending approvals" },
+  { name: "deposits", description: "Show deposit history" },
+  { name: "withdraw", description: "Request withdrawal" },
+  { name: "propose", description: "Propose collaborative plan" },
+  { name: "proposals", description: "List active proposals" },
 ];
 
 function filterCommands(partial: string): SlashCommandDef[] {
@@ -331,6 +356,163 @@ export function initSlashCommands(
           "system",
           `Intelligence gradient (${g.gradient.toFixed(2)}):\n${metrics.join("  ")}`,
         );
+        break;
+      }
+      case "balance": {
+        chatInput.value = "";
+        void (async () => {
+          try {
+            const data = (await relayFetch(ctx, `/api/v1/agents/${ctx.app.motebitId}/balance`)) as {
+              balance: number;
+              pending_allocations: number;
+              currency: string;
+            };
+            addMessage(
+              "system",
+              `Balance: ${data.balance} ${data.currency ?? "USDC"}\nPending: ${data.pending_allocations ?? 0}`,
+            );
+          } catch (err: unknown) {
+            addMessage(
+              "system",
+              `Balance error: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        })();
+        break;
+      }
+      case "deposits": {
+        chatInput.value = "";
+        void (async () => {
+          try {
+            const data = (await relayFetch(ctx, `/api/v1/agents/${ctx.app.motebitId}/balance`)) as {
+              transactions?: Array<{ type: string; amount: number; created_at: number }>;
+            };
+            const deposits = (data.transactions ?? []).filter((t) => t.type === "deposit");
+            if (deposits.length === 0) {
+              addMessage("system", "No deposits yet.");
+            } else {
+              const lines = deposits
+                .slice(0, 10)
+                .map((d) => `  ${new Date(d.created_at).toLocaleDateString()} — ${d.amount} USDC`);
+              addMessage("system", `Recent deposits:\n${lines.join("\n")}`);
+            }
+          } catch (err: unknown) {
+            addMessage(
+              "system",
+              `Deposits error: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        })();
+        break;
+      }
+      case "withdraw": {
+        chatInput.value = "";
+        addMessage(
+          "system",
+          "Withdrawals require the CLI or desktop app for secure signing. Run: motebit withdraw",
+        );
+        break;
+      }
+      case "discover": {
+        chatInput.value = "";
+        void (async () => {
+          try {
+            const data = (await relayFetch(ctx, "/api/v1/agents/discover")) as {
+              agents: Array<{ motebit_id: string; capabilities: string[]; endpoint_url: string }>;
+            };
+            const agents = data.agents ?? [];
+            if (agents.length === 0) {
+              addMessage("system", "No agents found on relay.");
+            } else {
+              const lines = agents
+                .slice(0, 15)
+                .map(
+                  (a) =>
+                    `  ${a.motebit_id.slice(0, 8)}... — ${(a.capabilities ?? []).join(", ") || "no caps"}`,
+                );
+              addMessage("system", `Discovered agents (${agents.length}):\n${lines.join("\n")}`);
+            }
+          } catch (err: unknown) {
+            addMessage(
+              "system",
+              `Discovery error: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        })();
+        break;
+      }
+      case "delegate": {
+        chatInput.value = "";
+        addMessage(
+          "system",
+          "Delegation happens transparently during conversation when connected to a relay. " +
+            "The AI will delegate to known agents when it lacks a capability locally.\n" +
+            "To delegate manually, use the CLI: motebit delegate <agent-id> <prompt>",
+        );
+        break;
+      }
+      case "approvals": {
+        chatInput.value = "";
+        {
+          const runtime = ctx.app.getRuntime();
+          if (!runtime) {
+            addMessage("system", "Runtime not initialized.");
+            break;
+          }
+          const pending = runtime.hasPendingApproval ? runtime.pendingApprovalInfo : null;
+          if (!pending) {
+            addMessage("system", "No pending approvals.");
+          } else {
+            addMessage(
+              "system",
+              `Pending approval: ${pending.toolName}\nArgs: ${JSON.stringify(pending.args, null, 2)}`,
+            );
+          }
+        }
+        break;
+      }
+      case "propose": {
+        chatInput.value = "";
+        addMessage(
+          "system",
+          "Collaborative proposals require the CLI. Run: motebit propose <agent-ids> <goal>",
+        );
+        break;
+      }
+      case "proposals": {
+        chatInput.value = "";
+        void (async () => {
+          try {
+            const data = (await relayFetch(
+              ctx,
+              `/api/v1/agents/${ctx.app.motebitId}/proposals`,
+            )) as {
+              proposals: Array<{
+                proposal_id: string;
+                status: string;
+                goal: string;
+                created_at: number;
+              }>;
+            };
+            const proposals = data.proposals ?? [];
+            if (proposals.length === 0) {
+              addMessage("system", "No active proposals.");
+            } else {
+              const lines = proposals
+                .slice(0, 10)
+                .map(
+                  (p) =>
+                    `  ${p.proposal_id.slice(0, 8)}... [${p.status}] — ${(p.goal ?? "").slice(0, 60)}`,
+                );
+              addMessage("system", `Proposals (${proposals.length}):\n${lines.join("\n")}`);
+            }
+          } catch (err: unknown) {
+            addMessage(
+              "system",
+              `Proposals error: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        })();
         break;
       }
     }

@@ -46,9 +46,9 @@ export class InMemoryEventStore implements EventStoreAdapter {
 
   appendWithClock(entry: Omit<EventLogEntry, "version_clock">): Promise<number> {
     if (this.seenIds.has(entry.event_id)) {
-      // Already exists — return existing clock
-      const existing = this.events.find((e) => e.event_id === entry.event_id);
-      return Promise.resolve(existing?.version_clock ?? 0);
+      // Already exists — return existing clock (seenIds guarantees the event is in the array)
+      const existing = this.events.find((e) => e.event_id === entry.event_id)!;
+      return Promise.resolve(existing.version_clock);
     }
     const moteEvents = this.events.filter((e) => e.motebit_id === entry.motebit_id);
     const clock =
