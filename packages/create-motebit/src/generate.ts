@@ -487,3 +487,78 @@ export async function generateIdentity(opts: {
     encryptedKey,
   };
 }
+
+/**
+ * Decrypt a private key from the encrypted config format.
+ */
+export async function decryptPrivateKey(enc: EncryptedKey, passphrase: string): Promise<string> {
+  const salt = fromHex(enc.salt);
+  const key = await deriveKey(passphrase, salt);
+  const plaintext = await decrypt(
+    {
+      ciphertext: fromHex(enc.ciphertext),
+      nonce: fromHex(enc.nonce),
+      tag: fromHex(enc.tag),
+    },
+    key,
+  );
+  return new TextDecoder().decode(plaintext);
+}
+
+/**
+ * Regenerate a signed motebit.md from an existing keypair.
+ * Used when "keep existing" identity is chosen but no motebit.md exists on disk.
+ */
+export async function regenerateIdentityFile(opts: {
+  motebitId: string;
+  deviceId: string;
+  name: string;
+  publicKeyHex: string;
+  privateKeyHex: string;
+  trustMode: TrustMode;
+}): Promise<string> {
+  const gov = GOVERNANCE_PRESETS[opts.trustMode];
+  const data: IdentityFileData = {
+    spec: "motebit/identity@1.0",
+    motebit_id: opts.motebitId,
+    created_at: new Date().toISOString(),
+    owner_id: opts.motebitId,
+    identity: {
+      algorithm: "Ed25519",
+      public_key: opts.publicKeyHex,
+    },
+    governance: {
+      trust_mode: opts.trustMode,
+      max_risk_auto: gov.max_risk_auto,
+      require_approval_above: gov.require_approval_above,
+      deny_above: gov.deny_above,
+      operator_mode: false,
+    },
+    privacy: {
+      default_sensitivity: "personal",
+      retention_days: { none: 365, personal: 90, medical: 30, financial: 30, secret: 7 },
+      fail_closed: true,
+    },
+    memory: {
+      half_life_days: 7,
+      confidence_threshold: 0.3,
+      per_turn_limit: 5,
+    },
+    devices: [
+      {
+        device_id: opts.deviceId,
+        name: opts.name,
+        public_key: opts.publicKeyHex,
+        registered_at: new Date().toISOString(),
+      },
+    ],
+  };
+
+  const yaml = serializeYaml(data);
+  const frontmatter = `---\n${yaml}\n---`;
+  const frontmatterBytes = new TextEncoder().encode(yaml);
+  const secretKey = fromHex(opts.privateKeyHex);
+  const signature = await ed.signAsync(frontmatterBytes, secretKey);
+  const sigB64 = toBase64Url(signature);
+  return `${frontmatter}\n${SIG_PREFIX}${sigB64}${SIG_SUFFIX}\n`;
+}

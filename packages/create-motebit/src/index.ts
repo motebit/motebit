@@ -11,7 +11,7 @@ import { verifyIdentityFile } from "@motebit/verify";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
 import { homedir } from "node:os";
-import { generateIdentity } from "./generate.js";
+import { generateIdentity, regenerateIdentityFile, decryptPrivateKey } from "./generate.js";
 import type { TrustMode, EncryptedKey, ServiceIdentityOptions } from "./generate.js";
 import { rotateKey } from "./rotate.js";
 import { createRL, input, password, select } from "./prompts.js";
@@ -563,11 +563,42 @@ async function guidedScaffold(
     const existingMd = join(configDir(), "motebit.md");
     if (existsSync(existingMd)) {
       identityFileContent = readFileSync(existingMd, "utf-8");
-    } else {
-      // Identity was created before motebit.md was persisted to config dir.
-      // Regenerate it if we have the encrypted key — requires passphrase.
-      console.log(`  ${yellow("!")} No motebit.md found in ${dim(configDir())}`);
-      console.log(`    Run ${dim("npx create-motebit rotate")} to regenerate your identity file.`);
+    } else if (
+      existingConfig.cli_encrypted_key &&
+      existingConfig.device_public_key &&
+      existingConfig.device_id
+    ) {
+      // No motebit.md on disk — regenerate from encrypted key
+      console.log(`  ${dim("Regenerating identity file from existing key...")}`);
+      const regenRl = createRL();
+      const regenPassphrase = await password(
+        regenRl,
+        "? Enter your passphrase to regenerate motebit.md: ",
+      );
+      regenRl.close();
+      if (regenPassphrase) {
+        try {
+          const privateKeyHex = await decryptPrivateKey(
+            existingConfig.cli_encrypted_key,
+            regenPassphrase,
+          );
+          identityFileContent = await regenerateIdentityFile({
+            motebitId: existingConfig.motebit_id!,
+            deviceId: existingConfig.device_id,
+            name: dirName,
+            publicKeyHex: existingConfig.device_public_key,
+            privateKeyHex,
+            trustMode,
+          });
+          // Persist for future reuse
+          writeFileSync(existingMd, identityFileContent, "utf-8");
+        } catch {
+          console.log(`  ${yellow("!")} Could not decrypt key — motebit.md will be omitted.`);
+          console.log(
+            `    Run ${dim("npx create-motebit rotate")} to regenerate your identity file.`,
+          );
+        }
+      }
     }
 
     // Update config with project name and provider
