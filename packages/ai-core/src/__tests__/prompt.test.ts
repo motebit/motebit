@@ -165,7 +165,7 @@ describe("buildSystemPrompt", () => {
   it("includes all core sections", () => {
     const prompt = buildSystemPrompt(makeContextPack());
     expect(prompt).toContain("motebit");
-    expect(prompt).toContain("[Your internal state");
+    expect(prompt).toContain("[INTERNAL REFERENCE — state fields");
     expect(prompt).toContain("<memory");
     expect(prompt).toContain("<state");
     expect(prompt).toContain("[State]");

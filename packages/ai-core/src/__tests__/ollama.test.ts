@@ -151,7 +151,7 @@ describe("OllamaProvider", () => {
     const mock = getFetchMock();
     const [, opts] = mock.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(opts.body as string);
-    expect(body.messages[0].content).toContain("[Your internal state");
+    expect(body.messages[0].content).toContain("[INTERNAL REFERENCE — state fields");
     expect(body.messages[0].content).toContain("affect_valence");
     expect(body.messages[0].content).toContain("trust_mode");
   });

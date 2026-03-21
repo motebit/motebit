@@ -281,7 +281,7 @@ describe("CloudProvider Anthropic integration", () => {
     const mock = getFetchMock();
     const [, opts] = mock.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(opts.body as string);
-    expect(body.system).toContain("[Your internal state");
+    expect(body.system).toContain("[INTERNAL REFERENCE — state fields");
     expect(body.system).toContain("affect_valence");
     expect(body.system).toContain("trust_mode");
   });
