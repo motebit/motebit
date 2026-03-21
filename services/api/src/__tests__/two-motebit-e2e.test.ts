@@ -104,6 +104,7 @@ async function signReceipt(
 ): Promise<ExecutionReceipt> {
   const unsigned = {
     task_id: taskId,
+    relay_task_id: taskId,
     motebit_id: agent.motebitId as unknown as MotebitId,
     device_id: `${agent.motebitId}-device` as unknown as DeviceId,
     submitted_at: Date.now(),

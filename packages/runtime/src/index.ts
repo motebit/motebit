@@ -1554,10 +1554,17 @@ export class MotebitRuntime {
    * (no LLM re-prompting) and continues the agentic loop with the result.
    */
   async *resumeAfterApproval(approved: boolean): AsyncGenerator<StreamChunk> {
-    if (!this._pendingApproval) throw new Error("No pending approval to resume");
+    // Clear timeout FIRST to prevent the race where timeout fires between
+    // our check and the state mutation (timeout sets _pendingApproval = null).
+    this.clearApprovalTimeout();
+
+    if (!this._pendingApproval) {
+      // Timeout already fired — approval came too late. The timeout handler
+      // already injected a denial into conversation history, so this is a no-op.
+      return;
+    }
     if (!this.loopDeps) throw new Error("AI not initialized");
 
-    this.clearApprovalTimeout();
     const pending = this._pendingApproval;
     this._pendingApproval = null;
     this._isProcessing = true;
@@ -1656,7 +1663,14 @@ export class MotebitRuntime {
    *   not held in mutable runtime memory.
    */
   async *resolveApprovalVote(approved: boolean, approverId: string): AsyncGenerator<StreamChunk> {
-    if (!this._pendingApproval) throw new Error("No pending approval to vote on");
+    // Clear timeout before checking state — prevents race where timeout
+    // fires between our check and the state mutation.
+    this.clearApprovalTimeout();
+
+    if (!this._pendingApproval) {
+      // Timeout already fired — approval came too late.
+      return;
+    }
 
     // No quorum — single-approval behavior
     if (!this._pendingApproval.quorum) {

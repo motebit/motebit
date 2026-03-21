@@ -1960,7 +1960,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
           if (enableDeviceAuth && token != null && token !== "") {
             // Master token bypass
             if (apiToken != null && apiToken !== "" && token === apiToken) {
-              // OK — master token
+              // OK — master token (WebSocket)
+              logger.info("auth.master_token_ws", { motebitId });
             } else if (verifyDeviceSignature && token.includes(".")) {
               // Signed token verification — O(1) lookup by device ID from token payload
               const verified = await verifySignedTokenForDevice(
@@ -3188,8 +3189,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     }
     const token = authHeader.slice(7);
 
-    // Master token bypass
+    // Master token bypass — log for audit trail (distinguishes admin from agent auth)
     if (apiToken != null && apiToken !== "" && token === apiToken) {
+      logger.info("auth.master_token", {
+        correlationId: c.req.header("x-correlation-id") ?? "none",
+        method: c.req.method,
+        path: new URL(c.req.url, "http://localhost").pathname,
+        ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? "unknown",
+      });
       await next();
       return;
     }
@@ -3882,21 +3889,19 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
           message: `Receipt relay_task_id "${receiptRelayTaskId}" does not match task "${taskId}" — receipt is bound to a different economic contract`,
         });
       }
-    } else if (
-      receipt.prompt_hash &&
-      typeof receipt.prompt_hash === "string" &&
-      entry.task.prompt
-    ) {
-      // Soft check: log mismatch but don't reject legacy receipts without relay_task_id.
-      // relay_task_id is the hard binding; prompt_hash is observability-only for legacy callers.
-      const expectedHash = await sha256Hash(new TextEncoder().encode(entry.task.prompt));
-      if (receipt.prompt_hash !== expectedHash) {
-        logger.warn("receipt.prompt_hash_mismatch", {
-          correlationId: taskId,
-          reason:
-            "receipt prompt_hash does not match task prompt — relay_task_id binding not present",
-        });
-      }
+    } else {
+      // No relay_task_id — reject. This field is required for cryptographic binding
+      // to the relay's economic identity. Legacy receipts without it are vulnerable
+      // to cross-task replay (identical-prompt collisions).
+      logger.error("receipt.missing_relay_task_id", {
+        correlationId: taskId,
+        reason: "receipt does not include relay_task_id — required for economic binding",
+        motebitId: receipt.motebit_id as string,
+      });
+      throw new HTTPException(400, {
+        message:
+          "Receipt missing relay_task_id — cryptographic task binding is required. Ensure your motebit runtime is up to date.",
+      });
     }
 
     // Update task status and store receipt before settlement

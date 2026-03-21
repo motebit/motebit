@@ -293,8 +293,10 @@ describe("Market — Verify Receipt", () => {
     const pubKeyHex = bytesToHex(keypair.publicKey);
     const { motebitId, deviceId } = await createIdentityAndDevice(relay, pubKeyHex);
 
+    const verifyTaskId = crypto.randomUUID();
     const unsigned = {
-      task_id: crypto.randomUUID(),
+      task_id: verifyTaskId,
+      relay_task_id: verifyTaskId,
       motebit_id: motebitId as unknown as MotebitId,
       device_id: deviceId as unknown as DeviceId,
       submitted_at: Date.now(),
@@ -323,8 +325,10 @@ describe("Market — Verify Receipt", () => {
     const pubKeyHex = bytesToHex(keypair.publicKey);
     const { motebitId, deviceId } = await createIdentityAndDevice(relay, pubKeyHex);
 
+    const mismatchTaskId = crypto.randomUUID();
     const unsigned = {
-      task_id: crypto.randomUUID(),
+      task_id: mismatchTaskId,
+      relay_task_id: mismatchTaskId,
       motebit_id: "wrong-id" as unknown as MotebitId,
       device_id: deviceId as unknown as DeviceId,
       submitted_at: Date.now(),
@@ -355,8 +359,10 @@ describe("Market — Verify Receipt", () => {
     const pubKeyHex = bytesToHex(keypair.publicKey);
     const { motebitId, deviceId } = await createIdentityAndDevice(relay, pubKeyHex);
 
+    const forgedTaskId = crypto.randomUUID();
     const unsigned = {
-      task_id: crypto.randomUUID(),
+      task_id: forgedTaskId,
+      relay_task_id: forgedTaskId,
       motebit_id: motebitId as unknown as MotebitId,
       device_id: deviceId as unknown as DeviceId,
       submitted_at: Date.now(),

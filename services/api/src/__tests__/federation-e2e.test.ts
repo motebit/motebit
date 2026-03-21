@@ -935,6 +935,7 @@ describe("Federation E2E", () => {
       // 6. Bob completes the task — sign receipt with the key registered in registerAgent
       const unsignedReceipt = {
         task_id: taskRequest!.task!.task_id,
+        relay_task_id: taskRequest!.task!.task_id,
         motebit_id: bob.motebitId as unknown as MotebitId,
         device_id: "bob-device" as unknown as DeviceId,
         submitted_at: Date.now(),

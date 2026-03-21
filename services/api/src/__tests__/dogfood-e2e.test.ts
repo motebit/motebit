@@ -82,6 +82,7 @@ async function makeReceipt(
 
   const unsigned = {
     task_id: taskId,
+    relay_task_id: taskId,
     motebit_id: executorMotebitId as unknown as MotebitId,
     device_id: executorDeviceId as unknown as DeviceId,
     submitted_at: Date.now() - 100,

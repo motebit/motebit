@@ -106,6 +106,7 @@ async function buildSignedReceipt(
 
   const unsignedReceipt = {
     task_id: taskId,
+    relay_task_id: taskId,
     motebit_id: workerMotebitId as unknown as MotebitId,
     device_id: "web-search-service" as unknown as DeviceId,
     submitted_at: Date.now() - 1000,

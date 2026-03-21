@@ -46,6 +46,7 @@ async function makeReceipt(
 ): Promise<ExecutionReceipt> {
   const unsigned = {
     task_id: taskId,
+    relay_task_id: taskId,
     motebit_id: workerMotebitId as unknown as MotebitId,
     device_id: "worker-device" as unknown as DeviceId,
     submitted_at: Date.now(),
@@ -1151,6 +1152,7 @@ describe("Delegation E2E", () => {
     const now = Date.now();
     const unsigned = {
       task_id: taskId,
+      relay_task_id: taskId,
       motebit_id: workerMotebitId as unknown as MotebitId,
       device_id: "worker-device" as unknown as DeviceId,
       submitted_at: now,

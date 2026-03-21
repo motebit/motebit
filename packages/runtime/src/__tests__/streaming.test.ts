@@ -552,12 +552,15 @@ describe("resumeAfterApproval", () => {
     );
   });
 
-  it("throws without pending approval", async () => {
-    await expect(async () => {
-      for await (const _chunk of runtime.resumeAfterApproval(true)) {
-        /* consume */
-      }
-    }).rejects.toThrow("No pending approval to resume");
+  it("returns silently without pending approval (timeout may have fired)", async () => {
+    // When no pending approval exists (e.g. timeout already fired and cleared it),
+    // resumeAfterApproval returns silently instead of throwing — prevents the race
+    // where a user approves at the same moment the timeout fires.
+    const chunks: unknown[] = [];
+    for await (const chunk of runtime.resumeAfterApproval(true)) {
+      chunks.push(chunk);
+    }
+    expect(chunks).toHaveLength(0);
   });
 
   it("throws without AI provider", async () => {

@@ -340,6 +340,7 @@ describe("Virtual Accounts", () => {
     // Submit receipt (worker completes the task)
     const unsigned = {
       task_id: taskBody.task_id,
+      relay_task_id: taskBody.task_id,
       motebit_id: workerId as unknown as MotebitId,
       device_id: "worker-device" as unknown as DeviceId,
       submitted_at: Date.now(),
@@ -418,6 +419,7 @@ describe("Virtual Accounts", () => {
     // Submit receipt
     const unsigned = {
       task_id: taskBody.task_id,
+      relay_task_id: taskBody.task_id,
       motebit_id: workerId as unknown as MotebitId,
       device_id: "worker-device" as unknown as DeviceId,
       submitted_at: Date.now(),

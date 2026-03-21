@@ -161,6 +161,7 @@ describe("Money Loop E2E", () => {
 
     const unsignedReceipt = {
       task_id: taskBody.task_id,
+      relay_task_id: taskBody.task_id,
       motebit_id: worker.motebitId as unknown as MotebitId,
       device_id: "web-search-service" as unknown as DeviceId,
       submitted_at: Date.now() - 1000,

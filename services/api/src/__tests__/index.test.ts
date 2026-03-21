@@ -1047,6 +1047,7 @@ describe("Sync Relay — agent protocol", () => {
     // Sign the receipt with the executing agent's private key
     const unsigned = {
       task_id,
+      relay_task_id: task_id,
       motebit_id: execMotebitId as unknown as import("@motebit/sdk").MotebitId,
       device_id: "worker-device" as unknown as import("@motebit/sdk").DeviceId,
       submitted_at: Date.now(),
@@ -1114,6 +1115,7 @@ describe("Sync Relay — agent protocol", () => {
     // Post receipt with garbage signature (key is known but sig is forged)
     const receipt: ExecutionReceipt = {
       task_id,
+      relay_task_id: task_id,
       motebit_id: execMotebitId as unknown as import("@motebit/sdk").MotebitId,
       device_id: "worker-device" as unknown as import("@motebit/sdk").DeviceId,
       submitted_at: Date.now(),
@@ -1147,6 +1149,7 @@ describe("Sync Relay — agent protocol", () => {
     // Receipt from an agent that never registered — no public key discoverable
     const receipt: ExecutionReceipt = {
       task_id,
+      relay_task_id: task_id,
       motebit_id: "unknown-agent" as unknown as import("@motebit/sdk").MotebitId,
       device_id: "device-1" as unknown as import("@motebit/sdk").DeviceId,
       submitted_at: Date.now(),
@@ -1287,6 +1290,7 @@ describe("Sync Relay — agent protocol", () => {
     // Service agent completes the task with a signed receipt
     const unsigned = {
       task_id,
+      relay_task_id: task_id,
       motebit_id: serviceMotebitId as unknown as import("@motebit/sdk").MotebitId,
       device_id: serviceDeviceId as unknown as import("@motebit/sdk").DeviceId,
       submitted_at: Date.now(),
@@ -1481,6 +1485,7 @@ describe("Sync Relay — agent protocol", () => {
     // Service agent fails the task
     const unsigned = {
       task_id,
+      relay_task_id: task_id,
       motebit_id: serviceMotebitId as unknown as import("@motebit/sdk").MotebitId,
       device_id: refDeviceId as unknown as import("@motebit/sdk").DeviceId,
       submitted_at: Date.now(),
@@ -1710,6 +1715,7 @@ describe("Sync Relay — agent protocol", () => {
 
     const unsigned = {
       task_id,
+      relay_task_id: task_id,
       motebit_id: execMotebitId as unknown as import("@motebit/sdk").MotebitId,
       device_id: "worker-device" as unknown as import("@motebit/sdk").DeviceId,
       submitted_at: Date.now(),
@@ -1766,6 +1772,7 @@ describe("Sync Relay — agent protocol", () => {
 
     const unsigned = {
       task_id,
+      relay_task_id: task_id,
       motebit_id: execMotebitId as unknown as import("@motebit/sdk").MotebitId,
       device_id: "worker-device" as unknown as import("@motebit/sdk").DeviceId,
       submitted_at: Date.now(),
@@ -1840,6 +1847,7 @@ describe("Sync Relay — agent protocol", () => {
 
     const unsigned = {
       task_id,
+      relay_task_id: task_id,
       motebit_id: execMotebitId as unknown as import("@motebit/sdk").MotebitId,
       device_id: "worker-device" as unknown as import("@motebit/sdk").DeviceId,
       submitted_at: Date.now(),
@@ -2321,6 +2329,7 @@ describe("Sync Relay — credential presentation", () => {
 
     const unsigned = {
       task_id,
+      relay_task_id: task_id,
       motebit_id: execMotebitId as unknown as import("@motebit/sdk").MotebitId,
       device_id: "worker-device" as unknown as import("@motebit/sdk").DeviceId,
       submitted_at: Date.now(),
