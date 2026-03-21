@@ -395,6 +395,8 @@ async function guidedScaffold(
   let trustMode: TrustMode;
   let passphrase: string;
   let rl: ReturnType<typeof createRL> | null = null;
+  let reuseExisting = false;
+  let existingConfig = loadConfig();
 
   if (nonInteractive) {
     provider = "anthropic";
@@ -436,7 +438,7 @@ async function guidedScaffold(
     console.log();
 
     // Check for existing identity
-    const existingConfig = loadConfig();
+    existingConfig = loadConfig();
     if (existingConfig.motebit_id) {
       console.log(`  ${yellow("!")} Existing identity found: ${dim(existingConfig.motebit_id)}`);
       const overwrite = await select(rl, "  Overwrite with new identity?", [
@@ -444,32 +446,31 @@ async function guidedScaffold(
         { label: "No, keep existing", value: false },
       ]);
       console.log();
-      if (!overwrite) {
-        rl.close();
-        console.log(`  ${dim("Aborted.")}`);
-        console.log();
-        process.exit(0);
-      }
+      reuseExisting = !overwrite;
     }
 
-    // Passphrase
-    const envPassphrase = process.env["MOTEBIT_PASSPHRASE"];
-    if (envPassphrase) {
-      passphrase = envPassphrase;
+    // Passphrase (skip if reusing existing identity)
+    if (reuseExisting) {
+      passphrase = ""; // not needed — identity already generated
     } else {
-      passphrase = await password(rl, "? Set a passphrase for your agent's key: ");
-      if (!passphrase) {
-        rl.close();
-        console.log(`  ${red("!")} Passphrase cannot be empty.`);
-        console.log();
-        process.exit(1);
-      }
-      const confirm = await password(rl, "? Confirm passphrase: ");
-      if (confirm !== passphrase) {
-        rl.close();
-        console.log(`  ${red("!")} Passphrases do not match.`);
-        console.log();
-        process.exit(1);
+      const envPassphrase = process.env["MOTEBIT_PASSPHRASE"];
+      if (envPassphrase) {
+        passphrase = envPassphrase;
+      } else {
+        passphrase = await password(rl, "? Set a passphrase for your agent's key: ");
+        if (!passphrase) {
+          rl.close();
+          console.log(`  ${red("!")} Passphrase cannot be empty.`);
+          console.log();
+          process.exit(1);
+        }
+        const confirm = await password(rl, "? Confirm passphrase: ");
+        if (confirm !== passphrase) {
+          rl.close();
+          console.log(`  ${red("!")} Passphrases do not match.`);
+          console.log();
+          process.exit(1);
+        }
       }
     }
 
@@ -546,52 +547,81 @@ async function guidedScaffold(
     };
   }
 
-  // Generate identity
-  console.log(`  Generating Ed25519 keypair...`);
-  const result = await generateIdentity({
-    name: dirName,
-    trustMode,
-    passphrase,
-    service: serviceOpts,
-  });
-  console.log(`  Signing identity file...`);
-
   // Create directory if needed
   mkdirSync(absDir, { recursive: true });
+
+  // Generate or reuse identity
+  let motebitId: string;
+  let identityFileContent: string | null = null;
+
+  if (reuseExisting && existingConfig.motebit_id) {
+    // Reuse existing identity — scaffold project files without regenerating keypair
+    motebitId = existingConfig.motebit_id;
+    console.log(`  Using existing identity: ${dim(motebitId)}`);
+
+    // Try to copy existing motebit.md if one exists nearby
+    const existingMd = join(configDir(), "motebit.md");
+    if (existsSync(existingMd)) {
+      identityFileContent = readFileSync(existingMd, "utf-8");
+    }
+
+    // Update config with project name and provider
+    existingConfig.name = dirName;
+    existingConfig.default_provider = provider;
+    saveConfig(existingConfig);
+  } else {
+    console.log(`  Generating Ed25519 keypair...`);
+    const result = await generateIdentity({
+      name: dirName,
+      trustMode,
+      passphrase,
+      service: serviceOpts,
+    });
+    console.log(`  Signing identity file...`);
+
+    motebitId = result.motebitId;
+    identityFileContent = result.identityFileContent;
+
+    // Save identity to config (merge with existing)
+    const config = loadConfig();
+    config.name = dirName;
+    config.motebit_id = result.motebitId;
+    config.device_id = result.deviceId;
+    config.device_public_key = result.publicKeyHex;
+    config.cli_encrypted_key = result.encryptedKey;
+    config.default_provider = provider;
+    saveConfig(config);
+  }
 
   // Write project files
   writeFileSync(pkgPath, makePackageJson(dirName), "utf-8");
   writeFileSync(join(absDir, ".env.example"), makeEnvExample(provider), "utf-8");
   writeFileSync(join(absDir, ".gitignore"), GITIGNORE, "utf-8");
-  writeFileSync(join(absDir, "motebit.md"), result.identityFileContent, "utf-8");
+  if (identityFileContent) {
+    writeFileSync(join(absDir, "motebit.md"), identityFileContent, "utf-8");
+  }
   writeFileSync(join(absDir, "verify.js"), makeVerifyExample(), "utf-8");
-
-  // Save identity to config (merge with existing)
-  const config = loadConfig();
-  config.name = dirName;
-  config.motebit_id = result.motebitId;
-  config.device_id = result.deviceId;
-  config.device_public_key = result.publicKeyHex;
-  config.cli_encrypted_key = result.encryptedKey;
-  config.default_provider = provider;
-  saveConfig(config);
 
   // Output
   const relDir = targetDir === "." ? "." : `./${dirName}`;
   console.log();
   console.log(`  ${green("+")} Created ${bold(relDir)}`);
   console.log();
-  console.log(`    motebit.md         ${dim("Signed agent identity")}`);
+  if (identityFileContent) {
+    console.log(`    motebit.md         ${dim("Signed agent identity")}`);
+  }
   console.log(`    verify.js          ${dim("Verification example")}`);
   console.log(`    package.json       ${dim("Node project")}`);
   console.log(`    .env.example       ${dim("Environment variable template")}`);
   console.log(`    .gitignore         ${dim("Secrets excluded")}`);
   console.log();
   console.log(`  Identity stored in ${dim(configPath())}`);
-  console.log(`  Motebit ID: ${cyan(result.motebitId)}`);
-  const verifyResult = await verifyIdentityFile(result.identityFileContent);
-  if (verifyResult.did) {
-    console.log(`  DID:        ${dim(verifyResult.did)}`);
+  console.log(`  Motebit ID: ${cyan(motebitId)}`);
+  if (identityFileContent) {
+    const verifyResult = await verifyIdentityFile(identityFileContent);
+    if (verifyResult.did) {
+      console.log(`  DID:        ${dim(verifyResult.did)}`);
+    }
   }
   console.log();
   console.log(`  ${bold("Next steps:")}`);
