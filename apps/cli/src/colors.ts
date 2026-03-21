@@ -60,6 +60,3 @@ export const border = dim;
 
 /** Warning — approval requests, injection warnings. */
 export const warn = yellow;
-
-/** Slash commands — the user's control surface. Distinct from prompt and system. */
-export const command = cyan;

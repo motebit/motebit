@@ -15,7 +15,7 @@ import { type CliConfig, termWidth } from "./args.js";
 import type { FullConfig } from "./config.js";
 import { saveFullConfig } from "./config.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
-import { green, dim, cyan, success, command } from "./colors.js";
+import { green, dim, cyan, success } from "./colors.js";
 import {
   SqliteConversationSyncStoreAdapter,
   SqlitePlanSyncStoreAdapter,
@@ -107,59 +107,55 @@ export async function handleSlashCommand(
 ): Promise<void> {
   switch (cmd) {
     case "help":
-      {
-        const c = command; // slash command highlight
-        const d = dim; // description
-        const lines = [
-          "",
-          "Available commands:",
-          `  ${c("/help")}              ${d("Show this help")}`,
-          `  ${c("/memories")}          ${d("List all memories")}`,
-          `  ${c("/graph")}             ${d("Memory graph stats — compounding health")}`,
-          `  ${c("/curious")}           ${d("Show decaying memories the agent is curious about")}`,
-          `  ${c("/state")}             ${d("Show current state vector")}`,
-          `  ${c("/forget")} <nodeId>   ${d("Delete a memory by ID")}`,
-          `  ${c("/export")}            ${d("Export all memories and state as JSON")}`,
-          `  ${c("/clear")}             ${d("Clear conversation history")}`,
-          `  ${c("/summarize")}         ${d("Summarize current conversation")}`,
-          `  ${c("/conversations")}     ${d("List recent conversations")}`,
-          `  ${c("/conversation")} <id> ${d("Load a past conversation")}`,
-          `  ${c("/model")} <name>      ${d("Switch AI model")}`,
-          `  ${c("/connect")} <url>     ${d("Connect to a relay (register, discover, delegate)")}`,
-          `  ${c("/serve")} [port]      ${d("Start MCP server — accept incoming delegations")}`,
-          `  ${c("/sync")}              ${d("Sync events and conversations with remote server")}`,
-          `  ${c("/tools")}             ${d("List registered tools")}`,
-          `  ${c("/goals")}             ${d("List all scheduled goals")}`,
-          `  ${c("/goal")} add "<prompt>" --every <interval> [--once]`,
-          `  ${c("/goal")} remove <id>  ${d("Remove a goal")}`,
-          `  ${c("/goal")} pause <id>   ${d("Pause a goal")}`,
-          `  ${c("/goal")} resume <id>  ${d("Resume a paused goal")}`,
-          `  ${c("/goal")} outcomes <id> ${d("Show execution history")}`,
-          `  ${c("/approvals")}         ${d("Show pending approval queue")}`,
-          `  ${c("/balance")}           ${d("Show virtual account balance")}`,
-          `  ${c("/withdraw")} <amount> ${d("Request a withdrawal")}`,
-          `  ${c("/deposits")}          ${d("Show recent deposit transactions")}`,
-          `  ${c("/reflect")}           ${d("Trigger reflection — see what the agent learned")}`,
-          `  ${c("/mcp")} list          ${d("List MCP servers and trust status")}`,
-          `  ${c("/mcp")} add <name> <url> [--motebit]  ${d("Add an HTTP MCP server")}`,
-          `  ${c("/mcp")} remove <name> ${d("Remove an MCP server")}`,
-          `  ${c("/mcp")} trust <name>  ${d("Trust an MCP server")}`,
-          `  ${c("/mcp")} untrust <name> ${d("Untrust an MCP server")}`,
-          `  ${c("/agents")}            ${d("List known agents with trust levels")}`,
-          `  ${c("/agents")} info <id>  ${d("Full trust record detail")}`,
-          `  ${c("/agents")} trust <id> <level>  ${d("Set trust level")}`,
-          `  ${c("/agents")} block <id> ${d("Shorthand for setting Blocked")}`,
-          `  ${c("/discover")} [cap]    ${d("Discover agents on the relay")}`,
-          `  ${c("/discover")} dom.com  ${d("Discover motebit at domain via DNS")}`,
-          `  ${c("/delegate")} <id> <prompt>  ${d("Delegate a task via the relay")}`,
-          `  ${c("/propose")} <ids> <goal>  ${d("Propose a collaborative plan")}`,
-          `  ${c("/proposals")}         ${d("List active proposals")}`,
-          `  ${c("/proposal")} <id> [accept|reject|counter]  ${d("Respond to a proposal")}`,
-          `  ${c("/operator")}          ${d("Show operator mode status")}`,
-          `  ${d("quit, exit")}         ${d("Exit")}`,
-        ];
-        console.log(lines.join("\n"));
-      }
+      console.log(
+        `
+Available commands:
+  /help              Show this help
+  /memories          List all memories
+  /graph             Memory graph stats — compounding health
+  /curious           Show decaying memories the agent is curious about
+  /state             Show current state vector
+  /forget <nodeId>   Delete a memory by ID
+  /export            Export all memories and state as JSON
+  /clear             Clear conversation history
+  /summarize         Summarize current conversation
+  /conversations     List recent conversations
+  /conversation <id> Load a past conversation
+  /model <name>      Switch AI model
+  /connect <url>     Connect to a relay (register, discover agents, enable delegation)
+  /serve [port]      Start MCP server (default port 3100) — accept incoming delegations
+  /sync              Sync events and conversations with remote server
+  /tools             List registered tools
+  /goals             List all scheduled goals
+  /goal add "<prompt>" --every <interval> [--once]
+  /goal remove <id>  Remove a goal
+  /goal pause <id>   Pause a goal
+  /goal resume <id>  Resume a paused goal
+  /goal outcomes <id> Show execution history
+  /approvals         Show pending approval queue
+  /balance           Show virtual account balance and recent transactions
+  /withdraw <amount> [destination]  Request a withdrawal
+  /deposits          Show recent deposit transactions
+  /reflect           Trigger reflection — see what the agent learned
+  /mcp list          List MCP servers and trust status
+  /mcp add <name> <url> [--motebit]  Add an HTTP MCP server
+  /mcp remove <name> Remove an MCP server
+  /mcp trust <name>  Trust an MCP server
+  /mcp untrust <name> Untrust an MCP server
+  /agents            List known agents with trust levels and reputation
+  /agents info <id>  Full trust record detail for an agent
+  /agents trust <id> <level>  Set trust level (first_contact|verified|trusted|blocked)
+  /agents block <id> Shorthand for setting Blocked
+  /discover [cap]    Discover agents on the relay (optional capability filter)
+  /discover dom.com  Discover motebit at domain via DNS/well-known
+  /delegate <id> <prompt>  Delegate a task to another motebit via the relay
+  /propose <ids> <goal>  Propose a collaborative plan to comma-separated motebit IDs
+  /proposals         List active proposals (sent and received)
+  /proposal <id> [accept|reject|counter]  View or respond to a proposal
+  /operator          Show operator mode status
+  quit, exit         Exit
+`.trim(),
+      );
       break;
 
     case "memories": {
@@ -2131,8 +2127,6 @@ export async function handleSlashCommand(
     }
 
     default:
-      console.log(
-        `Unknown command: ${command(`/${cmd}`)}. Type ${command("/help")} for available commands.`,
-      );
+      console.log(`Unknown command: /${cmd}. Type /help for available commands.`);
   }
 }
