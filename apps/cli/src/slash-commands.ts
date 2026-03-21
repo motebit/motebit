@@ -353,17 +353,39 @@ export async function handleSlashCommand(
     }
 
     case "model": {
+      // Known models with short aliases
+      const MODEL_ALIASES: Record<string, string> = {
+        opus: "claude-opus-4-6-20250414",
+        sonnet: "claude-sonnet-4-5-latest",
+        haiku: "claude-haiku-4-5-20251001",
+        "gpt-4o": "gpt-4o",
+        "gpt-4": "gpt-4",
+        o3: "o3",
+        "llama3.2": "llama3.2",
+        mistral: "mistral",
+      };
+
       if (!args) {
-        console.log(`Current model: ${runtime.currentModel}`);
+        const current = runtime.currentModel ?? "unknown";
+        console.log(`\nCurrent model: ${cyan(current)}\n`);
+        console.log("Available:");
+        const col = Math.max(...Object.keys(MODEL_ALIASES).map((k) => k.length)) + 2;
+        for (const [alias, modelId] of Object.entries(MODEL_ALIASES)) {
+          const marker = modelId === current || alias === current ? green(" ●") : "  ";
+          const gap = " ".repeat(Math.max(1, col - alias.length));
+          console.log(`${marker} ${cyan(alias)}${gap}${dim(modelId)}`);
+        }
+        console.log(dim(`\n  /model <name> to switch (or use a full model ID)\n`));
         break;
       }
-      runtime.setModel(args);
+      const resolved = MODEL_ALIASES[args.toLowerCase()] ?? args;
+      runtime.setModel(resolved);
       // Persist to config so it survives restart
       if (fullConfig) {
-        fullConfig.default_model = args;
+        fullConfig.default_model = resolved;
         saveFullConfig(fullConfig);
       }
-      console.log(`Model switched to: ${args}`);
+      console.log(`Model switched to: ${resolved}`);
       break;
     }
 
