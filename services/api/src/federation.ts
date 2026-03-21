@@ -788,9 +788,7 @@ export interface FederationDeps {
   queryLocalAgents(capability?: string, motebitId?: string, limit?: number): AgentInfo[];
 
   /** Called when a verified forwarded task arrives from a peer. */
-  onTaskForwarded(
-    task: VerifiedForwardedTask,
-  ):
+  onTaskForwarded(task: VerifiedForwardedTask):
     | Promise<{
         status: "routed" | "pending" | "duplicate" | "rejected";
         task_id?: string;
