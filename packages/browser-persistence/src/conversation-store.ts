@@ -184,6 +184,81 @@ export class IdbConversationStore implements ConversationStoreAdapter {
     }
   }
 
+  // === Sync upserts (write-through to IDB + cache) ===
+
+  upsertSyncConversation(conv: {
+    conversation_id: string;
+    motebit_id: string;
+    started_at: number;
+    last_active_at: number;
+    title: string | null;
+    summary: string | null;
+    message_count: number;
+  }): void {
+    const record: ConversationRecord = {
+      conversationId: conv.conversation_id,
+      motebitId: conv.motebit_id,
+      startedAt: conv.started_at,
+      lastActiveAt: conv.last_active_at,
+      title: conv.title,
+      summary: conv.summary,
+      messageCount: conv.message_count,
+    };
+    const tx = this.db.transaction("conversations", "readwrite");
+    tx.objectStore("conversations").put(record);
+
+    // Update cache
+    const cached = this._conversationListCache.get(conv.motebit_id);
+    if (cached) {
+      const idx = cached.findIndex((c) => c.conversationId === conv.conversation_id);
+      const entry = {
+        conversationId: conv.conversation_id,
+        startedAt: conv.started_at,
+        lastActiveAt: conv.last_active_at,
+        title: conv.title,
+        messageCount: conv.message_count,
+      };
+      if (idx >= 0) cached[idx] = entry;
+      else cached.unshift(entry);
+    }
+  }
+
+  upsertSyncMessage(msg: {
+    message_id: string;
+    conversation_id: string;
+    motebit_id: string;
+    role: string;
+    content: string;
+    tool_calls: string | null;
+    tool_call_id: string | null;
+    created_at: number;
+    token_estimate: number;
+  }): void {
+    const record: MessageRecord = {
+      messageId: msg.message_id,
+      conversationId: msg.conversation_id,
+      motebitId: msg.motebit_id,
+      role: msg.role,
+      content: msg.content,
+      toolCalls: msg.tool_calls,
+      toolCallId: msg.tool_call_id,
+      createdAt: msg.created_at,
+      tokenEstimate: msg.token_estimate,
+    };
+    const tx = this.db.transaction("conversation_messages", "readwrite");
+    tx.objectStore("conversation_messages").put(record);
+
+    // Update message cache if this conversation is loaded
+    const cached = this._messageCache.get(msg.conversation_id);
+    if (cached) {
+      const exists = cached.some((m) => m.messageId === msg.message_id);
+      if (!exists) {
+        cached.push(record);
+        cached.sort((a, b) => a.createdAt - b.createdAt);
+      }
+    }
+  }
+
   // === Preload / Cache ===
 
   private _messageCache = new Map<string, MessageRecord[]>();

@@ -8,6 +8,7 @@ import type { StreamingProvider } from "@motebit/ai-core/browser";
 import {
   createBrowserStorage,
   IdbConversationStore,
+  IdbConversationSyncStore,
   IdbPlanStore,
   IdbPlanSyncStore,
   IdbGradientStore,
@@ -24,6 +25,8 @@ import {
   decryptEventPayload,
   PlanSyncEngine,
   HttpPlanSyncAdapter,
+  ConversationSyncEngine,
+  HttpConversationSyncAdapter,
   type SyncStatus,
 } from "@motebit/sync-engine";
 import {
@@ -94,6 +97,7 @@ export class WebApp {
   private mcpAdapters = new Map<string, McpClientAdapter>();
   private _mcpServers: McpServerConfig[] = [];
   private _convStore: IdbConversationStore | null = null;
+  private _conversationSyncEngine: ConversationSyncEngine | null = null;
   private cuesTickInterval: ReturnType<typeof setInterval> | null = null;
   private housekeepingInterval: ReturnType<typeof setInterval> | null = null;
   private idleCues: BehaviorCues = {
@@ -859,6 +863,21 @@ export class WebApp {
       this._planSyncEngine.start();
     }
 
+    // Wire conversation sync — push/pull conversations to relay for cross-device visibility
+    if (this._convStore) {
+      const convSyncStore = new IdbConversationSyncStore(this._convStore, this._motebitId);
+      this._conversationSyncEngine = new ConversationSyncEngine(convSyncStore, this._motebitId);
+      this._conversationSyncEngine.connectRemote(
+        new HttpConversationSyncAdapter({
+          baseUrl: relayUrl,
+          motebitId: this._motebitId,
+          authToken: token ?? undefined,
+        }),
+      );
+      void this._conversationSyncEngine.sync();
+      this._conversationSyncEngine.start();
+    }
+
     // Recover any delegated steps orphaned by a previous tab close
     void (async () => {
       try {
@@ -938,6 +957,10 @@ export class WebApp {
     if (this._planSyncEngine) {
       this._planSyncEngine.stop();
       this._planSyncEngine = null;
+    }
+    if (this._conversationSyncEngine) {
+      this._conversationSyncEngine.stop();
+      this._conversationSyncEngine = null;
     }
     this.runtime?.sync.stop();
     this.setSyncStatus("disconnected");

@@ -26,6 +26,7 @@ export { IdbPlanStore } from "./plan-store.js";
 export { IdbAgentTrustStore } from "./agent-trust-store.js";
 export { IdbGradientStore } from "./gradient-store.js";
 export { IdbPlanSyncStore } from "./plan-sync-store.js";
+export { IdbConversationSyncStore } from "./conversation-sync-store.js";
 export { IdbServiceListingStore } from "./service-listing-store.js";
 export { IdbBudgetAllocationStore } from "./budget-allocation-store.js";
 export { IdbSettlementStore } from "./settlement-store.js";
