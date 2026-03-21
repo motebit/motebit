@@ -132,6 +132,17 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
 
     if (!resp.ok) {
       const text = await resp.text();
+      // Surface x402 payment requirement so callers can handle budget exhaustion
+      if (resp.status === 402) {
+        let detail = text;
+        try {
+          const parsed = JSON.parse(text) as { estimated_cost?: number; message?: string };
+          detail = parsed.message ?? `Payment required: ${parsed.estimated_cost ?? "unknown"} USDC`;
+        } catch {
+          // Use raw text
+        }
+        throw new Error(`Payment required (HTTP 402): ${detail}`);
+      }
       throw new Error(`Relay task submission failed (${resp.status}): ${text}`);
     }
 

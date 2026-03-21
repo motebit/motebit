@@ -243,7 +243,7 @@ export function registerA2ARoutes(app: Hono, db: DatabaseDriver, config: A2ABrid
 
     // Extract text from message parts
     const prompt = body.message.parts
-      .map((p) => p.text ?? (p.structuredData ? JSON.stringify(p.structuredData) : ""))
+      .map((p) => p.text ?? (p.structuredData != null ? JSON.stringify(p.structuredData) : ""))
       .filter((t) => t.length > 0)
       .join("\n");
 
@@ -265,7 +265,7 @@ export function registerA2ARoutes(app: Hono, db: DatabaseDriver, config: A2ABrid
     try {
       const taskBody: Record<string, unknown> = {
         prompt,
-        submitted_by: `a2a:${body.metadata?.caller_id ?? "unknown"}`,
+        submitted_by: `a2a:${(body.metadata?.caller_id as string | undefined) ?? "unknown"}`,
       };
       if (requiredCapabilities) taskBody.required_capabilities = requiredCapabilities;
       if (routingStrategy) taskBody.routing_strategy = routingStrategy;
@@ -328,7 +328,7 @@ export function registerA2ARoutes(app: Hono, db: DatabaseDriver, config: A2ABrid
       }
 
       // Attach signed receipt as motebit extension
-      if (result.receipt) {
+      if (result.receipt != null) {
         task["x-motebit-receipt"] = result.receipt;
         // Also include receipt as structured data artifact for A2A consumers
         task.artifacts = task.artifacts ?? [];

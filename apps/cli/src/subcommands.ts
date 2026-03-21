@@ -294,7 +294,17 @@ export async function handleExport(config: CliConfig): Promise<void> {
       skipped.push(`presentation (${vpResult.error})`);
     }
 
-    // 5. Budget summary
+    // 5. OSSA manifest (derived from identity for cross-platform compatibility)
+    try {
+      const ossaManifest = generateOssaManifest(motebitId, publicKeyHex);
+      const ossaPath = path.join(outputDir, "ossa-manifest.yaml");
+      fs.writeFileSync(ossaPath, ossaManifest, "utf-8");
+      exported.push("OSSA manifest");
+    } catch {
+      skipped.push("OSSA manifest (generation failed)");
+    }
+
+    // 6. Budget summary
     const budgetResult = await fetchRelayJson(`${baseUrl}/agent/${motebitId}/budget`, headers);
     if (budgetResult.ok) {
       const budgetPath = path.join(outputDir, "budget.json");
@@ -2105,4 +2115,57 @@ export async function handleWithdraw(config: CliConfig): Promise<void> {
     console.error(`Error: could not reach relay: ${msg}`);
     process.exit(1);
   }
+}
+
+// ---------------------------------------------------------------------------
+// OSSA manifest generation — maps motebit identity to OSSA contract layer
+// ---------------------------------------------------------------------------
+
+function generateOssaManifest(motebitId: string, publicKeyHex: string): string {
+  const lines: string[] = [
+    "# OSSA Agent Manifest — derived from motebit/identity@1.0",
+    "# This is a compatibility view. The authoritative identity is motebit.md (signed).",
+    "",
+    "ossa_version: '1.0'",
+    "",
+    `name: motebit-${motebitId.slice(0, 8)}`,
+    `description: Motebit sovereign agent ${motebitId.slice(0, 8)}`,
+    "",
+    "identity:",
+    `  gaid: 'did:key:z${publicKeyHex.slice(0, 16)}'`,
+    `  motebit_id: '${motebitId}'`,
+    `  public_key: '${publicKeyHex}'`,
+    "  verification:",
+    "    method: Ed25519",
+    "    spec: motebit/identity@1.0",
+    "    verifier: '@motebit/verify'",
+    "",
+    "protocols:",
+    "  mcp:",
+    "    supported: true",
+    "    transports: [stdio, http, streamable-http]",
+    "  a2a:",
+    "    supported: true",
+    "    agent_card: '/.well-known/agent.json'",
+    "  x402:",
+    "    supported: true",
+    "    settlement: USDC",
+    "",
+    "trust:",
+    "  model: semiring",
+    "  dimensions: [trust, cost, latency, reliability, regulatory_risk]",
+    "  sybil_defense: 4-layer",
+    "  credential_format: W3C VC 2.0 (eddsa-jcs-2022)",
+    "",
+    "governance:",
+    "  source: motebit.md",
+    "  enforcement: PolicyGate",
+    "  privacy: fail-closed",
+    "",
+    "specs:",
+    "  - motebit/identity@1.0",
+    "  - motebit/execution-ledger@1.0",
+    "  - motebit/relay-federation@1.0",
+  ];
+  return lines.join("\n") + "\n";
 }
