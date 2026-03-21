@@ -126,6 +126,7 @@ import {
 } from "./federation.js";
 import type { RelayIdentity } from "./federation.js";
 import { registerCredentialRoutes, getRelayKeypair } from "./credentials.js";
+import { registerA2ARoutes } from "./a2a-bridge.js";
 import { createTaskRouter, forwardTaskViaMcp, type ReceiptCandidate } from "./task-routing.js";
 import {
   createDataSyncTables,
@@ -3200,6 +3201,15 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // === Data Sync Routes (conversations, messages, plans, plan steps) ===
   registerDataSyncRoutes({ db: moteDb.db, app, connections });
+
+  // === A2A Protocol Bridge ===
+  // Exposes motebit agents as A2A-compatible agents for cross-framework discovery.
+  const a2aRelayUrl = federationConfig?.endpointUrl ?? "http://localhost:3000";
+  registerA2ARoutes(app, moteDb.db, {
+    relayIdentity,
+    relayUrl: a2aRelayUrl,
+    relayVersion: "0.5.2",
+  });
 
   // === Agent Protocol Endpoints ===
 
