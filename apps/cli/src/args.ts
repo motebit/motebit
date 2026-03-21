@@ -216,6 +216,12 @@ export function printVersion(): void {
   console.log(VERSION);
 }
 
+/** Terminal inner width, clamped to [40, 120]. Accounts for box border padding. */
+export function termWidth(): number {
+  const cols = process.stdout.columns ?? 80;
+  return Math.max(40, Math.min(cols - 4, 120)); // -4 for "  ╭" + "╮"
+}
+
 export function printBanner(opts: {
   motebitId: string;
   provider: string;
@@ -224,11 +230,13 @@ export function printBanner(opts: {
   goalCount: number;
   operator: boolean;
 }): void {
-  const W = 46; // inner width
+  const W = termWidth();
   const pad = (s: string) => s + " ".repeat(Math.max(0, W - s.length));
+  const clip = (s: string, max: number) => (s.length > max ? s.slice(0, max - 1) + "\u2026" : s);
   const id = opts.motebitId.slice(0, 8);
-  const model = opts.model.replace(/^claude-/, "").slice(0, 20);
-  const providerInfo = `${opts.provider} \u00b7 ${model}`;
+  const maxInfo = Math.max(10, W - 24); // 24 = creature art width
+  const model = opts.model.replace(/^claude-/, "");
+  const providerInfo = clip(`${opts.provider} \u00b7 ${model}`, maxInfo);
   const toolGoal = `${opts.toolCount} tools \u00b7 ${opts.goalCount} goals`;
   const op = opts.operator ? " \u00b7 operator" : "";
   const header = `\u2500 motebit v${VERSION} `;
@@ -239,12 +247,12 @@ export function printBanner(opts: {
   console.log(`  \u2502${pad("          .")}\u2502`);
   console.log(`  \u2502${pad(`        .:::.          ${id}`)}\u2502`);
   console.log(`  \u2502${pad(`       .:::::.         ${providerInfo}`)}\u2502`);
-  console.log(`  \u2502${pad(`       :::::::         ${toolGoal}${op}`)}\u2502`);
+  console.log(`  \u2502${pad(`       :::::::         ${clip(toolGoal + op, maxInfo)}`)}\u2502`);
   console.log(`  \u2502${pad("       ':::::'")}\u2502`);
   console.log(`  \u2502${pad("         '''")}\u2502`);
   console.log(`  \u2502${pad("")}\u2502`);
   console.log(`  \u2502${pad("   /help for commands \u00b7 /goals to manage")}\u2502`);
-  console.log(`  \u2570${"─".repeat(W)}\u256f`);
+  console.log(`  \u2570${"\u2500".repeat(W)}\u256f`);
 }
 
 export function trimHistory(

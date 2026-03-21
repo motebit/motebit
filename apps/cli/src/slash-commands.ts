@@ -11,7 +11,7 @@ import { computeReputationScore } from "@motebit/policy";
 import { createSignedToken, verifyExecutionReceipt, hexToBytes } from "@motebit/crypto";
 import { McpServerAdapter, wireServerDeps } from "@motebit/mcp-server";
 import type { McpServerConfig as McpServerAdapterConfig } from "@motebit/mcp-server";
-import type { CliConfig } from "./args.js";
+import { type CliConfig, termWidth } from "./args.js";
 import type { FullConfig } from "./config.js";
 import { saveFullConfig } from "./config.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
@@ -592,10 +592,17 @@ Available commands:
           ? `\nRegistered tools (${tools.length}, ${networkCount} network-exposed):\n`
           : `\nRegistered tools (${tools.length}):\n`;
         console.log(label);
+        const cols = termWidth() + 4; // termWidth is inner, add border back
         for (const tool of tools) {
           const local = LOCAL_ONLY_TOOLS.has(tool.name);
           const marker = isServing ? (local ? "\u25CB [local]   " : "\u25CF [network] ") : "  ";
-          console.log(`${marker}${tool.name.padEnd(24)} ${tool.description.slice(0, 60)}`);
+          const prefix = marker + tool.name.padEnd(24) + " ";
+          const descMax = Math.max(20, cols - prefix.length);
+          const desc =
+            tool.description.length > descMax
+              ? tool.description.slice(0, descMax - 1) + "\u2026"
+              : tool.description;
+          console.log(`${prefix}${desc}`);
         }
       }
       break;
