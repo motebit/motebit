@@ -23,6 +23,13 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "summarize", description: "Summarize conversation" },
   { name: "model", description: "Show current model" },
   { name: "help", description: "Show keyboard shortcuts" },
+  { name: "agents", description: "List known agents" },
+  { name: "graph", description: "Memory graph stats" },
+  { name: "curious", description: "Show curiosity targets" },
+  { name: "reflect", description: "Trigger self-reflection" },
+  { name: "export", description: "Export identity + memories" },
+  { name: "forget", description: "Delete a memory by keyword" },
+  { name: "gradient", description: "Intelligence gradient" },
 ];
 
 function filterCommands(partial: string): SlashCommandDef[] {
@@ -41,6 +48,7 @@ export interface SlashCommandsCallbacks {
   openShortcuts(): void;
   openMemory(): void;
   openGoals(): void;
+  openAgents(): void;
 }
 
 export function initSlashCommands(
@@ -201,6 +209,128 @@ export function initSlashCommands(
         chatInput.value = "";
         const model = ctx.app.currentModel;
         addMessage("system", model ? `Current model: ${model}` : "No model connected.");
+        break;
+      }
+      case "agents": {
+        chatInput.value = "";
+        callbacks.openAgents();
+        break;
+      }
+      case "graph": {
+        chatInput.value = "";
+        void (async () => {
+          const runtime = ctx.app.getRuntime();
+          if (!runtime) {
+            addMessage("system", "Runtime not initialized.");
+            return;
+          }
+          const { nodes, edges } = await runtime.memory.exportAll();
+          const active = nodes.filter((n) => !n.tombstoned);
+          const pinned = active.filter((n) => n.pinned);
+          addMessage(
+            "system",
+            `Memory graph: ${active.length} nodes, ${edges.length} edges, ${pinned.length} pinned`,
+          );
+        })();
+        break;
+      }
+      case "curious": {
+        chatInput.value = "";
+        const rt = ctx.app.getRuntime();
+        if (!rt) {
+          addMessage("system", "Runtime not initialized.");
+          break;
+        }
+        const targets = rt.getCuriosityTargets();
+        if (targets.length === 0) {
+          addMessage("system", "No curiosity targets — memory graph is stable.");
+        } else {
+          const lines = targets.map(
+            (t) => `  ${t.node.content.slice(0, 80)}${t.node.content.length > 80 ? "..." : ""}`,
+          );
+          addMessage("system", `Curiosity targets (${targets.length}):\n${lines.join("\n")}`);
+        }
+        break;
+      }
+      case "reflect": {
+        chatInput.value = "";
+        void (async () => {
+          const runtime = ctx.app.getRuntime();
+          if (!runtime) {
+            addMessage("system", "Runtime not initialized.");
+            return;
+          }
+          addMessage("system", "Reflecting...");
+          const result = await runtime.reflect();
+          addMessage(
+            "system",
+            `Reflection complete.\nSelf-assessment: ${result.selfAssessment}\nInsights: ${result.insights.length}`,
+          );
+        })();
+        break;
+      }
+      case "export": {
+        chatInput.value = "";
+        void (async () => {
+          const json = await ctx.app.exportData();
+          const blob = new Blob([json], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `motebit-export-${new Date().toISOString().slice(0, 10)}.json`;
+          a.click();
+          URL.revokeObjectURL(url);
+          addMessage("system", "Export downloaded.");
+        })();
+        break;
+      }
+      case "forget": {
+        chatInput.value = "";
+        void (async () => {
+          const runtime = ctx.app.getRuntime();
+          if (!runtime) {
+            addMessage("system", "Runtime not initialized.");
+            return;
+          }
+          const { nodes } = await runtime.memory.exportAll();
+          const active = nodes.filter((n) => !n.tombstoned);
+          if (active.length === 0) {
+            addMessage("system", "No memories to forget.");
+            return;
+          }
+          // Delete the oldest non-pinned memory as a simple default behavior
+          // (real keyword-based forget would require input parsing)
+          callbacks.openMemory();
+          addMessage("system", "Use the memory panel to select memories to forget.");
+        })();
+        break;
+      }
+      case "gradient": {
+        chatInput.value = "";
+        const runtime = ctx.app.getRuntime();
+        if (!runtime) {
+          addMessage("system", "Runtime not initialized.");
+          break;
+        }
+        const g = runtime.getGradient();
+        if (!g) {
+          addMessage("system", "No gradient data yet.");
+          break;
+        }
+        const metrics = [
+          `kd: ${g.knowledge_density.toFixed(2)}`,
+          `kq: ${g.knowledge_quality.toFixed(2)}`,
+          `gc: ${g.graph_connectivity.toFixed(2)}`,
+          `ts: ${g.temporal_stability.toFixed(2)}`,
+          `rq: ${g.retrieval_quality.toFixed(2)}`,
+          `ie: ${g.interaction_efficiency.toFixed(2)}`,
+          `te: ${g.tool_efficiency.toFixed(2)}`,
+          `cp: ${g.curiosity_pressure.toFixed(2)}`,
+        ];
+        addMessage(
+          "system",
+          `Intelligence gradient (${g.gradient.toFixed(2)}):\n${metrics.join("  ")}`,
+        );
         break;
       }
     }

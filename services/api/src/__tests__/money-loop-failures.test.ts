@@ -21,7 +21,6 @@ async function createTestRelay(): Promise<SyncRelay> {
   return createSyncRelay({
     apiToken: API_TOKEN,
     enableDeviceAuth: true,
-    verifyDeviceSignature: true,
     x402: {
       payToAddress: "0x0000000000000000000000000000000000000000",
       network: "eip155:84532",

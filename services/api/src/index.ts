@@ -243,7 +243,6 @@ export interface SyncRelayConfig {
   apiToken?: string; // Legacy single token (still supported as admin/master token)
   corsOrigin?: string;
   enableDeviceAuth?: boolean; // When true, validates per-device tokens (default: true)
-  verifyDeviceSignature?: boolean; // When true, uses Ed25519 signed token verification (default: true)
   /** x402 on-chain payment for task submission. Required in production. */
   x402: X402Config;
   /** When true, relay issues AgentReputationCredentials on verified receipts. Default: false (peer-issued). */
@@ -310,7 +309,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     apiToken,
     corsOrigin = "*",
     enableDeviceAuth = true,
-    verifyDeviceSignature = true,
     x402: x402Config,
     issueCredentials = process.env.MOTEBIT_RELAY_ISSUE_CREDENTIALS === "true",
     federation: federationConfig,
@@ -1886,7 +1884,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         throw new HTTPException(400, { message: "Missing motebitId" });
       }
 
-      if (verifyDeviceSignature && token.includes(".")) {
+      if (token.includes(".")) {
         // Signed token verification — O(1) lookup by device ID from token payload
         const verified = await verifySignedTokenForDevice(
           token,
@@ -1962,7 +1960,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
             if (apiToken != null && apiToken !== "" && token === apiToken) {
               // OK — master token (WebSocket)
               logger.info("auth.master_token_ws", { motebitId });
-            } else if (verifyDeviceSignature && token.includes(".")) {
+            } else if (token.includes(".")) {
               // Signed token verification — O(1) lookup by device ID from token payload
               const verified = await verifySignedTokenForDevice(
                 token,

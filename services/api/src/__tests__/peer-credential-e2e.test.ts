@@ -100,7 +100,6 @@ describe("Peer Credential E2E — Delegation Loop", () => {
       dbPath: ":memory:",
       apiToken: MASTER_TOKEN,
       enableDeviceAuth: true,
-      verifyDeviceSignature: true,
       issueCredentials: false, // <-- key: relay does NOT issue credentials
       x402: {
         payToAddress: "0x0000000000000000000000000000000000000000",

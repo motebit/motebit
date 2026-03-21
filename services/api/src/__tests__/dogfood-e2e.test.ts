@@ -126,7 +126,6 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
       dbPath: ":memory:",
       apiToken: RELAY_MASTER_TOKEN,
       enableDeviceAuth: true,
-      verifyDeviceSignature: true,
       issueCredentials: true,
       x402: {
         payToAddress: "0x0000000000000000000000000000000000000000",
@@ -884,7 +883,6 @@ describe("x402 Payment Gate", () => {
       dbPath: ":memory:",
       apiToken: MASTER_TOKEN,
       enableDeviceAuth: true,
-      verifyDeviceSignature: true,
       x402: {
         payToAddress: "0x0000000000000000000000000000000000000000",
         network: "eip155:84532",

@@ -128,7 +128,6 @@ describe("Stripe Checkout routes", () => {
     relay = await createSyncRelay({
       apiToken: API_TOKEN,
       enableDeviceAuth: true,
-      verifyDeviceSignature: true,
       x402: {
         payToAddress: "0x0000000000000000000000000000000000000000",
         network: "eip155:84532",

@@ -19,7 +19,6 @@ const MOTEBIT_ID = "test-mote";
 
 async function createTestRelay(overrides?: {
   enableDeviceAuth?: boolean;
-  verifyDeviceSignature?: boolean;
   issueCredentials?: boolean;
 }): Promise<SyncRelay> {
   return createSyncRelay({
@@ -509,7 +508,7 @@ describe("Sync Relay — signed token auth", () => {
   let relay: SyncRelay;
 
   beforeEach(async () => {
-    relay = await createTestRelay({ enableDeviceAuth: true, verifyDeviceSignature: true });
+    relay = await createTestRelay({ enableDeviceAuth: true });
   });
 
   afterEach(() => {
@@ -1903,7 +1902,7 @@ describe("Sync Relay — agent discovery registry", () => {
   let relay: SyncRelay;
 
   beforeEach(async () => {
-    relay = await createTestRelay({ enableDeviceAuth: true, verifyDeviceSignature: true });
+    relay = await createTestRelay({ enableDeviceAuth: true });
   });
 
   afterEach(() => {
