@@ -2,7 +2,7 @@
 
 import { parseArgs } from "node:util";
 import { VERSION } from "./config.js";
-import { bold, dim, cyan, green } from "./colors.js";
+import { bold, dim, cyan, green, command } from "./colors.js";
 
 export interface CliConfig {
   provider: "anthropic" | "openai" | "ollama" | "hybrid";
@@ -290,7 +290,7 @@ export function printBanner(opts: {
   console.log(`  ${b("\u2502")}${padPlain("")}${b("\u2502")}`);
   const helpPlain = "   /help for commands \u00b7 /goals to manage";
   console.log(
-    `  ${b("\u2502")}${pad(`   ${dim("/help for commands \u00b7 /goals to manage")}`, helpPlain.length)}${b("\u2502")}`,
+    `  ${b("\u2502")}${pad(`   ${command("/help")} ${dim("for commands \u00b7")} ${command("/goals")} ${dim("to manage")}`, helpPlain.length)}${b("\u2502")}`,
   );
   console.log(`  ${b("\u2570")}${b("\u2500".repeat(W))}${b("\u256f")}`);
 }
