@@ -22,7 +22,7 @@ import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from "node:
 import type { ExecutionReceipt } from "@motebit/sdk";
 import type { DatabaseDriver } from "@motebit/persistence";
 import { createLogger } from "./logger.js";
-import { SlidingWindowLimiter } from "./rate-limiter.js";
+import { FixedWindowLimiter } from "./rate-limiter.js";
 
 const logger = createLogger({ service: "relay", module: "federation" });
 
@@ -108,8 +108,8 @@ export interface VerifiedSettlement {
 
 // Re-export for test consumers that import from federation.ts
 export { bytesToHex, hexToBytes };
-/** @deprecated Use SlidingWindowLimiter directly. Kept for test import compatibility. */
-export { SlidingWindowLimiter as PeerRateLimiter };
+/** @deprecated Use FixedWindowLimiter directly. Alias kept for test import compatibility. */
+export { FixedWindowLimiter as PeerRateLimiter };
 
 // === Database ===
 
@@ -336,7 +336,12 @@ export async function processIncomingRevocations(
 
 // === Private Key Encryption (AES-256-GCM) ===
 
-const PBKDF2_ITERATIONS = 100_000;
+// Relay key encryption uses 600K iterations — same strength as user-facing identity files.
+// The relay private key is long-lived, signs all federation messages, issues credentials,
+// and settles budget. One-time cost at startup is acceptable for this threat model.
+// Operator PIN (runtime/operator.ts) uses 100K because rate-limiting is the primary defense
+// and PIN entry is frequent.
+const PBKDF2_ITERATIONS = 600_000;
 const AUTH_TAG_BYTES = 16;
 
 /** Derive a 256-bit AES key from a passphrase and salt using PBKDF2. */
@@ -806,7 +811,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
   // Unlike the per-IP limiter in index.ts, this keys on the peer's relay_id
   // from the request body so one misbehaving peer cannot exhaust the quota
   // for all other peers.
-  const peerLimiter = new SlidingWindowLimiter(30, 60_000);
+  const peerLimiter = new FixedWindowLimiter(30, 60_000);
 
   /** Check per-peer rate limit; throws HTTPException 429 if exceeded. */
   function checkPeerLimit(relayId: string): void {

@@ -113,7 +113,7 @@ import {
 /* eslint-enable no-restricted-imports */
 import type { KeySuccessionRecord } from "@motebit/crypto";
 import { createLogger } from "./logger.js";
-import { SlidingWindowLimiter } from "./rate-limiter.js";
+import { FixedWindowLimiter } from "./rate-limiter.js";
 import {
   createFederationTables,
   initRelayIdentity,
@@ -717,12 +717,20 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   }, 60_000);
 
   // Rate limiter instances per endpoint category (per-relay for test isolation)
-  const authLimiter = new SlidingWindowLimiter(30, 60_000); // 30 req/min
-  const readLimiter = new SlidingWindowLimiter(60, 60_000); // 60 req/min
-  const writeLimiter = new SlidingWindowLimiter(30, 60_000); // 30 req/min
-  const publicLimiter = new SlidingWindowLimiter(20, 60_000); // 20 req/min
-  const expensiveLimiter = new SlidingWindowLimiter(10, 60_000); // 10 req/min
-  const allLimiters = [authLimiter, readLimiter, writeLimiter, publicLimiter, expensiveLimiter];
+  const authLimiter = new FixedWindowLimiter(30, 60_000); // 30 req/min
+  const readLimiter = new FixedWindowLimiter(60, 60_000); // 60 req/min
+  const writeLimiter = new FixedWindowLimiter(30, 60_000); // 30 req/min
+  const publicLimiter = new FixedWindowLimiter(20, 60_000); // 20 req/min
+  const expensiveLimiter = new FixedWindowLimiter(10, 60_000); // 10 req/min
+  const wsLimiter = new FixedWindowLimiter(100, 10_000); // 100 msg/10s per connection
+  const allLimiters = [
+    authLimiter,
+    readLimiter,
+    writeLimiter,
+    publicLimiter,
+    expensiveLimiter,
+    wsLimiter,
+  ];
 
   // --- Relay Identity: persistent Ed25519 keypair ---
   const relayIdentity: RelayIdentity = await initRelayIdentity(
@@ -1783,7 +1791,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     return authHeader != null && authHeader === `Bearer ${apiToken}`;
   }
 
-  function rateLimitMiddleware(limiter: SlidingWindowLimiter) {
+  function rateLimitMiddleware(limiter: FixedWindowLimiter) {
     return async (
       c: Parameters<Parameters<typeof app.use>[1]>[0],
       next: () => Promise<void>,
@@ -1976,11 +1984,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       const deviceId = url.searchParams.get("device_id") ?? crypto.randomUUID();
       const token = url.searchParams.get("token");
 
-      // Per-connection rate limit: max 100 messages per 10 seconds
-      const WS_RATE_LIMIT = 100;
-      const WS_RATE_WINDOW_MS = 10_000;
-      let wsMessageCount = 0;
-      let wsWindowStart = Date.now();
+      // Per-connection rate limit key — wsLimiter provides 100 msg/10s
+      const wsRateKey = `ws:${motebitId}:${deviceId}`;
 
       return {
         // eslint-disable-next-line @typescript-eslint/no-misused-promises -- hono ws adapter supports async handlers
@@ -2061,14 +2066,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
         // eslint-disable-next-line @typescript-eslint/no-misused-promises -- hono ws adapter supports async handlers
         async onMessage(event, ws) {
-          // Per-connection rate limiting
-          const now = Date.now();
-          if (now - wsWindowStart > WS_RATE_WINDOW_MS) {
-            wsMessageCount = 0;
-            wsWindowStart = now;
-          }
-          wsMessageCount++;
-          if (wsMessageCount > WS_RATE_LIMIT) {
+          // Per-connection rate limiting (shared FixedWindowLimiter, keyed by connection)
+          const { allowed } = wsLimiter.check(wsRateKey);
+          if (!allowed) {
             ws.send(JSON.stringify({ type: "error", message: "Rate limit exceeded" }));
             return;
           }

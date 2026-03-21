@@ -1,10 +1,13 @@
 /**
- * Generic sliding-window rate limiter.
+ * Fixed-window rate limiter with per-key tracking.
  *
- * Keys on an arbitrary string (IP address, peer relay ID, etc.).
- * One class, multiple instances with different limits.
+ * Each key gets an independent window that starts on first request and resets
+ * after `windowMs`. Not a true sliding window (no per-request timestamp tracking),
+ * but sufficient for API rate limiting where burst tolerance is acceptable.
+ *
+ * Used for both HTTP (keyed by IP) and WebSocket (keyed by connection ID) rate limiting.
  */
-export class SlidingWindowLimiter {
+export class FixedWindowLimiter {
   private windows: Map<string, { count: number; resetAt: number }> = new Map();
 
   constructor(
@@ -38,3 +41,6 @@ export class SlidingWindowLimiter {
     }
   }
 }
+
+/** @deprecated Renamed to FixedWindowLimiter. Alias kept for backward compatibility. */
+export { FixedWindowLimiter as SlidingWindowLimiter };
