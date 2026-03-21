@@ -6,6 +6,7 @@ export interface KeyboardDeps {
   goals: { open(): void; close(): void };
   memory: { open(): void; close(): void };
   conversations: { open(): void; close(): void };
+  agents?: { open(): void; close(): void };
 }
 
 // === Shortcut Overlay ===

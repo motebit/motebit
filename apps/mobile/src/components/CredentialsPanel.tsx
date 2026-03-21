@@ -50,6 +50,30 @@ interface AccountBalance {
   }>;
 }
 
+interface LedgerEntry {
+  goal_id: string;
+  goal_prompt: string;
+  status: string;
+  steps: Array<{
+    step_id: string;
+    summary: string;
+    status: string;
+    started_at?: number;
+    completed_at?: number;
+  }>;
+  manifest_hash?: string;
+  signed_at?: number;
+}
+
+interface SuccessionRecord {
+  old_public_key: string;
+  new_public_key: string;
+  reason?: string;
+  rotated_at: number;
+  old_signature: string;
+  new_signature: string;
+}
+
 const TYPE_COLORS: Record<string, string> = {
   reputation: "#4caf50",
   trust: "#ff9800",
@@ -92,6 +116,9 @@ export function CredentialsPanel({
   const [budgetSummary, setBudgetSummary] = useState<BudgetSummary | null>(null);
   const [budgetAllocations, setBudgetAllocations] = useState<BudgetAllocation[]>([]);
   const [accountBalance, setAccountBalance] = useState<AccountBalance | null>(null);
+  const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
+  const [expandedGoalId, setExpandedGoalId] = useState<string | null>(null);
+  const [successionChain, setSuccessionChain] = useState<SuccessionRecord[]>([]);
   const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -178,6 +205,28 @@ export function CredentialsPanel({
         }
       } catch {
         // Balance fetch failed
+      }
+
+      // Fetch execution ledger entries
+      try {
+        const ledgerRes = await fetch(`${syncUrl}/agent/${motebitId}/ledger`);
+        if (ledgerRes.ok) {
+          const data = (await ledgerRes.json()) as { entries: LedgerEntry[] };
+          setLedgerEntries(data.entries ?? []);
+        }
+      } catch {
+        // Ledger fetch failed
+      }
+
+      // Fetch key succession chain
+      try {
+        const succRes = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/succession`);
+        if (succRes.ok) {
+          const data = (await succRes.json()) as { chain: SuccessionRecord[] };
+          setSuccessionChain(data.chain ?? []);
+        }
+      } catch {
+        // Succession fetch failed
       }
     } finally {
       setLoading(false);
@@ -318,6 +367,109 @@ export function CredentialsPanel({
                         ))}
                       </>
                     )}
+                  </View>
+                )}
+
+                {/* Execution Ledger */}
+                {ledgerEntries.length > 0 && (
+                  <View style={styles.budgetSection}>
+                    <Text style={styles.sectionTitle}>Execution Ledger</Text>
+                    {ledgerEntries.map((entry) => {
+                      const isExpanded = expandedGoalId === entry.goal_id;
+                      return (
+                        <View key={entry.goal_id}>
+                          <TouchableOpacity
+                            style={styles.ledgerItem}
+                            onPress={() => setExpandedGoalId(isExpanded ? null : entry.goal_id)}
+                            activeOpacity={0.7}
+                          >
+                            <View style={styles.ledgerHeader}>
+                              <Text style={styles.ledgerPrompt} numberOfLines={1}>
+                                {entry.goal_prompt}
+                              </Text>
+                              <View
+                                style={[
+                                  styles.ledgerStatusBadge,
+                                  {
+                                    borderColor:
+                                      entry.status === "completed"
+                                        ? colors.statusSuccess
+                                        : entry.status === "failed"
+                                          ? colors.statusError
+                                          : colors.statusWarning,
+                                  },
+                                ]}
+                              >
+                                <Text
+                                  style={[
+                                    styles.ledgerStatusText,
+                                    {
+                                      color:
+                                        entry.status === "completed"
+                                          ? colors.statusSuccess
+                                          : entry.status === "failed"
+                                            ? colors.statusError
+                                            : colors.statusWarning,
+                                    },
+                                  ]}
+                                >
+                                  {entry.status}
+                                </Text>
+                              </View>
+                            </View>
+                            {entry.manifest_hash && (
+                              <Text style={styles.credentialMeta}>
+                                hash: {entry.manifest_hash.slice(0, 16)}...
+                              </Text>
+                            )}
+                          </TouchableOpacity>
+                          {isExpanded && entry.steps.length > 0 && (
+                            <View style={styles.ledgerSteps}>
+                              {entry.steps.map((step) => (
+                                <View key={step.step_id} style={styles.ledgerStep}>
+                                  <Text style={styles.ledgerStepText}>{step.summary}</Text>
+                                  <Text style={styles.credentialMeta}>
+                                    {step.status}
+                                    {step.completed_at
+                                      ? ` — ${formatTimeAgo(step.completed_at)}`
+                                      : ""}
+                                  </Text>
+                                </View>
+                              ))}
+                            </View>
+                          )}
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
+
+                {/* Key Succession */}
+                {successionChain.length > 0 && (
+                  <View style={styles.budgetSection}>
+                    <Text style={styles.sectionTitle}>Key Succession</Text>
+                    {successionChain.map((record, idx) => (
+                      <View key={idx} style={styles.successionItem}>
+                        <View style={styles.successionRow}>
+                          <Text style={styles.successionLabel}>from</Text>
+                          <Text style={styles.successionKey}>
+                            {record.old_public_key.slice(0, 16)}...
+                          </Text>
+                        </View>
+                        <View style={styles.successionRow}>
+                          <Text style={styles.successionLabel}>to</Text>
+                          <Text style={styles.successionKey}>
+                            {record.new_public_key.slice(0, 16)}...
+                          </Text>
+                        </View>
+                        {record.reason && (
+                          <Text style={styles.credentialMeta}>reason: {record.reason}</Text>
+                        )}
+                        <Text style={styles.credentialMeta}>
+                          {formatTimeAgo(record.rotated_at)}
+                        </Text>
+                      </View>
+                    ))}
                   </View>
                 )}
 
@@ -522,6 +674,70 @@ function createStyles(c: ThemeColors) {
       color: c.textMuted,
       fontSize: 11,
       marginTop: 1,
+    },
+    ledgerItem: {
+      paddingVertical: 8,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.borderLight,
+    },
+    ledgerHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      gap: 8,
+    },
+    ledgerPrompt: {
+      color: c.textPrimary,
+      fontSize: 13,
+      flex: 1,
+    },
+    ledgerStatusBadge: {
+      borderWidth: 1,
+      borderRadius: 3,
+      paddingHorizontal: 6,
+      paddingVertical: 1,
+    },
+    ledgerStatusText: {
+      fontSize: 10,
+      fontWeight: "700",
+    },
+    ledgerSteps: {
+      paddingLeft: 12,
+      paddingTop: 4,
+      paddingBottom: 4,
+    },
+    ledgerStep: {
+      paddingVertical: 3,
+      borderLeftWidth: 2,
+      borderLeftColor: c.borderLight,
+      paddingLeft: 8,
+      marginBottom: 2,
+    },
+    ledgerStepText: {
+      color: c.textSecondary,
+      fontSize: 12,
+    },
+    successionItem: {
+      paddingVertical: 8,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.borderLight,
+    },
+    successionRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      marginBottom: 2,
+    },
+    successionLabel: {
+      color: c.textMuted,
+      fontSize: 10,
+      fontWeight: "600",
+      width: 30,
+    },
+    successionKey: {
+      color: c.textSecondary,
+      fontSize: 11,
+      fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
     },
     emptyContainer: {
       paddingVertical: 40,

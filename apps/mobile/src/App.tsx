@@ -58,6 +58,7 @@ import type { PinMode } from "./components/PinDialog";
 import { SettingsModal, deriveInteriorColor } from "./components/SettingsModal";
 import { MemoryPanel } from "./components/MemoryPanel";
 import { CredentialsPanel } from "./components/CredentialsPanel";
+import { AgentsPanel } from "./components/AgentsPanel";
 import { ConversationPanel } from "./components/ConversationPanel";
 import { VoiceIndicator } from "./components/VoiceIndicator";
 import { GoalsPanel } from "./components/GoalsPanel";
@@ -122,6 +123,7 @@ export function App(): React.ReactElement {
   const [showConversationPanel, setShowConversationPanel] = useState(false);
   const [showGoalsPanel, setShowGoalsPanel] = useState(false);
   const [showCredentialsPanel, setShowCredentialsPanel] = useState(false);
+  const [showAgentsPanel, setShowAgentsPanel] = useState(false);
 
   // Pairing state
   const [showPairing, setShowPairing] = useState(false);
@@ -1785,6 +1787,13 @@ export function App(): React.ReactElement {
             >
               <Text style={ds.overlayButtonText}>{"\u2606"}</Text>
             </TouchableOpacity>
+            <TouchableOpacity
+              style={ds.overlayButton}
+              onPress={() => setShowAgentsPanel(true)}
+              activeOpacity={0.7}
+            >
+              <Text style={ds.overlayButtonText}>{"\u2302"}</Text>
+            </TouchableOpacity>
           </View>
           {/* Settings gear */}
           <TouchableOpacity
@@ -2041,6 +2050,12 @@ export function App(): React.ReactElement {
           visible={showCredentialsPanel}
           app={app.current}
           onClose={() => setShowCredentialsPanel(false)}
+        />
+
+        <AgentsPanel
+          visible={showAgentsPanel}
+          app={app.current}
+          onClose={() => setShowAgentsPanel(false)}
         />
 
         {/* Pairing Modal */}

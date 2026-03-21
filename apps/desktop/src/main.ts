@@ -25,11 +25,13 @@ import {
 import { deriveInteriorColor } from "./ui/color-picker";
 import { initColorPicker } from "./ui/color-picker";
 import { initConversations } from "./ui/conversations";
+import { initAgents } from "./ui/agents";
 import { initGoals } from "./ui/goals";
 import { initMemory } from "./ui/memory";
 import { initPairing } from "./ui/pairing";
 import { initVoice } from "./ui/voice";
 import { initSettings } from "./ui/settings";
+import { initSovereign } from "./ui/sovereign";
 import { initTheme } from "./ui/theme";
 import { initKeyboard } from "./ui/keyboard";
 import {
@@ -64,10 +66,12 @@ const ctx: DesktopContext = {
 // === Module Init (late-binding for cross-module callbacks) ===
 
 const colorPicker = initColorPicker(ctx, () => voice.updateVoiceGlowColor());
+const agents = initAgents(ctx);
 const conversations = initConversations(ctx);
 const goals = initGoals(ctx);
 const memory = initMemory(ctx);
 const pairing = initPairing(ctx);
+const sovereign = initSovereign(ctx);
 
 const voice = initVoice(ctx, {
   onTranscriptReady: () => chat.handleSend(),
@@ -101,10 +105,12 @@ const theme = initTheme(isTauri);
 
 // === Keyboard Shortcuts ===
 
-initKeyboard({ settings, goals, memory, conversations });
+initKeyboard({ settings, goals, memory, conversations, agents });
 
 // === Escape Key Handler ===
 
+const agentsPanel = document.getElementById("agents-panel") as HTMLDivElement;
+const sovereignPanel = document.getElementById("sovereign-panel") as HTMLDivElement;
 const goalsPanel = document.getElementById("goals-panel") as HTMLDivElement;
 const memoryPanel = document.getElementById("memory-panel") as HTMLDivElement;
 const conversationsPanel = document.getElementById("conversations-panel") as HTMLDivElement;
@@ -134,6 +140,10 @@ document.addEventListener("keydown", (e) => {
       settings.closeRotateKeyDialog();
     } else if (settings.isPinDialogOpen()) {
       settings.closePinDialog();
+    } else if (agentsPanel.classList.contains("open")) {
+      agents.close();
+    } else if (sovereignPanel.classList.contains("open")) {
+      sovereign.close();
     } else if (goalsPanel.classList.contains("open")) {
       goals.close();
     } else if (memoryPanel.classList.contains("open")) {
