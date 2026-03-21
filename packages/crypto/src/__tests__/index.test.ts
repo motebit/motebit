@@ -28,6 +28,7 @@ import {
   hexToBytes,
   publicKeyToDidKey,
   hexPublicKeyToDidKey,
+  bytesToHex,
 } from "../index";
 
 // ---------------------------------------------------------------------------
@@ -665,6 +666,19 @@ describe("verifyReceiptChain", () => {
     expect(result.delegations).toHaveLength(1);
     expect(result.delegations[0]!.verified).toBe(false);
     expect(result.delegations[0]!.error).toBe("unknown motebit_id");
+  });
+
+  it("verifies using embedded public_key when not in knownKeys", async () => {
+    const kp = await generateKeypair();
+    const receiptWithKey = { ...makeReceipt(), public_key: bytesToHex(kp.publicKey) };
+    const signed = await signExecutionReceipt(receiptWithKey, kp.privateKey);
+
+    // Empty knownKeys — verification falls back to receipt.public_key
+    const knownKeys: KnownKeys = new Map();
+    const result = await verifyReceiptChain(signed, knownKeys);
+
+    expect(result.verified).toBe(true);
+    expect(result.error).toBeUndefined();
   });
 
   it("empty delegation_receipts still verifies with empty delegations array", async () => {

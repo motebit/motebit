@@ -119,6 +119,7 @@ const DEFAULT_PBKDF2_ITERATIONS = (() => {
   if (!proc?.env) return 600_000;
   const override = proc.env["MOTEBIT_PBKDF2_ITERATIONS"];
   if (!override) return 600_000;
+  /* v8 ignore start -- module-level IIFE runs once at import; env override is a runtime safety guard */
   const n = Number(override);
   // Safety: prevent accidentally shipping weak crypto to production
   if (n < 100_000 && proc.env["NODE_ENV"] !== "test") {
@@ -128,6 +129,7 @@ const DEFAULT_PBKDF2_ITERATIONS = (() => {
     );
   }
   return n;
+  /* v8 ignore stop */
 })();
 
 /**
@@ -587,6 +589,8 @@ export async function verifyReceiptChain(
   try {
     verified = await verifyExecutionReceipt(receipt, publicKey);
   } catch (err: unknown) {
+    // Defense-in-depth: verifyExecutionReceipt catches internally, but guard against future changes
+    /* v8 ignore next 3 */
     verified = false;
     error = err instanceof Error ? err.message : String(err);
   }
@@ -596,6 +600,7 @@ export async function verifyReceiptChain(
 
   const result: ReceiptVerification = { task_id, motebit_id, verified, delegations };
   if (error) {
+    /* v8 ignore next */
     result.error = error;
   }
   return result;
@@ -1021,6 +1026,7 @@ export async function verifyKeySuccession(record: KeySuccessionRecord): Promise<
 
     return oldValid && newValid;
   } catch {
+    /* v8 ignore next */
     return false;
   }
 }

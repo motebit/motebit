@@ -798,4 +798,37 @@ describe("graphRankCandidates exploration (epsilon-greedy)", () => {
     expect(scores[1]!.composite).toBe(0.3);
     expect(scores[2]!.composite).toBe(0.4);
   });
+
+  it("applies quality modulation when quality_sample_count >= 3", () => {
+    // Agent with low avg_quality and enough samples should get reduced reliability
+    const lowQualityCandidate = makeCandidate({
+      motebit_id: asMotebitId("low-quality"),
+      trust_record: makeTrustRecord({
+        remote_motebit_id: asMotebitId("low-quality"),
+        avg_quality: 0.5,
+        quality_sample_count: 5,
+      }),
+      listing: makeListing({ motebit_id: asMotebitId("low-quality") }),
+    });
+    const highQualityCandidate = makeCandidate({
+      motebit_id: asMotebitId("high-quality"),
+      trust_record: makeTrustRecord({
+        remote_motebit_id: asMotebitId("high-quality"),
+        avg_quality: 1.0,
+        quality_sample_count: 10,
+      }),
+      listing: makeListing({ motebit_id: asMotebitId("high-quality") }),
+    });
+
+    const scores = graphRankCandidates(
+      SELF_ID,
+      [lowQualityCandidate, highQualityCandidate],
+      defaultReqs,
+    );
+
+    // High-quality agent should score higher than low-quality agent (all else equal)
+    const lowScore = scores.find((s) => s.motebit_id === "low-quality")!;
+    const highScore = scores.find((s) => s.motebit_id === "high-quality")!;
+    expect(highScore.composite).toBeGreaterThan(lowScore.composite);
+  });
 });

@@ -251,6 +251,8 @@ export interface SyncRelayConfig {
   issueCredentials?: boolean;
   /** When true, relay starts in emergency freeze mode — all write operations are suspended. */
   emergencyFreeze?: boolean;
+  /** Max pending tasks per submitter. Default: 1000. */
+  maxTasksPerSubmitter?: number;
   /** Federation configuration. Omit to disable federation. */
   federation?: {
     /** Display name for this relay in the federation. */
@@ -605,7 +607,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // In-memory agent task queue: task_id → { task, receipt?, expiresAt, submitted_by?, price_snapshot?, origin_relay? }
   const TASK_TTL_MS = 10 * 60 * 1000; // 10 minutes
   const MAX_TASK_QUEUE_SIZE = 100_000; // Hard cap prevents memory exhaustion from task flooding
-  const MAX_TASKS_PER_SUBMITTER = 1_000; // Per-agent cap prevents fair-share starvation under flood
+  const MAX_TASKS_PER_SUBMITTER = config.maxTasksPerSubmitter ?? 1_000; // Per-agent cap prevents fair-share starvation
   const taskQueue = new Map<
     string,
     {

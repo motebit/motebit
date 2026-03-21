@@ -958,6 +958,54 @@ describe("Sync Relay — agent protocol", () => {
     relay.close();
   });
 
+  it("POST /agent/:id/task returns 429 when per-submitter limit exceeded", async () => {
+    // Create a relay with a tiny per-submitter limit for testing
+    const tinyRelay = await createSyncRelay({
+      apiToken: API_TOKEN,
+      x402: {
+        payToAddress: "0x0000000000000000000000000000000000000000",
+        network: "eip155:84532",
+        testnet: true,
+      },
+      enableDeviceAuth: false,
+      maxTasksPerSubmitter: 2,
+    });
+
+    // Register the agent
+    await tinyRelay.app.request(`/identity/${MOTEBIT_ID}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ motebit_id: MOTEBIT_ID, owner_id: "test" }),
+    });
+    await tinyRelay.app.request(`/device/${MOTEBIT_ID}/test-device`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ device_id: "test-device", motebit_id: MOTEBIT_ID }),
+    });
+
+    // Submit 2 tasks (within limit)
+    for (let i = 0; i < 2; i++) {
+      const res = await tinyRelay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+        body: JSON.stringify({ prompt: `Task ${i}`, submitted_by: "flooding-agent" }),
+      });
+      expect(res.status).toBe(201);
+    }
+
+    // 3rd task should be rejected
+    const blocked = await tinyRelay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ prompt: "Overflow task", submitted_by: "flooding-agent" }),
+    });
+    expect(blocked.status).toBe(429);
+    const body = (await blocked.json()) as { error: string };
+    expect(body.error).toContain("Too many pending tasks");
+
+    tinyRelay.close();
+  });
+
   it("POST /agent/:id/task submits a task and returns 201", async () => {
     const res = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
