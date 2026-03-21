@@ -1584,6 +1584,13 @@ export class MobileApp {
             getExplorationDrive: () => this.runtime?.getPrecision().explorationDrive,
           });
           this.runtime.setDelegationAdapter(delegationAdapter);
+
+          // Enable interactive delegation — lets the AI transparently delegate
+          // tasks to remote agents during conversation.
+          this.runtime.enableInteractiveDelegation({
+            syncUrl,
+            authToken: () => this.createSyncToken("task:submit"),
+          });
         }
 
         this.syncEngine.connectRemote(encryptedWs);

@@ -22,6 +22,7 @@ import { ThreeJSAdapter } from "@motebit/render-engine";
 import {
   CloudProvider,
   OllamaProvider,
+  HybridProvider,
   detectOllama,
   resolveConfig,
   DEFAULT_OLLAMA_URL,
@@ -191,7 +192,7 @@ export interface TauriCommands {
 // === Desktop AI Config ===
 
 export interface DesktopAIConfig {
-  provider: "anthropic" | "ollama" | "openai" | "proxy";
+  provider: "anthropic" | "ollama" | "openai" | "proxy" | "hybrid";
   model?: string;
   apiKey?: string;
   personalityConfig?: MotebitPersonalityConfig;
@@ -623,9 +624,9 @@ export class DesktopApp {
   }
 
   /** The active provider type or null if not initialized. */
-  private _activeProvider: "anthropic" | "ollama" | "openai" | "proxy" | null = null;
+  private _activeProvider: "anthropic" | "ollama" | "openai" | "proxy" | "hybrid" | null = null;
 
-  get currentProvider(): "anthropic" | "ollama" | "openai" | "proxy" | null {
+  get currentProvider(): "anthropic" | "ollama" | "openai" | "proxy" | "hybrid" | null {
     return this._activeProvider;
   }
 
@@ -670,6 +671,29 @@ export class DesktopApp {
         temperature,
       });
       this._activeProvider = "openai";
+    } else if (config.provider === "hybrid") {
+      if (config.apiKey == null || config.apiKey === "") return false;
+      const model =
+        config.model != null && config.model !== "" ? config.model : "claude-sonnet-4-20250514";
+      const base_url = config.isTauri ? "https://api.anthropic.com" : "/api/anthropic";
+      provider = new HybridProvider({
+        cloud: {
+          provider: "anthropic",
+          api_key: config.apiKey,
+          model,
+          base_url,
+          max_tokens: config.maxTokens,
+          temperature,
+        },
+        ollama: {
+          model: "llama3.2",
+          base_url: config.isTauri ? DEFAULT_OLLAMA_URL : "/api/ollama",
+          max_tokens: config.maxTokens,
+          temperature,
+        },
+        fallback_to_local: true,
+      });
+      this._activeProvider = "hybrid";
     } else if (config.provider === "proxy") {
       const model = "claude-sonnet-4-20250514";
       provider = new CloudProvider({
@@ -2902,6 +2926,14 @@ export class DesktopApp {
 
     this.runtime.startSync();
     this.emitSyncStatus({ status: "connected" });
+
+    // Enable interactive delegation — lets the AI transparently delegate tasks
+    // to remote agents during conversation via the delegate_to_agent tool.
+    const privKeyHex = keypair.privateKey;
+    this.runtime.enableInteractiveDelegation({
+      syncUrl,
+      authToken: async () => this.createSyncToken(privKeyHex, "task:submit"),
+    });
 
     // Token refresh: rebuild WS connection every 4.5 min (tokens expire at 5 min)
     this._wsTokenRefreshTimer = setInterval(() => {

@@ -816,6 +816,16 @@ export class WebApp {
     });
     this.runtime.setDelegationAdapter(delegationAdapter);
 
+    // Enable interactive delegation — lets the AI transparently delegate
+    // tasks to remote agents during conversation.
+    this.runtime.enableInteractiveDelegation({
+      syncUrl: relayUrl,
+      authToken: async () => {
+        const t = await this.createSyncToken("task:submit");
+        return t ?? "";
+      },
+    });
+
     const encryptedWs = new EncryptedEventStoreAdapter({ inner: wsAdapter, key: encKey });
 
     // Inbound real-time events: decrypt and write to local store
