@@ -1953,9 +1953,9 @@ describe("Sync Relay — agent discovery registry", () => {
     return { motebitId: identity.motebit_id, token, pubKeyHex };
   }
 
-  it("returns 401 when no auth token provided", async () => {
+  it("returns 200 when no auth token provided (discovery is public)", async () => {
     const res = await relay.app.request("/api/v1/agents/discover", { method: "GET" });
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(200);
   });
 
   it("register → discover finds the agent", async () => {

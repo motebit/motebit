@@ -4566,6 +4566,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       return;
     }
 
+    // Discovery is publicly readable — agents need to find each other without pre-existing auth
+    if (c.req.path === "/api/v1/agents/discover" && c.req.method === "GET") {
+      await next();
+      return;
+    }
+
     const authHeader = c.req.header("authorization");
     if (authHeader == null || !authHeader.startsWith("Bearer ")) {
       throw new HTTPException(401, { message: "Missing auth token" });

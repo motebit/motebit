@@ -238,9 +238,11 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
     // Token claims to be agent A but is signed by B's private key
     const spoofedToken = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairB, "admin:query");
 
-    const res = await relay.app.request("/api/v1/agents/discover", {
-      method: "GET",
-      headers: { Authorization: `Bearer ${spoofedToken}` },
+    // Use a protected endpoint (register) — discover is public
+    const res = await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${spoofedToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ motebit_id: motebitIdA, endpoint_url: "http://x", capabilities: [] }),
     });
 
     expect(res.status).toBe(401);
@@ -255,9 +257,11 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
       "admin:query",
     );
 
-    const res = await relay.app.request("/api/v1/agents/discover", {
-      method: "GET",
-      headers: { Authorization: `Bearer ${wrongDeviceToken}` },
+    // Use a protected endpoint (register) — discover is public
+    const res = await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${wrongDeviceToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ motebit_id: motebitIdA, endpoint_url: "http://x", capabilities: [] }),
     });
 
     // Relay looks up device by did claim — not found → verification fails
