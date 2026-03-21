@@ -45,6 +45,7 @@ import {
 } from "@motebit/tools";
 import type { SearchProvider } from "@motebit/tools";
 import type { McpServerConfig } from "@motebit/mcp-client";
+import { dim } from "./colors.js";
 import type { CliConfig } from "./args.js";
 import { CONFIG_DIR, loadFullConfig } from "./config.js";
 
@@ -363,8 +364,8 @@ export async function createRuntime(
   const moteDb = await openMotebitDatabase(dbPath);
   const provider = createProvider(config, personalityConfig);
 
-  console.log(`Data: ${dbPath}`);
-  console.log(`Provider: ${config.provider} (${provider.model})`);
+  console.log(dim(`Data: ${dbPath}`));
+  console.log(dim(`Provider: ${config.provider} (${provider.model})`));
   if (config.operator) {
     console.log("Operator mode: enabled");
   }
@@ -412,9 +413,9 @@ export async function createRuntime(
       ? new EncryptedEventStoreAdapter({ inner: httpAdapter, key: encKey })
       : httpAdapter;
     runtime.connectSync(remoteStore);
-    console.log(`Sync: ${syncUrl}${encKey ? " (encrypted)" : ""}`);
+    console.log(dim(`Sync: ${syncUrl}${encKey ? " (encrypted)" : ""}`));
   } else {
-    console.log("Sync: disabled (set MOTEBIT_SYNC_URL to enable)");
+    console.log(dim("Sync: disabled (set MOTEBIT_SYNC_URL to enable)"));
   }
 
   return { runtime, moteDb };
