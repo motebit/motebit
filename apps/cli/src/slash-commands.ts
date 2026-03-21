@@ -11,7 +11,7 @@ import { computeReputationScore } from "@motebit/policy";
 import { createSignedToken, verifyExecutionReceipt, hexToBytes } from "@motebit/crypto";
 import { McpServerAdapter, wireServerDeps } from "@motebit/mcp-server";
 import type { McpServerConfig as McpServerAdapterConfig } from "@motebit/mcp-server";
-import { type CliConfig, termWidth } from "./args.js";
+import { type CliConfig, COMMANDS } from "./args.js";
 import type { FullConfig } from "./config.js";
 import { saveFullConfig } from "./config.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
@@ -119,6 +119,31 @@ async function makeRelayHeaders(
   return headers;
 }
 
+/** Style a usage pattern: command portion in cyan, args in plain text. */
+function styleUsage(usage: string): string {
+  // Split on first space-followed-by-arg-or-end-of-command-word
+  // Commands: /help, /goal add, /mcp list, /agents trust, etc.
+  // We color the command tokens (words starting with /) and subcommand words,
+  // leave <args>, [opts], "--flags", and quoted strings unstyled.
+  return usage.replace(
+    /^(\/\S+(?:\s+(?:add|remove|pause|resume|outcomes|list|trust|untrust|block|info))?)(.*)/,
+    (_, cmd, rest) => command(cmd) + rest,
+  );
+}
+
+/** Render the help listing from the command registry. */
+function printHelp(): void {
+  const col = Math.max(...COMMANDS.map((c) => c.usage.length)) + 2;
+  console.log("\nAvailable commands:");
+  for (const { usage, desc } of COMMANDS) {
+    const gap = " ".repeat(Math.max(1, col - usage.length));
+    console.log(`  ${styleUsage(usage)}${gap}${dim(desc)}`);
+  }
+  console.log(
+    `  ${dim("quit, exit")}${" ".repeat(Math.max(1, col - "quit, exit".length))}${dim("Exit")}\n`,
+  );
+}
+
 export async function handleSlashCommand(
   cmd: string,
   args: string,
@@ -129,82 +154,7 @@ export async function handleSlashCommand(
 ): Promise<void> {
   switch (cmd) {
     case "help": {
-      const helpEntries: [string, string, string][] = [
-        ["/help", command("/help"), "Show this help"],
-        ["/memories", command("/memories"), "List all memories"],
-        ["/graph", command("/graph"), "Memory graph stats — compounding health"],
-        ["/curious", command("/curious"), "Show decaying memories the agent is curious about"],
-        ["/state", command("/state"), "Show current state vector"],
-        ["/forget <nodeId>", command("/forget") + " <nodeId>", "Delete a memory by ID"],
-        ["/export", command("/export"), "Export all memories and state as JSON"],
-        ["/clear", command("/clear"), "Clear conversation history"],
-        ["/summarize", command("/summarize"), "Summarize current conversation"],
-        ["/conversations", command("/conversations"), "List recent conversations"],
-        ["/conversation <id>", command("/conversation") + " <id>", "Load a past conversation"],
-        ["/model <name>", command("/model") + " <name>", "Switch AI model"],
-        ["/connect <url>", command("/connect") + " <url>", "Connect to a relay"],
-        ["/serve [port]", command("/serve") + " [port]", "Start MCP server — accept delegations"],
-        ["/sync", command("/sync"), "Sync events and conversations"],
-        ["/tools", command("/tools"), "List registered tools"],
-        ["/goals", command("/goals"), "List all scheduled goals"],
-        [
-          '/goal add "<prompt>" --every <interval>',
-          command("/goal add") + ' "<prompt>" --every <interval>',
-          "Add a scheduled goal",
-        ],
-        ["/goal remove <id>", command("/goal remove") + " <id>", "Remove a goal"],
-        ["/goal pause <id>", command("/goal pause") + " <id>", "Pause a goal"],
-        ["/goal resume <id>", command("/goal resume") + " <id>", "Resume a paused goal"],
-        ["/goal outcomes <id>", command("/goal outcomes") + " <id>", "Show execution history"],
-        ["/approvals", command("/approvals"), "Show pending approval queue"],
-        ["/balance", command("/balance"), "Show balance and transactions"],
-        ["/withdraw <amount>", command("/withdraw") + " <amount>", "Request a withdrawal"],
-        ["/deposits", command("/deposits"), "Show recent deposit transactions"],
-        ["/reflect", command("/reflect"), "Trigger reflection — see what the agent learned"],
-        ["/mcp list", command("/mcp list"), "List MCP servers and trust status"],
-        ["/mcp add <name> <url>", command("/mcp add") + " <name> <url>", "Add an HTTP MCP server"],
-        ["/mcp remove <name>", command("/mcp remove") + " <name>", "Remove an MCP server"],
-        ["/mcp trust <name>", command("/mcp trust") + " <name>", "Trust an MCP server"],
-        ["/mcp untrust <name>", command("/mcp untrust") + " <name>", "Untrust an MCP server"],
-        ["/agents", command("/agents"), "List agents with trust and reputation"],
-        ["/agents info <id>", command("/agents info") + " <id>", "Full trust record detail"],
-        [
-          "/agents trust <id> <level>",
-          command("/agents trust") + " <id> <level>",
-          "Set trust level",
-        ],
-        ["/agents block <id>", command("/agents block") + " <id>", "Shorthand for Blocked"],
-        ["/discover [cap]", command("/discover") + " [cap]", "Discover agents on the relay"],
-        [
-          "/delegate <id> <prompt>",
-          command("/delegate") + " <id> <prompt>",
-          "Delegate a task via relay",
-        ],
-        [
-          "/propose <ids> <goal>",
-          command("/propose") + " <ids> <goal>",
-          "Propose a collaborative plan",
-        ],
-        ["/proposals", command("/proposals"), "List active proposals"],
-        [
-          "/proposal <id> [accept|reject|counter]",
-          command("/proposal") + " <id> [accept|reject|counter]",
-          "Respond to a proposal",
-        ],
-        ["/operator", command("/operator"), "Show operator mode status"],
-      ];
-      const col = Math.max(...helpEntries.map(([p]) => p.length)) + 2;
-      const line = (plain: string, styled: string, desc: string) => {
-        const gap = " ".repeat(Math.max(1, col - plain.length));
-        return desc ? `  ${styled}${gap}${dim(desc)}` : `  ${styled}`;
-      };
-      console.log("\nAvailable commands:");
-      for (const [plain, styled, desc] of helpEntries) {
-        console.log(line(plain, styled, desc));
-      }
-      console.log(
-        `  ${dim("quit, exit")}${" ".repeat(Math.max(1, col - "quit, exit".length))}${dim("Exit")}\n`,
-      );
+      printHelp();
       break;
     }
 

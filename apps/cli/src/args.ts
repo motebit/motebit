@@ -138,7 +138,65 @@ function parseRoutingStrategy(
   throw new Error(`Unknown routing strategy "${value}". Use "cost", "quality", or "balanced".`);
 }
 
+/** Command metadata — single source of truth for REPL /help and CLI --help. */
+export interface CommandEntry {
+  /** Usage pattern, e.g. "/goal add \"<prompt>\" --every <interval>" */
+  usage: string;
+  /** Short description */
+  desc: string;
+}
+
+/**
+ * Slash command registry. Order here = order in help output.
+ * Adding a command? Add an entry here — both /help and --help self-generate.
+ */
+export const COMMANDS: CommandEntry[] = [
+  { usage: "/help", desc: "Show this help" },
+  { usage: "/memories", desc: "List all memories" },
+  { usage: "/graph", desc: "Memory graph stats — compounding health" },
+  { usage: "/curious", desc: "Show decaying memories the agent is curious about" },
+  { usage: "/state", desc: "Show current state vector" },
+  { usage: "/forget <nodeId>", desc: "Delete a memory by ID" },
+  { usage: "/export", desc: "Export all memories and state as JSON" },
+  { usage: "/clear", desc: "Clear conversation history" },
+  { usage: "/summarize", desc: "Summarize current conversation" },
+  { usage: "/conversations", desc: "List recent conversations" },
+  { usage: "/conversation <id>", desc: "Load a past conversation" },
+  { usage: "/model <name>", desc: "Switch AI model" },
+  { usage: "/connect <url>", desc: "Connect to a relay" },
+  { usage: "/serve [port]", desc: "Start MCP server — accept delegations" },
+  { usage: "/sync", desc: "Sync events and conversations" },
+  { usage: "/tools", desc: "List registered tools" },
+  { usage: "/goals", desc: "List all scheduled goals" },
+  { usage: '/goal add "<prompt>" --every <interval>', desc: "Add a scheduled goal" },
+  { usage: "/goal remove <id>", desc: "Remove a goal" },
+  { usage: "/goal pause <id>", desc: "Pause a goal" },
+  { usage: "/goal resume <id>", desc: "Resume a paused goal" },
+  { usage: "/goal outcomes <id>", desc: "Show execution history" },
+  { usage: "/approvals", desc: "Show pending approval queue" },
+  { usage: "/balance", desc: "Show balance and transactions" },
+  { usage: "/withdraw <amount>", desc: "Request a withdrawal" },
+  { usage: "/deposits", desc: "Show recent deposit transactions" },
+  { usage: "/reflect", desc: "Trigger reflection — see what the agent learned" },
+  { usage: "/mcp list", desc: "List MCP servers and trust status" },
+  { usage: "/mcp add <name> <url>", desc: "Add an HTTP MCP server" },
+  { usage: "/mcp remove <name>", desc: "Remove an MCP server" },
+  { usage: "/mcp trust <name>", desc: "Trust an MCP server" },
+  { usage: "/mcp untrust <name>", desc: "Untrust an MCP server" },
+  { usage: "/agents", desc: "List agents with trust and reputation" },
+  { usage: "/agents info <id>", desc: "Full trust record detail" },
+  { usage: "/agents trust <id> <level>", desc: "Set trust level" },
+  { usage: "/agents block <id>", desc: "Shorthand for Blocked" },
+  { usage: "/discover [cap]", desc: "Discover agents on the relay" },
+  { usage: "/delegate <id> <prompt>", desc: "Delegate a task via relay" },
+  { usage: "/propose <ids> <goal>", desc: "Propose a collaborative plan" },
+  { usage: "/proposals", desc: "List active proposals" },
+  { usage: "/proposal <id> [accept|reject|counter]", desc: "Respond to a proposal" },
+  { usage: "/operator", desc: "Show operator mode status" },
+];
+
 export function printHelp(): void {
+  const col = Math.max(...COMMANDS.map((c) => c.usage.length)) + 2;
   console.log(
     `
 Usage: motebit [command] [options]
@@ -205,38 +263,13 @@ Routing strategies (--routing-strategy):
   quality                 Most trusted agent first (trust-primary lexicographic)
   balanced                Weighted sum: trust, cost, latency, reliability, risk (default)
 
-Slash commands (in REPL):
-  /help              Show available commands
-  /memories          List all memories (with decay indicators)
-  /graph             Memory graph stats — compounding health
-  /curious           Show decaying memories the agent is curious about
-  /state             Show current state vector
-  /forget <nodeId>   Delete a memory by ID
-  /export            Export all memories and state as JSON
-  /clear             Clear conversation history
-  /conversations     List recent conversations
-  /conversation <id> Load a past conversation
-  /model <name>      Switch AI model mid-session
-  /sync              Sync events and conversations with remote server
-  /tools             List registered tools
-  /goals             List all scheduled goals
-  /goal add "<prompt>" --every <interval> [--once]
-  /goal remove <id>  Remove a goal
-  /goal pause <id>   Pause a goal
-  /goal resume <id>  Resume a paused goal
-  /goal outcomes <id> Show execution history
-  /approvals         Show pending approval queue
-  /balance           Show virtual account balance and recent transactions
-  /withdraw <amount> [destination]  Request a withdrawal
-  /deposits          Show recent deposit transactions
-  /reflect           Trigger reflection — see what the agent learned
-  /mcp list          List MCP servers and trust status
-  /mcp trust <name>  Mark MCP server as trusted (tools skip approval)
-  /mcp untrust <name> Mark MCP server as untrusted (tools require approval)
-  /operator          Show operator mode status
-  quit, exit         Exit the REPL
-`.trim(),
+Slash commands (in REPL):`,
   );
+  for (const { usage, desc } of COMMANDS) {
+    const gap = " ".repeat(Math.max(1, col - usage.length));
+    console.log(`  ${usage}${gap}${desc}`);
+  }
+  console.log("  quit, exit         Exit the REPL");
 }
 
 export function printVersion(): void {
