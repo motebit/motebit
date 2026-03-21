@@ -9,6 +9,8 @@ import { AgentTrustLevel, SensitivityLevel } from "@motebit/sdk";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import { computeReputationScore } from "@motebit/policy";
 import { createSignedToken, verifyExecutionReceipt, hexToBytes } from "@motebit/crypto";
+import { McpServerAdapter, wireServerDeps } from "@motebit/mcp-server";
+import type { McpServerConfig as McpServerAdapterConfig } from "@motebit/mcp-server";
 import type { CliConfig } from "./args.js";
 import type { FullConfig } from "./config.js";
 import { saveFullConfig } from "./config.js";
@@ -106,6 +108,7 @@ Available commands:
   /conversation <id> Load a past conversation
   /model <name>      Switch AI model
   /connect <url>     Connect to a relay (register, discover agents, enable delegation)
+  /serve [port]      Start MCP server (default port 3100) — accept incoming delegations
   /sync              Sync events and conversations with remote server
   /tools             List registered tools
   /goals             List all scheduled goals
@@ -477,6 +480,95 @@ Available commands:
       }
 
       console.log(`  Connected to ${connectUrl}`);
+      break;
+    }
+
+    case "serve": {
+      // /serve [port] — start MCP HTTP server on the running runtime
+      const port = args ? parseInt(args, 10) : 3100;
+      if (isNaN(port)) {
+        console.log("Usage: /serve [port]  (default: 3100)");
+        break;
+      }
+      if (!repl?.privateKeyBytes || !repl?.deviceId) {
+        console.log("Error: no signing keys — cannot serve without identity.");
+        break;
+      }
+
+      const pk = repl.privateKeyBytes;
+      const did = repl.deviceId;
+      const mid = repl.motebitId;
+      const pubHex = fullConfig?.device_public_key;
+
+      // Build MCP server deps from the existing runtime using wireServerDeps
+      const serveDeps = wireServerDeps(runtime as Parameters<typeof wireServerDeps>[0], {
+        motebitId: mid,
+        publicKeyHex: pubHex,
+      });
+
+      // Wire handleAgentTask so the server can execute full agentic tasks
+      serveDeps.handleAgentTask = async function* (prompt, options) {
+        const task = {
+          task_id: crypto.randomUUID(),
+          motebit_id: mid,
+          prompt,
+          submitted_at: Date.now(),
+          submitted_by: "mcp_client",
+          status: "running" as const,
+        };
+        if (options?.relayTaskId) {
+          (task as Record<string, unknown>).relay_task_id = options.relayTaskId;
+        }
+        for await (const chunk of runtime.handleAgentTask(
+          task as Parameters<typeof runtime.handleAgentTask>[0],
+          pk,
+          did,
+        )) {
+          yield chunk;
+        }
+      };
+
+      try {
+        const serverConfig: McpServerAdapterConfig = {
+          name: `motebit-${mid.slice(0, 8)}`,
+          transport: "http",
+          port,
+        };
+        const mcpServer = new McpServerAdapter(serverConfig, serveDeps);
+        await mcpServer.start();
+
+        const toolCount = runtime.getToolRegistry().list().length;
+        console.log(`  MCP server running on http://localhost:${port}`);
+        console.log(`  ${toolCount} tools exposed. Accepting incoming delegations.`);
+
+        // Register with relay if connected
+        const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig?.sync_url;
+        if (syncUrl && pubHex) {
+          try {
+            const token = await getRelayToken(config, repl);
+            const headers: Record<string, string> = { "Content-Type": "application/json" };
+            if (token) headers["Authorization"] = `Bearer ${token}`;
+            await fetch(`${syncUrl}/api/v1/agents/register`, {
+              method: "POST",
+              headers,
+              body: JSON.stringify({
+                motebit_id: mid,
+                endpoint_url: `http://localhost:${port}`,
+                public_key: pubHex,
+                capabilities: runtime
+                  .getToolRegistry()
+                  .list()
+                  .map((t) => t.name),
+              }),
+            });
+            console.log("  Registered as service agent on relay.");
+          } catch {
+            console.log("  Relay registration skipped (relay unreachable).");
+          }
+        }
+      } catch (err: unknown) {
+        console.log(`  Error starting server: ${err instanceof Error ? err.message : String(err)}`);
+      }
       break;
     }
 
