@@ -358,6 +358,11 @@ export async function handleSlashCommand(
         break;
       }
       runtime.setModel(args);
+      // Persist to config so it survives restart
+      if (fullConfig) {
+        fullConfig.default_model = args;
+        saveFullConfig(fullConfig);
+      }
       console.log(`Model switched to: ${args}`);
       break;
     }

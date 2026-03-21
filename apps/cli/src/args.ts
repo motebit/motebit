@@ -91,7 +91,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       ? "llama3.2"
       : provider === "openai"
         ? "gpt-4o"
-        : "claude-sonnet-4-5-20250929";
+        : "claude-sonnet-4-5-latest";
   const allowedPaths =
     values["allowed-paths"] != null && values["allowed-paths"] !== ""
       ? values["allowed-paths"].split(",").map((p) => p.trim())
@@ -162,7 +162,7 @@ export const COMMANDS: CommandEntry[] = [
   { usage: "/summarize", desc: "Summarize current conversation" },
   { usage: "/conversations", desc: "List recent conversations" },
   { usage: "/conversation <id>", desc: "Load a past conversation" },
-  { usage: "/model <name>", desc: "Switch AI model" },
+  { usage: "/model <name>", desc: "Switch AI model (persists across sessions)" },
   { usage: "/connect <url>", desc: "Connect to a relay" },
   { usage: "/serve [port]", desc: "Start MCP server — accept delegations" },
   { usage: "/sync", desc: "Sync events and conversations" },
@@ -250,7 +250,7 @@ Options:
 
 Providers:
   anthropic               Uses Anthropic API (requires ANTHROPIC_API_KEY)
-                          Default model: claude-sonnet-4-5-20250929
+                          Default model: claude-sonnet-4-5-latest
   openai                  Uses OpenAI API (requires OPENAI_API_KEY)
                           Default model: gpt-4o
   ollama                  Uses local Ollama server (no API key needed)
