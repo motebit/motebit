@@ -559,10 +559,15 @@ async function guidedScaffold(
     motebitId = existingConfig.motebit_id;
     console.log(`  Using existing identity: ${dim(motebitId)}`);
 
-    // Try to copy existing motebit.md if one exists nearby
+    // Copy existing motebit.md into the new project
     const existingMd = join(configDir(), "motebit.md");
     if (existsSync(existingMd)) {
       identityFileContent = readFileSync(existingMd, "utf-8");
+    } else {
+      // Identity was created before motebit.md was persisted to config dir.
+      // Regenerate it if we have the encrypted key — requires passphrase.
+      console.log(`  ${yellow("!")} No motebit.md found in ${dim(configDir())}`);
+      console.log(`    Run ${dim("npx create-motebit rotate")} to regenerate your identity file.`);
     }
 
     // Update config with project name and provider
@@ -591,6 +596,9 @@ async function guidedScaffold(
     config.cli_encrypted_key = result.encryptedKey;
     config.default_provider = provider;
     saveConfig(config);
+
+    // Persist motebit.md to config dir so "keep existing" can reuse it
+    writeFileSync(join(configDir(), "motebit.md"), result.identityFileContent, "utf-8");
   }
 
   // Write project files
