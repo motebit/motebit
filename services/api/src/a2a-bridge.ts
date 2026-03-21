@@ -306,12 +306,20 @@ export function registerA2ARoutes(app: Hono, db: DatabaseDriver, config: A2ABrid
     const routingStrategy = body.metadata?.routing_strategy as string | undefined;
     const requiredCapabilities = body.metadata?.required_capabilities as string[] | undefined;
 
+    // Auth is mandatory — the relay's internal task endpoint enforces it,
+    // but we fail-fast here to give a clear error to A2A callers.
+    const authHeader = c.req.header("Authorization");
+    if (!authHeader) {
+      return c.json({ error: "Authorization header required" }, 401);
+    }
+
     // Forward to the relay's native task submission endpoint.
     // The relay handles routing, budget, settlement, and receipt verification.
     const internalUrl = `${relayUrl}/agent/${motebitId}/task`;
-    const authHeader = c.req.header("Authorization");
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (authHeader) headers["Authorization"] = authHeader;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Authorization: authHeader,
+    };
 
     try {
       const taskBody: Record<string, unknown> = {
@@ -447,11 +455,18 @@ export function registerA2ARoutes(app: Hono, db: DatabaseDriver, config: A2ABrid
       }
     }
 
+    // Auth is mandatory for mandate execution
+    const authHeader = c.req.header("Authorization");
+    if (!authHeader) {
+      return c.json({ error: "Authorization header required" }, 401);
+    }
+
     // Map Intent Mandate → motebit task
     const prompt = mandate.prompt_playback ?? mandate.intent;
-    const authHeader = c.req.header("Authorization");
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (authHeader) headers["Authorization"] = authHeader;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Authorization: authHeader,
+    };
 
     const taskBody: Record<string, unknown> = {
       prompt,

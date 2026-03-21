@@ -2132,7 +2132,7 @@ function generateOssaManifest(motebitId: string, publicKeyHex: string): string {
     `description: Motebit sovereign agent ${motebitId.slice(0, 8)}`,
     "",
     "identity:",
-    `  gaid: 'did:key:z${publicKeyHex.slice(0, 16)}'`,
+    `  gaid: '${hexPublicKeyToDidKey(publicKeyHex)}'`,
     `  motebit_id: '${motebitId}'`,
     `  public_key: '${publicKeyHex}'`,
     "  verification:",

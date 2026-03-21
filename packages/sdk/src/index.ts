@@ -572,6 +572,8 @@ export interface ToolRegistry {
   list(): ToolDefinition[];
   execute(name: string, args: Record<string, unknown>): Promise<ToolResult>;
   register(tool: ToolDefinition, handler: ToolHandler): void;
+  /** Replace the handler for an existing tool, or register if new. */
+  replace?(tool: ToolDefinition, handler: ToolHandler): void;
 }
 
 // === AI Provider ===
