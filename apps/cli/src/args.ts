@@ -216,10 +216,10 @@ export function printVersion(): void {
   console.log(VERSION);
 }
 
-/** Terminal inner width, clamped to [40, 120]. Accounts for box border padding. */
+/** Terminal inner width. Fills available space, minimum 40. */
 export function termWidth(): number {
   const cols = process.stdout.columns ?? 80;
-  return Math.max(40, Math.min(cols - 4, 120)); // -4 for "  ╭" + "╮"
+  return Math.max(40, cols - 4); // -4 for "  ╭" + "╮" border
 }
 
 export function printBanner(opts: {
