@@ -1,6 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { verify } from "@motebit/verify";
-import { generateIdentity, GOVERNANCE_PRESETS, toHex, fromHex, decrypt } from "../generate.js";
+import {
+  generateIdentity,
+  GOVERNANCE_PRESETS,
+  toHex,
+  fromHex,
+  decrypt,
+  decryptPrivateKey,
+  regenerateIdentityFile,
+} from "../generate.js";
 import type { TrustMode } from "../generate.js";
 
 describe("generateIdentity", () => {
@@ -230,6 +238,78 @@ describe("service identity generation", () => {
     expect(verification.identity!.type).toBeUndefined();
     expect(verification.identity!.service_name).toBeUndefined();
     expect(verification.identity!.governance.max_risk_auto).toBe("R1_DRAFT");
+  });
+});
+
+describe("decryptPrivateKey", () => {
+  it("decrypts an encrypted key with the correct passphrase", async () => {
+    const passphrase = "test-passphrase-123";
+    const result = await generateIdentity({
+      name: "decrypt-test",
+      trustMode: "guarded",
+      passphrase,
+    });
+    const decrypted = await decryptPrivateKey(result.encryptedKey, passphrase);
+    // Decrypted value should be a 64-char hex string (32 bytes Ed25519 seed)
+    expect(decrypted).toMatch(/^[0-9a-f]{64}$/i);
+  });
+
+  it("rejects incorrect passphrase", async () => {
+    const result = await generateIdentity({
+      name: "decrypt-fail",
+      trustMode: "guarded",
+      passphrase: "correct",
+    });
+    await expect(decryptPrivateKey(result.encryptedKey, "wrong")).rejects.toThrow();
+  });
+});
+
+describe("regenerateIdentityFile", () => {
+  it("produces a verifiable identity file from existing keypair", async () => {
+    const passphrase = "regen-test-123";
+    const result = await generateIdentity({
+      name: "regen-test",
+      trustMode: "guarded",
+      passphrase,
+    });
+    const privateKeyHex = await decryptPrivateKey(result.encryptedKey, passphrase);
+
+    const regenerated = await regenerateIdentityFile({
+      motebitId: result.motebitId,
+      deviceId: result.deviceId,
+      name: "regen-test",
+      publicKeyHex: result.publicKeyHex,
+      privateKeyHex,
+      trustMode: "guarded",
+    });
+
+    const verification = await verify(regenerated);
+    expect(verification.valid).toBe(true);
+    expect(verification.identity!.motebit_id).toBe(result.motebitId);
+    expect(verification.identity!.identity.public_key).toBe(result.publicKeyHex);
+  });
+
+  it("regenerated file has matching governance settings", async () => {
+    const passphrase = "gov-test-123";
+    const result = await generateIdentity({
+      name: "gov-test",
+      trustMode: "minimal",
+      passphrase,
+    });
+    const privateKeyHex = await decryptPrivateKey(result.encryptedKey, passphrase);
+
+    const regenerated = await regenerateIdentityFile({
+      motebitId: result.motebitId,
+      deviceId: result.deviceId,
+      name: "gov-test",
+      publicKeyHex: result.publicKeyHex,
+      privateKeyHex,
+      trustMode: "minimal",
+    });
+
+    const verification = await verify(regenerated);
+    expect(verification.valid).toBe(true);
+    expect(verification.identity!.governance.trust_mode).toBe("minimal");
   });
 });
 
