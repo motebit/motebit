@@ -22,32 +22,36 @@ describe("web_search", () => {
     globalThis.fetch = originalFetch;
   });
 
-  it("returns results from DuckDuckGo API", async () => {
+  it("returns results from DuckDuckGo HTML search", async () => {
+    // Mock DuckDuckGo HTML lite response with result blocks
+    const mockHtml = `
+      <div class="result results_links results_links_deep web-result">
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.typescriptlang.org%2F">TypeScript: JavaScript With Syntax</a>
+        <a class="result__snippet">TypeScript is a typed superset of JavaScript that compiles to plain JavaScript.</a>
+      </div>
+      <div class="result results_links results_links_deep web-result">
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fen.wikipedia.org%2Fwiki%2FTypeScript">TypeScript - Wikipedia</a>
+        <a class="result__snippet">TypeScript is a programming language developed by Microsoft.</a>
+      </div>
+    `;
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({
-        AbstractText: "TypeScript is a typed superset of JavaScript.",
-        Heading: "TypeScript",
-        AbstractURL: "https://en.wikipedia.org/wiki/TypeScript",
-        RelatedTopics: [
-          { Text: "Related topic 1", FirstURL: "https://example.com/1" },
-          { Text: "Related topic 2", FirstURL: "https://example.com/2" },
-        ],
-      }),
+      text: async () => mockHtml,
     }) as unknown as typeof fetch;
 
     const handler = createWebSearchHandler();
     const result = await handler({ query: "typescript" });
 
     expect(result.ok).toBe(true);
-    expect(result.data).toContain("TypeScript is a typed superset");
-    expect(result.data).toContain("Related topic 1");
+    expect(result.data).toContain("TypeScript");
+    expect(result.data).toContain("typescriptlang.org");
   });
 
   it("returns friendly message when no results", async () => {
+    // Empty HTML with no result blocks
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ AbstractText: "", RelatedTopics: [] }),
+      text: async () => "<html><body>No results</body></html>",
     }) as unknown as typeof fetch;
 
     const handler = createWebSearchHandler();
