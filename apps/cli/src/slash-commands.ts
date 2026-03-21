@@ -58,7 +58,17 @@ function formatState(state: Record<string, unknown>): string {
 }
 
 // Tools excluded from network exposure when /serve is active.
-const LOCAL_ONLY_TOOLS = new Set(["read_file"]);
+// Internal tools have synthetic counterparts for remote callers:
+//   delegate_to_agent → motebit_task (prevents open relay — remote callers go through agentic loop)
+//   recall_memories   → motebit_recall (privacy-filtered, sensitivity-capped)
+//   list_events       → no remote equivalent needed (event history is internal)
+//   read_file         → no remote equivalent (filesystem access)
+const LOCAL_ONLY_TOOLS = new Set([
+  "read_file",
+  "delegate_to_agent",
+  "recall_memories",
+  "list_events",
+]);
 let isServing = false;
 
 /** Get an auth token for relay API calls — prefers master token, falls back to signed device token. */
