@@ -62,6 +62,22 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
     return Promise.all(entries.map((e) => this.decryptEntry(e)));
   }
 
+  async appendWithClock(entry: Omit<EventLogEntry, "version_clock">): Promise<number> {
+    const encrypted = await this.encryptPayload(entry.payload);
+    const encEntry = {
+      ...entry,
+      payload: { _encrypted: true, _data: encrypted } as unknown as Record<string, unknown>,
+    };
+    if (this.inner.appendWithClock) {
+      return this.inner.appendWithClock(encEntry);
+    }
+    // Fallback: non-atomic
+    const clock = await this.inner.getLatestClock(entry.motebit_id);
+    const assigned = clock + 1;
+    await this.inner.append({ ...encEntry, version_clock: assigned } as EventLogEntry);
+    return assigned;
+  }
+
   async getLatestClock(motebitId: string): Promise<number> {
     return this.inner.getLatestClock(motebitId);
   }

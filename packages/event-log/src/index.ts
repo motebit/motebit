@@ -44,6 +44,20 @@ export class InMemoryEventStore implements EventStoreAdapter {
     return Promise.resolve(results);
   }
 
+  appendWithClock(entry: Omit<EventLogEntry, "version_clock">): Promise<number> {
+    if (this.seenIds.has(entry.event_id)) {
+      // Already exists — return existing clock
+      const existing = this.events.find((e) => e.event_id === entry.event_id);
+      return Promise.resolve(existing?.version_clock ?? 0);
+    }
+    const moteEvents = this.events.filter((e) => e.motebit_id === entry.motebit_id);
+    const clock =
+      moteEvents.length === 0 ? 1 : Math.max(...moteEvents.map((e) => e.version_clock)) + 1;
+    this.seenIds.add(entry.event_id);
+    this.events.push({ ...entry, version_clock: clock });
+    return Promise.resolve(clock);
+  }
+
   getLatestClock(motebitId: string): Promise<number> {
     const moteEvents = this.events.filter((e) => e.motebit_id === motebitId);
     if (moteEvents.length === 0) return Promise.resolve(0);
@@ -97,6 +111,27 @@ export class EventStore {
 
   async tombstone(eventId: string, motebitId: string): Promise<void> {
     return this.adapter.tombstone(eventId, motebitId);
+  }
+
+  /**
+   * Atomically assign the next version_clock and append.
+   * Eliminates the getLatestClock() + clock+1 race condition.
+   */
+  async appendWithClock(entry: Omit<EventLogEntry, "version_clock">): Promise<number> {
+    if (entry.event_id === "") {
+      throw new Error("event_id must not be empty");
+    }
+    if (entry.motebit_id === "") {
+      throw new Error("motebit_id must not be empty");
+    }
+    if (this.adapter.appendWithClock) {
+      return this.adapter.appendWithClock(entry);
+    }
+    // Fallback for adapters that don't implement appendWithClock (non-atomic)
+    const clock = await this.adapter.getLatestClock(entry.motebit_id);
+    const assigned = clock + 1;
+    await this.adapter.append({ ...entry, version_clock: assigned } as EventLogEntry);
+    return assigned;
   }
 
   /**

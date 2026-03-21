@@ -226,14 +226,12 @@ export class ExportManager {
     });
 
     // Log the export event
-    const clock = await this.eventStore.getLatestClock(this.motebitId);
-    await this.eventStore.append({
+    await this.eventStore.appendWithClock({
       event_id: crypto.randomUUID(),
       motebit_id: this.motebitId,
       timestamp: Date.now(),
       event_type: EventType.ExportRequested,
       payload: {},
-      version_clock: clock + 1,
       tombstoned: false,
     });
 

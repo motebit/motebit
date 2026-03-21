@@ -96,8 +96,7 @@ export async function runHousekeeping(deps: HousekeepingDeps): Promise<Housekeep
     const curiosityTargets = findCuriosityTargets(nodes.filter((n) => !n.tombstoned && !n.pinned));
 
     // Log housekeeping run
-    const clock = await deps.events.getLatestClock(deps.motebitId);
-    await deps.events.append({
+    await deps.events.appendWithClock({
       event_id: crypto.randomUUID(),
       motebit_id: deps.motebitId,
       timestamp: now,
@@ -110,7 +109,6 @@ export async function runHousekeeping(deps: HousekeepingDeps): Promise<Housekeep
         skipped_pinned: skippedPinned,
         curiosity_targets: curiosityTargets.length,
       },
-      version_clock: clock + 1,
       tombstoned: false,
     });
 
@@ -123,8 +121,12 @@ export async function runHousekeeping(deps: HousekeepingDeps): Promise<Housekeep
     await deps.computeAndStoreGradient(nodes);
 
     return { curiosityTargets };
-  } catch {
+  } catch (err: unknown) {
     // Housekeeping is best-effort — don't crash the runtime
+    console.warn(
+      "[motebit] housekeeping failed:",
+      err instanceof Error ? err.message : String(err),
+    );
     return { curiosityTargets: [] };
   }
 }

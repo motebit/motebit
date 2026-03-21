@@ -56,6 +56,34 @@ export class IdbEventStore implements EventStoreAdapter {
     return results;
   }
 
+  async appendWithClock(entry: Omit<EventLogEntry, "version_clock">): Promise<number> {
+    // IDB transactions are serialized per store, so read-then-write within
+    // a single readwrite transaction is atomic.
+    const tx = this.db.transaction("events", "readwrite");
+    const store = tx.objectStore("events");
+    const index = store.index("motebit_clock");
+    const range = IDBKeyRange.bound([entry.motebit_id, -Infinity], [entry.motebit_id, Infinity]);
+
+    const latestClock = await new Promise<number>((resolve, reject) => {
+      const req = index.openCursor(range, "prev");
+      req.onsuccess = () => {
+        const cursor = req.result;
+        resolve(cursor ? (cursor.value as EventLogEntry).version_clock : 0);
+      };
+      req.onerror = () => reject(req.error ?? new Error("IDB cursor request failed"));
+    });
+
+    const clock = latestClock + 1;
+    const fullEntry = { ...entry, version_clock: clock } as EventLogEntry;
+    try {
+      await idbRequest(store.add(fullEntry));
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === "ConstraintError") return latestClock;
+      throw err;
+    }
+    return clock;
+  }
+
   async getLatestClock(motebitId: string): Promise<number> {
     const tx = this.db.transaction("events", "readonly");
     const store = tx.objectStore("events");

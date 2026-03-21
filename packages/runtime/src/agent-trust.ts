@@ -62,8 +62,7 @@ export async function bumpTrustFromReceipt(
       updated.trust_level = newLevel;
       // Emit trust transition event for audit trail
       try {
-        const clock = await events.getLatestClock(motebitId);
-        await events.append({
+        await events.appendWithClock({
           event_id: crypto.randomUUID(),
           motebit_id: motebitId,
           timestamp: now,
@@ -75,7 +74,6 @@ export async function bumpTrustFromReceipt(
             successful_tasks: updated.successful_tasks,
             failed_tasks: updated.failed_tasks,
           },
-          version_clock: clock + 1,
           tombstoned: false,
         });
       } catch {

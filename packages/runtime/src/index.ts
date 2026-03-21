@@ -815,8 +815,11 @@ export class MotebitRuntime {
         finalStatus,
         privateKey,
       );
-    } catch {
-      // Manifest construction failure should never break the goal flow
+    } catch (err: unknown) {
+      console.warn(
+        "[motebit] manifest construction failed:",
+        err instanceof Error ? err.message : String(err),
+      );
     }
   }
 
@@ -1071,14 +1074,12 @@ export class MotebitRuntime {
 
     void (async () => {
       try {
-        const clock = await this.events.getLatestClock(this.motebitId);
-        await this.events.append({
+        await this.events.appendWithClock({
           event_id: crypto.randomUUID(),
           motebit_id: this.motebitId,
           timestamp: Date.now(),
           event_type: eventType,
           payload,
-          version_clock: clock + 1,
           tombstoned: false,
         });
       } catch {
@@ -1410,8 +1411,7 @@ export class MotebitRuntime {
 
           // Emit chain trust event for gradient/audit consumption
           try {
-            const clock = await this.events.getLatestClock(this.motebitId);
-            await this.events.append({
+            await this.events.appendWithClock({
               event_id: crypto.randomUUID(),
               motebit_id: this.motebitId,
               timestamp: Date.now(),
@@ -1422,15 +1422,18 @@ export class MotebitRuntime {
                 chain_trust: chainTrust,
                 delegation_depth: (dr.delegation_receipts ?? []).length,
               },
-              version_clock: clock + 1,
               tombstoned: false,
             });
           } catch {
             // Event emission is best-effort
           }
         }
-      } catch {
+      } catch (err: unknown) {
         // Trust bumping is best-effort — don't break the task
+        console.warn(
+          "[motebit] trust bump failed:",
+          err instanceof Error ? err.message : String(err),
+        );
       }
     }
 
@@ -1438,8 +1441,11 @@ export class MotebitRuntime {
     for (const dr of delegationReceipts) {
       try {
         await this.agentGraph.addReceiptEdges(dr);
-      } catch {
-        // Graph update is best-effort
+      } catch (err: unknown) {
+        console.warn(
+          "[motebit] graph edge update failed:",
+          err instanceof Error ? err.message : String(err),
+        );
       }
     }
 
@@ -1451,8 +1457,11 @@ export class MotebitRuntime {
           if (latency > 0) {
             await this.latencyStatsStore.record(this.motebitId, dr.motebit_id, latency);
           }
-        } catch {
-          // Best-effort latency recording
+        } catch (err: unknown) {
+          console.warn(
+            "[motebit] latency recording failed:",
+            err instanceof Error ? err.message : String(err),
+          );
         }
       }
     }
@@ -1498,8 +1507,7 @@ export class MotebitRuntime {
     const eventType = eventTypeMap[status] ?? EventType.AgentTaskFailed;
 
     try {
-      const clock = await this.events.getLatestClock(this.motebitId);
-      await this.events.append({
+      await this.events.appendWithClock({
         event_id: crypto.randomUUID(),
         motebit_id: this.motebitId,
         device_id: deviceId,
@@ -1532,7 +1540,6 @@ export class MotebitRuntime {
             }),
           },
         },
-        version_clock: clock + 1,
         tombstoned: false,
       });
     } catch {
@@ -1922,8 +1929,7 @@ export class MotebitRuntime {
 
   private async logHousekeepingRun(prompt: string, result: string): Promise<void> {
     try {
-      const clock = await this.events.getLatestClock(this.motebitId);
-      await this.events.append({
+      await this.events.appendWithClock({
         event_id: crypto.randomUUID(),
         motebit_id: this.motebitId,
         timestamp: Date.now(),
@@ -1932,7 +1938,6 @@ export class MotebitRuntime {
           prompt_preview: prompt.slice(0, 100),
           result_preview: result.slice(0, 100),
         },
-        version_clock: clock + 1,
         tombstoned: false,
       });
     } catch {
@@ -2065,8 +2070,11 @@ export class MotebitRuntime {
           await this.events.compact(this.motebitId, clock - 1);
         }
       }
-    } catch {
-      // Compaction is best-effort — don't crash the runtime
+    } catch (err: unknown) {
+      console.warn(
+        "[motebit] compaction failed:",
+        err instanceof Error ? err.message : String(err),
+      );
     }
   }
 
@@ -2215,8 +2223,11 @@ export class MotebitRuntime {
           this._signingKeys.publicKey,
         );
         if (vc) this._persistCredential(vc);
-      } catch {
-        // Credential issuance is best-effort — don't break gradient computation
+      } catch (err: unknown) {
+        console.warn(
+          "[motebit] gradient credential issuance failed:",
+          err instanceof Error ? err.message : String(err),
+        );
       }
     }
 
@@ -2287,8 +2298,11 @@ export class MotebitRuntime {
           credential_json: JSON.stringify(vc),
           issued_at: Date.now(),
         });
-      } catch {
-        // Credential persistence is best-effort
+      } catch (err: unknown) {
+        console.warn(
+          "[motebit] credential persistence failed:",
+          err instanceof Error ? err.message : String(err),
+        );
       }
     }
   }
@@ -2331,14 +2345,12 @@ export class MotebitRuntime {
 
   private async logToolUsed(toolName: string, result: unknown): Promise<void> {
     try {
-      const clock = await this.events.getLatestClock(this.motebitId);
-      await this.events.append({
+      await this.events.appendWithClock({
         event_id: crypto.randomUUID(),
         motebit_id: this.motebitId,
         timestamp: Date.now(),
         event_type: EventType.ToolUsed,
         payload: { tool: toolName, result_summary: String(result).slice(0, 500) },
-        version_clock: clock + 1,
         tombstoned: false,
       });
     } catch {

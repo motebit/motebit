@@ -1393,6 +1393,12 @@ export interface EventFilter {
 
 export interface EventStoreAdapter {
   append(entry: EventLogEntry): Promise<void>;
+  /**
+   * Atomically assign the next version_clock and append the event.
+   * Eliminates the race condition in the getLatestClock() + clock+1 pattern.
+   * Returns the assigned version_clock.
+   */
+  appendWithClock?(entry: Omit<EventLogEntry, "version_clock">): Promise<number>;
   query(filter: EventFilter): Promise<EventLogEntry[]>;
   getLatestClock(motebitId: string): Promise<number>;
   tombstone(eventId: string, motebitId: string): Promise<void>;

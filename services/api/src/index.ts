@@ -604,6 +604,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // In-memory agent task queue: task_id → { task, receipt?, expiresAt, submitted_by?, price_snapshot?, origin_relay? }
   const TASK_TTL_MS = 10 * 60 * 1000; // 10 minutes
+  const MAX_TASK_QUEUE_SIZE = 100_000; // Hard cap prevents memory exhaustion from task flooding
   const taskQueue = new Map<
     string,
     {
@@ -631,6 +632,15 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       if (entry.expiresAt < now) {
         taskQueue.delete(id);
       }
+    }
+    // Evict oldest entries if queue exceeds hard cap (defensive against flooding)
+    if (taskQueue.size > MAX_TASK_QUEUE_SIZE) {
+      const entries = [...taskQueue.entries()].sort((a, b) => a[1].expiresAt - b[1].expiresAt);
+      const toEvict = entries.slice(0, taskQueue.size - MAX_TASK_QUEUE_SIZE);
+      for (const [id] of toEvict) {
+        taskQueue.delete(id);
+      }
+      logger.warn("task_queue.eviction", { evicted: toEvict.length, remaining: taskQueue.size });
     }
     // Clean expired agent registrations
     const stmtClean = moteDb.db.prepare("DELETE FROM agent_registry WHERE expires_at < ?");
@@ -3316,6 +3326,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     const x402Net = lastSettleNetwork;
     lastSettleTxHash = undefined;
     lastSettleNetwork = undefined;
+
+    // Reject if task queue is at capacity (prevents memory exhaustion from flooding)
+    if (taskQueue.size >= MAX_TASK_QUEUE_SIZE) {
+      throw new HTTPException(503, { message: "Task queue at capacity — try again later" });
+    }
 
     taskQueue.set(taskId, {
       task,

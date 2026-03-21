@@ -1,4 +1,4 @@
-import type { MotebitIdentity, EventLogEntry } from "@motebit/sdk";
+import type { MotebitIdentity } from "@motebit/sdk";
 import { EventType } from "@motebit/sdk";
 import type { EventStoreAdapter } from "@motebit/event-log";
 import { EventStore } from "@motebit/event-log";
@@ -123,8 +123,7 @@ export class IdentityManager {
 
     await this.storage.save(identity);
 
-    const clock = await this.eventStore.getLatestClock(identity.motebit_id);
-    const event: EventLogEntry = {
+    await this.eventStore.appendWithClock({
       event_id: generateUUIDv7(),
       motebit_id: identity.motebit_id,
       timestamp: identity.created_at,
@@ -132,11 +131,8 @@ export class IdentityManager {
       payload: {
         owner_id: ownerId,
       },
-      version_clock: clock + 1,
       tombstoned: false,
-    };
-
-    await this.eventStore.append(event);
+    });
     return identity;
   }
 
@@ -247,8 +243,7 @@ export class IdentityManager {
       await this.deviceStore.saveDevice(updated);
 
       // Log the rotation event
-      const clock = await this.eventStore.getLatestClock(device.motebit_id);
-      const event: EventLogEntry = {
+      await this.eventStore.appendWithClock({
         event_id: generateUUIDv7(),
         motebit_id: device.motebit_id,
         timestamp: Date.now(),
@@ -258,10 +253,8 @@ export class IdentityManager {
           action: "key_rotated",
           new_public_key: newPublicKeyHex,
         },
-        version_clock: clock + 1,
         tombstoned: false,
-      };
-      await this.eventStore.append(event);
+      });
     }
   }
 
@@ -278,8 +271,7 @@ export class IdentityManager {
     await this.deviceStore.saveDevice(updated);
 
     // Log the update event
-    const clock = await this.eventStore.getLatestClock(device.motebit_id);
-    const event: EventLogEntry = {
+    await this.eventStore.appendWithClock({
       event_id: generateUUIDv7(),
       motebit_id: device.motebit_id,
       timestamp: Date.now(),
@@ -289,10 +281,8 @@ export class IdentityManager {
         action: "public_key_updated",
         new_public_key: newPublicKeyHex,
       },
-      version_clock: clock + 1,
       tombstoned: false,
-    };
-    await this.eventStore.append(event);
+    });
   }
 }
 
@@ -365,17 +355,14 @@ export async function bootstrapIdentity(opts: {
     await identityStorage.save(restoredIdentity);
 
     // Log the restore event
-    const restoreClock = await eventStore.getLatestClock(existing.motebit_id);
-    const restoreEvent: EventLogEntry = {
+    await eventStore.appendWithClock({
       event_id: generateUUIDv7(),
       motebit_id: existing.motebit_id,
       timestamp: restoredIdentity.created_at,
       event_type: EventType.IdentityCreated,
       payload: { owner_id: surfaceName, restored: true },
-      version_clock: restoreClock + 1,
       tombstoned: false,
-    };
-    await eventStore.append(restoreEvent);
+    });
 
     // Register the device with the existing public key from config
     if (existing.device_public_key) {

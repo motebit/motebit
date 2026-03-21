@@ -656,8 +656,7 @@ export async function* runTurnStreaming(
     finalResponse.memory_candidates,
   );
   if (untaggedPatterns.length > 0) {
-    const auditClock = await eventStore.getLatestClock(motebitId);
-    await eventStore.append({
+    await eventStore.appendWithClock({
       event_id: crypto.randomUUID(),
       motebit_id: motebitId,
       timestamp: Date.now(),
@@ -666,7 +665,6 @@ export async function* runTurnStreaming(
         missed_patterns: untaggedPatterns,
         turn_message: userMessage.slice(0, 200),
       },
-      version_clock: auditClock + 1,
       tombstoned: false,
     });
   }
@@ -682,8 +680,7 @@ export async function* runTurnStreaming(
   }
 
   // 6. Log interaction event
-  const clock = await eventStore.getLatestClock(motebitId);
-  await eventStore.append({
+  await eventStore.appendWithClock({
     event_id: crypto.randomUUID(),
     motebit_id: motebitId,
     timestamp: Date.now(),
@@ -693,7 +690,6 @@ export async function* runTurnStreaming(
       response: finalText,
       memories_formed: memoriesFormed.length,
     },
-    version_clock: clock + 1,
     tombstoned: false,
   });
 

@@ -381,14 +381,12 @@ export class MemoryGraph {
 
     await this.storage.saveNode(node);
 
-    const clock = await this.eventStore.getLatestClock(this.motebitId);
-    await this.eventStore.append({
+    await this.eventStore.appendWithClock({
       event_id: crypto.randomUUID(),
       motebit_id: this.motebitId,
       timestamp: now,
       event_type: EventType.MemoryFormed,
       payload: { node_id: nodeId, content: candidate.content, sensitivity: candidate.sensitivity },
-      version_clock: clock + 1,
       tombstoned: false,
     });
 
@@ -533,8 +531,7 @@ export class MemoryGraph {
     newNodeId?: string,
   ): Promise<void> {
     try {
-      const clock = await this.eventStore.getLatestClock(this.motebitId);
-      await this.eventStore.append({
+      await this.eventStore.appendWithClock({
         event_id: crypto.randomUUID(),
         motebit_id: this.motebitId,
         timestamp: Date.now(),
@@ -545,7 +542,6 @@ export class MemoryGraph {
           new_node_id: newNodeId ?? null,
           reason: decision.reason,
         },
-        version_clock: clock + 1,
         tombstoned: false,
       });
     } catch {
@@ -728,14 +724,12 @@ export class MemoryGraph {
   async deleteMemory(nodeId: string): Promise<void> {
     await this.storage.tombstoneNode(nodeId);
 
-    const clock = await this.eventStore.getLatestClock(this.motebitId);
-    await this.eventStore.append({
+    await this.eventStore.appendWithClock({
       event_id: crypto.randomUUID(),
       motebit_id: this.motebitId,
       timestamp: Date.now(),
       event_type: EventType.MemoryDeleted,
       payload: { node_id: nodeId },
-      version_clock: clock + 1,
       tombstoned: false,
     });
   }
@@ -749,14 +743,12 @@ export class MemoryGraph {
 
     await this.storage.pinNode(nodeId, pinned);
 
-    const clock = await this.eventStore.getLatestClock(this.motebitId);
-    await this.eventStore.append({
+    await this.eventStore.appendWithClock({
       event_id: crypto.randomUUID(),
       motebit_id: this.motebitId,
       timestamp: Date.now(),
       event_type: EventType.MemoryPinned,
       payload: { node_id: nodeId, pinned },
-      version_clock: clock + 1,
       tombstoned: false,
     });
   }
@@ -777,14 +769,12 @@ export class MemoryGraph {
       node.last_accessed = Date.now();
       await this.storage.saveNode(node);
 
-      const clock = await this.eventStore.getLatestClock(this.motebitId);
-      await this.eventStore.append({
+      await this.eventStore.appendWithClock({
         event_id: crypto.randomUUID(),
         motebit_id: this.motebitId,
         timestamp: Date.now(),
         event_type: EventType.MemoryAccessed,
         payload: { node_id: nodeId },
-        version_clock: clock + 1,
         tombstoned: false,
       });
     }

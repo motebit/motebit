@@ -129,8 +129,7 @@ async function logReflectionCompleted(
   result: ReflectionResult,
 ): Promise<void> {
   try {
-    const clock = await deps.events.getLatestClock(deps.motebitId);
-    await deps.events.append({
+    await deps.events.appendWithClock({
       event_id: crypto.randomUUID(),
       motebit_id: deps.motebitId,
       timestamp: Date.now(),
@@ -141,7 +140,6 @@ async function logReflectionCompleted(
         adjustments_count: result.planAdjustments.length,
         self_assessment_preview: result.selfAssessment.slice(0, 100),
       },
-      version_clock: clock + 1,
       tombstoned: false,
     });
   } catch {

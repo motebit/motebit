@@ -268,6 +268,7 @@ export class SqliteEventStore implements EventStoreAdapter {
   private stmtAppend: PreparedStatement;
   private stmtGetLatestClock: PreparedStatement;
   private stmtTombstone: PreparedStatement;
+  private stmtAppendWithClock: PreparedStatement;
 
   constructor(private db: DatabaseDriver) {
     this.stmtAppend = db.prepare(
@@ -279,6 +280,12 @@ export class SqliteEventStore implements EventStoreAdapter {
     );
     this.stmtTombstone = db.prepare(
       `UPDATE events SET tombstoned = 1 WHERE event_id = ? AND motebit_id = ?`,
+    );
+    // Atomic clock assignment: COALESCE(MAX(version_clock), 0) + 1 in a single INSERT
+    // SQLite's single-writer model guarantees no concurrent INSERT can observe the same MAX.
+    this.stmtAppendWithClock = db.prepare(
+      `INSERT OR IGNORE INTO events (event_id, motebit_id, device_id, event_type, payload, version_clock, timestamp, tombstoned)
+       VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(version_clock), 0) + 1 FROM events WHERE motebit_id = ?), ?, ?)`,
     );
   }
 
@@ -293,6 +300,24 @@ export class SqliteEventStore implements EventStoreAdapter {
       entry.timestamp,
       entry.tombstoned ? 1 : 0,
     );
+  }
+
+  async appendWithClock(entry: Omit<EventLogEntry, "version_clock">): Promise<number> {
+    this.stmtAppendWithClock.run(
+      entry.event_id,
+      entry.motebit_id,
+      entry.device_id ?? null,
+      entry.event_type,
+      JSON.stringify(entry.payload),
+      entry.motebit_id, // for the subquery WHERE clause
+      entry.timestamp,
+      entry.tombstoned ? 1 : 0,
+    );
+    // Return the assigned clock (the row we just inserted, or existing if deduped)
+    const row = this.db
+      .prepare("SELECT version_clock FROM events WHERE event_id = ?")
+      .get(entry.event_id) as { version_clock: number } | undefined;
+    return row?.version_clock ?? 0;
   }
 
   async query(filter: EventFilter): Promise<EventLogEntry[]> {
