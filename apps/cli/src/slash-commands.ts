@@ -79,6 +79,7 @@ Available commands:
   /conversations     List recent conversations
   /conversation <id> Load a past conversation
   /model <name>      Switch AI model
+  /connect <url>     Connect to a relay (register, discover agents, enable delegation)
   /sync              Sync events and conversations with remote server
   /tools             List registered tools
   /goals             List all scheduled goals
@@ -351,6 +352,105 @@ Available commands:
           console.log("  Sync: skipped (no sync URL)");
         }
       }
+      break;
+    }
+
+    case "connect": {
+      // /connect <url> — connect to a relay from inside the REPL
+      if (!args) {
+        console.log("Usage: /connect <relay-url>");
+        console.log("  Example: /connect https://motebit-sync.fly.dev");
+        break;
+      }
+      if (!repl?.privateKeyBytes || !repl?.deviceId) {
+        console.log("Error: no signing keys available — cannot authenticate with relay.");
+        break;
+      }
+
+      const connectUrl = args.trim().replace(/\/+$/, ""); // strip trailing slashes
+      console.log(`Connecting to ${connectUrl}...`);
+
+      // 1. Register device with relay (bootstrap)
+      try {
+        const resp = await fetch(`${connectUrl}/api/v1/agents/bootstrap`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            motebit_id: repl.motebitId,
+            device_id: repl.deviceId,
+            public_key: fullConfig?.device_public_key,
+          }),
+        });
+        if (!resp.ok && resp.status !== 409) {
+          const body = await resp.text();
+          console.log(`  Registration failed: ${resp.status} ${body}`);
+          break;
+        }
+        console.log("  Registered with relay.");
+      } catch (err: unknown) {
+        console.log(`  Cannot reach relay: ${err instanceof Error ? err.message : String(err)}`);
+        break;
+      }
+
+      // 2. Enable interactive delegation
+      const pk = repl.privateKeyBytes;
+      const did = repl.deviceId;
+      const mid = repl.motebitId;
+      runtime.enableInteractiveDelegation({
+        syncUrl: connectUrl,
+        authToken: async () => {
+          const now = Date.now();
+          return createSignedToken(
+            {
+              mid,
+              did,
+              iat: now,
+              exp: now + 5 * 60 * 1000,
+              jti: crypto.randomUUID(),
+              aud: "task:submit",
+            },
+            pk,
+          );
+        },
+      });
+      console.log("  Interactive delegation enabled.");
+
+      // 3. Discover agents
+      try {
+        const token = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+        const headers: Record<string, string> = {};
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        const resp = await fetch(`${connectUrl}/api/v1/agents/discover`, { headers });
+        if (resp.ok) {
+          const data = (await resp.json()) as {
+            agents: Array<{ motebit_id: string; capabilities: string[] }>;
+          };
+          const others = data.agents.filter(
+            (a) => a.motebit_id !== repl.motebitId && a.capabilities.length > 0,
+          );
+          for (const agent of others) {
+            await runtime.registerServiceListing({
+              motebit_id: agent.motebit_id,
+              capabilities: agent.capabilities,
+              pricing: [],
+              sla: { max_latency_ms: 30_000, availability_guarantee: 0.99 },
+              description: agent.capabilities.join(", "),
+            });
+          }
+          console.log(`  Discovered ${others.length} agent${others.length === 1 ? "" : "s"}.`);
+        }
+      } catch {
+        console.log("  Agent discovery skipped (relay may not support it).");
+      }
+
+      // 4. Save to config for next launch
+      if (fullConfig) {
+        fullConfig.sync_url = connectUrl;
+        saveFullConfig(fullConfig);
+        console.log("  Saved relay URL to config.");
+      }
+
+      console.log(`  Connected to ${connectUrl}`);
       break;
     }
 
