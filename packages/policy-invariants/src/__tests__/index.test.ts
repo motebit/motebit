@@ -72,6 +72,26 @@ describe("clamp", () => {
     expect(clamp(-2, -1, 1)).toBe(-1);
     expect(clamp(2, -1, 1)).toBe(1);
   });
+
+  it("returns min for NaN", () => {
+    expect(clamp(NaN, 0, 1)).toBe(0);
+  });
+
+  it("returns min for Infinity", () => {
+    expect(clamp(Infinity, 0, 1)).toBe(0);
+  });
+
+  it("returns min for -Infinity", () => {
+    expect(clamp(-Infinity, 0, 1)).toBe(0);
+  });
+
+  it("returns custom fallback for NaN when provided", () => {
+    expect(clamp(NaN, -1, 1, 0)).toBe(0);
+  });
+
+  it("returns custom fallback for Infinity when provided", () => {
+    expect(clamp(Infinity, 0, 1, 0.5)).toBe(0.5);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -96,6 +116,27 @@ describe("clampState", () => {
     expect(over.attention).toBe(1);
     const under = clampState(makeDefaultState({ attention: -1 }));
     expect(under.attention).toBe(0);
+  });
+
+  it("replaces NaN with safe defaults instead of propagating", () => {
+    const poisoned = clampState(
+      makeDefaultState({
+        attention: NaN,
+        curiosity: NaN,
+        affect_valence: NaN,
+        confidence: Infinity,
+      }),
+    );
+    expect(poisoned.attention).toBe(0); // fallback to min
+    expect(poisoned.curiosity).toBe(0); // fallback to min
+    expect(poisoned.affect_valence).toBe(0); // fallback to custom (neutral)
+    expect(poisoned.confidence).toBe(0); // fallback to min
+    // No NaN in output
+    for (const [, value] of Object.entries(poisoned)) {
+      if (typeof value === "number") {
+        expect(Number.isFinite(value)).toBe(true);
+      }
+    }
   });
 
   it("clamps affect_arousal to [0, MAX_AROUSAL]", () => {
