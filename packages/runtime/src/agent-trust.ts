@@ -19,7 +19,10 @@ export interface AgentTrustDeps {
   events: EventStore;
   agentGraph: AgentGraphManager;
   signingKeys: { privateKey: Uint8Array; publicKey: Uint8Array } | null;
-  onCredentialIssued?: (vc: import("@motebit/crypto").VerifiableCredential<unknown>) => void;
+  onCredentialIssued?: (
+    vc: import("@motebit/crypto").VerifiableCredential<unknown>,
+    subjectMotebitId: string,
+  ) => void;
 }
 
 // === Trust from Receipt ===
@@ -126,7 +129,7 @@ export async function bumpTrustFromReceipt(
             signingKeys.publicKey,
             subjectDid,
           );
-          onCredentialIssued?.(vc);
+          onCredentialIssued?.(vc, remoteMotebitId);
         } catch {
           // Credential issuance is best-effort
         }
@@ -170,7 +173,7 @@ export async function bumpTrustFromReceipt(
           signingKeys.publicKey,
           subjectDid,
         );
-        onCredentialIssued?.(vc);
+        onCredentialIssued?.(vc, remoteMotebitId);
       } catch {
         // Credential issuance is best-effort
       }
@@ -215,7 +218,7 @@ export async function bumpTrustFromReceipt(
           signingKeys.publicKey,
           subjectDid,
         );
-        onCredentialIssued?.(vc);
+        onCredentialIssued?.(vc, remoteMotebitId);
       } catch {
         // Credential issuance is best-effort
       }

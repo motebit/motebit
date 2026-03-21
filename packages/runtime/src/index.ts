@@ -507,6 +507,13 @@ export class MotebitRuntime {
   private approvalStore: import("@motebit/sdk").ApprovalStoreAdapter | null = null;
   private _signingKeysErased = false;
   private _logger: { warn(message: string, context?: Record<string, unknown>): void };
+  /** Callback to submit credentials to relay for indexing. Set by enableInteractiveDelegation. */
+  private _credentialSubmitter:
+    | ((
+        vc: import("@motebit/crypto").VerifiableCredential<unknown>,
+        subjectMotebitId: string,
+      ) => Promise<void>)
+    | null = null;
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
     this.motebitId = config.motebitId;
@@ -2301,7 +2308,10 @@ export class MotebitRuntime {
   }
 
   /** Push a credential to both in-memory cache and persistent store. */
-  private _persistCredential(vc: import("@motebit/crypto").VerifiableCredential<unknown>): void {
+  private _persistCredential(
+    vc: import("@motebit/crypto").VerifiableCredential<unknown>,
+    subjectMotebitId?: string,
+  ): void {
     this._issuedCredentials.push(
       vc as import("@motebit/crypto").VerifiableCredential<AnyCredentialSubject>,
     );
@@ -2322,6 +2332,14 @@ export class MotebitRuntime {
           error: err instanceof Error ? err.message : String(err),
         });
       }
+    }
+    // Fire-and-forget: submit to relay for routing indexing
+    if (this._credentialSubmitter && subjectMotebitId) {
+      this._credentialSubmitter(vc, subjectMotebitId).catch((err: unknown) => {
+        this._logger.warn("credential relay submission failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
     }
   }
 
@@ -2390,7 +2408,7 @@ export class MotebitRuntime {
       events: this.events,
       agentGraph: this.agentGraph,
       signingKeys: this._signingKeys,
-      onCredentialIssued: (vc) => this._persistCredential(vc),
+      onCredentialIssued: (vc, subjectMotebitId) => this._persistCredential(vc, subjectMotebitId),
     };
   }
 
@@ -2466,6 +2484,39 @@ export class MotebitRuntime {
 
     // Avoid double-registration
     if (this.toolRegistry.has(TOOL_NAME)) return;
+
+    // Wire credential submission to relay — credentials issued by bumpTrustFromReceipt
+    // are submitted to the relay for routing indexing. The subject agent (the one we
+    // delegated to) gets the credential pushed to its relay profile.
+    const logger = this._logger;
+    this._credentialSubmitter = async (vc, targetMotebitId) => {
+      try {
+        const token = await config.authToken();
+        const resp = await fetch(
+          `${config.syncUrl}/api/v1/agents/${encodeURIComponent(targetMotebitId)}/credentials/submit`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ credentials: [vc] }),
+            signal: AbortSignal.timeout(10_000),
+          },
+        );
+        if (!resp.ok) {
+          logger.warn("credential relay submission rejected", {
+            status: resp.status,
+            targetMotebitId,
+          });
+        }
+      } catch (err: unknown) {
+        logger.warn("credential relay submission failed", {
+          error: err instanceof Error ? err.message : String(err),
+          targetMotebitId,
+        });
+      }
+    };
 
     const timeoutMs = config.timeoutMs ?? 120_000;
     const motebitId = this.motebitId;

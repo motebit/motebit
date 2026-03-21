@@ -375,14 +375,10 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
   // would filter them anyway, but rejecting at ingestion is cleaner.
   app.post("/api/v1/agents/:motebitId/credentials/submit", async (c) => {
     const motebitId = c.req.param("motebitId");
-    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
 
-    // Only the subject agent can submit credentials about itself
-    if (callerMotebitId && callerMotebitId !== motebitId) {
-      throw new HTTPException(403, {
-        message: "Only the credential subject can submit credentials for indexing",
-      });
-    }
+    // Any authenticated agent can submit credentials about any subject.
+    // The issuing agent submits credentials about agents it delegated to.
+    // The relay verifies each credential's Ed25519 signature regardless of who submits.
 
     const body = await c.req.json<{ credentials: VerifiableCredential[] }>();
     if (!Array.isArray(body.credentials) || body.credentials.length === 0) {
