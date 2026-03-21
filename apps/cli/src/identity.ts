@@ -33,24 +33,70 @@ export function promptPassphrase(
   rlOrPrompt: readline.Interface | string,
   maybePrompt?: string,
 ): Promise<string> {
-  const prompt = typeof rlOrPrompt === "string" ? rlOrPrompt : maybePrompt!;
+  const promptText = typeof rlOrPrompt === "string" ? rlOrPrompt : maybePrompt!;
+  const stdin = process.stdin;
+  const stdout = process.stdout;
+
+  // Non-TTY fallback (piped input) — read one line without masking
+  if (!stdin.isTTY) {
+    return new Promise((resolve) => {
+      const mutedOutput = new Writable({ write: (_c, _e, cb) => cb() });
+      const silentRl = readline.createInterface({
+        input: stdin,
+        output: mutedOutput,
+        terminal: false,
+      });
+      stdout.write(promptText);
+      silentRl.once("line", (answer) => {
+        silentRl.close();
+        resolve(answer);
+      });
+    });
+  }
+
+  // TTY: use raw mode directly instead of creating a second readline.
+  // Creating and closing a second readline.createInterface on process.stdin
+  // closes stdin itself, killing the REPL that uses the original rl.
   return new Promise((resolve) => {
-    const mutedOutput = new Writable({
-      write(_chunk, _encoding, callback) {
-        callback();
-      },
-    });
-    const silentRl = readline.createInterface({
-      input: process.stdin,
-      output: mutedOutput,
-      terminal: true,
-    });
-    process.stdout.write(prompt);
-    silentRl.question("", (answer) => {
-      silentRl.close();
-      process.stdout.write("\n");
-      resolve(answer);
-    });
+    stdout.write(promptText);
+
+    // Pause the caller's rl if provided (prevents it from consuming stdin)
+    const callerRl = typeof rlOrPrompt !== "string" ? rlOrPrompt : null;
+    callerRl?.pause();
+
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.setEncoding("utf8");
+
+    let value = "";
+
+    const onData = (ch: string) => {
+      const c = ch.toString();
+
+      if (c === "\n" || c === "\r" || c === "\u0004") {
+        stdin.removeListener("data", onData);
+        stdin.setRawMode(false);
+        stdin.pause();
+        stdout.write("\n");
+        callerRl?.resume();
+        resolve(value);
+      } else if (c === "\u0003") {
+        stdin.removeListener("data", onData);
+        stdin.setRawMode(false);
+        stdout.write("\n");
+        process.exit(130);
+      } else if (c === "\u007F" || c === "\b") {
+        if (value.length > 0) {
+          value = value.slice(0, -1);
+          stdout.write("\x1b[1D \x1b[1D");
+        }
+      } else if (c.charCodeAt(0) >= 32) {
+        value += c;
+        stdout.write("*");
+      }
+    };
+
+    stdin.on("data", onData);
   });
 }
 
