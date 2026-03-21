@@ -657,6 +657,15 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     } catch {
       // Best-effort cleanup
     }
+    // Clean stale service listings not updated in 7 days
+    try {
+      const listingCutoff = now - 7 * 24 * 60 * 60 * 1000;
+      moteDb.db
+        .prepare("DELETE FROM relay_service_listings WHERE updated_at < ?")
+        .run(listingCutoff);
+    } catch {
+      // Best-effort cleanup
+    }
     // Release stale budget allocations locked > 1 hour with no settlement.
     // Return held funds to the delegator's virtual account.
     try {

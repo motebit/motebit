@@ -644,10 +644,23 @@ export async function signDelegation(
 }
 
 /**
- * Verify a delegation token's signature using the delegator's public key.
- * Does NOT check expiration — caller should check `expires_at` separately.
+ * Verify a delegation token's signature and (optionally) expiration.
+ *
+ * @param delegation - The delegation token to verify
+ * @param options.checkExpiry - If true (default), reject expired tokens. Pass false
+ *   only when verifying historical chains where expiration is irrelevant.
+ * @param options.now - Current time in ms (default: Date.now()). For testing.
  */
-export async function verifyDelegation(delegation: DelegationToken): Promise<boolean> {
+export async function verifyDelegation(
+  delegation: DelegationToken,
+  options?: { checkExpiry?: boolean; now?: number },
+): Promise<boolean> {
+  const checkExpiry = options?.checkExpiry ?? true;
+  if (checkExpiry) {
+    const now = options?.now ?? Date.now();
+    if (delegation.expires_at < now) return false;
+  }
+
   const { signature, ...body } = delegation;
   const canonical = canonicalJson(body);
   const message = new TextEncoder().encode(canonical);
@@ -677,7 +690,8 @@ export async function verifyDelegationChain(
 
   for (let i = 0; i < chain.length; i++) {
     const delegation = chain[i]!;
-    const sigValid = await verifyDelegation(delegation);
+    // Chain verification is historical — don't reject expired tokens in the chain
+    const sigValid = await verifyDelegation(delegation, { checkExpiry: false });
     if (!sigValid) {
       return { valid: false, error: `Delegation ${i} has invalid signature` };
     }

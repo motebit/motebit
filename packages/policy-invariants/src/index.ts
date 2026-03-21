@@ -6,8 +6,11 @@ export { SPECIES_CONSTRAINTS };
 
 /**
  * Clamp a value to [min, max].
+ * Non-finite values (NaN, Infinity, -Infinity) fall back to `fallback`
+ * (defaults to `min`) to prevent poisoning the render pipeline.
  */
-export function clamp(value: number, min: number, max: number): number {
+export function clamp(value: number, min: number, max: number, fallback?: number): number {
+  if (!Number.isFinite(value)) return fallback ?? min;
   return Math.min(Math.max(value, min), max);
 }
 
@@ -21,7 +24,7 @@ export function clampState(state: MotebitState): MotebitState {
     attention: clamp(state.attention, 0, 1),
     processing: clamp(state.processing, 0, 1),
     confidence: clamp(state.confidence, 0, 1),
-    affect_valence: clamp(state.affect_valence, -1, 1),
+    affect_valence: clamp(state.affect_valence, -1, 1, 0),
     affect_arousal: clamp(state.affect_arousal, 0, SPECIES_CONSTRAINTS.MAX_AROUSAL),
     social_distance: clamp(state.social_distance, 0, 1),
     curiosity: clamp(state.curiosity, 0, 1),

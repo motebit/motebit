@@ -332,11 +332,9 @@ export async function* runTurnStreaming(
       precisionContext: iteration === 1 ? options?.precisionContext : undefined,
     };
 
-    // On continuation turns, the user_message is empty and the conversation
-    // history carries the context (including tool results). Adjust:
-    if (iteration > 1) {
-      contextPack.user_message = userMessage;
-    }
+    // On continuation turns, the conversation history carries the context
+    // (including tool results). user_message stays empty — re-injecting the
+    // original prompt would waste context and confuse turn structure.
 
     let aiResponse;
     for await (const chunk of provider.generateStream(contextPack)) {
