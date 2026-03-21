@@ -119,6 +119,39 @@ async function makeRelayHeaders(
   return headers;
 }
 
+/** Parse subcommand from args string: "/goal add foo" → { sub: "add", rest: "foo" } */
+function parseSub(args: string): { sub: string; rest: string } {
+  const m = args.match(/^(\S+)\s*([\s\S]*)$/);
+  return m ? { sub: m[1], rest: m[2].trim() } : { sub: "", rest: "" };
+}
+
+type RelayResult<T> =
+  | { ok: true; data: T; status: number }
+  | { ok: false; status: number; text: string };
+
+/** Fetch from relay with standardized error handling. Strips trailing slashes from baseUrl. */
+async function relayFetch<T>(
+  baseUrl: string,
+  path: string,
+  opts?: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: unknown;
+  },
+): Promise<RelayResult<T>> {
+  const url = `${baseUrl.replace(/\/+$/, "")}${path}`;
+  const init: RequestInit = { headers: opts?.headers };
+  if (opts?.method) init.method = opts.method;
+  if (opts?.body != null) init.body = JSON.stringify(opts.body);
+  const resp = await fetch(url, init);
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    return { ok: false, status: resp.status, text: text.slice(0, 200) };
+  }
+  const data = (await resp.json()) as T;
+  return { ok: true, data, status: resp.status };
+}
+
 /** Style a usage pattern: command portion in cyan, args in plain text. */
 function styleUsage(usage: string): string {
   // Split on first space-followed-by-arg-or-end-of-command-word
@@ -723,9 +756,7 @@ export async function handleSlashCommand(
         console.log("Goals not available in this context.");
         break;
       }
-      const parts = args.match(/^(\S+)\s*([\s\S]*)$/) ?? [];
-      const goalSub = parts[1] ?? "";
-      const goalArgs = (parts[2] ?? "").trim();
+      const { sub: goalSub, rest: goalArgs } = parseSub(args);
 
       if (goalSub === "add") {
         // Parse: /goal add "prompt" --every 30m [--once]
@@ -929,8 +960,7 @@ export async function handleSlashCommand(
         console.log("MCP config not available.");
         break;
       }
-      const [subCmd, ...subArgs] = args.split(/\s+/);
-      const serverName = subArgs.join(" ");
+      const { sub: subCmd, rest: serverName } = parseSub(args);
 
       if (subCmd == null || subCmd === "" || subCmd === "list") {
         const servers = fullConfig.mcp_servers ?? [];
@@ -1153,19 +1183,19 @@ export async function handleSlashCommand(
         const capParam = discoverArg || undefined;
         const queryStr = capParam ? `?capability=${encodeURIComponent(capParam)}` : "";
         const headers = await makeRelayHeaders(config, repl);
-        const resp = await fetch(`${syncUrl}/api/v1/agents/discover${queryStr}`, { headers });
-        if (!resp.ok) {
-          console.log(`Discovery failed: ${resp.status} ${resp.statusText}`);
-          break;
-        }
-        const data = (await resp.json()) as {
+        const discoverResult = await relayFetch<{
           agents: Array<{
             motebit_id: string;
             endpoint_url: string;
             capabilities: string[];
             public_key: string;
           }>;
-        };
+        }>(syncUrl, `/api/v1/agents/discover${queryStr}`, { headers });
+        if (!discoverResult.ok) {
+          console.log(`Discovery failed (${discoverResult.status}): ${discoverResult.text}`);
+          break;
+        }
+        const data = discoverResult.data;
         if (data.agents.length === 0) {
           console.log(
             capParam ? `No agents found with capability "${capParam}".` : "No agents registered.",
@@ -1216,9 +1246,7 @@ export async function handleSlashCommand(
           );
         }
       } else {
-        const parts = args.match(/^(\S+)\s*([\s\S]*)$/) ?? [];
-        const agentSub = parts[1] ?? "";
-        const agentArgs = (parts[2] ?? "").trim();
+        const { sub: agentSub, rest: agentArgs } = parseSub(args);
 
         if (agentSub === "info") {
           if (!agentArgs) {
@@ -1338,18 +1366,18 @@ export async function handleSlashCommand(
       if (rawTargetId.length < UUID_LENGTH) {
         try {
           const discoverHeaders = await makeRelayHeaders(config, repl);
-          const discoverResp = await fetch(`${syncUrl}/api/v1/agents/discover`, {
-            headers: discoverHeaders,
-          });
-          if (!discoverResp.ok) {
+          const discoverResult = await relayFetch<{ agents: Array<{ motebit_id: string }> }>(
+            syncUrl!,
+            `/api/v1/agents/discover`,
+            { headers: discoverHeaders },
+          );
+          if (!discoverResult.ok) {
             console.log(
-              `Failed to resolve agent prefix: ${discoverResp.status} ${discoverResp.statusText}`,
+              `Failed to resolve agent prefix (${discoverResult.status}): ${discoverResult.text}`,
             );
             break;
           }
-          const discoverData = (await discoverResp.json()) as {
-            agents: Array<{ motebit_id: string }>;
-          };
+          const discoverData = discoverResult.data;
           const matchedAgent = discoverData.agents.find((a) =>
             a.motebit_id.startsWith(rawTargetId),
           );
@@ -1377,18 +1405,20 @@ export async function handleSlashCommand(
       let taskId: string;
       try {
         console.log(`Delegating to ${targetMotebitId.slice(0, 12)}...`);
-        const submitResp = await fetch(`${syncUrl}/agent/${targetMotebitId}/task`, {
-          method: "POST",
-          headers: delegateHeaders,
-          body: JSON.stringify({ prompt: delegatePrompt, submitted_by: repl.motebitId }),
-        });
-        if (!submitResp.ok) {
-          const text = await submitResp.text();
-          console.log(`Task submission failed (${submitResp.status}): ${text}`);
+        const submitResult = await relayFetch<{ task_id: string }>(
+          syncUrl!,
+          `/agent/${targetMotebitId}/task`,
+          {
+            method: "POST",
+            headers: delegateHeaders,
+            body: { prompt: delegatePrompt, submitted_by: repl.motebitId },
+          },
+        );
+        if (!submitResult.ok) {
+          console.log(`Task submission failed (${submitResult.status}): ${submitResult.text}`);
           break;
         }
-        const submitData = (await submitResp.json()) as { task_id: string };
-        taskId = submitData.task_id;
+        taskId = submitResult.data.task_id;
         console.log(`Task submitted: ${taskId.slice(0, 12)}...`);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
@@ -1552,24 +1582,29 @@ export async function handleSlashCommand(
       const expiresAt = Date.now() + 60 * 60 * 1000; // 1 hour
 
       try {
-        const resp = await fetch(`${proposeSyncUrl}/api/v1/proposals`, {
-          method: "POST",
-          headers: proposeHeaders,
-          body: JSON.stringify({
-            proposal_id: proposalId,
-            plan_id: planId,
-            initiator_motebit_id: repl.motebitId,
-            participants: participantsPayload,
-            plan_snapshot: { goal: proposalGoal, steps },
-            expires_at: expiresAt,
-          }),
-        });
-        if (!resp.ok) {
-          const text = await resp.text();
-          console.log(`Proposal submission failed (${resp.status}): ${text}`);
+        const proposeResult = await relayFetch<{ proposal_id: string; status: string }>(
+          proposeSyncUrl!,
+          `/api/v1/proposals`,
+          {
+            method: "POST",
+            headers: proposeHeaders,
+            body: {
+              proposal_id: proposalId,
+              plan_id: planId,
+              initiator_motebit_id: repl.motebitId,
+              participants: participantsPayload,
+              plan_snapshot: { goal: proposalGoal, steps },
+              expires_at: expiresAt,
+            },
+          },
+        );
+        if (!proposeResult.ok) {
+          console.log(
+            `Proposal submission failed (${proposeResult.status}): ${proposeResult.text}`,
+          );
           break;
         }
-        const data = (await resp.json()) as { proposal_id: string; status: string };
+        const data = proposeResult.data;
         console.log(
           `Proposal ${data.proposal_id.slice(0, 12)}... sent to ${participantIds.length} agent(s). Waiting for responses...`,
         );
@@ -1597,14 +1632,7 @@ export async function handleSlashCommand(
       const proposalsHeaders = await makeRelayHeaders(config, repl, { aud: "proposal" });
 
       try {
-        const resp = await fetch(`${proposalsSyncUrl}/api/v1/proposals`, {
-          headers: proposalsHeaders,
-        });
-        if (!resp.ok) {
-          console.log(`Failed to fetch proposals (${resp.status})`);
-          break;
-        }
-        const data = (await resp.json()) as {
+        const listResult = await relayFetch<{
           proposals: Array<{
             proposal_id: string;
             plan_id: string;
@@ -1613,7 +1641,12 @@ export async function handleSlashCommand(
             created_at: number;
             expires_at: number;
           }>;
-        };
+        }>(proposalsSyncUrl!, `/api/v1/proposals`, { headers: proposalsHeaders });
+        if (!listResult.ok) {
+          console.log(`Failed to fetch proposals (${listResult.status}): ${listResult.text}`);
+          break;
+        }
+        const data = listResult.data;
 
         if (data.proposals.length === 0) {
           console.log("No active proposals.");
@@ -1678,40 +1711,40 @@ export async function handleSlashCommand(
       let proposalData: ProposalDetail | null = null;
 
       try {
-        const resp = await fetch(`${proposalSyncUrl}/api/v1/proposals/${proposalId}`, {
-          headers: proposalHeaders,
-        });
-        if (!resp.ok) {
-          if (resp.status === 404) {
-            // Try prefix match by listing proposals
-            const listResp = await fetch(`${proposalSyncUrl}/api/v1/proposals`, {
-              headers: proposalHeaders,
-            });
-            if (listResp.ok) {
-              const listData = (await listResp.json()) as {
-                proposals: Array<{ proposal_id: string }>;
-              };
-              const match = listData.proposals.find((p) => p.proposal_id.startsWith(proposalId));
-              if (match) {
-                const fullResp = await fetch(
-                  `${proposalSyncUrl}/api/v1/proposals/${match.proposal_id}`,
-                  { headers: proposalHeaders },
-                );
-                if (fullResp.ok) {
-                  proposalData = (await fullResp.json()) as ProposalDetail;
-                }
-              }
+        const detailResult = await relayFetch<ProposalDetail>(
+          proposalSyncUrl!,
+          `/api/v1/proposals/${proposalId}`,
+          { headers: proposalHeaders },
+        );
+        if (detailResult.ok) {
+          proposalData = detailResult.data;
+        } else if (detailResult.status === 404) {
+          // Try prefix match by listing proposals
+          const listResult = await relayFetch<{ proposals: Array<{ proposal_id: string }> }>(
+            proposalSyncUrl!,
+            `/api/v1/proposals`,
+            { headers: proposalHeaders },
+          );
+          if (listResult.ok) {
+            const match = listResult.data.proposals.find((p) =>
+              p.proposal_id.startsWith(proposalId),
+            );
+            if (match) {
+              const fullResult = await relayFetch<ProposalDetail>(
+                proposalSyncUrl!,
+                `/api/v1/proposals/${match.proposal_id}`,
+                { headers: proposalHeaders },
+              );
+              if (fullResult.ok) proposalData = fullResult.data;
             }
-            if (!proposalData) {
-              console.log(`Proposal not found: ${proposalId}`);
-              break;
-            }
-          } else {
-            console.log(`Failed to fetch proposal (${resp.status})`);
+          }
+          if (!proposalData) {
+            console.log(`Proposal not found: ${proposalId}`);
             break;
           }
         } else {
-          proposalData = (await resp.json()) as ProposalDetail;
+          console.log(`Failed to fetch proposal (${detailResult.status}): ${detailResult.text}`);
+          break;
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
@@ -1797,23 +1830,16 @@ export async function handleSlashCommand(
       }
 
       try {
-        const respondResp = await fetch(
-          `${proposalSyncUrl}/api/v1/proposals/${proposalData.proposal_id}/respond`,
-          {
-            method: "POST",
-            headers: proposalHeaders,
-            body: JSON.stringify(responseBody),
-          },
+        const respondResult = await relayFetch<{ status: string; all_responded: boolean }>(
+          proposalSyncUrl!,
+          `/api/v1/proposals/${proposalData.proposal_id}/respond`,
+          { method: "POST", headers: proposalHeaders, body: responseBody },
         );
-        if (!respondResp.ok) {
-          const text = await respondResp.text();
-          console.log(`Response failed (${respondResp.status}): ${text}`);
+        if (!respondResult.ok) {
+          console.log(`Response failed (${respondResult.status}): ${respondResult.text}`);
           break;
         }
-        const respondData = (await respondResp.json()) as {
-          status: string;
-          all_responded: boolean;
-        };
+        const respondData = respondResult.data;
         console.log(`Responded: ${proposalAction}. Proposal status: ${respondData.status}`);
         if (respondData.all_responded) {
           console.log("All participants have responded.");
@@ -1837,26 +1863,17 @@ export async function handleSlashCommand(
       }
       try {
         const balHeaders = await makeRelayHeaders(config, repl);
-        const balResp = await fetch(
-          `${balSyncUrl.replace(/\/+$/, "")}/api/v1/agents/${repl.motebitId}/balance`,
-          { headers: balHeaders },
-        );
-        if (!balResp.ok) {
-          const balText = await balResp.text();
-          console.log(`Balance request failed (${balResp.status}): ${balText.slice(0, 200)}`);
-          break;
-        }
-        const balData = (await balResp.json()) as {
+        const balResult = await relayFetch<{
           balance: number;
           currency: string;
-          transactions: Array<{
-            type: string;
-            amount: number;
-            created_at: string;
-          }>;
-        };
-        console.log(`\nBalance: $${balData.balance.toFixed(2)} ${balData.currency}`);
-        const recentTx = (balData.transactions ?? []).slice(0, 5);
+          transactions: Array<{ type: string; amount: number; created_at: string }>;
+        }>(balSyncUrl, `/api/v1/agents/${repl.motebitId}/balance`, { headers: balHeaders });
+        if (!balResult.ok) {
+          console.log(`Balance request failed (${balResult.status}): ${balResult.text}`);
+          break;
+        }
+        console.log(`\nBalance: $${balResult.data.balance.toFixed(2)} ${balResult.data.currency}`);
+        const recentTx = (balResult.data.transactions ?? []).slice(0, 5);
         if (recentTx.length > 0) {
           console.log("Recent:");
           for (const tx of recentTx) {
@@ -1900,27 +1917,22 @@ export async function handleSlashCommand(
         const wdHeaders = await makeRelayHeaders(config, repl, { json: true });
         const wdBody: Record<string, unknown> = { amount: wdAmount };
         if (wdDest) wdBody["destination"] = wdDest;
-        const wdResp = await fetch(
-          `${wdSyncUrl.replace(/\/+$/, "")}/api/v1/agents/${repl.motebitId}/withdraw`,
-          {
-            method: "POST",
-            headers: wdHeaders,
-            body: JSON.stringify(wdBody),
-          },
+        const wdResult = await relayFetch<{ withdrawal_id?: string }>(
+          wdSyncUrl,
+          `/api/v1/agents/${repl.motebitId}/withdraw`,
+          { method: "POST", headers: wdHeaders, body: wdBody },
         );
-        if (wdResp.status === 402) {
-          console.log("Insufficient balance.");
+        if (!wdResult.ok) {
+          console.log(
+            wdResult.status === 402
+              ? "Insufficient balance."
+              : `Withdrawal failed (${wdResult.status}): ${wdResult.text}`,
+          );
           break;
         }
-        if (!wdResp.ok) {
-          const wdText = await wdResp.text();
-          console.log(`Withdrawal failed (${wdResp.status}): ${wdText.slice(0, 200)}`);
-          break;
-        }
-        const wdData = (await wdResp.json()) as { withdrawal_id?: string };
         console.log(`Withdrawal of $${wdAmount.toFixed(2)} submitted.`);
-        if (wdData.withdrawal_id != null && wdData.withdrawal_id !== "") {
-          console.log(`  ID: ${wdData.withdrawal_id}`);
+        if (wdResult.data.withdrawal_id != null && wdResult.data.withdrawal_id !== "") {
+          console.log(`  ID: ${wdResult.data.withdrawal_id}`);
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
@@ -1941,16 +1953,7 @@ export async function handleSlashCommand(
       }
       try {
         const depHeaders = await makeRelayHeaders(config, repl);
-        const depResp = await fetch(
-          `${depSyncUrl.replace(/\/+$/, "")}/api/v1/agents/${repl.motebitId}/balance`,
-          { headers: depHeaders },
-        );
-        if (!depResp.ok) {
-          const depText = await depResp.text();
-          console.log(`Deposits request failed (${depResp.status}): ${depText.slice(0, 200)}`);
-          break;
-        }
-        const depData = (await depResp.json()) as {
+        const depResult = await relayFetch<{
           transactions: Array<{
             type: string;
             amount: number;
@@ -1958,7 +1961,12 @@ export async function handleSlashCommand(
             reference?: string;
             description?: string;
           }>;
-        };
+        }>(depSyncUrl, `/api/v1/agents/${repl.motebitId}/balance`, { headers: depHeaders });
+        if (!depResult.ok) {
+          console.log(`Deposits request failed (${depResult.status}): ${depResult.text}`);
+          break;
+        }
+        const depData = depResult.data;
         const deposits = (depData.transactions ?? []).filter((tx) => tx.type === "deposit");
         if (deposits.length === 0) {
           console.log("No deposit transactions found.");
