@@ -506,6 +506,15 @@ Available commands:
         publicKeyHex: pubHex,
       });
 
+      // Security: exclude local-only tools from network exposure.
+      // read_file gives filesystem access — safe for local REPL, dangerous for remote callers.
+      const LOCAL_ONLY_TOOLS = new Set(["read_file"]);
+      const origListTools = serveDeps.listTools.bind(serveDeps);
+      serveDeps.listTools = () => origListTools().filter((t) => !LOCAL_ONLY_TOOLS.has(t.name));
+      const origFilterTools = serveDeps.filterTools.bind(serveDeps);
+      serveDeps.filterTools = (tools) =>
+        origFilterTools(tools.filter((t) => !LOCAL_ONLY_TOOLS.has(t.name)));
+
       // Wire handleAgentTask so the server can execute full agentic tasks
       serveDeps.handleAgentTask = async function* (prompt, options) {
         const task = {
@@ -537,9 +546,9 @@ Available commands:
         const mcpServer = new McpServerAdapter(serverConfig, serveDeps);
         await mcpServer.start();
 
-        const toolCount = runtime.getToolRegistry().list().length;
+        const exposedTools = serveDeps.listTools();
         console.log(`  MCP server running on http://localhost:${port}`);
-        console.log(`  ${toolCount} tools exposed. Accepting incoming delegations.`);
+        console.log(`  ${exposedTools.length} tools exposed. Accepting incoming delegations.`);
 
         // Register with relay if connected
         const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig?.sync_url;
@@ -555,10 +564,7 @@ Available commands:
                 motebit_id: mid,
                 endpoint_url: `http://localhost:${port}`,
                 public_key: pubHex,
-                capabilities: runtime
-                  .getToolRegistry()
-                  .list()
-                  .map((t) => t.name),
+                capabilities: exposedTools.map((t) => t.name),
               }),
             });
             console.log("  Registered as service agent on relay.");
