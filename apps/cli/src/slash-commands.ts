@@ -456,6 +456,7 @@ Available commands:
             pk,
           );
         },
+        routingStrategy: config.routingStrategy,
       });
       console.log(success("  Interactive delegation enabled."));
 

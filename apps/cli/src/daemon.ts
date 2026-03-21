@@ -100,7 +100,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
   };
 
   if (personalityConfig.default_provider && !process.argv.includes("--provider")) {
-    const validProviders = ["anthropic", "openai", "ollama"] as const;
+    const validProviders = ["anthropic", "openai", "ollama", "hybrid"] as const;
     if (validProviders.includes(personalityConfig.default_provider)) {
       config.provider = personalityConfig.default_provider!;
     }
@@ -401,6 +401,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
         sendRaw: (data: string) => wsAdapter!.sendRaw(data),
         onCustomMessage: (cb) => wsAdapter!.onCustomMessage(cb),
         getExplorationDrive: () => runtime.getPrecision().explorationDrive,
+        routingStrategy: config.routingStrategy,
         onDelegationFailure: (step, _attempt, error, failedAgentId) => {
           console.warn(
             `Delegation failed for step "${step.description}"${failedAgentId ? ` (agent: ${failedAgentId.slice(0, 8)}...)` : ""}: ${error}`,
@@ -593,7 +594,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
   };
 
   if (personalityConfig.default_provider && !process.argv.includes("--provider")) {
-    const validProviders = ["anthropic", "openai", "ollama"] as const;
+    const validProviders = ["anthropic", "openai", "ollama", "hybrid"] as const;
     if (validProviders.includes(personalityConfig.default_provider)) {
       config.provider = personalityConfig.default_provider!;
     }

@@ -175,8 +175,9 @@ Commands:
   approvals deny <id> [--reason <text>]  Deny a pending tool call
 
 Options:
-  --provider <name>       AI provider: "anthropic", "openai", or "ollama" (default: anthropic)
+  --provider <name>       AI provider (default: anthropic)
   --model <model>         AI model to use (default depends on provider)
+  --routing-strategy <s>  Agent delegation routing: "cost", "quality", or "balanced"
   --db-path <path>        Database file path (default: ~/.motebit/motebit.db)
   --no-stream             Disable streaming (use blocking mode)
   --sync-url <url>        Remote sync server URL (or set MOTEBIT_SYNC_URL)
@@ -196,6 +197,13 @@ Providers:
                           Default model: gpt-4o
   ollama                  Uses local Ollama server (no API key needed)
                           Default model: llama3.2
+  hybrid                  Anthropic with Ollama fallback (requires ANTHROPIC_API_KEY)
+                          Cloud-first, falls back to local on failure
+
+Routing strategies (--routing-strategy):
+  cost                    Cheapest agent first (cost-primary lexicographic)
+  quality                 Most trusted agent first (trust-primary lexicographic)
+  balanced                Weighted sum: trust, cost, latency, reliability, risk (default)
 
 Slash commands (in REPL):
   /help              Show available commands
