@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { MotebitRuntime, NullRenderer } from "@motebit/runtime";
 import { embedText } from "@motebit/memory-graph";
 import type { StorageAdapters } from "@motebit/runtime";
-import { CloudProvider, OllamaProvider } from "@motebit/ai-core";
+import { CloudProvider, OllamaProvider, HybridProvider } from "@motebit/ai-core";
 import type { StreamingProvider, MotebitPersonalityConfig } from "@motebit/ai-core";
 import { openMotebitDatabase, type MotebitDatabase } from "@motebit/persistence";
 import {
@@ -39,6 +39,9 @@ import {
   createRecallMemoriesHandler,
   listEventsDefinition,
   createListEventsHandler,
+  createSubGoalDefinition,
+  completeGoalDefinition,
+  reportProgressDefinition,
   BraveSearchProvider,
   DuckDuckGoSearchProvider,
   FallbackSearchProvider,
@@ -127,6 +130,27 @@ export function createProvider(
     });
   }
 
+  if (config.provider === "hybrid") {
+    const apiKey = getApiKey("anthropic");
+    return new HybridProvider({
+      cloud: {
+        provider: "anthropic",
+        api_key: apiKey,
+        model: config.model,
+        max_tokens: config.maxTokens,
+        temperature,
+        personalityConfig,
+      },
+      ollama: {
+        model: "llama3.2",
+        max_tokens: config.maxTokens,
+        temperature,
+        personalityConfig,
+      },
+      fallback_to_local: true,
+    });
+  }
+
   const apiKey = getApiKey("anthropic");
   return new CloudProvider({
     provider: "anthropic",
@@ -190,6 +214,18 @@ export function buildToolRegistry(
 
   registry.register(recallMemoriesDefinition, createRecallMemoriesHandler(memorySearchFn));
   registry.register(listEventsDefinition, createListEventsHandler(eventQueryFn));
+
+  // Goal execution tools — registered as stubs so the AI knows they exist.
+  // In daemon mode, GoalScheduler.registerGoalTools() replaces these with full
+  // implementations that have access to the goalStore and currentGoalId context.
+  const goalStubHandler = () =>
+    Promise.resolve({
+      ok: false,
+      error: "No active goal context — goal tools are available during daemon mode goal execution.",
+    });
+  registry.register(createSubGoalDefinition, goalStubHandler);
+  registry.register(completeGoalDefinition, goalStubHandler);
+  registry.register(reportProgressDefinition, goalStubHandler);
 
   // Operator-only (R2+): write files, execute shell commands
   if (config.operator) {

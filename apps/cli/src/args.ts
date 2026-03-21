@@ -5,7 +5,7 @@ import { VERSION } from "./config.js";
 import { bold, dim, cyan, green } from "./colors.js";
 
 export interface CliConfig {
-  provider: "anthropic" | "openai" | "ollama";
+  provider: "anthropic" | "openai" | "ollama" | "hybrid";
   model: string;
   dbPath: string | undefined;
   noStream: boolean;
@@ -73,8 +73,15 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
   });
 
   const provider = values.provider;
-  if (provider !== "anthropic" && provider !== "openai" && provider !== "ollama") {
-    throw new Error(`Unknown provider "${provider}". Use "anthropic", "openai", or "ollama".`);
+  if (
+    provider !== "anthropic" &&
+    provider !== "openai" &&
+    provider !== "ollama" &&
+    provider !== "hybrid"
+  ) {
+    throw new Error(
+      `Unknown provider "${provider}". Use "anthropic", "openai", "ollama", or "hybrid".`,
+    );
   }
 
   const defaultModel =

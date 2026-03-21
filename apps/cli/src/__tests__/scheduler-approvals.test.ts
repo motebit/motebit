@@ -109,6 +109,9 @@ function createMockRuntime(
       register: vi.fn().mockImplementation((def: ToolDefinition, handler: ToolHandler) => {
         registeredTools.set(def.name, handler);
       }),
+      replace: vi.fn().mockImplementation((def: ToolDefinition, handler: ToolHandler) => {
+        registeredTools.set(def.name, handler);
+      }),
     }),
     stop: vi.fn(),
     housekeeping: vi.fn().mockResolvedValue(undefined),

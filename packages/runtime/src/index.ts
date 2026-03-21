@@ -291,6 +291,11 @@ class SimpleToolRegistry implements ToolRegistry {
     }
   }
 
+  /** Replace the handler for an existing tool, or register if new. */
+  replace(tool: ToolDefinition, handler: ToolHandler): void {
+    this.tools.set(tool.name, { definition: tool, handler });
+  }
+
   unregister(name: string): boolean {
     return this.tools.delete(name);
   }

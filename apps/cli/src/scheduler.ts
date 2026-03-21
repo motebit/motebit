@@ -252,9 +252,11 @@ export class GoalScheduler {
       return { ok: true, data: `Progress recorded: ${note}` };
     };
 
-    registry.register(createSubGoalDefinition, createSubGoalHandler);
-    registry.register(completeGoalDefinition, completeGoalHandler);
-    registry.register(reportProgressDefinition, reportProgressHandler);
+    // Replace stub handlers registered by buildToolRegistry with full implementations
+    // that have access to goalStore, currentGoalId, and event logging.
+    registry.replace(createSubGoalDefinition, createSubGoalHandler);
+    registry.replace(completeGoalDefinition, completeGoalHandler);
+    registry.replace(reportProgressDefinition, reportProgressHandler);
   }
 
   private buildGoalContext(goal: Goal, outcomes: GoalOutcome[], subGoals: Goal[]): string {

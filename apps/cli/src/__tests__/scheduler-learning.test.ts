@@ -119,6 +119,9 @@ function createMockRuntime(
       register: vi.fn().mockImplementation((def: ToolDefinition, handler: ToolHandler) => {
         registeredTools.set(def.name, handler);
       }),
+      replace: vi.fn().mockImplementation((def: ToolDefinition, handler: ToolHandler) => {
+        registeredTools.set(def.name, handler);
+      }),
       list: vi.fn().mockReturnValue([{ name: "shell_exec", description: "Execute shell command" }]),
     }),
     getLoopDeps: vi.fn().mockReturnValue({

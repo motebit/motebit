@@ -10,6 +10,11 @@ export class InMemoryToolRegistry implements ToolRegistry {
     this.tools.set(tool.name, { definition: tool, handler });
   }
 
+  /** Replace the handler for an existing tool, or register if new. */
+  replace(tool: ToolDefinition, handler: ToolHandler): void {
+    this.tools.set(tool.name, { definition: tool, handler });
+  }
+
   list(): ToolDefinition[] {
     return [...this.tools.values()].map((t) => t.definition);
   }
