@@ -36,6 +36,7 @@ packages/
   verify/             Standalone identity verifier (Layer 0, MIT, 2 deps)
   create-motebit/     CLI scaffolder: npm create motebit (Layer 0, MIT)
   crypto/             Ed25519, AES-256-GCM, PBKDF2, signed tokens, W3C VC 2.0
+  gradient/           Self-measurement: "What am I?" Pure narrative from gradient data (Layer 1, BSL)
   semiring/           Trust Semiring Algebra — generic computation graph for routing
   policy/             PolicyGate, MemoryGovernor, injection defense
   policy-invariants/  Clamping rules, state bounds validation
@@ -54,7 +55,8 @@ packages/
   privacy-layer/      Retention rules, deletion certificates, data export
   persistence/        SQLite (WAL mode), adapters for all storage types
   browser-persistence/ IndexedDB adapters for web/spatial
-  planner/            PlanEngine: goal decomposition, reflection, adjustment
+  planner/            PlanEngine: goal decomposition, plan-level reflection
+  reflection/         Adaptive intelligence: "What should I change?" LLM reflection engine (Layer 4, BSL)
   voice/              VAD, STT, TTS adapters
   market/             Budget, settlement, graph-based routing, credential weighting
   github-action/      GitHub Action for identity verification
