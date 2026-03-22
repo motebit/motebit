@@ -414,6 +414,104 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     }
   }
 
+  // --- Discover tab ---
+  const discoverList = document.getElementById("agents-discover-list") as HTMLDivElement;
+  const discoverEmpty = document.getElementById("agents-discover-empty") as HTMLDivElement;
+  const knownPane = document.getElementById("agents-known-pane") as HTMLDivElement;
+  const discoverPane = document.getElementById("agents-discover-pane") as HTMLDivElement;
+  const tabBtns = Array.from(agentsPanel.querySelectorAll<HTMLButtonElement>(".agents-tab"));
+
+  function switchTab(tab: string): void {
+    for (const btn of tabBtns) {
+      btn.classList.toggle("active", btn.dataset.tab === tab);
+    }
+    knownPane.style.display = tab === "known" ? "" : "none";
+    discoverPane.style.display = tab === "discover" ? "" : "none";
+    if (tab === "discover") void populateDiscover();
+  }
+
+  for (const btn of tabBtns) {
+    btn.addEventListener("click", () => switchTab(btn.dataset.tab ?? "known"));
+  }
+
+  async function populateDiscover(): Promise<void> {
+    const syncUrl = loadSyncUrl();
+    if (!syncUrl) {
+      discoverList.innerHTML = "";
+      discoverEmpty.textContent = "Connect to a relay in Settings to discover agents.";
+      discoverEmpty.style.display = "block";
+      return;
+    }
+
+    discoverList.innerHTML = "";
+    discoverEmpty.textContent = "Loading...";
+    discoverEmpty.style.display = "block";
+
+    try {
+      const token = await ctx.app.createSyncToken();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
+      const res = await fetch(`${syncUrl}/api/v1/agents/discover`, { headers });
+      if (!res.ok) throw new Error(`${res.status}`);
+      const data = (await res.json()) as {
+        agents: Array<{
+          motebit_id: string;
+          capabilities: string[];
+          trust_level?: string;
+          endpoint_url?: string;
+        }>;
+      };
+
+      const agents = data.agents ?? [];
+      if (agents.length === 0) {
+        discoverEmpty.textContent = "No agents on the network yet.";
+        discoverEmpty.style.display = "block";
+        return;
+      }
+
+      discoverEmpty.style.display = "none";
+
+      for (const agent of agents) {
+        const item = document.createElement("div");
+        item.className = "agent-item";
+
+        const idDiv = document.createElement("div");
+        idDiv.className = "agent-item-id";
+        idDiv.textContent = agent.motebit_id;
+        idDiv.title = agent.motebit_id;
+        item.appendChild(idDiv);
+
+        if (agent.capabilities && agent.capabilities.length > 0) {
+          const capsRow = document.createElement("div");
+          capsRow.className = "agent-caps-row";
+          for (const cap of agent.capabilities) {
+            const tag = document.createElement("span");
+            tag.className = "agent-cap-tag";
+            tag.textContent = cap;
+            capsRow.appendChild(tag);
+          }
+          item.appendChild(capsRow);
+        }
+
+        const meta = document.createElement("div");
+        meta.className = "agent-item-meta";
+        if (agent.trust_level) {
+          const badge = document.createElement("span");
+          badge.className = `agent-trust-badge ${TRUST_BADGE_CLASS[agent.trust_level] ?? "unknown"}`;
+          badge.textContent = agent.trust_level.replace(/_/g, " ");
+          meta.appendChild(badge);
+        }
+        item.appendChild(meta);
+
+        discoverList.appendChild(item);
+      }
+    } catch {
+      discoverEmpty.textContent = "Could not reach relay.";
+      discoverEmpty.style.display = "block";
+    }
+  }
+
   function openAgents(): void {
     closeAll();
     agentsPanel.classList.add("open");
