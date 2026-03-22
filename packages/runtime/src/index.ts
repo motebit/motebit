@@ -137,7 +137,7 @@ function stripDisplayTags(text: string): { clean: string; pending: string } {
   }
   return { clean, pending: "" };
 }
-import { performReflection, runReflectionSafe } from "./reflection.js";
+import { performReflection } from "./reflection.js";
 import type { ReflectionDeps } from "./reflection.js";
 import { runHousekeeping } from "./housekeeping.js";
 import type { HousekeepingDeps } from "./housekeeping.js";
@@ -500,6 +500,7 @@ export class MotebitRuntime {
   private agentGraph: AgentGraphManager;
   private _curiosityTargets: CuriosityTarget[] = [];
   private _precision: PrecisionWeights;
+  private _lastReflection: ReflectionResult | null = null;
   private _signingKeys: { privateKey: Uint8Array; publicKey: Uint8Array } | null;
   private _issuedCredentials: import("@motebit/crypto").VerifiableCredential<AnyCredentialSubject>[] =
     [];
@@ -752,6 +753,16 @@ export class MotebitRuntime {
   setProvider(provider: StreamingProvider): void {
     this.provider = provider;
     this.wireLoopDeps();
+
+    // On session resume with a provider now available, reflect on the previous
+    // session in background. The creature digests what happened while it slept.
+    // The result is available to buildSelfAwareness() on subsequent turns.
+    if (
+      this.conversation.getSessionInfo()?.continued &&
+      this.conversation.getHistory().length > 0
+    ) {
+      void this.reflectAndStore();
+    }
   }
 
   /** Access the tool registry to register additional tools at runtime. */
@@ -1214,6 +1225,69 @@ export class MotebitRuntime {
     }));
   }
 
+  /**
+   * Build self-awareness context: precision posture + self-model narration.
+   *
+   * The precision context tells the creature how to behave (cautious/confident).
+   * The self-model tells the creature what it knows about itself — trajectory,
+   * strengths, weaknesses, memory stats. Without this, the creature has a rich
+   * interior but cannot see it. This is the wire from gradient → self-knowledge.
+   */
+  private buildSelfAwareness(): string {
+    const parts: string[] = [];
+
+    // Active inference posture (existing behavior tier)
+    const posture = buildPrecisionContext(this._precision);
+    if (posture) parts.push(posture);
+
+    // Self-model narration from gradient history
+    const summary = this.getGradientSummary(10);
+    if (summary.snapshotCount > 0) {
+      const lines: string[] = [];
+      lines.push("[Self-Model — INTERNAL REFERENCE, never discuss mechanics with the user]");
+      lines.push(summary.trajectory);
+      lines.push(summary.overall);
+
+      if (summary.strengths.length > 0) {
+        lines.push(`Strengths: ${summary.strengths.join("; ")}.`);
+      }
+      if (summary.weaknesses.length > 0) {
+        lines.push(`Weaknesses: ${summary.weaknesses.join("; ")}.`);
+      }
+
+      // Memory stats — so the creature knows the shape of its own knowledge
+      const latest = this.gradientStore.latest(this.motebitId);
+      if (latest?.stats) {
+        const s = latest.stats;
+        lines.push(
+          `Memory: ${s.live_nodes} memories (${s.semantic_count} semantic, ${s.episodic_count} episodic, ${s.pinned_count} pinned), ${s.live_edges} connections.`,
+        );
+      }
+
+      parts.push(lines.join("\n"));
+    }
+
+    // Last reflection — behavioral learning from previous session or conversation
+    if (this._lastReflection) {
+      const rLines: string[] = [];
+      rLines.push("[Last Reflection — INTERNAL REFERENCE, never discuss mechanics with the user]");
+
+      if (this._lastReflection.planAdjustments.length > 0) {
+        rLines.push(`Behavioral adjustments: ${this._lastReflection.planAdjustments.join("; ")}.`);
+      }
+      if (this._lastReflection.insights.length > 0) {
+        rLines.push(`Insights: ${this._lastReflection.insights.join("; ")}.`);
+      }
+      if (this._lastReflection.selfAssessment) {
+        rLines.push(`Self-assessment: ${this._lastReflection.selfAssessment}`);
+      }
+
+      parts.push(rLines.join("\n"));
+    }
+
+    return parts.join("\n\n");
+  }
+
   async sendMessage(text: string, runId?: string): Promise<TurnResult> {
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
     if (this._isProcessing) throw new Error("Already processing a message");
@@ -1224,7 +1298,7 @@ export class MotebitRuntime {
     try {
       const trimmed = this.conversation.trimmed();
       const knownAgents = await this.listTrustedAgents();
-      const precisionCtx = buildPrecisionContext(this._precision);
+      const selfAwareness = this.buildSelfAwareness();
       const result = await runTurn(this.loopDeps, text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
@@ -1232,7 +1306,7 @@ export class MotebitRuntime {
         sessionInfo: this.conversation.getSessionInfo() ?? undefined,
         curiosityHints: this.buildCuriosityHints(),
         knownAgents: knownAgents.length > 0 ? knownAgents : undefined,
-        precisionContext: precisionCtx || undefined,
+        precisionContext: selfAwareness || undefined,
       });
       this.conversation.pushExchange(text, result.response);
       // Accumulate behavioral stats for the intelligence gradient
@@ -1241,6 +1315,10 @@ export class MotebitRuntime {
       this._behavioralStats.toolCallsSucceeded += result.toolCallsSucceeded;
       this._behavioralStats.toolCallsBlocked += result.toolCallsBlocked;
       this._behavioralStats.toolCallsFailed += result.toolCallsFailed;
+      // Periodic reflection — every 5th turn, digest in background
+      if (this._behavioralStats.turnCount % 5 === 0) {
+        void this.reflectAndStore();
+      }
       // Session info applies only to the first message after resume
       this.conversation.clearSessionInfo();
       return result;
@@ -1266,7 +1344,7 @@ export class MotebitRuntime {
     try {
       const trimmed = this.conversation.trimmed();
       const knownAgents = await this.listTrustedAgents();
-      const precisionCtx = buildPrecisionContext(this._precision);
+      const selfAwareness = this.buildSelfAwareness();
 
       // Build capabilities map from service listings for known agents
       let agentCapabilities: Record<string, string[]> | undefined;
@@ -1289,7 +1367,7 @@ export class MotebitRuntime {
         curiosityHints: this.buildCuriosityHints(),
         knownAgents: knownAgents.length > 0 ? knownAgents : undefined,
         agentCapabilities,
-        precisionContext: precisionCtx || undefined,
+        precisionContext: selfAwareness || undefined,
         delegationScope: options?.delegationScope,
       });
       // Session info applies only to the first message after resume
@@ -1880,6 +1958,10 @@ export class MotebitRuntime {
         this._behavioralStats.toolCallsSucceeded += result.toolCallsSucceeded;
         this._behavioralStats.toolCallsBlocked += result.toolCallsBlocked;
         this._behavioralStats.toolCallsFailed += result.toolCallsFailed;
+        // Periodic reflection — every 5th turn, digest in background
+        if (this._behavioralStats.turnCount % 5 === 0) {
+          void this.reflectAndStore();
+        }
       }
     }
 
@@ -1896,7 +1978,7 @@ export class MotebitRuntime {
   resetConversation(): void {
     // Trigger reflection on previous conversation before clearing (background)
     if (this.provider && this.conversation.getHistory().length > 0) {
-      void runReflectionSafe(this.reflectionDeps);
+      void this.reflectAndStore();
     }
     this.conversation.reset();
   }
@@ -1907,7 +1989,23 @@ export class MotebitRuntime {
    * Returns the reflection result for display (e.g. in the CLI).
    */
   async reflect(goals?: Array<{ description: string; status: string }>): Promise<ReflectionResult> {
-    return performReflection(this.reflectionDeps, goals);
+    const result = await performReflection(this.reflectionDeps, goals);
+    this._lastReflection = result;
+    return result;
+  }
+
+  /**
+   * Fire reflection in background and capture the result.
+   * The result is stored in _lastReflection and available to buildSelfAwareness()
+   * on subsequent turns — the creature carries forward its behavioral learning.
+   */
+  private async reflectAndStore(): Promise<void> {
+    try {
+      const result = await performReflection(this.reflectionDeps);
+      this._lastReflection = result;
+    } catch {
+      // Reflection is best-effort — don't crash the runtime
+    }
   }
 
   private get reflectionDeps(): ReflectionDeps {
