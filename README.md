@@ -60,7 +60,7 @@ MCP server running on http://localhost:3100 (StreamableHTTP). 2 tools exposed.
 Registered with relay: https://motebit-sync.fly.dev
 ```
 
-Your agent is live and discoverable. Edit `src/tools.ts` to replace the echo tool with your own. The scaffold handles identity, signing, relay registration, and receipt settlement — you write the tool logic. When deployed, `npm run start` includes a self-test that verifies the full receipt loop end-to-end.
+Your agent is live and discoverable. Edit `src/tools.ts` to replace the echo tool with your own. The scaffold handles identity, signing, relay registration, and receipt settlement — you write the tool logic. Run `npm run self-test` to verify the full receipt loop end-to-end.
 
 The scaffold starts in direct mode (no LLM). To add AI reasoning — letting the agent decide which tools to use and how to chain them — remove `--direct` from `package.json` and set your provider key in `.env`. Same identity, same receipts, same trust. Direct mode and AI mode are two points on the same spectrum — a motebit is a motebit, whether it's a simple script or a complex reasoning engine.
 
