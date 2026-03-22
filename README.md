@@ -130,7 +130,9 @@ packages/
   behavior-engine/ State → BehaviorCues, deterministic, species-constrained
   policy/          PolicyGate, MemoryGovernor, injection defense, audit
   privacy-layer/   Sensitivity levels, retention rules, deletion certificates
-  planner/         PlanEngine: goal decomposition, reflection, adjustment
+  gradient/        Self-measurement — "What am I?" Pure narrative from gradient data
+  reflection/      Adaptive intelligence — "What should I change?" LLM reflection engine
+  planner/         PlanEngine: goal decomposition, plan-level reflection
   sync-engine/     Multi-device sync, HTTP/WebSocket, conflict detection
   market/          Budget allocation, settlement, reputation, graph routing
   semiring/        Trust algebra — generic semirings for network routing
@@ -149,7 +151,7 @@ spec/
   relay-federation-v1.md  motebit/relay-federation@1.0
 ```
 
-40 pnpm workspaces across packages, apps, services, and the repo root.
+42 pnpm workspaces across packages, apps, services, and the repo root.
 
 ## Verify & integrate
 

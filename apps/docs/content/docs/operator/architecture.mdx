@@ -15,7 +15,7 @@ Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Nod
 | `apps/admin` | React + Vite dashboard. 13-tab real-time monitoring — state vector, memory graph, behavior cues, event log, tool audit, goals, plans, conversations, devices, intelligence gradient, agent trust, credentials, federation. |
 | `apps/spatial` | AR/VR positioning library. Body-relative orbital mechanics, WebXR audio reactivity. |
 | `apps/docs` | Fumadocs + Next.js. This site. |
-| `packages/` | 26 shared TypeScript packages — the interior of the system. |
+| `packages/` | 29 shared TypeScript packages — the interior of the system. |
 | `services/api` | Sync relay server. REST + WebSocket, device auth, fan-out. |
 | `spec/` | Three open specifications — `identity-v1.md`, `execution-ledger-v1.md`, `relay-federation-v1.md`. |
 
@@ -40,6 +40,8 @@ The interior machinery. Each engine owns one concern and communicates through ty
 | Package | Role |
 |---------|------|
 | `runtime` | Orchestrator. Wires all engines, exposes `sendMessage` / `sendMessageStreaming`. |
+| `gradient` | Self-measurement — "What am I?" Pure deterministic narrative from gradient snapshots. Precision, self-model summary, economic consequences. |
+| `reflection` | Adaptive intelligence — "What should I change?" LLM-driven reflection engine: insight extraction, memory storage, behavioral adjustment. |
 | `ai-core` | Pluggable providers (Cloud, Ollama, Hybrid), agentic turn loop, context packing. |
 | `behavior-engine` | `computeRawCues(state)` returns `BehaviorCues`. EMA smoothing, species constraints, rate limiting. |
 | `state-vector` | Tick-based EMA smoothing, hysteresis, interpolation for 60 FPS rendering. |
