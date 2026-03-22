@@ -126,6 +126,7 @@ import {
   cleanupRevocationEvents,
 } from "./federation.js";
 import type { RelayIdentity } from "./federation.js";
+import { startBatchAnchorLoop } from "./anchoring.js";
 import { registerCredentialRoutes, getRelayKeypair } from "./credentials.js";
 import { registerA2ARoutes } from "./a2a-bridge.js";
 import { createTaskRouter, forwardTaskViaMcp, type ReceiptCandidate } from "./task-routing.js";
@@ -5222,6 +5223,15 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     () => emergencyFreeze,
   );
 
+  // Batch anchor loop — cuts Merkle batches from unanchored federation settlements (§7.6).
+  // Checks every 60s; batch triggers: 100 settlements or 1 hour since oldest unanchored.
+  const batchAnchorInterval = startBatchAnchorLoop(
+    moteDb.db,
+    relayIdentity,
+    {},
+    () => emergencyFreeze,
+  );
+
   // GET /api/v1/agents/:motebitId — get specific agent
   app.get("/api/v1/agents/:motebitId", (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
@@ -6268,6 +6278,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     clearInterval(federationQueryPruneInterval);
     clearInterval(heartbeatInterval);
     clearInterval(settlementRetryInterval);
+    clearInterval(batchAnchorInterval);
     moteDb.close();
   }
 

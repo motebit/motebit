@@ -23,6 +23,11 @@ import type { ExecutionReceipt } from "@motebit/sdk";
 import type { DatabaseDriver } from "@motebit/persistence";
 import { createLogger } from "./logger.js";
 import { FixedWindowLimiter } from "./rate-limiter.js";
+import {
+  createAnchoringTables,
+  getSettlementProof,
+  isSettlementPendingBatch,
+} from "./anchoring.js";
 
 const logger = createLogger({ service: "relay", module: "federation" });
 
@@ -205,6 +210,9 @@ export function createFederationTables(db: DatabaseDriver): void {
     );
     CREATE INDEX IF NOT EXISTS idx_settlement_retries_next ON relay_settlement_retries(next_retry_at) WHERE status = 'pending';
   `);
+
+  // Merkle batch anchoring tables (§7.6)
+  createAnchoringTables(db);
 }
 
 // === Revocation Event Helpers ===
@@ -1366,5 +1374,28 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       .prepare("SELECT * FROM relay_federation_settlements ORDER BY settled_at DESC LIMIT ?")
       .all(limit);
     return c.json({ settlements: rows });
+  });
+
+  // ── Phase 5: Settlement Proof (§7.6.6) ──
+
+  app.get("/federation/v1/settlement/proof", async (c) => {
+    const settlementId = c.req.query("settlement_id");
+    if (!settlementId) {
+      throw new HTTPException(400, { message: "settlement_id query parameter required" });
+    }
+
+    // Check if settlement exists but is not yet batched → 202 with retry hint
+    if (isSettlementPendingBatch(db, settlementId)) {
+      return c.json({ status: "pending", message: "Settlement not yet batched" }, 202, {
+        "Retry-After": "60",
+      });
+    }
+
+    const proof = await getSettlementProof(db, settlementId);
+    if (!proof) {
+      throw new HTTPException(404, { message: "Settlement not found or not batched" });
+    }
+
+    return c.json(proof);
   });
 }
