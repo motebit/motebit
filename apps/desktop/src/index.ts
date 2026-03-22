@@ -3129,6 +3129,28 @@ export class DesktopApp {
     return this._activeTaskCount;
   }
 
+  /** Discover agents on the relay network. Returns empty array if not connected. */
+  async discoverAgents(): Promise<
+    Array<{ motebit_id: string; capabilities: string[]; trust_level?: string }>
+  > {
+    if (!this._servingSyncUrl || !this._servingAuthToken) return [];
+    try {
+      const res = await fetch(`${this._servingSyncUrl}/api/v1/agents/discover`, {
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this._servingAuthToken}`,
+        },
+      });
+      if (!res.ok) return [];
+      const data = (await res.json()) as {
+        agents: Array<{ motebit_id: string; capabilities: string[]; trust_level?: string }>;
+      };
+      return data.agents ?? [];
+    } catch {
+      return [];
+    }
+  }
+
   /**
    * Stop background event sync.
    */

@@ -24,6 +24,7 @@ const TRUST_BADGE_CLASS: Record<string, string> = {
 };
 
 export function initAgents(ctx: DesktopContext): AgentsAPI {
+  // --- Known tab ---
   async function populateAgents(): Promise<void> {
     const agents = await ctx.app.listTrustedAgents();
 
@@ -75,6 +76,79 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
       agentsList.appendChild(item);
     }
   }
+
+  // --- Discover tab ---
+  const discoverList = document.getElementById("agents-discover-list") as HTMLDivElement;
+  const discoverEmpty = document.getElementById("agents-discover-empty") as HTMLDivElement;
+  const knownPane = document.getElementById("agents-known-pane") as HTMLDivElement;
+  const discoverPane = document.getElementById("agents-discover-pane") as HTMLDivElement;
+  const tabBtns = Array.from(agentsPanel.querySelectorAll<HTMLButtonElement>(".agents-tab"));
+
+  function switchTab(tab: string): void {
+    for (const btn of tabBtns) {
+      btn.classList.toggle("active", btn.dataset.tab === tab);
+    }
+    knownPane.style.display = tab === "known" ? "" : "none";
+    discoverPane.style.display = tab === "discover" ? "" : "none";
+    if (tab === "discover") void populateDiscover();
+  }
+
+  for (const btn of tabBtns) {
+    btn.addEventListener("click", () => switchTab(btn.dataset.tab ?? "known"));
+  }
+
+  async function populateDiscover(): Promise<void> {
+    discoverList.innerHTML = "";
+    discoverEmpty.textContent = "Loading...";
+    discoverEmpty.style.display = "block";
+
+    const agents = await ctx.app.discoverAgents();
+
+    if (agents.length === 0) {
+      discoverEmpty.textContent = "No agents on the network yet. Connect to a relay to discover.";
+      discoverEmpty.style.display = "block";
+      return;
+    }
+
+    discoverEmpty.style.display = "none";
+
+    for (const agent of agents) {
+      const item = document.createElement("div");
+      item.className = "agent-item";
+
+      const idDiv = document.createElement("div");
+      idDiv.className = "agent-item-id";
+      idDiv.textContent = agent.motebit_id;
+      idDiv.title = agent.motebit_id;
+      item.appendChild(idDiv);
+
+      if (agent.capabilities && agent.capabilities.length > 0) {
+        const capsRow = document.createElement("div");
+        capsRow.className = "agent-caps-row";
+        for (const cap of agent.capabilities) {
+          const tag = document.createElement("span");
+          tag.className = "agent-cap-tag";
+          tag.textContent = cap;
+          capsRow.appendChild(tag);
+        }
+        item.appendChild(capsRow);
+      }
+
+      const meta = document.createElement("div");
+      meta.className = "agent-item-meta";
+      if (agent.trust_level) {
+        const badge = document.createElement("span");
+        badge.className = `agent-trust-badge ${TRUST_BADGE_CLASS[agent.trust_level] ?? "unknown"}`;
+        badge.textContent = agent.trust_level.replace(/_/g, " ");
+        meta.appendChild(badge);
+      }
+      item.appendChild(meta);
+
+      discoverList.appendChild(item);
+    }
+  }
+
+  // --- Panel open/close ---
 
   function open(): void {
     agentsPanel.classList.add("open");
