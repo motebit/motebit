@@ -16,6 +16,7 @@
     "clean": "rm -rf dist .turbo .expo"
   },
   "dependencies": {
+    "@motebit/gradient": "workspace:*",
     "@motebit/runtime": "workspace:*",
     "@motebit/ai-core": "workspace:*",
     "@motebit/event-log": "workspace:*",

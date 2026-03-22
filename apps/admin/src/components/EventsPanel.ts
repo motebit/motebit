@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { EventType } from "@motebit/sdk";
 import type { EventLogEntry } from "@motebit/sdk";
 
 /** Minimal receipt shape as stored in event payloads. */
@@ -110,6 +111,69 @@ const TASK_EVENT_TYPES = new Set([
   "agent_task_denied",
 ]);
 
+/** Minimal reflection payload shape stored in event log. */
+interface ReflectionPayload {
+  insights?: string[];
+  plan_adjustments?: string[];
+  self_assessment?: string;
+}
+
+function ReflectionDetail({ payload }: { payload: ReflectionPayload }): React.ReactElement {
+  const [expanded, setExpanded] = useState(false);
+  const insightCount = payload.insights?.length ?? 0;
+  const adjustmentCount = payload.plan_adjustments?.length ?? 0;
+  const label = `${insightCount} insight${insightCount !== 1 ? "s" : ""}, ${adjustmentCount} adjustment${adjustmentCount !== 1 ? "s" : ""}`;
+
+  return h(
+    "div",
+    { className: "reflection-detail" },
+    h(
+      "button",
+      {
+        className: "delegation-toggle",
+        onClick: (e: React.MouseEvent) => {
+          e.stopPropagation();
+          setExpanded(!expanded);
+        },
+      },
+      `${expanded ? "\u25BC" : "\u25B6"} ${label}`,
+    ),
+    expanded
+      ? h(
+          "div",
+          { style: { paddingLeft: 12, fontSize: 12, lineHeight: 1.6 } },
+          payload.self_assessment
+            ? h(
+                "div",
+                { style: { color: "var(--text)", marginTop: 4 } },
+                `Assessment: ${payload.self_assessment}`,
+              )
+            : null,
+          insightCount > 0
+            ? h(
+                "div",
+                null,
+                h("span", { style: { color: "#8888aa" } }, "Insights:"),
+                ...(payload.insights ?? []).map((ins, i) =>
+                  h("div", { key: i, style: { paddingLeft: 8 } }, `- ${ins}`),
+                ),
+              )
+            : null,
+          adjustmentCount > 0
+            ? h(
+                "div",
+                null,
+                h("span", { style: { color: "#8888aa" } }, "Adjustments:"),
+                ...(payload.plan_adjustments ?? []).map((adj, i) =>
+                  h("div", { key: i, style: { paddingLeft: 8 } }, `- ${adj}`),
+                ),
+              )
+            : null,
+        )
+      : null,
+  );
+}
+
 export function EventsPanel({ events }: { events: EventLogEntry[] }): React.ReactElement {
   const recent = events.slice(-30).reverse();
   return h(
@@ -119,16 +183,24 @@ export function EventsPanel({ events }: { events: EventLogEntry[] }): React.Reac
     h("div", { className: "count" }, `${events.length} events total`),
     ...recent.map((e) => {
       const isTaskEvent = TASK_EVENT_TYPES.has(e.event_type);
+      const isReflection = e.event_type === EventType.ReflectionCompleted;
       const receipt = isTaskEvent ? (e.payload.receipt as ReceiptSummary | undefined) : undefined;
 
       return h(
         "div",
-        { key: e.event_id, className: `event-entry${isTaskEvent ? " task-event" : ""}` },
+        {
+          key: e.event_id,
+          className: `event-entry${isTaskEvent ? " task-event" : ""}${isReflection ? " reflection-event" : ""}`,
+        },
         h(
           "div",
           { className: "event-entry-main" },
           h("span", { className: "timestamp" }, new Date(e.timestamp).toISOString()),
-          h("span", { className: "event-type" }, e.event_type),
+          h(
+            "span",
+            { className: "event-type", style: isReflection ? { color: "#a78bfa" } : undefined },
+            e.event_type,
+          ),
           h("span", { className: "clock" }, `v${e.version_clock}`),
           // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- payload fields are Record<string, unknown>
           isTaskEvent && e.payload.task_id
@@ -140,6 +212,9 @@ export function EventsPanel({ events }: { events: EventLogEntry[] }): React.Reac
             : null,
         ),
         receipt ? h(DelegationChain, { receipt }) : null,
+        isReflection
+          ? h(ReflectionDetail, { payload: e.payload as unknown as ReflectionPayload })
+          : null,
       );
     }),
   );

@@ -25,6 +25,7 @@
     "@motebit/policy-invariants": "workspace:*",
     "@motebit/render-engine": "workspace:*",
     "@motebit/memory-graph": "workspace:*",
+    "@motebit/gradient": "workspace:*",
     "@motebit/runtime": "workspace:*",
     "@motebit/sdk": "workspace:*",
     "@motebit/state-vector": "workspace:*",

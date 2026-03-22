@@ -30,6 +30,7 @@ const LAYER: Record<string, number> = {
 
   // Layer 1 — Primitives (depend only on Layer 0)
   "@motebit/crypto": 1,
+  "@motebit/gradient": 1,
   "@motebit/event-log": 1,
   "@motebit/policy": 1,
   "@motebit/tools": 1,
@@ -55,6 +56,7 @@ const LAYER: Record<string, number> = {
   // Layer 4 — Upper composites (depend on Layer 0–3)
   "@motebit/persistence": 4,
   "@motebit/planner": 4,
+  "@motebit/reflection": 4,
 
   // Layer 5 — Orchestrator
   "@motebit/runtime": 5,

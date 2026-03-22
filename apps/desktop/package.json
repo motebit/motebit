@@ -30,6 +30,7 @@
     "@motebit/memory-graph": "workspace:*",
     "@motebit/privacy-layer": "workspace:*",
     "@motebit/render-engine": "workspace:*",
+    "@motebit/gradient": "workspace:*",
     "@motebit/runtime": "workspace:*",
     "@motebit/sdk": "workspace:*",
     "@motebit/state-vector": "workspace:*",

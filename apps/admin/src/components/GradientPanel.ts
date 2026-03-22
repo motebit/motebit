@@ -1,6 +1,8 @@
 import React from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import type { GradientSnapshotEntry } from "../api";
+import { summarizeGradientHistory, narrateEconomicConsequences } from "@motebit/gradient";
+import type { GradientSnapshot } from "@motebit/sdk";
 
 const h = React.createElement;
 
@@ -184,6 +186,11 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
 
   const stats = current.stats;
 
+  // Compute self-model narrative from history
+  const snapshots = (history.length > 0 ? history : [current]) as unknown as GradientSnapshot[];
+  const selfModel = summarizeGradientHistory(snapshots);
+  const econ = narrateEconomicConsequences(current as unknown as GradientSnapshot);
+
   return h(
     "div",
     { className: "panel" },
@@ -203,6 +210,86 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
       ),
       deltaIndicator(current.delta),
     ),
+
+    // Self-model narrative
+    selfModel.snapshotCount > 0
+      ? h(
+          "div",
+          {
+            className: "gradient-self-model",
+            style: {
+              margin: "12px 0",
+              padding: "8px 12px",
+              background: "rgba(255,255,255,0.03)",
+              borderRadius: 6,
+              fontSize: 13,
+              lineHeight: 1.5,
+            },
+          },
+          h(
+            "div",
+            {
+              style: {
+                color: "#8888aa",
+                fontSize: 11,
+                textTransform: "uppercase" as const,
+                marginBottom: 4,
+              },
+            },
+            "Self-Model",
+          ),
+          h("div", null, selfModel.trajectory),
+          h("div", { style: { marginTop: 4 } }, selfModel.overall),
+          selfModel.strengths.length > 0
+            ? h(
+                "div",
+                { style: { marginTop: 4, color: "#2ecc71" } },
+                `Strengths: ${selfModel.strengths.join("; ")}`,
+              )
+            : null,
+          selfModel.weaknesses.length > 0
+            ? h(
+                "div",
+                { style: { marginTop: 2, color: "#e74c3c" } },
+                `Weaknesses: ${selfModel.weaknesses.join("; ")}`,
+              )
+            : null,
+          h("div", { style: { marginTop: 4, color: "#8888aa" } }, `Posture: ${selfModel.posture}`),
+        )
+      : null,
+
+    // Economic consequences (only when struggling)
+    econ.length > 0
+      ? h(
+          "div",
+          {
+            className: "gradient-economic",
+            style: {
+              margin: "8px 0",
+              padding: "8px 12px",
+              background: "rgba(231,76,60,0.08)",
+              borderRadius: 6,
+              fontSize: 13,
+              lineHeight: 1.5,
+            },
+          },
+          h(
+            "div",
+            {
+              style: {
+                color: "#e74c3c",
+                fontSize: 11,
+                textTransform: "uppercase" as const,
+                marginBottom: 4,
+              },
+            },
+            "Economic Pressure",
+          ),
+          ...econ.map((c, i) =>
+            h("div", { key: i, style: { marginTop: i > 0 ? 4 : 0 } }, `\u2022 ${c}`),
+          ),
+        )
+      : null,
 
     // Sub-metrics
     h(

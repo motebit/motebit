@@ -961,26 +961,41 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
         })();
         break;
 
-      case "gradient": {
-        const g = ctx.app.getGradient();
-        if (!g) {
-          addMessage("system", "No gradient data yet (computed during housekeeping)");
-        } else {
-          const lines = [
+      case "gradient":
+        void (async () => {
+          const g = ctx.app.getGradient();
+          if (!g) {
+            addMessage("system", "No gradient data yet (computed during housekeeping)");
+            return;
+          }
+          const summary = ctx.app.getGradientSummary();
+          const gLines = [
             `Intelligence gradient: ${g.gradient.toFixed(3)} (delta: ${g.delta >= 0 ? "+" : ""}${g.delta.toFixed(3)})`,
-            `  kd (knowledge density):     ${g.knowledge_density.toFixed(3)}`,
-            `  kq (knowledge quality):      ${g.knowledge_quality.toFixed(3)}`,
-            `  gc (graph connectivity):     ${g.graph_connectivity.toFixed(3)}`,
-            `  ts (temporal stability):     ${g.temporal_stability.toFixed(3)}`,
-            `  rq (retrieval quality):      ${g.retrieval_quality.toFixed(3)}`,
-            `  ie (interaction efficiency): ${g.interaction_efficiency.toFixed(3)}`,
-            `  te (tool efficiency):        ${g.tool_efficiency.toFixed(3)}`,
-            `  cp (curiosity pressure):     ${g.curiosity_pressure.toFixed(3)}`,
           ];
-          addMessage("system", lines.join("\n"));
-        }
+          if (summary.snapshotCount > 0) {
+            gLines.push(summary.trajectory);
+            gLines.push(summary.overall);
+            if (summary.strengths.length > 0)
+              gLines.push(`Strengths: ${summary.strengths.join("; ")}`);
+            if (summary.weaknesses.length > 0)
+              gLines.push(`Weaknesses: ${summary.weaknesses.join("; ")}`);
+            gLines.push(`Posture: ${summary.posture}`);
+          }
+          const { narrateEconomicConsequences } = await import("@motebit/gradient");
+          const econ = narrateEconomicConsequences(g);
+          if (econ.length > 0) {
+            gLines.push("");
+            gLines.push("Economic position:");
+            for (const c of econ) gLines.push(`  - ${c}`);
+          }
+          const lastRef = ctx.app.getLastReflection();
+          if (lastRef?.selfAssessment) {
+            gLines.push("");
+            gLines.push(`Last reflection: ${lastRef.selfAssessment}`);
+          }
+          addMessage("system", gLines.join("\n"));
+        })();
         break;
-      }
 
       case "agents":
         void (async () => {

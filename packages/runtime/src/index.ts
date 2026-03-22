@@ -2391,6 +2391,11 @@ export class MotebitRuntime {
     return stats;
   }
 
+  /** Return the cached reflection from the last session (or null if none). */
+  getLastReflection(): ReflectionResult | null {
+    return this._lastReflection;
+  }
+
   /** Force a gradient computation right now (useful for CLI/debug). */
   async computeGradientNow(): Promise<GradientSnapshot> {
     const { nodes } = await this.memory.exportAll();

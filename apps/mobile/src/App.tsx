@@ -972,26 +972,43 @@ export function App(): React.ReactElement {
             }
           })();
           break;
-        case "gradient": {
-          const grad = a.getGradient();
-          if (!grad) {
-            addSystemMessage("No gradient data yet (computed during housekeeping).");
-          } else {
-            const delta = grad.delta >= 0 ? `+${grad.delta.toFixed(4)}` : grad.delta.toFixed(4);
-            addSystemMessage(
-              `Intelligence Gradient: ${grad.gradient.toFixed(4)} (${delta})\n\n` +
-                `  kd: ${grad.knowledge_density.toFixed(3)}  ` +
-                `kq: ${grad.knowledge_quality.toFixed(3)}  ` +
-                `gc: ${grad.graph_connectivity.toFixed(3)}\n` +
-                `  ts: ${grad.temporal_stability.toFixed(3)}  ` +
-                `rq: ${grad.retrieval_quality.toFixed(3)}  ` +
-                `ie: ${grad.interaction_efficiency.toFixed(3)}\n` +
-                `  te: ${grad.tool_efficiency.toFixed(3)}  ` +
-                `cp: ${grad.curiosity_pressure.toFixed(3)}`,
+        case "gradient":
+          void (async () => {
+            const grad = a.getGradient();
+            if (!grad) {
+              addSystemMessage("No gradient data yet (computed during housekeeping).");
+              return;
+            }
+            const summary = a.getGradientSummary();
+            const gLines: string[] = [];
+            gLines.push(
+              `Intelligence Gradient: ${grad.gradient.toFixed(4)} (${grad.delta >= 0 ? "+" : ""}${grad.delta.toFixed(4)})`,
             );
-          }
+            if (summary.snapshotCount > 0) {
+              gLines.push("");
+              gLines.push(summary.trajectory);
+              gLines.push(summary.overall);
+              if (summary.strengths.length > 0)
+                gLines.push(`Strengths: ${summary.strengths.join("; ")}`);
+              if (summary.weaknesses.length > 0)
+                gLines.push(`Weaknesses: ${summary.weaknesses.join("; ")}`);
+              gLines.push(`Posture: ${summary.posture}`);
+            }
+            const { narrateEconomicConsequences } = await import("@motebit/gradient");
+            const econ = narrateEconomicConsequences(grad);
+            if (econ.length > 0) {
+              gLines.push("");
+              gLines.push("Economic position:");
+              for (const c of econ) gLines.push(`  - ${c}`);
+            }
+            const lastRef = a.getLastReflection();
+            if (lastRef?.selfAssessment) {
+              gLines.push("");
+              gLines.push(`Last reflection: ${lastRef.selfAssessment}`);
+            }
+            addSystemMessage(gLines.join("\n"));
+          })();
           break;
-        }
         case "agents":
           void (async () => {
             try {

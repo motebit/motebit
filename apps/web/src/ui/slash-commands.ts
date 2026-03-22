@@ -288,10 +288,17 @@ export function initSlashCommands(
           }
           addMessage("system", "Reflecting...");
           const result = await runtime.reflect();
-          addMessage(
-            "system",
-            `Reflection complete.\nSelf-assessment: ${result.selfAssessment}\nInsights: ${result.insights.length}`,
-          );
+          const lines: string[] = [];
+          if (result.selfAssessment) lines.push(`Assessment: ${result.selfAssessment}`);
+          if (result.insights.length > 0) {
+            lines.push("Insights:");
+            for (const i of result.insights) lines.push(`  - ${i}`);
+          }
+          if (result.planAdjustments.length > 0) {
+            lines.push("Adjustments:");
+            for (const a of result.planAdjustments) lines.push(`  - ${a}`);
+          }
+          addMessage("system", lines.join("\n") || "No reflection output");
         })();
         break;
       }
@@ -333,30 +340,45 @@ export function initSlashCommands(
       }
       case "gradient": {
         chatInput.value = "";
-        const runtime = ctx.app.getRuntime();
-        if (!runtime) {
-          addMessage("system", "Runtime not initialized.");
-          break;
-        }
-        const g = runtime.getGradient();
-        if (!g) {
-          addMessage("system", "No gradient data yet.");
-          break;
-        }
-        const metrics = [
-          `kd: ${g.knowledge_density.toFixed(2)}`,
-          `kq: ${g.knowledge_quality.toFixed(2)}`,
-          `gc: ${g.graph_connectivity.toFixed(2)}`,
-          `ts: ${g.temporal_stability.toFixed(2)}`,
-          `rq: ${g.retrieval_quality.toFixed(2)}`,
-          `ie: ${g.interaction_efficiency.toFixed(2)}`,
-          `te: ${g.tool_efficiency.toFixed(2)}`,
-          `cp: ${g.curiosity_pressure.toFixed(2)}`,
-        ];
-        addMessage(
-          "system",
-          `Intelligence gradient (${g.gradient.toFixed(2)}):\n${metrics.join("  ")}`,
-        );
+        void (async () => {
+          const runtime = ctx.app.getRuntime();
+          if (!runtime) {
+            addMessage("system", "Runtime not initialized.");
+            return;
+          }
+          const g = runtime.getGradient();
+          if (!g) {
+            addMessage("system", "No gradient data yet.");
+            return;
+          }
+          const summary = runtime.getGradientSummary();
+          const gLines: string[] = [];
+          gLines.push(
+            `Intelligence gradient: ${g.gradient.toFixed(3)} (delta: ${g.delta >= 0 ? "+" : ""}${g.delta.toFixed(3)})`,
+          );
+          if (summary.snapshotCount > 0) {
+            gLines.push(summary.trajectory);
+            gLines.push(summary.overall);
+            if (summary.strengths.length > 0)
+              gLines.push(`Strengths: ${summary.strengths.join("; ")}`);
+            if (summary.weaknesses.length > 0)
+              gLines.push(`Weaknesses: ${summary.weaknesses.join("; ")}`);
+            gLines.push(`Posture: ${summary.posture}`);
+          }
+          const { narrateEconomicConsequences } = await import("@motebit/gradient");
+          const econ = narrateEconomicConsequences(g);
+          if (econ.length > 0) {
+            gLines.push("");
+            gLines.push("Economic position:");
+            for (const c of econ) gLines.push(`  - ${c}`);
+          }
+          const lastRef = runtime.getLastReflection();
+          if (lastRef?.selfAssessment) {
+            gLines.push("");
+            gLines.push(`Last reflection: ${lastRef.selfAssessment}`);
+          }
+          addMessage("system", gLines.join("\n"));
+        })();
         break;
       }
       case "balance": {

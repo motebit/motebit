@@ -1,5 +1,5 @@
 {
-  "name": "@motebit/runtime",
+  "name": "@motebit/reflection",
   "version": "0.1.3",
   "license": "BSL-1.1",
   "private": true,
@@ -17,21 +17,10 @@
   "dependencies": {
     "@motebit/sdk": "workspace:*",
     "@motebit/ai-core": "workspace:*",
-    "@motebit/gradient": "workspace:*",
-    "@motebit/reflection": "workspace:*",
-    "@motebit/event-log": "workspace:*",
     "@motebit/memory-graph": "workspace:*",
+    "@motebit/event-log": "workspace:*",
     "@motebit/state-vector": "workspace:*",
-    "@motebit/behavior-engine": "workspace:*",
-    "@motebit/core-identity": "workspace:*",
-    "@motebit/privacy-layer": "workspace:*",
-    "@motebit/sync-engine": "workspace:*",
-    "@motebit/render-engine": "workspace:*",
-    "@motebit/crypto": "workspace:*",
-    "@motebit/mcp-client": "workspace:*",
-    "@motebit/planner": "workspace:*",
-    "@motebit/policy": "workspace:*",
-    "@motebit/semiring": "workspace:*"
+    "@motebit/policy": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

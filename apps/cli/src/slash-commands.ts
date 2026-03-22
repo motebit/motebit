@@ -1,6 +1,7 @@
 // --- REPL slash command handler ---
 
 import type { MotebitRuntime, ReflectionResult } from "@motebit/runtime";
+import { narrateEconomicConsequences } from "@motebit/gradient";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { McpClientAdapter, type McpServerConfig } from "@motebit/mcp-client";
@@ -289,6 +290,31 @@ export async function handleSlashCommand(
         const delta =
           gradient.delta >= 0 ? `+${gradient.delta.toFixed(4)}` : gradient.delta.toFixed(4);
         console.log(`\n  Gradient:   ${gradient.gradient.toFixed(4)} (${delta})`);
+
+        // Self-model narrative
+        const selfModel = runtime.getGradientSummary();
+        if (selfModel.snapshotCount > 0) {
+          console.log(`\n  ${selfModel.trajectory}`);
+          console.log(`  ${selfModel.overall}`);
+          if (selfModel.strengths.length > 0)
+            console.log(`  Strengths: ${selfModel.strengths.join("; ")}`);
+          if (selfModel.weaknesses.length > 0)
+            console.log(`  Weaknesses: ${selfModel.weaknesses.join("; ")}`);
+          console.log(`  Posture: ${selfModel.posture}`);
+        }
+
+        // Economic consequences (only when struggling)
+        const econ = narrateEconomicConsequences(gradient);
+        if (econ.length > 0) {
+          console.log("\n  Economic position:");
+          for (const c of econ) console.log(`    - ${c}`);
+        }
+      }
+
+      // Cached reflection summary
+      const lastReflection = runtime.getLastReflection();
+      if (lastReflection?.selfAssessment) {
+        console.log(`\n  Last reflection: ${lastReflection.selfAssessment}`);
       }
       break;
     }

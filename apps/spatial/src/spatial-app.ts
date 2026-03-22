@@ -485,6 +485,36 @@ export class SpatialApp {
     return { ...this.networkSettings };
   }
 
+  // === Self-Awareness Accessors ===
+
+  getGradient() {
+    return this.runtime?.getGradient() ?? null;
+  }
+
+  getGradientSummary() {
+    return (
+      this.runtime?.getGradientSummary() ?? {
+        trajectory: "",
+        overall: "",
+        strengths: [],
+        weaknesses: [],
+        posture: "",
+        gradient: 0,
+        delta: 0,
+        snapshotCount: 0,
+      }
+    );
+  }
+
+  getLastReflection() {
+    return this.runtime?.getLastReflection() ?? null;
+  }
+
+  async reflect() {
+    if (!this.runtime) throw new Error("AI not initialized");
+    return this.runtime.reflect();
+  }
+
   // === Interior Color ===
 
   setInteriorColor(presetName: string): void {

@@ -969,6 +969,25 @@ export class MobileApp {
     return this.runtime?.getGradient() ?? null;
   }
 
+  getGradientSummary() {
+    return (
+      this.runtime?.getGradientSummary() ?? {
+        trajectory: "",
+        overall: "",
+        strengths: [],
+        weaknesses: [],
+        posture: "",
+        gradient: 0,
+        delta: 0,
+        snapshotCount: 0,
+      }
+    );
+  }
+
+  getLastReflection() {
+    return this.runtime?.getLastReflection() ?? null;
+  }
+
   async getMemoryGraphStats(): Promise<{
     nodes: MemoryNode[];
     edges: Array<{ source_id: string; target_id: string; relation_type: string }>;

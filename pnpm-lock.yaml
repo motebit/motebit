@@ -72,6 +72,9 @@ importers:
       '@motebit/behavior-engine':
         specifier: workspace:*
         version: link:../../packages/behavior-engine
+      '@motebit/gradient':
+        specifier: workspace:*
+        version: link:../../packages/gradient
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
@@ -150,6 +153,9 @@ importers:
       '@motebit/event-log':
         specifier: workspace:*
         version: link:../../packages/event-log
+      '@motebit/gradient':
+        specifier: workspace:*
+        version: link:../../packages/gradient
       '@motebit/identity-file':
         specifier: workspace:*
         version: link:../../packages/identity-file
@@ -222,6 +228,9 @@ importers:
       '@motebit/event-log':
         specifier: workspace:*
         version: link:../../packages/event-log
+      '@motebit/gradient':
+        specifier: workspace:*
+        version: link:../../packages/gradient
       '@motebit/identity-file':
         specifier: workspace:*
         version: link:../../packages/identity-file
@@ -386,6 +395,9 @@ importers:
       '@motebit/event-log':
         specifier: workspace:*
         version: link:../../packages/event-log
+      '@motebit/gradient':
+        specifier: workspace:*
+        version: link:../../packages/gradient
       '@motebit/identity-file':
         specifier: workspace:*
         version: link:../../packages/identity-file
@@ -547,6 +559,9 @@ importers:
       '@motebit/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto
+      '@motebit/gradient':
+        specifier: workspace:*
+        version: link:../../packages/gradient
       '@motebit/mcp-client':
         specifier: workspace:*
         version: link:../../packages/mcp-client
@@ -756,6 +771,22 @@ importers:
         version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1)(lightningcss@1.30.2)(terser@5.46.0)
 
   packages/event-log:
+    dependencies:
+      '@motebit/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1)(lightningcss@1.30.2)(terser@5.46.0)
+
+  packages/gradient:
     dependencies:
       '@motebit/sdk':
         specifier: workspace:*
@@ -1010,6 +1041,37 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1)(lightningcss@1.30.2)(terser@5.46.0)
 
+  packages/reflection:
+    dependencies:
+      '@motebit/ai-core':
+        specifier: workspace:*
+        version: link:../ai-core
+      '@motebit/event-log':
+        specifier: workspace:*
+        version: link:../event-log
+      '@motebit/memory-graph':
+        specifier: workspace:*
+        version: link:../memory-graph
+      '@motebit/policy':
+        specifier: workspace:*
+        version: link:../policy
+      '@motebit/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      '@motebit/state-vector':
+        specifier: workspace:*
+        version: link:../state-vector
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1)(lightningcss@1.30.2)(terser@5.46.0)
+
   packages/render-engine:
     dependencies:
       '@motebit/policy-invariants':
@@ -1052,6 +1114,9 @@ importers:
       '@motebit/event-log':
         specifier: workspace:*
         version: link:../event-log
+      '@motebit/gradient':
+        specifier: workspace:*
+        version: link:../gradient
       '@motebit/mcp-client':
         specifier: workspace:*
         version: link:../mcp-client
@@ -1067,6 +1132,9 @@ importers:
       '@motebit/privacy-layer':
         specifier: workspace:*
         version: link:../privacy-layer
+      '@motebit/reflection':
+        specifier: workspace:*
+        version: link:../reflection
       '@motebit/render-engine':
         specifier: workspace:*
         version: link:../render-engine
