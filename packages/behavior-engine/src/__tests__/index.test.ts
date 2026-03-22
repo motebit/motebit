@@ -684,4 +684,14 @@ describe("BehaviorEngine final bounds enforcement", () => {
     expect(cues.eye_dilation).toBeLessThanOrEqual(1);
     expect(cues.eye_dilation).toBeGreaterThanOrEqual(0);
   });
+
+  it("large negative drift impulse falls back to BASE_DRIFT", () => {
+    const engine = new BehaviorEngine();
+    // Impulse large enough to push drift_amplitude below 0 after enforceDriftVariation
+    engine.injectImpulse("drift_amplitude", -5.0, 60);
+    const cues = engine.compute(makeDefaultState());
+    // Final guard catches the negative and resets to BASE_DRIFT (0.02)
+    expect(cues.drift_amplitude).toBeGreaterThanOrEqual(0);
+    expect(cues.drift_amplitude).toBe(0.02);
+  });
 });
