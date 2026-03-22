@@ -54,9 +54,9 @@ What you see:
 
 ```
 Identity: 019d... (from ./motebit.md)
-Tool loaded: echo
+Tools loaded: fetch_url, echo
 Agent task handler enabled (direct mode — no LLM)
-MCP server running on http://localhost:3100 (StreamableHTTP). 1 tools exposed.
+MCP server running on http://localhost:3100 (StreamableHTTP). 2 tools exposed.
 Registered with relay: https://motebit-sync.fly.dev
 ```
 
@@ -92,7 +92,7 @@ A motebit is a droplet of intelligence under surface tension. [Read the thesis.]
 | **Mobile**  | Live   | Expo build                                              |
 | **Spatial** | Proto  | WebXR                                                   |
 
-Each surface maximizes what its platform offers. The web connects via HTTP MCP. The CLI operates. The desktop companions. Mobile travels. Spatial embodies.
+Each surface maximizes what its platform offers. Desktop and web can serve — accept delegations from the network via `/serve`. The CLI operates and serves. Mobile converses. Spatial embodies.
 
 ## Architecture
 
