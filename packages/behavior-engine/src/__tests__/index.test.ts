@@ -587,3 +587,101 @@ describe("BehaviorEngine multi-impulse composition", () => {
     expect(cues.hover_distance).toBeLessThan(baseline.hover_distance);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Final bounds enforcement — impulse overflow, squint underflow
+// ---------------------------------------------------------------------------
+
+describe("BehaviorEngine final bounds enforcement", () => {
+  it("large glow impulse is clamped to 1.0", () => {
+    const engine = new BehaviorEngine();
+    engine.injectImpulse("glow_intensity", 5.0, 60); // massive impulse
+    const cues = engine.compute(makeDefaultState({ processing: 1, confidence: 1 }));
+    expect(cues.glow_intensity).toBeLessThanOrEqual(1.0);
+    expect(cues.glow_intensity).toBeGreaterThanOrEqual(0);
+  });
+
+  it("negative glow impulse is clamped to 0", () => {
+    const engine = new BehaviorEngine();
+    engine.injectImpulse("glow_intensity", -5.0, 60);
+    const cues = engine.compute(makeDefaultState({ processing: 0, confidence: 0 }));
+    expect(cues.glow_intensity).toBeGreaterThanOrEqual(0);
+  });
+
+  it("large negative eye_dilation impulse is clamped to 0", () => {
+    const engine = new BehaviorEngine();
+    engine.injectImpulse("eye_dilation", -5.0, 60);
+    const cues = engine.compute(makeDefaultState());
+    expect(cues.eye_dilation).toBeGreaterThanOrEqual(0);
+  });
+
+  it("large positive eye_dilation impulse is clamped to 1.0", () => {
+    const engine = new BehaviorEngine();
+    engine.injectImpulse("eye_dilation", 5.0, 60);
+    const cues = engine.compute(makeDefaultState());
+    expect(cues.eye_dilation).toBeLessThanOrEqual(1.0);
+  });
+
+  it("Duchenne squint cannot push eye_dilation below 0", () => {
+    const engine = new BehaviorEngine();
+    // Converge to high smile over many ticks
+    for (let i = 0; i < 50; i++) {
+      engine.compute(makeDefaultState({ affect_valence: 1, attention: 0 }));
+    }
+    // Add negative eye impulse on top of squint
+    engine.injectImpulse("eye_dilation", -0.5, 60);
+    const cues = engine.compute(makeDefaultState({ affect_valence: 1, attention: 0 }));
+    expect(cues.eye_dilation).toBeGreaterThanOrEqual(0);
+  });
+
+  it("negative hover_distance impulse is clamped to 0", () => {
+    const engine = new BehaviorEngine();
+    engine.injectImpulse("hover_distance", -5.0, 60);
+    const cues = engine.compute(makeDefaultState());
+    expect(cues.hover_distance).toBeGreaterThanOrEqual(0);
+  });
+
+  it("all cue fields remain finite after combined impulses + delegation + trust", () => {
+    const engine = new BehaviorEngine();
+    engine.injectImpulse("glow_intensity", 10.0, 60);
+    engine.injectImpulse("eye_dilation", -10.0, 60);
+    engine.injectImpulse("hover_distance", -10.0, 60);
+    engine.injectImpulse("smile_curvature", 5.0, 60);
+    engine.setDelegating(true);
+    engine.setTrustContext({ avgTrustLevel: 3, trustedCount: 100 });
+
+    const cues = engine.compute(
+      makeDefaultState({ processing: 1, confidence: 1, affect_valence: 1, attention: 1 }),
+    );
+
+    expect(cues.glow_intensity).toBeGreaterThanOrEqual(0);
+    expect(cues.glow_intensity).toBeLessThanOrEqual(1);
+    expect(cues.eye_dilation).toBeGreaterThanOrEqual(0);
+    expect(cues.eye_dilation).toBeLessThanOrEqual(1);
+    expect(cues.hover_distance).toBeGreaterThanOrEqual(0);
+    expect(Number.isFinite(cues.hover_distance)).toBe(true);
+    expect(Number.isFinite(cues.drift_amplitude)).toBe(true);
+    expect(Number.isFinite(cues.smile_curvature)).toBe(true);
+  });
+
+  it("NaN state fields produce valid cues via clamp fallback", () => {
+    const engine = new BehaviorEngine();
+    const cues = engine.compute(
+      makeDefaultState({ attention: NaN, processing: NaN, confidence: NaN }),
+    );
+    expect(Number.isFinite(cues.glow_intensity)).toBe(true);
+    expect(Number.isFinite(cues.eye_dilation)).toBe(true);
+    expect(Number.isFinite(cues.hover_distance)).toBe(true);
+  });
+
+  it("Infinity state fields produce valid cues via clamp fallback", () => {
+    const engine = new BehaviorEngine();
+    const cues = engine.compute(
+      makeDefaultState({ attention: Infinity, processing: -Infinity, curiosity: Infinity }),
+    );
+    expect(Number.isFinite(cues.glow_intensity)).toBe(true);
+    expect(Number.isFinite(cues.eye_dilation)).toBe(true);
+    expect(cues.eye_dilation).toBeLessThanOrEqual(1);
+    expect(cues.eye_dilation).toBeGreaterThanOrEqual(0);
+  });
+});

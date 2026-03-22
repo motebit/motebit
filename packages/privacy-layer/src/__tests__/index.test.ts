@@ -295,6 +295,51 @@ describe("PrivacyLayer", () => {
     });
   });
 
+  describe("setSensitivity", () => {
+    it("changes sensitivity level and creates audit trail", async () => {
+      const node = await memoryGraph.formMemory(
+        { content: "reclassify me", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 0],
+      );
+
+      await privacyLayer.setSensitivity(node.node_id, SensitivityLevel.Medical);
+
+      const loaded = await storage.getNode(node.node_id);
+      expect(loaded!.sensitivity).toBe(SensitivityLevel.Medical);
+
+      const auditRecords = await auditLog.query(MOTEBIT_ID);
+      const setRecord = auditRecords.find((r) => r.action === "set_sensitivity");
+      expect(setRecord).toBeDefined();
+      expect(setRecord!.details.old_level).toBe(SensitivityLevel.None);
+      expect(setRecord!.details.new_level).toBe(SensitivityLevel.Medical);
+    });
+
+    it("throws for non-existent node", async () => {
+      await expect(
+        privacyLayer.setSensitivity("nonexistent", SensitivityLevel.Secret),
+      ).rejects.toThrow("Privacy layer: access denied (fail-closed)");
+    });
+  });
+
+  describe("inspectMemory", () => {
+    it("returns memory and creates audit trail", async () => {
+      const node = makeNode({ content: "inspectable" });
+      await storage.saveNode(node);
+
+      const result = await privacyLayer.inspectMemory(node.node_id);
+      expect(result).not.toBeNull();
+      expect(result!.content).toBe("inspectable");
+
+      const auditRecords = await auditLog.query(MOTEBIT_ID);
+      expect(auditRecords.some((r) => r.action === "inspect_memory")).toBe(true);
+    });
+
+    it("returns null for non-existent node", async () => {
+      const result = await privacyLayer.inspectMemory("nonexistent");
+      expect(result).toBeNull();
+    });
+  });
+
   describe("fail-closed behavior", () => {
     it("wraps errors in fail-closed message for listMemories", async () => {
       // Create a storage that throws
@@ -345,6 +390,56 @@ describe("PrivacyLayer", () => {
       );
 
       await expect(failLayer.inspectMemory("n1")).rejects.toThrow(
+        "Privacy layer: access denied (fail-closed)",
+      );
+    });
+
+    it("wraps errors in fail-closed message for setSensitivity", async () => {
+      const failingStorage: MemoryStorageAdapter = {
+        queryNodes: vi.fn(),
+        getNode: vi.fn().mockRejectedValue(new Error("DB error")),
+        saveNode: vi.fn(),
+        saveEdge: vi.fn(),
+        getEdges: vi.fn(),
+        tombstoneNode: vi.fn(),
+        pinNode: vi.fn(),
+        getAllNodes: vi.fn(),
+        getAllEdges: vi.fn(),
+      };
+
+      const failLayer = new PrivacyLayer(
+        failingStorage,
+        memoryGraph,
+        eventStore,
+        auditLog,
+        MOTEBIT_ID,
+      );
+
+      await expect(failLayer.setSensitivity("n1", SensitivityLevel.Secret)).rejects.toThrow(
+        "Privacy layer: access denied (fail-closed)",
+      );
+    });
+
+    it("wraps errors in fail-closed message for deleteMemory", async () => {
+      // MemoryGraph.deleteMemory will throw when the node doesn't exist
+      // in the underlying graph — the PrivacyLayer must catch and re-throw fail-closed
+      const failGraph = new MemoryGraph(storage, eventStore, MOTEBIT_ID);
+      vi.spyOn(failGraph, "deleteMemory").mockRejectedValue(new Error("node not found"));
+
+      const failLayer = new PrivacyLayer(storage, failGraph, eventStore, auditLog, MOTEBIT_ID);
+
+      await expect(failLayer.deleteMemory("missing", "user")).rejects.toThrow(
+        "Privacy layer: access denied (fail-closed)",
+      );
+    });
+
+    it("wraps errors in fail-closed message for exportAll", async () => {
+      const failGraph = new MemoryGraph(storage, eventStore, MOTEBIT_ID);
+      vi.spyOn(failGraph, "exportAll").mockRejectedValue(new Error("export failed"));
+
+      const failLayer = new PrivacyLayer(storage, failGraph, eventStore, auditLog, MOTEBIT_ID);
+
+      await expect(failLayer.exportAll(makeIdentity())).rejects.toThrow(
         "Privacy layer: access denied (fail-closed)",
       );
     });

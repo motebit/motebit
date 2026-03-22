@@ -165,7 +165,19 @@ export class BehaviorEngine {
       deltaClamped.eye_dilation -= deltaClamped.smile_curvature * 0.12;
     }
 
-    // 9. Store for next tick
+    // 9. Final bounds enforcement — impulses, delegation, trust, and squint can push values
+    // outside valid ranges. Clamp all continuous cue fields to their physical bounds.
+    deltaClamped.glow_intensity = clamp(deltaClamped.glow_intensity, 0, 1);
+    deltaClamped.eye_dilation = clamp(deltaClamped.eye_dilation, 0, 1);
+    deltaClamped.smile_curvature = clamp(deltaClamped.smile_curvature, -0.15, 0.3, 0);
+    if (!Number.isFinite(deltaClamped.hover_distance) || deltaClamped.hover_distance < 0) {
+      deltaClamped.hover_distance = SPATIAL.SHOULDER_DISTANCE;
+    }
+    if (!Number.isFinite(deltaClamped.drift_amplitude) || deltaClamped.drift_amplitude < 0) {
+      deltaClamped.drift_amplitude = SPATIAL.BASE_DRIFT;
+    }
+
+    // 10. Store for next tick
     this.previousCues = { ...deltaClamped };
 
     return deltaClamped;

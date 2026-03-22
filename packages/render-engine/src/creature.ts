@@ -454,21 +454,24 @@ export function animateCreature(
 
   // Buoyancy bob — micro-pressure gradients in the medium
   const bp = state.basePosition;
-  const bobY = organicNoise(t, [1.5, 2.37, 0.73]) * 0.01 * cues.hover_distance;
+  const bobY = organicNoise(t, [1.5, 2.37, 0.73]) * 0.01;
 
   // Brownian drift
   const drift = cues.drift_amplitude + audioDrift;
   const driftX = organicNoise(t, [0.7, 1.13, 0.31]) * drift;
   const driftZ = organicNoise(t, [0.5, 0.83, 0.23]) * drift * 0.25;
 
-  // Breathing — asymmetric oblate/prolate oscillation
-  // Rate rises with glow (proxy for processing): calm ~2 Hz, thinking ~3.1 Hz
-  const breatheRate = 2.0 + cues.glow_intensity * 1.5;
-  const breatheRaw = Math.sin(t * breatheRate);
+  // Breathing — Rayleigh eigenmode of a liquid sphere at the motebit's mass and radius.
+  // ω² = n(n-1)(n+2)σ/ρR³ → ~0.3 Hz for borosilicate glass at body scale.
+  // The eigenfrequency is physical, not a design choice. Processing state modulates
+  // amplitude, not frequency — a hotter droplet oscillates more, not faster.
+  const BREATHE_FREQ = 0.3;
+  const breatheAmplitude = (0.012 + cues.glow_intensity * 0.008) * audioBreathScale;
+  const breatheRaw = Math.sin(t * BREATHE_FREQ * Math.PI * 2);
   const breathe =
-    (breatheRaw > 0
-      ? breatheRaw * 0.015
-      : Math.sign(breatheRaw) * Math.pow(Math.abs(breatheRaw), 0.6) * 0.015) * audioBreathScale;
+    breatheRaw > 0
+      ? breatheRaw * breatheAmplitude
+      : Math.sign(breatheRaw) * Math.pow(Math.abs(breatheRaw), 0.6) * breatheAmplitude;
 
   // Gravity sag — slow cycle, weight pulls down, tension recovers
   const sagRaw = Math.sin(t * 0.32 * Math.PI * 2);
