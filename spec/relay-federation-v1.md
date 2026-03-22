@@ -360,6 +360,145 @@ Settlement records may include optional on-chain payment proof fields:
 
 These fields flow through the settlement forwarding pipeline and are stored in both `relay_settlements` and `relay_federation_settlements` tables for audit linkage.
 
+### 7.6 — Settlement Anchoring (Merkle Batch)
+
+Inter-relay settlement requires a trustless verification layer. Neither relay trusts the other's database. On-chain Merkle root anchoring provides the clearing mechanism — both relays can independently verify that a settlement was included in an anchored batch without revealing the full settlement set.
+
+#### 7.6.1 — Leaf Construction
+
+Each settlement produces one Merkle leaf. The leaf hash is computed as:
+
+```
+leaf = SHA-256(canonicalJson({
+  settlement_id,
+  task_id,
+  upstream_relay_id,
+  downstream_relay_id,
+  gross_amount,
+  fee_amount,
+  net_amount,
+  receipt_hash,
+  settled_at
+}))
+```
+
+`canonicalJson` follows RFC 8785 (JCS) — deterministic key ordering, no whitespace — the same serialization used for Ed25519 signatures throughout the protocol. The leaf content is the subset of the settlement record needed for audit verification; it excludes `fee_rate` (derivable from `fee_amount / gross_amount`) and mutable fields.
+
+#### 7.6.2 — Tree Construction
+
+Leaves are sorted by `settled_at` ascending, then by `settlement_id` lexicographic ascending (tiebreaker). The tree is a binary Merkle tree:
+
+1. If the leaf count is odd, the last leaf is promoted (not duplicated). This prevents second-preimage attacks from duplicated leaves.
+2. Internal nodes: `SHA-256(left || right)` — raw concatenation of the 32-byte child hashes.
+3. The root is the single remaining hash after recursive pairing.
+
+A batch with one settlement has a tree of depth 0 (the leaf hash is the root).
+
+#### 7.6.3 — Batch Trigger
+
+A relay cuts a batch when **either** condition is met:
+
+| Trigger   | Threshold | Rationale                                                 |
+| --------- | --------- | --------------------------------------------------------- |
+| **Count** | 100       | Bounds proof size. 100 leaves → depth ≤ 7 → 7-hash proof. |
+| **Time**  | 1 hour    | Bounds settlement finality latency for low-volume relays. |
+
+Batches are cut from `relay_federation_settlements` rows where `anchor_batch_id IS NULL` (not yet anchored). The relay assigns a `batch_id` (UUID v7) and stores the Merkle root before anchoring.
+
+A relay with no unanchored settlements at the time trigger does nothing.
+
+#### 7.6.4 — Anchor Record
+
+Each anchored batch produces an `AnchorRecord`:
+
+| Field              | Type   | Required | Description                                                     |
+| ------------------ | ------ | -------- | --------------------------------------------------------------- |
+| `batch_id`         | string | yes      | UUID v7 identifier for this batch.                              |
+| `merkle_root`      | string | yes      | Hex-encoded SHA-256 Merkle root of the settlement batch.        |
+| `leaf_count`       | number | yes      | Number of settlements in the batch.                             |
+| `first_settled_at` | number | yes      | Earliest `settled_at` in the batch.                             |
+| `last_settled_at`  | number | yes      | Latest `settled_at` in the batch.                               |
+| `relay_id`         | string | yes      | `motebit_id` of the relay that produced the batch.              |
+| `signature`        | string | yes      | Ed25519 signature of `canonicalJson` of the above fields.       |
+| `tx_hash`          | string | no       | On-chain transaction hash after anchoring (populated async).    |
+| `network`          | string | no       | Chain identifier (CAIP-2, e.g., `"eip155:8453"` for Base).      |
+| `anchored_at`      | number | no       | Epoch milliseconds when the on-chain transaction was confirmed. |
+
+The relay signs the `AnchorRecord` before submitting to the chain. This binds the batch to the relay's identity — a peer can verify the signature without waiting for on-chain confirmation.
+
+#### 7.6.5 — On-Chain Submission
+
+The Merkle root is anchored by calling a minimal contract on Base (or other EVM chain):
+
+```solidity
+event SettlementBatchAnchored(
+    bytes32 indexed merkleRoot,
+    bytes32 indexed relayId,
+    uint64 leafCount,
+    uint64 batchTimestamp
+);
+
+function anchor(bytes32 merkleRoot, bytes32 relayId, uint64 leafCount) external;
+```
+
+The contract is append-only — it emits an event and stores nothing. Verification happens off-chain by checking the event log. Gas cost is constant regardless of batch size (~45K gas, ~$0.001 on Base).
+
+On-chain submission is **asynchronous**. The relay signs the `AnchorRecord` immediately, populates `tx_hash`, `network`, and `anchored_at` after confirmation. Settlement is not blocked on anchoring — the relay's Ed25519 signature provides immediate verifiability, and the on-chain anchor provides non-repudiability.
+
+#### 7.6.6 — Verification
+
+A peer relay verifies a settlement was included in an anchored batch using a Merkle inclusion proof:
+
+1. **Reconstruct the leaf** from the settlement record using the canonical construction (§7.6.1).
+2. **Obtain the proof** — the list of sibling hashes along the path from the leaf to the root — via `GET /federation/v1/settlement/proof?settlement_id=<id>`.
+3. **Recompute the root** by iteratively hashing the leaf with each sibling.
+4. **Compare** the computed root against the `AnchorRecord.merkle_root` (verified via the relay's Ed25519 signature) and optionally against the on-chain event log.
+
+The proof endpoint returns:
+
+| Field           | Type     | Description                                              |
+| --------------- | -------- | -------------------------------------------------------- |
+| `settlement_id` | string   | The settlement being proved.                             |
+| `leaf_hash`     | string   | SHA-256 hex of the settlement leaf.                      |
+| `proof`         | string[] | Ordered array of sibling hashes (hex) from leaf to root. |
+| `leaf_index`    | number   | Position of the leaf in the sorted batch.                |
+| `merkle_root`   | string   | Root hash for comparison.                                |
+| `batch_id`      | string   | Batch identifier for cross-reference.                    |
+| `anchor`        | object   | The signed `AnchorRecord` (§7.6.4).                      |
+
+#### 7.6.7 — Failure and Retry
+
+| Failure                                       | Response                                                                                                          |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| On-chain submission fails                     | Retry with exponential backoff (30s, 2m, 8m, 32m, 2h). Max 5 attempts.                                            |
+| On-chain submission exhausted                 | Batch marked `anchor_failed`. Ed25519 signature remains valid for verification. Manual intervention to re-anchor. |
+| Peer requests proof for unknown settlement    | HTTP 404. Settlement may be on a different relay or not yet batched.                                              |
+| Peer requests proof for unanchored settlement | HTTP 202. Batch is pending; `retry_after` header indicates expected anchor time.                                  |
+
+Anchoring failure does NOT invalidate the settlements. The relay's Ed25519 signature on the `AnchorRecord` is the primary trust mechanism between peers. The on-chain anchor is additive non-repudiability — it proves the relay cannot later deny having produced the batch. Settlements proceed regardless.
+
+#### 7.6.8 — `relay_anchor_batches` Table
+
+| Column             | Type    | Description                                               |
+| ------------------ | ------- | --------------------------------------------------------- |
+| `batch_id`         | TEXT PK | UUID v7 batch identifier.                                 |
+| `merkle_root`      | TEXT    | Hex-encoded Merkle root.                                  |
+| `leaf_count`       | INTEGER | Number of settlements in the batch.                       |
+| `first_settled_at` | INTEGER | Earliest `settled_at` timestamp in the batch.             |
+| `last_settled_at`  | INTEGER | Latest `settled_at` timestamp in the batch.               |
+| `signature`        | TEXT    | Relay's Ed25519 signature of the anchor record.           |
+| `tx_hash`          | TEXT    | On-chain transaction hash (NULL until confirmed).         |
+| `network`          | TEXT    | CAIP-2 chain identifier (NULL until submitted).           |
+| `anchored_at`      | INTEGER | Epoch ms of on-chain confirmation (NULL until confirmed). |
+| `status`           | TEXT    | `"signed"`, `"submitted"`, `"confirmed"`, `"failed"`.     |
+| `created_at`       | INTEGER | Epoch ms when the batch was created.                      |
+
+The `relay_federation_settlements` table gains one column:
+
+| Column            | Type | Description                                                |
+| ----------------- | ---- | ---------------------------------------------------------- |
+| `anchor_batch_id` | TEXT | FK to `relay_anchor_batches.batch_id`. NULL until batched. |
+
 ---
 
 ## 8. Receipt Verification
@@ -448,6 +587,7 @@ All federation endpoints are under the `/federation/v1/` path prefix. All reques
 | POST   | `/federation/v1/task/forward`       | Forward a task to a peer relay.       | 30/min per peer |
 | POST   | `/federation/v1/task/result`        | Return a task result to origin relay. | 30/min per peer |
 | POST   | `/federation/v1/settlement/forward` | Forward settlement to peer relay.     | 30/min per peer |
+| GET    | `/federation/v1/settlement/proof`   | Merkle inclusion proof (§7.6.6).      | 30/min per peer |
 | GET    | `/federation/v1/identity`           | Return this relay's public identity.  | 30/min per peer |
 
 ### 10.2 — Authentication

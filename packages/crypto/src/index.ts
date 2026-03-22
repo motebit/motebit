@@ -1138,3 +1138,10 @@ export type {
   VerifiableCredential,
   VerifiablePresentation,
 } from "./credentials.js";
+export {
+  buildMerkleTree,
+  getMerkleProof,
+  verifyMerkleProof,
+  computeSettlementLeaf,
+} from "./merkle.js";
+export type { MerkleTree, MerkleProof } from "./merkle.js";
