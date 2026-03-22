@@ -46,6 +46,7 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "propose", description: "Propose collaborative plan" },
   { name: "withdraw", description: "Request withdrawal" },
   { name: "mcp", description: "MCP server management" },
+  { name: "serve", description: "Toggle accepting delegations from network" },
 ];
 
 /** Map of command name to definition for O(1) lookup. */

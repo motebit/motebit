@@ -29,7 +29,13 @@ import {
   type MotebitPersonalityConfig,
 } from "@motebit/ai-core";
 export type { OllamaDetectionResult } from "@motebit/ai-core";
-import type { ToolAuditEntry, MemoryNode, MemoryEdge } from "@motebit/sdk";
+import type {
+  ToolAuditEntry,
+  MemoryNode,
+  MemoryEdge,
+  AgentTask,
+  ExecutionReceipt,
+} from "@motebit/sdk";
 import { EventType, SensitivityLevel, DeviceCapability } from "@motebit/sdk";
 import { InMemoryEventStore, type EventStoreAdapter } from "@motebit/event-log";
 import { InMemoryMemoryStorage, computeDecayedConfidence, embedText } from "@motebit/memory-graph";
@@ -382,7 +388,13 @@ export class DesktopApp {
   private _wsAdapter: WebSocketEventStoreAdapter | null = null;
   private _wsTokenRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private _wsUnsubOnEvent: (() => void) | null = null;
+  private _wsUnsubOnCustom: (() => void) | null = null;
   private _localEventStore: EventStoreAdapter | null = null;
+  private _serving = false;
+  private _servingPrivateKey: Uint8Array | null = null;
+  private _servingSyncUrl: string | null = null;
+  private _servingAuthToken: string | null = null;
+  private _activeTaskCount = 0;
 
   constructor() {
     this.renderer = new ThreeJSAdapter();
@@ -2935,6 +2947,66 @@ export class DesktopApp {
       authToken: async () => this.createSyncToken(privKeyHex, "task:submit"),
     });
 
+    // Store serving state for task handler
+    const servingPrivKey = new Uint8Array(privKeyHex.length / 2);
+    for (let i = 0; i < privKeyHex.length; i += 2) {
+      servingPrivKey[i / 2] = parseInt(privKeyHex.slice(i, i + 2), 16);
+    }
+    this._servingPrivateKey = servingPrivKey;
+    this._servingSyncUrl = syncUrl;
+    this._servingAuthToken = token;
+
+    // Wire task handler — accept delegations from the network.
+    // The glass droplet becomes a body that works, not just a face that talks.
+    if (this._wsUnsubOnCustom) this._wsUnsubOnCustom();
+    this._wsUnsubOnCustom = wsAdapter.onCustomMessage((msg) => {
+      if (msg.type !== "task_request" || msg.task == null || !this._serving) return;
+      if (!this.runtime || !this._servingPrivateKey) return;
+
+      const task = msg.task as AgentTask;
+      const runtime = this.runtime;
+      const privateKey = this._servingPrivateKey;
+
+      // Claim the task
+      this._wsAdapter?.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
+      this._activeTaskCount++;
+
+      // Execute — creature glow will rise from processing state
+      void (async () => {
+        try {
+          let receipt: ExecutionReceipt | undefined;
+          for await (const chunk of runtime.handleAgentTask(
+            task,
+            privateKey,
+            this.deviceId,
+            undefined,
+            { delegatedScope: task.delegated_scope },
+          )) {
+            if (chunk.type === "task_result") {
+              receipt = chunk.receipt;
+            }
+          }
+
+          if (receipt) {
+            const resultUrl = `${syncUrl}/agent/${this.motebitId}/task/${task.task_id}/result`;
+            await fetch(resultUrl, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${this._servingAuthToken ?? ""}`,
+              },
+              body: JSON.stringify(receipt),
+            });
+          }
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          console.error(`Task ${task.task_id.slice(0, 8)}... error: ${errMsg}`);
+        } finally {
+          this._activeTaskCount = Math.max(0, this._activeTaskCount - 1);
+        }
+      })();
+    });
+
     // Token refresh: rebuild WS connection every 4.5 min (tokens expire at 5 min)
     this._wsTokenRefreshTimer = setInterval(() => {
       void (async () => {
@@ -2986,6 +3058,65 @@ export class DesktopApp {
         });
       })
       .catch(() => {});
+  }
+
+  /**
+   * Start serving — register with relay and accept delegations.
+   * The creature becomes a body that works, not just a face that talks.
+   */
+  async startServing(): Promise<{ ok: boolean; error?: string }> {
+    if (!this.runtime || !this._servingSyncUrl || !this._servingAuthToken) {
+      return { ok: false, error: "Sync not connected — connect to relay first" };
+    }
+    if (this._serving) return { ok: true };
+
+    // Get tool capabilities to advertise
+    const tools = this.runtime.getToolRegistry().list();
+    const capabilities = tools.map((t: { name: string }) => t.name);
+
+    try {
+      const res = await fetch(`${this._servingSyncUrl}/api/v1/agents/register`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this._servingAuthToken}`,
+        },
+        body: JSON.stringify({
+          motebit_id: this.motebitId,
+          endpoint_url: `ws://${this.motebitId}`,
+          public_key: this.publicKey,
+          capabilities,
+        }),
+      });
+
+      if (!res.ok) {
+        const body = await res.text();
+        return { ok: false, error: `Registration failed: ${body}` };
+      }
+
+      this._serving = true;
+      return { ok: true };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: msg };
+    }
+  }
+
+  /**
+   * Stop serving — stop accepting delegations.
+   */
+  stopServing(): void {
+    this._serving = false;
+  }
+
+  /** Whether the desktop is currently accepting delegations. */
+  isServing(): boolean {
+    return this._serving;
+  }
+
+  /** Number of tasks currently executing. */
+  activeTaskCount(): number {
+    return this._activeTaskCount;
   }
 
   /**

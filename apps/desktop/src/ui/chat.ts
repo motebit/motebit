@@ -1243,6 +1243,23 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
         break;
       }
 
+      case "serve": {
+        if (ctx.app.isServing()) {
+          ctx.app.stopServing();
+          addMessage("system", "Stopped serving — no longer accepting delegations");
+        } else {
+          void (async () => {
+            const result = await ctx.app.startServing();
+            if (result.ok) {
+              addMessage("system", "Serving — accepting delegations from the network");
+            } else {
+              addMessage("system", `Could not start serving: ${result.error}`);
+            }
+          })();
+        }
+        break;
+      }
+
       default:
         addMessage("system", `Unknown command: /${command}`);
     }
