@@ -8,7 +8,7 @@ import type { RelayIdentity } from "../federation.js";
 import { cutBatch, getSettlementProof, isSettlementPendingBatch } from "../anchoring.js";
 import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
-import { generateKeypair, bytesToHex, verifyMerkleProof } from "@motebit/crypto";
+import { generateKeypair, bytesToHex } from "@motebit/crypto";
 
 // === Helpers ===
 
@@ -151,8 +151,6 @@ describe("cutBatch", () => {
     createFederationTables(moteDb2.db);
 
     const now = 1711000000000;
-    const baseOpts = { taskId: "task-1", settledAt: now, grossAmount: 1.0 };
-
     // Same settlement_id in both DBs
     db.prepare(
       `INSERT INTO relay_federation_settlements
@@ -242,19 +240,7 @@ describe("getSettlementProof", () => {
       const result = await getSettlementProof(db, s.settlement_id);
       expect(result).not.toBeNull();
 
-      const valid = await verifyMerkleProof(
-        {
-          leaf: result!.leaf_hash,
-          index: result!.leaf_index,
-          siblings: result!.proof,
-          layerSizes: [],
-        },
-        result!.merkle_root,
-      );
-      // Note: verifyMerkleProof with empty layerSizes works for balanced-ish trees
-      // where all siblings are present. For odd trees, the full layerSizes are needed.
-      // The proof endpoint provides siblings — peer verifiers reconstruct the tree.
-      // For this test, we verify the root matches the anchor.
+      // Verify the proof root matches the anchor record's signed root
       expect(result!.merkle_root).toBe(result!.anchor.merkle_root);
     }
   });
