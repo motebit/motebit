@@ -55,6 +55,7 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "withdraw", description: "Request withdrawal" },
   { name: "propose", description: "Propose collaborative plan" },
   { name: "proposals", description: "List active proposals" },
+  { name: "serve", description: "Toggle accepting delegations" },
 ];
 
 function filterCommands(partial: string): SlashCommandDef[] {
@@ -477,6 +478,23 @@ export function initSlashCommands(
           "system",
           "Collaborative proposals require the CLI. Run: motebit propose <agent-ids> <goal>",
         );
+        break;
+      }
+      case "serve": {
+        chatInput.value = "";
+        if (ctx.app.isServing()) {
+          ctx.app.stopServing();
+          addMessage("system", "Stopped serving");
+        } else {
+          void (async () => {
+            const result = await ctx.app.startServing();
+            if (result.ok) {
+              addMessage("system", "Serving — accepting delegations while this tab is open");
+            } else {
+              addMessage("system", `Could not start serving: ${result.error}`);
+            }
+          })();
+        }
         break;
       }
       case "proposals": {

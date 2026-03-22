@@ -1,6 +1,12 @@
 import { MotebitRuntime, RelayDelegationAdapter } from "@motebit/runtime";
 import type { StreamChunk, StorageAdapters, PlanChunk } from "@motebit/runtime";
-import type { ConversationMessage, BehaviorCues, EventType } from "@motebit/sdk";
+import type {
+  ConversationMessage,
+  BehaviorCues,
+  EventType,
+  AgentTask,
+  ExecutionReceipt,
+} from "@motebit/sdk";
 import { DeviceCapability } from "@motebit/sdk";
 import { ThreeJSAdapter } from "@motebit/render-engine";
 import type { AudioReactivity } from "@motebit/render-engine";
@@ -90,6 +96,10 @@ export class WebApp {
   private _wsAdapter: WebSocketEventStoreAdapter | null = null;
   private _wsTokenRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private _wsUnsubOnEvent: (() => void) | null = null;
+  private _wsUnsubOnCustom: (() => void) | null = null;
+  private _serving = false;
+  private _servingSyncUrl: string | null = null;
+  private _activeTaskCount = 0;
   private _localEventStore: StorageAdapters["eventStore"] | null = null;
   private _planStore: IdbPlanStore | null = null;
   private _planSyncEngine: PlanSyncEngine | null = null;
@@ -826,6 +836,62 @@ export class WebApp {
       },
     });
 
+    this._servingSyncUrl = relayUrl;
+
+    // Wire task handler — accept delegations while the tab is open.
+    if (this._wsUnsubOnCustom) this._wsUnsubOnCustom();
+    this._wsUnsubOnCustom = wsAdapter.onCustomMessage((msg) => {
+      if (msg.type !== "task_request" || msg.task == null || !this._serving) return;
+      if (!this.runtime) return;
+
+      const task = msg.task as AgentTask;
+      const runtime = this.runtime;
+
+      this._wsAdapter?.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
+      this._activeTaskCount++;
+
+      void (async () => {
+        try {
+          const privateKeyHex = await this.keyStore.loadPrivateKey();
+          if (!privateKeyHex) return;
+          const privKeyBytes = new Uint8Array(privateKeyHex.length / 2);
+          for (let i = 0; i < privateKeyHex.length; i += 2) {
+            privKeyBytes[i / 2] = parseInt(privateKeyHex.slice(i, i + 2), 16);
+          }
+
+          let receipt: ExecutionReceipt | undefined;
+          for await (const chunk of runtime.handleAgentTask(
+            task,
+            privKeyBytes,
+            this._deviceId,
+            undefined,
+            { delegatedScope: task.delegated_scope },
+          )) {
+            if (chunk.type === "task_result") {
+              receipt = chunk.receipt;
+            }
+          }
+          secureErase(privKeyBytes);
+
+          if (receipt) {
+            const token = await this.createSyncToken("task:submit");
+            await fetch(`${relayUrl}/agent/${this._motebitId}/task/${task.task_id}/result`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+              },
+              body: JSON.stringify(receipt),
+            });
+          }
+        } catch {
+          // Task execution failed — receipt not submitted
+        } finally {
+          this._activeTaskCount = Math.max(0, this._activeTaskCount - 1);
+        }
+      })();
+    });
+
     const encryptedWs = new EncryptedEventStoreAdapter({ inner: wsAdapter, key: encKey });
 
     // Inbound real-time events: decrypt and write to local store
@@ -954,7 +1020,58 @@ export class WebApp {
     }, 4.5 * 60_000);
   }
 
+  async startServing(): Promise<{ ok: boolean; error?: string }> {
+    if (!this.runtime || !this._servingSyncUrl) {
+      return { ok: false, error: "Sync not connected" };
+    }
+    if (this._serving) return { ok: true };
+
+    const LOCAL_ONLY = new Set([
+      "read_file",
+      "recall_memories",
+      "list_events",
+      "delegate_to_agent",
+    ]);
+    const tools = this.runtime.getToolRegistry().list();
+    const capabilities = tools
+      .filter((t: { name: string }) => !LOCAL_ONLY.has(t.name))
+      .map((t: { name: string }) => t.name);
+
+    try {
+      const token = await this.createSyncToken();
+      const res = await fetch(`${this._servingSyncUrl}/api/v1/agents/register`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          motebit_id: this._motebitId,
+          endpoint_url: `ws://${this._motebitId}`,
+          public_key: this._publicKeyHex,
+          capabilities,
+        }),
+      });
+      if (!res.ok) {
+        return { ok: false, error: `Registration failed: ${res.status}` };
+      }
+      this._serving = true;
+      return { ok: true };
+    } catch (err: unknown) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  stopServing(): void {
+    this._serving = false;
+  }
+
+  isServing(): boolean {
+    return this._serving;
+  }
+
   stopSync(): void {
+    this._serving = false;
     if (this._wsTokenRefreshTimer != null) {
       clearInterval(this._wsTokenRefreshTimer);
       this._wsTokenRefreshTimer = null;
