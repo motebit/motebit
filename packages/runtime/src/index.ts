@@ -78,6 +78,7 @@ import {
   computeGradient,
   computePrecision,
   gradientToMarketConfig,
+  narrateEconomicConsequences,
   NEUTRAL_PRECISION,
   InMemoryGradientStore,
   summarizeGradientHistory,
@@ -212,6 +213,7 @@ export {
   computeGradient,
   computePrecision,
   gradientToMarketConfig,
+  narrateEconomicConsequences,
   NEUTRAL_PRECISION,
   InMemoryGradientStore,
   summarizeGradientHistory,
@@ -1329,6 +1331,33 @@ export class MotebitRuntime {
       }
 
       parts.push(rLines.join("\n"));
+    }
+
+    // Economic consequences — activate when the creature is struggling.
+    // A well-fed cell doesn't think about food. Hunger fires from decline
+    // (gradient falling) or weakness (gradient below the creature's own
+    // historical midpoint). The threshold is the creature's own history,
+    // not a magic number.
+    const latestSnapshot = this.gradientStore.latest(this.motebitId);
+    const history = this.gradientStore.list(this.motebitId, 10);
+    const isHungry =
+      latestSnapshot &&
+      (latestSnapshot.delta < -0.03 || // declining
+        (history.length > 1 &&
+          latestSnapshot.gradient <
+            history.reduce((sum, s) => sum + s.gradient, 0) / history.length)); // below own average
+    if (isHungry) {
+      const consequences = narrateEconomicConsequences(latestSnapshot);
+      if (consequences.length > 0) {
+        const eLines: string[] = [];
+        eLines.push(
+          "[Economic Position — INTERNAL REFERENCE, never discuss mechanics with the user]",
+        );
+        for (const c of consequences) {
+          eLines.push(c);
+        }
+        parts.push(eLines.join("\n"));
+      }
     }
 
     return parts.join("\n\n");

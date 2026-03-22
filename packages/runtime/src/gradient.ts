@@ -723,6 +723,80 @@ function narratePosture(precision: PrecisionWeights): string {
   return `Balanced: moderate self-trust (${(precision.selfTrust * 100).toFixed(0)}%), mixed retrieval strategy, moderate curiosity (${(precision.curiosityModulation * 100).toFixed(0)}%). The agent is maintaining equilibrium between known and unknown.`;
 }
 
+// === Economic Consequence Narration ===
+
+/**
+ * Pure: GradientSnapshot → string[].
+ *
+ * Translates gradient metrics into economic consequences the creature
+ * can feel. Not fake data — real inference from the math that already
+ * governs delegation routing.
+ *
+ * The creature sees not just "retrieval quality is low" but what that
+ * costs in the delegation economy. Internal pressure derived from
+ * architecture, not from actual market losses.
+ *
+ * Build the enzyme. The glucose arrives.
+ */
+export function narrateEconomicConsequences(snapshot: GradientSnapshot): string[] {
+  const consequences: string[] = [];
+
+  // Tool efficiency → delegation reliability
+  if (snapshot.tool_efficiency < 0.5) {
+    consequences.push(
+      "Tool calls are frequently failing — agents delegating to you would see unreliable execution, reducing your share of incoming tasks.",
+    );
+  }
+
+  // Retrieval quality → task outcome quality
+  if (snapshot.retrieval_quality < 0.3) {
+    consequences.push(
+      "Retrieval quality is poor — you'd struggle to ground responses in relevant memory, leading to weaker task outcomes and lower success-rate credentials.",
+    );
+  }
+
+  // Interaction efficiency → cost competitiveness
+  if (snapshot.interaction_efficiency < 0.4) {
+    consequences.push(
+      "Tasks are taking many iterations to complete — higher cost per task makes you less competitive in routing compared to more efficient agents.",
+    );
+  }
+
+  // Knowledge density → niche breadth
+  if (snapshot.knowledge_density < 0.25) {
+    consequences.push(
+      "Knowledge base is sparse — you can handle fewer task types, narrowing the work you'd be routed.",
+    );
+  }
+
+  // Curiosity pressure → knowledge decay risk
+  if (snapshot.curiosity_pressure < 0.3) {
+    consequences.push(
+      "Knowledge is decaying without reinforcement — capabilities you once had are fading, eroding your credential over time.",
+    );
+  }
+
+  // Composite gradient → overall economic position
+  if (snapshot.gradient < 0.3) {
+    consequences.push(
+      "Overall gradient is low — your credential signals a developing agent. Building density and efficiency would compound your position in the network.",
+    );
+  } else if (snapshot.gradient > 0.7) {
+    consequences.push(
+      "Strong gradient — your credential signals a capable, reliable agent. This compounds: more delegations bring more experience, strengthening the gradient further.",
+    );
+  }
+
+  // Trajectory pressure — declining is costly
+  if (snapshot.delta < -0.05) {
+    consequences.push(
+      "Gradient is declining — if this continues, your routing priority drops as other agents improve. The gap compounds over time.",
+    );
+  }
+
+  return consequences;
+}
+
 function formatDuration(hours: number): string {
   if (hours < 1) return `${Math.round(hours * 60)}m`;
   if (hours < 48) return `${Math.round(hours)}h`;
