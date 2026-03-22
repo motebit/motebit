@@ -139,6 +139,10 @@ async function logReflectionCompleted(
         insights_count: result.insights.length,
         adjustments_count: result.planAdjustments.length,
         self_assessment_preview: result.selfAssessment.slice(0, 100),
+        // Full reflection data for persistence across restarts
+        insights: result.insights,
+        plan_adjustments: result.planAdjustments,
+        self_assessment: result.selfAssessment,
       },
       tombstoned: false,
     });

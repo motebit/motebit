@@ -754,6 +754,9 @@ export class MotebitRuntime {
     this.provider = provider;
     this.wireLoopDeps();
 
+    // Restore last reflection from event log — creature wakes with behavioral learning intact
+    void this.restoreLastReflection();
+
     // On session resume with a provider now available, reflect on the previous
     // session in background. The creature digests what happened while it slept.
     // The result is available to buildSelfAwareness() on subsequent turns.
@@ -1226,6 +1229,49 @@ export class MotebitRuntime {
   }
 
   /**
+   * Lightweight precision refresh from behavioral stats alone.
+   * Patches the latest gradient snapshot's ie/te metrics with current
+   * session stats, recomputes precision, and feeds back into subsystems.
+   * No memory graph I/O — runs synchronously after each turn.
+   */
+  private recomputePrecisionFromStats(): void {
+    const latest = this.gradientStore.latest(this.motebitId);
+    if (!latest) return; // No gradient yet — cold start handled separately
+
+    const stats = this._behavioralStats;
+    if (stats.turnCount === 0) return;
+
+    // Recompute just the behavioral metrics
+    const avgIterations = stats.totalIterations / stats.turnCount;
+    const ie = Math.max(0, Math.min(1, 1 - (avgIterations - 1) / 9)); // MAX_TOOL_ITERATIONS=10
+
+    const totalToolCalls =
+      stats.toolCallsSucceeded + stats.toolCallsBlocked + stats.toolCallsFailed;
+    const te = totalToolCalls > 0 ? stats.toolCallsSucceeded / totalToolCalls : 0.5;
+
+    // Patch the snapshot with fresh behavioral metrics
+    // Use the same weights from the gradient config
+    const patched = {
+      ...latest,
+      interaction_efficiency: ie,
+      tool_efficiency: te,
+      // Recompute gradient with patched values using the default weights
+      gradient:
+        latest.gradient -
+        0.12 * latest.interaction_efficiency -
+        0.1 * latest.tool_efficiency +
+        0.12 * ie +
+        0.1 * te,
+    };
+    patched.delta = patched.gradient - latest.gradient;
+
+    // Recompute precision and feed back
+    this._precision = computePrecision(patched);
+    this.state.pushUpdate({ curiosity: this._precision.curiosityModulation });
+    this.memory.setPrecisionWeights(this._precision.retrievalPrecision);
+  }
+
+  /**
    * Build self-awareness context: precision posture + self-model narration.
    *
    * The precision context tells the creature how to behave (cautious/confident).
@@ -1315,6 +1361,12 @@ export class MotebitRuntime {
       this._behavioralStats.toolCallsSucceeded += result.toolCallsSucceeded;
       this._behavioralStats.toolCallsBlocked += result.toolCallsBlocked;
       this._behavioralStats.toolCallsFailed += result.toolCallsFailed;
+      // Refresh precision weights from latest behavioral stats
+      this.recomputePrecisionFromStats();
+      // Cold start: bootstrap gradient after first turn if none exists
+      if (this._behavioralStats.turnCount === 1 && !this.gradientStore.latest(this.motebitId)) {
+        void this.computeGradientNow().catch(() => {});
+      }
       // Periodic reflection — every 5th turn, digest in background
       if (this._behavioralStats.turnCount % 5 === 0) {
         void this.reflectAndStore();
@@ -1958,6 +2010,12 @@ export class MotebitRuntime {
         this._behavioralStats.toolCallsSucceeded += result.toolCallsSucceeded;
         this._behavioralStats.toolCallsBlocked += result.toolCallsBlocked;
         this._behavioralStats.toolCallsFailed += result.toolCallsFailed;
+        // Refresh precision weights from latest behavioral stats
+        this.recomputePrecisionFromStats();
+        // Cold start: bootstrap gradient after first turn if none exists
+        if (this._behavioralStats.turnCount === 1 && !this.gradientStore.latest(this.motebitId)) {
+          void this.computeGradientNow().catch(() => {});
+        }
         // Periodic reflection — every 5th turn, digest in background
         if (this._behavioralStats.turnCount % 5 === 0) {
           void this.reflectAndStore();
@@ -1992,6 +2050,38 @@ export class MotebitRuntime {
     const result = await performReflection(this.reflectionDeps, goals);
     this._lastReflection = result;
     return result;
+  }
+
+  /**
+   * Restore the last reflection from the event log.
+   * Called during setProvider() so the creature wakes up with its
+   * behavioral learning intact — no gap between process restarts.
+   */
+  private async restoreLastReflection(): Promise<void> {
+    try {
+      const events = await this.events.query({
+        motebit_id: this.motebitId,
+        event_types: [EventType.ReflectionCompleted],
+        limit: 1,
+      });
+      if (events.length === 0) return;
+
+      const payload = events[0]!.payload;
+      const insights = payload.insights as string[] | undefined;
+      const adjustments = payload.plan_adjustments as string[] | undefined;
+      const assessment = payload.self_assessment as string | undefined;
+
+      // Only restore if we have actual content (not just the old summary format)
+      if (insights || adjustments || assessment) {
+        this._lastReflection = {
+          insights: insights ?? [],
+          planAdjustments: adjustments ?? [],
+          selfAssessment: assessment ?? "",
+        };
+      }
+    } catch {
+      // Restoration is best-effort — don't crash startup
+    }
   }
 
   /**
