@@ -31,6 +31,8 @@ import {
   createWriteFileHandler,
   shellExecDefinition,
   createShellExecHandler,
+  undoWriteDefinition,
+  createUndoWriteHandler,
   webSearchDefinition,
   createWebSearchHandler,
   readUrlDefinition,
@@ -218,8 +220,17 @@ export function buildToolRegistry(
 
   // Operator-only (R2+): write files, execute shell commands
   if (config.operator) {
-    registry.register(writeFileDefinition, createWriteFileHandler(config.allowedPaths));
-    registry.register(shellExecDefinition, createShellExecHandler());
+    const writeConfig = { allowedPaths: config.allowedPaths };
+    registry.register(writeFileDefinition, createWriteFileHandler(writeConfig));
+    registry.register(undoWriteDefinition, createUndoWriteHandler(writeConfig));
+    registry.register(
+      shellExecDefinition,
+      createShellExecHandler({
+        commandAllowList: config.allowedCommands,
+        commandBlockList: config.blockedCommands,
+        allowedPaths: config.allowedPaths,
+      }),
+    );
   }
 
   return registry;

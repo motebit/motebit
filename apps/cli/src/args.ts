@@ -28,6 +28,8 @@ export interface CliConfig {
   direct: boolean;
   maxTokens?: number;
   routingStrategy?: "cost" | "quality" | "balanced";
+  allowedCommands: string[];
+  blockedCommands: string[];
   json: boolean;
   presentation: boolean;
   all?: boolean;
@@ -64,6 +66,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       "max-tokens": { type: "string" },
       "routing-strategy": { type: "string" },
       direct: { type: "boolean", default: false },
+      "allow-commands": { type: "string" },
+      "block-commands": { type: "string" },
       json: { type: "boolean", default: false },
       presentation: { type: "boolean", default: false },
       all: { type: "boolean", default: false },
@@ -121,6 +125,14 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     maxTokens: values["max-tokens"] != null ? parseInt(values["max-tokens"], 10) : undefined,
     routingStrategy: parseRoutingStrategy(values["routing-strategy"]),
     direct: values.direct,
+    allowedCommands:
+      values["allow-commands"] != null && values["allow-commands"] !== ""
+        ? values["allow-commands"].split(",").map((s) => s.trim())
+        : [],
+    blockedCommands:
+      values["block-commands"] != null && values["block-commands"] !== ""
+        ? values["block-commands"].split(",").map((s) => s.trim())
+        : [],
     json: values.json,
     presentation: values.presentation,
     all: values.all,

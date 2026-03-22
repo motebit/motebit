@@ -1,7 +1,15 @@
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 import * as fs from "node:fs/promises";
-import * as fsSync from "node:fs";
 import * as path from "node:path";
+import { isPathAllowed } from "./path-sandbox.js";
+
+export interface WriteFileConfig {
+  allowedPaths?: string[];
+  /** Directory for pre-write backups. Default: ~/.motebit/backups */
+  backupDir?: string;
+  /** Whether to create backups before overwriting. Default: true */
+  enableBackup?: boolean;
+}
 
 export const writeFileDefinition: ToolDefinition = {
   name: "write_file",
@@ -18,48 +26,59 @@ export const writeFileDefinition: ToolDefinition = {
   requiresApproval: true,
 };
 
-export function createWriteFileHandler(allowedPaths?: string[]): ToolHandler {
+export function createWriteFileHandler(config?: WriteFileConfig | string[]): ToolHandler {
+  // Backward compat: accept string[] as allowedPaths
+  const cfg: WriteFileConfig = Array.isArray(config) ? { allowedPaths: config } : (config ?? {});
+  const allowedPaths = cfg.allowedPaths;
+  const enableBackup = cfg.enableBackup !== false;
+  const backupDir =
+    cfg.backupDir ??
+    path.join(process.env["HOME"] ?? process.env["USERPROFILE"] ?? "/tmp", ".motebit", "backups");
+
   return async (args) => {
     const filePath = args.path as string;
     const content = args.content as string;
     if (!filePath || content === undefined)
       return { ok: false, error: "Missing required parameters: path, content" };
 
-    // Sandbox check: resolve symlinks to prevent escape (handle ENOENT for new files)
+    // Sandbox check: resolve symlinks to prevent escape
     if (allowedPaths && allowedPaths.length > 0) {
-      let canonical: string;
-      try {
-        canonical = fsSync.realpathSync(path.resolve(filePath));
-      } catch (err: unknown) {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-          try {
-            const parentCanonical = fsSync.realpathSync(path.dirname(path.resolve(filePath)));
-            canonical = path.join(parentCanonical, path.basename(filePath));
-          } catch {
-            return { ok: false, error: `Cannot resolve parent directory for "${filePath}"` };
-          }
-        } else {
-          return { ok: false, error: `Cannot resolve path "${filePath}"` };
-        }
-      }
-      const allowed = allowedPaths.some((p) => {
-        try {
-          const resolvedAllow = fsSync.realpathSync(path.resolve(p));
-          if (canonical === resolvedAllow) return true;
-          const prefix = resolvedAllow.endsWith("/") ? resolvedAllow : resolvedAllow + "/";
-          return canonical.startsWith(prefix);
-        } catch {
-          return false;
-        }
-      });
-      if (!allowed) {
-        return { ok: false, error: `Access denied: "${canonical}" is outside allowed paths` };
+      const check = isPathAllowed(filePath, allowedPaths);
+      if (!check.allowed) {
+        return { ok: false, error: check.error ?? "Access denied" };
       }
     }
 
     const resolved = path.resolve(filePath);
 
     try {
+      // Pre-write backup: save existing content before overwriting
+      if (enableBackup) {
+        try {
+          const existing = await fs.readFile(resolved, "utf-8");
+          const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+          const uuid = crypto.randomUUID().slice(0, 8);
+          const basename = path.basename(resolved);
+          const backupPath = path.join(backupDir, `${timestamp}_${uuid}_${basename}`);
+          const metaPath = backupPath + ".meta.json";
+
+          await fs.mkdir(backupDir, { recursive: true });
+          await fs.writeFile(backupPath, existing, "utf-8");
+          await fs.writeFile(
+            metaPath,
+            JSON.stringify({
+              originalPath: resolved,
+              timestamp: Date.now(),
+              size: existing.length,
+            }),
+            "utf-8",
+          );
+        } catch {
+          // File doesn't exist yet (new file) — no backup needed. Or backup dir
+          // creation failed — not blocking, proceed with write.
+        }
+      }
+
       await fs.mkdir(path.dirname(resolved), { recursive: true });
       await fs.writeFile(resolved, content, "utf-8");
       return { ok: true, data: `Written ${content.length} bytes to ${resolved}` };

@@ -51,6 +51,8 @@ const stubConfig = {
   tools: undefined,
   selfTest: false,
   direct: false,
+  allowedCommands: [],
+  blockedCommands: [],
   json: false,
   presentation: false,
   version: false,

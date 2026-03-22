@@ -287,8 +287,8 @@ describe("write_file", () => {
 // ---------- shell_exec ----------
 
 describe("shell_exec", () => {
-  it("executes a simple command", async () => {
-    const handler = createShellExecHandler();
+  it("executes an allowlisted command", async () => {
+    const handler = createShellExecHandler({ commandAllowList: ["echo"] });
     const result = await handler({ command: "echo", args: ["hello"] });
 
     expect(result.ok).toBe(true);
@@ -296,20 +296,117 @@ describe("shell_exec", () => {
   });
 
   it("returns error on missing command", async () => {
-    const handler = createShellExecHandler();
+    const handler = createShellExecHandler({ commandAllowList: ["echo"] });
     const result = await handler({});
     expect(result.ok).toBe(false);
     expect(result.error).toContain("Missing required parameter");
   });
 
-  it("returns error on failing command", async () => {
+  it("denies when no allowlist is configured (fail-closed)", async () => {
     const handler = createShellExecHandler();
-    const result = await handler({
-      command: "/bin/sh",
-      args: ["-c", "exit 1"],
-    });
+    const result = await handler({ command: "echo", args: ["hello"] });
     expect(result.ok).toBe(false);
-    expect(result.error).toContain("Exec error");
+    expect(result.error).toContain("no commands are allowlisted");
+  });
+
+  it("denies commands not on the allowlist", async () => {
+    const handler = createShellExecHandler({ commandAllowList: ["node", "npm"] });
+    const result = await handler({ command: "python", args: ["script.py"] });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("not in the allowed commands list");
+  });
+
+  it("blocklist takes precedence over allowlist", async () => {
+    const handler = createShellExecHandler({
+      commandAllowList: ["rm", "ls"],
+      commandBlockList: ["rm"],
+    });
+    const result = await handler({ command: "rm", args: ["file.txt"] });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("blocked");
+  });
+
+  it("detects destructive rm -rf", async () => {
+    const handler = createShellExecHandler({ commandAllowList: ["rm"] });
+    const result = await handler({ command: "rm", args: ["-rf", "/tmp/test"] });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Destructive command");
+  });
+
+  it("detects destructive rm --recursive", async () => {
+    const handler = createShellExecHandler({ commandAllowList: ["rm"] });
+    const result = await handler({ command: "rm", args: ["--recursive", "dir/"] });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Destructive command");
+  });
+
+  it("detects destructive git reset --hard", async () => {
+    const handler = createShellExecHandler({ commandAllowList: ["git"] });
+    const result = await handler({ command: "git", args: ["reset", "--hard"] });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Destructive command");
+  });
+
+  it("detects destructive git push --force", async () => {
+    const handler = createShellExecHandler({ commandAllowList: ["git"] });
+    const result = await handler({ command: "git", args: ["push", "--force"] });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Destructive command");
+  });
+
+  it("blocks dd always", async () => {
+    const handler = createShellExecHandler({ commandAllowList: ["dd"] });
+    const result = await handler({ command: "dd", args: ["if=/dev/zero", "of=/dev/sda"] });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Destructive command");
+  });
+
+  it("allows non-destructive git commands", async () => {
+    const handler = createShellExecHandler({ commandAllowList: ["git"] });
+    const result = await handler({ command: "git", args: ["status"] });
+    // Will fail with exec error (no git repo) but should NOT be blocked by destructive check
+    expect(result.error ?? "").not.toContain("Destructive command");
+  });
+
+  it("allows blockDestructive: false to override", async () => {
+    const handler = createShellExecHandler({
+      commandAllowList: ["rm"],
+      blockDestructive: false,
+    });
+    const result = await handler({
+      command: "rm",
+      args: ["-rf", "/tmp/__motebit_test_nonexistent__"],
+    });
+    // Should NOT be blocked by destructive detection (may still fail from rm error)
+    expect(result.error ?? "").not.toContain("Destructive command");
+  });
+
+  it("normalizes absolute command paths against allowlist", async () => {
+    const handler = createShellExecHandler({ commandAllowList: ["echo"] });
+    const result = await handler({ command: "/bin/echo", args: ["works"] });
+    expect(result.ok).toBe(true);
+    expect(result.data as string).toContain("works");
+  });
+
+  it("denies cwd outside allowed paths", async () => {
+    const handler = createShellExecHandler({
+      commandAllowList: ["echo"],
+      allowedPaths: ["/tmp"],
+    });
+    const result = await handler({ command: "echo", args: ["test"], cwd: "/etc" });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("outside allowed paths");
+  });
+
+  it("defaults cwd to first allowed path when omitted", async () => {
+    const handler = createShellExecHandler({
+      commandAllowList: ["pwd"],
+      allowedPaths: ["/tmp"],
+    });
+    const result = await handler({ command: "pwd" });
+    expect(result.ok).toBe(true);
+    // pwd should output /tmp (or its canonical form)
+    expect(result.data as string).toContain("tmp");
   });
 
   it("has requiresApproval set", () => {
@@ -428,16 +525,17 @@ describe("list_events", () => {
 // ---------- registerBuiltinTools ----------
 
 describe("registerBuiltinTools", () => {
-  it("registers core tools (5 without optional callbacks)", () => {
+  it("registers core tools (6 without optional callbacks)", () => {
     const registry = new InMemoryToolRegistry();
     registerBuiltinTools(registry);
 
-    expect(registry.size).toBe(5);
+    expect(registry.size).toBe(6);
     expect(registry.has("web_search")).toBe(true);
     expect(registry.has("read_url")).toBe(true);
     expect(registry.has("read_file")).toBe(true);
     expect(registry.has("write_file")).toBe(true);
     expect(registry.has("shell_exec")).toBe(true);
+    expect(registry.has("undo_write")).toBe(true);
   });
 
   it("registers memory tool when memorySearchFn provided", () => {
@@ -446,7 +544,7 @@ describe("registerBuiltinTools", () => {
       memorySearchFn: async () => [],
     });
 
-    expect(registry.size).toBe(6);
+    expect(registry.size).toBe(7);
     expect(registry.has("recall_memories")).toBe(true);
   });
 
@@ -456,18 +554,18 @@ describe("registerBuiltinTools", () => {
       eventQueryFn: async () => [],
     });
 
-    expect(registry.size).toBe(6);
+    expect(registry.size).toBe(7);
     expect(registry.has("list_events")).toBe(true);
   });
 
-  it("registers all 7 tools when all options provided", () => {
+  it("registers all 8 tools when all options provided", () => {
     const registry = new InMemoryToolRegistry();
     registerBuiltinTools(registry, {
       memorySearchFn: async () => [],
       eventQueryFn: async () => [],
     });
 
-    expect(registry.size).toBe(7);
+    expect(registry.size).toBe(8);
     const names = registry
       .list()
       .map((t) => t.name)
@@ -478,6 +576,7 @@ describe("registerBuiltinTools", () => {
       "read_url",
       "recall_memories",
       "shell_exec",
+      "undo_write",
       "web_search",
       "write_file",
     ]);

@@ -1,7 +1,7 @@
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 import * as fs from "node:fs/promises";
-import * as fsSync from "node:fs";
 import * as path from "node:path";
+import { isPathAllowed } from "./path-sandbox.js";
 
 export const readFileDefinition: ToolDefinition = {
   name: "read_file",
@@ -22,24 +22,9 @@ export function createReadFileHandler(allowedPaths?: string[]): ToolHandler {
 
     // Sandbox check: resolve symlinks to prevent escape
     if (allowedPaths && allowedPaths.length > 0) {
-      let canonical: string;
-      try {
-        canonical = fsSync.realpathSync(path.resolve(filePath));
-      } catch {
-        return { ok: false, error: `Cannot resolve path "${filePath}"` };
-      }
-      const allowed = allowedPaths.some((p) => {
-        try {
-          const resolvedAllow = fsSync.realpathSync(path.resolve(p));
-          if (canonical === resolvedAllow) return true;
-          const prefix = resolvedAllow.endsWith("/") ? resolvedAllow : resolvedAllow + "/";
-          return canonical.startsWith(prefix);
-        } catch {
-          return false;
-        }
-      });
-      if (!allowed) {
-        return { ok: false, error: `Access denied: "${canonical}" is outside allowed paths` };
+      const check = isPathAllowed(filePath, allowedPaths);
+      if (!check.allowed) {
+        return { ok: false, error: check.error ?? "Access denied" };
       }
     }
 
