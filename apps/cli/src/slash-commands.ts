@@ -365,27 +365,41 @@ export async function handleSlashCommand(
         mistral: "mistral",
       };
 
-      if (!args) {
-        const current = runtime.currentModel ?? "unknown";
-        console.log(`\nCurrent model: ${cyan(current)}\n`);
-        console.log("Available:");
+      const showModelList = (current: string) => {
         const col = Math.max(...Object.keys(MODEL_ALIASES).map((k) => k.length)) + 2;
         for (const [alias, modelId] of Object.entries(MODEL_ALIASES)) {
-          const marker = modelId === current || alias === current ? green(" ●") : "  ";
+          const active = modelId === current || alias === current;
+          const marker = active ? green(" ●") : "  ";
           const gap = " ".repeat(Math.max(1, col - alias.length));
           console.log(`${marker} ${cyan(alias)}${gap}${dim(modelId)}`);
         }
-        console.log(dim(`\n  /model <name> to switch (or use a full model ID)\n`));
+      };
+
+      if (!args) {
+        const current = runtime.currentModel ?? "unknown";
+        console.log(`\nCurrent model: ${cyan(current)}\n`);
+        showModelList(current);
+        console.log(dim(`\n  /model <name> to switch\n`));
         break;
       }
-      const resolved = MODEL_ALIASES[args.toLowerCase()] ?? args;
-      runtime.setModel(resolved);
-      // Persist to config so it survives restart
+      const input = args.toLowerCase();
+      const resolved = MODEL_ALIASES[input];
+      const isFullId = Object.values(MODEL_ALIASES).includes(args);
+      if (!resolved && !isFullId) {
+        console.log(`\nUnknown model: ${cyan(args)}\n`);
+        showModelList(runtime.currentModel ?? "");
+        console.log(dim(`\n  /model <name> to switch\n`));
+        break;
+      }
+      const modelId = resolved ?? args;
+      runtime.setModel(modelId);
       if (fullConfig) {
-        fullConfig.default_model = resolved;
+        fullConfig.default_model = modelId;
         saveFullConfig(fullConfig);
       }
-      console.log(`Model switched to: ${resolved}`);
+      console.log();
+      showModelList(modelId);
+      console.log();
       break;
     }
 
