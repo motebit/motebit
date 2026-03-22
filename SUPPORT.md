@@ -19,4 +19,4 @@ File an [issue](https://github.com/motebit/motebit/issues/new?template=bug_repor
 
 ## Commercial licensing
 
-The platform is [BSL 1.1](LICENSE) -- free for non-commercial use, source-available, converts to MIT after 4 years. For commercial licensing inquiries, email **daniel@motebit.com**.
+The platform is [BSL 1.1](LICENSE) -- free for non-commercial use, source-available, converts to Apache 2.0 after 4 years. For commercial licensing inquiries, email **daniel@motebit.com**.

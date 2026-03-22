@@ -100,4 +100,4 @@ The CLA grants Motebit the rights needed to license contributions under our dual
 Contributions are licensed under the same terms as the project:
 
 - **Protocol layer** (`spec/`, `packages/verify/`, `packages/create-motebit/`, `packages/sdk/`, `packages/github-action/`) -- MIT
-- **Everything else** -- [BSL 1.1](LICENSE), source-available, converts to MIT per-version after 4 years
+- **Everything else** -- [BSL 1.1](LICENSE), source-available, converts to Apache 2.0 per-version after 4 years

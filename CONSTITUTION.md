@@ -32,7 +32,7 @@ Autonomy is a dial, not a switch. The user turns it. The surface tension — pol
 
 **Open** (MIT): `@motebit/verify`, `create-motebit`, the `motebit/identity@1.0` specification. Anyone can create and verify agent identity files. The standard is a public good.
 
-**Source-available** (BSL 1.1): the runtime, the surfaces, the memory graph, the policy engine, the sync relay. Free to use, source-available, converts to MIT per-version after 4 years. The product is protected to sustain development.
+**Source-available** (BSL 1.1): the runtime, the surfaces, the memory graph, the policy engine, the sync relay. Free to use, source-available, converts to Apache 2.0 per-version after 4 years. The product is protected to sustain development.
 
 This split is the moat. The identity standard spreads. The product that makes identity valuable is ours.
 
