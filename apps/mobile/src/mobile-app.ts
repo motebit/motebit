@@ -61,6 +61,7 @@ import { InMemoryToolRegistry } from "@motebit/tools";
 import { PlanEngine } from "@motebit/planner";
 import type { PlanChunk } from "@motebit/planner";
 import { PlanStatus, DeviceCapability } from "@motebit/sdk";
+import type { AgentTask, ExecutionReceipt } from "@motebit/sdk";
 import type { PairingSession, PairingStatus, SyncStatus } from "@motebit/sync-engine";
 import type {
   MotebitState,
@@ -277,6 +278,12 @@ export class MobileApp {
   private _wsUnsubOnEvent: (() => void) | null = null;
   private _syncEncKey: Uint8Array | null = null;
   private _localEventStore: EventStoreAdapter | null = null;
+
+  // Serving state
+  private _serving = false;
+  private _servingSyncUrl: string | null = null;
+  private _servingAuthToken: string | null = null;
+  private _activeTaskCount = 0;
 
   // MCP state
   private mcpAdapters: Map<string, McpClientAdapter> = new Map();
@@ -1393,6 +1400,74 @@ export class MobileApp {
     await AsyncStorage.removeItem(MobileApp.SYNC_URL_KEY);
   }
 
+  async startServing(): Promise<{ ok: boolean; error?: string }> {
+    if (!this.runtime || !this._servingSyncUrl || !this._servingAuthToken) {
+      return { ok: false, error: "Sync not connected" };
+    }
+    if (this._serving) return { ok: true };
+
+    const LOCAL_ONLY = new Set([
+      "read_file",
+      "recall_memories",
+      "list_events",
+      "delegate_to_agent",
+    ]);
+    const tools = this.runtime.getToolRegistry().list();
+    const capabilities = tools
+      .filter((t: { name: string }) => !LOCAL_ONLY.has(t.name))
+      .map((t: { name: string }) => t.name);
+
+    try {
+      const res = await fetch(`${this._servingSyncUrl}/api/v1/agents/register`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this._servingAuthToken}`,
+        },
+        body: JSON.stringify({
+          motebit_id: this.motebitId,
+          endpoint_url: `ws://${this.motebitId}`,
+          public_key: this.publicKey,
+          capabilities,
+        }),
+      });
+      if (!res.ok) return { ok: false, error: `Registration failed: ${res.status}` };
+      this._serving = true;
+      return { ok: true };
+    } catch (err: unknown) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  stopServing(): void {
+    this._serving = false;
+  }
+
+  isServing(): boolean {
+    return this._serving;
+  }
+
+  async discoverAgents(): Promise<
+    Array<{ motebit_id: string; capabilities: string[]; trust_level?: string }>
+  > {
+    if (!this._servingSyncUrl || !this._servingAuthToken) return [];
+    try {
+      const res = await fetch(`${this._servingSyncUrl}/api/v1/agents/discover`, {
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this._servingAuthToken}`,
+        },
+      });
+      if (!res.ok) return [];
+      const data = (await res.json()) as {
+        agents: Array<{ motebit_id: string; capabilities: string[]; trust_level?: string }>;
+      };
+      return data.agents ?? [];
+    } catch {
+      return [];
+    }
+  }
+
   get syncStatus(): SyncStatus {
     return this._syncStatus;
   }
@@ -1590,6 +1665,65 @@ export class MobileApp {
           this.runtime.enableInteractiveDelegation({
             syncUrl,
             authToken: () => this.createSyncToken("task:submit"),
+          });
+
+          // Store serving state
+          this._servingSyncUrl = syncUrl;
+          this._servingAuthToken = token ?? null;
+
+          // Wire task handler — accept delegations while the app is open.
+          wsAdapter.onCustomMessage((msg) => {
+            if (msg.type !== "task_request" || msg.task == null || !this._serving) return;
+            if (!this.runtime) return;
+
+            const task = msg.task as AgentTask;
+            const runtime = this.runtime;
+
+            this._wsAdapter?.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
+            this._activeTaskCount++;
+
+            void (async () => {
+              try {
+                const privKeyHex = await this.keyring.get("device_private_key");
+                if (!privKeyHex) return;
+                const privKeyBytes = new Uint8Array(privKeyHex.length / 2);
+                for (let i = 0; i < privKeyHex.length; i += 2) {
+                  privKeyBytes[i / 2] = parseInt(privKeyHex.slice(i, i + 2), 16);
+                }
+
+                let receipt: ExecutionReceipt | undefined;
+                for await (const chunk of runtime.handleAgentTask(
+                  task,
+                  privKeyBytes,
+                  this.deviceId,
+                  undefined,
+                  { delegatedScope: task.delegated_scope },
+                )) {
+                  if (chunk.type === "task_result") {
+                    receipt = chunk.receipt;
+                  }
+                }
+
+                if (receipt && this._servingSyncUrl) {
+                  const freshToken = await this.createSyncToken("task:submit");
+                  await fetch(
+                    `${this._servingSyncUrl}/agent/${this.motebitId}/task/${task.task_id}/result`,
+                    {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${freshToken}`,
+                      },
+                      body: JSON.stringify(receipt),
+                    },
+                  );
+                }
+              } catch {
+                // Task execution failed
+              } finally {
+                this._activeTaskCount = Math.max(0, this._activeTaskCount - 1);
+              }
+            })();
           });
         }
 

@@ -23,6 +23,12 @@ interface AgentRecord {
   notes?: string;
 }
 
+interface DiscoveredAgent {
+  motebit_id: string;
+  capabilities: string[];
+  trust_level?: string;
+}
+
 const TRUST_COLORS: Record<string, string> = {
   unknown: "#616161",
   first_contact: "#ff9800",
@@ -53,10 +59,12 @@ interface AgentsPanelProps {
 export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.ReactElement {
   const colors = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const [tab, setTab] = useState<"known" | "discover">("known");
   const [agents, setAgents] = useState<AgentRecord[]>([]);
+  const [discovered, setDiscovered] = useState<DiscoveredAgent[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const refresh = useCallback(async () => {
+  const refreshKnown = useCallback(async () => {
     setLoading(true);
     try {
       const records = await app.listTrustedAgents();
@@ -68,11 +76,24 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
     }
   }, [app]);
 
+  const refreshDiscover = useCallback(async () => {
+    setLoading(true);
+    try {
+      const results = await app.discoverAgents();
+      setDiscovered(results);
+    } catch {
+      setDiscovered([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [app]);
+
   useEffect(() => {
     if (visible) {
-      void refresh();
+      if (tab === "known") void refreshKnown();
+      else void refreshDiscover();
     }
-  }, [visible, refresh]);
+  }, [visible, tab, refreshKnown, refreshDiscover]);
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
@@ -81,12 +102,29 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
         <View style={styles.header}>
           <View style={styles.headerLeft}>
             <Text style={styles.headerTitle}>Agents</Text>
-            <View style={styles.countBadge}>
-              <Text style={styles.countText}>{agents.length}</Text>
-            </View>
           </View>
           <TouchableOpacity onPress={onClose} activeOpacity={0.7}>
             <Text style={styles.closeBtn}>Done</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Tabs */}
+        <View style={styles.tabBar}>
+          <TouchableOpacity
+            style={[styles.tab, tab === "known" && styles.tabActive]}
+            onPress={() => setTab("known")}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.tabText, tab === "known" && styles.tabTextActive]}>Known</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.tab, tab === "discover" && styles.tabActive]}
+            onPress={() => setTab("discover")}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.tabText, tab === "discover" && styles.tabTextActive]}>
+              Discover
+            </Text>
           </TouchableOpacity>
         </View>
 
@@ -94,7 +132,7 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="small" color={colors.accent} />
           </View>
-        ) : (
+        ) : tab === "known" ? (
           <FlatList
             data={agents}
             keyExtractor={(item) => item.remote_motebit_id}
@@ -136,6 +174,45 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
               </View>
             }
           />
+        ) : (
+          <FlatList
+            data={discovered}
+            keyExtractor={(item) => item.motebit_id}
+            style={styles.list}
+            contentContainerStyle={styles.listContent}
+            renderItem={({ item }) => {
+              const trustColor = TRUST_COLORS[item.trust_level ?? "unknown"] ?? "#616161";
+              return (
+                <View style={styles.agentItem}>
+                  <View style={styles.agentHeader}>
+                    <Text style={styles.agentId}>{truncateId(item.motebit_id)}</Text>
+                    {item.trust_level && (
+                      <View style={[styles.trustBadge, { borderColor: trustColor }]}>
+                        <Text style={[styles.trustText, { color: trustColor }]}>
+                          {item.trust_level}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                  {item.capabilities.length > 0 && (
+                    <View style={styles.capsRow}>
+                      {item.capabilities.map((cap) => (
+                        <View key={cap} style={styles.capTag}>
+                          <Text style={styles.capText}>{cap}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              );
+            }}
+            ListEmptyComponent={
+              <View style={styles.emptyContainer}>
+                <Text style={styles.emptyText}>No agents on the network yet.</Text>
+                <Text style={styles.emptySubtext}>Connect to a relay to discover agents.</Text>
+              </View>
+            }
+          />
         )}
       </View>
     </Modal>
@@ -168,20 +245,32 @@ function createStyles(c: ThemeColors) {
       fontSize: 17,
       fontWeight: "600",
     },
-    countBadge: {
-      backgroundColor: c.borderLight,
-      borderRadius: 10,
-      paddingHorizontal: 8,
-      paddingVertical: 2,
-    },
-    countText: {
-      color: c.textMuted,
-      fontSize: 12,
-      fontWeight: "600",
-    },
     closeBtn: {
       color: c.accent,
       fontSize: 16,
+      fontWeight: "600",
+    },
+    tabBar: {
+      flexDirection: "row",
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.borderPrimary,
+      paddingHorizontal: 16,
+    },
+    tab: {
+      paddingVertical: 10,
+      paddingHorizontal: 16,
+      borderBottomWidth: 2,
+      borderBottomColor: "transparent",
+    },
+    tabActive: {
+      borderBottomColor: c.textPrimary,
+    },
+    tabText: {
+      fontSize: 13,
+      color: c.textMuted,
+    },
+    tabTextActive: {
+      color: c.textPrimary,
       fontWeight: "600",
     },
     loadingContainer: {
@@ -224,6 +313,23 @@ function createStyles(c: ThemeColors) {
     trustText: {
       fontSize: 11,
       fontWeight: "700",
+    },
+    capsRow: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 4,
+      marginTop: 4,
+    },
+    capTag: {
+      backgroundColor: "rgba(126,184,218,0.1)",
+      borderRadius: 3,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+    },
+    capText: {
+      fontSize: 10,
+      color: c.textMuted,
+      fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
     },
     statsRow: {
       flexDirection: "row",
