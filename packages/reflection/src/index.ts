@@ -9,8 +9,6 @@
  *   engine.ts       — full pipeline: LLM call → insight storage → event log
  *
  * Plan reflection lives in @motebit/planner (tightly coupled to plan execution).
- *
- * BSL-1.1 licensed. This is the adaptive loop — the part that compounds.
  */
 
 export { type ReflectionResult, reflect, parseReflectionResponse } from "./conversation.js";

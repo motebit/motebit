@@ -4,7 +4,6 @@
  * Self-model, economic consequences, precision context. The agent's
  * capacity for self-awareness, derived from its own metrics.
  *
- * BSL-1.1 licensed. This is interior intelligence, not protocol surface.
  * Depends only on @motebit/sdk types. Zero I/O, zero Node deps.
  * Any surface (browser, mobile, CLI, admin) can import directly.
  */
