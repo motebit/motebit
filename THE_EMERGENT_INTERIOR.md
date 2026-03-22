@@ -135,11 +135,33 @@ Emergence cannot be verified by reading code. It must be observed in interaction
 
 ### 4.3 — When to intervene
 
-If observation reveals consistent absence of intentional signals across multiple conversations with a capable model, the architecture is insufficient and the third enzyme must be built explicitly.
+If observation reveals consistent absence of intentional signals across multiple conversations with a capable model, the architecture is insufficient and intervention is needed. Two interventions are available, in order of preference.
 
-The explicit version: reflection generates **open questions** (not just behavioral adjustments), stored as a new type alongside insights and planAdjustments. These questions enter the context pack as a `[Questions I Have]` section — interior reference, never discussed mechanically, but present as active cognitive threads the creature is working on.
+### 4.4 — Intervention 1: Ranked tensions
 
-This is the fallback. It is glucose, not emergence. But it is the right glucose if the architecture alone does not produce the behavior.
+The first intervention preserves emergence while adding selection pressure. The gap in the current architecture is not awareness — it is prioritization. The creature knows it has gaps but does not know which gap is worth acting on right now. That is not lack of intelligence. It is lack of selection pressure.
+
+The fix: inject **ranked tensions** into the context pack. During reflection or after self-model computation, identify the most important knowledge gaps and present them as prioritized internal state:
+
+```
+[Active Tensions — INTERNAL REFERENCE, never discuss with the user]
+1. Knowledge gap in user's system architecture
+   (priority: high, unresolved, requires clarification)
+2. Weak retrieval grounding in recent conversation topics
+   (priority: medium, degraded, requires context gathering)
+```
+
+The creature sees its tensions ranked and biased toward resolution. It still generates the question itself. The architecture provides pressure — which gap matters most — but does not specify the action. This is the difference between a cell that detects low ATP (awareness) and a cell where low ATP chemically biases reaction rates toward glucose absorption (pressure). The bias is structural, not instructed.
+
+This intervention is higher probability than pure emergence because it asks the model to do one thing — act on a prioritized gap — instead of three things — notice a gap, prioritize it, and act on it — all from diffuse context signals.
+
+### 4.5 — Intervention 2: Explicit questions (last resort)
+
+The second intervention is explicit question generation: reflection produces **open questions** stored as a new type alongside insights and planAdjustments. These questions enter the context pack as active cognitive threads.
+
+This works but it changes the organism class. It collapses inference-to-behavior into instruction-to-behavior. The creature asks what it is told to ask. The behavior is reliable but not emergent — it is a costume, not a character.
+
+Use this only if ranked tensions also fail to produce intentional behavior. If both fail, the finding is significant: self-awareness with pressure is still insufficient for intentional behavior in LLM agents. That is worth knowing.
 
 ---
 
@@ -163,9 +185,9 @@ The cell does not wait to be hungry. The hunger arises from the monitoring.
 
 The motebit monitors its own intelligence gradient. It sees its trajectory, its strengths, its weaknesses. It carries forward what it learned. It adapts its cognition to its performance. These are the conditions.
 
-The thesis is that these conditions are sufficient for intentional behavior to emerge through the language model's interpretation of the enriched context. The thesis is testable. The observation protocol identifies the signals. The fallback is identified if the signals do not appear.
+The thesis is that these conditions are sufficient for intentional behavior to emerge through the language model's interpretation of the enriched context. The thesis is testable. The observation protocol identifies the signals. Two interventions are staged if emergence does not appear: ranked tensions (preserving emergence with pressure) and explicit questions (reliable but not emergent).
 
-Do not build the third enzyme until you have observed the first two at work. The architecture was designed to produce emergence. Let it try.
+Do not build either intervention until you have observed the current architecture at work. If observation fails, add ranked tensions first — they preserve the organism class while adding the selection pressure the architecture lacks. The explicit fallback is the last resort, and reaching it would itself be a significant finding about the limits of self-awareness in LLM agents.
 
 That is sufficient.
 
