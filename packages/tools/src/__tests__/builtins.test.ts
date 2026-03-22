@@ -10,7 +10,11 @@ import {
   createShellExecHandler,
   createRecallMemoriesHandler,
   createListEventsHandler,
+  createUndoWriteHandler,
   registerBuiltinTools,
+  isPathAllowed,
+  isDirectoryAllowed,
+  DESTRUCTIVE_PATTERNS,
 } from "../builtins/index";
 
 // ---------- web_search ----------
@@ -281,6 +285,251 @@ describe("write_file", () => {
 
   it("has requiresApproval set", () => {
     expect(writeFileDefinition.requiresApproval).toBe(true);
+  });
+
+  it("creates backup before overwriting existing file", async () => {
+    const fs = await import("node:fs/promises");
+    const backupDir = `${testDir}/backups`;
+    const handler = createWriteFileHandler({ backupDir, allowedPaths: [testDir] });
+    const filePath = `${testDir}/overwrite.txt`;
+
+    // Write initial content
+    await fs.mkdir(testDir, { recursive: true });
+    await fs.writeFile(filePath, "original", "utf-8");
+
+    // Overwrite — should create backup
+    const result = await handler({ path: filePath, content: "updated" });
+    expect(result.ok).toBe(true);
+
+    // Verify backup exists
+    const backupFiles = await fs.readdir(backupDir);
+    const backups = backupFiles.filter((f) => !f.endsWith(".meta.json"));
+    expect(backups.length).toBe(1);
+
+    // Verify backup content
+    const backupContent = await fs.readFile(`${backupDir}/${backups[0]}`, "utf-8");
+    expect(backupContent).toBe("original");
+
+    // Verify meta file
+    const metaFiles = backupFiles.filter((f) => f.endsWith(".meta.json"));
+    expect(metaFiles.length).toBe(1);
+    const meta = JSON.parse(await fs.readFile(`${backupDir}/${metaFiles[0]}`, "utf-8"));
+    expect(meta.originalPath).toContain("overwrite.txt");
+    expect(meta.size).toBe(8);
+  });
+
+  it("skips backup for new files", async () => {
+    const fs = await import("node:fs/promises");
+    const backupDir = `${testDir}/backups`;
+    const handler = createWriteFileHandler({ backupDir });
+    const filePath = `${testDir}/new.txt`;
+
+    const result = await handler({ path: filePath, content: "fresh" });
+    expect(result.ok).toBe(true);
+
+    // No backup created for new file
+    try {
+      const files = await fs.readdir(backupDir);
+      expect(files.length).toBe(0);
+    } catch {
+      // backupDir doesn't exist — correct, no backup was needed
+    }
+  });
+
+  it("accepts WriteFileConfig object", async () => {
+    const fs = await import("node:fs/promises");
+    await fs.mkdir(testDir, { recursive: true });
+    const handler = createWriteFileHandler({ allowedPaths: [testDir] });
+    const filePath = `${testDir}/config-test.txt`;
+    const result = await handler({ path: filePath, content: "works" });
+    expect(result.ok).toBe(true);
+  });
+});
+
+// ---------- undo_write ----------
+
+describe("undo_write", () => {
+  const testDir = "/tmp/__motebit_test_undo__";
+
+  afterEach(async () => {
+    const fs = await import("node:fs/promises");
+    await fs.rm(testDir, { recursive: true, force: true });
+  });
+
+  it("restores file from backup", async () => {
+    const fs = await import("node:fs/promises");
+    const backupDir = `${testDir}/backups`;
+    const filePath = `${testDir}/restore-me.txt`;
+
+    // Create original + overwrite (which creates backup)
+    const writer = createWriteFileHandler({ backupDir });
+    await fs.mkdir(testDir, { recursive: true });
+    await fs.writeFile(filePath, "original-content", "utf-8");
+    await writer({ path: filePath, content: "overwritten" });
+
+    // Verify it was overwritten
+    expect(await fs.readFile(filePath, "utf-8")).toBe("overwritten");
+
+    // Undo
+    const undoer = createUndoWriteHandler({ backupDir });
+    const result = await undoer({ path: filePath });
+    expect(result.ok).toBe(true);
+    expect(result.data as string).toContain("Restored");
+
+    // Verify content restored
+    expect(await fs.readFile(filePath, "utf-8")).toBe("original-content");
+  });
+
+  it("returns error when no backup exists", async () => {
+    const undoer = createUndoWriteHandler({ backupDir: `${testDir}/empty-backups` });
+    const result = await undoer({ path: "/tmp/no-backup.txt" });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("No backup found");
+  });
+
+  it("returns error on missing path parameter", async () => {
+    const undoer = createUndoWriteHandler();
+    const result = await undoer({});
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Missing required parameter");
+  });
+
+  it("enforces allowedPaths on restore target", async () => {
+    const undoer = createUndoWriteHandler({ allowedPaths: ["/allowed/only"] });
+    const result = await undoer({ path: "/etc/passwd" });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Access denied");
+  });
+});
+
+// ---------- path_sandbox ----------
+
+describe("path_sandbox", () => {
+  it("allows paths within sandbox", () => {
+    const result = isPathAllowed(__filename, [__dirname]);
+    expect(result.allowed).toBe(true);
+  });
+
+  it("denies paths outside sandbox", () => {
+    const result = isPathAllowed("/etc/passwd", ["/tmp"]);
+    expect(result.allowed).toBe(false);
+    expect(result.error).toContain("outside allowed paths");
+  });
+
+  it("handles segment-boundary matching", () => {
+    // /tmp/project-evil should NOT match /tmp/project
+    const result = isPathAllowed("/tmp/project-evil/file.txt", ["/tmp/project"]);
+    expect(result.allowed).toBe(false);
+  });
+
+  it("allows exact path match", () => {
+    const result = isPathAllowed(__dirname, [__dirname]);
+    expect(result.allowed).toBe(true);
+  });
+
+  it("returns allowed for empty allowedPaths", () => {
+    const result = isPathAllowed("/any/path", []);
+    expect(result.allowed).toBe(true);
+  });
+
+  it("handles ENOENT with parent fallback for new files", () => {
+    const result = isPathAllowed(`${__dirname}/nonexistent-new-file.txt`, [__dirname]);
+    expect(result.allowed).toBe(true);
+  });
+
+  it("denies when parent also doesn't exist", () => {
+    const result = isPathAllowed("/nonexistent/parent/dir/file.txt", ["/tmp"]);
+    expect(result.allowed).toBe(false);
+  });
+
+  it("isDirectoryAllowed allows existing directory", () => {
+    const result = isDirectoryAllowed(__dirname, [__dirname]);
+    expect(result.allowed).toBe(true);
+  });
+
+  it("isDirectoryAllowed denies non-existent directory", () => {
+    const result = isDirectoryAllowed("/nonexistent/dir", ["/tmp"]);
+    expect(result.allowed).toBe(false);
+    expect(result.error).toContain("does not exist");
+  });
+
+  it("isDirectoryAllowed denies file (not directory)", () => {
+    const result = isDirectoryAllowed(__filename, [__dirname]);
+    expect(result.allowed).toBe(false);
+    expect(result.error).toContain("Not a directory");
+  });
+
+  it("isDirectoryAllowed denies outside sandbox", () => {
+    const result = isDirectoryAllowed("/tmp", ["/var"]);
+    expect(result.allowed).toBe(false);
+    expect(result.error).toContain("outside allowed paths");
+  });
+
+  it("isDirectoryAllowed allows with empty allowedPaths", () => {
+    const result = isDirectoryAllowed("/tmp", []);
+    expect(result.allowed).toBe(true);
+  });
+});
+
+// ---------- DESTRUCTIVE_PATTERNS ----------
+
+describe("DESTRUCTIVE_PATTERNS", () => {
+  it("rm detects -r flag", () => {
+    expect(DESTRUCTIVE_PATTERNS.rm!(["-r", "dir/"])).toBe(true);
+  });
+
+  it("rm detects -rf flag", () => {
+    expect(DESTRUCTIVE_PATTERNS.rm!(["-rf", "/"])).toBe(true);
+  });
+
+  it("rm detects --recursive", () => {
+    expect(DESTRUCTIVE_PATTERNS.rm!(["--recursive"])).toBe(true);
+  });
+
+  it("rm allows non-recursive delete", () => {
+    expect(DESTRUCTIVE_PATTERNS.rm!(["file.txt"])).toBe(false);
+  });
+
+  it("git detects reset --hard", () => {
+    expect(DESTRUCTIVE_PATTERNS.git!(["reset", "--hard"])).toBe(true);
+  });
+
+  it("git detects push --force", () => {
+    expect(DESTRUCTIVE_PATTERNS.git!(["push", "--force"])).toBe(true);
+  });
+
+  it("git detects push --force-with-lease", () => {
+    expect(DESTRUCTIVE_PATTERNS.git!(["push", "--force-with-lease"])).toBe(true);
+  });
+
+  it("git detects clean -f", () => {
+    expect(DESTRUCTIVE_PATTERNS.git!(["clean", "-f"])).toBe(true);
+  });
+
+  it("git detects branch -D", () => {
+    expect(DESTRUCTIVE_PATTERNS.git!(["branch", "-D", "feature"])).toBe(true);
+  });
+
+  it("git allows safe commands", () => {
+    expect(DESTRUCTIVE_PATTERNS.git!(["status"])).toBe(false);
+    expect(DESTRUCTIVE_PATTERNS.git!(["log"])).toBe(false);
+    expect(DESTRUCTIVE_PATTERNS.git!(["push"])).toBe(false);
+  });
+
+  it("chmod detects 777", () => {
+    expect(DESTRUCTIVE_PATTERNS.chmod!(["777", "file"])).toBe(true);
+  });
+
+  it("chmod allows normal perms", () => {
+    expect(DESTRUCTIVE_PATTERNS.chmod!(["644", "file"])).toBe(false);
+  });
+
+  it("chown detects recursive", () => {
+    expect(DESTRUCTIVE_PATTERNS.chown!(["-R", "root:root", "/"])).toBe(true);
+  });
+
+  it("chown allows non-recursive", () => {
+    expect(DESTRUCTIVE_PATTERNS.chown!(["user:group", "file"])).toBe(false);
   });
 });
 
