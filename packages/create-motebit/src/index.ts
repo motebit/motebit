@@ -153,35 +153,78 @@ function makeAgentPackageJson(name: string): string {
     type: "module",
     scripts: {
       build: "tsc",
-      dev: "tsc && npx motebit serve --identity ./motebit.md --tools ./dist/tools.js --serve-transport http --direct",
-      start:
-        "npx motebit serve --identity ./motebit.md --tools ./dist/tools.js --serve-transport http --direct --self-test",
+      start: "node dist/index.js",
+      dev: "tsc && node dist/index.js",
+      verify: "npx create-motebit verify motebit.md",
+      "self-test": "tsc && node dist/index.js --self-test",
     },
     dependencies: {
-      "@motebit/sdk": "^0.3.0",
+      "@motebit/sdk": `^${__VERIFY_VERSION__}`,
+      motebit: `^${__VERIFY_VERSION__}`,
     },
     devDependencies: {
-      motebit: "^0.3.0",
       typescript: "^5.7.0",
     },
   };
   return JSON.stringify(pkg, null, 2) + "\n";
 }
 
-function makeAgentTools(): string {
+function makeAgentTools(name: string): string {
   const sdk = "@motebit/sdk";
   return `import type { ToolDefinition, ToolResult } from "${sdk}";
 
-type ToolEntry = {
+/**
+ * ${name} — tool definitions.
+ *
+ * Each tool has a definition (name, description, input schema) and a handler.
+ * The handler receives validated arguments and returns a result.
+ *
+ * These tools are what your agent CAN DO. Other agents on the network
+ * discover your capabilities via the relay and delegate tasks to you.
+ * The tool names become your agent's advertised capabilities.
+ *
+ * Add your own tools below. Remove the examples when you're ready.
+ */
+
+export type ToolEntry = {
   definition: ToolDefinition;
   handler: (args: Record<string, unknown>) => Promise<ToolResult>;
 };
 
 const tools: ToolEntry[] = [
+  // --- Example: a tool that fetches a URL and returns the text ---
+  {
+    definition: {
+      name: "fetch_url",
+      description: "Fetch a URL and return its text content.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "The URL to fetch" },
+        },
+        required: ["url"],
+      },
+    },
+    handler: async (args) => {
+      const url = String(args.url ?? "");
+      try {
+        const res = await fetch(url, {
+          headers: { "User-Agent": "${name}/0.1.0" },
+          signal: AbortSignal.timeout(10_000),
+        });
+        const text = await res.text();
+        return { ok: true, data: text.slice(0, 50_000) };
+      } catch (err) {
+        return { ok: false, data: err instanceof Error ? err.message : String(err) };
+      }
+    },
+  },
+
+  // --- Example: a tool that echoes input (useful for testing) ---
   {
     definition: {
       name: "echo",
-      description: "Echo the input text back. A minimal working tool to prove the agent loop.",
+      description: "Echo the input text back. Useful for verifying the agent loop works.",
       inputSchema: {
         type: "object",
         properties: {
@@ -198,6 +241,66 @@ const tools: ToolEntry[] = [
 ];
 
 export default tools;
+`;
+}
+
+function makeAgentEntrypoint(name: string): string {
+  return `#!/usr/bin/env node
+/**
+ * ${name} — agent entrypoint.
+ *
+ * Starts the agent as an MCP server that accepts tasks from the relay.
+ * Other agents discover your capabilities and delegate work to you.
+ * Every completed task earns a signed receipt and trust credential.
+ *
+ * Usage:
+ *   npm run dev          # Build + start (development)
+ *   npm start            # Start from built dist/
+ *   npm run self-test    # Start + run self-delegation test
+ */
+
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import tools from "./tools.js";
+
+// Load the identity file
+const identityPath = resolve("motebit.md");
+const identity = readFileSync(identityPath, "utf-8");
+
+// Build the tool definitions for the CLI serve command
+const toolDefs = tools.map((t) => ({
+  definition: t.definition,
+  handler: t.handler,
+}));
+
+// Export for motebit serve --tools
+export default toolDefs;
+
+// When run directly, start the server
+const args = process.argv.slice(2);
+const selfTest = args.includes("--self-test");
+const port = process.env["PORT"] ?? "3100";
+
+const serveArgs = [
+  "serve",
+  "--identity", identityPath,
+  "--tools", import.meta.url.replace("file://", ""),
+  "--serve-transport", "http",
+  "--serve-port", port,
+  "--direct",
+];
+if (selfTest) serveArgs.push("--self-test");
+
+// Dynamic import to avoid bundling the full CLI
+const { execFileSync } = await import("node:child_process");
+try {
+  execFileSync("npx", ["motebit", ...serveArgs], {
+    stdio: "inherit",
+    env: { ...process.env },
+  });
+} catch {
+  process.exit(1);
+}
 `;
 }
 
@@ -324,7 +427,8 @@ async function agentScaffold(targetDir: string, nonInteractive: boolean): Promis
 
   writeFileSync(pkgPath, makeAgentPackageJson(dirName), "utf-8");
   writeFileSync(join(absDir, "tsconfig.json"), makeAgentTsconfig(), "utf-8");
-  writeFileSync(join(absDir, "src", "tools.ts"), makeAgentTools(), "utf-8");
+  writeFileSync(join(absDir, "src", "index.ts"), makeAgentEntrypoint(agentName), "utf-8");
+  writeFileSync(join(absDir, "src", "tools.ts"), makeAgentTools(agentName), "utf-8");
   writeFileSync(join(absDir, ".env.example"), makeAgentEnvExample(), "utf-8");
   writeFileSync(join(absDir, ".gitignore"), AGENT_GITIGNORE, "utf-8");
   writeFileSync(join(absDir, "motebit.md"), result.identityFileContent, "utf-8");
@@ -343,12 +447,12 @@ async function agentScaffold(targetDir: string, nonInteractive: boolean): Promis
   console.log();
   console.log(`  ${green("+")} Agent created: ${bold(relDir)}`);
   console.log();
-  console.log(`    motebit.md         ${dim("Signed agent identity")}`);
-  console.log(`    src/tools.ts       ${dim("Tool definitions (edit this)")}`);
+  console.log(`    motebit.md         ${dim("Signed identity — who your agent is")}`);
+  console.log(`    src/index.ts       ${dim("Entrypoint — starts the agent server")}`);
+  console.log(`    src/tools.ts       ${dim("Tools — what your agent can do")}`);
   console.log(`    tsconfig.json      ${dim("TypeScript config")}`);
-  console.log(`    package.json       ${dim("Node project with dev/start scripts")}`);
-  console.log(`    .env.example       ${dim("Environment variable template")}`);
-  console.log(`    .gitignore         ${dim("Secrets + dist excluded")}`);
+  console.log(`    package.json       ${dim("Scripts: dev, start, self-test, verify")}`);
+  console.log(`    .env.example       ${dim("Relay URL + API token")}`);
   console.log();
   console.log(`  Motebit ID: ${cyan(result.motebitId)}`);
   console.log();
@@ -358,10 +462,11 @@ async function agentScaffold(targetDir: string, nonInteractive: boolean): Promis
     console.log(`    cd ${dirName}`);
   }
   console.log(`    npm install`);
-  console.log(`    cp .env.example .env   ${dim("# set MOTEBIT_SYNC_URL and MOTEBIT_API_TOKEN")}`);
-  console.log(`    npm run dev`);
+  console.log(`    cp .env.example .env     ${dim("# add your relay URL and API token")}`);
+  console.log(`    npm run dev              ${dim("# build + start the agent")}`);
   console.log();
-  console.log(`  Edit ${cyan("src/tools.ts")} to add your own tools.`);
+  console.log(`  ${bold("Your agent is a body, not a document.")}`);
+  console.log(`  Edit ${cyan("src/tools.ts")} to give it hands.`);
   console.log();
 }
 

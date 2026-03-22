@@ -135,6 +135,7 @@ describe("create-motebit", () => {
     const projectDir = join(testDir, subDir);
 
     // Agent-specific files
+    expect(existsSync(join(projectDir, "src", "index.ts"))).toBe(true);
     expect(existsSync(join(projectDir, "src", "tools.ts"))).toBe(true);
     expect(existsSync(join(projectDir, "tsconfig.json"))).toBe(true);
     expect(existsSync(join(projectDir, "motebit.md"))).toBe(true);
@@ -144,13 +145,11 @@ describe("create-motebit", () => {
 
     // package.json has agent scripts
     const pkg = JSON.parse(readFileSync(join(projectDir, "package.json"), "utf-8"));
-    expect(pkg.scripts.dev).toContain("--direct");
-    expect(pkg.scripts.dev).not.toContain("--self-test");
-    expect(pkg.scripts.dev).toContain("--tools");
-    expect(pkg.scripts.start).toContain("--direct");
-    expect(pkg.scripts.start).toContain("--self-test");
+    expect(pkg.scripts.dev).toBeDefined();
+    expect(pkg.scripts.start).toBeDefined();
+    expect(pkg.scripts["self-test"]).toContain("--self-test");
     expect(pkg.dependencies).toHaveProperty("@motebit/sdk");
-    expect(pkg.devDependencies).toHaveProperty("motebit");
+    expect(pkg.dependencies).toHaveProperty("motebit");
 
     // tools.ts has echo tool
     const tools = readFileSync(join(projectDir, "src", "tools.ts"), "utf-8");
