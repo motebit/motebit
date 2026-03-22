@@ -238,7 +238,7 @@ export async function submitAnchorOnChain(
     const relayIdHash = await sha256Hex(batch.relay_id);
 
     // Function selector: keccak256("anchor(bytes32,bytes32,uint64)") first 4 bytes
-    const selectorHex = await functionSelector("anchor(bytes32,bytes32,uint64)");
+    const selectorHex = ANCHOR_SELECTOR;
 
     // ABI encode: bytes32 merkleRoot + bytes32 relayId + uint64 leafCount (padded to 32 bytes)
     const leafCountHex = batch.leaf_count.toString(16).padStart(64, "0");
@@ -306,15 +306,8 @@ async function sha256Hex(input: string): Promise<string> {
     .join("");
 }
 
-/** Compute keccak256 function selector (first 4 bytes). */
-async function functionSelector(_sig: string): Promise<string> {
-  // Note: EVM function selectors use keccak256, not SHA-256.
-  // In production, this should use a proper keccak256 implementation.
-  // For now, we use a well-known selector: anchor(bytes32,bytes32,uint64) = 0x2b3c0db3
-  // This is computed offline and hardcoded for the single function we call.
-  // When additional contract functions are needed, add @noble/hashes/keccak256.
-  return "2b3c0db3";
-}
+/** anchor(bytes32,bytes32,uint64) selector, computed offline via keccak256. */
+const ANCHOR_SELECTOR = "2b3c0db3";
 
 // === Batch Anchor Loop ===
 
