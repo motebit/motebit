@@ -25,11 +25,12 @@ When it finishes, you have a project directory:
 
 ```
 my-agent/
-  motebit.md          Signed agent identity (Ed25519 public key, governance, metadata)
-  src/tools.ts         Tool definitions — this is the file you edit
-  package.json         Scripts wired to `motebit serve`
+  motebit.md           Signed agent identity — who your agent is
+  src/index.ts         Entrypoint — starts the agent server
+  src/tools.ts         Tools — what your agent can do (fetch_url + echo to start)
+  package.json         Scripts: dev, start, self-test, verify
   tsconfig.json        TypeScript config (ES2022, Node16 module resolution)
-  .env.example         Environment variable template
+  .env.example         Relay URL + API token
   .gitignore           Secrets and dist excluded
 ```
 
@@ -42,7 +43,7 @@ npm install
 
 ## Step 2: Define your tool
 
-Open `src/tools.ts`. The scaffold starts with a minimal echo tool:
+Open `src/tools.ts`. The scaffold starts with `fetch_url` and `echo` tools:
 
 ```typescript
 import type { ToolDefinition, ToolResult } from "@motebit/sdk";
@@ -210,22 +211,13 @@ MOTEBIT_API_TOKEN=your-local-token
 npm run dev
 ```
 
-This runs `tsc` to compile TypeScript, then starts the MCP server:
+This runs `tsc` to compile TypeScript, then starts the agent server:
 
 ```bash
-tsc && npx motebit serve --identity ./motebit.md --tools ./dist/tools.js --serve-transport http --direct
+tsc && node dist/index.js
 ```
 
-The flags:
-
-| Flag | Purpose |
-|------|---------|
-| `--identity ./motebit.md` | Load the signed identity file |
-| `--tools ./dist/tools.js` | Load your compiled tool definitions |
-| `--serve-transport http` | Use HTTP (StreamableHTTP) transport instead of stdio |
-| `--direct` | Direct tool execution — no LLM, maps prompt to tool input |
-
-You should see output like:
+The entrypoint (`src/index.ts`) loads your identity and tools, then starts `motebit serve` with HTTP transport in direct mode. You should see output like:
 
 ```
 [2026-03-20T14:30:00.000Z] Identity verified: 01953abc-def0-7abc-...
@@ -239,16 +231,16 @@ The 7 tools include your custom tool(s) plus the synthetic motebit tools: `moteb
 
 ## Step 5: Test with --self-test
 
-The production `start` script includes `--self-test`:
+Run the self-test to verify the full protocol loop:
 
 ```bash
-npm run start
+npm run self-test
 ```
 
 Which runs:
 
 ```bash
-npx motebit serve --identity ./motebit.md --tools ./dist/tools.js --serve-transport http --direct --self-test
+tsc && node dist/index.js --self-test
 ```
 
 The `--self-test` flag does something specific after relay registration: it submits a self-delegation task through the relay back to itself. This exercises the full protocol loop in one shot:
@@ -358,16 +350,7 @@ const valid = await verifyExecutionReceipt(receipt, publicKey);
 
 The scaffold starts in direct mode — one prompt maps to one tool call, no LLM involved. To add AI-powered tool selection, multi-tool chaining, and prompt reasoning, remove `--direct` from your scripts and set a provider key.
 
-In `package.json`:
-
-```json
-{
-  "scripts": {
-    "dev": "tsc && npx motebit serve --identity ./motebit.md --tools ./dist/tools.js --serve-transport http",
-    "start": "npx motebit serve --identity ./motebit.md --tools ./dist/tools.js --serve-transport http --self-test"
-  }
-}
-```
+In `src/index.ts`, remove the `"--direct"` string from the `serveArgs` array. The entrypoint will then start the agent with AI reasoning enabled.
 
 In `.env`:
 

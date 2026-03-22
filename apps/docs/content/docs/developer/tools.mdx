@@ -7,17 +7,18 @@ Tools give the motebit agency — the ability to read files, search the web, exe
 
 ## Built-in tools
 
-Motebit ships with seven built-in tools:
+Motebit registers six tools by default:
 
 | Tool | Risk | Description |
 |---|---|---|
-| `readFile` | Read | Read a file from allowed paths |
-| `writeFile` | Write | Write a file (requires approval) |
-| `shellExec` | Execute | Execute a shell command (requires approval) |
-| `webSearch` | Read | Search the web |
-| `readUrl` | Annotate | Fetch and read a URL |
-| `recallMemories` | Read | Query the agent's memory graph |
-| `listEvents` | Read | Browse the agent's event log |
+| `read_file` | Read | Read a file from allowed paths |
+| `web_search` | Read | Search the web (Brave → DuckDuckGo fallback) |
+| `read_url` | Read | Fetch and read a URL |
+| `recall_memories` | Read | Query the agent's memory graph |
+| `list_events` | Read | Browse the agent's event log |
+| `delegate_to_agent` | Read | Delegate a task to a remote agent via relay |
+
+Additional tools (`write_file`, `shell_exec`) exist in `@motebit/tools` but are not registered by default. They require operator mode and explicit approval — see [Shell Execution](/docs/developer/tools#shell-execution) for the governance requirements before enabling.
 
 ## MCP integration
 

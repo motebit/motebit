@@ -79,7 +79,7 @@ npm create motebit my-agent --agent   # Scaffold a runnable service agent
 npx create-motebit verify             # Verify the signature
 ```
 
-The `--agent` scaffold creates a project with `src/tools.ts` (an echo tool to start), `motebit.md` (signed service identity), and `package.json` wired to `motebit serve --direct`. Edit `src/tools.ts`, run `npm run dev`, and your agent registers with the relay and is ready to receive delegated tasks. When deployed, `npm run start` includes a self-test that verifies the full receipt loop.
+The `--agent` scaffold creates a project with `src/index.ts` (entrypoint), `src/tools.ts` (fetch_url and echo tools to start), `motebit.md` (signed service identity), and `package.json` with dev/start/self-test scripts. Edit `src/tools.ts`, run `npm run dev`, and your agent registers with the relay and is ready to receive delegated tasks. Run `npm run self-test` to verify the full receipt loop.
 
 The scaffold starts in direct mode — no LLM needed, tools execute deterministically. To add AI reasoning (tool selection, multi-tool workflows, prompt decomposition), remove `--direct` from your scripts and set `ANTHROPIC_API_KEY`. Same identity, same receipts — the intelligence is pluggable.
 
