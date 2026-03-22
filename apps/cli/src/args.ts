@@ -243,6 +243,9 @@ Commands:
   approvals show <id>       Show approval detail
   approvals approve <id>    Approve a pending tool call
   approvals deny <id> [--reason <text>]  Deny a pending tool call
+  federation status           Show relay identity (motebit_id, DID, public key)
+  federation peers            List active federation peers
+  federation peer <url>       Peer with another relay (mutual handshake)
 
 Options:
   --provider <name>       AI provider (default: anthropic)
@@ -257,6 +260,8 @@ Options:
   --project <id>          Project ID for grouping related goals (shared context)
   --operator              Enable operator mode (write/exec tools)
   --allowed-paths <paths> Comma-separated allowed file paths (default: cwd)
+  --allow-commands <cmds> Comma-separated shell commands to allow (e.g. node,npm,git)
+  --block-commands <cmds> Comma-separated shell commands to always block (e.g. rm,mkfs)
   -v, --version           Print version and exit
   -h, --help              Print this help and exit
 

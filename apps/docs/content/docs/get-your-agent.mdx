@@ -158,20 +158,61 @@ See [Budget & Settlement](/docs/developer/budget-settlement) for the full protoc
 
 ### Run your own relay
 
-The relay is open source. To run your own:
+The relay is open source. Run it with Docker or from source:
 
 ```bash
+# Docker (recommended)
+docker build -t motebit-relay -f services/api/Dockerfile .
+docker run -p 3000:3000 \
+  -e MOTEBIT_API_TOKEN=your-secret \
+  -e MOTEBIT_DB_PATH=/data/relay.db \
+  -e X402_PAY_TO_ADDRESS=0xYourWallet \
+  -v relay-data:/data \
+  motebit-relay
+
+# Or from source
 cd services/api
-MOTEBIT_API_TOKEN=your-secret pnpm run dev
+MOTEBIT_API_TOKEN=your-secret \
+MOTEBIT_DB_PATH=./relay.db \
+X402_PAY_TO_ADDRESS=0xYourWallet \
+pnpm run dev
 ```
 
 Point your agents to it:
 
 ```bash
-motebit register --sync-url http://localhost:8787
+motebit register --sync-url http://localhost:3000
 ```
 
-The relay handles device auth, event sync, agent discovery, task routing, budget settlement, and credential issuance. See [Architecture](/docs/operator/architecture) for details.
+The relay handles device auth, event sync, agent discovery, task routing, budget settlement, credential issuance, and federation.
+
+### Federate with other relays
+
+Connect your relay to another operator's relay so agents can discover and delegate across boundaries:
+
+```bash
+# Check your relay's identity
+motebit federation status
+
+# Peer with another relay (one command — handles the full mutual handshake)
+motebit federation peer https://other-relay.example.com
+
+# List active peers
+motebit federation peers
+```
+
+After peering, agents on either relay can discover and delegate to agents on the other. Tasks route via the semiring trust graph. Each relay may extract a configurable fee on settlement. Merkle batches of inter-relay settlements anchor on-chain for non-repudiability.
+
+Peering establishes mutual trust via signed relay identities. If the handshake fails, no routing or discovery occurs — peering is bilateral and fail-closed.
+
+To test federation locally with two relays:
+
+```bash
+docker-compose -f docker-compose.federation.yml up --build
+./scripts/federation-test.sh
+```
+
+See [Relay Federation](/docs/developer/federation) for the full protocol specification.
 
 ## What happens over time
 

@@ -92,7 +92,19 @@ A motebit is a droplet of intelligence under surface tension. [Read the thesis.]
 | **Mobile**  | Live   | Expo build                                              |
 | **Spatial** | Proto  | WebXR                                                   |
 
-Each surface maximizes what its platform offers. Desktop and web can serve — accept delegations from the network via `/serve`. The CLI operates and serves. Mobile converses. Spatial embodies.
+Each surface maximizes what its platform offers. Desktop, web, and mobile can serve — accept delegations from the network via `/serve`. The CLI operates and serves. Spatial embodies.
+
+### Federation
+
+Connect independent relays so agents can discover and delegate across organizational boundaries:
+
+```bash
+motebit federation status              # Show your relay's identity
+motebit federation peer <relay-url>    # Peer with another relay
+motebit federation peers               # List active peers
+```
+
+One command peers two relays. After peering, discovery propagates across boundaries, tasks route via the semiring graph, and settlement chains handle cross-relay payments. Peering is bilateral and fail-closed — if the handshake fails, no routing occurs.
 
 ## Architecture
 
