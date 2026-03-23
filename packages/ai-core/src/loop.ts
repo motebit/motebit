@@ -19,6 +19,7 @@ import type { StateVectorEngine } from "@motebit/state-vector";
 import type { BehaviorEngine } from "@motebit/behavior-engine";
 import type { StreamingProvider } from "./index.js";
 import { inferStateFromText } from "./infer-state.js";
+import { isSelfReferential } from "./core.js";
 
 // === Constants ===
 
@@ -675,7 +676,9 @@ export async function* runTurnStreaming(
   // memory candidates may be influenced by attacker-controlled tool output.
   const MAX_TOOL_TURN_CONFIDENCE = 0.6;
   const memoriesFormed: MemoryNode[] = [];
-  let rawCandidates = finalResponse.memory_candidates;
+  // Defense in depth: filter self-referential memories in the loop, not just in
+  // tag parsing. Catches candidates regardless of provider implementation.
+  let rawCandidates = finalResponse.memory_candidates.filter((c) => !isSelfReferential(c.content));
   if (toolCallsSucceeded > 0) {
     rawCandidates = rawCandidates.map((c) => ({
       ...c,

@@ -213,7 +213,7 @@ const SELF_REFERENTIAL_PATTERNS = [
   /\b(?:memory graph|memory system|consolidation|half[- ]life|decay)\b/i,
 ];
 
-function isSelfReferential(content: string): boolean {
+export function isSelfReferential(content: string): boolean {
   return SELF_REFERENTIAL_PATTERNS.some((p) => p.test(content));
 }
 
