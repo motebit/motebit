@@ -70,13 +70,18 @@ const voiceAPI = initVoice(ctx, chatAPI, {
   },
 });
 
-const slashCommands = initSlashCommands(chatAPI, ctx, {
+const slashCommands = initSlashCommands(ctx, {
   openSettings: () => settings.open(),
   openConversations: () => conversations.open(),
   openShortcuts: () => openShortcutDialog(),
   openMemory: (auditNodeIds) => gatedPanels.openMemory(auditNodeIds),
   openGoals: () => gatedPanels.openGoals(),
   openAgents: () => gatedPanels.openAgents(),
+  newConversation: () => {
+    app.resetConversation();
+    const chatLog = document.getElementById("chat-log") as HTMLDivElement;
+    chatLog.innerHTML = "";
+  },
 });
 chatAPI.setSlashCommands(slashCommands);
 

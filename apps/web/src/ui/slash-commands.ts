@@ -1,7 +1,6 @@
 // === Slash Command Autocomplete ===
 // Web-specific subset of commands. Desktop-only commands are omitted.
 
-import type { ChatAPI } from "./chat";
 import { addMessage, addExpandableCard } from "./chat";
 import type { WebContext } from "../types";
 import { loadSyncUrl } from "../storage";
@@ -76,6 +75,7 @@ export interface SlashCommandsCallbacks {
   openMemory(auditNodeIds?: Map<string, string>): void;
   openGoals(): void;
   openAgents(): void;
+  newConversation(): void;
 }
 
 export interface SlashCommandsHandle {
@@ -84,7 +84,6 @@ export interface SlashCommandsHandle {
 }
 
 export function initSlashCommands(
-  chatAPI: ChatAPI,
   ctx: WebContext,
   callbacks: SlashCommandsCallbacks,
 ): SlashCommandsHandle {
@@ -151,7 +150,8 @@ export function initSlashCommands(
 
     switch (cmd.name) {
       case "clear":
-        void chatAPI.handleSend();
+        chatInput.value = "";
+        callbacks.newConversation();
         break;
       case "settings":
         chatInput.value = "";
