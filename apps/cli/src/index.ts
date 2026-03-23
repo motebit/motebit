@@ -282,7 +282,7 @@ async function main(): Promise<void> {
 
   if (fullConfig.cli_encrypted_key) {
     // Existing encrypted key — need passphrase to decrypt
-    passphrase = envPassphrase ?? (await promptPassphrase("Passphrase: "));
+    passphrase = envPassphrase ?? (await promptPassphrase("  Passphrase: "));
     try {
       await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
     } catch {
@@ -307,10 +307,16 @@ async function main(): Promise<void> {
     console.log("Private key encrypted and plaintext removed.");
   } else {
     // First launch — prompt for new passphrase
-    passphrase =
-      envPassphrase ?? (await promptPassphrase("Set a passphrase for your mote's key: "));
+    console.log();
+    console.log(`  ${dim("─")} ${bold("motebit")}${dim(" is creating your identity")}`);
+    console.log();
+    console.log(`  ${dim("Your mote gets its own Ed25519 keypair — a cryptographic")}`);
+    console.log(`  ${dim("identity that signs everything it does. The passphrase")}`);
+    console.log(`  ${dim("encrypts this key on disk. You'll need it each session.")}`);
+    console.log();
+    passphrase = envPassphrase ?? (await promptPassphrase("  Set a passphrase: "));
     if (!passphrase) {
-      console.error("Error: passphrase cannot be empty.");
+      console.error("  Error: passphrase cannot be empty.");
       process.exit(1);
     }
   }
