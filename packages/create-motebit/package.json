@@ -1,6 +1,6 @@
 {
   "name": "create-motebit",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "Scaffold a motebit agent project — npm create motebit",
   "type": "module",
   "bin": {

@@ -1,5 +1,13 @@
 # @motebit/behavior-engine
 
+## 0.1.8
+
+### Patch Changes
+
+- Updated dependencies [[`a58cc9a`](https://github.com/motebit/motebit/commit/a58cc9a6e79fc874151cb7044b4846acd855fbb2)]:
+  - @motebit/sdk@0.6.4
+  - @motebit/policy-invariants@0.1.8
+
 ## 0.1.7
 
 ### Patch Changes

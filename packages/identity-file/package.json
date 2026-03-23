@@ -1,6 +1,6 @@
 {
   "name": "@motebit/identity-file",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "license": "BSL-1.1",
   "private": true,
   "type": "module",
