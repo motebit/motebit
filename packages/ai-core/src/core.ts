@@ -201,6 +201,22 @@ interface AnthropicSSEEvent {
 
 // === Tag Extraction ===
 
+/**
+ * Detect self-referential memories — facts about the creature's own internals
+ * rather than facts about the user. These clutter the memory panel.
+ */
+const SELF_REFERENTIAL_PATTERNS = [
+  /\b(?:my|i)\s+(?:am|have|use|can|store|persist|run|operate)\b/i,
+  /\b(?:my|i)\s+(?:memor(?:y|ies)|tools?|capabilities?|system|architecture|state|embeddings?)\b/i,
+  /\bmotebit(?:'s)?\s+(?:memor(?:y|ies)|tools?|system|architecture|identity)\b/i,
+  /\b(?:indexeddb|sqlite|wal|websocket|onnx|three\.?js|tauri|expo)\b/i,
+  /\b(?:memory graph|memory system|consolidation|half[- ]life|decay)\b/i,
+];
+
+function isSelfReferential(content: string): boolean {
+  return SELF_REFERENTIAL_PATTERNS.some((p) => p.test(content));
+}
+
 export function extractMemoryTags(text: string): MemoryCandidate[] {
   const regex =
     /<memory\s+confidence="([^"]+)"\s+sensitivity="([^"]+)"(?:\s+type="([^"]+)")?\s*>([\s\S]*?)<\/memory>/g;
@@ -211,6 +227,8 @@ export function extractMemoryTags(text: string): MemoryCandidate[] {
     const sensitivityRaw = match[2]!;
     const typeRaw = match[3]; // optional
     const content = match[4]!.trim();
+    // Drop self-referential memories about the creature's own internals
+    if (isSelfReferential(content)) continue;
     const sensitivity = parseSensitivity(sensitivityRaw);
     const memory_type = typeRaw === "episodic" ? MemoryType.Episodic : MemoryType.Semantic;
     candidates.push({ content, confidence, sensitivity, memory_type });

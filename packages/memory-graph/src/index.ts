@@ -774,7 +774,9 @@ export class MemoryGraph {
       }
 
       case ConsolidationAction.REINFORCE: {
-        // Boost existing node's confidence and stability (half-life)
+        // Boost existing node's confidence and stability (half-life).
+        // Do NOT create a support node — the existing node already covers this fact.
+        // Creating support nodes caused visible duplication in the memory panel.
         const existingNode = decision.existingNodeId
           ? await this.storage.getNode(decision.existingNodeId)
           : null;
@@ -787,18 +789,8 @@ export class MemoryGraph {
           existingNode.last_accessed = now;
           await this.storage.saveNode(existingNode);
         }
-        // Form new node with shorter half-life as supporting context
-        const supportNode = await this.formMemory(
-          candidate,
-          embedding,
-          3 * 24 * 60 * 60 * 1000, // 3 days
-        );
-        // Create Reinforces edge
-        if (decision.existingNodeId) {
-          await this.link(supportNode.node_id, decision.existingNodeId, RT.Reinforces);
-        }
-        await this.logConsolidation(decision, supportNode.node_id);
-        return { node: supportNode, decision };
+        await this.logConsolidation(decision);
+        return { node: null, decision };
       }
 
       case ConsolidationAction.NOOP: {

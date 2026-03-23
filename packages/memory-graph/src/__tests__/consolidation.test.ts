@@ -272,7 +272,7 @@ describe("MemoryGraph.consolidateAndForm", () => {
     expect(supersedesEdge!.target_id).toBe(oldNode.node_id);
   });
 
-  it("REINFORCE: existing confidence boosted, half-life increased, Reinforces edge exists", async () => {
+  it("REINFORCE: existing confidence boosted, half-life increased, no duplicate node created", async () => {
     const existingNode = await graph.formMemory(
       { content: "User likes Python", confidence: 0.7, sensitivity: SensitivityLevel.None },
       [1, 0, 0],
@@ -297,7 +297,8 @@ describe("MemoryGraph.consolidateAndForm", () => {
     );
 
     expect(decision.action).toBe("reinforce");
-    expect(supportNode).not.toBeNull();
+    // REINFORCE no longer creates a support node — just boosts the existing one
+    expect(supportNode).toBeNull();
 
     // Check existing confidence was boosted
     const updated = await storage.getNode(existingNode.node_id);
@@ -305,11 +306,6 @@ describe("MemoryGraph.consolidateAndForm", () => {
 
     // Check half-life was increased by 1.5x (stability compounding)
     expect(updated!.half_life).toBe(originalHalfLife * 1.5);
-
-    // Check Reinforces edge
-    const edges = await storage.getEdges(supportNode!.node_id);
-    const reinforcesEdge = edges.find((e) => e.relation_type === RelationType.Reinforces);
-    expect(reinforcesEdge).toBeDefined();
   });
 
   it("REINFORCE: half-life caps at MAX_HALF_LIFE (365 days)", async () => {
