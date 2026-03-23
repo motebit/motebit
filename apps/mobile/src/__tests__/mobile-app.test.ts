@@ -180,6 +180,14 @@ vi.mock("@motebit/tools/web-safe", () => ({
     description: "Report progress",
     inputSchema: { type: "object", properties: { note: { type: "string" } }, required: ["note"] },
   },
+  selfReflectDefinition: {
+    name: "self_reflect",
+    description: "Reflect on recent interactions",
+    inputSchema: { type: "object", properties: {} },
+  },
+  createSelfReflectHandler: vi.fn((_fn: unknown) =>
+    vi.fn(() => Promise.resolve({ ok: true, data: "mock reflection" })),
+  ),
   DuckDuckGoSearchProvider: vi.fn().mockImplementation(() => ({})),
 }));
 
