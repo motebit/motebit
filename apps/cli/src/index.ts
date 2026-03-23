@@ -286,10 +286,14 @@ async function main(): Promise<void> {
     try {
       await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
     } catch {
-      console.error("Error: incorrect passphrase.");
-      console.error(
-        "  Run `npm create motebit` to generate a new identity, or set MOTEBIT_PASSPHRASE env var.",
-      );
+      console.log();
+      console.log(`  ${dim("─")} ${bold("Incorrect passphrase.")}`);
+      console.log();
+      console.log(`  ${dim("Try again, or reset your identity:")}`);
+      console.log();
+      console.log(`     ${dim("rm ~/.motebit/config.json")}`);
+      console.log(`     ${dim("motebit")}`);
+      console.log();
       process.exit(1);
     }
   } else if (fullConfig.cli_private_key != null && fullConfig.cli_private_key !== "") {
