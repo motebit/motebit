@@ -937,7 +937,7 @@ describe("reflect", () => {
     expect(mockAiReflect).toHaveBeenCalled();
   });
 
-  it("stores insights as memories", async () => {
+  it("does not store insights as memories (event log is canonical)", async () => {
     const runtime = new MotebitRuntime(
       { motebitId: "reflect-mem", tickRateHz: 0 },
       createAdapters(createMockProvider()),
@@ -954,9 +954,7 @@ describe("reflect", () => {
 
     const memories = await runtime.memory.exportAll();
     const reflectionMems = memories.nodes.filter((n) => n.content.startsWith("[reflection]"));
-    expect(reflectionMems).toHaveLength(2);
-    expect(reflectionMems[0]!.content).toContain("Insight one");
-    expect(reflectionMems[1]!.content).toContain("Insight two");
+    expect(reflectionMems).toHaveLength(0);
   });
 });
 

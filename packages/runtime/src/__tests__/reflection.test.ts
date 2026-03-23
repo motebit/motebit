@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { EventType, SensitivityLevel } from "@motebit/sdk";
+import { EventType } from "@motebit/sdk";
 
 // Mock embedText — avoid loading HF pipeline in tests
 vi.mock("@motebit/memory-graph", async (importOriginal) => {
@@ -62,7 +62,7 @@ describe("Runtime reflection — learning loop", () => {
     );
   });
 
-  it("stores plan adjustments as memories with [plan_adjustment] prefix", async () => {
+  it("does not store reflection insights as memories (event log is canonical)", async () => {
     mockReflect.mockResolvedValue({
       insights: ["User likes brevity"],
       planAdjustments: ["Be more concise", "Ask fewer clarifying questions"],
@@ -74,26 +74,8 @@ describe("Runtime reflection — learning loop", () => {
 
     await runtime.reflect();
 
-    // 1 insight + 2 plan adjustments = 3 memories formed
-    expect(formSpy).toHaveBeenCalledTimes(3);
-
-    // Verify insight is stored with [reflection] prefix
-    expect(formSpy.mock.calls[0]![0]).toMatchObject({
-      content: "[reflection] User likes brevity",
-      confidence: 0.7,
-      sensitivity: SensitivityLevel.None,
-    });
-
-    // Verify adjustments are stored with [plan_adjustment] prefix and lower confidence
-    expect(formSpy.mock.calls[1]![0]).toMatchObject({
-      content: "[plan_adjustment] Be more concise",
-      confidence: 0.6,
-      sensitivity: SensitivityLevel.None,
-    });
-    expect(formSpy.mock.calls[2]![0]).toMatchObject({
-      content: "[plan_adjustment] Ask fewer clarifying questions",
-      confidence: 0.6,
-    });
+    // Reflection results go to the event log, not the memory graph
+    expect(formSpy).not.toHaveBeenCalled();
   });
 
   it("passes goals to ai-core reflect when provided", async () => {
@@ -165,8 +147,7 @@ describe("Runtime reflection — learning loop", () => {
 
     await runtime.reflect();
 
-    // Only 1 insight, no adjustments
-    expect(formSpy).toHaveBeenCalledTimes(1);
-    expect(formSpy.mock.calls[0]![0].content).toContain("[reflection]");
+    // Reflection no longer stores to memory graph
+    expect(formSpy).not.toHaveBeenCalled();
   });
 });
