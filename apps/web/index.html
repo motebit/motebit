@@ -4046,6 +4046,119 @@
       pointer-events: none;
     }
 
+    /* Expandable system cards — progressive disclosure for diagnostics */
+    .system-card {
+      align-self: center;
+      max-width: 80%;
+      background: var(--system-bubble);
+      color: var(--system-text);
+      font-size: 12px;
+      border-radius: 8px;
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 0.25s ease, transform 0.25s ease;
+      overflow: hidden;
+    }
+    .system-card.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .system-card-summary {
+      padding: 8px 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      user-select: none;
+    }
+    .system-card-summary:hover {
+      background: rgba(255,255,255,0.04);
+    }
+    .system-card-chevron {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      flex-shrink: 0;
+      transition: transform 0.2s ease;
+      opacity: 0.5;
+    }
+    .system-card-chevron svg { display: block; }
+    .system-card.expanded .system-card-chevron {
+      transform: rotate(90deg);
+    }
+    .system-card-detail {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.25s ease;
+      white-space: pre-line;
+      font-size: 11px;
+      line-height: 1.5;
+      color: var(--text-muted);
+    }
+    .system-card.expanded .system-card-detail {
+      max-height: 50vh;
+      overflow-y: auto;
+    }
+    .system-card-detail-inner {
+      padding: 0 14px 10px;
+      border-top: 1px solid var(--border-light);
+    }
+
+    /* Memory audit indicators */
+    .memory-item.phantom .memory-item-content::before {
+      content: "";
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #f0a030;
+      margin-right: 6px;
+      vertical-align: middle;
+      flex-shrink: 0;
+    }
+    .memory-item.conflict .memory-item-content::before {
+      content: "";
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #e05555;
+      margin-right: 6px;
+      vertical-align: middle;
+      flex-shrink: 0;
+    }
+    .memory-item.near-death .memory-item-content::before {
+      content: "";
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--text-ghost);
+      margin-right: 6px;
+      vertical-align: middle;
+      flex-shrink: 0;
+    }
+    .memory-audit-tag {
+      font-size: 9px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      font-weight: 500;
+    }
+    .memory-audit-tag.phantom {
+      background: rgba(240, 160, 48, 0.15);
+      color: #f0a030;
+    }
+    .memory-audit-tag.conflict {
+      background: rgba(224, 85, 85, 0.15);
+      color: #e05555;
+    }
+    .memory-audit-tag.near-death {
+      background: rgba(128, 128, 128, 0.15);
+      color: var(--text-ghost);
+    }
+
     /* Persistent error banner */
     .error-banner {
       position: fixed;

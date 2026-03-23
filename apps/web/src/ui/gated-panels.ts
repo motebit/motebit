@@ -9,7 +9,7 @@ import { saveSyncUrl, loadSyncUrl, clearSyncUrl } from "../storage";
 import type { PlanChunk } from "@motebit/runtime";
 
 export interface GatedPanelsAPI {
-  openMemory(): void;
+  openMemory(auditNodeIds?: Map<string, string>): void;
   openGoals(): void;
   openAgents(): void;
   closeAll(): void;
@@ -67,6 +67,9 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   const memoryList = document.getElementById("memory-list") as HTMLDivElement;
   const memoryEmpty = document.getElementById("memory-empty") as HTMLDivElement;
 
+  /** Map of node_id → audit category, set by /audit and cleared on next open. */
+  let currentAuditFlags: Map<string, string> | undefined;
+
   async function populateMemories(): Promise<void> {
     const runtime = ctx.app.getRuntime();
     if (!runtime) {
@@ -92,12 +95,22 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
 
     memoryEmpty.style.display = "none";
 
-    // Sort by most recent
-    active.sort((a, b) => b.created_at - a.created_at);
+    const auditFlags = currentAuditFlags;
+
+    // Sort: flagged memories first when audit is active, then by recency
+    active.sort((a, b) => {
+      if (auditFlags) {
+        const aFlag = auditFlags.has(a.node_id) ? 0 : 1;
+        const bFlag = auditFlags.has(b.node_id) ? 0 : 1;
+        if (aFlag !== bFlag) return aFlag - bFlag;
+      }
+      return b.created_at - a.created_at;
+    });
 
     for (const node of active) {
       const item = document.createElement("div");
-      item.className = "memory-item";
+      const auditCategory = auditFlags?.get(node.node_id);
+      item.className = "memory-item" + (auditCategory ? ` ${auditCategory}` : "");
 
       const content = document.createElement("div");
       content.className = "memory-item-content";
@@ -106,6 +119,19 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
 
       const meta = document.createElement("div");
       meta.className = "memory-item-meta";
+
+      // Audit tag (if flagged)
+      if (auditCategory) {
+        const tag = document.createElement("span");
+        tag.className = `memory-audit-tag ${auditCategory}`;
+        const labels: Record<string, string> = {
+          phantom: "phantom",
+          conflict: "conflict",
+          "near-death": "fading",
+        };
+        tag.textContent = labels[auditCategory] ?? auditCategory;
+        meta.appendChild(tag);
+      }
 
       const confidence = document.createElement("span");
       confidence.textContent = `${Math.round(node.confidence * 100)}%`;
@@ -141,8 +167,9 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     }
   }
 
-  function openMemory(): void {
+  function openMemory(auditNodeIds?: Map<string, string>): void {
     closeAll();
+    currentAuditFlags = auditNodeIds;
     memoryPanel.classList.add("open");
     memoryBackdrop.classList.add("open");
     void populateMemories();
@@ -153,7 +180,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     memoryBackdrop.classList.remove("open");
   }
 
-  document.getElementById("memory-btn")!.addEventListener("click", openMemory);
+  document.getElementById("memory-btn")!.addEventListener("click", () => openMemory());
   document.getElementById("memory-close-btn")!.addEventListener("click", closeMemory);
   memoryBackdrop.addEventListener("click", closeMemory);
 

@@ -2,7 +2,7 @@
 // Web-specific subset of commands. Desktop-only commands are omitted.
 
 import type { ChatAPI } from "./chat";
-import { addMessage } from "./chat";
+import { addMessage, addExpandableCard } from "./chat";
 import type { WebContext } from "../types";
 import { loadSyncUrl } from "../storage";
 
@@ -73,7 +73,7 @@ export interface SlashCommandsCallbacks {
   openSettings(): void;
   openConversations(): void;
   openShortcuts(): void;
-  openMemory(): void;
+  openMemory(auditNodeIds?: Map<string, string>): void;
   openGoals(): void;
   openAgents(): void;
 }
@@ -200,10 +200,12 @@ export function initSlashCommands(
         const runtime = ctx.app.getRuntime();
         if (runtime) {
           const state = runtime.getState();
-          const lines = Object.entries(state).map(
-            ([k, v]) => `${k}: ${typeof v === "number" ? v.toFixed(3) : String(v)}`,
-          );
-          addMessage("system", lines.join("\n"));
+          const entries = Object.entries(state);
+          const summary = `State vector — ${entries.length} dimensions`;
+          const detail = entries
+            .map(([k, v]) => `${k}: ${typeof v === "number" ? v.toFixed(3) : String(v)}`)
+            .join("\n");
+          addExpandableCard(summary, detail);
         } else {
           addMessage("system", "Runtime not initialized.");
         }
@@ -259,10 +261,20 @@ export function initSlashCommands(
           const { nodes, edges } = await runtime.memory.exportAll();
           const active = nodes.filter((n) => !n.tombstoned);
           const pinned = active.filter((n) => n.pinned);
-          addMessage(
-            "system",
-            `Memory graph: ${active.length} nodes, ${edges.length} edges, ${pinned.length} pinned`,
-          );
+          const summary = `Memory graph — ${active.length} nodes, ${edges.length} edges, ${pinned.length} pinned`;
+          const edgeTypes = new Map<string, number>();
+          for (const e of edges) {
+            edgeTypes.set(e.relation_type, (edgeTypes.get(e.relation_type) ?? 0) + 1);
+          }
+          const detailLines = [
+            `Nodes: ${active.length} active, ${nodes.length - active.length} tombstoned`,
+          ];
+          detailLines.push(`Edges: ${edges.length} total`);
+          for (const [rel, count] of edgeTypes) {
+            detailLines.push(`  ${rel}: ${count}`);
+          }
+          detailLines.push(`Pinned: ${pinned.length}`);
+          addExpandableCard(summary, detailLines.join("\n"));
         })();
         break;
       }
@@ -294,21 +306,25 @@ export function initSlashCommands(
           }
           addMessage("system", "Reflecting...");
           const result = await runtime.reflect();
-          const lines: string[] = [];
-          if (result.selfAssessment) lines.push(`Assessment: ${result.selfAssessment}`);
+          const summary = result.selfAssessment || "Reflection complete";
+          const detailLines: string[] = [];
           if (result.insights.length > 0) {
-            lines.push("Insights:");
-            for (const i of result.insights) lines.push(`  - ${i}`);
+            detailLines.push("Insights:");
+            for (const i of result.insights) detailLines.push(`  - ${i}`);
           }
           if (result.planAdjustments.length > 0) {
-            lines.push("Adjustments:");
-            for (const a of result.planAdjustments) lines.push(`  - ${a}`);
+            detailLines.push("Adjustments:");
+            for (const a of result.planAdjustments) detailLines.push(`  - ${a}`);
           }
           if (result.patterns.length > 0) {
-            lines.push("Recurring patterns:");
-            for (const p of result.patterns) lines.push(`  - ${p}`);
+            detailLines.push("Recurring patterns:");
+            for (const p of result.patterns) detailLines.push(`  - ${p}`);
           }
-          addMessage("system", lines.join("\n") || "No reflection output");
+          if (detailLines.length > 0) {
+            addExpandableCard(summary, detailLines.join("\n"));
+          } else {
+            addExpandableCard(summary, "No additional detail.");
+          }
         })();
         break;
       }
@@ -361,33 +377,30 @@ export function initSlashCommands(
             addMessage("system", "No gradient data yet.");
             return;
           }
-          const summary = runtime.getGradientSummary();
-          const gLines: string[] = [];
-          gLines.push(
-            `Intelligence gradient: ${g.gradient.toFixed(3)} (delta: ${g.delta >= 0 ? "+" : ""}${g.delta.toFixed(3)})`,
-          );
-          if (summary.snapshotCount > 0) {
-            gLines.push(summary.trajectory);
-            gLines.push(summary.overall);
-            if (summary.strengths.length > 0)
-              gLines.push(`Strengths: ${summary.strengths.join("; ")}`);
-            if (summary.weaknesses.length > 0)
-              gLines.push(`Weaknesses: ${summary.weaknesses.join("; ")}`);
-            gLines.push(`Posture: ${summary.posture}`);
+          const gradientSummary = runtime.getGradientSummary();
+          const summaryLine = `Gradient ${g.gradient.toFixed(3)} (${g.delta >= 0 ? "+" : ""}${g.delta.toFixed(3)}) — ${gradientSummary.posture}`;
+          const detailLines: string[] = [];
+          if (gradientSummary.snapshotCount > 0) {
+            detailLines.push(gradientSummary.trajectory);
+            detailLines.push(gradientSummary.overall);
+            if (gradientSummary.strengths.length > 0)
+              detailLines.push(`Strengths: ${gradientSummary.strengths.join("; ")}`);
+            if (gradientSummary.weaknesses.length > 0)
+              detailLines.push(`Weaknesses: ${gradientSummary.weaknesses.join("; ")}`);
           }
           const { narrateEconomicConsequences } = await import("@motebit/gradient");
           const econ = narrateEconomicConsequences(g);
           if (econ.length > 0) {
-            gLines.push("");
-            gLines.push("Economic position:");
-            for (const c of econ) gLines.push(`  - ${c}`);
+            detailLines.push("");
+            detailLines.push("Economic position:");
+            for (const c of econ) detailLines.push(`  - ${c}`);
           }
           const lastRef = runtime.getLastReflection();
           if (lastRef?.selfAssessment) {
-            gLines.push("");
-            gLines.push(`Last reflection: ${lastRef.selfAssessment}`);
+            detailLines.push("");
+            detailLines.push(`Last reflection: ${lastRef.selfAssessment}`);
           }
-          addMessage("system", gLines.join("\n"));
+          addExpandableCard(summaryLine, detailLines.join("\n"));
         })();
         break;
       }
@@ -400,52 +413,35 @@ export function initSlashCommands(
             return;
           }
           const result = await runtime.auditMemory();
-          const lines: string[] = [];
-          lines.push(`Memory audit (${result.nodesAudited} nodes scanned)`);
+          const issues =
+            result.phantomCertainties.length + result.conflicts.length + result.nearDeath.length;
 
-          if (result.phantomCertainties.length > 0) {
-            lines.push("");
-            lines.push(`Phantom certainties (${result.phantomCertainties.length}):`);
-            for (const p of result.phantomCertainties) {
-              const label =
-                p.node.content.length > 60 ? p.node.content.slice(0, 60) + "..." : p.node.content;
-              lines.push(`  conf=${p.decayedConfidence.toFixed(2)} edges=${p.edgeCount}  ${label}`);
-            }
+          // Build a map of node_id → audit category for the memory panel
+          const auditFlags = new Map<string, string>();
+          for (const p of result.phantomCertainties) {
+            auditFlags.set(p.node.node_id, "phantom");
+          }
+          for (const c of result.conflicts) {
+            auditFlags.set(c.a.node_id, "conflict");
+            auditFlags.set(c.b.node_id, "conflict");
+          }
+          for (const nd of result.nearDeath) {
+            auditFlags.set(nd.node.node_id, "near-death");
           }
 
-          if (result.conflicts.length > 0) {
-            lines.push("");
-            lines.push(`Conflicts (${result.conflicts.length}):`);
-            for (const c of result.conflicts) {
-              const aLabel =
-                c.a.content.length > 40 ? c.a.content.slice(0, 40) + "..." : c.a.content;
-              const bLabel =
-                c.b.content.length > 40 ? c.b.content.slice(0, 40) + "..." : c.b.content;
-              lines.push(`  "${aLabel}" vs "${bLabel}"`);
-            }
+          if (issues === 0) {
+            addMessage("system", `Audit clean — ${result.nodesAudited} nodes, no issues.`);
+          } else {
+            const parts: string[] = [];
+            if (result.phantomCertainties.length > 0)
+              parts.push(`${result.phantomCertainties.length} phantom`);
+            if (result.conflicts.length > 0) parts.push(`${result.conflicts.length} conflict`);
+            if (result.nearDeath.length > 0) parts.push(`${result.nearDeath.length} near-death`);
+            addMessage("system", `Audit found ${parts.join(", ")} — flagged in memory panel.`);
           }
 
-          if (result.nearDeath.length > 0) {
-            lines.push("");
-            lines.push(`Near-death (${result.nearDeath.length}):`);
-            for (const nd of result.nearDeath) {
-              const label =
-                nd.node.content.length > 60
-                  ? nd.node.content.slice(0, 60) + "..."
-                  : nd.node.content;
-              lines.push(`  conf=${nd.decayedConfidence.toFixed(3)}  ${label}`);
-            }
-          }
-
-          if (
-            result.phantomCertainties.length === 0 &&
-            result.conflicts.length === 0 &&
-            result.nearDeath.length === 0
-          ) {
-            lines.push("No integrity issues found.");
-          }
-
-          addMessage("system", lines.join("\n"));
+          // Open memory panel with audit indicators
+          callbacks.openMemory(auditFlags);
         })();
         break;
       }

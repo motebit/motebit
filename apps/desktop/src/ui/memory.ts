@@ -20,7 +20,7 @@ const viewDeletionsBtn = document.getElementById("mem-view-deletions") as HTMLBu
 // === Memory Panel ===
 
 export interface MemoryAPI {
-  open(nodeId?: string): void;
+  open(nodeId?: string, auditFlags?: Map<string, string>): void;
   close(): void;
 }
 
@@ -302,11 +302,14 @@ function findNodeAt(nodes: GraphNode[], gx: number, gy: number): GraphNode | nul
 
 export function initMemory(ctx: DesktopContext): MemoryAPI {
   let focusNodeId: string | null = null;
+  /** Map of node_id → audit category, set by /audit and cleared on next open. */
+  let currentAuditFlags: Map<string, string> | undefined;
 
-  function open(nodeId?: string): void {
+  function open(nodeId?: string, auditFlags?: Map<string, string>): void {
     focusNodeId = nodeId ?? null;
-    // If focusing a specific node, ensure list view
-    if (focusNodeId != null && focusNodeId !== "" && currentView !== "list") {
+    currentAuditFlags = auditFlags;
+    // If focusing a specific node or showing audit, ensure list view
+    if ((focusNodeId != null && focusNodeId !== "" && currentView !== "list") || auditFlags) {
       setView("list");
     }
     memoryPanel.classList.add("open");
@@ -394,6 +397,17 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
     const pinned = filtered.filter((m) => m.pinned);
     const unpinned = filtered.filter((m) => !m.pinned);
 
+    // When audit is active, sort flagged memories first within each section
+    if (currentAuditFlags && currentAuditFlags.size > 0) {
+      const auditSort = (a: MemoryNode, b: MemoryNode): number => {
+        const aFlag = currentAuditFlags!.has(a.node_id) ? 0 : 1;
+        const bFlag = currentAuditFlags!.has(b.node_id) ? 0 : 1;
+        return aFlag - bFlag;
+      };
+      pinned.sort(auditSort);
+      unpinned.sort(auditSort);
+    }
+
     if (pinned.length > 0) {
       const header = document.createElement("div");
       header.className = "mem-section-header";
@@ -430,17 +444,31 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
   }
 
   function renderMemoryItem(mem: MemoryNode): void {
+    const auditCategory = currentAuditFlags?.get(mem.node_id);
     const item = document.createElement("div");
-    item.className = "mem-item";
+    item.className = "mem-item" + (auditCategory ? ` memory-item ${auditCategory}` : "");
     item.dataset.nodeId = mem.node_id;
 
     const contentDiv = document.createElement("div");
-    contentDiv.className = "mem-item-content";
+    contentDiv.className = "mem-item-content" + (auditCategory ? " memory-item-content" : "");
     contentDiv.textContent = mem.content;
     item.appendChild(contentDiv);
 
     const metaDiv = document.createElement("div");
     metaDiv.className = "mem-item-meta";
+
+    // Audit tag (if flagged)
+    if (auditCategory) {
+      const tag = document.createElement("span");
+      tag.className = `memory-audit-tag ${auditCategory}`;
+      const labels: Record<string, string> = {
+        phantom: "phantom",
+        conflict: "conflict",
+        "near-death": "fading",
+      };
+      tag.textContent = labels[auditCategory] ?? auditCategory;
+      metaDiv.appendChild(tag);
+    }
 
     if (mem.sensitivity != null && mem.sensitivity !== SensitivityLevel.None) {
       const badge = document.createElement("span");

@@ -74,7 +74,7 @@ const slashCommands = initSlashCommands(chatAPI, ctx, {
   openSettings: () => settings.open(),
   openConversations: () => conversations.open(),
   openShortcuts: () => openShortcutDialog(),
-  openMemory: () => gatedPanels.openMemory(),
+  openMemory: (auditNodeIds) => gatedPanels.openMemory(auditNodeIds),
   openGoals: () => gatedPanels.openGoals(),
   openAgents: () => gatedPanels.openAgents(),
 });

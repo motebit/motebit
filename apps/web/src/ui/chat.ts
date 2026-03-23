@@ -153,6 +153,47 @@ export function setProcessing(active: boolean): void {
   }
 }
 
+/**
+ * Renders a compact expandable card in the chat stream.
+ * Summary line always visible; detail revealed on click.
+ */
+export function addExpandableCard(summary: string, detail: string): void {
+  const card = document.createElement("div");
+  card.className = "system-card";
+
+  const summaryRow = document.createElement("div");
+  summaryRow.className = "system-card-summary";
+
+  const chevron = document.createElement("span");
+  chevron.className = "system-card-chevron";
+  chevron.innerHTML =
+    '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4.5 2.5L8 6L4.5 9.5"/></svg>';
+  summaryRow.appendChild(chevron);
+
+  const summaryText = document.createElement("span");
+  summaryText.textContent = summary;
+  summaryRow.appendChild(summaryText);
+
+  card.appendChild(summaryRow);
+
+  const detailEl = document.createElement("div");
+  detailEl.className = "system-card-detail";
+  const detailInner = document.createElement("div");
+  detailInner.className = "system-card-detail-inner";
+  detailInner.textContent = detail;
+  detailEl.appendChild(detailInner);
+  card.appendChild(detailEl);
+
+  summaryRow.addEventListener("click", () => {
+    card.classList.toggle("expanded");
+  });
+
+  chatLog.appendChild(card);
+  void card.offsetWidth;
+  card.classList.add("visible");
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
 export function showToast(text: string, duration = 3000): void {
   if (activeToast) {
     activeToast.remove();

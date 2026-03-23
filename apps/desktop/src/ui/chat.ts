@@ -183,6 +183,47 @@ export function addMessage(
   chatLog.scrollTop = chatLog.scrollHeight;
 }
 
+/**
+ * Renders a compact expandable card in the chat stream.
+ * Summary line always visible; detail revealed on click.
+ */
+export function addExpandableCard(summary: string, detail: string): void {
+  const card = document.createElement("div");
+  card.className = "system-card";
+
+  const summaryRow = document.createElement("div");
+  summaryRow.className = "system-card-summary";
+
+  const chevron = document.createElement("span");
+  chevron.className = "system-card-chevron";
+  chevron.innerHTML =
+    '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4.5 2.5L8 6L4.5 9.5"/></svg>';
+  summaryRow.appendChild(chevron);
+
+  const summaryText = document.createElement("span");
+  summaryText.textContent = summary;
+  summaryRow.appendChild(summaryText);
+
+  card.appendChild(summaryRow);
+
+  const detailEl = document.createElement("div");
+  detailEl.className = "system-card-detail";
+  const detailInner = document.createElement("div");
+  detailInner.className = "system-card-detail-inner";
+  detailInner.textContent = detail;
+  detailEl.appendChild(detailInner);
+  card.appendChild(detailEl);
+
+  summaryRow.addEventListener("click", () => {
+    card.classList.toggle("expanded");
+  });
+
+  chatLog.appendChild(card);
+  void card.offsetWidth;
+  card.classList.add("visible");
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
 export interface ActionButton {
   label: string;
   onClick: () => void;
@@ -592,7 +633,7 @@ export interface ChatCallbacks {
   openSettings(): void;
   openConversationsPanel(): void;
   openGoalsPanel(): void;
-  openMemoryPanel(nodeId?: string): void;
+  openMemoryPanel(nodeId?: string, auditFlags?: Map<string, string>): void;
   speakResponse(text: string): void;
   pushTTSChunk(delta: string): void;
   flushTTS(): void;
@@ -776,15 +817,12 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
         if (!state) {
           addMessage("system", "State vector not available (AI not initialized)");
         } else {
-          const lines: string[] = [];
-          for (const [key, value] of Object.entries(state)) {
-            if (typeof value === "number") {
-              lines.push(`${key}: ${value.toFixed(3)}`);
-            } else {
-              lines.push(`${key}: ${String(value)}`);
-            }
-          }
-          addMessage("system", lines.join("\n"));
+          const entries = Object.entries(state);
+          const summary = `State vector — ${entries.length} dimensions`;
+          const detail = entries
+            .map(([k, v]) => `${k}: ${typeof v === "number" ? v.toFixed(3) : String(v)}`)
+            .join("\n");
+          addExpandableCard(summary, detail);
         }
         break;
       }
@@ -909,9 +947,9 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
             if (!stats) {
               addMessage("system", "Memory graph not available (AI not initialized)");
             } else {
-              addMessage(
-                "system",
-                `Memory graph:\n  Nodes: ${stats.nodes}\n  Edges: ${stats.edges}\n  Pinned: ${stats.pinned}`,
+              addExpandableCard(
+                `Memory graph — ${stats.nodes} nodes, ${stats.edges} edges, ${stats.pinned} pinned`,
+                `Nodes: ${stats.nodes}\nEdges: ${stats.edges}\nPinned: ${stats.pinned}`,
               );
             }
           } catch (err: unknown) {
@@ -941,21 +979,25 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
           try {
             addMessage("system", "Reflecting...");
             const result = await ctx.app.reflect();
-            const lines: string[] = [];
-            if (result.selfAssessment) lines.push(`Assessment: ${result.selfAssessment}`);
+            const summary = result.selfAssessment || "Reflection complete";
+            const detailLines: string[] = [];
             if (result.insights.length > 0) {
-              lines.push("Insights:");
-              for (const i of result.insights) lines.push(`  - ${i}`);
+              detailLines.push("Insights:");
+              for (const i of result.insights) detailLines.push(`  - ${i}`);
             }
             if (result.planAdjustments.length > 0) {
-              lines.push("Adjustments:");
-              for (const a of result.planAdjustments) lines.push(`  - ${a}`);
+              detailLines.push("Adjustments:");
+              for (const a of result.planAdjustments) detailLines.push(`  - ${a}`);
             }
             if (result.patterns.length > 0) {
-              lines.push("Recurring patterns:");
-              for (const p of result.patterns) lines.push(`  - ${p}`);
+              detailLines.push("Recurring patterns:");
+              for (const p of result.patterns) detailLines.push(`  - ${p}`);
             }
-            addMessage("system", lines.join("\n") || "No reflection output");
+            if (detailLines.length > 0) {
+              addExpandableCard(summary, detailLines.join("\n"));
+            } else {
+              addExpandableCard(summary, "No additional detail.");
+            }
           } catch (err: unknown) {
             addMessage(
               "system",
@@ -972,74 +1014,69 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
             addMessage("system", "No gradient data yet (computed during housekeeping)");
             return;
           }
-          const summary = ctx.app.getGradientSummary();
-          const gLines = [
-            `Intelligence gradient: ${g.gradient.toFixed(3)} (delta: ${g.delta >= 0 ? "+" : ""}${g.delta.toFixed(3)})`,
-          ];
-          if (summary.snapshotCount > 0) {
-            gLines.push(summary.trajectory);
-            gLines.push(summary.overall);
-            if (summary.strengths.length > 0)
-              gLines.push(`Strengths: ${summary.strengths.join("; ")}`);
-            if (summary.weaknesses.length > 0)
-              gLines.push(`Weaknesses: ${summary.weaknesses.join("; ")}`);
-            gLines.push(`Posture: ${summary.posture}`);
+          const gradientSummary = ctx.app.getGradientSummary();
+          const summaryLine = `Gradient ${g.gradient.toFixed(3)} (${g.delta >= 0 ? "+" : ""}${g.delta.toFixed(3)}) — ${gradientSummary.posture}`;
+          const detailLines: string[] = [];
+          if (gradientSummary.snapshotCount > 0) {
+            detailLines.push(gradientSummary.trajectory);
+            detailLines.push(gradientSummary.overall);
+            if (gradientSummary.strengths.length > 0)
+              detailLines.push(`Strengths: ${gradientSummary.strengths.join("; ")}`);
+            if (gradientSummary.weaknesses.length > 0)
+              detailLines.push(`Weaknesses: ${gradientSummary.weaknesses.join("; ")}`);
           }
           const { narrateEconomicConsequences } = await import("@motebit/gradient");
           const econ = narrateEconomicConsequences(g);
           if (econ.length > 0) {
-            gLines.push("");
-            gLines.push("Economic position:");
-            for (const c of econ) gLines.push(`  - ${c}`);
+            detailLines.push("");
+            detailLines.push("Economic position:");
+            for (const c of econ) detailLines.push(`  - ${c}`);
           }
           const lastRef = ctx.app.getLastReflection();
           if (lastRef?.selfAssessment) {
-            gLines.push("");
-            gLines.push(`Last reflection: ${lastRef.selfAssessment}`);
+            detailLines.push("");
+            detailLines.push(`Last reflection: ${lastRef.selfAssessment}`);
           }
-          addMessage("system", gLines.join("\n"));
+          addExpandableCard(summaryLine, detailLines.join("\n"));
         })();
         break;
 
       case "audit":
         void (async () => {
           const auditResult = await ctx.app.auditMemory();
-          const aLines: string[] = [`Memory audit (${auditResult.nodesAudited} nodes scanned)`];
-          if (auditResult.phantomCertainties.length > 0) {
-            aLines.push("");
-            aLines.push(`Phantom certainties (${auditResult.phantomCertainties.length}):`);
-            for (const p of auditResult.phantomCertainties) {
-              const label =
-                p.node.content.length > 60 ? p.node.content.slice(0, 60) + "..." : p.node.content;
-              aLines.push(
-                `  conf=${p.decayedConfidence.toFixed(2)} edges=${p.edgeCount}  ${label}`,
-              );
-            }
+          const issues =
+            auditResult.phantomCertainties.length +
+            auditResult.conflicts.length +
+            auditResult.nearDeath.length;
+
+          // Build audit flags map for memory panel
+          const auditFlags = new Map<string, string>();
+          for (const p of auditResult.phantomCertainties) {
+            auditFlags.set(p.node.node_id, "phantom");
           }
-          if (auditResult.conflicts.length > 0) {
-            aLines.push("");
-            aLines.push(`Conflicts (${auditResult.conflicts.length}):`);
-            for (const c of auditResult.conflicts) {
-              aLines.push(`  "${c.a.content.slice(0, 40)}..." vs "${c.b.content.slice(0, 40)}..."`);
-            }
+          for (const c of auditResult.conflicts) {
+            auditFlags.set(c.a.node_id, "conflict");
+            auditFlags.set(c.b.node_id, "conflict");
           }
-          if (auditResult.nearDeath.length > 0) {
-            aLines.push("");
-            aLines.push(`Near-death (${auditResult.nearDeath.length}):`);
-            for (const nd of auditResult.nearDeath) {
-              aLines.push(
-                `  conf=${nd.decayedConfidence.toFixed(3)}  ${nd.node.content.slice(0, 60)}...`,
-              );
-            }
+          for (const nd of auditResult.nearDeath) {
+            auditFlags.set(nd.node.node_id, "near-death");
           }
-          if (
-            auditResult.phantomCertainties.length === 0 &&
-            auditResult.conflicts.length === 0 &&
-            auditResult.nearDeath.length === 0
-          ) {
-            aLines.push("No integrity issues found.");
+
+          if (issues === 0) {
+            addMessage("system", `Audit clean — ${auditResult.nodesAudited} nodes, no issues.`);
+          } else {
+            const parts: string[] = [];
+            if (auditResult.phantomCertainties.length > 0)
+              parts.push(`${auditResult.phantomCertainties.length} phantom`);
+            if (auditResult.conflicts.length > 0)
+              parts.push(`${auditResult.conflicts.length} conflict`);
+            if (auditResult.nearDeath.length > 0)
+              parts.push(`${auditResult.nearDeath.length} near-death`);
+            addMessage("system", `Audit found ${parts.join(", ")} — flagged in memory panel.`);
           }
-          addMessage("system", aLines.join("\n"));
+
+          // Open memory panel with audit indicators
+          callbacks.openMemoryPanel(undefined, auditFlags);
         })();
         break;
 
