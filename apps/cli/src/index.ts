@@ -238,134 +238,57 @@ async function main(): Promise<void> {
     config.maxTokens = fullConfig.max_tokens;
   }
 
-  // --- The creature IS the onboarding ---
-  // One unbroken flow from first byte to first conversation. The creature
-  // never exits. It asks for what it needs inline, validates, and proceeds.
+  // --- Two-phase onboarding ---
+  // Phase 1: Infra (API key) — fail early, deterministic, no narrative.
+  // Phase 2: Identity (passphrase) — the creature speaks here.
+  // Narrative begins only after the system is valid.
 
-  const isFirstLaunchFlow =
-    !fullConfig.cli_encrypted_key &&
-    (fullConfig.cli_private_key == null || fullConfig.cli_private_key === "");
-
-  // First launch: the creature arrives
-  if (isFirstLaunchFlow) {
-    console.log();
-    console.log(dim("         ."));
-    console.log(dim("       .:::."));
-    console.log(dim("      .:::::."));
-    console.log(dim("      :::::::"));
-    console.log(dim("      ':::::' "));
-    console.log(dim("        '''"));
-    console.log();
-    console.log(`  ${dim("Hello. I'm your mote — a small, curious being.")}`);
-    console.log(`  ${dim("Let me get set up so I can think.")}`);
-    console.log();
-  }
-
-  // API key — collect inline if missing, validate, persist to shell config
-  const keyEnvName = config.provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
-  const keyUrl =
-    config.provider === "openai"
-      ? "https://platform.openai.com/api-keys"
-      : "https://console.anthropic.com/settings/keys";
-  const needsKey = config.provider === "anthropic" || config.provider === "openai";
-
-  if (needsKey) {
-    let apiKey = process.env[keyEnvName];
-
-    const validateUrl =
+  // Phase 1: API key — environment check, fail fast
+  if (config.provider === "anthropic" || config.provider === "openai") {
+    const keyEnvName = config.provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+    const keyUrl =
       config.provider === "openai"
-        ? "https://api.openai.com/v1/models"
-        : "https://api.anthropic.com/v1/models";
+        ? "https://platform.openai.com/api-keys"
+        : "https://console.anthropic.com/settings/keys";
+    const apiKey = process.env[keyEnvName];
 
     if (!apiKey) {
-      if (isFirstLaunchFlow) {
-        console.log(`  ${dim("I need an API key to think. Get one here:")}`);
-      } else {
-        console.log();
-        console.log(`  ${dim("─")} ${bold("motebit")}${dim(" needs an API key to think")}`);
-      }
       console.log();
-      console.log(`     ${cyan(keyUrl)}`);
+      console.log(`  ${bold(keyEnvName)} ${dim("not set")}`);
+      console.log();
+      console.log(`  ${dim("export")} ${keyEnvName}=${dim("sk-...")}`);
+      console.log();
+      console.log(`  ${dim("Get a key:")} ${cyan(keyUrl)}`);
+      console.log(`  ${dim("Or run local:")} ${bold("motebit --provider ollama")}`);
+      console.log();
+      return;
     }
 
-    // Retry loop — the creature stays, lets you try again
-    const MAX_KEY_ATTEMPTS = 3;
-    for (let attempt = 0; attempt < MAX_KEY_ATTEMPTS; attempt++) {
-      if (!apiKey) {
-        console.log();
-        console.log(`  ${dim("Paste it here (hidden):")}`);
-        apiKey = await promptPassphrase("  ");
-        if (!apiKey) {
-          console.log();
-          console.log(`  ${dim("No key provided.")}`);
-          console.log(
-            `  ${dim("Or run locally without a key:")} ${bold("motebit --provider ollama")}`,
-          );
-          console.log();
-          process.exit(1);
-        }
-      }
-
+    // Validate
+    try {
+      const validateUrl =
+        config.provider === "openai"
+          ? "https://api.openai.com/v1/models"
+          : "https://api.anthropic.com/v1/models";
       const validateHeaders: Record<string, string> =
         config.provider === "openai"
           ? { Authorization: `Bearer ${apiKey}` }
           : { "x-api-key": apiKey, "anthropic-version": "2023-06-01" };
-
-      let keyValid = false;
-      try {
-        const resp = await fetch(validateUrl, { headers: validateHeaders });
-        keyValid = resp.ok;
-      } catch (err: unknown) {
-        // Only skip validation on genuine network failures (no internet, DNS, timeout).
-        // TypeError is what fetch throws when the network request itself fails.
-        if (err instanceof TypeError) break;
-        // Other errors (malformed request, etc.) — treat as bad key
+      const resp = await fetch(validateUrl, { headers: validateHeaders });
+      if (!resp.ok) {
+        console.log();
+        console.log(`  ${bold(keyEnvName)} ${dim("is set but invalid")}`);
+        console.log();
+        console.log(`  ${dim("Check your key:")} ${cyan(keyUrl)}`);
+        console.log();
+        return;
       }
-      if (keyValid) break; // Valid key — continue onboarding
-      console.log();
-      console.log(`  ${dim("That key didn't work. Try again:")}`);
-      apiKey = undefined; // Reset for next attempt
-
-      if (attempt === MAX_KEY_ATTEMPTS - 1) {
-        console.log();
-        console.log(`  ${dim("Still not working. Check your key here:")}`);
-        console.log();
-        console.log(`     ${cyan(keyUrl)}`);
-        console.log();
-        process.exit(1);
-      }
-    }
-
-    // If the key was entered inline (not from env), persist it to shell config
-    // apiKey is guaranteed non-null after the retry loop (loop exits or process.exit)
-    if (!process.env[keyEnvName]) {
-      process.env[keyEnvName] = apiKey!;
-      // Persist to ~/.zshrc (or ~/.bashrc) so it survives across sessions
-      const shell = process.env["SHELL"] ?? "/bin/zsh";
-      const rcFile = shell.includes("bash") ? "~/.bashrc" : "~/.zshrc";
-      const rcPath = rcFile.replace("~", process.env["HOME"] ?? "");
-      try {
-        const fs = await import("node:fs");
-        const line = `export ${keyEnvName}=${apiKey}`;
-        const existing = fs.readFileSync(rcPath, "utf-8");
-        // Only append if not already present
-        if (!existing.includes(keyEnvName)) {
-          fs.appendFileSync(rcPath, `\n${line}\n`);
-          console.log();
-          console.log(`  ${dim(`Saved to ${rcFile}`)}`);
-        }
-      } catch {
-        // Can't write to shell config — that's fine, key is in process.env for this session
-        console.log();
-        console.log(
-          `  ${dim(`Add to your shell to persist: export ${keyEnvName}=${apiKey!.slice(0, 12)}...`)}`,
-        );
-      }
-      console.log();
+    } catch {
+      // Network error — let it through, will fail later with context
     }
   }
 
-  // Passphrase
+  // Phase 2: Identity — the creature speaks here
   const envPassphrase = process.env["MOTEBIT_PASSPHRASE"];
   let passphrase: string;
 
@@ -376,16 +299,15 @@ async function main(): Promise<void> {
       await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
     } catch {
       console.log();
-      console.log(`  ${dim("That wasn't right. Try again, or start fresh:")}`);
+      console.log(`  ${dim("Incorrect. Try again, or start fresh:")}`);
       console.log();
-      console.log(`     ${dim("rm ~/.motebit/config.json")}`);
-      console.log(`     ${dim("motebit")}`);
+      console.log(`     ${dim("rm ~/.motebit/config.json && motebit")}`);
       console.log();
       process.exit(1);
     }
   } else if (fullConfig.cli_private_key != null && fullConfig.cli_private_key !== "") {
     // Migration: plaintext key exists — encrypt it
-    console.log(dim("  Migrating your key to encrypted storage..."));
+    console.log(dim("  Migrating private key to encrypted storage..."));
     passphrase = envPassphrase ?? (await promptPassphrase("  Set a passphrase: "));
     if (passphrase === "") {
       console.error("  Passphrase cannot be empty.");
@@ -395,11 +317,22 @@ async function main(): Promise<void> {
     delete fullConfig.cli_private_key;
     const { saveFullConfig } = await import("./config.js");
     saveFullConfig(fullConfig);
-    console.log(dim("  Done — plaintext key removed."));
+    console.log(dim("  Encrypted. Plaintext removed."));
   } else {
-    // First launch — the creature explains identity
-    console.log(`  ${dim("Now I need a passphrase to protect my keypair.")}`);
-    console.log(`  ${dim("This is my identity — I'll ask for it each session.")}`);
+    // Identity birth
+    console.log();
+    console.log(dim("         ."));
+    console.log(dim("       .:::."));
+    console.log(dim("      .:::::."));
+    console.log(dim("      :::::::"));
+    console.log(dim("      ':::::' "));
+    console.log(dim("        '''"));
+    console.log();
+    console.log(`  ${dim("Your mote gets its own Ed25519 keypair — a cryptographic")}`);
+    console.log(`  ${dim("identity that signs everything it does.")}`);
+    console.log();
+    console.log(`  ${dim("The passphrase encrypts this key on disk.")}`);
+    console.log(`  ${dim("You'll need it each session.")}`);
     console.log();
     passphrase = envPassphrase ?? (await promptPassphrase("  Set a passphrase: "));
     if (!passphrase) {
@@ -410,9 +343,7 @@ async function main(): Promise<void> {
       const confirm = await promptPassphrase("  Confirm: ");
       if (confirm !== passphrase) {
         console.log();
-        console.log(
-          `  ${dim("Those didn't match. Run")} ${bold("motebit")} ${dim("to try again.")}`,
-        );
+        console.log(`  ${dim("Didn't match. Run")} ${bold("motebit")} ${dim("to try again.")}`);
         console.log();
         process.exit(1);
       }
