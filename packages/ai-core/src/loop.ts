@@ -633,6 +633,43 @@ export async function* runTurnStreaming(
     throw new Error("No response generated");
   }
 
+  // Empty-response guard: if the model responded with only tags (memory/state)
+  // that got stripped, the user sees nothing. Re-prompt once without tools to
+  // force visible text. This typically happens when the model reflects on its
+  // own internals after a recall_memories call.
+  if (finalText.trim() === "" && toolCallsSucceeded > 0) {
+    conversationHistory.push({
+      role: "assistant",
+      content: finalResponse.text || "",
+      ...(finalResponse.tool_calls?.length ? { tool_calls: finalResponse.tool_calls } : {}),
+    });
+    conversationHistory.push({
+      role: "user",
+      content:
+        "[System: your previous response was empty after tag processing. Respond to the user with visible text. Do not emit only tags.]",
+    });
+
+    const nudgeContextPack = {
+      recent_events: recentEvents,
+      relevant_memories: relevantMemories,
+      current_state: currentState,
+      user_message: "",
+      conversation_history: conversationHistory,
+      behavior_cues: options?.previousCues,
+      tools: undefined, // no tools — must produce text
+      sessionInfo: options?.sessionInfo,
+    };
+
+    for await (const chunk of provider.generateStream(nudgeContextPack)) {
+      if (chunk.type === "text") {
+        yield { type: "text", text: chunk.text };
+      } else {
+        finalText = chunk.response.text;
+        finalResponse = chunk.response;
+      }
+    }
+  }
+
   // 4. Form memories from candidates (governed if governor present)
   // Cap confidence for tool-derived memories: when tool calls occurred in this turn,
   // memory candidates may be influenced by attacker-controlled tool output.
