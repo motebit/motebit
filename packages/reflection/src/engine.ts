@@ -60,9 +60,14 @@ export async function performReflection(
   // Run memory audit — surface phantom certainties, conflicts, near-death nodes
   const auditSummary = buildAuditSummary(recentMemories.nodes, recentMemories.edges);
 
+  // Use summary when available to keep reflection context bounded.
+  // Raw history is only needed when no summary exists (short conversations).
+  const history = deps.getConversationHistory();
+  const boundedHistory = summary ? history.slice(-4) : history;
+
   const result = await reflect(
     summary,
-    deps.getConversationHistory(),
+    boundedHistory,
     goals ?? [],
     memories,
     provider,
