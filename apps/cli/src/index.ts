@@ -22,7 +22,15 @@ import {
 } from "./runtime-factory.js";
 import { consumeStream } from "./stream.js";
 import { readInput, enableBracketedPaste, disableBracketedPaste } from "./input.js";
-import { prompt as promptColor, meta, error as errorColor, dim, success } from "./colors.js";
+import {
+  prompt as promptColor,
+  meta,
+  error as errorColor,
+  dim,
+  success,
+  bold,
+  cyan,
+} from "./colors.js";
 import { isSlashCommand, parseSlashCommand, handleSlashCommand } from "./slash-commands.js";
 import type { ReplContext } from "./slash-commands.js";
 import {
@@ -234,19 +242,35 @@ async function main(): Promise<void> {
   if (config.provider === "anthropic") {
     const key = process.env["ANTHROPIC_API_KEY"];
     if (key == null || key === "") {
-      console.error(
-        "Error: ANTHROPIC_API_KEY environment variable is not set.\n" +
-          "Set it with: export ANTHROPIC_API_KEY=sk-ant-...",
+      console.log();
+      console.log(`  ${dim("─")} ${bold("motebit")}${dim(" needs an API key to think")}`);
+      console.log();
+      console.log(
+        `  ${dim("1.")} Get a key from ${cyan("https://console.anthropic.com/settings/keys")}`,
       );
+      console.log(`  ${dim("2.")} Add it to your shell:`);
+      console.log();
+      console.log(`     ${dim("echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.zshrc")}`);
+      console.log(`     ${dim("source ~/.zshrc")}`);
+      console.log();
+      console.log(`  ${dim("3.")} Run ${bold("motebit")} again.`);
+      console.log();
       return;
     }
   } else if (config.provider === "openai") {
     const key = process.env["OPENAI_API_KEY"];
     if (key == null || key === "") {
-      console.error(
-        "Error: OPENAI_API_KEY environment variable is not set.\n" +
-          "Set it with: export OPENAI_API_KEY=sk-...",
-      );
+      console.log();
+      console.log(`  ${dim("─")} ${bold("motebit")}${dim(" needs an API key to think")}`);
+      console.log();
+      console.log(`  ${dim("1.")} Get a key from ${cyan("https://platform.openai.com/api-keys")}`);
+      console.log(`  ${dim("2.")} Add it to your shell:`);
+      console.log();
+      console.log(`     ${dim("echo 'export OPENAI_API_KEY=sk-...' >> ~/.zshrc")}`);
+      console.log(`     ${dim("source ~/.zshrc")}`);
+      console.log();
+      console.log(`  ${dim("3.")} Run ${bold("motebit")} again.`);
+      console.log();
       return;
     }
   }
