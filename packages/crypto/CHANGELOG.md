@@ -1,5 +1,12 @@
 # @motebit/crypto
 
+## 0.1.7
+
+### Patch Changes
+
+- Updated dependencies [[`15a81c5`](https://github.com/motebit/motebit/commit/15a81c5d4598cacd551b3024db49efb67455de94), [`8899fcd`](https://github.com/motebit/motebit/commit/8899fcd55def04c9f2b6e34a182ed1aa8c59bf71)]:
+  - @motebit/sdk@0.6.3
+
 ## 0.1.6
 
 ### Patch Changes

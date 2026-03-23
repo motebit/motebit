@@ -1,5 +1,13 @@
 # @motebit/sdk Changelog
 
+## 0.6.3
+
+### Patch Changes
+
+- [`15a81c5`](https://github.com/motebit/motebit/commit/15a81c5d4598cacd551b3024db49efb67455de94) Thanks [@hakimlabs](https://github.com/hakimlabs)! - auto-generated patch bump
+
+- [`8899fcd`](https://github.com/motebit/motebit/commit/8899fcd55def04c9f2b6e34a182ed1aa8c59bf71) Thanks [@hakimlabs](https://github.com/hakimlabs)! - Wrong passphrase: calm reset guide instead of jargon error
+
 ## 0.6.2
 
 ### Patch Changes
