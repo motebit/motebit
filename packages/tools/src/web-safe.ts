@@ -12,6 +12,8 @@ export {
   createRecallMemoriesHandler,
 } from "./builtins/recall-memories.js";
 export { listEventsDefinition, createListEventsHandler } from "./builtins/list-events.js";
+export { selfReflectDefinition, createSelfReflectHandler } from "./builtins/self-reflect.js";
+export type { ReflectionToolResult } from "./builtins/self-reflect.js";
 export type { SearchProvider, SearchResult } from "./search-provider.js";
 export { FallbackSearchProvider } from "./search-provider.js";
 export { BraveSearchProvider } from "./providers/brave-search.js";

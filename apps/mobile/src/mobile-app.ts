@@ -82,6 +82,8 @@ import {
   createRecallMemoriesHandler,
   listEventsDefinition,
   createListEventsHandler,
+  selfReflectDefinition,
+  createSelfReflectHandler,
   DuckDuckGoSearchProvider,
   createSubGoalDefinition,
   completeGoalDefinition,
@@ -562,6 +564,12 @@ export class MobileApp {
           payload: e.payload,
         }));
       }),
+    );
+
+    // Self-reflection — creature can introspect on its own behavior
+    registry.register(
+      selfReflectDefinition,
+      createSelfReflectHandler(async () => runtime.reflect()),
     );
 
     // Goal management tools (available during goal execution)

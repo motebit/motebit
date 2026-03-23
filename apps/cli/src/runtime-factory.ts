@@ -41,6 +41,8 @@ import {
   createRecallMemoriesHandler,
   listEventsDefinition,
   createListEventsHandler,
+  selfReflectDefinition,
+  createSelfReflectHandler,
   BraveSearchProvider,
   DuckDuckGoSearchProvider,
   FallbackSearchProvider,
@@ -213,6 +215,13 @@ export function buildToolRegistry(
 
   registry.register(recallMemoriesDefinition, createRecallMemoriesHandler(memorySearchFn));
   registry.register(listEventsDefinition, createListEventsHandler(eventQueryFn));
+  registry.register(
+    selfReflectDefinition,
+    createSelfReflectHandler(async () => {
+      if (!runtimeRef.current) throw new Error("Runtime not initialized");
+      return runtimeRef.current.reflect();
+    }),
+  );
 
   // Goal execution tools (create_sub_goal, complete_goal, report_progress) are NOT
   // registered here. They are registered/unregistered by GoalScheduler around each

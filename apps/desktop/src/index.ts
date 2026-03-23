@@ -3095,12 +3095,13 @@ export class DesktopApp {
     if (this._serving) return { ok: true };
 
     // Expose only network-safe tools. Operator tools (read_file, recall_memories,
-    // list_events, delegate_to_agent) are interior — they don't cross the surface.
+    // list_events, self_reflect, delegate_to_agent) are interior — they don't cross the surface.
     // What remains: MCP tools the user connected + web_search + read_url.
     const LOCAL_ONLY = new Set([
       "read_file",
       "recall_memories",
       "list_events",
+      "self_reflect",
       "delegate_to_agent",
     ]);
     const tools = this.runtime.getToolRegistry().list();

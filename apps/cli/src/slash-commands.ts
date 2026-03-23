@@ -69,6 +69,7 @@ const LOCAL_ONLY_TOOLS = new Set([
   "delegate_to_agent",
   "recall_memories",
   "list_events",
+  "self_reflect",
 ]);
 let isServing = false;
 

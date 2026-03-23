@@ -44,6 +44,8 @@ import {
   createRecallMemoriesHandler,
   listEventsDefinition,
   createListEventsHandler,
+  selfReflectDefinition,
+  createSelfReflectHandler,
   DuckDuckGoSearchProvider,
 } from "@motebit/tools/web-safe";
 import { embedText, setRemoteEmbedUrl } from "@motebit/memory-graph";
@@ -321,6 +323,13 @@ export class WebApp {
           timestamp: e.timestamp,
           payload: e.payload,
         }));
+      }),
+    );
+    registry.register(
+      selfReflectDefinition,
+      createSelfReflectHandler(async () => {
+        if (!this.runtime) throw new Error("Runtime not initialized");
+        return this.runtime.reflect();
       }),
     );
   }
@@ -1030,6 +1039,7 @@ export class WebApp {
       "read_file",
       "recall_memories",
       "list_events",
+      "self_reflect",
       "delegate_to_agent",
     ]);
     const tools = this.runtime.getToolRegistry().list();

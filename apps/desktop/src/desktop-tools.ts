@@ -31,6 +31,8 @@ import {
   createRecallMemoriesHandler,
   listEventsDefinition,
   createListEventsHandler,
+  selfReflectDefinition,
+  createSelfReflectHandler,
   BraveSearchProvider,
   DuckDuckGoSearchProvider,
   FallbackSearchProvider,
@@ -91,6 +93,15 @@ export function registerDesktopTools(
         timestamp: e.timestamp,
         payload: e.payload,
       }));
+    }),
+  );
+
+  // Self-reflection — creature can introspect on its own behavior
+  registry.register(
+    selfReflectDefinition,
+    createSelfReflectHandler(async () => {
+      const result = await runtime.reflect();
+      return result;
     }),
   );
 
