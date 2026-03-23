@@ -1,5 +1,12 @@
 # @motebit/semiring
 
+## 0.1.10
+
+### Patch Changes
+
+- Updated dependencies [[`349939f`](https://github.com/motebit/motebit/commit/349939f7533ac2a73ef99cf4cc2413cd78849ce7), [`349939f`](https://github.com/motebit/motebit/commit/349939f7533ac2a73ef99cf4cc2413cd78849ce7)]:
+  - @motebit/sdk@0.6.6
+
 ## 0.1.9
 
 ### Patch Changes

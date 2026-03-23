@@ -1,5 +1,13 @@
 # create-motebit Changelog
 
+## 0.6.6
+
+### Patch Changes
+
+- [`349939f`](https://github.com/motebit/motebit/commit/349939f7533ac2a73ef99cf4cc2413cd78849ce7) Thanks [@hakimlabs](https://github.com/hakimlabs)! - auto-generated patch bump
+
+- [`349939f`](https://github.com/motebit/motebit/commit/349939f7533ac2a73ef99cf4cc2413cd78849ce7) Thanks [@hakimlabs](https://github.com/hakimlabs)! - auto-generated patch bump
+
 ## 0.6.5
 
 ### Patch Changes

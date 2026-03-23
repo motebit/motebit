@@ -1,6 +1,6 @@
 {
   "name": "@motebit/verify",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "description": "Verify any Motebit artifact — identity files, execution receipts, verifiable credentials, and presentations. One function, zero deps, MIT.",
   "type": "module",
   "main": "./dist/index.js",
