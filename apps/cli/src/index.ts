@@ -272,6 +272,11 @@ async function main(): Promise<void> {
   if (needsKey) {
     let apiKey = process.env[keyEnvName];
 
+    const validateUrl =
+      config.provider === "openai"
+        ? "https://api.openai.com/v1/models"
+        : "https://api.anthropic.com/v1/models";
+
     if (!apiKey) {
       if (isFirstLaunchFlow) {
         console.log(`  ${dim("I need an API key to think. Get one here:")}`);
@@ -281,47 +286,60 @@ async function main(): Promise<void> {
       }
       console.log();
       console.log(`     ${cyan(keyUrl)}`);
-      console.log();
-      console.log(`  ${dim("Paste it here (hidden):")}`);
-      apiKey = await promptPassphrase("  ");
-      if (!apiKey) {
-        console.log();
-        console.log(`  ${dim("No key provided.")}`);
-        console.log(
-          `  ${dim("Or run locally without a key:")} ${bold("motebit --provider ollama")}`,
-        );
-        console.log();
-        process.exit(1);
-      }
     }
 
-    // Validate the key
-    const validateUrl =
-      config.provider === "openai"
-        ? "https://api.openai.com/v1/models"
-        : "https://api.anthropic.com/v1/models";
-    const validateHeaders =
-      config.provider === "openai"
-        ? { Authorization: `Bearer ${apiKey}` }
-        : { "x-api-key": apiKey, "anthropic-version": "2023-06-01" };
-
-    try {
-      const resp = await fetch(validateUrl, { headers: validateHeaders });
-      if (!resp.ok) {
+    // Retry loop — the creature stays, lets you try again
+    const MAX_KEY_ATTEMPTS = 3;
+    for (let attempt = 0; attempt < MAX_KEY_ATTEMPTS; attempt++) {
+      if (!apiKey) {
         console.log();
-        console.log(`  ${dim("That key didn't work. Check it here:")}`);
+        console.log(`  ${dim("Paste it here (hidden):")}`);
+        apiKey = await promptPassphrase("  ");
+        if (!apiKey) {
+          console.log();
+          console.log(`  ${dim("No key provided.")}`);
+          console.log(
+            `  ${dim("Or run locally without a key:")} ${bold("motebit --provider ollama")}`,
+          );
+          console.log();
+          process.exit(1);
+        }
+      }
+
+      const validateHeaders: Record<string, string> =
+        config.provider === "openai"
+          ? { Authorization: `Bearer ${apiKey}` }
+          : { "x-api-key": apiKey, "anthropic-version": "2023-06-01" };
+
+      let keyValid = false;
+      try {
+        const resp = await fetch(validateUrl, { headers: validateHeaders });
+        keyValid = resp.ok;
+      } catch (err: unknown) {
+        // Only skip validation on genuine network failures (no internet, DNS, timeout).
+        // TypeError is what fetch throws when the network request itself fails.
+        if (err instanceof TypeError) break;
+        // Other errors (malformed request, etc.) — treat as bad key
+      }
+      if (keyValid) break; // Valid key — continue onboarding
+      console.log();
+      console.log(`  ${dim("That key didn't work. Try again:")}`);
+      apiKey = undefined; // Reset for next attempt
+
+      if (attempt === MAX_KEY_ATTEMPTS - 1) {
+        console.log();
+        console.log(`  ${dim("Still not working. Check your key here:")}`);
         console.log();
         console.log(`     ${cyan(keyUrl)}`);
         console.log();
         process.exit(1);
       }
-    } catch {
-      // Network error — let it through, will fail later with context
     }
 
     // If the key was entered inline (not from env), persist it to shell config
+    // apiKey is guaranteed non-null after the retry loop (loop exits or process.exit)
     if (!process.env[keyEnvName]) {
-      process.env[keyEnvName] = apiKey;
+      process.env[keyEnvName] = apiKey!;
       // Persist to ~/.zshrc (or ~/.bashrc) so it survives across sessions
       const shell = process.env["SHELL"] ?? "/bin/zsh";
       const rcFile = shell.includes("bash") ? "~/.bashrc" : "~/.zshrc";
@@ -340,7 +358,7 @@ async function main(): Promise<void> {
         // Can't write to shell config — that's fine, key is in process.env for this session
         console.log();
         console.log(
-          `  ${dim(`Add to your shell to persist: export ${keyEnvName}=${apiKey.slice(0, 12)}...`)}`,
+          `  ${dim(`Add to your shell to persist: export ${keyEnvName}=${apiKey!.slice(0, 12)}...`)}`,
         );
       }
       console.log();
