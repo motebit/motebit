@@ -190,6 +190,7 @@ export const COMMANDS: CommandEntry[] = [
   { usage: "/withdraw <amount>", desc: "Request a withdrawal" },
   { usage: "/deposits", desc: "Show recent deposit transactions" },
   { usage: "/reflect", desc: "Trigger reflection — see what the agent learned" },
+  { usage: "/audit", desc: "Audit memory integrity — phantom certainties, conflicts" },
   { usage: "/mcp list", desc: "List MCP servers and trust status" },
   { usage: "/mcp add <name> <url>", desc: "Add an HTTP MCP server" },
   { usage: "/mcp remove <name>", desc: "Remove an MCP server" },

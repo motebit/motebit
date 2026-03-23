@@ -23,7 +23,12 @@ import {
   buildConsolidationPrompt,
   parseConsolidationResponse,
 } from "@motebit/memory-graph";
-import type { ConsolidationProvider, CuriosityTarget } from "@motebit/memory-graph";
+import type {
+  ConsolidationProvider,
+  CuriosityTarget,
+  MemoryAuditResult,
+} from "@motebit/memory-graph";
+import { auditMemoryGraph } from "@motebit/memory-graph";
 import { StateVectorEngine } from "@motebit/state-vector";
 import { BehaviorEngine } from "@motebit/behavior-engine";
 import { IdentityManager, InMemoryIdentityStorage } from "@motebit/core-identity";
@@ -181,7 +186,13 @@ type AnyCredentialSubject =
   | TrustCredentialSubject;
 export { AgentTrustLevel } from "@motebit/sdk";
 export type { EventStoreAdapter } from "@motebit/event-log";
-export type { MemoryStorageAdapter, CuriosityTarget } from "@motebit/memory-graph";
+export type {
+  MemoryStorageAdapter,
+  CuriosityTarget,
+  MemoryAuditResult,
+  PhantomCertainty,
+  MemoryConflict,
+} from "@motebit/memory-graph";
 export type { IdentityStorage } from "@motebit/core-identity";
 export type { AuditLogAdapter } from "@motebit/privacy-layer";
 export type { DeletionCertificate } from "@motebit/crypto";
@@ -2346,6 +2357,12 @@ export class MotebitRuntime {
   /** Get curiosity targets computed during last housekeeping cycle. */
   getCuriosityTargets(): CuriosityTarget[] {
     return this._curiosityTargets;
+  }
+
+  /** Audit the memory graph for integrity issues — phantom certainties, conflicts, near-death nodes. */
+  async auditMemory(): Promise<MemoryAuditResult> {
+    const { nodes, edges } = await this.memory.exportAll();
+    return auditMemoryGraph(nodes, edges);
   }
 
   // === Intelligence Gradient ===

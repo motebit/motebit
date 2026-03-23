@@ -14,6 +14,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { name: "memories", description: "Browse memories" },
   { name: "state", description: "Show state vector" },
   { name: "gradient", description: "Intelligence gradient + self-model" },
+  { name: "audit", description: "Audit memory integrity" },
   { name: "reflect", description: "Trigger reflection" },
   { name: "graph", description: "Memory graph stats" },
   { name: "curious", description: "Fading memories" },

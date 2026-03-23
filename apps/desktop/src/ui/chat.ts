@@ -997,6 +997,48 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
         })();
         break;
 
+      case "audit":
+        void (async () => {
+          const auditResult = await ctx.app.auditMemory();
+          const aLines: string[] = [`Memory audit (${auditResult.nodesAudited} nodes scanned)`];
+          if (auditResult.phantomCertainties.length > 0) {
+            aLines.push("");
+            aLines.push(`Phantom certainties (${auditResult.phantomCertainties.length}):`);
+            for (const p of auditResult.phantomCertainties) {
+              const label =
+                p.node.content.length > 60 ? p.node.content.slice(0, 60) + "..." : p.node.content;
+              aLines.push(
+                `  conf=${p.decayedConfidence.toFixed(2)} edges=${p.edgeCount}  ${label}`,
+              );
+            }
+          }
+          if (auditResult.conflicts.length > 0) {
+            aLines.push("");
+            aLines.push(`Conflicts (${auditResult.conflicts.length}):`);
+            for (const c of auditResult.conflicts) {
+              aLines.push(`  "${c.a.content.slice(0, 40)}..." vs "${c.b.content.slice(0, 40)}..."`);
+            }
+          }
+          if (auditResult.nearDeath.length > 0) {
+            aLines.push("");
+            aLines.push(`Near-death (${auditResult.nearDeath.length}):`);
+            for (const nd of auditResult.nearDeath) {
+              aLines.push(
+                `  conf=${nd.decayedConfidence.toFixed(3)}  ${nd.node.content.slice(0, 60)}...`,
+              );
+            }
+          }
+          if (
+            auditResult.phantomCertainties.length === 0 &&
+            auditResult.conflicts.length === 0 &&
+            auditResult.nearDeath.length === 0
+          ) {
+            aLines.push("No integrity issues found.");
+          }
+          addMessage("system", aLines.join("\n"));
+        })();
+        break;
+
       case "agents":
         void (async () => {
           try {

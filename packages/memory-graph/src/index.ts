@@ -144,6 +144,146 @@ export function findCuriosityTargets(
   return results.slice(0, limit);
 }
 
+// === Memory Audit ===
+
+/**
+ * A memory the creature believes but can't verify.
+ *
+ * High confidence, low connectivity. The creature is certain about
+ * something that has no corroboration in the graph. Could be the first
+ * memory about a new topic (fine — needs time to connect). Could be a
+ * confabulation (dangerous — feels solid but isn't grounded).
+ *
+ * The audit surfaces these so the creature can act: seek corroboration,
+ * ask a follow-up question, form an edge. Turns a passive graph into
+ * an active one.
+ */
+export interface PhantomCertainty {
+  node: MemoryNode;
+  decayedConfidence: number;
+  edgeCount: number;
+  /** Why this was flagged. */
+  reason: string;
+}
+
+/**
+ * Two memories that contradict each other.
+ *
+ * Both live in the graph, both believed. The creature holds conflicting
+ * knowledge and doesn't know it. Surfacing this lets reflection resolve
+ * the conflict — one is wrong, one is outdated, or they're about
+ * different contexts that need disambiguation.
+ */
+export interface MemoryConflict {
+  a: MemoryNode;
+  b: MemoryNode;
+  edgeId: string;
+}
+
+export interface MemoryAuditResult {
+  /** High-confidence nodes with few or no supporting edges. */
+  phantomCertainties: PhantomCertainty[];
+  /** Pairs of memories connected by ConflictsWith edges. */
+  conflicts: MemoryConflict[];
+  /** Nodes with decayed confidence near zero but not yet tombstoned. */
+  nearDeath: Array<{ node: MemoryNode; decayedConfidence: number }>;
+  /** Total live nodes audited. */
+  nodesAudited: number;
+}
+
+/**
+ * Pure: MemoryNode[] + MemoryEdge[] → MemoryAuditResult.
+ *
+ * Scans the memory graph for integrity issues the creature should
+ * know about. No I/O, no mutations. The caller decides what to do
+ * with the results.
+ *
+ * Three audit categories:
+ *   1. Phantom certainties — high confidence, low edges
+ *   2. Conflicts — memories connected by ConflictsWith edges
+ *   3. Near-death — memories about to be pruned by housekeeping
+ */
+export function auditMemoryGraph(
+  nodes: MemoryNode[],
+  edges: MemoryEdge[],
+  options?: {
+    /** Minimum decayed confidence to flag as phantom (default 0.5). */
+    minConfidence?: number;
+    /** Maximum edge count to flag as poorly connected (default 1). */
+    maxEdges?: number;
+    /** Decayed confidence threshold for near-death (default 0.15). */
+    nearDeathThreshold?: number;
+    /** Maximum results per category (default 10). */
+    limit?: number;
+  },
+): MemoryAuditResult {
+  const {
+    minConfidence = 0.5,
+    maxEdges = 1,
+    nearDeathThreshold = 0.15,
+    limit = 10,
+  } = options ?? {};
+
+  const now = Date.now();
+  const live = nodes.filter((n) => !n.tombstoned);
+
+  // Build edge count index
+  const edgeCounts = new Map<string, number>();
+  const liveIds = new Set(live.map((n) => n.node_id));
+  for (const edge of edges) {
+    if (!liveIds.has(edge.source_id) && !liveIds.has(edge.target_id)) continue;
+    edgeCounts.set(edge.source_id, (edgeCounts.get(edge.source_id) ?? 0) + 1);
+    edgeCounts.set(edge.target_id, (edgeCounts.get(edge.target_id) ?? 0) + 1);
+  }
+
+  // 1. Phantom certainties — high confidence, few edges
+  const phantomCertainties: PhantomCertainty[] = [];
+  const nearDeath: Array<{ node: MemoryNode; decayedConfidence: number }> = [];
+
+  for (const node of live) {
+    const elapsed = now - node.created_at;
+    const decayed = computeDecayedConfidence(node.confidence, node.half_life, elapsed);
+    const ec = edgeCounts.get(node.node_id) ?? 0;
+
+    if (decayed >= minConfidence && ec <= maxEdges && !node.pinned) {
+      const reason =
+        ec === 0
+          ? "High confidence, zero connections — completely isolated belief."
+          : "High confidence, single connection — weakly corroborated.";
+      phantomCertainties.push({ node, decayedConfidence: decayed, edgeCount: ec, reason });
+    }
+
+    if (decayed > 0 && decayed < nearDeathThreshold && !node.pinned) {
+      nearDeath.push({ node, decayedConfidence: decayed });
+    }
+  }
+
+  // Sort phantom certainties: highest confidence first (most dangerous)
+  phantomCertainties.sort((a, b) => b.decayedConfidence - a.decayedConfidence);
+
+  // Sort near-death: lowest confidence first (most urgent)
+  nearDeath.sort((a, b) => a.decayedConfidence - b.decayedConfidence);
+
+  // 2. Conflicts — ConflictsWith edges between live nodes
+  const conflicts: MemoryConflict[] = [];
+  const nodeMap = new Map(live.map((n) => [n.node_id, n]));
+  for (const edge of edges) {
+    if (edge.relation_type !== RT.ConflictsWith) continue;
+    const a = nodeMap.get(edge.source_id);
+    const b = nodeMap.get(edge.target_id);
+    if (a && b) {
+      conflicts.push({ a, b, edgeId: edge.edge_id });
+    }
+  }
+
+  return {
+    phantomCertainties: phantomCertainties.slice(0, limit),
+    conflicts: conflicts.slice(0, limit),
+    nearDeath: nearDeath.slice(0, limit),
+    nodesAudited: live.length,
+  };
+}
+
 // === Cosine Similarity ===
 
 export function cosineSimilarity(a: number[], b: number[]): number {

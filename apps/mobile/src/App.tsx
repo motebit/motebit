@@ -1009,6 +1009,55 @@ export function App(): React.ReactElement {
             addSystemMessage(gLines.join("\n"));
           })();
           break;
+        case "audit":
+          void (async () => {
+            try {
+              const auditResult = await a.auditMemory();
+              const aLines: string[] = [`Memory audit (${auditResult.nodesAudited} nodes scanned)`];
+              if (auditResult.phantomCertainties.length > 0) {
+                aLines.push("");
+                aLines.push(`Phantom certainties (${auditResult.phantomCertainties.length}):`);
+                for (const p of auditResult.phantomCertainties) {
+                  const label =
+                    p.node.content.length > 50
+                      ? p.node.content.slice(0, 50) + "..."
+                      : p.node.content;
+                  aLines.push(
+                    `  conf=${p.decayedConfidence.toFixed(2)} edges=${p.edgeCount}  ${label}`,
+                  );
+                }
+              }
+              if (auditResult.conflicts.length > 0) {
+                aLines.push("");
+                aLines.push(`Conflicts (${auditResult.conflicts.length}):`);
+                for (const c of auditResult.conflicts) {
+                  aLines.push(
+                    `  "${c.a.content.slice(0, 30)}..." vs "${c.b.content.slice(0, 30)}..."`,
+                  );
+                }
+              }
+              if (auditResult.nearDeath.length > 0) {
+                aLines.push("");
+                aLines.push(`Near-death (${auditResult.nearDeath.length}):`);
+                for (const nd of auditResult.nearDeath) {
+                  aLines.push(
+                    `  conf=${nd.decayedConfidence.toFixed(3)}  ${nd.node.content.slice(0, 50)}...`,
+                  );
+                }
+              }
+              if (
+                auditResult.phantomCertainties.length === 0 &&
+                auditResult.conflicts.length === 0 &&
+                auditResult.nearDeath.length === 0
+              ) {
+                aLines.push("No integrity issues found.");
+              }
+              addSystemMessage(aLines.join("\n"));
+            } catch (err: unknown) {
+              addSystemMessage(`Audit failed: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          })();
+          break;
         case "agents":
           void (async () => {
             try {

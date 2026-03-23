@@ -47,6 +47,7 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "export", description: "Export identity + memories" },
   { name: "forget", description: "Delete a memory by keyword" },
   { name: "gradient", description: "Intelligence gradient" },
+  { name: "audit", description: "Audit memory integrity" },
   { name: "balance", description: "Show account balance" },
   { name: "discover", description: "Discover agents on relay" },
   { name: "delegate", description: "Delegate task to agent" },
@@ -378,6 +379,64 @@ export function initSlashCommands(
             gLines.push(`Last reflection: ${lastRef.selfAssessment}`);
           }
           addMessage("system", gLines.join("\n"));
+        })();
+        break;
+      }
+      case "audit": {
+        chatInput.value = "";
+        void (async () => {
+          const runtime = ctx.app.getRuntime();
+          if (!runtime) {
+            addMessage("system", "Runtime not initialized.");
+            return;
+          }
+          const result = await runtime.auditMemory();
+          const lines: string[] = [];
+          lines.push(`Memory audit (${result.nodesAudited} nodes scanned)`);
+
+          if (result.phantomCertainties.length > 0) {
+            lines.push("");
+            lines.push(`Phantom certainties (${result.phantomCertainties.length}):`);
+            for (const p of result.phantomCertainties) {
+              const label =
+                p.node.content.length > 60 ? p.node.content.slice(0, 60) + "..." : p.node.content;
+              lines.push(`  conf=${p.decayedConfidence.toFixed(2)} edges=${p.edgeCount}  ${label}`);
+            }
+          }
+
+          if (result.conflicts.length > 0) {
+            lines.push("");
+            lines.push(`Conflicts (${result.conflicts.length}):`);
+            for (const c of result.conflicts) {
+              const aLabel =
+                c.a.content.length > 40 ? c.a.content.slice(0, 40) + "..." : c.a.content;
+              const bLabel =
+                c.b.content.length > 40 ? c.b.content.slice(0, 40) + "..." : c.b.content;
+              lines.push(`  "${aLabel}" vs "${bLabel}"`);
+            }
+          }
+
+          if (result.nearDeath.length > 0) {
+            lines.push("");
+            lines.push(`Near-death (${result.nearDeath.length}):`);
+            for (const nd of result.nearDeath) {
+              const label =
+                nd.node.content.length > 60
+                  ? nd.node.content.slice(0, 60) + "..."
+                  : nd.node.content;
+              lines.push(`  conf=${nd.decayedConfidence.toFixed(3)}  ${label}`);
+            }
+          }
+
+          if (
+            result.phantomCertainties.length === 0 &&
+            result.conflicts.length === 0 &&
+            result.nearDeath.length === 0
+          ) {
+            lines.push("No integrity issues found.");
+          }
+
+          addMessage("system", lines.join("\n"));
         })();
         break;
       }

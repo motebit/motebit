@@ -325,6 +325,47 @@ export async function handleSlashCommand(
       break;
     }
 
+    case "audit": {
+      const auditResult = await runtime.auditMemory();
+      console.log(`\nMemory audit (${auditResult.nodesAudited} nodes scanned)\n`);
+
+      if (auditResult.phantomCertainties.length > 0) {
+        console.log(`Phantom certainties (${auditResult.phantomCertainties.length}):`);
+        for (const p of auditResult.phantomCertainties) {
+          const label =
+            p.node.content.length > 70 ? p.node.content.slice(0, 70) + "..." : p.node.content;
+          console.log(`  conf=${p.decayedConfidence.toFixed(2)} edges=${p.edgeCount}  ${label}`);
+        }
+      }
+
+      if (auditResult.conflicts.length > 0) {
+        console.log(`\nConflicts (${auditResult.conflicts.length}):`);
+        for (const c of auditResult.conflicts) {
+          const aLabel = c.a.content.length > 40 ? c.a.content.slice(0, 40) + "..." : c.a.content;
+          const bLabel = c.b.content.length > 40 ? c.b.content.slice(0, 40) + "..." : c.b.content;
+          console.log(`  "${aLabel}" vs "${bLabel}"`);
+        }
+      }
+
+      if (auditResult.nearDeath.length > 0) {
+        console.log(`\nNear-death (${auditResult.nearDeath.length}):`);
+        for (const nd of auditResult.nearDeath) {
+          const label =
+            nd.node.content.length > 70 ? nd.node.content.slice(0, 70) + "..." : nd.node.content;
+          console.log(`  conf=${nd.decayedConfidence.toFixed(3)}  ${label}`);
+        }
+      }
+
+      if (
+        auditResult.phantomCertainties.length === 0 &&
+        auditResult.conflicts.length === 0 &&
+        auditResult.nearDeath.length === 0
+      ) {
+        console.log("No integrity issues found.");
+      }
+      break;
+    }
+
     case "forget": {
       if (!args) {
         console.log("Usage: /forget <nodeId>");

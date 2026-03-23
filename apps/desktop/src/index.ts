@@ -1240,6 +1240,11 @@ export class DesktopApp {
     return this.runtime?.getLastReflection() ?? null;
   }
 
+  async auditMemory() {
+    if (!this.runtime) throw new Error("AI not initialized");
+    return this.runtime.auditMemory();
+  }
+
   async reflect() {
     if (!this.runtime) throw new Error("AI not initialized");
     return this.runtime.reflect();

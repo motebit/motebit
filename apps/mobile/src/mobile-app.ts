@@ -988,6 +988,11 @@ export class MobileApp {
     return this.runtime?.getLastReflection() ?? null;
   }
 
+  async auditMemory() {
+    if (!this.runtime) throw new Error("Runtime not initialized");
+    return this.runtime.auditMemory();
+  }
+
   async getMemoryGraphStats(): Promise<{
     nodes: MemoryNode[];
     edges: Array<{ source_id: string; target_id: string; relation_type: string }>;
