@@ -1,5 +1,28 @@
 # @motebit/mobile
 
+## 0.1.12
+
+### Patch Changes
+
+- Updated dependencies [[`6df1778`](https://github.com/motebit/motebit/commit/6df1778caec68bc47aeeaa00cae9ee98631896f9), [`c8928d6`](https://github.com/motebit/motebit/commit/c8928d6e700918fa3ea2bce8714a72eb5d4bfc80), [`c8928d6`](https://github.com/motebit/motebit/commit/c8928d6e700918fa3ea2bce8714a72eb5d4bfc80), [`c8928d6`](https://github.com/motebit/motebit/commit/c8928d6e700918fa3ea2bce8714a72eb5d4bfc80), [`4ae74fe`](https://github.com/motebit/motebit/commit/4ae74fefb4c2f249deafe044052d53c8679c2bf4), [`4ae74fe`](https://github.com/motebit/motebit/commit/4ae74fefb4c2f249deafe044052d53c8679c2bf4), [`c8928d6`](https://github.com/motebit/motebit/commit/c8928d6e700918fa3ea2bce8714a72eb5d4bfc80)]:
+  - @motebit/sdk@0.6.8
+  - @motebit/ai-core@0.1.12
+  - @motebit/behavior-engine@0.1.12
+  - @motebit/core-identity@0.1.12
+  - @motebit/crypto@0.1.12
+  - @motebit/event-log@0.1.12
+  - @motebit/gradient@0.1.12
+  - @motebit/identity-file@0.1.12
+  - @motebit/mcp-client@0.1.12
+  - @motebit/memory-graph@0.1.12
+  - @motebit/planner@0.1.12
+  - @motebit/privacy-layer@0.1.12
+  - @motebit/render-engine@0.1.12
+  - @motebit/runtime@0.1.12
+  - @motebit/state-vector@0.1.12
+  - @motebit/sync-engine@0.1.12
+  - @motebit/tools@0.1.12
+
 ## 0.1.11
 
 ### Patch Changes

@@ -258,6 +258,10 @@ async function main(): Promise<void> {
       console.log();
       console.log(`  ${dim("export")} ${keyEnvName}=${dim("sk-...")}`);
       console.log();
+      console.log(
+        `  ${dim("To persist:")} ${dim(`echo 'export ${keyEnvName}=sk-...' >> ~/.zshrc`)}`,
+      );
+      console.log();
       console.log(`  ${dim("Get a key:")} ${cyan(keyUrl)}`);
       console.log(`  ${dim("Or run local:")} ${bold("motebit --provider ollama")}`);
       console.log();
