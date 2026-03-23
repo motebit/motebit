@@ -686,10 +686,16 @@ export async function* runTurnStreaming(
     }));
   }
   const candidates = deps.memoryGovernor
-    ? rawCandidates.filter((c) => {
-        const decisions = deps.memoryGovernor!.evaluate([c]);
-        return decisions[0]?.memoryClass === "persistent";
-      })
+    ? rawCandidates
+        .map((c) => {
+          const decisions = deps.memoryGovernor!.evaluate([c]);
+          const d = decisions[0];
+          if (!d || d.memoryClass !== "persistent") return null;
+          // Use the governor's potentially modified candidate (capped confidence,
+          // reclassified sensitivity, etc.) — not the original.
+          return d.candidate;
+        })
+        .filter((c): c is MemoryCandidate => c !== null)
     : rawCandidates;
 
   for (const candidate of candidates) {
