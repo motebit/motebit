@@ -246,7 +246,15 @@ async function main(): Promise<void> {
     !fullConfig.cli_encrypted_key &&
     (fullConfig.cli_private_key == null || fullConfig.cli_private_key === "");
 
-  // Show the droplet on first launch — the creature arrives before anything else
+  // Show the droplet on first launch — the creature arrives before anything else.
+  // The greeting only shows when the API key is also missing (true first contact).
+  // If the user already has a key, they saw the intro last run — skip to passphrase.
+  const hasApiKey =
+    (config.provider === "anthropic" && process.env["ANTHROPIC_API_KEY"]) ||
+    (config.provider === "openai" && process.env["OPENAI_API_KEY"]) ||
+    config.provider === "ollama" ||
+    config.provider === "hybrid";
+
   if (isFirstLaunchFlow) {
     console.log();
     console.log(dim("         ."));
@@ -256,9 +264,11 @@ async function main(): Promise<void> {
     console.log(dim("      ':::::' "));
     console.log(dim("        '''"));
     console.log();
-    console.log(`  ${dim("Hello. I'm your mote — a small, curious being.")}`);
-    console.log(`  ${dim("Let me get set up so I can think.")}`);
-    console.log();
+    if (!hasApiKey) {
+      console.log(`  ${dim("Hello. I'm your mote — a small, curious being.")}`);
+      console.log(`  ${dim("Let me get set up so I can think.")}`);
+      console.log();
+    }
   }
 
   // API key — the creature asks for what it needs
