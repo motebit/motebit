@@ -30,6 +30,8 @@ If past reflections are provided, look for PATTERNS across them:
 - Improvements or regressions in your self-assessment over time
 Surface these patterns explicitly — "I keep noting X" is more valuable than a fresh observation.
 
+If a memory audit is provided, note any beliefs you hold without corroboration and any contradictions in your knowledge.
+
 Respond in this exact format (keep each section concise):
 
 INSIGHTS:
@@ -162,6 +164,7 @@ export async function reflect(
   provider: IntelligenceProvider,
   taskRouter?: TaskRouter,
   pastReflections?: PastReflection[],
+  auditSummary?: string,
 ): Promise<ReflectionResult> {
   // Build context sections
   const sections: string[] = [REFLECTION_PROMPT];
@@ -204,6 +207,10 @@ export async function reflect(
       return parts.join("\n  ");
     });
     sections.push(`[Past Reflections — look for recurring patterns]\n${refList.join("\n\n")}`);
+  }
+
+  if (auditSummary != null && auditSummary !== "") {
+    sections.push(`[Memory Audit]\n${auditSummary}`);
   }
 
   const userMessage = sections.join("\n\n");

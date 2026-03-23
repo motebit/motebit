@@ -17,4 +17,9 @@ export {
   reflect,
   parseReflectionResponse,
 } from "./conversation.js";
-export { type ReflectionDeps, performReflection, runReflectionSafe } from "./engine.js";
+export {
+  type ReflectionDeps,
+  performReflection,
+  runReflectionSafe,
+  formatAuditSummary,
+} from "./engine.js";

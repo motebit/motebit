@@ -15,8 +15,8 @@ import type {
   PastReflection,
 } from "@motebit/ai-core";
 import { reflect } from "@motebit/ai-core";
-import { embedText } from "@motebit/memory-graph";
-import type { MemoryGraph } from "@motebit/memory-graph";
+import { embedText, auditMemoryGraph } from "@motebit/memory-graph";
+import type { MemoryGraph, MemoryAuditResult } from "@motebit/memory-graph";
 import type { EventStore } from "@motebit/event-log";
 import type { StateVectorEngine } from "@motebit/state-vector";
 import { MemoryClass } from "@motebit/policy";
@@ -58,6 +58,9 @@ export async function performReflection(
   // Query past reflections for trajectory — the creature sees its own reflection history
   const pastReflections = await loadPastReflections(deps, 5);
 
+  // Run memory audit — surface phantom certainties, conflicts, near-death nodes
+  const auditSummary = buildAuditSummary(recentMemories.nodes, recentMemories.edges);
+
   const result = await reflect(
     summary,
     deps.getConversationHistory(),
@@ -66,6 +69,7 @@ export async function performReflection(
     provider,
     deps.getTaskRouter() ?? undefined,
     pastReflections.length > 0 ? pastReflections : undefined,
+    auditSummary,
   );
 
   // Store insights and plan adjustments as memories
@@ -197,7 +201,7 @@ async function loadPastReflections(deps: ReflectionDeps, limit: number): Promise
     });
 
     return events
-      .filter((e) => e.payload.insights || e.payload.plan_adjustments)
+      .filter((e) => Array.isArray(e.payload.insights) || Array.isArray(e.payload.plan_adjustments))
       .map((e) => ({
         timestamp: e.timestamp,
         insights: (e.payload.insights as string[] | undefined) ?? [],
@@ -207,4 +211,60 @@ async function loadPastReflections(deps: ReflectionDeps, limit: number): Promise
   } catch {
     return [];
   }
+}
+
+/**
+ * Run auditMemoryGraph and format the result as a concise text summary.
+ * Best-effort: returns undefined if the audit fails or finds nothing notable.
+ */
+function buildAuditSummary(
+  nodes: Parameters<typeof auditMemoryGraph>[0],
+  edges: Parameters<typeof auditMemoryGraph>[1],
+): string | undefined {
+  try {
+    const audit = auditMemoryGraph(nodes, edges);
+    return formatAuditSummary(audit);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Format a MemoryAuditResult into a concise text summary for the LLM prompt.
+ * Returns undefined if nothing notable was found.
+ */
+export function formatAuditSummary(audit: MemoryAuditResult): string | undefined {
+  const lines: string[] = [];
+
+  if (audit.phantomCertainties.length > 0) {
+    lines.push(
+      `Phantom certainties (${audit.phantomCertainties.length} beliefs held with high confidence but little corroboration):`,
+    );
+    for (const p of audit.phantomCertainties.slice(0, 5)) {
+      lines.push(
+        `- "${p.node.content.slice(0, 120)}" (confidence: ${p.decayedConfidence.toFixed(2)}, edges: ${p.edgeCount})`,
+      );
+    }
+  }
+
+  if (audit.conflicts.length > 0) {
+    lines.push(`Contradictions (${audit.conflicts.length} pairs of conflicting memories):`);
+    for (const c of audit.conflicts.slice(0, 5)) {
+      lines.push(`- "${c.a.content.slice(0, 80)}" vs "${c.b.content.slice(0, 80)}"`);
+    }
+  }
+
+  if (audit.nearDeath.length > 0) {
+    lines.push(`Fading memories (${audit.nearDeath.length} memories near expiry):`);
+    for (const nd of audit.nearDeath.slice(0, 3)) {
+      lines.push(
+        `- "${nd.node.content.slice(0, 120)}" (confidence: ${nd.decayedConfidence.toFixed(2)})`,
+      );
+    }
+  }
+
+  if (lines.length === 0) return undefined;
+
+  lines.unshift(`Memory audit of ${audit.nodesAudited} nodes found issues:`);
+  return lines.join("\n");
 }

@@ -284,6 +284,170 @@ export function auditMemoryGraph(
   };
 }
 
+// === Reflection Pattern Detection ===
+
+export interface ReflectionPattern {
+  /** The recurring theme detected across reflections */
+  description: string;
+  /** How many past reflections contained this theme */
+  occurrences: number;
+  /** The specific insight/adjustment text from each occurrence */
+  evidence: string[];
+}
+
+const STOP_WORDS = new Set([
+  "a",
+  "the",
+  "is",
+  "are",
+  "was",
+  "were",
+  "to",
+  "of",
+  "in",
+  "for",
+  "on",
+  "with",
+  "at",
+  "by",
+  "an",
+  "and",
+  "or",
+  "but",
+  "not",
+  "this",
+  "that",
+  "it",
+  "i",
+  "my",
+]);
+
+/**
+ * Token-overlap similarity (Jaccard index) between two strings.
+ * Lowercases, splits on whitespace, removes stop words, computes |intersection| / |union|.
+ * Pure, synchronous — no embeddings needed.
+ */
+export function textSimilarity(a: string, b: string): number {
+  const tokenize = (s: string): Set<string> => {
+    const tokens = s
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((t) => t.length > 0 && !STOP_WORDS.has(t));
+    return new Set(tokens);
+  };
+
+  const setA = tokenize(a);
+  const setB = tokenize(b);
+  if (setA.size === 0 && setB.size === 0) return 1;
+  if (setA.size === 0 || setB.size === 0) return 0;
+
+  let intersection = 0;
+  for (const token of setA) {
+    if (setB.has(token)) intersection++;
+  }
+  const union = setA.size + setB.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+}
+
+/**
+ * Detect recurring patterns across reflection history.
+ * Pure function — no I/O, no LLM calls.
+ *
+ * Collects all insight and adjustment strings, clusters them by text similarity
+ * (greedy single-linkage), then filters for clusters spanning 2+ different reflections.
+ * Most recent string in each cluster becomes the pattern description.
+ */
+export function detectReflectionPatterns(
+  pastReflections: Array<{
+    timestamp: number;
+    insights: string[];
+    planAdjustments: string[];
+  }>,
+  options?: {
+    /** Minimum occurrences to count as a pattern (default 2) */
+    minOccurrences?: number;
+    /** Text similarity threshold for matching (default 0.7) */
+    similarityThreshold?: number;
+    /** Maximum patterns to return (default 5) */
+    limit?: number;
+  },
+): ReflectionPattern[] {
+  const { minOccurrences = 2, similarityThreshold = 0.7, limit = 5 } = options ?? {};
+
+  // Collect all strings with their source reflection index and timestamp
+  interface TaggedString {
+    text: string;
+    reflectionIndex: number;
+    timestamp: number;
+  }
+
+  const items: TaggedString[] = [];
+  for (let i = 0; i < pastReflections.length; i++) {
+    const r = pastReflections[i]!;
+    for (const insight of r.insights) {
+      if (insight.trim().length > 0) {
+        items.push({ text: insight, reflectionIndex: i, timestamp: r.timestamp });
+      }
+    }
+    for (const adj of r.planAdjustments) {
+      if (adj.trim().length > 0) {
+        items.push({ text: adj, reflectionIndex: i, timestamp: r.timestamp });
+      }
+    }
+  }
+
+  if (items.length === 0) return [];
+
+  // Greedy single-linkage clustering by text similarity
+  const assigned = new Set<number>();
+  const clusters: TaggedString[][] = [];
+
+  for (let i = 0; i < items.length; i++) {
+    if (assigned.has(i)) continue;
+
+    const cluster = [items[i]!];
+    assigned.add(i);
+
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      for (let j = 0; j < items.length; j++) {
+        if (assigned.has(j)) continue;
+        const candidate = items[j]!;
+        for (const member of cluster) {
+          if (textSimilarity(candidate.text, member.text) >= similarityThreshold) {
+            cluster.push(candidate);
+            assigned.add(j);
+            expanded = true;
+            break;
+          }
+        }
+      }
+    }
+
+    clusters.push(cluster);
+  }
+
+  // Filter: cluster must span 2+ different reflections
+  const patterns: ReflectionPattern[] = [];
+  for (const cluster of clusters) {
+    const uniqueReflections = new Set(cluster.map((item) => item.reflectionIndex));
+    if (uniqueReflections.size < minOccurrences) continue;
+
+    // Pick the most recent string as the description
+    const sorted = [...cluster].sort((a, b) => b.timestamp - a.timestamp);
+    patterns.push({
+      description: sorted[0]!.text,
+      occurrences: uniqueReflections.size,
+      evidence: cluster.map((item) => item.text),
+    });
+  }
+
+  // Sort by occurrence count descending
+  patterns.sort((a, b) => b.occurrences - a.occurrences);
+  return patterns.slice(0, limit);
+}
+
 // === Cosine Similarity ===
 
 export function cosineSimilarity(a: number[], b: number[]): number {

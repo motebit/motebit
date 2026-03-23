@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { parseReflectionResponse } from "../index.js";
+import { parseReflectionResponse, formatAuditSummary } from "../index.js";
+import type { MemoryAuditResult } from "@motebit/memory-graph";
+import { SensitivityLevel } from "@motebit/sdk";
+import type { MemoryNode } from "@motebit/sdk";
 
 describe("parseReflectionResponse", () => {
   it("parses structured reflection output", () => {
@@ -55,5 +58,102 @@ Getting better at conciseness but still over-explains sometimes.`;
     const result = parseReflectionResponse("");
     expect(result.selfAssessment).toBe("");
     expect(result.patterns).toHaveLength(0);
+  });
+});
+
+function makeNode(overrides: Partial<MemoryNode> & { content: string }): MemoryNode {
+  return {
+    node_id: crypto.randomUUID() as MemoryNode["node_id"],
+    motebit_id: "test-motebit" as MemoryNode["motebit_id"],
+    content: overrides.content,
+    confidence: overrides.confidence ?? 0.9,
+    sensitivity: overrides.sensitivity ?? SensitivityLevel.None,
+    embedding: overrides.embedding ?? [1, 0],
+    created_at: overrides.created_at ?? Date.now(),
+    last_accessed: overrides.last_accessed ?? Date.now(),
+    half_life: overrides.half_life ?? 86400000,
+    tombstoned: overrides.tombstoned ?? false,
+    pinned: overrides.pinned ?? false,
+  };
+}
+
+describe("formatAuditSummary", () => {
+  it("returns undefined when audit finds nothing", () => {
+    const audit: MemoryAuditResult = {
+      phantomCertainties: [],
+      conflicts: [],
+      nearDeath: [],
+      nodesAudited: 5,
+    };
+    expect(formatAuditSummary(audit)).toBeUndefined();
+  });
+
+  it("includes phantom certainties in summary", () => {
+    const node = makeNode({ content: "The sky is always green" });
+    const audit: MemoryAuditResult = {
+      phantomCertainties: [
+        { node, decayedConfidence: 0.85, edgeCount: 0, reason: "Isolated belief" },
+      ],
+      conflicts: [],
+      nearDeath: [],
+      nodesAudited: 10,
+    };
+    const summary = formatAuditSummary(audit);
+    expect(summary).toBeDefined();
+    expect(summary).toContain("Phantom certainties");
+    expect(summary).toContain("The sky is always green");
+    expect(summary).toContain("0.85");
+    expect(summary).toContain("10 nodes");
+  });
+
+  it("includes conflicts in summary", () => {
+    const a = makeNode({ content: "User prefers dark mode" });
+    const b = makeNode({ content: "User prefers light mode" });
+    const audit: MemoryAuditResult = {
+      phantomCertainties: [],
+      conflicts: [{ a, b, edgeId: "edge-1" }],
+      nearDeath: [],
+      nodesAudited: 8,
+    };
+    const summary = formatAuditSummary(audit);
+    expect(summary).toBeDefined();
+    expect(summary).toContain("Contradictions");
+    expect(summary).toContain("dark mode");
+    expect(summary).toContain("light mode");
+  });
+
+  it("includes near-death memories in summary", () => {
+    const node = makeNode({ content: "Something almost forgotten" });
+    const audit: MemoryAuditResult = {
+      phantomCertainties: [],
+      conflicts: [],
+      nearDeath: [{ node, decayedConfidence: 0.05 }],
+      nodesAudited: 12,
+    };
+    const summary = formatAuditSummary(audit);
+    expect(summary).toBeDefined();
+    expect(summary).toContain("Fading memories");
+    expect(summary).toContain("almost forgotten");
+  });
+
+  it("combines all audit categories", () => {
+    const phantom = makeNode({ content: "Uncorroborated belief" });
+    const a = makeNode({ content: "Fact A" });
+    const b = makeNode({ content: "Fact B" });
+    const fading = makeNode({ content: "Fading memory" });
+    const audit: MemoryAuditResult = {
+      phantomCertainties: [
+        { node: phantom, decayedConfidence: 0.7, edgeCount: 0, reason: "Isolated" },
+      ],
+      conflicts: [{ a, b, edgeId: "e1" }],
+      nearDeath: [{ node: fading, decayedConfidence: 0.03 }],
+      nodesAudited: 20,
+    };
+    const summary = formatAuditSummary(audit);
+    expect(summary).toBeDefined();
+    expect(summary).toContain("Phantom certainties");
+    expect(summary).toContain("Contradictions");
+    expect(summary).toContain("Fading memories");
+    expect(summary).toContain("20 nodes");
   });
 });
