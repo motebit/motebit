@@ -1212,7 +1212,10 @@ export class DesktopApp {
   async getMemoryGraphStats() {
     if (!this.runtime) return null;
     const { nodes, edges } = await this.runtime.memory.exportAll();
-    const active = nodes.filter((n) => !n.tombstoned);
+    const now = Date.now();
+    const active = nodes.filter(
+      (n) => !n.tombstoned && (n.valid_until == null || n.valid_until > now),
+    );
     const pinned = active.filter((n) => n.pinned);
     return { nodes: active.length, edges: edges.length, pinned: pinned.length };
   }
@@ -1516,7 +1519,10 @@ export class DesktopApp {
     if (!this.runtime) return [];
     try {
       const { nodes } = await this.runtime.memory.exportAll();
-      return nodes.filter((n) => !n.tombstoned).sort((a, b) => b.created_at - a.created_at);
+      const now = Date.now();
+      return nodes
+        .filter((n) => !n.tombstoned && (n.valid_until == null || n.valid_until > now))
+        .sort((a, b) => b.created_at - a.created_at);
     } catch {
       return [];
     }

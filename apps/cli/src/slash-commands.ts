@@ -206,8 +206,10 @@ export async function handleSlashCommand(
           edgeCounts.set(edge.target_id, (edgeCounts.get(edge.target_id) ?? 0) + 1);
         }
 
-        const live = data.nodes.filter((n) => !n.tombstoned);
         const now = Date.now();
+        const live = data.nodes.filter(
+          (n) => !n.tombstoned && (n.valid_until == null || n.valid_until > now),
+        );
         console.log(`\nMemories (${live.length} nodes, ${data.edges.length} edges):\n`);
         for (const node of live) {
           const halfDays = Math.round(node.half_life / MS_PER_DAY);
@@ -233,7 +235,10 @@ export async function handleSlashCommand(
 
     case "graph": {
       const graphData = await runtime.memory.exportAll();
-      const live = graphData.nodes.filter((n) => !n.tombstoned);
+      const now = Date.now();
+      const live = graphData.nodes.filter(
+        (n) => !n.tombstoned && (n.valid_until == null || n.valid_until > now),
+      );
       const liveIds = new Set(live.map((n) => n.node_id));
       const liveEdges = graphData.edges.filter(
         (e) => liveIds.has(e.source_id) || liveIds.has(e.target_id),

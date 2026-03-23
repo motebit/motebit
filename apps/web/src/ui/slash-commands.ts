@@ -259,7 +259,10 @@ export function initSlashCommands(
             return;
           }
           const { nodes, edges } = await runtime.memory.exportAll();
-          const active = nodes.filter((n) => !n.tombstoned);
+          const now = Date.now();
+          const active = nodes.filter(
+            (n) => !n.tombstoned && (n.valid_until == null || n.valid_until > now),
+          );
           const pinned = active.filter((n) => n.pinned);
           const summary = `Memory graph — ${active.length} nodes, ${edges.length} edges, ${pinned.length} pinned`;
           const edgeTypes = new Map<string, number>();
@@ -352,7 +355,10 @@ export function initSlashCommands(
             return;
           }
           const { nodes } = await runtime.memory.exportAll();
-          const active = nodes.filter((n) => !n.tombstoned);
+          const now = Date.now();
+          const active = nodes.filter(
+            (n) => !n.tombstoned && (n.valid_until == null || n.valid_until > now),
+          );
           if (active.length === 0) {
             addMessage("system", "No memories to forget.");
             return;

@@ -677,8 +677,9 @@ export async function handleServe(config: CliConfig): Promise<void> {
 
     getMemories: async (limit = 50) => {
       const data = await runtime.memory.exportAll();
+      const now = Date.now();
       return data.nodes
-        .filter((n) => !n.tombstoned)
+        .filter((n) => !n.tombstoned && (n.valid_until == null || n.valid_until > now))
         .map((n) => ({
           content: n.content,
           confidence: n.confidence,

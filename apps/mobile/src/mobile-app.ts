@@ -1187,8 +1187,9 @@ export class MobileApp {
     if (!this.runtime) return [];
     try {
       const { nodes } = await this.runtime.memory.exportAll();
+      const now = Date.now();
       return nodes
-        .filter((n: MemoryNode) => !n.tombstoned)
+        .filter((n: MemoryNode) => !n.tombstoned && (n.valid_until == null || n.valid_until > now))
         .sort((a: MemoryNode, b: MemoryNode) => b.created_at - a.created_at);
     } catch {
       return [];

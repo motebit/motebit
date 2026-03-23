@@ -528,7 +528,9 @@ export class WebApp {
         exported_at: new Date().toISOString(),
         identity,
         memories: {
-          nodes: memories.nodes.filter((n) => !n.tombstoned),
+          nodes: memories.nodes.filter(
+            (n) => !n.tombstoned && (n.valid_until == null || n.valid_until > Date.now()),
+          ),
           edges: memories.edges,
         },
         conversations,

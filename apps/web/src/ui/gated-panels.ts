@@ -83,7 +83,13 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     // Filter: exclude tombstoned and sensitive memories (medical/financial/secret)
     // matching CLI export behavior — only none/personal displayed in UI
     const displayAllowed = new Set(["none", "personal"]);
-    const active = nodes.filter((n) => !n.tombstoned && displayAllowed.has(n.sensitivity));
+    const now = Date.now();
+    const active = nodes.filter(
+      (n) =>
+        !n.tombstoned &&
+        displayAllowed.has(n.sensitivity) &&
+        (n.valid_until == null || n.valid_until > now),
+    );
 
     memoryList.innerHTML = "";
 
