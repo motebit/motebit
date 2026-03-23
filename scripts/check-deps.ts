@@ -1,12 +1,15 @@
 /**
  * Architectural dependency enforcement for the Motebit monorepo.
  *
- * Five checks:
+ * Eight checks:
  *   1. No circular dependencies between @motebit/* packages
  *   2. No imports from internal paths (@motebit/foo/src/* or /dist/*)
  *   3. Layer ordering — lower layers cannot depend on higher layers
  *   4. Export surface — every package with src/ must have src/index.ts
  *   5. Undeclared dependencies — every @motebit/* import must be in package.json
+ *   6. package.json field order — name, version, license, private for private packages
+ *   7. tsconfig.json references — must match production @motebit/* dependencies
+ *   8. No license text in source files — license lives in package.json, not headers
  *
  * Exit code 1 on any violation. Designed to run in CI before typecheck.
  */
@@ -388,6 +391,119 @@ function checkUndeclaredDeps(packages: PkgInfo[]): void {
   }
 }
 
+// Check 6: package.json field order for private packages
+// Canonical order: name, version, license, private, type, main, types
+function checkPackageJsonOrder(packages: PkgInfo[]): void {
+  for (const pkg of packages) {
+    // Skip apps and services
+    if (pkg.dir.includes("/apps/") || pkg.dir.includes("/services/")) continue;
+
+    const pkgPath = join(pkg.dir, "package.json");
+    const raw = readFileSync(pkgPath, "utf-8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+
+    // Only check private packages (published packages have different structure)
+    if (!parsed.private) continue;
+
+    const keys = Object.keys(parsed);
+    const nameIdx = keys.indexOf("name");
+    const versionIdx = keys.indexOf("version");
+    const licenseIdx = keys.indexOf("license");
+    const privateIdx = keys.indexOf("private");
+
+    if (versionIdx !== -1 && nameIdx !== -1 && nameIdx > versionIdx) {
+      fail("pkg-order", `${pkg.name}: "name" must come before "version" in package.json`);
+    }
+    if (versionIdx !== -1 && licenseIdx !== -1 && licenseIdx < versionIdx) {
+      fail("pkg-order", `${pkg.name}: "version" must come before "license" in package.json`);
+    }
+    if (versionIdx !== -1 && privateIdx !== -1 && privateIdx < versionIdx) {
+      fail("pkg-order", `${pkg.name}: "version" must come before "private" in package.json`);
+    }
+
+    // Check main/types use ./dist/ prefix
+    const main = parsed.main as string | undefined;
+    const types = parsed.types as string | undefined;
+    if (main && main.startsWith("dist/") && !main.startsWith("./dist/")) {
+      fail("pkg-order", `${pkg.name}: "main" should use "./dist/" prefix, got "${main}"`);
+    }
+    if (types && types.startsWith("dist/") && !types.startsWith("./dist/")) {
+      fail("pkg-order", `${pkg.name}: "types" should use "./dist/" prefix, got "${types}"`);
+    }
+  }
+}
+
+// Check 7: tsconfig.json references match production @motebit/* dependencies
+function checkTsconfigReferences(packages: PkgInfo[]): void {
+  for (const pkg of packages) {
+    // Skip apps and services
+    if (pkg.dir.includes("/apps/") || pkg.dir.includes("/services/")) continue;
+
+    const tscPath = join(pkg.dir, "tsconfig.json");
+    if (!existsSync(tscPath)) continue;
+
+    const tsc = JSON.parse(readFileSync(tscPath, "utf-8")) as Record<string, unknown>;
+    const refs = (tsc.references as Array<{ path: string }> | undefined) ?? [];
+    const refPaths = new Set(refs.map((r) => r.path.replace("../", "")));
+
+    // Expected: every @motebit/* production dep should have a reference
+    const expectedDeps = pkg.deps
+      .filter((d) => d.startsWith("@motebit/"))
+      .map((d) => d.replace("@motebit/", ""));
+
+    for (const dep of expectedDeps) {
+      if (!refPaths.has(dep)) {
+        fail(
+          "tsconfig-refs",
+          `${pkg.name}: tsconfig.json missing reference for production dep "@motebit/${dep}"`,
+        );
+      }
+    }
+
+    // No extra references that aren't production deps
+    for (const ref of refPaths) {
+      if (!expectedDeps.includes(ref)) {
+        fail(
+          "tsconfig-refs",
+          `${pkg.name}: tsconfig.json has reference "../${ref}" but "@motebit/${ref}" is not a production dependency`,
+        );
+      }
+    }
+
+    // Packages with no @motebit/* deps should have no references
+    if (expectedDeps.length === 0 && refs.length > 0) {
+      fail(
+        "tsconfig-refs",
+        `${pkg.name}: tsconfig.json has references but no @motebit/* production dependencies`,
+      );
+    }
+  }
+}
+
+// Check 8: No license text in source file headers
+function checkNoLicenseInSource(packages: PkgInfo[]): void {
+  const licensePattern = /\bBSL[-\s]1\.1\b|\bMIT\s+licens/i;
+
+  for (const pkg of packages) {
+    const srcDir = join(pkg.dir, "src");
+    if (!existsSync(srcDir)) continue;
+
+    for (const file of collectSourceFiles(srcDir)) {
+      if (isTestFile(file)) continue;
+      const content = readFileSync(file, "utf-8");
+      // Only check the first 20 lines (file header)
+      const header = content.split("\n").slice(0, 20).join("\n");
+      if (licensePattern.test(header)) {
+        const rel = relative(ROOT, file);
+        fail(
+          "license-in-source",
+          `${rel}: license text in source header — license belongs in package.json, not code`,
+        );
+      }
+    }
+  }
+}
+
 // Check for wildcard exports (warnings, not errors)
 function warnWildcardExports(packages: PkgInfo[]): void {
   for (const pkg of packages) {
@@ -417,6 +533,9 @@ checkInternalImports(packages);
 checkLayerOrdering(packages);
 checkExportSurface(packages);
 checkUndeclaredDeps(packages);
+checkPackageJsonOrder(packages);
+checkTsconfigReferences(packages);
+checkNoLicenseInSource(packages);
 
 if (violations.length === 0) {
   console.log("\n  All architectural checks passed.\n");
