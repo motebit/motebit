@@ -2,7 +2,7 @@
 
 Verify any Motebit artifact — identity files, execution receipts, verifiable credentials, and verifiable presentations.
 
-One function. Any artifact. Zero monorepo dependencies. MIT licensed.
+One function. Any artifact. Zero runtime dependencies. MIT licensed.
 
 ## Install
 

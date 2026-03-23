@@ -26,10 +26,17 @@
     "mcp",
     "sovereign"
   ],
+  "homepage": "https://github.com/motebit/motebit/tree/main/apps/cli#readme",
+  "bugs": {
+    "url": "https://github.com/motebit/motebit/issues"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/motebit/motebit",
     "directory": "apps/cli"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "engines": {
     "node": ">=20"

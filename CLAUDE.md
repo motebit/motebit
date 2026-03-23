@@ -33,7 +33,7 @@ apps/
 
 packages/
   sdk/                Core types (Layer 0, MIT, 0 deps)
-  verify/             Standalone identity verifier (Layer 0, MIT, 2 deps)
+  verify/             Standalone identity verifier (Layer 0, MIT, 0 deps)
   create-motebit/     CLI scaffolder: npm create motebit (Layer 0, MIT)
   crypto/             Ed25519, AES-256-GCM, PBKDF2, signed tokens, W3C VC 2.0
   gradient/           Self-measurement: "What am I?" Pure narrative from gradient data (Layer 1, BSL)
@@ -158,6 +158,6 @@ Motebit is calm software. Do not confirm what the user can already see.
 Four npm packages form the protocol adoption layer:
 
 - `@motebit/sdk` — Core types. MIT, 0 deps.
-- `@motebit/verify` — Standalone identity verifier. MIT, 2 deps (`@noble/ed25519`, `@noble/hashes`).
+- `@motebit/verify` — Standalone identity verifier. MIT, 0 deps (noble bundled).
 - `create-motebit` — Scaffold signed identity. MIT, zero-deps CLI. `npm create motebit`, `--agent` for runnable project.
 - `motebit` — Operator console. BSL-1.1. REPL, daemon, MCP server, delegation, export/verify/rotate.
