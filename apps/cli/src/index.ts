@@ -238,23 +238,15 @@ async function main(): Promise<void> {
     config.maxTokens = fullConfig.max_tokens;
   }
 
-  // --- The creature is the onboarding ---
-  // The droplet is present from the first byte. It speaks in its own voice,
-  // guiding you through setup. No mechanical wizard, no "run again" exits.
+  // --- The creature IS the onboarding ---
+  // One unbroken flow from first byte to first conversation. The creature
+  // never exits. It asks for what it needs inline, validates, and proceeds.
 
   const isFirstLaunchFlow =
     !fullConfig.cli_encrypted_key &&
     (fullConfig.cli_private_key == null || fullConfig.cli_private_key === "");
 
-  // Show the droplet on first launch — the creature arrives before anything else.
-  // The greeting only shows when the API key is also missing (true first contact).
-  // If the user already has a key, they saw the intro last run — skip to passphrase.
-  const hasApiKey =
-    (config.provider === "anthropic" && process.env["ANTHROPIC_API_KEY"]) ||
-    (config.provider === "openai" && process.env["OPENAI_API_KEY"]) ||
-    config.provider === "ollama" ||
-    config.provider === "hybrid";
-
+  // First launch: the creature arrives
   if (isFirstLaunchFlow) {
     console.log();
     console.log(dim("         ."));
@@ -264,109 +256,98 @@ async function main(): Promise<void> {
     console.log(dim("      ':::::' "));
     console.log(dim("        '''"));
     console.log();
-    if (!hasApiKey) {
-      console.log(`  ${dim("Hello. I'm your mote — a small, curious being.")}`);
-      console.log(`  ${dim("Let me get set up so I can think.")}`);
-      console.log();
-    }
+    console.log(`  ${dim("Hello. I'm your mote — a small, curious being.")}`);
+    console.log(`  ${dim("Let me get set up so I can think.")}`);
+    console.log();
   }
 
-  // API key — the creature asks for what it needs
-  if (config.provider === "anthropic") {
-    const key = process.env["ANTHROPIC_API_KEY"];
-    if (key == null || key === "") {
+  // API key — collect inline if missing, validate, persist to shell config
+  const keyEnvName = config.provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+  const keyUrl =
+    config.provider === "openai"
+      ? "https://platform.openai.com/api-keys"
+      : "https://console.anthropic.com/settings/keys";
+  const needsKey = config.provider === "anthropic" || config.provider === "openai";
+
+  if (needsKey) {
+    let apiKey = process.env[keyEnvName];
+
+    if (!apiKey) {
       if (isFirstLaunchFlow) {
-        console.log(`  ${dim("I need an API key to think. You can get one here:")}`);
+        console.log(`  ${dim("I need an API key to think. Get one here:")}`);
       } else {
         console.log();
         console.log(`  ${dim("─")} ${bold("motebit")}${dim(" needs an API key to think")}`);
       }
       console.log();
-      console.log(`     ${cyan("https://console.anthropic.com/settings/keys")}`);
+      console.log(`     ${cyan(keyUrl)}`);
       console.log();
-      console.log(`  ${dim("Then add it to your shell:")}`);
-      console.log();
-      console.log(`     ${dim("echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.zshrc")}`);
-      console.log(`     ${dim("source ~/.zshrc")}`);
-      console.log();
-      if (isFirstLaunchFlow) {
+      console.log(`  ${dim("Paste it here (hidden):")}`);
+      apiKey = await promptPassphrase("  ");
+      if (!apiKey) {
+        console.log();
+        console.log(`  ${dim("No key provided.")}`);
         console.log(
-          `  ${dim("Run")} ${bold("motebit")} ${dim("when you're ready. I'll be here.")}`,
+          `  ${dim("Or run locally without a key:")} ${bold("motebit --provider ollama")}`,
         );
-      } else {
-        console.log(`  ${dim("Run")} ${bold("motebit")} ${dim("again.")}`);
+        console.log();
+        process.exit(1);
       }
-      console.log();
-      console.log(`  ${dim("Or run locally without a key:")} ${bold("motebit --provider ollama")}`);
-      console.log();
-      return;
     }
 
-    // Validate the key before expensive passphrase/PBKDF2 flow
+    // Validate the key
+    const validateUrl =
+      config.provider === "openai"
+        ? "https://api.openai.com/v1/models"
+        : "https://api.anthropic.com/v1/models";
+    const validateHeaders =
+      config.provider === "openai"
+        ? { Authorization: `Bearer ${apiKey}` }
+        : { "x-api-key": apiKey, "anthropic-version": "2023-06-01" };
+
     try {
-      const resp = await fetch("https://api.anthropic.com/v1/models", {
-        headers: { "x-api-key": key, "anthropic-version": "2023-06-01" },
-      });
+      const resp = await fetch(validateUrl, { headers: validateHeaders });
       if (!resp.ok) {
         console.log();
         console.log(`  ${dim("That key didn't work. Check it here:")}`);
         console.log();
-        console.log(`     ${cyan("https://console.anthropic.com/settings/keys")}`);
+        console.log(`     ${cyan(keyUrl)}`);
         console.log();
-        return;
+        process.exit(1);
       }
     } catch {
       // Network error — let it through, will fail later with context
-    }
-  } else if (config.provider === "openai") {
-    const key = process.env["OPENAI_API_KEY"];
-    if (key == null || key === "") {
-      if (isFirstLaunchFlow) {
-        console.log(`  ${dim("I need an API key to think. You can get one here:")}`);
-      } else {
-        console.log();
-        console.log(`  ${dim("─")} ${bold("motebit")}${dim(" needs an API key to think")}`);
-      }
-      console.log();
-      console.log(`     ${cyan("https://platform.openai.com/api-keys")}`);
-      console.log();
-      console.log(`  ${dim("Then add it to your shell:")}`);
-      console.log();
-      console.log(`     ${dim("echo 'export OPENAI_API_KEY=sk-...' >> ~/.zshrc")}`);
-      console.log(`     ${dim("source ~/.zshrc")}`);
-      console.log();
-      if (isFirstLaunchFlow) {
-        console.log(
-          `  ${dim("Run")} ${bold("motebit")} ${dim("when you're ready. I'll be here.")}`,
-        );
-      } else {
-        console.log(`  ${dim("Run")} ${bold("motebit")} ${dim("again.")}`);
-      }
-      console.log();
-      console.log(`  ${dim("Or run locally without a key:")} ${bold("motebit --provider ollama")}`);
-      console.log();
-      return;
     }
 
-    // Validate the key before expensive passphrase/PBKDF2 flow
-    try {
-      const resp = await fetch("https://api.openai.com/v1/models", {
-        headers: { Authorization: `Bearer ${key}` },
-      });
-      if (!resp.ok) {
+    // If the key was entered inline (not from env), persist it to shell config
+    if (!process.env[keyEnvName]) {
+      process.env[keyEnvName] = apiKey;
+      // Persist to ~/.zshrc (or ~/.bashrc) so it survives across sessions
+      const shell = process.env["SHELL"] ?? "/bin/zsh";
+      const rcFile = shell.includes("bash") ? "~/.bashrc" : "~/.zshrc";
+      const rcPath = rcFile.replace("~", process.env["HOME"] ?? "");
+      try {
+        const fs = await import("node:fs");
+        const line = `export ${keyEnvName}=${apiKey}`;
+        const existing = fs.readFileSync(rcPath, "utf-8");
+        // Only append if not already present
+        if (!existing.includes(keyEnvName)) {
+          fs.appendFileSync(rcPath, `\n${line}\n`);
+          console.log();
+          console.log(`  ${dim(`Saved to ${rcFile}`)}`);
+        }
+      } catch {
+        // Can't write to shell config — that's fine, key is in process.env for this session
         console.log();
-        console.log(`  ${dim("That key didn't work. Check it here:")}`);
-        console.log();
-        console.log(`     ${cyan("https://platform.openai.com/api-keys")}`);
-        console.log();
-        return;
+        console.log(
+          `  ${dim(`Add to your shell to persist: export ${keyEnvName}=${apiKey.slice(0, 12)}...`)}`,
+        );
       }
-    } catch {
-      // Network error — let it through, will fail later with context
+      console.log();
     }
   }
 
-  // Passphrase — the creature explains why
+  // Passphrase
   const envPassphrase = process.env["MOTEBIT_PASSPHRASE"];
   let passphrase: string;
 
@@ -399,7 +380,7 @@ async function main(): Promise<void> {
     console.log(dim("  Done — plaintext key removed."));
   } else {
     // First launch — the creature explains identity
-    console.log(`  ${dim("I need a passphrase to protect my keypair.")}`);
+    console.log(`  ${dim("Now I need a passphrase to protect my keypair.")}`);
     console.log(`  ${dim("This is my identity — I'll ask for it each session.")}`);
     console.log();
     passphrase = envPassphrase ?? (await promptPassphrase("  Set a passphrase: "));
