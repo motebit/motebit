@@ -115,10 +115,10 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
-  // Parse and validate body
+  // Parse and validate body — post-parse size is the true boundary
   const maxBody = isBYOK ? BYOK_MAX_BODY_SIZE : FREE_MAX_BODY_SIZE;
-  const contentLength = request.headers.get("content-length");
-  if (contentLength && parseInt(contentLength, 10) > maxBody) {
+  const raw = await request.text();
+  if (raw.length > maxBody) {
     return new Response(JSON.stringify({ error: "request_too_large" }), {
       status: 413,
       headers: { ...cors, "Content-Type": "application/json" },
@@ -127,7 +127,7 @@ export async function POST(request: Request): Promise<Response> {
 
   let body: Record<string, unknown>;
   try {
-    body = (await request.json()) as Record<string, unknown>;
+    body = JSON.parse(raw) as Record<string, unknown>;
   } catch {
     return new Response(JSON.stringify({ error: "invalid_json" }), {
       status: 400,
@@ -169,13 +169,23 @@ export async function POST(request: Request): Promise<Response> {
       { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
     );
   }
+  let totalChars = 0;
   for (const msg of messages) {
-    if (typeof msg.content === "string" && msg.content.length > maxMsgLen) {
-      return new Response(JSON.stringify({ error: "message_too_long" }), {
-        status: 400,
-        headers: { ...cors, "Content-Type": "application/json" },
-      });
+    if (typeof msg.content === "string") {
+      if (msg.content.length > maxMsgLen) {
+        return new Response(JSON.stringify({ error: "message_too_long" }), {
+          status: 400,
+          headers: { ...cors, "Content-Type": "application/json" },
+        });
+      }
+      totalChars += msg.content.length;
     }
+  }
+  if (totalChars > maxBody) {
+    return new Response(JSON.stringify({ error: "payload_too_large" }), {
+      status: 413,
+      headers: { ...cors, "Content-Type": "application/json" },
+    });
   }
 
   // Build proxied request
