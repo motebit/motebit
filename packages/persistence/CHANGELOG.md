@@ -1,5 +1,17 @@
 # @motebit/persistence
 
+## 0.1.11
+
+### Patch Changes
+
+- Updated dependencies [[`62cda1c`](https://github.com/motebit/motebit/commit/62cda1cca70562f2f54de6649eae070548a97389)]:
+  - @motebit/sdk@0.6.7
+  - @motebit/core-identity@0.1.11
+  - @motebit/event-log@0.1.11
+  - @motebit/memory-graph@0.1.11
+  - @motebit/policy@0.1.11
+  - @motebit/privacy-layer@0.1.11
+
 ## 0.1.10
 
 ### Patch Changes

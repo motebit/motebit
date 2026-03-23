@@ -1,6 +1,6 @@
 {
   "name": "@motebit/behavior-engine",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "license": "BSL-1.1",
   "private": true,
   "type": "module",

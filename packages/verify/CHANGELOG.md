@@ -1,5 +1,11 @@
 # @motebit/verify Changelog
 
+## 0.6.7
+
+### Patch Changes
+
+- [`62cda1c`](https://github.com/motebit/motebit/commit/62cda1cca70562f2f54de6649eae070548a97389) Thanks [@hakimlabs](https://github.com/hakimlabs)! - auto-generated patch bump
+
 ## 0.6.6
 
 ### Patch Changes

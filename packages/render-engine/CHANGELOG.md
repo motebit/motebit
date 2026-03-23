@@ -1,5 +1,13 @@
 # @motebit/render-engine
 
+## 0.1.11
+
+### Patch Changes
+
+- Updated dependencies [[`62cda1c`](https://github.com/motebit/motebit/commit/62cda1cca70562f2f54de6649eae070548a97389)]:
+  - @motebit/sdk@0.6.7
+  - @motebit/policy-invariants@0.1.11
+
 ## 0.1.10
 
 ### Patch Changes
