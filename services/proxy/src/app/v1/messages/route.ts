@@ -1,9 +1,14 @@
 export const runtime = "edge";
 
 const DAILY_LIMIT = 5;
-const MAX_BODY_SIZE = 100_000; // 100KB
-const MAX_MESSAGE_LENGTH = 10_000;
-const MAX_MESSAGES = 50;
+// Free tier: strict limits to control cost
+const FREE_MAX_BODY_SIZE = 100_000; // 100KB
+const FREE_MAX_MESSAGE_LENGTH = 10_000;
+const FREE_MAX_MESSAGES = 50;
+// BYOK: relaxed but bounded — user pays, but protect infra
+const BYOK_MAX_BODY_SIZE = 1_000_000; // 1MB
+const BYOK_MAX_MESSAGE_LENGTH = 200_000;
+const BYOK_MAX_MESSAGES = 200;
 // Free tier model allowlist — BYOK users can use any model
 const FREE_MODEL_ALLOWLIST = ["claude-sonnet-4-20250514"];
 
@@ -111,8 +116,9 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   // Parse and validate body
+  const maxBody = isBYOK ? BYOK_MAX_BODY_SIZE : FREE_MAX_BODY_SIZE;
   const contentLength = request.headers.get("content-length");
-  if (contentLength && parseInt(contentLength, 10) > MAX_BODY_SIZE) {
+  if (contentLength && parseInt(contentLength, 10) > maxBody) {
     return new Response(JSON.stringify({ error: "request_too_large" }), {
       status: 413,
       headers: { ...cors, "Content-Type": "application/json" },
@@ -147,7 +153,7 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  // Validate messages
+  // Validate messages — graduated limits by tier
   const messages = body.messages as Array<{ role: string; content: string }> | undefined;
   if (!Array.isArray(messages) || messages.length === 0) {
     return new Response(JSON.stringify({ error: "invalid_messages" }), {
@@ -155,14 +161,16 @@ export async function POST(request: Request): Promise<Response> {
       headers: { ...cors, "Content-Type": "application/json" },
     });
   }
-  if (messages.length > MAX_MESSAGES) {
+  const maxMessages = isBYOK ? BYOK_MAX_MESSAGES : FREE_MAX_MESSAGES;
+  const maxMsgLen = isBYOK ? BYOK_MAX_MESSAGE_LENGTH : FREE_MAX_MESSAGE_LENGTH;
+  if (messages.length > maxMessages) {
     return new Response(
-      JSON.stringify({ error: "too_many_messages", message: `Max ${MAX_MESSAGES} messages` }),
+      JSON.stringify({ error: "too_many_messages", message: `Max ${maxMessages} messages` }),
       { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
     );
   }
   for (const msg of messages) {
-    if (typeof msg.content === "string" && msg.content.length > MAX_MESSAGE_LENGTH) {
+    if (typeof msg.content === "string" && msg.content.length > maxMsgLen) {
       return new Response(JSON.stringify({ error: "message_too_long" }), {
         status: 400,
         headers: { ...cors, "Content-Type": "application/json" },
