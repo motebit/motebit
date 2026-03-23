@@ -1,8 +1,28 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "./dist",
-    "rootDir": "./src"
+    "outDir": "dist",
+    "rootDir": "src"
   },
-  "include": ["src"]
+  "include": ["src"],
+  "references": [
+    {
+      "path": "../core-identity"
+    },
+    {
+      "path": "../event-log"
+    },
+    {
+      "path": "../memory-graph"
+    },
+    {
+      "path": "../policy"
+    },
+    {
+      "path": "../privacy-layer"
+    },
+    {
+      "path": "../sdk"
+    }
+  ]
 }

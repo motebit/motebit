@@ -1,8 +1,28 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "./dist",
-    "rootDir": "./src"
+    "outDir": "dist",
+    "rootDir": "src"
   },
-  "include": ["src"]
+  "include": ["src"],
+  "references": [
+    {
+      "path": "../ai-core"
+    },
+    {
+      "path": "../event-log"
+    },
+    {
+      "path": "../memory-graph"
+    },
+    {
+      "path": "../policy"
+    },
+    {
+      "path": "../sdk"
+    },
+    {
+      "path": "../state-vector"
+    }
+  ]
 }

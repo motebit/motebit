@@ -1,9 +1,26 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "./dist",
-    "rootDir": "./src",
+    "outDir": "dist",
+    "rootDir": "src",
     "lib": ["ES2022", "DOM"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  "references": [
+    {
+      "path": "../behavior-engine"
+    },
+    {
+      "path": "../event-log"
+    },
+    {
+      "path": "../memory-graph"
+    },
+    {
+      "path": "../sdk"
+    },
+    {
+      "path": "../state-vector"
+    }
+  ]
 }

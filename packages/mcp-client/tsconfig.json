@@ -5,5 +5,15 @@
     "rootDir": "src"
   },
   "include": ["src"],
-  "references": [{ "path": "../sdk" }, { "path": "../tools" }, { "path": "../crypto" }]
+  "references": [
+    {
+      "path": "../crypto"
+    },
+    {
+      "path": "../sdk"
+    },
+    {
+      "path": "../tools"
+    }
+  ]
 }

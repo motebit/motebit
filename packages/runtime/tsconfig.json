@@ -1,8 +1,61 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "./dist",
-    "rootDir": "./src"
+    "outDir": "dist",
+    "rootDir": "src"
   },
-  "include": ["src"]
+  "include": ["src"],
+  "references": [
+    {
+      "path": "../ai-core"
+    },
+    {
+      "path": "../behavior-engine"
+    },
+    {
+      "path": "../core-identity"
+    },
+    {
+      "path": "../crypto"
+    },
+    {
+      "path": "../event-log"
+    },
+    {
+      "path": "../gradient"
+    },
+    {
+      "path": "../mcp-client"
+    },
+    {
+      "path": "../memory-graph"
+    },
+    {
+      "path": "../planner"
+    },
+    {
+      "path": "../policy"
+    },
+    {
+      "path": "../privacy-layer"
+    },
+    {
+      "path": "../reflection"
+    },
+    {
+      "path": "../render-engine"
+    },
+    {
+      "path": "../sdk"
+    },
+    {
+      "path": "../semiring"
+    },
+    {
+      "path": "../state-vector"
+    },
+    {
+      "path": "../sync-engine"
+    }
+  ]
 }
