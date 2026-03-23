@@ -10,10 +10,10 @@ const FREE_MODEL_ALLOWLIST = ["claude-sonnet-4-20250514"];
 const ALLOWED_ORIGINS = new Set([
   "https://motebit.com",
   "https://www.motebit.com",
-  // Dev
-  ...(process.env.NODE_ENV === "development"
-    ? ["http://localhost:3000", "http://localhost:3002", "http://localhost:5173"]
-    : []),
+  // Localhost is safe — the proxy validates API keys regardless of origin
+  "http://localhost:3000",
+  "http://localhost:3002",
+  "http://localhost:5173",
 ]);
 
 function corsHeaders(origin: string): Record<string, string> {

@@ -6,7 +6,7 @@
  * side effects; the conversation/plan modules are pure.
  */
 
-import { SensitivityLevel, EventType } from "@motebit/sdk";
+import { EventType } from "@motebit/sdk";
 import type { ConversationMessage } from "@motebit/sdk";
 import type {
   StreamingProvider,
@@ -15,11 +15,10 @@ import type {
   PastReflection,
 } from "@motebit/ai-core";
 import { reflect } from "@motebit/ai-core";
-import { embedText, auditMemoryGraph } from "@motebit/memory-graph";
+import { auditMemoryGraph } from "@motebit/memory-graph";
 import type { MemoryGraph, MemoryAuditResult } from "@motebit/memory-graph";
 import type { EventStore } from "@motebit/event-log";
 import type { StateVectorEngine } from "@motebit/state-vector";
-import { MemoryClass } from "@motebit/policy";
 import type { MemoryGovernor } from "@motebit/policy";
 
 /** Dependencies injected by the runtime. */
@@ -72,11 +71,19 @@ export async function performReflection(
     auditSummary,
   );
 
-  // Store insights and plan adjustments as memories
-  await storeReflectionInsights(deps, result);
-
-  // Audit: log that reflection occurred
+  // Reflection is stored in the event log (the trajectory). Individual insights
+  // are NOT duplicated into the memory graph — they're generic self-talk, not
+  // grounded knowledge. The LLM forms specific memories during conversation.
+  // TODO: layer selective persistence — store only high-signal insights that
+  // reference concrete entities, pass a novelty threshold, and aren't repeated.
   void logReflectionCompleted(deps, result);
+
+  // Single state pulse: reflection completed → brief confidence + warmth spike
+  const cur = deps.state.getState();
+  deps.state.pushUpdate({
+    confidence: Math.min(1, cur.confidence + 0.15),
+    affect_valence: Math.min(1, cur.affect_valence + 0.1),
+  });
 
   return result;
 }
@@ -87,75 +94,6 @@ export async function runReflectionSafe(deps: ReflectionDeps): Promise<void> {
     await performReflection(deps);
   } catch {
     // Reflection is best-effort — don't crash the runtime
-  }
-}
-
-async function storeReflectionInsights(
-  deps: ReflectionDeps,
-  result: ReflectionResult,
-): Promise<void> {
-  for (const insight of result.insights) {
-    try {
-      const candidate = {
-        content: `[reflection] ${insight}`,
-        confidence: 0.7,
-        sensitivity: SensitivityLevel.None,
-      };
-      const [decision] = deps.memoryGovernor.evaluate([candidate]);
-      if (decision && decision.memoryClass === MemoryClass.REJECTED) {
-        continue;
-      }
-      const embedding = await embedText(candidate.content);
-      await deps.memory.formMemory(candidate, embedding);
-      // Memory formed — brief confidence + warmth spike visible through glass
-      const cur = deps.state.getState();
-      deps.state.pushUpdate({
-        confidence: Math.min(1, cur.confidence + 0.2),
-        affect_valence: Math.min(1, cur.affect_valence + 0.15),
-      });
-    } catch {
-      // Memory formation is best-effort during reflection
-    }
-  }
-
-  // Store plan adjustments as memories — behavioral learnings for future planning
-  for (const adjustment of result.planAdjustments) {
-    try {
-      const candidate = {
-        content: `[plan_adjustment] ${adjustment}`,
-        confidence: 0.6,
-        sensitivity: SensitivityLevel.None,
-      };
-      const [decision] = deps.memoryGovernor.evaluate([candidate]);
-      if (decision && decision.memoryClass === MemoryClass.REJECTED) {
-        continue;
-      }
-      const embedding = await embedText(candidate.content);
-      await deps.memory.formMemory(candidate, embedding);
-    } catch {
-      // Memory formation is best-effort during reflection
-    }
-  }
-
-  // Store detected patterns as high-confidence memories — these are the trajectory
-  // Patterns are recurring observations across multiple reflections, so they
-  // deserve higher confidence than single-session insights (0.85 vs 0.7).
-  for (const pattern of result.patterns) {
-    try {
-      const candidate = {
-        content: `[pattern] ${pattern}`,
-        confidence: 0.85,
-        sensitivity: SensitivityLevel.None,
-      };
-      const [decision] = deps.memoryGovernor.evaluate([candidate]);
-      if (decision && decision.memoryClass === MemoryClass.REJECTED) {
-        continue;
-      }
-      const embedding = await embedText(candidate.content);
-      await deps.memory.formMemory(candidate, embedding);
-    } catch {
-      // Memory formation is best-effort during reflection
-    }
   }
 }
 
