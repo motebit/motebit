@@ -927,6 +927,7 @@ describe("reflect", () => {
     const mockResult = {
       insights: ["Users prefer short answers"],
       planAdjustments: ["Be more concise"],
+      patterns: [],
       selfAssessment: "Good overall",
     };
     mockAiReflect.mockResolvedValue(mockResult);
@@ -945,6 +946,7 @@ describe("reflect", () => {
     mockAiReflect.mockResolvedValue({
       insights: ["Insight one", "Insight two"],
       planAdjustments: [],
+      patterns: [],
       selfAssessment: "Good",
     });
 

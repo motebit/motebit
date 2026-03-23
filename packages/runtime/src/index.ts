@@ -1337,6 +1337,9 @@ export class MotebitRuntime {
       if (this._lastReflection.insights.length > 0) {
         rLines.push(`Insights: ${this._lastReflection.insights.join("; ")}.`);
       }
+      if (this._lastReflection.patterns.length > 0) {
+        rLines.push(`Recurring patterns: ${this._lastReflection.patterns.join("; ")}.`);
+      }
       if (this._lastReflection.selfAssessment) {
         rLines.push(`Self-assessment: ${this._lastReflection.selfAssessment}`);
       }
@@ -2109,13 +2112,15 @@ export class MotebitRuntime {
       const payload = events[0]!.payload;
       const insights = payload.insights as string[] | undefined;
       const adjustments = payload.plan_adjustments as string[] | undefined;
+      const patterns = payload.patterns as string[] | undefined;
       const assessment = payload.self_assessment as string | undefined;
 
       // Only restore if we have actual content (not just the old summary format)
-      if (insights || adjustments || assessment) {
+      if (insights || adjustments || patterns || assessment) {
         this._lastReflection = {
           insights: insights ?? [],
           planAdjustments: adjustments ?? [],
+          patterns: patterns ?? [],
           selfAssessment: assessment ?? "",
         };
       }

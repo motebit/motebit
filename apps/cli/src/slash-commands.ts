@@ -1049,12 +1049,20 @@ export async function handleSlashCommand(
           }
         }
 
+        if (reflection.patterns.length > 0) {
+          console.log("\nRecurring patterns:");
+          for (const pattern of reflection.patterns) {
+            console.log(`  - ${pattern}`);
+          }
+        }
+
         if (reflection.selfAssessment) {
           console.log(`\nSelf-assessment: ${reflection.selfAssessment}`);
         }
 
-        if (reflection.insights.length > 0) {
-          console.log(`\n  [${reflection.insights.length} insight(s) stored as memories]`);
+        const storedCount = reflection.insights.length + reflection.patterns.length;
+        if (storedCount > 0) {
+          console.log(`\n  [${storedCount} item(s) stored as memories]`);
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);

@@ -6,4 +6,4 @@
  */
 
 export { reflect, parseReflectionResponse } from "@motebit/ai-core";
-export type { ReflectionResult } from "@motebit/ai-core";
+export type { ReflectionResult, PastReflection } from "@motebit/ai-core";

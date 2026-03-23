@@ -955,11 +955,18 @@ export function App(): React.ReactElement {
                   "Adjustments:\n" +
                   reflection.planAdjustments.map((adj) => `  - ${adj}`).join("\n");
               }
+              if (reflection.patterns.length > 0) {
+                msg +=
+                  (msg ? "\n\n" : "") +
+                  "Recurring patterns:\n" +
+                  reflection.patterns.map((p) => `  - ${p}`).join("\n");
+              }
               if (reflection.selfAssessment) {
                 msg += (msg ? "\n\n" : "") + `Self-assessment: ${reflection.selfAssessment}`;
               }
-              if (reflection.insights.length > 0) {
-                msg += `\n\n  [${reflection.insights.length} insight(s) stored as memories]`;
+              const storedCount = reflection.insights.length + reflection.patterns.length;
+              if (storedCount > 0) {
+                msg += `\n\n  [${storedCount} item(s) stored as memories]`;
               }
               if (msg) {
                 addSystemMessage(msg);

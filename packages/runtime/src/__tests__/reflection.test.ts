@@ -67,6 +67,7 @@ describe("Runtime reflection — learning loop", () => {
       insights: ["User likes brevity"],
       planAdjustments: ["Be more concise", "Ask fewer clarifying questions"],
       selfAssessment: "Good overall",
+      patterns: [],
     });
 
     const formSpy = vi.spyOn(runtime.memory, "formMemory");
@@ -100,6 +101,7 @@ describe("Runtime reflection — learning loop", () => {
       insights: [],
       planAdjustments: [],
       selfAssessment: "N/A",
+      patterns: [],
     });
 
     const goals = [
@@ -119,6 +121,7 @@ describe("Runtime reflection — learning loop", () => {
       insights: [],
       planAdjustments: [],
       selfAssessment: "N/A",
+      patterns: [],
     });
 
     await runtime.reflect();
@@ -131,6 +134,7 @@ describe("Runtime reflection — learning loop", () => {
       insights: ["Insight A", "Insight B"],
       planAdjustments: ["Adjust X"],
       selfAssessment: "Performed well",
+      patterns: [],
     });
 
     await runtime.reflect();
@@ -154,6 +158,7 @@ describe("Runtime reflection — learning loop", () => {
       insights: ["Only insight"],
       planAdjustments: [],
       selfAssessment: "Fine",
+      patterns: [],
     });
 
     const formSpy = vi.spyOn(runtime.memory, "formMemory");

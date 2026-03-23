@@ -8,7 +8,12 @@
 
 import { SensitivityLevel, EventType } from "@motebit/sdk";
 import type { ConversationMessage } from "@motebit/sdk";
-import type { StreamingProvider, TaskRouter, ReflectionResult } from "@motebit/ai-core";
+import type {
+  StreamingProvider,
+  TaskRouter,
+  ReflectionResult,
+  PastReflection,
+} from "@motebit/ai-core";
 import { reflect } from "@motebit/ai-core";
 import { embedText } from "@motebit/memory-graph";
 import type { MemoryGraph } from "@motebit/memory-graph";
@@ -50,6 +55,9 @@ export async function performReflection(
   const recentMemories = await deps.memory.exportAll();
   const memories = recentMemories.nodes.slice(0, 10).map((n) => ({ content: n.content }));
 
+  // Query past reflections for trajectory — the creature sees its own reflection history
+  const pastReflections = await loadPastReflections(deps, 5);
+
   const result = await reflect(
     summary,
     deps.getConversationHistory(),
@@ -57,6 +65,7 @@ export async function performReflection(
     memories,
     provider,
     deps.getTaskRouter() ?? undefined,
+    pastReflections.length > 0 ? pastReflections : undefined,
   );
 
   // Store insights and plan adjustments as memories
@@ -123,6 +132,27 @@ async function storeReflectionInsights(
       // Memory formation is best-effort during reflection
     }
   }
+
+  // Store detected patterns as high-confidence memories — these are the trajectory
+  // Patterns are recurring observations across multiple reflections, so they
+  // deserve higher confidence than single-session insights (0.85 vs 0.7).
+  for (const pattern of result.patterns) {
+    try {
+      const candidate = {
+        content: `[pattern] ${pattern}`,
+        confidence: 0.85,
+        sensitivity: SensitivityLevel.None,
+      };
+      const [decision] = deps.memoryGovernor.evaluate([candidate]);
+      if (decision && decision.memoryClass === MemoryClass.REJECTED) {
+        continue;
+      }
+      const embedding = await embedText(candidate.content);
+      await deps.memory.formMemory(candidate, embedding);
+    } catch {
+      // Memory formation is best-effort during reflection
+    }
+  }
 }
 
 async function logReflectionCompleted(
@@ -139,15 +169,42 @@ async function logReflectionCompleted(
         source: "runtime_reflect",
         insights_count: result.insights.length,
         adjustments_count: result.planAdjustments.length,
+        patterns_count: result.patterns.length,
         self_assessment_preview: result.selfAssessment.slice(0, 100),
         // Full reflection data for persistence across restarts
         insights: result.insights,
         plan_adjustments: result.planAdjustments,
+        patterns: result.patterns,
         self_assessment: result.selfAssessment,
       },
       tombstoned: false,
     });
   } catch {
     // Audit logging is best-effort
+  }
+}
+
+/**
+ * Load past reflection results from the event log for trajectory analysis.
+ * Returns most recent first, capped at `limit`.
+ */
+async function loadPastReflections(deps: ReflectionDeps, limit: number): Promise<PastReflection[]> {
+  try {
+    const events = await deps.events.query({
+      motebit_id: deps.motebitId,
+      event_types: [EventType.ReflectionCompleted],
+      limit,
+    });
+
+    return events
+      .filter((e) => e.payload.insights || e.payload.plan_adjustments)
+      .map((e) => ({
+        timestamp: e.timestamp,
+        insights: (e.payload.insights as string[] | undefined) ?? [],
+        planAdjustments: (e.payload.plan_adjustments as string[] | undefined) ?? [],
+        selfAssessment: (e.payload.self_assessment as string | undefined) ?? "",
+      }));
+  } catch {
+    return [];
   }
 }

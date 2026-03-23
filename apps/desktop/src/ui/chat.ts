@@ -951,6 +951,10 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
               lines.push("Adjustments:");
               for (const a of result.planAdjustments) lines.push(`  - ${a}`);
             }
+            if (result.patterns.length > 0) {
+              lines.push("Recurring patterns:");
+              for (const p of result.patterns) lines.push(`  - ${p}`);
+            }
             addMessage("system", lines.join("\n") || "No reflection output");
           } catch (err: unknown) {
             addMessage(

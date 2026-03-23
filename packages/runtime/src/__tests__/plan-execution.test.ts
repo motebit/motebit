@@ -19,7 +19,9 @@ vi.mock("@motebit/ai-core", async () => {
     // Stub summarization/reflection to avoid side effects
     summarizeConversation: vi.fn().mockResolvedValue(null),
     shouldSummarize: vi.fn().mockReturnValue(false),
-    reflect: vi.fn().mockResolvedValue({ insights: [], planAdjustments: [], selfAssessment: "" }),
+    reflect: vi
+      .fn()
+      .mockResolvedValue({ insights: [], planAdjustments: [], patterns: [], selfAssessment: "" }),
   };
 });
 

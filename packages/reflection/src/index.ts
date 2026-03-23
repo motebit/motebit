@@ -11,5 +11,10 @@
  * Plan reflection lives in @motebit/planner (tightly coupled to plan execution).
  */
 
-export { type ReflectionResult, reflect, parseReflectionResponse } from "./conversation.js";
+export {
+  type ReflectionResult,
+  type PastReflection,
+  reflect,
+  parseReflectionResponse,
+} from "./conversation.js";
 export { type ReflectionDeps, performReflection, runReflectionSafe } from "./engine.js";

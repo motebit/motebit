@@ -26,7 +26,7 @@ export type { MotebitPersonalityConfig } from "./config.js";
 export { summarizeConversation, shouldSummarize } from "./summarizer.js";
 export type { SummarizerConfig } from "./summarizer.js";
 export { reflect, parseReflectionResponse } from "./reflection.js";
-export type { ReflectionResult } from "./reflection.js";
+export type { ReflectionResult, PastReflection } from "./reflection.js";
 export { TaskRouter, withTaskConfig } from "./task-router.js";
 export type { TaskType, TaskProfile, TaskRouterConfig, ResolvedTaskConfig } from "./task-router.js";
 

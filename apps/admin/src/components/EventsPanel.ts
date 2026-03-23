@@ -115,6 +115,7 @@ const TASK_EVENT_TYPES = new Set([
 interface ReflectionPayload {
   insights?: string[];
   plan_adjustments?: string[];
+  patterns?: string[];
   self_assessment?: string;
 }
 
@@ -122,7 +123,13 @@ function ReflectionDetail({ payload }: { payload: ReflectionPayload }): React.Re
   const [expanded, setExpanded] = useState(false);
   const insightCount = payload.insights?.length ?? 0;
   const adjustmentCount = payload.plan_adjustments?.length ?? 0;
-  const label = `${insightCount} insight${insightCount !== 1 ? "s" : ""}, ${adjustmentCount} adjustment${adjustmentCount !== 1 ? "s" : ""}`;
+  const patternCount = payload.patterns?.length ?? 0;
+  const parts = [
+    `${insightCount} insight${insightCount !== 1 ? "s" : ""}`,
+    `${adjustmentCount} adjustment${adjustmentCount !== 1 ? "s" : ""}`,
+  ];
+  if (patternCount > 0) parts.push(`${patternCount} pattern${patternCount !== 1 ? "s" : ""}`);
+  const label = parts.join(", ");
 
   return h(
     "div",
@@ -166,6 +173,16 @@ function ReflectionDetail({ payload }: { payload: ReflectionPayload }): React.Re
                 h("span", { style: { color: "#8888aa" } }, "Adjustments:"),
                 ...(payload.plan_adjustments ?? []).map((adj, i) =>
                   h("div", { key: i, style: { paddingLeft: 8 } }, `- ${adj}`),
+                ),
+              )
+            : null,
+          patternCount > 0
+            ? h(
+                "div",
+                null,
+                h("span", { style: { color: "#f59e0b" } }, "Recurring patterns:"),
+                ...(payload.patterns ?? []).map((pat, i) =>
+                  h("div", { key: i, style: { paddingLeft: 8 } }, `- ${pat}`),
                 ),
               )
             : null,
