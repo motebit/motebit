@@ -1,5 +1,13 @@
 # @motebit/verify Changelog
 
+## 0.6.2
+
+### Patch Changes
+
+- [`f246433`](https://github.com/motebit/motebit/commit/f2464332f3ec068aeb539202bd32f081b23c35b0) Thanks [@hakimlabs](https://github.com/hakimlabs)! - auto-generated patch bump
+
+- [`4a152f0`](https://github.com/motebit/motebit/commit/4a152f029f98145778a2e84b46b379fa811874cb) Thanks [@hakimlabs](https://github.com/hakimlabs)! - First-launch passphrase: explain identity before prompting
+
 ## 0.6.1
 
 ### Patch Changes

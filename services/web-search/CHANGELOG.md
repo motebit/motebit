@@ -1,5 +1,19 @@
 # @motebit/web-search
 
+## 0.1.6
+
+### Patch Changes
+
+- Updated dependencies [[`f246433`](https://github.com/motebit/motebit/commit/f2464332f3ec068aeb539202bd32f081b23c35b0), [`4a152f0`](https://github.com/motebit/motebit/commit/4a152f029f98145778a2e84b46b379fa811874cb)]:
+  - @motebit/sdk@0.6.2
+  - @motebit/crypto@0.1.6
+  - @motebit/identity-file@0.1.6
+  - @motebit/mcp-server@0.1.6
+  - @motebit/memory-graph@0.1.6
+  - @motebit/persistence@0.1.6
+  - @motebit/runtime@0.1.6
+  - @motebit/tools@0.1.6
+
 ## 0.1.5
 
 ### Patch Changes

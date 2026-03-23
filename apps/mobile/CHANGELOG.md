@@ -1,5 +1,28 @@
 # @motebit/mobile
 
+## 0.1.6
+
+### Patch Changes
+
+- Updated dependencies [[`f246433`](https://github.com/motebit/motebit/commit/f2464332f3ec068aeb539202bd32f081b23c35b0), [`4a152f0`](https://github.com/motebit/motebit/commit/4a152f029f98145778a2e84b46b379fa811874cb)]:
+  - @motebit/sdk@0.6.2
+  - @motebit/ai-core@0.1.6
+  - @motebit/behavior-engine@0.1.6
+  - @motebit/core-identity@0.1.6
+  - @motebit/crypto@0.1.6
+  - @motebit/event-log@0.1.6
+  - @motebit/gradient@0.1.6
+  - @motebit/identity-file@0.1.6
+  - @motebit/mcp-client@0.1.6
+  - @motebit/memory-graph@0.1.6
+  - @motebit/planner@0.1.6
+  - @motebit/privacy-layer@0.1.6
+  - @motebit/render-engine@0.1.6
+  - @motebit/runtime@0.1.6
+  - @motebit/state-vector@0.1.6
+  - @motebit/sync-engine@0.1.6
+  - @motebit/tools@0.1.6
+
 ## 0.1.5
 
 ### Patch Changes

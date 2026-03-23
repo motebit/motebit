@@ -1,5 +1,12 @@
 # @motebit/gradient
 
+## 0.1.6
+
+### Patch Changes
+
+- Updated dependencies [[`f246433`](https://github.com/motebit/motebit/commit/f2464332f3ec068aeb539202bd32f081b23c35b0), [`4a152f0`](https://github.com/motebit/motebit/commit/4a152f029f98145778a2e84b46b379fa811874cb)]:
+  - @motebit/sdk@0.6.2
+
 ## 0.1.5
 
 ### Patch Changes
