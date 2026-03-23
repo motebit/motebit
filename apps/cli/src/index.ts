@@ -255,7 +255,32 @@ async function main(): Promise<void> {
       console.log();
       console.log(`  ${dim("3.")} Run ${bold("motebit")} again.`);
       console.log();
+      console.log(`  ${dim("Or run locally without a key:")} ${bold("motebit --provider ollama")}`);
+      console.log();
       return;
+    }
+
+    // Validate the key actually works before expensive passphrase/PBKDF2 flow
+    try {
+      const resp = await fetch("https://api.anthropic.com/v1/models", {
+        headers: {
+          "x-api-key": key,
+          "anthropic-version": "2023-06-01",
+        },
+      });
+      if (!resp.ok) {
+        console.log();
+        console.log(`  ${dim("─")} ${bold("API key didn't work")}`);
+        console.log();
+        console.log(
+          `  Check that your key is valid at ${cyan("https://console.anthropic.com/settings/keys")}`,
+        );
+        console.log(`  Then run ${bold("motebit")} again.`);
+        console.log();
+        return;
+      }
+    } catch {
+      // Network error — let it through, will fail later with a better message
     }
   } else if (config.provider === "openai") {
     const key = process.env["OPENAI_API_KEY"];
@@ -271,7 +296,31 @@ async function main(): Promise<void> {
       console.log();
       console.log(`  ${dim("3.")} Run ${bold("motebit")} again.`);
       console.log();
+      console.log(`  ${dim("Or run locally without a key:")} ${bold("motebit --provider ollama")}`);
+      console.log();
       return;
+    }
+
+    // Validate the key actually works before expensive passphrase/PBKDF2 flow
+    try {
+      const resp = await fetch("https://api.openai.com/v1/models", {
+        headers: {
+          Authorization: `Bearer ${key}`,
+        },
+      });
+      if (!resp.ok) {
+        console.log();
+        console.log(`  ${dim("─")} ${bold("API key didn't work")}`);
+        console.log();
+        console.log(
+          `  Check that your key is valid at ${cyan("https://platform.openai.com/api-keys")}`,
+        );
+        console.log(`  Then run ${bold("motebit")} again.`);
+        console.log();
+        return;
+      }
+    } catch {
+      // Network error — let it through, will fail later with a better message
     }
   }
 
@@ -322,6 +371,17 @@ async function main(): Promise<void> {
     if (!passphrase) {
       console.error("  Error: passphrase cannot be empty.");
       process.exit(1);
+    }
+    if (!envPassphrase) {
+      const confirm = await promptPassphrase("  Confirm passphrase: ");
+      if (confirm !== passphrase) {
+        console.log();
+        console.log(`  ${dim("─")} ${bold("Passphrases didn't match.")}`);
+        console.log();
+        console.log(`  ${dim("Run")} ${bold("motebit")} ${dim("again to try once more.")}`);
+        console.log();
+        process.exit(1);
+      }
     }
   }
 

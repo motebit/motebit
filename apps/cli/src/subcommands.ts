@@ -57,7 +57,7 @@ export async function handleDoctor(): Promise<void> {
     checks.push({ name: "Config dir", ok: false, detail: `Cannot write to ${CONFIG_DIR}` });
   }
 
-  // SQLite driver (better-sqlite3 preferred, sql.js fallback)
+  // SQLite driver (sql.js)
   try {
     const tmpDbPath = path.join(CONFIG_DIR, ".doctor-test.db");
     const db = await openMotebitDatabase(tmpDbPath);
