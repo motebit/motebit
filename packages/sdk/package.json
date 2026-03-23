@@ -1,6 +1,6 @@
 {
   "name": "@motebit/sdk",
-  "version": "0.5.3",
+  "version": "0.6.0",
   "description": "Core types for the motebit protocol — state vectors, identity, memory, policy, tools, and agent delegation",
   "type": "module",
   "main": "./dist/index.js",
