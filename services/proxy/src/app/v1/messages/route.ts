@@ -179,7 +179,7 @@ export async function POST(request: Request): Promise<Response> {
       ? (body.max_tokens as number) || 4096
       : Math.min((body.max_tokens as number) || 4096, 4096),
     temperature: body.temperature,
-    stream: true,
+    stream: body.stream ?? true,
   };
 
   // BYOK users get tool support; free tier strips tools to keep costs down

@@ -479,6 +479,7 @@ export class CloudProvider implements StreamingProvider {
       temperature: this.config.temperature ?? 0.7,
       system: systemPrompt,
       messages,
+      stream: false,
     };
 
     if (contextPack.tools && contextPack.tools.length > 0) {
