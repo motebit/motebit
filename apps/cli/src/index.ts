@@ -238,107 +238,136 @@ async function main(): Promise<void> {
     config.maxTokens = fullConfig.max_tokens;
   }
 
-  // Fail fast if API key is missing (before expensive passphrase/PBKDF2 flow)
+  // --- The creature is the onboarding ---
+  // The droplet is present from the first byte. It speaks in its own voice,
+  // guiding you through setup. No mechanical wizard, no "run again" exits.
+
+  const isFirstLaunchFlow =
+    !fullConfig.cli_encrypted_key &&
+    (fullConfig.cli_private_key == null || fullConfig.cli_private_key === "");
+
+  // Show the droplet on first launch — the creature arrives before anything else
+  if (isFirstLaunchFlow) {
+    console.log();
+    console.log(dim("         ."));
+    console.log(dim("       .:::."));
+    console.log(dim("      .:::::."));
+    console.log(dim("      :::::::"));
+    console.log(dim("      ':::::' "));
+    console.log(dim("        '''"));
+    console.log();
+    console.log(`  ${dim("Hello. I'm your mote — a small, curious being.")}`);
+    console.log(`  ${dim("Let me get set up so I can think.")}`);
+    console.log();
+  }
+
+  // API key — the creature asks for what it needs
   if (config.provider === "anthropic") {
     const key = process.env["ANTHROPIC_API_KEY"];
     if (key == null || key === "") {
+      if (isFirstLaunchFlow) {
+        console.log(`  ${dim("I need an API key to think. You can get one here:")}`);
+      } else {
+        console.log();
+        console.log(`  ${dim("─")} ${bold("motebit")}${dim(" needs an API key to think")}`);
+      }
       console.log();
-      console.log(`  ${dim("─")} ${bold("motebit")}${dim(" needs an API key to think")}`);
+      console.log(`     ${cyan("https://console.anthropic.com/settings/keys")}`);
       console.log();
-      console.log(
-        `  ${dim("1.")} Get a key from ${cyan("https://console.anthropic.com/settings/keys")}`,
-      );
-      console.log(`  ${dim("2.")} Add it to your shell:`);
+      console.log(`  ${dim("Then add it to your shell:")}`);
       console.log();
       console.log(`     ${dim("echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.zshrc")}`);
       console.log(`     ${dim("source ~/.zshrc")}`);
       console.log();
-      console.log(`  ${dim("3.")} Run ${bold("motebit")} again.`);
+      if (isFirstLaunchFlow) {
+        console.log(
+          `  ${dim("Run")} ${bold("motebit")} ${dim("when you're ready. I'll be here.")}`,
+        );
+      } else {
+        console.log(`  ${dim("Run")} ${bold("motebit")} ${dim("again.")}`);
+      }
       console.log();
       console.log(`  ${dim("Or run locally without a key:")} ${bold("motebit --provider ollama")}`);
       console.log();
       return;
     }
 
-    // Validate the key actually works before expensive passphrase/PBKDF2 flow
+    // Validate the key before expensive passphrase/PBKDF2 flow
     try {
       const resp = await fetch("https://api.anthropic.com/v1/models", {
-        headers: {
-          "x-api-key": key,
-          "anthropic-version": "2023-06-01",
-        },
+        headers: { "x-api-key": key, "anthropic-version": "2023-06-01" },
       });
       if (!resp.ok) {
         console.log();
-        console.log(`  ${dim("─")} ${bold("API key didn't work")}`);
+        console.log(`  ${dim("That key didn't work. Check it here:")}`);
         console.log();
-        console.log(
-          `  Check that your key is valid at ${cyan("https://console.anthropic.com/settings/keys")}`,
-        );
-        console.log(`  Then run ${bold("motebit")} again.`);
+        console.log(`     ${cyan("https://console.anthropic.com/settings/keys")}`);
         console.log();
         return;
       }
     } catch {
-      // Network error — let it through, will fail later with a better message
+      // Network error — let it through, will fail later with context
     }
   } else if (config.provider === "openai") {
     const key = process.env["OPENAI_API_KEY"];
     if (key == null || key === "") {
+      if (isFirstLaunchFlow) {
+        console.log(`  ${dim("I need an API key to think. You can get one here:")}`);
+      } else {
+        console.log();
+        console.log(`  ${dim("─")} ${bold("motebit")}${dim(" needs an API key to think")}`);
+      }
       console.log();
-      console.log(`  ${dim("─")} ${bold("motebit")}${dim(" needs an API key to think")}`);
+      console.log(`     ${cyan("https://platform.openai.com/api-keys")}`);
       console.log();
-      console.log(`  ${dim("1.")} Get a key from ${cyan("https://platform.openai.com/api-keys")}`);
-      console.log(`  ${dim("2.")} Add it to your shell:`);
+      console.log(`  ${dim("Then add it to your shell:")}`);
       console.log();
       console.log(`     ${dim("echo 'export OPENAI_API_KEY=sk-...' >> ~/.zshrc")}`);
       console.log(`     ${dim("source ~/.zshrc")}`);
       console.log();
-      console.log(`  ${dim("3.")} Run ${bold("motebit")} again.`);
+      if (isFirstLaunchFlow) {
+        console.log(
+          `  ${dim("Run")} ${bold("motebit")} ${dim("when you're ready. I'll be here.")}`,
+        );
+      } else {
+        console.log(`  ${dim("Run")} ${bold("motebit")} ${dim("again.")}`);
+      }
       console.log();
       console.log(`  ${dim("Or run locally without a key:")} ${bold("motebit --provider ollama")}`);
       console.log();
       return;
     }
 
-    // Validate the key actually works before expensive passphrase/PBKDF2 flow
+    // Validate the key before expensive passphrase/PBKDF2 flow
     try {
       const resp = await fetch("https://api.openai.com/v1/models", {
-        headers: {
-          Authorization: `Bearer ${key}`,
-        },
+        headers: { Authorization: `Bearer ${key}` },
       });
       if (!resp.ok) {
         console.log();
-        console.log(`  ${dim("─")} ${bold("API key didn't work")}`);
+        console.log(`  ${dim("That key didn't work. Check it here:")}`);
         console.log();
-        console.log(
-          `  Check that your key is valid at ${cyan("https://platform.openai.com/api-keys")}`,
-        );
-        console.log(`  Then run ${bold("motebit")} again.`);
+        console.log(`     ${cyan("https://platform.openai.com/api-keys")}`);
         console.log();
         return;
       }
     } catch {
-      // Network error — let it through, will fail later with a better message
+      // Network error — let it through, will fail later with context
     }
   }
 
-  // Resolve passphrase BEFORE creating readline — a readline on stdin
-  // echoes keystrokes even when paused, which corrupts raw-mode masking.
+  // Passphrase — the creature explains why
   const envPassphrase = process.env["MOTEBIT_PASSPHRASE"];
   let passphrase: string;
 
   if (fullConfig.cli_encrypted_key) {
-    // Existing encrypted key — need passphrase to decrypt
+    // Returning user — just the prompt
     passphrase = envPassphrase ?? (await promptPassphrase("  Passphrase: "));
     try {
       await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
     } catch {
       console.log();
-      console.log(`  ${dim("─")} ${bold("Incorrect passphrase.")}`);
-      console.log();
-      console.log(`  ${dim("Try again, or reset your identity:")}`);
+      console.log(`  ${dim("That wasn't right. Try again, or start fresh:")}`);
       console.log();
       console.log(`     ${dim("rm ~/.motebit/config.json")}`);
       console.log(`     ${dim("motebit")}`);
@@ -347,38 +376,34 @@ async function main(): Promise<void> {
     }
   } else if (fullConfig.cli_private_key != null && fullConfig.cli_private_key !== "") {
     // Migration: plaintext key exists — encrypt it
-    console.log("Migrating private key to encrypted storage...");
-    passphrase = envPassphrase ?? (await promptPassphrase("Set a passphrase for key encryption: "));
+    console.log(dim("  Migrating your key to encrypted storage..."));
+    passphrase = envPassphrase ?? (await promptPassphrase("  Set a passphrase: "));
     if (passphrase === "") {
-      console.error("Error: passphrase cannot be empty.");
+      console.error("  Passphrase cannot be empty.");
       process.exit(1);
     }
     fullConfig.cli_encrypted_key = await encryptPrivateKey(fullConfig.cli_private_key, passphrase);
     delete fullConfig.cli_private_key;
     const { saveFullConfig } = await import("./config.js");
     saveFullConfig(fullConfig);
-    console.log("Private key encrypted and plaintext removed.");
+    console.log(dim("  Done — plaintext key removed."));
   } else {
-    // First launch — prompt for new passphrase
-    console.log();
-    console.log(`  ${dim("─")} ${bold("motebit")}${dim(" is creating your identity")}`);
-    console.log();
-    console.log(`  ${dim("Your mote gets its own Ed25519 keypair — a cryptographic")}`);
-    console.log(`  ${dim("identity that signs everything it does. The passphrase")}`);
-    console.log(`  ${dim("encrypts this key on disk. You'll need it each session.")}`);
+    // First launch — the creature explains identity
+    console.log(`  ${dim("I need a passphrase to protect my keypair.")}`);
+    console.log(`  ${dim("This is my identity — I'll ask for it each session.")}`);
     console.log();
     passphrase = envPassphrase ?? (await promptPassphrase("  Set a passphrase: "));
     if (!passphrase) {
-      console.error("  Error: passphrase cannot be empty.");
+      console.error("  Passphrase cannot be empty.");
       process.exit(1);
     }
     if (!envPassphrase) {
-      const confirm = await promptPassphrase("  Confirm passphrase: ");
+      const confirm = await promptPassphrase("  Confirm: ");
       if (confirm !== passphrase) {
         console.log();
-        console.log(`  ${dim("─")} ${bold("Passphrases didn't match.")}`);
-        console.log();
-        console.log(`  ${dim("Run")} ${bold("motebit")} ${dim("again to try once more.")}`);
+        console.log(
+          `  ${dim("Those didn't match. Run")} ${bold("motebit")} ${dim("to try again.")}`,
+        );
         console.log();
         process.exit(1);
       }
@@ -409,8 +434,11 @@ async function main(): Promise<void> {
   tempDb.close();
 
   if (isFirstLaunch) {
-    console.log(`\nYour mote has been created: ${motebitId.slice(0, 8)}...`);
-    console.log("Identity and encrypted keypair stored in ~/.motebit/config.json\n");
+    console.log();
+    console.log(
+      `  ${dim("I'm")} ${cyan(motebitId.slice(0, 8))}${dim(". My keypair is stored in ~/.motebit/")}`,
+    );
+    console.log();
   }
 
   // Derive sync encryption key from private key (for zero-knowledge relay)
