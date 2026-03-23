@@ -82,6 +82,7 @@ export async function handleDoctor(): Promise<void> {
 
   // @xenova/transformers (optional)
   try {
+    // @ts-expect-error — optional dep, not in package.json
     await import("@xenova/transformers");
     checks.push({
       name: "Embeddings",
