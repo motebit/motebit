@@ -70,7 +70,7 @@ const voiceAPI = initVoice(ctx, chatAPI, {
   },
 });
 
-initSlashCommands(chatAPI, ctx, {
+const slashCommands = initSlashCommands(chatAPI, ctx, {
   openSettings: () => settings.open(),
   openConversations: () => conversations.open(),
   openShortcuts: () => openShortcutDialog(),
@@ -78,6 +78,7 @@ initSlashCommands(chatAPI, ctx, {
   openGoals: () => gatedPanels.openGoals(),
   openAgents: () => gatedPanels.openAgents(),
 });
+chatAPI.setSlashCommands(slashCommands);
 
 const chatInput = document.getElementById("chat-input") as HTMLInputElement;
 initKeyboard({

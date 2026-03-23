@@ -78,11 +78,16 @@ export interface SlashCommandsCallbacks {
   openAgents(): void;
 }
 
+export interface SlashCommandsHandle {
+  /** Try to execute a slash command from raw input text. Returns true if handled. */
+  tryExecute(text: string): boolean;
+}
+
 export function initSlashCommands(
   chatAPI: ChatAPI,
   ctx: WebContext,
   callbacks: SlashCommandsCallbacks,
-): void {
+): SlashCommandsHandle {
   let selectedIndex = 0;
   let visible = false;
   let matches: SlashCommandDef[] = [];
@@ -667,4 +672,16 @@ export function initSlashCommands(
     // Small delay to allow mousedown on autocomplete items
     setTimeout(hide, 150);
   });
+
+  return {
+    tryExecute(text: string): boolean {
+      if (!text.startsWith("/")) return false;
+      const name = text.slice(1).split(/\s/)[0]!.toLowerCase();
+      const cmd = SLASH_COMMANDS.find((c) => c.name === name);
+      if (!cmd) return false;
+      chatInput.value = "/" + cmd.name;
+      selectCommand(cmd);
+      return true;
+    },
+  };
 }

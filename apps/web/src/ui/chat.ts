@@ -423,41 +423,24 @@ export interface ChatCallbacks {
 
 export interface ChatAPI {
   handleSend(): Promise<void>;
+  /** Register slash command handler so Enter key executes commands. */
+  setSlashCommands(handle: { tryExecute(text: string): boolean }): void;
 }
 
 export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
+  let slashHandle: { tryExecute(text: string): boolean } | null = null;
+
   async function handleSend(): Promise<void> {
     const text = chatInput.value.trim();
     if (!text || ctx.app.isProcessing) return;
 
+    // Delegate slash commands to the registered handler
+    if (text.startsWith("/") && slashHandle?.tryExecute(text)) {
+      return;
+    }
+
     chatInput.value = "";
     updateSendButton();
-
-    // Handle /clear command
-    if (text === "/clear") {
-      ctx.app.resetConversation();
-      chatLog.innerHTML = "";
-      userMessageCount = 0;
-      return;
-    }
-
-    // Handle /settings command
-    if (text === "/settings") {
-      callbacks.openSettings();
-      return;
-    }
-
-    // Handle /conversations command
-    if (text === "/conversations") {
-      callbacks.openConversations?.();
-      return;
-    }
-
-    // Handle /help command
-    if (text === "/help") {
-      callbacks.openShortcuts?.();
-      return;
-    }
 
     streamingTTS.cancel(); // Interrupt any ongoing speech
 
@@ -631,5 +614,10 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
     }
   });
 
-  return { handleSend };
+  return {
+    handleSend,
+    setSlashCommands(handle: { tryExecute(text: string): boolean }) {
+      slashHandle = handle;
+    },
+  };
 }
