@@ -1,5 +1,11 @@
 # motebit CLI Changelog
 
+## 0.6.9
+
+### Patch Changes
+
+- [`0563a0b`](https://github.com/motebit/motebit/commit/0563a0bb505583df75766fcbfc2c9a49295f309e) Thanks [@hakimlabs](https://github.com/hakimlabs)! - auto-generated patch bump
+
 ## 0.6.8
 
 ### Patch Changes

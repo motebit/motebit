@@ -1,5 +1,27 @@
 # @motebit/web
 
+## 0.1.13
+
+### Patch Changes
+
+- Updated dependencies [[`0563a0b`](https://github.com/motebit/motebit/commit/0563a0bb505583df75766fcbfc2c9a49295f309e)]:
+  - @motebit/sdk@0.6.9
+  - @motebit/ai-core@0.1.13
+  - @motebit/behavior-engine@0.1.13
+  - @motebit/browser-persistence@0.1.13
+  - @motebit/core-identity@0.1.13
+  - @motebit/crypto@0.1.13
+  - @motebit/gradient@0.1.13
+  - @motebit/mcp-client@0.1.13
+  - @motebit/memory-graph@0.1.13
+  - @motebit/planner@0.1.13
+  - @motebit/policy-invariants@0.1.13
+  - @motebit/render-engine@0.1.13
+  - @motebit/runtime@0.1.13
+  - @motebit/state-vector@0.1.13
+  - @motebit/sync-engine@0.1.13
+  - @motebit/tools@0.1.13
+
 ## 0.1.12
 
 ### Patch Changes

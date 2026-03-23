@@ -1,5 +1,13 @@
 # @motebit/docs
 
+## 0.1.13
+
+### Patch Changes
+
+- Updated dependencies [[`0563a0b`](https://github.com/motebit/motebit/commit/0563a0bb505583df75766fcbfc2c9a49295f309e)]:
+  - @motebit/sdk@0.6.9
+  - @motebit/render-engine@0.1.13
+
 ## 0.1.12
 
 ### Patch Changes
