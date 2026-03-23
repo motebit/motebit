@@ -56,3 +56,4 @@ infra/secrets/
 # Internal docs (local only, never public)
 docs/ops/
 docs/strategy/
+.npmrc

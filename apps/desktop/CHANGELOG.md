@@ -1,5 +1,28 @@
 # @motebit/desktop
 
+## 0.1.5
+
+### Patch Changes
+
+- Updated dependencies [[`1bdd3ae`](https://github.com/motebit/motebit/commit/1bdd3ae35d2d7464dce1677d07af39f5b0026ba1), [`2c5a6a9`](https://github.com/motebit/motebit/commit/2c5a6a98754a625db8c13bc0b5a686e5198de34d)]:
+  - @motebit/sdk@0.6.1
+  - @motebit/ai-core@0.1.5
+  - @motebit/behavior-engine@0.1.5
+  - @motebit/core-identity@0.1.5
+  - @motebit/crypto@0.1.5
+  - @motebit/event-log@0.1.5
+  - @motebit/gradient@0.1.5
+  - @motebit/identity-file@0.1.5
+  - @motebit/mcp-client@0.1.5
+  - @motebit/memory-graph@0.1.5
+  - @motebit/planner@0.1.5
+  - @motebit/privacy-layer@0.1.5
+  - @motebit/render-engine@0.1.5
+  - @motebit/runtime@0.1.5
+  - @motebit/state-vector@0.1.5
+  - @motebit/sync-engine@0.1.5
+  - @motebit/tools@0.1.5
+
 ## 0.1.4
 
 ### Patch Changes

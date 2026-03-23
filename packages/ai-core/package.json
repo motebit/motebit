@@ -1,6 +1,6 @@
 {
   "name": "@motebit/ai-core",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "license": "BSL-1.1",
   "private": true,
   "type": "module",
