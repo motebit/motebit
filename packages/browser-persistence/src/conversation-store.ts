@@ -44,6 +44,29 @@ export class IdbConversationStore implements ConversationStoreAdapter {
     };
     const tx = this.db.transaction("conversations", "readwrite");
     tx.objectStore("conversations").add(record);
+
+    // Update caches — listConversations and getActiveConversation read from these
+    const listEntry = {
+      conversationId,
+      startedAt: now,
+      lastActiveAt: now,
+      title: null,
+      messageCount: 0,
+    };
+    const cached = this._conversationListCache.get(motebitId);
+    if (cached) {
+      cached.unshift(listEntry);
+    } else {
+      this._conversationListCache.set(motebitId, [listEntry]);
+    }
+    this._activeConversationCache.set(motebitId, {
+      conversationId,
+      startedAt: now,
+      lastActiveAt: now,
+      summary: null,
+    });
+    this._messageCache.set(conversationId, []);
+
     return conversationId;
   }
 
@@ -77,17 +100,31 @@ export class IdbConversationStore implements ConversationStoreAdapter {
     const tx = this.db.transaction(["conversation_messages", "conversations"], "readwrite");
     tx.objectStore("conversation_messages").add(record);
 
-    // Update conversation metadata
-    const convStore = tx.objectStore("conversations");
-    const getReq = convStore.get(conversationId);
+    // Update conversation metadata in IDB
+    const idbConvStore = tx.objectStore("conversations");
+    const getReq = idbConvStore.get(conversationId);
     getReq.onsuccess = () => {
       const conv = getReq.result as ConversationRecord | undefined;
       if (conv) {
         conv.lastActiveAt = now;
         conv.messageCount += 1;
-        convStore.put(conv);
+        idbConvStore.put(conv);
       }
     };
+
+    // Update caches — keep in-memory state consistent with IDB writes
+    const msgCache = this._messageCache.get(conversationId);
+    if (msgCache) {
+      msgCache.push(record);
+    }
+    // Update conversation list cache entry
+    for (const [, list] of this._conversationListCache) {
+      const entry = list.find((c) => c.conversationId === conversationId);
+      if (entry) {
+        entry.lastActiveAt = now;
+        entry.messageCount += 1;
+      }
+    }
   }
 
   loadMessages(conversationId: string, limit?: number): MessageRecord[] {
@@ -122,6 +159,12 @@ export class IdbConversationStore implements ConversationStoreAdapter {
         store.put(conv);
       }
     };
+    // Update active conversation cache
+    for (const [, active] of this._activeConversationCache) {
+      if (active.conversationId === conversationId) {
+        active.summary = summary;
+      }
+    }
   }
 
   updateTitle(conversationId: string, title: string): void {
@@ -135,6 +178,13 @@ export class IdbConversationStore implements ConversationStoreAdapter {
         store.put(conv);
       }
     };
+    // Update list cache
+    for (const [, list] of this._conversationListCache) {
+      const entry = list.find((c) => c.conversationId === conversationId);
+      if (entry) {
+        entry.title = title;
+      }
+    }
   }
 
   listConversations(
