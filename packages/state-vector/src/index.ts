@@ -99,6 +99,15 @@ export class StateVectorEngine {
   }
 
   /**
+   * Force an immediate tick — processes raw input through EMA smoothing
+   * and notifies subscribers. Use after pushUpdate when you need the
+   * state to be current before the next scheduled tick (e.g. for display).
+   */
+  tickNow(): void {
+    this.tick();
+  }
+
+  /**
    * Subscribe to state changes.
    */
   subscribe(subscriber: StateSubscriber): () => void {

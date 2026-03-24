@@ -373,6 +373,27 @@ describe("StateVectorEngine", () => {
     expect(calls.length).toBe(1);
   });
 
+  it("tickNow processes pushUpdate immediately without waiting for interval", () => {
+    engine.pushUpdate({ attention: 1.0 });
+    // No start() — the interval-based tick is not running
+    engine.tickNow();
+    // First tick: hysteresis starts sustain timer
+    // Advance fake timers past sustain_ms (500ms)
+    vi.advanceTimersByTime(600);
+    engine.tickNow();
+    const state = engine.getState();
+    // After sustain elapsed, the EMA value should have committed
+    expect(state.attention).toBeGreaterThan(0);
+  });
+
+  it("tickNow notifies subscribers", () => {
+    const values: number[] = [];
+    engine.subscribe((s) => values.push(s.attention));
+    engine.pushUpdate({ attention: 0.8 });
+    engine.tickNow();
+    expect(values.length).toBe(1);
+  });
+
   it("stop clears the tick interval", () => {
     const calls: number[] = [];
     engine.subscribe(() => calls.push(1));

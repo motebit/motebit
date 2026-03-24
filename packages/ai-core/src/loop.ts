@@ -786,6 +786,9 @@ export async function* runTurnStreaming(
       stateEngine.pushUpdate(inferred);
     }
   }
+  // Force immediate tick so stateAfter reflects the update (next scheduled
+  // tick may be up to 500ms away, but we need current state for display).
+  stateEngine.tickNow();
 
   // 6. Log interaction event
   await eventStore.appendWithClock({
