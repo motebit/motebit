@@ -1,23 +1,17 @@
 /**
- * Raw-mode input handler with bracketed paste support.
+ * Input handler — readline for display correctness, raw-mode pre-pass for paste.
  *
- * Normal typing: character-by-character echo, backspace, Enter to submit.
- * Paste detected (bracketed or heuristic): buffers content, collapses newlines,
- * redraws as a single line or summary. Enter to submit.
+ * readline.question() handles: wrapping, cursor position, backspace, display.
+ * Before handing to readline, we intercept bracketed paste to strip ANSI codes
+ * and collapse newlines (so the full paste arrives as one line).
  */
 
-import { dim } from "./colors.js";
+import * as readline from "node:readline";
 
-/** Strip ANSI escape codes to get visible character count. */
-function visibleLength(s: string): number {
-  // eslint-disable-next-line no-control-regex
-  return s.replace(/\x1b\[[0-9;]*m/g, "").length;
-}
-
-/** Strip ANSI escape codes from pasted content. */
+/** Strip ANSI escape codes. */
 function stripAnsi(s: string): string {
   // eslint-disable-next-line no-control-regex
-  return s.replace(/\x1b\[[0-9;]*m/g, "");
+  return s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
 }
 
 const PASTE_OPEN = "\x1b[200~";
@@ -38,179 +32,148 @@ export function disableBracketedPaste(): void {
 }
 
 /**
- * Read a line of input with bracketed paste support.
- * Shows the prompt, handles typing and paste, returns on Enter.
+ * Read a line of input. Uses readline for correct terminal wrapping.
+ * Bracketed paste is intercepted at the raw level to strip ANSI and collapse newlines,
+ * then injected into readline as clean single-line text.
  */
 export function readInput(promptText: string): Promise<string> {
   return new Promise((resolve) => {
+    // Phase 1: Raw-mode pre-pass to intercept bracketed paste.
+    // We read stdin in raw mode, detect paste brackets, clean the content,
+    // then switch to readline for normal input handling.
     const stdin = process.stdin;
     const stdout = process.stdout;
+
+    let inPaste = false;
+    let pasteBuffer = "";
+    let prePasteBuffer = ""; // text typed before paste
+    // gotPaste tracking removed — paste is handled by switchToReadline
 
     stdin.setRawMode(true);
     stdin.resume();
     stdin.setEncoding("utf8");
 
-    process.stdout.write(promptText);
+    stdout.write(promptText);
 
-    let value = "";
-    let pasteBuffer = "";
-    let inPaste = false;
-    let pasteLineCount = 0;
-    let lastEscTime = 0;
-
-    const promptVisibleLen = visibleLength(promptText);
-    let lastDisplayLen = 0; // track visible length of last display for wrapping calc
-
-    /** Clear displayed content (including wrapped lines) and rewrite from prompt. */
-    const redrawLine = (text: string) => {
-      const cols = stdout.columns || 80;
-      // How many terminal lines did the previous display occupy?
-      const prevTotal = promptVisibleLen + lastDisplayLen;
-      const wrappedLines = Math.max(0, Math.ceil(prevTotal / cols) - 1);
-      // Move cursor up to the prompt line
-      if (wrappedLines > 0) {
-        stdout.write(`\x1b[${wrappedLines}A`);
-      }
-      // Go to column 0, clear everything from here to end of screen, rewrite
-      stdout.write(`\r\x1b[J${promptText}${text}`);
-      lastDisplayLen = visibleLength(text);
-    };
-
-    const finish = () => {
-      stdin.removeListener("data", onData);
+    const switchToReadline = (prefill: string) => {
+      stdin.removeListener("data", rawHandler);
       stdin.setRawMode(false);
-      stdin.pause();
-      stdout.write("\n");
 
-      if (pasteBuffer) {
-        // Pasted text — collapse newlines, strip ANSI, trim
-        resolve(stripAnsi(pasteBuffer).replace(/\r?\n/g, " ").replace(/ {2,}/g, " ").trim());
-      } else {
-        resolve(value);
+      const rl = readline.createInterface({
+        input: stdin,
+        output: stdout,
+        prompt: "",
+        escapeCodeTimeout: 50,
+      });
+
+      // Clear the prompt we wrote in raw mode and rewrite it manually.
+      // readline's prompt is empty so it won't repeat on wrapped lines.
+      stdout.write(`\r\x1b[K${promptText}`);
+      if (prefill) {
+        rl.write(prefill);
       }
+
+      rl.on("line", (line) => {
+        rl.close();
+        resolve(line.trim());
+      });
     };
 
-    /** Handle a chunk of data that arrived without bracketed paste markers.
-     *  If it looks like a paste (multi-char with newlines, or very long), treat it as one. */
-    const handleUnbracketedPaste = (data: string) => {
-      const cleaned = stripAnsi(data).replace(/\r?\n/g, " ").replace(/ {2,}/g, " ").trim();
-      pasteBuffer = value + cleaned;
-      value = pasteBuffer;
-      pasteBuffer = "";
-      redrawLine(value);
-    };
+    const rawHandler = (chunk: string) => {
+      const data = chunk.toString();
 
-    const onData = (ch: string) => {
-      const data = ch.toString();
-
-      // Detect paste open bracket
+      // --- Bracketed paste ---
       if (data.includes(PASTE_OPEN)) {
         inPaste = true;
-        pasteBuffer = value; // Include any text typed before paste
-        pasteLineCount = 0;
-        // Strip the open bracket and process remaining data
+        pasteBuffer = "";
         const afterOpen = data.slice(data.indexOf(PASTE_OPEN) + PASTE_OPEN.length);
+        // Anything before the paste bracket is pre-typed text
+        const beforeOpen = data.slice(0, data.indexOf(PASTE_OPEN));
+        if (beforeOpen) {
+          for (const c of beforeOpen) {
+            if (c.charCodeAt(0) >= 32) {
+              prePasteBuffer += c;
+              stdout.write(c);
+            }
+          }
+        }
         if (afterOpen) {
-          processPasteData(afterOpen);
+          processPaste(afterOpen);
         }
         return;
       }
 
       if (inPaste) {
-        processPasteData(data);
+        processPaste(data);
         return;
       }
 
-      // Heuristic: multi-character chunk containing newlines or very long —
-      // treat as unbracketed paste (terminal doesn't support bracketed paste,
-      // or text was pasted from an app that doesn't emit paste brackets).
-      if (data.length > 1 && (data.includes("\n") || data.includes("\r") || data.length > 20)) {
-        handleUnbracketedPaste(data);
-        return;
-      }
-
-      // Normal typing mode — process each character individually.
-      // Rapid key repeats can arrive as multi-character strings (e.g. "\x7f\x7f\x7f").
+      // --- Normal keystrokes in raw mode ---
       for (let i = 0; i < data.length; i++) {
         const c = data[i]!;
+
         if (c === "\r" || c === "\n") {
-          finish();
+          // Submit what we have
+          stdin.removeListener("data", rawHandler);
+          stdin.setRawMode(false);
+          stdin.pause();
+          stdout.write("\n");
+          resolve(prePasteBuffer.trim());
           return;
-        } else if (c === "\u0003") {
+        }
+
+        if (c === "\u0003") {
           // Ctrl+C
-          stdin.removeListener("data", onData);
+          stdin.removeListener("data", rawHandler);
           stdin.setRawMode(false);
           stdout.write("\n");
           resolve("");
           return;
-        } else if (c === "\u007F" || c === "\b") {
-          // Backspace — redraw from prompt to avoid cursor bleeding into prompt text
-          if (value.length > 0) {
-            value = value.slice(0, -1);
-            redrawLine(value);
-          }
-        } else if (c === "\x1b") {
-          const now = Date.now();
-          if (now - lastEscTime < 300) {
-            // Double-tap Escape — clear input
-            value = "";
-            pasteBuffer = "";
-            redrawLine("");
-            lastEscTime = 0;
-          } else {
-            lastEscTime = now;
-          }
-          // Skip remaining bytes in this chunk (escape sequence like arrow keys)
-          return;
-        } else if (c.charCodeAt(0) >= 32) {
-          // Printable character — use redrawLine to handle wrapping correctly
-          value += c;
-          redrawLine(value);
         }
+
+        if (c === "\u007F" || c === "\b") {
+          if (prePasteBuffer.length > 0) {
+            prePasteBuffer = prePasteBuffer.slice(0, -1);
+            stdout.write("\b \b");
+          }
+          continue;
+        }
+
+        if (c === "\x1b") {
+          // Skip escape sequences (arrow keys etc)
+          return;
+        }
+
+        if (c.charCodeAt(0) >= 32) {
+          prePasteBuffer += c;
+          stdout.write(c);
+        }
+      }
+
+      // If we've typed enough without a paste, switch to readline for better UX
+      // (This handles the case where someone types a very long message)
+      if (prePasteBuffer.length > 60) {
+        switchToReadline(prePasteBuffer);
       }
     };
 
-    const processPasteData = (data: string) => {
-      // Check for paste close bracket
+    const processPaste = (data: string) => {
       const closeIdx = data.indexOf(PASTE_CLOSE);
       if (closeIdx !== -1) {
-        // End of paste
-        const remaining = data.slice(0, closeIdx);
-        pasteBuffer += remaining;
-        pasteLineCount += (remaining.match(/\n/g) || []).length;
+        pasteBuffer += data.slice(0, closeIdx);
         inPaste = false;
+        // Clean: strip ANSI, collapse newlines
+        const cleaned = stripAnsi(pasteBuffer).replace(/\r?\n/g, " ").replace(/ {2,}/g, " ").trim();
 
-        // Strip ANSI from pasted content
-        pasteBuffer = stripAnsi(pasteBuffer);
-
-        // Show paste summary or inline text
-        const charCount = pasteBuffer.length;
-        const summary =
-          pasteLineCount > 0
-            ? dim(`[Pasted text #${charCount} +${pasteLineCount} lines]`)
-            : pasteBuffer;
-        redrawLine(pasteLineCount > 0 ? summary : pasteBuffer);
-
-        // If single-line paste, put it in value for normal editing
-        if (pasteLineCount === 0) {
-          value = pasteBuffer;
-          pasteBuffer = "";
-        }
+        // Combine pre-typed text with paste, switch to readline for display
+        const full = prePasteBuffer + cleaned;
+        switchToReadline(full);
         return;
       }
 
-      // Still in paste — accumulate
       pasteBuffer += data;
-      pasteLineCount += (data.match(/\n/g) || []).length;
-
-      // Show running summary
-      if (pasteLineCount > 0) {
-        const charCount = pasteBuffer.length;
-        const summary = dim(`[Pasted text #${charCount} +${pasteLineCount} lines]`);
-        redrawLine(summary);
-      }
     };
 
-    stdin.on("data", onData);
+    stdin.on("data", rawHandler);
   });
 }
