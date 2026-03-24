@@ -29,6 +29,9 @@ RUN apk add --no-cache libstdc++
 
 COPY --from=build /app/deployed ./
 
+# Identity file — not included by pnpm deploy (not a source dep)
+COPY --from=build /app/services/web-search/motebit.md ./motebit.md
+
 # Create data directory for SQLite
 RUN mkdir -p /data
 
