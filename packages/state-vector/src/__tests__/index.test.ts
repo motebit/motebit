@@ -219,6 +219,36 @@ describe("StateVectorEngine", () => {
     expect(state2.attention).toBeGreaterThan(0);
   });
 
+  it("hysteresis allows convergence when raw target is far from current", () => {
+    // With alpha=0.3, targeting 1.0 from 0: per-tick EMA delta eventually drops
+    // below threshold, but raw target (1.0) is still far from current.
+    // Hysteresis must not trap convergence.
+    engine.pushUpdate({ attention: 1.0 });
+    engine.start();
+    // Run for enough ticks to fully converge
+    vi.advanceTimersByTime(20000);
+    const state = engine.getState();
+    // Should converge close to 1.0, not plateau at ~0.83
+    expect(state.attention).toBeGreaterThan(0.95);
+  });
+
+  it("hysteresis allows convergence with slow alpha", () => {
+    // Production-like config: alpha=0.1, which creates smaller per-tick deltas
+    const slowEngine = new StateVectorEngine({
+      tick_rate_hz: 2,
+      ema_alpha: 0.1,
+      hysteresis_threshold: 0.05,
+      hysteresis_sustain_ms: 500,
+    });
+    slowEngine.pushUpdate({ attention: 0.8 });
+    slowEngine.start();
+    vi.advanceTimersByTime(30000);
+    const state = slowEngine.getState();
+    // Should converge close to 0.8, not plateau at ~0.33
+    expect(state.attention).toBeGreaterThan(0.7);
+    slowEngine.stop();
+  });
+
   it("hysteresis resets when delta drops below threshold", () => {
     // Push big change, then immediately retract before sustain completes
     engine.pushUpdate({ curiosity: 1.0 });

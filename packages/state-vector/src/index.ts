@@ -173,7 +173,7 @@ export class StateVectorEngine {
       const ema = alpha * raw + (1 - alpha) * prev;
 
       // Hysteresis: only commit if sustained above threshold
-      if (this.applyHysteresis(field, ema, prev, now)) {
+      if (this.applyHysteresis(field, ema, prev, raw, now)) {
         smoothed[field] = ema;
       }
     }
@@ -196,12 +196,15 @@ export class StateVectorEngine {
     field: string,
     newValue: number,
     currentValue: number,
+    rawValue: number,
     now: number,
   ): boolean {
     const delta = Math.abs(newValue - currentValue);
     if (delta < this.config.hysteresis_threshold) {
       this.hysteresis.delete(field);
-      return false;
+      // If raw target is still far from current, EMA is mid-convergence — commit
+      // If raw is also close, it's genuine noise — block correctly
+      return Math.abs(rawValue - currentValue) >= this.config.hysteresis_threshold;
     }
 
     const entry = this.hysteresis.get(field);
