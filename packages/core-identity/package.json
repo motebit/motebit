@@ -1,6 +1,6 @@
 {
   "name": "@motebit/core-identity",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "license": "BSL-1.1",
   "private": true,
   "type": "module",
