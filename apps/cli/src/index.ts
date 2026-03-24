@@ -443,29 +443,6 @@ async function main(): Promise<void> {
     process.env["MOTEBIT_SYNC_URL"] ??
     reloadedConfig.sync_url ??
     DEFAULT_SYNC_URL;
-  if (syncUrl && privateKeyBytes && deviceId) {
-    const pk = privateKeyBytes; // capture for closure
-    const did = deviceId;
-    runtime.enableInteractiveDelegation({
-      syncUrl,
-      authToken: async (audience = "task:submit") => {
-        const now = Date.now();
-        return createSignedToken(
-          {
-            mid: motebitId,
-            did,
-            iat: now,
-            exp: now + 5 * 60 * 1000,
-            jti: crypto.randomUUID(),
-            aud: audience,
-          },
-          pk,
-        );
-      },
-      routingStrategy: config.routingStrategy,
-    });
-  }
-
   // Initial sync — default relay is always available
   {
     try {
@@ -480,7 +457,10 @@ async function main(): Promise<void> {
       console.warn(`Sync failed (continuing offline): ${message}`);
     }
 
-    // Register device with relay so other agents can resolve our public key
+    // Register device with relay BEFORE enabling delegation.
+    // Signed device tokens require the device's public key in the relay's
+    // identity manager. Without this, verifySignedTokenForDevice rejects
+    // poll requests with "Device not authorized".
     if (syncUrl && privateKeyBytes && deviceId && reloadedConfig.device_public_key) {
       try {
         const resp = await fetch(`${syncUrl}/api/v1/agents/bootstrap`, {
@@ -502,6 +482,31 @@ async function main(): Promise<void> {
       } catch {
         // Best-effort — relay may be unreachable
       }
+    }
+
+    // Enable delegation with audience-bound signed device tokens.
+    // Device is already registered above, so verifySignedTokenForDevice succeeds.
+    if (syncUrl && privateKeyBytes && deviceId) {
+      const pk = privateKeyBytes;
+      const did = deviceId;
+      runtime.enableInteractiveDelegation({
+        syncUrl,
+        authToken: async (audience = "task:submit") => {
+          const now = Date.now();
+          return createSignedToken(
+            {
+              mid: motebitId,
+              did,
+              iat: now,
+              exp: now + 5 * 60 * 1000,
+              jti: crypto.randomUUID(),
+              aud: audience,
+            },
+            pk,
+          );
+        },
+        routingStrategy: config.routingStrategy,
+      });
     }
 
     // Discover remote agents and populate service listings for interactive delegation
