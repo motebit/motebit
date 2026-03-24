@@ -82,6 +82,7 @@ import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebi
 import {
   computeGradient,
   computePrecision,
+  computeStateBaseline,
   gradientToMarketConfig,
   narrateEconomicConsequences,
   NEUTRAL_PRECISION,
@@ -602,6 +603,15 @@ export class MotebitRuntime {
 
     // Intelligence gradient
     this.gradientStore = adapters.storage.gradientStore ?? new InMemoryGradientStore();
+
+    // Apply accumulated intelligence baseline on startup.
+    // A warm-started creature inherits its gradient-derived posture immediately —
+    // the creature at 100 interactions wakes up differently than a fresh one.
+    const latestGradient = this.gradientStore.latest(this.motebitId);
+    if (latestGradient) {
+      this._precision = computePrecision(latestGradient);
+      this.state.pushUpdate(computeStateBaseline(latestGradient, this._precision));
+    }
 
     // Agent trust
     this.agentTrustStore = adapters.storage.agentTrustStore ?? null;
@@ -1273,9 +1283,9 @@ export class MotebitRuntime {
     };
     patched.delta = patched.gradient - latest.gradient;
 
-    // Recompute precision and feed back
+    // Recompute precision and feed back into state vector + memory
     this._precision = computePrecision(patched);
-    this.state.pushUpdate({ curiosity: this._precision.curiosityModulation });
+    this.state.pushUpdate(computeStateBaseline(patched, this._precision));
     this.memory.setPrecisionWeights(this._precision.retrievalPrecision);
   }
 
@@ -2548,11 +2558,13 @@ export class MotebitRuntime {
     // === Active inference precision feedback ===
     // Compute precision from the gradient and feed it back into subsystems.
     // This closes the loop: model evidence (gradient) → confidence (precision) →
-    // action selection (curiosity, retrieval, routing).
+    // action selection (curiosity, retrieval, routing) → creature behavior.
     this._precision = computePrecision(snapshot);
 
-    // Feed curiosity back into state vector (EMA-smoothed on next tick)
-    this.state.pushUpdate({ curiosity: this._precision.curiosityModulation });
+    // Feed accumulated intelligence into state vector as baseline shifts.
+    // confidence, affect_valence, affect_arousal, curiosity all derived from gradient.
+    // The creature at 100 interactions looks and moves differently than a fresh one.
+    this.state.pushUpdate(computeStateBaseline(snapshot, this._precision));
 
     // Feed retrieval precision to memory graph (modulates scoring weights)
     this.memory.setPrecisionWeights(this._precision.retrievalPrecision);

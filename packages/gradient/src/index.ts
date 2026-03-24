@@ -59,6 +59,46 @@ export function computePrecision(snapshot: GradientSnapshot): PrecisionWeights {
   return { selfTrust, explorationDrive, retrievalPrecision, curiosityModulation };
 }
 
+/** Partial state vector update derived from accumulated gradient data. */
+export interface StateBaseline {
+  confidence: number;
+  affect_valence: number;
+  affect_arousal: number;
+  curiosity: number;
+}
+
+/**
+ * Pure: GradientSnapshot + PrecisionWeights → state vector baseline shifts.
+ *
+ * Maps accumulated intelligence metrics to creature behavior:
+ * - confidence: sigmoid of composite gradient (experienced agent → decisive creature)
+ * - affect_valence: gradient trajectory (growing → positive, declining → concerned)
+ * - affect_arousal: magnitude of change (rapid change → alert, stability → calm)
+ * - curiosity: exploration drive (already computed in precision)
+ */
+export function computeStateBaseline(
+  snapshot: GradientSnapshot,
+  precision: PrecisionWeights,
+): StateBaseline {
+  // Confidence: selfTrust mapped to [0.3, 0.8] — never fully zero, never overconfident
+  const confidence = 0.3 + precision.selfTrust * 0.5;
+
+  // Affect valence: gradient trajectory drives mood
+  // Growing → positive, declining → negative, stable → neutral
+  const valenceFromDelta = Math.max(-0.3, Math.min(0.3, snapshot.delta * 3));
+  // Slight positive bias from high overall gradient (accumulated wisdom feels good)
+  const valenceFromLevel = (snapshot.gradient - 0.5) * 0.15;
+  const affect_valence = Math.max(-0.4, Math.min(0.4, valenceFromDelta + valenceFromLevel));
+
+  // Affect arousal: magnitude of change (rapid change = alert, stability = calm)
+  const affect_arousal = Math.min(0.3, Math.abs(snapshot.delta) * 2);
+
+  // Curiosity: exploration drive from precision
+  const curiosity = precision.curiosityModulation;
+
+  return { confidence, affect_valence, affect_arousal, curiosity };
+}
+
 /**
  * Pure: PrecisionWeights → system prompt string.
  *

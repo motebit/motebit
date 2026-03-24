@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   computePrecision,
+  computeStateBaseline,
   buildPrecisionContext,
   summarizeGradientHistory,
   narrateEconomicConsequences,
@@ -138,5 +139,65 @@ describe("narrateEconomicConsequences", () => {
   it("notes strong gradient positively", () => {
     const consequences = narrateEconomicConsequences(makeSnapshot({ gradient: 0.8 }));
     expect(consequences.some((c) => c.includes("Strong gradient"))).toBe(true);
+  });
+});
+
+describe("computeStateBaseline", () => {
+  it("fresh motebit (gradient 0.5, delta 0) → moderate confidence, neutral valence", () => {
+    const snapshot = makeSnapshot({ gradient: 0.5, delta: 0 });
+    const precision = computePrecision(snapshot);
+    const baseline = computeStateBaseline(snapshot, precision);
+
+    expect(baseline.confidence).toBeCloseTo(0.55, 1); // 0.3 + 0.5 * 0.5
+    expect(baseline.affect_valence).toBeCloseTo(0, 1); // stable, neutral gradient
+    expect(baseline.affect_arousal).toBeCloseTo(0, 1); // no change
+  });
+
+  it("experienced motebit (gradient 0.9) → high confidence, positive valence", () => {
+    const snapshot = makeSnapshot({ gradient: 0.9, delta: 0.01 });
+    const precision = computePrecision(snapshot);
+    const baseline = computeStateBaseline(snapshot, precision);
+
+    expect(baseline.confidence).toBeGreaterThan(0.7); // high selfTrust
+    expect(baseline.affect_valence).toBeGreaterThan(0); // above 0.5 gradient + slight growth
+  });
+
+  it("declining motebit → negative valence, elevated arousal", () => {
+    const snapshot = makeSnapshot({ gradient: 0.4, delta: -0.15 });
+    const precision = computePrecision(snapshot);
+    const baseline = computeStateBaseline(snapshot, precision);
+
+    expect(baseline.affect_valence).toBeLessThan(0); // declining + below 0.5
+    expect(baseline.affect_arousal).toBeGreaterThan(0.1); // rapid change
+    expect(baseline.curiosity).toBeGreaterThan(0.5); // exploration drive up
+  });
+
+  it("rapidly growing motebit → positive valence, elevated arousal", () => {
+    const snapshot = makeSnapshot({ gradient: 0.6, delta: 0.2 });
+    const precision = computePrecision(snapshot);
+    const baseline = computeStateBaseline(snapshot, precision);
+
+    expect(baseline.affect_valence).toBeGreaterThan(0.2); // strong positive delta
+    expect(baseline.affect_arousal).toBeGreaterThan(0.1); // rapid change
+  });
+
+  it("all values within valid state vector bounds", () => {
+    // Test extremes
+    for (const g of [0, 0.1, 0.5, 0.9, 1.0]) {
+      for (const d of [-0.5, -0.1, 0, 0.1, 0.5]) {
+        const snapshot = makeSnapshot({ gradient: g, delta: d });
+        const precision = computePrecision(snapshot);
+        const baseline = computeStateBaseline(snapshot, precision);
+
+        expect(baseline.confidence).toBeGreaterThanOrEqual(0);
+        expect(baseline.confidence).toBeLessThanOrEqual(1);
+        expect(baseline.affect_valence).toBeGreaterThanOrEqual(-1);
+        expect(baseline.affect_valence).toBeLessThanOrEqual(1);
+        expect(baseline.affect_arousal).toBeGreaterThanOrEqual(0);
+        expect(baseline.affect_arousal).toBeLessThanOrEqual(1);
+        expect(baseline.curiosity).toBeGreaterThanOrEqual(0);
+        expect(baseline.curiosity).toBeLessThanOrEqual(1);
+      }
+    }
   });
 });

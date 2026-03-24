@@ -27,12 +27,12 @@ import type {
   GradientStoreAdapter,
 } from "@motebit/sdk";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
-import { computePrecision } from "@motebit/gradient";
+import { computePrecision, computeStateBaseline } from "@motebit/gradient";
 
 // Re-export from gradient/sdk so internal consumers that import from "./gradient.js" still resolve
 export type { GradientSnapshot, GradientStoreAdapter } from "@motebit/sdk";
 export type { SelfModelSummary } from "@motebit/gradient";
-export { computePrecision };
+export { computePrecision, computeStateBaseline };
 export {
   buildPrecisionContext,
   NEUTRAL_PRECISION,
