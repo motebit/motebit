@@ -178,9 +178,10 @@ export class IdentityManager {
     motebitId: string,
     deviceName?: string,
     publicKey?: string,
+    deviceId?: string,
   ): Promise<DeviceRegistration> {
     const device: DeviceRegistration = {
-      device_id: crypto.randomUUID(),
+      device_id: deviceId ?? crypto.randomUUID(),
       motebit_id: motebitId,
       device_token: crypto.randomUUID(),
       public_key: publicKey ?? "",

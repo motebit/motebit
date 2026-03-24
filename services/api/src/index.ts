@@ -4764,6 +4764,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         motebitId,
         body.device_id ?? "bootstrap-device",
         body.public_key,
+        body.device_id,
       );
       return c.json(
         {
@@ -4786,6 +4787,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       motebitId,
       body.device_id ?? "bootstrap-device",
       body.public_key,
+      body.device_id,
     );
 
     return c.json(
