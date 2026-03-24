@@ -663,6 +663,93 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       expect(h).toBe("Bearer signed-jwt-token");
     }
   });
+
+  it("logs warning and continues polling when poll returns non-ok", async () => {
+    const runtime = new MotebitRuntime(
+      { motebitId: "alice-001", tickRateHz: 0 },
+      createAdapters(createMockProvider()),
+    );
+
+    const receipt = fakeReceipt();
+    let pollCount = 0;
+
+    mockFetchHandler = async (url: string, init?: RequestInit) => {
+      if (url.includes("/agent/alice-001/task") && init?.method === "POST") {
+        return new Response(JSON.stringify({ task_id: "relay-task-001", status: "pending" }), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/agent/alice-001/task/relay-task-001")) {
+        pollCount++;
+        if (pollCount === 1) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        return new Response(JSON.stringify({ task: { status: "completed" }, receipt }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("ok", { status: 200 });
+    };
+
+    runtime.enableInteractiveDelegation({
+      syncUrl: "https://mock-relay.test",
+      authToken: async (aud) => `test-token-${aud ?? "default"}`,
+    });
+
+    const result = await runtime.getToolRegistry().execute("delegate_to_agent", {
+      prompt: "test poll retry",
+    });
+
+    expect(pollCount).toBe(2);
+    expect(result.ok).toBe(true);
+  });
+
+  it("succeeds even when trust bump throws", async () => {
+    const provider = createMockProvider();
+    const storage = createInMemoryStorage();
+    const trustStore = new InMemoryAgentTrustStore();
+    trustStore.setAgentTrust = async () => {
+      throw new Error("trust store unavailable");
+    };
+    const adapters: PlatformAdapters = {
+      storage: { ...storage, agentTrustStore: trustStore },
+      renderer: new NullRenderer(),
+      ai: provider,
+    };
+
+    const runtime = new MotebitRuntime({ motebitId: "alice-001", tickRateHz: 0 }, adapters);
+
+    const receipt = fakeReceipt();
+    mockFetchHandler = async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && url.includes("/task") && !url.includes("credentials")) {
+        return new Response(JSON.stringify({ task_id: "relay-task-001", status: "pending" }), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/task/relay-task-001")) {
+        return new Response(JSON.stringify({ task: { status: "completed" }, receipt }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("ok", { status: 200 });
+    };
+
+    runtime.enableInteractiveDelegation({
+      syncUrl: "https://mock-relay.test",
+      authToken: async () => "test-token",
+    });
+
+    const result = await runtime.getToolRegistry().execute("delegate_to_agent", {
+      prompt: "trust bump will fail",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.data).toContain("motebit is a sovereign AI agent framework");
+  });
 });
 
 describe("Agent capabilities in context", () => {
