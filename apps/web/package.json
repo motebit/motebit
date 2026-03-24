@@ -32,7 +32,7 @@
     "@motebit/sync-engine": "workspace:*",
     "@motebit/tools": "workspace:*",
     "@motebit/voice": "workspace:*",
-    "three": "^0.170.0"
+    "three": "^0.183.2"
   },
   "devDependencies": {
     "@types/three": "^0.170.0",

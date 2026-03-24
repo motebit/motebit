@@ -18,7 +18,7 @@
     "@motebit/crypto": "workspace:*",
     "@motebit/sdk": "workspace:*",
     "@motebit/tools": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.12.0"
+    "@modelcontextprotocol/sdk": "^1.27.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
