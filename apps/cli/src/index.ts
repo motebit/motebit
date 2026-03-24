@@ -1,4 +1,3 @@
-import * as readline from "node:readline";
 import { DEFAULT_CONFIG } from "@motebit/ai-core";
 import type { MotebitPersonalityConfig } from "@motebit/ai-core";
 import { deriveSyncEncryptionKey, createSignedToken } from "@motebit/crypto";
@@ -21,7 +20,7 @@ import {
   openMotebitDatabase,
 } from "./runtime-factory.js";
 import { consumeStream } from "./stream.js";
-import { readInput, enableBracketedPaste, disableBracketedPaste } from "./input.js";
+import { readInput, writeOutput, initTerminal, destroyTerminal } from "./terminal.js";
 import {
   prompt as promptColor,
   meta,
@@ -356,22 +355,9 @@ async function main(): Promise<void> {
     }
   }
 
-  enableBracketedPaste();
+  initTerminal();
 
-  // Readline is created lazily — only when the approval flow in consumeStream
-  // needs it. Keeping readline connected to stdin at all times interferes with
-  // raw-mode input (readInput) by echoing paste content before the handler sees it.
-  let rl: readline.Interface | null = null;
-  const getOrCreateRl = (): readline.Interface => {
-    if (!rl) {
-      rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
-        escapeCodeTimeout: 50,
-      });
-    }
-    return rl;
-  };
+  // Terminal is already initialized (initTerminal above) — raw stdin is owned.
 
   // Bootstrap identity — need DB first for identity storage
   const dbPath = getDbPath(config.dbPath);
@@ -557,7 +543,7 @@ async function main(): Promise<void> {
   }
 
   const shutdown = async (): Promise<void> => {
-    disableBracketedPaste();
+    destroyTerminal();
     runtime.stop();
     // Disconnect MCP servers
     await Promise.allSettled(mcpAdapters.map((a) => a.disconnect()));
@@ -593,18 +579,14 @@ async function main(): Promise<void> {
   if (isFirstLaunch) {
     try {
       const activationRunId = crypto.randomUUID();
-      process.stdout.write(promptColor("mote>") + " ");
-      const streamRl = getOrCreateRl();
+      writeOutput(promptColor("mote>") + " ");
       await consumeStream(
         runtime.generateActivation(
           "You just came into existence. The person who created you is here. Speak first.",
           activationRunId,
         ),
         runtime,
-        streamRl,
       );
-      streamRl.close();
-      rl = null;
       void runtime.autoTitle();
     } catch (err: unknown) {
       // Activation is best-effort — if it fails, user still gets the prompt
@@ -625,9 +607,8 @@ async function main(): Promise<void> {
     const trimmed = line.trim();
 
     if (trimmed === "quit" || trimmed === "exit") {
-      console.log("Goodbye!");
+      writeOutput("Goodbye!\n");
       await shutdown();
-      rl?.close();
       return;
     }
 
@@ -673,15 +654,8 @@ async function main(): Promise<void> {
         if (bodyLine) console.log(meta(`  ${bodyLine}`));
         console.log();
       } else {
-        process.stdout.write("\n" + promptColor("mote>") + " ");
-        const streamRl = getOrCreateRl();
-        try {
-          await consumeStream(runtime.sendMessageStreaming(trimmed, chatRunId), runtime, streamRl);
-        } finally {
-          // Always close readline so it doesn't interfere with next readInput
-          streamRl.close();
-          rl = null;
-        }
+        writeOutput("\n" + promptColor("mote>") + " ");
+        await consumeStream(runtime.sendMessageStreaming(trimmed, chatRunId), runtime);
       }
       // Best-effort auto-title after enough messages
       void runtime.autoTitle();
