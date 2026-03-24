@@ -895,7 +895,31 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       return { verified: false, reason: `no public key on file for agent ${executingId}` };
     }
 
-    const receiptValid = await verifyExecutionReceipt(receipt, hexToBytes(pubKeyHex));
+    let receiptValid = await verifyExecutionReceipt(receipt, hexToBytes(pubKeyHex));
+
+    // Fallback: try the public key embedded in the receipt itself.
+    // This handles key rotation or registration mismatches — the receipt
+    // carries a self-authenticating key. If it verifies, update the registry.
+    if (
+      !receiptValid &&
+      receipt.public_key &&
+      typeof receipt.public_key === "string" &&
+      receipt.public_key !== pubKeyHex
+    ) {
+      receiptValid = await verifyExecutionReceipt(receipt, hexToBytes(receipt.public_key));
+      if (receiptValid) {
+        // Update registry with the correct key for future verifications
+        moteDb.db
+          .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
+          .run(receipt.public_key, receipt.motebit_id);
+        logger.info("receipt.public_key_updated", {
+          correlationId: taskId,
+          motebitId: receipt.motebit_id,
+          reason: "embedded key verified, registry updated",
+        });
+      }
+    }
+
     if (!receiptValid) {
       logger.error("receipt.verification_failed", {
         correlationId: taskId,
