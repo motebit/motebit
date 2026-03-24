@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { wireServerDeps } from "../service.js";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { wireServerDeps, startServiceServer } from "../service.js";
 import type { ServiceRuntime } from "../service.js";
 import { AgentTrustLevel } from "@motebit/sdk";
 
@@ -234,5 +234,118 @@ describe("wireServerDeps", () => {
     const runtime = makeRuntime();
     const deps = wireServerDeps(runtime, { motebitId: "test-id" });
     expect(deps.resolveCallerKey).toBeUndefined();
+  });
+});
+
+describe("startServiceServer", () => {
+  let handle: Awaited<ReturnType<typeof startServiceServer>> | null = null;
+
+  afterEach(async () => {
+    if (handle) {
+      await handle.shutdown();
+      handle = null;
+    }
+  });
+
+  function makeDeps(overrides: Partial<ReturnType<typeof wireServerDeps>> = {}) {
+    return {
+      motebitId: "test-svc",
+      listTools: () => [{ name: "echo", description: "Echo", inputSchema: {} }],
+      filterTools: (tools: unknown[]) => tools,
+      validateTool: () => ({ allowed: true, requiresApproval: false }),
+      executeTool: vi.fn().mockResolvedValue({ ok: true, data: "ok" }),
+      getState: () => ({ attention: 0.5 }),
+      getMemories: vi.fn().mockResolvedValue([]),
+      logToolCall: vi.fn(),
+      ...overrides,
+    } as unknown as ReturnType<typeof wireServerDeps>;
+  }
+
+  it("starts server and calls onStart callback", async () => {
+    const onStart = vi.fn();
+    handle = await startServiceServer(makeDeps(), {
+      port: 0,
+      onStart,
+    });
+    expect(handle.server).toBeDefined();
+    expect(onStart).toHaveBeenCalledWith(expect.any(Number), 1);
+  });
+
+  it("shutdown calls onStop and is idempotent", async () => {
+    const onStop = vi.fn();
+    handle = await startServiceServer(makeDeps(), {
+      port: 0,
+      onStop,
+    });
+    await handle.shutdown();
+    expect(onStop).toHaveBeenCalledTimes(1);
+    // Second shutdown is a no-op
+    await handle.shutdown();
+    expect(onStop).toHaveBeenCalledTimes(1);
+    handle = null; // already shut down
+  });
+
+  it("registers with relay when syncUrl is provided", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ registered: true }), { status: 200 }));
+
+    const log = vi.fn();
+    handle = await startServiceServer(makeDeps(), {
+      port: 0,
+      syncUrl: "http://fake-relay",
+      apiToken: "test-token",
+      onStart: vi.fn(),
+      log,
+    });
+
+    expect(fetchSpy).toHaveBeenCalled();
+    const registerCall = fetchSpy.mock.calls.find(
+      (c) => typeof c[0] === "string" && c[0].includes("/register"),
+    );
+    expect(registerCall).toBeDefined();
+
+    fetchSpy.mockRestore();
+  });
+
+  it("handles relay registration failure gracefully", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("unauthorized", { status: 401 }));
+
+    const log = vi.fn();
+    handle = await startServiceServer(makeDeps(), {
+      port: 0,
+      syncUrl: "http://fake-relay",
+      log,
+    });
+
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("registration failed"));
+    fetchSpy.mockRestore();
+  });
+
+  it("deregisters from relay on shutdown", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ registered: true }), { status: 200 }));
+
+    handle = await startServiceServer(makeDeps(), {
+      port: 0,
+      syncUrl: "http://fake-relay",
+      apiToken: "tok",
+    });
+
+    await handle.shutdown();
+    handle = null;
+
+    const deregisterCall = fetchSpy.mock.calls.find(
+      (c) =>
+        typeof c[0] === "string" &&
+        c[0].includes("/deregister") &&
+        (c[1] as RequestInit)?.method === "DELETE",
+    );
+    expect(deregisterCall).toBeDefined();
+
+    fetchSpy.mockRestore();
   });
 });
