@@ -111,7 +111,7 @@ function stripDisplayTags(text: string): { clean: string; pending: string } {
     .replace(/<state\s+[^>]*\/>/g, "")
     .replace(/<parameter\s+[^>]*>[\s\S]*?<\/parameter>/g, "")
     .replace(/<\/?(?:artifact|function_calls|invoke|antml)[^>]*>/g, "")
-    .replace(/\*[^*]+\*/g, "")
+    .replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1")
     .replace(/ {2,}/g, " ");
 
   // Check for trailing incomplete patterns that might close in a later chunk
@@ -128,12 +128,13 @@ function stripDisplayTags(text: string): { clean: string; pending: string } {
     }
   }
 
-  // Incomplete action: *text without closing *
+  // Incomplete stage direction: *word... without closing *
+  // Only hold back if the text after the last * looks like a stage direction
+  // (starts with a letter, no special chars). Don't catch markdown bold or prices.
   const lastStar = clean.lastIndexOf("*");
   if (lastStar !== -1) {
-    const afterLastStar = clean.slice(lastStar);
-    const starCount = (afterLastStar.match(/\*/g) ?? []).length;
-    if (starCount % 2 === 1) {
+    const after = clean.slice(lastStar + 1);
+    if (after.length > 0 && after.length < 50 && /^[a-zA-Z]/.test(after) && !/\*/.test(after)) {
       return { clean: clean.slice(0, lastStar), pending: clean.slice(lastStar) };
     }
   }

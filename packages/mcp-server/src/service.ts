@@ -411,6 +411,33 @@ export async function startServiceServer(
       });
       if (regResp.ok) {
         config.log?.(`Registered with relay (capabilities: ${toolNames.join(", ")})`);
+
+        // Auto-publish service listing so relay routing can find this service
+        try {
+          const listing = (await deps.getServiceListing?.()) ?? {
+            capabilities: toolNames,
+            pricing: [],
+            sla: { max_latency_ms: 30_000, availability_guarantee: 0.99 },
+            description: serverName,
+          };
+          const listingResp = await fetch(
+            `${config.syncUrl}/api/v1/agents/${deps.motebitId}/listing`,
+            {
+              method: "POST",
+              headers: regHeaders,
+              body: JSON.stringify(listing),
+            },
+          );
+          if (listingResp.ok) {
+            config.log?.(`Published service listing`);
+          } else {
+            config.log?.(
+              `Service listing failed: ${listingResp.status} ${await listingResp.text().catch(() => "")}`,
+            );
+          }
+        } catch {
+          // Best-effort listing
+        }
       } else {
         config.log?.(
           `Relay registration failed: ${regResp.status} ${await regResp.text().catch(() => "")}`,
