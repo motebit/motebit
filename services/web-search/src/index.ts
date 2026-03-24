@@ -36,28 +36,7 @@ import {
   createSignedToken,
 } from "@motebit/crypto";
 import { embedText } from "@motebit/memory-graph";
-
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
-
-function loadConfig() {
-  return {
-    port: parseInt(process.env["MOTEBIT_PORT"] ?? "3200", 10),
-    dbPath: process.env["MOTEBIT_DB_PATH"] ?? "./data/web-search.db",
-    identityPath: process.env["MOTEBIT_IDENTITY_PATH"] ?? "./motebit.md",
-    privateKeyHex: process.env["MOTEBIT_PRIVATE_KEY_HEX"],
-    authToken: process.env["MOTEBIT_AUTH_TOKEN"],
-    syncUrl: process.env["MOTEBIT_SYNC_URL"],
-    apiToken: process.env["MOTEBIT_API_TOKEN"],
-    braveApiKey: process.env["BRAVE_SEARCH_API_KEY"],
-    publicUrl: process.env["MOTEBIT_PUBLIC_URL"],
-    /** URL of a read-url service to sub-delegate URL reading (multi-hop). */
-    delegateReadUrl: process.env["MOTEBIT_DELEGATE_READ_URL"],
-    /** Motebit ID of the sub-delegate (for relay task submission). */
-    delegateTargetId: process.env["MOTEBIT_DELEGATE_TARGET_ID"],
-  };
-}
+import { loadConfig, fromHex, canonicalizeResults } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -66,61 +45,6 @@ function loadConfig() {
 function log(msg: string): void {
   const ts = new Date().toISOString();
   console.log(`[${ts}] ${msg}`);
-}
-
-function fromHex(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
-  }
-  return bytes;
-}
-
-/**
- * Canonicalize search results for deterministic receipt hashing.
- * Strips tracking params, normalizes URLs, sorts by URL, takes top N.
- */
-function canonicalizeResults(raw: string, maxResults = 5): string {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return raw;
-
-    const normalized = parsed
-      .slice(0, maxResults)
-      .map((r: Record<string, unknown>) => {
-        const rawUrl = r["url"] ?? r["link"];
-        let url = typeof rawUrl === "string" ? rawUrl : "";
-        try {
-          const u = new URL(url);
-          for (const p of [
-            "utm_source",
-            "utm_medium",
-            "utm_campaign",
-            "utm_content",
-            "ref",
-            "fbclid",
-            "gclid",
-          ]) {
-            u.searchParams.delete(p);
-          }
-          url = u.toString();
-        } catch {
-          // Not a valid URL — keep as-is
-        }
-        const rawTitle = r["title"];
-        const rawSnippet = r["snippet"] ?? r["description"];
-        return {
-          title: typeof rawTitle === "string" ? rawTitle : "",
-          url,
-          snippet: typeof rawSnippet === "string" ? rawSnippet : "",
-        };
-      })
-      .sort((a, b) => a.url.localeCompare(b.url));
-
-    return JSON.stringify(normalized);
-  } catch {
-    return raw;
-  }
 }
 
 /**
