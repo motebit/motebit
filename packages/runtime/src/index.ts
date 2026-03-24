@@ -104,18 +104,20 @@ import { ConversationManager } from "./conversation.js";
  * tag/action that shouldn't be yielded yet (it may close in a later chunk).
  */
 function stripDisplayTags(text: string): { clean: string; pending: string } {
-  // Strip complete tags
+  // Strip complete tags — known internal tags + any stray XML the model emits
   const clean = text
     .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
     .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
     .replace(/<state\s+[^>]*\/>/g, "")
+    .replace(/<parameter\s+[^>]*>[\s\S]*?<\/parameter>/g, "")
+    .replace(/<\/?(?:artifact|function_calls|invoke|antml)[^>]*>/g, "")
     .replace(/\*[^*]+\*/g, "")
     .replace(/ {2,}/g, " ");
 
   // Check for trailing incomplete patterns that might close in a later chunk
 
   // Incomplete <memory> or <thinking> tag: opened but not closed yet
-  for (const tag of ["<memory", "<thinking"]) {
+  for (const tag of ["<memory", "<thinking", "<parameter"]) {
     const lastOpen = clean.lastIndexOf(tag);
     if (lastOpen !== -1) {
       const closeTag = `</${tag.slice(1)}>`;
