@@ -140,7 +140,9 @@ export function readInput(promptText: string): Promise<string> {
         }
 
         if (c === "\x1b") {
-          // Skip escape sequences (arrow keys etc)
+          // Arrow keys or other escape sequences — switch to readline
+          // which handles cursor movement correctly.
+          switchToReadline(prePasteBuffer);
           return;
         }
 

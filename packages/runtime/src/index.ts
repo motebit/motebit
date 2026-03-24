@@ -111,7 +111,7 @@ function stripDisplayTags(text: string): { clean: string; pending: string } {
     .replace(/<state\s+[^>]*\/>/g, "")
     .replace(/<parameter\s+[^>]*>[\s\S]*?<\/parameter>/g, "")
     .replace(/<\/?(?:artifact|function_calls|invoke|antml)[^>]*>/g, "")
-    .replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1")
+    .replace(/\*{1,3}/g, "")
     .replace(/ {2,}/g, " ");
 
   // Check for trailing incomplete patterns that might close in a later chunk
@@ -125,17 +125,6 @@ function stripDisplayTags(text: string): { clean: string; pending: string } {
       if (!afterOpen.includes(closeTag)) {
         return { clean: clean.slice(0, lastOpen), pending: clean.slice(lastOpen) };
       }
-    }
-  }
-
-  // Incomplete stage direction: *word... without closing *
-  // Only hold back if the text after the last * looks like a stage direction
-  // (starts with a letter, no special chars). Don't catch markdown bold or prices.
-  const lastStar = clean.lastIndexOf("*");
-  if (lastStar !== -1) {
-    const after = clean.slice(lastStar + 1);
-    if (after.length > 0 && after.length < 50 && /^[a-zA-Z]/.test(after) && !/\*/.test(after)) {
-      return { clean: clean.slice(0, lastStar), pending: clean.slice(lastStar) };
     }
   }
 
@@ -2832,9 +2821,8 @@ export class MotebitRuntime {
         description:
           "Delegate a task to a remote agent on the motebit network. " +
           "The relay routes to the best capable agent based on trust and capabilities. " +
-          "Use when the user's request needs capabilities you don't have locally " +
-          "(web search, URL reading, specialized computation, etc.). " +
-          "Returns the agent's response text.",
+          "Use when the user asks you to delegate, or when a task would benefit from " +
+          "a specialized agent. Returns the agent's response text.",
         inputSchema: {
           type: "object",
           properties: {
