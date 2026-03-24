@@ -716,6 +716,12 @@ export class CloudProvider implements StreamingProvider {
       }
     }
 
+    // Anthropic API requires messages to start with a user turn.
+    // Activation records an assistant-only message — prepend a placeholder.
+    if (messages.length > 0 && (messages[0] as Record<string, unknown>).role === "assistant") {
+      messages.unshift({ role: "user", content: "[listening]" });
+    }
+
     if (contextPack.activationPrompt) {
       messages.push({ role: "user", content: "[listening]" });
     } else {

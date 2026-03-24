@@ -370,6 +370,13 @@ export async function* runTurnStreaming(
       break;
     }
 
+    // Preserve user message in history so subsequent iterations can reference it.
+    // On iteration 1 it lives only in contextPack.user_message — without this,
+    // the model loses the user's input after a tool call.
+    if (iteration === 1 && userMessage) {
+      conversationHistory.push({ role: "user", content: userMessage });
+    }
+
     // Process tool calls
     const assistantMsg: ConversationMessage = {
       role: "assistant",
