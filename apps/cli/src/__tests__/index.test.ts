@@ -12,7 +12,7 @@ describe("parseCliArgs", () => {
   it("returns defaults when no args provided", () => {
     const config = parseCliArgs([]);
     expect(config.provider).toBe("anthropic");
-    expect(config.model).toBe("claude-sonnet-4-5-latest");
+    expect(config.model).toBe("claude-sonnet-4-6");
     expect(config.dbPath).toBeUndefined();
     expect(config.noStream).toBe(false);
     expect(config.version).toBe(false);
@@ -22,7 +22,7 @@ describe("parseCliArgs", () => {
   it("parses --provider anthropic with default model", () => {
     const config = parseCliArgs(["--provider", "anthropic"]);
     expect(config.provider).toBe("anthropic");
-    expect(config.model).toBe("claude-sonnet-4-5-latest");
+    expect(config.model).toBe("claude-sonnet-4-6");
   });
 
   it("parses --provider ollama with default model", () => {
@@ -40,7 +40,7 @@ describe("parseCliArgs", () => {
   it("parses openai provider", () => {
     const config = parseCliArgs(["--provider", "openai"]);
     expect(config.provider).toBe("openai");
-    expect(config.model).toBe("gpt-4o");
+    expect(config.model).toBe("gpt-4o-mini");
   });
 
   it("throws on unknown provider", () => {
