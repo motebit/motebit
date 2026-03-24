@@ -414,14 +414,14 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
     expect(body.status).toBe("completed");
   });
 
-  it("12. Agent A retrieves the completed task + receipt via the master token", async () => {
-    // In the real internet scenario, A gets the result via:
-    //   (a) WebSocket push from the relay, or
-    //   (b) HTTP poll using the shared relay master token (or a relay-issued service token).
-    // Here we use the master token to represent authenticated cross-agent retrieval.
+  it("12. Agent A polls the completed task with a signed device token (task:query audience)", async () => {
+    // Agent A uses its own device token with "task:query" audience to poll.
+    // The relay verifies the token against A's identity (from token claims.mid),
+    // NOT the target agent B's motebitId from the URL.
+    const tokenAQuery = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA, "task:query");
     const res = await relay.app.request(`/agent/${motebitIdB}/task/${sharedTaskId}`, {
       method: "GET",
-      headers: { Authorization: `Bearer ${RELAY_MASTER_TOKEN}` },
+      headers: { Authorization: `Bearer ${tokenAQuery}` },
     });
 
     expect(res.status).toBe(200);
@@ -444,7 +444,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
   });
 
   it("13. Agent A independently verifies the receipt signature with B's public key", async () => {
-    // Retrieve the receipt (using master token — same as test 12)
+    // Retrieve the receipt (using master token for admin access)
     const res = await relay.app.request(`/agent/${motebitIdB}/task/${sharedTaskId}`, {
       method: "GET",
       headers: { Authorization: `Bearer ${RELAY_MASTER_TOKEN}` },
@@ -511,6 +511,36 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
   // =========================================================================
   // 11. Hijack prevention
   // =========================================================================
+
+  it("15a. Unrelated agent cannot poll another agent's task with device token → 403", async () => {
+    // Agent B tries to poll A-submitted task using B's own device token.
+    // B is neither the submitter nor the target for the URL's motebitId scope,
+    // but here the task is stored under B's motebitId so B IS the target.
+    // Create a truly unrelated agent C to test the authorization boundary.
+    const keypairC = await generateKeypair();
+    const pubKeyHexC = bytesToHex(keypairC.publicKey);
+
+    const bootstrapC = await relay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        motebit_id: `agent-c-${crypto.randomUUID()}`,
+        public_key: pubKeyHexC,
+      }),
+    });
+    expect(bootstrapC.status).toBe(201);
+    const { device_id: relayDeviceIdC, motebit_id: motebitIdC } = (await bootstrapC.json()) as {
+      device_id: string;
+      motebit_id: string;
+    };
+
+    const tokenCQuery = await makeSignedToken(motebitIdC, relayDeviceIdC, keypairC, "task:query");
+    const res = await relay.app.request(`/agent/${motebitIdB}/task/${sharedTaskId}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${tokenCQuery}` },
+    });
+    expect(res.status).toBe(403);
+  });
 
   it("15. Hijack prevention: bootstrap with existing motebit_id + different key → 409", async () => {
     const attackerKeypair = await generateKeypair();

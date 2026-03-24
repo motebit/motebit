@@ -3893,23 +3893,31 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       throw new HTTPException(401, { message: "Authorization required" });
     }
     const token = authHeader.slice(7);
-    if (apiToken == null || token !== apiToken) {
-      // Verify as device signed token
-      if (enableDeviceAuth && token.includes(".")) {
-        const verified = await verifySignedTokenForDevice(
-          token,
-          motebitId,
-          identityManager,
-          "task:query",
-          isTokenBlacklisted,
-          isAgentRevoked,
-        );
-        if (!verified) {
-          throw new HTTPException(403, { message: "Device not authorized" });
-        }
-      } else {
-        throw new HTTPException(403, { message: "Invalid authorization" });
+    let callerMotebitId: string | undefined;
+    if (apiToken != null && apiToken !== "" && token === apiToken) {
+      // Master token bypass — caller identity unknown but trusted
+    } else if (enableDeviceAuth && token.includes(".")) {
+      // Verify device token against the CALLER's identity (from token claims),
+      // not the target agent's motebitId from the URL. The submitter polls for
+      // tasks they submitted to another agent — their token carries their own mid.
+      const claims = parseTokenPayloadUnsafe(token);
+      if (!claims?.mid) {
+        throw new HTTPException(401, { message: "Invalid token" });
       }
+      const verified = await verifySignedTokenForDevice(
+        token,
+        claims.mid,
+        identityManager,
+        "task:query",
+        isTokenBlacklisted,
+        isAgentRevoked,
+      );
+      if (!verified) {
+        throw new HTTPException(403, { message: "Device not authorized" });
+      }
+      callerMotebitId = claims.mid;
+    } else {
+      throw new HTTPException(403, { message: "Invalid authorization" });
     }
 
     const entry = taskQueue.get(taskId);
@@ -3923,6 +3931,17 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       throw new HTTPException(404, {
         message: "Task not found — motebit_id in URL does not match the task's target agent",
       });
+    }
+
+    // Authorization: caller must be the submitter or the target agent
+    if (callerMotebitId) {
+      const submitter = entry.submitted_by ?? entry.task.submitted_by;
+      if (callerMotebitId !== motebitId && callerMotebitId !== submitter) {
+        throw new HTTPException(403, {
+          message:
+            "Not authorized to poll this task — caller is neither the submitter nor the target agent",
+        });
+      }
     }
 
     return c.json({ task: entry.task, receipt: entry.receipt ?? null });
