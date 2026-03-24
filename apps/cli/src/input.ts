@@ -2,7 +2,8 @@
  * Raw-mode input handler with bracketed paste support.
  *
  * Normal typing: character-by-character echo, backspace, Enter to submit.
- * Paste detected: buffers content, shows "[Pasted text +N lines]", Enter to submit full text.
+ * Paste detected (bracketed or heuristic): buffers content, collapses newlines,
+ * redraws as a single line or summary. Enter to submit.
  */
 
 import { dim } from "./colors.js";
@@ -11,6 +12,12 @@ import { dim } from "./colors.js";
 function visibleLength(s: string): number {
   // eslint-disable-next-line no-control-regex
   return s.replace(/\x1b\[[0-9;]*m/g, "").length;
+}
+
+/** Strip ANSI escape codes from pasted content. */
+function stripAnsi(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
 const PASTE_OPEN = "\x1b[200~";
@@ -76,11 +83,21 @@ export function readInput(promptText: string): Promise<string> {
       stdout.write("\n");
 
       if (pasteBuffer) {
-        // Pasted text — return full content with newlines replaced by spaces
-        resolve(pasteBuffer.replace(/\r?\n/g, " ").trim());
+        // Pasted text — collapse newlines, strip ANSI, trim
+        resolve(stripAnsi(pasteBuffer).replace(/\r?\n/g, " ").replace(/ {2,}/g, " ").trim());
       } else {
         resolve(value);
       }
+    };
+
+    /** Handle a chunk of data that arrived without bracketed paste markers.
+     *  If it looks like a paste (multi-char with newlines, or very long), treat it as one. */
+    const handleUnbracketedPaste = (data: string) => {
+      const cleaned = stripAnsi(data).replace(/\r?\n/g, " ").replace(/ {2,}/g, " ").trim();
+      pasteBuffer = value + cleaned;
+      value = pasteBuffer;
+      pasteBuffer = "";
+      redrawLine(value);
     };
 
     const onData = (ch: string) => {
@@ -101,6 +118,14 @@ export function readInput(promptText: string): Promise<string> {
 
       if (inPaste) {
         processPasteData(data);
+        return;
+      }
+
+      // Heuristic: multi-character chunk containing newlines or very long —
+      // treat as unbracketed paste (terminal doesn't support bracketed paste,
+      // or text was pasted from an app that doesn't emit paste brackets).
+      if (data.length > 1 && (data.includes("\n") || data.includes("\r") || data.length > 20)) {
+        handleUnbracketedPaste(data);
         return;
       }
 
@@ -138,10 +163,9 @@ export function readInput(promptText: string): Promise<string> {
           // Skip remaining bytes in this chunk (escape sequence like arrow keys)
           return;
         } else if (c.charCodeAt(0) >= 32) {
-          // Printable character
+          // Printable character — use redrawLine to handle wrapping correctly
           value += c;
-          stdout.write(c);
-          lastDisplayLen = value.length;
+          redrawLine(value);
         }
       }
     };
@@ -156,7 +180,10 @@ export function readInput(promptText: string): Promise<string> {
         pasteLineCount += (remaining.match(/\n/g) || []).length;
         inPaste = false;
 
-        // Show paste summary
+        // Strip ANSI from pasted content
+        pasteBuffer = stripAnsi(pasteBuffer);
+
+        // Show paste summary or inline text
         const charCount = pasteBuffer.length;
         const summary =
           pasteLineCount > 0
