@@ -371,10 +371,21 @@ function onStdinData(buf: Buffer): void {
   }
 }
 
+let resizeTimer: ReturnType<typeof setTimeout> | null = null;
 function onResize(): void {
-  if (inputActive) {
+  if (!inputActive) return;
+  // Debounce: terminal fires many resize events while dragging.
+  // Only redraw once the resize settles.
+  if (resizeTimer) clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    resizeTimer = null;
+    if (!inputActive) return;
+    // The terminal already reflowed all text on screen.
+    // Don't try to edit scrollback. Start fresh on a new line.
+    process.stdout.write("\n");
+    inputRows = 1;
     redrawInput();
-  }
+  }, 100);
 }
 
 // ---------------------------------------------------------------------------
