@@ -143,6 +143,8 @@ async function main(): Promise<void> {
         prompt_hash: promptHash,
         result_hash: resultHash,
         ...(options?.relayTaskId ? { relay_task_id: options.relayTaskId } : {}),
+        // Delegated scope — must be included before signing so it's in the canonical form
+        ...(options?.delegatedScope ? { delegated_scope: options.delegatedScope } : {}),
       };
 
       const signed = await signExecutionReceipt(

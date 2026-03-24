@@ -462,7 +462,7 @@ async function main(): Promise<void> {
     const did = deviceId;
     runtime.enableInteractiveDelegation({
       syncUrl,
-      authToken: async () => {
+      authToken: async (audience = "task:submit") => {
         const now = Date.now();
         return createSignedToken(
           {
@@ -471,7 +471,7 @@ async function main(): Promise<void> {
             iat: now,
             exp: now + 5 * 60 * 1000,
             jti: crypto.randomUUID(),
-            aud: "task:submit",
+            aud: audience,
           },
           pk,
         );

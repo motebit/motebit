@@ -433,6 +433,8 @@ async function main(): Promise<void> {
         result_hash: resultHash,
         // Cryptographic binding to the relay's economic identity for this task.
         ...(options?.relayTaskId ? { relay_task_id: options.relayTaskId } : {}),
+        // Delegated scope — must be included before signing so it's in the canonical form
+        ...(options?.delegatedScope ? { delegated_scope: options.delegatedScope } : {}),
         // Nested receipts from sub-delegated work — chain of custody proof
         ...(delegationReceipts ? { delegation_receipts: delegationReceipts } : {}),
       };

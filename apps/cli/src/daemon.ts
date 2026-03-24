@@ -375,7 +375,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
     // Use a token factory to mint fresh signed tokens for long-lived daemons (5-min expiry).
     if (privKeyBytes) {
       const privateKeyForDelegation = privKeyBytes;
-      const tokenFactory = async (): Promise<string> => {
+      const tokenFactory = async (audience = "task:submit"): Promise<string> => {
         if (!fullConfig.device_id) return syncToken ?? "";
         try {
           return await createSignedToken(
@@ -385,7 +385,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
               iat: Date.now(),
               exp: Date.now() + 5 * 60 * 1000,
               jti: crypto.randomUUID(),
-              aud: "task:submit",
+              aud: audience,
             },
             privateKeyForDelegation,
           );

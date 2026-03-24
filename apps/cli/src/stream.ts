@@ -11,6 +11,22 @@ export function rlQuestion(rl: readline.Interface, prompt: string): Promise<stri
   });
 }
 
+// Animated dots: cycles .  → .. → ... while a tool call is in flight.
+// Returns a stop function that clears the interval and writes " done\n".
+function startDotAnimation(): () => void {
+  let dots = 1;
+  const timer = setInterval(() => {
+    dots = (dots % 3) + 1;
+    // Erase previous dots (max 3 chars) and rewrite
+    process.stdout.write(`\x1b[${3}D${meta(".".repeat(dots) + " ".repeat(3 - dots))}`);
+  }, 400);
+  return () => {
+    clearInterval(timer);
+    // Erase dots, write " done\n"
+    process.stdout.write(`\x1b[${3}D${meta("...")} ${meta("done")}\n`);
+  };
+}
+
 export async function consumeStream(
   stream: AsyncGenerator<StreamChunk>,
   runtime: MotebitRuntime,
@@ -22,6 +38,7 @@ export async function consumeStream(
     args: Record<string, unknown>;
     quorum?: { required: number; approvers: string[]; collected: string[] };
   } | null = null;
+  let stopAnimation: (() => void) | null = null;
 
   for await (const chunk of stream) {
     switch (chunk.type) {
@@ -30,10 +47,16 @@ export async function consumeStream(
         break;
 
       case "tool_status":
+        // Delegation tools are announced by delegation_start/delegation_complete instead
+        if (chunk.name === "delegate_to_agent") break;
         if (chunk.status === "calling") {
           process.stdout.write(`\n  ${action("●")} ${action(chunk.name)}${meta("...")}`);
+          stopAnimation = startDotAnimation();
         } else {
-          process.stdout.write(meta(" done") + "\n");
+          if (stopAnimation) {
+            stopAnimation();
+            stopAnimation = null;
+          } else process.stdout.write(meta(" done") + "\n");
         }
         break;
 
@@ -50,10 +73,14 @@ export async function consumeStream(
         process.stdout.write(
           `\n  ${action("●")} ${dim("[delegating]")} ${action(chunk.tool)}${meta("...")}`,
         );
+        stopAnimation = startDotAnimation();
         break;
 
       case "delegation_complete":
-        process.stdout.write(meta(" done") + "\n");
+        if (stopAnimation) {
+          stopAnimation();
+          stopAnimation = null;
+        } else process.stdout.write(meta(" done") + "\n");
         break;
 
       case "injection_warning":

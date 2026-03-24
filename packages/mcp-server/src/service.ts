@@ -386,31 +386,60 @@ export async function startServiceServer(
     config.onStart(config.port, toolCount);
   }
 
-  // Relay registration
-  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
-  if (config.syncUrl) {
-    try {
-      const toolNames = deps.listTools().map((t) => t.name);
-      const regHeaders: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-      if (config.apiToken) regHeaders["Authorization"] = `Bearer ${config.apiToken}`;
+  // Relay registration with clock-drift-aware heartbeat.
+  //
+  // Problem: platforms like Fly.io freeze the process when auto-stopping machines.
+  // When the machine wakes, setInterval timers resume but don't know time passed —
+  // the relay registration (15-min TTL) expires silently. Heartbeats fire on the
+  // old schedule as if no time elapsed.
+  //
+  // Solution: track wall-clock time of last successful registration/heartbeat.
+  // On each heartbeat tick, detect drift (actual elapsed > 2× expected interval)
+  // and re-register instead of just heartbeating. Expose ensureRegistered() so the
+  // health endpoint can also trigger re-registration on wake.
+  const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+  const REGISTRATION_TTL_MS = 15 * 60 * 1000; // 15 minutes (relay-side)
+  const STALE_THRESHOLD_MS = REGISTRATION_TTL_MS * 0.7; // re-register at 70% of TTL
 
-      const endpointUrl = config.publicEndpointUrl ?? `http://localhost:${config.port}`;
-      const regBody = {
-        motebit_id: deps.motebitId,
-        public_key: deps.publicKeyHex ?? "",
-        endpoint_url: endpointUrl,
-        capabilities: toolNames,
-        metadata: { name: serverName },
-      };
-      const regResp = await fetch(`${config.syncUrl}/api/v1/agents/register`, {
-        method: "POST",
-        headers: regHeaders,
-        body: JSON.stringify(regBody),
-      });
-      if (regResp.ok) {
-        config.log?.(`Registered with relay (capabilities: ${toolNames.join(", ")})`);
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  let lastRegisteredAt = 0; // wall-clock ms of last successful register/heartbeat
+  let registering = false; // guard against concurrent registration attempts
+
+  if (config.syncUrl) {
+    const toolNames = deps.listTools().map((t) => t.name);
+    const regHeaders: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (config.apiToken) regHeaders["Authorization"] = `Bearer ${config.apiToken}`;
+
+    const endpointUrl = config.publicEndpointUrl ?? `http://localhost:${config.port}`;
+    const regBody = {
+      motebit_id: deps.motebitId,
+      public_key: deps.publicKeyHex ?? "",
+      endpoint_url: endpointUrl,
+      capabilities: toolNames,
+      metadata: { name: serverName },
+    };
+
+    /** Full registration: register + publish listing. Idempotent, concurrency-guarded. */
+    const register = async (): Promise<boolean> => {
+      if (registering) return lastRegisteredAt > 0;
+      registering = true;
+      try {
+        const regResp = await fetch(`${config.syncUrl}/api/v1/agents/register`, {
+          method: "POST",
+          headers: regHeaders,
+          body: JSON.stringify(regBody),
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!regResp.ok) {
+          config.log?.(
+            `Relay registration failed: ${regResp.status} ${await regResp.text().catch(() => "")}`,
+          );
+          return false;
+        }
+
+        lastRegisteredAt = Date.now();
 
         // Auto-publish service listing so relay routing can find this service
         try {
@@ -426,6 +455,7 @@ export async function startServiceServer(
               method: "POST",
               headers: regHeaders,
               body: JSON.stringify(listing),
+              signal: AbortSignal.timeout(10_000),
             },
           );
           if (listingResp.ok) {
@@ -438,31 +468,75 @@ export async function startServiceServer(
         } catch {
           // Best-effort listing
         }
-      } else {
+        return true;
+      } catch (err: unknown) {
         config.log?.(
-          `Relay registration failed: ${regResp.status} ${await regResp.text().catch(() => "")}`,
+          `Relay registration error: ${err instanceof Error ? err.message : String(err)}`,
         );
+        return false;
+      } finally {
+        registering = false;
       }
-      if (regResp.ok) {
-        heartbeatTimer = setInterval(
-          // eslint-disable-next-line @typescript-eslint/no-misused-promises -- fire-and-forget heartbeat
-          async () => {
-            try {
-              await fetch(`${config.syncUrl}/api/v1/agents/heartbeat`, {
-                method: "POST",
-                headers: regHeaders,
-                body: JSON.stringify({ motebit_id: deps.motebitId }),
-              });
-            } catch {
-              // Best-effort heartbeat
-            }
-          },
-          5 * 60 * 1000,
-        );
+    };
+
+    /** Lightweight heartbeat — just extends the TTL. */
+    const heartbeat = async (): Promise<void> => {
+      try {
+        const resp = await fetch(`${config.syncUrl}/api/v1/agents/heartbeat`, {
+          method: "POST",
+          headers: regHeaders,
+          body: JSON.stringify({ motebit_id: deps.motebitId }),
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (resp.ok) lastRegisteredAt = Date.now();
+      } catch {
+        // Best-effort heartbeat
+      }
+    };
+
+    // Initial registration
+    try {
+      const ok = await register();
+      if (ok) {
+        config.log?.(`Registered with relay (capabilities: ${toolNames.join(", ")})`);
       }
     } catch (err: unknown) {
       config.log?.(`Relay registration error: ${err instanceof Error ? err.message : String(err)}`);
     }
+
+    // Clock-drift-aware heartbeat timer
+    if (lastRegisteredAt > 0) {
+      heartbeatTimer = setInterval(
+        // eslint-disable-next-line @typescript-eslint/no-misused-promises -- fire-and-forget heartbeat
+        async () => {
+          const elapsed = Date.now() - lastRegisteredAt;
+          if (elapsed >= STALE_THRESHOLD_MS) {
+            // Registration likely expired (process was frozen or heartbeats failed).
+            // Full re-registration instead of heartbeat.
+            const ok = await register();
+            if (ok)
+              config.log?.(`Re-registered with relay (stale after ${Math.round(elapsed / 1000)}s)`);
+          } else {
+            await heartbeat();
+          }
+        },
+        HEARTBEAT_INTERVAL_MS,
+      );
+    }
+
+    // Expose ensureRegistered for health endpoint — platforms that freeze processes
+    // (Fly.io auto_stop, Kubernetes pod eviction) wake on health checks, which
+    // run before any task traffic arrives. Re-registering here closes the window.
+    mcpServer.ensureRegistered = async () => {
+      const elapsed = Date.now() - lastRegisteredAt;
+      if (elapsed >= STALE_THRESHOLD_MS) {
+        const ok = await register();
+        if (ok)
+          config.log?.(
+            `Re-registered with relay (health check, stale ${Math.round(elapsed / 1000)}s)`,
+          );
+      }
+    };
   }
 
   // Shutdown handler (guarded against double-call)

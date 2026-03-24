@@ -589,7 +589,7 @@ export async function handleSlashCommand(
       const mid = repl.motebitId;
       runtime.enableInteractiveDelegation({
         syncUrl: connectUrl,
-        authToken: async () => {
+        authToken: async (audience = "task:submit") => {
           const now = Date.now();
           return createSignedToken(
             {
@@ -598,7 +598,7 @@ export async function handleSlashCommand(
               iat: now,
               exp: now + 5 * 60 * 1000,
               jti: crypto.randomUUID(),
-              aud: "task:submit",
+              aud: audience,
             },
             pk,
           );

@@ -480,6 +480,8 @@ export interface SignableReceipt {
   prompt_hash: string;
   result_hash: string;
   delegation_receipts?: SignableReceipt[];
+  relay_task_id?: string;
+  delegated_scope?: string;
   signature: string;
 }
 

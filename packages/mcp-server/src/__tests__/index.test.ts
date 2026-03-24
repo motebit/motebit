@@ -1764,14 +1764,19 @@ describe("McpServerAdapter — motebit_task scope enforcement", () => {
   });
 
   it("motebit_task includes delegated_scope in receipt when delegation token provided", async () => {
-    const mockReceipt = {
-      task_id: "t3",
-      motebit_id: "m3",
-      signature: "sig3",
-      status: "completed",
-      result: "scoped",
-    };
-    const handleAgentTask = async function* () {
+    // Service is responsible for including delegated_scope before signing
+    const handleAgentTask = async function* (
+      _prompt: string,
+      options?: { delegatedScope?: string; relayTaskId?: string },
+    ) {
+      const mockReceipt: Record<string, unknown> = {
+        task_id: "t3",
+        motebit_id: "m3",
+        signature: "sig3",
+        status: "completed",
+        result: "scoped",
+        ...(options?.delegatedScope ? { delegated_scope: options.delegatedScope } : {}),
+      };
       yield { type: "task_result" as const, receipt: mockReceipt };
     };
     const deps = makeDeps({ handleAgentTask });

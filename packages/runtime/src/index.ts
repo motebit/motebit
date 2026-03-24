@@ -2764,7 +2764,7 @@ export class MotebitRuntime {
    */
   enableInteractiveDelegation(config: {
     syncUrl: string;
-    authToken: () => Promise<string>;
+    authToken: (audience?: string) => Promise<string>;
     timeoutMs?: number;
     routingStrategy?: "cost" | "quality" | "balanced";
   }): void {
@@ -2845,22 +2845,24 @@ export class MotebitRuntime {
         const prompt = args.prompt as string;
         const requiredCapabilities = args.required_capabilities as string[] | undefined;
 
-        // Build fresh auth header (signed token, 5-min expiry)
-        let authHeader: string;
+        // Build audience-specific auth tokens.
+        // The relay enforces aud binding: submit requires "task:submit",
+        // polling requires "task:query". A single token won't work for both.
+        let submitHeader: string;
+        let queryHeader: string;
         try {
-          const token = await config.authToken();
-          authHeader = `Bearer ${token}`;
+          const [submitToken, queryToken] = await Promise.all([
+            config.authToken("task:submit"),
+            config.authToken("task:query"),
+          ]);
+          submitHeader = `Bearer ${submitToken}`;
+          queryHeader = `Bearer ${queryToken}`;
         } catch (err: unknown) {
           return {
             ok: false,
             error: `Auth failed: ${err instanceof Error ? err.message : String(err)}`,
           };
         }
-
-        const headers: Record<string, string> = {
-          "Content-Type": "application/json",
-          Authorization: authHeader,
-        };
 
         // Submit task to relay
         let taskId: string;
@@ -2879,7 +2881,7 @@ export class MotebitRuntime {
 
           const resp = await fetch(`${config.syncUrl}/agent/${motebitId}/task`, {
             method: "POST",
-            headers,
+            headers: { "Content-Type": "application/json", Authorization: submitHeader },
             body: JSON.stringify(body),
           });
 
@@ -2912,9 +2914,16 @@ export class MotebitRuntime {
 
           try {
             const resp = await fetch(`${config.syncUrl}/agent/${targetMotebitId}/task/${taskId}`, {
-              headers,
+              headers: { Authorization: queryHeader },
             });
-            if (!resp.ok) continue;
+            if (!resp.ok) {
+              logger.warn("delegation poll failed", {
+                taskId,
+                status: resp.status,
+                body: await resp.text().catch(() => ""),
+              });
+              continue;
+            }
 
             const data = (await resp.json()) as {
               task: { status: string };

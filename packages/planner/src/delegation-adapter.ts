@@ -27,7 +27,7 @@ export interface RelayDelegationConfig {
    * Static auth token or an async factory that mints fresh tokens.
    * Use a factory for long-running daemons to avoid 5-minute expiry.
    */
-  authToken?: string | (() => Promise<string>);
+  authToken?: string | ((audience?: string) => Promise<string>);
   sendRaw: (data: string) => void;
   onCustomMessage: (cb: (msg: { type: string; [key: string]: unknown }) => void) => () => void;
   /** Optional: returns agent's current exploration drive [0-1] from intelligence gradient, passed to relay for routing. */
@@ -48,11 +48,11 @@ export interface RelayDelegationConfig {
 export class RelayDelegationAdapter implements StepDelegationAdapter {
   constructor(private config: RelayDelegationConfig) {}
 
-  private async buildHeaders(): Promise<Record<string, string>> {
+  private async buildHeaders(audience?: string): Promise<Record<string, string>> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     const { authToken } = this.config;
     if (authToken != null && authToken !== "") {
-      const token = typeof authToken === "function" ? await authToken() : authToken;
+      const token = typeof authToken === "function" ? await authToken(audience) : authToken;
       if (token !== "") headers["Authorization"] = `Bearer ${token}`;
     }
     return headers;
@@ -126,7 +126,7 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
 
     const resp = await fetch(`${syncUrl}/agent/${motebitId}/task`, {
       method: "POST",
-      headers: await this.buildHeaders(),
+      headers: await this.buildHeaders("task:submit"),
       body: JSON.stringify(body),
     });
 
@@ -206,7 +206,7 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
 
     try {
       const resp = await fetch(`${syncUrl}/agent/${motebitId}/task/${taskId}`, {
-        headers: await this.buildHeaders(),
+        headers: await this.buildHeaders("task:query"),
       });
 
       if (!resp.ok) return null; // Task not found (expired) or auth error

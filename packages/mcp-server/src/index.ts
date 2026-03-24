@@ -251,6 +251,12 @@ export class McpServerAdapter {
   private httpServer?: import("node:http").Server;
   private lastVerifiedCaller: CallerIdentity | null = null;
 
+  /**
+   * Hook for relay re-registration on health checks. Set by startServiceServer
+   * to close the stale-registration window when platforms freeze/resume processes.
+   */
+  ensureRegistered?: () => Promise<void>;
+
   constructor(config: McpServerConfig, deps: MotebitServerDeps) {
     this.config = config;
     this.deps = deps;
@@ -718,10 +724,8 @@ export class McpServerAdapter {
               };
             }
 
-            // Include delegated_scope in receipt if delegation token was provided
-            if (delegatedScope) {
-              receipt.delegated_scope = delegatedScope;
-            }
+            // delegated_scope is now included by the service before signing —
+            // do NOT mutate the signed receipt here (breaks Ed25519 verification)
             this.deps.logToolCall("motebit_task", args, { ok: true, data: receipt });
             return fmt(receipt);
           }
@@ -1032,8 +1036,14 @@ export class McpServerAdapter {
         return;
       }
 
-      // Health endpoint (no auth required)
+      // Health endpoint (no auth required).
+      // Also triggers relay re-registration if stale — platforms that freeze
+      // processes (Fly.io auto_stop) run health checks on wake, before any
+      // task traffic arrives. This closes the expired-registration window.
       if (url.pathname === "/health" && req.method === "GET") {
+        if (this.ensureRegistered) {
+          void this.ensureRegistered();
+        }
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({
