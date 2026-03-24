@@ -188,6 +188,10 @@ export interface TurnOptions {
   precisionContext?: string;
   /** Delegation scope — restricts tool calls to tools within this scope set. */
   delegationScope?: string;
+  /** First conversation ever — no prior history exists. */
+  firstConversation?: boolean;
+  /** System-triggered generation — goes into system prompt, not user message. */
+  activationPrompt?: string;
 }
 
 export type AgenticChunk =
@@ -331,6 +335,8 @@ export async function* runTurnStreaming(
       knownAgents: iteration === 1 ? options?.knownAgents : undefined,
       agentCapabilities: iteration === 1 ? options?.agentCapabilities : undefined,
       precisionContext: iteration === 1 ? options?.precisionContext : undefined,
+      firstConversation: iteration === 1 ? options?.firstConversation : undefined,
+      activationPrompt: iteration === 1 ? options?.activationPrompt : undefined,
     };
 
     // On continuation turns, the conversation history carries the context

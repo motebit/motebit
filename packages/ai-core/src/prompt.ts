@@ -251,6 +251,15 @@ export function buildSystemPrompt(
     );
   }
 
+  // First conversation — creature forms memories eagerly and discovers direction
+  if (contextPack.firstConversation) {
+    sections.push(
+      `[First conversation] You have no memories yet. This is the very beginning. ` +
+        `When the person shares their name, what they do, or what they're working on, tag each fact as a <memory>. ` +
+        `After you learn what they care about, ask what they'd like to accomplish together — help them find their first goal.`,
+    );
+  }
+
   // Active inference precision context — modulates behavior based on gradient
   if (contextPack.precisionContext) {
     sections.push(contextPack.precisionContext);
@@ -276,6 +285,11 @@ export function buildSystemPrompt(
   sections.push(
     "If the user shared something new and lasting about themselves, tag it with <memory> before your response.",
   );
+
+  // Activation — system-triggered generation, appended last so it's the immediate directive
+  if (contextPack.activationPrompt) {
+    sections.push(`[Activation] ${contextPack.activationPrompt}`);
+  }
 
   return sections.join("\n\n");
 }

@@ -130,6 +130,26 @@ export class ConversationManager {
 
   // --- Push + auto-summarize ---
 
+  /** Record only an assistant message (no user message). Used for system-triggered
+   *  generation like first-contact activation where there is no user input. */
+  pushActivation(assistantResponse: string): void {
+    this.history.push({ role: "assistant", content: assistantResponse });
+    if (this.history.length > this.deps.maxHistory) {
+      this.history = this.history.slice(-this.deps.maxHistory);
+    }
+
+    const { store } = this.deps;
+    if (store != null) {
+      if (this.currentId == null || this.currentId === "") {
+        this.currentId = store.createConversation(this.deps.motebitId);
+      }
+      store.appendMessage(this.currentId, this.deps.motebitId, {
+        role: "assistant",
+        content: assistantResponse,
+      });
+    }
+  }
+
   pushExchange(userMessage: string, assistantResponse: string): void {
     this.history.push(
       { role: "user", content: userMessage },

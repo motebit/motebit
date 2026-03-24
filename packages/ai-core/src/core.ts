@@ -152,8 +152,10 @@ export function packContext(contextPack: ContextPack): string {
     }
   }
 
-  // User message
-  parts.push(`[User] ${contextPack.user_message}`);
+  // User message (omitted for activation — directive is in system prompt)
+  if (!contextPack.activationPrompt) {
+    parts.push(`[User] ${contextPack.user_message}`);
+  }
 
   return parts.join("\n");
 }
@@ -714,7 +716,11 @@ export class CloudProvider implements StreamingProvider {
       }
     }
 
-    messages.push({ role: "user", content: contextPack.user_message });
+    if (contextPack.activationPrompt) {
+      messages.push({ role: "user", content: "[listening]" });
+    } else {
+      messages.push({ role: "user", content: contextPack.user_message });
+    }
     return messages;
   }
 
@@ -1096,7 +1102,11 @@ export class OllamaProvider implements StreamingProvider {
       }
     }
 
-    messages.push({ role: "user", content: contextPack.user_message });
+    if (contextPack.activationPrompt) {
+      messages.push({ role: "user", content: "[listening]" });
+    } else {
+      messages.push({ role: "user", content: contextPack.user_message });
+    }
     return messages;
   }
 

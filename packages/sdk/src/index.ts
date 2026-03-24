@@ -598,6 +598,10 @@ export interface ContextPack {
   agentCapabilities?: Record<string, string[]>;
   /** Active inference precision context — modulates agent behavior based on intelligence gradient. */
   precisionContext?: string;
+  /** First conversation ever — creature should form memories eagerly and discover direction. */
+  firstConversation?: boolean;
+  /** System-triggered generation — appended to system prompt, no user message sent. */
+  activationPrompt?: string;
 }
 
 export type ConversationMessage =

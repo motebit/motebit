@@ -94,8 +94,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     provider === "ollama"
       ? "llama3.2"
       : provider === "openai"
-        ? "gpt-4o"
-        : "claude-sonnet-4-5-latest";
+        ? "gpt-4o-mini"
+        : "claude-sonnet-4-6";
   const allowedPaths =
     values["allowed-paths"] != null && values["allowed-paths"] !== ""
       ? values["allowed-paths"].split(",").map((p) => p.trim())
@@ -268,9 +268,9 @@ Options:
 
 Providers:
   anthropic               Uses Anthropic API (requires ANTHROPIC_API_KEY)
-                          Default model: claude-sonnet-4-5-latest
+                          Default model: claude-sonnet-4-6
   openai                  Uses OpenAI API (requires OPENAI_API_KEY)
-                          Default model: gpt-4o
+                          Default model: gpt-4o-mini
   ollama                  Uses local Ollama server (no API key needed)
                           Default model: llama3.2
   hybrid                  Anthropic with Ollama fallback (requires ANTHROPIC_API_KEY)

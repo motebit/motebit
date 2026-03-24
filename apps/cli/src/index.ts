@@ -325,6 +325,8 @@ async function main(): Promise<void> {
   } else {
     // Identity birth
     console.log();
+    console.log(`  ${bold("Welcome to Motebit.")}`);
+    console.log();
     console.log(dim("         ."));
     console.log(dim("       .:::."));
     console.log(dim("      .:::::."));
@@ -584,6 +586,32 @@ async function main(): Promise<void> {
     operator: config.operator,
   });
   console.log();
+
+  // First-session activation: creature speaks first after identity birth.
+  // Uses generateActivation — no synthetic user message in history.
+  if (isFirstLaunch) {
+    try {
+      const activationRunId = crypto.randomUUID();
+      process.stdout.write(promptColor("mote>") + " ");
+      const streamRl = getOrCreateRl();
+      await consumeStream(
+        runtime.generateActivation(
+          "You just came into existence. The person who created you is here. Speak first.",
+          activationRunId,
+        ),
+        runtime,
+        streamRl,
+      );
+      streamRl.close();
+      rl = null;
+      void runtime.autoTitle();
+    } catch (err: unknown) {
+      // Activation is best-effort — if it fails, user still gets the prompt
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(dim(`  [activation failed: ${msg}]`));
+    }
+    console.log();
+  }
 
   const prompt = (): void => {
     readInput(promptColor("you>") + " ").then(

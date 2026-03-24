@@ -461,6 +461,7 @@ export class MotebitRuntime {
   private loopDeps: MotebitLoopDependencies | null = null;
   private conversation: ConversationManager;
   private _isProcessing = false;
+  private _isFirstConversation = false;
   private latestCues: BehaviorCues = {
     hover_distance: 0.4,
     drift_amplitude: 0.02,
@@ -599,6 +600,8 @@ export class MotebitRuntime {
       generateCompletion: (prompt, taskType) => this.generateCompletion(prompt, taskType),
     });
     this.conversation.resumeActiveConversation();
+    // First conversation: no prior history was loaded from persistence
+    this._isFirstConversation = this.conversation.getHistory().length === 0;
 
     // Plan-execute engine
     this.planStore = adapters.storage.planStore ?? new InMemoryPlanStore();
@@ -1396,8 +1399,13 @@ export class MotebitRuntime {
         curiosityHints: this.buildCuriosityHints(),
         knownAgents: knownAgents.length > 0 ? knownAgents : undefined,
         precisionContext: selfAwareness || undefined,
+        firstConversation: this._isFirstConversation || undefined,
       });
       this.conversation.pushExchange(text, result.response);
+      // First-conversation guidance fades after a few exchanges
+      if (this._isFirstConversation && this.conversation.getHistory().length >= 5) {
+        this._isFirstConversation = false;
+      }
       // Accumulate behavioral stats for the intelligence gradient
       this._behavioralStats.turnCount++;
       this._behavioralStats.totalIterations += result.iterations;
@@ -1464,10 +1472,48 @@ export class MotebitRuntime {
         agentCapabilities,
         precisionContext: selfAwareness || undefined,
         delegationScope: options?.delegationScope,
+        firstConversation: this._isFirstConversation || undefined,
       });
       // Session info applies only to the first message after resume
       this.conversation.clearSessionInfo();
       yield* this.processStream(stream, text, runId);
+      // First-conversation guidance fades after a few exchanges
+      if (this._isFirstConversation && this.conversation.getHistory().length >= 5) {
+        this._isFirstConversation = false;
+      }
+    } finally {
+      this.behavior.setSpeaking(false);
+      this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
+      this._isProcessing = false;
+    }
+  }
+
+  /**
+   * System-triggered generation with no user message. Used for first-contact
+   * activation — the creature speaks first without polluting conversation
+   * history with a synthetic user message.
+   *
+   * The activation prompt is injected as system context, not as user input.
+   * Only the assistant's response is recorded in history.
+   */
+  async *generateActivation(activationPrompt: string, runId?: string): AsyncGenerator<StreamChunk> {
+    if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
+    if (this._isProcessing) throw new Error("Already processing a message");
+
+    this._isProcessing = true;
+    this._pendingApproval = null;
+    this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
+    this.behavior.setSpeaking(true);
+
+    try {
+      const stream = runTurnStreaming(this.loopDeps, "", {
+        conversationHistory: [],
+        previousCues: this.latestCues,
+        runId,
+        firstConversation: true,
+        activationPrompt,
+      });
+      yield* this.processStream(stream, "", runId, { activationOnly: true });
     } finally {
       this.behavior.setSpeaking(false);
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
@@ -1939,6 +1985,7 @@ export class MotebitRuntime {
     stream: AsyncGenerator<AgenticChunk>,
     userMessage: string,
     runId?: string,
+    options?: { activationOnly?: boolean },
   ): AsyncGenerator<StreamChunk> {
     let result: TurnResult | null = null;
     let accumulated = "";
@@ -2036,7 +2083,8 @@ export class MotebitRuntime {
 
       // Strip state/memory/action tags from text before yielding to UI
       if (chunk.type === "text") {
-        const { clean } = stripDisplayTags(accumulated);
+        // trimStart: tags before text leave orphaned newlines
+        const clean = stripDisplayTags(accumulated).clean.trimStart();
         const delta = clean.slice(yieldedCleanLength);
         if (delta) {
           yieldedCleanLength += delta.length;
@@ -2067,7 +2115,11 @@ export class MotebitRuntime {
     }
 
     if (result) {
-      this.conversation.pushExchange(userMessage, result.response);
+      if (options?.activationOnly) {
+        this.conversation.pushActivation(result.response);
+      } else {
+        this.conversation.pushExchange(userMessage, result.response);
+      }
     }
 
     // Apply collected state updates as the creature settles into new equilibrium
