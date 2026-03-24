@@ -55,7 +55,10 @@ export class FallbackSearchProvider implements SearchProvider {
     }
     // If every provider threw, surface the first error instead of
     // silently returning [] (which callers would read as "no results").
-    if (firstError !== undefined) throw firstError;
+    if (firstError !== undefined) {
+      if (firstError instanceof Error) throw firstError;
+      throw new Error("All search providers failed");
+    }
     return [];
   }
 }
