@@ -687,6 +687,20 @@ export class CloudProvider implements StreamingProvider {
 
     for (const msg of history) {
       if (msg.role === "tool") {
+        // Merge consecutive tool results into a single user message.
+        // Anthropic requires ALL tool_results in one message after the assistant's tool_use.
+        const prev = messages[messages.length - 1] as Record<string, unknown> | undefined;
+        if (prev?.role === "user" && Array.isArray(prev.content)) {
+          const blocks = prev.content as Record<string, unknown>[];
+          if (blocks.length > 0 && blocks[0]?.type === "tool_result") {
+            blocks.push({
+              type: "tool_result",
+              tool_use_id: msg.tool_call_id,
+              content: msg.content,
+            });
+            continue;
+          }
+        }
         messages.push({
           role: "user",
           content: [
