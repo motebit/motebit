@@ -736,11 +736,52 @@ export class CloudProvider implements StreamingProvider {
       messages.unshift({ role: "user", content: "[listening]" });
     }
 
-    if (contextPack.activationPrompt) {
-      messages.push({ role: "user", content: "[listening]" });
+    // Append user message — but avoid consecutive user messages (which Anthropic rejects).
+    // On loop iteration 2+, user_message is "" and the last message may be tool_results.
+    const userContent = contextPack.activationPrompt ? "[listening]" : contextPack.user_message;
+    const lastMsg = messages[messages.length - 1] as Record<string, unknown> | undefined;
+    if (lastMsg?.role === "user" && (!userContent || userContent === "")) {
+      // Skip empty user message — tool_results already serve as the user turn
     } else {
-      messages.push({ role: "user", content: contextPack.user_message });
+      messages.push({ role: "user", content: userContent || "[continue]" });
     }
+
+    // Safety: ensure every assistant tool_use has a matching tool_result after it.
+    // Scan for orphaned tool_uses and inject synthetic error results.
+    for (let i = 0; i < messages.length - 1; i++) {
+      const msg = messages[i] as Record<string, unknown>;
+      if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
+      const toolUses = (msg.content as Array<Record<string, unknown>>).filter(
+        (b) => b.type === "tool_use",
+      );
+      if (toolUses.length === 0) continue;
+
+      // Next message must be a user message with tool_results for all tool_use ids
+      const next = messages[i + 1] as Record<string, unknown> | undefined;
+      const nextBlocks = Array.isArray(next?.content)
+        ? (next?.content as Array<Record<string, unknown>>)
+        : [];
+      const resultIds = new Set(
+        nextBlocks.filter((b) => b.type === "tool_result").map((b) => b.tool_use_id as string),
+      );
+
+      const missing = toolUses.filter((tu) => !resultIds.has(tu.id as string));
+      if (missing.length > 0) {
+        const missingResults = missing.map((tu) => ({
+          type: "tool_result",
+          tool_use_id: tu.id,
+          content: JSON.stringify({ ok: false, error: "Result unavailable" }),
+        }));
+        if (next?.role === "user" && nextBlocks.some((b) => b.type === "tool_result")) {
+          // Merge into existing tool_result message
+          nextBlocks.push(...missingResults);
+        } else {
+          // Insert a new tool_result message
+          messages.splice(i + 1, 0, { role: "user", content: missingResults });
+        }
+      }
+    }
+
     return messages;
   }
 

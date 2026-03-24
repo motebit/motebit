@@ -675,10 +675,13 @@ async function main(): Promise<void> {
       } else {
         process.stdout.write("\n" + promptColor("mote>") + " ");
         const streamRl = getOrCreateRl();
-        await consumeStream(runtime.sendMessageStreaming(trimmed, chatRunId), runtime, streamRl);
-        // Close readline after each stream so it doesn't interfere with next readInput
-        streamRl.close();
-        rl = null;
+        try {
+          await consumeStream(runtime.sendMessageStreaming(trimmed, chatRunId), runtime, streamRl);
+        } finally {
+          // Always close readline so it doesn't interfere with next readInput
+          streamRl.close();
+          rl = null;
+        }
       }
       // Best-effort auto-title after enough messages
       void runtime.autoTitle();
