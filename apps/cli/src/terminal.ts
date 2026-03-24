@@ -49,6 +49,7 @@ let inputResolver: ((line: string) => void) | null = null;
 let lastEscTime = 0;
 let pendingEscTimer: ReturnType<typeof setTimeout> | null = null;
 let pasteBuffer: string | null = null; // non-null = inside paste brackets
+let pasteSplitCarry = ""; // partial PASTE_CLOSE held across chunks
 
 // Track how many terminal rows the input occupies for proper clearing
 let inputRows = 0;
@@ -59,7 +60,12 @@ let inputRows = 0;
 
 function parseChunk(buf: Buffer): TerminalEvent[] {
   const events: TerminalEvent[] = [];
-  const data = buf.toString("utf-8");
+  // Prepend any partial PASTE_CLOSE carried from the previous chunk
+  let data = buf.toString("utf-8");
+  if (pasteSplitCarry.length > 0) {
+    data = pasteSplitCarry + data;
+    pasteSplitCarry = "";
+  }
   let i = 0;
 
   while (i < data.length) {
@@ -69,13 +75,25 @@ function parseChunk(buf: Buffer): TerminalEvent[] {
     if (pasteBuffer !== null) {
       const closeIdx = data.indexOf(PASTE_CLOSE, i);
       if (closeIdx === -1) {
-        pasteBuffer += data.slice(i);
+        // PASTE_CLOSE (\x1b[201~) may be split across chunks.
+        // Check if the tail of this chunk is a prefix of PASTE_CLOSE.
+        const remaining = data.slice(i);
+        let overlap = 0;
+        for (let k = 1; k < PASTE_CLOSE.length && k <= remaining.length; k++) {
+          if (remaining.slice(remaining.length - k) === PASTE_CLOSE.slice(0, k)) {
+            overlap = k;
+          }
+        }
+        // Buffer everything except the potential partial match
+        pasteBuffer += remaining.slice(0, remaining.length - overlap);
+        pasteSplitCarry = overlap > 0 ? remaining.slice(remaining.length - overlap) : "";
         i = data.length;
       } else {
         pasteBuffer += data.slice(i, closeIdx);
         const text = pasteBuffer.replace(/[\r\n]+/g, " ");
         events.push({ type: "paste", text });
         pasteBuffer = null;
+        pasteSplitCarry = "";
         i = closeIdx + PASTE_CLOSE.length;
       }
       continue;

@@ -18,6 +18,7 @@ import type { PlanEngine, PlanChunk } from "@motebit/planner";
 import type { PlanStoreAdapter } from "@motebit/planner";
 import { embedText } from "@motebit/memory-graph";
 import { parseInterval } from "./intervals.js";
+import { writeOutput } from "./terminal.js";
 
 interface SuspendedTurn {
   approvalId: string;
@@ -584,19 +585,19 @@ export class GoalScheduler {
       }
       switch (chunk.type) {
         case "text":
-          process.stdout.write(chunk.text);
+          writeOutput(chunk.text);
           responseText += chunk.text;
           break;
 
         case "tool_status":
           if (chunk.status === "calling") {
-            process.stdout.write(`\n  [tool] ${chunk.name}...`);
+            writeOutput(`\n  [tool] ${chunk.name}...`);
             toolCallsMade++;
             if (toolCallsMade > MAX_TOOL_CALLS_PER_RUN) {
               throw new Error(`Goal exceeded ${MAX_TOOL_CALLS_PER_RUN} tool calls — run stopped`);
             }
           } else {
-            process.stdout.write(" done\n");
+            writeOutput(" done\n");
           }
           break;
 
@@ -747,17 +748,17 @@ export class GoalScheduler {
         case "step_chunk":
           // Forward inner agentic chunks
           if (chunk.chunk.type === "text") {
-            process.stdout.write(chunk.chunk.text);
+            writeOutput(chunk.chunk.text);
             responseText += chunk.chunk.text;
           } else if (chunk.chunk.type === "tool_status") {
             if (chunk.chunk.status === "calling") {
-              process.stdout.write(`\n  [tool] ${chunk.chunk.name}...`);
+              writeOutput(`\n  [tool] ${chunk.chunk.name}...`);
               toolCallsMade++;
               if (toolCallsMade > MAX_TOOL_CALLS_PER_RUN) {
                 throw new Error(`Goal exceeded ${MAX_TOOL_CALLS_PER_RUN} tool calls — run stopped`);
               }
             } else {
-              process.stdout.write(" done\n");
+              writeOutput(" done\n");
             }
           } else if (chunk.chunk.type === "injection_warning") {
             console.warn(`\n  [warning] suspicious content in ${chunk.chunk.tool_name}`);
