@@ -363,7 +363,17 @@ async function main(): Promise<void> {
 
       let result: { ok: boolean; data?: unknown; error?: string };
       try {
-        result = await runtime.getToolRegistry().execute("web_search", { query: prompt });
+        // The prompt from delegation is often a full sentence ("Search for the current
+        // Bitcoin price in USD"). Brave Search works best with keywords, not natural
+        // language. Strip common filler to extract the core query.
+        const query = prompt
+          .replace(
+            /\b(search\s+(for|the)?|find\s+(me\s+)?|look\s+up|what\s+is\s+(the\s+)?|tell\s+me\s+(about\s+)?|get\s+(me\s+)?|can\s+you|please|right\s+now|currently?|latest|return\s+the\s+result)\b/gi,
+            " ",
+          )
+          .replace(/\s{2,}/g, " ")
+          .trim();
+        result = await runtime.getToolRegistry().execute("web_search", { query: query || prompt });
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         result = { ok: false, error: msg };
