@@ -451,7 +451,12 @@ async function main(): Promise<void> {
   await runtime.init();
 
   // Enable interactive delegation if relay + signing keys are available
-  const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? reloadedConfig.sync_url;
+  const DEFAULT_SYNC_URL = "https://motebit-sync.fly.dev";
+  const syncUrl =
+    config.syncUrl ??
+    process.env["MOTEBIT_SYNC_URL"] ??
+    reloadedConfig.sync_url ??
+    DEFAULT_SYNC_URL;
   if (syncUrl && privateKeyBytes && deviceId) {
     const pk = privateKeyBytes; // capture for closure
     const did = deviceId;
@@ -475,12 +480,8 @@ async function main(): Promise<void> {
     });
   }
 
-  // Initial sync — only attempt if a remote sync URL was configured
-  const hasSyncRemote =
-    config.syncUrl != null ||
-    process.env["MOTEBIT_SYNC_URL"] != null ||
-    (reloadedConfig.sync_url != null && reloadedConfig.sync_url !== "");
-  if (hasSyncRemote) {
+  // Initial sync — default relay is always available
+  {
     try {
       console.log(dim("Syncing..."));
       const result = await runtime.sync.sync();

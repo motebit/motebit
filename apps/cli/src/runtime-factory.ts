@@ -443,25 +443,26 @@ export async function createRuntime(
     },
   );
 
-  // Wire sync if configured (CLI arg > env var > config file)
-  const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? loadFullConfig().sync_url;
+  // Wire sync — default relay is always available
+  const DEFAULT_SYNC_URL = "https://motebit-sync.fly.dev";
+  const syncUrl =
+    config.syncUrl ??
+    process.env["MOTEBIT_SYNC_URL"] ??
+    loadFullConfig().sync_url ??
+    DEFAULT_SYNC_URL;
   const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
 
-  if (syncUrl != null && syncUrl !== "") {
-    const httpAdapter = new HttpEventStoreAdapter({
-      baseUrl: syncUrl,
-      motebitId,
-      authToken: syncToken,
-    });
-    // Wrap with encryption if key available (zero-knowledge relay)
-    const remoteStore = encKey
-      ? new EncryptedEventStoreAdapter({ inner: httpAdapter, key: encKey })
-      : httpAdapter;
-    runtime.connectSync(remoteStore);
-    console.log(dim(`Sync: ${syncUrl}${encKey ? " (encrypted)" : ""}`));
-  } else {
-    console.log(dim("Sync: disabled (set MOTEBIT_SYNC_URL to enable)"));
-  }
+  const httpAdapter = new HttpEventStoreAdapter({
+    baseUrl: syncUrl,
+    motebitId,
+    authToken: syncToken,
+  });
+  // Wrap with encryption if key available (zero-knowledge relay)
+  const remoteStore = encKey
+    ? new EncryptedEventStoreAdapter({ inner: httpAdapter, key: encKey })
+    : httpAdapter;
+  runtime.connectSync(remoteStore);
+  console.log(dim(`Sync: ${syncUrl}${encKey ? " (encrypted)" : ""}`));
 
   return { runtime, moteDb };
 }
