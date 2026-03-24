@@ -675,7 +675,9 @@ export async function forwardTaskViaMcp(
           clientInfo: { name: "relay-forward", version: "1.0.0" },
         },
       }),
-      signal: AbortSignal.timeout(10000),
+      // 30s timeout: Fly.io auto_stop machines need ~3-5s cold start before
+      // the MCP server is ready. 10s was too tight for cold start + TLS + init.
+      signal: AbortSignal.timeout(30000),
     });
     const sessionId = initResp.headers.get("mcp-session-id");
     if (sessionId) mcpHeaders["Mcp-Session-Id"] = sessionId;

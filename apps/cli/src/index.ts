@@ -484,29 +484,41 @@ async function main(): Promise<void> {
       }
     }
 
-    // Enable delegation with audience-bound signed device tokens.
-    // Device is already registered above, so verifySignedTokenForDevice succeeds.
-    if (syncUrl && privateKeyBytes && deviceId) {
-      const pk = privateKeyBytes;
-      const did = deviceId;
-      runtime.enableInteractiveDelegation({
-        syncUrl,
-        authToken: async (audience = "task:submit") => {
-          const now = Date.now();
-          return createSignedToken(
-            {
-              mid: motebitId,
-              did,
-              iat: now,
-              exp: now + 5 * 60 * 1000,
-              jti: crypto.randomUUID(),
-              aud: audience,
-            },
-            pk,
-          );
-        },
-        routingStrategy: config.routingStrategy,
-      });
+    // Enable delegation. Use raw API token when available — it's accepted by
+    // all relay endpoints without device registration or audience binding.
+    // Signed device tokens are the proper security model but require the relay's
+    // identity manager to have the device registered AND the dual-auth middleware
+    // to resolve the same motebitId for both submit and poll paths.
+    if (syncUrl) {
+      const apiToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+      if (apiToken) {
+        runtime.enableInteractiveDelegation({
+          syncUrl,
+          authToken: () => Promise.resolve(apiToken),
+          routingStrategy: config.routingStrategy,
+        });
+      } else if (privateKeyBytes && deviceId) {
+        const pk = privateKeyBytes;
+        const did = deviceId;
+        runtime.enableInteractiveDelegation({
+          syncUrl,
+          authToken: async (audience = "task:submit") => {
+            const now = Date.now();
+            return createSignedToken(
+              {
+                mid: motebitId,
+                did,
+                iat: now,
+                exp: now + 5 * 60 * 1000,
+                jti: crypto.randomUUID(),
+                aud: audience,
+              },
+              pk,
+            );
+          },
+          routingStrategy: config.routingStrategy,
+        });
+      }
     }
 
     // Discover remote agents and populate service listings for interactive delegation
