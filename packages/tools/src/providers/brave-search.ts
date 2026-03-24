@@ -9,6 +9,7 @@
  */
 
 import type { SearchProvider, SearchResult } from "../search-provider.js";
+import { SearchProviderError } from "../search-provider.js";
 
 interface BraveWebResult {
   title?: string;
@@ -41,7 +42,17 @@ export class BraveSearchProvider implements SearchProvider {
     });
 
     if (!res.ok) {
-      throw new Error(`Brave Search API error: ${res.status}`);
+      let body = "";
+      try {
+        body = await res.text();
+      } catch {
+        /* ignore read errors */
+      }
+      throw new SearchProviderError(
+        `Brave Search API error: ${res.status}${body ? ` — ${body.slice(0, 200)}` : ""}`,
+        res.status,
+        "brave",
+      );
     }
 
     const data = (await res.json()) as BraveSearchResponse;

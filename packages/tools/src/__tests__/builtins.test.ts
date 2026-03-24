@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { InMemoryToolRegistry } from "../index";
+import { InMemoryToolRegistry, SearchProviderError, FallbackSearchProvider } from "../index";
+import { BraveSearchProvider } from "../providers/brave-search";
 import {
   createWebSearchHandler,
   createReadUrlHandler,
@@ -76,13 +77,14 @@ describe("web_search", () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 500,
+      text: async () => "",
     }) as unknown as typeof fetch;
 
     const handler = createWebSearchHandler();
     const result = await handler({ query: "test" });
     expect(result.ok).toBe(false);
-    expect(result.error).toContain("Search error");
     expect(result.error).toContain("500");
+    expect(result.error).toContain("duckduckgo");
   });
 
   it("returns error on network error", async () => {
@@ -130,6 +132,166 @@ describe("web_search", () => {
     expect(result.data).toContain('Results for "multi"');
     expect(result.data).toContain("1. First");
     expect(result.data).toContain("2. Second");
+  });
+
+  it("surfaces HTTP 422 from search provider as error (not 'no results')", async () => {
+    const mockProvider = {
+      search: vi
+        .fn()
+        .mockRejectedValue(
+          new SearchProviderError("Brave Search API error: 422 — invalid query", 422, "brave"),
+        ),
+    };
+
+    const handler = createWebSearchHandler(mockProvider);
+    const result = await handler({ query: "test" });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("422");
+    expect(result.error).toContain("brave");
+    expect(result.error).not.toContain("No results found");
+  });
+
+  it("surfaces HTTP 429 rate limit from search provider as error", async () => {
+    const mockProvider = {
+      search: vi
+        .fn()
+        .mockRejectedValue(
+          new SearchProviderError("Brave Search API error: 429 — rate limited", 429, "brave"),
+        ),
+    };
+
+    const handler = createWebSearchHandler(mockProvider);
+    const result = await handler({ query: "test" });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("429");
+    expect(result.error).toContain("brave");
+    expect(result.error).toContain("Search provider error");
+  });
+});
+
+// ---------- BraveSearchProvider ----------
+
+describe("BraveSearchProvider", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("throws SearchProviderError with status on HTTP 422", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 422,
+      text: async () => '{"error":"invalid query parameter"}',
+    }) as unknown as typeof fetch;
+
+    const provider = new BraveSearchProvider("test-key");
+    await expect(provider.search("bad query")).rejects.toThrow(SearchProviderError);
+
+    try {
+      await provider.search("bad query");
+    } catch (err) {
+      expect(err).toBeInstanceOf(SearchProviderError);
+      const spe = err as SearchProviderError;
+      expect(spe.status).toBe(422);
+      expect(spe.provider).toBe("brave");
+      expect(spe.message).toContain("422");
+      expect(spe.message).toContain("invalid query parameter");
+    }
+  });
+
+  it("throws SearchProviderError with status on HTTP 429", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      text: async () => "rate limit exceeded",
+    }) as unknown as typeof fetch;
+
+    const provider = new BraveSearchProvider("test-key");
+
+    try {
+      await provider.search("test");
+    } catch (err) {
+      expect(err).toBeInstanceOf(SearchProviderError);
+      const spe = err as SearchProviderError;
+      expect(spe.status).toBe(429);
+      expect(spe.provider).toBe("brave");
+      expect(spe.message).toContain("429");
+      expect(spe.message).toContain("rate limit exceeded");
+    }
+  });
+
+  it("includes response body (truncated) in error message", async () => {
+    const longBody = "x".repeat(500);
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: async () => longBody,
+    }) as unknown as typeof fetch;
+
+    const provider = new BraveSearchProvider("test-key");
+    await expect(provider.search("test")).rejects.toThrow(SearchProviderError);
+
+    try {
+      await provider.search("test");
+    } catch (err) {
+      const spe = err as SearchProviderError;
+      // Body should be truncated to 200 chars
+      expect(spe.message.length).toBeLessThan(300);
+    }
+  });
+});
+
+// ---------- FallbackSearchProvider ----------
+
+describe("FallbackSearchProvider", () => {
+  it("re-throws first error when all providers fail", async () => {
+    const braveErr = new SearchProviderError("Brave: 429", 429, "brave");
+    const ddgErr = new SearchProviderError("DDG: 503", 503, "duckduckgo");
+
+    const provider = new FallbackSearchProvider([
+      { search: vi.fn().mockRejectedValue(braveErr) },
+      { search: vi.fn().mockRejectedValue(ddgErr) },
+    ]);
+
+    await expect(provider.search("test")).rejects.toThrow(braveErr);
+  });
+
+  it("returns empty array only when providers return empty (no errors)", async () => {
+    const provider = new FallbackSearchProvider([
+      { search: vi.fn().mockResolvedValue([]) },
+      { search: vi.fn().mockResolvedValue([]) },
+    ]);
+
+    const results = await provider.search("test");
+    expect(results).toEqual([]);
+  });
+
+  it("falls through to next provider when first throws but second succeeds", async () => {
+    const braveErr = new SearchProviderError("Brave: 429", 429, "brave");
+    const results = [{ title: "DDG Result", url: "https://ddg.com", snippet: "ok" }];
+
+    const provider = new FallbackSearchProvider([
+      { search: vi.fn().mockRejectedValue(braveErr) },
+      { search: vi.fn().mockResolvedValue(results) },
+    ]);
+
+    const out = await provider.search("test");
+    expect(out).toEqual(results);
+  });
+
+  it("falls through on empty results but throws if remaining providers also error", async () => {
+    const ddgErr = new SearchProviderError("DDG: 503", 503, "duckduckgo");
+
+    const provider = new FallbackSearchProvider([
+      { search: vi.fn().mockResolvedValue([]) },
+      { search: vi.fn().mockRejectedValue(ddgErr) },
+    ]);
+
+    // First provider returned empty, second threw — the error should propagate
+    await expect(provider.search("test")).rejects.toThrow(ddgErr);
   });
 });
 

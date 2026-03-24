@@ -10,6 +10,7 @@
  */
 
 import type { SearchProvider, SearchResult } from "../search-provider.js";
+import { SearchProviderError } from "../search-provider.js";
 
 export class DuckDuckGoSearchProvider implements SearchProvider {
   async search(query: string, maxResults: number = 5): Promise<SearchResult[]> {
@@ -22,7 +23,11 @@ export class DuckDuckGoSearchProvider implements SearchProvider {
     });
 
     if (!res.ok) {
-      throw new Error(`DuckDuckGo search error: ${res.status}`);
+      throw new SearchProviderError(
+        `DuckDuckGo search error: ${res.status}`,
+        res.status,
+        "duckduckgo",
+      );
     }
 
     const html = await res.text();
