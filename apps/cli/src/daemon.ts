@@ -1035,18 +1035,48 @@ export async function handleServe(config: CliConfig): Promise<void> {
           5 * 60 * 1000,
         );
 
-        // Self-test: submit a task to ourselves via the relay
+        // Self-test: submit a task to ourselves via the relay using signed device tokens.
+        // This exercises the exact auth flow production agents use — if device auth is
+        // broken, onboarding breaks. The self-delegation also validates all four sybil
+        // defense layers (no bogus trust credentials from self→self tasks).
         if (config.selfTest) {
           await (async () => {
             try {
               await new Promise((r) => setTimeout(r, 500));
               // Use the last tool name — externally loaded tools are registered after builtins
               const firstToolName = toolNames[toolNames.length - 1] ?? "echo";
-              log("[self-test] submitting task via relay...");
+
+              // Mint audience-scoped device tokens (same as production delegation flow).
+              // Falls back to master token only when device keys are unavailable.
+              const mintToken = async (audience: string): Promise<string> => {
+                if (servePrivateKey && fullConfigForServe.device_id) {
+                  return createSignedToken(
+                    {
+                      mid: motebitId,
+                      did: fullConfigForServe.device_id,
+                      iat: Date.now(),
+                      exp: Date.now() + 5 * 60 * 1000,
+                      jti: crypto.randomUUID(),
+                      aud: audience,
+                    },
+                    servePrivateKey,
+                  );
+                }
+                return masterToken ?? "";
+              };
+
+              const submitToken = await mintToken("task:submit");
+              const queryToken = await mintToken("task:query");
+              const authMethod =
+                servePrivateKey && fullConfigForServe.device_id ? "device token" : "master token";
+              log(`[self-test] submitting task via relay (auth: ${authMethod})...`);
 
               const taskResp = await fetch(`${syncUrl}/agent/${motebitId}/task`, {
                 method: "POST",
-                headers: regHeaders,
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${submitToken}`,
+                },
                 body: JSON.stringify({
                   prompt: "self-test",
                   submitted_by: motebitId,
@@ -1060,6 +1090,8 @@ export async function handleServe(config: CliConfig): Promise<void> {
                   `[self-test] failed — relay returned ${status}${body ? `: ${body.slice(0, 100)}` : ""}`,
                 );
                 if (status === 402) log("[self-test] hint: fund the agent's budget on the relay");
+                if (status === 401 || status === 403)
+                  log("[self-test] hint: device may not be registered with relay");
                 return;
               }
 
@@ -1071,13 +1103,13 @@ export async function handleServe(config: CliConfig): Promise<void> {
               }
               log(`[self-test] task routed (task_id=${taskId.slice(0, 8)}...)`);
 
-              // Poll for completion
+              // Poll for completion using task:query audience token
               const deadline = Date.now() + 30_000;
               let settled = false;
               while (Date.now() < deadline) {
                 await new Promise((r) => setTimeout(r, 2_000));
                 const pollResp = await fetch(`${syncUrl}/agent/${motebitId}/task/${taskId}`, {
-                  headers: regHeaders,
+                  headers: { Authorization: `Bearer ${queryToken}` },
                 });
                 if (!pollResp.ok) continue;
                 const pollData = (await pollResp.json()) as { status?: string };
