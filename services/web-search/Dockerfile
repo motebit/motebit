@@ -20,6 +20,11 @@ RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @motebit/web-search... build
 RUN pnpm --filter @motebit/web-search deploy --prod /app/deployed
 
+# Ensure identity file exists for COPY (gitignored — contains encrypted keys).
+# Real file comes from local build context; CI gets an empty placeholder.
+# Production identity is injected via Fly volume mount.
+RUN test -f services/web-search/motebit.md || touch services/web-search/motebit.md
+
 # --- Runtime: lean image with only production deps ---
 FROM node:22-alpine AS runtime
 WORKDIR /app
