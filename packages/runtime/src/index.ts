@@ -89,6 +89,8 @@ import type { ReflectionDeps } from "./reflection.js";
 import { runHousekeeping } from "./housekeeping.js";
 import type { HousekeepingDeps } from "./housekeeping.js";
 import type { AgentTrustDeps } from "./agent-trust.js";
+import { handleAgentTask as handleAgentTaskFn } from "./agent-task-handler.js";
+import type { AgentTaskHandlerDeps } from "./agent-task-handler.js";
 export { canonicalJson } from "./execution-ledger.js";
 import type {
   GradientSnapshot,
@@ -1053,253 +1055,7 @@ export class MotebitRuntime {
     options?: { delegatedScope?: string },
   ): AsyncGenerator<StreamChunk> {
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
-
-    // Save current conversation context
-    const savedCtx = this.conversation.saveContext();
-    this.conversation.clearForTask();
-
-    const wallClockMs = task.wall_clock_ms ?? 60_000;
-    const abortController = new AbortController();
-    const timeout = setTimeout(() => abortController.abort(), wallClockMs);
-
-    let responseText = "";
-    const toolsUsed: string[] = [];
-    let memoriesFormed = 0;
-    let status: "completed" | "failed" | "denied" = "completed";
-
-    try {
-      const stream = this.sendMessageStreaming(task.prompt, undefined, {
-        delegationScope: options?.delegatedScope,
-      });
-
-      for await (const chunk of stream) {
-        if (abortController.signal.aborted) {
-          status = "failed";
-          responseText = responseText || "Task timed out";
-          break;
-        }
-
-        if (chunk.type === "text") {
-          responseText += chunk.text;
-        } else if (chunk.type === "tool_status" && chunk.status === "done") {
-          if (!toolsUsed.includes(chunk.name)) {
-            toolsUsed.push(chunk.name);
-          }
-        } else if (chunk.type === "result") {
-          responseText = chunk.result.response;
-          memoriesFormed = chunk.result.memoriesFormed.length;
-        }
-
-        yield chunk;
-      }
-    } catch (err: unknown) {
-      status = "failed";
-      responseText = responseText || (err instanceof Error ? err.message : String(err));
-    } finally {
-      clearTimeout(timeout);
-
-      // Restore user conversation context
-      this.conversation.restoreContext(savedCtx);
-    }
-
-    // Drain delegation receipts from motebit MCP adapters + interactive delegation tool
-    const delegationReceipts: ExecutionReceipt[] = [];
-    for (const adapter of this.mcpAdapters) {
-      if (adapter.getAndResetDelegationReceipts) {
-        delegationReceipts.push(...adapter.getAndResetDelegationReceipts());
-      }
-    }
-    delegationReceipts.push(...this.getAndResetInteractiveDelegationReceipts());
-
-    // Bump trust from verified delegation receipts (best-effort)
-    if (delegationReceipts.length > 0 && this.agentTrustStore != null) {
-      try {
-        const { verifyExecutionReceipt } = await import("@motebit/crypto");
-        const { composeDelegationTrust, trustLevelToScore, AgentTrustLevel } =
-          await import("@motebit/sdk");
-
-        // Pre-fetch trust scores for all agents in receipt trees into a sync map
-        const collectIds = (r: ExecutionReceipt): string[] => {
-          const ids = [r.motebit_id];
-          for (const sub of r.delegation_receipts ?? []) ids.push(...collectIds(sub));
-          return ids;
-        };
-        const allIds = [...new Set(delegationReceipts.flatMap(collectIds))];
-        const trustMap = new Map<string, number>();
-        for (const id of allIds) {
-          const rec = await this.agentTrustStore.getAgentTrust(this.motebitId, id);
-          trustMap.set(
-            id,
-            rec ? trustLevelToScore(rec.trust_level) : trustLevelToScore(AgentTrustLevel.Unknown),
-          );
-        }
-
-        for (const dr of delegationReceipts) {
-          // Look up stored public key for the delegatee
-          const trustRecord = await this.agentTrustStore.getAgentTrust(
-            this.motebitId,
-            dr.motebit_id,
-          );
-          if (trustRecord?.public_key) {
-            const fromHex = (hex: string): Uint8Array => {
-              const bytes = new Uint8Array(hex.length / 2);
-              for (let i = 0; i < hex.length; i += 2) {
-                bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
-              }
-              return bytes;
-            };
-            const pubKey = fromHex(trustRecord.public_key);
-            const verified = await verifyExecutionReceipt(dr, pubKey);
-            await this.bumpTrustFromReceipt(dr, verified);
-          } else {
-            // No stored key — record as unverified first contact
-            await this.bumpTrustFromReceipt(dr, true);
-          }
-
-          // Compose chain trust through delegation tree (best-effort)
-          const directTrust =
-            trustMap.get(dr.motebit_id) ?? trustLevelToScore(AgentTrustLevel.Unknown);
-          const chainTrust = composeDelegationTrust(
-            directTrust,
-            dr,
-            (id: string) => trustMap.get(id) ?? trustLevelToScore(AgentTrustLevel.Unknown),
-          );
-
-          // Emit chain trust event for gradient/audit consumption
-          try {
-            await this.events.appendWithClock({
-              event_id: crypto.randomUUID(),
-              motebit_id: this.motebitId,
-              timestamp: Date.now(),
-              event_type: EventType.ChainTrustComputed,
-              payload: {
-                delegatee: dr.motebit_id,
-                direct_trust: directTrust,
-                chain_trust: chainTrust,
-                delegation_depth: (dr.delegation_receipts ?? []).length,
-              },
-              tombstoned: false,
-            });
-          } catch {
-            // Event emission is best-effort
-          }
-        }
-      } catch (err: unknown) {
-        // Trust bumping is best-effort — don't break the task
-        this._logger.warn("trust bump failed", {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-
-    // Update agent graph with delegation receipt edges
-    for (const dr of delegationReceipts) {
-      try {
-        await this.agentGraph.addReceiptEdges(dr);
-      } catch (err: unknown) {
-        this._logger.warn("graph edge update failed", {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-
-    // Record latency for delegation receipts (best-effort)
-    if (delegationReceipts.length > 0 && this.latencyStatsStore != null) {
-      for (const dr of delegationReceipts) {
-        try {
-          const latency = dr.completed_at - dr.submitted_at;
-          if (latency > 0) {
-            await this.latencyStatsStore.record(this.motebitId, dr.motebit_id, latency);
-          }
-        } catch (err: unknown) {
-          this._logger.warn("latency recording failed", {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-    }
-
-    // Hash prompt and result
-    const { hash, signExecutionReceipt } = await import("@motebit/crypto");
-    const promptHash = await hash(new TextEncoder().encode(task.prompt));
-    const resultHash = await hash(new TextEncoder().encode(responseText));
-
-    // Build and sign receipt
-    const receiptBody: Record<string, unknown> = {
-      task_id: task.task_id,
-      motebit_id: task.motebit_id,
-      device_id: deviceId,
-      submitted_at: task.submitted_at,
-      completed_at: Date.now(),
-      status,
-      result: responseText,
-      tools_used: toolsUsed,
-      memories_formed: memoriesFormed,
-      prompt_hash: promptHash,
-      result_hash: resultHash,
-      // Relay task ID binding — task.task_id IS the relay-assigned ID for WebSocket tasks.
-      // Including it explicitly as relay_task_id enables the relay's binding check.
-      relay_task_id: task.task_id,
-    };
-    if (delegationReceipts.length > 0) {
-      receiptBody.delegation_receipts = delegationReceipts;
-    }
-
-    const receipt = await signExecutionReceipt(
-      receiptBody as Omit<ExecutionReceipt, "signature">,
-      privateKey,
-      publicKey,
-    );
-
-    // Log event
-    const eventTypeMap: Record<string, EventType> = {
-      completed: EventType.AgentTaskCompleted,
-      denied: EventType.AgentTaskDenied,
-      failed: EventType.AgentTaskFailed,
-    };
-    const eventType = eventTypeMap[status] ?? EventType.AgentTaskFailed;
-
-    try {
-      await this.events.appendWithClock({
-        event_id: crypto.randomUUID(),
-        motebit_id: this.motebitId,
-        device_id: deviceId,
-        timestamp: Date.now(),
-        event_type: eventType,
-        payload: {
-          task_id: task.task_id,
-          status,
-          tools_used: toolsUsed,
-          memories_formed: memoriesFormed,
-          receipt: {
-            motebit_id: receipt.motebit_id,
-            device_id: receipt.device_id,
-            completed_at: receipt.completed_at,
-            signature: receipt.signature.slice(0, 16),
-            delegation_receipts: receipt.delegation_receipts?.map(function summarize(
-              dr: ExecutionReceipt,
-            ): Record<string, unknown> {
-              return {
-                task_id: dr.task_id,
-                motebit_id: dr.motebit_id,
-                device_id: dr.device_id,
-                status: dr.status,
-                completed_at: dr.completed_at,
-                tools_used: dr.tools_used,
-                memories_formed: dr.memories_formed,
-                signature: dr.signature.slice(0, 16),
-                delegation_receipts: dr.delegation_receipts?.map(summarize),
-              };
-            }),
-          },
-        },
-        tombstoned: false,
-      });
-    } catch {
-      // Event logging is best-effort
-    }
-
-    yield { type: "task_result", receipt };
+    yield* handleAgentTaskFn(this.agentTaskDeps, task, privateKey, deviceId, publicKey, options);
   }
 
   async *resumeAfterApproval(approved: boolean): AsyncGenerator<StreamChunk> {
@@ -1725,6 +1481,26 @@ export class MotebitRuntime {
    * Trust progression: Unknown → FirstContact (on first interaction) → Verified (after 5+ verified).
    * Never auto-promotes to Trusted — requires explicit owner action.
    */
+  private get agentTaskDeps(): AgentTaskHandlerDeps {
+    return {
+      motebitId: this.motebitId,
+      events: this.events,
+      agentTrustStore: this.agentTrustStore,
+      agentGraph: this.agentGraph,
+      latencyStatsStore: this.latencyStatsStore,
+      logger: this._logger,
+      sendMessageStreaming: (text, runId, options) =>
+        this.sendMessageStreaming(text, runId, options),
+      saveConversationContext: () => this.conversation.saveContext(),
+      clearConversationForTask: () => this.conversation.clearForTask(),
+      restoreConversationContext: (ctx) => this.conversation.restoreContext(ctx),
+      getMcpAdapters: () => this.mcpAdapters,
+      getAndResetInteractiveDelegationReceipts: () =>
+        this.getAndResetInteractiveDelegationReceipts(),
+      bumpTrustFromReceipt: (receipt, verified) => this.bumpTrustFromReceipt(receipt, verified),
+    };
+  }
+
   private get trustDeps(): AgentTrustDeps {
     return {
       motebitId: this.motebitId,
