@@ -379,28 +379,14 @@ export function initVoice(
     };
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
-      let interim = "";
       let final = "";
-
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i]!;
         if (result.isFinal) {
           final += result[0]!.transcript;
-        } else {
-          interim += result[0]!.transcript;
         }
       }
 
-      // Show interim transcript
-      if (voiceTranscript) {
-        const text = final || interim;
-        if (text) {
-          voiceTranscript.textContent = text;
-          voiceTranscript.classList.add("has-text");
-        }
-      }
-
-      // When we get a final result, pause listening (not end) and send via voice mode
       if (final) {
         pauseListening();
         void chatAPI.handleVoiceSend(final.trim());
