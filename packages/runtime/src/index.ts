@@ -1448,13 +1448,17 @@ export class MotebitRuntime {
 
     try {
       const trimmed = this.conversation.trimmed();
-      const knownAgents = await this.listTrustedAgents();
       const selfAwareness = this.buildSelfAwareness();
+
+      // Parallelize independent async operations
+      const [knownAgents, listings] = await Promise.all([
+        this.listTrustedAgents(),
+        this.serviceListingStore ? this.serviceListingStore.list() : Promise.resolve([]),
+      ]);
 
       // Build capabilities map from service listings for known agents
       let agentCapabilities: Record<string, string[]> | undefined;
-      if (knownAgents.length > 0 && this.serviceListingStore) {
-        const listings = await this.serviceListingStore.list();
+      if (knownAgents.length > 0 && listings.length > 0) {
         const capMap: Record<string, string[]> = {};
         for (const listing of listings) {
           if (listing.capabilities.length > 0) {

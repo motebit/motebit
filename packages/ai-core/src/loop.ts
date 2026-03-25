@@ -248,19 +248,18 @@ export async function* runTurnStreaming(
 ): AsyncGenerator<AgenticChunk> {
   const { motebitId, eventStore, memoryGraph, stateEngine, behaviorEngine, provider } = deps;
 
-  // 1. Query recent events
-  const recentEvents = await eventStore.query({
-    motebit_id: motebitId,
-    limit: 10,
-  });
-
-  // 2. Embed user message and retrieve relevant memories (two-bucket: pinned + similarity)
-  // Sensitivity gate: only include None and Personal memories in context sent to
-  // external AI providers. Medical, Financial, and Secret memories stay local.
+  // 1. Query recent events, embed user message, and fetch pinned memories in parallel.
+  // These are independent — no reason to await sequentially.
   const CONTEXT_SAFE_SENSITIVITY = [SensitivityLevel.None, SensitivityLevel.Personal];
 
-  const queryEmbedding = await embedText(userMessage);
-  const pinnedMemories = (await memoryGraph.getPinnedMemories()).filter((m) =>
+  const [recentEvents, queryEmbedding, pinnedMemoriesRaw] = await Promise.all([
+    eventStore.query({ motebit_id: motebitId, limit: 10 }),
+    embedText(userMessage),
+    memoryGraph.getPinnedMemories(),
+  ]);
+
+  // 2. Similarity retrieval depends on the embedding — runs after parallel batch
+  const pinnedMemories = pinnedMemoriesRaw.filter((m) =>
     CONTEXT_SAFE_SENSITIVITY.includes(m.sensitivity),
   );
   const similarityMemories = await memoryGraph.retrieve(queryEmbedding, {
