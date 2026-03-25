@@ -7,9 +7,6 @@ import type {
   ExecutionReceipt,
   AgentTrustRecord,
   GoalExecutionManifest,
-  ExecutionTimelineEntry,
-  ExecutionStepSummary,
-  ToolAuditEntry,
   AgentServiceListing,
   PrecisionWeights,
   KeyringAdapter,
@@ -91,7 +88,8 @@ import {
   buildPrecisionContext,
 } from "./gradient.js";
 import { AgentGraphManager } from "./agent-graph.js";
-import { replayGoal, hashString, computeTimelineHash } from "./execution-ledger.js";
+import { CredentialManager } from "./credential-manager.js";
+import { PlanExecutionManager } from "./plan-execution.js";
 import { setOperatorMode, setupOperatorPin, resetOperatorPin } from "./operator.js";
 import {
   bumpTrustFromReceipt as _bumpTrustFromReceipt,
@@ -166,17 +164,6 @@ export type {
   ConversationMessage,
   AgentTrustRecord,
 } from "@motebit/sdk";
-import type {
-  GradientCredentialSubject,
-  ReputationCredentialSubject,
-  TrustCredentialSubject,
-} from "@motebit/sdk";
-
-/** Union of all credential subject types issued by the runtime. */
-type AnyCredentialSubject =
-  | GradientCredentialSubject
-  | ReputationCredentialSubject
-  | TrustCredentialSubject;
 export { AgentTrustLevel } from "@motebit/sdk";
 export type { EventStoreAdapter } from "@motebit/event-log";
 export type {
@@ -509,19 +496,11 @@ export class MotebitRuntime {
   private _precision: PrecisionWeights;
   private _lastReflection: ReflectionResult | null = null;
   private _signingKeys: { privateKey: Uint8Array; publicKey: Uint8Array } | null;
-  private _issuedCredentials: import("@motebit/crypto").VerifiableCredential<AnyCredentialSubject>[] =
-    [];
-  private _credentialStore: import("@motebit/sdk").CredentialStoreAdapter | null = null;
+  private credentialManager!: CredentialManager;
+  private planExecution!: PlanExecutionManager;
   private approvalStore: import("@motebit/sdk").ApprovalStoreAdapter | null = null;
   private _signingKeysErased = false;
   private _logger: { warn(message: string, context?: Record<string, unknown>): void };
-  /** Callback to submit credentials to relay for indexing. Set by enableInteractiveDelegation. */
-  private _credentialSubmitter:
-    | ((
-        vc: import("@motebit/crypto").VerifiableCredential<unknown>,
-        subjectMotebitId: string,
-      ) => Promise<void>)
-    | null = null;
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
     this.motebitId = config.motebitId;
@@ -620,8 +599,14 @@ export class MotebitRuntime {
     this.serviceListingStore = adapters.storage.serviceListingStore ?? null;
     this.latencyStatsStore = adapters.storage.latencyStatsStore ?? null;
 
-    // Credential persistence — persists issued VCs across restarts
-    this._credentialStore = adapters.storage.credentialStore ?? null;
+    // Credential manager — issuance, persistence, relay submission
+    const credentialStore = adapters.storage.credentialStore ?? null;
+    this.credentialManager = new CredentialManager({
+      motebitId: this.motebitId,
+      credentialStore,
+      gradientStore: this.gradientStore,
+      logger: this._logger,
+    });
 
     // Approval store — persistence-backed quorum state (source of truth for multi-party approval)
     this.approvalStore = adapters.storage.approvalStore ?? null;
@@ -629,11 +614,12 @@ export class MotebitRuntime {
     // Agent graph — algebraic routing substrate
     // The credential store adapter reads from persistent storage (survives restart)
     // with fallback to in-memory credentials for environments without persistence.
+    const credentialMgr = this.credentialManager;
     const graphCredentialStore = {
       getCredentialsForSubject: (subjectMotebitId: string) => {
         // Prefer persistent store (has historical credentials across sessions)
-        if (this._credentialStore) {
-          const stored = this._credentialStore.listBySubject(subjectMotebitId);
+        if (credentialStore) {
+          const stored = credentialStore.listBySubject(subjectMotebitId);
           return stored
             .filter((sc) => sc.credential_type === "AgentReputationCredential")
             .map((sc) => {
@@ -650,7 +636,8 @@ export class MotebitRuntime {
             });
         }
         // Fallback: in-memory credentials only
-        return this._issuedCredentials
+        return credentialMgr
+          .getIssuedCredentials()
           .filter(
             (vc) =>
               vc.credentialSubject?.id?.includes(subjectMotebitId) &&
@@ -674,6 +661,19 @@ export class MotebitRuntime {
       this.latencyStatsStore,
       graphCredentialStore,
     );
+
+    // Plan execution manager
+    this.planExecution = new PlanExecutionManager({
+      motebitId: this.motebitId,
+      planEngine: this.planEngine,
+      planStore: this.planStore,
+      toolRegistry: this.toolRegistry,
+      events: this.events,
+      toolAuditSink: this.toolAuditSink,
+      logger: this._logger,
+      getLoopDeps: () => this.loopDeps,
+      getLocalCapabilities: () => this._localCapabilities,
+    });
 
     this.wireLoopDeps();
   }
@@ -809,353 +809,35 @@ export class MotebitRuntime {
     this.planEngine.setCollaborativeAdapter(adapter);
   }
 
-  /**
-   * Create and execute a plan for a goal prompt.
-   * Decomposes the goal into steps, then executes each step sequentially,
-   * streaming PlanChunk events for progress tracking.
-   *
-   * After execution completes, a signed `GoalExecutionManifest` is built from
-   * the accumulated timeline. Retrieve it with `getLastExecutionManifest()`.
-   * If `privateKey` is provided, the manifest is Ed25519-signed per the
-   * execution-ledger@1.0 spec.
-   */
+  /** Create and execute a plan for a goal prompt. */
   async *executePlan(
     goalId: string,
     goalPrompt: string,
     runId?: string,
     privateKey?: Uint8Array,
   ): AsyncGenerator<PlanChunk> {
-    if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
-
-    const availableTools =
-      this.toolRegistry.size > 0 ? this.toolRegistry.list().map((t) => t.name) : undefined;
-
-    const { plan } = await this.planEngine.createPlan(
-      goalId,
-      this.motebitId,
-      {
-        goalPrompt,
-        availableTools,
-        localCapabilities: this._localCapabilities.length > 0 ? this._localCapabilities : undefined,
-      },
-      this.loopDeps,
-    );
-
-    const executionStartedAt = Date.now();
-    let finalStatus: GoalExecutionManifest["status"] = "active";
-
-    for await (const chunk of this.planEngine.executePlan(
-      plan.plan_id,
-      this.loopDeps,
-      undefined,
-      runId,
-    )) {
-      this._logPlanChunkEvent(chunk, goalId);
-      if (chunk.type === "plan_completed") finalStatus = "completed";
-      else if (chunk.type === "plan_failed") finalStatus = "failed";
-      yield chunk;
-    }
-
-    // Build execution manifest from PlanEngine timeline + tool audit data
-    try {
-      this._lastExecutionManifest = await this._buildLiveManifest(
-        goalId,
-        plan.plan_id,
-        executionStartedAt,
-        finalStatus,
-        privateKey,
-      );
-    } catch (err: unknown) {
-      this._logger.warn("manifest construction failed", {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    yield* this.planExecution.executePlan(goalId, goalPrompt, runId, privateKey);
   }
 
-  private _lastExecutionManifest: GoalExecutionManifest | null = null;
-
-  /**
-   * Return the execution manifest produced by the last `executePlan()` call.
-   * Returns null if no execution has completed or manifest construction failed.
-   */
+  /** Return the execution manifest produced by the last `executePlan()` call. */
   getLastExecutionManifest(): GoalExecutionManifest | null {
-    return this._lastExecutionManifest;
+    return this.planExecution.getLastExecutionManifest();
   }
 
-  /**
-   * Build a signed GoalExecutionManifest from the PlanEngine's accumulated
-   * timeline, augmented with tool audit data (args hashes, call IDs, durations).
-   */
-  private async _buildLiveManifest(
-    goalId: string,
-    planId: string,
-    startedAt: number,
-    status: GoalExecutionManifest["status"],
-    privateKey?: Uint8Array,
-  ): Promise<GoalExecutionManifest> {
-    // 1. Collect structural timeline from PlanEngine
-    const timeline: ExecutionTimelineEntry[] = [];
-
-    // goal_started
-    timeline.push({
-      timestamp: startedAt,
-      type: "goal_started",
-      payload: { goal_id: goalId },
-    });
-
-    // Plan engine timeline (plan_created, step events, plan outcome)
-    const engineTimeline = this.planEngine.takeTimeline();
-
-    // 2. Augment tool events with audit data (args_hash, call_id, precise ok/duration)
-    const toolEntries: ToolAuditEntry[] = [];
-    if (this.toolAuditSink?.queryByRunId != null) {
-      toolEntries.push(...this.toolAuditSink.queryByRunId(planId));
-    }
-
-    // Build a map from tool audit entries keyed by approximate timestamp + tool name
-    // to match with PlanEngine's tool_invoked/tool_result events
-    let auditIndex = 0;
-    for (const entry of engineTimeline) {
-      if (entry.type === "tool_invoked") {
-        // Try to match with an audit entry
-        const auditEntry = toolEntries[auditIndex];
-        if (auditEntry && auditEntry.decision.allowed) {
-          const argsHash = await hashString(
-            JSON.stringify(auditEntry.args, Object.keys(auditEntry.args).sort()),
-          );
-          entry.payload = {
-            tool: auditEntry.tool,
-            args_hash: argsHash,
-            call_id: auditEntry.callId,
-          };
-        }
-      } else if (entry.type === "tool_result") {
-        const auditEntry = toolEntries[auditIndex];
-        if (auditEntry && auditEntry.decision.allowed && auditEntry.result) {
-          entry.payload = {
-            tool: auditEntry.tool,
-            ok: auditEntry.result.ok,
-            duration_ms: auditEntry.result.durationMs,
-            call_id: auditEntry.callId,
-          };
-          auditIndex++;
-        } else if (auditEntry) {
-          auditIndex++;
-        }
-      }
-      timeline.push(entry);
-    }
-
-    // goal_completed
-    const completedAt = Date.now();
-    timeline.push({
-      timestamp: completedAt,
-      type: "goal_completed",
-      payload: { goal_id: goalId, status },
-    });
-
-    // 3. Build step summaries from the plan store
-    const steps = this.planStore.getStepsForPlan(planId);
-    const stepSummaries: ExecutionStepSummary[] = steps.map((s) => {
-      const stepToolEntries = toolEntries.filter((t) => {
-        if (s.started_at == null) return false;
-        const end = s.completed_at ?? Infinity;
-        return t.timestamp >= s.started_at && t.timestamp <= end;
-      });
-      const uniqueTools = [...new Set(stepToolEntries.map((t) => t.tool))];
-
-      const summary: ExecutionStepSummary = {
-        step_id: s.step_id,
-        ordinal: s.ordinal,
-        description: s.description,
-        status: s.status,
-        tools_used: uniqueTools,
-        tool_calls: s.tool_calls_made,
-        started_at: s.started_at,
-        completed_at: s.completed_at,
-      };
-
-      if (s.delegation_task_id) {
-        // Find the step_delegated event for this step to extract routing provenance
-        const delegatedEvent = timeline.find(
-          (e) => e.type === "step_delegated" && e.payload.step_id === s.step_id,
-        );
-        const routingChoice = delegatedEvent?.payload.routing_choice as
-          | NonNullable<ExecutionStepSummary["delegation"]>["routing_choice"]
-          | undefined;
-
-        summary.delegation = {
-          task_id: s.delegation_task_id,
-          routing_choice: routingChoice,
-        };
-      }
-
-      return summary;
-    });
-
-    // 4. Compute content hash
-    const contentHash = await computeTimelineHash(timeline);
-
-    // 5. Assemble manifest
-    const manifest: GoalExecutionManifest = {
-      spec: "motebit/execution-ledger@1.0",
-      motebit_id: this.motebitId,
-      goal_id: goalId,
-      plan_id: planId,
-      started_at: startedAt,
-      completed_at: completedAt,
-      status,
-      timeline,
-      steps: stepSummaries,
-      delegation_receipts: [],
-      content_hash: contentHash,
-    };
-
-    // 6. Sign if private key provided
-    if (privateKey) {
-      const { sign, toBase64Url, hexToBytes } = await import("@motebit/crypto");
-      const hashBytes = hexToBytes(contentHash);
-      const sig = await sign(hashBytes, privateKey);
-      manifest.signature = toBase64Url(sig);
-    }
-
-    return manifest;
-  }
-
-  /**
-   * Resume an existing plan that was paused (e.g. waiting for approval).
-   * Streams PlanChunk events starting from where the plan left off.
-   */
+  /** Resume an existing plan that was paused (e.g. waiting for approval). */
   async *resumePlan(planId: string, runId?: string): AsyncGenerator<PlanChunk> {
-    if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
-    const plan = this.planStore.getPlan(planId);
-    const goalId = plan?.goal_id;
-    for await (const chunk of this.planEngine.resumePlan(planId, this.loopDeps, undefined, runId)) {
-      this._logPlanChunkEvent(chunk, goalId);
-      yield chunk;
-    }
+    yield* this.planExecution.resumePlan(planId, runId);
   }
 
-  /**
-   * Recover delegated steps that were orphaned (e.g. tab closed during delegation).
-   * Polls relay for results and resumes plans where possible.
-   */
+  /** Recover delegated steps that were orphaned (e.g. tab closed during delegation). */
   async *recoverDelegatedSteps(): AsyncGenerator<PlanChunk> {
     if (!this.loopDeps) return;
-    for await (const chunk of this.planEngine.recoverDelegatedSteps(
-      this.motebitId,
-      this.loopDeps,
-    )) {
-      this._logPlanChunkEvent(chunk);
-      yield chunk;
-    }
+    yield* this.planExecution.recoverDelegatedSteps(this.loopDeps);
   }
 
-  /**
-   * Log plan lifecycle events centrally so all consumers (CLI, desktop, mobile, web)
-   * get audit history without duplicating event-logging logic.
-   */
-  private _logPlanChunkEvent(chunk: PlanChunk, goalId?: string): void {
-    let eventType: EventType | undefined;
-    let payload: Record<string, unknown> | undefined;
-
-    switch (chunk.type) {
-      case "plan_created":
-        eventType = EventType.PlanCreated;
-        payload = {
-          plan_id: chunk.plan.plan_id,
-          title: chunk.plan.title,
-          total_steps: chunk.steps.length,
-        };
-        break;
-      case "step_started":
-        eventType = EventType.PlanStepStarted;
-        payload = {
-          plan_id: chunk.step.plan_id,
-          step_id: chunk.step.step_id,
-          ordinal: chunk.step.ordinal,
-          description: chunk.step.description,
-        };
-        break;
-      case "step_completed":
-        eventType = EventType.PlanStepCompleted;
-        payload = {
-          plan_id: chunk.step.plan_id,
-          step_id: chunk.step.step_id,
-          ordinal: chunk.step.ordinal,
-          tool_calls_made: chunk.step.tool_calls_made,
-        };
-        break;
-      case "step_failed":
-        eventType = EventType.PlanStepFailed;
-        payload = {
-          plan_id: chunk.step.plan_id,
-          step_id: chunk.step.step_id,
-          ordinal: chunk.step.ordinal,
-          error: chunk.error,
-        };
-        break;
-      case "step_delegated":
-        eventType = EventType.PlanStepDelegated;
-        payload = {
-          plan_id: chunk.step.plan_id,
-          step_id: chunk.step.step_id,
-          ordinal: chunk.step.ordinal,
-          task_id: chunk.task_id,
-          routing_choice: chunk.routing_choice,
-        };
-        break;
-      case "plan_completed":
-        eventType = EventType.PlanCompleted;
-        payload = { plan_id: chunk.plan.plan_id };
-        break;
-      case "plan_failed":
-        eventType = EventType.PlanFailed;
-        payload = { plan_id: chunk.plan.plan_id, reason: chunk.reason };
-        break;
-      default:
-        return; // step_chunk, approval_request, reflection, plan_retrying, plan_truncated — handled by consumers
-    }
-
-    if (goalId != null) {
-      payload.goal_id = goalId;
-    }
-
-    void (async () => {
-      try {
-        await this.events.appendWithClock({
-          event_id: crypto.randomUUID(),
-          motebit_id: this.motebitId,
-          timestamp: Date.now(),
-          event_type: eventType,
-          payload,
-          tombstoned: false,
-        });
-      } catch {
-        // Fire-and-forget — consistent with existing event logging patterns
-      }
-    })();
-  }
-
-  /**
-   * Reconstruct a complete execution manifest for a goal from the event log
-   * and tool audit trail. The manifest is a verifiable, replayable record
-   * of everything the agent did during goal execution.
-   *
-   * If `privateKey` is provided, the content_hash is Ed25519-signed, making
-   * the manifest independently verifiable by any party with the public key.
-   */
+  /** Reconstruct a complete execution manifest for a goal from the event log. */
   async replayGoal(goalId: string, privateKey?: Uint8Array): Promise<GoalExecutionManifest | null> {
-    return replayGoal(
-      {
-        motebitId: this.motebitId,
-        planStore: this.planStore,
-        events: this.events,
-        auditSink: this.toolAuditSink,
-      },
-      goalId,
-      privateKey,
-    );
+    return this.planExecution.replayGoal(goalId, privateKey);
   }
 
   get isOperatorMode(): boolean {
@@ -2553,11 +2235,11 @@ export class MotebitRuntime {
     // Issue gradient credential (best-effort)
     if (this._signingKeys) {
       try {
-        const vc = await this.issueGradientCredential(
+        const vc = await this.credentialManager.issueGradientCredential(
           this._signingKeys.privateKey,
           this._signingKeys.publicKey,
         );
-        if (vc) this._persistCredential(vc);
+        if (vc) this.credentialManager.persistCredential(vc);
       } catch (err: unknown) {
         this._logger.warn("gradient credential issuance failed", {
           error: err instanceof Error ? err.message : String(err),
@@ -2582,75 +2264,19 @@ export class MotebitRuntime {
     return snapshot;
   }
 
-  /**
-   * Issue a W3C Verifiable Credential containing this agent's current gradient.
-   * Returns null if no gradient has been computed or no private key is available.
-   */
-  async issueGradientCredential(
-    privateKey: Uint8Array,
-    publicKey: Uint8Array,
-  ): Promise<
-    | import("@motebit/crypto").VerifiableCredential<
-        import("@motebit/sdk").GradientCredentialSubject
-      >
-    | null
-  > {
-    const snapshot = this.gradientStore.latest(this.motebitId);
-    if (!snapshot) return null;
-
-    const { issueGradientCredential: issue } = await import("@motebit/crypto");
-    return issue(snapshot, privateKey, publicKey);
+  /** Issue a W3C Verifiable Credential containing this agent's current gradient. */
+  async issueGradientCredential(privateKey: Uint8Array, publicKey: Uint8Array) {
+    return this.credentialManager.issueGradientCredential(privateKey, publicKey);
   }
 
-  /**
-   * Return all verifiable credentials issued by this runtime (gradient + trust).
-   * Credentials accumulate in memory; consumers can read and clear as needed.
-   */
-  getIssuedCredentials(): import("@motebit/crypto").VerifiableCredential<AnyCredentialSubject>[] {
-    return [...this._issuedCredentials];
+  /** Return all verifiable credentials issued by this runtime (gradient + trust). */
+  getIssuedCredentials() {
+    return this.credentialManager.getIssuedCredentials();
   }
 
-  /**
-   * Clear the in-memory credential cache (e.g. after persisting or presenting them).
-   */
+  /** Clear the in-memory credential cache (e.g. after persisting or presenting them). */
   clearIssuedCredentials(): void {
-    this._issuedCredentials = [];
-  }
-
-  /** Push a credential to both in-memory cache and persistent store. */
-  private _persistCredential(
-    vc: import("@motebit/crypto").VerifiableCredential<unknown>,
-    subjectMotebitId?: string,
-  ): void {
-    this._issuedCredentials.push(
-      vc as import("@motebit/crypto").VerifiableCredential<AnyCredentialSubject>,
-    );
-    if (this._credentialStore) {
-      try {
-        const credType =
-          vc.type.find((t) => t !== "VerifiableCredential") ?? "VerifiableCredential";
-        this._credentialStore.save({
-          credential_id: crypto.randomUUID(),
-          subject_motebit_id: vc.credentialSubject?.id ?? "",
-          issuer_did: vc.issuer,
-          credential_type: credType,
-          credential_json: JSON.stringify(vc),
-          issued_at: Date.now(),
-        });
-      } catch (err: unknown) {
-        this._logger.warn("credential persistence failed", {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-    // Fire-and-forget: submit to relay for routing indexing
-    if (this._credentialSubmitter && subjectMotebitId) {
-      this._credentialSubmitter(vc, subjectMotebitId).catch((err: unknown) => {
-        this._logger.warn("credential relay submission failed", {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
-    }
+    this.credentialManager.clearIssuedCredentials();
   }
 
   private wireLoopDeps(): void {
@@ -2718,7 +2344,8 @@ export class MotebitRuntime {
       events: this.events,
       agentGraph: this.agentGraph,
       signingKeys: this._signingKeys,
-      onCredentialIssued: (vc, subjectMotebitId) => this._persistCredential(vc, subjectMotebitId),
+      onCredentialIssued: (vc, subjectMotebitId) =>
+        this.credentialManager.persistCredential(vc, subjectMotebitId),
     };
   }
 
@@ -2799,7 +2426,7 @@ export class MotebitRuntime {
     // are submitted to the relay for routing indexing. The subject agent (the one we
     // delegated to) gets the credential pushed to its relay profile.
     const logger = this._logger;
-    this._credentialSubmitter = async (vc, targetMotebitId) => {
+    this.credentialManager.credentialSubmitter = async (vc, targetMotebitId) => {
       try {
         const token = await config.authToken();
         const resp = await fetch(
