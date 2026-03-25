@@ -50,7 +50,7 @@ import {
 } from "@motebit/tools/web-safe";
 import { embedText, setRemoteEmbedUrl } from "@motebit/memory-graph";
 import { CursorPresence } from "./cursor-presence";
-import { createProvider, WebLLMProvider } from "./providers";
+import { createProvider, WebLLMProvider, PROXY_BASE_URL } from "./providers";
 import type { ProviderConfig } from "./storage";
 import { needsMigration, loadLegacyConversations, markMigrationDone } from "./storage";
 import { LocalStorageKeyringAdapter } from "./browser-keyring";
@@ -129,7 +129,7 @@ export class WebApp {
 
   async bootstrap(): Promise<void> {
     // Configure semantic embeddings via proxy (browser can't load ONNX model locally)
-    setRemoteEmbedUrl("https://api.motebit.com/v1/embed");
+    setRemoteEmbedUrl(`${PROXY_BASE_URL}/v1/embed`);
 
     // Open IndexedDB storage
     const storage = await createBrowserStorage();
@@ -298,7 +298,7 @@ export class WebApp {
     registry.register(webSearchDefinition, createWebSearchHandler(new DuckDuckGoSearchProvider()));
     registry.register(
       readUrlDefinition,
-      createReadUrlHandler({ proxyUrl: "https://api.motebit.com/v1/fetch" }),
+      createReadUrlHandler({ proxyUrl: `${PROXY_BASE_URL}/v1/fetch` }),
     );
     registry.register(
       recallMemoriesDefinition,

@@ -427,11 +427,13 @@ export class MobileApp {
       });
     } else if (config.provider === "proxy") {
       const model = "claude-sonnet-4-20250514";
+      const proxyUrl =
+        (await AsyncStorage.getItem("@motebit/proxy_url")) ?? "https://api.motebit.com";
       provider = new CloudProvider({
         provider: "anthropic",
         api_key: "",
         model,
-        base_url: "https://api.motebit.com",
+        base_url: proxyUrl,
         max_tokens: config.maxTokens,
       });
     } else if (config.provider === "hybrid") {

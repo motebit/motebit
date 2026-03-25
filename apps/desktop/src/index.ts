@@ -708,11 +708,12 @@ export class DesktopApp {
       this._activeProvider = "hybrid";
     } else if (config.provider === "proxy") {
       const model = "claude-sonnet-4-20250514";
+      const proxyUrl = (import.meta.env?.VITE_PROXY_URL as string) ?? "https://api.motebit.com";
       provider = new CloudProvider({
         provider: "anthropic",
         api_key: "",
         model,
-        base_url: "https://api.motebit.com",
+        base_url: proxyUrl,
         max_tokens: config.maxTokens,
         temperature,
       });

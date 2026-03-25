@@ -885,7 +885,13 @@ export interface ExecutionReceipt {
   prompt_hash: string;
   result_hash: string;
   delegation_receipts?: ExecutionReceipt[];
-  /** Cryptographic binding to the relay's economic identity for this task. */
+  /**
+   * Cryptographic binding to the relay's economic identity for this task.
+   *
+   * Optional for local (non-relay) execution. **Required** for relay-mediated
+   * tasks — the relay rejects receipts without this field (HTTP 400). The value
+   * is included in the Ed25519 signature, so tampering breaks verification.
+   */
   relay_task_id?: string;
   /** Scope from the delegation token that authorized this execution, if any. */
   delegated_scope?: string;

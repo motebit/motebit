@@ -2,9 +2,9 @@
 
 ## Relay Federation Specification
 
-**Status:** Draft
+**Status:** Stable
 **Version:** 1.0
-**Date:** 2026-03-13
+**Date:** 2026-03-24
 
 ---
 
