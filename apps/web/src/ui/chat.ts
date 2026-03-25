@@ -9,9 +9,15 @@ class StreamingTTS {
   private queue: string[] = [];
   private speaking = false;
   private _enabled = false;
+  /** Called when TTS starts/stops speaking. Used to drive creature mouth animation. */
+  onSpeakingChange: ((isSpeaking: boolean) => void) | null = null;
 
   get enabled(): boolean {
     return this._enabled;
+  }
+
+  get isSpeaking(): boolean {
+    return this.speaking;
   }
 
   enable(): void {
@@ -54,18 +60,23 @@ class StreamingTTS {
   cancel(): void {
     this.buffer = "";
     this.queue = [];
+    const wasSpeaking = this.speaking;
     this.speaking = false;
     if (typeof speechSynthesis !== "undefined") {
       speechSynthesis.cancel();
     }
+    if (wasSpeaking) this.onSpeakingChange?.(false);
   }
 
   private speakNext(): void {
     if (this.queue.length === 0) {
       this.speaking = false;
+      this.onSpeakingChange?.(false);
       return;
     }
+    const wasSpeaking = this.speaking;
     this.speaking = true;
+    if (!wasSpeaking) this.onSpeakingChange?.(true);
     const text = this.queue.shift()!;
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = 1.05;
@@ -85,6 +96,11 @@ export function setStreamingTTSEnabled(enabled: boolean): void {
   } else {
     streamingTTS.disable();
   }
+}
+
+/** Register a callback for when TTS starts/stops speaking. */
+export function onTTSSpeakingChange(cb: (isSpeaking: boolean) => void): void {
+  streamingTTS.onSpeakingChange = cb;
 }
 
 // === DOM Refs ===

@@ -9,7 +9,7 @@ import { initChat, addMessage, showToast } from "./ui/chat";
 import { initSettings } from "./ui/settings";
 import { initConversations } from "./ui/conversations";
 import { initVoice } from "./ui/voice";
-import { setStreamingTTSEnabled } from "./ui/chat";
+import { setStreamingTTSEnabled, onTTSSpeakingChange } from "./ui/chat";
 import { initGatedPanels } from "./ui/gated-panels";
 import { initSovereignPanels } from "./ui/sovereign-panels";
 import { initTheme } from "./ui/theme";
@@ -69,6 +69,36 @@ const voiceAPI = initVoice(ctx, chatAPI, {
     setStreamingTTSEnabled(active);
   },
 });
+
+// Drive creature mouth animation during TTS speech output.
+// Uses synthetic speech-like pulsing since Web Speech API doesn't expose audio streams.
+{
+  let speakingFrameId = 0;
+  onTTSSpeakingChange((isSpeaking) => {
+    if (isSpeaking) {
+      const startTime = performance.now();
+      const animate = (now: number): void => {
+        const t = (now - startTime) / 1000;
+        // Natural speech cadence: overlapping sine waves at syllable-like frequencies
+        const syllable = Math.abs(Math.sin(t * 5.2)) * 0.4 + Math.abs(Math.sin(t * 3.1)) * 0.3;
+        const breathe = 0.1 + Math.sin(t * 1.3) * 0.05;
+        const rms = syllable * 0.6 + breathe;
+        app.setAudioReactivity({
+          rms,
+          low: rms * 0.8,
+          mid: syllable * 0.5,
+          high: syllable * 0.2,
+        });
+        speakingFrameId = requestAnimationFrame(animate);
+      };
+      speakingFrameId = requestAnimationFrame(animate);
+    } else {
+      cancelAnimationFrame(speakingFrameId);
+      speakingFrameId = 0;
+      app.setAudioReactivity(null);
+    }
+  });
+}
 
 const slashCommands = initSlashCommands(ctx, {
   openSettings: () => settings.open(),
