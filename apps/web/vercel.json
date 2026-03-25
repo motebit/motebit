@@ -1,5 +1,5 @@
 {
   "framework": "vite",
   "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
-  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- apps/web/ packages/"
+  "ignoreCommand": "git diff --quiet $VERCEL_GIT_PREVIOUS_SHA $VERCEL_GIT_COMMIT_SHA -- apps/web/ packages/"
 }
