@@ -1,8 +1,10 @@
 /**
  * Task submission, polling, receipt ingestion, and settlement routes.
  *
- * handleReceiptIngestion is exported for use by the WebSocket handler
- * and federation onTaskResultReceived callback in index.ts.
+ * handleReceiptIngestion is the unified receipt pipeline (~760 lines).
+ * All three call sites (HTTP result POST, MCP forward callback, HTTP MCP
+ * fallback callback) live within registerTaskRoutes. Exported in case
+ * future refactoring moves the WebSocket or federation receipt paths here.
  */
 
 import type { Hono } from "hono";
