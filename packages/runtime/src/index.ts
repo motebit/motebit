@@ -40,18 +40,11 @@ import type {
   InteriorColor,
   AudioReactivity,
 } from "@motebit/render-engine/spec";
-import {
-  runTurn,
-  runTurnStreaming,
-  extractStateTags,
-  TaskRouter,
-  withTaskConfig,
-} from "@motebit/ai-core";
+import { runTurn, runTurnStreaming, TaskRouter, withTaskConfig } from "@motebit/ai-core";
 import type {
   StreamingProvider,
   MotebitLoopDependencies,
   TurnResult,
-  AgenticChunk,
   ReflectionResult,
   TaskRouterConfig,
   TaskType,
@@ -88,45 +81,9 @@ import {
 import { ConversationManager } from "./conversation.js";
 import { GradientManager } from "./gradient-manager.js";
 import { InteractiveDelegationManager } from "./interactive-delegation.js";
+import { StreamingManager } from "./streaming.js";
 import type { InteractiveDelegationConfig } from "./interactive-delegation.js";
 
-/**
- * Strip state/memory/action tags for display — preserves whitespace.
- * Returns { clean, pending } where pending is a trailing incomplete
- * tag/action that shouldn't be yielded yet (it may close in a later chunk).
- */
-function stripDisplayTags(text: string): { clean: string; pending: string } {
-  // Strip complete tags — known internal tags + any stray XML the model emits
-  const clean = text
-    .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
-    .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
-    .replace(/<state\s+[^>]*\/>/g, "")
-    .replace(/<parameter\s+[^>]*>[\s\S]*?<\/parameter>/g, "")
-    .replace(/<\/?(?:artifact|function_calls|invoke|antml)[^>]*>/g, "")
-    .replace(/\*{1,3}/g, "")
-    .replace(/ {2,}/g, " ");
-
-  // Check for trailing incomplete patterns that might close in a later chunk
-
-  // Incomplete <memory> or <thinking> tag: opened but not closed yet
-  for (const tag of ["<memory", "<thinking", "<parameter"]) {
-    const lastOpen = clean.lastIndexOf(tag);
-    if (lastOpen !== -1) {
-      const closeTag = `</${tag.slice(1)}>`;
-      const afterOpen = clean.slice(lastOpen);
-      if (!afterOpen.includes(closeTag)) {
-        return { clean: clean.slice(0, lastOpen), pending: clean.slice(lastOpen) };
-      }
-    }
-  }
-
-  // Incomplete XML tag: < without closing >
-  const lastOpen = clean.lastIndexOf("<");
-  if (lastOpen !== -1 && !clean.includes(">", lastOpen)) {
-    return { clean: clean.slice(0, lastOpen), pending: clean.slice(lastOpen) };
-  }
-  return { clean, pending: "" };
-}
 import { performReflection } from "./reflection.js";
 import type { ReflectionDeps } from "./reflection.js";
 import { runHousekeeping } from "./housekeeping.js";
@@ -459,18 +416,8 @@ export class MotebitRuntime {
   private planStore: PlanStoreAdapter;
   private planEngine: PlanEngine;
   private _localCapabilities: DeviceCapability[] = [];
-  private _pendingApproval: {
-    toolCallId: string;
-    toolName: string;
-    args: Record<string, unknown>;
-    userMessage: string;
-    runId?: string;
-    quorum?: { required: number; approvers: string[]; collected: string[] };
-  } | null = null;
-  private approvalTimeoutMs: number;
   private taskRouter: TaskRouter | null;
-  private approvalTimer: ReturnType<typeof setTimeout> | null = null;
-  private approvalExpiredCallback: (() => void) | null = null;
+  private streaming!: StreamingManager;
   private episodicConsolidation: boolean;
   private gradientStore: GradientStoreAdapter;
   private gradientManager!: GradientManager;
@@ -489,7 +436,6 @@ export class MotebitRuntime {
     this.motebitId = config.motebitId;
     this.compactionThreshold = config.compactionThreshold ?? 1000;
     this.mcpConfigs = config.mcpServers ?? [];
-    this.approvalTimeoutMs = config.approvalTimeoutMs ?? 600_000; // 10 min default
     this.taskRouter = config.taskRouter ? new TaskRouter(config.taskRouter) : null;
     this.episodicConsolidation = config.episodicConsolidation ?? false;
     this._signingKeys = config.signingKeys ?? null;
@@ -678,6 +624,40 @@ export class MotebitRuntime {
       },
       bumpTrustFromReceipt: (receipt) => this.bumpTrustFromReceipt(receipt, true),
       wireLoopDeps: () => this.wireLoopDeps(),
+    });
+
+    // Streaming & Approval — stream processing, tool approval lifecycle, timeouts
+    this.streaming = new StreamingManager({
+      pushStateUpdate: (u) => this.state.pushUpdate(u),
+      setSpeaking: (a) => this.behavior.setSpeaking(a),
+      setDelegating: (a) => this.behavior.setDelegating(a),
+      getMotebitToolServers: () => this.motebitToolServers,
+      accumulateTurnStats: (r) => this.accumulateTurnStats(r),
+      pushExchange: (u, a) => this.conversation.pushExchange(u, a),
+      pushActivation: (a) => this.conversation.pushActivation(a),
+      injectIntermediateMessages: (am, um) => this.conversation.injectIntermediateMessages(am, um),
+      logToolUsed: (n, r) => void this.logToolUsed(n, r),
+      getLiveHistory: () => this.conversation.liveHistory,
+      getToolRegistry: () => this.toolRegistry,
+      sanitizeToolResult: (result, toolName) => {
+        if (typeof this.policy.sanitizeAndCheck === "function") {
+          const check = this.policy.sanitizeAndCheck(result, toolName);
+          return {
+            result: check.result,
+            injectionDetected: check.injectionDetected,
+            injectionPatterns: check.injectionPatterns,
+          };
+        }
+        if (typeof this.policy.sanitizeResult === "function") {
+          return { result: this.policy.sanitizeResult(result, toolName) };
+        }
+        return { result };
+      },
+      getLoopDeps: () => this.loopDeps,
+      getLatestCues: () => this.latestCues,
+      getApprovalStore: () => this.approvalStore,
+      approvalTimeoutMs: config.approvalTimeoutMs ?? 600_000,
+      motebitId: this.motebitId,
     });
 
     this.wireLoopDeps();
@@ -993,7 +973,7 @@ export class MotebitRuntime {
     if (this._isProcessing) throw new Error("Already processing a message");
 
     this._isProcessing = true;
-    this._pendingApproval = null;
+    this.streaming.clearPendingApproval();
     this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
     this.behavior.setSpeaking(true);
 
@@ -1016,7 +996,7 @@ export class MotebitRuntime {
       });
       // Session info applies only to the first message after resume
       this.conversation.clearSessionInfo();
-      yield* this.processStream(stream, text, runId);
+      yield* this.streaming.processStream(stream, text, runId);
       // First-conversation guidance fades after a few exchanges
       if (this._isFirstConversation && this.conversation.getHistory().length >= 5) {
         this._isFirstConversation = false;
@@ -1041,7 +1021,7 @@ export class MotebitRuntime {
     if (this._isProcessing) throw new Error("Already processing a message");
 
     this._isProcessing = true;
-    this._pendingApproval = null;
+    this.streaming.clearPendingApproval();
     this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
     this.behavior.setSpeaking(true);
 
@@ -1053,7 +1033,7 @@ export class MotebitRuntime {
         firstConversation: true,
         activationPrompt,
       });
-      yield* this.processStream(stream, "", runId, { activationOnly: true });
+      yield* this.streaming.processStream(stream, "", runId, { activationOnly: true });
     } finally {
       this.behavior.setSpeaking(false);
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
@@ -1322,96 +1302,12 @@ export class MotebitRuntime {
     yield { type: "task_result", receipt };
   }
 
-  /**
-   * Resume after a tool approval decision. Executes the tool deterministically
-   * (no LLM re-prompting) and continues the agentic loop with the result.
-   */
   async *resumeAfterApproval(approved: boolean): AsyncGenerator<StreamChunk> {
-    // Clear timeout FIRST to prevent the race where timeout fires between
-    // our check and the state mutation (timeout sets _pendingApproval = null).
-    this.clearApprovalTimeout();
-
-    if (!this._pendingApproval) {
-      // Timeout already fired — approval came too late. The timeout handler
-      // already injected a denial into conversation history, so this is a no-op.
-      return;
-    }
-    if (!this.loopDeps) throw new Error("AI not initialized");
-
-    const pending = this._pendingApproval;
-    this._pendingApproval = null;
-    this._isProcessing = true;
-    this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
-    this.behavior.setSpeaking(true);
-
-    try {
-      if (approved) {
-        // Execute the tool directly
-        yield { type: "tool_status" as const, name: pending.toolName, status: "calling" as const };
-        const result = await this.toolRegistry.execute(pending.toolName, pending.args);
-
-        // Sanitize through policy if available
-        let sanitized: ToolResult = result;
-        if (typeof this.policy.sanitizeAndCheck === "function") {
-          const check = this.policy.sanitizeAndCheck(result, pending.toolName);
-          sanitized = check.result;
-          if (check.injectionDetected) {
-            yield {
-              type: "injection_warning" as const,
-              tool_name: pending.toolName,
-              patterns: check.injectionPatterns,
-            };
-          }
-        } else if (typeof this.policy.sanitizeResult === "function") {
-          sanitized = this.policy.sanitizeResult(result, pending.toolName);
-        }
-
-        yield {
-          type: "tool_status" as const,
-          name: pending.toolName,
-          status: "done" as const,
-          result: sanitized.data ?? sanitized.error,
-        };
-        void this.logToolUsed(pending.toolName, sanitized.data ?? sanitized.error);
-
-        // Push tool call + result into conversation history for continuation
-        this.conversation.injectIntermediateMessages(
-          {
-            role: "assistant" as const,
-            content: `[tool_use: ${pending.toolName}(${JSON.stringify(pending.args)})]`,
-          },
-          { role: "user" as const, content: `[tool_result: ${JSON.stringify(sanitized)}]` },
-        );
-      } else {
-        // Push denial into conversation history
-        this.conversation.injectIntermediateMessages(
-          {
-            role: "assistant" as const,
-            content: `[tool_use: ${pending.toolName}(${JSON.stringify(pending.args)})]`,
-          },
-          {
-            role: "user" as const,
-            content: `[tool_result: {"ok":false,"error":"User denied this tool call."}]`,
-          },
-        );
-      }
-
-      // Run continuation turn with updated history
-      const stream = runTurnStreaming(this.loopDeps, pending.userMessage, {
-        conversationHistory: this.conversation.liveHistory,
-        previousCues: this.latestCues,
-        runId: pending.runId,
-      });
-      yield* this.processStream(stream, pending.userMessage, pending.runId);
-    } finally {
-      this.behavior.setSpeaking(false);
-      this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
-      this._isProcessing = false;
-    }
+    yield* this.streaming.resumeAfterApproval(approved);
   }
 
   get hasPendingApproval(): boolean {
-    return this._pendingApproval !== null;
+    return this.streaming.hasPendingApproval;
   }
 
   get pendingApprovalInfo(): {
@@ -1419,239 +1315,15 @@ export class MotebitRuntime {
     args: Record<string, unknown>;
     quorum?: { required: number; approvers: string[]; collected: string[] };
   } | null {
-    if (!this._pendingApproval) return null;
-    return {
-      toolName: this._pendingApproval.toolName,
-      args: this._pendingApproval.args,
-      quorum: this._pendingApproval.quorum,
-    };
+    return this.streaming.pendingApprovalInfo;
   }
 
-  /**
-   * Record a single approval vote for multi-party (quorum) approval.
-   * - If no quorum is configured, delegates to resumeAfterApproval (backward compat).
-   * - A deny vote immediately denies (fail-closed).
-   * - Duplicate votes are ignored.
-   * - Quorum state is persisted in the approval store (source of truth),
-   *   not held in mutable runtime memory.
-   */
   async *resolveApprovalVote(approved: boolean, approverId: string): AsyncGenerator<StreamChunk> {
-    // Clear timeout before checking state — prevents race where timeout
-    // fires between our check and the state mutation.
-    this.clearApprovalTimeout();
-
-    if (!this._pendingApproval) {
-      // Timeout already fired — approval came too late.
-      return;
-    }
-
-    // No quorum — single-approval behavior
-    if (!this._pendingApproval.quorum) {
-      yield* this.resumeAfterApproval(approved);
-      return;
-    }
-
-    // Deny vote = immediate deny (fail-closed)
-    if (!approved) {
-      yield* this.resumeAfterApproval(false);
-      return;
-    }
-
-    // Delegate to persistence store — it is the source of truth for quorum state.
-    // Runtime is a pure observer: read from store, never mutate local quorum state.
-    if (this.approvalStore) {
-      const result = this.approvalStore.collectApproval(
-        this._pendingApproval.toolCallId,
-        approverId,
-      );
-
-      if (result.met) {
-        yield* this.resumeAfterApproval(true);
-      }
-      // Otherwise: still waiting for more votes — runtime does not touch local state
-    } else {
-      // Fallback for environments without persistence (tests, in-memory).
-      // Still correct: single-process, single-runtime — no drift risk.
-      const quorum = this._pendingApproval.quorum;
-      if (quorum.collected.includes(approverId)) return;
-      quorum.collected.push(approverId);
-      if (quorum.collected.length >= quorum.required) {
-        yield* this.resumeAfterApproval(true);
-      }
-    }
+    yield* this.streaming.resolveApprovalVote(approved, approverId);
   }
 
-  /**
-   * Register a callback invoked when a pending approval expires.
-   * Apps should use this to auto-deny and update UI (e.g. dismiss dialog, show toast).
-   */
   onApprovalExpired(cb: () => void): void {
-    this.approvalExpiredCallback = cb;
-  }
-
-  private startApprovalTimeout(): void {
-    this.clearApprovalTimeout();
-    if (this.approvalTimeoutMs <= 0) return;
-    this.approvalTimer = setTimeout(() => {
-      if (!this._pendingApproval) return;
-      const expired = this._pendingApproval;
-      this._pendingApproval = null;
-      // Push denial into conversation history so LLM sees it on next turn
-      this.conversation.injectIntermediateMessages(
-        {
-          role: "assistant" as const,
-          content: `[tool_use: ${expired.toolName}(${JSON.stringify(expired.args)})]`,
-        },
-        {
-          role: "user" as const,
-          content: `[tool_result: {"ok":false,"error":"Approval timed out after ${this.approvalTimeoutMs}ms"}]`,
-        },
-      );
-      this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
-      this._isProcessing = false;
-      this.approvalExpiredCallback?.();
-    }, this.approvalTimeoutMs);
-  }
-
-  private clearApprovalTimeout(): void {
-    if (this.approvalTimer) {
-      clearTimeout(this.approvalTimer);
-      this.approvalTimer = null;
-    }
-  }
-
-  /** Shared stream processing — extracts state tags, handles tool/approval/injection chunks. */
-  private async *processStream(
-    stream: AsyncGenerator<AgenticChunk>,
-    userMessage: string,
-    runId?: string,
-    options?: { activationOnly?: boolean },
-  ): AsyncGenerator<StreamChunk> {
-    let result: TurnResult | null = null;
-    let accumulated = "";
-    let yieldedCleanLength = 0;
-
-    // State tags are collected during streaming but applied once at the end.
-    // The creature's only visible change while speaking is the processing glow
-    // and speaking activity. This is the physics of surface tension: perturbation
-    // → oscillation → new equilibrium. Not snap-snap-snap.
-    let pendingStateUpdates: Partial<MotebitState> = {};
-
-    for await (const chunk of stream) {
-      if (chunk.type === "text") {
-        accumulated += chunk.text;
-
-        // Collect state updates — don't apply yet
-        const stateUpdates = extractStateTags(accumulated);
-        if (Object.keys(stateUpdates).length > 0) {
-          pendingStateUpdates = { ...pendingStateUpdates, ...stateUpdates };
-        }
-      }
-
-      // Creature reacts to tool activity
-      if (chunk.type === "tool_status") {
-        const motebitServer = this.motebitToolServers.get(chunk.name);
-        if (chunk.status === "calling") {
-          this.state.pushUpdate({ processing: 0.95 });
-          // Emit delegation_start for motebit MCP tools
-          if (motebitServer) {
-            this.behavior.setDelegating(true);
-            yield { type: "delegation_start", server: motebitServer, tool: chunk.name };
-          }
-        } else if (chunk.status === "done") {
-          this.state.pushUpdate({ processing: 0.6 });
-          void this.logToolUsed(chunk.name, chunk.result);
-          // Emit delegation_complete for motebit MCP tools
-          if (motebitServer) {
-            // Extract receipt summary if this was a motebit_task call with a receipt result
-            let receiptSummary:
-              | { task_id: string; status: string; tools_used: string[] }
-              | undefined;
-            if (chunk.result != null && typeof chunk.result === "object") {
-              const r = chunk.result as Record<string, unknown>;
-              if (
-                typeof r.task_id === "string" &&
-                typeof r.status === "string" &&
-                Array.isArray(r.tools_used)
-              ) {
-                receiptSummary = {
-                  task_id: r.task_id,
-                  status: r.status,
-                  tools_used: r.tools_used as string[],
-                };
-              }
-            }
-            this.behavior.setDelegating(false);
-            yield {
-              type: "delegation_complete",
-              server: motebitServer,
-              tool: chunk.name,
-              receipt: receiptSummary,
-            };
-          }
-        }
-      }
-
-      // Approval request: capture pending state and start timeout
-      if (chunk.type === "approval_request") {
-        this._pendingApproval = {
-          toolCallId: chunk.tool_call_id,
-          toolName: chunk.name,
-          args: chunk.args,
-          userMessage,
-          runId,
-          quorum: chunk.quorum,
-        };
-
-        // Persist quorum metadata to the approval store (source of truth)
-        if (chunk.quorum && this.approvalStore) {
-          this.approvalStore.setQuorum(
-            chunk.tool_call_id,
-            chunk.quorum.required,
-            chunk.quorum.approvers,
-          );
-        }
-
-        this.startApprovalTimeout();
-        this.state.pushUpdate({ processing: 0.5 });
-      }
-
-      // Injection warning — processing dips, personality shifts deferred
-      if (chunk.type === "injection_warning") {
-        this.state.pushUpdate({ processing: 0.3 });
-      }
-
-      // Strip state/memory/action tags from text before yielding to UI
-      if (chunk.type === "text") {
-        // trimStart: tags before text leave orphaned newlines
-        const clean = stripDisplayTags(accumulated).clean.trimStart();
-        const delta = clean.slice(yieldedCleanLength);
-        if (delta) {
-          yieldedCleanLength += delta.length;
-          yield { type: "text" as const, text: delta };
-        }
-      } else {
-        yield chunk;
-      }
-      if (chunk.type === "result") {
-        result = chunk.result;
-        // Accumulate behavioral stats for the intelligence gradient
-        this.accumulateTurnStats(result);
-      }
-    }
-
-    if (result) {
-      if (options?.activationOnly) {
-        this.conversation.pushActivation(result.response);
-      } else {
-        this.conversation.pushExchange(userMessage, result.response);
-      }
-    }
-
-    // Apply collected state updates as the creature settles into new equilibrium
-    if (Object.keys(pendingStateUpdates).length > 0) {
-      this.state.pushUpdate(pendingStateUpdates);
-    }
+    this.streaming.onApprovalExpired(cb);
   }
 
   resetConversation(): void {

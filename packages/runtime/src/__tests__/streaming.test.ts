@@ -565,8 +565,10 @@ describe("resumeAfterApproval", () => {
 
   it("throws without AI provider", async () => {
     const headless = new MotebitRuntime({ motebitId: "no-ai" }, createAdapters());
-    // Set pending approval directly for this edge case test
-    (headless as unknown as { _pendingApproval: unknown })._pendingApproval = {
+    // Set pending approval directly via the streaming manager for this edge case test
+    const streaming = (headless as unknown as { streaming: { _pendingApproval: unknown } })
+      .streaming;
+    streaming._pendingApproval = {
       toolCallId: "tc-1",
       toolName: "test",
       args: {},
