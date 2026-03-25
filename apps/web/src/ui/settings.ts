@@ -1,10 +1,12 @@
 import type { WebContext } from "../types";
-import type { ProviderConfig, ProviderType, GovernanceConfig } from "../storage";
+import type { ProviderConfig, ProviderType, GovernanceConfig, VoiceConfig } from "../storage";
 import {
   saveProviderConfig,
   saveSoulColor,
   saveGovernanceConfig,
   loadGovernanceConfig,
+  saveVoiceConfig,
+  loadVoiceConfig,
 } from "../storage";
 import { detectOllamaModels, checkWebGPU, WebLLMProvider, DEFAULT_OLLAMA_URL } from "../providers";
 import { hexPublicKeyToDidKey } from "@motebit/crypto";
@@ -57,6 +59,11 @@ const govPersistenceThreshold = document.getElementById(
 const govPersistenceValue = document.getElementById("gov-persistence-value") as HTMLSpanElement;
 const govRejectSecrets = document.getElementById("gov-reject-secrets") as HTMLInputElement;
 const govMaxCalls = document.getElementById("gov-max-calls") as HTMLSelectElement;
+
+// Voice elements
+const ttsVoiceSelect = document.getElementById("settings-tts-voice") as HTMLSelectElement;
+const voiceAutoSend = document.getElementById("settings-voice-autosend") as HTMLInputElement;
+const voiceResponse = document.getElementById("settings-voice-response") as HTMLInputElement;
 
 // === State ===
 
@@ -127,6 +134,29 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     const pubHex = ctx.app.publicKeyHex;
     identityDid.textContent = pubHex ? hexPublicKeyToDidKey(pubHex) : "—";
     identityPublicKey.textContent = pubHex || "—";
+  }
+
+  function populateTtsVoices(): void {
+    if (typeof speechSynthesis === "undefined") return;
+    const fill = (): void => {
+      const voices = speechSynthesis.getVoices();
+      // Keep default option, clear the rest
+      while (ttsVoiceSelect.options.length > 1) ttsVoiceSelect.remove(1);
+      for (const v of voices) {
+        const opt = document.createElement("option");
+        opt.value = v.name;
+        opt.textContent = `${v.name} (${v.lang})`;
+        ttsVoiceSelect.appendChild(opt);
+      }
+      // Restore saved selection
+      const saved = loadVoiceConfig();
+      if (saved?.ttsVoice) ttsVoiceSelect.value = saved.ttsVoice;
+    };
+    fill();
+    // Chrome loads voices async
+    if (speechSynthesis.getVoices().length === 0) {
+      speechSynthesis.addEventListener("voiceschanged", fill, { once: true });
+    }
   }
 
   function classifyDecision(decision: unknown): "allowed" | "denied" | "approval" {
@@ -352,6 +382,16 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       govMaxCalls.value = String(govConfig.maxCallsPerTurn);
     }
 
+    // Populate TTS voices
+    populateTtsVoices();
+    const voiceConfig = loadVoiceConfig();
+    if (voiceConfig) {
+      voiceAutoSend.checked = voiceConfig.autoSend;
+      voiceResponse.checked = voiceConfig.voiceResponse;
+      // Voice select populated async — set after voices load
+      if (voiceConfig.ttsVoice) ttsVoiceSelect.value = voiceConfig.ttsVoice;
+    }
+
     // Pre-fill from current provider config
     const config = ctx.getConfig();
     if (config) {
@@ -481,6 +521,14 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     };
     saveGovernanceConfig(govCfg);
     applyGovernanceToRuntime(ctx, govCfg);
+
+    // Save voice config
+    const voiceCfg: VoiceConfig = {
+      ttsVoice: ttsVoiceSelect.value,
+      autoSend: voiceAutoSend.checked,
+      voiceResponse: voiceResponse.checked,
+    };
+    saveVoiceConfig(voiceCfg);
 
     updateModelIndicator();
     updateConnectPrompt();

@@ -130,6 +130,36 @@ export function loadGovernanceConfig(): GovernanceConfig | null {
   return null;
 }
 
+// === Voice Config ===
+
+export interface VoiceConfig {
+  ttsVoice: string;
+  autoSend: boolean;
+  voiceResponse: boolean;
+}
+
+const VOICE_KEY = "motebit-voice";
+
+export function saveVoiceConfig(config: VoiceConfig): void {
+  try {
+    localStorage.setItem(VOICE_KEY, JSON.stringify(config));
+  } catch {
+    // localStorage unavailable
+  }
+}
+
+export function loadVoiceConfig(): VoiceConfig | null {
+  try {
+    const raw = localStorage.getItem(VOICE_KEY);
+    if (raw) {
+      return JSON.parse(raw) as VoiceConfig;
+    }
+  } catch {
+    // localStorage unavailable or corrupt
+  }
+  return null;
+}
+
 // === Sovereignty Ceiling CTA ===
 
 const CEILING_KEY = "motebit-ceiling-shown";
