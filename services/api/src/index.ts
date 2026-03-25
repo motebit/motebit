@@ -103,7 +103,6 @@ import {
   canonicalJson,
   bytesToHex,
   hexToBytes,
-  hash as sha256Hash,
 } from "@motebit/crypto";
 /* eslint-enable no-restricted-imports */
 import type { KeySuccessionRecord } from "@motebit/crypto";
@@ -133,21 +132,9 @@ import {
 import {
   createAccountTables,
   createWithdrawalTables,
-  getOrCreateAccount,
   getAccountBalance,
-  getAccountBalanceDetailed,
   creditAccount,
   debitAccount,
-  getTransactions,
-  hasTransactionWithReference,
-  requestWithdrawal,
-  completeWithdrawal,
-  signWithdrawalReceipt,
-  failWithdrawal,
-  getWithdrawals,
-  getPendingWithdrawals,
-  reconcileLedger,
-  processStripeCheckout,
 } from "./accounts.js";
 import { createPairingTables, registerPairingRoutes } from "./pairing.js";
 import { registerStateExportRoutes } from "./state-export.js";
@@ -155,6 +142,7 @@ import { registerTrustGraphRoutes } from "./trust-graph.js";
 import { registerListingsRoutes } from "./listings.js";
 import { registerProposalRoutes } from "./proposals.js";
 import { registerKeyRotationRoutes } from "./key-rotation.js";
+import { registerBudgetRoutes } from "./budget.js";
 import {
   explainedRankCandidates,
   settleOnReceipt,
@@ -319,8 +307,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // Stripe Checkout — optional fiat on-ramp for virtual account deposits
   // Emergency freeze: runtime toggle for kill switch. When true, all state-mutating
   // operations (POST/PUT/PATCH/DELETE) return 503. Reads remain available.
-  let emergencyFreeze = config.emergencyFreeze ?? false;
-  let freezeReason: string | null = config.emergencyFreeze ? "startup" : null;
+  // Shared mutable object so budget.ts freeze/unfreeze routes can toggle the same state.
+  const freezeState = {
+    frozen: config.emergencyFreeze ?? false,
+    reason: config.emergencyFreeze ? ("startup" as string | null) : null,
+  };
+  // Local aliases for backward compatibility within index.ts closures
+  const getEmergencyFreeze = () => freezeState.frozen;
+  const getFreezeReason = () => freezeState.reason;
 
   const stripeClient = stripeConfig ? new Stripe(stripeConfig.secretKey) : null;
 
@@ -754,7 +748,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // Emergency freeze: block all state-mutating operations
   app.use("*", async (c, next) => {
-    if (!emergencyFreeze) return next();
+    if (!getEmergencyFreeze()) return next();
 
     // Allow reads
     if (c.req.method === "GET" || c.req.method === "HEAD" || c.req.method === "OPTIONS") {
@@ -1991,9 +1985,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // --- Health (public, no auth) ---
   app.get("/health", (c) =>
     c.json({
-      status: emergencyFreeze ? "frozen" : "ok",
-      frozen: emergencyFreeze,
-      ...(emergencyFreeze && freezeReason ? { freeze_reason: freezeReason } : {}),
+      status: getEmergencyFreeze() ? "frozen" : "ok",
+      frozen: getEmergencyFreeze(),
+      ...(getEmergencyFreeze() && getFreezeReason() ? { freeze_reason: getFreezeReason() } : {}),
       timestamp: Date.now(),
     }),
   );
@@ -2913,6 +2907,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     app.use("/api/v1/admin/unfreeze", bearerAuth({ token: apiToken }));
   }
 
+  // === Budget, Accounts & Admin Routes (after auth middleware) ===
+  registerBudgetRoutes({
+    app,
+    moteDb,
+    relayIdentity,
+    freezeState,
+    stripeClient,
+    stripeConfig: stripeConfig ?? null,
+  });
+
   // --- Task submission with scored routing ---
 
   app.post("/agent/:motebitId/task", async (c) => {
@@ -3653,463 +3657,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     });
   });
 
-  // --- Virtual Account Endpoints ---
-
-  // POST /api/v1/agents/:motebitId/deposit — credit virtual account
-  app.post("/api/v1/agents/:motebitId/deposit", async (c) => {
-    const motebitId = c.req.param("motebitId");
-    const correlationId = c.get("correlationId" as never) as string;
-    const body = await c.req.json<{
-      amount: number;
-      currency?: string;
-      reference?: string;
-      description?: string;
-    }>();
-
-    if (typeof body.amount !== "number" || body.amount <= 0) {
-      throw new HTTPException(400, { message: "amount must be a positive number" });
-    }
-
-    // Idempotency: if a reference is provided and already used, return current balance
-    if (body.reference) {
-      if (hasTransactionWithReference(moteDb.db, motebitId, body.reference)) {
-        const account = getOrCreateAccount(moteDb.db, motebitId);
-        logger.info("account.deposit_idempotent", {
-          correlationId,
-          motebitId,
-          reference: body.reference,
-        });
-        return c.json({
-          motebit_id: motebitId,
-          balance: account.balance,
-          transaction_id: null,
-          idempotent: true,
-        });
-      }
-    }
-
-    // Atomic deposit: credit + transaction in a single SQLite transaction
-    let newBalance: number;
-    const txnId = crypto.randomUUID();
-    moteDb.db.exec("BEGIN");
-    try {
-      const account = getOrCreateAccount(moteDb.db, motebitId);
-      newBalance = account.balance + body.amount;
-      const now = Date.now();
-
-      moteDb.db
-        .prepare("UPDATE relay_accounts SET balance = ?, updated_at = ? WHERE motebit_id = ?")
-        .run(newBalance, now, motebitId);
-
-      moteDb.db
-        .prepare(
-          `INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at)
-           VALUES (?, ?, 'deposit', ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          txnId,
-          motebitId,
-          body.amount,
-          newBalance,
-          body.reference ?? null,
-          body.description ?? null,
-          now,
-        );
-
-      moteDb.db.exec("COMMIT");
-    } catch (err) {
-      moteDb.db.exec("ROLLBACK");
-      throw new Error("Deposit failed", { cause: err });
-    }
-
-    logger.info("account.deposit", {
-      correlationId,
-      motebitId,
-      amount: body.amount,
-      balanceAfter: newBalance,
-      reference: body.reference ?? null,
-    });
-
-    return c.json({
-      motebit_id: motebitId,
-      balance: newBalance,
-      transaction_id: txnId,
-    });
-  });
-
-  // GET /api/v1/agents/:motebitId/balance — query virtual account balance + recent transactions
-  // Returns balance breakdown: balance (current), pending_withdrawals, pending_allocations
-  app.get("/api/v1/agents/:motebitId/balance", (c) => {
-    const motebitId = c.req.param("motebitId");
-    const account = getAccountBalance(moteDb.db, motebitId);
-
-    if (!account) {
-      return c.json({
-        motebit_id: motebitId,
-        balance: 0,
-        currency: "USD",
-        pending_withdrawals: 0,
-        pending_allocations: 0,
-        transactions: [],
-      });
-    }
-
-    const detailed = getAccountBalanceDetailed(moteDb.db, motebitId);
-    const transactions = getTransactions(moteDb.db, motebitId, 50);
-
-    return c.json({
-      motebit_id: motebitId,
-      balance: detailed.balance,
-      currency: detailed.currency,
-      pending_withdrawals: detailed.pending_withdrawals,
-      pending_allocations: detailed.pending_allocations,
-      transactions,
-    });
-  });
-
-  // POST /api/v1/agents/:motebitId/withdraw — request withdrawal from virtual account
-  // POST /api/v1/agents/:motebitId/withdraw — request withdrawal from virtual account
-  // Supports idempotency via Idempotency-Key header or body.idempotency_key
-  app.post("/api/v1/agents/:motebitId/withdraw", async (c) => {
-    const motebitId = c.req.param("motebitId");
-    const correlationId = c.get("correlationId" as never) as string;
-    const body = await c.req.json<{
-      amount: number;
-      destination?: string;
-      idempotency_key?: string;
-    }>();
-
-    if (typeof body.amount !== "number" || body.amount <= 0) {
-      throw new HTTPException(400, { message: "amount must be a positive number" });
-    }
-
-    const idempotencyKey = body.idempotency_key ?? c.req.header("Idempotency-Key") ?? undefined;
-
-    const result = requestWithdrawal(
-      moteDb.db,
-      motebitId,
-      body.amount,
-      body.destination ?? "pending",
-      idempotencyKey,
-    );
-
-    if (result === null) {
-      throw new HTTPException(402, { message: "Insufficient balance for withdrawal" });
-    }
-
-    // Idempotent replay — return existing withdrawal
-    if ("existing" in result) {
-      logger.info("withdrawal.endpoint.idempotent", {
-        correlationId,
-        motebitId,
-        withdrawalId: result.existing.withdrawal_id,
-        idempotencyKey,
-      });
-      return c.json({
-        motebit_id: motebitId,
-        withdrawal: result.existing,
-        idempotent: true,
-      });
-    }
-
-    logger.info("withdrawal.endpoint.requested", {
-      correlationId,
-      motebitId,
-      withdrawalId: result.withdrawal_id,
-      amount: body.amount,
-      destination: result.destination,
-      idempotencyKey: idempotencyKey ?? null,
-    });
-
-    return c.json({
-      motebit_id: motebitId,
-      withdrawal: result,
-    });
-  });
-
-  // GET /api/v1/agents/:motebitId/withdrawals — list withdrawal history
-  app.get("/api/v1/agents/:motebitId/withdrawals", (c) => {
-    const motebitId = c.req.param("motebitId");
-    const withdrawals = getWithdrawals(moteDb.db, motebitId, 50);
-    return c.json({ motebit_id: motebitId, withdrawals });
-  });
-
-  // GET /api/v1/admin/withdrawals/pending — list all pending withdrawals (admin)
-  app.get("/api/v1/admin/withdrawals/pending", (c) => {
-    const withdrawals = getPendingWithdrawals(moteDb.db);
-    return c.json({ withdrawals, count: withdrawals.length });
-  });
-
-  // POST /api/v1/admin/withdrawals/:withdrawalId/complete — mark withdrawal as completed (admin)
-  // Signs a WithdrawalReceipt with the relay's Ed25519 key for independent verification.
-  app.post("/api/v1/admin/withdrawals/:withdrawalId/complete", async (c) => {
-    const withdrawalId = c.req.param("withdrawalId");
-    const correlationId = c.get("correlationId" as never) as string;
-    const body = await c.req.json<{ payout_reference: string }>();
-
-    if (!body.payout_reference || typeof body.payout_reference !== "string") {
-      throw new HTTPException(400, { message: "payout_reference is required" });
-    }
-
-    // Look up the withdrawal to get fields for signing
-    const withdrawal = moteDb.db
-      .prepare(
-        "SELECT * FROM relay_withdrawals WHERE withdrawal_id = ? AND status IN ('pending', 'processing')",
-      )
-      .get(withdrawalId) as
-      | { motebit_id: string; amount: number; currency: string; destination: string }
-      | undefined;
-    if (!withdrawal) {
-      throw new HTTPException(404, {
-        message: "Withdrawal not found or already completed/failed",
-      });
-    }
-
-    // Sign the withdrawal receipt with the relay's Ed25519 key
-    const completedAt = Date.now();
-    const relayPublicKeyHex = bytesToHex(relayIdentity.publicKey);
-    const signature = await signWithdrawalReceipt(
-      {
-        withdrawal_id: withdrawalId,
-        motebit_id: withdrawal.motebit_id,
-        amount: withdrawal.amount,
-        currency: withdrawal.currency,
-        destination: withdrawal.destination,
-        payout_reference: body.payout_reference,
-        completed_at: completedAt,
-        relay_id: relayIdentity.relayMotebitId,
-      },
-      relayIdentity.privateKey,
-    );
-
-    const success = completeWithdrawal(
-      moteDb.db,
-      withdrawalId,
-      body.payout_reference,
-      signature,
-      relayPublicKeyHex,
-      completedAt,
-    );
-    if (!success) {
-      throw new HTTPException(404, {
-        message: "Withdrawal not found or already completed/failed",
-      });
-    }
-
-    logger.info("withdrawal.admin.completed", {
-      correlationId,
-      withdrawalId,
-      payoutReference: body.payout_reference,
-      signed: true,
-    });
-
-    return c.json({
-      withdrawal_id: withdrawalId,
-      status: "completed",
-      relay_signature: signature,
-      relay_public_key: relayPublicKeyHex,
-    });
-  });
-
-  // POST /api/v1/admin/withdrawals/:withdrawalId/fail — mark withdrawal as failed and refund (admin)
-  app.post("/api/v1/admin/withdrawals/:withdrawalId/fail", async (c) => {
-    const withdrawalId = c.req.param("withdrawalId");
-    const correlationId = c.get("correlationId" as never) as string;
-    const body = await c.req.json<{ reason: string }>();
-
-    if (!body.reason || typeof body.reason !== "string") {
-      throw new HTTPException(400, { message: "reason is required" });
-    }
-
-    const success = failWithdrawal(moteDb.db, withdrawalId, body.reason);
-    if (!success) {
-      throw new HTTPException(404, {
-        message: "Withdrawal not found or already completed/failed",
-      });
-    }
-
-    logger.info("withdrawal.admin.failed", {
-      correlationId,
-      withdrawalId,
-      reason: body.reason,
-    });
-
-    return c.json({ withdrawal_id: withdrawalId, status: "failed", refunded: true });
-  });
-
-  // GET /api/v1/admin/reconciliation — verify ledger consistency (admin, expensive)
-  app.get("/api/v1/admin/reconciliation", (c) => {
-    const correlationId = c.get("correlationId" as never) as string;
-    const result = reconcileLedger(moteDb.db);
-
-    logger.info("admin.reconciliation", {
-      correlationId,
-      consistent: result.consistent,
-      errorCount: result.errors.length,
-    });
-
-    return c.json(result);
-  });
-
-  // --- Emergency Freeze Admin Endpoints ---
-
-  // POST /api/v1/admin/freeze — activate emergency freeze (block all writes)
-  app.post("/api/v1/admin/freeze", async (c) => {
-    const body = await c.req.json<{ reason?: string }>().catch(() => ({}) as { reason?: string });
-    const reason = typeof body.reason === "string" ? body.reason.trim() : "";
-    if (!reason) {
-      throw new HTTPException(400, { message: "reason is required" });
-    }
-
-    emergencyFreeze = true;
-    freezeReason = reason;
-
-    // Hash token for forensic traceability without credential leakage
-    const authHeader = c.req.header("authorization") ?? "";
-    const tokenHash = (await sha256Hash(new TextEncoder().encode(authHeader))).slice(0, 12);
-
-    logger.warn("admin.emergency_freeze.activated", {
-      correlationId: c.get("correlationId" as never) as string,
-      reason,
-      actor: tokenHash,
-    });
-    return c.json({ status: "frozen", message: "All write operations suspended", reason });
-  });
-
-  // POST /api/v1/admin/unfreeze — deactivate emergency freeze (resume writes)
-  app.post("/api/v1/admin/unfreeze", async (c) => {
-    const previousReason = freezeReason;
-    emergencyFreeze = false;
-    freezeReason = null;
-
-    const authHeader = c.req.header("authorization") ?? "";
-    const tokenHash = (await sha256Hash(new TextEncoder().encode(authHeader))).slice(0, 12);
-
-    logger.info("admin.emergency_freeze.deactivated", {
-      correlationId: c.get("correlationId" as never) as string,
-      previousReason,
-      actor: tokenHash,
-    });
-    return c.json({ status: "active", message: "Write operations resumed" });
-  });
-
-  // --- Stripe Checkout Endpoints ---
-
-  // POST /api/v1/agents/:motebitId/checkout — create a Stripe Checkout Session for deposit
-  app.post("/api/v1/agents/:motebitId/checkout", async (c) => {
-    if (!stripeClient || !stripeConfig) {
-      throw new HTTPException(501, { message: "Stripe is not configured on this relay" });
-    }
-
-    const motebitId = c.req.param("motebitId");
-    const correlationId = c.get("correlationId" as never) as string;
-    const body = await c.req.json<{ amount: number }>();
-
-    if (typeof body.amount !== "number" || body.amount <= 0) {
-      throw new HTTPException(400, { message: "amount must be a positive number (in dollars)" });
-    }
-
-    // Stripe minimum is $0.50
-    if (body.amount < 0.5) {
-      throw new HTTPException(400, { message: "Minimum deposit amount is $0.50" });
-    }
-
-    const baseUrl = new URL(c.req.url);
-    const successUrl = `${baseUrl.origin}/api/v1/agents/${motebitId}/balance`;
-    const cancelUrl = `${baseUrl.origin}/api/v1/agents/${motebitId}/balance`;
-
-    const session = await stripeClient.checkout.sessions.create({
-      mode: "payment",
-      payment_method_types: ["card"],
-      line_items: [
-        {
-          price_data: {
-            currency: stripeConfig.currency ?? "usd",
-            product_data: {
-              name: `Motebit Agent Deposit (${motebitId.slice(0, 8)}...)`,
-            },
-            unit_amount: Math.round(body.amount * 100), // cents
-          },
-          quantity: 1,
-        },
-      ],
-      metadata: { motebit_id: motebitId, amount: String(body.amount) },
-      success_url: successUrl,
-      cancel_url: cancelUrl,
-    });
-
-    logger.info("stripe.checkout.created", {
-      correlationId,
-      motebitId,
-      sessionId: session.id,
-      amount: body.amount,
-    });
-
-    return c.json({ checkout_url: session.url, session_id: session.id });
-  });
-
-  // POST /api/v1/stripe/webhook — handle Stripe webhook events (no auth — verified via signature)
-  app.post("/api/v1/stripe/webhook", async (c) => {
-    if (!stripeClient || !stripeConfig) {
-      throw new HTTPException(501, { message: "Stripe is not configured on this relay" });
-    }
-
-    const sig = c.req.header("stripe-signature");
-    if (!sig) {
-      throw new HTTPException(400, { message: "Missing stripe-signature header" });
-    }
-
-    const rawBody = await c.req.text();
-    let event: Stripe.Event;
-    try {
-      event = stripeClient.webhooks.constructEvent(rawBody, sig, stripeConfig.webhookSecret);
-    } catch (err) {
-      logger.info("stripe.webhook.signature_failed", {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      throw new HTTPException(400, { message: "Invalid webhook signature" });
-    }
-
-    logger.info("stripe.webhook.received", { type: event.type, id: event.id });
-
-    if (event.type === "checkout.session.completed") {
-      const session = event.data.object;
-      const motebitId = session.metadata?.motebit_id;
-      const amount = session.metadata?.amount ? parseFloat(session.metadata.amount) : 0;
-
-      if (!motebitId || !amount || amount <= 0) {
-        logger.info("stripe.webhook.invalid_metadata", {
-          eventId: event.id,
-          metadata: session.metadata,
-        });
-        return c.json({ received: true });
-      }
-
-      const paymentIntent =
-        typeof session.payment_intent === "string"
-          ? session.payment_intent
-          : session.payment_intent?.id;
-
-      const applied = processStripeCheckout(
-        moteDb.db,
-        session.id,
-        motebitId,
-        amount,
-        paymentIntent ?? undefined,
-      );
-
-      logger.info("stripe.webhook.processed", {
-        eventId: event.id,
-        sessionId: session.id,
-        motebitId,
-        amount,
-        applied,
-      });
-    }
-
-    return c.json({ received: true });
-  });
-
   // GET /agent/:motebitId/capabilities — public (no auth)
   app.get("/agent/:motebitId/capabilities", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
@@ -4757,11 +4304,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // Heartbeat sender — probes active/suspended peers every 60s.
   // Suspends at 3 missed, removes at 5.
   // Skipped when emergency freeze is active (no state mutation during investigation).
-  const heartbeatInterval = startHeartbeatLoop(
-    moteDb.db,
-    relayIdentity,
-    60_000,
-    () => emergencyFreeze,
+  const heartbeatInterval = startHeartbeatLoop(moteDb.db, relayIdentity, 60_000, () =>
+    getEmergencyFreeze(),
   );
 
   // Settlement retry loop — retries failed settlement forwards every 30s with exponential backoff.
@@ -4815,16 +4359,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         // Best-effort refund
       }
     },
-    () => emergencyFreeze,
+    () => getEmergencyFreeze(),
   );
 
   // Batch anchor loop — cuts Merkle batches from unanchored federation settlements (§7.6).
   // Checks every 60s; batch triggers: 100 settlements or 1 hour since oldest unanchored.
-  const batchAnchorInterval = startBatchAnchorLoop(
-    moteDb.db,
-    relayIdentity,
-    {},
-    () => emergencyFreeze,
+  const batchAnchorInterval = startBatchAnchorLoop(moteDb.db, relayIdentity, {}, () =>
+    getEmergencyFreeze(),
   );
 
   // GET /api/v1/agents/:motebitId — get specific agent
@@ -4898,7 +4439,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     },
     moteDb,
     get emergencyFreeze() {
-      return emergencyFreeze;
+      return getEmergencyFreeze();
     },
   };
 }
