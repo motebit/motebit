@@ -368,7 +368,7 @@ export function initVoice(
       micBtn!.classList.add("active");
       inputBarWrapper!.classList.add("listening");
       if (voiceTranscript) {
-        voiceTranscript.innerHTML = '<span class="recording-dot"></span>Listening...';
+        voiceTranscript.textContent = "";
         voiceTranscript.classList.remove("has-text");
       }
       if (hasAudio) {
