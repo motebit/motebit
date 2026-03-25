@@ -52,7 +52,12 @@ import { embedText, setRemoteEmbedUrl } from "@motebit/memory-graph";
 import { CursorPresence } from "./cursor-presence";
 import { createProvider, WebLLMProvider, PROXY_BASE_URL } from "./providers";
 import type { ProviderConfig } from "./storage";
-import { needsMigration, loadLegacyConversations, markMigrationDone } from "./storage";
+import {
+  needsMigration,
+  loadLegacyConversations,
+  markMigrationDone,
+  loadGovernanceConfig,
+} from "./storage";
 import { LocalStorageKeyringAdapter } from "./browser-keyring";
 import { EncryptedKeyStore } from "./encrypted-keystore";
 
@@ -186,8 +191,36 @@ export class WebApp {
 
     // Create runtime — no AI provider yet, will be set via connectProvider()
     const keyring = new LocalStorageKeyringAdapter();
+    const govConfig = loadGovernanceConfig();
+    const presetConfigs: Record<
+      string,
+      { maxRiskLevel: number; requireApprovalAbove: number; denyAbove: number }
+    > = {
+      cautious: { maxRiskLevel: 3, requireApprovalAbove: 0, denyAbove: 3 },
+      balanced: { maxRiskLevel: 3, requireApprovalAbove: 1, denyAbove: 3 },
+      autonomous: { maxRiskLevel: 4, requireApprovalAbove: 3, denyAbove: 4 },
+    };
+    const preset = govConfig
+      ? (presetConfigs[govConfig.approvalPreset] ?? presetConfigs.balanced!)
+      : presetConfigs.balanced!;
     this.runtime = new MotebitRuntime(
-      { motebitId: this._motebitId, tickRateHz: 2 },
+      {
+        motebitId: this._motebitId,
+        tickRateHz: 2,
+        policy: {
+          operatorMode: false,
+          maxRiskLevel: preset.maxRiskLevel,
+          requireApprovalAbove: preset.requireApprovalAbove,
+          denyAbove: preset.denyAbove,
+          budget: govConfig ? { maxCallsPerTurn: govConfig.maxCallsPerTurn } : undefined,
+        },
+        memoryGovernance: govConfig
+          ? {
+              persistenceThreshold: govConfig.persistenceThreshold,
+              rejectSecrets: govConfig.rejectSecrets,
+            }
+          : undefined,
+      },
       { storage, renderer: this.renderer, ai: undefined, keyring },
     );
 

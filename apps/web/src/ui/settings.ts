@@ -1,6 +1,11 @@
 import type { WebContext } from "../types";
-import type { ProviderConfig, ProviderType } from "../storage";
-import { saveProviderConfig, saveSoulColor } from "../storage";
+import type { ProviderConfig, ProviderType, GovernanceConfig } from "../storage";
+import {
+  saveProviderConfig,
+  saveSoulColor,
+  saveGovernanceConfig,
+  loadGovernanceConfig,
+} from "../storage";
 import { detectOllamaModels, checkWebGPU, WebLLMProvider, DEFAULT_OLLAMA_URL } from "../providers";
 import { hexPublicKeyToDidKey } from "@motebit/crypto";
 import type { ColorPickerAPI } from "./color-picker";
@@ -42,6 +47,17 @@ const webllmProgressFill = document.getElementById("webllm-progress-fill") as HT
 const webllmProgressText = document.getElementById("webllm-progress-text") as HTMLDivElement;
 const maxTokensSelect = document.getElementById("max-tokens-select") as HTMLSelectElement;
 
+// Governance elements
+const approvalPresets = document.querySelectorAll<HTMLInputElement>(
+  'input[name="approval-preset"]',
+);
+const govPersistenceThreshold = document.getElementById(
+  "gov-persistence-threshold",
+) as HTMLInputElement;
+const govPersistenceValue = document.getElementById("gov-persistence-value") as HTMLSpanElement;
+const govRejectSecrets = document.getElementById("gov-reject-secrets") as HTMLInputElement;
+const govMaxCalls = document.getElementById("gov-max-calls") as HTMLSelectElement;
+
 // === State ===
 
 let activeProviderTab: ProviderType = "anthropic";
@@ -58,6 +74,28 @@ export interface SettingsAPI {
 
 export interface SettingsDeps {
   colorPicker: ColorPickerAPI;
+}
+
+const APPROVAL_PRESET_CONFIGS: Record<
+  string,
+  { maxRiskLevel: number; requireApprovalAbove: number; denyAbove: number }
+> = {
+  cautious: { maxRiskLevel: 3, requireApprovalAbove: 0, denyAbove: 3 },
+  balanced: { maxRiskLevel: 3, requireApprovalAbove: 1, denyAbove: 3 },
+  autonomous: { maxRiskLevel: 4, requireApprovalAbove: 3, denyAbove: 4 },
+};
+
+function applyGovernanceToRuntime(ctx: WebContext, gov: GovernanceConfig): void {
+  const runtime = ctx.app.getRuntime();
+  if (!runtime) return;
+  const preset = APPROVAL_PRESET_CONFIGS[gov.approvalPreset] ?? APPROVAL_PRESET_CONFIGS.balanced!;
+  runtime.updatePolicyConfig({
+    operatorMode: false,
+    maxRiskLevel: preset.maxRiskLevel,
+    requireApprovalAbove: preset.requireApprovalAbove,
+    denyAbove: preset.denyAbove,
+    budget: { maxCallsPerTurn: gov.maxCallsPerTurn },
+  });
 }
 
 export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
@@ -191,6 +229,13 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   // Re-detect when base URL changes
   ollamaBaseUrl.addEventListener("change", () => void detectAndPopulateOllama());
 
+  // Governance: live-update persistence threshold display
+  govPersistenceThreshold.addEventListener("input", () => {
+    govPersistenceValue.textContent = (parseInt(govPersistenceThreshold.value, 10) / 100).toFixed(
+      2,
+    );
+  });
+
   // === Open / Close ===
 
   function open(): void {
@@ -199,6 +244,18 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     settingsBackdrop.classList.add("open");
     settingsModal.classList.add("open");
     renderMcpServers();
+
+    // Pre-fill governance config
+    const govConfig = loadGovernanceConfig();
+    if (govConfig) {
+      approvalPresets.forEach((radio) => {
+        radio.checked = radio.value === govConfig.approvalPreset;
+      });
+      govPersistenceThreshold.value = String(Math.round(govConfig.persistenceThreshold * 100));
+      govPersistenceValue.textContent = govConfig.persistenceThreshold.toFixed(2);
+      govRejectSecrets.checked = govConfig.rejectSecrets;
+      govMaxCalls.value = String(govConfig.maxCallsPerTurn);
+    }
 
     // Pre-fill from current provider config
     const config = ctx.getConfig();
@@ -316,6 +373,20 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
 
     saveProviderConfig(config);
     ctx.setConfig(config);
+
+    // Save governance config and apply to runtime
+    const selectedPreset =
+      document.querySelector<HTMLInputElement>('input[name="approval-preset"]:checked')?.value ??
+      "balanced";
+    const govCfg: GovernanceConfig = {
+      approvalPreset: selectedPreset as GovernanceConfig["approvalPreset"],
+      persistenceThreshold: parseInt(govPersistenceThreshold.value, 10) / 100,
+      rejectSecrets: govRejectSecrets.checked,
+      maxCallsPerTurn: parseInt(govMaxCalls.value, 10) || 10,
+    };
+    saveGovernanceConfig(govCfg);
+    applyGovernanceToRuntime(ctx, govCfg);
+
     updateModelIndicator();
     updateConnectPrompt();
     close();

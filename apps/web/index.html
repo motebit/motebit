@@ -4887,17 +4887,46 @@
           </div>
         </div>
       </div>
-      <!-- Governance pane (locked) -->
+      <!-- Governance pane -->
       <div class="settings-pane" id="pane-governance" role="tabpanel" aria-labelledby="tab-governance">
-        <div class="locked-panel-content" style="padding:24px 16px;min-height:260px;">
-          <svg class="locked-panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-          <div class="locked-panel-heading">Policy &amp; Governance</div>
-          <div class="locked-panel-text">Tool approval policies, budget limits, sensitivity-aware privacy rules, and a complete audit trail of every action your motebit takes.</div>
-          <div class="locked-panel-text" style="margin-top:4px;color:var(--text-faint);">Governance requires the operator console (CLI or desktop app).</div>
-          <a class="locked-panel-btn" href="https://github.com/motebit/motebit/releases" target="_blank" rel="noopener">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            Download App
-          </a>
+        <div class="settings-card">
+          <div class="card-title">Approval Policy</div>
+          <div class="settings-field">
+            <label>Tool approval threshold</label>
+            <div class="approval-presets" id="approval-presets">
+              <label class="radio-label"><input type="radio" name="approval-preset" value="cautious"> Cautious <span class="radio-hint">Approve everything above read</span></label>
+              <label class="radio-label"><input type="radio" name="approval-preset" value="balanced" checked> Balanced <span class="radio-hint">Auto-allow reads &amp; drafts</span></label>
+              <label class="radio-label"><input type="radio" name="approval-preset" value="autonomous"> Autonomous <span class="radio-hint">Auto-allow up to writes</span></label>
+            </div>
+          </div>
+        </div>
+        <div class="settings-card">
+          <div class="card-title">Memory Governance</div>
+          <div class="settings-field">
+            <label for="gov-persistence-threshold">Persistence threshold</label>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <input type="range" id="gov-persistence-threshold" min="0" max="100" value="50" style="flex:1;">
+              <span id="gov-persistence-value" style="font-size:11px;color:var(--text-faint);min-width:32px;text-align:right;">0.50</span>
+            </div>
+          </div>
+          <div class="settings-field">
+            <label class="checkbox-label">
+              <input type="checkbox" id="gov-reject-secrets" checked>
+              Reject secrets (API keys, passwords, tokens)
+            </label>
+          </div>
+        </div>
+        <div class="settings-card">
+          <div class="card-title">Budget</div>
+          <div class="settings-field">
+            <label for="gov-max-calls">Max tool calls per turn</label>
+            <select id="gov-max-calls">
+              <option value="5">5</option>
+              <option value="10" selected>10</option>
+              <option value="20">20</option>
+              <option value="50">50</option>
+            </select>
+          </div>
         </div>
       </div>
       <!-- Identity pane (functional) -->

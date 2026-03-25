@@ -99,6 +99,37 @@ export function clearSyncUrl(): void {
   }
 }
 
+// === Governance Config ===
+
+export interface GovernanceConfig {
+  approvalPreset: "cautious" | "balanced" | "autonomous";
+  persistenceThreshold: number;
+  rejectSecrets: boolean;
+  maxCallsPerTurn: number;
+}
+
+const GOVERNANCE_KEY = "motebit-governance";
+
+export function saveGovernanceConfig(config: GovernanceConfig): void {
+  try {
+    localStorage.setItem(GOVERNANCE_KEY, JSON.stringify(config));
+  } catch {
+    // localStorage unavailable
+  }
+}
+
+export function loadGovernanceConfig(): GovernanceConfig | null {
+  try {
+    const raw = localStorage.getItem(GOVERNANCE_KEY);
+    if (raw) {
+      return JSON.parse(raw) as GovernanceConfig;
+    }
+  } catch {
+    // localStorage unavailable or corrupt
+  }
+  return null;
+}
+
 // === Sovereignty Ceiling CTA ===
 
 const CEILING_KEY = "motebit-ceiling-shown";
