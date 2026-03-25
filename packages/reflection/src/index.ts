@@ -22,4 +22,5 @@ export {
   performReflection,
   runReflectionSafe,
   formatAuditSummary,
+  isConcreteInsight,
 } from "./engine.js";

@@ -62,7 +62,7 @@ describe("Runtime reflection — learning loop", () => {
     );
   });
 
-  it("does not store reflection insights as memories (event log is canonical)", async () => {
+  it("does not store generic insights as memories (only high-signal concrete insights persist)", async () => {
     mockReflect.mockResolvedValue({
       insights: ["User likes brevity"],
       planAdjustments: ["Be more concise", "Ask fewer clarifying questions"],
@@ -74,7 +74,11 @@ describe("Runtime reflection — learning loop", () => {
 
     await runtime.reflect();
 
-    // Reflection results go to the event log, not the memory graph
+    // Wait for async persistence attempt
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Generic insights ("User likes brevity") are too short/abstract to persist.
+    // Only concrete insights referencing specific entities pass the filter.
     expect(formSpy).not.toHaveBeenCalled();
   });
 
@@ -147,7 +151,10 @@ describe("Runtime reflection — learning loop", () => {
 
     await runtime.reflect();
 
-    // Reflection no longer stores to memory graph
+    // Wait for async persistence attempt
+    await new Promise((r) => setTimeout(r, 50));
+
+    // "Only insight" is too short/generic — no memory formed
     expect(formSpy).not.toHaveBeenCalled();
   });
 });

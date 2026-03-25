@@ -6,7 +6,7 @@
  * side effects; the conversation/plan modules are pure.
  */
 
-import { EventType } from "@motebit/sdk";
+import { EventType, SensitivityLevel, MemoryType } from "@motebit/sdk";
 import type { ConversationMessage } from "@motebit/sdk";
 import type {
   StreamingProvider,
@@ -15,10 +15,17 @@ import type {
   PastReflection,
 } from "@motebit/ai-core";
 import { reflect } from "@motebit/ai-core";
-import { auditMemoryGraph } from "@motebit/memory-graph";
+import {
+  auditMemoryGraph,
+  embedText,
+  textSimilarity,
+  cosineSimilarity,
+  detectReflectionPatterns,
+} from "@motebit/memory-graph";
 import type { MemoryGraph, MemoryAuditResult } from "@motebit/memory-graph";
 import type { EventStore } from "@motebit/event-log";
 import type { StateVectorEngine } from "@motebit/state-vector";
+import { MemoryClass } from "@motebit/policy";
 import type { MemoryGovernor } from "@motebit/policy";
 
 /** Dependencies injected by the runtime. */
@@ -76,11 +83,11 @@ export async function performReflection(
     auditSummary,
   );
 
-  // Reflection is stored in the event log (the trajectory). Individual insights
-  // are NOT duplicated into the memory graph — they're generic self-talk, not
-  // grounded knowledge. The LLM forms specific memories during conversation.
-  // TODO: layer selective persistence — store only high-signal insights that
-  // reference concrete entities, pass a novelty threshold, and aren't repeated.
+  // Selective persistence: store high-signal insights as semantic memories.
+  // Generic self-talk stays in the event log only. High-signal insights
+  // reference concrete entities, pass a novelty check, and aren't repeated.
+  void persistHighSignalInsights(deps, result.insights, pastReflections);
+
   void logReflectionCompleted(deps, result);
 
   // Single state pulse: reflection completed → brief confidence + warmth spike
@@ -210,4 +217,125 @@ export function formatAuditSummary(audit: MemoryAuditResult): string | undefined
 
   lines.unshift(`Memory audit of ${audit.nodesAudited} nodes found issues:`);
   return lines.join("\n");
+}
+
+// === Selective Persistence ===
+
+/** Half-life for reflection-sourced memories: 7 days (shorter than semantic default). */
+const REFLECTION_HALF_LIFE = 7 * 24 * 60 * 60 * 1000;
+
+/** Minimum insight length to be considered concrete (very short = too generic). */
+const MIN_INSIGHT_LENGTH = 25;
+
+/** Maximum cosine similarity to existing memories before considered redundant. */
+const NOVELTY_THRESHOLD = 0.8;
+
+/** Maximum text similarity to past reflection insights before considered repeated. */
+const REPETITION_THRESHOLD = 0.7;
+
+/** Confidence assigned to reflection-sourced memories (moderate — can be reinforced). */
+const REFLECTION_CONFIDENCE = 0.6;
+
+/**
+ * Heuristic: does this insight reference concrete entities rather than being
+ * pure self-talk? Checks for proper nouns, quoted terms, numbers, or
+ * specific capability/tool names.
+ */
+export function isConcreteInsight(insight: string): boolean {
+  if (insight.length < MIN_INSIGHT_LENGTH) return false;
+
+  // Quoted terms: "something specific"
+  if (/".+?"/.test(insight) || /'.+?'/.test(insight)) return true;
+
+  // Numbers, percentages, measurements
+  if (/\d{2,}|\d+%|\d+\.\d/.test(insight)) return true;
+
+  // Capitalized words not at sentence start (proper nouns / specific references)
+  // Split into sentences, check words after the first position
+  const words = insight.split(/\s+/);
+  for (let i = 1; i < words.length; i++) {
+    const w = words[i]!;
+    if (
+      /^[A-Z][a-z]{2,}/.test(w) &&
+      !/^(The|This|That|These|Those|When|Where|What|How|Why|But|And|Also|However|Instead|Although|Because|Since|After|Before|During|While|With|Without|About|Into|From|They|Their|Then|Than|Some|Most|Each|Every|Both|Either|Neither|Should|Would|Could|Being|Having|Using|Making)$/.test(
+        w,
+      )
+    ) {
+      return true;
+    }
+  }
+
+  // Technical terms: snake_case, camelCase, or dot.notation
+  if (/[a-z][A-Z]|[a-z]_[a-z]|[a-z]\.[a-z]/.test(insight)) return true;
+
+  return false;
+}
+
+/**
+ * Persist high-signal insights as semantic memories.
+ * Best-effort — failures are swallowed to avoid crashing the runtime.
+ *
+ * Filtering pipeline:
+ * 1. Concrete entity check (heuristic, no I/O)
+ * 2. Not repeated in past reflections (text similarity)
+ * 3. Novel relative to existing memories (embedding cosine similarity)
+ * 4. Pass through MemoryGovernor (injection defense, sensitivity)
+ */
+async function persistHighSignalInsights(
+  deps: ReflectionDeps,
+  insights: string[],
+  pastReflections: PastReflection[],
+): Promise<number> {
+  if (insights.length === 0) return 0;
+
+  let persisted = 0;
+
+  try {
+    // Collect past insight strings for repetition check
+    const patterns = detectReflectionPatterns(pastReflections);
+    const patternTexts = patterns.map((p) => p.description);
+
+    for (const insight of insights) {
+      // 1. Concrete entity check
+      if (!isConcreteInsight(insight)) continue;
+
+      // 2. Not repeated in past reflection patterns
+      const isRepeated = patternTexts.some(
+        (p) => textSimilarity(insight, p) >= REPETITION_THRESHOLD,
+      );
+      if (isRepeated) continue;
+
+      // 3. Novelty check against existing memories
+      let embedding: number[];
+      try {
+        embedding = await embedText(insight);
+      } catch {
+        continue; // Embedding unavailable — skip rather than crash
+      }
+
+      const similar = await deps.memory.retrieve(embedding, { limit: 3 });
+      const tooSimilar = similar.some(
+        (n) => cosineSimilarity(embedding, n.embedding) >= NOVELTY_THRESHOLD,
+      );
+      if (tooSimilar) continue;
+
+      // 4. Form memory through governor
+      const candidate = {
+        content: insight,
+        confidence: REFLECTION_CONFIDENCE,
+        sensitivity: SensitivityLevel.None,
+        memory_type: MemoryType.Semantic,
+      };
+
+      const [decision] = deps.memoryGovernor.evaluate([candidate]);
+      if (!decision || decision.memoryClass === MemoryClass.REJECTED) continue;
+
+      await deps.memory.formMemory(decision.candidate, embedding, REFLECTION_HALF_LIFE);
+      persisted++;
+    }
+  } catch {
+    // Persistence is best-effort — don't crash the runtime
+  }
+
+  return persisted;
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseReflectionResponse, formatAuditSummary } from "../index.js";
+import { parseReflectionResponse, formatAuditSummary, isConcreteInsight } from "../index.js";
 import type { MemoryAuditResult } from "@motebit/memory-graph";
 import { SensitivityLevel } from "@motebit/sdk";
 import type { MemoryNode } from "@motebit/sdk";
@@ -155,5 +155,50 @@ describe("formatAuditSummary", () => {
     expect(summary).toContain("Contradictions");
     expect(summary).toContain("Fading memories");
     expect(summary).toContain("20 nodes");
+  });
+});
+
+describe("isConcreteInsight", () => {
+  it("rejects short generic insights", () => {
+    expect(isConcreteInsight("Be more concise")).toBe(false);
+    expect(isConcreteInsight("I should improve")).toBe(false);
+  });
+
+  it("accepts insights with proper nouns", () => {
+    expect(isConcreteInsight("The user prefers Python over JavaScript for data work")).toBe(true);
+  });
+
+  it("accepts insights with quoted terms", () => {
+    expect(
+      isConcreteInsight('The user refers to the process as "memory consolidation" consistently'),
+    ).toBe(true);
+  });
+
+  it("accepts insights with numbers", () => {
+    expect(isConcreteInsight("The deployment takes approximately 45 seconds on average")).toBe(
+      true,
+    );
+  });
+
+  it("accepts insights with technical terms (camelCase)", () => {
+    expect(isConcreteInsight("The formMemory function rejects redacted content from sync")).toBe(
+      true,
+    );
+  });
+
+  it("accepts insights with technical terms (snake_case)", () => {
+    expect(isConcreteInsight("The relay_task_id field binds receipts to economic contracts")).toBe(
+      true,
+    );
+  });
+
+  it("rejects generic self-talk without entities", () => {
+    expect(isConcreteInsight("I should be better at explaining things to people")).toBe(false);
+  });
+
+  it("accepts insights with dot notation", () => {
+    expect(isConcreteInsight("The agent uses memory.retrieve for semantic search operations")).toBe(
+      true,
+    );
   });
 });
