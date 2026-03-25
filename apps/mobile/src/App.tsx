@@ -39,7 +39,7 @@ import { MemoryType } from "@motebit/sdk";
 import type { StreamChunk } from "@motebit/runtime";
 import { stripTags, stripPartialActionTag } from "@motebit/ai-core";
 import type { TTSProvider, STTProvider } from "@motebit/voice";
-import { FallbackTTSProvider, StreamingTTSQueue } from "@motebit/voice";
+import { FallbackTTSProvider, StreamingTTSQueue, computeSpeechEnergy } from "@motebit/voice";
 import { ExpoSpeechTTSProvider } from "./adapters/expo-speech-tts";
 import { OpenAITTSProvider } from "./adapters/openai-tts";
 import { ExpoAVSTTProvider } from "./adapters/expo-av-stt";
@@ -577,19 +577,8 @@ export function App(): React.ReactElement {
           runtime.behavior.setSpeaking(isSpeaking);
         }
         if (isSpeaking) {
-          const t = time / 1000;
-          const syllable = Math.max(0, Math.sin(t * 8.3) * Math.sin(t * 5.1));
-          const word = Math.max(0, Math.sin(t * 2.7 + 0.5)) * 0.5 + 0.5;
-          const breath = Math.max(0, Math.sin(t * 0.8)) * 0.3 + 0.7;
-          const jitter = Math.sin(t * 31.7) * 0.02;
-          const energy = (syllable * 0.5 + 0.05 + jitter) * word * breath;
-          const rms = energy * 0.25;
-          a.setAudioReactivity({
-            rms,
-            low: rms * 1.2,
-            mid: energy * 0.12,
-            high: syllable * word * 0.04,
-          });
+          const bands = computeSpeechEnergy(time / 1000);
+          a.setAudioReactivity(bands);
         }
 
         a.renderFrame(dt, time / 1000);

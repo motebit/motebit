@@ -4,6 +4,7 @@ import {
   WebSpeechSTTProvider,
   FallbackTTSProvider,
   StreamingTTSQueue,
+  computeSpeechEnergy,
 } from "@motebit/voice";
 import type { TTSProvider } from "@motebit/voice";
 import { stripTags } from "@motebit/ai-core";
@@ -652,20 +653,8 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
     const startTime = performance.now();
     const pulse = (now: number): void => {
       if (!ttsSpeaking) return;
-      const t = (now - startTime) / 1000;
-      // Organic speech-like glow: layered noise at syllable, word, and breath rates.
-      const syllable = Math.max(0, Math.sin(t * 8.3) * Math.sin(t * 5.1));
-      const word = Math.max(0, Math.sin(t * 2.7 + 0.5)) * 0.5 + 0.5;
-      const breath = Math.max(0, Math.sin(t * 0.8)) * 0.3 + 0.7;
-      const jitter = Math.sin(t * 31.7) * 0.02;
-      const energy = (syllable * 0.5 + 0.05 + jitter) * word * breath;
-      const rms = energy * 0.25;
-      ctx.app.setAudioReactivity({
-        rms,
-        low: rms * 1.2,
-        mid: energy * 0.12,
-        high: syllable * word * 0.04,
-      });
+      const bands = computeSpeechEnergy((now - startTime) / 1000);
+      ctx.app.setAudioReactivity(bands);
       ttsPulseAnimationId = requestAnimationFrame(pulse);
     };
     ttsPulseAnimationId = requestAnimationFrame(pulse);
