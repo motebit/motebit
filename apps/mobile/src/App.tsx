@@ -39,7 +39,7 @@ import { MemoryType } from "@motebit/sdk";
 import type { StreamChunk } from "@motebit/runtime";
 import { stripTags, stripPartialActionTag } from "@motebit/ai-core";
 import type { TTSProvider, STTProvider } from "@motebit/voice";
-import { FallbackTTSProvider } from "@motebit/voice";
+import { FallbackTTSProvider, StreamingTTSQueue } from "@motebit/voice";
 import { ExpoSpeechTTSProvider } from "./adapters/expo-speech-tts";
 import { OpenAITTSProvider } from "./adapters/openai-tts";
 import { ExpoAVSTTProvider } from "./adapters/expo-av-stt";
@@ -172,10 +172,8 @@ export function App(): React.ReactElement {
   const sttRef = useRef<STTProvider | null>(null);
   const audioMonitorRef = useRef<AudioMonitor | null>(null);
   const ttsPulseRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // Streaming TTS state
-  const ttsBufferRef = useRef("");
-  const ttsQueueRef = useRef<string[]>([]);
-  const ttsStreamingRef = useRef(false);
+  // Streaming TTS queue (shared state machine from @motebit/voice)
+  const ttsQueueRef = useRef<StreamingTTSQueue | null>(null);
   // Track whether voice was auto-triggered by VAD (vs manual tap from ambient)
   const vadTriggeredRef = useRef(false);
   // Audio level for VoiceIndicator visualization
@@ -323,6 +321,10 @@ export function App(): React.ReactElement {
       } else {
         ttsRef.current = systemTts;
       }
+      // Wire streaming queue to the active TTS provider
+      ttsQueueRef.current = new StreamingTTSQueue(
+        (text) => ttsRef.current?.speak(text) ?? Promise.resolve(),
+      );
 
       if (!sttRef.current) {
         // STT needs an OpenAI API key for Whisper
@@ -570,7 +572,7 @@ export function App(): React.ReactElement {
 
         // Sync creature mouth + glow to actual TTS audio playback
         const runtime = a.getRuntime();
-        const isSpeaking = ttsStreamingRef.current;
+        const isSpeaking = ttsQueueRef.current?.draining ?? false;
         if (runtime) {
           runtime.behavior.setSpeaking(isSpeaking);
         }
@@ -1254,55 +1256,21 @@ export function App(): React.ReactElement {
   // --- Streaming TTS helpers ---
   const pushTTSChunk = useCallback(
     (delta: string) => {
-      if (!settings?.voiceResponseEnabled || !settings?.voiceEnabled || !ttsRef.current) return;
-      ttsBufferRef.current += delta;
-      // First utterance: clause boundary (min 12 chars) for faster start.
-      // Subsequent: full sentence boundary for natural cadence.
-      const pattern = ttsStreamingRef.current
-        ? /^([\s\S]*?[.!?])\s+([\s\S]*)$/
-        : /^([\s\S]{12,}?[.!?:;,])\s+([\s\S]*)$/;
-      const match = ttsBufferRef.current.match(pattern);
-      if (match) {
-        const clause = match[1]!.trim();
-        ttsBufferRef.current = match[2]!;
-        if (clause) {
-          ttsQueueRef.current.push(clause);
-          if (!ttsStreamingRef.current) speakNextQueued();
-        }
-      }
+      if (!settings?.voiceResponseEnabled || !settings?.voiceEnabled || !ttsQueueRef.current)
+        return;
+      ttsQueueRef.current.push(delta);
     },
     [settings?.voiceResponseEnabled, settings?.voiceEnabled],
   );
 
   const flushTTS = useCallback(() => {
-    if (!ttsRef.current) return;
-    const remaining = ttsBufferRef.current.trim();
-    ttsBufferRef.current = "";
-    if (remaining) {
-      ttsQueueRef.current.push(remaining);
-      if (!ttsStreamingRef.current) speakNextQueued();
-    }
+    ttsQueueRef.current?.flush();
   }, []);
 
   const cancelStreamingTTS = useCallback(() => {
-    ttsBufferRef.current = "";
-    ttsQueueRef.current = [];
-    ttsStreamingRef.current = false;
+    ttsQueueRef.current?.cancel();
     ttsRef.current?.cancel();
   }, []);
-
-  function speakNextQueued(): void {
-    if (ttsQueueRef.current.length === 0) {
-      ttsStreamingRef.current = false;
-      return;
-    }
-    ttsStreamingRef.current = true;
-    const sentence = ttsQueueRef.current.shift()!;
-    ttsRef.current
-      ?.speak(sentence)
-      .then(() => speakNextQueued())
-      .catch(() => speakNextQueued());
-  }
 
   const handleSend = useCallback(async () => {
     const text = inputText.trim();

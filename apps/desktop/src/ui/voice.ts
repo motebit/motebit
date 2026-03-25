@@ -1,5 +1,10 @@
 import { MicVAD } from "@ricky0123/vad-web";
-import { WebSpeechTTSProvider, WebSpeechSTTProvider, FallbackTTSProvider } from "@motebit/voice";
+import {
+  WebSpeechTTSProvider,
+  WebSpeechSTTProvider,
+  FallbackTTSProvider,
+  StreamingTTSQueue,
+} from "@motebit/voice";
 import type { TTSProvider } from "@motebit/voice";
 import { stripTags } from "@motebit/ai-core";
 import type { InteriorColor, InvokeFn } from "../index";
@@ -677,54 +682,21 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
   }
 
   // --- Streaming TTS — speak sentences as they arrive during streaming ---
-  let ttsBuffer = "";
-  let ttsQueue: string[] = [];
-  let ttsStreaming = false;
 
-  function pushTTSChunk(delta: string): void {
-    if (!voiceResponseEnabled) return;
-    ttsBuffer += delta;
-    // First utterance: speak on clause boundary (min 12 chars) for faster start.
-    // Subsequent: full sentence boundary for natural cadence.
-    const pattern = ttsStreaming
-      ? /^([\s\S]*?[.!?])\s+([\s\S]*)$/
-      : /^([\s\S]{12,}?[.!?:;,])\s+([\s\S]*)$/;
-    const match = ttsBuffer.match(pattern);
-    if (match) {
-      const clause = match[1]!.trim();
-      ttsBuffer = match[2]!;
-      if (clause) {
-        ttsQueue.push(clause);
-        if (!ttsStreaming) speakNextQueued();
-      }
-    }
-  }
-
-  function flushTTS(): void {
-    if (!voiceResponseEnabled) return;
-    const remaining = ttsBuffer.trim();
-    ttsBuffer = "";
-    if (remaining) {
-      ttsQueue.push(remaining);
-      if (!ttsStreaming) speakNextQueued();
-    }
-  }
-
-  function cancelStreamingTTS(): void {
-    ttsBuffer = "";
-    ttsQueue = [];
-    ttsStreaming = false;
-    ttsProvider.cancel();
-    ttsSpeaking = false;
-    stopTTSPulse();
-  }
-
-  function speakNextQueued(): void {
-    if (ttsQueue.length === 0) {
-      ttsStreaming = false;
+  const streamingQueue = new StreamingTTSQueue(
+    (text) => ttsProvider.speak(text),
+    () => {
+      // Drain started — enter speaking state
+      ttsSpeaking = true;
+      micState = "speaking";
+      micBtn.classList.remove("active");
+      micBtn.classList.add("ambient");
+      startTTSPulse();
+    },
+    () => {
+      // Drain ended — return to ambient or off
       ttsSpeaking = false;
       stopTTSPulse();
-      // Re-enter ambient if mic is active
       if (micStream && audioContext && analyserNode) {
         ttsCooldownUntil = performance.now() + TTS_COOLDOWN_MS;
         micState = "ambient";
@@ -739,20 +711,24 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
         micState = "off";
         micBtn.classList.remove("ambient");
       }
-      return;
-    }
-    ttsStreaming = true;
-    ttsSpeaking = true;
-    micState = "speaking";
-    micBtn.classList.remove("active");
-    micBtn.classList.add("ambient");
-    startTTSPulse();
+    },
+  );
 
-    const sentence = ttsQueue.shift()!;
-    ttsProvider
-      .speak(sentence)
-      .then(() => speakNextQueued())
-      .catch(() => speakNextQueued());
+  function pushTTSChunk(delta: string): void {
+    if (!voiceResponseEnabled) return;
+    streamingQueue.push(delta);
+  }
+
+  function flushTTS(): void {
+    if (!voiceResponseEnabled) return;
+    streamingQueue.flush();
+  }
+
+  function cancelStreamingTTS(): void {
+    streamingQueue.cancel();
+    ttsProvider.cancel();
+    ttsSpeaking = false;
+    stopTTSPulse();
   }
 
   function speakAssistantResponse(text: string): void {

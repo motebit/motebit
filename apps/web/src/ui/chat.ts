@@ -1,21 +1,33 @@
 import type { WebContext } from "../types";
 import { hasCeilingBeenShown, markCeilingShown } from "../storage";
+import { StreamingTTSQueue } from "@motebit/voice";
 
 // === Streaming TTS ===
 
 /**
- * Speaks text incrementally as clauses complete during streaming.
- * Tracks actual audio playback state via SpeechSynthesisUtterance events.
+ * Thin wrapper around StreamingTTSQueue for the web surface.
+ * Adds enable/disable gating, voice selection, and audioPlaying tracking
+ * (consumed by main.ts syncTTS loop to detect TTS completion).
  */
 class StreamingTTS {
-  private buffer = "";
-  private queue: string[] = [];
-  private speaking = false;
   private _enabled = false;
   /** True when the browser is actually producing audio (from utterance.onstart). */
   audioPlaying = false;
   /** Selected voice name — matched against speechSynthesis.getVoices(). */
   voiceName = "";
+  private queue: StreamingTTSQueue;
+
+  constructor() {
+    this.queue = new StreamingTTSQueue(
+      (text) => this.speakOne(text),
+      () => {
+        this.audioPlaying = true;
+      },
+      () => {
+        this.audioPlaying = false;
+      },
+    );
+  }
 
   get enabled(): boolean {
     return this._enabled;
@@ -30,73 +42,42 @@ class StreamingTTS {
     this.cancel();
   }
 
-  /** Feed a text delta from the stream. Speaks when a clause boundary is detected. */
   push(delta: string): void {
     if (!this._enabled) return;
-    this.buffer += delta;
-
-    // First utterance: speak on clause boundary (,;:) with minimum length so it sounds natural.
-    // Subsequent utterances: speak on sentence boundary (.!?) for smooth cadence.
-    const pattern = this.speaking
-      ? /^([\s\S]*?[.!?])\s+([\s\S]*)$/
-      : /^([\s\S]{12,}?[.!?:;,])\s+([\s\S]*)$/; // min 12 chars avoids clipped fragments
-    const match = this.buffer.match(pattern);
-    if (match) {
-      const clause = match[1]!.trim();
-      this.buffer = match[2]!;
-      if (clause) {
-        this.queue.push(clause);
-        if (!this.speaking) this.speakNext();
-      }
-    }
+    this.queue.push(delta);
   }
 
-  /** Flush remaining buffer (call at end of stream). */
   flush(): void {
     if (!this._enabled) return;
-    const remaining = this.buffer.trim();
-    this.buffer = "";
-    if (remaining) {
-      this.queue.push(remaining);
-      if (!this.speaking) this.speakNext();
-    }
+    this.queue.flush();
   }
 
   cancel(): void {
-    this.buffer = "";
-    this.queue = [];
-    const wasActive = this.speaking || this.audioPlaying;
-    this.speaking = false;
+    const wasActive = this.queue.draining || this.audioPlaying;
+    this.queue.cancel();
     this.audioPlaying = false;
-    // Only call speechSynthesis.cancel() if something was actually playing.
-    // Calling it on silence produces an audible pop on some browsers.
     if (wasActive && typeof speechSynthesis !== "undefined") {
       speechSynthesis.cancel();
     }
   }
 
-  private speakNext(): void {
-    if (this.queue.length === 0) {
-      this.speaking = false;
-      this.audioPlaying = false;
-      return;
-    }
-    this.speaking = true;
-    const text = this.queue.shift()!;
-    const utterance = new SpeechSynthesisUtterance(text);
-    if (this.voiceName) {
-      const match = speechSynthesis.getVoices().find((v) => v.name === this.voiceName);
-      if (match) utterance.voice = match;
-    }
-    utterance.rate = 1.05;
-    utterance.pitch = 1.0;
-    utterance.volume = 0.85;
-    utterance.onstart = () => {
-      this.audioPlaying = true;
-    };
-    utterance.onend = () => this.speakNext();
-    utterance.onerror = () => this.speakNext();
-    speechSynthesis.speak(utterance);
+  private speakOne(text: string): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const utterance = new SpeechSynthesisUtterance(text);
+      if (this.voiceName) {
+        const match = speechSynthesis.getVoices().find((v) => v.name === this.voiceName);
+        if (match) utterance.voice = match;
+      }
+      utterance.rate = 1.05;
+      utterance.pitch = 1.0;
+      utterance.volume = 0.85;
+      utterance.onstart = () => {
+        this.audioPlaying = true;
+      };
+      utterance.onend = () => resolve();
+      utterance.onerror = () => resolve();
+      speechSynthesis.speak(utterance);
+    });
   }
 }
 
