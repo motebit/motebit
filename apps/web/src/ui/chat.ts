@@ -14,6 +14,8 @@ class StreamingTTS {
   private _enabled = false;
   /** True when the browser is actually producing audio (from utterance.onstart). */
   audioPlaying = false;
+  /** Selected voice name — matched against speechSynthesis.getVoices(). */
+  voiceName = "";
 
   get enabled(): boolean {
     return this._enabled;
@@ -82,6 +84,10 @@ class StreamingTTS {
     this.speaking = true;
     const text = this.queue.shift()!;
     const utterance = new SpeechSynthesisUtterance(text);
+    if (this.voiceName) {
+      const match = speechSynthesis.getVoices().find((v) => v.name === this.voiceName);
+      if (match) utterance.voice = match;
+    }
     utterance.rate = 1.05;
     utterance.pitch = 1.0;
     utterance.volume = 0.85;
@@ -102,6 +108,11 @@ export function setStreamingTTSEnabled(enabled: boolean): void {
   } else {
     streamingTTS.disable();
   }
+}
+
+/** Set the TTS voice by name (matched against speechSynthesis.getVoices()). */
+export function setTTSVoice(name: string): void {
+  streamingTTS.voiceName = name;
 }
 
 /** True when TTS is actually producing audio (browser ground truth). */

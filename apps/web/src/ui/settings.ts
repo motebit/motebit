@@ -9,6 +9,7 @@ import {
   loadVoiceConfig,
 } from "../storage";
 import { detectOllamaModels, checkWebGPU, WebLLMProvider, DEFAULT_OLLAMA_URL } from "../providers";
+import { setTTSVoice } from "./chat";
 import { hexPublicKeyToDidKey } from "@motebit/crypto";
 import type { ColorPickerAPI } from "./color-picker";
 
@@ -529,6 +530,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       voiceResponse: voiceResponse.checked,
     };
     saveVoiceConfig(voiceCfg);
+    setTTSVoice(voiceCfg.ttsVoice);
 
     updateModelIndicator();
     updateConnectPrompt();

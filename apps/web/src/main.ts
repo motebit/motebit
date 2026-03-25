@@ -9,7 +9,8 @@ import { initChat, addMessage, showToast } from "./ui/chat";
 import { initSettings } from "./ui/settings";
 import { initConversations } from "./ui/conversations";
 import { initVoice } from "./ui/voice";
-import { setStreamingTTSEnabled, isTTSAudioPlaying } from "./ui/chat";
+import { setStreamingTTSEnabled, isTTSAudioPlaying, setTTSVoice } from "./ui/chat";
+import { loadVoiceConfig } from "./storage";
 import { initGatedPanels } from "./ui/gated-panels";
 import { initSovereignPanels } from "./ui/sovereign-panels";
 import { initTheme } from "./ui/theme";
@@ -69,6 +70,10 @@ const voiceAPI = initVoice(ctx, chatAPI, {
     setStreamingTTSEnabled(active);
   },
 });
+
+// Apply saved voice preference
+const savedVoice = loadVoiceConfig();
+if (savedVoice?.ttsVoice) setTTSVoice(savedVoice.ttsVoice);
 
 // Sync creature to TTS audio — mouth movement + gentle glow while speaking.
 // Overrides the runtime's setSpeaking which fires on stream start/end, not audio start/end.
