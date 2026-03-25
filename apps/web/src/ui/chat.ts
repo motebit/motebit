@@ -33,11 +33,11 @@ class StreamingTTS {
     if (!this._enabled) return;
     this.buffer += delta;
 
-    // Speak on clause boundaries (comma, semicolon, colon, sentence-end) for faster first-word.
-    // The first chunk uses a shorter threshold so speech starts quickly.
+    // First utterance: speak on clause boundary (,;:) with minimum length so it sounds natural.
+    // Subsequent utterances: speak on sentence boundary (.!?) for smooth cadence.
     const pattern = this.speaking
-      ? /^([\s\S]*?[.!?])\s+([\s\S]*)$/ // After first utterance: full sentences
-      : /^([\s\S]*?[.!?:;,])\s+([\s\S]*)$/; // First utterance: any clause boundary
+      ? /^([\s\S]*?[.!?])\s+([\s\S]*)$/
+      : /^([\s\S]{12,}?[.!?:;,])\s+([\s\S]*)$/; // min 12 chars avoids clipped fragments
     const match = this.buffer.match(pattern);
     if (match) {
       const clause = match[1]!.trim();
@@ -99,6 +99,15 @@ export function setStreamingTTSEnabled(enabled: boolean): void {
   } else {
     streamingTTS.disable();
   }
+}
+
+/** Pre-warm speechSynthesis to avoid cold-start pop on first utterance. */
+export function warmTTS(): void {
+  if (typeof speechSynthesis === "undefined") return;
+  const u = new SpeechSynthesisUtterance("");
+  u.volume = 0;
+  speechSynthesis.speak(u);
+  speechSynthesis.cancel();
 }
 
 /** True when TTS is actually producing audio (browser ground truth). */
