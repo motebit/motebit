@@ -65,6 +65,7 @@ spec/
   identity-v1.md           motebit/identity@1.0 — file format, signing, succession
   execution-ledger-v1.md   motebit/execution-ledger@1.0 — timeline, signed manifests
   relay-federation-v1.md   motebit/relay-federation@1.0 — peering, discovery, routing
+  market-v1.md             motebit/market@1.0 — budget, settlement, fees, trust, routing
 
 services/
   api/          Relay server (modules: index, federation, task-routing,
