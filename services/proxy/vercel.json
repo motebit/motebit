@@ -1,3 +1,3 @@
 {
-  "ignoreCommand": "git diff --quiet ${VERCEL_GIT_PREVIOUS_SHA:-HEAD^} $VERCEL_GIT_COMMIT_SHA -- services/proxy/"
+  "ignoreCommand": "git diff --quiet ${VERCEL_GIT_PREVIOUS_SHA:-HEAD^} $VERCEL_GIT_COMMIT_SHA -- services/proxy/ 2>/dev/null || exit 1"
 }
