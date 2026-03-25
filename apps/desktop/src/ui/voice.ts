@@ -282,7 +282,7 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
         } else {
           voiceInterimTranscript = transcript;
         }
-        voiceTranscript.textContent = (voiceFinalTranscript + voiceInterimTranscript).trim();
+        // No transcript overlay — the waveform is the feedback
       };
 
       sttProvider.onError = (error: string) => {
@@ -379,8 +379,8 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
       inputBarWrapper.classList.remove("listening");
       micBtn.classList.remove("active");
       micBtn.classList.add("ambient");
-      voiceTranscript.textContent = "Transcribing...";
-      voiceTranscript.style.display = "block";
+      voiceTranscript.textContent = "";
+      voiceTranscript.style.display = "";
       void transcribeWithWhisper(toAmbient);
     } else {
       finishVoiceTranscript("", toAmbient);
