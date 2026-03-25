@@ -1297,6 +1297,28 @@ export class MotebitRuntime {
    * strengths, weaknesses, memory stats. Without this, the creature has a rich
    * interior but cannot see it. This is the wire from gradient → self-knowledge.
    */
+  private async buildAgentContext(): Promise<{
+    knownAgents?: AgentTrustRecord[];
+    agentCapabilities?: Record<string, string[]>;
+  }> {
+    const knownAgents = await this.listTrustedAgents();
+    if (knownAgents.length === 0) return {};
+
+    let agentCapabilities: Record<string, string[]> | undefined;
+    if (this.serviceListingStore) {
+      const listings = await this.serviceListingStore.list();
+      const capMap: Record<string, string[]> = {};
+      for (const listing of listings) {
+        if (listing.capabilities.length > 0) {
+          capMap[listing.motebit_id] = listing.capabilities;
+        }
+      }
+      if (Object.keys(capMap).length > 0) agentCapabilities = capMap;
+    }
+
+    return { knownAgents, agentCapabilities };
+  }
+
   private buildSelfAwareness(): string {
     const parts: string[] = [];
 
@@ -1391,7 +1413,7 @@ export class MotebitRuntime {
 
     try {
       const trimmed = this.conversation.trimmed();
-      const knownAgents = await this.listTrustedAgents();
+      const { knownAgents, agentCapabilities } = await this.buildAgentContext();
       const selfAwareness = this.buildSelfAwareness();
       const result = await runTurn(this.loopDeps, text, {
         conversationHistory: trimmed,
@@ -1399,7 +1421,8 @@ export class MotebitRuntime {
         runId,
         sessionInfo: this.conversation.getSessionInfo() ?? undefined,
         curiosityHints: this.buildCuriosityHints(),
-        knownAgents: knownAgents.length > 0 ? knownAgents : undefined,
+        knownAgents,
+        agentCapabilities,
         precisionContext: selfAwareness || undefined,
         firstConversation: this._isFirstConversation || undefined,
       });
@@ -1448,25 +1471,8 @@ export class MotebitRuntime {
 
     try {
       const trimmed = this.conversation.trimmed();
+      const { knownAgents, agentCapabilities } = await this.buildAgentContext();
       const selfAwareness = this.buildSelfAwareness();
-
-      // Parallelize independent async operations
-      const [knownAgents, listings] = await Promise.all([
-        this.listTrustedAgents(),
-        this.serviceListingStore ? this.serviceListingStore.list() : Promise.resolve([]),
-      ]);
-
-      // Build capabilities map from service listings for known agents
-      let agentCapabilities: Record<string, string[]> | undefined;
-      if (knownAgents.length > 0 && listings.length > 0) {
-        const capMap: Record<string, string[]> = {};
-        for (const listing of listings) {
-          if (listing.capabilities.length > 0) {
-            capMap[listing.motebit_id] = listing.capabilities;
-          }
-        }
-        if (Object.keys(capMap).length > 0) agentCapabilities = capMap;
-      }
 
       const stream = runTurnStreaming(this.loopDeps, text, {
         conversationHistory: trimmed,
@@ -1474,7 +1480,7 @@ export class MotebitRuntime {
         runId,
         sessionInfo: this.conversation.getSessionInfo() ?? undefined,
         curiosityHints: this.buildCuriosityHints(),
-        knownAgents: knownAgents.length > 0 ? knownAgents : undefined,
+        knownAgents,
         agentCapabilities,
         precisionContext: selfAwareness || undefined,
         delegationScope: options?.delegationScope,
