@@ -394,8 +394,7 @@ export function initSovereignPanels(ctx: WebContext): SovereignPanelsAPI {
         detail.style.display = "block";
         if (detail.dataset.loaded === "1") return;
 
-        detail.innerHTML =
-          '<div class="ledger-loading" style="font-size:11px;color:var(--text-ghost);padding:8px 0;">Fetching ledger...</div>';
+        detail.innerHTML = "";
 
         void (async () => {
           try {

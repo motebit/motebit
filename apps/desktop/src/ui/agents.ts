@@ -99,7 +99,7 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
 
   async function populateDiscover(): Promise<void> {
     discoverList.innerHTML = "";
-    discoverEmpty.textContent = "Loading...";
+    discoverEmpty.textContent = "";
     discoverEmpty.style.display = "block";
 
     const agents = await ctx.app.discoverAgents();

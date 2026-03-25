@@ -184,7 +184,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
     container: HTMLDivElement,
     invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>,
   ): void {
-    container.innerHTML = '<span style="font-size:10px;color:var(--text-ghost)">Loading...</span>';
+    container.innerHTML = "";
 
     // Helper: timestamp-range fallback for legacy rows without run_id
     const loadFallback = (): void => {
@@ -384,8 +384,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
     if (config?.isTauri !== true || config.invoke == null) return;
     const invoke = config.invoke;
 
-    container.innerHTML =
-      '<div style="font-size:11px;color:rgba(0,0,0,0.3);padding:2px 0;">Loading...</div>';
+    container.innerHTML = "";
     void invoke<Array<Record<string, unknown>>>("goals_outcomes", { goalId, limit: 5 })
       .then((outcomes) => {
         container.innerHTML = "";
@@ -658,7 +657,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
     container: HTMLDivElement,
     invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>,
   ): void {
-    container.innerHTML = '<div class="plan-history-empty">Loading...</div>';
+    container.innerHTML = "";
 
     void invoke<Array<Record<string, unknown>>>("db_query", {
       sql: `SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY ordinal ASC`,

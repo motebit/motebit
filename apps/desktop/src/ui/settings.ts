@@ -1396,7 +1396,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     ctx.setConfig(newConfig);
 
     if (!(await ctx.app.initAI(newConfig))) {
-      addMessage("system", "Settings saved — AI initialization failed (check API key)");
+      addMessage("system", "AI initialization failed — check API key");
     }
 
     updateModelIndicator();

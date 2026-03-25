@@ -477,7 +477,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     }
 
     discoverList.innerHTML = "";
-    discoverEmpty.textContent = "Loading...";
+    discoverEmpty.textContent = "";
     discoverEmpty.style.display = "block";
 
     try {

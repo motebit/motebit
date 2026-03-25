@@ -599,7 +599,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
     memoryList.innerHTML = "";
     const loading = document.createElement("div");
     loading.className = "mem-empty";
-    loading.textContent = "Loading deletion log...";
+    loading.textContent = "";
     memoryList.appendChild(loading);
 
     void ctx.app.listDeletionCertificates().then((certs) => {
