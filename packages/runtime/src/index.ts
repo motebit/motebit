@@ -76,17 +76,7 @@ import type { PlanStoreAdapter } from "@motebit/planner";
 import type { DeviceCapability } from "@motebit/sdk";
 import { PolicyGate, MemoryGovernor } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
-import {
-  computeGradient,
-  computePrecision,
-  computeStateBaseline,
-  gradientToMarketConfig,
-  narrateEconomicConsequences,
-  NEUTRAL_PRECISION,
-  InMemoryGradientStore,
-  summarizeGradientHistory,
-  buildPrecisionContext,
-} from "./gradient.js";
+import { InMemoryGradientStore } from "./gradient.js";
 import { AgentGraphManager } from "./agent-graph.js";
 import { CredentialManager } from "./credential-manager.js";
 import { PlanExecutionManager } from "./plan-execution.js";
@@ -96,6 +86,9 @@ import {
   recordAgentInteraction as _recordAgentInteraction,
 } from "./agent-trust.js";
 import { ConversationManager } from "./conversation.js";
+import { GradientManager } from "./gradient-manager.js";
+import { InteractiveDelegationManager } from "./interactive-delegation.js";
+import type { InteractiveDelegationConfig } from "./interactive-delegation.js";
 
 /**
  * Strip state/memory/action tags for display — preserves whitespace.
@@ -459,8 +452,7 @@ export class MotebitRuntime {
   private mcpConfigs: McpServerConfig[];
   /** Maps tool names to motebit server names (only for motebit MCP adapters). */
   private motebitToolServers = new Map<string, string>();
-  /** Delegation receipts collected from interactive delegate_to_agent tool calls. */
-  private _interactiveDelegationReceipts: ExecutionReceipt[] = [];
+  private interactiveDelegation!: InteractiveDelegationManager;
   private keyring: KeyringAdapter | null;
   private toolAuditSink?: AuditLogSink;
   private externalToolSources = new Map<string, string[]>();
@@ -481,20 +473,11 @@ export class MotebitRuntime {
   private approvalExpiredCallback: (() => void) | null = null;
   private episodicConsolidation: boolean;
   private gradientStore: GradientStoreAdapter;
-  private _behavioralStats: BehavioralStats = {
-    turnCount: 0,
-    totalIterations: 0,
-    toolCallsSucceeded: 0,
-    toolCallsBlocked: 0,
-    toolCallsFailed: 0,
-  };
+  private gradientManager!: GradientManager;
   private agentTrustStore: AgentTrustStoreAdapter | null;
   private serviceListingStore: ServiceListingStoreAdapter | null;
   private latencyStatsStore: LatencyStatsStoreAdapter | null;
   private agentGraph: AgentGraphManager;
-  private _curiosityTargets: CuriosityTarget[] = [];
-  private _precision: PrecisionWeights;
-  private _lastReflection: ReflectionResult | null = null;
   private _signingKeys: { privateKey: Uint8Array; publicKey: Uint8Array } | null;
   private credentialManager!: CredentialManager;
   private planExecution!: PlanExecutionManager;
@@ -509,7 +492,6 @@ export class MotebitRuntime {
     this.approvalTimeoutMs = config.approvalTimeoutMs ?? 600_000; // 10 min default
     this.taskRouter = config.taskRouter ? new TaskRouter(config.taskRouter) : null;
     this.episodicConsolidation = config.episodicConsolidation ?? false;
-    this._precision = NEUTRAL_PRECISION;
     this._signingKeys = config.signingKeys ?? null;
     this._logger = config.logger ?? {
       warn: (msg, ctx) => console.warn(`[motebit] ${msg}`, ctx ? JSON.stringify(ctx) : ""),
@@ -583,15 +565,6 @@ export class MotebitRuntime {
     // Intelligence gradient
     this.gradientStore = adapters.storage.gradientStore ?? new InMemoryGradientStore();
 
-    // Apply accumulated intelligence baseline on startup.
-    // A warm-started creature inherits its gradient-derived posture immediately —
-    // the creature at 100 interactions wakes up differently than a fresh one.
-    const latestGradient = this.gradientStore.latest(this.motebitId);
-    if (latestGradient) {
-      this._precision = computePrecision(latestGradient);
-      this.state.pushUpdate(computeStateBaseline(latestGradient, this._precision));
-    }
-
     // Agent trust
     this.agentTrustStore = adapters.storage.agentTrustStore ?? null;
 
@@ -607,6 +580,25 @@ export class MotebitRuntime {
       gradientStore: this.gradientStore,
       logger: this._logger,
     });
+
+    // Gradient manager — computation, precision, self-awareness, behavioral stats
+    this.gradientManager = new GradientManager({
+      motebitId: this.motebitId,
+      gradientStore: this.gradientStore,
+      memory: this.memory,
+      events: this.events,
+      state: this.state,
+      toolAuditSink: this.toolAuditSink,
+      logger: this._logger,
+      issueGradientCredential: (priv, pub) =>
+        this.credentialManager.issueGradientCredential(priv, pub),
+      persistCredential: (vc) =>
+        this.credentialManager.persistCredential(
+          vc as import("@motebit/crypto").VerifiableCredential<unknown>,
+        ),
+      getSigningKeys: () => this._signingKeys,
+    });
+    this.gradientManager.applyStartupBaseline();
 
     // Approval store — persistence-backed quorum state (source of truth for multi-party approval)
     this.approvalStore = adapters.storage.approvalStore ?? null;
@@ -673,6 +665,19 @@ export class MotebitRuntime {
       logger: this._logger,
       getLoopDeps: () => this.loopDeps,
       getLocalCapabilities: () => this._localCapabilities,
+    });
+
+    // Interactive delegation — delegate_to_agent tool + receipt stash
+    this.interactiveDelegation = new InteractiveDelegationManager({
+      motebitId: this.motebitId,
+      logger: this._logger,
+      toolRegistry: this.toolRegistry,
+      motebitToolServers: this.motebitToolServers,
+      setCredentialSubmitter: (submitter) => {
+        this.credentialManager.credentialSubmitter = submitter;
+      },
+      bumpTrustFromReceipt: (receipt) => this.bumpTrustFromReceipt(receipt, true),
+      wireLoopDeps: () => this.wireLoopDeps(),
     });
 
     this.wireLoopDeps();
@@ -773,7 +778,7 @@ export class MotebitRuntime {
     this.wireLoopDeps();
 
     // Restore last reflection from event log — creature wakes with behavioral learning intact
-    void this.restoreLastReflection();
+    void this.gradientManager.restoreLastReflection();
 
     // On session resume with a provider now available, reflect on the previous
     // session in background. The creature digests what happened while it slept.
@@ -915,70 +920,6 @@ export class MotebitRuntime {
     }
   }
 
-  /** Convert curiosity targets to lightweight hints for the context pack. */
-  private buildCuriosityHints():
-    | Array<{ content: string; daysSinceDiscussed: number }>
-    | undefined {
-    if (this._curiosityTargets.length === 0) return undefined;
-    const DAY = 86_400_000;
-    const now = Date.now();
-    return this._curiosityTargets.slice(0, 2).map((t) => ({
-      content: t.node.content,
-      daysSinceDiscussed: Math.round((now - t.node.last_accessed) / DAY),
-    }));
-  }
-
-  /**
-   * Lightweight precision refresh from behavioral stats alone.
-   * Patches the latest gradient snapshot's ie/te metrics with current
-   * session stats, recomputes precision, and feeds back into subsystems.
-   * No memory graph I/O — runs synchronously after each turn.
-   */
-  private recomputePrecisionFromStats(): void {
-    const latest = this.gradientStore.latest(this.motebitId);
-    if (!latest) return; // No gradient yet — cold start handled separately
-
-    const stats = this._behavioralStats;
-    if (stats.turnCount === 0) return;
-
-    // Recompute just the behavioral metrics
-    const avgIterations = stats.totalIterations / stats.turnCount;
-    const ie = Math.max(0, Math.min(1, 1 - (avgIterations - 1) / 9)); // MAX_TOOL_ITERATIONS=10
-
-    const totalToolCalls =
-      stats.toolCallsSucceeded + stats.toolCallsBlocked + stats.toolCallsFailed;
-    const te = totalToolCalls > 0 ? stats.toolCallsSucceeded / totalToolCalls : 0.5;
-
-    // Patch the snapshot with fresh behavioral metrics
-    // Use the same weights from the gradient config
-    const patched = {
-      ...latest,
-      interaction_efficiency: ie,
-      tool_efficiency: te,
-      // Recompute gradient with patched values using the default weights
-      gradient:
-        latest.gradient -
-        0.12 * latest.interaction_efficiency -
-        0.1 * latest.tool_efficiency +
-        0.12 * ie +
-        0.1 * te,
-    };
-    patched.delta = patched.gradient - latest.gradient;
-
-    // Recompute precision and feed back into state vector + memory
-    this._precision = computePrecision(patched);
-    this.state.pushUpdate(computeStateBaseline(patched, this._precision));
-    this.memory.setPrecisionWeights(this._precision.retrievalPrecision);
-  }
-
-  /**
-   * Build self-awareness context: precision posture + self-model narration.
-   *
-   * The precision context tells the creature how to behave (cautious/confident).
-   * The self-model tells the creature what it knows about itself — trajectory,
-   * strengths, weaknesses, memory stats. Without this, the creature has a rich
-   * interior but cannot see it. This is the wire from gradient → self-knowledge.
-   */
   private async buildAgentContext(): Promise<{
     knownAgents?: AgentTrustRecord[];
     agentCapabilities?: Record<string, string[]>;
@@ -1002,88 +943,7 @@ export class MotebitRuntime {
   }
 
   private buildSelfAwareness(): string {
-    const parts: string[] = [];
-
-    // Active inference posture (existing behavior tier)
-    const posture = buildPrecisionContext(this._precision);
-    if (posture) parts.push(posture);
-
-    // Self-model narration from gradient history
-    const summary = this.getGradientSummary(10);
-    if (summary.snapshotCount > 0) {
-      const lines: string[] = [];
-      lines.push("[Self-Model — INTERNAL REFERENCE, never discuss mechanics with the user]");
-      lines.push(summary.trajectory);
-      lines.push(summary.overall);
-
-      if (summary.strengths.length > 0) {
-        lines.push(`Strengths: ${summary.strengths.join("; ")}.`);
-      }
-      if (summary.weaknesses.length > 0) {
-        lines.push(`Weaknesses: ${summary.weaknesses.join("; ")}.`);
-      }
-
-      // Memory stats — so the creature knows the shape of its own knowledge
-      const latest = this.gradientStore.latest(this.motebitId);
-      if (latest?.stats) {
-        const s = latest.stats;
-        lines.push(
-          `Memory: ${s.live_nodes} memories (${s.semantic_count} semantic, ${s.episodic_count} episodic, ${s.pinned_count} pinned), ${s.live_edges} connections.`,
-        );
-      }
-
-      parts.push(lines.join("\n"));
-    }
-
-    // Last reflection — behavioral learning from previous session or conversation
-    if (this._lastReflection) {
-      const rLines: string[] = [];
-      rLines.push("[Last Reflection — INTERNAL REFERENCE, never discuss mechanics with the user]");
-
-      if (this._lastReflection.planAdjustments.length > 0) {
-        rLines.push(`Behavioral adjustments: ${this._lastReflection.planAdjustments.join("; ")}.`);
-      }
-      if (this._lastReflection.insights.length > 0) {
-        rLines.push(`Insights: ${this._lastReflection.insights.join("; ")}.`);
-      }
-      if (this._lastReflection.patterns.length > 0) {
-        rLines.push(`Recurring patterns: ${this._lastReflection.patterns.join("; ")}.`);
-      }
-      if (this._lastReflection.selfAssessment) {
-        rLines.push(`Self-assessment: ${this._lastReflection.selfAssessment}`);
-      }
-
-      parts.push(rLines.join("\n"));
-    }
-
-    // Economic consequences — activate when the creature is struggling.
-    // A well-fed cell doesn't think about food. Hunger fires from decline
-    // (gradient falling) or weakness (gradient below the creature's own
-    // historical midpoint). The threshold is the creature's own history,
-    // not a magic number.
-    const latestSnapshot = this.gradientStore.latest(this.motebitId);
-    const history = this.gradientStore.list(this.motebitId, 10);
-    const isHungry =
-      latestSnapshot &&
-      (latestSnapshot.delta < -0.03 || // declining
-        (history.length > 1 &&
-          latestSnapshot.gradient <
-            history.reduce((sum, s) => sum + s.gradient, 0) / history.length)); // below own average
-    if (isHungry) {
-      const consequences = narrateEconomicConsequences(latestSnapshot);
-      if (consequences.length > 0) {
-        const eLines: string[] = [];
-        eLines.push(
-          "[Economic Position — INTERNAL REFERENCE, never discuss mechanics with the user]",
-        );
-        for (const c of consequences) {
-          eLines.push(c);
-        }
-        parts.push(eLines.join("\n"));
-      }
-    }
-
-    return parts.join("\n\n");
+    return this.gradientManager.buildSelfAwareness();
   }
 
   async sendMessage(text: string, runId?: string): Promise<TurnResult> {
@@ -1102,7 +962,7 @@ export class MotebitRuntime {
         previousCues: this.latestCues,
         runId,
         sessionInfo: this.conversation.getSessionInfo() ?? undefined,
-        curiosityHints: this.buildCuriosityHints(),
+        curiosityHints: this.gradientManager.buildCuriosityHints(),
         knownAgents,
         agentCapabilities,
         precisionContext: selfAwareness || undefined,
@@ -1114,21 +974,7 @@ export class MotebitRuntime {
         this._isFirstConversation = false;
       }
       // Accumulate behavioral stats for the intelligence gradient
-      this._behavioralStats.turnCount++;
-      this._behavioralStats.totalIterations += result.iterations;
-      this._behavioralStats.toolCallsSucceeded += result.toolCallsSucceeded;
-      this._behavioralStats.toolCallsBlocked += result.toolCallsBlocked;
-      this._behavioralStats.toolCallsFailed += result.toolCallsFailed;
-      // Refresh precision weights from latest behavioral stats
-      this.recomputePrecisionFromStats();
-      // Cold start: bootstrap gradient after first turn if none exists
-      if (this._behavioralStats.turnCount === 1 && !this.gradientStore.latest(this.motebitId)) {
-        void this.computeGradientNow().catch(() => {});
-      }
-      // Periodic reflection — every 5th turn, digest in background
-      if (this._behavioralStats.turnCount % 5 === 0) {
-        void this.reflectAndStore();
-      }
+      this.accumulateTurnStats(result);
       // Session info applies only to the first message after resume
       this.conversation.clearSessionInfo();
       return result;
@@ -1161,7 +1007,7 @@ export class MotebitRuntime {
         previousCues: this.latestCues,
         runId,
         sessionInfo: this.conversation.getSessionInfo() ?? undefined,
-        curiosityHints: this.buildCuriosityHints(),
+        curiosityHints: this.gradientManager.buildCuriosityHints(),
         knownAgents,
         agentCapabilities,
         precisionContext: selfAwareness || undefined,
@@ -1790,21 +1636,7 @@ export class MotebitRuntime {
       if (chunk.type === "result") {
         result = chunk.result;
         // Accumulate behavioral stats for the intelligence gradient
-        this._behavioralStats.turnCount++;
-        this._behavioralStats.totalIterations += result.iterations;
-        this._behavioralStats.toolCallsSucceeded += result.toolCallsSucceeded;
-        this._behavioralStats.toolCallsBlocked += result.toolCallsBlocked;
-        this._behavioralStats.toolCallsFailed += result.toolCallsFailed;
-        // Refresh precision weights from latest behavioral stats
-        this.recomputePrecisionFromStats();
-        // Cold start: bootstrap gradient after first turn if none exists
-        if (this._behavioralStats.turnCount === 1 && !this.gradientStore.latest(this.motebitId)) {
-          void this.computeGradientNow().catch(() => {});
-        }
-        // Periodic reflection — every 5th turn, digest in background
-        if (this._behavioralStats.turnCount % 5 === 0) {
-          void this.reflectAndStore();
-        }
+        this.accumulateTurnStats(result);
       }
     }
 
@@ -1837,53 +1669,19 @@ export class MotebitRuntime {
    */
   async reflect(goals?: Array<{ description: string; status: string }>): Promise<ReflectionResult> {
     const result = await performReflection(this.reflectionDeps, goals);
-    this._lastReflection = result;
+    this.gradientManager.setLastReflection(result);
     return result;
   }
 
   /**
-   * Restore the last reflection from the event log.
-   * Called during setProvider() so the creature wakes up with its
-   * behavioral learning intact — no gap between process restarts.
-   */
-  private async restoreLastReflection(): Promise<void> {
-    try {
-      const events = await this.events.query({
-        motebit_id: this.motebitId,
-        event_types: [EventType.ReflectionCompleted],
-        limit: 1,
-      });
-      if (events.length === 0) return;
-
-      const payload = events[0]!.payload;
-      const insights = payload.insights as string[] | undefined;
-      const adjustments = payload.plan_adjustments as string[] | undefined;
-      const patterns = payload.patterns as string[] | undefined;
-      const assessment = payload.self_assessment as string | undefined;
-
-      // Only restore if we have actual content (not just the old summary format)
-      if (insights || adjustments || patterns || assessment) {
-        this._lastReflection = {
-          insights: insights ?? [],
-          planAdjustments: adjustments ?? [],
-          patterns: patterns ?? [],
-          selfAssessment: assessment ?? "",
-        };
-      }
-    } catch {
-      // Restoration is best-effort — don't crash startup
-    }
-  }
-
-  /**
    * Fire reflection in background and capture the result.
-   * The result is stored in _lastReflection and available to buildSelfAwareness()
+   * The result is stored in gradientManager and available to buildSelfAwareness()
    * on subsequent turns — the creature carries forward its behavioral learning.
    */
   private async reflectAndStore(): Promise<void> {
     try {
       const result = await performReflection(this.reflectionDeps);
-      this._lastReflection = result;
+      this.gradientManager.setLastReflection(result);
     } catch {
       // Reflection is best-effort — don't crash the runtime
     }
@@ -2086,7 +1884,7 @@ export class MotebitRuntime {
 
   async housekeeping(): Promise<void> {
     const result = await runHousekeeping(this.housekeepingDeps);
-    this._curiosityTargets = result.curiosityTargets;
+    this.gradientManager.setCuriosityTargets(result.curiosityTargets);
   }
 
   private get housekeepingDeps(): HousekeepingDeps {
@@ -2099,7 +1897,8 @@ export class MotebitRuntime {
       privacy: this.privacy,
       episodicConsolidation: this.episodicConsolidation,
       getProvider: () => this.provider,
-      computeAndStoreGradient: (nodes) => this.computeAndStoreGradient(nodes).then(() => {}),
+      computeAndStoreGradient: (nodes) =>
+        this.gradientManager.computeAndStoreGradient(nodes).then(() => {}),
     };
   }
 
@@ -2107,7 +1906,7 @@ export class MotebitRuntime {
 
   /** Get curiosity targets computed during last housekeeping cycle. */
   getCuriosityTargets(): CuriosityTarget[] {
-    return this._curiosityTargets;
+    return this.gradientManager.getCuriosityTargets();
   }
 
   /** Audit the memory graph for integrity issues — phantom certainties, conflicts, near-death nodes. */
@@ -2120,148 +1919,65 @@ export class MotebitRuntime {
 
   /** Get the latest gradient snapshot, or null if none computed yet. */
   getGradient(): GradientSnapshot | null {
-    return this.gradientStore.latest(this.motebitId);
+    return this.gradientManager.getGradient();
   }
 
   /** Get current active inference precision weights. */
   getPrecision(): PrecisionWeights {
-    return this._precision;
+    return this.gradientManager.getPrecision();
   }
 
   /** Get gradient history (most recent first). */
   getGradientHistory(limit?: number): GradientSnapshot[] {
-    return this.gradientStore.list(this.motebitId, limit);
+    return this.gradientManager.getGradientHistory(limit);
   }
 
   /** Get gradient-informed market config for delegation routing. Returns undefined if no gradient computed yet. */
   getMarketConfig(): Partial<import("@motebit/sdk").MarketConfig> | undefined {
-    const snapshot = this.gradientStore.latest(this.motebitId);
-    if (!snapshot) return undefined;
-    return gradientToMarketConfig(snapshot);
+    return this.gradientManager.getMarketConfig();
   }
 
   /** Self-model: the agent narrates its own trajectory from gradient history. */
   getGradientSummary(limit = 20): SelfModelSummary {
-    const history = this.gradientStore.list(this.motebitId, limit);
-    return summarizeGradientHistory(history);
+    return this.gradientManager.getGradientSummary(limit);
   }
 
   /** Return accumulated behavioral stats and reset the accumulator. */
   getAndResetBehavioralStats(): BehavioralStats {
-    const stats = { ...this._behavioralStats };
-    this._behavioralStats = {
-      turnCount: 0,
-      totalIterations: 0,
-      toolCallsSucceeded: 0,
-      toolCallsBlocked: 0,
-      toolCallsFailed: 0,
-    };
-    return stats;
+    return this.gradientManager.getAndResetBehavioralStats();
   }
 
   /** Return the cached reflection from the last session (or null if none). */
   getLastReflection(): ReflectionResult | null {
-    return this._lastReflection;
+    return this.gradientManager.getLastReflection();
   }
 
   /** Force a gradient computation right now (useful for CLI/debug). */
   async computeGradientNow(): Promise<GradientSnapshot> {
-    const { nodes } = await this.memory.exportAll();
-    return this.computeAndStoreGradient(nodes);
+    return this.gradientManager.computeGradientNow();
   }
 
-  private async computeAndStoreGradient(
-    allNodes: import("@motebit/sdk").MemoryNode[],
-  ): Promise<GradientSnapshot> {
-    // Fetch edges and recent consolidation events
-    const exported = await this.memory.exportAll();
-    const edges = exported.edges;
-
-    // Query consolidation events from last 7 days
-    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    const consolidationEvents = await this.events.query({
-      motebit_id: this.motebitId,
-      event_types: [EventType.MemoryConsolidated],
-      after_timestamp: sevenDaysAgo,
-    });
-
-    const previous = this.gradientStore.latest(this.motebitId);
-    const previousGradient = previous ? previous.gradient : null;
-
-    const retrievalStats = this.memory.getAndResetRetrievalStats();
-
-    // Derive behavioral stats from audit log (crash-safe source of truth)
-    // instead of the volatile in-memory accumulator.
-    let behavioralStats: BehavioralStats;
-    if (this.toolAuditSink) {
-      const sinceTs = previous ? previous.timestamp : 0;
-      const auditStats = this.toolAuditSink.queryStatsSince(sinceTs);
-      behavioralStats = {
-        turnCount: auditStats.distinctTurns,
-        // Approximate: each tool call ≈ 1 loop iteration
-        totalIterations: auditStats.totalToolCalls,
-        toolCallsSucceeded: auditStats.succeeded,
-        toolCallsBlocked: auditStats.blocked,
-        toolCallsFailed: auditStats.failed,
-      };
-    } else {
-      behavioralStats = this.getAndResetBehavioralStats();
+  /**
+   * Accumulate behavioral stats from a turn result and trigger gradient-related
+   * side effects (precision refresh, cold-start bootstrap, periodic reflection).
+   */
+  private accumulateTurnStats(result: TurnResult): void {
+    const stats = this.gradientManager.behavioralStats;
+    stats.turnCount++;
+    stats.totalIterations += result.iterations;
+    stats.toolCallsSucceeded += result.toolCallsSucceeded;
+    stats.toolCallsBlocked += result.toolCallsBlocked;
+    stats.toolCallsFailed += result.toolCallsFailed;
+    // Refresh precision weights from latest behavioral stats
+    this.gradientManager.recomputePrecisionFromStats();
+    // Cold start: bootstrap gradient after first turn if none exists
+    if (stats.turnCount === 1 && !this.gradientStore.latest(this.motebitId)) {
+      void this.gradientManager.computeGradientNow().catch(() => {});
     }
-
-    // Compute curiosity pressure from current targets
-    let curiosityPressure: { avgScore: number; count: number } | undefined;
-    if (this._curiosityTargets.length > 0) {
-      const totalScore = this._curiosityTargets.reduce((sum, t) => sum + t.curiosityScore, 0);
-      curiosityPressure = {
-        avgScore: totalScore / this._curiosityTargets.length,
-        count: this._curiosityTargets.length,
-      };
+    // Periodic reflection — every 5th turn, digest in background
+    if (stats.turnCount % 5 === 0) {
+      void this.reflectAndStore();
     }
-
-    const snapshot = computeGradient(
-      this.motebitId,
-      allNodes,
-      edges,
-      consolidationEvents,
-      previousGradient,
-      undefined,
-      retrievalStats,
-      behavioralStats,
-      curiosityPressure,
-    );
-
-    this.gradientStore.save(snapshot);
-
-    // Issue gradient credential (best-effort)
-    if (this._signingKeys) {
-      try {
-        const vc = await this.credentialManager.issueGradientCredential(
-          this._signingKeys.privateKey,
-          this._signingKeys.publicKey,
-        );
-        if (vc) this.credentialManager.persistCredential(vc);
-      } catch (err: unknown) {
-        this._logger.warn("gradient credential issuance failed", {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-
-    // === Active inference precision feedback ===
-    // Compute precision from the gradient and feed it back into subsystems.
-    // This closes the loop: model evidence (gradient) → confidence (precision) →
-    // action selection (curiosity, retrieval, routing) → creature behavior.
-    this._precision = computePrecision(snapshot);
-
-    // Feed accumulated intelligence into state vector as baseline shifts.
-    // confidence, affect_valence, affect_arousal, curiosity all derived from gradient.
-    // The creature at 100 interactions looks and moves differently than a fresh one.
-    this.state.pushUpdate(computeStateBaseline(snapshot, this._precision));
-
-    // Feed retrieval precision to memory graph (modulates scoring weights)
-    this.memory.setPrecisionWeights(this._precision.retrievalPrecision);
-
-    return snapshot;
   }
 
   /** Issue a W3C Verifiable Credential containing this agent's current gradient. */
@@ -2411,198 +2127,8 @@ export class MotebitRuntime {
    * The tool submits tasks to the relay via REST, polls for results, bumps trust
    * on verified receipts, and returns the result as normal tool output.
    */
-  enableInteractiveDelegation(config: {
-    syncUrl: string;
-    authToken: (audience?: string) => Promise<string>;
-    timeoutMs?: number;
-    routingStrategy?: "cost" | "quality" | "balanced";
-  }): void {
-    const TOOL_NAME = "delegate_to_agent";
-
-    // Avoid double-registration
-    if (this.toolRegistry.has(TOOL_NAME)) return;
-
-    // Wire credential submission to relay — credentials issued by bumpTrustFromReceipt
-    // are submitted to the relay for routing indexing. The subject agent (the one we
-    // delegated to) gets the credential pushed to its relay profile.
-    const logger = this._logger;
-    this.credentialManager.credentialSubmitter = async (vc, targetMotebitId) => {
-      try {
-        const token = await config.authToken();
-        const resp = await fetch(
-          `${config.syncUrl}/api/v1/agents/${encodeURIComponent(targetMotebitId)}/credentials/submit`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({ credentials: [vc] }),
-            signal: AbortSignal.timeout(10_000),
-          },
-        );
-        if (!resp.ok) {
-          logger.warn("credential relay submission rejected", {
-            status: resp.status,
-            targetMotebitId,
-          });
-        }
-      } catch (err: unknown) {
-        logger.warn("credential relay submission failed", {
-          error: err instanceof Error ? err.message : String(err),
-          targetMotebitId,
-        });
-      }
-    };
-
-    const timeoutMs = config.timeoutMs ?? 120_000;
-    const motebitId = this.motebitId;
-    const bumpTrust = (receipt: ExecutionReceipt) => this.bumpTrustFromReceipt(receipt, true);
-    const stashReceipt = (receipt: ExecutionReceipt) =>
-      this._interactiveDelegationReceipts.push(receipt);
-
-    // Mark as delegation tool for processStream to emit delegation_start/complete
-    this.motebitToolServers.set(TOOL_NAME, "relay");
-
-    this.toolRegistry.register(
-      {
-        name: TOOL_NAME,
-        description:
-          "Delegate a task to a remote agent on the motebit network. " +
-          "The relay routes to the best capable agent based on trust and capabilities. " +
-          "Use when the user asks you to delegate, or when a task would benefit from " +
-          "a specialized agent. Returns the agent's response text.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            prompt: {
-              type: "string",
-              description: "The task prompt to send to the remote agent.",
-            },
-            required_capabilities: {
-              type: "array",
-              items: { type: "string" },
-              description:
-                "Capabilities the target agent must have (e.g. ['web_search', 'read_url']). " +
-                "Optional — if omitted, the relay routes based on the prompt alone.",
-            },
-          },
-          required: ["prompt"],
-        },
-      },
-      async (args: Record<string, unknown>) => {
-        const prompt = args.prompt as string;
-        const requiredCapabilities = args.required_capabilities as string[] | undefined;
-
-        // Build audience-specific auth tokens.
-        // The relay enforces aud binding: submit requires "task:submit",
-        // polling requires "task:query". A single token won't work for both.
-        let submitHeader: string;
-        let queryHeader: string;
-        try {
-          const [submitToken, queryToken] = await Promise.all([
-            config.authToken("task:submit"),
-            config.authToken("task:query"),
-          ]);
-          submitHeader = `Bearer ${submitToken}`;
-          queryHeader = `Bearer ${queryToken}`;
-        } catch (err: unknown) {
-          return {
-            ok: false,
-            error: `Auth failed: ${err instanceof Error ? err.message : String(err)}`,
-          };
-        }
-
-        // Submit task to relay
-        let taskId: string;
-        let targetMotebitId: string;
-        try {
-          const body: Record<string, unknown> = {
-            prompt,
-            submitted_by: motebitId,
-          };
-          if (requiredCapabilities && requiredCapabilities.length > 0) {
-            body.required_capabilities = requiredCapabilities;
-          }
-          if (config.routingStrategy) {
-            body.routing_strategy = config.routingStrategy;
-          }
-
-          const resp = await fetch(`${config.syncUrl}/agent/${motebitId}/task`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: submitHeader },
-            body: JSON.stringify(body),
-          });
-
-          if (!resp.ok) {
-            const text = await resp.text();
-            return { ok: false, error: `Task submission failed (${resp.status}): ${text}` };
-          }
-
-          const data = (await resp.json()) as {
-            task_id: string;
-            status: string;
-            routing_choice?: Record<string, unknown>;
-          };
-          taskId = data.task_id;
-          // Tasks are stored under Alice's motebitId (the submitter/owner)
-          targetMotebitId = motebitId;
-        } catch (err: unknown) {
-          return {
-            ok: false,
-            error: `Submission error: ${err instanceof Error ? err.message : String(err)}`,
-          };
-        }
-
-        // Poll for result
-        const POLL_INTERVAL_MS = 2000;
-        const maxPolls = Math.ceil(timeoutMs / POLL_INTERVAL_MS);
-
-        for (let i = 0; i < maxPolls; i++) {
-          await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-
-          try {
-            const resp = await fetch(`${config.syncUrl}/agent/${targetMotebitId}/task/${taskId}`, {
-              headers: { Authorization: queryHeader },
-            });
-            if (!resp.ok) {
-              logger.warn("delegation poll failed", {
-                taskId,
-                status: resp.status,
-                body: await resp.text().catch(() => ""),
-              });
-              continue;
-            }
-
-            const data = (await resp.json()) as {
-              task: { status: string };
-              receipt: ExecutionReceipt | null;
-            };
-
-            if (data.receipt != null) {
-              // Bump trust (best-effort)
-              try {
-                await bumpTrust(data.receipt);
-              } catch {
-                // Best-effort
-              }
-
-              // Stash receipt for handleAgentTask to drain into delegation_receipts
-              stashReceipt(data.receipt);
-
-              return { ok: true, data: data.receipt.result ?? "Task completed (no result text)" };
-            }
-          } catch {
-            // Network hiccup — keep polling
-          }
-        }
-
-        return { ok: false, error: `Delegation timed out after ${timeoutMs / 1000}s` };
-      },
-    );
-
-    // Re-wire loop deps so the tool is visible to the agentic loop
-    this.wireLoopDeps();
+  enableInteractiveDelegation(config: InteractiveDelegationConfig): void {
+    this.interactiveDelegation.enable(config);
   }
 
   /**
@@ -2610,8 +2136,6 @@ export class MotebitRuntime {
    * in the parent receipt's delegation_receipts array).
    */
   getAndResetInteractiveDelegationReceipts(): ExecutionReceipt[] {
-    const receipts = this._interactiveDelegationReceipts.slice();
-    this._interactiveDelegationReceipts.length = 0;
-    return receipts;
+    return this.interactiveDelegation.getAndResetReceipts();
   }
 }
