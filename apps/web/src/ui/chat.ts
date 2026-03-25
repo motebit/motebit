@@ -63,9 +63,12 @@ class StreamingTTS {
   cancel(): void {
     this.buffer = "";
     this.queue = [];
+    const wasActive = this.speaking || this.audioPlaying;
     this.speaking = false;
     this.audioPlaying = false;
-    if (typeof speechSynthesis !== "undefined") {
+    // Only call speechSynthesis.cancel() if something was actually playing.
+    // Calling it on silence produces an audible pop on some browsers.
+    if (wasActive && typeof speechSynthesis !== "undefined") {
       speechSynthesis.cancel();
     }
   }
@@ -99,15 +102,6 @@ export function setStreamingTTSEnabled(enabled: boolean): void {
   } else {
     streamingTTS.disable();
   }
-}
-
-/** Pre-warm speechSynthesis to avoid cold-start pop on first utterance. */
-export function warmTTS(): void {
-  if (typeof speechSynthesis === "undefined") return;
-  const u = new SpeechSynthesisUtterance("");
-  u.volume = 0;
-  speechSynthesis.speak(u);
-  speechSynthesis.cancel();
 }
 
 /** True when TTS is actually producing audio (browser ground truth). */

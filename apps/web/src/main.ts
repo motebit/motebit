@@ -9,7 +9,7 @@ import { initChat, addMessage, showToast } from "./ui/chat";
 import { initSettings } from "./ui/settings";
 import { initConversations } from "./ui/conversations";
 import { initVoice } from "./ui/voice";
-import { setStreamingTTSEnabled, isTTSAudioPlaying, warmTTS } from "./ui/chat";
+import { setStreamingTTSEnabled, isTTSAudioPlaying } from "./ui/chat";
 import { initGatedPanels } from "./ui/gated-panels";
 import { initSovereignPanels } from "./ui/sovereign-panels";
 import { initTheme } from "./ui/theme";
@@ -69,9 +69,6 @@ const voiceAPI = initVoice(ctx, chatAPI, {
     setStreamingTTSEnabled(active);
   },
 });
-
-// Pre-warm speechSynthesis on first interaction to avoid cold-start pop.
-document.addEventListener("click", () => warmTTS(), { once: true });
 
 // Sync creature mouth to actual TTS audio playback — every frame, unconditionally.
 // Overrides the runtime's setSpeaking which fires on stream start/end, not audio start/end.
