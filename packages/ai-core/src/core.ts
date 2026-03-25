@@ -521,7 +521,15 @@ export class CloudProvider implements StreamingProvider {
     });
 
     if (!res.ok) {
-      const errorText = await res.text();
+      let errorText: string;
+      try {
+        errorText = await Promise.race([
+          res.text(),
+          new Promise<string>((_, reject) => setTimeout(() => reject(new Error("timeout")), 3000)),
+        ]);
+      } catch {
+        errorText = `(status ${res.status})`;
+      }
       throw new Error(`Anthropic API error ${res.status}: ${errorText}`);
     }
 
@@ -564,7 +572,16 @@ export class CloudProvider implements StreamingProvider {
     });
 
     if (!res.ok) {
-      const errorText = await res.text();
+      let errorText: string;
+      try {
+        // Race against timeout — streaming error responses may hang
+        errorText = await Promise.race([
+          res.text(),
+          new Promise<string>((_, reject) => setTimeout(() => reject(new Error("timeout")), 3000)),
+        ]);
+      } catch {
+        errorText = `(status ${res.status})`;
+      }
       throw new Error(`Anthropic API error ${res.status}: ${errorText}`);
     }
 
