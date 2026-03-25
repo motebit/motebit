@@ -519,6 +519,11 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
     updateSendButton();
 
     streamingTTS.cancel(); // Interrupt any ongoing speech
+    // Typed sends must not inherit TTS from a previous voice send.
+    // handleVoiceSend enables TTS before calling us, so voice sends stay active.
+    if (textOverride == null) {
+      streamingTTS.disable();
+    }
 
     if (!ctx.app.isProviderConnected) {
       addMessage("system", "No provider connected. Open settings to configure one.");
@@ -631,6 +636,11 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
           }
 
           case "result": {
+            // If no visible text was ever yielded (response was entirely internal
+            // tags or tool-only), clean up the thinking indicator so it doesn't hang.
+            if (!firstChunkReceived) {
+              removeThinkingIndicator(thinkingEl);
+            }
             streamingTTS.flush();
             // Trigger auto-titling in background (best-effort, don't surface errors)
             void ctx.app.autoTitle().catch(() => {});
