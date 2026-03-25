@@ -756,7 +756,6 @@ export function App(): React.ReactElement {
             try {
               a.setModel(args);
               setCurrentModel(args);
-              showToast(`Model switched to: ${args}`);
             } catch (err: unknown) {
               const msg = err instanceof Error ? err.message : String(err);
               addSystemMessage(`Error: ${msg}`);
@@ -769,7 +768,6 @@ export function App(): React.ReactElement {
         case "new":
           a.startNewConversation();
           setMessages([]);
-          showToast("New conversation started");
           break;
         case "memories":
           setShowMemoryPanel(true);
@@ -777,11 +775,8 @@ export function App(): React.ReactElement {
         case "sync":
           void a
             .syncNow()
-            .then((result) => {
-              showToast(
-                `Synced: ${result.events_pushed + result.conversations_pushed} pushed, ` +
-                  `${result.events_pulled + result.conversations_pulled} pulled`,
-              );
+            .then(() => {
+              showToast("Synced");
             })
             .catch((err: unknown) => {
               const msg = err instanceof Error ? err.message : String(err);
@@ -827,15 +822,10 @@ export function App(): React.ReactElement {
           if (!args) {
             addSystemMessage("Usage: /forget <nodeId>");
           } else {
-            void a
-              .deleteMemory(args)
-              .then(() => {
-                showToast(`Memory ${args} deleted`);
-              })
-              .catch((err: unknown) => {
-                const msg = err instanceof Error ? err.message : String(err);
-                addSystemMessage(`Error: ${msg}`);
-              });
+            void a.deleteMemory(args).catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              addSystemMessage(`Error: ${msg}`);
+            });
           }
           break;
         case "clear":
@@ -860,7 +850,6 @@ export function App(): React.ReactElement {
           break;
         }
         case "operator":
-          showToast(a.isOperatorMode ? "Operator mode: ON" : "Operator mode: OFF");
           break;
         case "graph":
           void (async () => {
