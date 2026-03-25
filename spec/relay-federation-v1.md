@@ -787,7 +787,7 @@ These are governance knobs for production deployments. The protocol mechanics (h
 
 **Spec (§14):** Peering between relays with incompatible major versions MUST be rejected during the handshake.
 
-**Implementation:** The `GET /federation/v1/identity` response includes `"spec": "motebit/relay-federation@1.0"`, but the peering handshake does not validate the peer's advertised version. All current relays are on the same version. Version checking should be added before a v2.0 is defined.
+**Implementation:** The `POST /federation/v1/peer/propose` endpoint accepts an optional `spec_version` field. When provided, the relay extracts the major version and rejects peering if the major versions differ (HTTP 403). The peer's protocol version is stored in the `peer_protocol_version` column of `relay_peers`. Pre-version peers (no `spec_version` in propose body) are accepted for backward compatibility.
 
 ---
 

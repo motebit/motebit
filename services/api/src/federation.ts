@@ -148,11 +148,12 @@ export function createFederationTables(db: DatabaseDriver): void {
       );
   `);
 
-  // Migration: Phase 5 trust tracking columns
+  // Migration: Phase 5 trust tracking columns + Phase 6 protocol version
   for (const col of [
     "ALTER TABLE relay_peers ADD COLUMN trust_level TEXT NOT NULL DEFAULT 'first_contact'",
     "ALTER TABLE relay_peers ADD COLUMN successful_forwards INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE relay_peers ADD COLUMN failed_forwards INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE relay_peers ADD COLUMN peer_protocol_version TEXT",
   ]) {
     try {
       db.exec(col);
@@ -870,6 +871,29 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     }
   }
 
+  /** Extract major version from spec string like "motebit/relay-federation@1.0" → 1. */
+  function parseMajorVersion(spec: string): number | null {
+    const match = spec.match(/@(\d+)\./);
+    return match ? parseInt(match[1]!, 10) : null;
+  }
+
+  const RELAY_SPEC_VERSION = "motebit/relay-federation@1.0";
+
+  /**
+   * Throw 403 if peer's protocol version is incompatible.
+   * Per spec §11: relays with incompatible major versions MUST reject peering.
+   */
+  function checkVersionCompatibility(peerSpecVersion: string | undefined): void {
+    if (!peerSpecVersion) return; // Pre-version peers accepted (all are v1.0)
+    const ourMajor = parseMajorVersion(RELAY_SPEC_VERSION);
+    const peerMajor = parseMajorVersion(peerSpecVersion);
+    if (ourMajor != null && peerMajor != null && ourMajor !== peerMajor) {
+      throw new HTTPException(403, {
+        message: `Incompatible federation protocol version: peer=${peerSpecVersion}, local=${RELAY_SPEC_VERSION}`,
+      });
+    }
+  }
+
   /** Throw 503 if the maximum number of active peers has been reached. */
   function checkMaxPeers(): void {
     const count = (
@@ -886,7 +910,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   app.get("/federation/v1/identity", (c) => {
     return c.json({
-      spec: "motebit/relay-federation@1.0",
+      spec: RELAY_SPEC_VERSION,
       relay_motebit_id: relayIdentity.relayMotebitId,
       public_key: relayIdentity.publicKeyHex,
       did: relayIdentity.did,
@@ -902,9 +926,10 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       endpoint_url?: string;
       display_name?: string;
       nonce?: string;
+      spec_version?: string;
     }>();
 
-    const { relay_id, public_key, endpoint_url, display_name, nonce } = body;
+    const { relay_id, public_key, endpoint_url, display_name, nonce, spec_version } = body;
     if (!relay_id || !public_key)
       throw new HTTPException(400, { message: "relay_id and public_key are required" });
     if (!endpoint_url) throw new HTTPException(400, { message: "endpoint_url is required" });
@@ -912,6 +937,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
     checkFederationEnabled();
     checkPeerPolicy(relay_id);
+    checkVersionCompatibility(spec_version);
     checkPeerLimit(relay_id);
     checkMaxPeers();
 
@@ -932,14 +958,15 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     const challengeSig = await sign(challengeMsg, relayIdentity.privateKey);
 
     db.prepare(
-      `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, display_name, state, nonce, missed_heartbeats, agent_count, trust_score)
-       VALUES (?, ?, ?, ?, 'pending', ?, 0, 0, 0.5)
+      `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, display_name, state, nonce, missed_heartbeats, agent_count, trust_score, peer_protocol_version)
+       VALUES (?, ?, ?, ?, 'pending', ?, 0, 0, 0.5, ?)
        ON CONFLICT(peer_relay_id) DO UPDATE SET
          public_key = excluded.public_key, endpoint_url = excluded.endpoint_url,
          display_name = excluded.display_name, state = 'pending',
-         nonce = excluded.nonce, missed_heartbeats = 0
+         nonce = excluded.nonce, missed_heartbeats = 0,
+         peer_protocol_version = excluded.peer_protocol_version
          WHERE relay_peers.state NOT IN ('active', 'pending')`,
-    ).run(relay_id, public_key, endpoint_url, display_name ?? null, ourNonce);
+    ).run(relay_id, public_key, endpoint_url, display_name ?? null, ourNonce, spec_version ?? null);
 
     return c.json({
       relay_id: relayIdentity.relayMotebitId,
@@ -948,6 +975,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       display_name: federationConfig?.displayName ?? null,
       nonce: ourNonce,
       challenge: bytesToHex(challengeSig),
+      spec_version: RELAY_SPEC_VERSION,
     });
   });
 

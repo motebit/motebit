@@ -227,7 +227,7 @@ The receipt includes a `prompt_hash` that doesn't match the task's prompt, and n
 {"level":"warn","msg":"receipt.prompt_hash_mismatch","reason":"receipt prompt_hash does not match task prompt — relay_task_id binding not present"}
 ```
 
-This is a warning, not a rejection. Legacy receipts without `relay_task_id` fall back to prompt hash comparison for observability. The fix is to upgrade the agent to include `relay_task_id` in signed receipts.
+This is a **hard rejection** (HTTP 400). The `relay_task_id` field is required for cryptographic task binding — there is no legacy fallback. The fix is to upgrade the agent to include `relay_task_id` in signed receipts (motebit runtime 0.4.0+).
 
 ### `delegation_receipt.signature_invalid`
 
