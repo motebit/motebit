@@ -19,6 +19,7 @@ export default defineConfig({
     },
   ],
   test: {
+    exclude: ["**/node_modules/**", "**/dist/**", "**/coverage/**"],
     setupFiles: ["./src/__tests__/__stubs__/patch-ajv.ts"],
     coverage: {
       include: ["src/**/*.ts"],
