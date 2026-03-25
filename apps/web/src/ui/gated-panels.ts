@@ -515,7 +515,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
         idDiv.title = agent.motebit_id;
         item.appendChild(idDiv);
 
-        if (agent.capabilities && agent.capabilities.length > 0) {
+        if (agent.capabilities.length > 0) {
           const capsRow = document.createElement("div");
           capsRow.className = "agent-caps-row";
           for (const cap of agent.capabilities) {
