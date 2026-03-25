@@ -464,6 +464,8 @@ export interface ChatCallbacks {
 
 export interface ChatAPI {
   handleSend(): Promise<void>;
+  /** Voice-initiated send: processes through runtime with TTS response, no chat bubbles. */
+  handleVoiceSend(transcript: string): Promise<void>;
   /** Register slash command handler so Enter key executes commands. */
   setSlashCommands(handle: { tryExecute(text: string): boolean }): void;
 }
@@ -618,6 +620,53 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
     }
   }
 
+  /**
+   * Voice-initiated send: the creature responds with voice, not text bubbles.
+   * The conversation still processes through the runtime (memory, tools, receipts)
+   * but the primary output is TTS. No user or assistant bubbles appear in the chat log.
+   */
+  async function handleVoiceSend(transcript: string): Promise<void> {
+    if (!transcript.trim() || ctx.app.isProcessing) return;
+
+    if (!ctx.app.isProviderConnected) {
+      addMessage("system", "No provider connected. Open settings to configure one.");
+      return;
+    }
+
+    streamingTTS.enable();
+    streamingTTS.cancel();
+    setProcessing(true);
+
+    try {
+      for await (const chunk of ctx.app.sendMessageStreaming(transcript)) {
+        switch (chunk.type) {
+          case "text":
+            streamingTTS.push(chunk.text);
+            break;
+          case "result":
+            streamingTTS.flush();
+            void ctx.app.autoTitle().catch(() => {});
+            break;
+          case "approval_request":
+            // Voice can't handle approval UX — fall back to chat bubble
+            addMessage(
+              "system",
+              `Tool "${chunk.name}" needs approval — use text input to respond.`,
+            );
+            break;
+          case "injection_warning":
+            // Silent in voice mode — logged in audit trail
+            break;
+        }
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addMessage("system", formatErrorMessage(msg));
+    } finally {
+      setProcessing(false);
+    }
+  }
+
   // Wire up Enter key
   chatInput.addEventListener("keydown", (e: KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -657,6 +706,7 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
 
   return {
     handleSend,
+    handleVoiceSend,
     setSlashCommands(handle: { tryExecute(text: string): boolean }) {
       slashHandle = handle;
     },
