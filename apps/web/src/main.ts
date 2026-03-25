@@ -71,34 +71,13 @@ const voiceAPI = initVoice(ctx, chatAPI, {
 });
 
 // Drive creature mouth animation during TTS speech output.
-// Uses synthetic speech-like pulsing since Web Speech API doesn't expose audio streams.
-{
-  let speakingFrameId = 0;
-  onTTSSpeakingChange((isSpeaking) => {
-    if (isSpeaking) {
-      const startTime = performance.now();
-      const animate = (now: number): void => {
-        const t = (now - startTime) / 1000;
-        // Natural speech cadence: overlapping sine waves at syllable-like frequencies
-        const syllable = Math.abs(Math.sin(t * 5.2)) * 0.4 + Math.abs(Math.sin(t * 3.1)) * 0.3;
-        const breathe = 0.1 + Math.sin(t * 1.3) * 0.05;
-        const rms = syllable * 0.6 + breathe;
-        app.setAudioReactivity({
-          rms,
-          low: rms * 0.8,
-          mid: syllable * 0.5,
-          high: syllable * 0.2,
-        });
-        speakingFrameId = requestAnimationFrame(animate);
-      };
-      speakingFrameId = requestAnimationFrame(animate);
-    } else {
-      cancelAnimationFrame(speakingFrameId);
-      speakingFrameId = 0;
-      app.setAudioReactivity(null);
-    }
-  });
-}
+// The runtime sets setSpeaking(false) when streaming ends, but TTS may still be
+// playing queued sentences. Override: keep speaking_activity=1 while TTS is active.
+onTTSSpeakingChange((isSpeaking) => {
+  const runtime = app.getRuntime();
+  if (!runtime) return;
+  runtime.behavior.setSpeaking(isSpeaking);
+});
 
 const slashCommands = initSlashCommands(ctx, {
   openSettings: () => settings.open(),
