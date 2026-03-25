@@ -1371,9 +1371,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     federationQueryCache,
     queryLocalAgents: (capability, motebitId, limit) =>
       taskRouter.queryLocalAgents(capability, motebitId, limit),
-    onTaskForwarded: federationCallbacks.onTaskForwarded,
-    onTaskResultReceived: federationCallbacks.onTaskResultReceived,
-    onSettlementReceived: federationCallbacks.onSettlementReceived,
+    onTaskForwarded: (v) => federationCallbacks.onTaskForwarded(v),
+    onTaskResultReceived: (v) => federationCallbacks.onTaskResultReceived(v),
+    onSettlementReceived: (v) => federationCallbacks.onSettlementReceived(v),
   });
 
   // --- Credentials: extracted to credentials.ts ---
