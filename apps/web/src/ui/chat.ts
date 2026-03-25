@@ -3,21 +3,20 @@ import { hasCeilingBeenShown, markCeilingShown } from "../storage";
 
 // === Streaming TTS ===
 
-/** Speaks text incrementally as sentences complete during streaming. */
+/**
+ * Speaks text incrementally as clauses complete during streaming.
+ * Tracks actual audio playback state via SpeechSynthesisUtterance events.
+ */
 class StreamingTTS {
   private buffer = "";
   private queue: string[] = [];
   private speaking = false;
   private _enabled = false;
-  /** Called when TTS starts/stops speaking. Used to drive creature mouth animation. */
-  onSpeakingChange: ((isSpeaking: boolean) => void) | null = null;
+  /** True when the browser is actually producing audio (from utterance.onstart). */
+  audioPlaying = false;
 
   get enabled(): boolean {
     return this._enabled;
-  }
-
-  get isSpeaking(): boolean {
-    return this.speaking;
   }
 
   enable(): void {
@@ -29,18 +28,22 @@ class StreamingTTS {
     this.cancel();
   }
 
-  /** Feed a text delta from the stream. Speaks when a sentence boundary is detected. */
+  /** Feed a text delta from the stream. Speaks when a clause boundary is detected. */
   push(delta: string): void {
     if (!this._enabled) return;
     this.buffer += delta;
 
-    // Detect sentence boundaries: . ! ? followed by space or end of buffer
-    const match = this.buffer.match(/^([\s\S]*?[.!?])\s+([\s\S]*)$/);
+    // Speak on clause boundaries (comma, semicolon, colon, sentence-end) for faster first-word.
+    // The first chunk uses a shorter threshold so speech starts quickly.
+    const pattern = this.speaking
+      ? /^([\s\S]*?[.!?])\s+([\s\S]*)$/ // After first utterance: full sentences
+      : /^([\s\S]*?[.!?:;,])\s+([\s\S]*)$/; // First utterance: any clause boundary
+    const match = this.buffer.match(pattern);
     if (match) {
-      const sentence = match[1]!.trim();
+      const clause = match[1]!.trim();
       this.buffer = match[2]!;
-      if (sentence) {
-        this.queue.push(sentence);
+      if (clause) {
+        this.queue.push(clause);
         if (!this.speaking) this.speakNext();
       }
     }
@@ -60,28 +63,28 @@ class StreamingTTS {
   cancel(): void {
     this.buffer = "";
     this.queue = [];
-    const wasSpeaking = this.speaking;
     this.speaking = false;
+    this.audioPlaying = false;
     if (typeof speechSynthesis !== "undefined") {
       speechSynthesis.cancel();
     }
-    if (wasSpeaking) this.onSpeakingChange?.(false);
   }
 
   private speakNext(): void {
     if (this.queue.length === 0) {
       this.speaking = false;
-      this.onSpeakingChange?.(false);
+      this.audioPlaying = false;
       return;
     }
-    const wasSpeaking = this.speaking;
     this.speaking = true;
-    if (!wasSpeaking) this.onSpeakingChange?.(true);
     const text = this.queue.shift()!;
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = 1.05;
     utterance.pitch = 1.0;
     utterance.volume = 0.85;
+    utterance.onstart = () => {
+      this.audioPlaying = true;
+    };
     utterance.onend = () => this.speakNext();
     utterance.onerror = () => this.speakNext();
     speechSynthesis.speak(utterance);
@@ -98,9 +101,9 @@ export function setStreamingTTSEnabled(enabled: boolean): void {
   }
 }
 
-/** Register a callback for when TTS starts/stops speaking. */
-export function onTTSSpeakingChange(cb: (isSpeaking: boolean) => void): void {
-  streamingTTS.onSpeakingChange = cb;
+/** True when TTS is actually producing audio (browser ground truth). */
+export function isTTSAudioPlaying(): boolean {
+  return streamingTTS.audioPlaying;
 }
 
 // === DOM Refs ===

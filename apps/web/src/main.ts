@@ -9,7 +9,7 @@ import { initChat, addMessage, showToast } from "./ui/chat";
 import { initSettings } from "./ui/settings";
 import { initConversations } from "./ui/conversations";
 import { initVoice } from "./ui/voice";
-import { setStreamingTTSEnabled, onTTSSpeakingChange } from "./ui/chat";
+import { setStreamingTTSEnabled, isTTSAudioPlaying } from "./ui/chat";
 import { initGatedPanels } from "./ui/gated-panels";
 import { initSovereignPanels } from "./ui/sovereign-panels";
 import { initTheme } from "./ui/theme";
@@ -70,14 +70,20 @@ const voiceAPI = initVoice(ctx, chatAPI, {
   },
 });
 
-// Drive creature mouth animation during TTS speech output.
-// The runtime sets setSpeaking(false) when streaming ends, but TTS may still be
-// playing queued sentences. Override: keep speaking_activity=1 while TTS is active.
-onTTSSpeakingChange((isSpeaking) => {
-  const runtime = app.getRuntime();
-  if (!runtime) return;
-  runtime.behavior.setSpeaking(isSpeaking);
-});
+// Sync creature mouth to actual TTS audio playback.
+// Runs every frame: reads ground truth from utterance.onstart/onend,
+// overrides the runtime's premature setSpeaking(false) at stream end.
+{
+  const syncMouth = (): void => {
+    const runtime = app.getRuntime();
+    if (runtime) {
+      const playing = isTTSAudioPlaying();
+      if (playing) runtime.behavior.setSpeaking(true);
+    }
+    requestAnimationFrame(syncMouth);
+  };
+  requestAnimationFrame(syncMouth);
+}
 
 const slashCommands = initSlashCommands(ctx, {
   openSettings: () => settings.open(),
