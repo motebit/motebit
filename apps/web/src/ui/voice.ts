@@ -66,6 +66,10 @@ let waveformColor = { r: 203, g: 225, b: 255 };
 
 export interface VoiceAPI {
   updateVoiceGlowColor(): void;
+  /** Re-enter listening after TTS finishes (continuous conversation loop). */
+  resumeListening(): void;
+  /** End the voice session entirely (mic button toggle off). */
+  endSession(): void;
 }
 
 export interface VoiceCallbacks {
@@ -80,7 +84,7 @@ export function initVoice(
   voiceCallbacks?: VoiceCallbacks,
 ): VoiceAPI {
   if (!micBtn || !inputBarWrapper) {
-    return { updateVoiceGlowColor() {} };
+    return { updateVoiceGlowColor() {}, resumeListening() {}, endSession() {} };
   }
 
   // Check for Web Speech API support
@@ -93,7 +97,7 @@ export function initVoice(
 
   if (!SpeechRecognitionCtor) {
     micBtn.style.display = "none";
-    return { updateVoiceGlowColor() {} };
+    return { updateVoiceGlowColor() {}, resumeListening() {}, endSession() {} };
   }
 
   // Show presence circle — it's both the voice indicator and the voice input trigger
@@ -396,35 +400,39 @@ export function initVoice(
         }
       }
 
-      // When we get a final result, send via voice mode (TTS response, no chat bubbles)
+      // When we get a final result, pause listening (not end) and send via voice mode
       if (final) {
-        stopListening();
+        pauseListening();
         void chatAPI.handleVoiceSend(final.trim());
       }
     };
 
     recognition.onerror = () => {
-      stopListening();
+      pauseListening();
+      // Re-enter listening if session is still active
+      if (inSession) void startListening();
     };
 
     recognition.onend = () => {
-      stopListening();
+      // recognition.onend fires after onresult or onerror — only restart
+      // if we paused (not if a final result was already captured)
+      if (isListening) pauseListening();
     };
 
     recognition.start();
   }
 
-  function stopListening(): void {
+  /** Pause listening between turns — keep audio pipeline and session visuals alive. */
+  function pauseListening(): void {
     if (!isListening) return;
     isListening = false;
-    micBtn!.classList.remove("active");
-    inputBarWrapper!.classList.remove("listening");
+    // Keep micBtn active and inputBarWrapper in session state — don't remove visual classes.
+    // The bar stays glowing throughout the voice session.
     if (voiceTranscript) {
       voiceTranscript.textContent = "";
       voiceTranscript.classList.remove("has-text");
     }
     stopWaveformLoop();
-    ctx.app.setAudioReactivity(null);
 
     if (recognition) {
       try {
@@ -434,20 +442,37 @@ export function initVoice(
       }
       recognition = null;
     }
-
-    // Release audio resources when done
-    releaseAudioPipeline();
+    // Audio pipeline stays alive — no pop, ready to resume
   }
 
+  /** End the voice session — release everything. */
+  function endSession(): void {
+    pauseListening();
+    micBtn!.classList.remove("active");
+    inputBarWrapper!.classList.remove("listening");
+    ctx.app.setAudioReactivity(null);
+    releaseAudioPipeline();
+    inSession = false;
+  }
+
+  let inSession = false;
+
   micBtn.addEventListener("click", () => {
-    if (isListening) {
-      stopListening();
+    if (inSession) {
+      endSession();
       voiceCallbacks?.onPresenceToggle(false);
     } else {
+      inSession = true;
       void startListening();
       voiceCallbacks?.onPresenceToggle(true);
     }
   });
 
-  return { updateVoiceGlowColor };
+  return {
+    updateVoiceGlowColor,
+    resumeListening() {
+      if (inSession) void startListening();
+    },
+    endSession,
+  };
 }

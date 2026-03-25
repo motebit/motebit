@@ -102,8 +102,14 @@ if (savedVoice?.ttsVoice) setTTSVoice(savedVoice.ttsVoice);
         high: syllable * word * 0.04,
       });
     }
+    // When TTS finishes, resume listening for the next turn
+    if (wasTTSPlaying && !playing) {
+      voiceAPI.resumeListening();
+    }
+    wasTTSPlaying = playing;
     requestAnimationFrame(syncTTS);
   };
+  let wasTTSPlaying = false;
   requestAnimationFrame(syncTTS);
 }
 
