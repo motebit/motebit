@@ -48,7 +48,6 @@ declare const webkitSpeechRecognition: { new (): SpeechRecognition } | undefined
 // === DOM Refs ===
 
 const micBtn = document.getElementById("mic-btn") as HTMLButtonElement | null;
-const chatInput = document.getElementById("chat-input") as HTMLInputElement;
 const inputBarWrapper = document.getElementById("input-bar-wrapper") as HTMLDivElement | null;
 const voiceTranscript = document.getElementById("voice-transcript") as HTMLSpanElement | null;
 const voiceWaveform = document.getElementById("voice-waveform") as HTMLCanvasElement | null;
@@ -397,11 +396,10 @@ export function initVoice(
         }
       }
 
-      // When we get a final result, fill the input and send
+      // When we get a final result, send via voice mode (TTS response, no chat bubbles)
       if (final) {
-        chatInput.value = final.trim();
         stopListening();
-        void chatAPI.handleSend();
+        void chatAPI.handleVoiceSend(final.trim());
       }
     };
 

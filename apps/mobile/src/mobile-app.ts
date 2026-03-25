@@ -688,6 +688,10 @@ export class MobileApp {
     return this.runtime?.isProcessing ?? false;
   }
 
+  getRuntime(): MotebitRuntime | null {
+    return this.runtime;
+  }
+
   get currentModel(): string | null {
     return this.runtime?.currentModel ?? null;
   }

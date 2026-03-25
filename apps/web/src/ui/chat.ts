@@ -3,12 +3,17 @@ import { hasCeilingBeenShown, markCeilingShown } from "../storage";
 
 // === Streaming TTS ===
 
-/** Speaks text incrementally as sentences complete during streaming. */
+/**
+ * Speaks text incrementally as clauses complete during streaming.
+ * Tracks actual audio playback state via SpeechSynthesisUtterance events.
+ */
 class StreamingTTS {
   private buffer = "";
   private queue: string[] = [];
   private speaking = false;
   private _enabled = false;
+  /** True when the browser is actually producing audio (from utterance.onstart). */
+  audioPlaying = false;
 
   get enabled(): boolean {
     return this._enabled;
@@ -23,18 +28,22 @@ class StreamingTTS {
     this.cancel();
   }
 
-  /** Feed a text delta from the stream. Speaks when a sentence boundary is detected. */
+  /** Feed a text delta from the stream. Speaks when a clause boundary is detected. */
   push(delta: string): void {
     if (!this._enabled) return;
     this.buffer += delta;
 
-    // Detect sentence boundaries: . ! ? followed by space or end of buffer
-    const match = this.buffer.match(/^([\s\S]*?[.!?])\s+([\s\S]*)$/);
+    // First utterance: speak on clause boundary (,;:) with minimum length so it sounds natural.
+    // Subsequent utterances: speak on sentence boundary (.!?) for smooth cadence.
+    const pattern = this.speaking
+      ? /^([\s\S]*?[.!?])\s+([\s\S]*)$/
+      : /^([\s\S]{12,}?[.!?:;,])\s+([\s\S]*)$/; // min 12 chars avoids clipped fragments
+    const match = this.buffer.match(pattern);
     if (match) {
-      const sentence = match[1]!.trim();
+      const clause = match[1]!.trim();
       this.buffer = match[2]!;
-      if (sentence) {
-        this.queue.push(sentence);
+      if (clause) {
+        this.queue.push(clause);
         if (!this.speaking) this.speakNext();
       }
     }
@@ -54,8 +63,12 @@ class StreamingTTS {
   cancel(): void {
     this.buffer = "";
     this.queue = [];
+    const wasActive = this.speaking || this.audioPlaying;
     this.speaking = false;
-    if (typeof speechSynthesis !== "undefined") {
+    this.audioPlaying = false;
+    // Only call speechSynthesis.cancel() if something was actually playing.
+    // Calling it on silence produces an audible pop on some browsers.
+    if (wasActive && typeof speechSynthesis !== "undefined") {
       speechSynthesis.cancel();
     }
   }
@@ -63,6 +76,7 @@ class StreamingTTS {
   private speakNext(): void {
     if (this.queue.length === 0) {
       this.speaking = false;
+      this.audioPlaying = false;
       return;
     }
     this.speaking = true;
@@ -71,6 +85,9 @@ class StreamingTTS {
     utterance.rate = 1.05;
     utterance.pitch = 1.0;
     utterance.volume = 0.85;
+    utterance.onstart = () => {
+      this.audioPlaying = true;
+    };
     utterance.onend = () => this.speakNext();
     utterance.onerror = () => this.speakNext();
     speechSynthesis.speak(utterance);
@@ -85,6 +102,11 @@ export function setStreamingTTSEnabled(enabled: boolean): void {
   } else {
     streamingTTS.disable();
   }
+}
+
+/** True when TTS is actually producing audio (browser ground truth). */
+export function isTTSAudioPlaying(): boolean {
+  return streamingTTS.audioPlaying;
 }
 
 // === DOM Refs ===
@@ -464,6 +486,8 @@ export interface ChatCallbacks {
 
 export interface ChatAPI {
   handleSend(): Promise<void>;
+  /** Voice-initiated send: processes through runtime with TTS response, no chat bubbles. */
+  handleVoiceSend(transcript: string): Promise<void>;
   /** Register slash command handler so Enter key executes commands. */
   setSlashCommands(handle: { tryExecute(text: string): boolean }): void;
 }
@@ -618,6 +642,53 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
     }
   }
 
+  /**
+   * Voice-initiated send: the creature responds with voice, not text bubbles.
+   * The conversation still processes through the runtime (memory, tools, receipts)
+   * but the primary output is TTS. No user or assistant bubbles appear in the chat log.
+   */
+  async function handleVoiceSend(transcript: string): Promise<void> {
+    if (!transcript.trim() || ctx.app.isProcessing) return;
+
+    if (!ctx.app.isProviderConnected) {
+      addMessage("system", "No provider connected. Open settings to configure one.");
+      return;
+    }
+
+    streamingTTS.enable();
+    streamingTTS.cancel();
+    setProcessing(true);
+
+    try {
+      for await (const chunk of ctx.app.sendMessageStreaming(transcript)) {
+        switch (chunk.type) {
+          case "text":
+            streamingTTS.push(chunk.text);
+            break;
+          case "result":
+            streamingTTS.flush();
+            void ctx.app.autoTitle().catch(() => {});
+            break;
+          case "approval_request":
+            // Voice can't handle approval UX — fall back to chat bubble
+            addMessage(
+              "system",
+              `Tool "${chunk.name}" needs approval — use text input to respond.`,
+            );
+            break;
+          case "injection_warning":
+            // Silent in voice mode — logged in audit trail
+            break;
+        }
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addMessage("system", formatErrorMessage(msg));
+    } finally {
+      setProcessing(false);
+    }
+  }
+
   // Wire up Enter key
   chatInput.addEventListener("keydown", (e: KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -657,6 +728,7 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
 
   return {
     handleSend,
+    handleVoiceSend,
     setSlashCommands(handle: { tryExecute(text: string): boolean }) {
       slashHandle = handle;
     },

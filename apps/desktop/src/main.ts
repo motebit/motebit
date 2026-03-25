@@ -651,6 +651,13 @@ async function bootstrap(): Promise<void> {
     const time = timestamp / 1000;
     const deltaTime = lastTime === 0 ? 1 / 60 : time - lastTime;
     lastTime = time;
+
+    // Sync creature mouth to actual TTS audio, not runtime stream lifecycle
+    const runtime = app.getRuntime();
+    if (runtime) {
+      runtime.behavior.setSpeaking(voice.getMicState() === "speaking");
+    }
+
     app.renderFrame(deltaTime, time);
     requestAnimationFrame(loop);
   };
