@@ -263,5 +263,5 @@ export function createProvider(config: ProviderConfig): StreamingProvider | Inte
 
 /** LLM proxy / embed / fetch base URL. Override at build time via VITE_PROXY_URL. */
 export const PROXY_BASE_URL: string =
-  ((import.meta as unknown as Record<string, Record<string, string> | undefined>).env
-    ?.VITE_PROXY_URL as string | undefined) ?? "https://api.motebit.com";
+  (import.meta as unknown as Record<string, Record<string, string> | undefined>).env
+    ?.VITE_PROXY_URL ?? "https://api.motebit.com";
