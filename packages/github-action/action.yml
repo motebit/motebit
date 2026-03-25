@@ -58,9 +58,9 @@ runs:
           exit 0
         fi
 
-        # Run verification using npx (downloads create-motebit on first use)
+        # Run verification using npx (pinned version for reproducibility)
         set +e
-        OUTPUT=$(npx --yes create-motebit@latest verify "$FILE" 2>&1)
+        OUTPUT=$(npx --yes create-motebit@0.6.10 verify "$FILE" 2>&1)
         EXIT_CODE=$?
         set -e
 

@@ -1,0 +1,12 @@
+dbs:
+  - path: /data/motebit.db
+    replicas:
+      - type: s3
+        bucket: ${LITESTREAM_REPLICA_BUCKET}
+        path: ${LITESTREAM_REPLICA_PATH:-motebit-sync}
+        region: ${LITESTREAM_REPLICA_REGION:-us-west-2}
+        access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+        secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
+        retention: 72h
+        sync-interval: 10s
+        snapshot-interval: 1h

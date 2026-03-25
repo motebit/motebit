@@ -27,7 +27,15 @@ WORKDIR /app
 # better-sqlite3 needs libstdc++ at runtime
 RUN apk add --no-cache libstdc++
 
+# Litestream for streaming SQLite replication to S3.
+# Optional — only active when LITESTREAM_REPLICA_BUCKET is set.
+ADD https://github.com/benbjohnson/litestream/releases/download/v0.3.13/litestream-v0.3.13-linux-amd64.tar.gz /tmp/litestream.tar.gz
+RUN tar -xzf /tmp/litestream.tar.gz -C /usr/local/bin && rm /tmp/litestream.tar.gz
+
 COPY --from=build /app/deployed ./
+COPY services/api/litestream.yml /app/litestream.yml
+COPY services/api/run.sh /app/run.sh
+RUN chmod +x /app/run.sh
 
 # Create data directory for SQLite persistent volume
 RUN mkdir -p /data
@@ -39,4 +47,4 @@ EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://localhost:3000/health || exit 1
 
-CMD ["node", "dist/index.js"]
+CMD ["/app/run.sh"]
