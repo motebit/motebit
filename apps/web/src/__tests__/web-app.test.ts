@@ -66,6 +66,7 @@ vi.mock("../providers.js", () => ({
     getModel: vi.fn().mockReturnValue("mock-model"),
   }),
   WebLLMProvider: class {},
+  PROXY_BASE_URL: "https://api.motebit.com",
 }));
 
 beforeEach(() => {
