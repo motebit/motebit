@@ -1,4 +1,5 @@
 import type { ChatAPI } from "./chat";
+import { setStreamingTTSEnabled } from "./chat";
 import type { WebContext } from "../types";
 
 // === Web Speech API Types ===
@@ -434,6 +435,7 @@ export function initVoice(
   /** End the voice session — release everything. */
   function endSession(): void {
     pauseListening();
+    setStreamingTTSEnabled(false); // Stop any in-progress TTS speech
     micBtn!.classList.remove("active");
     inputBarWrapper!.classList.remove("listening");
     ctx.app.setAudioReactivity(null);
