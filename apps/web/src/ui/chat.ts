@@ -636,11 +636,6 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
           }
 
           case "result": {
-            // If no visible text was ever yielded (response was entirely internal
-            // tags or tool-only), clean up the thinking indicator so it doesn't hang.
-            if (!firstChunkReceived) {
-              removeThinkingIndicator(thinkingEl);
-            }
             streamingTTS.flush();
             // Trigger auto-titling in background (best-effort, don't surface errors)
             void ctx.app.autoTitle().catch(() => {});
@@ -648,11 +643,14 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
           }
         }
       }
+      // Post-loop cleanup: unconditionally remove thinking indicator.
+      // Covers all edge cases (tag-only responses, tool-only iterations,
+      // early break, missing result chunk). Safe to call if already removed.
+      removeThinkingIndicator(thinkingEl);
     } catch (err: unknown) {
+      removeThinkingIndicator(thinkingEl);
       const msg = err instanceof Error ? err.message : String(err);
-      if (!firstChunkReceived) {
-        removeThinkingIndicator(thinkingEl);
-      } else if (bubble && !textEl?.textContent) {
+      if (bubble && !textEl?.textContent) {
         bubble.remove();
       }
       // Map errors to actionable messages
