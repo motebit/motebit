@@ -113,9 +113,11 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       pane.classList.toggle("active", pane.id === `pane-${tabName}`);
     });
 
-    // Populate identity fields when switching to identity tab
     if (tabName === "identity") {
       populateIdentityFields();
+    }
+    if (tabName === "governance") {
+      populateAuditTrail();
     }
   }
 
@@ -125,6 +127,99 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     const pubHex = ctx.app.publicKeyHex;
     identityDid.textContent = pubHex ? hexPublicKeyToDidKey(pubHex) : "—";
     identityPublicKey.textContent = pubHex || "—";
+  }
+
+  function classifyDecision(decision: unknown): "allowed" | "denied" | "approval" {
+    if (decision == null || typeof decision !== "object") return "allowed";
+    const d = decision as Record<string, unknown>;
+    if (d.allowed === false) return "denied";
+    if (d.requiresApproval === true) return "approval";
+    return "allowed";
+  }
+
+  function formatTimeAgo(ts: number): string {
+    const diff = Date.now() - ts;
+    if (diff < 60_000) return "just now";
+    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+    if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+    return `${Math.floor(diff / 86_400_000)}d ago`;
+  }
+
+  function populateAuditTrail(): void {
+    const listEl = document.getElementById("audit-activity-list")!;
+    const emptyEl = document.getElementById("audit-activity-empty")!;
+    listEl.innerHTML = "";
+    emptyEl.style.display = "none";
+
+    const runtime = ctx.app.getRuntime();
+    if (!runtime) {
+      emptyEl.style.display = "block";
+      return;
+    }
+
+    const entries = runtime.policy.audit.getAll();
+    if (entries.length === 0) {
+      emptyEl.style.display = "block";
+      return;
+    }
+
+    // Show most recent first, limit to 50
+    const recent = entries.slice(-50).reverse();
+    for (const entry of recent) {
+      const row = document.createElement("div");
+      row.className = "audit-row";
+
+      const header = document.createElement("div");
+      header.className = "audit-row-header";
+
+      const toolName = document.createElement("span");
+      toolName.className = "audit-tool-name";
+      toolName.textContent = entry.tool;
+      header.appendChild(toolName);
+
+      const badgeClass = classifyDecision(entry.decision);
+      const badge = document.createElement("span");
+      badge.className = `audit-decision-badge ${badgeClass}`;
+      badge.textContent = badgeClass;
+      header.appendChild(badge);
+
+      if (entry.injection?.detected) {
+        const injBadge = document.createElement("span");
+        injBadge.className = "audit-decision-badge denied";
+        injBadge.textContent = "injection";
+        header.appendChild(injBadge);
+      }
+
+      const time = document.createElement("span");
+      time.className = "audit-time";
+      time.textContent = formatTimeAgo(entry.timestamp);
+      header.appendChild(time);
+
+      row.appendChild(header);
+
+      // Expandable detail
+      const detail = document.createElement("div");
+      detail.className = "audit-row-detail";
+
+      const argsStr = JSON.stringify(entry.args ?? {});
+      const argsDiv = document.createElement("div");
+      argsDiv.className = "audit-detail-args";
+      argsDiv.textContent = argsStr.length > 200 ? argsStr.slice(0, 200) + "..." : argsStr;
+      detail.appendChild(argsDiv);
+
+      if (entry.result) {
+        const resultDiv = document.createElement("div");
+        resultDiv.className = "audit-detail-result";
+        const ok = entry.result.ok ? "ok" : "failed";
+        const dur = entry.result.durationMs != null ? `${entry.result.durationMs}ms` : "";
+        resultDiv.textContent = [ok, dur].filter(Boolean).join(" · ");
+        detail.appendChild(resultDiv);
+      }
+
+      row.appendChild(detail);
+      row.addEventListener("click", () => row.classList.toggle("expanded"));
+      listEl.appendChild(row);
+    }
   }
 
   function setupIdentityCopyHandlers(): void {
