@@ -567,6 +567,29 @@ export function App(): React.ReactElement {
       const animate = (time: number): void => {
         const dt = lastTime ? (time - lastTime) / 1000 : 0.016;
         lastTime = time;
+
+        // Sync creature mouth + glow to actual TTS audio playback
+        const runtime = a.getRuntime();
+        const isSpeaking = ttsStreamingRef.current;
+        if (runtime) {
+          runtime.behavior.setSpeaking(isSpeaking);
+        }
+        if (isSpeaking) {
+          const t = time / 1000;
+          const syllable = Math.max(0, Math.sin(t * 8.3) * Math.sin(t * 5.1));
+          const word = Math.max(0, Math.sin(t * 2.7 + 0.5)) * 0.5 + 0.5;
+          const breath = Math.max(0, Math.sin(t * 0.8)) * 0.3 + 0.7;
+          const jitter = Math.sin(t * 31.7) * 0.02;
+          const energy = (syllable * 0.5 + 0.05 + jitter) * word * breath;
+          const rms = energy * 0.25;
+          a.setAudioReactivity({
+            rms,
+            low: rms * 1.2,
+            mid: energy * 0.12,
+            high: syllable * word * 0.04,
+          });
+        }
+
         a.renderFrame(dt, time / 1000);
         animFrameRef.current = requestAnimationFrame(animate);
       };
@@ -1233,12 +1256,17 @@ export function App(): React.ReactElement {
     (delta: string) => {
       if (!settings?.voiceResponseEnabled || !settings?.voiceEnabled || !ttsRef.current) return;
       ttsBufferRef.current += delta;
-      const match = ttsBufferRef.current.match(/^([\s\S]*?[.!?])\s+([\s\S]*)$/);
+      // First utterance: clause boundary (min 12 chars) for faster start.
+      // Subsequent: full sentence boundary for natural cadence.
+      const pattern = ttsStreamingRef.current
+        ? /^([\s\S]*?[.!?])\s+([\s\S]*)$/
+        : /^([\s\S]{12,}?[.!?:;,])\s+([\s\S]*)$/;
+      const match = ttsBufferRef.current.match(pattern);
       if (match) {
-        const sentence = match[1]!.trim();
+        const clause = match[1]!.trim();
         ttsBufferRef.current = match[2]!;
-        if (sentence) {
-          ttsQueueRef.current.push(sentence);
+        if (clause) {
+          ttsQueueRef.current.push(clause);
           if (!ttsStreamingRef.current) speakNextQueued();
         }
       }
