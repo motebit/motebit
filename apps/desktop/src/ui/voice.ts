@@ -644,17 +644,22 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
 
   function startTTSPulse(): void {
     stopTTSPulse();
-    let phase = 0;
-    const pulse = (): void => {
+    const startTime = performance.now();
+    const pulse = (now: number): void => {
       if (!ttsSpeaking) return;
-      phase += 0.05;
-      const base = 0.15;
-      const wave = Math.sin(phase * 3.7) * 0.08 + Math.sin(phase * 7.1) * 0.04;
+      const t = (now - startTime) / 1000;
+      // Organic speech-like glow: layered noise at syllable, word, and breath rates.
+      const syllable = Math.max(0, Math.sin(t * 8.3) * Math.sin(t * 5.1));
+      const word = Math.max(0, Math.sin(t * 2.7 + 0.5)) * 0.5 + 0.5;
+      const breath = Math.max(0, Math.sin(t * 0.8)) * 0.3 + 0.7;
+      const jitter = Math.sin(t * 31.7) * 0.02;
+      const energy = (syllable * 0.5 + 0.05 + jitter) * word * breath;
+      const rms = energy * 0.25;
       ctx.app.setAudioReactivity({
-        rms: base + wave,
-        low: base * 0.8 + wave * 0.5,
-        mid: base * 1.2 + wave,
-        high: base * 0.4 + Math.sin(phase * 11.3) * 0.03,
+        rms,
+        low: rms * 1.2,
+        mid: energy * 0.12,
+        high: syllable * word * 0.04,
       });
       ttsPulseAnimationId = requestAnimationFrame(pulse);
     };
@@ -679,12 +684,17 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
   function pushTTSChunk(delta: string): void {
     if (!voiceResponseEnabled) return;
     ttsBuffer += delta;
-    const match = ttsBuffer.match(/^([\s\S]*?[.!?])\s+([\s\S]*)$/);
+    // First utterance: speak on clause boundary (min 12 chars) for faster start.
+    // Subsequent: full sentence boundary for natural cadence.
+    const pattern = ttsStreaming
+      ? /^([\s\S]*?[.!?])\s+([\s\S]*)$/
+      : /^([\s\S]{12,}?[.!?:;,])\s+([\s\S]*)$/;
+    const match = ttsBuffer.match(pattern);
     if (match) {
-      const sentence = match[1]!.trim();
+      const clause = match[1]!.trim();
       ttsBuffer = match[2]!;
-      if (sentence) {
-        ttsQueue.push(sentence);
+      if (clause) {
+        ttsQueue.push(clause);
         if (!ttsStreaming) speakNextQueued();
       }
     }
