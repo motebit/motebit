@@ -71,14 +71,19 @@ const voiceAPI = initVoice(ctx, chatAPI, {
 });
 
 // Sync creature mouth to actual TTS audio playback.
-// Runs every frame: reads ground truth from utterance.onstart/onend,
-// overrides the runtime's premature setSpeaking(false) at stream end.
+// Runs every frame: reads ground truth from utterance.onstart/onend.
 {
+  let wasPlaying = false;
   const syncMouth = (): void => {
     const runtime = app.getRuntime();
     if (runtime) {
       const playing = isTTSAudioPlaying();
-      if (playing) runtime.behavior.setSpeaking(true);
+      if (playing) {
+        runtime.behavior.setSpeaking(true);
+      } else if (wasPlaying) {
+        runtime.behavior.setSpeaking(false);
+      }
+      wasPlaying = playing;
     }
     requestAnimationFrame(syncMouth);
   };
