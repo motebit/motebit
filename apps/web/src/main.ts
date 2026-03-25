@@ -70,17 +70,29 @@ const voiceAPI = initVoice(ctx, chatAPI, {
   },
 });
 
-// Sync creature mouth to actual TTS audio playback — every frame, unconditionally.
+// Sync creature to TTS audio — mouth movement + gentle glow while speaking.
 // Overrides the runtime's setSpeaking which fires on stream start/end, not audio start/end.
+// Glow is subtler than user voice input (~30% intensity) — creature expresses, not reacts.
 {
-  const syncMouth = (): void => {
+  const syncTTS = (now: number): void => {
+    const playing = isTTSAudioPlaying();
     const runtime = app.getRuntime();
     if (runtime) {
-      runtime.behavior.setSpeaking(isTTSAudioPlaying());
+      runtime.behavior.setSpeaking(playing);
     }
-    requestAnimationFrame(syncMouth);
+    if (playing) {
+      const t = now / 1000;
+      const pulse = 0.08 + Math.abs(Math.sin(t * 4.7)) * 0.06 + Math.sin(t * 2.3) * 0.03;
+      app.setAudioReactivity({
+        rms: pulse,
+        low: pulse * 0.7,
+        mid: pulse * 0.4,
+        high: pulse * 0.15,
+      });
+    }
+    requestAnimationFrame(syncTTS);
   };
-  requestAnimationFrame(syncMouth);
+  requestAnimationFrame(syncTTS);
 }
 
 const slashCommands = initSlashCommands(ctx, {
