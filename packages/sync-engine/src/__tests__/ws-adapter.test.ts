@@ -361,7 +361,7 @@ describe("WebSocketEventStoreAdapter", () => {
     expect(MockWebSocket.instances).toHaveLength(4);
   });
 
-  it("resets reconnect attempt counter on successful connect", () => {
+  it("resets reconnect counter after 30s stable connection (hysteresis)", () => {
     const adapter = new WebSocketEventStoreAdapter({
       url: WS_URL,
       motebitId: MOTEBIT_ID,
@@ -372,17 +372,45 @@ describe("WebSocketEventStoreAdapter", () => {
     lastWS().simulateOpen();
     lastWS().simulateClose();
 
-    // First reconnect at 100ms
+    // First reconnect at 100ms (attempt 1)
     vi.advanceTimersByTime(100);
     expect(MockWebSocket.instances).toHaveLength(2);
 
-    // Successful reconnect — counter resets
+    // Successful reconnect — hold for 30s stability window
+    lastWS().simulateOpen();
+    vi.advanceTimersByTime(30_000);
+    lastWS().simulateClose();
+
+    // Counter reset: next reconnect at base 100ms, not 200ms
+    vi.advanceTimersByTime(100);
+    expect(MockWebSocket.instances).toHaveLength(3);
+  });
+
+  it("keeps elevated backoff if connection drops before stability window", () => {
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      reconnectBaseMs: 100,
+      reconnectMaxMs: 10000,
+    });
+    adapter.connect();
     lastWS().simulateOpen();
     lastWS().simulateClose();
 
-    // Next reconnect should be back to base (100ms), not 200ms
+    // Reconnect at 100ms (attempt 1)
     vi.advanceTimersByTime(100);
-    expect(MockWebSocket.instances).toHaveLength(3);
+    expect(MockWebSocket.instances).toHaveLength(2);
+
+    // Reconnect succeeds but drops after 5s (before 30s stability)
+    lastWS().simulateOpen();
+    vi.advanceTimersByTime(5_000);
+    lastWS().simulateClose();
+
+    // Backoff not reset: should be 200ms (attempt 2), not 100ms
+    vi.advanceTimersByTime(100);
+    expect(MockWebSocket.instances).toHaveLength(2); // not yet
+    vi.advanceTimersByTime(100);
+    expect(MockWebSocket.instances).toHaveLength(3); // 200ms → attempt 2
   });
 
   // --- Catch-up ---

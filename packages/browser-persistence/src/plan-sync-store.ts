@@ -132,6 +132,15 @@ function syncToPlan(s: SyncPlan): Plan {
   };
 }
 
+function parseSafe<T>(raw: string | null | undefined, fallback: T): T {
+  if (raw == null || typeof raw !== "string") return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 function syncToStep(s: SyncPlanStep): PlanStep {
   return {
     step_id: s.step_id,
@@ -139,12 +148,12 @@ function syncToStep(s: SyncPlanStep): PlanStep {
     ordinal: s.ordinal,
     description: s.description,
     prompt: s.prompt,
-    depends_on: typeof s.depends_on === "string" ? (JSON.parse(s.depends_on) as string[]) : [],
+    depends_on: parseSafe(s.depends_on, []),
     optional: s.optional,
     status: s.status,
     required_capabilities:
       s.required_capabilities != null
-        ? (JSON.parse(s.required_capabilities) as PlanStep["required_capabilities"])
+        ? parseSafe<PlanStep["required_capabilities"]>(s.required_capabilities, undefined)
         : undefined,
     delegation_task_id: s.delegation_task_id ?? undefined,
     assigned_motebit_id: s.assigned_motebit_id ?? undefined,

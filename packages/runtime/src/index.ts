@@ -562,17 +562,24 @@ export class MotebitRuntime {
           const stored = credentialStore.listBySubject(subjectMotebitId);
           return stored
             .filter((sc) => sc.credential_type === "AgentReputationCredential")
-            .map((sc) => {
-              const vc = JSON.parse(sc.credential_json) as Record<string, unknown>;
-              return {
-                type: vc.type as string[],
-                issuer: vc.issuer as string,
-                validFrom: vc.validFrom as string | undefined,
-                credentialSubject:
-                  vc.credentialSubject as import("@motebit/sdk").ReputationCredentialSubject & {
-                    id: string;
+            .flatMap((sc) => {
+              try {
+                const vc = JSON.parse(sc.credential_json) as Record<string, unknown>;
+                return [
+                  {
+                    type: vc.type as string[],
+                    issuer: vc.issuer as string,
+                    validFrom: vc.validFrom as string | undefined,
+                    credentialSubject:
+                      vc.credentialSubject as import("@motebit/sdk").ReputationCredentialSubject & {
+                        id: string;
+                      },
                   },
-              };
+                ];
+              } catch {
+                // Malformed credential_json — skip rather than break the entire array
+                return [];
+              }
             });
         }
         // Fallback: in-memory credentials only

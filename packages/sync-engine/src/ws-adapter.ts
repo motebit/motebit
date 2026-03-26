@@ -62,6 +62,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   private onCustomMessageCallbacks: Set<CustomMessageCallback> = new Set();
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private stabilityTimer: ReturnType<typeof setTimeout> | null = null;
   private connected = false;
   private pendingEvents: EventLogEntry[] = [];
 
@@ -102,7 +103,13 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
 
     this.ws.onopen = () => {
       this.connected = true;
-      this.reconnectAttempt = 0;
+      // Stability hysteresis: don't reset backoff immediately — require 30s of
+      // sustained connection. Prevents rapid reconnect cycles on flaky networks
+      // from resetting the exponential backoff counter on each brief success.
+      if (this.stabilityTimer) clearTimeout(this.stabilityTimer);
+      this.stabilityTimer = setTimeout(() => {
+        this.reconnectAttempt = 0;
+      }, 30_000);
 
       // Flush pending events
       if (this.pendingEvents.length > 0) {
@@ -136,6 +143,11 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     this.ws.onclose = () => {
       this.connected = false;
       this.ws = null;
+      // Cancel stability timer — connection dropped before 30s, keep backoff elevated
+      if (this.stabilityTimer) {
+        clearTimeout(this.stabilityTimer);
+        this.stabilityTimer = null;
+      }
       this.scheduleReconnect();
     };
 
@@ -148,6 +160,10 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+    if (this.stabilityTimer) {
+      clearTimeout(this.stabilityTimer);
+      this.stabilityTimer = null;
     }
     if (this.ws) {
       this.ws.onclose = null;

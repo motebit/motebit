@@ -188,9 +188,21 @@ export function wireServerDeps(
         tombstoned: false,
       };
       if (runtime.events.appendWithClock) {
-        void runtime.events.appendWithClock(entry).catch(() => {});
+        void runtime.events.appendWithClock(entry).catch((err: unknown) => {
+          console.warn(
+            "[motebit] tool event log failed:",
+            err instanceof Error ? err.message : String(err),
+          );
+        });
       } else {
-        void runtime.events.append({ ...entry, version_clock: 0 } as EventLogEntry).catch(() => {});
+        void runtime.events
+          .append({ ...entry, version_clock: 0 } as EventLogEntry)
+          .catch((err: unknown) => {
+            console.warn(
+              "[motebit] tool event log failed:",
+              err instanceof Error ? err.message : String(err),
+            );
+          });
       }
     },
 

@@ -946,10 +946,22 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     checkMaxPeers();
 
     const existing = db
-      .prepare("SELECT state FROM relay_peers WHERE peer_relay_id = ?")
-      .get(relay_id) as { state: string } | undefined;
+      .prepare("SELECT state, last_heartbeat_at FROM relay_peers WHERE peer_relay_id = ?")
+      .get(relay_id) as { state: string; last_heartbeat_at: number | null } | undefined;
     if (existing && (existing.state === "active" || existing.state === "pending")) {
       throw new HTTPException(409, { message: `Peer already exists in ${existing.state} state` });
+    }
+    // Cooldown: removed peers must wait 5 minutes before re-peering.
+    // Prevents rapid removed→pending oscillation when the root cause persists.
+    if (existing && existing.state === "removed" && existing.last_heartbeat_at) {
+      const cooldownMs = 5 * 60 * 1000;
+      const elapsed = Date.now() - existing.last_heartbeat_at;
+      if (elapsed < cooldownMs) {
+        const retryAfter = Math.ceil((cooldownMs - elapsed) / 1000);
+        throw new HTTPException(429, {
+          message: `Removed peer must wait ${retryAfter}s before re-peering`,
+        });
+      }
     }
 
     const ourNonceBytes = new Uint8Array(32);
