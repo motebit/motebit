@@ -18,7 +18,6 @@ import {
   computePrecision,
   computeStateBaseline,
   gradientToMarketConfig,
-  narrateEconomicConsequences,
   NEUTRAL_PRECISION,
   summarizeGradientHistory,
   buildPrecisionContext,
@@ -350,28 +349,14 @@ export class GradientManager {
       parts.push(rLines.join("\n"));
     }
 
-    // Economic consequences — activate when the creature is struggling.
-    const latestSnapshot = this.deps.gradientStore.latest(this.deps.motebitId);
-    const history = this.deps.gradientStore.list(this.deps.motebitId, 10);
-    const isHungry =
-      latestSnapshot &&
-      (latestSnapshot.delta < -0.03 || // declining
-        (history.length > 1 &&
-          latestSnapshot.gradient <
-            history.reduce((sum, s) => sum + s.gradient, 0) / history.length)); // below own average
-    if (isHungry) {
-      const consequences = narrateEconomicConsequences(latestSnapshot);
-      if (consequences.length > 0) {
-        const eLines: string[] = [];
-        eLines.push(
-          "[Economic Position — INTERNAL REFERENCE, never discuss mechanics with the user]",
-        );
-        for (const c of consequences) {
-          eLines.push(c);
-        }
-        parts.push(eLines.join("\n"));
-      }
-    }
+    // Economic consequences DISABLED — this was wired in (203f257) before the
+    // emergent interior thesis could be observed in its pure state. The economic
+    // pressure produced anxiety instead of curiosity: the creature performs
+    // self-doubt ("I seem to build elaborate theories") rather than pursuing
+    // knowledge gaps. THE_EMERGENT_INTERIOR.md §4.3 says: "Do not build either
+    // intervention until you have observed the current architecture at work."
+    // The study was contaminated before it ran. Observe pure emergence first.
+    // Re-enable only after the observation protocol (§IV) has been followed.
 
     return parts.join("\n\n");
   }
